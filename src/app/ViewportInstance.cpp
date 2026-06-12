@@ -9,6 +9,8 @@ module;
 
 module quader.app.viewport_instance;
 
+import quader.render.viewport_gizmos;
+
 namespace quader {
 namespace {
 
@@ -36,11 +38,6 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
     return { value.x * amount, value.y * amount, value.z * amount };
 }
 
-[[nodiscard]] float finite_or(float value, float fallback)
-{
-    return std::isfinite(value) ? value : fallback;
-}
-
 [[nodiscard]] float squared_length(Vec3 value)
 {
     return value.x * value.x + value.y * value.y + value.z * value.z;
@@ -64,11 +61,6 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
 
     const float inverse_length = 1.0f / std::sqrt(length_squared);
     return scale(value, inverse_length);
-}
-
-[[nodiscard]] float clamped_pitch(float pitch_degrees)
-{
-    return std::clamp(finite_or(pitch_degrees, 0.0f), -89.0f, 89.0f);
 }
 
 [[nodiscard]] ViewportCamera viewport_camera_from_render_camera(RenderCamera camera)
@@ -135,44 +127,6 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
     return navigation;
 }
 
-[[nodiscard]] SceneRenderSnapshot scene_render_snapshot_from(const Scene& scene)
-{
-    SceneRenderSnapshot snapshot;
-    snapshot.revision = 1;
-
-    for (const SceneEntity& entity : scene.entities()) {
-        if (entity.mesh.has_value()) {
-            ViewportMeshKind mesh_kind = ViewportMeshKind::cube;
-            switch (entity.mesh->mesh_kind) {
-            case SceneMeshKind::cube:
-                mesh_kind = ViewportMeshKind::cube;
-                break;
-            case SceneMeshKind::plane:
-                mesh_kind = ViewportMeshKind::plane;
-                break;
-            }
-
-            snapshot.meshes.push_back(SceneRenderMesh {
-                .mesh_kind = mesh_kind,
-                .position = entity.transform.position,
-                .rotation_degrees = entity.transform.rotation_degrees,
-                .scale = entity.transform.scale,
-                .material = entity.mesh->material,
-                .casts_shadows = entity.mesh->casts_shadows,
-                .receives_shadows = entity.mesh->receives_shadows,
-            });
-        }
-
-        if (entity.directional_light.has_value()) {
-            snapshot.directional_lights.push_back(SceneRenderDirectionalLight {
-                .settings = entity.directional_light->settings,
-            });
-        }
-    }
-
-    return snapshot;
-}
-
 } // namespace
 
 ViewportInstance ViewportInstance::scene_viewport(
@@ -189,16 +143,6 @@ ViewportInstance ViewportInstance::non_interactive_scene_viewport(
     ViewportCameraPreset preset)
 {
     return ViewportInstance(id, std::move(title), ViewportSubjectKind::scene, ViewportNavigationKind::none, preset);
-}
-
-ViewportInstance ViewportInstance::preview_viewport(ViewportId id, std::string title)
-{
-    return ViewportInstance(
-        id,
-        std::move(title),
-        ViewportSubjectKind::preview,
-        ViewportNavigationKind::orbit_preview,
-        ViewportCameraPreset::perspective);
 }
 
 ViewportInstance::ViewportInstance(
@@ -275,9 +219,6 @@ bool ViewportInstance::update_navigation(
     case ViewportNavigationKind::scene_camera:
         changed = update_scene_navigation(input, mouse_lock_active, delta_seconds);
         break;
-    case ViewportNavigationKind::orbit_preview:
-        changed = update_preview_orbit_navigation(input, mouse_lock_active);
-        break;
     case ViewportNavigationKind::none:
         changed = false;
         break;
@@ -291,22 +232,17 @@ bool ViewportInstance::update_navigation(
 }
 
 std::optional<ViewportRenderRequest> ViewportInstance::try_begin_render_request(
-    const Scene& scene,
-    const PbrMaterialSettings& preview_material,
-    DirectionalLightSettings preview_light)
+    const Scene& scene)
 {
     if (!dirty_ || request_pending_ || !requested_extent_.is_valid()) {
         return std::nullopt;
     }
 
-    ViewportRenderSubject subject = SceneViewportSubject { .snapshot = scene_render_snapshot_from(scene) };
-    if (subject_kind_ == ViewportSubjectKind::preview) {
-        subject = PreviewViewportSubject {
-            .material = preview_material,
-            .light = preview_light,
-            .revision = generation_.value,
-        };
-    }
+    SceneRenderSnapshot snapshot = build_scene_render_snapshot(scene);
+    DebugDrawFrame debug_draw;
+    append_light_gizmos(snapshot, debug_draw);
+
+    ViewportRenderSubject subject = SceneViewportSubject { .snapshot = std::move(snapshot) };
 
     const uint64_t request_serial = next_request_serial_++;
     request_pending_ = true;
@@ -318,6 +254,7 @@ std::optional<ViewportRenderRequest> ViewportInstance::try_begin_render_request(
         .generation = generation_,
         .request_serial = request_serial,
         .subject = subject,
+        .debug_draw = std::move(debug_draw),
         .camera = current_camera(),
         .projection = current_projection(),
         .extent = requested_extent_,
@@ -364,15 +301,6 @@ void ViewportInstance::fail_pending_request()
 
 ViewportCamera ViewportInstance::current_camera() const
 {
-    if (subject_kind_ == ViewportSubjectKind::preview) {
-        const Vec3 forward = normalized_direction_from_yaw_pitch(orbit_yaw_degrees_, orbit_pitch_degrees_);
-        return ViewportCamera {
-            .position = scale(forward, -orbit_distance_),
-            .forward = forward,
-            .up = world_up,
-        };
-    }
-
     if (camera_preset_ == ViewportCameraPreset::perspective) {
         return viewport_camera_from_render_camera(perspective_camera_.render_camera());
     }
@@ -382,7 +310,7 @@ ViewportCamera ViewportInstance::current_camera() const
 
 ViewportProjection ViewportInstance::current_projection() const
 {
-    if (subject_kind_ == ViewportSubjectKind::preview || camera_preset_ == ViewportCameraPreset::perspective) {
+    if (camera_preset_ == ViewportCameraPreset::perspective) {
         const RenderCamera render_camera = perspective_camera_.render_camera();
         return {
             .kind = ViewportProjectionKind::perspective,
@@ -433,34 +361,10 @@ bool ViewportInstance::update_scene_navigation(
     return changed;
 }
 
-bool ViewportInstance::update_preview_orbit_navigation(
-    const ViewportNavigationSnapshot& input,
-    bool navigation_mouse_locked)
-{
-    bool changed = false;
-    if (navigation_mouse_locked) {
-        if (input.mouse_delta.x != 0.0f || input.mouse_delta.y != 0.0f) {
-            orbit_yaw_degrees_ += input.mouse_delta.x * 0.18f;
-            orbit_pitch_degrees_ = clamped_pitch(orbit_pitch_degrees_ + input.mouse_delta.y * 0.18f);
-            changed = true;
-        }
-    }
-
-    if (input.hovered && input.mouse_wheel_delta.y != 0.0f) {
-        const float scale_factor = input.mouse_wheel_delta.y > 0.0f ? 0.9f : 1.1f;
-        orbit_distance_ = std::clamp(orbit_distance_ * scale_factor, 1.0f, 25.0f);
-        changed = true;
-    }
-
-    return changed;
-}
-
 bool ViewportInstance::can_capture_navigation() const noexcept
 {
     switch (navigation_kind_) {
     case ViewportNavigationKind::scene_camera:
-        return true;
-    case ViewportNavigationKind::orbit_preview:
         return true;
     case ViewportNavigationKind::none:
         return false;
@@ -487,8 +391,6 @@ bool ViewportInstance::should_start_navigation_mouse_lock(const ViewportNavigati
     case ViewportNavigationKind::scene_camera:
         return input.right_mouse_pressed ||
             (camera_preset_ == ViewportCameraPreset::perspective && is_fly_movement_requested(input));
-    case ViewportNavigationKind::orbit_preview:
-        return input.right_mouse_pressed;
     case ViewportNavigationKind::none:
         return false;
     }
@@ -510,8 +412,6 @@ bool ViewportInstance::should_keep_navigation_mouse_lock(const ViewportNavigatio
     case ViewportNavigationKind::scene_camera:
         return input.right_mouse_down ||
             (camera_preset_ == ViewportCameraPreset::perspective && is_fly_movement_requested(input));
-    case ViewportNavigationKind::orbit_preview:
-        return input.right_mouse_down;
     case ViewportNavigationKind::none:
         return false;
     }

@@ -19,6 +19,7 @@ find_package(imgui CONFIG REQUIRED)
 find_package(Vulkan REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(EnTT CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
@@ -91,6 +92,13 @@ quader_add_filament_material(
     QUADER_LIT_PBR_INC
 )
 
+quader_add_filament_material(
+    QuaderDebugDrawMaterial
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/filament/materials/DebugDrawUnlit.mat"
+    "quader_debug_draw_material"
+    QUADER_DEBUG_DRAW_INC
+)
+
 add_custom_target(quader_generated_assets
     DEPENDS ${QUADER_GENERATED_ASSETS}
 )
@@ -121,6 +129,7 @@ set(QUADER_CORE_SOURCES
     src/app/ViewportLayout.cpp
     src/diagnostics/Logger.cpp
     src/filament/FilamentRenderEngine.cpp
+    src/filament/FilamentDebugDrawRenderer.cpp
     src/filament/FilamentSceneViewport.cpp
     src/math/MathTypes.cpp
     src/platform/FatalErrorDialog.cpp
@@ -132,14 +141,16 @@ set(QUADER_CORE_SOURCES
     src/render/RenderEngineFactory.cpp
     src/render/RenderTypes.cpp
     src/render/RendererStartupValidation.cpp
+    src/render/ViewportGizmos.cpp
     src/render/VulkanCommon.cpp
     src/render/VulkanDevice.cpp
     src/render/VulkanSwapchain.cpp
     src/scene/Scene.cpp
+    src/ui/ComponentEditors.cpp
     src/ui/EditorDockspace.cpp
     src/ui/ImGuiLayer.cpp
-    src/ui/LightPanel.cpp
-    src/ui/MaterialPanel.cpp
+    src/ui/InspectorMenu.cpp
+    src/ui/OutlinerPanel.cpp
     src/ui/ViewportHostPanel.cpp
     src/ui/ViewportSurface.cpp
     src/ui/ViewportTextureStore.cpp
@@ -156,6 +167,7 @@ set(QUADER_MODULES
     src/app/ViewportLayout.ixx
     src/diagnostics/Logger.ixx
     src/filament/FilamentRenderEngine.ixx
+    src/filament/FilamentDebugDrawRenderer.ixx
     src/filament/FilamentSceneViewport.ixx
     src/math/MathTypes.ixx
     src/platform/FatalErrorDialog.ixx
@@ -168,18 +180,21 @@ set(QUADER_MODULES
     src/render/IRenderEngine.ixx
     src/render/RendererStatus.ixx
     src/render/RenderTypes.ixx
+    src/render/DebugDrawTypes.ixx
     src/render/RendererStartupValidation.ixx
     src/render/RenderEngineFactory.ixx
     src/render/ViewportRenderer.ixx
     src/render/ViewportTypes.ixx
+    src/render/ViewportGizmos.ixx
     src/render/VulkanCommon.ixx
     src/render/VulkanDevice.ixx
     src/render/VulkanSwapchain.ixx
     src/scene/Scene.ixx
+    src/ui/ComponentEditors.ixx
     src/ui/EditorDockspace.ixx
     src/ui/ImGuiLayer.ixx
-    src/ui/LightPanel.ixx
-    src/ui/MaterialPanel.ixx
+    src/ui/InspectorMenu.ixx
+    src/ui/OutlinerPanel.ixx
     src/ui/UiControls.ixx
     src/ui/UiStyle.ixx
     src/ui/ViewportHostPanel.ixx
@@ -208,6 +223,7 @@ target_link_libraries(quader_core PUBLIC
     Vulkan::Vulkan
     filament_sdk
     glm::glm
+    EnTT::EnTT
     spdlog::spdlog
     Tracy::TracyClient
 )

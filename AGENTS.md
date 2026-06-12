@@ -56,6 +56,92 @@ Agents must follow these rules when creating, modifying, or refactoring code.
 
 Before implementing new C++20 code, especially in an object-oriented or SOLID-oriented codebase, answer these questions.
 
+## Mandatory OOP And Pattern Discipline
+
+Pay particular attention to OOP design, SOLID boundaries, ownership, and pattern fit before writing code. Do not treat this as optional style guidance.
+
+Before implementing anything non-trivial, stop and do an OOP design pass. This is a required gate, not a nice-to-have. The implementation may begin only after the agent can explain why the chosen shape makes sense.
+
+Before adding a class, inheritance hierarchy, virtual interface, service, manager, command, factory, strategy, adapter, or helper, explicitly decide:
+
+- What responsibility does this abstraction own, in one sentence?
+- What invariant or lifecycle does it enforce that a free function or value type would not?
+- What concrete extension is expected, and is polymorphism justified now?
+- Does this abstraction reduce coupling at a real boundary, or does it hide procedural code behind a class name?
+- Who owns the data and resources, who mutates them, and who only observes them?
+- Which project layer is allowed to know about this abstraction?
+- What code will reuse this abstraction now or in an already-known next task?
+- What would become duplicated, harder to test, or harder to replace if this abstraction is not introduced?
+
+If these questions cannot be answered clearly, do not write code yet. Re-read the surrounding architecture, identify the responsibility boundary, and choose a simpler or better-shaped design.
+
+Preferred OOP use:
+
+- Classes own resources, lifecycle, invariants, persistent state, or boundary-facing behavior.
+- Interfaces represent stable project-owned boundaries, not convenience wrappers around one call site.
+- Polymorphic bases are used when multiple implementations share a lifecycle or contract that callers genuinely need to treat uniformly.
+- Factories construct families of related objects when construction details or backend types should stay hidden.
+- Strategy/policy objects are used when behavior varies independently from the object that owns the data.
+- Composition is preferred over inheritance when behavior can be assembled from smaller owned parts.
+- Value types are preferred for plain data and immutable snapshots.
+- Free functions are preferred for stateless transformations with no ownership, lifecycle, or polymorphic contract.
+
+Base class or interface rules:
+
+- Add a base class only when callers need to treat multiple implementations uniformly through one stable contract.
+- A base class must have a narrow responsibility, a virtual destructor, and no unrelated convenience methods.
+- Do not add a base class merely because a future type might exist. Add it when at least one concrete extension point is known from the current task, roadmap, or explicit user request.
+- If a current request names a family of future variants, design the common lower-level abstraction now instead of hardcoding the first variant. Example: if the app needs gizmos, traces, debug points, debug lines, boxes, spheres, and arrows, introduce a reusable debug/editor draw primitive layer rather than a one-off light-gizmo renderer.
+- Keep implementation inheritance shallow. Prefer one interface plus concrete implementations over deep hierarchies.
+- Respect Liskov substitution: every derived implementation must honor the same lifetime, ownership, side-effect, and performance expectations as the base.
+- Avoid virtual dispatch in hot inner loops unless the boundary is coarse enough that the cost is irrelevant or measured acceptable.
+
+Reusable abstraction rules:
+
+- Abstract repeated responsibility, not repeated syntax.
+- Introduce a reusable abstraction when it removes real duplication, owns a shared lifecycle, protects an invariant, or creates a stable backend boundary.
+- Do not abstract tiny one-off code just to look architectural.
+- If two call sites are similar but have different ownership, lifetime, or failure behavior, do not force them into the same abstraction.
+- If a feature will obviously grow into a family, identify the lowest reusable primitive first, then layer specific features on top of it.
+- Keep high-level feature objects declarative where possible. They should describe intent and data; low-level systems should perform backend-specific work.
+
+Avoid weak OOP:
+
+- Do not create broad `Manager`, `Service`, `Helper`, `Controller`, or `Utility` types unless the responsibility is precise and narrow.
+- Do not add inheritance just because more types may exist later; name the concrete extension point and lifecycle first.
+- Do not turn straightforward data transforms into classes with no ownership, invariants, or state.
+- Do not put business logic into UI panels, renderer adapters, or glue objects just because they have convenient access.
+- Do not make god objects responsible for creation, storage, mutation, rendering, selection, and UI at the same time.
+- Do not let one feature-specific implementation become the hidden home for a general system.
+- Do not mix data ownership, command handling, rendering, picking, and UI presentation inside one class.
+- Do not duplicate domain state inside renderer or UI helper objects; derive transient presentation from the authoritative model.
+
+For editor/render helper families such as gizmos, overlays, handles, debug primitives, or picking proxies, prefer a small shared abstraction only when it owns a common renderer lifecycle or reusable geometry/material contract. Keep editor-only render representations derived from domain/ECS state; do not duplicate domain data inside helper objects.
+
+Renderer/editor helper rule:
+
+- Domain/ECS data owns what exists.
+- Snapshot/render data describes what should be visible.
+- Debug draw or editor draw systems own low-level drawing primitives such as lines, points, arrows, boxes, spheres, circles, cylinders, and transient traces.
+- Gizmos, handles, overlays, and helper visuals should produce or request low-level draw primitives; they should not each reinvent Filament buffers, materials, renderables, cleanup, or topology.
+- Backend-specific draw code stays in backend-specific modules such as `src/filament`; project-owned contracts should use project-owned data types.
+- Selection and picking must remain tied to real domain/ECS entity ids, not accidental render helper entities.
+- Gizmos are expected to be pickable. Design the pick payload at the same time as the visual primitive. Do not add a visual gizmo first and leave picking as an unrelated later patch.
+- Pickable helper visuals must carry project-owned owner ids and roles such as selected entity, hovered entity, transform handle axis, light gizmo, trace marker, or measurement handle. The selection result must resolve back to domain/ECS identity or an explicit editor-tool handle, never to a backend render entity.
+
+Before coding, write down the chosen shape mentally or in the work update:
+
+```text
+Responsibility:
+Owner:
+Lifetime:
+Extension point:
+Why class/interface/free function:
+What stays out:
+```
+
+If the design would sound vague in that format, tighten it before implementation.
+
 ## What responsibility should this code own?
 
 Clarify the role of the code before choosing a class, pattern, abstraction, or file structure.
@@ -112,6 +198,19 @@ Before starting any new task, automatically make a pre-emptive architecture and 
 Use subagents as part of this pre-emptive health check. For non-trivial work, boot 1 to 6 subagents before implementation begins; use more agents within that range when the code area is large, cross-cutting, or architecturally risky. Each booted subagent should participate in the overall health check by inspecting a clear slice of the relevant code and reporting code smells, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and concrete architecture refactors that should be done before or alongside the requested task.
 
 When opening subagents, always pass the explicit task context in the subagent prompt instead of using full-history mode. Full-history subagent spawning is currently error-prone in this workspace; keep prompts self-contained with the repo path, relevant constraints, ownership boundaries, and expected output.
+
+When using subagents for architecture, refactor, OOP design, code-health review, or implementation planning, always pass down the relevant architecture and best-practice rules explicitly in the subagent prompt. Do not assume the subagent has read, remembered, or will independently infer the project standards. At minimum, include the applicable constraints for:
+
+- OOP/SOLID responsibility boundaries and pattern discipline.
+- Ownership, lifecycle, invariants, RAII, and failure modes.
+- Project layer boundaries and allowed dependency direction.
+- UI rules when touching ImGui or panels.
+- Renderer/Filament boundary rules when touching viewport, gizmos, overlays, debug draw, materials, lights, cameras, or render resources.
+- ECS/domain-data ownership rules when touching scene data, selection, entities, or components.
+- Performance expectations for hot paths and per-frame code.
+- The concrete files/modules the subagent may inspect or edit, and what it must not change.
+
+Every architecture/refactor subagent prompt must be self-contained enough that the subagent can make senior-level design decisions without relying on hidden chat context. If the prompt cannot state the relevant rules clearly, tighten the prompt before spawning the subagent.
 
 When the architecture and code-health analysis is complete, and before implementation begins, report what the agents found. List code smells, architecture debt, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and any focused refactors that should happen before or alongside the requested task. If nothing meaningful is found because the relevant architecture is already healthy enough, explicitly say that the architecture is good for this task and no cleanup is needed this time.
 
@@ -228,10 +327,34 @@ Current renderer-engine abstraction:
 
 - `quader.render.status` exports `RendererStatus`.
 - `quader.render.engine` exports `IRenderEngine`.
-- `quader.render.debug_preview_renderer` exports the temporary `IDebugPreviewRenderer` proof-of-concept preview boundary.
-- `quader.render.engine_factory` creates the current debug-preview renderer implementation.
-- `quader.filament.render_engine` implements `IDebugPreviewRenderer` using Filament behind the renderer boundary.
-- `Application` consumes renderer abstractions and delegates preview coordination to `PreviewController`; UI panels consume project-owned render settings, not Filament objects.
+- `quader.render.viewport_renderer` exports `IViewportRenderer`, the current viewport rendering boundary.
+- `quader.render.viewport_types` exports project-owned viewport IDs, render requests, scene snapshots, frame payloads, and temporary readback types.
+- `quader.render.engine_factory` creates the current viewport renderer implementation.
+- `quader.filament.render_engine` implements `IViewportRenderer` using Filament behind the renderer boundary.
+- `Application` and editor viewport orchestration consume `IViewportRenderer`; UI panels consume project-owned viewport texture/status data, not Filament objects.
+
+## Renderer Gizmos And Debug Draw
+
+Gizmos, debug draw, editor handles, selection outlines, traces, and picking proxies should enter the renderer as project-owned value data or batched command buffers, usually through `ViewportRenderRequest` / `ViewportRenderSubject` or a similarly narrow render-layer type.
+
+Do not model each axis, line, handle, trace, or debug primitive as a heap-owned polymorphic object with its own draw/update lifecycle unless it owns a real shared GPU resource lifecycle. Prefer value commands such as line, point, arrow, box, sphere, circle, cylinder, or mesh-overlay requests consumed by a renderer-owned draw system.
+
+Editor/app code may derive gizmo/debug command data from tool state, selection, and scene data, but it must not own Filament entities, materials, buffers, or renderables. Filament implementations own cached GPU resources and update them from stable IDs, revisions, dirty flags, spans, or batched arrays.
+
+Keep picking and hit-testing project-owned. A visual helper must carry an explicit pick payload when it is clickable, including the real owner ECS/entity id and the helper role. Selection must return the real domain/ECS entity id or an explicit editor-tool handle, not a backend render entity. Avoid duplicating domain state inside visual helper objects.
+
+When adding a new gizmo/debug visual, define both sides together:
+
+```text
+Visual primitive:
+Owner domain id:
+Pick role:
+Hit proxy shape:
+Priority/mask:
+Backend resource owner:
+```
+
+If the visual representation and picking representation can drift, extract a shared project-owned primitive/proxy description first.
 
 ## No God Objects
 

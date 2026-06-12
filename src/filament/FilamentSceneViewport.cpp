@@ -45,8 +45,8 @@ module;
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -54,6 +54,7 @@ module quader.filament.scene_viewport;
 
 import quader.assets.image;
 import quader.diagnostics.logger;
+import quader.filament.debug_draw_renderer;
 import quader.math.types;
 
 namespace quader {
@@ -88,9 +89,14 @@ struct CachedMaterialTexture {
 struct MeshRenderable {
     utils::Entity entity;
     filament::MaterialInstance* material_instance = nullptr;
+    ViewportMeshKind mesh_kind = ViewportMeshKind::cube;
 };
 
 struct DirectionalLightRenderable {
+    utils::Entity entity;
+};
+
+struct PointLightRenderable {
     utils::Entity entity;
 };
 
@@ -171,12 +177,6 @@ filament::math::float4 to_filament_premultiplied_color(LinearColor color, float 
     return filament::math::float4 { rgba.r, rgba.g, rgba.b, rgba.a };
 }
 
-filament::math::float3 to_filament_direction(const DirectionalLightSettings& settings)
-{
-    const Vec3 direction = normalized_direction_from_yaw_pitch(settings.yaw_degrees, settings.pitch_degrees);
-    return filament::math::float3 { direction.x, direction.y, direction.z };
-}
-
 filament::math::double3 to_filament_point(Vec3 position)
 {
     return filament::math::double3 { position.x, position.y, position.z };
@@ -240,7 +240,7 @@ std::string material_texture_cache_key(
 
 std::array<MeshSourceVertex, 24> cube_source_vertices()
 {
-    constexpr float half_extent = 1.0f;
+    constexpr float half_extent = 0.5f;
 
     return {
         MeshSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f } },
@@ -434,6 +434,15 @@ filament::LightManager::ShadowOptions filament_shadow_options(const DirectionalS
     return options;
 }
 
+filament::LightManager::ShadowOptions filament_shadow_options(const PointLightShadowSettings& settings)
+{
+    filament::LightManager::ShadowOptions options;
+    options.mapSize = directional_shadow_quality_map_size(settings.quality);
+    options.constantBias = settings.constant_bias;
+    options.normalBias = settings.normal_bias;
+    return options;
+}
+
 filament::View::VsmShadowOptions filament_vsm_shadow_options(const DirectionalShadowSettings& settings)
 {
     filament::View::VsmShadowOptions options;
@@ -466,38 +475,40 @@ struct FilamentSceneViewport::Resources {
     {
         engine.flushAndWait();
 
+        debug_draw_renderer.reset();
+
         if (scene != nullptr) {
-            for (const MeshRenderable& cube : cubes) {
-                if (cube.entity) {
-                    scene->remove(cube.entity);
+            for (const auto& [_, mesh] : meshes) {
+                if (mesh.entity) {
+                    scene->remove(mesh.entity);
                 }
             }
-            for (const MeshRenderable& plane : planes) {
-                if (plane.entity) {
-                    scene->remove(plane.entity);
+            for (const auto& [_, light] : directional_lights) {
+                if (light.entity) {
+                    scene->remove(light.entity);
                 }
             }
-            for (const DirectionalLightRenderable& light : directional_lights) {
+            for (const auto& [_, light] : point_lights) {
                 if (light.entity) {
                     scene->remove(light.entity);
                 }
             }
         }
 
-        for (MeshRenderable& cube : cubes) {
-            destroy_mesh_renderable(cube);
+        for (auto& [_, mesh] : meshes) {
+            destroy_mesh_renderable(mesh);
         }
-        cubes.clear();
+        meshes.clear();
 
-        for (MeshRenderable& plane : planes) {
-            destroy_mesh_renderable(plane);
-        }
-        planes.clear();
-
-        for (DirectionalLightRenderable& light : directional_lights) {
+        for (auto& [_, light] : directional_lights) {
             destroy_directional_light_renderable(light);
         }
         directional_lights.clear();
+
+        for (auto& [_, light] : point_lights) {
+            destroy_point_light_renderable(light);
+        }
+        point_lights.clear();
 
         if (camera_entity) {
             engine.destroyCameraComponent(camera_entity);
@@ -550,6 +561,7 @@ struct FilamentSceneViewport::Resources {
         renderer = require_filament_allocation(engine.createRenderer(), "viewport renderer");
         scene = require_filament_allocation(engine.createScene(), "viewport scene");
         view = require_filament_allocation(engine.createView(), "viewport view");
+        debug_draw_renderer = std::make_unique<FilamentDebugDrawRenderer>(engine, *scene);
 
         view->setScene(scene);
         view->setPostProcessingEnabled(true);
@@ -829,6 +841,7 @@ struct FilamentSceneViewport::Resources {
         ensure_material();
 
         MeshRenderable mesh;
+        mesh.mesh_kind = mesh_kind;
         mesh.entity = utils::EntityManager::get().create();
         mesh.material_instance = material->createInstance(
             mesh_kind == ViewportMeshKind::plane ? "Quader plane material" : "Quader cube material");
@@ -837,8 +850,8 @@ struct FilamentSceneViewport::Resources {
 
         const filament::Box bounding_box =
             mesh_kind == ViewportMeshKind::plane
-                ? filament::Box { { 0.0f, 0.0f, 0.0f }, { 0.75f, 0.01f, 0.75f } }
-                : filament::Box { { 0.0f, 0.0f, 0.0f }, { 1.75f, 1.75f, 1.75f } };
+                ? filament::Box { { 0.0f, 0.0f, 0.0f }, { 0.55f, 0.02f, 0.55f } }
+                : filament::Box { { 0.0f, 0.0f, 0.0f }, { 0.55f, 0.55f, 0.55f } };
         const filament::RenderableManager::Builder::Result renderable_result =
             filament::RenderableManager::Builder(1)
             .boundingBox(bounding_box)
@@ -926,89 +939,151 @@ struct FilamentSceneViewport::Resources {
         light.entity.clear();
     }
 
-    void set_cube_count(size_t count)
+    [[nodiscard]] PointLightRenderable create_point_light_renderable()
     {
-        while (cubes.size() > count) {
-            destroy_mesh_renderable(cubes.back());
-            cubes.pop_back();
+        PointLightRenderable light;
+        light.entity = utils::EntityManager::get().create();
+        const filament::LightManager::Builder::Result light_result =
+            filament::LightManager::Builder(filament::LightManager::Type::POINT)
+            .castShadows(true)
+            .build(engine, light.entity);
+        if (light_result != filament::LightManager::Builder::Success) {
+            throw std::runtime_error("Filament failed to create the viewport point light.");
+        }
+        scene->addEntity(light.entity);
+        return light;
+    }
+
+    void destroy_point_light_renderable(PointLightRenderable& light)
+    {
+        if (!light.entity) {
+            return;
+        }
+
+        if (scene != nullptr) {
+            scene->remove(light.entity);
+        }
+
+        engine.getLightManager().destroy(light.entity);
+        utils::EntityManager::get().destroy(light.entity);
+        light.entity.clear();
+    }
+
+    void prune_scene_entities(
+        const std::unordered_set<uint32_t>& mesh_ids,
+        const std::unordered_set<uint32_t>& directional_light_ids,
+        const std::unordered_set<uint32_t>& point_light_ids)
+    {
+        for (auto entry = meshes.begin(); entry != meshes.end();) {
+            if (!mesh_ids.contains(entry->first)) {
+                destroy_mesh_renderable(entry->second);
+                entry = meshes.erase(entry);
+            } else {
+                ++entry;
+            }
+        }
+
+        for (auto entry = directional_lights.begin(); entry != directional_lights.end();) {
+            if (!directional_light_ids.contains(entry->first)) {
+                destroy_directional_light_renderable(entry->second);
+                entry = directional_lights.erase(entry);
+            } else {
+                ++entry;
+            }
+        }
+
+        for (auto entry = point_lights.begin(); entry != point_lights.end();) {
+            if (!point_light_ids.contains(entry->first)) {
+                destroy_point_light_renderable(entry->second);
+                entry = point_lights.erase(entry);
+            } else {
+                ++entry;
+            }
         }
     }
 
-    void set_plane_count(size_t count)
+    MeshRenderable& ensure_mesh_entity(const SceneRenderMesh& mesh)
     {
-        while (planes.size() > count) {
-            destroy_mesh_renderable(planes.back());
-            planes.pop_back();
+        auto entry = meshes.find(mesh.entity_id.value);
+        if (entry != meshes.end() && entry->second.mesh_kind != mesh.mesh_kind) {
+            destroy_mesh_renderable(entry->second);
+            meshes.erase(entry);
+            entry = meshes.end();
         }
+
+        if (entry == meshes.end()) {
+            MeshRenderable renderable =
+                mesh.mesh_kind == ViewportMeshKind::plane ? create_plane_renderable() : create_cube_renderable();
+            auto [inserted_entry, inserted] = meshes.emplace(mesh.entity_id.value, std::move(renderable));
+            (void)inserted;
+            entry = inserted_entry;
+        }
+
+        return entry->second;
     }
 
-    void set_directional_light_count(size_t count)
+    DirectionalLightRenderable& ensure_directional_light_entity(const SceneRenderDirectionalLight& light)
     {
-        while (directional_lights.size() > count) {
-            destroy_directional_light_renderable(directional_lights.back());
-            directional_lights.pop_back();
+        auto [entry, inserted] = directional_lights.try_emplace(light.entity_id.value);
+        if (inserted) {
+            entry->second = create_directional_light_renderable();
         }
+        return entry->second;
     }
 
-    void ensure_cube_entity(size_t index, const SceneRenderMesh& mesh)
+    PointLightRenderable& ensure_point_light_entity(const SceneRenderPointLight& light)
     {
-        while (cubes.size() <= index) {
-            cubes.push_back(create_cube_renderable());
+        auto [entry, inserted] = point_lights.try_emplace(light.entity_id.value);
+        if (inserted) {
+            entry->second = create_point_light_renderable();
         }
-
-        MeshRenderable& cube = cubes[index];
-        apply_material_settings(*cube.material_instance, mesh.material);
-        apply_mesh_shadow_settings(cube.entity, mesh);
-        engine.getTransformManager().setTransform(
-            engine.getTransformManager().getInstance(cube.entity),
-            scene_mesh_transform(mesh));
-    }
-
-    void ensure_plane_entity(size_t index, const SceneRenderMesh& mesh)
-    {
-        while (planes.size() <= index) {
-            planes.push_back(create_plane_renderable());
-        }
-
-        MeshRenderable& plane = planes[index];
-        apply_material_settings(*plane.material_instance, mesh.material);
-        apply_mesh_shadow_settings(plane.entity, mesh);
-        engine.getTransformManager().setTransform(
-            engine.getTransformManager().getInstance(plane.entity),
-            scene_mesh_transform(mesh));
-    }
-
-    void ensure_directional_light_entity(size_t index, const DirectionalLightSettings& settings)
-    {
-        while (directional_lights.size() <= index) {
-            directional_lights.push_back(create_directional_light_renderable());
-        }
-
-        apply_directional_light_settings(directional_lights[index].entity, settings);
+        return entry->second;
     }
 
     void apply_scene_snapshot(const SceneRenderSnapshot& snapshot)
     {
-        size_t cube_index = 0;
-        size_t plane_index = 0;
-        for (const SceneRenderMesh& mesh : snapshot.meshes) {
-            switch (mesh.mesh_kind) {
-            case ViewportMeshKind::cube:
-                ensure_cube_entity(cube_index++, mesh);
-                break;
-            case ViewportMeshKind::plane:
-                ensure_plane_entity(plane_index++, mesh);
-                break;
-            }
-        }
-        set_cube_count(cube_index);
-        set_plane_count(plane_index);
+        std::unordered_set<uint32_t> mesh_ids;
+        std::unordered_set<uint32_t> directional_light_ids;
+        std::unordered_set<uint32_t> point_light_ids;
+        mesh_ids.reserve(snapshot.meshes.size());
+        directional_light_ids.reserve(snapshot.directional_lights.size());
+        point_light_ids.reserve(snapshot.point_lights.size());
 
-        size_t light_index = 0;
-        for (const SceneRenderDirectionalLight& directional_light : snapshot.directional_lights) {
-            ensure_directional_light_entity(light_index++, directional_light.settings);
+        for (const SceneRenderMesh& mesh : snapshot.meshes) {
+            if (!mesh.entity_id.is_valid()) {
+                continue;
+            }
+
+            mesh_ids.insert(mesh.entity_id.value);
+            MeshRenderable& renderable = ensure_mesh_entity(mesh);
+            apply_material_settings(*renderable.material_instance, mesh.material);
+            apply_mesh_shadow_settings(renderable.entity, mesh);
+            engine.getTransformManager().setTransform(
+                engine.getTransformManager().getInstance(renderable.entity),
+                scene_mesh_transform(mesh));
         }
-        set_directional_light_count(light_index);
+
+        for (const SceneRenderDirectionalLight& directional_light : snapshot.directional_lights) {
+            if (!directional_light.entity_id.is_valid()) {
+                continue;
+            }
+
+            directional_light_ids.insert(directional_light.entity_id.value);
+            DirectionalLightRenderable& renderable = ensure_directional_light_entity(directional_light);
+            apply_directional_light_settings(renderable.entity, directional_light);
+        }
+
+        for (const SceneRenderPointLight& point_light : snapshot.point_lights) {
+            if (!point_light.entity_id.is_valid()) {
+                continue;
+            }
+
+            point_light_ids.insert(point_light.entity_id.value);
+            PointLightRenderable& renderable = ensure_point_light_entity(point_light);
+            apply_point_light_settings(renderable.entity, point_light);
+        }
+
+        prune_scene_entities(mesh_ids, directional_light_ids, point_light_ids);
     }
 
     void apply_material_settings(filament::MaterialInstance& instance, PbrMaterialSettings settings)
@@ -1063,8 +1138,11 @@ struct FilamentSceneViewport::Resources {
         renderables.setScreenSpaceContactShadows(renderable_instance, mesh.receives_shadows);
     }
 
-    void apply_directional_light_settings(utils::Entity light_entity, DirectionalLightSettings settings) const
+    void apply_directional_light_settings(
+        utils::Entity light_entity,
+        const SceneRenderDirectionalLight& light) const
     {
+        DirectionalLightSettings settings = light.settings;
         settings = clamp_directional_light_settings(settings);
         view->setShadowType(filament_shadow_type(settings.shadow.mode));
         view->setVsmShadowOptions(filament_vsm_shadow_options(settings.shadow));
@@ -1074,7 +1152,22 @@ struct FilamentSceneViewport::Resources {
         const filament::LightManager::Instance light_instance = lights.getInstance(light_entity);
         lights.setColor(light_instance, to_filament_color(settings.color));
         lights.setIntensity(light_instance, settings.intensity);
-        lights.setDirection(light_instance, to_filament_direction(settings));
+        lights.setDirection(light_instance, to_filament_float3(light.direction));
+        lights.setShadowCaster(light_instance, settings.shadow.enabled);
+        lights.setShadowOptions(light_instance, filament_shadow_options(settings.shadow));
+    }
+
+    void apply_point_light_settings(utils::Entity light_entity, const SceneRenderPointLight& light) const
+    {
+        const PointLightSettings settings = clamp_point_light_settings(light.settings);
+        const float falloff_radius = std::max(0.001f, settings.range * settings.falloff);
+
+        filament::LightManager& lights = engine.getLightManager();
+        const filament::LightManager::Instance light_instance = lights.getInstance(light_entity);
+        lights.setPosition(light_instance, to_filament_float3(light.position));
+        lights.setColor(light_instance, to_filament_color(settings.color));
+        lights.setIntensity(light_instance, settings.intensity);
+        lights.setFalloff(light_instance, falloff_radius);
         lights.setShadowCaster(light_instance, settings.shadow.enabled);
         lights.setShadowOptions(light_instance, filament_shadow_options(settings.shadow));
     }
@@ -1174,44 +1267,11 @@ struct FilamentSceneViewport::Resources {
     {
         ZoneScopedN("Filament scene viewport render");
 
-        SceneRenderSnapshot snapshot;
-        std::visit(
-            [&snapshot](const auto& subject) {
-                using Subject = std::decay_t<decltype(subject)>;
-                if constexpr (std::is_same_v<Subject, SceneViewportSubject>) {
-                    snapshot = subject.snapshot;
-                } else if constexpr (std::is_same_v<Subject, PreviewViewportSubject>) {
-                    PbrMaterialSettings ground_material;
-                    ground_material.albedo = { 0.55f, 0.58f, 0.56f };
-                    ground_material.roughness = 0.9f;
-                    snapshot.meshes.push_back(SceneRenderMesh {
-                        .mesh_kind = ViewportMeshKind::cube,
-                        .position = Vec3 { 0.0f, 1.0f, 0.0f },
-                        .material = subject.material,
-                        .casts_shadows = true,
-                        .receives_shadows = true,
-                    });
-                    snapshot.meshes.push_back(SceneRenderMesh {
-                        .mesh_kind = ViewportMeshKind::plane,
-                        .position = Vec3 { 0.0f, 0.0f, 0.0f },
-                        .scale = Vec3 { 10.0f, 1.0f, 10.0f },
-                        .material = ground_material,
-                        .casts_shadows = false,
-                        .receives_shadows = true,
-                    });
-                    snapshot.directional_lights.push_back(SceneRenderDirectionalLight {
-                        .settings = subject.light,
-                    });
-                    snapshot.revision = subject.revision;
-                }
-            },
-            request.subject);
-
-        if (!snapshot.has_renderables()) {
-            return;
-        }
-
+        const SceneRenderSnapshot& snapshot = std::get<SceneViewportSubject>(request.subject).snapshot;
         apply_scene_snapshot(snapshot);
+        if (debug_draw_renderer != nullptr) {
+            debug_draw_renderer->render(request.debug_draw);
+        }
         apply_camera(request.camera, request.projection);
         ensure_preview_size(request.extent);
         if (preview_target == nullptr) {
@@ -1276,8 +1336,10 @@ struct FilamentSceneViewport::Resources {
     filament::VertexBuffer* plane_vertices = nullptr;
     filament::IndexBuffer* plane_indices = nullptr;
     filament::Material* material = nullptr;
-    std::vector<MeshRenderable> cubes;
-    std::vector<MeshRenderable> planes;
+    std::unordered_map<uint32_t, MeshRenderable> meshes;
+    std::unordered_map<uint32_t, DirectionalLightRenderable> directional_lights;
+    std::unordered_map<uint32_t, PointLightRenderable> point_lights;
+    std::unique_ptr<FilamentDebugDrawRenderer> debug_draw_renderer;
     filament::Texture* fallback_albedo_texture = nullptr;
     filament::Texture* fallback_scalar_texture = nullptr;
     std::unordered_map<std::string, CachedMaterialTexture> material_texture_cache;
@@ -1289,7 +1351,6 @@ struct FilamentSceneViewport::Resources {
     filament::Skybox* skybox = nullptr;
     filament::Camera* camera = nullptr;
     utils::Entity camera_entity;
-    std::vector<DirectionalLightRenderable> directional_lights;
     RenderExtent preview_extent;
     ViewportCamera camera_state;
     ViewportProjection projection_state;

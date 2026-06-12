@@ -15,12 +15,10 @@ export namespace quader {
 
 enum class ViewportSubjectKind {
     scene,
-    preview,
 };
 
 enum class ViewportNavigationKind {
     scene_camera,
-    orbit_preview,
     none,
 };
 
@@ -58,8 +56,6 @@ public:
         ViewportId id,
         std::string title,
         ViewportCameraPreset preset);
-    [[nodiscard]] static ViewportInstance preview_viewport(ViewportId id, std::string title);
-
     [[nodiscard]] ViewportId id() const noexcept;
     [[nodiscard]] ViewportGeneration generation() const noexcept;
     [[nodiscard]] std::string_view title() const noexcept;
@@ -73,6 +69,8 @@ public:
     [[nodiscard]] bool can_capture_navigation() const noexcept;
     [[nodiscard]] bool should_start_navigation_mouse_lock(const ViewportNavigationSnapshot& input) const noexcept;
     [[nodiscard]] bool should_keep_navigation_mouse_lock(const ViewportNavigationSnapshot& input) const noexcept;
+    [[nodiscard]] ViewportCamera current_camera() const;
+    [[nodiscard]] ViewportProjection current_projection() const;
 
     void set_camera_preset(ViewportCameraPreset preset);
     void set_requested_extent(RenderExtent extent);
@@ -83,9 +81,7 @@ public:
         bool navigation_mouse_locked,
         float delta_seconds);
     [[nodiscard]] std::optional<ViewportRenderRequest> try_begin_render_request(
-        const Scene& scene,
-        const PbrMaterialSettings& preview_material,
-        DirectionalLightSettings preview_light);
+        const Scene& scene);
     [[nodiscard]] ViewportFrameAcceptance accept_frame(const ViewportRenderFrame& frame);
     void fail_pending_request();
 
@@ -97,15 +93,10 @@ private:
         ViewportNavigationKind navigation_kind,
         ViewportCameraPreset preset);
 
-    [[nodiscard]] ViewportCamera current_camera() const;
-    [[nodiscard]] ViewportProjection current_projection() const;
     [[nodiscard]] bool update_scene_navigation(
         const ViewportNavigationSnapshot& input,
         bool navigation_mouse_locked,
         float delta_seconds);
-    [[nodiscard]] bool update_preview_orbit_navigation(
-        const ViewportNavigationSnapshot& input,
-        bool navigation_mouse_locked);
 
     ViewportId id_;
     ViewportGeneration generation_ { 1 };
@@ -119,9 +110,6 @@ private:
     EditorCamera perspective_camera_;
     Vec3 orthographic_target_;
     float orthographic_size_ = 5.0f;
-    float orbit_yaw_degrees_ = -35.0f;
-    float orbit_pitch_degrees_ = 20.0f;
-    float orbit_distance_ = 4.0f;
     bool dirty_ = true;
     bool request_pending_ = false;
     bool dirty_after_pending_ = false;

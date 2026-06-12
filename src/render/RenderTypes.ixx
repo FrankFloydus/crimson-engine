@@ -125,9 +125,22 @@ struct DirectionalShadowSettings {
 struct DirectionalLightSettings {
     LinearColor color { 1.0f, 0.94f, 0.86f };
     float intensity = 65000.0f;
-    float yaw_degrees = 140.0f;
-    float pitch_degrees = -24.0f;
     DirectionalShadowSettings shadow;
+};
+
+struct PointLightShadowSettings {
+    bool enabled = true;
+    DirectionalShadowQuality quality = DirectionalShadowQuality::medium;
+    float constant_bias = 0.001f;
+    float normal_bias = 1.0f;
+};
+
+struct PointLightSettings {
+    LinearColor color { 1.0f, 0.94f, 0.86f };
+    float intensity = 10000.0f;
+    float range = 10.0f;
+    float falloff = 1.0f;
+    PointLightShadowSettings shadow;
 };
 
 [[nodiscard]] LinearColor clamp_color(LinearColor color);
@@ -148,5 +161,7 @@ struct DirectionalLightSettings {
 [[nodiscard]] uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality);
 [[nodiscard]] DirectionalShadowSettings clamp_directional_shadow_settings(DirectionalShadowSettings settings);
 [[nodiscard]] DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettings settings);
+[[nodiscard]] PointLightShadowSettings clamp_point_light_shadow_settings(PointLightShadowSettings settings);
+[[nodiscard]] PointLightSettings clamp_point_light_settings(PointLightSettings settings);
 
 } // namespace quader

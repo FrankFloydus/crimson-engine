@@ -43,9 +43,11 @@ struct ViewportSurfaceUiStyle {
     ImU32 overlay_text_color = IM_COL32(230, 235, 240, 230);
 };
 
-struct PreviewPanelUiStyle {
-    InitialWindowBounds material_window { ImVec2 { 888.0f, 56.0f }, ImVec2 { 380.0f, 390.0f } };
-    InitialWindowBounds light_window { ImVec2 { 888.0f, 472.0f }, ImVec2 { 340.0f, 260.0f } };
+struct InspectorUiStyle {
+    InitialWindowBounds window { ImVec2 { 888.0f, 56.0f }, ImVec2 { 380.0f, 620.0f } };
+    float position_drag_speed = 0.01f;
+    float rotation_drag_speed = 0.1f;
+    float scale_drag_speed = 0.01f;
 };
 
 [[nodiscard]] inline ViewportHostUiStyle viewport_host_ui_style()
@@ -58,7 +60,7 @@ struct PreviewPanelUiStyle {
     return {};
 }
 
-[[nodiscard]] inline PreviewPanelUiStyle preview_panel_ui_style()
+[[nodiscard]] inline InspectorUiStyle inspector_ui_style()
 {
     return {};
 }

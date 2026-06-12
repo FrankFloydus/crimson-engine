@@ -2,6 +2,8 @@ module;
 
 #include <imgui.h>
 
+#include <optional>
+
 export module quader.ui.viewport_surface;
 
 export import quader.render.viewport_types;
@@ -28,6 +30,11 @@ struct ViewportPerformanceOverlay {
     bool dirty = false;
 };
 
+struct ViewportSurfaceClick {
+    float local_x = 0.0f;
+    float local_y = 0.0f;
+};
+
 struct ViewportSurfaceInput {
     ViewportId id;
     ViewportTextureView texture;
@@ -45,7 +52,9 @@ struct ViewportSurfaceResult {
     bool focused = false;
     bool active = false;
     bool clicked = false;
+    bool left_clicked = false;
     bool dragging = false;
+    std::optional<ViewportSurfaceClick> click;
 };
 
 [[nodiscard]] ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input);

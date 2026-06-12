@@ -15,11 +15,16 @@ import quader.ui.viewport_surface;
 
 export namespace quader {
 
+struct EditorViewportFrameResult {
+    bool selection_requested = false;
+    std::optional<SceneEntityId> picked_entity;
+};
+
 class EditorViewport {
 public:
     ~EditorViewport();
 
-    void render_frame(
+    [[nodiscard]] EditorViewportFrameResult render_frame(
         IViewportRenderer& renderer,
         ImGuiLayer& imgui,
         const Scene& scene,
@@ -36,20 +41,19 @@ private:
 
     void render_scene_viewport_host(
         ImGuiLayer& imgui,
+        const Scene& scene,
         const Input& input,
         float delta_seconds,
-        std::vector<ViewportId>& visible_viewport_ids);
-    void render_preview_viewport_panel(
-        ImGuiLayer& imgui,
-        const Input& input,
-        float delta_seconds,
-        std::vector<ViewportId>& visible_viewport_ids);
+        std::vector<ViewportId>& visible_viewport_ids,
+        EditorViewportFrameResult& frame_result);
     void update_viewport_from_surface(
         ViewportInstance& viewport,
+        const Scene& scene,
         const ViewportSurfaceResult& surface,
         const Input& input,
         float delta_seconds,
-        std::vector<ViewportId>& visible_viewport_ids);
+        std::vector<ViewportId>& visible_viewport_ids,
+        EditorViewportFrameResult& frame_result);
     void release_navigation_capture_if_hidden(const std::vector<ViewportId>& visible_viewport_ids);
 
     void request_visible_viewport_frames(
@@ -63,14 +67,15 @@ private:
     [[nodiscard]] ViewportPerformanceOverlay performance_overlay_for(
         const ViewportInstance& viewport,
         float delta_seconds) const;
-    [[nodiscard]] PbrMaterialSettings preview_material_from_scene(const Scene& scene) const;
-    [[nodiscard]] DirectionalLightSettings preview_light_from_scene(const Scene& scene) const;
+    [[nodiscard]] std::optional<SceneEntityId> pick_entity_from_surface(
+        const Scene& scene,
+        const ViewportInstance& viewport,
+        const ViewportSurfaceResult& surface) const;
     void mark_scene_viewports_dirty();
     void mark_all_viewports_dirty();
 
     IViewportRenderer* renderer_ = nullptr;
     std::vector<ViewportInstance> scene_viewports_;
-    std::optional<ViewportInstance> preview_viewport_;
     ViewportLayoutState layout_state_;
     std::optional<ViewportId> active_viewport_;
     std::optional<ViewportId> mouse_locked_viewport_;

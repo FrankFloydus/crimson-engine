@@ -108,8 +108,6 @@ TEST(RenderTypes, ClampDirectionalLightSettings)
     quader::DirectionalLightSettings settings;
     settings.color = { 3.0f, -2.0f, 0.25f };
     settings.intensity = 500000.0f;
-    settings.yaw_degrees = 540.0f;
-    settings.pitch_degrees = -120.0f;
 
     const quader::DirectionalLightSettings clamped = quader::clamp_directional_light_settings(settings);
 
@@ -117,8 +115,6 @@ TEST(RenderTypes, ClampDirectionalLightSettings)
     EXPECT_FLOAT_EQ(0.0f, clamped.color.g);
     EXPECT_FLOAT_EQ(0.25f, clamped.color.b);
     EXPECT_FLOAT_EQ(200000.0f, clamped.intensity);
-    EXPECT_FLOAT_EQ(180.0f, clamped.yaw_degrees);
-    EXPECT_FLOAT_EQ(-89.0f, clamped.pitch_degrees);
 }
 
 TEST(RenderTypes, DefaultDirectionalShadowSettingsAreProductionReady)
@@ -149,6 +145,28 @@ TEST(RenderTypes, DefaultDirectionalShadowSettingsAreProductionReady)
     EXPECT_FLOAT_EQ(0.02f, light.shadow.soft_shadow_bulb_radius);
     EXPECT_FLOAT_EQ(1.0f, light.shadow.penumbra_scale);
     EXPECT_FLOAT_EQ(1.0f, light.shadow.penumbra_ratio_scale);
+}
+
+TEST(RenderTypes, ClampPointLightSettings)
+{
+    quader::PointLightSettings settings;
+    settings.color = { 2.0f, -1.0f, 0.25f };
+    settings.intensity = std::numeric_limits<float>::infinity();
+    settings.range = -5.0f;
+    settings.falloff = std::numeric_limits<float>::quiet_NaN();
+    settings.shadow.constant_bias = -1.0f;
+    settings.shadow.normal_bias = -2.0f;
+
+    const quader::PointLightSettings clamped = quader::clamp_point_light_settings(settings);
+
+    EXPECT_FLOAT_EQ(1.0f, clamped.color.r);
+    EXPECT_FLOAT_EQ(0.0f, clamped.color.g);
+    EXPECT_FLOAT_EQ(0.25f, clamped.color.b);
+    EXPECT_FLOAT_EQ(10000.0f, clamped.intensity);
+    EXPECT_FLOAT_EQ(0.0f, clamped.range);
+    EXPECT_FLOAT_EQ(1.0f, clamped.falloff);
+    EXPECT_FLOAT_EQ(0.0f, clamped.shadow.constant_bias);
+    EXPECT_FLOAT_EQ(0.0f, clamped.shadow.normal_bias);
 }
 
 TEST(RenderTypes, DirectionalShadowQualityMapsToTextureSize)

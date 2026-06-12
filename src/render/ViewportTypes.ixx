@@ -8,6 +8,7 @@ module;
 
 export module quader.render.viewport_types;
 
+export import quader.render.debug_draw;
 export import quader.render.types;
 
 export namespace quader {
@@ -53,6 +54,20 @@ struct ViewportFrameId {
     [[nodiscard]] bool is_valid() const noexcept
     {
         return value != 0;
+    }
+};
+
+struct RenderEntityId {
+    uint32_t value = 0;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return value != 0;
+    }
+
+    [[nodiscard]] friend bool operator==(RenderEntityId left, RenderEntityId right) noexcept
+    {
+        return left.value == right.value;
     }
 };
 
@@ -104,6 +119,7 @@ enum class ViewportMeshKind : uint8_t {
 };
 
 struct SceneRenderMesh {
+    RenderEntityId entity_id;
     ViewportMeshKind mesh_kind = ViewportMeshKind::cube;
     Vec3 position {};
     Vec3 rotation_degrees {};
@@ -114,17 +130,29 @@ struct SceneRenderMesh {
 };
 
 struct SceneRenderDirectionalLight {
+    RenderEntityId entity_id;
+    Vec3 position {};
+    Vec3 direction { 0.0f, 0.0f, -1.0f };
+    Vec3 right { 1.0f, 0.0f, 0.0f };
+    Vec3 up { 0.0f, 1.0f, 0.0f };
     DirectionalLightSettings settings;
+};
+
+struct SceneRenderPointLight {
+    RenderEntityId entity_id;
+    Vec3 position {};
+    PointLightSettings settings;
 };
 
 struct SceneRenderSnapshot {
     std::vector<SceneRenderMesh> meshes;
     std::vector<SceneRenderDirectionalLight> directional_lights;
+    std::vector<SceneRenderPointLight> point_lights;
     uint64_t revision = 0;
 
     [[nodiscard]] bool has_renderables() const noexcept
     {
-        return !meshes.empty() || !directional_lights.empty();
+        return !meshes.empty() || !directional_lights.empty() || !point_lights.empty();
     }
 };
 
@@ -137,19 +165,14 @@ struct SceneViewportSubject {
     }
 };
 
-struct PreviewViewportSubject {
-    PbrMaterialSettings material;
-    DirectionalLightSettings light;
-    uint64_t revision = 0;
-};
-
-using ViewportRenderSubject = std::variant<SceneViewportSubject, PreviewViewportSubject>;
+using ViewportRenderSubject = std::variant<SceneViewportSubject>;
 
 struct ViewportRenderRequest {
     ViewportId viewport_id;
     ViewportGeneration generation;
     uint64_t request_serial = 0;
     ViewportRenderSubject subject;
+    DebugDrawFrame debug_draw;
     ViewportCamera camera;
     ViewportProjection projection;
     RenderExtent extent;

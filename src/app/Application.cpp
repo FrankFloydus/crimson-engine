@@ -61,7 +61,6 @@ Application::Application()
     , vulkan_device_(window_)
     , swapchain_(vulkan_device_, window_)
     , render_engine_(create_renderer_engine_or_throw())
-    , open_scene_(create_default_scene())
     , imgui_(window_, vulkan_device_, swapchain_)
 {
     event_dispatcher_.subscribe(input_);
@@ -113,12 +112,15 @@ void Application::draw_frame(float delta_seconds)
     if (scene_properties_.render_frame(open_scene_, native_file_dialog_)) {
         scene_viewport_.mark_render_state_dirty();
     }
-    scene_viewport_.render_frame(
+    const EditorViewportFrameResult viewport_result = scene_viewport_.render_frame(
         *render_engine_,
         imgui_,
         open_scene_,
         input_,
         delta_seconds);
+    if (viewport_result.selection_requested) {
+        scene_properties_.select_entity(viewport_result.picked_entity.value_or(SceneEntityId {}));
+    }
     imgui_.end_frame(swapchain_);
 
     FrameMark;

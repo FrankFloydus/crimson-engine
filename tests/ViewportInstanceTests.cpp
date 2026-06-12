@@ -5,6 +5,7 @@
 #include <vector>
 
 import quader.app.viewport_instance;
+import quader.render.viewport_gizmos;
 
 namespace {
 
@@ -24,6 +25,30 @@ quader::ViewportRenderFrame completed_frame_from(const quader::ViewportRenderReq
             255),
     };
     return frame;
+}
+
+quader::Scene make_test_scene()
+{
+    quader::Scene scene("Viewport Test Scene");
+
+    quader::TransformComponent cube_transform;
+    cube_transform.position = { 0.0f, 1.0f, 0.0f };
+    const quader::SceneEntityId cube = scene.create_cube("Cube", cube_transform);
+    scene.material(cube)->material.roughness = 0.75f;
+
+    quader::TransformComponent plane_transform;
+    plane_transform.scale = { 10.0f, 1.0f, 10.0f };
+    const quader::SceneEntityId plane = scene.create_plane("Plane", plane_transform);
+    scene.mesh(plane)->casts_shadows = false;
+
+    const quader::SceneEntityId sun = scene.create_directional_light("Sun");
+    (void)sun;
+
+    quader::TransformComponent point_transform;
+    point_transform.position = { 1.0f, 2.0f, 0.0f };
+    const quader::SceneEntityId point_light = scene.create_point_light("Point Light", point_transform);
+    (void)point_light;
+    return scene;
 }
 
 } // namespace
@@ -52,13 +77,13 @@ TEST(ViewportInstance, SceneViewportKeepsOriginalCameraPresetAsDefault)
 
 TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
 {
-    quader::Scene scene = quader::create_default_scene();
+    quader::Scene scene = make_test_scene();
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 1 }, "Perspective", quader::ViewportCameraPreset::perspective);
     viewport.set_requested_extent({ 320, 200 });
 
     std::optional<quader::ViewportRenderRequest> request =
-        viewport.try_begin_render_request(scene, {}, {});
+        viewport.try_begin_render_request(scene);
 
     ASSERT_TRUE(request.has_value());
     EXPECT_EQ(quader::ViewportId { 1 }, request->viewport_id);
@@ -67,7 +92,9 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     const quader::SceneViewportSubject& subject =
         std::get<quader::SceneViewportSubject>(request->subject);
     ASSERT_EQ(2U, subject.snapshot.meshes.size());
+    EXPECT_TRUE(subject.snapshot.meshes[0].entity_id.is_valid());
     EXPECT_EQ(quader::ViewportMeshKind::cube, subject.snapshot.meshes[0].mesh_kind);
+    EXPECT_FLOAT_EQ(0.75f, subject.snapshot.meshes[0].material.roughness);
     EXPECT_TRUE(subject.snapshot.meshes[0].casts_shadows);
     EXPECT_TRUE(subject.snapshot.meshes[0].receives_shadows);
     EXPECT_EQ(quader::ViewportMeshKind::plane, subject.snapshot.meshes[1].mesh_kind);
@@ -76,39 +103,77 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     EXPECT_FALSE(subject.snapshot.meshes[1].casts_shadows);
     EXPECT_TRUE(subject.snapshot.meshes[1].receives_shadows);
     EXPECT_EQ(1U, subject.snapshot.directional_lights.size());
+    EXPECT_EQ(1U, subject.snapshot.point_lights.size());
+    EXPECT_TRUE(subject.snapshot.point_lights[0].entity_id.is_valid());
+    EXPECT_FALSE(request->debug_draw.empty());
+    EXPECT_GE(request->debug_draw.depth_tested.lines().size(), 5U);
+    EXPECT_EQ(3U, request->debug_draw.depth_tested.pick_proxies().size());
     EXPECT_TRUE(viewport.request_pending());
-    EXPECT_FALSE(viewport.try_begin_render_request(scene, {}, {}).has_value());
+    EXPECT_FALSE(viewport.try_begin_render_request(scene).has_value());
 }
 
-TEST(ViewportInstance, PreviewViewportBuildsPreviewRenderRequest)
+TEST(ViewportInstance, SceneViewportBuildsPickableLightGizmoDebugDraw)
 {
-    quader::Scene scene = quader::create_default_scene();
-    quader::PbrMaterialSettings material;
-    material.roughness = 0.75f;
-    quader::DirectionalLightSettings light;
-    light.intensity = 1200.0f;
-    quader::ViewportInstance viewport = quader::ViewportInstance::preview_viewport({ 2 }, "Preview");
-    viewport.set_requested_extent({ 128, 128 });
+    quader::Scene scene = make_test_scene();
+    quader::ViewportInstance viewport =
+        quader::ViewportInstance::scene_viewport({ 11 }, "Perspective", quader::ViewportCameraPreset::perspective);
+    viewport.set_requested_extent({ 320, 200 });
 
-    std::optional<quader::ViewportRenderRequest> request =
-        viewport.try_begin_render_request(scene, material, light);
+    const std::optional<quader::ViewportRenderRequest> request =
+        viewport.try_begin_render_request(scene);
 
     ASSERT_TRUE(request.has_value());
-    ASSERT_TRUE(std::holds_alternative<quader::PreviewViewportSubject>(request->subject));
-    const quader::PreviewViewportSubject& subject =
-        std::get<quader::PreviewViewportSubject>(request->subject);
-    EXPECT_FLOAT_EQ(0.75f, subject.material.roughness);
-    EXPECT_FLOAT_EQ(1200.0f, subject.light.intensity);
+    const std::vector<quader::DebugDrawLine>& lines = request->debug_draw.depth_tested.lines();
+    const std::vector<quader::DebugDrawPickProxy>& pick_proxies =
+        request->debug_draw.depth_tested.pick_proxies();
+
+    ASSERT_FALSE(lines.empty());
+    ASSERT_FALSE(pick_proxies.empty());
+    for (const quader::DebugDrawLine& line : lines) {
+        ASSERT_TRUE(line.pick.has_value());
+        EXPECT_TRUE(line.pick->is_valid());
+        EXPECT_TRUE(scene.contains(quader::SceneEntityId { line.pick->owner_entity_id }));
+    }
+    for (const quader::DebugDrawPickProxy& proxy : pick_proxies) {
+        EXPECT_TRUE(proxy.is_valid());
+        EXPECT_TRUE(scene.contains(quader::SceneEntityId { proxy.payload.owner_entity_id }));
+        EXPECT_TRUE(proxy.payload.role == quader::DebugDrawPickRole::directional_light_gizmo ||
+            proxy.payload.role == quader::DebugDrawPickRole::point_light_gizmo);
+    }
+}
+
+TEST(ViewportInstance, DirectionalLightGizmoUsesRolledBasisForArrowHead)
+{
+    quader::SceneRenderSnapshot snapshot;
+    snapshot.directional_lights.push_back(quader::SceneRenderDirectionalLight {
+        .entity_id = quader::RenderEntityId { 7 },
+        .position = { 0.0f, 0.0f, 0.0f },
+        .direction = { 0.0f, 0.0f, -1.0f },
+        .right = { 0.0f, 1.0f, 0.0f },
+        .up = { -1.0f, 0.0f, 0.0f },
+    });
+
+    quader::DebugDrawFrame debug_draw;
+    quader::append_light_gizmos(snapshot, debug_draw);
+
+    const std::vector<quader::DebugDrawLine>& lines = debug_draw.depth_tested.lines();
+    ASSERT_GE(lines.size(), 5U);
+    EXPECT_FLOAT_EQ(0.0f, lines[1].b.position.x);
+    EXPECT_FLOAT_EQ(0.12f, lines[1].b.position.y);
+    EXPECT_FLOAT_EQ(-0.78f, lines[1].b.position.z);
+    EXPECT_FLOAT_EQ(-0.12f, lines[3].b.position.x);
+    EXPECT_FLOAT_EQ(0.0f, lines[3].b.position.y);
+    EXPECT_FLOAT_EQ(-0.78f, lines[3].b.position.z);
 }
 
 TEST(ViewportInstance, AcceptsMatchingFrameAndStoresDisplayedExtent)
 {
-    quader::Scene scene = quader::create_default_scene();
+    quader::Scene scene = make_test_scene();
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 3 }, "Top", quader::ViewportCameraPreset::top);
     viewport.set_requested_extent({ 64, 32 });
 
-    const quader::ViewportRenderRequest request = *viewport.try_begin_render_request(scene, {}, {});
+    const quader::ViewportRenderRequest request = *viewport.try_begin_render_request(scene);
     const quader::ViewportFrameAcceptance acceptance = viewport.accept_frame(completed_frame_from(request));
 
     EXPECT_TRUE(acceptance.accepted);
@@ -120,12 +185,12 @@ TEST(ViewportInstance, AcceptsMatchingFrameAndStoresDisplayedExtent)
 
 TEST(ViewportInstance, RejectsFrameWhenExtentChangedWhilePending)
 {
-    quader::Scene scene = quader::create_default_scene();
+    quader::Scene scene = make_test_scene();
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 4 }, "Perspective", quader::ViewportCameraPreset::perspective);
     viewport.set_requested_extent({ 64, 32 });
 
-    const quader::ViewportRenderRequest request = *viewport.try_begin_render_request(scene, {}, {});
+    const quader::ViewportRenderRequest request = *viewport.try_begin_render_request(scene);
     viewport.set_requested_extent({ 128, 64 });
 
     const quader::ViewportFrameAcceptance acceptance = viewport.accept_frame(completed_frame_from(request));
@@ -197,34 +262,6 @@ TEST(ViewportInstance, PerspectiveSceneDoesNotStartMouseLockAwayFromViewport)
 
     EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
     EXPECT_FALSE(viewport.update_navigation(input, false, 0.016f));
-}
-
-TEST(ViewportInstance, PreviewOrbitNavigationLocksMouseOnlyForRightDrag)
-{
-    quader::ViewportInstance viewport = quader::ViewportInstance::preview_viewport({ 11 }, "Preview");
-
-    quader::ViewportNavigationSnapshot input;
-    input.hovered = true;
-    input.move_forward = true;
-
-    EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
-
-    input.right_mouse_pressed = true;
-    input.right_mouse_down = true;
-    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
-    EXPECT_TRUE(viewport.should_keep_navigation_mouse_lock(input));
-}
-
-TEST(ViewportInstance, PreviewOrbitNavigationChangesOnWheel)
-{
-    quader::ViewportInstance viewport = quader::ViewportInstance::preview_viewport({ 6 }, "Preview");
-
-    quader::ViewportNavigationSnapshot input;
-    input.hovered = true;
-    input.mouse_wheel_delta = { 0.0f, 1.0f };
-
-    EXPECT_TRUE(viewport.update_navigation(input, false, 0.016f));
-    EXPECT_TRUE(viewport.is_dirty());
 }
 
 TEST(ViewportInstance, NonInteractiveViewportIgnoresNavigationInput)

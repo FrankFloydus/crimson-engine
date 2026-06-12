@@ -212,10 +212,28 @@ DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettin
 
     settings.color = clamp_color(settings.color);
     settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 200000.0f);
-    settings.yaw_degrees = normalize_yaw(settings.yaw_degrees);
-    settings.pitch_degrees =
-        std::clamp(finite_or(settings.pitch_degrees, defaults.pitch_degrees), -89.0f, 89.0f);
     settings.shadow = clamp_directional_shadow_settings(settings.shadow);
+    return settings;
+}
+
+PointLightShadowSettings clamp_point_light_shadow_settings(PointLightShadowSettings settings)
+{
+    const PointLightShadowSettings defaults;
+
+    settings.constant_bias = std::max(finite_or(settings.constant_bias, defaults.constant_bias), 0.0f);
+    settings.normal_bias = std::max(finite_or(settings.normal_bias, defaults.normal_bias), 0.0f);
+    return settings;
+}
+
+PointLightSettings clamp_point_light_settings(PointLightSettings settings)
+{
+    const PointLightSettings defaults;
+
+    settings.color = clamp_color(settings.color);
+    settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 200000.0f);
+    settings.range = std::max(finite_or(settings.range, defaults.range), 0.0f);
+    settings.falloff = std::max(finite_or(settings.falloff, defaults.falloff), 0.001f);
+    settings.shadow = clamp_point_light_shadow_settings(settings.shadow);
     return settings;
 }
 
