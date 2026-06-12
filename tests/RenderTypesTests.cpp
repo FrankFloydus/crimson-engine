@@ -9,8 +9,11 @@ TEST(RenderTypes, DefaultPbrMaterialIsGlossyRedDielectric)
     EXPECT_FLOAT_EQ(1.0f, settings.albedo.r);
     EXPECT_FLOAT_EQ(0.0f, settings.albedo.g);
     EXPECT_FLOAT_EQ(0.0f, settings.albedo.b);
+    EXPECT_FALSE(settings.albedo_texture.has_source());
     EXPECT_FLOAT_EQ(0.18f, settings.roughness);
+    EXPECT_FALSE(settings.roughness_texture.has_source());
     EXPECT_FLOAT_EQ(0.0f, settings.metallic);
+    EXPECT_FALSE(settings.metallic_texture.has_source());
     EXPECT_FLOAT_EQ(0.8f, settings.reflectance);
     EXPECT_FLOAT_EQ(1.0f, settings.specular_factor);
     EXPECT_FLOAT_EQ(1.0f, settings.specular_color_factor.r);
@@ -18,6 +21,22 @@ TEST(RenderTypes, DefaultPbrMaterialIsGlossyRedDielectric)
     EXPECT_FLOAT_EQ(1.0f, settings.specular_color_factor.b);
     EXPECT_FLOAT_EQ(0.0f, settings.clear_coat);
     EXPECT_FLOAT_EQ(0.0f, settings.clear_coat_roughness);
+}
+
+TEST(RenderTypes, MaterialTextureReferenceSelectsRequestedSlot)
+{
+    quader::PbrMaterialSettings settings;
+
+    quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::albedo).source_path = "albedo.png";
+    quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::roughness).source_path = "roughness.png";
+    quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::metallic).source_path = "metallic.png";
+
+    EXPECT_EQ("albedo.png", settings.albedo_texture.source_path);
+    EXPECT_EQ("roughness.png", settings.roughness_texture.source_path);
+    EXPECT_EQ("metallic.png", settings.metallic_texture.source_path);
+
+    quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::roughness).clear();
+    EXPECT_FALSE(settings.roughness_texture.has_source());
 }
 
 TEST(RenderTypes, ClampPbrMaterialSettings)

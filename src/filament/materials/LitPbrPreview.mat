@@ -7,12 +7,36 @@ material {
             name : albedo
         },
         {
+            type : sampler2d,
+            name : albedoTexture
+        },
+        {
+            type : bool,
+            name : useAlbedoTexture
+        },
+        {
             type : float,
             name : roughness
         },
         {
+            type : sampler2d,
+            name : roughnessTexture
+        },
+        {
+            type : bool,
+            name : useRoughnessTexture
+        },
+        {
             type : float,
             name : metallic
+        },
+        {
+            type : sampler2d,
+            name : metallicTexture
+        },
+        {
+            type : bool,
+            name : useMetallicTexture
         },
         {
             type : float,
@@ -34,15 +58,35 @@ material {
             type : float,
             name : clearCoatRoughness
         }
+    ],
+    requires : [
+        uv0
     ]
 }
 
 fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
-        material.baseColor = materialParams.albedo;
-        material.roughness = materialParams.roughness;
-        material.metallic = materialParams.metallic;
+
+        float4 baseColor = materialParams.albedo;
+        if (materialParams.useAlbedoTexture) {
+            baseColor = texture(materialParams_albedoTexture, getUV0());
+            baseColor.rgb *= baseColor.a;
+        }
+
+        float roughness = materialParams.roughness;
+        if (materialParams.useRoughnessTexture) {
+            roughness *= texture(materialParams_roughnessTexture, getUV0()).r;
+        }
+
+        float metallic = materialParams.metallic;
+        if (materialParams.useMetallicTexture) {
+            metallic *= texture(materialParams_metallicTexture, getUV0()).r;
+        }
+
+        material.baseColor = baseColor;
+        material.roughness = roughness;
+        material.metallic = metallic;
         material.reflectance = materialParams.reflectance;
         material.specularFactor = materialParams.specularFactor;
         material.specularColorFactor = materialParams.specularColorFactor;

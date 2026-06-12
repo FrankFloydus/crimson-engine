@@ -100,6 +100,34 @@ LinearRgba premultiplied_linear_rgba(LinearColor color, float alpha)
     };
 }
 
+TextureAssetReference& material_texture_reference(PbrMaterialSettings& settings, PbrMaterialTextureSlot slot)
+{
+    switch (slot) {
+    case PbrMaterialTextureSlot::albedo:
+        return settings.albedo_texture;
+    case PbrMaterialTextureSlot::roughness:
+        return settings.roughness_texture;
+    case PbrMaterialTextureSlot::metallic:
+        return settings.metallic_texture;
+    }
+
+    return settings.albedo_texture;
+}
+
+const TextureAssetReference& material_texture_reference(const PbrMaterialSettings& settings, PbrMaterialTextureSlot slot)
+{
+    switch (slot) {
+    case PbrMaterialTextureSlot::albedo:
+        return settings.albedo_texture;
+    case PbrMaterialTextureSlot::roughness:
+        return settings.roughness_texture;
+    case PbrMaterialTextureSlot::metallic:
+        return settings.metallic_texture;
+    }
+
+    return settings.albedo_texture;
+}
+
 RenderCamera clamp_render_camera(RenderCamera camera)
 {
     const RenderCamera defaults;

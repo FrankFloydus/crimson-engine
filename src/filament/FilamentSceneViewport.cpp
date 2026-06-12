@@ -17,6 +17,7 @@ module;
 #include <filament/Scene.h>
 #include <filament/Skybox.h>
 #include <filament/Texture.h>
+#include <filament/TextureSampler.h>
 #include <filament/TransformManager.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
@@ -29,19 +30,25 @@ module;
 #include <utils/EntityManager.h>
 #include <tracy/Tracy.hpp>
 
+#include "diagnostics/LogMacros.h"
 #include "generated/QuaderLitPbrMaterial.inc"
 
 #include <array>
+#include <exception>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 module quader.filament.scene_viewport;
 
+import quader.assets.image;
+import quader.diagnostics.logger;
 import quader.math.types;
 
 namespace quader {
@@ -50,11 +57,27 @@ namespace {
 struct CubeVertex {
     filament::math::float3 position;
     filament::math::short4 tangent_frame;
+    filament::math::float2 uv0;
 };
 
 struct CubeSourceVertex {
     filament::math::float3 position;
     filament::math::float3 normal;
+    filament::math::float2 uv0;
+};
+
+enum class PreviewTextureEncoding : uint8_t {
+    srgb_rgba,
+    linear_red,
+};
+
+struct MaterialTextureBinding {
+    filament::Texture* texture = nullptr;
+    bool use_source_texture = false;
+};
+
+struct CachedMaterialTexture {
+    filament::Texture* texture = nullptr;
 };
 
 template<typename Value>
@@ -76,6 +99,36 @@ template<typename Value, size_t Size>
 filament::backend::BufferDescriptor make_filament_buffer_copy(const std::array<Value, Size>& values)
 {
     return make_filament_buffer_copy<Value>(std::span<const Value>(values.data(), values.size()));
+}
+
+filament::backend::PixelBufferDescriptor make_filament_pixel_buffer_copy(
+    std::span<const uint8_t> values,
+    filament::backend::PixelDataFormat format)
+{
+    const size_t byte_count = values.size_bytes();
+    auto* bytes = new std::byte[byte_count];
+    std::memcpy(bytes, values.data(), byte_count);
+
+    return filament::backend::PixelBufferDescriptor(
+        bytes,
+        byte_count,
+        format,
+        filament::backend::PixelDataType::UBYTE,
+        1,
+        0,
+        0,
+        0,
+        [](void* buffer, size_t, void*) {
+            delete[] static_cast<std::byte*>(buffer);
+        });
+}
+
+template<size_t Size>
+filament::backend::PixelBufferDescriptor make_filament_pixel_buffer_copy(
+    const std::array<uint8_t, Size>& values,
+    filament::backend::PixelDataFormat format)
+{
+    return make_filament_pixel_buffer_copy(std::span<const uint8_t>(values.data(), values.size()), format);
 }
 
 filament::math::float3 to_filament_color(LinearColor color)
@@ -106,40 +159,64 @@ filament::math::double3 to_filament_direction(const RenderCamera& camera)
     return filament::math::double3 { direction.x, direction.y, direction.z };
 }
 
+const char* texture_slot_name(PbrMaterialTextureSlot slot)
+{
+    switch (slot) {
+    case PbrMaterialTextureSlot::albedo:
+        return "albedo";
+    case PbrMaterialTextureSlot::roughness:
+        return "roughness";
+    case PbrMaterialTextureSlot::metallic:
+        return "metallic";
+    }
+
+    return "unknown";
+}
+
+std::string material_texture_cache_key(
+    std::string_view source_path,
+    PbrMaterialTextureSlot slot,
+    PreviewTextureEncoding encoding)
+{
+    return std::to_string(static_cast<uint32_t>(slot)) + "|" +
+        std::to_string(static_cast<uint32_t>(encoding)) + "|" +
+        std::string(source_path);
+}
+
 std::array<CubeSourceVertex, 24> cube_source_vertices()
 {
     constexpr float half_extent = 1.0f;
 
     return {
-        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f } },
-        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f } },
+        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f } },
+        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f } },
-        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f } },
-        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f } },
+        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 1.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 1.0f, 1.0f } },
+        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { -1.0f, 0.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { -1.0f, 0.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { -1.0f, 0.0f, 0.0f }, { 1.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
+        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 1.0f, 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 1.0f, 0.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
+        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 1.0f } },
+        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f } },
+        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f }, { 1.0f, 0.0f } },
+        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f }, { 1.0f, 1.0f } },
+        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } },
     };
 }
 
@@ -207,6 +284,7 @@ std::vector<CubeVertex> build_cube_vertices()
         vertices.push_back(CubeVertex {
             source_vertices[index].position,
             tangent_frames[index],
+            source_vertices[index].uv0,
         });
     }
 
@@ -265,6 +343,8 @@ struct FilamentSceneViewport::Resources {
             engine.destroy(material);
         }
 
+        destroy_material_textures();
+
         if (cube_indices != nullptr) {
             engine.destroy(cube_indices);
         }
@@ -322,6 +402,140 @@ struct FilamentSceneViewport::Resources {
         view->setCamera(camera);
     }
 
+    filament::Texture* create_material_texture(
+        uint32_t width,
+        uint32_t height,
+        filament::Texture::InternalFormat internal_format,
+        filament::backend::PixelDataFormat pixel_format,
+        std::span<const uint8_t> pixels)
+    {
+        filament::Texture* texture = filament::Texture::Builder()
+            .width(width)
+            .height(height)
+            .levels(1)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .format(internal_format)
+            .build(engine);
+
+        if (texture == nullptr) {
+            throw std::runtime_error("Filament failed to allocate a material texture.");
+        }
+
+        texture->setImage(engine, 0, make_filament_pixel_buffer_copy(pixels, pixel_format));
+        return texture;
+    }
+
+    filament::Texture* load_material_texture(
+        std::string_view source_path,
+        PreviewTextureEncoding encoding)
+    {
+        const ImageColorEncoding image_encoding =
+            encoding == PreviewTextureEncoding::srgb_rgba
+                ? ImageColorEncoding::srgb
+                : ImageColorEncoding::linear;
+        const Rgba8Image image = load_rgba8_image_from_file(source_path, image_encoding);
+        if (!image.has_pixels()) {
+            throw std::runtime_error("Image decoder returned no pixels for " + std::string(source_path));
+        }
+
+        if (encoding == PreviewTextureEncoding::srgb_rgba) {
+            return create_material_texture(
+                image.width,
+                image.height,
+                filament::Texture::InternalFormat::SRGB8_A8,
+                filament::backend::PixelDataFormat::RGBA,
+                std::span<const uint8_t>(image.rgba.data(), image.rgba.size()));
+        }
+
+        const size_t pixel_count = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
+        std::vector<uint8_t> red_channel(pixel_count);
+        for (size_t pixel_index = 0; pixel_index < pixel_count; ++pixel_index) {
+            red_channel[pixel_index] = image.rgba[pixel_index * 4];
+        }
+
+        return create_material_texture(
+            image.width,
+            image.height,
+            filament::Texture::InternalFormat::R8,
+            filament::backend::PixelDataFormat::R,
+            std::span<const uint8_t>(red_channel.data(), red_channel.size()));
+    }
+
+    void ensure_fallback_material_textures()
+    {
+        if (fallback_albedo_texture == nullptr) {
+            constexpr std::array<uint8_t, 4> white_srgb_rgba { 255, 255, 255, 255 };
+            fallback_albedo_texture = create_material_texture(
+                1,
+                1,
+                filament::Texture::InternalFormat::SRGB8_A8,
+                filament::backend::PixelDataFormat::RGBA,
+                std::span<const uint8_t>(white_srgb_rgba.data(), white_srgb_rgba.size()));
+        }
+
+        if (fallback_scalar_texture == nullptr) {
+            constexpr std::array<uint8_t, 1> white_linear_scalar { 255 };
+            fallback_scalar_texture = create_material_texture(
+                1,
+                1,
+                filament::Texture::InternalFormat::R8,
+                filament::backend::PixelDataFormat::R,
+                std::span<const uint8_t>(white_linear_scalar.data(), white_linear_scalar.size()));
+        }
+    }
+
+    MaterialTextureBinding resolve_material_texture(
+        const TextureAssetReference& reference,
+        PbrMaterialTextureSlot slot,
+        PreviewTextureEncoding encoding,
+        filament::Texture* fallback_texture)
+    {
+        if (!reference.has_source()) {
+            return MaterialTextureBinding { fallback_texture, false };
+        }
+
+        const std::string cache_key = material_texture_cache_key(reference.source_path, slot, encoding);
+        auto [entry, inserted] = material_texture_cache.try_emplace(cache_key);
+        if (inserted) {
+            try {
+                entry->second.texture = load_material_texture(reference.source_path, encoding);
+            } catch (const std::exception& error) {
+                QUADER_LOG_WARN(
+                    "Failed to load {} material texture '{}': {}",
+                    texture_slot_name(slot),
+                    reference.source_path,
+                    error.what());
+            }
+        }
+
+        if (entry->second.texture == nullptr) {
+            return MaterialTextureBinding { fallback_texture, false };
+        }
+
+        return MaterialTextureBinding { entry->second.texture, true };
+    }
+
+    void destroy_material_textures()
+    {
+        for (auto& [_, cached] : material_texture_cache) {
+            if (cached.texture != nullptr) {
+                engine.destroy(cached.texture);
+                cached.texture = nullptr;
+            }
+        }
+        material_texture_cache.clear();
+
+        if (fallback_scalar_texture != nullptr) {
+            engine.destroy(fallback_scalar_texture);
+            fallback_scalar_texture = nullptr;
+        }
+
+        if (fallback_albedo_texture != nullptr) {
+            engine.destroy(fallback_albedo_texture);
+            fallback_albedo_texture = nullptr;
+        }
+    }
+
     void create_cube(const PbrMaterialSettings& settings)
     {
         const std::vector<CubeVertex> vertices = build_cube_vertices();
@@ -343,6 +557,12 @@ struct FilamentSceneViewport::Resources {
                 offsetof(CubeVertex, tangent_frame),
                 sizeof(CubeVertex))
             .normalized(filament::VertexAttribute::TANGENTS)
+            .attribute(
+                filament::VertexAttribute::UV0,
+                0,
+                filament::VertexBuffer::AttributeType::FLOAT2,
+                offsetof(CubeVertex, uv0),
+                sizeof(CubeVertex))
             .build(engine);
 
         cube_vertices->setBufferAt(engine, 0, make_filament_buffer_copy<CubeVertex>(vertices));
@@ -427,15 +647,39 @@ struct FilamentSceneViewport::Resources {
         }
     }
 
-    void apply_material_settings(PbrMaterialSettings settings) const
+    void apply_material_settings(PbrMaterialSettings settings)
     {
         settings = clamp_pbr_material_settings(settings);
+        ensure_fallback_material_textures();
+
+        const MaterialTextureBinding albedo_texture = resolve_material_texture(
+            settings.albedo_texture,
+            PbrMaterialTextureSlot::albedo,
+            PreviewTextureEncoding::srgb_rgba,
+            fallback_albedo_texture);
+        const MaterialTextureBinding roughness_texture = resolve_material_texture(
+            settings.roughness_texture,
+            PbrMaterialTextureSlot::roughness,
+            PreviewTextureEncoding::linear_red,
+            fallback_scalar_texture);
+        const MaterialTextureBinding metallic_texture = resolve_material_texture(
+            settings.metallic_texture,
+            PbrMaterialTextureSlot::metallic,
+            PreviewTextureEncoding::linear_red,
+            fallback_scalar_texture);
+
         material_instance->setParameter(
             "albedo",
             filament::RgbaType::PREMULTIPLIED_LINEAR,
             to_filament_premultiplied_color(settings.albedo, 1.0f));
+        material_instance->setParameter("albedoTexture", albedo_texture.texture, material_texture_sampler);
+        material_instance->setParameter("useAlbedoTexture", albedo_texture.use_source_texture);
         material_instance->setParameter("roughness", settings.roughness);
+        material_instance->setParameter("roughnessTexture", roughness_texture.texture, material_texture_sampler);
+        material_instance->setParameter("useRoughnessTexture", roughness_texture.use_source_texture);
         material_instance->setParameter("metallic", settings.metallic);
+        material_instance->setParameter("metallicTexture", metallic_texture.texture, material_texture_sampler);
+        material_instance->setParameter("useMetallicTexture", metallic_texture.use_source_texture);
         material_instance->setParameter("reflectance", settings.reflectance);
         material_instance->setParameter("specularFactor", settings.specular_factor);
         material_instance->setParameter(
@@ -593,6 +837,14 @@ struct FilamentSceneViewport::Resources {
     filament::IndexBuffer* cube_indices = nullptr;
     filament::Material* material = nullptr;
     filament::MaterialInstance* material_instance = nullptr;
+    filament::Texture* fallback_albedo_texture = nullptr;
+    filament::Texture* fallback_scalar_texture = nullptr;
+    std::unordered_map<std::string, CachedMaterialTexture> material_texture_cache;
+    filament::TextureSampler material_texture_sampler {
+        filament::TextureSampler::MinFilter::LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR,
+        filament::TextureSampler::WrapMode::REPEAT,
+    };
     filament::Skybox* skybox = nullptr;
     filament::Camera* camera = nullptr;
     utils::Entity camera_entity;

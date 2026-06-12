@@ -9,6 +9,8 @@ module;
 
 module quader.filament.render_engine;
 
+import quader.filament.scene_viewport;
+
 namespace quader {
 namespace {
 
@@ -34,19 +36,38 @@ std::string backend_to_string(filament::backend::Backend backend)
 
 } // namespace
 
+struct FilamentRenderEngine::Resources {
+    Resources() = default;
+
+    Resources(const Resources&) = delete;
+    Resources& operator=(const Resources&) = delete;
+
+    ~Resources()
+    {
+        scene_viewport.reset();
+        if (engine != nullptr) {
+            filament::Engine::destroy(&engine);
+        }
+    }
+
+    filament::Engine* engine = nullptr;
+    std::unique_ptr<FilamentSceneViewport> scene_viewport;
+};
+
 FilamentRenderEngine::FilamentRenderEngine()
+    : resources_(std::make_unique<Resources>())
 {
     try {
-        engine_ = filament::Engine::create(filament::backend::Backend::VULKAN);
-        if (engine_ == nullptr) {
+        resources_->engine = filament::Engine::create(filament::backend::Backend::VULKAN);
+        if (resources_->engine == nullptr) {
             status_.message = "Filament Engine::create returned null.";
             return;
         }
 
-        scene_viewport_ = std::make_unique<FilamentSceneViewport>(*engine_);
+        resources_->scene_viewport = std::make_unique<FilamentSceneViewport>(*resources_->engine);
 
         status_.initialized = true;
-        status_.backend_name = backend_to_string(engine_->getBackend());
+        status_.backend_name = backend_to_string(resources_->engine->getBackend());
         status_.message = "Filament scene viewport renderer is initialized.";
     } catch (const std::exception& error) {
         status_.message = error.what();
@@ -55,13 +76,7 @@ FilamentRenderEngine::FilamentRenderEngine()
     }
 }
 
-FilamentRenderEngine::~FilamentRenderEngine()
-{
-    scene_viewport_.reset();
-    if (engine_ != nullptr) {
-        filament::Engine::destroy(&engine_);
-    }
-}
+FilamentRenderEngine::~FilamentRenderEngine() = default;
 
 RendererStatus FilamentRenderEngine::status() const
 {
@@ -73,12 +88,12 @@ bool FilamentRenderEngine::request_scene_viewport_frame(
     const RenderCamera& camera,
     RenderExtent extent)
 {
-    if (!status_.initialized || scene_viewport_ == nullptr || !extent.is_valid()) {
+    if (!status_.initialized || resources_ == nullptr || resources_->scene_viewport == nullptr || !extent.is_valid()) {
         viewport_frame_available_ = false;
         return false;
     }
 
-    scene_viewport_->render_into(scene, camera, extent, viewport_frame_);
+    resources_->scene_viewport->render_into(scene, camera, extent, viewport_frame_);
     viewport_frame_available_ = viewport_frame_.has_pixels();
     return viewport_frame_available_;
 }

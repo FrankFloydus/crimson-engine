@@ -20,6 +20,7 @@ find_package(Vulkan REQUIRED)
 find_package(GTest CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(Stb REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 
 include(GoogleTest)
@@ -111,6 +112,7 @@ target_link_libraries(filament_sdk INTERFACE
 )
 
 set(QUADER_CORE_SOURCES
+    src/assets/ImageAsset.cpp
     src/app/Application.cpp
     src/app/EditorCamera.cpp
     src/app/EditorViewport.cpp
@@ -121,6 +123,7 @@ set(QUADER_CORE_SOURCES
     src/platform/FatalErrorDialog.cpp
     src/platform/AppEventDispatcher.cpp
     src/platform/Input.cpp
+    src/platform/NativeFileDialog.cpp
     src/platform/SdlEventSource.cpp
     src/platform/SdlWindow.cpp
     src/render/RenderEngineFactory.cpp
@@ -130,12 +133,15 @@ set(QUADER_CORE_SOURCES
     src/render/VulkanDevice.cpp
     src/render/VulkanSwapchain.cpp
     src/scene/Scene.cpp
+    src/ui/EditorDockspace.cpp
     src/ui/ImGuiLayer.cpp
+    src/ui/MaterialPanel.cpp
     src/ui/ViewportPanels.cpp
     src/ui/VulkanViewportTexture.cpp
 )
 
 set(QUADER_MODULES
+    src/assets/ImageAsset.ixx
     src/app/Application.ixx
     src/app/EditorCamera.ixx
     src/app/EditorViewport.ixx
@@ -147,6 +153,7 @@ set(QUADER_MODULES
     src/platform/AppEvent.ixx
     src/platform/AppEventDispatcher.ixx
     src/platform/Input.ixx
+    src/platform/NativeFileDialog.ixx
     src/platform/SdlEventSource.ixx
     src/platform/SdlWindow.ixx
     src/render/IRenderEngine.ixx
@@ -159,7 +166,9 @@ set(QUADER_MODULES
     src/render/VulkanDevice.ixx
     src/render/VulkanSwapchain.ixx
     src/scene/Scene.ixx
+    src/ui/EditorDockspace.ixx
     src/ui/ImGuiLayer.ixx
+    src/ui/MaterialPanel.ixx
     src/ui/ViewportPanels.ixx
     src/ui/VulkanViewportTexture.ixx
 )
@@ -174,6 +183,7 @@ target_sources(quader_core
 
 target_include_directories(quader_core PUBLIC src)
 target_include_directories(quader_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(quader_core PRIVATE ${Stb_INCLUDE_DIR})
 
 add_dependencies(quader_core quader_generated_assets)
 

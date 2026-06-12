@@ -16,20 +16,9 @@ Vec3 operator+(Vec3 left, Vec3 right)
     return { left.x + right.x, left.y + right.y, left.z + right.z };
 }
 
-Vec3 operator-(Vec3 left, Vec3 right)
-{
-    return { left.x - right.x, left.y - right.y, left.z - right.z };
-}
-
 Vec3 operator*(Vec3 value, float scale)
 {
     return { value.x * scale, value.y * scale, value.z * scale };
-}
-
-Vec3& operator+=(Vec3& left, Vec3 right)
-{
-    left = left + right;
-    return left;
 }
 
 float squared_length(Vec3 value)
@@ -62,6 +51,15 @@ bool has_nonzero_vector(Vec3 value)
     return squared_length(value) > 0.000001f;
 }
 
+float finite_or_zero(float value)
+{
+    if (!std::isfinite(value)) {
+        return 0.0f;
+    }
+
+    return value;
+}
+
 float normalized_delta_seconds(float delta_seconds)
 {
     if (!std::isfinite(delta_seconds) || delta_seconds <= 0.0f) {
@@ -74,6 +72,28 @@ float normalized_delta_seconds(float delta_seconds)
 bool is_boosting(const Input& input)
 {
     return input.is_key_down(AppKey::left_shift) || input.is_key_down(AppKey::right_shift);
+}
+
+float key_axis(bool positive_direction_down, bool negative_direction_down)
+{
+    return (positive_direction_down ? 1.0f : 0.0f) - (negative_direction_down ? 1.0f : 0.0f);
+}
+
+EditorCameraNavigationInput navigation_input_from_input(const Input& input)
+{
+    const MouseDelta mouse_delta = input.mouse_delta();
+
+    EditorCameraNavigationInput navigation_input;
+    navigation_input.move_forward = input.is_key_down(AppKey::w);
+    navigation_input.move_backward = input.is_key_down(AppKey::s);
+    navigation_input.move_left = input.is_key_down(AppKey::a);
+    navigation_input.move_right = input.is_key_down(AppKey::d);
+    navigation_input.move_up = input.is_key_down(AppKey::e);
+    navigation_input.move_down = input.is_key_down(AppKey::q);
+    navigation_input.boost = is_boosting(input);
+    navigation_input.look_active = input.is_mouse_button_down(AppMouseButton::right);
+    navigation_input.look_delta = mouse_delta;
+    return navigation_input;
 }
 
 } // namespace
@@ -98,17 +118,20 @@ RenderCamera EditorCamera::render_camera() const
     return camera_;
 }
 
-bool EditorCamera::update_from_input(const Input& input, float delta_seconds)
+bool EditorCamera::update_from_navigation_input(
+    const EditorCameraNavigationInput& navigation_input,
+    float delta_seconds)
 {
     ZoneScopedN("Editor camera update");
 
     bool changed = false;
-    if (input.is_mouse_button_down(AppMouseButton::right)) {
-        const MouseDelta mouse_delta = input.mouse_delta();
-        if (mouse_delta.x != 0.0f || mouse_delta.y != 0.0f) {
-            camera_.yaw_degrees += mouse_delta.x * look_sensitivity_degrees_per_pixel_;
+    if (navigation_input.look_active) {
+        const float look_delta_x = finite_or_zero(navigation_input.look_delta.x);
+        const float look_delta_y = finite_or_zero(navigation_input.look_delta.y);
+        if (look_delta_x != 0.0f || look_delta_y != 0.0f) {
+            camera_.yaw_degrees += look_delta_x * look_sensitivity_degrees_per_pixel_;
             camera_.pitch_degrees = std::clamp(
-                camera_.pitch_degrees - mouse_delta.y * look_sensitivity_degrees_per_pixel_,
+                camera_.pitch_degrees - look_delta_y * look_sensitivity_degrees_per_pixel_,
                 -89.0f,
                 89.0f);
             changed = true;
@@ -116,32 +139,18 @@ bool EditorCamera::update_from_input(const Input& input, float delta_seconds)
     }
 
     const float frame_seconds = normalized_delta_seconds(delta_seconds);
-    Vec3 movement {};
+    const float move_forward_axis = key_axis(navigation_input.move_forward, navigation_input.move_backward);
+    const float move_right_axis = key_axis(navigation_input.move_right, navigation_input.move_left);
+    const float move_up_axis = key_axis(navigation_input.move_up, navigation_input.move_down);
     const Vec3 forward = normalized_direction_from_yaw_pitch(camera_.yaw_degrees, camera_.pitch_degrees);
     const Vec3 right = normalized_or_zero(cross(forward, world_up));
-
-    if (input.is_key_down(AppKey::w)) {
-        movement += forward;
-    }
-    if (input.is_key_down(AppKey::s)) {
-        movement = movement - forward;
-    }
-    if (input.is_key_down(AppKey::d)) {
-        movement += right;
-    }
-    if (input.is_key_down(AppKey::a)) {
-        movement = movement - right;
-    }
-    if (input.is_key_down(AppKey::e)) {
-        movement += world_up;
-    }
-    if (input.is_key_down(AppKey::q)) {
-        movement = movement - world_up;
-    }
+    const Vec3 movement = (forward * move_forward_axis) + (right * move_right_axis) + (world_up * move_up_axis);
 
     if (frame_seconds > 0.0f && has_nonzero_vector(movement)) {
-        const float speed = movement_speed_ * (is_boosting(input) ? movement_boost_multiplier_ : 1.0f);
-        camera_.position += normalized_or_zero(movement) * (speed * frame_seconds);
+        const float movement_length = std::sqrt(squared_length(movement));
+        const float movement_scale = std::min(movement_length, 1.0f);
+        const float speed = movement_speed_ * (navigation_input.boost ? movement_boost_multiplier_ : 1.0f);
+        camera_.position = camera_.position + (normalized_or_zero(movement) * (speed * frame_seconds * movement_scale));
         changed = true;
     }
 
@@ -150,6 +159,11 @@ bool EditorCamera::update_from_input(const Input& input, float delta_seconds)
     }
 
     return changed;
+}
+
+bool EditorCamera::update_from_input(const Input& input, float delta_seconds)
+{
+    return update_from_navigation_input(navigation_input_from_input(input), delta_seconds);
 }
 
 } // namespace quader

@@ -7,12 +7,14 @@ export module quader.app;
 import quader.app.editor_viewport;
 import quader.platform.app_event_dispatcher;
 import quader.platform.input;
+import quader.platform.native_file_dialog;
 import quader.platform.sdl_event_source;
 import quader.platform.sdl_window;
 import quader.render.scene_viewport_renderer;
 import quader.render.vulkan_device;
 import quader.render.vulkan_swapchain;
 import quader.scene.scene;
+import quader.ui.editor_dockspace;
 import quader.ui.imgui_layer;
 
 export namespace quader {
@@ -32,6 +34,7 @@ private:
     void update_relative_mouse_mode();
 
     SdlWindow window_;
+    NativeFileDialogService native_file_dialog_;
     SdlEventSource event_source_;
     AppEventDispatcher event_dispatcher_;
     Input input_;

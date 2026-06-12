@@ -2,6 +2,7 @@ module;
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 export module quader.render.types;
@@ -49,6 +50,26 @@ struct LinearRgba {
     float a = 1.0f;
 };
 
+struct TextureAssetReference {
+    std::string source_path;
+
+    [[nodiscard]] bool has_source() const
+    {
+        return !source_path.empty();
+    }
+
+    void clear()
+    {
+        source_path.clear();
+    }
+};
+
+enum class PbrMaterialTextureSlot : uint8_t {
+    albedo,
+    roughness,
+    metallic,
+};
+
 struct RenderCamera {
     Vec3 position { 3.0f, 2.1f, 3.5f };
     float yaw_degrees = -40.601295f;
@@ -60,8 +81,11 @@ struct RenderCamera {
 
 struct PbrMaterialSettings {
     LinearColor albedo { 1.0f, 0.0f, 0.0f };
+    TextureAssetReference albedo_texture;
     float roughness = 0.18f;
+    TextureAssetReference roughness_texture;
     float metallic = 0.0f;
+    TextureAssetReference metallic_texture;
     float reflectance = 0.8f;
     float specular_factor = 1.0f;
     LinearColor specular_color_factor { 1.0f, 1.0f, 1.0f };
@@ -83,6 +107,12 @@ struct DirectionalLightSettings {
 [[nodiscard]] LinearColor srgb_to_linear(SrgbColor color);
 [[nodiscard]] SrgbColor linear_to_srgb(LinearColor color);
 [[nodiscard]] LinearRgba premultiplied_linear_rgba(LinearColor color, float alpha);
+[[nodiscard]] TextureAssetReference& material_texture_reference(
+    PbrMaterialSettings& settings,
+    PbrMaterialTextureSlot slot);
+[[nodiscard]] const TextureAssetReference& material_texture_reference(
+    const PbrMaterialSettings& settings,
+    PbrMaterialTextureSlot slot);
 [[nodiscard]] RenderCamera clamp_render_camera(RenderCamera camera);
 [[nodiscard]] PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings);
 [[nodiscard]] DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettings settings);

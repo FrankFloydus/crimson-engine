@@ -109,11 +109,17 @@ If these questions cannot be answered simply, pause and refine the design before
 
 Before starting any new task, automatically make a pre-emptive architecture and code-health check around the area being changed. Identify code smells, tight coupling, unclear ownership, overgrown classes, misplaced responsibilities, non-modular code, and anything that does not follow OOP/SOLID, modularity, or scalability expectations.
 
-Do this check silently as part of normal work. Do not report the audit process to the user unless it changes the user-facing plan, requires approval, affects risk, or the user explicitly asks for the audit.
+Use subagents as part of this pre-emptive health check. For non-trivial work, boot 1 to 6 subagents before implementation begins; use more agents within that range when the code area is large, cross-cutting, or architecturally risky. Each booted subagent should participate in the overall health check by inspecting a clear slice of the relevant code and reporting code smells, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and concrete architecture refactors that should be done before or alongside the requested task.
 
-Automatically refactor bad or smelly code on the go when it is directly in the path of the task and the refactor reduces risk or improves the design needed for the new work. Keep these refactors focused; do not wander into unrelated cleanup.
+When opening subagents, always pass the explicit task context in the subagent prompt instead of using full-history mode. Full-history subagent spawning is currently error-prone in this workspace; keep prompts self-contained with the repo path, relevant constraints, ownership boundaries, and expected output.
 
-After that check, boot up a subagent to help identify the best place, architecture, and pattern for the new functionality. Use the subagent's input to keep the app modular, scalable, and aligned with OOP/SOLID principles before implementation begins.
+When the architecture and code-health analysis is complete, and before implementation begins, report what the agents found. List code smells, architecture debt, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and any focused refactors that should happen before or alongside the requested task. If nothing meaningful is found because the relevant architecture is already healthy enough, explicitly say that the architecture is good for this task and no cleanup is needed this time.
+
+Do not repeat the architecture inspection in the same chat when the first pass has already been completed and nothing meaningful has changed in the relevant code since that pass. Also do not restart the architecture inspection solely because the conversation was automatically compacted; continue from the compacted summary and only inspect again if the code or task scope changed enough to invalidate the earlier findings.
+
+Automatically refactor bad or smelly code on the go when it is directly in the path of the task and the refactor reduces risk or improves the design needed for the new work. Keep these refactors focused; do not wander into unrelated cleanup. When subagents were used for the health check, use the same agents for the focused refactor whenever practical: give them disjoint ownership, have them apply or recommend the cleanup they identified, wait for their final reports, and incorporate the results before moving on.
+
+After the architecture health check and any required refactor are complete, actual implementation work should always be done with multiple agents to make progress faster. Split implementation across disjoint ownership boundaries whenever possible, give each implementation subagent the relevant context, intended architecture, ownership boundaries, and any constraints discovered during the health check, then wait until all implementation-planning subagents have reported before the task implementation starts. Use their input to keep the app modular, scalable, and aligned with OOP/SOLID principles.
 
 When any subagent is spawned, always wait for it to reach a final completed status before finalizing the response or treating the work as complete. Do not leave spawned subagents running in the background, and close completed subagents once their result has been incorporated. Incorporate the completed subagent result into the plan, architecture decision, implementation, or final summary as appropriate.
 
@@ -340,7 +346,7 @@ For changes that touch build, startup, platform, renderer, UI, or Filament:
 - Run the executable with `QUADER_AUTOCLOSE_MS`.
 - Run GoogleTest with `ctest --test-dir .\out\build\vs2026-x64 -C Debug --output-on-failure` when touching tested logic, diagnostics, build structure, startup validation, or renderer contracts.
 - Do not build Release unless the user explicitly asks for it.
-- Remove generated runtime state such as `imgui.ini` unless it is intentionally being committed.
+- For now, keep `imgui.ini` when it is generated; do not remove or cancel it. This preserves ImGui docking/layout state until the app has a proper user-settings path.
 - Keep the final status concise and mention any test you could not run.
 
 # 2. Dear ImGui Architecture Rules for Agentic AI

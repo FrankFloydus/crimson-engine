@@ -1,22 +1,16 @@
 #include <gtest/gtest.h>
 
 import quader.app.editor_camera;
-import quader.platform.input;
 
-TEST(EditorCamera, MovesForwardFromWasdInput)
+TEST(EditorCamera, MovesForwardFromNavigationInput)
 {
-    quader::Input input;
+    quader::EditorCameraNavigationInput navigation_input;
     quader::EditorCamera camera;
     const quader::RenderCamera before = camera.render_camera();
 
-    input.begin_frame();
-    input.handle_event(quader::AppKeyEvent {
-        .key = quader::AppKey::w,
-        .pressed = true,
-        .repeat = false,
-    });
+    navigation_input.move_forward = true;
 
-    EXPECT_TRUE(camera.update_from_input(input, 1.0f));
+    EXPECT_TRUE(camera.update_from_navigation_input(navigation_input, 1.0f));
 
     const quader::RenderCamera after = camera.render_camera();
     EXPECT_NE(before.position.x, after.position.x);
@@ -24,25 +18,35 @@ TEST(EditorCamera, MovesForwardFromWasdInput)
     EXPECT_NE(before.position.z, after.position.z);
 }
 
-TEST(EditorCamera, RightMouseDragChangesYawAndPitch)
+TEST(EditorCamera, ActiveLookInputChangesYawAndPitch)
 {
-    quader::Input input;
+    quader::EditorCameraNavigationInput navigation_input;
     quader::EditorCamera camera;
     const quader::RenderCamera before = camera.render_camera();
 
-    input.begin_frame();
-    input.handle_event(quader::AppMouseButtonEvent {
-        .button = quader::AppMouseButton::right,
-        .pressed = true,
-    });
-    input.handle_event(quader::AppMouseMotionEvent {
-        .delta_x = 10.0f,
-        .delta_y = -5.0f,
-    });
+    navigation_input.look_active = true;
+    navigation_input.look_delta.x = 10.0f;
+    navigation_input.look_delta.y = -5.0f;
 
-    EXPECT_TRUE(camera.update_from_input(input, 0.016f));
+    EXPECT_TRUE(camera.update_from_navigation_input(navigation_input, 0.016f));
 
     const quader::RenderCamera after = camera.render_camera();
     EXPECT_GT(after.yaw_degrees, before.yaw_degrees);
     EXPECT_GT(after.pitch_degrees, before.pitch_degrees);
+}
+
+TEST(EditorCamera, InactiveLookInputDoesNotChangeYawOrPitch)
+{
+    quader::EditorCameraNavigationInput navigation_input;
+    quader::EditorCamera camera;
+    const quader::RenderCamera before = camera.render_camera();
+
+    navigation_input.look_delta.x = 10.0f;
+    navigation_input.look_delta.y = -5.0f;
+
+    EXPECT_FALSE(camera.update_from_navigation_input(navigation_input, 0.016f));
+
+    const quader::RenderCamera after = camera.render_camera();
+    EXPECT_EQ(before.yaw_degrees, after.yaw_degrees);
+    EXPECT_EQ(before.pitch_degrees, after.pitch_degrees);
 }

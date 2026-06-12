@@ -1,12 +1,8 @@
 module;
-
-#include <filament/Engine.h>
-
 #include <memory>
 
 export module quader.filament.render_engine;
 
-import quader.filament.scene_viewport;
 export import quader.render.engine;
 export import quader.render.scene_viewport_renderer;
 
@@ -30,8 +26,9 @@ public:
     [[nodiscard]] const RenderViewportFrame* try_consume_scene_viewport_frame() override;
 
 private:
-    filament::Engine* engine_ = nullptr;
-    std::unique_ptr<FilamentSceneViewport> scene_viewport_;
+    struct Resources;
+
+    std::unique_ptr<Resources> resources_;
     RendererStatus status_;
     RenderViewportFrame viewport_frame_;
     bool viewport_frame_available_ = false;

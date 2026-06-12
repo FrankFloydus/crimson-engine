@@ -56,6 +56,7 @@ std::unique_ptr<ISceneViewportRenderer> create_renderer_engine_or_throw()
 
 Application::Application()
     : window_("Quader Native", 1280, 800)
+    , native_file_dialog_(window_)
     , event_source_(window_)
     , vulkan_device_(window_)
     , swapchain_(vulkan_device_, window_)
@@ -85,7 +86,6 @@ int Application::run()
 
         input_.begin_frame();
         poll_events();
-        update_relative_mouse_mode();
 
         if (input_.close_requested()) {
             running = false;
@@ -97,6 +97,7 @@ int Application::run()
         }
 
         draw_frame(delta_seconds.count());
+        update_relative_mouse_mode();
     }
 
     return render_engine_->status().initialized ? 0 : 2;
@@ -108,7 +109,14 @@ void Application::draw_frame(float delta_seconds)
 
     swapchain_.recreate_if_needed(window_);
     imgui_.begin_frame();
-    scene_viewport_.render_frame(*render_engine_, imgui_, open_scene_, input_, delta_seconds);
+    render_editor_dockspace();
+    scene_viewport_.render_frame(
+        *render_engine_,
+        imgui_,
+        open_scene_,
+        native_file_dialog_,
+        input_,
+        delta_seconds);
     imgui_.end_frame(swapchain_);
 
     FrameMark;
@@ -121,7 +129,7 @@ void Application::poll_events()
 
 void Application::update_relative_mouse_mode()
 {
-    window_.set_relative_mouse_mode(input_.is_mouse_button_down(AppMouseButton::right));
+    window_.set_relative_mouse_mode(scene_viewport_.wants_relative_mouse_mode());
 }
 
 } // namespace quader
