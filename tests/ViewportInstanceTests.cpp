@@ -78,6 +78,12 @@ TEST(ViewportInstance, SceneViewportKeepsOriginalCameraPresetAsDefault)
 TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
 {
     quader::Scene scene = make_test_scene();
+    quader::EnvironmentLightingSettings environment;
+    environment.intensity = 12000.0f;
+    environment.rotation_degrees = 30.0f;
+    environment.show_skybox = false;
+    scene.set_environment_settings(environment);
+
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 1 }, "Perspective", quader::ViewportCameraPreset::perspective);
     viewport.set_requested_extent({ 320, 200 });
@@ -91,6 +97,9 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     ASSERT_TRUE(std::holds_alternative<quader::SceneViewportSubject>(request->subject));
     const quader::SceneViewportSubject& subject =
         std::get<quader::SceneViewportSubject>(request->subject);
+    EXPECT_FLOAT_EQ(12000.0f, subject.snapshot.environment.intensity);
+    EXPECT_FLOAT_EQ(30.0f, subject.snapshot.environment.rotation_degrees);
+    EXPECT_FALSE(subject.snapshot.environment.show_skybox);
     ASSERT_EQ(2U, subject.snapshot.meshes.size());
     EXPECT_TRUE(subject.snapshot.meshes[0].entity_id.is_valid());
     EXPECT_EQ(quader::ViewportMeshKind::cube, subject.snapshot.meshes[0].mesh_kind);

@@ -5,3 +5,5 @@ CMakeUserPresets.json
 imgui.ini
 quader-native-imgui.ini
 logs/
+assets/environments/**/*.hdr
+assets/environments/**/*.exr

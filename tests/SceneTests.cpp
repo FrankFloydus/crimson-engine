@@ -25,6 +25,33 @@ TEST(Scene, DefaultSceneStartsEmpty)
     EXPECT_EQ("Untitled Scene", scene.title());
     EXPECT_EQ(0u, scene.entity_count());
     EXPECT_TRUE(scene.entities().empty());
+    EXPECT_TRUE(scene.environment_settings().enabled);
+    EXPECT_FLOAT_EQ(30000.0f, scene.environment_settings().intensity);
+    EXPECT_FALSE(scene.environment_settings().show_skybox);
+}
+
+TEST(Scene, StoresClampedEnvironmentSettings)
+{
+    quader::Scene scene;
+
+    quader::EnvironmentLightingSettings settings;
+    settings.enabled = false;
+    settings.intensity = -15.0f;
+    settings.rotation_degrees = 540.0f;
+    settings.show_skybox = false;
+    settings.fallback_color = { 1.25f, 0.5f, -0.25f, 0.75f };
+
+    scene.set_environment_settings(settings);
+
+    const quader::EnvironmentLightingSettings stored = scene.environment_settings();
+    EXPECT_FALSE(stored.enabled);
+    EXPECT_FLOAT_EQ(0.0f, stored.intensity);
+    EXPECT_FLOAT_EQ(180.0f, stored.rotation_degrees);
+    EXPECT_FALSE(stored.show_skybox);
+    EXPECT_FLOAT_EQ(1.0f, stored.fallback_color.r);
+    EXPECT_FLOAT_EQ(0.5f, stored.fallback_color.g);
+    EXPECT_FLOAT_EQ(0.0f, stored.fallback_color.b);
+    EXPECT_FLOAT_EQ(0.75f, stored.fallback_color.a);
 }
 
 TEST(Scene, CreatesDefaultRenderableAndLightEntities)
@@ -51,7 +78,8 @@ TEST(Scene, CreatesDefaultRenderableAndLightEntities)
     EXPECT_FLOAT_EQ(65000.0f, scene.directional_light(directional_light)->settings.intensity);
 
     ASSERT_NE(nullptr, scene.point_light(point_light));
-    EXPECT_FLOAT_EQ(10000.0f, scene.point_light(point_light)->settings.intensity);
+    EXPECT_FLOAT_EQ(1000000.0f, scene.point_light(point_light)->settings.intensity);
+    EXPECT_EQ(quader::PointLightFalloffMode::linear, scene.point_light(point_light)->settings.falloff_mode);
     EXPECT_TRUE(scene.point_light(point_light)->settings.shadow.enabled);
 }
 
@@ -122,6 +150,7 @@ TEST(Scene, RenderSnapshotUsesEntityIdsAndTransformDrivenLightDirection)
     point_transform.position = { 3.0f, 4.0f, 5.0f };
     const quader::SceneEntityId point_light = scene.create_point_light("Point Light", point_transform);
     scene.point_light(point_light)->settings.range = 12.5f;
+    scene.point_light(point_light)->settings.falloff_mode = quader::PointLightFalloffMode::inverse_squared;
 
     const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
 
@@ -135,6 +164,24 @@ TEST(Scene, RenderSnapshotUsesEntityIdsAndTransformDrivenLightDirection)
     EXPECT_EQ(point_light.value, snapshot.point_lights[0].entity_id.value);
     expect_near_vec3(snapshot.point_lights[0].position, { 3.0f, 4.0f, 5.0f });
     EXPECT_FLOAT_EQ(12.5f, snapshot.point_lights[0].settings.range);
+    EXPECT_EQ(quader::PointLightFalloffMode::inverse_squared, snapshot.point_lights[0].settings.falloff_mode);
+}
+
+TEST(Scene, RenderSnapshotCarriesEnvironmentSettings)
+{
+    quader::Scene scene;
+
+    quader::EnvironmentLightingSettings settings;
+    settings.intensity = 15000.0f;
+    settings.rotation_degrees = -45.0f;
+    settings.show_skybox = false;
+    scene.set_environment_settings(settings);
+
+    const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
+
+    EXPECT_FLOAT_EQ(15000.0f, snapshot.environment.intensity);
+    EXPECT_FLOAT_EQ(-45.0f, snapshot.environment.rotation_degrees);
+    EXPECT_FALSE(snapshot.environment.show_skybox);
 }
 
 TEST(Scene, RenderSnapshotCarriesDirectionalLightRollBasis)

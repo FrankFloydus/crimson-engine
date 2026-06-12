@@ -28,6 +28,11 @@ constexpr std::array<DirectionalShadowQuality, 4> kShadowQualities {
     DirectionalShadowQuality::ultra,
 };
 
+constexpr std::array<PointLightFalloffMode, 2> kPointLightFalloffModes {
+    PointLightFalloffMode::linear,
+    PointLightFalloffMode::inverse_squared,
+};
+
 [[nodiscard]] std::string_view filename_or_path_text(std::string_view path)
 {
     const size_t separator = path.find_last_of("/\\");
@@ -566,29 +571,27 @@ PointLightComponentEditorResult draw_point_light_component(PointLightComponent& 
             "Intensity",
             light.settings.intensity,
             defaults.settings.intensity,
-            100.0f,
+            5000.0f,
             0.0f,
-            200000.0f,
+            100000000.0f,
             "%.0f lm",
-            "Point light strength.");
+            "Point light luminous power in lumens. High values are expected under the editor's outdoor-style exposure.");
         result.settings_changed |= render_resettable_float_drag(
             "Range",
             light.settings.range,
             defaults.settings.range,
             0.05f,
             0.0f,
-            10000.0f,
+            1000.0f,
             "%.2f m",
-            "Maximum point light influence distance.");
-        result.settings_changed |= render_resettable_float_drag(
+            "Maximum point light influence distance passed to Filament falloff.");
+        result.settings_changed |= render_resettable_combo(
             "Falloff",
-            light.settings.falloff,
-            defaults.settings.falloff,
-            0.01f,
-            0.001f,
-            10.0f,
-            "%.3f",
-            "Multiplier applied to the point light influence radius before it is passed to Filament falloff.");
+            light.settings.falloff_mode,
+            defaults.settings.falloff_mode,
+            std::span<const PointLightFalloffMode> { kPointLightFalloffModes },
+            point_light_falloff_mode_name,
+            "Linear keeps the authored radius visually useful for editor lighting. Inverse Squared uses Filament's physically based point-light attenuation.");
         result.settings_changed |= render_resettable_checkbox(
             "Shadows Enabled",
             light.settings.shadow.enabled,

@@ -35,10 +35,12 @@ struct ViewportHostPanelResult {
     std::vector<ViewportPaneResult> panes;
     std::optional<ViewportId> active_viewport;
     bool layout_changed = false;
+    bool environment_changed = false;
 };
 
 [[nodiscard]] ViewportHostPanelResult draw_viewport_host_panel(
     ViewportLayoutState& layout_state,
+    EnvironmentLightingSettings& environment_settings,
     std::span<const ViewportPaneInput> panes);
 
 } // namespace quader

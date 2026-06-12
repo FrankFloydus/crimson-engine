@@ -66,7 +66,7 @@ struct RenderCamera {
     float pitch_degrees = -24.699650f;
     float vertical_fov_degrees = 52.0f;
     float near_plane = 0.1f;
-    float far_plane = 100.0f;
+    float far_plane = 1000.0f;
 };
 
 struct PbrMaterialSettings {
@@ -81,6 +81,19 @@ struct PbrMaterialSettings {
     LinearColor specular_color_factor { 1.0f, 1.0f, 1.0f };
     float clear_coat = 0.0f;
     float clear_coat_roughness = 0.0f;
+};
+
+enum class EnvironmentLightingSource : uint8_t {
+    built_in_default,
+};
+
+struct EnvironmentLightingSettings {
+    EnvironmentLightingSource source = EnvironmentLightingSource::built_in_default;
+    bool enabled = true;
+    float intensity = 30000.0f;
+    float rotation_degrees = 0.0f;
+    bool show_skybox = false;
+    LinearRgba fallback_color { 0.055f, 0.060f, 0.070f, 1.0f };
 };
 
 enum class DirectionalShadowMode : uint8_t {
@@ -135,16 +148,23 @@ struct PointLightShadowSettings {
     float normal_bias = 1.0f;
 };
 
+enum class PointLightFalloffMode : uint8_t {
+    linear,
+    inverse_squared,
+};
+
 struct PointLightSettings {
     LinearColor color { 1.0f, 0.94f, 0.86f };
-    float intensity = 10000.0f;
+    float intensity = 1000000.0f;
     float range = 10.0f;
-    float falloff = 1.0f;
+    PointLightFalloffMode falloff_mode = PointLightFalloffMode::linear;
     PointLightShadowSettings shadow;
 };
 
 [[nodiscard]] LinearColor clamp_color(LinearColor color);
 [[nodiscard]] SrgbColor clamp_color(SrgbColor color);
+[[nodiscard]] LinearRgba clamp_color(LinearRgba color);
+[[nodiscard]] const char* environment_lighting_source_name(EnvironmentLightingSource source) noexcept;
 [[nodiscard]] float srgb_channel_to_linear(float channel);
 [[nodiscard]] float linear_channel_to_srgb(float channel);
 [[nodiscard]] LinearColor srgb_to_linear(SrgbColor color);
@@ -158,9 +178,11 @@ struct PointLightSettings {
     PbrMaterialTextureSlot slot);
 [[nodiscard]] RenderCamera clamp_render_camera(RenderCamera camera);
 [[nodiscard]] PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings);
+[[nodiscard]] EnvironmentLightingSettings clamp_environment_lighting_settings(EnvironmentLightingSettings settings);
 [[nodiscard]] uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality);
 [[nodiscard]] DirectionalShadowSettings clamp_directional_shadow_settings(DirectionalShadowSettings settings);
 [[nodiscard]] DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettings settings);
+[[nodiscard]] const char* point_light_falloff_mode_name(PointLightFalloffMode mode) noexcept;
 [[nodiscard]] PointLightShadowSettings clamp_point_light_shadow_settings(PointLightShadowSettings settings);
 [[nodiscard]] PointLightSettings clamp_point_light_settings(PointLightSettings settings);
 

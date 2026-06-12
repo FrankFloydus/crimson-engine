@@ -642,7 +642,13 @@ void EditorViewport::render_scene_viewport_host(
         });
     }
 
-    ViewportHostPanelResult result = draw_viewport_host_panel(layout_state_, panes);
+    EnvironmentLightingSettings environment_settings = scene.environment_settings();
+    ViewportHostPanelResult result = draw_viewport_host_panel(layout_state_, environment_settings, panes);
+    if (result.environment_changed) {
+        scene.set_environment_settings(environment_settings);
+        frame_result.scene_changed = true;
+        mark_scene_viewports_dirty();
+    }
     if (result.active_viewport.has_value()) {
         active_viewport_ = *result.active_viewport;
     }

@@ -71,6 +71,40 @@ TEST(RenderTypes, ClampPbrMaterialSettings)
     EXPECT_FLOAT_EQ(0.0f, clamped.clear_coat_roughness);
 }
 
+TEST(RenderTypes, DefaultEnvironmentLightingUsesBuiltInIblWithHiddenSkybox)
+{
+    const quader::EnvironmentLightingSettings settings;
+
+    EXPECT_EQ(quader::EnvironmentLightingSource::built_in_default, settings.source);
+    EXPECT_STREQ("Built-in Default", quader::environment_lighting_source_name(settings.source));
+    EXPECT_TRUE(settings.enabled);
+    EXPECT_FLOAT_EQ(30000.0f, settings.intensity);
+    EXPECT_FLOAT_EQ(0.0f, settings.rotation_degrees);
+    EXPECT_FALSE(settings.show_skybox);
+    EXPECT_FLOAT_EQ(0.055f, settings.fallback_color.r);
+    EXPECT_FLOAT_EQ(0.060f, settings.fallback_color.g);
+    EXPECT_FLOAT_EQ(0.070f, settings.fallback_color.b);
+    EXPECT_FLOAT_EQ(1.0f, settings.fallback_color.a);
+}
+
+TEST(RenderTypes, ClampEnvironmentLightingSettings)
+{
+    quader::EnvironmentLightingSettings settings;
+    settings.intensity = std::numeric_limits<float>::infinity();
+    settings.rotation_degrees = 725.0f;
+    settings.fallback_color = { -1.0f, 0.25f, 2.0f, 5.0f };
+
+    const quader::EnvironmentLightingSettings clamped =
+        quader::clamp_environment_lighting_settings(settings);
+
+    EXPECT_FLOAT_EQ(30000.0f, clamped.intensity);
+    EXPECT_FLOAT_EQ(5.0f, clamped.rotation_degrees);
+    EXPECT_FLOAT_EQ(0.0f, clamped.fallback_color.r);
+    EXPECT_FLOAT_EQ(0.25f, clamped.fallback_color.g);
+    EXPECT_FLOAT_EQ(1.0f, clamped.fallback_color.b);
+    EXPECT_FLOAT_EQ(1.0f, clamped.fallback_color.a);
+}
+
 TEST(RenderTypes, ConvertSrgbToLinearWithStandardTransferFunction)
 {
     const quader::LinearColor black = quader::srgb_to_linear({ 0.0f, 0.0f, 0.0f });
@@ -153,7 +187,6 @@ TEST(RenderTypes, ClampPointLightSettings)
     settings.color = { 2.0f, -1.0f, 0.25f };
     settings.intensity = std::numeric_limits<float>::infinity();
     settings.range = -5.0f;
-    settings.falloff = std::numeric_limits<float>::quiet_NaN();
     settings.shadow.constant_bias = -1.0f;
     settings.shadow.normal_bias = -2.0f;
 
@@ -162,11 +195,28 @@ TEST(RenderTypes, ClampPointLightSettings)
     EXPECT_FLOAT_EQ(1.0f, clamped.color.r);
     EXPECT_FLOAT_EQ(0.0f, clamped.color.g);
     EXPECT_FLOAT_EQ(0.25f, clamped.color.b);
-    EXPECT_FLOAT_EQ(10000.0f, clamped.intensity);
+    EXPECT_FLOAT_EQ(1000000.0f, clamped.intensity);
     EXPECT_FLOAT_EQ(0.0f, clamped.range);
-    EXPECT_FLOAT_EQ(1.0f, clamped.falloff);
+    EXPECT_EQ(quader::PointLightFalloffMode::linear, clamped.falloff_mode);
     EXPECT_FLOAT_EQ(0.0f, clamped.shadow.constant_bias);
     EXPECT_FLOAT_EQ(0.0f, clamped.shadow.normal_bias);
+}
+
+TEST(RenderTypes, PointLightIntensitySupportsBrightEditorValues)
+{
+    const quader::PointLightSettings defaults;
+    EXPECT_FLOAT_EQ(1000000.0f, defaults.intensity);
+    EXPECT_EQ(quader::PointLightFalloffMode::linear, defaults.falloff_mode);
+    EXPECT_STREQ("Linear", quader::point_light_falloff_mode_name(defaults.falloff_mode));
+    EXPECT_STREQ(
+        "Inverse Squared",
+        quader::point_light_falloff_mode_name(quader::PointLightFalloffMode::inverse_squared));
+
+    quader::PointLightSettings settings;
+    settings.intensity = 500000000.0f;
+
+    const quader::PointLightSettings clamped = quader::clamp_point_light_settings(settings);
+    EXPECT_FLOAT_EQ(100000000.0f, clamped.intensity);
 }
 
 TEST(RenderTypes, DirectionalShadowQualityMapsToTextureSize)

@@ -15,7 +15,6 @@ module;
 #include <filament/RenderTarget.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
-#include <filament/Skybox.h>
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
 #include <filament/TransformManager.h>
@@ -55,10 +54,15 @@ module quader.filament.scene_viewport;
 import quader.assets.image;
 import quader.diagnostics.logger;
 import quader.filament.debug_draw_renderer;
+import quader.filament.environment_resources;
 import quader.math.types;
 
 namespace quader {
 namespace {
+
+constexpr float kMaximumFilamentPointLightLumens = 1.0e12f;
+constexpr float kMinimumPointLightRange = 0.001f;
+constexpr float kMaximumDynamicLightingFar = 10000.0f;
 
 struct MeshVertex {
     filament::math::float3 position;
@@ -169,6 +173,19 @@ filament::math::float3 to_filament_color(LinearColor color)
 filament::math::float3 to_filament_float3(Vec3 value)
 {
     return filament::math::float3 { value.x, value.y, value.z };
+}
+
+float squared_distance(Vec3 left, Vec3 right)
+{
+    const float x = left.x - right.x;
+    const float y = left.y - right.y;
+    const float z = left.z - right.z;
+    return x * x + y * y + z * z;
+}
+
+float distance_between(Vec3 left, Vec3 right)
+{
+    return std::sqrt(squared_distance(left, right));
 }
 
 filament::math::float4 to_filament_premultiplied_color(LinearColor color, float alpha)
@@ -443,6 +460,53 @@ filament::LightManager::ShadowOptions filament_shadow_options(const PointLightSh
     return options;
 }
 
+float filament_point_light_falloff_radius(PointLightSettings settings)
+{
+    settings = clamp_point_light_settings(settings);
+    return std::max(kMinimumPointLightRange, settings.range);
+}
+
+float filament_point_light_lumens(PointLightSettings settings)
+{
+    settings = clamp_point_light_settings(settings);
+    if (settings.falloff_mode == PointLightFalloffMode::inverse_squared) {
+        return settings.intensity;
+    }
+
+    const PointLightSettings defaults;
+    const float reference_range = std::max(kMinimumPointLightRange, defaults.range);
+    const float normalized_range = filament_point_light_falloff_radius(settings) / reference_range;
+    return std::clamp(
+        settings.intensity * normalized_range * normalized_range,
+        0.0f,
+        kMaximumFilamentPointLightLumens);
+}
+
+float dynamic_lighting_far_for(
+    const SceneRenderSnapshot& snapshot,
+    const ViewportCamera& camera,
+    const ViewportProjection& projection)
+{
+    float far_distance = std::max(projection.near_plane + 0.001f, projection.far_plane);
+    for (const SceneRenderPointLight& light : snapshot.point_lights) {
+        if (!light.entity_id.is_valid()) {
+            continue;
+        }
+
+        const PointLightSettings settings = clamp_point_light_settings(light.settings);
+        const float distance_to_light = distance_between(camera.position, light.position);
+        if (!std::isfinite(distance_to_light)) {
+            continue;
+        }
+
+        far_distance = std::max(
+            far_distance,
+            distance_to_light + filament_point_light_falloff_radius(settings));
+    }
+
+    return std::clamp(far_distance, projection.near_plane + 0.001f, kMaximumDynamicLightingFar);
+}
+
 filament::View::VsmShadowOptions filament_vsm_shadow_options(const DirectionalShadowSettings& settings)
 {
     filament::View::VsmShadowOptions options;
@@ -475,6 +539,7 @@ struct FilamentSceneViewport::Resources {
     {
         engine.flushAndWait();
 
+        environment_resources.reset();
         debug_draw_renderer.reset();
 
         if (scene != nullptr) {
@@ -513,10 +578,6 @@ struct FilamentSceneViewport::Resources {
         if (camera_entity) {
             engine.destroyCameraComponent(camera_entity);
             utils::EntityManager::get().destroy(camera_entity);
-        }
-
-        if (skybox != nullptr) {
-            engine.destroy(skybox);
         }
 
         if (material != nullptr) {
@@ -561,23 +622,19 @@ struct FilamentSceneViewport::Resources {
         renderer = require_filament_allocation(engine.createRenderer(), "viewport renderer");
         scene = require_filament_allocation(engine.createScene(), "viewport scene");
         view = require_filament_allocation(engine.createView(), "viewport view");
+        environment_resources = std::make_unique<FilamentEnvironmentResources>(engine, *scene);
         debug_draw_renderer = std::make_unique<FilamentDebugDrawRenderer>(engine, *scene);
 
         view->setScene(scene);
         view->setPostProcessingEnabled(true);
         view->setAntiAliasing(filament::View::AntiAliasing::FXAA);
         view->setShadowingEnabled(true);
+        view->setShadowType(filament::View::ShadowType::PCF);
 
         filament::Renderer::ClearOptions clear_options;
         clear_options.clear = true;
         clear_options.clearColor = { 0.055, 0.060, 0.070, 1.0 };
         renderer->setClearOptions(clear_options);
-
-        skybox = filament::Skybox::Builder()
-            .color({ 0.055f, 0.060f, 0.070f, 1.0f })
-            .build(engine);
-        skybox = require_filament_allocation(skybox, "viewport skybox");
-        scene->setSkybox(skybox);
 
         create_camera();
     }
@@ -941,11 +998,15 @@ struct FilamentSceneViewport::Resources {
 
     [[nodiscard]] PointLightRenderable create_point_light_renderable()
     {
+        const PointLightSettings defaults = clamp_point_light_settings({});
         PointLightRenderable light;
         light.entity = utils::EntityManager::get().create();
         const filament::LightManager::Builder::Result light_result =
             filament::LightManager::Builder(filament::LightManager::Type::POINT)
-            .castShadows(true)
+            .intensity(filament_point_light_lumens(defaults))
+            .falloff(filament_point_light_falloff_radius(defaults))
+            .castShadows(defaults.shadow.enabled)
+            .shadowOptions(filament_shadow_options(defaults.shadow))
             .build(engine, light.entity);
         if (light_result != filament::LightManager::Builder::Success) {
             throw std::runtime_error("Filament failed to create the viewport point light.");
@@ -1160,22 +1221,26 @@ struct FilamentSceneViewport::Resources {
     void apply_point_light_settings(utils::Entity light_entity, const SceneRenderPointLight& light) const
     {
         const PointLightSettings settings = clamp_point_light_settings(light.settings);
-        const float falloff_radius = std::max(0.001f, settings.range * settings.falloff);
+        const float falloff_radius = filament_point_light_falloff_radius(settings);
 
         filament::LightManager& lights = engine.getLightManager();
         const filament::LightManager::Instance light_instance = lights.getInstance(light_entity);
         lights.setPosition(light_instance, to_filament_float3(light.position));
         lights.setColor(light_instance, to_filament_color(settings.color));
-        lights.setIntensity(light_instance, settings.intensity);
+        lights.setIntensity(light_instance, filament_point_light_lumens(settings));
         lights.setFalloff(light_instance, falloff_radius);
         lights.setShadowCaster(light_instance, settings.shadow.enabled);
         lights.setShadowOptions(light_instance, filament_shadow_options(settings.shadow));
     }
 
-    void apply_camera(ViewportCamera camera_settings, ViewportProjection projection_settings)
+    void apply_camera(
+        ViewportCamera camera_settings,
+        ViewportProjection projection_settings,
+        float dynamic_lighting_far)
     {
         camera_state = camera_settings;
         projection_state = projection_settings;
+        projection_state.far_plane = std::max(projection_state.far_plane, dynamic_lighting_far);
 
         const filament::math::double3 eye = to_filament_point(camera_state.position);
         const filament::math::double3 target = eye + to_filament_direction(camera_state.forward);
@@ -1204,6 +1269,7 @@ struct FilamentSceneViewport::Resources {
                 half_height,
                 projection_state.near_plane,
                 projection_state.far_plane);
+            view->setDynamicLightingOptions(projection_state.near_plane, projection_state.far_plane);
             return;
         }
 
@@ -1212,6 +1278,7 @@ struct FilamentSceneViewport::Resources {
             aspect,
             projection_state.near_plane,
             projection_state.far_plane);
+        view->setDynamicLightingOptions(projection_state.near_plane, projection_state.far_plane);
     }
 
     void ensure_preview_size(RenderExtent extent)
@@ -1268,11 +1335,17 @@ struct FilamentSceneViewport::Resources {
         ZoneScopedN("Filament scene viewport render");
 
         const SceneRenderSnapshot& snapshot = std::get<SceneViewportSubject>(request.subject).snapshot;
+        if (environment_resources != nullptr) {
+            environment_resources->apply(snapshot.environment);
+        }
         apply_scene_snapshot(snapshot);
         if (debug_draw_renderer != nullptr) {
             debug_draw_renderer->render(request.debug_draw);
         }
-        apply_camera(request.camera, request.projection);
+        apply_camera(
+            request.camera,
+            request.projection,
+            dynamic_lighting_far_for(snapshot, request.camera, request.projection));
         ensure_preview_size(request.extent);
         if (preview_target == nullptr) {
             return;
@@ -1339,6 +1412,7 @@ struct FilamentSceneViewport::Resources {
     std::unordered_map<uint32_t, MeshRenderable> meshes;
     std::unordered_map<uint32_t, DirectionalLightRenderable> directional_lights;
     std::unordered_map<uint32_t, PointLightRenderable> point_lights;
+    std::unique_ptr<FilamentEnvironmentResources> environment_resources;
     std::unique_ptr<FilamentDebugDrawRenderer> debug_draw_renderer;
     filament::Texture* fallback_albedo_texture = nullptr;
     filament::Texture* fallback_scalar_texture = nullptr;
@@ -1348,7 +1422,6 @@ struct FilamentSceneViewport::Resources {
         filament::TextureSampler::MagFilter::LINEAR,
         filament::TextureSampler::WrapMode::REPEAT,
     };
-    filament::Skybox* skybox = nullptr;
     filament::Camera* camera = nullptr;
     utils::Entity camera_entity;
     RenderExtent preview_extent;

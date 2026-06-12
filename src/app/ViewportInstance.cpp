@@ -320,7 +320,7 @@ ViewportProjection ViewportInstance::current_projection() const
         .vertical_fov_degrees = 52.0f,
         .orthographic_size = orthographic_size_,
         .near_plane = 0.01f,
-        .far_plane = 100.0f,
+        .far_plane = 1000.0f,
     };
 }
 

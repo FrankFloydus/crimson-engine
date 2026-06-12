@@ -110,7 +110,7 @@ struct ViewportProjection {
     float vertical_fov_degrees = 52.0f;
     float orthographic_size = 5.0f;
     float near_plane = 0.1f;
-    float far_plane = 100.0f;
+    float far_plane = 1000.0f;
 };
 
 enum class ViewportMeshKind : uint8_t {
@@ -145,6 +145,7 @@ struct SceneRenderPointLight {
 };
 
 struct SceneRenderSnapshot {
+    EnvironmentLightingSettings environment;
     std::vector<SceneRenderMesh> meshes;
     std::vector<SceneRenderDirectionalLight> directional_lights;
     std::vector<SceneRenderPointLight> point_lights;

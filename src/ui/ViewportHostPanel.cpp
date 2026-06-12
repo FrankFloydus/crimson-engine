@@ -6,6 +6,7 @@ module;
 #include <array>
 #include <cstddef>
 #include <cstdio>
+#include <limits>
 #include <optional>
 #include <span>
 #include <vector>
@@ -76,6 +77,49 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
         floats_match(left.secondary_split_ratio, right.secondary_split_ratio);
 }
 
+[[nodiscard]] bool colors_match(LinearRgba left, LinearRgba right)
+{
+    return floats_match(left.r, right.r) &&
+        floats_match(left.g, right.g) &&
+        floats_match(left.b, right.b) &&
+        floats_match(left.a, right.a);
+}
+
+[[nodiscard]] bool render_srgb_rgba_color_edit(const char* label, LinearRgba& color)
+{
+    const SrgbColor srgb = linear_to_srgb(LinearColor { color.r, color.g, color.b });
+    float values[4] { srgb.r, srgb.g, srgb.b, color.a };
+    if (!ImGui::ColorEdit4(label, values, ImGuiColorEditFlags_Float)) {
+        return false;
+    }
+
+    const LinearColor linear = srgb_to_linear(SrgbColor { values[0], values[1], values[2] });
+    color = LinearRgba {
+        .r = linear.r,
+        .g = linear.g,
+        .b = linear.b,
+        .a = values[3],
+    };
+    return true;
+}
+
+[[nodiscard]] bool render_resettable_srgb_rgba_edit(
+    const char* label,
+    LinearRgba& value,
+    LinearRgba default_value,
+    const char* tooltip)
+{
+    const bool changed_from_default = !colors_match(value, default_value);
+    const ResettablePropertyLayout layout = begin_resettable_property(label, tooltip, changed_from_default);
+    bool changed = render_srgb_rgba_color_edit("##Value", value);
+    render_item_tooltip(tooltip);
+    if (end_resettable_property(layout, "Reset this color to its default.")) {
+        value = default_value;
+        changed = true;
+    }
+    return changed;
+}
+
 [[nodiscard]] bool draw_layout_combo(ViewportLayoutState& layout_state, const ViewportHostUiStyle& style)
 {
     bool changed = false;
@@ -105,6 +149,77 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
         layout_state = default_layout_state;
         changed = true;
     }
+    return changed;
+}
+
+[[nodiscard]] bool draw_environment_popup(
+    EnvironmentLightingSettings& settings,
+    const ViewportHostUiStyle& style)
+{
+    bool changed = false;
+    if (ImGui::Button("Environment", ImVec2 { style.environment_button_width, 0.0f })) {
+        ImGui::OpenPopup("EnvironmentSettingsPopup");
+    }
+    render_item_tooltip("Edits the scene environment lighting used by every viewport.");
+
+    // Popups auto-fit their contents. The resettable controls size from the available width,
+    // so clamp X to avoid a feedback loop where changed rows make the popup grow every frame.
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2 { style.environment_popup_width, 0.0f },
+        ImVec2 { style.environment_popup_width, std::numeric_limits<float>::max() });
+    ImGui::SetNextWindowSize(ImVec2 { style.environment_popup_width, 0.0f }, ImGuiCond_Appearing);
+    if (ImGui::BeginPopup("EnvironmentSettingsPopup")) {
+        const EnvironmentLightingSettings defaults;
+
+        ImGui::TextUnformatted(environment_lighting_source_name(settings.source));
+        render_item_tooltip("Current environment source.");
+
+        changed |= render_resettable_checkbox(
+            "Enabled",
+            settings.enabled,
+            defaults.enabled,
+            "Enables the scene's indirect environment light.");
+
+        {
+            DisabledScope disabled(!settings.enabled);
+            changed |= render_resettable_float_drag(
+                "Intensity",
+                settings.intensity,
+                defaults.intensity,
+                100.0f,
+                0.0f,
+                200000.0f,
+                "%.0f",
+                "Scales the indirect light in lux.");
+            changed |= render_resettable_float_drag(
+                "Rotation",
+                settings.rotation_degrees,
+                defaults.rotation_degrees,
+                0.25f,
+                -180.0f,
+                180.0f,
+                "%.1f deg",
+                "Rotates the environment around the vertical axis.");
+            changed |= render_resettable_checkbox(
+                "Skybox",
+                settings.show_skybox,
+                defaults.show_skybox,
+                "Shows the environment as the viewport background.");
+        }
+
+        changed |= render_resettable_srgb_rgba_edit(
+            "Fallback",
+            settings.fallback_color,
+            defaults.fallback_color,
+            "Viewport background color used when the environment skybox is hidden or unavailable.");
+
+        if (changed) {
+            settings = clamp_environment_lighting_settings(settings);
+        }
+
+        ImGui::EndPopup();
+    }
+
     return changed;
 }
 
@@ -438,6 +553,7 @@ ViewportPaneResult draw_pane(
 
 ViewportHostPanelResult draw_viewport_host_panel(
     ViewportLayoutState& layout_state,
+    EnvironmentLightingSettings& environment_settings,
     std::span<const ViewportPaneInput> panes)
 {
     const ViewportHostUiStyle style = viewport_host_ui_style();
@@ -446,6 +562,8 @@ ViewportHostPanelResult draw_viewport_host_panel(
     ViewportHostPanelResult result;
     if (ImGui::Begin("Viewport")) {
         result.layout_changed |= draw_layout_combo(layout_state, style);
+        ImGui::SameLine(0.0f, style.toolbar_control_gap);
+        result.environment_changed |= draw_environment_popup(environment_settings, style);
         ImGui::Separator();
 
         const ImVec2 content_origin = ImGui::GetCursorScreenPos();

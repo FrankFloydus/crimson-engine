@@ -49,6 +49,25 @@ SrgbColor clamp_color(SrgbColor color)
     return color;
 }
 
+LinearRgba clamp_color(LinearRgba color)
+{
+    color.r = clamp_unit_channel(color.r);
+    color.g = clamp_unit_channel(color.g);
+    color.b = clamp_unit_channel(color.b);
+    color.a = clamp_unit_channel(color.a);
+    return color;
+}
+
+const char* environment_lighting_source_name(EnvironmentLightingSource source) noexcept
+{
+    switch (source) {
+    case EnvironmentLightingSource::built_in_default:
+        return "Built-in Default";
+    }
+
+    return "Built-in Default";
+}
+
 float srgb_channel_to_linear(float channel)
 {
     const float srgb = clamp_unit_channel(channel);
@@ -161,6 +180,16 @@ PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)
     return settings;
 }
 
+EnvironmentLightingSettings clamp_environment_lighting_settings(EnvironmentLightingSettings settings)
+{
+    const EnvironmentLightingSettings defaults;
+
+    settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 200000.0f);
+    settings.rotation_degrees = normalize_yaw(settings.rotation_degrees);
+    settings.fallback_color = clamp_color(settings.fallback_color);
+    return settings;
+}
+
 uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality)
 {
     switch (quality) {
@@ -216,6 +245,18 @@ DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettin
     return settings;
 }
 
+const char* point_light_falloff_mode_name(PointLightFalloffMode mode) noexcept
+{
+    switch (mode) {
+    case PointLightFalloffMode::linear:
+        return "Linear";
+    case PointLightFalloffMode::inverse_squared:
+        return "Inverse Squared";
+    }
+
+    return "Linear";
+}
+
 PointLightShadowSettings clamp_point_light_shadow_settings(PointLightShadowSettings settings)
 {
     const PointLightShadowSettings defaults;
@@ -230,9 +271,8 @@ PointLightSettings clamp_point_light_settings(PointLightSettings settings)
     const PointLightSettings defaults;
 
     settings.color = clamp_color(settings.color);
-    settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 200000.0f);
+    settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 100000000.0f);
     settings.range = std::max(finite_or(settings.range, defaults.range), 0.0f);
-    settings.falloff = std::max(finite_or(settings.falloff, defaults.falloff), 0.001f);
     settings.shadow = clamp_point_light_shadow_settings(settings.shadow);
     return settings;
 }

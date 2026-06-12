@@ -115,6 +115,16 @@ void Scene::set_title(std::string title)
     title_ = std::move(title);
 }
 
+EnvironmentLightingSettings Scene::environment_settings() const
+{
+    return environment_settings_;
+}
+
+void Scene::set_environment_settings(EnvironmentLightingSettings settings)
+{
+    environment_settings_ = clamp_environment_lighting_settings(settings);
+}
+
 SceneEntityId Scene::create_entity(std::string name, TransformComponent transform)
 {
     return create_named_entity(std::move(name), transform);
@@ -426,6 +436,7 @@ void Scene::rebuild_entity_cache() const
 SceneRenderSnapshot build_scene_render_snapshot(const Scene& scene)
 {
     SceneRenderSnapshot snapshot;
+    snapshot.environment = scene.environment_settings();
     snapshot.revision = 1;
 
     for (const SceneEntity& entity : scene.entities()) {

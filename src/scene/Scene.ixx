@@ -122,6 +122,8 @@ public:
 
     [[nodiscard]] std::string_view title() const;
     void set_title(std::string title);
+    [[nodiscard]] EnvironmentLightingSettings environment_settings() const;
+    void set_environment_settings(EnvironmentLightingSettings settings);
 
     [[nodiscard]] SceneEntityId create_entity(std::string name, TransformComponent transform = {});
     [[nodiscard]] SceneEntityId create_cube(std::string name = "Cube", TransformComponent transform = {});
@@ -158,6 +160,7 @@ private:
     void rebuild_entity_cache() const;
 
     std::string title_;
+    EnvironmentLightingSettings environment_settings_;
     std::unique_ptr<SceneStorage> storage_;
     mutable std::vector<SceneEntity> entity_cache_;
     mutable bool entity_cache_borrowed_ = false;

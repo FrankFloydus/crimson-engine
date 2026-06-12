@@ -47,12 +47,18 @@ set(FILAMENT_CORE_LIBS
     geometry
     smol-v
     ibl
+    ktxreader
+    image
     abseil
     zstd
 )
 
 set(QUADER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(QUADER_MATC "${QUADER_FILAMENT_SDK}/bin/matc.exe")
+set(QUADER_CMGEN "${QUADER_FILAMENT_SDK}/bin/cmgen.exe")
+set(QUADER_DEFAULT_ENVIRONMENT_HDR
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments/default/quader_default_environment.hdr"
+    CACHE FILEPATH "Local source HDR used to generate the built-in Quader environment IBL")
 set(QUADER_GENERATED_ASSETS)
 
 function(quader_add_filament_material target_name source_path output_symbol output_inc_variable)
@@ -85,6 +91,35 @@ function(quader_add_filament_material target_name source_path output_symbol outp
     set(QUADER_GENERATED_ASSETS "${QUADER_GENERATED_ASSETS};${include_path}" PARENT_SCOPE)
 endfunction()
 
+function(quader_embed_binary target_name input_path output_symbol output_inc_variable)
+    set(include_path "${QUADER_GENERATED_DIR}/${target_name}.inc")
+
+    add_custom_command(
+        OUTPUT "${include_path}"
+        COMMAND powershell
+            -NoProfile
+            -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.ps1"
+            -InputPath "${input_path}"
+            -OutputPath "${include_path}"
+            -Symbol "${output_symbol}"
+        DEPENDS "${input_path}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/embed_binary.ps1"
+        VERBATIM
+    )
+
+    set(${output_inc_variable} "${include_path}" PARENT_SCOPE)
+    set(QUADER_GENERATED_ASSETS "${QUADER_GENERATED_ASSETS};${include_path}" PARENT_SCOPE)
+endfunction()
+
+function(quader_embed_empty_binary target_name output_symbol output_inc_variable)
+    file(MAKE_DIRECTORY "${QUADER_GENERATED_DIR}")
+    set(empty_path "${QUADER_GENERATED_DIR}/${target_name}.empty")
+    file(WRITE "${empty_path}" "")
+    quader_embed_binary("${target_name}" "${empty_path}" "${output_symbol}" "${output_inc_variable}")
+    set(${output_inc_variable} "${${output_inc_variable}}" PARENT_SCOPE)
+    set(QUADER_GENERATED_ASSETS "${QUADER_GENERATED_ASSETS}" PARENT_SCOPE)
+endfunction()
+
 quader_add_filament_material(
     QuaderLitPbrMaterial
     "${CMAKE_CURRENT_SOURCE_DIR}/src/filament/materials/LitPbrPreview.mat"
@@ -105,6 +140,59 @@ quader_add_filament_material(
     "quader_debug_draw_overlay_material"
     QUADER_DEBUG_DRAW_OVERLAY_INC
 )
+
+if(EXISTS "${QUADER_DEFAULT_ENVIRONMENT_HDR}")
+    set(QUADER_DEFAULT_ENVIRONMENT_DEPLOY_DIR "${QUADER_GENERATED_DIR}/quader_default_environment")
+    set(QUADER_DEFAULT_ENVIRONMENT_IBL_KTX
+        "${QUADER_DEFAULT_ENVIRONMENT_DEPLOY_DIR}/quader_default_environment_ibl.ktx")
+    set(QUADER_DEFAULT_ENVIRONMENT_SKYBOX_KTX
+        "${QUADER_DEFAULT_ENVIRONMENT_DEPLOY_DIR}/quader_default_environment_skybox.ktx")
+    set(QUADER_DEFAULT_ENVIRONMENT_SH
+        "${QUADER_DEFAULT_ENVIRONMENT_DEPLOY_DIR}/sh.txt")
+
+    add_custom_command(
+        OUTPUT
+            "${QUADER_DEFAULT_ENVIRONMENT_IBL_KTX}"
+            "${QUADER_DEFAULT_ENVIRONMENT_SKYBOX_KTX}"
+            "${QUADER_DEFAULT_ENVIRONMENT_SH}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${QUADER_DEFAULT_ENVIRONMENT_DEPLOY_DIR}"
+        COMMAND "${QUADER_CMGEN}"
+            --quiet
+            --format=ktx
+            --size=256
+            "--deploy=${QUADER_DEFAULT_ENVIRONMENT_DEPLOY_DIR}"
+            "${QUADER_DEFAULT_ENVIRONMENT_HDR}"
+        DEPENDS "${QUADER_DEFAULT_ENVIRONMENT_HDR}"
+        VERBATIM
+    )
+
+    quader_embed_binary(
+        QuaderDefaultEnvironmentIbl
+        "${QUADER_DEFAULT_ENVIRONMENT_IBL_KTX}"
+        "quader_default_environment_ibl_ktx"
+        QUADER_DEFAULT_ENVIRONMENT_IBL_INC
+    )
+    quader_embed_binary(
+        QuaderDefaultEnvironmentSkybox
+        "${QUADER_DEFAULT_ENVIRONMENT_SKYBOX_KTX}"
+        "quader_default_environment_skybox_ktx"
+        QUADER_DEFAULT_ENVIRONMENT_SKYBOX_INC
+    )
+else()
+    message(WARNING
+        "Default environment HDR not found at QUADER_DEFAULT_ENVIRONMENT_HDR=${QUADER_DEFAULT_ENVIRONMENT_HDR}. "
+        "Quader will build with color-skybox fallback until a local HDR is provided.")
+    quader_embed_empty_binary(
+        QuaderDefaultEnvironmentIbl
+        "quader_default_environment_ibl_ktx"
+        QUADER_DEFAULT_ENVIRONMENT_IBL_INC
+    )
+    quader_embed_empty_binary(
+        QuaderDefaultEnvironmentSkybox
+        "quader_default_environment_skybox_ktx"
+        QUADER_DEFAULT_ENVIRONMENT_SKYBOX_INC
+    )
+endif()
 
 add_custom_target(quader_generated_assets
     DEPENDS ${QUADER_GENERATED_ASSETS}
@@ -140,6 +228,7 @@ set(QUADER_CORE_SOURCES
     src/diagnostics/Logger.cpp
     src/filament/FilamentRenderEngine.cpp
     src/filament/FilamentDebugDrawRenderer.cpp
+    src/filament/FilamentEnvironmentResources.cpp
     src/filament/FilamentSceneViewport.cpp
     src/math/MathTypes.cpp
     src/platform/FatalErrorDialog.cpp
@@ -181,6 +270,7 @@ set(QUADER_MODULES
     src/diagnostics/Logger.ixx
     src/filament/FilamentRenderEngine.ixx
     src/filament/FilamentDebugDrawRenderer.ixx
+    src/filament/FilamentEnvironmentResources.ixx
     src/filament/FilamentSceneViewport.ixx
     src/math/MathTypes.ixx
     src/platform/FatalErrorDialog.ixx
