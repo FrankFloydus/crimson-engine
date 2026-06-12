@@ -45,9 +45,9 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
     return std::nullopt;
 }
 
-std::unique_ptr<ISceneViewportRenderer> create_renderer_engine_or_throw()
+std::unique_ptr<IViewportRenderer> create_renderer_engine_or_throw()
 {
-    std::unique_ptr<ISceneViewportRenderer> render_engine = create_default_scene_viewport_renderer();
+    std::unique_ptr<IViewportRenderer> render_engine = create_default_viewport_renderer();
     throw_if_renderer_failed_to_start(render_engine->status());
     return render_engine;
 }
@@ -110,11 +110,13 @@ void Application::draw_frame(float delta_seconds)
     swapchain_.recreate_if_needed(window_);
     imgui_.begin_frame();
     render_editor_dockspace();
+    if (scene_properties_.render_frame(open_scene_, native_file_dialog_)) {
+        scene_viewport_.mark_render_state_dirty();
+    }
     scene_viewport_.render_frame(
         *render_engine_,
         imgui_,
         open_scene_,
-        native_file_dialog_,
         input_,
         delta_seconds);
     imgui_.end_frame(swapchain_);

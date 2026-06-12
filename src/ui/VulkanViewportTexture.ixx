@@ -8,6 +8,7 @@ module;
 
 export module quader.ui.vulkan_viewport_texture;
 
+export import quader.render.types;
 export import quader.render.vulkan_device;
 
 export namespace quader {
@@ -25,6 +26,7 @@ public:
 
     [[nodiscard]] ImTextureID texture_id() const;
     [[nodiscard]] bool has_pixels() const;
+    [[nodiscard]] RenderExtent extent() const;
 
 private:
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties) const;

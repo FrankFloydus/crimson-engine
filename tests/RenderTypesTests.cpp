@@ -1,16 +1,19 @@
 #include <gtest/gtest.h>
 
-import quader.render.types;
+#include <vector>
 
-TEST(RenderTypes, DefaultPbrMaterialIsGlossyRedDielectric)
+import quader.render.types;
+import quader.render.viewport_types;
+
+TEST(RenderTypes, DefaultPbrMaterialIsMatteWhiteDielectric)
 {
     const quader::PbrMaterialSettings settings;
 
     EXPECT_FLOAT_EQ(1.0f, settings.albedo.r);
-    EXPECT_FLOAT_EQ(0.0f, settings.albedo.g);
-    EXPECT_FLOAT_EQ(0.0f, settings.albedo.b);
+    EXPECT_FLOAT_EQ(1.0f, settings.albedo.g);
+    EXPECT_FLOAT_EQ(1.0f, settings.albedo.b);
     EXPECT_FALSE(settings.albedo_texture.has_source());
-    EXPECT_FLOAT_EQ(0.18f, settings.roughness);
+    EXPECT_FLOAT_EQ(1.0f, settings.roughness);
     EXPECT_FALSE(settings.roughness_texture.has_source());
     EXPECT_FLOAT_EQ(0.0f, settings.metallic);
     EXPECT_FALSE(settings.metallic_texture.has_source());
@@ -113,4 +116,30 @@ TEST(RenderTypes, ClampDirectionalLightSettings)
     EXPECT_FLOAT_EQ(0.25f, clamped.color.b);
     EXPECT_FLOAT_EQ(200000.0f, clamped.intensity);
     EXPECT_FLOAT_EQ(-89.0f, clamped.pitch_degrees);
+}
+
+TEST(ViewportTypes, TextureHandlePayloadIsNotPresentableUntilGpuPresentationExists)
+{
+    quader::ViewportFramePayload payload;
+    payload.texture = quader::RenderTextureHandle {
+        .value = 42,
+        .extent = { 320, 180 },
+    };
+
+    EXPECT_FALSE(payload.has_pixels());
+    EXPECT_FALSE(payload.has_presentable_pixels());
+    EXPECT_TRUE(payload.has_unsupported_texture_payload());
+}
+
+TEST(ViewportTypes, TemporaryReadbackPayloadIsPresentable)
+{
+    quader::ViewportFramePayload payload;
+    payload.temporary_readback = quader::TemporaryRgba8ReadbackFrame {
+        .extent = { 2, 2 },
+        .rgba = std::vector<uint8_t>(16, 255),
+    };
+
+    EXPECT_TRUE(payload.has_pixels());
+    EXPECT_TRUE(payload.has_presentable_pixels());
+    EXPECT_FALSE(payload.has_unsupported_texture_payload());
 }

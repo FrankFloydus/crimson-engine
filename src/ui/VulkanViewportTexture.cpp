@@ -39,6 +39,8 @@ void VulkanViewportTexture::upload_rgba(uint32_t width, uint32_t height, const u
         return;
     }
 
+    device_.wait_idle();
+
     if (image_ == VK_NULL_HANDLE || width_ != width || height_ != height) {
         create_texture(width, height);
     }
@@ -78,6 +80,11 @@ ImTextureID VulkanViewportTexture::texture_id() const
 bool VulkanViewportTexture::has_pixels() const
 {
     return descriptor_ != VK_NULL_HANDLE && has_pixels_;
+}
+
+RenderExtent VulkanViewportTexture::extent() const
+{
+    return RenderExtent { width_, height_ };
 }
 
 uint32_t VulkanViewportTexture::find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties) const
@@ -330,6 +337,7 @@ void VulkanViewportTexture::submit_upload_commands(const UploadSlot& slot) const
     submit_info.pCommandBuffers = &slot.command_buffer;
 
     check_vk(vkQueueSubmit(device_.queue(), 1, &submit_info, slot.fence), "vkQueueSubmit");
+    check_vk(vkWaitForFences(device_.device(), 1, &slot.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
 }
 
 void VulkanViewportTexture::transition_image(

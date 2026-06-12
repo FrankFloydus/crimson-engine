@@ -5,6 +5,7 @@ module;
 
 #include <iterator>
 #include <memory>
+#include <span>
 #include <stdexcept>
 
 module quader.ui.imgui_layer;
@@ -25,6 +26,7 @@ ImGuiLayer::ImGuiLayer(const SdlWindow& window, const VulkanDevice& device, cons
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
+    io.IniFilename = "quader-native-imgui.ini";
 
     ImGui::StyleColorsDark();
 
@@ -58,14 +60,14 @@ ImGuiLayer::ImGuiLayer(const SdlWindow& window, const VulkanDevice& device, cons
         throw std::runtime_error("ImGui Vulkan backend failed to initialize.");
     }
 
-    viewport_texture_ = std::make_unique<VulkanViewportTexture>(device_);
+    viewport_textures_ = std::make_unique<ViewportTextureStore>(device_);
 }
 
 ImGuiLayer::~ImGuiLayer()
 {
     device_.wait_idle();
 
-    viewport_texture_.reset();
+    viewport_textures_.reset();
 
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
@@ -94,19 +96,30 @@ void ImGuiLayer::end_frame(VulkanSwapchain& swapchain)
     swapchain.render_current_imgui_frame();
 }
 
-void ImGuiLayer::upload_viewport_texture(uint32_t width, uint32_t height, const uint8_t* rgba)
+void ImGuiLayer::upload_viewport_texture(ViewportId viewport_id, uint32_t width, uint32_t height, const uint8_t* rgba)
 {
-    viewport_texture_->upload_rgba(width, height, rgba);
+    if (viewport_textures_ != nullptr) {
+        viewport_textures_->upload(viewport_id, width, height, rgba);
+    }
 }
 
-ImTextureID ImGuiLayer::viewport_texture_id() const
+void ImGuiLayer::remove_viewport_texture(ViewportId viewport_id)
 {
-    return viewport_texture_ ? viewport_texture_->texture_id() : ImTextureID {};
+    if (viewport_textures_ != nullptr) {
+        viewport_textures_->remove(viewport_id);
+    }
 }
 
-bool ImGuiLayer::has_viewport_texture() const
+void ImGuiLayer::prune_viewport_textures(std::span<const ViewportId> live_viewport_ids)
 {
-    return viewport_texture_ && viewport_texture_->has_pixels();
+    if (viewport_textures_ != nullptr) {
+        viewport_textures_->prune(live_viewport_ids);
+    }
+}
+
+ViewportTextureView ImGuiLayer::viewport_texture(ViewportId viewport_id) const
+{
+    return viewport_textures_ ? viewport_textures_->texture_view(viewport_id) : ViewportTextureView {};
 }
 
 VkDescriptorPool ImGuiLayer::create_descriptor_pool()

@@ -2,16 +2,20 @@ module;
 
 #include <imgui.h>
 
-#include "diagnostics/LogMacros.h"
+#include <algorithm>
+#include <optional>
+#include <stdexcept>
+#include <utility>
+#include <vector>
 
 module quader.app.editor_viewport;
 
-import quader.diagnostics.logger;
-import quader.ui.material_panel;
-import quader.ui.viewport_panels;
+import quader.ui.viewport_host_panel;
 
 namespace quader {
 namespace {
+
+constexpr uint32_t kMinimumRenderableViewportDimension = 64;
 
 bool is_viewport_movement_key_down(const Input& input)
 {
@@ -23,205 +27,416 @@ bool is_viewport_movement_key_down(const Input& input)
         input.is_key_down(AppKey::e);
 }
 
-bool render_extent_changed(RenderExtent left, RenderExtent right)
+ViewportId create_viewport_or_throw(IViewportRenderer& renderer, const char* viewport_name)
 {
-    return left.width != right.width || left.height != right.height;
+    std::optional<ViewportId> viewport_id = renderer.try_create_viewport();
+    if (!viewport_id.has_value() || !viewport_id->is_valid()) {
+        throw std::runtime_error(std::string("Renderer failed to create viewport: ") + viewport_name);
+    }
+
+    return *viewport_id;
 }
 
-EditorCameraNavigationInput editor_camera_navigation_input_from(
+ViewportNavigationSnapshot navigation_snapshot_from(
     const Input& input,
-    bool keyboard_navigation_active,
-    bool mouse_navigation_active)
+    bool viewport_hovered)
 {
-    if (!keyboard_navigation_active && !mouse_navigation_active) {
-        return {};
-    }
-
-    EditorCameraNavigationInput navigation_input;
-    if (keyboard_navigation_active || mouse_navigation_active) {
-        navigation_input.move_forward = input.is_key_down(AppKey::w);
-        navigation_input.move_backward = input.is_key_down(AppKey::s);
-        navigation_input.move_left = input.is_key_down(AppKey::a);
-        navigation_input.move_right = input.is_key_down(AppKey::d);
-        navigation_input.move_up = input.is_key_down(AppKey::e);
-        navigation_input.move_down = input.is_key_down(AppKey::q);
-        navigation_input.boost =
-            input.is_key_down(AppKey::left_shift) || input.is_key_down(AppKey::right_shift);
-    }
-
-    navigation_input.look_active = mouse_navigation_active;
-    navigation_input.look_delta = mouse_navigation_active ? input.mouse_delta() : MouseDelta {};
-    return navigation_input;
+    return ViewportNavigationSnapshot {
+        .window_has_keyboard_focus = input.window_has_keyboard_focus(),
+        .window_has_mouse_focus = input.window_has_mouse_focus(),
+        .text_input_active = ImGui::GetIO().WantTextInput,
+        .hovered = viewport_hovered,
+        .right_mouse_pressed = input.was_mouse_button_pressed(AppMouseButton::right),
+        .right_mouse_released = input.was_mouse_button_released(AppMouseButton::right),
+        .right_mouse_down = input.is_mouse_button_down(AppMouseButton::right),
+        .move_forward = input.is_key_down(AppKey::w),
+        .move_backward = input.is_key_down(AppKey::s),
+        .move_left = input.is_key_down(AppKey::a),
+        .move_right = input.is_key_down(AppKey::d),
+        .move_up = input.is_key_down(AppKey::e),
+        .move_down = input.is_key_down(AppKey::q),
+        .boost = input.is_key_down(AppKey::left_shift) || input.is_key_down(AppKey::right_shift),
+        .mouse_delta = input.mouse_delta(),
+        .mouse_wheel_delta = input.mouse_wheel_delta(),
+    };
 }
 
-bool imgui_text_input_is_active()
+void upload_readback_frame_if_available(
+    const ViewportRenderFrame& frame,
+    ImGuiLayer& imgui)
 {
-    return ImGui::GetIO().WantTextInput;
+    if (!frame.payload.temporary_readback.has_value() || !frame.payload.temporary_readback->has_pixels()) {
+        return;
+    }
+
+    const TemporaryRgba8ReadbackFrame& readback = *frame.payload.temporary_readback;
+    imgui.upload_viewport_texture(
+        frame.viewport_id,
+        readback.extent.width,
+        readback.extent.height,
+        readback.rgba.data());
 }
 
 } // namespace
 
+EditorViewport::~EditorViewport()
+{
+    release_viewports();
+}
+
 void EditorViewport::render_frame(
-    ISceneViewportRenderer& renderer,
+    IViewportRenderer& renderer,
     ImGuiLayer& imgui,
-    Scene& scene,
-    NativeFileDialogService& native_file_dialog,
+    const Scene& scene,
     const Input& input,
     float delta_seconds)
 {
-    consume_texture_picker_result_if_available(scene, native_file_dialog);
+    ensure_viewports(renderer);
 
-    render_material_panel(scene, native_file_dialog);
+    upload_completed_viewport_frames(renderer, imgui);
 
-    if (SceneDirectionalLightComponent* light = first_directional_light_component(scene)) {
-        if (render_directional_light_panel(light->settings)) {
-            viewport_dirty_ = true;
-        }
-    }
+    std::vector<ViewportId> visible_viewport_ids;
+    render_scene_viewport_host(imgui, input, delta_seconds, visible_viewport_ids);
+    render_preview_viewport_panel(imgui, input, delta_seconds, visible_viewport_ids);
+    release_navigation_capture_if_hidden(visible_viewport_ids);
 
-    request_viewport_frame_if_needed(renderer, scene);
-    upload_completed_viewport_frame_if_available(renderer, imgui);
+    request_visible_viewport_frames(renderer, scene, visible_viewport_ids);
 
-    const ViewportPanelResult viewport_panel = render_scene_viewport_panel(
-        imgui.has_viewport_texture() ? imgui.viewport_texture_id() : ImTextureID {},
-        displayed_extent_.is_valid() ? displayed_extent_ : viewport_extent_);
-
-    if (viewport_panel.requested_extent.is_valid() &&
-        render_extent_changed(viewport_extent_, viewport_panel.requested_extent)) {
-        viewport_extent_ = viewport_panel.requested_extent;
-        viewport_dirty_ = true;
-    }
-
-    if (!input.window_has_keyboard_focus() || !input.window_has_mouse_focus()) {
-        viewport_mouse_navigation_active_ = false;
-    }
-
-    if (input.was_mouse_button_pressed(AppMouseButton::right) && viewport_panel.image_hovered) {
-        viewport_mouse_navigation_active_ = true;
-    }
-    if (input.was_mouse_button_released(AppMouseButton::right) ||
-        !input.is_mouse_button_down(AppMouseButton::right)) {
-        viewport_mouse_navigation_active_ = false;
-    }
-
-    viewport_keyboard_focus_ =
-        viewport_panel.image_hovered &&
-        !imgui_text_input_is_active() &&
-        is_viewport_movement_key_down(input);
-
-    update_editor_camera(input, delta_seconds);
+    std::vector<ViewportId> owned_viewport_ids;
+    append_owned_viewport_ids(owned_viewport_ids);
+    imgui.prune_viewport_textures(owned_viewport_ids);
 }
 
 bool EditorViewport::wants_relative_mouse_mode() const noexcept
 {
-    return viewport_mouse_navigation_active_;
+    return captured_navigation_viewport_.has_value();
 }
 
-void EditorViewport::update_editor_camera(const Input& input, float delta_seconds)
+void EditorViewport::mark_render_state_dirty()
 {
-    const EditorCameraNavigationInput navigation_input = editor_camera_navigation_input_from(
-        input,
-        viewport_keyboard_focus_ || viewport_mouse_navigation_active_,
-        viewport_mouse_navigation_active_);
-
-    if (editor_camera_.update_from_navigation_input(navigation_input, delta_seconds)) {
-        viewport_dirty_ = true;
-    }
+    mark_all_viewports_dirty();
 }
 
-void EditorViewport::render_material_panel(Scene& scene, NativeFileDialogService& native_file_dialog)
+void EditorViewport::ensure_viewports(IViewportRenderer& renderer)
 {
-    SceneMeshComponent* mesh = first_mesh_component(scene);
-    if (mesh == nullptr) {
+    if (renderer_ != nullptr) {
         return;
     }
 
-    const MaterialPanelResult result =
-        render_material_settings_panel(mesh->material, native_file_dialog.has_pending_request());
+    renderer_ = &renderer;
 
-    if (result.settings_changed) {
-        viewport_dirty_ = true;
-    }
+    scene_viewports_.reserve(4);
+    scene_viewports_.push_back(ViewportInstance::scene_viewport(
+        create_viewport_or_throw(renderer, "Perspective"),
+        "Perspective",
+        ViewportCameraPreset::perspective));
+    scene_viewports_.push_back(ViewportInstance::scene_viewport(
+        create_viewport_or_throw(renderer, "Top"),
+        "Top",
+        ViewportCameraPreset::top));
+    scene_viewports_.push_back(ViewportInstance::scene_viewport(
+        create_viewport_or_throw(renderer, "Side"),
+        "Side",
+        ViewportCameraPreset::side));
+    scene_viewports_.push_back(ViewportInstance::scene_viewport(
+        create_viewport_or_throw(renderer, "Front"),
+        "Front",
+        ViewportCameraPreset::front));
+    preview_viewport_ = ViewportInstance::preview_viewport(
+        create_viewport_or_throw(renderer, "Material Preview"),
+        "Material Preview");
 
-    if (result.requested_texture_clear.has_value()) {
-        material_texture_reference(mesh->material, *result.requested_texture_clear).clear();
-        viewport_dirty_ = true;
-    }
-
-    if (result.requested_texture_pick.has_value() && !native_file_dialog.has_pending_request()) {
-        pending_material_texture_slot_ = *result.requested_texture_pick;
-        native_file_dialog.request_image_file();
+    if (!scene_viewports_.empty()) {
+        active_viewport_ = scene_viewports_.front().id();
     }
 }
 
-void EditorViewport::consume_texture_picker_result_if_available(
-    Scene& scene,
-    NativeFileDialogService& native_file_dialog)
+void EditorViewport::release_viewports()
 {
-    std::optional<NativeFileDialogResult> result = native_file_dialog.try_consume_result();
-    if (!result.has_value()) {
+    if (renderer_ == nullptr) {
         return;
     }
 
-    const std::optional<PbrMaterialTextureSlot> pending_slot = pending_material_texture_slot_;
-    pending_material_texture_slot_.reset();
+    for (const ViewportInstance& viewport : scene_viewports_) {
+        renderer_->release_viewport(viewport.id());
+    }
 
-    switch (result->status) {
-    case NativeFileDialogStatus::selected: {
-        if (!pending_slot.has_value()) {
-            QUADER_LOG_WARN("Image texture picker returned a path without a pending material slot.");
+    if (preview_viewport_.has_value()) {
+        renderer_->release_viewport(preview_viewport_->id());
+    }
+
+    scene_viewports_.clear();
+    preview_viewport_.reset();
+    active_viewport_.reset();
+    captured_navigation_viewport_.reset();
+    renderer_ = nullptr;
+}
+
+void EditorViewport::append_owned_viewport_ids(std::vector<ViewportId>& viewport_ids) const
+{
+    viewport_ids.reserve(viewport_ids.size() + scene_viewports_.size() + (preview_viewport_.has_value() ? 1U : 0U));
+    for (const ViewportInstance& viewport : scene_viewports_) {
+        viewport_ids.push_back(viewport.id());
+    }
+    if (preview_viewport_.has_value()) {
+        viewport_ids.push_back(preview_viewport_->id());
+    }
+}
+
+void EditorViewport::render_scene_viewport_host(
+    ImGuiLayer& imgui,
+    const Input& input,
+    float delta_seconds,
+    std::vector<ViewportId>& visible_viewport_ids)
+{
+    std::vector<ViewportPaneInput> panes;
+    panes.reserve(scene_viewports_.size());
+    for (const ViewportInstance& viewport : scene_viewports_) {
+        panes.push_back(ViewportPaneInput {
+            .id = viewport.id(),
+            .title = viewport.title(),
+            .texture = imgui.viewport_texture(viewport.id()),
+            .performance = performance_overlay_for(viewport, delta_seconds),
+            .camera_preset = viewport.camera_preset(),
+            .active = active_viewport_.has_value() && *active_viewport_ == viewport.id(),
+            .camera_dropdown_enabled = true,
+        });
+    }
+
+    ViewportHostPanelResult result = draw_viewport_host_panel(layout_state_, panes);
+    if (result.active_viewport.has_value()) {
+        active_viewport_ = *result.active_viewport;
+    }
+
+    for (const ViewportPaneResult& pane : result.panes) {
+        ViewportInstance* viewport = find_viewport(pane.id);
+        if (viewport == nullptr) {
+            continue;
+        }
+
+        if (pane.requested_camera_preset.has_value()) {
+            viewport->set_camera_preset(*pane.requested_camera_preset);
+        }
+
+        update_viewport_from_surface(*viewport, pane.surface, input, delta_seconds, visible_viewport_ids);
+    }
+}
+
+void EditorViewport::render_preview_viewport_panel(
+    ImGuiLayer& imgui,
+    const Input& input,
+    float delta_seconds,
+    std::vector<ViewportId>& visible_viewport_ids)
+{
+    if (!preview_viewport_.has_value()) {
+        return;
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(888.0f, 56.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(380.0f, 260.0f), ImGuiCond_FirstUseEver);
+
+    if (ImGui::Begin("Preview Viewport")) {
+        ImGui::TextUnformatted(preview_viewport_->title().data(), preview_viewport_->title().data() + preview_viewport_->title().size());
+        ImGui::Separator();
+
+        ViewportSurfaceResult surface = draw_viewport_surface(ViewportSurfaceInput {
+            .id = preview_viewport_->id(),
+            .texture = imgui.viewport_texture(preview_viewport_->id()),
+            .performance = performance_overlay_for(*preview_viewport_, delta_seconds),
+            .empty_text = "Waiting for preview pixels.",
+            .active = active_viewport_.has_value() && *active_viewport_ == preview_viewport_->id(),
+        });
+
+        update_viewport_from_surface(*preview_viewport_, surface, input, delta_seconds, visible_viewport_ids);
+    }
+
+    ImGui::End();
+}
+
+void EditorViewport::update_viewport_from_surface(
+    ViewportInstance& viewport,
+    const ViewportSurfaceResult& surface,
+    const Input& input,
+    float delta_seconds,
+    std::vector<ViewportId>& visible_viewport_ids)
+{
+    if (!surface.visible) {
+        return;
+    }
+
+    if (surface.requested_extent.width < kMinimumRenderableViewportDimension ||
+        surface.requested_extent.height < kMinimumRenderableViewportDimension) {
+        return;
+    }
+
+    visible_viewport_ids.push_back(viewport.id());
+    viewport.set_requested_extent(surface.requested_extent);
+
+    if (surface.hovered || surface.clicked || (surface.hovered && is_viewport_movement_key_down(input))) {
+        active_viewport_ = viewport.id();
+    }
+
+    const ViewportNavigationSnapshot navigation_snapshot = navigation_snapshot_from(input, surface.hovered);
+    if (captured_navigation_viewport_ == viewport.id() &&
+        (!navigation_snapshot.window_has_keyboard_focus ||
+            !navigation_snapshot.window_has_mouse_focus ||
+            navigation_snapshot.right_mouse_released ||
+            !navigation_snapshot.right_mouse_down)) {
+        captured_navigation_viewport_.reset();
+    }
+
+    if (!captured_navigation_viewport_.has_value() &&
+        viewport.should_start_navigation_capture(navigation_snapshot)) {
+        captured_navigation_viewport_ = viewport.id();
+    }
+
+    const bool navigation_captured =
+        captured_navigation_viewport_.has_value() &&
+        *captured_navigation_viewport_ == viewport.id();
+    const bool navigation_changed =
+        viewport.update_navigation(navigation_snapshot, navigation_captured, delta_seconds);
+    (void)navigation_changed;
+    if (navigation_captured) {
+        active_viewport_ = viewport.id();
+    }
+}
+
+void EditorViewport::release_navigation_capture_if_hidden(const std::vector<ViewportId>& visible_viewport_ids)
+{
+    if (!captured_navigation_viewport_.has_value()) {
+        return;
+    }
+
+    const bool captured_viewport_is_visible =
+        std::find(visible_viewport_ids.begin(), visible_viewport_ids.end(), *captured_navigation_viewport_) !=
+        visible_viewport_ids.end();
+    if (!captured_viewport_is_visible) {
+        captured_navigation_viewport_.reset();
+    }
+}
+
+void EditorViewport::request_visible_viewport_frames(
+    IViewportRenderer& renderer,
+    const Scene& scene,
+    const std::vector<ViewportId>& visible_viewport_ids)
+{
+    const PbrMaterialSettings preview_material = preview_material_from_scene(scene);
+    const DirectionalLightSettings preview_light = preview_light_from_scene(scene);
+
+    for (ViewportId viewport_id : visible_viewport_ids) {
+        ViewportInstance* viewport = find_viewport(viewport_id);
+        if (viewport == nullptr) {
+            continue;
+        }
+
+        std::optional<ViewportRenderRequest> request =
+            viewport->try_begin_render_request(scene, preview_material, preview_light);
+        if (!request.has_value()) {
+            continue;
+        }
+
+        if (!renderer.request_viewport_frame(*request)) {
+            viewport->fail_pending_request();
+        }
+    }
+}
+
+void EditorViewport::upload_completed_viewport_frames(IViewportRenderer& renderer, ImGuiLayer& imgui)
+{
+    auto consume_viewport = [&renderer, &imgui](ViewportInstance& viewport) {
+        std::optional<ViewportRenderFrame> frame = renderer.try_consume_viewport_frame(viewport.id());
+        if (!frame.has_value()) {
             return;
         }
 
-        SceneMeshComponent* mesh = first_mesh_component(scene);
-        if (mesh == nullptr) {
-            QUADER_LOG_WARN("Image texture picker returned a path, but the scene has no mesh material to update.");
+        const ViewportFrameAcceptance acceptance = viewport.accept_frame(*frame);
+        if (!acceptance.accepted) {
             return;
         }
 
-        material_texture_reference(mesh->material, *pending_slot).source_path = result->path;
-        viewport_dirty_ = true;
-        return;
+        upload_readback_frame_if_available(*frame, imgui);
+    };
+
+    for (ViewportInstance& viewport : scene_viewports_) {
+        consume_viewport(viewport);
     }
-    case NativeFileDialogStatus::failed:
-        if (result->message.empty()) {
-            QUADER_LOG_ERROR("Native image file dialog failed.");
-        } else {
-            QUADER_LOG_ERROR("Native image file dialog failed: {}", result->message);
+    if (preview_viewport_.has_value()) {
+        consume_viewport(*preview_viewport_);
+    }
+}
+
+ViewportInstance* EditorViewport::find_viewport(ViewportId viewport_id)
+{
+    for (ViewportInstance& viewport : scene_viewports_) {
+        if (viewport.id() == viewport_id) {
+            return &viewport;
         }
-        return;
-    case NativeFileDialogStatus::canceled:
-        return;
+    }
+
+    if (preview_viewport_.has_value() && preview_viewport_->id() == viewport_id) {
+        return &*preview_viewport_;
+    }
+
+    return nullptr;
+}
+
+const ViewportInstance* EditorViewport::find_viewport(ViewportId viewport_id) const
+{
+    for (const ViewportInstance& viewport : scene_viewports_) {
+        if (viewport.id() == viewport_id) {
+            return &viewport;
+        }
+    }
+
+    if (preview_viewport_.has_value() && preview_viewport_->id() == viewport_id) {
+        return &*preview_viewport_;
+    }
+
+    return nullptr;
+}
+
+ViewportPerformanceOverlay EditorViewport::performance_overlay_for(
+    const ViewportInstance& viewport,
+    float delta_seconds) const
+{
+    return ViewportPerformanceOverlay {
+        .enabled = true,
+        .frame_delta_seconds = delta_seconds,
+        .render_request_pending = viewport.request_pending(),
+        .dirty = viewport.is_dirty(),
+    };
+}
+
+PbrMaterialSettings EditorViewport::preview_material_from_scene(const Scene& scene) const
+{
+    if (const SceneMeshComponent* mesh = first_mesh_component(scene)) {
+        return mesh->material;
+    }
+
+    return {};
+}
+
+DirectionalLightSettings EditorViewport::preview_light_from_scene(const Scene& scene) const
+{
+    if (const SceneDirectionalLightComponent* light = first_directional_light_component(scene)) {
+        return light->settings;
+    }
+
+    return {};
+}
+
+void EditorViewport::mark_scene_viewports_dirty()
+{
+    for (ViewportInstance& viewport : scene_viewports_) {
+        viewport.mark_dirty();
     }
 }
 
-void EditorViewport::request_viewport_frame_if_needed(ISceneViewportRenderer& renderer, const Scene& scene)
+void EditorViewport::mark_all_viewports_dirty()
 {
-    if (!viewport_dirty_ || viewport_request_pending_) {
-        return;
-    }
-
-    viewport_request_pending_ =
-        renderer.request_scene_viewport_frame(scene, editor_camera_.render_camera(), viewport_extent_);
-    viewport_dirty_ = !viewport_request_pending_;
-}
-
-void EditorViewport::upload_completed_viewport_frame_if_available(ISceneViewportRenderer& renderer, ImGuiLayer& imgui)
-{
-    const RenderViewportFrame* viewport_frame = renderer.try_consume_scene_viewport_frame();
-    if (viewport_frame == nullptr) {
-        return;
-    }
-
-    viewport_request_pending_ = false;
-    if (viewport_frame->has_pixels()) {
-        imgui.upload_viewport_texture(
-            viewport_frame->extent.width,
-            viewport_frame->extent.height,
-            viewport_frame->rgba.data());
-        displayed_extent_ = viewport_frame->extent;
-    } else {
-        viewport_dirty_ = true;
+    mark_scene_viewports_dirty();
+    if (preview_viewport_.has_value()) {
+        preview_viewport_->mark_dirty();
     }
 }
 

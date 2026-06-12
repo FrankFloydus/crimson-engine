@@ -3,4 +3,5 @@ build/
 .vs/
 CMakeUserPresets.json
 imgui.ini
+quader-native-imgui.ini
 logs/

@@ -116,6 +116,9 @@ set(QUADER_CORE_SOURCES
     src/app/Application.cpp
     src/app/EditorCamera.cpp
     src/app/EditorViewport.cpp
+    src/app/ScenePropertiesPanelController.cpp
+    src/app/ViewportInstance.cpp
+    src/app/ViewportLayout.cpp
     src/diagnostics/Logger.cpp
     src/filament/FilamentRenderEngine.cpp
     src/filament/FilamentSceneViewport.cpp
@@ -135,8 +138,11 @@ set(QUADER_CORE_SOURCES
     src/scene/Scene.cpp
     src/ui/EditorDockspace.cpp
     src/ui/ImGuiLayer.cpp
+    src/ui/LightPanel.cpp
     src/ui/MaterialPanel.cpp
-    src/ui/ViewportPanels.cpp
+    src/ui/ViewportHostPanel.cpp
+    src/ui/ViewportSurface.cpp
+    src/ui/ViewportTextureStore.cpp
     src/ui/VulkanViewportTexture.cpp
 )
 
@@ -145,6 +151,9 @@ set(QUADER_MODULES
     src/app/Application.ixx
     src/app/EditorCamera.ixx
     src/app/EditorViewport.ixx
+    src/app/ScenePropertiesPanelController.ixx
+    src/app/ViewportInstance.ixx
+    src/app/ViewportLayout.ixx
     src/diagnostics/Logger.ixx
     src/filament/FilamentRenderEngine.ixx
     src/filament/FilamentSceneViewport.ixx
@@ -161,15 +170,21 @@ set(QUADER_MODULES
     src/render/RenderTypes.ixx
     src/render/RendererStartupValidation.ixx
     src/render/RenderEngineFactory.ixx
-    src/render/SceneViewportRenderer.ixx
+    src/render/ViewportRenderer.ixx
+    src/render/ViewportTypes.ixx
     src/render/VulkanCommon.ixx
     src/render/VulkanDevice.ixx
     src/render/VulkanSwapchain.ixx
     src/scene/Scene.ixx
     src/ui/EditorDockspace.ixx
     src/ui/ImGuiLayer.ixx
+    src/ui/LightPanel.ixx
     src/ui/MaterialPanel.ixx
-    src/ui/ViewportPanels.ixx
+    src/ui/UiControls.ixx
+    src/ui/UiStyle.ixx
+    src/ui/ViewportHostPanel.ixx
+    src/ui/ViewportSurface.ixx
+    src/ui/ViewportTextureStore.ixx
     src/ui/VulkanViewportTexture.ixx
 )
 
@@ -225,6 +240,8 @@ add_executable(quader_tests
     tests/RenderTypesTests.cpp
     tests/RendererStartupValidationTests.cpp
     tests/SceneTests.cpp
+    tests/ViewportInstanceTests.cpp
+    tests/ViewportLayoutTests.cpp
 )
 
 target_link_libraries(quader_tests PRIVATE

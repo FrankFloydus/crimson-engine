@@ -21,16 +21,6 @@ struct RenderExtent {
     }
 };
 
-struct RenderViewportFrame {
-    RenderExtent extent;
-    std::vector<uint8_t> rgba;
-
-    [[nodiscard]] bool has_pixels() const
-    {
-        return extent.is_valid() && rgba.size() == static_cast<std::size_t>(extent.width) * extent.height * 4;
-    }
-};
-
 struct LinearColor {
     float r = 1.0f;
     float g = 1.0f;
@@ -80,9 +70,9 @@ struct RenderCamera {
 };
 
 struct PbrMaterialSettings {
-    LinearColor albedo { 1.0f, 0.0f, 0.0f };
+    LinearColor albedo { 1.0f, 1.0f, 1.0f };
     TextureAssetReference albedo_texture;
-    float roughness = 0.18f;
+    float roughness = 1.0f;
     TextureAssetReference roughness_texture;
     float metallic = 0.0f;
     TextureAssetReference metallic_texture;

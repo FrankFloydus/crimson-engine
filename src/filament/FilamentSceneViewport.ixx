@@ -7,7 +7,7 @@ module;
 export module quader.filament.scene_viewport;
 
 export import quader.render.types;
-export import quader.scene.scene;
+export import quader.render.viewport_types;
 
 export namespace quader {
 
@@ -20,7 +20,7 @@ public:
 
     ~FilamentSceneViewport();
 
-    void render_into(const Scene& scene, const RenderCamera& camera, RenderExtent extent, RenderViewportFrame& frame);
+    void render_into(const ViewportRenderRequest& request, ViewportRenderFrame& frame);
 
 private:
     struct Resources;

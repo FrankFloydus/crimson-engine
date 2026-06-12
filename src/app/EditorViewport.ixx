@@ -1,46 +1,79 @@
 module;
 
 #include <optional>
+#include <vector>
 
 export module quader.app.editor_viewport;
 
-import quader.app.editor_camera;
+import quader.app.viewport_instance;
+import quader.app.viewport_layout;
 import quader.platform.input;
-import quader.platform.native_file_dialog;
-import quader.render.types;
-import quader.render.scene_viewport_renderer;
+import quader.render.viewport_renderer;
 import quader.scene.scene;
 import quader.ui.imgui_layer;
+import quader.ui.viewport_surface;
 
 export namespace quader {
 
 class EditorViewport {
 public:
+    ~EditorViewport();
+
     void render_frame(
-        ISceneViewportRenderer& renderer,
+        IViewportRenderer& renderer,
         ImGuiLayer& imgui,
-        Scene& scene,
-        NativeFileDialogService& native_file_dialog,
+        const Scene& scene,
         const Input& input,
         float delta_seconds);
 
     [[nodiscard]] bool wants_relative_mouse_mode() const noexcept;
+    void mark_render_state_dirty();
 
 private:
-    void update_editor_camera(const Input& input, float delta_seconds);
-    void render_material_panel(Scene& scene, NativeFileDialogService& native_file_dialog);
-    void consume_texture_picker_result_if_available(Scene& scene, NativeFileDialogService& native_file_dialog);
-    void request_viewport_frame_if_needed(ISceneViewportRenderer& renderer, const Scene& scene);
-    void upload_completed_viewport_frame_if_available(ISceneViewportRenderer& renderer, ImGuiLayer& imgui);
+    void ensure_viewports(IViewportRenderer& renderer);
+    void release_viewports();
+    void append_owned_viewport_ids(std::vector<ViewportId>& viewport_ids) const;
 
-    RenderExtent viewport_extent_ { 720, 420 };
-    RenderExtent displayed_extent_;
-    EditorCamera editor_camera_;
-    std::optional<PbrMaterialTextureSlot> pending_material_texture_slot_;
-    bool viewport_dirty_ = true;
-    bool viewport_request_pending_ = false;
-    bool viewport_keyboard_focus_ = false;
-    bool viewport_mouse_navigation_active_ = false;
+    void render_scene_viewport_host(
+        ImGuiLayer& imgui,
+        const Input& input,
+        float delta_seconds,
+        std::vector<ViewportId>& visible_viewport_ids);
+    void render_preview_viewport_panel(
+        ImGuiLayer& imgui,
+        const Input& input,
+        float delta_seconds,
+        std::vector<ViewportId>& visible_viewport_ids);
+    void update_viewport_from_surface(
+        ViewportInstance& viewport,
+        const ViewportSurfaceResult& surface,
+        const Input& input,
+        float delta_seconds,
+        std::vector<ViewportId>& visible_viewport_ids);
+    void release_navigation_capture_if_hidden(const std::vector<ViewportId>& visible_viewport_ids);
+
+    void request_visible_viewport_frames(
+        IViewportRenderer& renderer,
+        const Scene& scene,
+        const std::vector<ViewportId>& visible_viewport_ids);
+    void upload_completed_viewport_frames(IViewportRenderer& renderer, ImGuiLayer& imgui);
+
+    [[nodiscard]] ViewportInstance* find_viewport(ViewportId viewport_id);
+    [[nodiscard]] const ViewportInstance* find_viewport(ViewportId viewport_id) const;
+    [[nodiscard]] ViewportPerformanceOverlay performance_overlay_for(
+        const ViewportInstance& viewport,
+        float delta_seconds) const;
+    [[nodiscard]] PbrMaterialSettings preview_material_from_scene(const Scene& scene) const;
+    [[nodiscard]] DirectionalLightSettings preview_light_from_scene(const Scene& scene) const;
+    void mark_scene_viewports_dirty();
+    void mark_all_viewports_dirty();
+
+    IViewportRenderer* renderer_ = nullptr;
+    std::vector<ViewportInstance> scene_viewports_;
+    std::optional<ViewportInstance> preview_viewport_;
+    ViewportLayoutState layout_state_;
+    std::optional<ViewportId> active_viewport_;
+    std::optional<ViewportId> captured_navigation_viewport_;
 };
 
 } // namespace quader

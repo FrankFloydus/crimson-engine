@@ -5,12 +5,13 @@ module;
 export module quader.app;
 
 import quader.app.editor_viewport;
+import quader.app.scene_properties_panel_controller;
 import quader.platform.app_event_dispatcher;
 import quader.platform.input;
 import quader.platform.native_file_dialog;
 import quader.platform.sdl_event_source;
 import quader.platform.sdl_window;
-import quader.render.scene_viewport_renderer;
+import quader.render.viewport_renderer;
 import quader.render.vulkan_device;
 import quader.render.vulkan_swapchain;
 import quader.scene.scene;
@@ -40,8 +41,9 @@ private:
     Input input_;
     VulkanDevice vulkan_device_;
     VulkanSwapchain swapchain_;
-    std::unique_ptr<ISceneViewportRenderer> render_engine_;
+    std::unique_ptr<IViewportRenderer> render_engine_;
     Scene open_scene_;
+    ScenePropertiesPanelController scene_properties_;
     EditorViewport scene_viewport_;
     ImGuiLayer imgui_;
 };
