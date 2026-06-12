@@ -1,0 +1,24 @@
+{
+  "name": "quader-native",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "sdl3",
+      "features": [
+        "vulkan"
+      ]
+    },
+    {
+      "name": "imgui",
+      "features": [
+        "docking-experimental",
+        "sdl3-binding",
+        "vulkan-binding"
+      ]
+    },
+    "gtest",
+    "glm",
+    "spdlog",
+    "tracy"
+  ]
+}

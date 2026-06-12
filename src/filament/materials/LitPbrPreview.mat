@@ -1,0 +1,52 @@
+material {
+    name : QuaderLitPbrPreview,
+    shadingModel : lit,
+    parameters : [
+        {
+            type : float4,
+            name : albedo
+        },
+        {
+            type : float,
+            name : roughness
+        },
+        {
+            type : float,
+            name : metallic
+        },
+        {
+            type : float,
+            name : reflectance
+        },
+        {
+            type : float,
+            name : specularFactor
+        },
+        {
+            type : float3,
+            name : specularColorFactor
+        },
+        {
+            type : float,
+            name : clearCoat
+        },
+        {
+            type : float,
+            name : clearCoatRoughness
+        }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        material.baseColor = materialParams.albedo;
+        material.roughness = materialParams.roughness;
+        material.metallic = materialParams.metallic;
+        material.reflectance = materialParams.reflectance;
+        material.specularFactor = materialParams.specularFactor;
+        material.specularColorFactor = materialParams.specularColorFactor;
+        material.clearCoat = materialParams.clearCoat;
+        material.clearCoatRoughness = materialParams.clearCoatRoughness;
+    }
+}
