@@ -35,6 +35,11 @@ struct ViewportSurfaceClick {
     float local_y = 0.0f;
 };
 
+struct ViewportSurfacePointer {
+    float local_x = 0.0f;
+    float local_y = 0.0f;
+};
+
 struct ViewportSurfaceInput {
     ViewportId id;
     ViewportTextureView texture;
@@ -53,7 +58,10 @@ struct ViewportSurfaceResult {
     bool active = false;
     bool clicked = false;
     bool left_clicked = false;
+    bool left_down = false;
+    bool left_released = false;
     bool dragging = false;
+    std::optional<ViewportSurfacePointer> pointer;
     std::optional<ViewportSurfaceClick> click;
 };
 

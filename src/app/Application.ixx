@@ -5,6 +5,7 @@ module;
 export module quader.app;
 
 import quader.app.editor_viewport;
+import quader.app.editor_selection;
 import quader.app.scene_properties_panel_controller;
 import quader.platform.app_event_dispatcher;
 import quader.platform.input;
@@ -43,6 +44,7 @@ private:
     VulkanSwapchain swapchain_;
     std::unique_ptr<IViewportRenderer> render_engine_;
     Scene open_scene_;
+    EditorSelectionModel selection_;
     ScenePropertiesPanelController scene_properties_;
     EditorViewport scene_viewport_;
     ImGuiLayer imgui_;

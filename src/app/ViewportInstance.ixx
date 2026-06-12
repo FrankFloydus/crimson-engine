@@ -8,6 +8,7 @@ export module quader.app.viewport_instance;
 
 export import quader.app.editor_camera;
 export import quader.platform.input;
+export import quader.render.viewport_gizmos;
 export import quader.render.viewport_types;
 export import quader.scene.scene;
 
@@ -27,15 +28,13 @@ struct ViewportNavigationSnapshot {
     bool window_has_mouse_focus = true;
     bool text_input_active = false;
     bool hovered = false;
-    bool right_mouse_pressed = false;
-    bool right_mouse_released = false;
-    bool right_mouse_down = false;
-    bool move_forward = false;
-    bool move_backward = false;
-    bool move_left = false;
-    bool move_right = false;
-    bool move_up = false;
-    bool move_down = false;
+    bool navigation_activate_pressed = false;
+    bool navigation_activate_released = false;
+    bool navigation_activate_down = false;
+    bool fly_forward = false;
+    bool fly_backward = false;
+    bool fly_left = false;
+    bool fly_right = false;
     bool boost = false;
     MouseDelta mouse_delta;
     MouseDelta mouse_wheel_delta;
@@ -81,7 +80,8 @@ public:
         bool navigation_mouse_locked,
         float delta_seconds);
     [[nodiscard]] std::optional<ViewportRenderRequest> try_begin_render_request(
-        const Scene& scene);
+        const Scene& scene,
+        const std::optional<TransformGizmoRequest>& transform_gizmo = std::nullopt);
     [[nodiscard]] ViewportFrameAcceptance accept_frame(const ViewportRenderFrame& frame);
     void fail_pending_request();
 

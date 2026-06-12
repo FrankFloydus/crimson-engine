@@ -15,6 +15,8 @@ enum class AppKey : uint8_t {
     d,
     q,
     e,
+    r,
+    t,
     escape,
     left_shift,
     right_shift,

@@ -50,6 +50,20 @@ The goals are:
 
 Agents must follow these rules when creating, modifying, or refactoring code.
 
+## No Half-Done Or Band-Aid Systems
+
+Never implement half-done systems, shortcut architecture, temporary band-aids, placeholder workflows, or narrowly patched behavior unless the user explicitly asks for a temporary workaround.
+
+When a problem exposes a missing system boundary, build or extend the real project-owned system boundary needed for the feature instead of hiding the issue behind local booleans, duplicated checks, one-off helper paths, or "good enough for now" logic. This is a MUST rule, not a preference.
+
+If a complete solution is too large for the current turn, stop before coding the shortcut, explain the scope honestly, and record the required full-system work in `tasks.md`. Do not land partial infrastructure that future work would need to undo.
+
+## Input Actions And Contexts
+
+Do not read raw keys or mouse buttons directly inside editor tools, viewport navigation, gizmos, panels, or feature controllers when the intent is a command, shortcut, tool selection, camera movement, or other editor action. Raw device state belongs in `src/platform/Input.*`; editor behavior must go through the project-owned app-layer input action/context resolver.
+
+The same physical key may intentionally mean different things in different contexts. For example, `W` selects the move tool in the editor-tools context, while `W` moves the camera forward only in the viewport-navigation context activated by RMB. Context activation, priority, text-input suppression, and capture rules must be centralized and test-covered. Never solve key conflicts with scattered local booleans or one-off checks.
+
 ---
 
 # Pre-Implementation Design Questions for C++20 Code
@@ -193,9 +207,9 @@ Good C++20 design should answer these two questions clearly:
 
 If these questions cannot be answered simply, pause and refine the design before implementing.
 
-Before starting any new task, automatically make a pre-emptive architecture and code-health check around the area being changed. Identify code smells, tight coupling, unclear ownership, overgrown classes, misplaced responsibilities, non-modular code, and anything that does not follow OOP/SOLID, modularity, or scalability expectations.
+Before starting any new task, automatically make a pre-emptive global architecture and code-health check across the whole repository, not only around the area being changed. Identify code smells, tight coupling, unclear ownership, overgrown classes, misplaced responsibilities, non-modular code, and anything that does not follow OOP/SOLID, modularity, or scalability expectations. After the global pass, call out which findings are directly relevant to the current task and which are broader backlog-level architecture debt.
 
-Use subagents as part of this pre-emptive health check. For non-trivial work, boot 1 to 6 subagents before implementation begins; use more agents within that range when the code area is large, cross-cutting, or architecturally risky. Each booted subagent should participate in the overall health check by inspecting a clear slice of the relevant code and reporting code smells, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and concrete architecture refactors that should be done before or alongside the requested task.
+Use subagents as part of this pre-emptive global health check. For non-trivial work, boot 1 to 6 subagents before implementation begins; use more agents within that range when the repository is large, cross-cutting, or architecturally risky. Each booted subagent should participate in the overall health check by inspecting a clear repository slice and reporting code smells, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and concrete architecture refactors that should be done before or alongside the requested task.
 
 When opening subagents, always pass the explicit task context in the subagent prompt instead of using full-history mode. Full-history subagent spawning is currently error-prone in this workspace; keep prompts self-contained with the repo path, relevant constraints, ownership boundaries, and expected output.
 
@@ -212,9 +226,9 @@ When using subagents for architecture, refactor, OOP design, code-health review,
 
 Every architecture/refactor subagent prompt must be self-contained enough that the subagent can make senior-level design decisions without relying on hidden chat context. If the prompt cannot state the relevant rules clearly, tighten the prompt before spawning the subagent.
 
-When the architecture and code-health analysis is complete, and before implementation begins, report what the agents found. List code smells, architecture debt, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and any focused refactors that should happen before or alongside the requested task. If nothing meaningful is found because the relevant architecture is already healthy enough, explicitly say that the architecture is good for this task and no cleanup is needed this time.
+When the architecture and code-health analysis is complete, and before implementation begins, report what the agents found. List global code smells, architecture debt, risky coupling, ownership issues, misplaced responsibilities, missing abstractions, and any focused refactors that should happen before or alongside the requested task. If nothing meaningful is found because the repository architecture is already healthy enough, explicitly say that the architecture is good for this task and no cleanup is needed this time.
 
-This report is not a stopping point. If the analysis finds bad or smelly code that is directly related to the current task, continue into implementation in the same turn and fix it end to end. Do not leave the user with only an analysis unless the user explicitly requested analysis-only work, the fix is outside the current task scope, or a concrete blocker makes implementation unsafe. When implementation is blocked or deferred, explain the blocker and record any required follow-up in `tasks.md`.
+This report is not a stopping point. If the analysis finds bad or smelly code that is directly related to the current task, continue into implementation in the same turn and fix it end to end. No exceptions! This step is not mandatory or delayable "until later time"; these reports MUST be fixed in place in the same worktree, without fear to pollute or adding complexity. Do not leave the user with only an analysis unless the user explicitly requested analysis-only work, the fix is outside the current task scope, or a concrete blocker makes implementation unsafe. When implementation is blocked or deferred, explain the blocker and record any required follow-up in `tasks.md`.
 
 Do not repeat the architecture inspection in the same chat when the first pass has already been completed and nothing meaningful has changed in the relevant code since that pass. Also do not restart the architecture inspection solely because the conversation was automatically compacted; continue from the compacted summary and only inspect again if the code or task scope changed enough to invalidate the earlier findings.
 

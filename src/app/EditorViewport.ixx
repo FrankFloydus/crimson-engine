@@ -5,6 +5,9 @@ module;
 
 export module quader.app.editor_viewport;
 
+import quader.app.editor_selection;
+import quader.app.editor_input;
+import quader.app.transform_gizmo;
 import quader.app.viewport_instance;
 import quader.app.viewport_layout;
 import quader.platform.input;
@@ -16,8 +19,7 @@ import quader.ui.viewport_surface;
 export namespace quader {
 
 struct EditorViewportFrameResult {
-    bool selection_requested = false;
-    std::optional<SceneEntityId> picked_entity;
+    bool scene_changed = false;
 };
 
 class EditorViewport {
@@ -27,8 +29,9 @@ public:
     [[nodiscard]] EditorViewportFrameResult render_frame(
         IViewportRenderer& renderer,
         ImGuiLayer& imgui,
-        const Scene& scene,
+        Scene& scene,
         const Input& input,
+        EditorSelectionModel& selection,
         float delta_seconds);
 
     [[nodiscard]] bool wants_relative_mouse_mode() const noexcept;
@@ -41,24 +44,29 @@ private:
 
     void render_scene_viewport_host(
         ImGuiLayer& imgui,
-        const Scene& scene,
+        Scene& scene,
         const Input& input,
+        EditorSelectionModel& selection,
         float delta_seconds,
         std::vector<ViewportId>& visible_viewport_ids,
+        bool& hover_payload_updated,
         EditorViewportFrameResult& frame_result);
     void update_viewport_from_surface(
         ViewportInstance& viewport,
-        const Scene& scene,
+        Scene& scene,
         const ViewportSurfaceResult& surface,
         const Input& input,
+        EditorSelectionModel& selection,
         float delta_seconds,
         std::vector<ViewportId>& visible_viewport_ids,
+        bool& hover_payload_updated,
         EditorViewportFrameResult& frame_result);
     void release_navigation_capture_if_hidden(const std::vector<ViewportId>& visible_viewport_ids);
 
     void request_visible_viewport_frames(
         IViewportRenderer& renderer,
         const Scene& scene,
+        const EditorSelectionModel& selection,
         const std::vector<ViewportId>& visible_viewport_ids);
     void upload_completed_viewport_frames(IViewportRenderer& renderer, ImGuiLayer& imgui);
 
@@ -67,9 +75,15 @@ private:
     [[nodiscard]] ViewportPerformanceOverlay performance_overlay_for(
         const ViewportInstance& viewport,
         float delta_seconds) const;
-    [[nodiscard]] std::optional<SceneEntityId> pick_entity_from_surface(
+    struct ViewportPickResult {
+        std::optional<SceneEntityId> entity_id;
+        std::optional<DebugDrawPickPayload> debug_payload;
+    };
+
+    [[nodiscard]] ViewportPickResult pick_from_surface(
         const Scene& scene,
         const ViewportInstance& viewport,
+        const EditorSelectionModel& selection,
         const ViewportSurfaceResult& surface) const;
     void mark_scene_viewports_dirty();
     void mark_all_viewports_dirty();
@@ -77,6 +91,8 @@ private:
     IViewportRenderer* renderer_ = nullptr;
     std::vector<ViewportInstance> scene_viewports_;
     ViewportLayoutState layout_state_;
+    EditorInputResolver editor_input_;
+    TransformGizmoController transform_gizmo_;
     std::optional<ViewportId> active_viewport_;
     std::optional<ViewportId> mouse_locked_viewport_;
 };

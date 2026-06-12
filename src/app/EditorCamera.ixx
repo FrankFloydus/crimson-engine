@@ -2,21 +2,23 @@ module;
 
 export module quader.app.editor_camera;
 
-import quader.platform.input;
 import quader.render.types;
 
 export namespace quader {
+
+struct EditorCameraLookDelta {
+    float x = 0.0f;
+    float y = 0.0f;
+};
 
 struct EditorCameraNavigationInput {
     bool move_forward = false;
     bool move_backward = false;
     bool move_left = false;
     bool move_right = false;
-    bool move_up = false;
-    bool move_down = false;
     bool boost = false;
     bool look_active = false;
-    MouseDelta look_delta {};
+    EditorCameraLookDelta look_delta {};
 };
 
 class EditorCamera {
@@ -30,7 +32,6 @@ public:
     [[nodiscard]] bool update_from_navigation_input(
         const EditorCameraNavigationInput& navigation_input,
         float delta_seconds);
-    [[nodiscard]] bool update_from_input(const Input& input, float delta_seconds);
 
 private:
     RenderCamera camera_;

@@ -99,6 +99,13 @@ quader_add_filament_material(
     QUADER_DEBUG_DRAW_INC
 )
 
+quader_add_filament_material(
+    QuaderDebugDrawOverlayMaterial
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/filament/materials/DebugDrawOverlayUnlit.mat"
+    "quader_debug_draw_overlay_material"
+    QUADER_DEBUG_DRAW_OVERLAY_INC
+)
+
 add_custom_target(quader_generated_assets
     DEPENDS ${QUADER_GENERATED_ASSETS}
 )
@@ -123,8 +130,11 @@ set(QUADER_CORE_SOURCES
     src/assets/ImageAsset.cpp
     src/app/Application.cpp
     src/app/EditorCamera.cpp
+    src/app/EditorInput.cpp
+    src/app/EditorSelection.cpp
     src/app/EditorViewport.cpp
     src/app/ScenePropertiesPanelController.cpp
+    src/app/TransformGizmo.cpp
     src/app/ViewportInstance.cpp
     src/app/ViewportLayout.cpp
     src/diagnostics/Logger.cpp
@@ -161,8 +171,11 @@ set(QUADER_MODULES
     src/assets/ImageAsset.ixx
     src/app/Application.ixx
     src/app/EditorCamera.ixx
+    src/app/EditorInput.ixx
+    src/app/EditorSelection.ixx
     src/app/EditorViewport.ixx
     src/app/ScenePropertiesPanelController.ixx
+    src/app/TransformGizmo.ixx
     src/app/ViewportInstance.ixx
     src/app/ViewportLayout.ixx
     src/diagnostics/Logger.ixx
@@ -251,11 +264,15 @@ add_custom_command(TARGET quader_native POST_BUILD
 )
 
 add_executable(quader_tests
+    tests/EditorInputTests.cpp
+    tests/EditorSelectionTests.cpp
     tests/EditorCameraTests.cpp
     tests/InputTests.cpp
     tests/RenderTypesTests.cpp
     tests/RendererStartupValidationTests.cpp
     tests/SceneTests.cpp
+    tests/TransformGizmoTests.cpp
+    tests/ViewportGizmosTests.cpp
     tests/ViewportInstanceTests.cpp
     tests/ViewportLayoutTests.cpp
 )

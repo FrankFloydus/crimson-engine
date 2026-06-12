@@ -18,16 +18,6 @@ constexpr Vec3 world_up { 0.0f, 1.0f, 0.0f };
 constexpr Vec3 world_forward { 0.0f, 0.0f, -1.0f };
 constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
 
-[[nodiscard]] bool is_fly_movement_requested(const ViewportNavigationSnapshot& input)
-{
-    return input.move_forward ||
-        input.move_backward ||
-        input.move_left ||
-        input.move_right ||
-        input.move_up ||
-        input.move_down;
-}
-
 [[nodiscard]] Vec3 add(Vec3 left, Vec3 right)
 {
     return { left.x + right.x, left.y + right.y, left.z + right.z };
@@ -110,20 +100,20 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
 {
     EditorCameraNavigationInput navigation;
     const bool keyboard_navigation_active =
-        (input.hovered || navigation_mouse_locked) &&
+        navigation_mouse_locked &&
         !input.text_input_active;
     if (keyboard_navigation_active) {
-        navigation.move_forward = input.move_forward;
-        navigation.move_backward = input.move_backward;
-        navigation.move_left = input.move_left;
-        navigation.move_right = input.move_right;
-        navigation.move_up = input.move_up;
-        navigation.move_down = input.move_down;
+        navigation.move_forward = input.fly_forward;
+        navigation.move_backward = input.fly_backward;
+        navigation.move_left = input.fly_left;
+        navigation.move_right = input.fly_right;
         navigation.boost = input.boost;
     }
 
     navigation.look_active = navigation_mouse_locked;
-    navigation.look_delta = navigation_mouse_locked ? input.mouse_delta : MouseDelta {};
+    navigation.look_delta = navigation_mouse_locked
+        ? EditorCameraLookDelta { .x = input.mouse_delta.x, .y = input.mouse_delta.y }
+        : EditorCameraLookDelta {};
     return navigation;
 }
 
@@ -232,7 +222,8 @@ bool ViewportInstance::update_navigation(
 }
 
 std::optional<ViewportRenderRequest> ViewportInstance::try_begin_render_request(
-    const Scene& scene)
+    const Scene& scene,
+    const std::optional<TransformGizmoRequest>& transform_gizmo)
 {
     if (!dirty_ || request_pending_ || !requested_extent_.is_valid()) {
         return std::nullopt;
@@ -241,6 +232,9 @@ std::optional<ViewportRenderRequest> ViewportInstance::try_begin_render_request(
     SceneRenderSnapshot snapshot = build_scene_render_snapshot(scene);
     DebugDrawFrame debug_draw;
     append_light_gizmos(snapshot, debug_draw);
+    if (transform_gizmo.has_value()) {
+        append_transform_gizmo(*transform_gizmo, debug_draw);
+    }
 
     ViewportRenderSubject subject = SceneViewportSubject { .snapshot = std::move(snapshot) };
 
@@ -389,8 +383,7 @@ bool ViewportInstance::should_start_navigation_mouse_lock(const ViewportNavigati
 
     switch (navigation_kind_) {
     case ViewportNavigationKind::scene_camera:
-        return input.right_mouse_pressed ||
-            (camera_preset_ == ViewportCameraPreset::perspective && is_fly_movement_requested(input));
+        return input.navigation_activate_pressed;
     case ViewportNavigationKind::none:
         return false;
     }
@@ -410,8 +403,7 @@ bool ViewportInstance::should_keep_navigation_mouse_lock(const ViewportNavigatio
 
     switch (navigation_kind_) {
     case ViewportNavigationKind::scene_camera:
-        return input.right_mouse_down ||
-            (camera_preset_ == ViewportCameraPreset::perspective && is_fly_movement_requested(input));
+        return input.navigation_activate_down;
     case ViewportNavigationKind::none:
         return false;
     }

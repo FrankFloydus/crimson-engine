@@ -208,8 +208,8 @@ TEST(ViewportInstance, ScenePerspectiveNavigationLocksMouseForRightDrag)
 
     quader::ViewportNavigationSnapshot input;
     input.hovered = true;
-    input.right_mouse_pressed = true;
-    input.right_mouse_down = true;
+    input.navigation_activate_pressed = true;
+    input.navigation_activate_down = true;
     input.mouse_delta = { 12.0f, -4.0f };
 
     EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
@@ -217,18 +217,34 @@ TEST(ViewportInstance, ScenePerspectiveNavigationLocksMouseForRightDrag)
     EXPECT_TRUE(viewport.update_navigation(input, true, 0.016f));
 }
 
-TEST(ViewportInstance, ScenePerspectiveNavigationLocksMouseForKeyboardFly)
+TEST(ViewportInstance, ScenePerspectiveNavigationDoesNotLockMouseForKeyboardFlyWithoutRmb)
 {
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 10 }, "Perspective", quader::ViewportCameraPreset::perspective);
 
     quader::ViewportNavigationSnapshot input;
     input.hovered = true;
-    input.move_forward = true;
+    input.fly_forward = true;
 
-    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
+    EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
 
     input.hovered = false;
+    EXPECT_FALSE(viewport.should_keep_navigation_mouse_lock(input));
+    EXPECT_FALSE(viewport.update_navigation(input, false, 0.016f));
+}
+
+TEST(ViewportInstance, ScenePerspectiveNavigationMovesOnlyWhileRmbContextIsActive)
+{
+    quader::ViewportInstance viewport =
+        quader::ViewportInstance::scene_viewport({ 11 }, "Perspective", quader::ViewportCameraPreset::perspective);
+
+    quader::ViewportNavigationSnapshot input;
+    input.hovered = true;
+    input.navigation_activate_pressed = true;
+    input.navigation_activate_down = true;
+    input.fly_forward = true;
+
+    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
     EXPECT_TRUE(viewport.should_keep_navigation_mouse_lock(input));
     EXPECT_TRUE(viewport.update_navigation(input, true, 0.016f));
 }
@@ -240,8 +256,8 @@ TEST(ViewportInstance, OrthographicSceneRightDragPansOnlyThatViewport)
 
     quader::ViewportNavigationSnapshot input;
     input.hovered = true;
-    input.right_mouse_pressed = true;
-    input.right_mouse_down = true;
+    input.navigation_activate_pressed = true;
+    input.navigation_activate_down = true;
     input.mouse_delta = { 12.0f, -4.0f };
 
     EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
@@ -256,8 +272,8 @@ TEST(ViewportInstance, PerspectiveSceneDoesNotStartMouseLockAwayFromViewport)
 
     quader::ViewportNavigationSnapshot input;
     input.hovered = false;
-    input.right_mouse_pressed = false;
-    input.right_mouse_down = true;
+    input.navigation_activate_pressed = false;
+    input.navigation_activate_down = true;
     input.mouse_delta = { 12.0f, -4.0f };
 
     EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
@@ -273,8 +289,8 @@ TEST(ViewportInstance, NonInteractiveViewportIgnoresNavigationInput)
 
     quader::ViewportNavigationSnapshot input;
     input.hovered = true;
-    input.right_mouse_pressed = true;
-    input.right_mouse_down = true;
+    input.navigation_activate_pressed = true;
+    input.navigation_activate_down = true;
     input.mouse_delta = { 15.0f, 15.0f };
 
     EXPECT_FALSE(viewport.can_capture_navigation());

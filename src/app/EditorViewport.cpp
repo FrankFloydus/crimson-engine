@@ -27,6 +27,7 @@ struct Ray {
 
 struct RayHit {
     SceneEntityId entity_id;
+    std::optional<DebugDrawPickPayload> debug_payload;
     float distance = 0.0f;
     uint8_t priority = 0;
 };
@@ -112,16 +113,6 @@ float degrees_to_radians(float degrees)
     return rotate_by_quaternion(value, rotation);
 }
 
-bool is_viewport_movement_key_down(const Input& input)
-{
-    return input.is_key_down(AppKey::w) ||
-        input.is_key_down(AppKey::a) ||
-        input.is_key_down(AppKey::s) ||
-        input.is_key_down(AppKey::d) ||
-        input.is_key_down(AppKey::q) ||
-        input.is_key_down(AppKey::e);
-}
-
 ViewportId create_viewport_or_throw(IViewportRenderer& renderer, const char* viewport_name)
 {
     std::optional<ViewportId> viewport_id = renderer.try_create_viewport();
@@ -134,23 +125,24 @@ ViewportId create_viewport_or_throw(IViewportRenderer& renderer, const char* vie
 
 ViewportNavigationSnapshot navigation_snapshot_from(
     const Input& input,
+    const ResolvedEditorInput& resolved_input,
     bool viewport_hovered)
 {
+    const ViewportNavigationInputActions navigation_actions =
+        viewport_navigation_input_actions_from(resolved_input);
     return ViewportNavigationSnapshot {
         .window_has_keyboard_focus = input.window_has_keyboard_focus(),
         .window_has_mouse_focus = input.window_has_mouse_focus(),
         .text_input_active = ImGui::GetIO().WantTextInput,
         .hovered = viewport_hovered,
-        .right_mouse_pressed = input.was_mouse_button_pressed(AppMouseButton::right),
-        .right_mouse_released = input.was_mouse_button_released(AppMouseButton::right),
-        .right_mouse_down = input.is_mouse_button_down(AppMouseButton::right),
-        .move_forward = input.is_key_down(AppKey::w),
-        .move_backward = input.is_key_down(AppKey::s),
-        .move_left = input.is_key_down(AppKey::a),
-        .move_right = input.is_key_down(AppKey::d),
-        .move_up = input.is_key_down(AppKey::e),
-        .move_down = input.is_key_down(AppKey::q),
-        .boost = input.is_key_down(AppKey::left_shift) || input.is_key_down(AppKey::right_shift),
+        .navigation_activate_pressed = navigation_actions.activate_pressed,
+        .navigation_activate_released = navigation_actions.activate_released,
+        .navigation_activate_down = navigation_actions.activate_down,
+        .fly_forward = navigation_actions.fly_forward_down,
+        .fly_backward = navigation_actions.fly_backward_down,
+        .fly_left = navigation_actions.fly_left_down,
+        .fly_right = navigation_actions.fly_right_down,
+        .boost = navigation_actions.boost_down,
         .mouse_delta = input.mouse_delta(),
         .mouse_wheel_delta = input.mouse_wheel_delta(),
     };
@@ -271,19 +263,82 @@ ViewportNavigationSnapshot navigation_snapshot_from(
     return t_min;
 }
 
-[[nodiscard]] Ray viewport_ray_from_surface(
+[[nodiscard]] std::optional<float> intersect_ray_oriented_box(
+    const Ray& ray,
+    Vec3 center,
+    Vec3 axis_x,
+    Vec3 axis_y,
+    Vec3 axis_z,
+    Vec3 half_extents)
+{
+    axis_x = normalized_or(axis_x, { 1.0f, 0.0f, 0.0f });
+    axis_y = normalized_or(axis_y, { 0.0f, 1.0f, 0.0f });
+    axis_z = normalized_or(axis_z, { 0.0f, 0.0f, 1.0f });
+    const Vec3 origin_delta = subtract(ray.origin, center);
+    const Ray local_ray {
+        .origin = {
+            dot(origin_delta, axis_x),
+            dot(origin_delta, axis_y),
+            dot(origin_delta, axis_z),
+        },
+        .direction = {
+            dot(ray.direction, axis_x),
+            dot(ray.direction, axis_y),
+            dot(ray.direction, axis_z),
+        },
+    };
+    return intersect_ray_aabb(
+        local_ray,
+        scale(half_extents, -1.0f),
+        half_extents);
+}
+
+[[nodiscard]] std::optional<float> intersect_ray_ring(
+    const Ray& ray,
+    Vec3 center,
+    Vec3 normal,
+    float radius,
+    float thickness)
+{
+    if (radius <= 0.0f || thickness <= 0.0f) {
+        return std::nullopt;
+    }
+
+    normal = normalized_or(normal, { 0.0f, 1.0f, 0.0f });
+    const float denominator = dot(ray.direction, normal);
+    if (std::abs(denominator) <= 0.000001f) {
+        return std::nullopt;
+    }
+
+    const float t = dot(subtract(center, ray.origin), normal) / denominator;
+    if (t < 0.0f) {
+        return std::nullopt;
+    }
+
+    const Vec3 hit = add(ray.origin, scale(ray.direction, t));
+    const Vec3 center_to_hit = subtract(hit, center);
+    const Vec3 radial = subtract(center_to_hit, scale(normal, dot(center_to_hit, normal)));
+    if (std::abs(std::sqrt(squared_length(radial)) - radius) > thickness) {
+        return std::nullopt;
+    }
+
+    return t;
+}
+
+[[nodiscard]] Ray viewport_ray_from_surface_pointer(
     const ViewportInstance& viewport,
-    const ViewportSurfaceResult& surface)
+    const ViewportSurfaceResult& surface,
+    ViewportSurfacePointer pointer)
 {
     const ViewportCamera camera = viewport.current_camera();
     const ViewportProjection projection = viewport.current_projection();
     const float aspect =
         surface.image_bounds.height > 0.0f ? surface.image_bounds.width / surface.image_bounds.height : 1.0f;
-    const float normalized_x = surface.click.has_value() && surface.image_bounds.width > 0.0f
-        ? (surface.click->local_x / surface.image_bounds.width) * 2.0f - 1.0f
+    const float normalized_x = surface.image_bounds.width > 0.0f
+        ? (pointer.local_x / surface.image_bounds.width) * 2.0f - 1.0f
         : 0.0f;
-    const float normalized_y = surface.click.has_value() && surface.image_bounds.height > 0.0f
-        ? 1.0f - (surface.click->local_y / surface.image_bounds.height) * 2.0f
+    const float normalized_y = surface.image_bounds.height > 0.0f
+        ? 1.0f - (pointer.local_y / surface.image_bounds.height) * 2.0f
         : 0.0f;
 
     const Vec3 forward = normalized_or(camera.forward, { 0.0f, 0.0f, -1.0f });
@@ -310,6 +365,16 @@ ViewportNavigationSnapshot navigation_snapshot_from(
             add(forward, add(scale(right, normalized_x * half_width), scale(up, normalized_y * half_height))),
             forward),
     };
+}
+
+[[nodiscard]] bool is_transform_gizmo_payload(DebugDrawPickPayload payload)
+{
+    return payload.role == DebugDrawPickRole::transform_move_axis ||
+        payload.role == DebugDrawPickRole::transform_move_plane ||
+        payload.role == DebugDrawPickRole::transform_rotate_axis ||
+        payload.role == DebugDrawPickRole::transform_scale_axis ||
+        payload.role == DebugDrawPickRole::transform_scale_plane ||
+        payload.role == DebugDrawPickRole::transform_uniform_scale;
 }
 
 [[nodiscard]] std::optional<float> intersect_mesh_entity(const Ray& ray, const SceneEntity& entity)
@@ -367,11 +432,15 @@ void upload_readback_frame_if_available(
         return true;
     }
 
+    if (candidate.priority != current->priority) {
+        return candidate.priority > current->priority;
+    }
+
     if (candidate.distance < current->distance) {
         return true;
     }
 
-    return candidate.distance == current->distance && candidate.priority > current->priority;
+    return false;
 }
 
 void consider_debug_pick_proxies(
@@ -398,6 +467,18 @@ void consider_debug_pick_proxies(
         case DebugDrawPickProxyKind::capsule:
             hit_distance = intersect_ray_capsule(ray, proxy.segment_a, proxy.segment_b, proxy.radius);
             break;
+        case DebugDrawPickProxyKind::oriented_box:
+            hit_distance = intersect_ray_oriented_box(
+                ray,
+                proxy.center,
+                proxy.axis_x,
+                proxy.axis_y,
+                proxy.axis_z,
+                proxy.half_extents);
+            break;
+        case DebugDrawPickProxyKind::ring:
+            hit_distance = intersect_ray_ring(ray, proxy.center, proxy.normal, proxy.radius, proxy.thickness);
+            break;
         }
 
         if (!hit_distance.has_value()) {
@@ -406,6 +487,7 @@ void consider_debug_pick_proxies(
 
         RayHit candidate {
             .entity_id = owner,
+            .debug_payload = proxy.payload,
             .distance = *hit_distance,
             .priority = proxy.priority,
         };
@@ -425,8 +507,9 @@ EditorViewport::~EditorViewport()
 EditorViewportFrameResult EditorViewport::render_frame(
     IViewportRenderer& renderer,
     ImGuiLayer& imgui,
-    const Scene& scene,
+    Scene& scene,
     const Input& input,
+    EditorSelectionModel& selection,
     float delta_seconds)
 {
     ensure_viewports(renderer);
@@ -435,10 +518,34 @@ EditorViewportFrameResult EditorViewport::render_frame(
 
     EditorViewportFrameResult frame_result;
     std::vector<ViewportId> visible_viewport_ids;
-    render_scene_viewport_host(imgui, scene, input, delta_seconds, visible_viewport_ids, frame_result);
+    bool hover_payload_updated = false;
+    const bool text_input_active = ImGui::GetIO().WantTextInput;
+    const EditorInputEnvironment tool_input_environment =
+        editor_input_environment_from_input(
+            input,
+            text_input_active,
+            false,
+            mouse_locked_viewport_.has_value(),
+            transform_gizmo_.is_dragging());
+    const ResolvedEditorInput tool_input = editor_input_.resolve(input, tool_input_environment);
+    if (transform_gizmo_.update_tool_hotkeys(transform_tool_input_actions_from(tool_input))) {
+        mark_scene_viewports_dirty();
+    }
+    render_scene_viewport_host(
+        imgui,
+        scene,
+        input,
+        selection,
+        delta_seconds,
+        visible_viewport_ids,
+        hover_payload_updated,
+        frame_result);
+    if (!hover_payload_updated && transform_gizmo_.set_hovered_payload(std::nullopt)) {
+        mark_scene_viewports_dirty();
+    }
     release_navigation_capture_if_hidden(visible_viewport_ids);
 
-    request_visible_viewport_frames(renderer, scene, visible_viewport_ids);
+    request_visible_viewport_frames(renderer, scene, selection, visible_viewport_ids);
 
     std::vector<ViewportId> owned_viewport_ids;
     append_owned_viewport_ids(owned_viewport_ids);
@@ -512,10 +619,12 @@ void EditorViewport::append_owned_viewport_ids(std::vector<ViewportId>& viewport
 
 void EditorViewport::render_scene_viewport_host(
     ImGuiLayer& imgui,
-    const Scene& scene,
+    Scene& scene,
     const Input& input,
+    EditorSelectionModel& selection,
     float delta_seconds,
     std::vector<ViewportId>& visible_viewport_ids,
+    bool& hover_payload_updated,
     EditorViewportFrameResult& frame_result)
 {
     std::vector<ViewportPaneInput> panes;
@@ -548,17 +657,28 @@ void EditorViewport::render_scene_viewport_host(
             viewport->set_camera_preset(*pane.requested_camera_preset);
         }
 
-        update_viewport_from_surface(*viewport, scene, pane.surface, input, delta_seconds, visible_viewport_ids, frame_result);
+        update_viewport_from_surface(
+            *viewport,
+            scene,
+            pane.surface,
+            input,
+            selection,
+            delta_seconds,
+            visible_viewport_ids,
+            hover_payload_updated,
+            frame_result);
     }
 }
 
 void EditorViewport::update_viewport_from_surface(
     ViewportInstance& viewport,
-    const Scene& scene,
+    Scene& scene,
     const ViewportSurfaceResult& surface,
     const Input& input,
+    EditorSelectionModel& selection,
     float delta_seconds,
     std::vector<ViewportId>& visible_viewport_ids,
+    bool& hover_payload_updated,
     EditorViewportFrameResult& frame_result)
 {
     if (!surface.visible) {
@@ -573,16 +693,61 @@ void EditorViewport::update_viewport_from_surface(
     visible_viewport_ids.push_back(viewport.id());
     viewport.set_requested_extent(surface.requested_extent);
 
-    if (surface.hovered || surface.clicked || (surface.hovered && is_viewport_movement_key_down(input))) {
+    const bool navigation_captured =
+        mouse_locked_viewport_.has_value() &&
+        *mouse_locked_viewport_ == viewport.id();
+    const EditorInputEnvironment viewport_input_environment =
+        editor_input_environment_from_input(
+            input,
+            ImGui::GetIO().WantTextInput,
+            surface.hovered,
+            navigation_captured,
+            transform_gizmo_.is_dragging());
+    const ResolvedEditorInput viewport_input = editor_input_.resolve(input, viewport_input_environment);
+    const ViewportNavigationInputActions navigation_actions =
+        viewport_navigation_input_actions_from(viewport_input);
+
+    if (surface.hovered || surface.clicked || navigation_actions.activate_down) {
         active_viewport_ = viewport.id();
     }
 
-    if (surface.left_clicked && !surface.dragging) {
-        frame_result.selection_requested = true;
-        frame_result.picked_entity = pick_entity_from_surface(scene, viewport, surface);
+    if (surface.hovered && surface.pointer.has_value() && !transform_gizmo_.is_dragging()) {
+        const ViewportPickResult hover_pick = pick_from_surface(scene, viewport, selection, surface);
+        const std::optional<DebugDrawPickPayload> hover_payload =
+            hover_pick.debug_payload.has_value() && is_transform_gizmo_payload(*hover_pick.debug_payload)
+            ? hover_pick.debug_payload
+            : std::nullopt;
+        hover_payload_updated = true;
+        if (transform_gizmo_.set_hovered_payload(hover_payload)) {
+            mark_scene_viewports_dirty();
+        }
     }
 
-    const ViewportNavigationSnapshot navigation_snapshot = navigation_snapshot_from(input, surface.hovered);
+    if (transform_gizmo_.update_drag(scene, viewport.current_camera(), viewport.current_projection(), surface)) {
+        active_viewport_ = viewport.id();
+        frame_result.scene_changed = true;
+        mark_scene_viewports_dirty();
+    }
+
+    if (surface.left_clicked && !surface.dragging && !transform_gizmo_.is_dragging()) {
+        const ViewportPickResult pick = pick_from_surface(scene, viewport, selection, surface);
+        if (pick.debug_payload.has_value() &&
+            transform_gizmo_.try_begin_drag(
+                *pick.debug_payload,
+                scene,
+                viewport.current_camera(),
+                viewport.current_projection(),
+                surface)) {
+            selection.select_entity(SceneEntityId { pick.debug_payload->owner_entity_id });
+            active_viewport_ = viewport.id();
+        } else {
+            selection.select_entity(pick.entity_id.value_or(SceneEntityId {}));
+        }
+        mark_scene_viewports_dirty();
+    }
+
+    const ViewportNavigationSnapshot navigation_snapshot =
+        navigation_snapshot_from(input, viewport_input, surface.hovered);
     if (mouse_locked_viewport_ == viewport.id() &&
         !viewport.should_keep_navigation_mouse_lock(navigation_snapshot)) {
         mouse_locked_viewport_.reset();
@@ -621,6 +786,7 @@ void EditorViewport::release_navigation_capture_if_hidden(const std::vector<View
 void EditorViewport::request_visible_viewport_frames(
     IViewportRenderer& renderer,
     const Scene& scene,
+    const EditorSelectionModel& selection,
     const std::vector<ViewportId>& visible_viewport_ids)
 {
     for (ViewportId viewport_id : visible_viewport_ids) {
@@ -629,8 +795,14 @@ void EditorViewport::request_visible_viewport_frames(
             continue;
         }
 
+        const std::optional<TransformGizmoRequest> transform_gizmo =
+            transform_gizmo_.render_request_for_selection(
+                scene,
+                selection.selected_entity(),
+                viewport->current_camera(),
+                viewport->current_projection());
         std::optional<ViewportRenderRequest> request =
-            viewport->try_begin_render_request(scene);
+            viewport->try_begin_render_request(scene, transform_gizmo);
         if (!request.has_value()) {
             continue;
         }
@@ -696,21 +868,39 @@ ViewportPerformanceOverlay EditorViewport::performance_overlay_for(
     };
 }
 
-std::optional<SceneEntityId> EditorViewport::pick_entity_from_surface(
+EditorViewport::ViewportPickResult EditorViewport::pick_from_surface(
     const Scene& scene,
     const ViewportInstance& viewport,
+    const EditorSelectionModel& selection,
     const ViewportSurfaceResult& surface) const
 {
-    if (!surface.click.has_value() || surface.image_bounds.width <= 0.0f || surface.image_bounds.height <= 0.0f) {
-        return std::nullopt;
+    std::optional<ViewportSurfacePointer> pointer = surface.pointer;
+    if (!pointer.has_value() && surface.click.has_value()) {
+        pointer = ViewportSurfacePointer {
+            .local_x = surface.click->local_x,
+            .local_y = surface.click->local_y,
+        };
     }
 
-    const Ray ray = viewport_ray_from_surface(viewport, surface);
+    if (!pointer.has_value() || surface.image_bounds.width <= 0.0f || surface.image_bounds.height <= 0.0f) {
+        return {};
+    }
+
+    const Ray ray = viewport_ray_from_surface_pointer(viewport, surface, *pointer);
     std::optional<RayHit> best_hit;
 
     SceneRenderSnapshot snapshot = build_scene_render_snapshot(scene);
     DebugDrawFrame debug_draw;
     append_light_gizmos(snapshot, debug_draw);
+    const std::optional<TransformGizmoRequest> transform_gizmo =
+        transform_gizmo_.render_request_for_selection(
+            scene,
+            selection.selected_entity(),
+            viewport.current_camera(),
+            viewport.current_projection());
+    if (transform_gizmo.has_value()) {
+        append_transform_gizmo(*transform_gizmo, debug_draw);
+    }
     consider_debug_pick_proxies(scene, ray, debug_draw.depth_tested, best_hit);
     consider_debug_pick_proxies(scene, ray, debug_draw.overlay, best_hit);
 
@@ -721,19 +911,23 @@ std::optional<SceneEntityId> EditorViewport::pick_entity_from_surface(
             continue;
         }
 
-        if (!best_hit.has_value() || *hit_distance < best_hit->distance) {
-            best_hit = RayHit {
+        RayHit candidate {
                 .entity_id = entity.id,
                 .distance = *hit_distance,
-            };
+        };
+        if (first_hit_is_better(candidate, best_hit)) {
+            best_hit = candidate;
         }
     }
 
     if (!best_hit.has_value()) {
-        return std::nullopt;
+        return {};
     }
 
-    return best_hit->entity_id;
+    return ViewportPickResult {
+        .entity_id = best_hit->entity_id,
+        .debug_payload = best_hit->debug_payload,
+    };
 }
 
 void EditorViewport::mark_scene_viewports_dirty()

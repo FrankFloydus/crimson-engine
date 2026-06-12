@@ -16,28 +16,20 @@ import quader.ui.style;
 
 namespace quader {
 
-void ScenePropertiesPanelController::select_entity(SceneEntityId entity_id)
-{
-    selected_entity_ = entity_id.is_valid() ? std::optional<SceneEntityId>(entity_id) : std::nullopt;
-}
-
 bool ScenePropertiesPanelController::render_frame(
     Scene& scene,
-    NativeFileDialogService& native_file_dialog)
+    NativeFileDialogService& native_file_dialog,
+    EditorSelectionModel& selection)
 {
-    if (selected_entity_.has_value() && !scene.contains(*selected_entity_)) {
-        selected_entity_.reset();
-    }
-
-    bool render_state_changed = false;
+    bool render_state_changed = selection.validate_against(scene);
     render_state_changed |= consume_texture_picker_result_if_available(scene, native_file_dialog);
-    render_state_changed |= render_create_menu(scene);
-    render_outliner(scene);
-    render_state_changed |= render_property_inspector(scene, native_file_dialog);
+    render_state_changed |= render_create_menu(scene, selection);
+    render_outliner(scene, selection);
+    render_state_changed |= render_property_inspector(scene, native_file_dialog, selection);
     return render_state_changed;
 }
 
-bool ScenePropertiesPanelController::render_create_menu(Scene& scene)
+bool ScenePropertiesPanelController::render_create_menu(Scene& scene, EditorSelectionModel& selection)
 {
     const InspectorCreateMenuResult result = draw_inspector_create_menu();
     if (!result.requested_create.has_value()) {
@@ -47,22 +39,22 @@ bool ScenePropertiesPanelController::render_create_menu(Scene& scene)
     switch (*result.requested_create) {
     case CreateSceneItemKind::cube: {
         const SceneEntityId created_id = scene.create_cube();
-        selected_entity_ = created_id;
+        selection.select_entity(created_id);
         return true;
     }
     case CreateSceneItemKind::plane: {
         const SceneEntityId created_id = scene.create_plane();
-        selected_entity_ = created_id;
+        selection.select_entity(created_id);
         return true;
     }
     case CreateSceneItemKind::directional_light: {
         const SceneEntityId created_id = scene.create_directional_light();
-        selected_entity_ = created_id;
+        selection.select_entity(created_id);
         return true;
     }
     case CreateSceneItemKind::point_light: {
         const SceneEntityId created_id = scene.create_point_light();
-        selected_entity_ = created_id;
+        selection.select_entity(created_id);
         return true;
     }
     }
@@ -70,17 +62,18 @@ bool ScenePropertiesPanelController::render_create_menu(Scene& scene)
     return false;
 }
 
-void ScenePropertiesPanelController::render_outliner(const Scene& scene)
+void ScenePropertiesPanelController::render_outliner(const Scene& scene, EditorSelectionModel& selection)
 {
-    const OutlinerPanelResult result = outliner_panel_.draw(scene.entities(), selected_entity_);
+    const OutlinerPanelResult result = outliner_panel_.draw(scene.entities(), selection.selected_entity());
     if (result.selected_entity.has_value()) {
-        selected_entity_ = *result.selected_entity;
+        selection.select_entity(*result.selected_entity);
     }
 }
 
 bool ScenePropertiesPanelController::render_property_inspector(
     Scene& scene,
-    NativeFileDialogService& native_file_dialog)
+    NativeFileDialogService& native_file_dialog,
+    EditorSelectionModel& selection)
 {
     const InspectorUiStyle style = inspector_ui_style();
     set_initial_window_bounds(style.window);
@@ -91,13 +84,14 @@ bool ScenePropertiesPanelController::render_property_inspector(
         return false;
     }
 
-    if (!selected_entity_.has_value()) {
+    const std::optional<SceneEntityId> selected_entity = selection.selected_entity();
+    if (!selected_entity.has_value()) {
         ImGui::TextDisabled("No entity selected.");
         ImGui::End();
         return false;
     }
 
-    const std::optional<SceneEntity> entity = scene.entity(*selected_entity_);
+    const std::optional<SceneEntity> entity = scene.entity(*selected_entity);
     if (!entity.has_value()) {
         ImGui::TextDisabled("No entity selected.");
         ImGui::End();

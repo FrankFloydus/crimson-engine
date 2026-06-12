@@ -153,6 +153,8 @@ ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
         ImGui::IsItemClicked(ImGuiMouseButton_Right) ||
         ImGui::IsItemClicked(ImGuiMouseButton_Middle);
     result.left_clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    result.left_down = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    result.left_released = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
     result.dragging = result.active &&
         (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
             ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
@@ -161,6 +163,13 @@ ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
     const ImVec2 image_min = ImGui::GetItemRectMin();
     const ImVec2 image_max = ImGui::GetItemRectMax();
     result.image_bounds = image_bounds_from_rect(image_min, image_max);
+    if (result.hovered || result.active) {
+        const ImVec2 mouse = ImGui::GetMousePos();
+        result.pointer = ViewportSurfacePointer {
+            .local_x = std::clamp(mouse.x - image_min.x, 0.0f, result.image_bounds.width),
+            .local_y = std::clamp(mouse.y - image_min.y, 0.0f, result.image_bounds.height),
+        };
+    }
     if (result.left_clicked) {
         const ImVec2 mouse = ImGui::GetMousePos();
         result.click = ViewportSurfaceClick {

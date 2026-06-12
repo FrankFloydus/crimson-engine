@@ -15,6 +15,7 @@ module;
 #include <utils/EntityManager.h>
 
 #include "generated/QuaderDebugDrawMaterial.inc"
+#include "generated/QuaderDebugDrawOverlayMaterial.inc"
 
 #include <algorithm>
 #include <cstddef>
@@ -237,11 +238,171 @@ struct FilamentDebugDrawRenderer::Resources {
         std::vector<FilamentDebugVertex> scratch_vertices;
     };
 
+    struct TriangleBatch {
+        filament::Engine& engine;
+        filament::Scene& scene;
+        const char* label = "debug triangles";
+        utils::Entity entity;
+        filament::MaterialInstance* material_instance = nullptr;
+        filament::VertexBuffer* vertices = nullptr;
+        uint32_t vertex_capacity = 0;
+        bool in_scene = false;
+
+        TriangleBatch(filament::Engine& engine_ref, filament::Scene& scene_ref, const char* label_ref)
+            : engine(engine_ref)
+            , scene(scene_ref)
+            , label(label_ref)
+        {
+        }
+
+        TriangleBatch(const TriangleBatch&) = delete;
+        TriangleBatch& operator=(const TriangleBatch&) = delete;
+
+        ~TriangleBatch()
+        {
+            destroy();
+        }
+
+        void destroy()
+        {
+            if (entity) {
+                if (in_scene) {
+                    scene.remove(entity);
+                    in_scene = false;
+                }
+
+                engine.getRenderableManager().destroy(entity);
+                engine.getTransformManager().destroy(entity);
+                utils::EntityManager::get().destroy(entity);
+                entity.clear();
+            }
+
+            if (material_instance != nullptr) {
+                engine.destroy(material_instance);
+                material_instance = nullptr;
+            }
+
+            if (vertices != nullptr) {
+                engine.destroy(vertices);
+                vertices = nullptr;
+            }
+
+            vertex_capacity = 0;
+        }
+
+        void update(filament::Material& material, const std::vector<DebugDrawTriangle>& triangles)
+        {
+            if (triangles.empty()) {
+                if (entity && in_scene) {
+                    scene.remove(entity);
+                    in_scene = false;
+                }
+                return;
+            }
+
+            const uint32_t vertex_count = static_cast<uint32_t>(triangles.size() * 3);
+            ensure_capacity(material, vertex_count);
+
+            scratch_vertices.clear();
+            scratch_vertices.reserve(vertex_count);
+            for (const DebugDrawTriangle& triangle : triangles) {
+                scratch_vertices.push_back(FilamentDebugVertex {
+                    .position = to_filament_float3(triangle.a.position),
+                    .color = to_filament_color(triangle.a.color),
+                });
+                scratch_vertices.push_back(FilamentDebugVertex {
+                    .position = to_filament_float3(triangle.b.position),
+                    .color = to_filament_color(triangle.b.color),
+                });
+                scratch_vertices.push_back(FilamentDebugVertex {
+                    .position = to_filament_float3(triangle.c.position),
+                    .color = to_filament_color(triangle.c.color),
+                });
+            }
+
+            vertices->setBufferAt(
+                engine,
+                0,
+                make_filament_buffer_copy<FilamentDebugVertex>(
+                    std::span<const FilamentDebugVertex>(scratch_vertices.data(), scratch_vertices.size())));
+
+            filament::RenderableManager& renderables = engine.getRenderableManager();
+            const filament::RenderableManager::Instance renderable = renderables.getInstance(entity);
+            renderables.setGeometryAt(
+                renderable,
+                0,
+                filament::RenderableManager::PrimitiveType::TRIANGLES,
+                vertices,
+                0,
+                vertex_count);
+
+            if (!in_scene) {
+                scene.addEntity(entity);
+                in_scene = true;
+            }
+        }
+
+        void ensure_capacity(filament::Material& material, uint32_t required_vertex_count)
+        {
+            if (entity && vertices != nullptr && vertex_capacity >= required_vertex_count) {
+                return;
+            }
+
+            destroy();
+            vertex_capacity = next_capacity(required_vertex_count);
+            entity = utils::EntityManager::get().create();
+            vertices = filament::VertexBuffer::Builder()
+                .vertexCount(vertex_capacity)
+                .bufferCount(1)
+                .attribute(
+                    filament::VertexAttribute::POSITION,
+                    0,
+                    filament::VertexBuffer::AttributeType::FLOAT3,
+                    offsetof(FilamentDebugVertex, position),
+                    sizeof(FilamentDebugVertex))
+                .attribute(
+                    filament::VertexAttribute::COLOR,
+                    0,
+                    filament::VertexBuffer::AttributeType::FLOAT4,
+                    offsetof(FilamentDebugVertex, color),
+                    sizeof(FilamentDebugVertex))
+                .build(engine);
+            vertices = require_filament_allocation(vertices, "debug draw triangle vertex buffer");
+
+            material_instance = material.createInstance(label);
+            material_instance = require_filament_allocation(material_instance, "debug draw triangle material instance");
+
+            const filament::RenderableManager::Builder::Result result =
+                filament::RenderableManager::Builder(1)
+                .geometry(
+                    0,
+                    filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    vertices,
+                    0,
+                    required_vertex_count)
+                .material(0, material_instance)
+                .culling(false)
+                .castShadows(false)
+                .receiveShadows(false)
+                .priority(7)
+                .build(engine, entity);
+            if (result != filament::RenderableManager::Builder::Success) {
+                throw std::runtime_error("Filament failed to create the debug draw triangle renderable.");
+            }
+
+            engine.getTransformManager().create(entity);
+        }
+
+        std::vector<FilamentDebugVertex> scratch_vertices;
+    };
+
     Resources(filament::Engine& engine_ref, filament::Scene& scene_ref)
         : engine(engine_ref)
         , scene(scene_ref)
         , depth_lines(engine_ref, scene_ref, "Quader depth-tested debug lines")
         , overlay_lines(engine_ref, scene_ref, "Quader overlay debug lines")
+        , depth_triangles(engine_ref, scene_ref, "Quader depth-tested debug triangles")
+        , overlay_triangles(engine_ref, scene_ref, "Quader overlay debug triangles")
     {
     }
 
@@ -252,38 +413,56 @@ struct FilamentDebugDrawRenderer::Resources {
     {
         depth_lines.destroy();
         overlay_lines.destroy();
-        if (material != nullptr) {
-            engine.destroy(material);
-            material = nullptr;
+        depth_triangles.destroy();
+        overlay_triangles.destroy();
+        if (depth_material != nullptr) {
+            engine.destroy(depth_material);
+            depth_material = nullptr;
+        }
+        if (overlay_material != nullptr) {
+            engine.destroy(overlay_material);
+            overlay_material = nullptr;
         }
     }
 
     void render(const DebugDrawFrame& frame)
     {
-        ensure_material();
-        depth_lines.update(*material, frame.depth_tested.lines());
-        overlay_lines.update(*material, frame.overlay.lines());
+        ensure_materials();
+        depth_lines.update(*depth_material, frame.depth_tested.lines());
+        depth_triangles.update(*depth_material, frame.depth_tested.triangles());
+        overlay_lines.update(*overlay_material, frame.overlay.lines());
+        overlay_triangles.update(*overlay_material, frame.overlay.triangles());
     }
 
-    void ensure_material()
+    void ensure_materials()
     {
-        if (material != nullptr) {
-            return;
+        if (depth_material == nullptr) {
+            depth_material = filament::Material::Builder()
+                .package(
+                    filament_assets::quader_debug_draw_material,
+                    filament_assets::quader_debug_draw_material_size)
+                .build(engine);
+            depth_material = require_filament_allocation(depth_material, "debug draw material");
         }
 
-        material = filament::Material::Builder()
-            .package(
-                filament_assets::quader_debug_draw_material,
-                filament_assets::quader_debug_draw_material_size)
-            .build(engine);
-        material = require_filament_allocation(material, "debug draw material");
+        if (overlay_material == nullptr) {
+            overlay_material = filament::Material::Builder()
+                .package(
+                    filament_assets::quader_debug_draw_overlay_material,
+                    filament_assets::quader_debug_draw_overlay_material_size)
+                .build(engine);
+            overlay_material = require_filament_allocation(overlay_material, "debug draw overlay material");
+        }
     }
 
     filament::Engine& engine;
     filament::Scene& scene;
-    filament::Material* material = nullptr;
+    filament::Material* depth_material = nullptr;
+    filament::Material* overlay_material = nullptr;
     LineBatch depth_lines;
     LineBatch overlay_lines;
+    TriangleBatch depth_triangles;
+    TriangleBatch overlay_triangles;
 };
 
 FilamentDebugDrawRenderer::FilamentDebugDrawRenderer(filament::Engine& engine, filament::Scene& scene)

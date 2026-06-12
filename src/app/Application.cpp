@@ -109,7 +109,7 @@ void Application::draw_frame(float delta_seconds)
     swapchain_.recreate_if_needed(window_);
     imgui_.begin_frame();
     render_editor_dockspace();
-    if (scene_properties_.render_frame(open_scene_, native_file_dialog_)) {
+    if (scene_properties_.render_frame(open_scene_, native_file_dialog_, selection_)) {
         scene_viewport_.mark_render_state_dirty();
     }
     const EditorViewportFrameResult viewport_result = scene_viewport_.render_frame(
@@ -117,9 +117,10 @@ void Application::draw_frame(float delta_seconds)
         imgui_,
         open_scene_,
         input_,
+        selection_,
         delta_seconds);
-    if (viewport_result.selection_requested) {
-        scene_properties_.select_entity(viewport_result.picked_entity.value_or(SceneEntityId {}));
+    if (viewport_result.scene_changed) {
+        scene_viewport_.mark_render_state_dirty();
     }
     imgui_.end_frame(swapchain_);
 

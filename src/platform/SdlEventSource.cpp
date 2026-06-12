@@ -25,6 +25,10 @@ AppKey to_app_key(SDL_Scancode scancode)
         return AppKey::q;
     case SDL_SCANCODE_E:
         return AppKey::e;
+    case SDL_SCANCODE_R:
+        return AppKey::r;
+    case SDL_SCANCODE_T:
+        return AppKey::t;
     case SDL_SCANCODE_ESCAPE:
         return AppKey::escape;
     case SDL_SCANCODE_LSHIFT:

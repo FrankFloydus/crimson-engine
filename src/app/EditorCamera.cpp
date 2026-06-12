@@ -69,31 +69,9 @@ float normalized_delta_seconds(float delta_seconds)
     return std::min(delta_seconds, 0.1f);
 }
 
-bool is_boosting(const Input& input)
-{
-    return input.is_key_down(AppKey::left_shift) || input.is_key_down(AppKey::right_shift);
-}
-
 float key_axis(bool positive_direction_down, bool negative_direction_down)
 {
     return (positive_direction_down ? 1.0f : 0.0f) - (negative_direction_down ? 1.0f : 0.0f);
-}
-
-EditorCameraNavigationInput navigation_input_from_input(const Input& input)
-{
-    const MouseDelta mouse_delta = input.mouse_delta();
-
-    EditorCameraNavigationInput navigation_input;
-    navigation_input.move_forward = input.is_key_down(AppKey::w);
-    navigation_input.move_backward = input.is_key_down(AppKey::s);
-    navigation_input.move_left = input.is_key_down(AppKey::a);
-    navigation_input.move_right = input.is_key_down(AppKey::d);
-    navigation_input.move_up = input.is_key_down(AppKey::e);
-    navigation_input.move_down = input.is_key_down(AppKey::q);
-    navigation_input.boost = is_boosting(input);
-    navigation_input.look_active = input.is_mouse_button_down(AppMouseButton::right);
-    navigation_input.look_delta = mouse_delta;
-    return navigation_input;
 }
 
 } // namespace
@@ -141,10 +119,9 @@ bool EditorCamera::update_from_navigation_input(
     const float frame_seconds = normalized_delta_seconds(delta_seconds);
     const float move_forward_axis = key_axis(navigation_input.move_forward, navigation_input.move_backward);
     const float move_right_axis = key_axis(navigation_input.move_right, navigation_input.move_left);
-    const float move_up_axis = key_axis(navigation_input.move_up, navigation_input.move_down);
     const Vec3 forward = normalized_direction_from_yaw_pitch(camera_.yaw_degrees, camera_.pitch_degrees);
     const Vec3 right = normalized_or_zero(cross(forward, world_up));
-    const Vec3 movement = (forward * move_forward_axis) + (right * move_right_axis) + (world_up * move_up_axis);
+    const Vec3 movement = (forward * move_forward_axis) + (right * move_right_axis);
 
     if (frame_seconds > 0.0f && has_nonzero_vector(movement)) {
         const float movement_length = std::sqrt(squared_length(movement));
@@ -159,11 +136,6 @@ bool EditorCamera::update_from_navigation_input(
     }
 
     return changed;
-}
-
-bool EditorCamera::update_from_input(const Input& input, float delta_seconds)
-{
-    return update_from_navigation_input(navigation_input_from_input(input), delta_seconds);
 }
 
 } // namespace quader
