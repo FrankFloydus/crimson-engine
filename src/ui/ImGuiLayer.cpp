@@ -57,14 +57,14 @@ ImGuiLayer::ImGuiLayer(const SdlWindow& window, const VulkanDevice& device, cons
         throw std::runtime_error("ImGui Vulkan backend failed to initialize.");
     }
 
-    preview_texture_ = std::make_unique<VulkanPreviewTexture>(device_);
+    viewport_texture_ = std::make_unique<VulkanViewportTexture>(device_);
 }
 
 ImGuiLayer::~ImGuiLayer()
 {
     device_.wait_idle();
 
-    preview_texture_.reset();
+    viewport_texture_.reset();
 
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
@@ -75,7 +75,7 @@ ImGuiLayer::~ImGuiLayer()
     }
 }
 
-void ImGuiLayer::process_event(const SDL_Event& event)
+void ImGuiLayer::process_sdl_event(const SDL_Event& event)
 {
     ImGui_ImplSDL3_ProcessEvent(&event);
 }
@@ -93,19 +93,19 @@ void ImGuiLayer::end_frame(VulkanSwapchain& swapchain)
     swapchain.render_current_imgui_frame();
 }
 
-void ImGuiLayer::upload_preview_texture(uint32_t width, uint32_t height, const uint8_t* rgba)
+void ImGuiLayer::upload_viewport_texture(uint32_t width, uint32_t height, const uint8_t* rgba)
 {
-    preview_texture_->upload_rgba(width, height, rgba);
+    viewport_texture_->upload_rgba(width, height, rgba);
 }
 
-ImTextureID ImGuiLayer::preview_texture_id() const
+ImTextureID ImGuiLayer::viewport_texture_id() const
 {
-    return preview_texture_ ? preview_texture_->texture_id() : ImTextureID {};
+    return viewport_texture_ ? viewport_texture_->texture_id() : ImTextureID {};
 }
 
-bool ImGuiLayer::has_preview_texture() const
+bool ImGuiLayer::has_viewport_texture() const
 {
-    return preview_texture_ && preview_texture_->has_pixels();
+    return viewport_texture_ && viewport_texture_->has_pixels();
 }
 
 VkDescriptorPool ImGuiLayer::create_descriptor_pool()

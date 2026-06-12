@@ -6,20 +6,20 @@ module;
 #include <array>
 #include <cstdint>
 
-export module quader.ui.vulkan_preview_texture;
+export module quader.ui.vulkan_viewport_texture;
 
 export import quader.render.vulkan_device;
 
 export namespace quader {
 
-class VulkanPreviewTexture {
+class VulkanViewportTexture {
 public:
-    explicit VulkanPreviewTexture(const VulkanDevice& device);
+    explicit VulkanViewportTexture(const VulkanDevice& device);
 
-    VulkanPreviewTexture(const VulkanPreviewTexture&) = delete;
-    VulkanPreviewTexture& operator=(const VulkanPreviewTexture&) = delete;
+    VulkanViewportTexture(const VulkanViewportTexture&) = delete;
+    VulkanViewportTexture& operator=(const VulkanViewportTexture&) = delete;
 
-    ~VulkanPreviewTexture();
+    ~VulkanViewportTexture();
 
     void upload_rgba(uint32_t width, uint32_t height, const uint8_t* rgba);
 

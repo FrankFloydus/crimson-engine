@@ -40,7 +40,7 @@ module;
 #include <stdexcept>
 #include <vector>
 
-module quader.filament.preview_scene;
+module quader.filament.scene_viewport;
 
 import quader.math.types;
 
@@ -93,6 +93,17 @@ filament::math::float3 to_filament_direction(const DirectionalLightSettings& set
 {
     const Vec3 direction = normalized_direction_from_yaw_pitch(settings.yaw_degrees, settings.pitch_degrees);
     return filament::math::float3 { direction.x, direction.y, direction.z };
+}
+
+filament::math::double3 to_filament_point(Vec3 position)
+{
+    return filament::math::double3 { position.x, position.y, position.z };
+}
+
+filament::math::double3 to_filament_direction(const RenderCamera& camera)
+{
+    const Vec3 direction = normalized_direction_from_yaw_pitch(camera.yaw_degrees, camera.pitch_degrees);
+    return filament::math::double3 { direction.x, direction.y, direction.z };
 }
 
 std::array<CubeSourceVertex, 24> cube_source_vertices()
@@ -204,7 +215,7 @@ std::vector<CubeVertex> build_cube_vertices()
 
 } // namespace
 
-struct FilamentPreviewScene::Resources {
+struct FilamentSceneViewport::Resources {
     explicit Resources(filament::Engine& engine_ref)
         : engine(engine_ref)
     {
@@ -277,14 +288,14 @@ struct FilamentPreviewScene::Resources {
         }
     }
 
-    void initialize(const PbrMaterialSettings& material_settings, const DirectionalLightSettings& light_settings)
+    void initialize()
     {
         renderer = engine.createRenderer();
         scene = engine.createScene();
         view = engine.createView();
 
         if (renderer == nullptr || scene == nullptr || view == nullptr) {
-            throw std::runtime_error("Filament failed to allocate renderer, scene, or view for the preview.");
+            throw std::runtime_error("Filament failed to allocate renderer, scene, or view for the viewport.");
         }
 
         view->setScene(scene);
@@ -302,8 +313,6 @@ struct FilamentPreviewScene::Resources {
         scene->setSkybox(skybox);
 
         create_camera();
-        create_cube(material_settings);
-        create_directional_light(light_settings);
     }
 
     void create_camera()
@@ -311,10 +320,6 @@ struct FilamentPreviewScene::Resources {
         camera_entity = utils::EntityManager::get().create();
         camera = engine.createCamera(camera_entity);
         view->setCamera(camera);
-        camera->lookAt(
-            filament::math::double3 { 3.0, 2.1, 3.5 },
-            filament::math::double3 { 0.0, 0.05, 0.0 },
-            filament::math::double3 { 0.0, 1.0, 0.0 });
     }
 
     void create_cube(const PbrMaterialSettings& settings)
@@ -391,6 +396,37 @@ struct FilamentPreviewScene::Resources {
         scene->addEntity(light_entity);
     }
 
+    void ensure_cube_entity(const PbrMaterialSettings& settings)
+    {
+        if (cube_entity) {
+            apply_material_settings(settings);
+            return;
+        }
+
+        create_cube(settings);
+    }
+
+    void ensure_directional_light_entity(const DirectionalLightSettings& settings)
+    {
+        if (light_entity) {
+            apply_directional_light_settings(settings);
+            return;
+        }
+
+        create_directional_light(settings);
+    }
+
+    void apply_scene(const Scene& scene_data)
+    {
+        if (const SceneMeshComponent* mesh = first_mesh_component(scene_data)) {
+            ensure_cube_entity(mesh->material);
+        }
+
+        if (const SceneDirectionalLightComponent* light = first_directional_light_component(scene_data)) {
+            ensure_directional_light_entity(light->settings);
+        }
+    }
+
     void apply_material_settings(PbrMaterialSettings settings) const
     {
         settings = clamp_pbr_material_settings(settings);
@@ -418,6 +454,31 @@ struct FilamentPreviewScene::Resources {
         lights.setColor(light_instance, to_filament_color(settings.color));
         lights.setIntensity(light_instance, settings.intensity);
         lights.setDirection(light_instance, to_filament_direction(settings));
+    }
+
+    void apply_camera(RenderCamera camera_settings)
+    {
+        camera_settings = clamp_render_camera(camera_settings);
+        camera_state = camera_settings;
+
+        const filament::math::double3 eye = to_filament_point(camera_state.position);
+        const filament::math::double3 target = eye + to_filament_direction(camera_state);
+        camera->lookAt(eye, target, filament::math::double3 { 0.0, 1.0, 0.0 });
+
+        apply_camera_projection();
+    }
+
+    void apply_camera_projection()
+    {
+        if (camera == nullptr || !preview_extent.is_valid()) {
+            return;
+        }
+
+        camera->setProjection(
+            camera_state.vertical_fov_degrees,
+            static_cast<double>(preview_extent.width) / static_cast<double>(preview_extent.height),
+            camera_state.near_plane,
+            camera_state.far_plane);
     }
 
     void ensure_preview_size(RenderExtent extent)
@@ -463,13 +524,15 @@ struct FilamentPreviewScene::Resources {
         preview_extent = extent;
         view->setViewport(filament::Viewport { 0, 0, extent.width, extent.height });
         view->setRenderTarget(preview_target);
-        camera->setProjection(52.0, static_cast<double>(extent.width) / static_cast<double>(extent.height), 0.1, 100.0);
+        apply_camera_projection();
     }
 
-    void render_into(RenderExtent extent, RenderPreviewFrame& frame)
+    void render_into(const Scene& scene_data, const RenderCamera& camera_settings, RenderExtent extent, RenderViewportFrame& frame)
     {
-        ZoneScopedN("Filament preview render");
+        ZoneScopedN("Filament scene viewport render");
 
+        apply_scene(scene_data);
+        apply_camera(camera_settings);
         ensure_preview_size(extent);
         if (preview_target == nullptr) {
             return;
@@ -536,32 +599,24 @@ struct FilamentPreviewScene::Resources {
     utils::Entity cube_entity;
     utils::Entity light_entity;
     RenderExtent preview_extent;
+    RenderCamera camera_state;
 };
 
-FilamentPreviewScene::FilamentPreviewScene(
-    filament::Engine& engine,
-    const PbrMaterialSettings& material_settings,
-    const DirectionalLightSettings& light_settings)
+FilamentSceneViewport::FilamentSceneViewport(filament::Engine& engine)
     : resources_(std::make_unique<Resources>(engine))
 {
-    resources_->initialize(material_settings, light_settings);
+    resources_->initialize();
 }
 
-FilamentPreviewScene::~FilamentPreviewScene() = default;
+FilamentSceneViewport::~FilamentSceneViewport() = default;
 
-void FilamentPreviewScene::apply_material_settings(const PbrMaterialSettings& settings)
+void FilamentSceneViewport::render_into(
+    const Scene& scene,
+    const RenderCamera& camera,
+    RenderExtent extent,
+    RenderViewportFrame& frame)
 {
-    resources_->apply_material_settings(settings);
-}
-
-void FilamentPreviewScene::apply_directional_light_settings(const DirectionalLightSettings& settings)
-{
-    resources_->apply_directional_light_settings(settings);
-}
-
-void FilamentPreviewScene::render_into(RenderExtent extent, RenderPreviewFrame& frame)
-{
-    resources_->render_into(extent, frame);
+    resources_->render_into(scene, camera, extent, frame);
 }
 
 } // namespace quader

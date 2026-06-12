@@ -6,6 +6,8 @@ module;
 
 export module quader.render.types;
 
+export import quader.math.types;
+
 export namespace quader {
 
 struct RenderExtent {
@@ -18,7 +20,7 @@ struct RenderExtent {
     }
 };
 
-struct RenderPreviewFrame {
+struct RenderViewportFrame {
     RenderExtent extent;
     std::vector<uint8_t> rgba;
 
@@ -47,6 +49,15 @@ struct LinearRgba {
     float a = 1.0f;
 };
 
+struct RenderCamera {
+    Vec3 position { 3.0f, 2.1f, 3.5f };
+    float yaw_degrees = -40.601295f;
+    float pitch_degrees = -24.699650f;
+    float vertical_fov_degrees = 52.0f;
+    float near_plane = 0.1f;
+    float far_plane = 100.0f;
+};
+
 struct PbrMaterialSettings {
     LinearColor albedo { 1.0f, 0.0f, 0.0f };
     float roughness = 0.18f;
@@ -72,6 +83,7 @@ struct DirectionalLightSettings {
 [[nodiscard]] LinearColor srgb_to_linear(SrgbColor color);
 [[nodiscard]] SrgbColor linear_to_srgb(LinearColor color);
 [[nodiscard]] LinearRgba premultiplied_linear_rgba(LinearColor color, float alpha);
+[[nodiscard]] RenderCamera clamp_render_camera(RenderCamera camera);
 [[nodiscard]] PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings);
 [[nodiscard]] DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettings settings);
 

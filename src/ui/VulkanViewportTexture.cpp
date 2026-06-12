@@ -6,20 +6,20 @@ module;
 #include <cstring>
 #include <stdexcept>
 
-module quader.ui.vulkan_preview_texture;
+module quader.ui.vulkan_viewport_texture;
 
 import quader.render.vulkan_common;
 
 namespace quader {
 
-VulkanPreviewTexture::VulkanPreviewTexture(const VulkanDevice& device)
+VulkanViewportTexture::VulkanViewportTexture(const VulkanDevice& device)
     : device_(device)
     , upload_command_pool_(create_upload_command_pool())
 {
     create_upload_slots();
 }
 
-VulkanPreviewTexture::~VulkanPreviewTexture()
+VulkanViewportTexture::~VulkanViewportTexture()
 {
     device_.wait_idle();
     destroy_texture();
@@ -31,9 +31,9 @@ VulkanPreviewTexture::~VulkanPreviewTexture()
     }
 }
 
-void VulkanPreviewTexture::upload_rgba(uint32_t width, uint32_t height, const uint8_t* rgba)
+void VulkanViewportTexture::upload_rgba(uint32_t width, uint32_t height, const uint8_t* rgba)
 {
-    ZoneScopedN("Vulkan preview texture upload");
+    ZoneScopedN("Vulkan viewport texture upload");
 
     if (width == 0 || height == 0 || rgba == nullptr) {
         return;
@@ -70,17 +70,17 @@ void VulkanPreviewTexture::upload_rgba(uint32_t width, uint32_t height, const ui
     has_pixels_ = true;
 }
 
-ImTextureID VulkanPreviewTexture::texture_id() const
+ImTextureID VulkanViewportTexture::texture_id() const
 {
     return reinterpret_cast<ImTextureID>(descriptor_);
 }
 
-bool VulkanPreviewTexture::has_pixels() const
+bool VulkanViewportTexture::has_pixels() const
 {
     return descriptor_ != VK_NULL_HANDLE && has_pixels_;
 }
 
-uint32_t VulkanPreviewTexture::find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties) const
+uint32_t VulkanViewportTexture::find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties) const
 {
     VkPhysicalDeviceMemoryProperties memory_properties = {};
     vkGetPhysicalDeviceMemoryProperties(device_.physical_device(), &memory_properties);
@@ -95,10 +95,10 @@ uint32_t VulkanPreviewTexture::find_memory_type(uint32_t type_filter, VkMemoryPr
         }
     }
 
-    throw std::runtime_error("No Vulkan memory type satisfies the preview texture allocation.");
+    throw std::runtime_error("No Vulkan memory type satisfies the viewport texture allocation.");
 }
 
-void VulkanPreviewTexture::create_texture(uint32_t width, uint32_t height)
+void VulkanViewportTexture::create_texture(uint32_t width, uint32_t height)
 {
     device_.wait_idle();
     destroy_texture();
@@ -167,7 +167,7 @@ void VulkanPreviewTexture::create_texture(uint32_t width, uint32_t height)
     has_pixels_ = false;
 }
 
-void VulkanPreviewTexture::destroy_texture()
+void VulkanViewportTexture::destroy_texture()
 {
     if (descriptor_ != VK_NULL_HANDLE) {
         ImGui_ImplVulkan_RemoveTexture(descriptor_);
@@ -199,7 +199,7 @@ void VulkanPreviewTexture::destroy_texture()
     has_pixels_ = false;
 }
 
-void VulkanPreviewTexture::ensure_staging_buffer(UploadSlot& slot, VkDeviceSize required_size)
+void VulkanViewportTexture::ensure_staging_buffer(UploadSlot& slot, VkDeviceSize required_size)
 {
     if (slot.staging_buffer != VK_NULL_HANDLE && slot.staging_size >= required_size) {
         return;
@@ -229,7 +229,7 @@ void VulkanPreviewTexture::ensure_staging_buffer(UploadSlot& slot, VkDeviceSize 
     slot.staging_size = required_size;
 }
 
-void VulkanPreviewTexture::destroy_staging_buffer(UploadSlot& slot)
+void VulkanViewportTexture::destroy_staging_buffer(UploadSlot& slot)
 {
     if (slot.staging_buffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(device_.device(), slot.staging_buffer, device_.allocator());
@@ -244,7 +244,7 @@ void VulkanPreviewTexture::destroy_staging_buffer(UploadSlot& slot)
     slot.staging_size = 0;
 }
 
-VkCommandPool VulkanPreviewTexture::create_upload_command_pool()
+VkCommandPool VulkanViewportTexture::create_upload_command_pool()
 {
     VkCommandPoolCreateInfo pool_info = {};
     pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -256,7 +256,7 @@ VkCommandPool VulkanPreviewTexture::create_upload_command_pool()
     return command_pool;
 }
 
-void VulkanPreviewTexture::create_upload_slots()
+void VulkanViewportTexture::create_upload_slots()
 {
     VkFenceCreateInfo fence_info = {};
     fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -276,7 +276,7 @@ void VulkanPreviewTexture::create_upload_slots()
     }
 }
 
-void VulkanPreviewTexture::destroy_upload_slots()
+void VulkanViewportTexture::destroy_upload_slots()
 {
     for (UploadSlot& slot : upload_slots_) {
         destroy_staging_buffer(slot);
@@ -290,7 +290,7 @@ void VulkanPreviewTexture::destroy_upload_slots()
     }
 }
 
-VulkanPreviewTexture::UploadSlot& VulkanPreviewTexture::acquire_upload_slot()
+VulkanViewportTexture::UploadSlot& VulkanViewportTexture::acquire_upload_slot()
 {
     for (uint32_t offset = 0; offset < upload_slot_count_; ++offset) {
         const uint32_t slot_index = (next_upload_slot_ + offset) % upload_slot_count_;
@@ -316,13 +316,13 @@ VulkanPreviewTexture::UploadSlot& VulkanPreviewTexture::acquire_upload_slot()
     return slot;
 }
 
-void VulkanPreviewTexture::reset_upload_slot(UploadSlot& slot) const
+void VulkanViewportTexture::reset_upload_slot(UploadSlot& slot) const
 {
     check_vk(vkResetFences(device_.device(), 1, &slot.fence), "vkResetFences");
     check_vk(vkResetCommandBuffer(slot.command_buffer, 0), "vkResetCommandBuffer");
 }
 
-void VulkanPreviewTexture::submit_upload_commands(const UploadSlot& slot) const
+void VulkanViewportTexture::submit_upload_commands(const UploadSlot& slot) const
 {
     VkSubmitInfo submit_info = {};
     submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -332,7 +332,7 @@ void VulkanPreviewTexture::submit_upload_commands(const UploadSlot& slot) const
     check_vk(vkQueueSubmit(device_.queue(), 1, &submit_info, slot.fence), "vkQueueSubmit");
 }
 
-void VulkanPreviewTexture::transition_image(
+void VulkanViewportTexture::transition_image(
     VkCommandBuffer command_buffer,
     VkImageLayout old_layout,
     VkImageLayout new_layout) const
@@ -381,7 +381,7 @@ void VulkanPreviewTexture::transition_image(
         &barrier);
 }
 
-void VulkanPreviewTexture::copy_buffer_to_image(
+void VulkanViewportTexture::copy_buffer_to_image(
     VkCommandBuffer command_buffer,
     VkBuffer source,
     uint32_t width,

@@ -1,6 +1,5 @@
 module;
 #include <tracy/Tracy.hpp>
-#include <SDL3/SDL.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -46,36 +45,26 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
     return std::nullopt;
 }
 
-std::unique_ptr<IDebugPreviewRenderer> create_renderer_engine_or_throw()
+std::unique_ptr<ISceneViewportRenderer> create_renderer_engine_or_throw()
 {
-    std::unique_ptr<IDebugPreviewRenderer> render_engine = create_default_debug_preview_renderer();
+    std::unique_ptr<ISceneViewportRenderer> render_engine = create_default_scene_viewport_renderer();
     throw_if_renderer_failed_to_start(render_engine->status());
     return render_engine;
-}
-
-bool should_close_for(const SDL_Event& event, const SdlWindow& window)
-{
-    if (event.type == SDL_EVENT_QUIT) {
-        return true;
-    }
-
-    if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-        event.window.windowID == SDL_GetWindowID(window.native_handle())) {
-        return true;
-    }
-
-    return event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE;
 }
 
 } // namespace
 
 Application::Application()
     : window_("Quader Native", 1280, 800)
+    , event_source_(window_)
     , vulkan_device_(window_)
     , swapchain_(vulkan_device_, window_)
     , render_engine_(create_renderer_engine_or_throw())
+    , open_scene_(create_default_scene())
     , imgui_(window_, vulkan_device_, swapchain_)
 {
+    event_dispatcher_.subscribe(input_);
+
     const RendererStatus status = render_engine_->status();
     QUADER_LOG_INFO("Renderer initialized with {} backend.", status.backend_name);
 }
@@ -87,14 +76,19 @@ int Application::run()
     bool running = true;
     const auto autoclose_delay = read_autoclose_delay();
     const auto start_time = std::chrono::steady_clock::now();
+    auto previous_frame_time = start_time;
 
     while (running) {
-        SDL_Event event;
-        while (SDL_PollEvent(&event)) {
-            imgui_.process_event(event);
-            if (should_close_for(event, window_)) {
-                running = false;
-            }
+        const auto frame_time = std::chrono::steady_clock::now();
+        const std::chrono::duration<float> delta_seconds = frame_time - previous_frame_time;
+        previous_frame_time = frame_time;
+
+        input_.begin_frame();
+        poll_events();
+        update_relative_mouse_mode();
+
+        if (input_.close_requested()) {
+            running = false;
         }
 
         if (autoclose_delay.has_value() &&
@@ -102,22 +96,32 @@ int Application::run()
             running = false;
         }
 
-        draw_frame();
+        draw_frame(delta_seconds.count());
     }
 
     return render_engine_->status().initialized ? 0 : 2;
 }
 
-void Application::draw_frame()
+void Application::draw_frame(float delta_seconds)
 {
     ZoneScopedN("Application frame");
 
     swapchain_.recreate_if_needed(window_);
     imgui_.begin_frame();
-    preview_controller_.render_frame(*render_engine_, imgui_);
+    scene_viewport_.render_frame(*render_engine_, imgui_, open_scene_, input_, delta_seconds);
     imgui_.end_frame(swapchain_);
 
     FrameMark;
+}
+
+void Application::poll_events()
+{
+    event_source_.poll_events(event_dispatcher_, imgui_);
+}
+
+void Application::update_relative_mouse_mode()
+{
+    window_.set_relative_mouse_mode(input_.is_mouse_button_down(AppMouseButton::right));
 }
 
 } // namespace quader

@@ -13,6 +13,23 @@ float clamp_unit_channel(float value)
     return std::clamp(value, 0.0f, 1.0f);
 }
 
+float finite_or(float value, float fallback)
+{
+    return std::isfinite(value) ? value : fallback;
+}
+
+float normalize_yaw(float yaw_degrees)
+{
+    yaw_degrees = finite_or(yaw_degrees, 0.0f);
+    while (yaw_degrees > 180.0f) {
+        yaw_degrees -= 360.0f;
+    }
+    while (yaw_degrees < -180.0f) {
+        yaw_degrees += 360.0f;
+    }
+    return yaw_degrees;
+}
+
 } // namespace
 
 LinearColor clamp_color(LinearColor color)
@@ -81,6 +98,25 @@ LinearRgba premultiplied_linear_rgba(LinearColor color, float alpha)
         color.b * clamped_alpha,
         clamped_alpha,
     };
+}
+
+RenderCamera clamp_render_camera(RenderCamera camera)
+{
+    const RenderCamera defaults;
+
+    camera.position.x = finite_or(camera.position.x, defaults.position.x);
+    camera.position.y = finite_or(camera.position.y, defaults.position.y);
+    camera.position.z = finite_or(camera.position.z, defaults.position.z);
+    camera.yaw_degrees = normalize_yaw(camera.yaw_degrees);
+    camera.pitch_degrees = std::clamp(finite_or(camera.pitch_degrees, defaults.pitch_degrees), -89.0f, 89.0f);
+    camera.vertical_fov_degrees =
+        std::clamp(finite_or(camera.vertical_fov_degrees, defaults.vertical_fov_degrees), 1.0f, 120.0f);
+    camera.near_plane = std::max(finite_or(camera.near_plane, defaults.near_plane), 0.001f);
+    camera.far_plane = std::max(
+        finite_or(camera.far_plane, defaults.far_plane),
+        camera.near_plane + 0.001f);
+
+    return camera;
 }
 
 PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)

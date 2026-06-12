@@ -43,23 +43,21 @@ FilamentRenderEngine::FilamentRenderEngine()
             return;
         }
 
-        material_settings_ = clamp_pbr_material_settings(material_settings_);
-        light_settings_ = clamp_directional_light_settings(light_settings_);
-        preview_scene_ = std::make_unique<FilamentPreviewScene>(*engine_, material_settings_, light_settings_);
+        scene_viewport_ = std::make_unique<FilamentSceneViewport>(*engine_);
 
         status_.initialized = true;
         status_.backend_name = backend_to_string(engine_->getBackend());
-        status_.message = "Filament lit PBR cube preview is initialized.";
+        status_.message = "Filament scene viewport renderer is initialized.";
     } catch (const std::exception& error) {
         status_.message = error.what();
     } catch (...) {
-        status_.message = "Filament threw an unknown exception during preview initialization.";
+        status_.message = "Filament threw an unknown exception during scene viewport initialization.";
     }
 }
 
 FilamentRenderEngine::~FilamentRenderEngine()
 {
-    preview_scene_.reset();
+    scene_viewport_.reset();
     if (engine_ != nullptr) {
         filament::Engine::destroy(&engine_);
     }
@@ -70,52 +68,29 @@ RendererStatus FilamentRenderEngine::status() const
     return status_;
 }
 
-PbrMaterialSettings FilamentRenderEngine::material_settings() const
+bool FilamentRenderEngine::request_scene_viewport_frame(
+    const Scene& scene,
+    const RenderCamera& camera,
+    RenderExtent extent)
 {
-    return material_settings_;
-}
-
-DirectionalLightSettings FilamentRenderEngine::directional_light_settings() const
-{
-    return light_settings_;
-}
-
-void FilamentRenderEngine::set_material_settings(const PbrMaterialSettings& settings)
-{
-    material_settings_ = clamp_pbr_material_settings(settings);
-    if (preview_scene_ != nullptr) {
-        preview_scene_->apply_material_settings(material_settings_);
-    }
-}
-
-void FilamentRenderEngine::set_directional_light_settings(const DirectionalLightSettings& settings)
-{
-    light_settings_ = clamp_directional_light_settings(settings);
-    if (preview_scene_ != nullptr) {
-        preview_scene_->apply_directional_light_settings(light_settings_);
-    }
-}
-
-bool FilamentRenderEngine::request_debug_preview(RenderExtent extent)
-{
-    if (!status_.initialized || preview_scene_ == nullptr || !extent.is_valid()) {
-        preview_frame_available_ = false;
+    if (!status_.initialized || scene_viewport_ == nullptr || !extent.is_valid()) {
+        viewport_frame_available_ = false;
         return false;
     }
 
-    preview_scene_->render_into(extent, preview_frame_);
-    preview_frame_available_ = preview_frame_.has_pixels();
-    return preview_frame_available_;
+    scene_viewport_->render_into(scene, camera, extent, viewport_frame_);
+    viewport_frame_available_ = viewport_frame_.has_pixels();
+    return viewport_frame_available_;
 }
 
-const RenderPreviewFrame* FilamentRenderEngine::try_consume_debug_preview_frame()
+const RenderViewportFrame* FilamentRenderEngine::try_consume_scene_viewport_frame()
 {
-    if (!preview_frame_available_) {
+    if (!viewport_frame_available_) {
         return nullptr;
     }
 
-    preview_frame_available_ = false;
-    return &preview_frame_;
+    viewport_frame_available_ = false;
+    return &viewport_frame_;
 }
 
 } // namespace quader

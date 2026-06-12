@@ -10,13 +10,14 @@ module;
 export module quader.ui.imgui_layer;
 
 export import quader.platform.sdl_window;
+import quader.platform.sdl_event_source;
 export import quader.render.vulkan_device;
 export import quader.render.vulkan_swapchain;
-import quader.ui.vulkan_preview_texture;
+import quader.ui.vulkan_viewport_texture;
 
 export namespace quader {
 
-class ImGuiLayer {
+class ImGuiLayer : public ISdlNativeEventSink {
 public:
     ImGuiLayer(const SdlWindow& window, const VulkanDevice& device, const VulkanSwapchain& swapchain);
 
@@ -25,20 +26,20 @@ public:
 
     ~ImGuiLayer();
 
-    void process_event(const SDL_Event& event);
+    void process_sdl_event(const SDL_Event& event) override;
     void begin_frame();
     void end_frame(VulkanSwapchain& swapchain);
-    void upload_preview_texture(uint32_t width, uint32_t height, const uint8_t* rgba);
+    void upload_viewport_texture(uint32_t width, uint32_t height, const uint8_t* rgba);
 
-    [[nodiscard]] ImTextureID preview_texture_id() const;
-    [[nodiscard]] bool has_preview_texture() const;
+    [[nodiscard]] ImTextureID viewport_texture_id() const;
+    [[nodiscard]] bool has_viewport_texture() const;
 
 private:
     VkDescriptorPool create_descriptor_pool();
 
     const VulkanDevice& device_;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
-    std::unique_ptr<VulkanPreviewTexture> preview_texture_;
+    std::unique_ptr<VulkanViewportTexture> viewport_texture_;
 };
 
 } // namespace quader

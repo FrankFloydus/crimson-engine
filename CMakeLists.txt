@@ -112,12 +112,16 @@ target_link_libraries(filament_sdk INTERFACE
 
 set(QUADER_CORE_SOURCES
     src/app/Application.cpp
-    src/app/PreviewController.cpp
+    src/app/EditorCamera.cpp
+    src/app/EditorViewport.cpp
     src/diagnostics/Logger.cpp
     src/filament/FilamentRenderEngine.cpp
-    src/filament/FilamentPreviewScene.cpp
+    src/filament/FilamentSceneViewport.cpp
     src/math/MathTypes.cpp
     src/platform/FatalErrorDialog.cpp
+    src/platform/AppEventDispatcher.cpp
+    src/platform/Input.cpp
+    src/platform/SdlEventSource.cpp
     src/platform/SdlWindow.cpp
     src/render/RenderEngineFactory.cpp
     src/render/RenderTypes.cpp
@@ -125,32 +129,39 @@ set(QUADER_CORE_SOURCES
     src/render/VulkanCommon.cpp
     src/render/VulkanDevice.cpp
     src/render/VulkanSwapchain.cpp
+    src/scene/Scene.cpp
     src/ui/ImGuiLayer.cpp
-    src/ui/PreviewPanels.cpp
-    src/ui/VulkanPreviewTexture.cpp
+    src/ui/ViewportPanels.cpp
+    src/ui/VulkanViewportTexture.cpp
 )
 
 set(QUADER_MODULES
     src/app/Application.ixx
-    src/app/PreviewController.ixx
+    src/app/EditorCamera.ixx
+    src/app/EditorViewport.ixx
     src/diagnostics/Logger.ixx
     src/filament/FilamentRenderEngine.ixx
-    src/filament/FilamentPreviewScene.ixx
+    src/filament/FilamentSceneViewport.ixx
     src/math/MathTypes.ixx
     src/platform/FatalErrorDialog.ixx
+    src/platform/AppEvent.ixx
+    src/platform/AppEventDispatcher.ixx
+    src/platform/Input.ixx
+    src/platform/SdlEventSource.ixx
     src/platform/SdlWindow.ixx
-    src/render/DebugPreviewRenderer.ixx
     src/render/IRenderEngine.ixx
     src/render/RendererStatus.ixx
     src/render/RenderTypes.ixx
     src/render/RendererStartupValidation.ixx
     src/render/RenderEngineFactory.ixx
+    src/render/SceneViewportRenderer.ixx
     src/render/VulkanCommon.ixx
     src/render/VulkanDevice.ixx
     src/render/VulkanSwapchain.ixx
+    src/scene/Scene.ixx
     src/ui/ImGuiLayer.ixx
-    src/ui/PreviewPanels.ixx
-    src/ui/VulkanPreviewTexture.ixx
+    src/ui/ViewportPanels.ixx
+    src/ui/VulkanViewportTexture.ixx
 )
 
 add_library(quader_core STATIC ${QUADER_CORE_SOURCES})
@@ -199,8 +210,11 @@ add_custom_command(TARGET quader_native POST_BUILD
 )
 
 add_executable(quader_tests
+    tests/EditorCameraTests.cpp
+    tests/InputTests.cpp
     tests/RenderTypesTests.cpp
     tests/RendererStartupValidationTests.cpp
+    tests/SceneTests.cpp
 )
 
 target_link_libraries(quader_tests PRIVATE

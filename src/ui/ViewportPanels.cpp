@@ -2,7 +2,9 @@ module;
 
 #include <imgui.h>
 
-module quader.ui.preview_panels;
+#include <string>
+
+module quader.ui.viewport_panels;
 
 namespace quader {
 namespace {
@@ -21,19 +23,20 @@ bool render_srgb_color_edit(const char* label, LinearColor& linear_color)
 
 } // namespace
 
-void render_debug_preview_panel(ImTextureID texture_id, RenderExtent extent)
+void render_scene_viewport_panel(std::string_view scene_title, ImTextureID texture_id, RenderExtent extent)
 {
     ImGui::SetNextWindowPos(ImVec2(32.0f, 56.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(820.0f, 560.0f), ImGuiCond_Always);
 
-    if (ImGui::Begin("Filament Cube Preview")) {
+    const std::string title = std::string(scene_title) + " Viewport";
+    if (ImGui::Begin(title.c_str())) {
         if (texture_id != ImTextureID {} && extent.is_valid()) {
             const float available_width = ImGui::GetContentRegionAvail().x;
             const float aspect = static_cast<float>(extent.height) / static_cast<float>(extent.width);
             const ImVec2 size(available_width, available_width * aspect);
             ImGui::Image(texture_id, size);
         } else {
-            ImGui::TextUnformatted("Waiting for Filament preview pixels.");
+            ImGui::TextUnformatted("Waiting for scene viewport pixels.");
         }
     }
 
@@ -46,7 +49,7 @@ bool render_material_settings_panel(PbrMaterialSettings& settings)
     ImGui::SetNextWindowSize(ImVec2(380.0f, 390.0f), ImGuiCond_Always);
 
     bool changed = false;
-    if (ImGui::Begin("Material Settings")) {
+    if (ImGui::Begin("Mesh Material")) {
         changed |= render_srgb_color_edit("Albedo", settings.albedo);
         changed |= ImGui::SliderFloat("Roughness", &settings.roughness, 0.0f, 1.0f);
         changed |= ImGui::SliderFloat("Metallic", &settings.metallic, 0.0f, 1.0f);

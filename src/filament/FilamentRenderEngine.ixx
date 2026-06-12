@@ -6,13 +6,13 @@ module;
 
 export module quader.filament.render_engine;
 
-import quader.filament.preview_scene;
-export import quader.render.debug_preview_renderer;
+import quader.filament.scene_viewport;
 export import quader.render.engine;
+export import quader.render.scene_viewport_renderer;
 
 export namespace quader {
 
-class FilamentRenderEngine final : public IDebugPreviewRenderer {
+class FilamentRenderEngine final : public ISceneViewportRenderer {
 public:
     FilamentRenderEngine();
 
@@ -22,23 +22,19 @@ public:
     ~FilamentRenderEngine() override;
 
     [[nodiscard]] RendererStatus status() const override;
-    [[nodiscard]] PbrMaterialSettings material_settings() const override;
-    [[nodiscard]] DirectionalLightSettings directional_light_settings() const override;
 
-    void set_material_settings(const PbrMaterialSettings& settings) override;
-    void set_directional_light_settings(const DirectionalLightSettings& settings) override;
-
-    [[nodiscard]] bool request_debug_preview(RenderExtent extent) override;
-    [[nodiscard]] const RenderPreviewFrame* try_consume_debug_preview_frame() override;
+    [[nodiscard]] bool request_scene_viewport_frame(
+        const Scene& scene,
+        const RenderCamera& camera,
+        RenderExtent extent) override;
+    [[nodiscard]] const RenderViewportFrame* try_consume_scene_viewport_frame() override;
 
 private:
     filament::Engine* engine_ = nullptr;
-    std::unique_ptr<FilamentPreviewScene> preview_scene_;
+    std::unique_ptr<FilamentSceneViewport> scene_viewport_;
     RendererStatus status_;
-    PbrMaterialSettings material_settings_;
-    DirectionalLightSettings light_settings_;
-    RenderPreviewFrame preview_frame_;
-    bool preview_frame_available_ = false;
+    RenderViewportFrame viewport_frame_;
+    bool viewport_frame_available_ = false;
 };
 
 } // namespace quader
