@@ -30,11 +30,14 @@ struct SceneTransform {
 
 enum class SceneMeshKind : uint8_t {
     cube,
+    plane,
 };
 
 struct SceneMeshComponent {
     SceneMeshKind mesh_kind = SceneMeshKind::cube;
     PbrMaterialSettings material;
+    bool casts_shadows = true;
+    bool receives_shadows = true;
 };
 
 struct SceneDirectionalLightComponent {

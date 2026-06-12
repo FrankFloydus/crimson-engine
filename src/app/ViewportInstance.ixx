@@ -65,12 +65,14 @@ public:
     [[nodiscard]] std::string_view title() const noexcept;
     [[nodiscard]] ViewportSubjectKind subject_kind() const noexcept;
     [[nodiscard]] ViewportCameraPreset camera_preset() const noexcept;
+    [[nodiscard]] ViewportCameraPreset default_camera_preset() const noexcept;
     [[nodiscard]] RenderExtent requested_extent() const noexcept;
     [[nodiscard]] RenderExtent displayed_extent() const noexcept;
     [[nodiscard]] bool is_dirty() const noexcept;
     [[nodiscard]] bool request_pending() const noexcept;
     [[nodiscard]] bool can_capture_navigation() const noexcept;
-    [[nodiscard]] bool should_start_navigation_capture(const ViewportNavigationSnapshot& input) const noexcept;
+    [[nodiscard]] bool should_start_navigation_mouse_lock(const ViewportNavigationSnapshot& input) const noexcept;
+    [[nodiscard]] bool should_keep_navigation_mouse_lock(const ViewportNavigationSnapshot& input) const noexcept;
 
     void set_camera_preset(ViewportCameraPreset preset);
     void set_requested_extent(RenderExtent extent);
@@ -78,7 +80,7 @@ public:
 
     [[nodiscard]] bool update_navigation(
         const ViewportNavigationSnapshot& input,
-        bool navigation_captured,
+        bool navigation_mouse_locked,
         float delta_seconds);
     [[nodiscard]] std::optional<ViewportRenderRequest> try_begin_render_request(
         const Scene& scene,
@@ -99,11 +101,11 @@ private:
     [[nodiscard]] ViewportProjection current_projection() const;
     [[nodiscard]] bool update_scene_navigation(
         const ViewportNavigationSnapshot& input,
-        bool navigation_captured,
+        bool navigation_mouse_locked,
         float delta_seconds);
     [[nodiscard]] bool update_preview_orbit_navigation(
         const ViewportNavigationSnapshot& input,
-        bool navigation_captured);
+        bool navigation_mouse_locked);
 
     ViewportId id_;
     ViewportGeneration generation_ { 1 };
@@ -111,6 +113,7 @@ private:
     ViewportSubjectKind subject_kind_ = ViewportSubjectKind::scene;
     ViewportNavigationKind navigation_kind_ = ViewportNavigationKind::scene_camera;
     ViewportCameraPreset camera_preset_ = ViewportCameraPreset::perspective;
+    ViewportCameraPreset default_camera_preset_ = ViewportCameraPreset::perspective;
     RenderExtent requested_extent_ { 720, 420 };
     RenderExtent displayed_extent_;
     EditorCamera perspective_camera_;

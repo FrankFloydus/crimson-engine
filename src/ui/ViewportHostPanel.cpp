@@ -12,6 +12,7 @@ module;
 
 module quader.ui.viewport_host_panel;
 
+import quader.ui.controls;
 import quader.ui.style;
 
 namespace quader {
@@ -67,12 +68,23 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
     return nullptr;
 }
 
+[[nodiscard]] bool layout_states_match(const ViewportLayoutState& left, const ViewportLayoutState& right)
+{
+    return left.preset == right.preset &&
+        left.maximized_viewport == right.maximized_viewport &&
+        floats_match(left.root_split_ratio, right.root_split_ratio) &&
+        floats_match(left.secondary_split_ratio, right.secondary_split_ratio);
+}
+
 [[nodiscard]] bool draw_layout_combo(ViewportLayoutState& layout_state, const ViewportHostUiStyle& style)
 {
     bool changed = false;
+    const ViewportLayoutState default_layout_state;
     const char* current = viewport_layout_preset_name(layout_state.preset);
     ImGui::SetNextItemWidth(style.layout_combo_width);
-    if (ImGui::BeginCombo("##ViewportLayoutPreset", current)) {
+    const bool combo_open = ImGui::BeginCombo("##ViewportLayoutPreset", current);
+    render_item_tooltip("Chooses the viewport arrangement. Reset restores the single-view layout and centered splitters.");
+    if (combo_open) {
         for (ViewportLayoutPreset preset : kLayoutPresets) {
             const bool selected = layout_state.preset == preset;
             if (ImGui::Selectable(viewport_layout_preset_name(preset), selected)) {
@@ -86,26 +98,32 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
         }
         ImGui::EndCombo();
     }
+    if (render_changed_reset_control(
+            "Viewport Layout",
+            !layout_states_match(layout_state, default_layout_state),
+            "Reset the viewport layout to the default single view.")) {
+        layout_state = default_layout_state;
+        changed = true;
+    }
     return changed;
 }
 
 [[nodiscard]] std::optional<ViewportCameraPreset> draw_camera_combo(
     ViewportCameraPreset current,
+    ViewportCameraPreset default_preset,
     const ViewportHostUiStyle& style)
 {
     std::optional<ViewportCameraPreset> requested;
-    ImGui::SetNextItemWidth(style.camera_combo_width);
-    if (ImGui::BeginCombo("##CameraPreset", viewport_camera_preset_name(current))) {
-        for (ViewportCameraPreset preset : kCameraPresets) {
-            const bool selected = current == preset;
-            if (ImGui::Selectable(viewport_camera_preset_name(preset), selected)) {
-                requested = preset;
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
-            }
-        }
-        ImGui::EndCombo();
+    ViewportCameraPreset editable = current;
+    if (render_resettable_combo(
+            "##CameraPreset",
+            editable,
+            default_preset,
+            std::span<const ViewportCameraPreset> { kCameraPresets },
+            viewport_camera_preset_name,
+            "Chooses how this viewport looks at the scene. Reset returns this pane to its original view.",
+            style.camera_combo_width)) {
+        requested = editable;
     }
     return requested;
 }
@@ -348,7 +366,9 @@ void draw_pane_toolbar(
 {
     const bool is_maximized = layout_state.maximized_viewport == pane.id;
     const float controls_width = style.maximize_button_width +
-        (pane.camera_dropdown_enabled ? style.camera_combo_width + style.toolbar_control_gap : 0.0f);
+        (pane.camera_dropdown_enabled ?
+                style.camera_combo_width + style.resettable_control_extra_width + style.toolbar_control_gap :
+                0.0f);
 
     if (!ImGui::BeginTable(
             "ViewportPaneToolbar",
@@ -369,7 +389,8 @@ void draw_pane_toolbar(
 
     ImGui::TableSetColumnIndex(1);
     if (pane.camera_dropdown_enabled) {
-        if (std::optional<ViewportCameraPreset> preset = draw_camera_combo(pane.camera_preset, style)) {
+        if (std::optional<ViewportCameraPreset> preset =
+                draw_camera_combo(pane.camera_preset, pane.default_camera_preset, style)) {
             result.requested_camera_preset = *preset;
         }
         ImGui::SameLine(0.0f, style.toolbar_control_gap);

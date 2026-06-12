@@ -109,7 +109,7 @@ void EditorViewport::render_frame(
 
 bool EditorViewport::wants_relative_mouse_mode() const noexcept
 {
-    return captured_navigation_viewport_.has_value();
+    return mouse_locked_viewport_.has_value();
 }
 
 void EditorViewport::mark_render_state_dirty()
@@ -168,7 +168,7 @@ void EditorViewport::release_viewports()
     scene_viewports_.clear();
     preview_viewport_.reset();
     active_viewport_.reset();
-    captured_navigation_viewport_.reset();
+    mouse_locked_viewport_.reset();
     renderer_ = nullptr;
 }
 
@@ -198,6 +198,7 @@ void EditorViewport::render_scene_viewport_host(
             .texture = imgui.viewport_texture(viewport.id()),
             .performance = performance_overlay_for(viewport, delta_seconds),
             .camera_preset = viewport.camera_preset(),
+            .default_camera_preset = viewport.default_camera_preset(),
             .active = active_viewport_.has_value() && *active_viewport_ == viewport.id(),
             .camera_dropdown_enabled = true,
         });
@@ -277,41 +278,38 @@ void EditorViewport::update_viewport_from_surface(
     }
 
     const ViewportNavigationSnapshot navigation_snapshot = navigation_snapshot_from(input, surface.hovered);
-    if (captured_navigation_viewport_ == viewport.id() &&
-        (!navigation_snapshot.window_has_keyboard_focus ||
-            !navigation_snapshot.window_has_mouse_focus ||
-            navigation_snapshot.right_mouse_released ||
-            !navigation_snapshot.right_mouse_down)) {
-        captured_navigation_viewport_.reset();
+    if (mouse_locked_viewport_ == viewport.id() &&
+        !viewport.should_keep_navigation_mouse_lock(navigation_snapshot)) {
+        mouse_locked_viewport_.reset();
     }
 
-    if (!captured_navigation_viewport_.has_value() &&
-        viewport.should_start_navigation_capture(navigation_snapshot)) {
-        captured_navigation_viewport_ = viewport.id();
+    if (!mouse_locked_viewport_.has_value() &&
+        viewport.should_start_navigation_mouse_lock(navigation_snapshot)) {
+        mouse_locked_viewport_ = viewport.id();
     }
 
-    const bool navigation_captured =
-        captured_navigation_viewport_.has_value() &&
-        *captured_navigation_viewport_ == viewport.id();
+    const bool navigation_mouse_locked =
+        mouse_locked_viewport_.has_value() &&
+        *mouse_locked_viewport_ == viewport.id();
     const bool navigation_changed =
-        viewport.update_navigation(navigation_snapshot, navigation_captured, delta_seconds);
+        viewport.update_navigation(navigation_snapshot, navigation_mouse_locked, delta_seconds);
     (void)navigation_changed;
-    if (navigation_captured) {
+    if (navigation_mouse_locked) {
         active_viewport_ = viewport.id();
     }
 }
 
 void EditorViewport::release_navigation_capture_if_hidden(const std::vector<ViewportId>& visible_viewport_ids)
 {
-    if (!captured_navigation_viewport_.has_value()) {
+    if (!mouse_locked_viewport_.has_value()) {
         return;
     }
 
     const bool captured_viewport_is_visible =
-        std::find(visible_viewport_ids.begin(), visible_viewport_ids.end(), *captured_navigation_viewport_) !=
+        std::find(visible_viewport_ids.begin(), visible_viewport_ids.end(), *mouse_locked_viewport_) !=
         visible_viewport_ids.end();
     if (!captured_viewport_is_visible) {
-        captured_navigation_viewport_.reset();
+        mouse_locked_viewport_.reset();
     }
 }
 

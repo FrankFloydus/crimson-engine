@@ -15,6 +15,7 @@ struct ViewportHostUiStyle {
     InitialWindowBounds window { ImVec2 { 32.0f, 56.0f }, ImVec2 { 820.0f, 560.0f } };
     float layout_combo_width = 220.0f;
     float camera_combo_width = 116.0f;
+    float resettable_control_extra_width = 112.0f;
     float maximize_button_width = 70.0f;
     float pane_toolbar_height = 26.0f;
     float toolbar_control_gap = 6.0f;

@@ -100,6 +100,7 @@ struct ViewportProjection {
 
 enum class ViewportMeshKind : uint8_t {
     cube,
+    plane,
 };
 
 struct SceneRenderMesh {
@@ -108,6 +109,8 @@ struct SceneRenderMesh {
     Vec3 rotation_degrees {};
     Vec3 scale { 1.0f, 1.0f, 1.0f };
     PbrMaterialSettings material;
+    bool casts_shadows = true;
+    bool receives_shadows = true;
 };
 
 struct SceneRenderDirectionalLight {

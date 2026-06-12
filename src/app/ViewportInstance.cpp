@@ -16,6 +16,16 @@ constexpr Vec3 world_up { 0.0f, 1.0f, 0.0f };
 constexpr Vec3 world_forward { 0.0f, 0.0f, -1.0f };
 constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
 
+[[nodiscard]] bool is_fly_movement_requested(const ViewportNavigationSnapshot& input)
+{
+    return input.move_forward ||
+        input.move_backward ||
+        input.move_left ||
+        input.move_right ||
+        input.move_up ||
+        input.move_down;
+}
+
 [[nodiscard]] Vec3 add(Vec3 left, Vec3 right)
 {
     return { left.x + right.x, left.y + right.y, left.z + right.z };
@@ -104,11 +114,11 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
 
 [[nodiscard]] EditorCameraNavigationInput scene_navigation_input_from(
     const ViewportNavigationSnapshot& input,
-    bool navigation_captured)
+    bool navigation_mouse_locked)
 {
     EditorCameraNavigationInput navigation;
     const bool keyboard_navigation_active =
-        (input.hovered || navigation_captured) &&
+        (input.hovered || navigation_mouse_locked) &&
         !input.text_input_active;
     if (keyboard_navigation_active) {
         navigation.move_forward = input.move_forward;
@@ -120,8 +130,8 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
         navigation.boost = input.boost;
     }
 
-    navigation.look_active = navigation_captured;
-    navigation.look_delta = navigation_captured ? input.mouse_delta : MouseDelta {};
+    navigation.look_active = navigation_mouse_locked;
+    navigation.look_delta = navigation_mouse_locked ? input.mouse_delta : MouseDelta {};
     return navigation;
 }
 
@@ -132,12 +142,24 @@ constexpr Vec3 top_view_up { 0.0f, 0.0f, -1.0f };
 
     for (const SceneEntity& entity : scene.entities()) {
         if (entity.mesh.has_value()) {
+            ViewportMeshKind mesh_kind = ViewportMeshKind::cube;
+            switch (entity.mesh->mesh_kind) {
+            case SceneMeshKind::cube:
+                mesh_kind = ViewportMeshKind::cube;
+                break;
+            case SceneMeshKind::plane:
+                mesh_kind = ViewportMeshKind::plane;
+                break;
+            }
+
             snapshot.meshes.push_back(SceneRenderMesh {
-                .mesh_kind = ViewportMeshKind::cube,
+                .mesh_kind = mesh_kind,
                 .position = entity.transform.position,
                 .rotation_degrees = entity.transform.rotation_degrees,
                 .scale = entity.transform.scale,
                 .material = entity.mesh->material,
+                .casts_shadows = entity.mesh->casts_shadows,
+                .receives_shadows = entity.mesh->receives_shadows,
             });
         }
 
@@ -190,6 +212,7 @@ ViewportInstance::ViewportInstance(
     , subject_kind_(subject_kind)
     , navigation_kind_(navigation_kind)
     , camera_preset_(preset)
+    , default_camera_preset_(preset)
 {
 }
 
@@ -198,6 +221,7 @@ ViewportGeneration ViewportInstance::generation() const noexcept { return genera
 std::string_view ViewportInstance::title() const noexcept { return title_; }
 ViewportSubjectKind ViewportInstance::subject_kind() const noexcept { return subject_kind_; }
 ViewportCameraPreset ViewportInstance::camera_preset() const noexcept { return camera_preset_; }
+ViewportCameraPreset ViewportInstance::default_camera_preset() const noexcept { return default_camera_preset_; }
 RenderExtent ViewportInstance::requested_extent() const noexcept { return requested_extent_; }
 RenderExtent ViewportInstance::displayed_extent() const noexcept { return displayed_extent_; }
 bool ViewportInstance::is_dirty() const noexcept { return dirty_; }
@@ -236,23 +260,23 @@ void ViewportInstance::mark_dirty()
 
 bool ViewportInstance::update_navigation(
     const ViewportNavigationSnapshot& input,
-    bool navigation_captured,
+    bool navigation_mouse_locked,
     float delta_seconds)
 {
-    const bool capture_active =
-        navigation_captured &&
+    const bool mouse_lock_active =
+        navigation_mouse_locked &&
         input.window_has_keyboard_focus &&
         input.window_has_mouse_focus &&
-        input.right_mouse_down &&
+        !input.text_input_active &&
         can_capture_navigation();
 
     bool changed = false;
     switch (navigation_kind_) {
     case ViewportNavigationKind::scene_camera:
-        changed = update_scene_navigation(input, capture_active, delta_seconds);
+        changed = update_scene_navigation(input, mouse_lock_active, delta_seconds);
         break;
     case ViewportNavigationKind::orbit_preview:
-        changed = update_preview_orbit_navigation(input, capture_active);
+        changed = update_preview_orbit_navigation(input, mouse_lock_active);
         break;
     case ViewportNavigationKind::none:
         changed = false;
@@ -380,12 +404,12 @@ ViewportProjection ViewportInstance::current_projection() const
 
 bool ViewportInstance::update_scene_navigation(
     const ViewportNavigationSnapshot& input,
-    bool navigation_captured,
+    bool navigation_mouse_locked,
     float delta_seconds)
 {
     if (camera_preset_ == ViewportCameraPreset::perspective) {
         return perspective_camera_.update_from_navigation_input(
-            scene_navigation_input_from(input, navigation_captured),
+            scene_navigation_input_from(input, navigation_mouse_locked),
             delta_seconds);
     }
 
@@ -396,7 +420,7 @@ bool ViewportInstance::update_scene_navigation(
         changed = true;
     }
 
-    if (navigation_captured && (input.mouse_delta.x != 0.0f || input.mouse_delta.y != 0.0f)) {
+    if (navigation_mouse_locked && (input.mouse_delta.x != 0.0f || input.mouse_delta.y != 0.0f)) {
         const ViewportCamera camera = current_camera();
         const Vec3 right = normalized_or(cross(camera.forward, camera.up), { 1.0f, 0.0f, 0.0f });
         const float pan_scale = orthographic_size_ * 0.0025f;
@@ -411,10 +435,10 @@ bool ViewportInstance::update_scene_navigation(
 
 bool ViewportInstance::update_preview_orbit_navigation(
     const ViewportNavigationSnapshot& input,
-    bool navigation_captured)
+    bool navigation_mouse_locked)
 {
     bool changed = false;
-    if (navigation_captured) {
+    if (navigation_mouse_locked) {
         if (input.mouse_delta.x != 0.0f || input.mouse_delta.y != 0.0f) {
             orbit_yaw_degrees_ += input.mouse_delta.x * 0.18f;
             orbit_pitch_degrees_ = clamped_pitch(orbit_pitch_degrees_ + input.mouse_delta.y * 0.18f);
@@ -445,7 +469,7 @@ bool ViewportInstance::can_capture_navigation() const noexcept
     return false;
 }
 
-bool ViewportInstance::should_start_navigation_capture(const ViewportNavigationSnapshot& input) const noexcept
+bool ViewportInstance::should_start_navigation_mouse_lock(const ViewportNavigationSnapshot& input) const noexcept
 {
     if (!input.window_has_keyboard_focus || !input.window_has_mouse_focus) {
         return false;
@@ -455,7 +479,44 @@ bool ViewportInstance::should_start_navigation_capture(const ViewportNavigationS
         return false;
     }
 
-    return input.right_mouse_pressed && input.hovered;
+    if (!input.hovered || input.text_input_active) {
+        return false;
+    }
+
+    switch (navigation_kind_) {
+    case ViewportNavigationKind::scene_camera:
+        return input.right_mouse_pressed ||
+            (camera_preset_ == ViewportCameraPreset::perspective && is_fly_movement_requested(input));
+    case ViewportNavigationKind::orbit_preview:
+        return input.right_mouse_pressed;
+    case ViewportNavigationKind::none:
+        return false;
+    }
+
+    return false;
+}
+
+bool ViewportInstance::should_keep_navigation_mouse_lock(const ViewportNavigationSnapshot& input) const noexcept
+{
+    if (!input.window_has_keyboard_focus || !input.window_has_mouse_focus) {
+        return false;
+    }
+
+    if (!can_capture_navigation() || input.text_input_active) {
+        return false;
+    }
+
+    switch (navigation_kind_) {
+    case ViewportNavigationKind::scene_camera:
+        return input.right_mouse_down ||
+            (camera_preset_ == ViewportCameraPreset::perspective && is_fly_movement_requested(input));
+    case ViewportNavigationKind::orbit_preview:
+        return input.right_mouse_down;
+    case ViewportNavigationKind::none:
+        return false;
+    }
+
+    return false;
 }
 
 } // namespace quader

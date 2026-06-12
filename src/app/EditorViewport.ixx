@@ -73,7 +73,7 @@ private:
     std::optional<ViewportInstance> preview_viewport_;
     ViewportLayoutState layout_state_;
     std::optional<ViewportId> active_viewport_;
-    std::optional<ViewportId> captured_navigation_viewport_;
+    std::optional<ViewportId> mouse_locked_viewport_;
 };
 
 } // namespace quader

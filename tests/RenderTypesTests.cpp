@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <vector>
 
 import quader.render.types;
@@ -107,6 +108,7 @@ TEST(RenderTypes, ClampDirectionalLightSettings)
     quader::DirectionalLightSettings settings;
     settings.color = { 3.0f, -2.0f, 0.25f };
     settings.intensity = 500000.0f;
+    settings.yaw_degrees = 540.0f;
     settings.pitch_degrees = -120.0f;
 
     const quader::DirectionalLightSettings clamped = quader::clamp_directional_light_settings(settings);
@@ -115,7 +117,84 @@ TEST(RenderTypes, ClampDirectionalLightSettings)
     EXPECT_FLOAT_EQ(0.0f, clamped.color.g);
     EXPECT_FLOAT_EQ(0.25f, clamped.color.b);
     EXPECT_FLOAT_EQ(200000.0f, clamped.intensity);
+    EXPECT_FLOAT_EQ(180.0f, clamped.yaw_degrees);
     EXPECT_FLOAT_EQ(-89.0f, clamped.pitch_degrees);
+}
+
+TEST(RenderTypes, DefaultDirectionalShadowSettingsAreProductionReady)
+{
+    const quader::DirectionalLightSettings light;
+
+    EXPECT_TRUE(light.shadow.enabled);
+    EXPECT_EQ(quader::DirectionalShadowMode::crisp, light.shadow.mode);
+    EXPECT_EQ(quader::DirectionalShadowQuality::high, light.shadow.quality);
+    EXPECT_EQ(2048U, quader::directional_shadow_quality_map_size(light.shadow.quality));
+    EXPECT_FLOAT_EQ(150.0f, light.shadow.distance);
+    EXPECT_EQ(3, light.shadow.cascades);
+    EXPECT_FALSE(light.shadow.stable);
+    EXPECT_TRUE(light.shadow.contact_shadows);
+    EXPECT_FLOAT_EQ(0.3f, light.shadow.contact_distance);
+    EXPECT_EQ(8, light.shadow.contact_steps);
+    EXPECT_FLOAT_EQ(0.001f, light.shadow.constant_bias);
+    EXPECT_FLOAT_EQ(1.0f, light.shadow.normal_bias);
+    EXPECT_FLOAT_EQ(0.5f, light.shadow.polygon_offset_constant);
+    EXPECT_FLOAT_EQ(2.0f, light.shadow.polygon_offset_slope);
+    EXPECT_FLOAT_EQ(1.0f, light.shadow.near_hint);
+    EXPECT_FLOAT_EQ(100.0f, light.shadow.far_hint);
+    EXPECT_TRUE(light.shadow.lispsm);
+    EXPECT_FLOAT_EQ(0.0f, light.shadow.vsm_blur_width);
+    EXPECT_FALSE(light.shadow.vsm_elvsm);
+    EXPECT_FALSE(light.shadow.vsm_high_precision);
+    EXPECT_FLOAT_EQ(0.15f, light.shadow.vsm_light_bleed_reduction);
+    EXPECT_FLOAT_EQ(0.02f, light.shadow.soft_shadow_bulb_radius);
+    EXPECT_FLOAT_EQ(1.0f, light.shadow.penumbra_scale);
+    EXPECT_FLOAT_EQ(1.0f, light.shadow.penumbra_ratio_scale);
+}
+
+TEST(RenderTypes, DirectionalShadowQualityMapsToTextureSize)
+{
+    EXPECT_EQ(512U, quader::directional_shadow_quality_map_size(quader::DirectionalShadowQuality::low));
+    EXPECT_EQ(1024U, quader::directional_shadow_quality_map_size(quader::DirectionalShadowQuality::medium));
+    EXPECT_EQ(2048U, quader::directional_shadow_quality_map_size(quader::DirectionalShadowQuality::high));
+    EXPECT_EQ(4096U, quader::directional_shadow_quality_map_size(quader::DirectionalShadowQuality::ultra));
+}
+
+TEST(RenderTypes, ClampDirectionalShadowSettings)
+{
+    quader::DirectionalShadowSettings settings;
+    settings.distance = std::numeric_limits<float>::quiet_NaN();
+    settings.cascades = 99;
+    settings.contact_distance = -1.0f;
+    settings.contact_steps = 0;
+    settings.constant_bias = -0.25f;
+    settings.normal_bias = std::numeric_limits<float>::infinity();
+    settings.polygon_offset_constant = -2.0f;
+    settings.polygon_offset_slope = std::numeric_limits<float>::quiet_NaN();
+    settings.near_hint = -5.0f;
+    settings.far_hint = std::numeric_limits<float>::infinity();
+    settings.vsm_blur_width = 500.0f;
+    settings.vsm_light_bleed_reduction = -0.5f;
+    settings.soft_shadow_bulb_radius = -3.0f;
+    settings.penumbra_scale = std::numeric_limits<float>::quiet_NaN();
+    settings.penumbra_ratio_scale = -4.0f;
+
+    const quader::DirectionalShadowSettings clamped = quader::clamp_directional_shadow_settings(settings);
+
+    EXPECT_FLOAT_EQ(150.0f, clamped.distance);
+    EXPECT_EQ(4, clamped.cascades);
+    EXPECT_FLOAT_EQ(0.0f, clamped.contact_distance);
+    EXPECT_EQ(1, clamped.contact_steps);
+    EXPECT_FLOAT_EQ(0.0f, clamped.constant_bias);
+    EXPECT_FLOAT_EQ(1.0f, clamped.normal_bias);
+    EXPECT_FLOAT_EQ(0.0f, clamped.polygon_offset_constant);
+    EXPECT_FLOAT_EQ(2.0f, clamped.polygon_offset_slope);
+    EXPECT_FLOAT_EQ(0.0f, clamped.near_hint);
+    EXPECT_FLOAT_EQ(100.0f, clamped.far_hint);
+    EXPECT_FLOAT_EQ(125.0f, clamped.vsm_blur_width);
+    EXPECT_FLOAT_EQ(0.0f, clamped.vsm_light_bleed_reduction);
+    EXPECT_FLOAT_EQ(0.0f, clamped.soft_shadow_bulb_radius);
+    EXPECT_FLOAT_EQ(1.0f, clamped.penumbra_scale);
+    EXPECT_FLOAT_EQ(1.0f, clamped.penumbra_ratio_scale);
 }
 
 TEST(ViewportTypes, TextureHandlePayloadIsNotPresentableUntilGpuPresentationExists)

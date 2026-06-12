@@ -36,6 +36,20 @@ TEST(ViewportInstance, ViewportIdsAndGenerationsExposeValidity)
     EXPECT_TRUE((quader::ViewportGeneration { 1 }).is_valid());
 }
 
+TEST(ViewportInstance, SceneViewportKeepsOriginalCameraPresetAsDefault)
+{
+    quader::ViewportInstance viewport =
+        quader::ViewportInstance::scene_viewport({ 12 }, "Top", quader::ViewportCameraPreset::top);
+
+    EXPECT_EQ(quader::ViewportCameraPreset::top, viewport.camera_preset());
+    EXPECT_EQ(quader::ViewportCameraPreset::top, viewport.default_camera_preset());
+
+    viewport.set_camera_preset(quader::ViewportCameraPreset::front);
+
+    EXPECT_EQ(quader::ViewportCameraPreset::front, viewport.camera_preset());
+    EXPECT_EQ(quader::ViewportCameraPreset::top, viewport.default_camera_preset());
+}
+
 TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
 {
     quader::Scene scene = quader::create_default_scene();
@@ -52,7 +66,15 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     ASSERT_TRUE(std::holds_alternative<quader::SceneViewportSubject>(request->subject));
     const quader::SceneViewportSubject& subject =
         std::get<quader::SceneViewportSubject>(request->subject);
-    EXPECT_EQ(1U, subject.snapshot.meshes.size());
+    ASSERT_EQ(2U, subject.snapshot.meshes.size());
+    EXPECT_EQ(quader::ViewportMeshKind::cube, subject.snapshot.meshes[0].mesh_kind);
+    EXPECT_TRUE(subject.snapshot.meshes[0].casts_shadows);
+    EXPECT_TRUE(subject.snapshot.meshes[0].receives_shadows);
+    EXPECT_EQ(quader::ViewportMeshKind::plane, subject.snapshot.meshes[1].mesh_kind);
+    EXPECT_FLOAT_EQ(10.0f, subject.snapshot.meshes[1].scale.x);
+    EXPECT_FLOAT_EQ(10.0f, subject.snapshot.meshes[1].scale.z);
+    EXPECT_FALSE(subject.snapshot.meshes[1].casts_shadows);
+    EXPECT_TRUE(subject.snapshot.meshes[1].receives_shadows);
     EXPECT_EQ(1U, subject.snapshot.directional_lights.size());
     EXPECT_TRUE(viewport.request_pending());
     EXPECT_FALSE(viewport.try_begin_render_request(scene, {}, {}).has_value());
@@ -114,7 +136,7 @@ TEST(ViewportInstance, RejectsFrameWhenExtentChangedWhilePending)
     EXPECT_TRUE(viewport.is_dirty());
 }
 
-TEST(ViewportInstance, ScenePerspectiveNavigationCapturesRelativeMouse)
+TEST(ViewportInstance, ScenePerspectiveNavigationLocksMouseForRightDrag)
 {
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 5 }, "Perspective", quader::ViewportCameraPreset::perspective);
@@ -125,7 +147,24 @@ TEST(ViewportInstance, ScenePerspectiveNavigationCapturesRelativeMouse)
     input.right_mouse_down = true;
     input.mouse_delta = { 12.0f, -4.0f };
 
-    EXPECT_TRUE(viewport.should_start_navigation_capture(input));
+    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
+    EXPECT_TRUE(viewport.should_keep_navigation_mouse_lock(input));
+    EXPECT_TRUE(viewport.update_navigation(input, true, 0.016f));
+}
+
+TEST(ViewportInstance, ScenePerspectiveNavigationLocksMouseForKeyboardFly)
+{
+    quader::ViewportInstance viewport =
+        quader::ViewportInstance::scene_viewport({ 10 }, "Perspective", quader::ViewportCameraPreset::perspective);
+
+    quader::ViewportNavigationSnapshot input;
+    input.hovered = true;
+    input.move_forward = true;
+
+    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
+
+    input.hovered = false;
+    EXPECT_TRUE(viewport.should_keep_navigation_mouse_lock(input));
     EXPECT_TRUE(viewport.update_navigation(input, true, 0.016f));
 }
 
@@ -140,11 +179,12 @@ TEST(ViewportInstance, OrthographicSceneRightDragPansOnlyThatViewport)
     input.right_mouse_down = true;
     input.mouse_delta = { 12.0f, -4.0f };
 
-    EXPECT_TRUE(viewport.should_start_navigation_capture(input));
+    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
+    EXPECT_TRUE(viewport.should_keep_navigation_mouse_lock(input));
     EXPECT_TRUE(viewport.update_navigation(input, true, 0.016f));
 }
 
-TEST(ViewportInstance, PerspectiveSceneIgnoresRightDragCapturedByAnotherViewport)
+TEST(ViewportInstance, PerspectiveSceneDoesNotStartMouseLockAwayFromViewport)
 {
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 9 }, "Perspective", quader::ViewportCameraPreset::perspective);
@@ -155,8 +195,24 @@ TEST(ViewportInstance, PerspectiveSceneIgnoresRightDragCapturedByAnotherViewport
     input.right_mouse_down = true;
     input.mouse_delta = { 12.0f, -4.0f };
 
-    EXPECT_FALSE(viewport.should_start_navigation_capture(input));
+    EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
     EXPECT_FALSE(viewport.update_navigation(input, false, 0.016f));
+}
+
+TEST(ViewportInstance, PreviewOrbitNavigationLocksMouseOnlyForRightDrag)
+{
+    quader::ViewportInstance viewport = quader::ViewportInstance::preview_viewport({ 11 }, "Preview");
+
+    quader::ViewportNavigationSnapshot input;
+    input.hovered = true;
+    input.move_forward = true;
+
+    EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
+
+    input.right_mouse_pressed = true;
+    input.right_mouse_down = true;
+    EXPECT_TRUE(viewport.should_start_navigation_mouse_lock(input));
+    EXPECT_TRUE(viewport.should_keep_navigation_mouse_lock(input));
 }
 
 TEST(ViewportInstance, PreviewOrbitNavigationChangesOnWheel)
@@ -185,6 +241,7 @@ TEST(ViewportInstance, NonInteractiveViewportIgnoresNavigationInput)
     input.mouse_delta = { 15.0f, 15.0f };
 
     EXPECT_FALSE(viewport.can_capture_navigation());
-    EXPECT_FALSE(viewport.should_start_navigation_capture(input));
+    EXPECT_FALSE(viewport.should_start_navigation_mouse_lock(input));
+    EXPECT_FALSE(viewport.should_keep_navigation_mouse_lock(input));
     EXPECT_FALSE(viewport.update_navigation(input, true, 0.016f));
 }

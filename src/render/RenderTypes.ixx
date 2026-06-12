@@ -83,11 +83,51 @@ struct PbrMaterialSettings {
     float clear_coat_roughness = 0.0f;
 };
 
+enum class DirectionalShadowMode : uint8_t {
+    crisp,
+    soft,
+    vsm_transparent,
+};
+
+enum class DirectionalShadowQuality : uint8_t {
+    low,
+    medium,
+    high,
+    ultra,
+};
+
+struct DirectionalShadowSettings {
+    bool enabled = true;
+    DirectionalShadowMode mode = DirectionalShadowMode::crisp;
+    DirectionalShadowQuality quality = DirectionalShadowQuality::high;
+    float distance = 150.0f;
+    uint8_t cascades = 3;
+    bool stable = false;
+    bool contact_shadows = true;
+    float contact_distance = 0.3f;
+    uint8_t contact_steps = 8;
+    float constant_bias = 0.001f;
+    float normal_bias = 1.0f;
+    float polygon_offset_constant = 0.5f;
+    float polygon_offset_slope = 2.0f;
+    float near_hint = 1.0f;
+    float far_hint = 100.0f;
+    bool lispsm = true;
+    float vsm_blur_width = 0.0f;
+    bool vsm_elvsm = false;
+    bool vsm_high_precision = false;
+    float vsm_light_bleed_reduction = 0.15f;
+    float soft_shadow_bulb_radius = 0.02f;
+    float penumbra_scale = 1.0f;
+    float penumbra_ratio_scale = 1.0f;
+};
+
 struct DirectionalLightSettings {
     LinearColor color { 1.0f, 0.94f, 0.86f };
     float intensity = 65000.0f;
     float yaw_degrees = 140.0f;
     float pitch_degrees = -24.0f;
+    DirectionalShadowSettings shadow;
 };
 
 [[nodiscard]] LinearColor clamp_color(LinearColor color);
@@ -105,6 +145,8 @@ struct DirectionalLightSettings {
     PbrMaterialTextureSlot slot);
 [[nodiscard]] RenderCamera clamp_render_camera(RenderCamera camera);
 [[nodiscard]] PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings);
+[[nodiscard]] uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality);
+[[nodiscard]] DirectionalShadowSettings clamp_directional_shadow_settings(DirectionalShadowSettings settings);
 [[nodiscard]] DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettings settings);
 
 } // namespace quader

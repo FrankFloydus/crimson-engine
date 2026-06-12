@@ -2,6 +2,7 @@ module;
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 module quader.render.types;
 
@@ -160,11 +161,61 @@ PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)
     return settings;
 }
 
+uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality)
+{
+    switch (quality) {
+    case DirectionalShadowQuality::low:
+        return 512;
+    case DirectionalShadowQuality::medium:
+        return 1024;
+    case DirectionalShadowQuality::high:
+        return 2048;
+    case DirectionalShadowQuality::ultra:
+        return 4096;
+    }
+
+    return 2048;
+}
+
+DirectionalShadowSettings clamp_directional_shadow_settings(DirectionalShadowSettings settings)
+{
+    const DirectionalShadowSettings defaults;
+
+    settings.distance = std::max(finite_or(settings.distance, defaults.distance), 0.0f);
+    settings.cascades = static_cast<uint8_t>(std::clamp(static_cast<int>(settings.cascades), 1, 4));
+    settings.contact_distance = std::max(finite_or(settings.contact_distance, defaults.contact_distance), 0.0f);
+    settings.contact_steps = static_cast<uint8_t>(std::clamp(static_cast<int>(settings.contact_steps), 1, 64));
+    settings.constant_bias = std::max(finite_or(settings.constant_bias, defaults.constant_bias), 0.0f);
+    settings.normal_bias = std::max(finite_or(settings.normal_bias, defaults.normal_bias), 0.0f);
+    settings.polygon_offset_constant =
+        std::max(finite_or(settings.polygon_offset_constant, defaults.polygon_offset_constant), 0.0f);
+    settings.polygon_offset_slope =
+        std::max(finite_or(settings.polygon_offset_slope, defaults.polygon_offset_slope), 0.0f);
+    settings.near_hint = std::max(finite_or(settings.near_hint, defaults.near_hint), 0.0f);
+    settings.far_hint = std::max(finite_or(settings.far_hint, defaults.far_hint), 0.0f);
+    settings.vsm_blur_width =
+        std::clamp(finite_or(settings.vsm_blur_width, defaults.vsm_blur_width), 0.0f, 125.0f);
+    settings.vsm_light_bleed_reduction =
+        std::clamp(finite_or(settings.vsm_light_bleed_reduction, defaults.vsm_light_bleed_reduction), 0.0f, 1.0f);
+    settings.soft_shadow_bulb_radius =
+        std::max(finite_or(settings.soft_shadow_bulb_radius, defaults.soft_shadow_bulb_radius), 0.0f);
+    settings.penumbra_scale = std::max(finite_or(settings.penumbra_scale, defaults.penumbra_scale), 0.001f);
+    settings.penumbra_ratio_scale =
+        std::max(finite_or(settings.penumbra_ratio_scale, defaults.penumbra_ratio_scale), 1.0f);
+
+    return settings;
+}
+
 DirectionalLightSettings clamp_directional_light_settings(DirectionalLightSettings settings)
 {
+    const DirectionalLightSettings defaults;
+
     settings.color = clamp_color(settings.color);
-    settings.intensity = std::clamp(settings.intensity, 0.0f, 200000.0f);
-    settings.pitch_degrees = std::clamp(settings.pitch_degrees, -89.0f, 89.0f);
+    settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 200000.0f);
+    settings.yaw_degrees = normalize_yaw(settings.yaw_degrees);
+    settings.pitch_degrees =
+        std::clamp(finite_or(settings.pitch_degrees, defaults.pitch_degrees), -89.0f, 89.0f);
+    settings.shadow = clamp_directional_shadow_settings(settings.shadow);
     return settings;
 }
 

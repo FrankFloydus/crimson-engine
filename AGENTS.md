@@ -806,11 +806,36 @@ namespace ui
 
     bool searchBox(std::string& text, const UiTheme& theme);
     bool propertyRow(std::string_view label, const UiTheme& theme);
+    bool propertyRow(std::string_view label, std::string_view tooltip, const UiTheme& theme);
 
     bool drawTransformEditor(Transform& transform, const UiTheme& theme);
     bool drawAssetPicker(AssetId& selected, IAssetQueries& assets, const UiTheme& theme);
 }
 ```
+
+Property rows and editable/inspectable panel fields should have explanatory hover tooltips.
+The tooltip should say what the property does, what units or ranges matter, and any important
+side effects or backend mapping. Prefer a shared helper such as `ui::helpMarker()` or a tooltip
+argument on `ui::propertyRow()` so every panel behaves consistently.
+
+When adding new panel properties, include tooltips from the start. When touching an existing panel
+or widget group, retrofit missing tooltips for nearby properties in that panel instead of leaving a
+mixed UI where some controls explain themselves and adjacent controls do not.
+
+Editable value controls should also use the shared resettable-property pattern unless a panel has a
+specific reason not to. A value control is any UI element that owns or edits a property: floats,
+integers, colors, checkboxes, combo/select controls, text inputs, asset/reference pickers, and
+similar fields. When its current value differs from its default, show a clear changed/default
+indicator and a reset button or icon that restores the default.
+
+Numeric value controls should prefer ImGui drag inputs such as `DragFloat` / `DragInt`, normally via
+the shared helper, instead of finite slider tracks. Configure ImGui drags for unbounded dragging
+(`v_min >= v_max`, e.g. `0, 0`) and then apply project/domain clamps after the edit when the value
+has real minimum/maximum bounds. Do not pass the domain bounds directly to the ImGui drag unless
+the control is intentionally finite.
+
+Keep this as immediate-mode helper functions such as resettable float, checkbox, combo, text, color,
+or picker helpers. Do not introduce retained widget classes for ordinary resettable inputs.
 
 Avoid large abstract widget frameworks.
 

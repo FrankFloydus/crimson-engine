@@ -54,8 +54,21 @@ Scene create_default_scene()
 {
     Scene scene("Default Scene");
 
-    SceneEntity& cube = scene.add_entity("Cube");
+    SceneEntity& cube = scene.add_entity("Cube", SceneTransform {
+        .position = { 0.0f, 1.0f, 0.0f },
+    });
     cube.mesh = SceneMeshComponent {};
+
+    SceneEntity& ground_plane = scene.add_entity("Ground Plane", SceneTransform {
+        .scale = { 10.0f, 1.0f, 10.0f },
+    });
+    SceneMeshComponent ground_mesh;
+    ground_mesh.mesh_kind = SceneMeshKind::plane;
+    ground_mesh.material.albedo = { 0.55f, 0.58f, 0.56f };
+    ground_mesh.material.roughness = 0.9f;
+    ground_mesh.casts_shadows = false;
+    ground_mesh.receives_shadows = true;
+    ground_plane.mesh = ground_mesh;
 
     SceneEntity& key_light = scene.add_entity("Key Light");
     key_light.directional_light = SceneDirectionalLightComponent {};

@@ -19,6 +19,7 @@ struct ViewportPaneInput {
     ViewportTextureView texture;
     ViewportPerformanceOverlay performance;
     ViewportCameraPreset camera_preset = ViewportCameraPreset::perspective;
+    ViewportCameraPreset default_camera_preset = ViewportCameraPreset::perspective;
     bool active = false;
     bool camera_dropdown_enabled = true;
 };

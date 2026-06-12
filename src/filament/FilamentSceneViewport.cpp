@@ -33,6 +33,7 @@ module;
 #include "diagnostics/LogMacros.h"
 #include "generated/QuaderLitPbrMaterial.inc"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <exception>
@@ -58,13 +59,13 @@ import quader.math.types;
 namespace quader {
 namespace {
 
-struct CubeVertex {
+struct MeshVertex {
     filament::math::float3 position;
     filament::math::short4 tangent_frame;
     filament::math::float2 uv0;
 };
 
-struct CubeSourceVertex {
+struct MeshSourceVertex {
     filament::math::float3 position;
     filament::math::float3 normal;
     filament::math::float2 uv0;
@@ -84,7 +85,7 @@ struct CachedMaterialTexture {
     filament::Texture* texture = nullptr;
 };
 
-struct CubeRenderable {
+struct MeshRenderable {
     utils::Entity entity;
     filament::MaterialInstance* material_instance = nullptr;
 };
@@ -237,40 +238,52 @@ std::string material_texture_cache_key(
         std::string(source_path);
 }
 
-std::array<CubeSourceVertex, 24> cube_source_vertices()
+std::array<MeshSourceVertex, 24> cube_source_vertices()
 {
     constexpr float half_extent = 1.0f;
 
     return {
-        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 1.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 1.0f, 1.0f } },
-        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 1.0f } },
+        MeshSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 0.0f, -1.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { -1.0f, 0.0f, 0.0f }, { 1.0f, 0.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, -half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { -half_extent, -half_extent, half_extent }, { -1.0f, 0.0f, 0.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { -half_extent, half_extent, half_extent }, { -1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, half_extent, -half_extent }, { -1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
-        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
+        MeshSourceVertex { { half_extent, -half_extent, half_extent }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, -half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, half_extent, -half_extent }, { 1.0f, 0.0f, 0.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { half_extent, half_extent, half_extent }, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 1.0f } },
-        CubeSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, half_extent, half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, half_extent, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f } },
 
-        CubeSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f }, { 1.0f, 0.0f } },
-        CubeSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f }, { 1.0f, 1.0f } },
-        CubeSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, -half_extent, -half_extent }, { 0.0f, -1.0f, 0.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, -half_extent, half_extent }, { 0.0f, -1.0f, 0.0f }, { 0.0f, 1.0f } },
+    };
+}
+
+std::array<MeshSourceVertex, 4> plane_source_vertices()
+{
+    constexpr float half_extent = 0.5f;
+
+    return {
+        MeshSourceVertex { { -half_extent, 0.0f, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, 0.0f, -half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 0.0f } },
+        MeshSourceVertex { { half_extent, 0.0f, half_extent }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 1.0f } },
+        MeshSourceVertex { { -half_extent, 0.0f, half_extent }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 1.0f } },
     };
 }
 
@@ -283,6 +296,13 @@ std::array<uint16_t, 36> cube_index_data()
         12, 13, 14, 12, 14, 15,
         16, 17, 18, 16, 18, 19,
         20, 21, 22, 20, 22, 23,
+    };
+}
+
+std::array<uint16_t, 6> plane_index_data()
+{
+    return {
+        0, 2, 1, 0, 3, 2,
     };
 }
 
@@ -304,13 +324,21 @@ std::array<filament::math::ushort3, 12> cube_orientation_triangles()
     };
 }
 
-std::vector<CubeVertex> build_cube_vertices()
+std::array<filament::math::ushort3, 2> plane_orientation_triangles()
 {
-    const std::array<CubeSourceVertex, 24> source_vertices = cube_source_vertices();
-    const std::array<filament::math::ushort3, 12> triangles = cube_orientation_triangles();
+    return {
+        filament::math::ushort3 { 0, 2, 1 },
+        filament::math::ushort3 { 0, 3, 2 },
+    };
+}
 
-    std::array<filament::math::float3, 24> positions {};
-    std::array<filament::math::float3, 24> normals {};
+std::vector<MeshVertex> build_mesh_vertices(
+    std::span<const MeshSourceVertex> source_vertices,
+    std::span<const filament::math::ushort3> triangles,
+    const char* resource_name)
+{
+    std::vector<filament::math::float3> positions(source_vertices.size());
+    std::vector<filament::math::float3> normals(source_vertices.size());
     for (size_t index = 0; index < source_vertices.size(); ++index) {
         positions[index] = source_vertices[index].position;
         normals[index] = source_vertices[index].normal;
@@ -326,16 +354,16 @@ std::vector<CubeVertex> build_cube_vertices()
             .build());
 
     if (!orientation) {
-        throw std::runtime_error("Filament failed to generate cube tangent frames.");
+        throw std::runtime_error("Filament failed to generate " + std::string(resource_name) + " tangent frames.");
     }
 
-    std::array<filament::math::short4, 24> tangent_frames {};
+    std::vector<filament::math::short4> tangent_frames(source_vertices.size());
     orientation->getQuats(tangent_frames.data(), tangent_frames.size());
 
-    std::vector<CubeVertex> vertices;
+    std::vector<MeshVertex> vertices;
     vertices.reserve(source_vertices.size());
     for (size_t index = 0; index < source_vertices.size(); ++index) {
-        vertices.push_back(CubeVertex {
+        vertices.push_back(MeshVertex {
             source_vertices[index].position,
             tangent_frames[index],
             source_vertices[index].uv0,
@@ -343,6 +371,84 @@ std::vector<CubeVertex> build_cube_vertices()
     }
 
     return vertices;
+}
+
+std::vector<MeshVertex> build_cube_vertices()
+{
+    const std::array<MeshSourceVertex, 24> source_vertices = cube_source_vertices();
+    const std::array<filament::math::ushort3, 12> triangles = cube_orientation_triangles();
+    return build_mesh_vertices(source_vertices, triangles, "cube");
+}
+
+std::vector<MeshVertex> build_plane_vertices()
+{
+    const std::array<MeshSourceVertex, 4> source_vertices = plane_source_vertices();
+    const std::array<filament::math::ushort3, 2> triangles = plane_orientation_triangles();
+    return build_mesh_vertices(source_vertices, triangles, "plane");
+}
+
+filament::View::ShadowType filament_shadow_type(DirectionalShadowMode mode)
+{
+    switch (mode) {
+    case DirectionalShadowMode::crisp:
+        return filament::View::ShadowType::PCF;
+    case DirectionalShadowMode::soft:
+        return filament::View::ShadowType::PCSS;
+    case DirectionalShadowMode::vsm_transparent:
+        return filament::View::ShadowType::VSM;
+    }
+
+    return filament::View::ShadowType::PCF;
+}
+
+filament::LightManager::ShadowOptions filament_shadow_options(const DirectionalShadowSettings& settings)
+{
+    filament::LightManager::ShadowOptions options;
+    options.mapSize = directional_shadow_quality_map_size(settings.quality);
+    options.shadowCascades = settings.cascades;
+    if (settings.cascades > 1) {
+        const float near_distance = settings.near_hint;
+        const float far_distance = std::max(settings.far_hint, near_distance + 0.001f);
+        filament::LightManager::ShadowCascades::computePracticalSplits(
+            options.cascadeSplitPositions,
+            settings.cascades,
+            near_distance,
+            far_distance,
+            0.5f);
+    }
+    options.constantBias = settings.constant_bias;
+    options.normalBias = settings.normal_bias;
+    options.shadowFar = settings.distance;
+    options.shadowNearHint = settings.near_hint;
+    options.shadowFarHint = settings.far_hint;
+    options.stable = settings.stable;
+    options.lispsm = settings.lispsm;
+    options.polygonOffsetConstant = settings.polygon_offset_constant;
+    options.polygonOffsetSlope = settings.polygon_offset_slope;
+    options.screenSpaceContactShadows = settings.contact_shadows;
+    options.stepCount = settings.contact_steps;
+    options.maxShadowDistance = settings.contact_distance;
+    options.vsm.elvsm = settings.vsm_elvsm;
+    options.vsm.blurWidth = settings.vsm_blur_width;
+    options.shadowBulbRadius = settings.soft_shadow_bulb_radius;
+    return options;
+}
+
+filament::View::VsmShadowOptions filament_vsm_shadow_options(const DirectionalShadowSettings& settings)
+{
+    filament::View::VsmShadowOptions options;
+    options.highPrecision = settings.vsm_high_precision;
+    options.lightBleedReduction = settings.vsm_light_bleed_reduction;
+    options.mipmapping = settings.vsm_blur_width > 0.0f;
+    return options;
+}
+
+filament::View::SoftShadowOptions filament_soft_shadow_options(const DirectionalShadowSettings& settings)
+{
+    filament::View::SoftShadowOptions options;
+    options.penumbraScale = settings.penumbra_scale;
+    options.penumbraRatioScale = settings.penumbra_ratio_scale;
+    return options;
 }
 
 } // namespace
@@ -361,9 +467,14 @@ struct FilamentSceneViewport::Resources {
         engine.flushAndWait();
 
         if (scene != nullptr) {
-            for (const CubeRenderable& cube : cubes) {
+            for (const MeshRenderable& cube : cubes) {
                 if (cube.entity) {
                     scene->remove(cube.entity);
+                }
+            }
+            for (const MeshRenderable& plane : planes) {
+                if (plane.entity) {
+                    scene->remove(plane.entity);
                 }
             }
             for (const DirectionalLightRenderable& light : directional_lights) {
@@ -373,10 +484,15 @@ struct FilamentSceneViewport::Resources {
             }
         }
 
-        for (CubeRenderable& cube : cubes) {
-            destroy_cube_renderable(cube);
+        for (MeshRenderable& cube : cubes) {
+            destroy_mesh_renderable(cube);
         }
         cubes.clear();
+
+        for (MeshRenderable& plane : planes) {
+            destroy_mesh_renderable(plane);
+        }
+        planes.clear();
 
         for (DirectionalLightRenderable& light : directional_lights) {
             destroy_directional_light_renderable(light);
@@ -406,6 +522,14 @@ struct FilamentSceneViewport::Resources {
             engine.destroy(cube_vertices);
         }
 
+        if (plane_indices != nullptr) {
+            engine.destroy(plane_indices);
+        }
+
+        if (plane_vertices != nullptr) {
+            engine.destroy(plane_vertices);
+        }
+
         destroy_preview_target();
 
         if (view != nullptr) {
@@ -430,6 +554,7 @@ struct FilamentSceneViewport::Resources {
         view->setScene(scene);
         view->setPostProcessingEnabled(true);
         view->setAntiAliasing(filament::View::AntiAliasing::FXAA);
+        view->setShadowingEnabled(true);
 
         filament::Renderer::ClearOptions clear_options;
         clear_options.clear = true;
@@ -583,14 +708,29 @@ struct FilamentSceneViewport::Resources {
         }
     }
 
+    void ensure_material()
+    {
+        if (material != nullptr) {
+            return;
+        }
+
+        material = filament::Material::Builder()
+            .package(
+                filament_assets::quader_lit_pbr_material,
+                filament_assets::quader_lit_pbr_material_size)
+            .build(engine);
+        material = require_filament_allocation(material, "viewport mesh material");
+    }
+
     void ensure_cube_resources()
     {
-        if (cube_vertices != nullptr && cube_indices != nullptr && material != nullptr) {
+        ensure_material();
+        if (cube_vertices != nullptr && cube_indices != nullptr) {
             return;
         }
 
         if (cube_vertices == nullptr) {
-            const std::vector<CubeVertex> vertices = build_cube_vertices();
+            const std::vector<MeshVertex> vertices = build_cube_vertices();
             cube_vertices = filament::VertexBuffer::Builder()
                 .vertexCount(static_cast<uint32_t>(vertices.size()))
                 .bufferCount(1)
@@ -598,25 +738,25 @@ struct FilamentSceneViewport::Resources {
                     filament::VertexAttribute::POSITION,
                     0,
                     filament::VertexBuffer::AttributeType::FLOAT3,
-                    offsetof(CubeVertex, position),
-                    sizeof(CubeVertex))
+                    offsetof(MeshVertex, position),
+                    sizeof(MeshVertex))
                 .attribute(
                     filament::VertexAttribute::TANGENTS,
                     0,
                     filament::VertexBuffer::AttributeType::SHORT4,
-                    offsetof(CubeVertex, tangent_frame),
-                    sizeof(CubeVertex))
+                    offsetof(MeshVertex, tangent_frame),
+                    sizeof(MeshVertex))
                 .normalized(filament::VertexAttribute::TANGENTS)
                 .attribute(
                     filament::VertexAttribute::UV0,
                     0,
                     filament::VertexBuffer::AttributeType::FLOAT2,
-                    offsetof(CubeVertex, uv0),
-                    sizeof(CubeVertex))
+                    offsetof(MeshVertex, uv0),
+                    sizeof(MeshVertex))
                 .build(engine);
             cube_vertices = require_filament_allocation(cube_vertices, "viewport cube vertex buffer");
 
-            cube_vertices->setBufferAt(engine, 0, make_filament_buffer_copy<CubeVertex>(vertices));
+            cube_vertices->setBufferAt(engine, 0, make_filament_buffer_copy<MeshVertex>(vertices));
         }
 
         if (cube_indices == nullptr) {
@@ -629,69 +769,131 @@ struct FilamentSceneViewport::Resources {
 
             cube_indices->setBuffer(engine, make_filament_buffer_copy<uint16_t>(indices));
         }
+    }
 
-        if (material == nullptr) {
-            material = filament::Material::Builder()
-                .package(
-                    filament_assets::quader_lit_pbr_material,
-                    filament_assets::quader_lit_pbr_material_size)
+    void ensure_plane_resources()
+    {
+        ensure_material();
+        if (plane_vertices != nullptr && plane_indices != nullptr) {
+            return;
+        }
+
+        if (plane_vertices == nullptr) {
+            const std::vector<MeshVertex> vertices = build_plane_vertices();
+            plane_vertices = filament::VertexBuffer::Builder()
+                .vertexCount(static_cast<uint32_t>(vertices.size()))
+                .bufferCount(1)
+                .attribute(
+                    filament::VertexAttribute::POSITION,
+                    0,
+                    filament::VertexBuffer::AttributeType::FLOAT3,
+                    offsetof(MeshVertex, position),
+                    sizeof(MeshVertex))
+                .attribute(
+                    filament::VertexAttribute::TANGENTS,
+                    0,
+                    filament::VertexBuffer::AttributeType::SHORT4,
+                    offsetof(MeshVertex, tangent_frame),
+                    sizeof(MeshVertex))
+                .normalized(filament::VertexAttribute::TANGENTS)
+                .attribute(
+                    filament::VertexAttribute::UV0,
+                    0,
+                    filament::VertexBuffer::AttributeType::FLOAT2,
+                    offsetof(MeshVertex, uv0),
+                    sizeof(MeshVertex))
                 .build(engine);
-            material = require_filament_allocation(material, "viewport cube material");
+            plane_vertices = require_filament_allocation(plane_vertices, "viewport plane vertex buffer");
+
+            plane_vertices->setBufferAt(engine, 0, make_filament_buffer_copy<MeshVertex>(vertices));
+        }
+
+        if (plane_indices == nullptr) {
+            const std::array<uint16_t, 6> indices = plane_index_data();
+            plane_indices = filament::IndexBuffer::Builder()
+                .indexCount(static_cast<uint32_t>(indices.size()))
+                .bufferType(filament::IndexBuffer::IndexType::USHORT)
+                .build(engine);
+            plane_indices = require_filament_allocation(plane_indices, "viewport plane index buffer");
+
+            plane_indices->setBuffer(engine, make_filament_buffer_copy<uint16_t>(indices));
         }
     }
 
-    [[nodiscard]] CubeRenderable create_cube_renderable()
+    [[nodiscard]] MeshRenderable create_mesh_renderable(
+        ViewportMeshKind mesh_kind,
+        filament::VertexBuffer* vertices,
+        filament::IndexBuffer* indices,
+        size_t index_count)
     {
-        ensure_cube_resources();
+        ensure_material();
 
-        CubeRenderable cube;
-        cube.entity = utils::EntityManager::get().create();
-        cube.material_instance = material->createInstance("Quader cube material");
-        cube.material_instance =
-            require_filament_allocation(cube.material_instance, "viewport cube material instance");
+        MeshRenderable mesh;
+        mesh.entity = utils::EntityManager::get().create();
+        mesh.material_instance = material->createInstance(
+            mesh_kind == ViewportMeshKind::plane ? "Quader plane material" : "Quader cube material");
+        mesh.material_instance =
+            require_filament_allocation(mesh.material_instance, "viewport mesh material instance");
 
-        const std::array<uint16_t, 36> indices = cube_index_data();
+        const filament::Box bounding_box =
+            mesh_kind == ViewportMeshKind::plane
+                ? filament::Box { { 0.0f, 0.0f, 0.0f }, { 0.75f, 0.01f, 0.75f } }
+                : filament::Box { { 0.0f, 0.0f, 0.0f }, { 1.75f, 1.75f, 1.75f } };
         const filament::RenderableManager::Builder::Result renderable_result =
             filament::RenderableManager::Builder(1)
-            .boundingBox({ { 0.0f, 0.0f, 0.0f }, { 1.75f, 1.75f, 1.75f } })
+            .boundingBox(bounding_box)
             .geometry(
                 0,
                 filament::RenderableManager::PrimitiveType::TRIANGLES,
-                cube_vertices,
-                cube_indices,
+                vertices,
+                indices,
                 0,
-                indices.size())
-            .material(0, cube.material_instance)
+                index_count)
+            .material(0, mesh.material_instance)
             .castShadows(false)
             .receiveShadows(false)
-            .build(engine, cube.entity);
+            .build(engine, mesh.entity);
         if (renderable_result != filament::RenderableManager::Builder::Success) {
-            throw std::runtime_error("Filament failed to create the viewport cube renderable.");
+            throw std::runtime_error("Filament failed to create the viewport mesh renderable.");
         }
 
-        engine.getTransformManager().create(cube.entity);
-        scene->addEntity(cube.entity);
-        return cube;
+        engine.getTransformManager().create(mesh.entity);
+        scene->addEntity(mesh.entity);
+        return mesh;
     }
 
-    void destroy_cube_renderable(CubeRenderable& cube)
+    [[nodiscard]] MeshRenderable create_cube_renderable()
     {
-        if (!cube.entity) {
+        ensure_cube_resources();
+        const std::array<uint16_t, 36> indices = cube_index_data();
+        return create_mesh_renderable(ViewportMeshKind::cube, cube_vertices, cube_indices, indices.size());
+    }
+
+    [[nodiscard]] MeshRenderable create_plane_renderable()
+    {
+        ensure_plane_resources();
+        const std::array<uint16_t, 6> indices = plane_index_data();
+        return create_mesh_renderable(ViewportMeshKind::plane, plane_vertices, plane_indices, indices.size());
+    }
+
+    void destroy_mesh_renderable(MeshRenderable& mesh)
+    {
+        if (!mesh.entity) {
             return;
         }
 
         if (scene != nullptr) {
-            scene->remove(cube.entity);
+            scene->remove(mesh.entity);
         }
 
-        engine.getRenderableManager().destroy(cube.entity);
-        engine.getTransformManager().destroy(cube.entity);
-        if (cube.material_instance != nullptr) {
-            engine.destroy(cube.material_instance);
-            cube.material_instance = nullptr;
+        engine.getRenderableManager().destroy(mesh.entity);
+        engine.getTransformManager().destroy(mesh.entity);
+        if (mesh.material_instance != nullptr) {
+            engine.destroy(mesh.material_instance);
+            mesh.material_instance = nullptr;
         }
-        utils::EntityManager::get().destroy(cube.entity);
-        cube.entity.clear();
+        utils::EntityManager::get().destroy(mesh.entity);
+        mesh.entity.clear();
     }
 
     [[nodiscard]] DirectionalLightRenderable create_directional_light_renderable()
@@ -699,8 +901,8 @@ struct FilamentSceneViewport::Resources {
         DirectionalLightRenderable light;
         light.entity = utils::EntityManager::get().create();
         const filament::LightManager::Builder::Result light_result =
-            filament::LightManager::Builder(filament::LightManager::Type::DIRECTIONAL)
-            .castShadows(false)
+            filament::LightManager::Builder(filament::LightManager::Type::SUN)
+            .castShadows(true)
             .build(engine, light.entity);
         if (light_result != filament::LightManager::Builder::Success) {
             throw std::runtime_error("Filament failed to create the viewport directional light.");
@@ -727,8 +929,16 @@ struct FilamentSceneViewport::Resources {
     void set_cube_count(size_t count)
     {
         while (cubes.size() > count) {
-            destroy_cube_renderable(cubes.back());
+            destroy_mesh_renderable(cubes.back());
             cubes.pop_back();
+        }
+    }
+
+    void set_plane_count(size_t count)
+    {
+        while (planes.size() > count) {
+            destroy_mesh_renderable(planes.back());
+            planes.pop_back();
         }
     }
 
@@ -746,10 +956,25 @@ struct FilamentSceneViewport::Resources {
             cubes.push_back(create_cube_renderable());
         }
 
-        CubeRenderable& cube = cubes[index];
+        MeshRenderable& cube = cubes[index];
         apply_material_settings(*cube.material_instance, mesh.material);
+        apply_mesh_shadow_settings(cube.entity, mesh);
         engine.getTransformManager().setTransform(
             engine.getTransformManager().getInstance(cube.entity),
+            scene_mesh_transform(mesh));
+    }
+
+    void ensure_plane_entity(size_t index, const SceneRenderMesh& mesh)
+    {
+        while (planes.size() <= index) {
+            planes.push_back(create_plane_renderable());
+        }
+
+        MeshRenderable& plane = planes[index];
+        apply_material_settings(*plane.material_instance, mesh.material);
+        apply_mesh_shadow_settings(plane.entity, mesh);
+        engine.getTransformManager().setTransform(
+            engine.getTransformManager().getInstance(plane.entity),
             scene_mesh_transform(mesh));
     }
 
@@ -765,14 +990,19 @@ struct FilamentSceneViewport::Resources {
     void apply_scene_snapshot(const SceneRenderSnapshot& snapshot)
     {
         size_t cube_index = 0;
+        size_t plane_index = 0;
         for (const SceneRenderMesh& mesh : snapshot.meshes) {
             switch (mesh.mesh_kind) {
             case ViewportMeshKind::cube:
                 ensure_cube_entity(cube_index++, mesh);
                 break;
+            case ViewportMeshKind::plane:
+                ensure_plane_entity(plane_index++, mesh);
+                break;
             }
         }
         set_cube_count(cube_index);
+        set_plane_count(plane_index);
 
         size_t light_index = 0;
         for (const SceneRenderDirectionalLight& directional_light : snapshot.directional_lights) {
@@ -824,14 +1054,29 @@ struct FilamentSceneViewport::Resources {
         instance.setParameter("clearCoatRoughness", settings.clear_coat_roughness);
     }
 
+    void apply_mesh_shadow_settings(utils::Entity mesh_entity, const SceneRenderMesh& mesh) const
+    {
+        filament::RenderableManager& renderables = engine.getRenderableManager();
+        const filament::RenderableManager::Instance renderable_instance = renderables.getInstance(mesh_entity);
+        renderables.setCastShadows(renderable_instance, mesh.casts_shadows);
+        renderables.setReceiveShadows(renderable_instance, mesh.receives_shadows);
+        renderables.setScreenSpaceContactShadows(renderable_instance, mesh.receives_shadows);
+    }
+
     void apply_directional_light_settings(utils::Entity light_entity, DirectionalLightSettings settings) const
     {
         settings = clamp_directional_light_settings(settings);
+        view->setShadowType(filament_shadow_type(settings.shadow.mode));
+        view->setVsmShadowOptions(filament_vsm_shadow_options(settings.shadow));
+        view->setSoftShadowOptions(filament_soft_shadow_options(settings.shadow));
+
         filament::LightManager& lights = engine.getLightManager();
         const filament::LightManager::Instance light_instance = lights.getInstance(light_entity);
         lights.setColor(light_instance, to_filament_color(settings.color));
         lights.setIntensity(light_instance, settings.intensity);
         lights.setDirection(light_instance, to_filament_direction(settings));
+        lights.setShadowCaster(light_instance, settings.shadow.enabled);
+        lights.setShadowOptions(light_instance, filament_shadow_options(settings.shadow));
     }
 
     void apply_camera(ViewportCamera camera_settings, ViewportProjection projection_settings)
@@ -936,9 +1181,23 @@ struct FilamentSceneViewport::Resources {
                 if constexpr (std::is_same_v<Subject, SceneViewportSubject>) {
                     snapshot = subject.snapshot;
                 } else if constexpr (std::is_same_v<Subject, PreviewViewportSubject>) {
+                    PbrMaterialSettings ground_material;
+                    ground_material.albedo = { 0.55f, 0.58f, 0.56f };
+                    ground_material.roughness = 0.9f;
                     snapshot.meshes.push_back(SceneRenderMesh {
                         .mesh_kind = ViewportMeshKind::cube,
+                        .position = Vec3 { 0.0f, 1.0f, 0.0f },
                         .material = subject.material,
+                        .casts_shadows = true,
+                        .receives_shadows = true,
+                    });
+                    snapshot.meshes.push_back(SceneRenderMesh {
+                        .mesh_kind = ViewportMeshKind::plane,
+                        .position = Vec3 { 0.0f, 0.0f, 0.0f },
+                        .scale = Vec3 { 10.0f, 1.0f, 10.0f },
+                        .material = ground_material,
+                        .casts_shadows = false,
+                        .receives_shadows = true,
                     });
                     snapshot.directional_lights.push_back(SceneRenderDirectionalLight {
                         .settings = subject.light,
@@ -1014,8 +1273,11 @@ struct FilamentSceneViewport::Resources {
     filament::RenderTarget* preview_target = nullptr;
     filament::VertexBuffer* cube_vertices = nullptr;
     filament::IndexBuffer* cube_indices = nullptr;
+    filament::VertexBuffer* plane_vertices = nullptr;
+    filament::IndexBuffer* plane_indices = nullptr;
     filament::Material* material = nullptr;
-    std::vector<CubeRenderable> cubes;
+    std::vector<MeshRenderable> cubes;
+    std::vector<MeshRenderable> planes;
     filament::Texture* fallback_albedo_texture = nullptr;
     filament::Texture* fallback_scalar_texture = nullptr;
     std::unordered_map<std::string, CachedMaterialTexture> material_texture_cache;
