@@ -6,6 +6,7 @@
 import quader.render.types;
 import quader.render.viewport_projection_policy;
 import quader.render.viewport_types;
+import quader.filament.renderer_capabilities;
 
 TEST(RenderTypes, DefaultPbrMaterialIsMatteWhiteDielectric)
 {
@@ -59,6 +60,18 @@ TEST(RenderTypes, DefaultPbrMaterialIsMatteWhiteDielectric)
     EXPECT_FLOAT_EQ(0.5f, settings.thickness);
     EXPECT_FLOAT_EQ(0.0f, settings.micro_thickness);
     EXPECT_FLOAT_EQ(0.0f, settings.dispersion);
+}
+
+TEST(RendererCapabilities, FilamentCapabilitiesExposeBackendOwnedLabels)
+{
+    const quader::RendererCapabilities capabilities = quader::filament_renderer_capabilities();
+
+    EXPECT_STREQ("Filament", capabilities.engine_name);
+    EXPECT_STREQ("Transparent VSM", capabilities.shadows.directional_modes.entries[2].label);
+    EXPECT_STREQ(
+        "Only blooms HDR values above the renderer's bloom threshold.",
+        capabilities.post_processing.bloom.threshold.description);
+    EXPECT_TRUE(capabilities.material.screen_space_refraction.supported);
 }
 
 TEST(RenderTypes, MaterialTextureReferenceSelectsRequestedSlot)

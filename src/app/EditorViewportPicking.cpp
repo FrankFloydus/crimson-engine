@@ -8,6 +8,7 @@ module;
 
 module quader.app.editor_viewport_picking;
 
+import quader.app.scene_render_snapshot_builder;
 import quader.render.debug_draw_picking;
 import quader.render.viewport_gizmos;
 

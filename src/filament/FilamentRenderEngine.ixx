@@ -24,6 +24,7 @@ public:
     ~FilamentRenderEngine() override;
 
     [[nodiscard]] RendererStatus status() const override;
+    [[nodiscard]] RendererCapabilities capabilities() const override;
 
     [[nodiscard]] std::optional<ViewportId> try_create_viewport() override;
     void release_viewport(ViewportId viewport_id) override;

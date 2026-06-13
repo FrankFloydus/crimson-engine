@@ -12,7 +12,6 @@ module;
 export module quader.scene.scene;
 
 export import quader.render.types;
-export import quader.render.viewport_types;
 
 export namespace quader {
 
@@ -126,6 +125,7 @@ public:
     void set_environment_settings(EnvironmentLightingSettings settings);
     [[nodiscard]] PostProcessingSettings post_processing_settings() const;
     void set_post_processing_settings(PostProcessingSettings settings);
+    [[nodiscard]] uint64_t render_revision() const noexcept;
 
     [[nodiscard]] SceneEntityId create_entity(std::string name, TransformComponent transform = {});
     [[nodiscard]] SceneEntityId create_cube(std::string name = "Cube", TransformComponent transform = {});
@@ -161,6 +161,8 @@ private:
     struct SceneStorage;
 
     [[nodiscard]] SceneEntityId create_named_entity(std::string name, TransformComponent transform);
+    [[nodiscard]] bool entity_contributes_to_render(SceneEntityId id) const;
+    void mark_render_state_changed() noexcept;
     void rebuild_entity_cache() const;
 
     std::string title_;
@@ -169,7 +171,5 @@ private:
     std::unique_ptr<SceneStorage> storage_;
     mutable std::vector<SceneEntity> entity_cache_;
 };
-
-[[nodiscard]] SceneRenderSnapshot build_scene_render_snapshot(const Scene& scene);
 
 } // namespace quader

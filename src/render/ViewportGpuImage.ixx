@@ -1,10 +1,7 @@
 module;
 
-#include <vulkan/vulkan.h>
-
+#include <cstddef>
 #include <cstdint>
-#include <optional>
-#include <type_traits>
 
 export module quader.render.viewport_gpu_image;
 
@@ -12,20 +9,42 @@ export import quader.render.viewport_types;
 
 export namespace quader {
 
-enum class ViewportSampledGpuImageBackend {
-    vulkan,
-    opengl,
+struct ViewportTexturePayloadKind {
+    uint64_t value = 0;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return value != 0;
+    }
+
+    [[nodiscard]] friend bool operator==(
+        ViewportTexturePayloadKind left,
+        ViewportTexturePayloadKind right) noexcept
+    {
+        return left.value == right.value;
+    }
 };
 
-enum class ViewportTextureTokenBackend : uint8_t {
-    vulkan,
-    opengl,
-};
+[[nodiscard]] consteval ViewportTexturePayloadKind viewport_texture_payload_kind(const char* name) noexcept
+{
+    uint64_t hash = 14695981039346656037ull;
+    for (std::size_t index = 0; name[index] != '\0'; ++index) {
+        hash ^= static_cast<uint64_t>(static_cast<unsigned char>(name[index]));
+        hash *= 1099511628211ull;
+    }
+
+    return ViewportTexturePayloadKind { hash == 0 ? 1 : hash };
+}
 
 struct ViewportTextureTokenPayload {
     uint64_t word0 = 0;
     uint64_t word1 = 0;
     uint64_t word2 = 0;
+
+    [[nodiscard]] bool has_value() const noexcept
+    {
+        return word0 != 0 || word1 != 0 || word2 != 0;
+    }
 
     [[nodiscard]] friend bool operator==(
         ViewportTextureTokenPayload left,
@@ -39,25 +58,13 @@ struct ViewportTextureTokenPayload {
 
 struct ViewportTextureToken {
     ViewportGpuImageHandle handle;
-    ViewportTextureTokenBackend backend = ViewportTextureTokenBackend::vulkan;
+    ViewportTexturePayloadKind payload_kind;
     ViewportTextureTokenPayload payload;
+    bool uv_origin_bottom_left = false;
 
     [[nodiscard]] bool is_valid() const noexcept
     {
-        if (!handle.is_ready()) {
-            return false;
-        }
-
-        switch (backend) {
-        case ViewportTextureTokenBackend::vulkan:
-            return payload.word0 != 0 &&
-                payload.word1 != 0 &&
-                payload.word2 != static_cast<uint64_t>(VK_IMAGE_LAYOUT_UNDEFINED);
-        case ViewportTextureTokenBackend::opengl:
-            return payload.word0 != 0;
-        }
-
-        return false;
+        return handle.is_ready() && payload_kind.is_valid() && payload.has_value();
     }
 
     [[nodiscard]] friend bool operator==(const ViewportTextureToken& left, const ViewportTextureToken& right) noexcept
@@ -70,142 +77,23 @@ struct ViewportTextureToken {
             left.handle.extent.width == right.handle.extent.width &&
             left.handle.extent.height == right.handle.extent.height &&
             left.handle.readiness == right.handle.readiness &&
-            left.backend == right.backend &&
-            left.payload == right.payload;
+            left.payload_kind == right.payload_kind &&
+            left.payload == right.payload &&
+            left.uv_origin_bottom_left == right.uv_origin_bottom_left;
     }
 };
-
-struct ViewportVulkanTextureTokenPayload {
-    VkImageView image_view = VK_NULL_HANDLE;
-    VkSampler sampler = VK_NULL_HANDLE;
-    VkImageLayout image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    [[nodiscard]] bool is_valid() const noexcept
-    {
-        return image_view != VK_NULL_HANDLE &&
-            sampler != VK_NULL_HANDLE &&
-            image_layout != VK_IMAGE_LAYOUT_UNDEFINED;
-    }
-};
-
-struct ViewportOpenGlTextureTokenPayload {
-    uint32_t texture_id = 0;
-
-    [[nodiscard]] bool is_valid() const noexcept
-    {
-        return texture_id != 0;
-    }
-};
-
-template <typename Handle>
-[[nodiscard]] uint64_t viewport_texture_payload_word_from_handle(Handle handle) noexcept
-{
-    if constexpr (std::is_pointer_v<Handle>) {
-        return static_cast<uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
-    } else {
-        return static_cast<uint64_t>(handle);
-    }
-}
-
-template <typename Handle>
-[[nodiscard]] Handle viewport_texture_handle_from_payload_word(uint64_t word) noexcept
-{
-    if constexpr (std::is_pointer_v<Handle>) {
-        return reinterpret_cast<Handle>(static_cast<std::uintptr_t>(word));
-    } else {
-        return static_cast<Handle>(word);
-    }
-}
-
-[[nodiscard]] inline ViewportTextureToken make_vulkan_viewport_texture_token(
-    ViewportGpuImageHandle handle,
-    ViewportVulkanTextureTokenPayload payload) noexcept
-{
-    return ViewportTextureToken {
-        .handle = handle,
-        .backend = ViewportTextureTokenBackend::vulkan,
-        .payload = {
-            viewport_texture_payload_word_from_handle(payload.image_view),
-            viewport_texture_payload_word_from_handle(payload.sampler),
-            static_cast<uint64_t>(payload.image_layout),
-        },
-    };
-}
-
-[[nodiscard]] inline ViewportTextureToken make_opengl_viewport_texture_token(
-    ViewportGpuImageHandle handle,
-    ViewportOpenGlTextureTokenPayload payload) noexcept
-{
-    return ViewportTextureToken {
-        .handle = handle,
-        .backend = ViewportTextureTokenBackend::opengl,
-        .payload = {
-            static_cast<uint64_t>(payload.texture_id),
-            0,
-            0,
-        },
-    };
-}
-
-[[nodiscard]] inline std::optional<ViewportVulkanTextureTokenPayload> unpack_vulkan_viewport_texture_token(
-    const ViewportTextureToken& texture) noexcept
-{
-    if (texture.backend != ViewportTextureTokenBackend::vulkan || !texture.is_valid()) {
-        return std::nullopt;
-    }
-
-    return ViewportVulkanTextureTokenPayload {
-        .image_view = viewport_texture_handle_from_payload_word<VkImageView>(texture.payload.word0),
-        .sampler = viewport_texture_handle_from_payload_word<VkSampler>(texture.payload.word1),
-        .image_layout = static_cast<VkImageLayout>(texture.payload.word2),
-    };
-}
-
-[[nodiscard]] inline std::optional<ViewportOpenGlTextureTokenPayload> unpack_opengl_viewport_texture_token(
-    const ViewportTextureToken& texture) noexcept
-{
-    if (texture.backend != ViewportTextureTokenBackend::opengl || !texture.is_valid()) {
-        return std::nullopt;
-    }
-
-    return ViewportOpenGlTextureTokenPayload {
-        .texture_id = static_cast<uint32_t>(texture.payload.word0),
-    };
-}
 
 struct ViewportSampledGpuImage {
-    ViewportGpuImageHandle handle;
-    ViewportSampledGpuImageBackend backend = ViewportSampledGpuImageBackend::vulkan;
-    VkImageView image_view = VK_NULL_HANDLE;
-    VkSampler sampler = VK_NULL_HANDLE;
-    VkImageLayout image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    uint32_t opengl_texture_id = 0;
+    ViewportTextureToken texture;
 
     [[nodiscard]] ViewportTextureToken texture_token() const noexcept
     {
-        switch (backend) {
-        case ViewportSampledGpuImageBackend::vulkan:
-            return make_vulkan_viewport_texture_token(
-                handle,
-                ViewportVulkanTextureTokenPayload {
-                    .image_view = image_view,
-                    .sampler = sampler,
-                    .image_layout = image_layout,
-                });
-        case ViewportSampledGpuImageBackend::opengl:
-            return make_opengl_viewport_texture_token(
-                handle,
-                ViewportOpenGlTextureTokenPayload {
-                    .texture_id = opengl_texture_id,
-                });
-        }
-
-        return {};
+        return texture;
     }
 
     [[nodiscard]] bool is_valid() const noexcept
     {
-        return texture_token().is_valid();
+        return texture.is_valid();
     }
 };
 

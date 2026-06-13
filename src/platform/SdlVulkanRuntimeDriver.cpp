@@ -3,13 +3,13 @@ module;
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
 module quader.platform.sdl_vulkan_runtime_driver;
 
 import quader.platform.sdl_vulkan_presentation_surface;
-import quader.render.engine_factory;
 import quader.render.startup_validation;
 import quader.render.vulkan_device;
 import quader.render.vulkan_swapchain;
@@ -19,10 +19,14 @@ namespace quader {
 namespace {
 
 std::unique_ptr<IViewportRenderer> create_vulkan_renderer_engine_or_throw(
+    const IRenderEngineFactory& render_engine_factory,
     const VulkanDevice& device)
 {
-    std::unique_ptr<IViewportRenderer> render_engine = create_default_viewport_renderer(
+    std::unique_ptr<IViewportRenderer> render_engine = render_engine_factory.create_vulkan_viewport_renderer(
         device.shared_device_context());
+    if (!render_engine) {
+        throw std::runtime_error("Renderer engine factory returned null for Vulkan.");
+    }
     throw_if_renderer_failed_to_start(render_engine->status());
     return render_engine;
 }
@@ -31,11 +35,14 @@ std::unique_ptr<IViewportRenderer> create_vulkan_renderer_engine_or_throw(
 
 class SdlVulkanRuntimeDriver::Impl final {
 public:
-    Impl(const SdlWindow& window, std::string imgui_ini_file)
+    Impl(
+        const SdlWindow& window,
+        std::string imgui_ini_file,
+        const IRenderEngineFactory& render_engine_factory)
         : presentation_surface(window)
         , device(presentation_surface)
         , swapchain(device, presentation_surface)
-        , viewport_renderer(create_vulkan_renderer_engine_or_throw(device))
+        , viewport_renderer(create_vulkan_renderer_engine_or_throw(render_engine_factory, device))
         , imgui(window, device, swapchain, std::move(imgui_ini_file))
     {
     }
@@ -49,8 +56,9 @@ public:
 
 SdlVulkanRuntimeDriver::SdlVulkanRuntimeDriver(
     const SdlWindow& window,
-    std::string imgui_ini_file)
-    : impl_(std::make_unique<Impl>(window, std::move(imgui_ini_file)))
+    std::string imgui_ini_file,
+    const IRenderEngineFactory& render_engine_factory)
+    : impl_(std::make_unique<Impl>(window, std::move(imgui_ini_file), render_engine_factory))
 {
 }
 

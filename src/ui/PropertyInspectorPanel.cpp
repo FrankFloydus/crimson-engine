@@ -45,7 +45,7 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
     if (entity.material.has_value()) {
         PbrMaterialSettings edited_material = *entity.material;
         const MaterialComponentEditorResult material_result =
-            draw_material_component(edited_material, input.material_texture_picker_busy);
+            draw_material_component(edited_material, input.material_texture_picker_busy, input.renderer);
         if (material_result.settings_changed) {
             result.changed_material = edited_material;
         }
@@ -56,7 +56,7 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
     if (entity.directional_light.has_value()) {
         DirectionalLightSettings edited_light = *entity.directional_light;
         const DirectionalLightComponentEditorResult light_result =
-            draw_directional_light_component(edited_light);
+            draw_directional_light_component(edited_light, input.renderer);
         if (light_result.settings_changed) {
             result.changed_directional_light = edited_light;
         }
@@ -64,7 +64,7 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
 
     if (entity.point_light.has_value()) {
         PointLightComponent edited_light = *entity.point_light;
-        const PointLightComponentEditorResult light_result = draw_point_light_component(edited_light);
+        const PointLightComponentEditorResult light_result = draw_point_light_component(edited_light, input.renderer);
         if (light_result.settings_changed) {
             result.changed_point_light = edited_light;
         }

@@ -164,7 +164,8 @@ private:
 
 [[nodiscard]] std::unique_ptr<IEditorRuntimeHost> create_host_for_candidate(
     const RenderDriverStartupCandidate& candidate,
-    const EditorRuntimeHostConfig& config)
+    const EditorRuntimeHostConfig& config,
+    const IRenderEngineFactory& render_engine_factory)
 {
     if (candidate.availability != RenderDriverBuildAvailability::implemented) {
         throw std::runtime_error(describe_render_driver_unavailable(candidate.driver));
@@ -174,18 +175,20 @@ private:
     case RenderDriverKind::vulkan:
         return std::make_unique<SdlImGuiEditorRuntimeHost>(
             describe_default_window(candidate.surface),
-            [&config](const SdlWindow& window) {
+            [&config, &render_engine_factory](const SdlWindow& window) {
                 return std::make_unique<SdlVulkanRuntimeDriver>(
                     window,
-                    config.imgui_ini_file);
+                    config.imgui_ini_file,
+                    render_engine_factory);
             });
     case RenderDriverKind::opengl:
         return std::make_unique<SdlImGuiEditorRuntimeHost>(
             describe_opengl_window(candidate.surface),
-            [&config](const SdlWindow& window) {
+            [&config, &render_engine_factory](const SdlWindow& window) {
                 return std::make_unique<SdlOpenGlRuntimeDriver>(
                     window,
-                    config.imgui_ini_file);
+                    config.imgui_ini_file,
+                    render_engine_factory);
             });
     case RenderDriverKind::metal:
         throw std::runtime_error(describe_render_driver_unavailable(candidate.driver));
@@ -200,7 +203,8 @@ private:
 
 std::unique_ptr<IEditorRuntimeHost> create_editor_runtime_host(
     RenderDriverSelection selection,
-    EditorRuntimeHostConfig config)
+    EditorRuntimeHostConfig config,
+    const IRenderEngineFactory& render_engine_factory)
 {
     if (config.imgui_ini_file.empty()) {
         throw std::invalid_argument("Editor runtime host ImGui ini file path is empty.");
@@ -212,7 +216,7 @@ std::unique_ptr<IEditorRuntimeHost> create_editor_runtime_host(
 
     for (const RenderDriverStartupCandidate& candidate : plan.active_candidates()) {
         try {
-            return create_host_for_candidate(candidate, config);
+            return create_host_for_candidate(candidate, config, render_engine_factory);
         } catch (const std::exception& exception) {
             if (!selection.is_automatic()) {
                 throw std::runtime_error(describe_requested_render_driver_failure(

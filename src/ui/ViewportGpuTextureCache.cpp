@@ -10,22 +10,6 @@ module;
 module quader.ui.viewport_gpu_texture_cache;
 
 namespace quader {
-namespace {
-
-[[nodiscard]] ViewportTextureUvOrigin uv_origin_from_backend(ViewportTextureTokenBackend backend) noexcept
-{
-    switch (backend) {
-    case ViewportTextureTokenBackend::vulkan:
-        return ViewportTextureUvOrigin::top_left;
-    case ViewportTextureTokenBackend::opengl:
-        return ViewportTextureUvOrigin::bottom_left;
-    }
-
-    return ViewportTextureUvOrigin::top_left;
-}
-
-} // namespace
-
 class ViewportGpuTextureDescriptorCache::Impl {
 public:
     explicit Impl(IViewportTextureRegistry& texture_registry)
@@ -131,7 +115,9 @@ public:
         return ViewportTextureView {
             .texture_id = existing->second.texture_id,
             .extent = existing->second.texture.handle.extent,
-            .uv_origin = uv_origin_from_backend(existing->second.texture.backend),
+            .uv_origin = existing->second.texture.uv_origin_bottom_left
+                ? ViewportTextureUvOrigin::bottom_left
+                : ViewportTextureUvOrigin::top_left,
             .has_pixels = true,
         };
     }

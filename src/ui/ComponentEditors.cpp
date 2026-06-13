@@ -3,7 +3,6 @@ module;
 #include <imgui.h>
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -13,68 +12,12 @@ module;
 
 module quader.ui.component_editors;
 
+import quader.render.capabilities;
 import quader.ui.controls;
 import quader.ui.style;
 
 namespace quader {
 namespace {
-
-constexpr std::array<DirectionalShadowMode, 3> kShadowModes {
-    DirectionalShadowMode::crisp,
-    DirectionalShadowMode::soft,
-    DirectionalShadowMode::vsm_transparent,
-};
-
-constexpr std::array<DirectionalShadowQuality, 4> kShadowQualities {
-    DirectionalShadowQuality::low,
-    DirectionalShadowQuality::medium,
-    DirectionalShadowQuality::high,
-    DirectionalShadowQuality::ultra,
-};
-
-constexpr std::array<PointLightFalloffMode, 2> kPointLightFalloffModes {
-    PointLightFalloffMode::linear,
-    PointLightFalloffMode::inverse_squared,
-};
-
-constexpr std::array<PbrMaterialBlendMode, 7> kMaterialBlendModes {
-    PbrMaterialBlendMode::opaque,
-    PbrMaterialBlendMode::transparent,
-    PbrMaterialBlendMode::fade,
-    PbrMaterialBlendMode::masked,
-    PbrMaterialBlendMode::add,
-    PbrMaterialBlendMode::multiply,
-    PbrMaterialBlendMode::screen,
-};
-
-constexpr std::array<PbrMaterialTransparencyMode, 3> kMaterialTransparencyModes {
-    PbrMaterialTransparencyMode::default_sorting,
-    PbrMaterialTransparencyMode::two_passes_one_side,
-    PbrMaterialTransparencyMode::two_passes_two_sides,
-};
-
-constexpr std::array<PbrMaterialCullingMode, 4> kMaterialCullingModes {
-    PbrMaterialCullingMode::none,
-    PbrMaterialCullingMode::front,
-    PbrMaterialCullingMode::back,
-    PbrMaterialCullingMode::front_and_back,
-};
-
-constexpr std::array<PbrMaterialRefractionMode, 3> kMaterialRefractionModes {
-    PbrMaterialRefractionMode::none,
-    PbrMaterialRefractionMode::cubemap,
-    PbrMaterialRefractionMode::screen_space,
-};
-
-constexpr std::array<PbrMaterialRefractionType, 2> kMaterialRefractionTypes {
-    PbrMaterialRefractionType::solid,
-    PbrMaterialRefractionType::thin,
-};
-
-constexpr std::array<PbrMaterialAbsorptionMode, 2> kMaterialAbsorptionModes {
-    PbrMaterialAbsorptionMode::coefficients,
-    PbrMaterialAbsorptionMode::transmittance_color,
-};
 
 [[nodiscard]] std::string_view filename_or_path_text(std::string_view path)
 {
@@ -86,6 +29,72 @@ constexpr std::array<PbrMaterialAbsorptionMode, 2> kMaterialAbsorptionModes {
     return path;
 }
 
+template <typename Option, typename Value>
+[[nodiscard]] const Option* find_option(std::span<const Option> options, Value value)
+{
+    for (const Option& option : options) {
+        if (option.value == value) {
+            return &option;
+        }
+    }
+
+    return nullptr;
+}
+
+template <typename Option, typename Value>
+[[nodiscard]] const char* option_label(std::span<const Option> options, Value value, const char* fallback)
+{
+    if (const Option* option = find_option(options, value); option != nullptr && option->label[0] != '\0') {
+        return option->label;
+    }
+
+    return fallback;
+}
+
+template <typename Value, typename Option>
+[[nodiscard]] bool render_resettable_capability_combo(
+    const char* label,
+    Value& value,
+    Value default_value,
+    std::span<const Option> options,
+    const char* fallback_label,
+    const char* tooltip)
+{
+    if (options.empty()) {
+        return false;
+    }
+
+    bool changed = false;
+    const ResettablePropertyLayout layout =
+        begin_resettable_property(label, tooltip, value != default_value);
+    {
+        const ComboScope combo("##Value", option_label(options, value, fallback_label));
+        render_item_tooltip(tooltip);
+        if (combo) {
+            for (const Option& option : options) {
+                const bool selected = value == option.value;
+                const DisabledScope disabled(!option.supported);
+                if (ImGui::Selectable(option.label, selected)) {
+                    value = option.value;
+                    changed = true;
+                }
+                render_item_tooltip(
+                    option.supported || option.unsupported_reason[0] == '\0' ?
+                        option.description :
+                        option.unsupported_reason);
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+        }
+    }
+    if (end_resettable_property(layout)) {
+        value = default_value;
+        changed = true;
+    }
+    return changed;
+}
+
 [[nodiscard]] const char* shadow_mode_label(DirectionalShadowMode mode)
 {
     switch (mode) {
@@ -94,7 +103,7 @@ constexpr std::array<PbrMaterialAbsorptionMode, 2> kMaterialAbsorptionModes {
     case DirectionalShadowMode::soft:
         return "Soft";
     case DirectionalShadowMode::vsm_transparent:
-        return "VSM / Transparent";
+        return "Transparent";
     }
 
     return "Crisp";
@@ -272,27 +281,31 @@ void draw_texture_row(
     }
 }
 
-[[nodiscard]] bool draw_shadow_mode_combo(DirectionalShadowMode& mode, DirectionalShadowMode default_mode)
+[[nodiscard]] bool draw_shadow_mode_combo(
+    DirectionalShadowMode& mode,
+    DirectionalShadowMode default_mode,
+    const RendererShadowCapabilities& shadows)
 {
-    return render_resettable_combo(
+    return render_resettable_capability_combo(
         "Shadow Mode",
         mode,
         default_mode,
-        std::span<const DirectionalShadowMode> { kShadowModes },
-        shadow_mode_label,
-        "Changes the character of the shadow edge. Crisp feels like hard sunlight, Soft gives a broader falloff, and VSM / Transparent is for experiments with translucent-looking shadowing.");
+        shadows.directional_modes.options(),
+        shadow_mode_label(mode),
+        "Changes the character of the shadow edge.");
 }
 
 [[nodiscard]] bool draw_shadow_quality_combo(
     DirectionalShadowQuality& quality,
-    DirectionalShadowQuality default_quality)
+    DirectionalShadowQuality default_quality,
+    const RendererShadowCapabilities& shadows)
 {
-    return render_resettable_combo(
+    return render_resettable_capability_combo(
         "Shadow Quality",
         quality,
         default_quality,
-        std::span<const DirectionalShadowQuality> { kShadowQualities },
-        shadow_quality_label,
+        shadows.qualities.options(),
+        shadow_quality_label(quality),
         "Controls how much detail the shadow can hold. Use higher quality for sharper contact and cleaner silhouettes; lower quality is faster but blurrier.");
 }
 
@@ -323,6 +336,7 @@ void draw_texture_row(
     PbrMaterialSettings& settings,
     const PbrMaterialSettings& defaults,
     bool picker_busy,
+    const RendererMaterialCapabilities& capabilities,
     MaterialComponentEditorResult& result)
 {
     bool changed = false;
@@ -330,13 +344,14 @@ void draw_texture_row(
         return false;
     }
 
-    changed |= render_resettable_combo(
+    const DisabledScope transparency_disabled(!capabilities.transparency.supported);
+    changed |= render_resettable_capability_combo(
         "Blend Mode",
         settings.blend_mode,
         defaults.blend_mode,
-        std::span<const PbrMaterialBlendMode> { kMaterialBlendModes },
-        material_blend_mode_label,
-        "Selects how this material combines with pixels behind it.");
+        capabilities.blend_modes.options(),
+        material_blend_mode_label(settings.blend_mode),
+        capabilities.transparency.description);
     changed |= render_resettable_float_drag(
         "Opacity",
         settings.opacity,
@@ -362,30 +377,35 @@ void draw_texture_row(
         1.0f,
         "%.3f",
         "Alpha cutoff used by masked materials.");
-    changed |= render_resettable_combo(
+    changed |= render_resettable_capability_combo(
         "Transparency Pass",
         settings.transparency_mode,
         defaults.transparency_mode,
-        std::span<const PbrMaterialTransparencyMode> { kMaterialTransparencyModes },
-        material_transparency_mode_label,
+        capabilities.transparency_modes.options(),
+        material_transparency_mode_label(settings.transparency_mode),
         "Chooses the transparent rendering pass strategy.");
     ImGui::Separator();
-    changed |= render_resettable_checkbox(
-        "Transparent Shadows",
-        settings.transparent_shadow,
-        defaults.transparent_shadow,
-        "Lets material alpha affect shadow opacity.");
+    {
+        const DisabledScope disabled(!capabilities.transparent_shadows.supported);
+        changed |= render_resettable_checkbox(
+            "Transparent Shadows",
+            settings.transparent_shadow,
+            defaults.transparent_shadow,
+            capabilities.transparent_shadows.supported ?
+                capabilities.transparent_shadows.description :
+                capabilities.transparent_shadows.unsupported_reason);
+    }
     changed |= render_resettable_checkbox(
         "Double Sided",
         settings.double_sided,
         defaults.double_sided,
         "Renders and lights both sides of the material.");
-    changed |= render_resettable_combo(
+    changed |= render_resettable_capability_combo(
         "Culling",
         settings.culling,
         defaults.culling,
-        std::span<const PbrMaterialCullingMode> { kMaterialCullingModes },
-        material_culling_mode_label,
+        capabilities.culling_modes.options(),
+        material_culling_mode_label(settings.culling),
         "Controls which face orientation is skipped by rasterization.");
     changed |= render_resettable_checkbox(
         "Depth Write",
@@ -402,116 +422,131 @@ void draw_texture_row(
         settings.color_write,
         defaults.color_write,
         "Allows the material to write color.");
-    changed |= render_resettable_checkbox(
-        "Alpha To Coverage",
-        settings.alpha_to_coverage,
-        defaults.alpha_to_coverage,
-        "Uses alpha to coverage for masked edges when MSAA is available.");
+    {
+        const DisabledScope disabled(!capabilities.alpha_to_coverage.supported);
+        changed |= render_resettable_checkbox(
+            "Alpha To Coverage",
+            settings.alpha_to_coverage,
+            defaults.alpha_to_coverage,
+            capabilities.alpha_to_coverage.supported ?
+                capabilities.alpha_to_coverage.description :
+                capabilities.alpha_to_coverage.unsupported_reason);
+    }
 
     ImGui::Separator();
-    changed |= render_resettable_combo(
-        "Refraction Mode",
-        settings.refraction_mode,
-        defaults.refraction_mode,
-        std::span<const PbrMaterialRefractionMode> { kMaterialRefractionModes },
-        material_refraction_mode_label,
-        "Chooses the source used for refracted light.");
-    changed |= render_resettable_combo(
-        "Refraction Type",
-        settings.refraction_type,
-        defaults.refraction_type,
-        std::span<const PbrMaterialRefractionType> { kMaterialRefractionTypes },
-        material_refraction_type_label,
-        "Chooses whether refraction behaves like a solid volume or a thin surface.");
-    changed |= render_resettable_float_drag(
-        "Transmission",
-        settings.transmission,
-        defaults.transmission,
-        0.005f,
-        0.0f,
-        1.0f,
-        "%.3f",
-        "How much diffuse light passes through the material.");
-    changed |= render_resettable_float_drag(
-        "IOR",
-        settings.ior,
-        defaults.ior,
-        0.005f,
-        1.0f,
-        4.0f,
-        "%.3f",
-        "Index of refraction.");
-    changed |= render_resettable_combo(
-        "Absorption Mode",
-        settings.absorption_mode,
-        defaults.absorption_mode,
-        std::span<const PbrMaterialAbsorptionMode> { kMaterialAbsorptionModes },
-        material_absorption_mode_label,
-        "Chooses direct absorption coefficients or artist-facing transmittance color.");
-    changed |= draw_vec3_drag(
-        "Absorption",
-        settings.absorption,
-        defaults.absorption,
-        0.005f,
-        "%.3f",
-        "Beer-Lambert absorption coefficients.");
-    changed |= render_resettable_srgb_color_edit(
-        "Transmittance Color",
-        settings.transmittance_color,
-        defaults.transmittance_color,
-        "Color white light becomes after traveling the transmittance distance.");
-    changed |= render_resettable_float_drag(
-        "Transmittance Distance",
-        settings.transmittance_distance,
-        defaults.transmittance_distance,
-        0.01f,
-        0.001f,
-        1000.0f,
-        "%.3f m",
-        "Distance used to derive absorption from transmittance color.");
-    changed |= render_resettable_float_drag(
-        "Thickness",
-        settings.thickness,
-        defaults.thickness,
-        0.005f,
-        0.0f,
-        1000.0f,
-        "%.3f m",
-        "Approximate optical depth for solid refractive objects.");
-    changed |= render_resettable_float_drag(
-        "Micro Thickness",
-        settings.micro_thickness,
-        defaults.micro_thickness,
-        0.0001f,
-        0.0f,
-        10.0f,
-        "%.4f m",
-        "Approximate optical depth for thin refractive objects.");
-    changed |= render_resettable_float_drag(
-        "Dispersion",
-        settings.dispersion,
-        defaults.dispersion,
-        0.001f,
-        0.0f,
-        1.0f,
-        "%.3f",
-        "Separates transmitted color by wavelength.");
+    {
+        const DisabledScope disabled(!capabilities.refraction.supported);
+        changed |= render_resettable_capability_combo(
+            "Refraction Mode",
+            settings.refraction_mode,
+            defaults.refraction_mode,
+            capabilities.refraction_modes.options(),
+            material_refraction_mode_label(settings.refraction_mode),
+            capabilities.refraction.description);
+        changed |= render_resettable_capability_combo(
+            "Refraction Type",
+            settings.refraction_type,
+            defaults.refraction_type,
+            capabilities.refraction_types.options(),
+            material_refraction_type_label(settings.refraction_type),
+            "Chooses whether refraction behaves like a solid volume or a thin surface.");
+        changed |= render_resettable_float_drag(
+            "Transmission",
+            settings.transmission,
+            defaults.transmission,
+            0.005f,
+            0.0f,
+            1.0f,
+            "%.3f",
+            "How much diffuse light passes through the material.");
+        changed |= render_resettable_float_drag(
+            "IOR",
+            settings.ior,
+            defaults.ior,
+            0.005f,
+            1.0f,
+            4.0f,
+            "%.3f",
+            "Index of refraction.");
+        changed |= render_resettable_capability_combo(
+            "Absorption Mode",
+            settings.absorption_mode,
+            defaults.absorption_mode,
+            capabilities.absorption_modes.options(),
+            material_absorption_mode_label(settings.absorption_mode),
+            "Chooses direct absorption coefficients or artist-facing transmittance color.");
+        changed |= draw_vec3_drag(
+            "Absorption",
+            settings.absorption,
+            defaults.absorption,
+            0.005f,
+            "%.3f",
+            "Beer-Lambert absorption coefficients.");
+        changed |= render_resettable_srgb_color_edit(
+            "Transmittance Color",
+            settings.transmittance_color,
+            defaults.transmittance_color,
+            "Color white light becomes after traveling the transmittance distance.");
+        changed |= render_resettable_float_drag(
+            "Transmittance Distance",
+            settings.transmittance_distance,
+            defaults.transmittance_distance,
+            0.01f,
+            0.001f,
+            1000.0f,
+            "%.3f m",
+            "Distance used to derive absorption from transmittance color.");
+        changed |= render_resettable_float_drag(
+            "Thickness",
+            settings.thickness,
+            defaults.thickness,
+            0.005f,
+            0.0f,
+            1000.0f,
+            "%.3f m",
+            "Approximate optical depth for solid refractive objects.");
+        changed |= render_resettable_float_drag(
+            "Micro Thickness",
+            settings.micro_thickness,
+            defaults.micro_thickness,
+            0.0001f,
+            0.0f,
+            10.0f,
+            "%.4f m",
+            "Approximate optical depth for thin refractive objects.");
+        changed |= render_resettable_float_drag(
+            "Dispersion",
+            settings.dispersion,
+            defaults.dispersion,
+            0.001f,
+            0.0f,
+            1.0f,
+            "%.3f",
+            "Separates transmitted color by wavelength.");
+    }
 
     return changed;
 }
 
-[[nodiscard]] bool draw_shadow_basics(DirectionalShadowSettings& shadow)
+[[nodiscard]] bool draw_shadow_basics(
+    DirectionalShadowSettings& shadow,
+    const DirectionalShadowSettings& defaults,
+    const RendererShadowCapabilities& shadows)
 {
-    const DirectionalShadowSettings defaults;
     bool changed = false;
 
-    changed |= render_resettable_checkbox(
-        "Shadows Enabled",
-        shadow.enabled,
-        defaults.enabled,
-        "Turns the light's shadow on or off without changing the light color or brightness.");
-    changed |= draw_shadow_mode_combo(shadow.mode, defaults.mode);
-    changed |= draw_shadow_quality_combo(shadow.quality, defaults.quality);
+    {
+        const DisabledScope disabled(!shadows.directional_shadows.supported);
+        changed |= render_resettable_checkbox(
+            "Shadows Enabled",
+            shadow.enabled,
+            defaults.enabled,
+            shadows.directional_shadows.supported ?
+                "Turns the light's shadow on or off without changing the light color or brightness." :
+                shadows.directional_shadows.unsupported_reason);
+    }
+    changed |= draw_shadow_mode_combo(shadow.mode, defaults.mode, shadows);
+    changed |= draw_shadow_quality_combo(shadow.quality, defaults.quality, shadows);
     changed |= render_resettable_float_drag(
         "Shadow Distance",
         shadow.distance,
@@ -533,11 +568,16 @@ void draw_texture_row(
         shadow.stable,
         defaults.stable,
         "Reduces swimming and shimmer while the camera moves.");
-    changed |= render_resettable_checkbox(
-        "Contact Shadows",
-        shadow.contact_shadows,
-        defaults.contact_shadows,
-        "Adds a small dark touch where objects meet surfaces.");
+    {
+        const DisabledScope disabled(!shadows.contact_shadows.supported);
+        changed |= render_resettable_checkbox(
+            "Contact Shadows",
+            shadow.contact_shadows,
+            defaults.contact_shadows,
+            shadows.contact_shadows.supported ?
+                shadows.contact_shadows.description :
+                shadows.contact_shadows.unsupported_reason);
+    }
     changed |= render_resettable_float_drag(
         "Contact Distance",
         shadow.contact_distance,
@@ -558,10 +598,13 @@ void draw_texture_row(
     return changed;
 }
 
-[[nodiscard]] bool draw_advanced_shadows(DirectionalShadowSettings& shadow)
+[[nodiscard]] bool draw_advanced_shadows(
+    DirectionalShadowSettings& shadow,
+    const DirectionalShadowSettings& defaults,
+    const RendererShadowCapabilities& shadows)
 {
-    const DirectionalShadowSettings defaults;
     bool changed = false;
+    const DisabledScope disabled(!shadows.advanced_controls.supported);
     if (ImGui::CollapsingHeader("Advanced Shadows")) {
         changed |= render_resettable_float_drag(
             "Constant Bias",
@@ -678,7 +721,10 @@ void draw_texture_row(
             "%.3f",
             "Controls how quickly shadows soften as they move away from the caster.");
     }
-    render_item_tooltip("Fine controls for cleaning up shadow speckles, floating edges, shimmering, leaks, and softness.");
+    render_item_tooltip(
+        shadows.advanced_controls.supported ?
+            shadows.advanced_controls.description :
+            shadows.advanced_controls.unsupported_reason);
 
     return changed;
 }
@@ -723,11 +769,14 @@ TransformComponentEditorResult draw_transform_component(SceneTransform& transfor
     return result;
 }
 
-MaterialComponentEditorResult draw_material_component(PbrMaterialSettings& settings, bool picker_busy)
+MaterialComponentEditorResult draw_material_component(
+    PbrMaterialSettings& settings,
+    bool picker_busy,
+    const RendererCapabilities& renderer)
 {
     MaterialComponentEditorResult result;
     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const PbrMaterialSettings defaults;
+        const PbrMaterialSettings defaults = renderer.defaults.material;
         result.settings_changed |= render_resettable_srgb_color_edit(
             "Albedo",
             settings.albedo,
@@ -850,10 +899,15 @@ MaterialComponentEditorResult draw_material_component(PbrMaterialSettings& setti
                 "How much camera exposure affects the emissive intensity.");
         }
 
-        result.settings_changed |= draw_transparent_material_controls(settings, defaults, picker_busy, result);
+        result.settings_changed |= draw_transparent_material_controls(
+            settings,
+            defaults,
+            picker_busy,
+            renderer.material,
+            result);
 
         if (ImGui::Button("Reset PBR")) {
-            settings = {};
+            settings = defaults;
             result.settings_changed = true;
         }
         render_item_tooltip("Restores all material scalar, color, and texture settings to their defaults.");
@@ -866,11 +920,13 @@ MaterialComponentEditorResult draw_material_component(PbrMaterialSettings& setti
     return result;
 }
 
-DirectionalLightComponentEditorResult draw_directional_light_component(DirectionalLightSettings& settings)
+DirectionalLightComponentEditorResult draw_directional_light_component(
+    DirectionalLightSettings& settings,
+    const RendererCapabilities& renderer)
 {
     DirectionalLightComponentEditorResult result;
     if (ImGui::CollapsingHeader("Directional Light", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const DirectionalLightSettings defaults;
+        const DirectionalLightSettings defaults = renderer.defaults.directional_light;
         result.settings_changed |= render_resettable_srgb_color_edit(
             "Color",
             settings.color,
@@ -887,11 +943,11 @@ DirectionalLightComponentEditorResult draw_directional_light_component(Direction
             "Light strength in lux.");
 
         ImGui::Separator();
-        result.settings_changed |= draw_shadow_basics(settings.shadow);
-        result.settings_changed |= draw_advanced_shadows(settings.shadow);
+        result.settings_changed |= draw_shadow_basics(settings.shadow, defaults.shadow, renderer.shadows);
+        result.settings_changed |= draw_advanced_shadows(settings.shadow, defaults.shadow, renderer.shadows);
 
         if (ImGui::Button("Reset Light")) {
-            settings = {};
+            settings = defaults;
             result.settings_changed = true;
         }
         render_item_tooltip("Restores the directional light and all shadow controls to their defaults.");
@@ -904,20 +960,20 @@ DirectionalLightComponentEditorResult draw_directional_light_component(Direction
     return result;
 }
 
-PointLightComponentEditorResult draw_point_light_component(PointLightComponent& light)
+PointLightComponentEditorResult draw_point_light_component(PointLightComponent& light, const RendererCapabilities& renderer)
 {
     PointLightComponentEditorResult result;
     if (ImGui::CollapsingHeader("Point Light", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const PointLightComponent defaults;
+        const PointLightSettings default_settings = renderer.defaults.point_light;
         result.settings_changed |= render_resettable_srgb_color_edit(
             "Color",
             light.settings.color,
-            defaults.settings.color,
+            default_settings.color,
             "Tint of the point light before intensity is applied.");
         result.settings_changed |= render_resettable_float_drag(
             "Intensity",
             light.settings.intensity,
-            defaults.settings.intensity,
+            default_settings.intensity,
             5000.0f,
             0.0f,
             100000000.0f,
@@ -926,31 +982,37 @@ PointLightComponentEditorResult draw_point_light_component(PointLightComponent& 
         result.settings_changed |= render_resettable_float_drag(
             "Range",
             light.settings.range,
-            defaults.settings.range,
+            default_settings.range,
             0.05f,
             0.0f,
             1000.0f,
             "%.2f m",
-            "Maximum point light influence distance passed to Filament falloff.");
-        result.settings_changed |= render_resettable_combo(
+            renderer.lights.point_light_range.description);
+        result.settings_changed |= render_resettable_capability_combo(
             "Falloff",
             light.settings.falloff_mode,
-            defaults.settings.falloff_mode,
-            std::span<const PointLightFalloffMode> { kPointLightFalloffModes },
-            point_light_falloff_mode_name,
-            "Linear keeps the authored radius visually useful for editor lighting. Inverse Squared uses Filament's physically based point-light attenuation.");
-        result.settings_changed |= render_resettable_checkbox(
-            "Shadows Enabled",
-            light.settings.shadow.enabled,
-            defaults.settings.shadow.enabled,
-            "Allows this point light to cast shadows.");
+            default_settings.falloff_mode,
+            renderer.lights.point_light_falloff_modes.options(),
+            point_light_falloff_mode_name(light.settings.falloff_mode),
+            "Chooses how point light energy falls off over distance.");
+        {
+            const DisabledScope disabled(!renderer.shadows.point_shadows.supported);
+            result.settings_changed |= render_resettable_checkbox(
+                "Shadows Enabled",
+                light.settings.shadow.enabled,
+                default_settings.shadow.enabled,
+                renderer.shadows.point_shadows.supported ?
+                    "Allows this point light to cast shadows." :
+                    renderer.shadows.point_shadows.unsupported_reason);
+        }
         result.settings_changed |= draw_shadow_quality_combo(
             light.settings.shadow.quality,
-            defaults.settings.shadow.quality);
+            default_settings.shadow.quality,
+            renderer.shadows);
         result.settings_changed |= render_resettable_float_drag(
             "Constant Bias",
             light.settings.shadow.constant_bias,
-            defaults.settings.shadow.constant_bias,
+            default_settings.shadow.constant_bias,
             0.0001f,
             0.0f,
             1.0f,
@@ -959,7 +1021,7 @@ PointLightComponentEditorResult draw_point_light_component(PointLightComponent& 
         result.settings_changed |= render_resettable_float_drag(
             "Normal Bias",
             light.settings.shadow.normal_bias,
-            defaults.settings.shadow.normal_bias,
+            default_settings.shadow.normal_bias,
             0.01f,
             0.0f,
             100.0f,
@@ -967,7 +1029,7 @@ PointLightComponentEditorResult draw_point_light_component(PointLightComponent& 
             "Pushes shadow tests along the surface normal.");
 
         if (ImGui::Button("Reset Point Light")) {
-            light = {};
+            light.settings = default_settings;
             result.settings_changed = true;
         }
         render_item_tooltip("Restores the point light controls to their defaults.");

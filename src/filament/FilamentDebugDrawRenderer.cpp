@@ -1,6 +1,5 @@
 module;
 
-#include <backend/BufferDescriptor.h>
 #include <filament/Box.h>
 #include <filament/Engine.h>
 #include <filament/Material.h>
@@ -21,7 +20,6 @@ module;
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -29,6 +27,8 @@ module;
 #include <vector>
 
 module quader.filament.debug_draw_renderer;
+
+import quader.filament.buffer_upload;
 
 namespace quader {
 namespace {
@@ -39,31 +39,6 @@ struct FilamentDebugVertex {
     filament::math::float3 position;
     filament::math::float4 color;
 };
-
-template<typename Value>
-filament::backend::BufferDescriptor make_filament_buffer_copy(std::span<const Value> values)
-{
-    const size_t byte_count = values.size_bytes();
-    auto* bytes = new std::byte[byte_count];
-    std::memcpy(bytes, values.data(), byte_count);
-
-    return filament::backend::BufferDescriptor(
-        bytes,
-        byte_count,
-        [](void* buffer, size_t, void*) {
-            delete[] static_cast<std::byte*>(buffer);
-        });
-}
-
-template<typename Pointer>
-Pointer require_filament_allocation(Pointer pointer, const char* resource_name)
-{
-    if (pointer == nullptr) {
-        throw std::runtime_error("Filament failed to allocate " + std::string(resource_name) + ".");
-    }
-
-    return pointer;
-}
 
 [[nodiscard]] filament::math::float3 to_filament_float3(Vec3 value)
 {
@@ -501,7 +476,21 @@ struct FilamentDebugDrawRenderer::Resources {
 
         ~LineBatch()
         {
+            destroy_after_gpu_idle();
+        }
+
+        void destroy_after_gpu_idle(bool already_idle = false)
+        {
+            if (upload_buffers_released) {
+                return;
+            }
+
+            if (!already_idle) {
+                engine.flushAndWait();
+            }
             destroy();
+            upload_pool.clear_after_gpu_idle();
+            upload_buffers_released = true;
         }
 
         void destroy()
@@ -550,7 +539,9 @@ struct FilamentDebugDrawRenderer::Resources {
             ensure_capacity(material, vertex_count);
 
             scratch_vertices.clear();
-            scratch_vertices.reserve(vertex_count);
+            if (scratch_vertices.capacity() < vertex_count) {
+                scratch_vertices.reserve(next_capacity(vertex_count));
+            }
             for (const DebugDrawLine& line : lines) {
                 append_debug_vertex(scratch_vertices, line.a.position, line.a.color);
                 append_debug_vertex(scratch_vertices, line.b.position, line.b.color);
@@ -568,7 +559,7 @@ struct FilamentDebugDrawRenderer::Resources {
             vertices->setBufferAt(
                 engine,
                 0,
-                make_filament_buffer_copy<FilamentDebugVertex>(
+                upload_pool.copy<FilamentDebugVertex>(
                     std::span<const FilamentDebugVertex>(scratch_vertices.data(), scratch_vertices.size())));
 
             filament::RenderableManager& renderables = engine.getRenderableManager();
@@ -639,6 +630,8 @@ struct FilamentDebugDrawRenderer::Resources {
         }
 
         std::vector<FilamentDebugVertex> scratch_vertices;
+        FilamentBufferUploadPool upload_pool;
+        bool upload_buffers_released = false;
     };
 
     struct TriangleBatch {
@@ -663,7 +656,21 @@ struct FilamentDebugDrawRenderer::Resources {
 
         ~TriangleBatch()
         {
+            destroy_after_gpu_idle();
+        }
+
+        void destroy_after_gpu_idle(bool already_idle = false)
+        {
+            if (upload_buffers_released) {
+                return;
+            }
+
+            if (!already_idle) {
+                engine.flushAndWait();
+            }
             destroy();
+            upload_pool.clear_after_gpu_idle();
+            upload_buffers_released = true;
         }
 
         void destroy()
@@ -713,7 +720,9 @@ struct FilamentDebugDrawRenderer::Resources {
             ensure_capacity(material, vertex_count);
 
             scratch_vertices.clear();
-            scratch_vertices.reserve(vertex_count);
+            if (scratch_vertices.capacity() < vertex_count) {
+                scratch_vertices.reserve(next_capacity(vertex_count));
+            }
             for (const DebugDrawTriangle& triangle : triangles) {
                 append_debug_triangle(scratch_vertices, triangle.a, triangle.b, triangle.c);
             }
@@ -730,7 +739,7 @@ struct FilamentDebugDrawRenderer::Resources {
             vertices->setBufferAt(
                 engine,
                 0,
-                make_filament_buffer_copy<FilamentDebugVertex>(
+                upload_pool.copy<FilamentDebugVertex>(
                     std::span<const FilamentDebugVertex>(scratch_vertices.data(), scratch_vertices.size())));
 
             filament::RenderableManager& renderables = engine.getRenderableManager();
@@ -801,6 +810,8 @@ struct FilamentDebugDrawRenderer::Resources {
         }
 
         std::vector<FilamentDebugVertex> scratch_vertices;
+        FilamentBufferUploadPool upload_pool;
+        bool upload_buffers_released = false;
     };
 
     Resources(filament::Engine& engine_ref, filament::Scene& scene_ref)
@@ -818,10 +829,11 @@ struct FilamentDebugDrawRenderer::Resources {
 
     ~Resources()
     {
-        depth_lines.destroy();
-        overlay_lines.destroy();
-        depth_triangles.destroy();
-        overlay_triangles.destroy();
+        engine.flushAndWait();
+        depth_lines.destroy_after_gpu_idle(true);
+        overlay_lines.destroy_after_gpu_idle(true);
+        depth_triangles.destroy_after_gpu_idle(true);
+        overlay_triangles.destroy_after_gpu_idle(true);
         if (depth_material != nullptr) {
             engine.destroy(depth_material);
             depth_material = nullptr;

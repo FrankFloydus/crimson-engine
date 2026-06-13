@@ -94,7 +94,9 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
 
 } // namespace
 
-Application::Application(UserSettingsPaths user_settings_paths)
+Application::Application(
+    UserSettingsPaths user_settings_paths,
+    const IRenderEngineFactory& render_engine_factory)
     : user_settings_paths_(std::move(user_settings_paths))
     , render_driver_settings_(std::string(user_settings_paths_.render_driver_settings_file()))
     , render_driver_selection_(render_driver_settings_.load_selection())
@@ -103,14 +105,16 @@ Application::Application(UserSettingsPaths user_settings_paths)
           render_driver_selection_,
           EditorRuntimeHostConfig {
               .imgui_ini_file = std::string(user_settings_paths_.imgui_ini_file()),
-          }))
+          },
+          render_engine_factory))
 {
     event_dispatcher_.subscribe(input_);
 
     const RendererStatus status = runtime_host_->status();
     QUADER_LOG_INFO(
-        "Renderer initialized with {} driver and {} backend.",
+        "Renderer initialized with {} driver, {} renderer engine, and {} graphics backend.",
         render_driver_kind_display_name(runtime_host_->driver_kind()),
+        status.engine_name,
         status.backend_name);
 }
 
@@ -195,7 +199,8 @@ EditorUiFrameInput Application::build_editor_ui_input()
         .scene_properties = scene_properties_.build_frame_input(
             open_scene_,
             runtime_host_->image_file_dialog(),
-            selection_),
+            selection_,
+            runtime_host_->viewport_renderer().capabilities()),
     };
 }
 

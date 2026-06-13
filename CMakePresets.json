@@ -12,6 +12,15 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "QUADER_FILAMENT_SDK": "C:/Users/Drako/Desktop/_QUADER_NATIVE/thirdy-party/filament-v1.71.5-windows"
       }
+    },
+    {
+      "name": "vs2026-x64-no-filament",
+      "displayName": "Visual Studio 2026 x64 (No Filament Contracts)",
+      "inherits": "vs2026-x64",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "QUADER_ENABLE_FILAMENT_BACKEND": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -19,6 +28,12 @@
       "name": "debug",
       "displayName": "Debug",
       "configurePreset": "vs2026-x64",
+      "configuration": "Debug"
+    },
+    {
+      "name": "debug-no-filament",
+      "displayName": "Debug (No Filament Contracts)",
+      "configurePreset": "vs2026-x64-no-filament",
       "configuration": "Debug"
     },
     {

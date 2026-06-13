@@ -7,6 +7,7 @@ module;
 
 export module quader.ui_shell.editor_panel_contracts;
 
+export import quader.render.capabilities;
 export import quader.render.driver_kind;
 export import quader.scene.scene;
 
@@ -63,6 +64,7 @@ struct PropertyInspectorPanelEntity {
 
 struct PropertyInspectorPanelInput {
     std::optional<PropertyInspectorPanelEntity> entity;
+    RendererCapabilities renderer;
     bool material_texture_picker_busy = false;
 };
 

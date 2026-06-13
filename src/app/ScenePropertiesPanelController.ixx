@@ -22,7 +22,8 @@ public:
     [[nodiscard]] ScenePropertiesPanelFrameInput build_frame_input(
         const Scene& scene,
         const IImageFileDialogService& image_file_dialog,
-        const EditorSelectionModel& selection);
+        const EditorSelectionModel& selection,
+        const RendererCapabilities& renderer);
     [[nodiscard]] bool apply_frame_result(
         const ScenePropertiesPanelFrameResult& result,
         Scene& scene,
@@ -43,7 +44,8 @@ private:
     [[nodiscard]] PropertyInspectorPanelInput make_property_inspector_input(
         const Scene& scene,
         const IImageFileDialogService& image_file_dialog,
-        const EditorSelectionModel& selection) const;
+        const EditorSelectionModel& selection,
+        const RendererCapabilities& renderer) const;
     [[nodiscard]] bool apply_outliner_result(
         const OutlinerPanelResult& result,
         EditorSelectionModel& selection);

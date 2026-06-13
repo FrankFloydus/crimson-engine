@@ -1,7 +1,5 @@
 module;
 
-#include <utils/Panic.h>
-
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -230,51 +228,10 @@ void signal_abort_handler(int)
 
 #endif
 
-void filament_panic_handler(void*, const utils::Panic& panic) noexcept
-{
-    try {
-        std::string message = "Filament panic";
-        const char* type = safe_c_string(panic.getType());
-        if (type[0] != '\0') {
-            message += " (";
-            message += type;
-            message += ")";
-        }
-
-        message += ": ";
-        message += safe_c_string(panic.what());
-
-        const char* reason = safe_c_string(panic.getReason());
-        if (reason[0] != '\0') {
-            message += "\nReason: ";
-            message += reason;
-        }
-
-        const char* function = safe_c_string(panic.getFunction());
-        if (function[0] != '\0') {
-            message += "\nFunction: ";
-            message += function;
-        }
-
-        const char* file = safe_c_string(panic.getFile());
-        if (file[0] != '\0') {
-            message += "\nLocation: ";
-            message += file;
-            message += ":";
-            message += std::to_string(panic.getLine());
-        }
-
-        remember_log_and_show(std::move(message));
-    } catch (...) {
-        write_stderr_fallback("Filament panic occurred, but the panic handler failed while formatting details.");
-    }
-}
-
 } // namespace
 
 void install_fatal_diagnostics() noexcept
 {
-    utils::Panic::setPanicHandler(&filament_panic_handler, nullptr);
     std::set_terminate(&terminate_handler);
 
 #if defined(_MSC_VER)
@@ -284,6 +241,11 @@ void install_fatal_diagnostics() noexcept
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     std::signal(SIGABRT, &signal_abort_handler);
 #endif
+}
+
+void report_fatal_diagnostic(std::string message) noexcept
+{
+    remember_log_and_show(std::move(message));
 }
 
 void record_fatal_operation(std::string_view operation)

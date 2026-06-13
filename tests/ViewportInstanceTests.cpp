@@ -136,6 +136,7 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     EXPECT_TRUE(subject.snapshot.post_processing.ambient_occlusion.enabled);
     EXPECT_FLOAT_EQ(1.5f, subject.snapshot.post_processing.ambient_occlusion.intensity);
     EXPECT_EQ(quader::AmbientOcclusionQuality::high, subject.snapshot.post_processing.ambient_occlusion.quality);
+    EXPECT_EQ(scene.render_revision(), subject.snapshot.revision);
     ASSERT_EQ(2U, subject.snapshot.meshes.size());
     EXPECT_TRUE(subject.snapshot.meshes[0].entity_id.is_valid());
     EXPECT_EQ(quader::ViewportMeshKind::cube, subject.snapshot.meshes[0].mesh_kind);

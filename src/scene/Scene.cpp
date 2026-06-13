@@ -53,17 +53,6 @@ struct SceneEntityRecord {
     };
 }
 
-[[nodiscard]] Vec3 rotate_direction(Quaternion rotation, Vec3 direction)
-{
-    const glm::vec3 rotated = to_glm(rotation) * glm::vec3(direction.x, direction.y, direction.z);
-    if (glm::dot(rotated, rotated) <= 0.000001f) {
-        return direction;
-    }
-
-    const glm::vec3 normalized = glm::normalize(rotated);
-    return { normalized.x, normalized.y, normalized.z };
-}
-
 } // namespace
 
 struct Scene::SceneStorage {
@@ -71,6 +60,7 @@ struct Scene::SceneStorage {
     std::unordered_map<uint32_t, entt::entity> entity_by_id;
     std::vector<SceneEntityId> entity_order;
     uint32_t next_entity_id = 1;
+    uint64_t render_revision = 1;
 };
 
 void TransformComponent::set_rotation_degrees(Vec3 degrees)
@@ -123,6 +113,7 @@ EnvironmentLightingSettings Scene::environment_settings() const
 void Scene::set_environment_settings(EnvironmentLightingSettings settings)
 {
     environment_settings_ = clamp_environment_lighting_settings(settings);
+    mark_render_state_changed();
 }
 
 PostProcessingSettings Scene::post_processing_settings() const
@@ -133,6 +124,12 @@ PostProcessingSettings Scene::post_processing_settings() const
 void Scene::set_post_processing_settings(PostProcessingSettings settings)
 {
     post_processing_settings_ = clamp_post_processing_settings(settings);
+    mark_render_state_changed();
+}
+
+uint64_t Scene::render_revision() const noexcept
+{
+    return storage_->render_revision;
 }
 
 SceneEntityId Scene::create_entity(std::string name, TransformComponent transform)
@@ -147,6 +144,7 @@ SceneEntityId Scene::create_cube(std::string name, TransformComponent transform)
         MeshComponent& component = storage_->registry.emplace<MeshComponent>(found->second);
         component.mesh_kind = SceneMeshKind::cube;
         storage_->registry.emplace<MaterialComponent>(found->second);
+        mark_render_state_changed();
     }
     return id;
 }
@@ -158,6 +156,7 @@ SceneEntityId Scene::create_plane(std::string name, TransformComponent transform
         MeshComponent& component = storage_->registry.emplace<MeshComponent>(found->second);
         component.mesh_kind = SceneMeshKind::plane;
         storage_->registry.emplace<MaterialComponent>(found->second);
+        mark_render_state_changed();
     }
     return id;
 }
@@ -167,6 +166,7 @@ SceneEntityId Scene::create_directional_light(std::string name, TransformCompone
     const SceneEntityId id = create_named_entity(std::move(name), transform);
     if (const auto found = storage_->entity_by_id.find(id.value); found != storage_->entity_by_id.end()) {
         storage_->registry.emplace<DirectionalLightComponent>(found->second);
+        mark_render_state_changed();
     }
     return id;
 }
@@ -176,6 +176,7 @@ SceneEntityId Scene::create_point_light(std::string name, TransformComponent tra
     const SceneEntityId id = create_named_entity(std::move(name), transform);
     if (const auto found = storage_->entity_by_id.find(id.value); found != storage_->entity_by_id.end()) {
         storage_->registry.emplace<PointLightComponent>(found->second);
+        mark_render_state_changed();
     }
     return id;
 }
@@ -187,10 +188,14 @@ bool Scene::destroy_entity(SceneEntityId id)
         return false;
     }
 
+    const bool affected_render = entity_contributes_to_render(id);
     storage_->registry.destroy(found->second);
     storage_->entity_by_id.erase(found);
     std::erase(storage_->entity_order, id);
     entity_cache_.clear();
+    if (affected_render) {
+        mark_render_state_changed();
+    }
     return true;
 }
 
@@ -233,6 +238,9 @@ bool Scene::set_transform(SceneEntityId id, TransformComponent transform)
     transform.set_rotation_degrees(transform.rotation_degrees());
     storage_->registry.emplace_or_replace<TransformComponent>(found->second, transform);
     entity_cache_.clear();
+    if (entity_contributes_to_render(id)) {
+        mark_render_state_changed();
+    }
     return true;
 }
 
@@ -248,6 +256,7 @@ bool Scene::set_material(SceneEntityId id, PbrMaterialSettings material)
         component.material = material;
     });
     entity_cache_.clear();
+    mark_render_state_changed();
     return true;
 }
 
@@ -263,6 +272,7 @@ bool Scene::clear_material_texture(SceneEntityId id, PbrMaterialTextureSlot slot
         component.material = clamp_pbr_material_settings(component.material);
     });
     entity_cache_.clear();
+    mark_render_state_changed();
     return true;
 }
 
@@ -283,6 +293,7 @@ bool Scene::set_material_texture_source(
             component.material = clamp_pbr_material_settings(component.material);
         });
     entity_cache_.clear();
+    mark_render_state_changed();
     return true;
 }
 
@@ -298,6 +309,7 @@ bool Scene::set_mesh_shadow_settings(SceneEntityId id, MeshShadowSettings settin
         component.receives_shadows = settings.receives_shadows;
     });
     entity_cache_.clear();
+    mark_render_state_changed();
     return true;
 }
 
@@ -315,6 +327,7 @@ bool Scene::set_directional_light(SceneEntityId id, DirectionalLightSettings set
             component.settings = settings;
         });
     entity_cache_.clear();
+    mark_render_state_changed();
     return true;
 }
 
@@ -328,6 +341,7 @@ bool Scene::set_point_light(SceneEntityId id, PointLightComponent light)
     light.settings = clamp_point_light_settings(light.settings);
     storage_->registry.emplace_or_replace<PointLightComponent>(found->second, light);
     entity_cache_.clear();
+    mark_render_state_changed();
     return true;
 }
 
@@ -394,6 +408,25 @@ SceneEntityId Scene::create_named_entity(std::string name, TransformComponent tr
     return id;
 }
 
+bool Scene::entity_contributes_to_render(SceneEntityId id) const
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end()) {
+        return false;
+    }
+
+    const entt::entity entity = found->second;
+    return storage_->registry.any_of<MeshComponent, DirectionalLightComponent, PointLightComponent>(entity);
+}
+
+void Scene::mark_render_state_changed() noexcept
+{
+    ++storage_->render_revision;
+    if (storage_->render_revision == 0) {
+        storage_->render_revision = 1;
+    }
+}
+
 void Scene::rebuild_entity_cache() const
 {
     if (entity_cache_.size() == storage_->entity_order.size()) {
@@ -440,61 +473,6 @@ void Scene::rebuild_entity_cache() const
 
         entity_cache_.push_back(std::move(view));
     }
-}
-
-SceneRenderSnapshot build_scene_render_snapshot(const Scene& scene)
-{
-    SceneRenderSnapshot snapshot;
-    snapshot.environment = scene.environment_settings();
-    snapshot.post_processing = scene.post_processing_settings();
-    snapshot.revision = 1;
-
-    for (const SceneEntity& entity : scene.entities()) {
-        const RenderEntityId render_entity_id { entity.id.value };
-        if (entity.mesh.has_value()) {
-            ViewportMeshKind mesh_kind = ViewportMeshKind::cube;
-            switch (entity.mesh->mesh_kind) {
-            case SceneMeshKind::cube:
-                mesh_kind = ViewportMeshKind::cube;
-                break;
-            case SceneMeshKind::plane:
-                mesh_kind = ViewportMeshKind::plane;
-                break;
-            }
-
-            snapshot.meshes.push_back(SceneRenderMesh {
-                .entity_id = render_entity_id,
-                .mesh_kind = mesh_kind,
-                .position = entity.transform.position,
-                .rotation_degrees = entity.transform.get_rotation_degrees(),
-                .scale = entity.transform.scale,
-                .material = entity.material.has_value() ? entity.material->material : PbrMaterialSettings {},
-                .casts_shadows = entity.mesh->casts_shadows,
-                .receives_shadows = entity.mesh->receives_shadows,
-            });
-        }
-
-        if (entity.directional_light.has_value()) {
-            snapshot.directional_lights.push_back(SceneRenderDirectionalLight {
-                .entity_id = render_entity_id,
-                .position = entity.transform.position,
-                .direction = rotate_direction(entity.transform.rotation, Vec3 { 0.0f, 0.0f, -1.0f }),
-                .right = rotate_direction(entity.transform.rotation, Vec3 { 1.0f, 0.0f, 0.0f }),
-                .up = rotate_direction(entity.transform.rotation, Vec3 { 0.0f, 1.0f, 0.0f }),
-                .settings = entity.directional_light->settings,
-            });
-        }
-
-        if (entity.point_light.has_value()) {
-            snapshot.point_lights.push_back(SceneRenderPointLight {
-                .entity_id = render_entity_id,
-                .position = entity.transform.position,
-                .settings = entity.point_light->settings,
-            });
-        }
-    }
-
-    return snapshot;
 }
 
 } // namespace quader
