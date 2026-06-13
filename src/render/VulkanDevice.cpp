@@ -87,7 +87,7 @@ InstanceRequest describe_instance_extensions_needed_by_sdl(const SdlWindow& wind
     uint32_t sdl_extension_count = 0;
     const char* const* sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extension_count);
     if (sdl_extensions == nullptr) {
-        throw std::runtime_error(window.vulkan_error());
+        throw std::runtime_error(window.last_error());
     }
 
     InstanceRequest request;
@@ -446,7 +446,7 @@ void VulkanDevice::create_instance(const SdlWindow& window)
 void VulkanDevice::create_surface(const SdlWindow& window)
 {
     if (!SDL_Vulkan_CreateSurface(window.native_handle(), instance_, allocator_, &surface_)) {
-        throw std::runtime_error(window.vulkan_error());
+        throw std::runtime_error(window.last_error());
     }
 }
 

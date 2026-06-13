@@ -14,4 +14,11 @@ std::unique_ptr<IViewportRenderer> create_default_viewport_renderer(
     return std::make_unique<FilamentRenderEngine>(shared_device_context);
 }
 
+std::unique_ptr<IViewportRenderer> create_opengl_viewport_renderer(
+    OpenGlSharedContextHandle shared_context,
+    IOpenGlTexture2DAllocator& texture_allocator)
+{
+    return std::make_unique<FilamentRenderEngine>(shared_context, texture_allocator);
+}
+
 } // namespace quader

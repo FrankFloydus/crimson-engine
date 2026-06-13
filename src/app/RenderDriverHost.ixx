@@ -4,12 +4,14 @@ module;
 
 export module quader.app.render_driver_host;
 
+export import quader.platform.sdl_event_source;
 export import quader.platform.sdl_window;
 export import quader.render.driver_kind;
+export import quader.render.driver_startup_plan;
 export import quader.render.status;
 export import quader.render.viewport_renderer;
 export import quader.app.viewport_frame_presenter;
-export import quader.ui.imgui_layer;
+export import quader.ui_shell.editor_shell;
 
 export namespace quader {
 
@@ -19,16 +21,19 @@ public:
 
     [[nodiscard]] virtual RenderDriverKind driver_kind() const noexcept = 0;
     [[nodiscard]] virtual RendererStatus status() const = 0;
+    [[nodiscard]] virtual SdlWindow& window() = 0;
+    [[nodiscard]] virtual IEditorShell& editor_shell() = 0;
     [[nodiscard]] virtual IViewportRenderer& viewport_renderer() = 0;
     [[nodiscard]] virtual IViewportFramePresenter& viewport_frame_presenter() = 0;
-    [[nodiscard]] virtual ImGuiLayer& imgui() = 0;
+    [[nodiscard]] virtual ISdlNativeEventSink& native_event_sink() = 0;
 
     virtual void begin_frame() = 0;
     virtual void end_frame() = 0;
     virtual void collect_retired_viewport_gpu_resources(bool viewport_render_requests_pending) = 0;
 };
 
-[[nodiscard]] std::unique_ptr<IRenderDriverHost> create_default_render_driver_host(
-    const SdlWindow& window);
+[[nodiscard]] std::unique_ptr<IRenderDriverHost> create_render_driver_host(
+    RenderDriverSelection selection);
+[[nodiscard]] std::unique_ptr<IRenderDriverHost> create_default_render_driver_host();
 
 } // namespace quader

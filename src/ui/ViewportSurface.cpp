@@ -37,6 +37,30 @@ namespace {
     };
 }
 
+[[nodiscard]] ImVec2 viewport_texture_uv_min(ViewportTextureUvOrigin origin) noexcept
+{
+    switch (origin) {
+    case ViewportTextureUvOrigin::top_left:
+        return { 0.0f, 0.0f };
+    case ViewportTextureUvOrigin::bottom_left:
+        return { 0.0f, 1.0f };
+    }
+
+    return { 0.0f, 0.0f };
+}
+
+[[nodiscard]] ImVec2 viewport_texture_uv_max(ViewportTextureUvOrigin origin) noexcept
+{
+    switch (origin) {
+    case ViewportTextureUvOrigin::top_left:
+        return { 1.0f, 1.0f };
+    case ViewportTextureUvOrigin::bottom_left:
+        return { 1.0f, 0.0f };
+    }
+
+    return { 1.0f, 1.0f };
+}
+
 void draw_centered_text(
     ImDrawList* draw_list,
     ImVec2 min,
@@ -188,7 +212,12 @@ ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
     draw_list->AddRectFilled(image_min, image_max, background);
 
     if (input.texture.has_pixels && input.texture.texture_id != 0 && input.texture.extent.is_valid()) {
-        draw_list->AddImage(static_cast<ImTextureID>(input.texture.texture_id), image_min, image_max);
+        draw_list->AddImage(
+            static_cast<ImTextureID>(input.texture.texture_id),
+            image_min,
+            image_max,
+            viewport_texture_uv_min(input.texture.uv_origin),
+            viewport_texture_uv_max(input.texture.uv_origin));
     } else {
         draw_centered_text(draw_list, image_min, image_max, input.empty_text, style);
     }

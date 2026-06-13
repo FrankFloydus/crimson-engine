@@ -26,7 +26,7 @@ class NativeFileDialogService {
 public:
     struct SharedState;
 
-    explicit NativeFileDialogService(SdlWindow& window);
+    explicit NativeFileDialogService(const SdlWindow& window);
 
     NativeFileDialogService(const NativeFileDialogService&) = delete;
     NativeFileDialogService& operator=(const NativeFileDialogService&) = delete;
@@ -36,7 +36,7 @@ public:
     [[nodiscard]] std::optional<NativeFileDialogResult> try_consume_result();
 
 private:
-    SdlWindow& window_;
+    const SdlWindow& window_;
     std::shared_ptr<SharedState> state_;
 };
 

@@ -9,9 +9,15 @@ export import quader.render.viewport_types;
 
 export namespace quader {
 
+enum class ViewportTextureUvOrigin {
+    top_left,
+    bottom_left,
+};
+
 struct ViewportTextureView {
     uint64_t texture_id = 0;
     RenderExtent extent;
+    ViewportTextureUvOrigin uv_origin = ViewportTextureUvOrigin::top_left;
     bool has_pixels = false;
 };
 

@@ -65,7 +65,7 @@ void complete_dialog(
 
 } // namespace
 
-NativeFileDialogService::NativeFileDialogService(SdlWindow& window)
+NativeFileDialogService::NativeFileDialogService(const SdlWindow& window)
     : window_(window)
     , state_(std::make_shared<SharedState>())
 {

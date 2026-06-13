@@ -1,26 +1,19 @@
 module;
 
 #include <optional>
-#include <span>
 
 export module quader.ui.outliner_panel;
 
-export import quader.scene.scene;
+export import quader.ui_shell.editor_panel_contracts;
 
 export namespace quader {
-
-struct OutlinerPanelResult {
-    std::optional<SceneEntityId> selected_entity;
-};
 
 class OutlinerPanel {
 public:
     [[nodiscard]] bool is_open() const noexcept;
     void set_open(bool open) noexcept;
 
-    [[nodiscard]] OutlinerPanelResult draw(
-        std::span<const SceneEntity> entities,
-        std::optional<SceneEntityId> selected_entity);
+    [[nodiscard]] OutlinerPanelResult draw(const SceneOutlinerPanelInput& input);
 
 private:
     bool open_ = true;

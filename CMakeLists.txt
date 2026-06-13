@@ -72,7 +72,7 @@ function(quader_add_filament_material target_name source_path output_symbol outp
     add_custom_command(
         OUTPUT "${filamat_path}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${QUADER_GENERATED_DIR}"
-        COMMAND "${QUADER_MATC}" -a vulkan -p desktop -o "${filamat_path}" "${source_path}"
+        COMMAND "${QUADER_MATC}" -a all -p desktop -o "${filamat_path}" "${source_path}"
         DEPENDS "${source_path}"
         VERBATIM
     )
@@ -237,6 +237,7 @@ set(QUADER_CORE_SOURCES
     src/app/EditorSelection.cpp
     src/app/EditorViewport.cpp
     src/app/EditorViewportPicking.cpp
+    src/app/RenderDriverSettings.cpp
     src/app/RenderDriverHost.cpp
     src/app/ScenePropertiesPanelController.cpp
     src/app/TransformGizmo.cpp
@@ -255,11 +256,14 @@ set(QUADER_CORE_SOURCES
     src/platform/Input.cpp
     src/platform/NativeFileDialog.cpp
     src/platform/SdlEventSource.cpp
+    src/platform/SdlOpenGlContext.cpp
+    src/platform/SdlOpenGlTextureAllocator.cpp
     src/platform/SdlPlatformContext.cpp
     src/platform/SdlWindow.cpp
     src/platform/UserSettingsPaths.cpp
     src/render/RenderEngineFactory.cpp
     src/render/RenderDriverKind.cpp
+    src/render/RenderDriverStartupPlan.cpp
     src/render/RenderTypes.cpp
     src/render/DebugDrawPicking.cpp
     src/render/RendererStartupValidation.cpp
@@ -272,7 +276,9 @@ set(QUADER_CORE_SOURCES
     src/scene/Scene.cpp
     src/ui/ComponentEditors.cpp
     src/ui/EditorDockspace.cpp
+    src/ui/ImGuiBackendCommon.cpp
     src/ui/ImGuiLayer.cpp
+    src/ui/ImGuiOpenGlLayer.cpp
     src/ui/InspectorMenu.cpp
     src/ui/OutlinerPanel.cpp
     src/ui/PropertyInspectorPanel.cpp
@@ -280,6 +286,7 @@ set(QUADER_CORE_SOURCES
     src/ui/ViewportGpuTextureCache.cpp
     src/ui/ViewportSurface.cpp
     src/ui/ViewportTextureStore.cpp
+    src/ui_shell/ImGuiEditorShell.cpp
 )
 
 set(QUADER_MODULES
@@ -292,6 +299,7 @@ set(QUADER_MODULES
     src/app/EditorSelection.ixx
     src/app/EditorViewport.ixx
     src/app/EditorViewportPicking.ixx
+    src/app/RenderDriverSettings.ixx
     src/app/RenderDriverHost.ixx
     src/app/ScenePropertiesPanelController.ixx
     src/app/TransformGizmo.ixx
@@ -312,12 +320,16 @@ set(QUADER_MODULES
     src/platform/Input.ixx
     src/platform/NativeFileDialog.ixx
     src/platform/SdlEventSource.ixx
+    src/platform/SdlOpenGlContext.ixx
+    src/platform/SdlOpenGlTextureAllocator.ixx
     src/platform/SdlPlatformContext.ixx
     src/platform/SdlWindow.ixx
     src/platform/UserSettingsPaths.ixx
     src/render/IRenderEngine.ixx
+    src/render/OpenGlTexture.ixx
     src/render/RendererStatus.ixx
     src/render/RenderDriverKind.ixx
+    src/render/RenderDriverStartupPlan.ixx
     src/render/RenderTypes.ixx
     src/render/DebugDrawTypes.ixx
     src/render/DebugDrawPicking.ixx
@@ -335,7 +347,9 @@ set(QUADER_MODULES
     src/scene/Scene.ixx
     src/ui/ComponentEditors.ixx
     src/ui/EditorDockspace.ixx
+    src/ui/ImGuiBackendCommon.ixx
     src/ui/ImGuiLayer.ixx
+    src/ui/ImGuiOpenGlLayer.ixx
     src/ui/InspectorMenu.ixx
     src/ui/OutlinerPanel.ixx
     src/ui/PropertyInspectorPanel.ixx
@@ -345,6 +359,9 @@ set(QUADER_MODULES
     src/ui/ViewportGpuTextureCache.ixx
     src/ui/ViewportSurface.ixx
     src/ui/ViewportTextureStore.ixx
+    src/ui_shell/EditorPanelContracts.ixx
+    src/ui_shell/EditorShell.ixx
+    src/ui_shell/ImGuiEditorShell.ixx
 )
 
 add_library(quader_core STATIC ${QUADER_CORE_SOURCES})
@@ -413,6 +430,8 @@ add_executable(quader_tests
     tests/EditorCameraTests.cpp
     tests/InputTests.cpp
     tests/RenderDriverKindTests.cpp
+    tests/RenderDriverSettingsTests.cpp
+    tests/RenderDriverStartupPlanTests.cpp
     tests/RenderTypesTests.cpp
     tests/RendererStartupValidationTests.cpp
     tests/SceneTests.cpp

@@ -20,9 +20,11 @@ struct ViewportGpuTextureKey {
     uint64_t resource_id = 0;
     uint64_t image_generation = 0;
     RenderExtent extent;
+    ViewportSampledGpuImageBackend backend = ViewportSampledGpuImageBackend::vulkan;
     VkImageView image_view = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
     VkImageLayout image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    uint32_t opengl_texture_id = 0;
 
     [[nodiscard]] bool operator==(const ViewportGpuTextureKey& other) const noexcept
     {
@@ -32,9 +34,11 @@ struct ViewportGpuTextureKey {
             image_generation == other.image_generation &&
             extent.width == other.extent.width &&
             extent.height == other.extent.height &&
+            backend == other.backend &&
             image_view == other.image_view &&
             sampler == other.sampler &&
-            image_layout == other.image_layout;
+            image_layout == other.image_layout &&
+            opengl_texture_id == other.opengl_texture_id;
     }
 };
 
@@ -46,10 +50,24 @@ struct ViewportGpuTextureKey {
         .resource_id = image.handle.resource_id,
         .image_generation = image.handle.image_generation,
         .extent = image.handle.extent,
+        .backend = image.backend,
         .image_view = image.image_view,
         .sampler = image.sampler,
         .image_layout = image.image_layout,
+        .opengl_texture_id = image.opengl_texture_id,
     };
+}
+
+[[nodiscard]] ViewportTextureUvOrigin uv_origin_from_backend(ViewportSampledGpuImageBackend backend) noexcept
+{
+    switch (backend) {
+    case ViewportSampledGpuImageBackend::vulkan:
+        return ViewportTextureUvOrigin::top_left;
+    case ViewportSampledGpuImageBackend::opengl:
+        return ViewportTextureUvOrigin::bottom_left;
+    }
+
+    return ViewportTextureUvOrigin::top_left;
 }
 
 } // namespace
@@ -78,10 +96,7 @@ public:
             return true;
         }
 
-        const uint64_t texture_id = texture_registry_.add_texture(
-            image.sampler,
-            image.image_view,
-            image.image_layout);
+        const uint64_t texture_id = texture_registry_.add_texture(image);
         if (texture_id == 0) {
             return false;
         }
@@ -163,6 +178,7 @@ public:
         return ViewportTextureView {
             .texture_id = existing->second.texture_id,
             .extent = existing->second.key.extent,
+            .uv_origin = uv_origin_from_backend(existing->second.key.backend),
             .has_pixels = true,
         };
     }

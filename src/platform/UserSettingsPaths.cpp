@@ -17,6 +17,7 @@ namespace {
 constexpr const char* kOrganizationName = "Quader";
 constexpr const char* kApplicationName = "Quader Native";
 constexpr std::string_view kImGuiIniFilename = "imgui.ini";
+constexpr std::string_view kRenderDriverSettingsFilename = "render_driver_settings.ini";
 
 struct SdlAllocatedStringDeleter {
     void operator()(char* value) const noexcept
@@ -113,6 +114,7 @@ void ensure_settings_directory_exists(const std::string& directory)
 UserSettingsPaths::UserSettingsPaths()
     : settings_directory_(resolve_sdl_pref_settings_directory())
     , imgui_ini_file_(join_path(settings_directory_, kImGuiIniFilename))
+    , render_driver_settings_file_(join_path(settings_directory_, kRenderDriverSettingsFilename))
 {
     ensure_settings_directory_exists(settings_directory_);
 }
@@ -125,6 +127,11 @@ std::string_view UserSettingsPaths::settings_directory() const
 std::string_view UserSettingsPaths::imgui_ini_file() const
 {
     return imgui_ini_file_;
+}
+
+std::string_view UserSettingsPaths::render_driver_settings_file() const
+{
+    return render_driver_settings_file_;
 }
 
 const char* UserSettingsPaths::imgui_ini_file_c_str() const

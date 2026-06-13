@@ -1,22 +1,77 @@
 module;
 
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 
 #include "diagnostics/LogMacros.h"
 
 module quader.app.scene_properties_panel_controller;
 
 import quader.diagnostics.logger;
-import quader.ui.inspector_menu;
-import quader.ui.property_inspector_panel;
 
 namespace quader {
 namespace {
 
-[[nodiscard]] PropertyInspectorPanelInput make_property_inspector_input(
+[[nodiscard]] const char* entity_fallback_name(const SceneEntity& entity) noexcept
+{
+    if (entity.mesh.has_value()) {
+        return entity.mesh->mesh_kind == SceneMeshKind::plane ? "Plane" : "Cube";
+    }
+
+    if (entity.directional_light.has_value()) {
+        return "Directional Light";
+    }
+
+    if (entity.point_light.has_value()) {
+        return "Point Light";
+    }
+
+    return "Entity";
+}
+
+[[nodiscard]] std::string_view display_name_for(const SceneEntity& entity) noexcept
+{
+    if (!entity.name.empty()) {
+        return entity.name;
+    }
+
+    return entity_fallback_name(entity);
+}
+
+} // namespace
+
+bool ScenePropertiesPanelController::begin_frame(
+    Scene& scene,
+    NativeFileDialogService& native_file_dialog,
+    EditorSelectionModel& selection)
+{
+    bool render_state_changed = selection.validate_against(scene);
+    render_state_changed |= consume_texture_picker_result_if_available(scene, native_file_dialog);
+    return render_state_changed;
+}
+
+ScenePropertiesPanelFrameInput ScenePropertiesPanelController::build_frame_input(
     const Scene& scene,
     const NativeFileDialogService& native_file_dialog,
     const EditorSelectionModel& selection)
+{
+    rebuild_outliner_rows(scene);
+
+    return ScenePropertiesPanelFrameInput {
+        .outliner = SceneOutlinerPanelInput {
+            .rows = outliner_rows_,
+            .selected_entity = selection.selected_entity(),
+        },
+        .property_inspector = make_property_inspector_input(scene, native_file_dialog, selection),
+    };
+}
+
+PropertyInspectorPanelInput ScenePropertiesPanelController::make_property_inspector_input(
+    const Scene& scene,
+    const NativeFileDialogService& native_file_dialog,
+    const EditorSelectionModel& selection) const
 {
     PropertyInspectorPanelInput input {
         .material_texture_picker_busy = native_file_dialog.has_pending_request(),
@@ -35,38 +90,44 @@ namespace {
     input.entity = PropertyInspectorPanelEntity {
         .id = entity->id,
         .name = entity->name,
-        .transform = scene.transform(entity->id),
-        .material = scene.material(entity->id),
-        .directional_light = scene.directional_light(entity->id),
-        .point_light = scene.point_light(entity->id),
     };
+
+    if (const TransformComponent* transform = scene.transform(entity->id); transform != nullptr) {
+        input.entity->transform = *transform;
+    }
+
+    if (const MaterialComponent* material = scene.material(entity->id); material != nullptr) {
+        input.entity->material = material->material;
+    }
+
+    if (const DirectionalLightComponent* light = scene.directional_light(entity->id); light != nullptr) {
+        input.entity->directional_light = light->settings;
+    }
+
+    if (const PointLightComponent* light = scene.point_light(entity->id); light != nullptr) {
+        input.entity->point_light = *light;
+    }
 
     return input;
 }
 
-} // namespace
-
-bool ScenePropertiesPanelController::render_frame(
+bool ScenePropertiesPanelController::apply_frame_result(
+    const ScenePropertiesPanelFrameResult& result,
     Scene& scene,
     NativeFileDialogService& native_file_dialog,
     EditorSelectionModel& selection)
 {
-    bool render_state_changed = selection.validate_against(scene);
-    render_state_changed |= consume_texture_picker_result_if_available(scene, native_file_dialog);
-    render_state_changed |= render_create_menu(scene, selection);
-    render_state_changed |= render_outliner(scene, selection);
-    render_state_changed |= render_property_inspector(scene, native_file_dialog, selection);
+    bool render_state_changed = apply_outliner_result(result.outliner, selection);
+    render_state_changed |= apply_property_inspector_result(result.property_inspector, scene, native_file_dialog);
     return render_state_changed;
 }
 
-bool ScenePropertiesPanelController::render_create_menu(Scene& scene, EditorSelectionModel& selection)
+bool ScenePropertiesPanelController::apply_create_request(
+    CreateSceneItemKind create_kind,
+    Scene& scene,
+    EditorSelectionModel& selection)
 {
-    const InspectorCreateMenuResult result = draw_inspector_create_menu();
-    if (!result.requested_create.has_value()) {
-        return false;
-    }
-
-    switch (*result.requested_create) {
+    switch (create_kind) {
     case CreateSceneItemKind::cube: {
         const SceneEntityId created_id = scene.create_cube();
         selection.select_entity(created_id);
@@ -92,9 +153,24 @@ bool ScenePropertiesPanelController::render_create_menu(Scene& scene, EditorSele
     return false;
 }
 
-bool ScenePropertiesPanelController::render_outliner(const Scene& scene, EditorSelectionModel& selection)
+void ScenePropertiesPanelController::rebuild_outliner_rows(const Scene& scene)
 {
-    const OutlinerPanelResult result = outliner_panel_.draw(scene.entities(), selection.selected_entity());
+    const std::span<const SceneEntity> entities = scene.entities();
+    outliner_rows_.clear();
+    outliner_rows_.reserve(entities.size());
+
+    for (const SceneEntity& entity : entities) {
+        outliner_rows_.push_back(SceneOutlinerRow {
+            .id = entity.id,
+            .display_name = std::string(display_name_for(entity)),
+        });
+    }
+}
+
+bool ScenePropertiesPanelController::apply_outliner_result(
+    const OutlinerPanelResult& result,
+    EditorSelectionModel& selection)
+{
     if (result.selected_entity.has_value()) {
         return selection.select_entity(*result.selected_entity);
     }
@@ -102,13 +178,11 @@ bool ScenePropertiesPanelController::render_outliner(const Scene& scene, EditorS
     return false;
 }
 
-bool ScenePropertiesPanelController::render_property_inspector(
+bool ScenePropertiesPanelController::apply_property_inspector_result(
+    const PropertyInspectorPanelResult& result,
     Scene& scene,
-    NativeFileDialogService& native_file_dialog,
-    EditorSelectionModel& selection)
+    NativeFileDialogService& native_file_dialog)
 {
-    const PropertyInspectorPanelInput input = make_property_inspector_input(scene, native_file_dialog, selection);
-    const PropertyInspectorPanelResult result = draw_property_inspector_panel(input);
     if (!result.inspected_entity.has_value()) {
         return false;
     }

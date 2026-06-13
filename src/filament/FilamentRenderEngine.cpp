@@ -1,6 +1,7 @@
 module;
 
 #include <backend/platforms/VulkanPlatform.h>
+#include <backend/platforms/PlatformWGL.h>
 #include <backend/DriverEnums.h>
 #include <filament/Engine.h>
 
@@ -15,6 +16,7 @@ module quader.filament.render_engine;
 
 import quader.filament.scene_viewport;
 import quader.filament.viewport_vulkan_platform;
+import quader.render.opengl_texture;
 
 namespace quader {
 namespace {
@@ -69,6 +71,14 @@ struct FilamentRenderEngine::Resources {
     {
     }
 
+    Resources(
+        OpenGlSharedContextHandle shared_context,
+        IOpenGlTexture2DAllocator& texture_allocator)
+        : opengl_shared_context(shared_context)
+        , opengl_texture_allocator(&texture_allocator)
+    {
+    }
+
     Resources(const Resources&) = delete;
     Resources& operator=(const Resources&) = delete;
 
@@ -78,13 +88,18 @@ struct FilamentRenderEngine::Resources {
         if (engine != nullptr) {
             filament::Engine::destroy(&engine);
         }
-        platform.reset();
+        vulkan_platform.reset();
+        opengl_platform.reset();
     }
 
     filament::Engine* engine = nullptr;
     VulkanSharedDeviceContext shared_device_context;
     filament::backend::VulkanPlatform::VulkanSharedContext filament_shared_context;
-    std::unique_ptr<FilamentViewportVulkanPlatform> platform;
+    std::unique_ptr<FilamentViewportVulkanPlatform> vulkan_platform;
+    std::unique_ptr<filament::backend::PlatformWGL> opengl_platform;
+    OpenGlSharedContextHandle opengl_shared_context;
+    IOpenGlTexture2DAllocator* opengl_texture_allocator = nullptr;
+
     struct ViewportSlot {
         std::unique_ptr<FilamentSceneViewport> viewport;
         ViewportRenderFrame frame;
@@ -102,7 +117,14 @@ struct FilamentRenderEngine::Resources {
         }
 
         const ViewportId viewport_id { next_viewport_id };
-        auto viewport = std::make_unique<FilamentSceneViewport>(engine_ref, *platform);
+        std::unique_ptr<FilamentSceneViewport> viewport;
+        if (vulkan_platform != nullptr) {
+            viewport = std::make_unique<FilamentSceneViewport>(engine_ref, *vulkan_platform);
+        } else if (opengl_texture_allocator != nullptr) {
+            viewport = std::make_unique<FilamentSceneViewport>(engine_ref, *opengl_texture_allocator);
+        } else {
+            return std::nullopt;
+        }
 
         auto [entry, inserted] = viewports.try_emplace(viewport_id);
         if (!inserted) {
@@ -135,11 +157,11 @@ FilamentRenderEngine::FilamentRenderEngine(VulkanSharedDeviceContext shared_devi
         }
 
         resources_->filament_shared_context = filament_shared_context_from(resources_->shared_device_context);
-        resources_->platform = std::make_unique<FilamentViewportVulkanPlatform>(
+        resources_->vulkan_platform = std::make_unique<FilamentViewportVulkanPlatform>(
             resources_->shared_device_context);
         resources_->engine = filament::Engine::Builder()
             .backend(filament::backend::Backend::VULKAN)
-            .platform(resources_->platform.get())
+            .platform(resources_->vulkan_platform.get())
             .sharedContext(&resources_->filament_shared_context)
             .build();
         if (resources_->engine == nullptr) {
@@ -154,6 +176,42 @@ FilamentRenderEngine::FilamentRenderEngine(VulkanSharedDeviceContext shared_devi
         status_.message = error.what();
     } catch (...) {
         status_.message = "Filament threw an unknown exception during scene viewport initialization.";
+    }
+}
+
+FilamentRenderEngine::FilamentRenderEngine(
+    OpenGlSharedContextHandle shared_context,
+    IOpenGlTexture2DAllocator& texture_allocator)
+    : resources_(std::make_unique<Resources>(shared_context, texture_allocator))
+{
+    try {
+        if (!resources_->opengl_shared_context.is_valid()) {
+            status_.message = "Filament OpenGL viewport renderer received an invalid shared native OpenGL context.";
+            return;
+        }
+        if (resources_->opengl_shared_context.api != OpenGlSharedContextApi::windows_wgl) {
+            status_.message = "Filament OpenGL viewport renderer received a non-WGL shared OpenGL context on Windows.";
+            return;
+        }
+
+        resources_->opengl_platform = std::make_unique<filament::backend::PlatformWGL>();
+        resources_->engine = filament::Engine::Builder()
+            .backend(filament::backend::Backend::OPENGL)
+            .platform(resources_->opengl_platform.get())
+            .sharedContext(resources_->opengl_shared_context.native_handle)
+            .build();
+        if (resources_->engine == nullptr) {
+            status_.message = "Filament OpenGL Engine::create returned null.";
+            return;
+        }
+
+        status_.initialized = true;
+        status_.backend_name = backend_to_string(resources_->engine->getBackend());
+        status_.message = "Filament OpenGL viewport renderer is initialized.";
+    } catch (const std::exception& error) {
+        status_.message = error.what();
+    } catch (...) {
+        status_.message = "Filament threw an unknown exception during OpenGL scene viewport initialization.";
     }
 }
 
@@ -192,8 +250,8 @@ void FilamentRenderEngine::release_viewport(ViewportId viewport_id)
     }
 
     resources_->viewports.erase(viewport_id);
-    if (resources_->platform != nullptr) {
-        resources_->platform->release_viewport(viewport_id);
+    if (resources_->vulkan_platform != nullptr) {
+        resources_->vulkan_platform->release_viewport(viewport_id);
     }
 }
 
@@ -231,18 +289,16 @@ std::optional<ViewportRenderFrame> FilamentRenderEngine::try_consume_viewport_fr
         return std::nullopt;
     }
 
-    if (resources_->platform == nullptr) {
-        return std::nullopt;
-    }
-
-    bool received_submitted_image = false;
-    while (std::optional<ViewportGpuImageHandle> submitted_image =
-               resources_->platform->take_latest_viewport_gpu_image(viewport_id)) {
-        entry->second.frame.payload.gpu_image = *submitted_image;
-        received_submitted_image = true;
-    }
-    if (received_submitted_image) {
-        entry->second.frame.payload.gpu_image_pending = false;
+    if (resources_->vulkan_platform != nullptr) {
+        bool received_submitted_image = false;
+        while (std::optional<ViewportGpuImageHandle> submitted_image =
+                   resources_->vulkan_platform->take_latest_viewport_gpu_image(viewport_id)) {
+            entry->second.frame.payload.gpu_image = *submitted_image;
+            received_submitted_image = true;
+        }
+        if (received_submitted_image) {
+            entry->second.frame.payload.gpu_image_pending = false;
+        }
     }
 
     if (!entry->second.frame.payload.gpu_image.has_value()) {
@@ -257,9 +313,7 @@ std::optional<ViewportRenderFrame> FilamentRenderEngine::try_consume_viewport_fr
     if (entry->second.frame.payload.gpu_image.has_value() &&
         !entry->second.frame.payload.gpu_image->is_ready()) {
         std::optional<ViewportSampledGpuImage> image =
-            resources_->platform->resolve_viewport_gpu_image(
-                *entry->second.frame.payload.gpu_image,
-                ViewportGpuResolveWait::poll);
+            entry->second.viewport->resolve_viewport_gpu_image(*entry->second.frame.payload.gpu_image);
         if (!image.has_value()) {
             return std::nullopt;
         }
@@ -274,26 +328,43 @@ std::optional<ViewportRenderFrame> FilamentRenderEngine::try_consume_viewport_fr
 std::optional<ViewportSampledGpuImage> FilamentRenderEngine::resolve_viewport_gpu_image(
     const ViewportGpuImageHandle& handle)
 {
-    if (!handle.is_ready() || resources_ == nullptr || resources_->platform == nullptr) {
+    if (!handle.is_ready() || resources_ == nullptr) {
         return std::nullopt;
     }
 
-    return resources_->platform->resolve_viewport_gpu_image(
-        handle,
-        ViewportGpuResolveWait::poll);
+    const auto entry = resources_->viewports.find(handle.viewport_id);
+    if (entry == resources_->viewports.end() || entry->second.viewport == nullptr) {
+        return std::nullopt;
+    }
+
+    return entry->second.viewport->resolve_viewport_gpu_image(handle);
 }
 
 bool FilamentRenderEngine::has_retired_viewport_gpu_resources() const noexcept
 {
-    return resources_ != nullptr &&
-        resources_->platform != nullptr &&
-        resources_->platform->has_retired_viewport_gpu_resources();
+    if (resources_ == nullptr) {
+        return false;
+    }
+
+    for (const auto& [_, slot] : resources_->viewports) {
+        if (slot.viewport != nullptr && slot.viewport->has_retired_viewport_gpu_resources()) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void FilamentRenderEngine::collect_retired_viewport_gpu_resources()
 {
-    if (resources_ != nullptr && resources_->platform != nullptr) {
-        resources_->platform->collect_retired_viewport_gpu_resources();
+    if (resources_ == nullptr) {
+        return;
+    }
+
+    for (auto& [_, slot] : resources_->viewports) {
+        if (slot.viewport != nullptr) {
+            slot.viewport->collect_retired_viewport_gpu_resources();
+        }
     }
 }
 

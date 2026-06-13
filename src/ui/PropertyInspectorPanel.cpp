@@ -34,7 +34,7 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
     ImGui::TextUnformatted(entity.name.data(), entity.name.data() + entity.name.size());
     ImGui::Separator();
 
-    if (entity.transform != nullptr) {
+    if (entity.transform.has_value()) {
         TransformComponent edited_transform = *entity.transform;
         const TransformComponentEditorResult transform_result = draw_transform_component(edited_transform);
         if (transform_result.transform_changed) {
@@ -42,8 +42,8 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
         }
     }
 
-    if (entity.material != nullptr) {
-        PbrMaterialSettings edited_material = entity.material->material;
+    if (entity.material.has_value()) {
+        PbrMaterialSettings edited_material = *entity.material;
         const MaterialComponentEditorResult material_result =
             draw_material_component(edited_material, input.material_texture_picker_busy);
         if (material_result.settings_changed) {
@@ -53,8 +53,8 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
         result.requested_texture_clear = material_result.requested_texture_clear;
     }
 
-    if (entity.directional_light != nullptr) {
-        DirectionalLightSettings edited_light = entity.directional_light->settings;
+    if (entity.directional_light.has_value()) {
+        DirectionalLightSettings edited_light = *entity.directional_light;
         const DirectionalLightComponentEditorResult light_result =
             draw_directional_light_component(edited_light);
         if (light_result.settings_changed) {
@@ -62,7 +62,7 @@ PropertyInspectorPanelResult draw_property_inspector_panel(const PropertyInspect
         }
     }
 
-    if (entity.point_light != nullptr) {
+    if (entity.point_light.has_value()) {
         PointLightComponent edited_light = *entity.point_light;
         const PointLightComponentEditorResult light_result = draw_point_light_component(edited_light);
         if (light_result.settings_changed) {

@@ -8,16 +8,16 @@ import quader.app.editor_viewport;
 import quader.app.editor_command_stack;
 import quader.app.editor_hover;
 import quader.app.editor_selection;
+import quader.app.render_driver_settings;
 import quader.app.scene_properties_panel_controller;
 import quader.platform.app_event_dispatcher;
 import quader.platform.input;
 import quader.platform.native_file_dialog;
 import quader.platform.sdl_event_source;
 import quader.platform.sdl_platform_context;
-import quader.platform.sdl_window;
 import quader.app.render_driver_host;
 import quader.scene.scene;
-import quader.ui.editor_dockspace;
+import quader.ui_shell.editor_shell;
 
 export namespace quader {
 
@@ -32,17 +32,24 @@ public:
 
 private:
     void draw_frame(float delta_seconds);
+    [[nodiscard]] bool apply_editor_ui_result(const EditorUiFrameResult& result);
+    [[nodiscard]] EditorUiFrameInput build_editor_ui_input();
+    [[nodiscard]] bool apply_main_menu_result(const EditorMainMenuResult& result);
+    void save_render_driver_selection(RenderDriverKind requested_driver);
     void collect_retired_viewport_gpu_resources();
     void poll_events();
     void update_relative_mouse_mode();
 
     SdlPlatformContext sdl_platform_context_;
-    SdlWindow window_;
+    UserSettingsPaths user_settings_paths_;
+    RenderDriverSettingsStore render_driver_settings_;
+    RenderDriverSelection render_driver_selection_;
+    bool render_driver_restart_required_ = false;
+    std::unique_ptr<IRenderDriverHost> render_driver_;
     NativeFileDialogService native_file_dialog_;
     SdlEventSource event_source_;
     AppEventDispatcher event_dispatcher_;
     Input input_;
-    std::unique_ptr<IRenderDriverHost> render_driver_;
     Scene open_scene_;
     EditorSelectionModel selection_;
     EditorHoverModel hover_;

@@ -5,6 +5,7 @@ module;
 export module quader.filament.render_engine;
 
 export import quader.render.engine;
+export import quader.render.opengl_texture;
 import quader.render.vulkan_device;
 export import quader.render.viewport_renderer;
 
@@ -13,6 +14,9 @@ export namespace quader {
 class FilamentRenderEngine final : public IViewportRenderer {
 public:
     explicit FilamentRenderEngine(VulkanSharedDeviceContext shared_device_context);
+    FilamentRenderEngine(
+        OpenGlSharedContextHandle shared_context,
+        IOpenGlTexture2DAllocator& texture_allocator);
 
     FilamentRenderEngine(const FilamentRenderEngine&) = delete;
     FilamentRenderEngine& operator=(const FilamentRenderEngine&) = delete;

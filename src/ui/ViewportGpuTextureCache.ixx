@@ -1,7 +1,5 @@
 module;
 
-#include <vulkan/vulkan.h>
-
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -22,10 +20,7 @@ public:
 
     virtual ~IViewportTextureRegistry() = default;
 
-    [[nodiscard]] virtual uint64_t add_texture(
-        VkSampler sampler,
-        VkImageView image_view,
-        VkImageLayout image_layout) = 0;
+    [[nodiscard]] virtual uint64_t add_texture(const ViewportSampledGpuImage& image) = 0;
     virtual void remove_texture(uint64_t texture_id) = 0;
 };
 

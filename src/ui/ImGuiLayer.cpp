@@ -14,6 +14,7 @@ module quader.ui.imgui_layer;
 
 import quader.platform.user_settings_paths;
 import quader.render.vulkan_common;
+import quader.ui.imgui_backend_common;
 import quader.ui.viewport_texture_store;
 
 namespace quader {
@@ -21,12 +22,16 @@ namespace {
 
 class ImGuiViewportTextureRegistry final : public IViewportTextureRegistry {
 public:
-    [[nodiscard]] uint64_t add_texture(
-        VkSampler sampler,
-        VkImageView image_view,
-        VkImageLayout image_layout) override
+    [[nodiscard]] uint64_t add_texture(const ViewportSampledGpuImage& image) override
     {
-        VkDescriptorSet descriptor = ImGui_ImplVulkan_AddTexture(sampler, image_view, image_layout);
+        if (image.backend != ViewportSampledGpuImageBackend::vulkan) {
+            return 0;
+        }
+
+        VkDescriptorSet descriptor = ImGui_ImplVulkan_AddTexture(
+            image.sampler,
+            image.image_view,
+            image.image_layout);
         return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(descriptor));
     }
 
@@ -84,22 +89,8 @@ ImGuiLayer::Impl::Impl(const SdlWindow& window, const VulkanDevice& device, cons
     try {
         descriptor_pool_ = create_descriptor_pool();
 
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
+        create_editor_imgui_context(user_settings_paths_.imgui_ini_file_c_str());
         imgui_context_created_ = true;
-
-        ImGuiIO& io = ImGui::GetIO();
-        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-        io.ConfigWindowsMoveFromTitleBarOnly = true;
-        io.IniFilename = user_settings_paths_.imgui_ini_file_c_str();
-
-        ImGui::StyleColorsDark();
-
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.WindowRounding = 4.0f;
-        style.FrameRounding = 3.0f;
-        style.TabRounding = 3.0f;
 
         if (!ImGui_ImplSDL3_InitForVulkan(window.native_handle())) {
             throw std::runtime_error("ImGui SDL3 backend failed to initialize for Vulkan.");
