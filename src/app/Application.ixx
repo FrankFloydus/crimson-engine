@@ -15,12 +15,9 @@ import quader.platform.native_file_dialog;
 import quader.platform.sdl_event_source;
 import quader.platform.sdl_platform_context;
 import quader.platform.sdl_window;
-import quader.render.viewport_renderer;
-import quader.render.vulkan_device;
-import quader.render.vulkan_swapchain;
+import quader.app.render_driver_host;
 import quader.scene.scene;
 import quader.ui.editor_dockspace;
-import quader.ui.imgui_layer;
 
 export namespace quader {
 
@@ -45,16 +42,13 @@ private:
     SdlEventSource event_source_;
     AppEventDispatcher event_dispatcher_;
     Input input_;
-    VulkanDevice vulkan_device_;
-    VulkanSwapchain swapchain_;
-    std::unique_ptr<IViewportRenderer> render_engine_;
+    std::unique_ptr<IRenderDriverHost> render_driver_;
     Scene open_scene_;
     EditorSelectionModel selection_;
     EditorHoverModel hover_;
     EditorCommandStack commands_;
     ScenePropertiesPanelController scene_properties_;
     EditorViewport scene_viewport_;
-    ImGuiLayer imgui_;
 };
 
 } // namespace quader

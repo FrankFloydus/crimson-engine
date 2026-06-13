@@ -11,9 +11,8 @@ module;
 
 module quader.app;
 
+import quader.app.render_driver_host;
 import quader.diagnostics.logger;
-import quader.render.engine_factory;
-import quader.render.startup_validation;
 
 namespace quader {
 namespace {
@@ -45,14 +44,6 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
     return std::nullopt;
 }
 
-std::unique_ptr<IViewportRenderer> create_renderer_engine_or_throw(const VulkanDevice& device)
-{
-    std::unique_ptr<IViewportRenderer> render_engine = create_default_viewport_renderer(
-        device.shared_device_context());
-    throw_if_renderer_failed_to_start(render_engine->status());
-    return render_engine;
-}
-
 } // namespace
 
 Application::Application()
@@ -60,15 +51,15 @@ Application::Application()
     , window_("Quader Native", 1280, 800)
     , native_file_dialog_(window_)
     , event_source_(window_)
-    , vulkan_device_(window_)
-    , swapchain_(vulkan_device_, window_)
-    , render_engine_(create_renderer_engine_or_throw(vulkan_device_))
-    , imgui_(window_, vulkan_device_, swapchain_)
+    , render_driver_(create_default_render_driver_host(window_))
 {
     event_dispatcher_.subscribe(input_);
 
-    const RendererStatus status = render_engine_->status();
-    QUADER_LOG_INFO("Renderer initialized with {} backend.", status.backend_name);
+    const RendererStatus status = render_driver_->status();
+    QUADER_LOG_INFO(
+        "Renderer initialized with {} driver and {} backend.",
+        render_driver_kind_display_name(render_driver_->driver_kind()),
+        status.backend_name);
 }
 
 int Application::run()
@@ -101,22 +92,21 @@ int Application::run()
         update_relative_mouse_mode();
     }
 
-    return render_engine_->status().initialized ? 0 : 2;
+    return render_driver_->status().initialized ? 0 : 2;
 }
 
 void Application::draw_frame(float delta_seconds)
 {
     ZoneScopedN("Application frame");
 
-    swapchain_.recreate_if_needed(window_);
-    imgui_.begin_frame();
+    render_driver_->begin_frame();
     render_editor_dockspace();
     if (scene_properties_.render_frame(open_scene_, native_file_dialog_, selection_)) {
         scene_viewport_.mark_render_state_dirty();
     }
     const EditorViewportFrameResult viewport_result = scene_viewport_.render_frame(
-        *render_engine_,
-        imgui_,
+        render_driver_->viewport_renderer(),
+        render_driver_->imgui(),
         open_scene_,
         input_,
         selection_,
@@ -127,33 +117,20 @@ void Application::draw_frame(float delta_seconds)
         scene_viewport_.mark_render_state_dirty();
     }
     collect_retired_viewport_gpu_resources();
-    imgui_.end_frame(swapchain_);
+    render_driver_->end_frame();
 
     FrameMark;
 }
 
 void Application::collect_retired_viewport_gpu_resources()
 {
-    const bool has_retired_textures = imgui_.has_retired_viewport_gpu_textures();
-    const bool can_collect_render_resources =
-        !scene_viewport_.has_pending_render_requests() &&
-        render_engine_->has_retired_viewport_gpu_resources();
-    if (!has_retired_textures && !can_collect_render_resources) {
-        return;
-    }
-
-    vulkan_device_.wait_idle();
-    if (has_retired_textures) {
-        imgui_.collect_retired_viewport_gpu_textures();
-    }
-    if (can_collect_render_resources) {
-        render_engine_->collect_retired_viewport_gpu_resources();
-    }
+    render_driver_->collect_retired_viewport_gpu_resources(
+        scene_viewport_.has_pending_render_requests());
 }
 
 void Application::poll_events()
 {
-    event_source_.poll_events(event_dispatcher_, imgui_);
+    event_source_.poll_events(event_dispatcher_, render_driver_->imgui());
 }
 
 void Application::update_relative_mouse_mode()

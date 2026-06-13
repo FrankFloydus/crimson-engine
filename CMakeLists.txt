@@ -237,6 +237,7 @@ set(QUADER_CORE_SOURCES
     src/app/EditorSelection.cpp
     src/app/EditorViewport.cpp
     src/app/EditorViewportPicking.cpp
+    src/app/RenderDriverHost.cpp
     src/app/ScenePropertiesPanelController.cpp
     src/app/TransformGizmo.cpp
     src/app/ViewportInstance.cpp
@@ -258,6 +259,7 @@ set(QUADER_CORE_SOURCES
     src/platform/SdlWindow.cpp
     src/platform/UserSettingsPaths.cpp
     src/render/RenderEngineFactory.cpp
+    src/render/RenderDriverKind.cpp
     src/render/RenderTypes.cpp
     src/render/DebugDrawPicking.cpp
     src/render/RendererStartupValidation.cpp
@@ -290,6 +292,7 @@ set(QUADER_MODULES
     src/app/EditorSelection.ixx
     src/app/EditorViewport.ixx
     src/app/EditorViewportPicking.ixx
+    src/app/RenderDriverHost.ixx
     src/app/ScenePropertiesPanelController.ixx
     src/app/TransformGizmo.ixx
     src/app/ViewportInstance.ixx
@@ -313,6 +316,7 @@ set(QUADER_MODULES
     src/platform/UserSettingsPaths.ixx
     src/render/IRenderEngine.ixx
     src/render/RendererStatus.ixx
+    src/render/RenderDriverKind.ixx
     src/render/RenderTypes.ixx
     src/render/DebugDrawTypes.ixx
     src/render/DebugDrawPicking.ixx
@@ -407,6 +411,7 @@ add_executable(quader_tests
     tests/EditorSelectionTests.cpp
     tests/EditorCameraTests.cpp
     tests/InputTests.cpp
+    tests/RenderDriverKindTests.cpp
     tests/RenderTypesTests.cpp
     tests/RendererStartupValidationTests.cpp
     tests/SceneTests.cpp
