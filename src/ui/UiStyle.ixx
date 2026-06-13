@@ -16,6 +16,8 @@ struct ViewportHostUiStyle {
     float layout_combo_width = 220.0f;
     float environment_button_width = 116.0f;
     float environment_popup_width = 340.0f;
+    float post_processing_button_width = 92.0f;
+    float post_processing_popup_width = 340.0f;
     float camera_combo_width = 116.0f;
     float resettable_control_extra_width = 112.0f;
     float maximize_button_width = 70.0f;

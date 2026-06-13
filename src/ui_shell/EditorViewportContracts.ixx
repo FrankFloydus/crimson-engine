@@ -96,6 +96,7 @@ struct ViewportPaneResult {
 struct ViewportHostPanelInput {
     ViewportLayoutState layout;
     EnvironmentLightingSettings environment;
+    PostProcessingSettings post_processing;
     std::span<const ViewportPaneInput> panes;
 };
 
@@ -104,8 +105,10 @@ struct ViewportHostPanelResult {
     std::optional<ViewportId> active_viewport;
     ViewportLayoutState layout;
     EnvironmentLightingSettings environment;
+    PostProcessingSettings post_processing;
     bool layout_changed = false;
     bool environment_changed = false;
+    bool post_processing_changed = false;
 };
 
 } // namespace quader

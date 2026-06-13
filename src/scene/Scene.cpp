@@ -125,6 +125,16 @@ void Scene::set_environment_settings(EnvironmentLightingSettings settings)
     environment_settings_ = clamp_environment_lighting_settings(settings);
 }
 
+PostProcessingSettings Scene::post_processing_settings() const
+{
+    return post_processing_settings_;
+}
+
+void Scene::set_post_processing_settings(PostProcessingSettings settings)
+{
+    post_processing_settings_ = clamp_post_processing_settings(settings);
+}
+
 SceneEntityId Scene::create_entity(std::string name, TransformComponent transform)
 {
     return create_named_entity(std::move(name), transform);
@@ -436,6 +446,7 @@ SceneRenderSnapshot build_scene_render_snapshot(const Scene& scene)
 {
     SceneRenderSnapshot snapshot;
     snapshot.environment = scene.environment_settings();
+    snapshot.post_processing = scene.post_processing_settings();
     snapshot.revision = 1;
 
     for (const SceneEntity& entity : scene.entities()) {

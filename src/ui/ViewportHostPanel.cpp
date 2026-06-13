@@ -40,6 +40,43 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
     ViewportCameraPreset::front,
 };
 
+constexpr std::array<BloomBlendMode, 2> kBloomBlendModes {
+    BloomBlendMode::add,
+    BloomBlendMode::interpolate,
+};
+
+constexpr std::array<BloomQuality, 3> kBloomQualities {
+    BloomQuality::low,
+    BloomQuality::medium,
+    BloomQuality::high,
+};
+
+[[nodiscard]] const char* bloom_blend_mode_label(BloomBlendMode mode)
+{
+    switch (mode) {
+    case BloomBlendMode::add:
+        return "Add";
+    case BloomBlendMode::interpolate:
+        return "Interpolate";
+    }
+
+    return "Add";
+}
+
+[[nodiscard]] const char* bloom_quality_label(BloomQuality quality)
+{
+    switch (quality) {
+    case BloomQuality::low:
+        return "Low";
+    case BloomQuality::medium:
+        return "Medium";
+    case BloomQuality::high:
+        return "High";
+    }
+
+    return "Low";
+}
+
 [[nodiscard]] std::span<const ViewportId> viewport_ids_from(
     std::span<const ViewportPaneInput> panes,
     std::array<ViewportId, kInlineViewportIdCapacity>& inline_ids,
@@ -218,6 +255,144 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
 
         if (changed) {
             settings = clamp_environment_lighting_settings(settings);
+        }
+    }
+
+    return changed;
+}
+
+[[nodiscard]] bool draw_uint32_drag_property(
+    const char* label,
+    uint32_t& value,
+    uint32_t default_value,
+    int min_value,
+    int max_value,
+    const char* tooltip)
+{
+    int editable_value = static_cast<int>(value);
+    bool changed = render_resettable_int_drag(
+        label,
+        editable_value,
+        static_cast<int>(default_value),
+        1.0f,
+        min_value,
+        max_value,
+        tooltip);
+    if (changed) {
+        value = static_cast<uint32_t>(editable_value);
+    }
+    return changed;
+}
+
+[[nodiscard]] bool draw_uint8_drag_property(
+    const char* label,
+    uint8_t& value,
+    uint8_t default_value,
+    int min_value,
+    int max_value,
+    const char* tooltip)
+{
+    int editable_value = static_cast<int>(value);
+    bool changed = render_resettable_int_drag(
+        label,
+        editable_value,
+        static_cast<int>(default_value),
+        0.1f,
+        min_value,
+        max_value,
+        tooltip);
+    if (changed) {
+        value = static_cast<uint8_t>(editable_value);
+    }
+    return changed;
+}
+
+[[nodiscard]] bool draw_post_processing_popup(
+    PostProcessingSettings& settings,
+    const ViewportHostUiStyle& style)
+{
+    bool changed = false;
+    if (ImGui::Button("Post FX", ImVec2 { style.post_processing_button_width, 0.0f })) {
+        ImGui::OpenPopup("PostProcessingSettingsPopup");
+    }
+    render_item_tooltip("Edits post-processing effects applied to rendered viewports.");
+
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2 { style.post_processing_popup_width, 0.0f },
+        ImVec2 { style.post_processing_popup_width, std::numeric_limits<float>::max() });
+    ImGui::SetNextWindowSize(ImVec2 { style.post_processing_popup_width, 0.0f }, ImGuiCond_Appearing);
+    const PopupScope popup("PostProcessingSettingsPopup");
+    if (popup) {
+        const PostProcessingSettings defaults;
+
+        if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
+            BloomSettings& bloom = settings.bloom;
+            const BloomSettings& default_bloom = defaults.bloom;
+
+            changed |= render_resettable_checkbox(
+                "Enabled",
+                bloom.enabled,
+                default_bloom.enabled,
+                "Adds a glow around high-luminance pixels, including emissive materials.");
+
+            {
+                DisabledScope disabled(!bloom.enabled);
+                changed |= render_resettable_float_drag(
+                    "Strength",
+                    bloom.strength,
+                    default_bloom.strength,
+                    0.005f,
+                    0.0f,
+                    1.0f,
+                    "%.3f",
+                    "How much bloom is added back into the scene.");
+                changed |= draw_uint32_drag_property(
+                    "Resolution",
+                    bloom.resolution,
+                    default_bloom.resolution,
+                    8,
+                    4096,
+                    "Minor-axis resolution of the bloom buffer.");
+                changed |= draw_uint8_drag_property(
+                    "Levels",
+                    bloom.levels,
+                    default_bloom.levels,
+                    1,
+                    11,
+                    "Number of blur levels used to spread the glow.");
+                changed |= render_resettable_combo(
+                    "Blend",
+                    bloom.blend_mode,
+                    default_bloom.blend_mode,
+                    std::span<const BloomBlendMode> { kBloomBlendModes },
+                    bloom_blend_mode_label,
+                    "Chooses whether bloom is added to or interpolated with the scene.");
+                changed |= render_resettable_combo(
+                    "Quality",
+                    bloom.quality,
+                    default_bloom.quality,
+                    std::span<const BloomQuality> { kBloomQualities },
+                    bloom_quality_label,
+                    "Controls the filter quality used by the bloom pass.");
+                changed |= render_resettable_checkbox(
+                    "Threshold",
+                    bloom.threshold,
+                    default_bloom.threshold,
+                    "Only blooms HDR values above Filament's bloom threshold.");
+                changed |= render_resettable_float_drag(
+                    "Highlight Limit",
+                    bloom.highlight,
+                    default_bloom.highlight,
+                    10.0f,
+                    10.0f,
+                    1000000.0f,
+                    "%.0f",
+                    "Caps very bright highlights before bloom.");
+            }
+        }
+
+        if (changed) {
+            settings = clamp_post_processing_settings(settings);
         }
     }
 
@@ -564,10 +739,12 @@ ViewportHostPanelResult draw_viewport_host_panel(const ViewportHostPanelInput& i
     ViewportHostPanelResult result;
     ViewportLayoutState layout_state = input.layout;
     EnvironmentLightingSettings environment_settings = input.environment;
+    PostProcessingSettings post_processing_settings = input.post_processing;
     const std::span<const ViewportPaneInput> panes = input.panes;
-    auto capture_result_state = [&result, &layout_state, &environment_settings] {
+    auto capture_result_state = [&result, &layout_state, &environment_settings, &post_processing_settings] {
         result.layout = layout_state;
         result.environment = environment_settings;
+        result.post_processing = post_processing_settings;
     };
 
     const WindowScope window("Viewport");
@@ -575,6 +752,8 @@ ViewportHostPanelResult draw_viewport_host_panel(const ViewportHostPanelInput& i
         result.layout_changed |= draw_layout_combo(layout_state, style);
         ImGui::SameLine(0.0f, style.toolbar_control_gap);
         result.environment_changed |= draw_environment_popup(environment_settings, style);
+        ImGui::SameLine(0.0f, style.toolbar_control_gap);
+        result.post_processing_changed |= draw_post_processing_popup(post_processing_settings, style);
         ImGui::Separator();
 
         const ImVec2 content_origin = ImGui::GetCursorScreenPos();

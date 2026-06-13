@@ -233,6 +233,7 @@ void EditorViewport::render_scene_viewport_host(
     const ViewportHostPanelResult result = editor_shell.draw_viewport_host(ViewportHostPanelInput {
         .layout = layout_state_,
         .environment = scene.environment_settings(),
+        .post_processing = scene.post_processing_settings(),
         .panes = panes,
     });
     if (result.layout_changed) {
@@ -240,6 +241,11 @@ void EditorViewport::render_scene_viewport_host(
     }
     if (result.environment_changed) {
         scene.set_environment_settings(result.environment);
+        frame_result.scene_changed = true;
+        mark_scene_viewports_dirty();
+    }
+    if (result.post_processing_changed) {
+        scene.set_post_processing_settings(result.post_processing);
         frame_result.scene_changed = true;
         mark_scene_viewports_dirty();
     }

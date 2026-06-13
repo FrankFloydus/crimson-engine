@@ -817,6 +817,39 @@ MaterialComponentEditorResult draw_material_component(PbrMaterialSettings& setti
             "%.3f",
             "Roughness of the clear-coat layer.");
 
+        if (ImGui::CollapsingHeader("Emission")) {
+            result.settings_changed |= render_resettable_srgb_color_edit(
+                "Emission Color",
+                settings.emission_color,
+                defaults.emission_color,
+                "Surface light color, authored in sRGB and converted to linear for rendering.");
+            draw_texture_row(
+                "Emission Texture",
+                PbrMaterialTextureSlot::emission,
+                settings,
+                picker_busy,
+                "Texture multiplied with the emission color.",
+                result);
+            result.settings_changed |= render_resettable_float_drag(
+                "Intensity",
+                settings.emission_intensity,
+                defaults.emission_intensity,
+                10.0f,
+                0.0f,
+                1000000.0f,
+                "%.0f nits",
+                "Emissive surface luminance.");
+            result.settings_changed |= render_resettable_float_drag(
+                "Exposure Weight",
+                settings.emission_exposure_weight,
+                defaults.emission_exposure_weight,
+                0.005f,
+                0.0f,
+                1.0f,
+                "%.3f",
+                "How much camera exposure affects the emissive intensity.");
+        }
+
         result.settings_changed |= draw_transparent_material_controls(settings, defaults, picker_busy, result);
 
         if (ImGui::Button("Reset PBR")) {

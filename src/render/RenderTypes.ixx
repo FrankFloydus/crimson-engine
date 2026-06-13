@@ -59,6 +59,7 @@ enum class PbrMaterialTextureSlot : uint8_t {
     roughness,
     metallic,
     opacity,
+    emission,
 };
 
 enum class PbrMaterialBlendMode : uint8_t {
@@ -121,6 +122,10 @@ struct PbrMaterialSettings {
     LinearColor specular_color_factor { 1.0f, 1.0f, 1.0f };
     float clear_coat = 0.0f;
     float clear_coat_roughness = 0.0f;
+    LinearColor emission_color { 1.0f, 1.0f, 1.0f };
+    TextureAssetReference emission_texture;
+    float emission_intensity = 0.0f;
+    float emission_exposure_weight = 1.0f;
     PbrMaterialBlendMode blend_mode = PbrMaterialBlendMode::opaque;
     PbrMaterialTransparencyMode transparency_mode = PbrMaterialTransparencyMode::default_sorting;
     PbrMaterialCullingMode culling = PbrMaterialCullingMode::back;
@@ -144,6 +149,32 @@ struct PbrMaterialSettings {
     float thickness = 0.5f;
     float micro_thickness = 0.0f;
     float dispersion = 0.0f;
+};
+
+enum class BloomBlendMode : uint8_t {
+    add,
+    interpolate,
+};
+
+enum class BloomQuality : uint8_t {
+    low,
+    medium,
+    high,
+};
+
+struct BloomSettings {
+    bool enabled = false;
+    float strength = 0.1f;
+    uint32_t resolution = 384;
+    uint8_t levels = 6;
+    BloomBlendMode blend_mode = BloomBlendMode::add;
+    BloomQuality quality = BloomQuality::low;
+    bool threshold = true;
+    float highlight = 1000.0f;
+};
+
+struct PostProcessingSettings {
+    BloomSettings bloom;
 };
 
 enum class EnvironmentLightingSource : uint8_t {
@@ -241,6 +272,8 @@ struct PointLightSettings {
     PbrMaterialTextureSlot slot);
 [[nodiscard]] RenderCamera clamp_render_camera(RenderCamera camera);
 [[nodiscard]] PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings);
+[[nodiscard]] BloomSettings clamp_bloom_settings(BloomSettings settings);
+[[nodiscard]] PostProcessingSettings clamp_post_processing_settings(PostProcessingSettings settings);
 [[nodiscard]] EnvironmentLightingSettings clamp_environment_lighting_settings(EnvironmentLightingSettings settings);
 [[nodiscard]] uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality);
 [[nodiscard]] DirectionalShadowSettings clamp_directional_shadow_settings(DirectionalShadowSettings settings);

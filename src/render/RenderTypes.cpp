@@ -108,6 +108,29 @@ PbrMaterialCullingMode valid_or_default(PbrMaterialCullingMode mode)
     return PbrMaterialCullingMode::back;
 }
 
+BloomBlendMode valid_or_default(BloomBlendMode mode)
+{
+    switch (mode) {
+    case BloomBlendMode::add:
+    case BloomBlendMode::interpolate:
+        return mode;
+    }
+
+    return BloomBlendMode::add;
+}
+
+BloomQuality valid_or_default(BloomQuality quality)
+{
+    switch (quality) {
+    case BloomQuality::low:
+    case BloomQuality::medium:
+    case BloomQuality::high:
+        return quality;
+    }
+
+    return BloomQuality::low;
+}
+
 float normalize_yaw(float yaw_degrees)
 {
     yaw_degrees = finite_or(yaw_degrees, 0.0f);
@@ -220,6 +243,8 @@ TextureAssetReference& material_texture_reference(PbrMaterialSettings& settings,
         return settings.metallic_texture;
     case PbrMaterialTextureSlot::opacity:
         return settings.opacity_texture;
+    case PbrMaterialTextureSlot::emission:
+        return settings.emission_texture;
     }
 
     return settings.albedo_texture;
@@ -236,6 +261,8 @@ const TextureAssetReference& material_texture_reference(const PbrMaterialSetting
         return settings.metallic_texture;
     case PbrMaterialTextureSlot::opacity:
         return settings.opacity_texture;
+    case PbrMaterialTextureSlot::emission:
+        return settings.emission_texture;
     }
 
     return settings.albedo_texture;
@@ -276,6 +303,11 @@ PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)
     settings.specular_color_factor = clamp_color(settings.specular_color_factor);
     settings.clear_coat = std::clamp(settings.clear_coat, 0.0f, 1.0f);
     settings.clear_coat_roughness = std::clamp(settings.clear_coat_roughness, 0.0f, 1.0f);
+    settings.emission_color = clamp_color(settings.emission_color);
+    settings.emission_intensity =
+        std::clamp(finite_or(settings.emission_intensity, 0.0f), 0.0f, 100000000.0f);
+    settings.emission_exposure_weight =
+        std::clamp(finite_or(settings.emission_exposure_weight, 1.0f), 0.0f, 1.0f);
     settings.opacity = std::clamp(finite_or(settings.opacity, 1.0f), 0.0f, 1.0f);
     settings.mask_threshold = std::clamp(finite_or(settings.mask_threshold, 0.4f), 0.0f, 1.0f);
     settings.transmission = std::clamp(finite_or(settings.transmission, 0.0f), 0.0f, 1.0f);
@@ -286,6 +318,25 @@ PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)
     settings.thickness = nonnegative_finite_or(settings.thickness, 0.5f);
     settings.micro_thickness = nonnegative_finite_or(settings.micro_thickness, 0.0f);
     settings.dispersion = std::clamp(finite_or(settings.dispersion, 0.0f), 0.0f, 1.0f);
+    return settings;
+}
+
+BloomSettings clamp_bloom_settings(BloomSettings settings)
+{
+    const BloomSettings defaults;
+
+    settings.strength = std::clamp(finite_or(settings.strength, defaults.strength), 0.0f, 1.0f);
+    settings.resolution = std::clamp(settings.resolution, 8U, 4096U);
+    settings.levels = static_cast<uint8_t>(std::clamp(static_cast<int>(settings.levels), 1, 11));
+    settings.blend_mode = valid_or_default(settings.blend_mode);
+    settings.quality = valid_or_default(settings.quality);
+    settings.highlight = std::max(finite_or(settings.highlight, defaults.highlight), 10.0f);
+    return settings;
+}
+
+PostProcessingSettings clamp_post_processing_settings(PostProcessingSettings settings)
+{
+    settings.bloom = clamp_bloom_settings(settings.bloom);
     return settings;
 }
 

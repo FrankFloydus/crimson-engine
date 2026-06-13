@@ -26,6 +26,12 @@ TEST(RenderTypes, DefaultPbrMaterialIsMatteWhiteDielectric)
     EXPECT_FLOAT_EQ(1.0f, settings.specular_color_factor.b);
     EXPECT_FLOAT_EQ(0.0f, settings.clear_coat);
     EXPECT_FLOAT_EQ(0.0f, settings.clear_coat_roughness);
+    EXPECT_FLOAT_EQ(1.0f, settings.emission_color.r);
+    EXPECT_FLOAT_EQ(1.0f, settings.emission_color.g);
+    EXPECT_FLOAT_EQ(1.0f, settings.emission_color.b);
+    EXPECT_FALSE(settings.emission_texture.has_source());
+    EXPECT_FLOAT_EQ(0.0f, settings.emission_intensity);
+    EXPECT_FLOAT_EQ(1.0f, settings.emission_exposure_weight);
     EXPECT_EQ(quader::PbrMaterialBlendMode::opaque, settings.blend_mode);
     EXPECT_EQ(quader::PbrMaterialTransparencyMode::default_sorting, settings.transparency_mode);
     EXPECT_EQ(quader::PbrMaterialCullingMode::back, settings.culling);
@@ -63,11 +69,13 @@ TEST(RenderTypes, MaterialTextureReferenceSelectsRequestedSlot)
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::roughness).source_path = "roughness.png";
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::metallic).source_path = "metallic.png";
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::opacity).source_path = "opacity.png";
+    quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::emission).source_path = "emission.png";
 
     EXPECT_EQ("albedo.png", settings.albedo_texture.source_path);
     EXPECT_EQ("roughness.png", settings.roughness_texture.source_path);
     EXPECT_EQ("metallic.png", settings.metallic_texture.source_path);
     EXPECT_EQ("opacity.png", settings.opacity_texture.source_path);
+    EXPECT_EQ("emission.png", settings.emission_texture.source_path);
 
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::roughness).clear();
     EXPECT_FALSE(settings.roughness_texture.has_source());
@@ -84,6 +92,9 @@ TEST(RenderTypes, ClampPbrMaterialSettings)
     settings.specular_color_factor = { 1.5f, -0.25f, 0.75f };
     settings.clear_coat = 1.5f;
     settings.clear_coat_roughness = -1.0f;
+    settings.emission_color = { -1.0f, 0.25f, 2.0f };
+    settings.emission_intensity = -10.0f;
+    settings.emission_exposure_weight = 1.5f;
     settings.blend_mode = static_cast<quader::PbrMaterialBlendMode>(255);
     settings.transparency_mode = static_cast<quader::PbrMaterialTransparencyMode>(255);
     settings.culling = static_cast<quader::PbrMaterialCullingMode>(255);
@@ -115,6 +126,11 @@ TEST(RenderTypes, ClampPbrMaterialSettings)
     EXPECT_FLOAT_EQ(0.75f, clamped.specular_color_factor.b);
     EXPECT_FLOAT_EQ(1.0f, clamped.clear_coat);
     EXPECT_FLOAT_EQ(0.0f, clamped.clear_coat_roughness);
+    EXPECT_FLOAT_EQ(0.0f, clamped.emission_color.r);
+    EXPECT_FLOAT_EQ(0.25f, clamped.emission_color.g);
+    EXPECT_FLOAT_EQ(1.0f, clamped.emission_color.b);
+    EXPECT_FLOAT_EQ(0.0f, clamped.emission_intensity);
+    EXPECT_FLOAT_EQ(1.0f, clamped.emission_exposure_weight);
     EXPECT_EQ(quader::PbrMaterialBlendMode::opaque, clamped.blend_mode);
     EXPECT_EQ(quader::PbrMaterialTransparencyMode::default_sorting, clamped.transparency_mode);
     EXPECT_EQ(quader::PbrMaterialCullingMode::back, clamped.culling);
@@ -169,6 +185,44 @@ TEST(RenderTypes, ClampEnvironmentLightingSettings)
     EXPECT_FLOAT_EQ(0.25f, clamped.fallback_color.g);
     EXPECT_FLOAT_EQ(1.0f, clamped.fallback_color.b);
     EXPECT_FLOAT_EQ(1.0f, clamped.fallback_color.a);
+}
+
+TEST(RenderTypes, DefaultPostProcessingHasBloomReadyButDisabled)
+{
+    const quader::PostProcessingSettings settings;
+
+    EXPECT_FALSE(settings.bloom.enabled);
+    EXPECT_FLOAT_EQ(0.1f, settings.bloom.strength);
+    EXPECT_EQ(384U, settings.bloom.resolution);
+    EXPECT_EQ(6U, settings.bloom.levels);
+    EXPECT_EQ(quader::BloomBlendMode::add, settings.bloom.blend_mode);
+    EXPECT_EQ(quader::BloomQuality::low, settings.bloom.quality);
+    EXPECT_TRUE(settings.bloom.threshold);
+    EXPECT_FLOAT_EQ(1000.0f, settings.bloom.highlight);
+}
+
+TEST(RenderTypes, ClampPostProcessingSettings)
+{
+    quader::PostProcessingSettings settings;
+    settings.bloom.enabled = true;
+    settings.bloom.strength = 2.0f;
+    settings.bloom.resolution = 1U;
+    settings.bloom.levels = 64U;
+    settings.bloom.blend_mode = static_cast<quader::BloomBlendMode>(255);
+    settings.bloom.quality = static_cast<quader::BloomQuality>(255);
+    settings.bloom.threshold = false;
+    settings.bloom.highlight = -10.0f;
+
+    const quader::PostProcessingSettings clamped = quader::clamp_post_processing_settings(settings);
+
+    EXPECT_TRUE(clamped.bloom.enabled);
+    EXPECT_FLOAT_EQ(1.0f, clamped.bloom.strength);
+    EXPECT_EQ(8U, clamped.bloom.resolution);
+    EXPECT_EQ(11U, clamped.bloom.levels);
+    EXPECT_EQ(quader::BloomBlendMode::add, clamped.bloom.blend_mode);
+    EXPECT_EQ(quader::BloomQuality::low, clamped.bloom.quality);
+    EXPECT_FALSE(clamped.bloom.threshold);
+    EXPECT_FLOAT_EQ(10.0f, clamped.bloom.highlight);
 }
 
 TEST(RenderTypes, ConvertSrgbToLinearWithStandardTransferFunction)

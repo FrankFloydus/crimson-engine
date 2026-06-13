@@ -107,6 +107,10 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     environment.rotation_degrees = 30.0f;
     environment.show_skybox = false;
     scene.set_environment_settings(environment);
+    quader::PostProcessingSettings post_processing;
+    post_processing.bloom.enabled = true;
+    post_processing.bloom.strength = 0.25f;
+    scene.set_post_processing_settings(post_processing);
 
     quader::ViewportInstance viewport =
         quader::ViewportInstance::scene_viewport({ 1 }, "Perspective", quader::ViewportCameraPreset::perspective);
@@ -124,6 +128,8 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     EXPECT_FLOAT_EQ(12000.0f, subject.snapshot.environment.intensity);
     EXPECT_FLOAT_EQ(30.0f, subject.snapshot.environment.rotation_degrees);
     EXPECT_FALSE(subject.snapshot.environment.show_skybox);
+    EXPECT_TRUE(subject.snapshot.post_processing.bloom.enabled);
+    EXPECT_FLOAT_EQ(0.25f, subject.snapshot.post_processing.bloom.strength);
     ASSERT_EQ(2U, subject.snapshot.meshes.size());
     EXPECT_TRUE(subject.snapshot.meshes[0].entity_id.is_valid());
     EXPECT_EQ(quader::ViewportMeshKind::cube, subject.snapshot.meshes[0].mesh_kind);

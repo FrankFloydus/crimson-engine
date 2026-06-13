@@ -65,6 +65,26 @@ material {
             name : clearCoatRoughness
         },
         {
+            type : float3,
+            name : emissionColor
+        },
+        {
+            type : sampler2d,
+            name : emissionTexture
+        },
+        {
+            type : bool,
+            name : useEmissionTexture
+        },
+        {
+            type : float,
+            name : emissionIntensity
+        },
+        {
+            type : float,
+            name : emissionExposureWeight
+        },
+        {
             type : float,
             name : opacity
         },
@@ -133,6 +153,11 @@ fragment {
             metallic *= texture(materialParams_metallicTexture, getUV0()).r;
         }
 
+        float3 emission = materialParams.emissionColor;
+        if (materialParams.useEmissionTexture) {
+            emission *= texture(materialParams_emissionTexture, getUV0()).rgb;
+        }
+
         material.baseColor = float4(baseColor * opacity, opacity);
         material.roughness = roughness;
         material.metallic = metallic;
@@ -141,6 +166,7 @@ fragment {
         material.specularColorFactor = materialParams.specularColorFactor;
         material.clearCoat = materialParams.clearCoat;
         material.clearCoatRoughness = materialParams.clearCoatRoughness;
+        material.emissive = float4(emission * materialParams.emissionIntensity, materialParams.emissionExposureWeight);
 @QUADER_LIT_PBR_REFRACTION_INPUTS@
     }
 }

@@ -28,6 +28,7 @@ TEST(Scene, DefaultSceneStartsEmpty)
     EXPECT_TRUE(scene.environment_settings().enabled);
     EXPECT_FLOAT_EQ(30000.0f, scene.environment_settings().intensity);
     EXPECT_FALSE(scene.environment_settings().show_skybox);
+    EXPECT_FALSE(scene.post_processing_settings().bloom.enabled);
 }
 
 TEST(Scene, StoresClampedEnvironmentSettings)
@@ -52,6 +53,27 @@ TEST(Scene, StoresClampedEnvironmentSettings)
     EXPECT_FLOAT_EQ(0.5f, stored.fallback_color.g);
     EXPECT_FLOAT_EQ(0.0f, stored.fallback_color.b);
     EXPECT_FLOAT_EQ(0.75f, stored.fallback_color.a);
+}
+
+TEST(Scene, StoresClampedPostProcessingSettings)
+{
+    quader::Scene scene;
+
+    quader::PostProcessingSettings settings;
+    settings.bloom.enabled = true;
+    settings.bloom.strength = 2.0f;
+    settings.bloom.resolution = 1U;
+    settings.bloom.levels = 64U;
+    settings.bloom.highlight = -1.0f;
+
+    scene.set_post_processing_settings(settings);
+
+    const quader::PostProcessingSettings stored = scene.post_processing_settings();
+    EXPECT_TRUE(stored.bloom.enabled);
+    EXPECT_FLOAT_EQ(1.0f, stored.bloom.strength);
+    EXPECT_EQ(8U, stored.bloom.resolution);
+    EXPECT_EQ(11U, stored.bloom.levels);
+    EXPECT_FLOAT_EQ(10.0f, stored.bloom.highlight);
 }
 
 TEST(Scene, CreatesDefaultRenderableAndLightEntities)
@@ -186,6 +208,47 @@ TEST(Scene, RenderSnapshotCarriesEnvironmentSettings)
     EXPECT_FLOAT_EQ(15000.0f, snapshot.environment.intensity);
     EXPECT_FLOAT_EQ(-45.0f, snapshot.environment.rotation_degrees);
     EXPECT_FALSE(snapshot.environment.show_skybox);
+}
+
+TEST(Scene, RenderSnapshotCarriesPostProcessingSettings)
+{
+    quader::Scene scene;
+
+    quader::PostProcessingSettings settings;
+    settings.bloom.enabled = true;
+    settings.bloom.strength = 0.42f;
+    settings.bloom.quality = quader::BloomQuality::high;
+    scene.set_post_processing_settings(settings);
+
+    const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
+
+    EXPECT_TRUE(snapshot.post_processing.bloom.enabled);
+    EXPECT_FLOAT_EQ(0.42f, snapshot.post_processing.bloom.strength);
+    EXPECT_EQ(quader::BloomQuality::high, snapshot.post_processing.bloom.quality);
+}
+
+TEST(Scene, RenderSnapshotCarriesEmissiveMaterialSettings)
+{
+    quader::Scene scene;
+    const quader::SceneEntityId cube = scene.create_cube();
+
+    quader::PbrMaterialSettings material;
+    material.emission_color = { 0.25f, 0.5f, 1.0f };
+    material.emission_texture.source_path = "textures/neon.png";
+    material.emission_intensity = 650.0f;
+    material.emission_exposure_weight = 0.0f;
+    ASSERT_TRUE(scene.set_material(cube, material));
+
+    const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
+
+    ASSERT_EQ(1U, snapshot.meshes.size());
+    const quader::PbrMaterialSettings& snapshot_material = snapshot.meshes[0].material;
+    EXPECT_FLOAT_EQ(0.25f, snapshot_material.emission_color.r);
+    EXPECT_FLOAT_EQ(0.5f, snapshot_material.emission_color.g);
+    EXPECT_FLOAT_EQ(1.0f, snapshot_material.emission_color.b);
+    EXPECT_EQ("textures/neon.png", snapshot_material.emission_texture.source_path);
+    EXPECT_FLOAT_EQ(650.0f, snapshot_material.emission_intensity);
+    EXPECT_FLOAT_EQ(0.0f, snapshot_material.emission_exposure_weight);
 }
 
 TEST(Scene, RenderSnapshotCarriesTransparentMaterialSettings)

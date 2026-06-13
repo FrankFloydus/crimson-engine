@@ -145,6 +145,7 @@ struct SceneRenderPointLight {
 
 struct SceneRenderSnapshot {
     EnvironmentLightingSettings environment;
+    PostProcessingSettings post_processing;
     std::vector<SceneRenderMesh> meshes;
     std::vector<SceneRenderDirectionalLight> directional_lights;
     std::vector<SceneRenderPointLight> point_lights;

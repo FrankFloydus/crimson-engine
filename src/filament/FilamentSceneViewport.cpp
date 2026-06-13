@@ -292,6 +292,8 @@ const char* texture_slot_name(PbrMaterialTextureSlot slot)
         return "metallic";
     case PbrMaterialTextureSlot::opacity:
         return "opacity";
+    case PbrMaterialTextureSlot::emission:
+        return "emission";
     }
 
     return "unknown";
@@ -461,6 +463,48 @@ const char* texture_slot_name(PbrMaterialTextureSlot slot)
     }
 
     return filament::MaterialInstance::CullingMode::BACK;
+}
+
+[[nodiscard]] filament::View::BloomOptions::BlendMode filament_bloom_blend_mode(BloomBlendMode mode)
+{
+    switch (mode) {
+    case BloomBlendMode::add:
+        return filament::View::BloomOptions::BlendMode::ADD;
+    case BloomBlendMode::interpolate:
+        return filament::View::BloomOptions::BlendMode::INTERPOLATE;
+    }
+
+    return filament::View::BloomOptions::BlendMode::ADD;
+}
+
+[[nodiscard]] filament::QualityLevel filament_quality(BloomQuality quality)
+{
+    switch (quality) {
+    case BloomQuality::low:
+        return filament::QualityLevel::LOW;
+    case BloomQuality::medium:
+        return filament::QualityLevel::MEDIUM;
+    case BloomQuality::high:
+        return filament::QualityLevel::HIGH;
+    }
+
+    return filament::QualityLevel::LOW;
+}
+
+[[nodiscard]] filament::View::BloomOptions filament_bloom_options(BloomSettings settings)
+{
+    settings = clamp_bloom_settings(settings);
+
+    filament::View::BloomOptions options;
+    options.enabled = settings.enabled;
+    options.strength = settings.strength;
+    options.resolution = settings.resolution;
+    options.levels = settings.levels;
+    options.blendMode = filament_bloom_blend_mode(settings.blend_mode);
+    options.quality = filament_quality(settings.quality);
+    options.threshold = settings.threshold;
+    options.highlight = settings.highlight;
+    return options;
 }
 
 [[nodiscard]] filament::math::float3 filament_absorption(PbrMaterialSettings settings)
@@ -1403,6 +1447,11 @@ public:
             PbrMaterialTextureSlot::opacity,
             PreviewTextureEncoding::linear_red,
             fallback_scalar_texture);
+        const MaterialTextureBinding emission_texture = resolve_texture(
+            settings.emission_texture,
+            PbrMaterialTextureSlot::emission,
+            PreviewTextureEncoding::srgb_rgba,
+            fallback_albedo_texture);
 
         instance.setParameter(
             "albedo",
@@ -1424,6 +1473,11 @@ public:
             to_filament_color(settings.specular_color_factor));
         instance.setParameter("clearCoat", settings.clear_coat);
         instance.setParameter("clearCoatRoughness", settings.clear_coat_roughness);
+        instance.setParameter("emissionColor", filament::RgbType::LINEAR, to_filament_color(settings.emission_color));
+        instance.setParameter("emissionTexture", emission_texture.texture, texture_sampler);
+        instance.setParameter("useEmissionTexture", emission_texture.use_source_texture);
+        instance.setParameter("emissionIntensity", settings.emission_intensity);
+        instance.setParameter("emissionExposureWeight", settings.emission_exposure_weight);
         instance.setParameter("opacity", settings.opacity);
         instance.setParameter("opacityTexture", opacity_texture.texture, texture_sampler);
         instance.setParameter("useOpacityTexture", opacity_texture.use_source_texture);
@@ -2167,6 +2221,7 @@ struct FilamentSceneViewport::Resources {
         ZoneScopedN("Filament scene viewport render");
 
         const SceneRenderSnapshot& snapshot = std::get<SceneViewportSubject>(request.subject).snapshot;
+        view->setBloomOptions(filament_bloom_options(snapshot.post_processing.bloom));
         if (environment_resources != nullptr) {
             environment_resources->apply(snapshot.environment);
         }
