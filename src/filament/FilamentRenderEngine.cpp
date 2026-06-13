@@ -15,6 +15,7 @@ module;
 module quader.filament.render_engine;
 
 import quader.filament.scene_viewport;
+import quader.filament.renderer_capabilities;
 import quader.filament.viewport_vulkan_platform;
 import quader.render.opengl_texture;
 
@@ -150,6 +151,9 @@ struct FilamentRenderEngine::Resources {
 FilamentRenderEngine::FilamentRenderEngine(VulkanSharedDeviceContext shared_device_context)
     : resources_(std::make_unique<Resources>(std::move(shared_device_context)))
 {
+    status_.engine_kind = RenderEngineKind::filament;
+    status_.engine_name = std::string(render_engine_kind_display_name(RenderEngineKind::filament));
+
     try {
         if (!resources_->shared_device_context.is_valid()) {
             status_.message = "Filament viewport renderer received an invalid app Vulkan shared device context.";
@@ -184,6 +188,9 @@ FilamentRenderEngine::FilamentRenderEngine(
     IOpenGlTexture2DAllocator& texture_allocator)
     : resources_(std::make_unique<Resources>(shared_context, texture_allocator))
 {
+    status_.engine_kind = RenderEngineKind::filament;
+    status_.engine_name = std::string(render_engine_kind_display_name(RenderEngineKind::filament));
+
     try {
         if (!resources_->opengl_shared_context.is_valid()) {
             status_.message = "Filament OpenGL viewport renderer received an invalid shared native OpenGL context.";
@@ -220,6 +227,11 @@ FilamentRenderEngine::~FilamentRenderEngine() = default;
 RendererStatus FilamentRenderEngine::status() const
 {
     return status_;
+}
+
+RendererCapabilities FilamentRenderEngine::capabilities() const
+{
+    return filament_renderer_capabilities();
 }
 
 std::optional<ViewportId> FilamentRenderEngine::try_create_viewport()
@@ -318,7 +330,7 @@ std::optional<ViewportRenderFrame> FilamentRenderEngine::try_consume_viewport_fr
             return std::nullopt;
         }
 
-        entry->second.frame.payload.gpu_image = image->handle;
+        entry->second.frame.payload.gpu_image = image->texture.handle;
     }
 
     entry->second.frame_available = false;

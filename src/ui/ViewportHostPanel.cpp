@@ -40,28 +40,6 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
     ViewportCameraPreset::front,
 };
 
-constexpr std::array<BloomBlendMode, 2> kBloomBlendModes {
-    BloomBlendMode::add,
-    BloomBlendMode::interpolate,
-};
-
-constexpr std::array<BloomQuality, 3> kBloomQualities {
-    BloomQuality::low,
-    BloomQuality::medium,
-    BloomQuality::high,
-};
-
-constexpr std::array<AmbientOcclusionAlgorithm, 2> kAmbientOcclusionAlgorithms {
-    AmbientOcclusionAlgorithm::scalable,
-    AmbientOcclusionAlgorithm::ground_truth,
-};
-
-constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
-    AmbientOcclusionQuality::low,
-    AmbientOcclusionQuality::medium,
-    AmbientOcclusionQuality::high,
-};
-
 [[nodiscard]] const char* bloom_blend_mode_label(BloomBlendMode mode)
 {
     switch (mode) {
@@ -112,6 +90,72 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
     }
 
     return "Low";
+}
+
+template <typename Option, typename Value>
+[[nodiscard]] const Option* find_option(std::span<const Option> options, Value value)
+{
+    for (const Option& option : options) {
+        if (option.value == value) {
+            return &option;
+        }
+    }
+
+    return nullptr;
+}
+
+template <typename Option, typename Value>
+[[nodiscard]] const char* option_label(std::span<const Option> options, Value value, const char* fallback)
+{
+    if (const Option* option = find_option(options, value); option != nullptr && option->label[0] != '\0') {
+        return option->label;
+    }
+
+    return fallback;
+}
+
+template <typename Value, typename Option>
+[[nodiscard]] bool render_resettable_capability_combo(
+    const char* label,
+    Value& value,
+    Value default_value,
+    std::span<const Option> options,
+    const char* fallback_label,
+    const char* tooltip)
+{
+    if (options.empty()) {
+        return false;
+    }
+
+    bool changed = false;
+    const ResettablePropertyLayout layout =
+        begin_resettable_property(label, tooltip, value != default_value);
+    {
+        const ComboScope combo("##Value", option_label(options, value, fallback_label));
+        render_item_tooltip(tooltip);
+        if (combo) {
+            for (const Option& option : options) {
+                const bool selected = value == option.value;
+                const DisabledScope disabled(!option.supported);
+                if (ImGui::Selectable(option.label, selected)) {
+                    value = option.value;
+                    changed = true;
+                }
+                render_item_tooltip(
+                    option.supported || option.unsupported_reason[0] == '\0' ?
+                        option.description :
+                        option.unsupported_reason);
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+        }
+    }
+    if (end_resettable_property(layout)) {
+        value = default_value;
+        changed = true;
+    }
+    return changed;
 }
 
 [[nodiscard]] std::span<const ViewportId> viewport_ids_from(
@@ -230,13 +274,21 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
 
 [[nodiscard]] bool draw_environment_popup(
     EnvironmentLightingSettings& settings,
-    const ViewportHostUiStyle& style)
+    const ViewportHostUiStyle& style,
+    const RendererCapabilities& renderer)
 {
+    const RendererEnvironmentLightingCapabilities& capabilities = renderer.environment_lighting;
     bool changed = false;
-    if (ImGui::Button("Environment", ImVec2 { style.environment_button_width, 0.0f })) {
-        ImGui::OpenPopup("EnvironmentSettingsPopup");
+    {
+        const DisabledScope disabled(!capabilities.feature.supported);
+        if (ImGui::Button("Environment", ImVec2 { style.environment_button_width, 0.0f })) {
+            ImGui::OpenPopup("EnvironmentSettingsPopup");
+        }
     }
-    render_item_tooltip("Edits the scene environment lighting used by every viewport.");
+    render_item_tooltip(
+        capabilities.feature.supported ?
+            capabilities.feature.description :
+            capabilities.feature.unsupported_reason);
 
     // Popups auto-fit their contents. The resettable controls size from the available width,
     // so clamp X to avoid a feedback loop where changed rows make the popup grow every frame.
@@ -246,7 +298,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
     ImGui::SetNextWindowSize(ImVec2 { style.environment_popup_width, 0.0f }, ImGuiCond_Appearing);
     const PopupScope popup("EnvironmentSettingsPopup");
     if (popup) {
-        const EnvironmentLightingSettings defaults;
+        const EnvironmentLightingSettings& defaults = renderer.defaults.environment_lighting;
 
         ImGui::TextUnformatted(environment_lighting_source_name(settings.source));
         render_item_tooltip("Current environment source.");
@@ -267,7 +319,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                 0.0f,
                 200000.0f,
                 "%.0f",
-                "Scales the indirect light in lux.");
+                capabilities.intensity.description);
             changed |= render_resettable_float_drag(
                 "Rotation",
                 settings.rotation_degrees,
@@ -276,19 +328,19 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                 -180.0f,
                 180.0f,
                 "%.1f deg",
-                "Rotates the environment around the vertical axis.");
+                capabilities.rotation.description);
             changed |= render_resettable_checkbox(
                 "Skybox",
                 settings.show_skybox,
                 defaults.show_skybox,
-                "Shows the environment as the viewport background.");
+                capabilities.skybox.description);
         }
 
         changed |= render_resettable_srgb_rgba_edit(
             "Fallback",
             settings.fallback_color,
             defaults.fallback_color,
-            "Viewport background color used when the environment skybox is hidden or unavailable.");
+            capabilities.fallback_color.description);
 
         if (changed) {
             settings = clamp_environment_lighting_settings(settings);
@@ -372,13 +424,21 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
 
 [[nodiscard]] bool draw_post_processing_popup(
     PostProcessingSettings& settings,
-    const ViewportHostUiStyle& style)
+    const ViewportHostUiStyle& style,
+    const RendererCapabilities& renderer)
 {
+    const RendererPostProcessingCapabilities& capabilities = renderer.post_processing;
     bool changed = false;
-    if (ImGui::Button("Post FX", ImVec2 { style.post_processing_button_width, 0.0f })) {
-        ImGui::OpenPopup("PostProcessingSettingsPopup");
+    {
+        const DisabledScope disabled(!capabilities.feature.supported);
+        if (ImGui::Button("Post FX", ImVec2 { style.post_processing_button_width, 0.0f })) {
+            ImGui::OpenPopup("PostProcessingSettingsPopup");
+        }
     }
-    render_item_tooltip("Edits post-processing effects applied to rendered viewports.");
+    render_item_tooltip(
+        capabilities.feature.supported ?
+            capabilities.feature.description :
+            capabilities.feature.unsupported_reason);
 
     ImGui::SetNextWindowSizeConstraints(
         ImVec2 { style.post_processing_popup_width, 0.0f },
@@ -386,9 +446,10 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
     ImGui::SetNextWindowSize(ImVec2 { style.post_processing_popup_width, 0.0f }, ImGuiCond_Appearing);
     const PopupScope popup("PostProcessingSettingsPopup");
     if (popup) {
-        const PostProcessingSettings defaults;
+        const PostProcessingSettings& defaults = renderer.defaults.post_processing;
 
-        if (ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (capabilities.bloom.feature.supported &&
+            ImGui::CollapsingHeader("Bloom", ImGuiTreeNodeFlags_DefaultOpen)) {
             BloomSettings& bloom = settings.bloom;
             const BloomSettings& default_bloom = defaults.bloom;
 
@@ -396,7 +457,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                 "Enabled",
                 bloom.enabled,
                 default_bloom.enabled,
-                "Adds a glow around high-luminance pixels, including emissive materials.");
+                capabilities.bloom.feature.description);
 
             {
                 DisabledScope disabled(!bloom.enabled);
@@ -408,40 +469,45 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.0f,
                     1.0f,
                     "%.3f",
-                    "How much bloom is added back into the scene.");
+                    capabilities.bloom.strength.description);
                 changed |= draw_uint32_drag_property(
                     "Resolution",
                     bloom.resolution,
                     default_bloom.resolution,
                     8,
                     4096,
-                    "Minor-axis resolution of the bloom buffer.");
+                    capabilities.bloom.resolution.description);
                 changed |= draw_uint8_drag_property(
                     "Levels",
                     bloom.levels,
                     default_bloom.levels,
                     1,
                     11,
-                    "Number of blur levels used to spread the glow.");
-                changed |= render_resettable_combo(
+                    capabilities.bloom.levels.description);
+                changed |= render_resettable_capability_combo(
                     "Blend",
                     bloom.blend_mode,
                     default_bloom.blend_mode,
-                    std::span<const BloomBlendMode> { kBloomBlendModes },
-                    bloom_blend_mode_label,
-                    "Chooses whether bloom is added to or interpolated with the scene.");
-                changed |= render_resettable_combo(
+                    capabilities.bloom.blend_modes.options(),
+                    bloom_blend_mode_label(bloom.blend_mode),
+                    capabilities.bloom.blend.description);
+                changed |= render_resettable_capability_combo(
                     "Quality",
                     bloom.quality,
                     default_bloom.quality,
-                    std::span<const BloomQuality> { kBloomQualities },
-                    bloom_quality_label,
-                    "Controls the filter quality used by the bloom pass.");
-                changed |= render_resettable_checkbox(
-                    "Threshold",
-                    bloom.threshold,
-                    default_bloom.threshold,
-                    "Only blooms HDR values above Filament's bloom threshold.");
+                    capabilities.bloom.qualities.options(),
+                    bloom_quality_label(bloom.quality),
+                    capabilities.bloom.quality.description);
+                {
+                    const DisabledScope threshold_disabled(!capabilities.bloom.threshold.supported);
+                    changed |= render_resettable_checkbox(
+                        "Threshold",
+                        bloom.threshold,
+                        default_bloom.threshold,
+                        capabilities.bloom.threshold.supported ?
+                            capabilities.bloom.threshold.description :
+                            capabilities.bloom.threshold.unsupported_reason);
+                }
                 changed |= render_resettable_float_drag(
                     "Highlight Limit",
                     bloom.highlight,
@@ -450,11 +516,12 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     10.0f,
                     1000000.0f,
                     "%.0f",
-                    "Caps very bright highlights before bloom.");
+                    capabilities.bloom.highlight.description);
             }
         }
 
-        if (ImGui::CollapsingHeader("Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (capabilities.ambient_occlusion.feature.supported &&
+            ImGui::CollapsingHeader("Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen)) {
             AmbientOcclusionSettings& ambient_occlusion = settings.ambient_occlusion;
             const AmbientOcclusionSettings& default_ambient_occlusion = defaults.ambient_occlusion;
 
@@ -462,17 +529,17 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                 "Enabled##AmbientOcclusion",
                 ambient_occlusion.enabled,
                 default_ambient_occlusion.enabled,
-                "Adds screen-space occlusion to indirect lighting.");
+                capabilities.ambient_occlusion.feature.description);
 
             {
                 DisabledScope disabled(!ambient_occlusion.enabled);
-                changed |= render_resettable_combo(
+                changed |= render_resettable_capability_combo(
                     "Algorithm",
                     ambient_occlusion.algorithm,
                     default_ambient_occlusion.algorithm,
-                    std::span<const AmbientOcclusionAlgorithm> { kAmbientOcclusionAlgorithms },
-                    ambient_occlusion_algorithm_label,
-                    "Chooses the screen-space occlusion algorithm.");
+                    capabilities.ambient_occlusion.algorithms.options(),
+                    ambient_occlusion_algorithm_label(ambient_occlusion.algorithm),
+                    "Chooses the ambient occlusion algorithm.");
                 changed |= render_resettable_float_drag(
                     "Radius",
                     ambient_occlusion.radius,
@@ -481,7 +548,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.0f,
                     10.0f,
                     "%.3f",
-                    "World-space occlusion radius in meters.");
+                    capabilities.ambient_occlusion.radius.description);
                 changed |= render_resettable_float_drag(
                     "Intensity",
                     ambient_occlusion.intensity,
@@ -490,7 +557,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.0f,
                     10.0f,
                     "%.3f",
-                    "Strength of the ambient occlusion pass.");
+                    capabilities.ambient_occlusion.intensity.description);
                 changed |= render_resettable_float_drag(
                     "Power",
                     ambient_occlusion.power,
@@ -499,7 +566,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.001f,
                     16.0f,
                     "%.3f",
-                    "Contrast curve applied to the occlusion term.");
+                    capabilities.ambient_occlusion.power.description);
                 changed |= render_resettable_float_drag(
                     "Bias",
                     ambient_occlusion.bias,
@@ -508,7 +575,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.0f,
                     0.1f,
                     "%.4f",
-                    "World-space self-occlusion bias.");
+                    capabilities.ambient_occlusion.bias.description);
                 changed |= render_resettable_float_drag(
                     "Resolution",
                     ambient_occlusion.resolution_scale,
@@ -517,7 +584,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.5f,
                     1.0f,
                     "%.1f",
-                    "AO buffer scale; Filament accepts half or full resolution.");
+                    capabilities.ambient_occlusion.resolution.description);
                 changed |= render_resettable_float_drag(
                     "Bilateral Threshold",
                     ambient_occlusion.bilateral_threshold,
@@ -526,33 +593,33 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.0f,
                     1.0f,
                     "%.3f",
-                    "Depth threshold used by the bilateral filter.");
-                changed |= render_resettable_combo(
+                    capabilities.ambient_occlusion.bilateral_threshold.description);
+                changed |= render_resettable_capability_combo(
                     "Quality##AmbientOcclusion",
                     ambient_occlusion.quality,
                     default_ambient_occlusion.quality,
-                    std::span<const AmbientOcclusionQuality> { kAmbientOcclusionQualities },
-                    ambient_occlusion_quality_label,
-                    "Controls sampling and filtering quality.");
-                changed |= render_resettable_combo(
+                    capabilities.ambient_occlusion.qualities.options(),
+                    ambient_occlusion_quality_label(ambient_occlusion.quality),
+                    capabilities.ambient_occlusion.quality.description);
+                changed |= render_resettable_capability_combo(
                     "Low Pass",
                     ambient_occlusion.low_pass_filter,
                     default_ambient_occlusion.low_pass_filter,
-                    std::span<const AmbientOcclusionQuality> { kAmbientOcclusionQualities },
-                    ambient_occlusion_quality_label,
-                    "Controls AO smoothness.");
-                changed |= render_resettable_combo(
+                    capabilities.ambient_occlusion.qualities.options(),
+                    ambient_occlusion_quality_label(ambient_occlusion.low_pass_filter),
+                    capabilities.ambient_occlusion.low_pass_filter.description);
+                changed |= render_resettable_capability_combo(
                     "Upsampling",
                     ambient_occlusion.upsampling,
                     default_ambient_occlusion.upsampling,
-                    std::span<const AmbientOcclusionQuality> { kAmbientOcclusionQualities },
-                    ambient_occlusion_quality_label,
-                    "Controls AO buffer upsampling quality.");
+                    capabilities.ambient_occlusion.qualities.options(),
+                    ambient_occlusion_quality_label(ambient_occlusion.upsampling),
+                    capabilities.ambient_occlusion.upsampling.description);
                 changed |= render_resettable_checkbox(
                     "Bent Normals",
                     ambient_occlusion.bent_normals,
                     default_ambient_occlusion.bent_normals,
-                    "Computes bent normals for more accurate specular occlusion.");
+                    capabilities.ambient_occlusion.bent_normals.description);
                 changed |= render_resettable_float_drag(
                     "Min Horizon",
                     ambient_occlusion.min_horizon_angle_radians,
@@ -561,16 +628,17 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     0.0f,
                     1.5708f,
                     "%.3f",
-                    "Minimum horizon angle in radians for scalable AO.");
+                    capabilities.ambient_occlusion.min_horizon_angle.description);
 
-                if (ImGui::TreeNodeEx("SSCT", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (capabilities.ambient_occlusion.cone_tracing.supported &&
+                    ImGui::TreeNodeEx("Cone Tracing", ImGuiTreeNodeFlags_DefaultOpen)) {
                     AmbientOcclusionSsctSettings& ssct = ambient_occlusion.ssct;
                     const AmbientOcclusionSsctSettings& default_ssct = default_ambient_occlusion.ssct;
                     changed |= render_resettable_checkbox(
                         "Enabled",
                         ssct.enabled,
                         default_ssct.enabled,
-                        "Adds screen-space cone-traced ambient shadows from a dominant light direction.");
+                        capabilities.ambient_occlusion.cone_tracing.description);
                     {
                         DisabledScope ssct_disabled(!ssct.enabled);
                         changed |= render_resettable_float_drag(
@@ -608,7 +676,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                             0.0f,
                             10.0f,
                             "%.3f",
-                            "SSCT shadow strength.");
+                            "Cone-traced ambient shadow strength.");
                         changed |= draw_vec3_drag_property(
                             "Light Direction",
                             ssct.light_direction,
@@ -652,7 +720,8 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNodeEx("GTAO", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (capabilities.ambient_occlusion.ground_truth_detail.supported &&
+                    ImGui::TreeNodeEx("Ground Truth Detail", ImGuiTreeNodeFlags_DefaultOpen)) {
                     AmbientOcclusionGtaoSettings& gtao = ambient_occlusion.gtao;
                     const AmbientOcclusionGtaoSettings& default_gtao = default_ambient_occlusion.gtao;
                     changed |= draw_uint8_drag_property(
@@ -677,12 +746,12 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                         0.0f,
                         1.0f,
                         "%.3f",
-                        "Thickness heuristic used by GTAO without visibility bitmasks.");
+                        "Thickness heuristic used when visibility bitmasks are disabled.");
                     changed |= render_resettable_checkbox(
                         "Visibility Bitmasks",
                         gtao.use_visibility_bitmasks,
                         default_gtao.use_visibility_bitmasks,
-                        "Enables GTAO visibility bitmasks; changing this can trigger shader recompilation.");
+                        capabilities.ambient_occlusion.visibility_bitmasks.description);
                     changed |= render_resettable_float_drag(
                         "Const Thickness",
                         gtao.const_thickness,
@@ -696,7 +765,7 @@ constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
                         "Linear Thickness",
                         gtao.linear_thickness,
                         default_gtao.linear_thickness,
-                        "Increases GTAO thickness with distance; changing this can trigger shader recompilation.");
+                        capabilities.ambient_occlusion.linear_thickness.description);
                     ImGui::TreePop();
                 }
             }
@@ -1062,9 +1131,9 @@ ViewportHostPanelResult draw_viewport_host_panel(const ViewportHostPanelInput& i
     if (window) {
         result.layout_changed |= draw_layout_combo(layout_state, style);
         ImGui::SameLine(0.0f, style.toolbar_control_gap);
-        result.environment_changed |= draw_environment_popup(environment_settings, style);
+        result.environment_changed |= draw_environment_popup(environment_settings, style, input.renderer);
         ImGui::SameLine(0.0f, style.toolbar_control_gap);
-        result.post_processing_changed |= draw_post_processing_popup(post_processing_settings, style);
+        result.post_processing_changed |= draw_post_processing_popup(post_processing_settings, style, input.renderer);
         ImGui::Separator();
 
         const ImVec2 content_origin = ImGui::GetCursorScreenPos();

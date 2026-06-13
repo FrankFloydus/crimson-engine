@@ -11,6 +11,7 @@ module;
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 module quader.ui.imgui_layer;
@@ -22,11 +23,56 @@ import quader.ui.viewport_texture_store;
 namespace quader {
 namespace {
 
+constexpr ViewportTexturePayloadKind kVulkanViewportTexturePayloadKind =
+    viewport_texture_payload_kind("quader.viewport_texture.vulkan.image_view_sampler.v1");
+
+struct VulkanViewportTexturePayload {
+    VkImageView image_view = VK_NULL_HANDLE;
+    VkSampler sampler = VK_NULL_HANDLE;
+    VkImageLayout image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return image_view != VK_NULL_HANDLE &&
+            sampler != VK_NULL_HANDLE &&
+            image_layout != VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+};
+
+template <typename Handle>
+[[nodiscard]] Handle texture_handle_from_payload_word(uint64_t word) noexcept
+{
+    if constexpr (std::is_pointer_v<Handle>) {
+        return reinterpret_cast<Handle>(static_cast<std::uintptr_t>(word));
+    } else {
+        return static_cast<Handle>(word);
+    }
+}
+
+[[nodiscard]] std::optional<VulkanViewportTexturePayload> unpack_vulkan_viewport_texture_token(
+    const ViewportTextureToken& texture) noexcept
+{
+    if (!texture.is_valid() || texture.payload_kind != kVulkanViewportTexturePayloadKind) {
+        return std::nullopt;
+    }
+
+    VulkanViewportTexturePayload payload {
+        .image_view = texture_handle_from_payload_word<VkImageView>(texture.payload.word0),
+        .sampler = texture_handle_from_payload_word<VkSampler>(texture.payload.word1),
+        .image_layout = static_cast<VkImageLayout>(texture.payload.word2),
+    };
+    if (!payload.is_valid()) {
+        return std::nullopt;
+    }
+
+    return payload;
+}
+
 class ImGuiViewportTextureRegistry final : public IViewportTextureRegistry {
 public:
     [[nodiscard]] uint64_t add_texture(const ViewportTextureToken& texture) override
     {
-        const std::optional<ViewportVulkanTextureTokenPayload> payload =
+        const std::optional<VulkanViewportTexturePayload> payload =
             unpack_vulkan_viewport_texture_token(texture);
         if (!payload.has_value()) {
             return 0;

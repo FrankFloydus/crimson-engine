@@ -10,6 +10,7 @@ export import quader.app.viewport_frame_presenter;
 export import quader.platform.app_event_dispatcher;
 export import quader.platform.file_dialog;
 export import quader.render.driver_kind;
+export import quader.render.engine_factory;
 export import quader.render.status;
 export import quader.render.viewport_renderer;
 export import quader.ui_shell.editor_shell;
@@ -41,6 +42,7 @@ public:
 
 [[nodiscard]] std::unique_ptr<IEditorRuntimeHost> create_editor_runtime_host(
     RenderDriverSelection selection,
-    EditorRuntimeHostConfig config);
+    EditorRuntimeHostConfig config,
+    const IRenderEngineFactory& render_engine_factory);
 
 } // namespace quader

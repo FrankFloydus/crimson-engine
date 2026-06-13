@@ -4,6 +4,8 @@ module;
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -19,11 +21,41 @@ import quader.ui.viewport_texture_store;
 namespace quader {
 namespace {
 
+constexpr ViewportTexturePayloadKind kOpenGlViewportTexturePayloadKind =
+    viewport_texture_payload_kind("quader.viewport_texture.opengl.texture2d.v1");
+
+struct OpenGlViewportTexturePayload {
+    uint32_t texture_id = 0;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return texture_id != 0;
+    }
+};
+
+[[nodiscard]] std::optional<OpenGlViewportTexturePayload> unpack_opengl_viewport_texture_token(
+    const ViewportTextureToken& texture) noexcept
+{
+    if (!texture.is_valid() || texture.payload_kind != kOpenGlViewportTexturePayloadKind ||
+        texture.payload.word0 > std::numeric_limits<uint32_t>::max()) {
+        return std::nullopt;
+    }
+
+    OpenGlViewportTexturePayload payload {
+        .texture_id = static_cast<uint32_t>(texture.payload.word0),
+    };
+    if (!payload.is_valid()) {
+        return std::nullopt;
+    }
+
+    return payload;
+}
+
 class ImGuiOpenGlViewportTextureRegistry final : public IViewportTextureRegistry {
 public:
     [[nodiscard]] uint64_t add_texture(const ViewportTextureToken& texture) override
     {
-        const std::optional<ViewportOpenGlTextureTokenPayload> payload =
+        const std::optional<OpenGlViewportTexturePayload> payload =
             unpack_opengl_viewport_texture_token(texture);
         if (!payload.has_value()) {
             return 0;

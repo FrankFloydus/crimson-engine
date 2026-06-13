@@ -124,7 +124,7 @@ TEST(ScenePropertiesPanelController, FrameInputReportsBusyWhileDialogIsPending)
         selection));
 
     const quader::ScenePropertiesPanelFrameInput input =
-        controller.build_frame_input(scene, dialog, selection);
+        controller.build_frame_input(scene, dialog, selection, quader::default_renderer_capabilities());
 
     EXPECT_TRUE(input.property_inspector.material_texture_picker_busy);
     ASSERT_TRUE(input.property_inspector.entity.has_value());

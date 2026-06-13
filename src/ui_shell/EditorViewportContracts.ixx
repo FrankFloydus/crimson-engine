@@ -8,6 +8,7 @@ module;
 
 export module quader.ui_shell.editor_viewport_contracts;
 
+export import quader.render.capabilities;
 export import quader.render.types;
 export import quader.render.viewport_types;
 export import quader.ui_shell.editor_viewport_layout;
@@ -97,6 +98,7 @@ struct ViewportHostPanelInput {
     ViewportLayoutState layout;
     EnvironmentLightingSettings environment;
     PostProcessingSettings post_processing;
+    RendererCapabilities renderer;
     std::span<const ViewportPaneInput> panes;
 };
 

@@ -15,6 +15,14 @@ The preset uses vcpkg manifest mode and the Filament SDK at:
 C:\Users\Drako\Desktop\_QUADER_NATIVE\thirdy-party\filament-v1.71.5-windows
 ```
 
+To verify project contracts without the Filament backend:
+
+```powershell
+cmake --preset vs2026-x64-no-filament
+cmake --build --preset debug-no-filament --target quader_no_filament_contract_tests
+ctest --test-dir .\out\build\vs2026-x64-no-filament -C Debug -L no_filament --output-on-failure
+```
+
 ## Run
 
 ```powershell

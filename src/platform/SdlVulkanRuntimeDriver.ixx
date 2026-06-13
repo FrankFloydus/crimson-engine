@@ -8,12 +8,16 @@ export module quader.platform.sdl_vulkan_runtime_driver;
 
 export import quader.platform.sdl_imgui_runtime_driver;
 export import quader.platform.sdl_window;
+export import quader.render.engine_factory;
 
 export namespace quader {
 
 class SdlVulkanRuntimeDriver final : public ISdlImGuiRuntimeDriver {
 public:
-    SdlVulkanRuntimeDriver(const SdlWindow& window, std::string imgui_ini_file);
+    SdlVulkanRuntimeDriver(
+        const SdlWindow& window,
+        std::string imgui_ini_file,
+        const IRenderEngineFactory& render_engine_factory);
 
     SdlVulkanRuntimeDriver(const SdlVulkanRuntimeDriver&) = delete;
     SdlVulkanRuntimeDriver& operator=(const SdlVulkanRuntimeDriver&) = delete;

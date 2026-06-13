@@ -7,6 +7,7 @@
 import quader.app;
 import quader.diagnostics.fatal_diagnostics;
 import quader.diagnostics.logger;
+import quader.filament.render_engine_factory;
 import quader.platform.fatal_error_dialog;
 import quader.platform.sdl_user_settings_paths;
 
@@ -31,7 +32,10 @@ int main(int, char**)
         quader::install_fatal_diagnostics();
         QUADER_LOG_INFO("Quader Native starting.");
 
-        quader::Application app(quader::resolve_sdl_user_settings_paths());
+        const quader::FilamentRenderEngineFactory render_engine_factory;
+        quader::Application app(
+            quader::resolve_sdl_user_settings_paths(),
+            render_engine_factory);
         const int exit_code = app.run();
 
         QUADER_LOG_INFO("Quader Native stopped with exit code {}.", exit_code);

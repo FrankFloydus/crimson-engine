@@ -8,6 +8,7 @@ module;
 export module quader.app;
 
 export import quader.app.user_settings_paths;
+export import quader.render.engine_factory;
 import quader.app.editor_viewport;
 import quader.app.editor_command_stack;
 import quader.app.editor_hover;
@@ -24,7 +25,9 @@ export namespace quader {
 
 class Application {
 public:
-    explicit Application(UserSettingsPaths user_settings_paths);
+    Application(
+        UserSettingsPaths user_settings_paths,
+        const IRenderEngineFactory& render_engine_factory);
 
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;

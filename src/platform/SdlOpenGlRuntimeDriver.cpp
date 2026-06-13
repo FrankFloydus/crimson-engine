@@ -3,6 +3,7 @@ module;
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -10,7 +11,6 @@ module quader.platform.sdl_opengl_runtime_driver;
 
 import quader.platform.sdl_opengl_context;
 import quader.platform.sdl_opengl_texture_allocator;
-import quader.render.engine_factory;
 import quader.render.startup_validation;
 import quader.ui.imgui_opengl_layer;
 
@@ -18,6 +18,7 @@ namespace quader {
 namespace {
 
 std::unique_ptr<IViewportRenderer> create_opengl_renderer_engine_or_throw(
+    const IRenderEngineFactory& render_engine_factory,
     SdlOpenGlContext& context,
     IOpenGlTexture2DAllocator& texture_allocator)
 {
@@ -25,10 +26,13 @@ std::unique_ptr<IViewportRenderer> create_opengl_renderer_engine_or_throw(
     const OpenGlSharedContextHandle shared_context = context.shared_context_handle();
     // WGL can reject context sharing while the source context is current on another thread.
     context.clear_current();
-    std::unique_ptr<IViewportRenderer> render_engine = create_opengl_viewport_renderer(
+    std::unique_ptr<IViewportRenderer> render_engine = render_engine_factory.create_opengl_viewport_renderer(
         shared_context,
         texture_allocator);
     context.make_current();
+    if (!render_engine) {
+        throw std::runtime_error("Renderer engine factory returned null for OpenGL.");
+    }
     throw_if_renderer_failed_to_start(render_engine->status());
     return render_engine;
 }
@@ -37,10 +41,16 @@ std::unique_ptr<IViewportRenderer> create_opengl_renderer_engine_or_throw(
 
 class SdlOpenGlRuntimeDriver::Impl final {
 public:
-    Impl(const SdlWindow& window, std::string imgui_ini_file)
+    Impl(
+        const SdlWindow& window,
+        std::string imgui_ini_file,
+        const IRenderEngineFactory& render_engine_factory)
         : context(window)
         , texture_allocator(context)
-        , viewport_renderer(create_opengl_renderer_engine_or_throw(context, texture_allocator))
+        , viewport_renderer(create_opengl_renderer_engine_or_throw(
+              render_engine_factory,
+              context,
+              texture_allocator))
         , imgui(window, context, std::move(imgui_ini_file))
     {
     }
@@ -53,8 +63,9 @@ public:
 
 SdlOpenGlRuntimeDriver::SdlOpenGlRuntimeDriver(
     const SdlWindow& window,
-    std::string imgui_ini_file)
-    : impl_(std::make_unique<Impl>(window, std::move(imgui_ini_file)))
+    std::string imgui_ini_file,
+    const IRenderEngineFactory& render_engine_factory)
+    : impl_(std::make_unique<Impl>(window, std::move(imgui_ini_file), render_engine_factory))
 {
 }
 

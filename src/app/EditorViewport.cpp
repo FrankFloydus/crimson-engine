@@ -234,6 +234,7 @@ void EditorViewport::render_scene_viewport_host(
         .layout = layout_state_,
         .environment = scene.environment_settings(),
         .post_processing = scene.post_processing_settings(),
+        .renderer = renderer_->capabilities(),
         .panes = panes,
     });
     if (result.layout_changed) {

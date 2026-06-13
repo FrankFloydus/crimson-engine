@@ -10,6 +10,7 @@ module;
 module quader.app.viewport_instance;
 
 import quader.diagnostics.fatal_diagnostics;
+import quader.app.scene_render_snapshot_builder;
 import quader.render.viewport_projection_policy;
 import quader.render.viewport_gizmos;
 

@@ -31,7 +31,9 @@ include(GoogleTest)
 enable_testing()
 
 option(QUADER_ENABLE_TRACY "Enable Tracy profiling zones." ON)
+option(QUADER_ENABLE_FILAMENT_BACKEND "Build the Filament renderer backend and app targets." ON)
 
+if(QUADER_ENABLE_FILAMENT_BACKEND)
 set(FILAMENT_INCLUDE_DIR "${QUADER_FILAMENT_SDK}/include")
 set(FILAMENT_LIBRARY_ROOT "${QUADER_FILAMENT_SDK}/lib/x86_64")
 
@@ -499,6 +501,7 @@ target_link_libraries(filament_sdk INTERFACE
     opengl32
     user32
 )
+endif()
 
 set(QUADER_CORE_SOURCES
     src/assets/ImageAsset.cpp
@@ -512,17 +515,12 @@ set(QUADER_CORE_SOURCES
     src/app/EditorViewportPicking.cpp
     src/app/RenderDriverSettings.cpp
     src/app/ScenePropertiesPanelController.cpp
+    src/app/SceneRenderSnapshotBuilder.cpp
     src/app/TransformGizmo.cpp
     src/app/UserSettingsPaths.cpp
     src/app/ViewportInstance.cpp
     src/diagnostics/FatalDiagnostics.cpp
     src/diagnostics/Logger.cpp
-    src/filament/FilamentRenderEngine.cpp
-    src/filament/FilamentDebugDrawRenderer.cpp
-    src/filament/FilamentEnvironmentResources.cpp
-    src/filament/FilamentPostProcessingOptions.cpp
-    src/filament/FilamentSceneViewport.cpp
-    src/filament/FilamentViewportVulkanPlatform.cpp
     src/math/MathTypes.cpp
     src/platform/FatalErrorDialog.cpp
     src/platform/AppEventDispatcher.cpp
@@ -530,7 +528,6 @@ set(QUADER_CORE_SOURCES
     src/platform/NativeFileDialog.cpp
     src/platform/SdlEditorHostServices.cpp
     src/platform/SdlEventSource.cpp
-    src/platform/SdlImGuiEditorRuntimeHost.cpp
     src/platform/SdlOpenGlContext.cpp
     src/platform/SdlOpenGlRuntimeDriver.cpp
     src/platform/SdlOpenGlTextureAllocator.cpp
@@ -539,11 +536,11 @@ set(QUADER_CORE_SOURCES
     src/platform/SdlVulkanRuntimeDriver.cpp
     src/platform/SdlVulkanPresentationSurface.cpp
     src/platform/SdlWindow.cpp
-    src/render/RenderEngineFactory.cpp
     src/render/RenderDriverKind.cpp
     src/render/RenderDriverStartupPlan.cpp
     src/render/RenderTypes.cpp
     src/render/DebugDrawPicking.cpp
+    src/render/RendererCapabilities.cpp
     src/render/RendererStartupValidation.cpp
     src/render/ViewportProjectionPolicy.cpp
     src/render/ViewportGizmos.cpp
@@ -582,18 +579,13 @@ set(QUADER_MODULES
     src/app/EditorViewportPicking.ixx
     src/app/RenderDriverSettings.ixx
     src/app/ScenePropertiesPanelController.ixx
+    src/app/SceneRenderSnapshotBuilder.ixx
     src/app/TransformGizmo.ixx
     src/app/UserSettingsPaths.ixx
     src/app/ViewportFramePresenter.ixx
     src/app/ViewportInstance.ixx
     src/diagnostics/FatalDiagnostics.ixx
     src/diagnostics/Logger.ixx
-    src/filament/FilamentRenderEngine.ixx
-    src/filament/FilamentDebugDrawRenderer.ixx
-    src/filament/FilamentEnvironmentResources.ixx
-    src/filament/FilamentPostProcessingOptions.ixx
-    src/filament/FilamentSceneViewport.ixx
-    src/filament/FilamentViewportVulkanPlatform.ixx
     src/math/MathTypes.ixx
     src/platform/FatalErrorDialog.ixx
     src/platform/AppEvent.ixx
@@ -619,6 +611,7 @@ set(QUADER_MODULES
     src/render/RenderTypes.ixx
     src/render/DebugDrawTypes.ixx
     src/render/DebugDrawPicking.ixx
+    src/render/RendererCapabilities.ixx
     src/render/RendererStartupValidation.ixx
     src/render/RenderEngineFactory.ixx
     src/render/ViewportGpuImage.ixx
@@ -654,6 +647,90 @@ set(QUADER_MODULES
     src/ui_shell/EditorShell.ixx
 )
 
+if(QUADER_ENABLE_FILAMENT_BACKEND)
+    set(QUADER_FILAMENT_BACKEND_SOURCES
+        src/filament/FilamentBufferUpload.cpp
+        src/filament/FilamentDebugDrawRenderer.cpp
+        src/filament/FilamentDiagnostics.cpp
+        src/filament/FilamentEnvironmentResources.cpp
+        src/filament/FilamentPostProcessingOptions.cpp
+        src/filament/FilamentRenderEngine.cpp
+        src/filament/FilamentRenderEngineFactory.cpp
+        src/filament/FilamentRendererCapabilities.cpp
+        src/filament/FilamentSceneViewport.cpp
+        src/filament/FilamentSceneViewportCamera.cpp
+        src/filament/FilamentSceneViewportLights.cpp
+        src/filament/FilamentSceneViewportMaterials.cpp
+        src/filament/FilamentSceneViewportRenderTargets.cpp
+        src/filament/FilamentSceneViewportSceneSync.cpp
+        src/filament/FilamentViewportVulkanPlatform.cpp
+        src/platform/SdlImGuiEditorRuntimeHost.cpp
+    )
+
+    set(QUADER_FILAMENT_BACKEND_MODULES
+        src/filament/FilamentBufferUpload.ixx
+        src/filament/FilamentDebugDrawRenderer.ixx
+        src/filament/FilamentDiagnostics.ixx
+        src/filament/FilamentEnvironmentResources.ixx
+        src/filament/FilamentPostProcessingOptions.ixx
+        src/filament/FilamentRenderEngine.ixx
+        src/filament/FilamentRendererCapabilities.ixx
+        src/filament/FilamentSceneViewport.ixx
+        src/filament/FilamentSceneViewportCamera.ixx
+        src/filament/FilamentSceneViewportConversions.ixx
+        src/filament/FilamentSceneViewportLights.ixx
+        src/filament/FilamentSceneViewportMaterials.ixx
+        src/filament/FilamentSceneViewportRenderTargets.ixx
+        src/filament/FilamentSceneViewportSceneSync.ixx
+        src/filament/FilamentViewportVulkanPlatform.ixx
+    )
+
+    set(QUADER_FILAMENT_BACKEND_PUBLIC_MODULES
+        src/filament/FilamentRenderEngineFactory.ixx
+    )
+endif()
+
+set(QUADER_RENDER_CONTRACT_SOURCES
+    src/math/MathTypes.cpp
+    src/render/RendererCapabilities.cpp
+    src/render/RenderTypes.cpp
+)
+
+set(QUADER_RENDER_CONTRACT_MODULES
+    src/math/MathTypes.ixx
+    src/render/DebugDrawTypes.ixx
+    src/render/IRenderEngine.ixx
+    src/render/OpenGlTexture.ixx
+    src/render/RenderEngineFactory.ixx
+    src/render/RendererCapabilities.ixx
+    src/render/RendererStatus.ixx
+    src/render/RenderTypes.ixx
+    src/render/ViewportGpuImage.ixx
+    src/render/ViewportRenderer.ixx
+    src/render/ViewportTypes.ixx
+    src/render/VulkanDevice.ixx
+    src/render/VulkanPresentationSurface.ixx
+)
+
+add_library(quader_render_contracts STATIC ${QUADER_RENDER_CONTRACT_SOURCES})
+
+target_sources(quader_render_contracts
+    PUBLIC
+        FILE_SET quader_render_contract_modules TYPE CXX_MODULES FILES
+            ${QUADER_RENDER_CONTRACT_MODULES}
+)
+
+target_include_directories(quader_render_contracts PUBLIC src)
+
+target_link_libraries(quader_render_contracts PRIVATE
+    Vulkan::Vulkan
+    glm::glm
+)
+
+if(MSVC)
+    target_compile_options(quader_render_contracts PRIVATE /W4 /permissive-)
+endif()
+
 add_library(quader_core STATIC ${QUADER_CORE_SOURCES})
 
 target_sources(quader_core
@@ -666,13 +743,10 @@ target_include_directories(quader_core PUBLIC src)
 target_include_directories(quader_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_include_directories(quader_core PRIVATE ${Stb_INCLUDE_DIR})
 
-add_dependencies(quader_core quader_generated_assets)
-
 target_link_libraries(quader_core PRIVATE
     SDL3::SDL3
     imgui::imgui
     Vulkan::Vulkan
-    filament_sdk
     glm::glm
     EnTT::EnTT
     spdlog::spdlog
@@ -687,8 +761,44 @@ if(QUADER_ENABLE_TRACY)
     target_compile_definitions(quader_core PRIVATE TRACY_ENABLE)
 endif()
 
+if(QUADER_ENABLE_FILAMENT_BACKEND)
+    add_library(quader_filament_backend STATIC ${QUADER_FILAMENT_BACKEND_SOURCES})
+
+    target_sources(quader_filament_backend
+        PUBLIC
+            FILE_SET quader_filament_backend_public_modules TYPE CXX_MODULES FILES
+                ${QUADER_FILAMENT_BACKEND_PUBLIC_MODULES}
+        PRIVATE
+            FILE_SET quader_filament_backend_modules TYPE CXX_MODULES FILES
+                ${QUADER_FILAMENT_BACKEND_MODULES}
+    )
+
+    target_include_directories(quader_filament_backend PRIVATE src)
+    target_include_directories(quader_filament_backend PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(quader_filament_backend PRIVATE ${Stb_INCLUDE_DIR})
+
+    add_dependencies(quader_filament_backend quader_generated_assets)
+
+    target_link_libraries(quader_filament_backend PRIVATE
+        quader_core
+        filament_sdk
+        glm::glm
+        EnTT::EnTT
+        spdlog::spdlog
+        Tracy::TracyClient
+    )
+
+    if(MSVC)
+        target_compile_options(quader_filament_backend PRIVATE /W4 /permissive-)
+    endif()
+
+    if(QUADER_ENABLE_TRACY)
+        target_compile_definitions(quader_filament_backend PRIVATE TRACY_ENABLE)
+    endif()
+endif()
+
 function(configure_quader_app_target target_name)
-    target_link_libraries(${target_name} PRIVATE quader_core)
+    target_link_libraries(${target_name} PRIVATE quader_core quader_filament_backend)
 
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /W4 /permissive-)
@@ -702,54 +812,92 @@ function(configure_quader_app_target target_name)
     )
 endfunction()
 
-add_executable(quader_native WIN32 src/main.cpp)
-configure_quader_app_target(quader_native)
+if(QUADER_ENABLE_FILAMENT_BACKEND)
+    add_executable(quader_native WIN32 src/main.cpp)
+    configure_quader_app_target(quader_native)
 
-if(MSVC)
-    target_link_options(quader_native PRIVATE /ENTRY:mainCRTStartup)
+    if(MSVC)
+        target_link_options(quader_native PRIVATE /ENTRY:mainCRTStartup)
+    endif()
+
+    add_executable(quader_native_console src/main.cpp)
+    configure_quader_app_target(quader_native_console)
+else()
+    message(STATUS "QUADER_ENABLE_FILAMENT_BACKEND=OFF: app targets are skipped; contract tests remain available.")
 endif()
 
-add_executable(quader_native_console src/main.cpp)
-configure_quader_app_target(quader_native_console)
-
-add_executable(quader_tests
-    tests/EditorCommandStackTests.cpp
-    tests/EditorHoverTests.cpp
-    tests/EditorInputTests.cpp
-    tests/EditorSelectionTests.cpp
-    tests/EditorCameraTests.cpp
-    tests/InputTests.cpp
-    tests/RenderDriverKindTests.cpp
-    tests/RenderDriverSettingsTests.cpp
-    tests/RenderDriverStartupPlanTests.cpp
-    tests/RenderTypesTests.cpp
-    tests/RendererStartupValidationTests.cpp
-    tests/SceneTests.cpp
-    tests/ScenePropertiesPanelControllerTests.cpp
-    tests/TransformGizmoTests.cpp
-    tests/UserSettingsPathsTests.cpp
-    tests/ViewportGpuTextureCacheTests.cpp
-    tests/VulkanDeviceContextTests.cpp
-    tests/VulkanViewportImageRingTests.cpp
-    tests/ViewportGizmosTests.cpp
-    tests/ViewportInstanceTests.cpp
-    tests/ViewportLayoutTests.cpp
+add_executable(quader_no_filament_contract_tests
+    tests/FakeViewportRendererContractTests.cpp
 )
 
-target_link_libraries(quader_tests PRIVATE
-    quader_core
+target_link_libraries(quader_no_filament_contract_tests PRIVATE
+    quader_render_contracts
     GTest::gtest_main
 )
 
 if(MSVC)
-    target_compile_options(quader_tests PRIVATE /W4 /permissive-)
+    target_compile_options(quader_no_filament_contract_tests PRIVATE /W4 /permissive-)
 endif()
 
-add_custom_command(TARGET quader_tests POST_BUILD
+add_custom_command(TARGET quader_no_filament_contract_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_RUNTIME_DLLS:quader_tests>
-        $<TARGET_FILE_DIR:quader_tests>
+        $<TARGET_RUNTIME_DLLS:quader_no_filament_contract_tests>
+        $<TARGET_FILE_DIR:quader_no_filament_contract_tests>
     COMMAND_EXPAND_LISTS
 )
 
-gtest_discover_tests(quader_tests DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(
+    quader_no_filament_contract_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS no_filament
+)
+
+if(QUADER_ENABLE_FILAMENT_BACKEND)
+    add_executable(quader_tests
+        tests/EditorCommandStackTests.cpp
+        tests/EditorHoverTests.cpp
+        tests/EditorInputTests.cpp
+        tests/EditorSelectionTests.cpp
+        tests/EditorCameraTests.cpp
+        tests/InputTests.cpp
+        tests/RenderDriverKindTests.cpp
+        tests/RenderDriverSettingsTests.cpp
+        tests/RenderDriverStartupPlanTests.cpp
+        tests/RenderTypesTests.cpp
+        tests/RendererStartupValidationTests.cpp
+        tests/SceneTests.cpp
+        tests/SceneRenderSnapshotBuilderTests.cpp
+        tests/ScenePropertiesPanelControllerTests.cpp
+        tests/TransformGizmoTests.cpp
+        tests/UserSettingsPathsTests.cpp
+        tests/ViewportGpuTextureCacheTests.cpp
+        tests/VulkanDeviceContextTests.cpp
+        tests/VulkanViewportImageRingTests.cpp
+        tests/ViewportGizmosTests.cpp
+        tests/ViewportInstanceTests.cpp
+        tests/ViewportLayoutTests.cpp
+    )
+
+    target_link_libraries(quader_tests PRIVATE
+        quader_core
+        GTest::gtest_main
+        quader_filament_backend
+    )
+
+    if(MSVC)
+        target_compile_options(quader_tests PRIVATE /W4 /permissive-)
+    endif()
+
+    add_custom_command(TARGET quader_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:quader_tests>
+            $<TARGET_FILE_DIR:quader_tests>
+        COMMAND_EXPAND_LISTS
+    )
+
+    gtest_discover_tests(
+        quader_tests
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES LABELS debug
+    )
+endif()

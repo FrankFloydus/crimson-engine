@@ -10,6 +10,7 @@ module;
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -22,11 +23,41 @@ namespace quader {
 namespace {
 
 constexpr uint64_t kFenceWaitForever = std::numeric_limits<uint64_t>::max();
+constexpr ViewportTexturePayloadKind kVulkanViewportTexturePayloadKind =
+    viewport_texture_payload_kind("quader.viewport_texture.vulkan.image_view_sampler.v1");
 
 uint64_t next_ring_resource_id()
 {
     static uint64_t next_id = 1;
     return next_id++;
+}
+
+template <typename Handle>
+[[nodiscard]] uint64_t viewport_texture_payload_word_from_handle(Handle handle) noexcept
+{
+    if constexpr (std::is_pointer_v<Handle>) {
+        return static_cast<uint64_t>(reinterpret_cast<std::uintptr_t>(handle));
+    } else {
+        return static_cast<uint64_t>(handle);
+    }
+}
+
+[[nodiscard]] ViewportTextureToken make_vulkan_viewport_texture_token(
+    ViewportGpuImageHandle handle,
+    VkImageView image_view,
+    VkSampler sampler,
+    VkImageLayout image_layout) noexcept
+{
+    return ViewportTextureToken {
+        .handle = handle,
+        .payload_kind = kVulkanViewportTexturePayloadKind,
+        .payload = {
+            viewport_texture_payload_word_from_handle(image_view),
+            viewport_texture_payload_word_from_handle(sampler),
+            static_cast<uint64_t>(image_layout),
+        },
+        .uv_origin_bottom_left = false,
+    };
 }
 
 bool same_extent(RenderExtent left, RenderExtent right) noexcept
@@ -665,10 +696,11 @@ public:
         }
 
         return ViewportSampledGpuImage {
-            .handle = *ready_handle,
-            .image_view = slot->sampled_color.view,
-            .sampler = sampler,
-            .image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .texture = make_vulkan_viewport_texture_token(
+                *ready_handle,
+                slot->sampled_color.view,
+                sampler,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
         };
     }
 

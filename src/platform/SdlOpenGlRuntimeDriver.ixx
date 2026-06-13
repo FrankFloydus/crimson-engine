@@ -8,12 +8,16 @@ export module quader.platform.sdl_opengl_runtime_driver;
 
 export import quader.platform.sdl_imgui_runtime_driver;
 export import quader.platform.sdl_window;
+export import quader.render.engine_factory;
 
 export namespace quader {
 
 class SdlOpenGlRuntimeDriver final : public ISdlImGuiRuntimeDriver {
 public:
-    SdlOpenGlRuntimeDriver(const SdlWindow& window, std::string imgui_ini_file);
+    SdlOpenGlRuntimeDriver(
+        const SdlWindow& window,
+        std::string imgui_ini_file,
+        const IRenderEngineFactory& render_engine_factory);
 
     SdlOpenGlRuntimeDriver(const SdlOpenGlRuntimeDriver&) = delete;
     SdlOpenGlRuntimeDriver& operator=(const SdlOpenGlRuntimeDriver&) = delete;

@@ -55,7 +55,8 @@ bool ScenePropertiesPanelController::begin_frame(
 ScenePropertiesPanelFrameInput ScenePropertiesPanelController::build_frame_input(
     const Scene& scene,
     const IImageFileDialogService& image_file_dialog,
-    const EditorSelectionModel& selection)
+    const EditorSelectionModel& selection,
+    const RendererCapabilities& renderer)
 {
     rebuild_outliner_rows(scene);
 
@@ -64,16 +65,18 @@ ScenePropertiesPanelFrameInput ScenePropertiesPanelController::build_frame_input
             .rows = outliner_rows_,
             .selected_entity = selection.selected_entity(),
         },
-        .property_inspector = make_property_inspector_input(scene, image_file_dialog, selection),
+        .property_inspector = make_property_inspector_input(scene, image_file_dialog, selection, renderer),
     };
 }
 
 PropertyInspectorPanelInput ScenePropertiesPanelController::make_property_inspector_input(
     const Scene& scene,
     const IImageFileDialogService& image_file_dialog,
-    const EditorSelectionModel& selection) const
+    const EditorSelectionModel& selection,
+    const RendererCapabilities& renderer) const
 {
     PropertyInspectorPanelInput input {
+        .renderer = renderer,
         .material_texture_picker_busy = image_file_dialog.has_pending_request(),
     };
 
