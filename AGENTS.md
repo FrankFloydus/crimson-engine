@@ -8,13 +8,13 @@ This project is a standalone C++20 desktop modeling-suite shell. Treat it as an 
 - Build: CMake presets plus vcpkg manifest mode.
 - Windowing/input: SDL3.
 - UI: Dear ImGui docking branch.
-- Rendering bootstrap: Vulkan.
+- Runtime graphics drivers: automatic selection between project-owned Vulkan and OpenGL runtime drivers, with Direct3D and Metal expected as future drivers.
 - Current render engine bootstrap: Google Filament SDK from `C:\Users\Drako\Desktop\_QUADER_NATIVE\thirdy-party\filament-v1.71.5-windows`.
 - Logging: macro-based `quader::Logger` facade over spdlog.
 - Tests: GoogleTest.
 - Profiling: Tracy.
 
-The app is currently Vulkan-only at runtime. CMake may still link Filament's OpenGL support libraries on Windows because Filament's static `backend.lib` contains OpenGL symbols even when the app creates a Vulkan engine.
+The app must remain driver-selectable at runtime through project-owned abstractions. Vulkan and OpenGL are current runtime targets; Direct3D and Metal should be additive backend work, not application-architecture rewrites. CMake may still link Filament's OpenGL support libraries on Windows because Filament's static `backend.lib` contains OpenGL symbols even when the app creates a Vulkan engine.
 
 ## Filament Documentation
 
@@ -253,11 +253,12 @@ Before starting new work, check `tasks.md` for pending items. If a pending item 
 Keep the code organized around clear responsibilities:
 
 - `src/main.cpp`: entry point only. It should import `quader.app`, create `quader::Application`, call `run()`, and handle fatal top-level errors.
-- `src/app`: application orchestration. The app loop may coordinate systems, but it must not own low-level renderer, Vulkan, SDL, ImGui, or Filament details.
+- `src/app`: application orchestration. The app loop may coordinate systems, but it must not own low-level renderer, Vulkan, OpenGL, Direct3D, Metal, SDL, ImGui, Qt, or Filament details.
 - `src/diagnostics`: logging, crash reporting, and profiling support code. Diagnostics may be globally reachable, but they still need narrow APIs and boring behavior.
-- `src/platform`: platform/window/input adapters. SDL-specific code belongs here unless it is purely event dispatch in the app loop.
-- `src/render`: graphics device, swapchain, frame rendering, and future renderer-facing abstractions.
-- `src/ui`: ImGui setup and UI panels. UI code should consume application state and service interfaces, not raw renderer internals.
+- `src/platform`: platform/window/input adapters and concrete runtime host/driver adapters. SDL-specific code belongs here unless it is purely event dispatch in the app loop.
+- `src/render`: renderer-facing abstractions, startup policy, viewport texture tokens, graphics device/swapchain concepts, frame rendering contracts, and future renderer-facing abstractions.
+- `src/ui_shell`: toolkit-neutral editor shell contracts, layout data, panel inputs/results, and UI-facing DTOs. This layer must stay free of ImGui, Qt, SDL, Filament, Vulkan, OpenGL, Direct3D, and Metal types.
+- `src/ui`: Dear ImGui implementation of the editor shell and panels. UI code should consume application state, commands, service interfaces, and `src/ui_shell` contracts, not raw renderer internals.
 - `src/filament`: Filament-specific integration. Do not let Filament types leak upward into app/UI/platform code unless there is an explicit abstraction boundary.
 
 Important direction of dependency:
@@ -340,6 +341,51 @@ Prefer dependency inversion for important systems:
 - Higher-level code depends on stable project-owned abstractions.
 - Lower-level adapters implement those abstractions with SDL3, Vulkan, Filament, ImGui, etc.
 - Project-owned abstractions should use project-owned data types where practical.
+
+## Renderer, Driver, And UI Decoupling Gate
+
+Before implementing any feature, every agent must explicitly evaluate whether the feature touches any of these replacement boundaries:
+
+- Renderer engine: Filament now, a different renderer later.
+- Graphics driver/API: Vulkan, OpenGL, Direct3D, Metal, or future drivers.
+- Platform/window/input runtime: SDL now, a different platform host later.
+- UI toolkit: Dear ImGui now, Qt or another toolkit later.
+- Domain/application model: project-owned state, commands, settings, scene data, and editor workflows.
+
+If a feature crosses one of those boundaries, define or extend the project-owned contract first. Do not let convenience access drift into coupling. The implementation may begin only after the agent can answer this checklist:
+
+```text
+Feature responsibility:
+Authoritative owner:
+Runtime lifetime:
+Renderer dependency, if any:
+Graphics driver dependency, if any:
+UI toolkit dependency, if any:
+Project-owned contract/DTO used across the boundary:
+Concrete adapter files allowed to know the third-party API:
+Files that would change when swapping Filament, the graphics driver, or the UI toolkit:
+Tests or smoke checks proving the boundary still works:
+```
+
+Rules:
+
+- App and domain code must not import, include, store, or branch on raw Filament, Vulkan, OpenGL, Direct3D, Metal, SDL, ImGui, or Qt types.
+- UI shell contracts must remain toolkit-neutral. They may use project-owned IDs, enums, DTOs, commands, and service interfaces only.
+- ImGui panels must render project-owned DTOs and dispatch project-owned commands/results. They must not create render engines, choose graphics devices, own driver startup policy, or inspect backend handles.
+- Runtime driver selection, availability, fallback order, and "change on next restart" behavior belong in app/render/platform startup policy and settings services, not in panels.
+- Driver-specific resource handles must stay in driver or backend implementation modules. If UI presentation needs a GPU image, pass an opaque project-owned token such as `ViewportTextureToken`, then unpack it only inside the matching backend adapter.
+- Renderer-specific state must not become UI state. UI state is view-only state; renderer state belongs behind render interfaces; domain state remains authoritative in app/model systems.
+- Do not add `if driver == ...` or `if toolkit == ...` branches in high-level app or UI code unless the branch consumes a project-owned enum as user-facing state or policy. Backend behavior belongs in driver/toolkit adapters.
+- New Direct3D, Metal, renderer, or UI toolkit support must be added as a new adapter/factory implementation behind existing contracts where possible. If existing contracts are insufficient, evolve the contract deliberately before writing the adapter.
+- Any feature that cannot preserve these boundaries must stop before implementation, describe the missing boundary, and add or refactor that boundary first.
+
+Expected replacement blast radius:
+
+- Swapping Dear ImGui for Qt should primarily touch `src/ui`, toolkit runtime adapters under `src/platform`, build files, and tests for the new adapter. `src/app`, `src/render`, `src/filament`, and domain modules should not need toolkit-specific rewrites.
+- Adding Direct3D or Metal should primarily touch concrete platform/render driver adapters, Filament/backend startup code, build configuration, and smoke tests. UI panels and app workflow code should not learn backend API details.
+- Replacing Filament should primarily touch `src/filament` and renderer factory implementations behind `src/render` contracts. UI and domain code should keep using project-owned viewport requests, scene snapshots, texture tokens, and status DTOs.
+
+When reviewing or refactoring code, treat any leak across these boundaries as directly relevant architecture debt. Fix it in the same task when it is in the implementation path.
 
 Current renderer-engine abstraction:
 
