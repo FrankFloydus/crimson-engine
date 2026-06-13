@@ -58,6 +58,42 @@ material {
         {
             type : float,
             name : clearCoatRoughness
+        },
+        {
+            type : float,
+            name : opacity
+        },
+        {
+            type : sampler2d,
+            name : opacityTexture
+        },
+        {
+            type : bool,
+            name : useOpacityTexture
+        },
+        {
+            type : float,
+            name : transmission
+        },
+        {
+            type : float,
+            name : ior
+        },
+        {
+            type : float3,
+            name : absorption
+        },
+        {
+            type : float,
+            name : thickness
+        },
+        {
+            type : float,
+            name : microThickness
+        },
+        {
+            type : float,
+            name : dispersion
         }
     ],
     requires : [
@@ -69,11 +105,18 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        float4 baseColor = materialParams.albedo;
+        float3 baseColor = materialParams.albedo.rgb;
+        float opacity = materialParams.opacity;
         if (materialParams.useAlbedoTexture) {
-            baseColor = texture(materialParams_albedoTexture, getUV0());
-            baseColor.rgb *= baseColor.a;
+            float4 albedoSample = texture(materialParams_albedoTexture, getUV0());
+            baseColor *= albedoSample.rgb;
+            opacity *= albedoSample.a;
         }
+
+        if (materialParams.useOpacityTexture) {
+            opacity *= texture(materialParams_opacityTexture, getUV0()).r;
+        }
+        opacity = clamp(opacity, 0.0, 1.0);
 
         float roughness = materialParams.roughness;
         if (materialParams.useRoughnessTexture) {
@@ -85,7 +128,7 @@ fragment {
             metallic *= texture(materialParams_metallicTexture, getUV0()).r;
         }
 
-        material.baseColor = baseColor;
+        material.baseColor = float4(baseColor * opacity, opacity);
         material.roughness = roughness;
         material.metallic = metallic;
         material.reflectance = materialParams.reflectance;

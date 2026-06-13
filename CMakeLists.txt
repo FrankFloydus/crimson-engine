@@ -94,6 +94,74 @@ function(quader_add_filament_material target_name source_path output_symbol outp
     set(QUADER_GENERATED_ASSETS "${QUADER_GENERATED_ASSETS};${include_path}" PARENT_SCOPE)
 endfunction()
 
+function(quader_add_lit_pbr_variant target_name output_stem output_symbol output_inc_variable)
+    cmake_parse_arguments(
+        ARG
+        "TRANSPARENT_SHADOW;ALPHA_TO_COVERAGE"
+        "BLENDING;REFRACTION_MODE;REFRACTION_TYPE"
+        ""
+        ${ARGN}
+    )
+
+    set(QUADER_LIT_PBR_MATERIAL_NAME "${output_stem}")
+    set(QUADER_LIT_PBR_BLENDING_LINE "")
+    set(QUADER_LIT_PBR_REFRACTION_MODE_LINE "")
+    set(QUADER_LIT_PBR_REFRACTION_TYPE_LINE "")
+    set(QUADER_LIT_PBR_REFLECTANCE_INPUT "        material.reflectance = materialParams.reflectance;")
+    set(QUADER_LIT_PBR_REFRACTION_INPUTS "")
+    set(QUADER_LIT_PBR_TRANSPARENT_SHADOW_LINE "")
+    set(QUADER_LIT_PBR_ALPHA_TO_COVERAGE_LINE "")
+
+    if(DEFINED ARG_BLENDING AND NOT "${ARG_BLENDING}" STREQUAL "")
+        set(QUADER_LIT_PBR_BLENDING_LINE "    blending : ${ARG_BLENDING},")
+    endif()
+
+    if(DEFINED ARG_REFRACTION_MODE AND NOT "${ARG_REFRACTION_MODE}" STREQUAL "")
+        set(QUADER_LIT_PBR_REFRACTION_MODE_LINE "    refractionMode : ${ARG_REFRACTION_MODE},")
+    endif()
+
+    if(DEFINED ARG_REFRACTION_TYPE AND NOT "${ARG_REFRACTION_TYPE}" STREQUAL "")
+        set(QUADER_LIT_PBR_REFRACTION_TYPE_LINE "    refractionType : ${ARG_REFRACTION_TYPE},")
+    endif()
+
+    if(DEFINED ARG_REFRACTION_MODE AND NOT "${ARG_REFRACTION_MODE}" STREQUAL "")
+        set(QUADER_LIT_PBR_REFLECTANCE_INPUT "")
+        if(DEFINED ARG_REFRACTION_TYPE AND "${ARG_REFRACTION_TYPE}" STREQUAL "thin")
+            set(QUADER_LIT_PBR_REFRACTION_INPUTS
+                "        material.transmission = materialParams.transmission;\n        material.ior = materialParams.ior;\n        material.absorption = materialParams.absorption;\n        material.microThickness = materialParams.microThickness;")
+        else()
+            set(QUADER_LIT_PBR_REFRACTION_INPUTS
+                "        material.transmission = materialParams.transmission;\n        material.ior = materialParams.ior;\n        material.absorption = materialParams.absorption;\n        material.thickness = materialParams.thickness;\n        material.dispersion = materialParams.dispersion;")
+        endif()
+    endif()
+
+    if(ARG_TRANSPARENT_SHADOW)
+        set(QUADER_LIT_PBR_TRANSPARENT_SHADOW_LINE "    transparentShadow : true,")
+    endif()
+
+    if(ARG_ALPHA_TO_COVERAGE)
+        set(QUADER_LIT_PBR_ALPHA_TO_COVERAGE_LINE "")
+    elseif(DEFINED ARG_BLENDING AND "${ARG_BLENDING}" STREQUAL "masked")
+        set(QUADER_LIT_PBR_ALPHA_TO_COVERAGE_LINE "    alphaToCoverage : false,")
+    endif()
+
+    set(configured_mat_path "${QUADER_GENERATED_DIR}/${output_stem}.mat")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/filament/materials/LitPbrPreview.mat.in"
+        "${configured_mat_path}"
+        @ONLY
+    )
+
+    quader_add_filament_material(
+        "${target_name}"
+        "${configured_mat_path}"
+        "${output_symbol}"
+        "${output_inc_variable}"
+    )
+    set(${output_inc_variable} "${${output_inc_variable}}" PARENT_SCOPE)
+    set(QUADER_GENERATED_ASSETS "${QUADER_GENERATED_ASSETS}" PARENT_SCOPE)
+endfunction()
+
 function(quader_embed_binary target_name input_path output_symbol output_inc_variable)
     set(include_path "${QUADER_GENERATED_DIR}/${target_name}.inc")
 
@@ -128,6 +196,211 @@ quader_add_filament_material(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/filament/materials/LitPbrPreview.mat"
     "quader_lit_pbr_material"
     QUADER_LIT_PBR_INC
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrOpaqueTransparentShadowMaterial
+    LitPbrOpaqueTransparentShadowPreview
+    "quader_lit_pbr_opaque_transparent_shadow_material"
+    QUADER_LIT_PBR_OPAQUE_TRANSPARENT_SHADOW_INC
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrTransparentMaterial
+    LitPbrTransparentPreview
+    "quader_lit_pbr_transparent_material"
+    QUADER_LIT_PBR_TRANSPARENT_INC
+    BLENDING transparent
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrTransparentShadowMaterial
+    LitPbrTransparentShadowPreview
+    "quader_lit_pbr_transparent_shadow_material"
+    QUADER_LIT_PBR_TRANSPARENT_SHADOW_INC
+    BLENDING transparent
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrFadeMaterial
+    LitPbrFadePreview
+    "quader_lit_pbr_fade_material"
+    QUADER_LIT_PBR_FADE_INC
+    BLENDING fade
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrFadeShadowMaterial
+    LitPbrFadeShadowPreview
+    "quader_lit_pbr_fade_shadow_material"
+    QUADER_LIT_PBR_FADE_SHADOW_INC
+    BLENDING fade
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrMaskedMaterial
+    LitPbrMaskedPreview
+    "quader_lit_pbr_masked_material"
+    QUADER_LIT_PBR_MASKED_INC
+    BLENDING masked
+    ALPHA_TO_COVERAGE
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrMaskedNoAlphaToCoverageMaterial
+    LitPbrMaskedNoAlphaToCoveragePreview
+    "quader_lit_pbr_masked_no_alpha_to_coverage_material"
+    QUADER_LIT_PBR_MASKED_NO_ALPHA_TO_COVERAGE_INC
+    BLENDING masked
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrMaskedShadowMaterial
+    LitPbrMaskedShadowPreview
+    "quader_lit_pbr_masked_shadow_material"
+    QUADER_LIT_PBR_MASKED_SHADOW_INC
+    BLENDING masked
+    ALPHA_TO_COVERAGE
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrMaskedNoAlphaToCoverageShadowMaterial
+    LitPbrMaskedNoAlphaToCoverageShadowPreview
+    "quader_lit_pbr_masked_no_alpha_to_coverage_shadow_material"
+    QUADER_LIT_PBR_MASKED_NO_ALPHA_TO_COVERAGE_SHADOW_INC
+    BLENDING masked
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrAddMaterial
+    LitPbrAddPreview
+    "quader_lit_pbr_add_material"
+    QUADER_LIT_PBR_ADD_INC
+    BLENDING add
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrAddShadowMaterial
+    LitPbrAddShadowPreview
+    "quader_lit_pbr_add_shadow_material"
+    QUADER_LIT_PBR_ADD_SHADOW_INC
+    BLENDING add
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrMultiplyMaterial
+    LitPbrMultiplyPreview
+    "quader_lit_pbr_multiply_material"
+    QUADER_LIT_PBR_MULTIPLY_INC
+    BLENDING multiply
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrMultiplyShadowMaterial
+    LitPbrMultiplyShadowPreview
+    "quader_lit_pbr_multiply_shadow_material"
+    QUADER_LIT_PBR_MULTIPLY_SHADOW_INC
+    BLENDING multiply
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrScreenMaterial
+    LitPbrScreenPreview
+    "quader_lit_pbr_screen_material"
+    QUADER_LIT_PBR_SCREEN_INC
+    BLENDING screen
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrScreenShadowMaterial
+    LitPbrScreenShadowPreview
+    "quader_lit_pbr_screen_shadow_material"
+    QUADER_LIT_PBR_SCREEN_SHADOW_INC
+    BLENDING screen
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractCubemapSolidMaterial
+    LitPbrRefractCubemapSolidPreview
+    "quader_lit_pbr_refract_cubemap_solid_material"
+    QUADER_LIT_PBR_REFRACT_CUBEMAP_SOLID_INC
+    REFRACTION_MODE cubemap
+    REFRACTION_TYPE solid
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractCubemapSolidShadowMaterial
+    LitPbrRefractCubemapSolidShadowPreview
+    "quader_lit_pbr_refract_cubemap_solid_shadow_material"
+    QUADER_LIT_PBR_REFRACT_CUBEMAP_SOLID_SHADOW_INC
+    REFRACTION_MODE cubemap
+    REFRACTION_TYPE solid
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractCubemapThinMaterial
+    LitPbrRefractCubemapThinPreview
+    "quader_lit_pbr_refract_cubemap_thin_material"
+    QUADER_LIT_PBR_REFRACT_CUBEMAP_THIN_INC
+    REFRACTION_MODE cubemap
+    REFRACTION_TYPE thin
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractCubemapThinShadowMaterial
+    LitPbrRefractCubemapThinShadowPreview
+    "quader_lit_pbr_refract_cubemap_thin_shadow_material"
+    QUADER_LIT_PBR_REFRACT_CUBEMAP_THIN_SHADOW_INC
+    REFRACTION_MODE cubemap
+    REFRACTION_TYPE thin
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractScreenSpaceSolidMaterial
+    LitPbrRefractScreenSpaceSolidPreview
+    "quader_lit_pbr_refract_screen_space_solid_material"
+    QUADER_LIT_PBR_REFRACT_SCREEN_SPACE_SOLID_INC
+    REFRACTION_MODE screenspace
+    REFRACTION_TYPE solid
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractScreenSpaceSolidShadowMaterial
+    LitPbrRefractScreenSpaceSolidShadowPreview
+    "quader_lit_pbr_refract_screen_space_solid_shadow_material"
+    QUADER_LIT_PBR_REFRACT_SCREEN_SPACE_SOLID_SHADOW_INC
+    REFRACTION_MODE screenspace
+    REFRACTION_TYPE solid
+    TRANSPARENT_SHADOW
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractScreenSpaceThinMaterial
+    LitPbrRefractScreenSpaceThinPreview
+    "quader_lit_pbr_refract_screen_space_thin_material"
+    QUADER_LIT_PBR_REFRACT_SCREEN_SPACE_THIN_INC
+    REFRACTION_MODE screenspace
+    REFRACTION_TYPE thin
+)
+
+quader_add_lit_pbr_variant(
+    QuaderLitPbrRefractScreenSpaceThinShadowMaterial
+    LitPbrRefractScreenSpaceThinShadowPreview
+    "quader_lit_pbr_refract_screen_space_thin_shadow_material"
+    QUADER_LIT_PBR_REFRACT_SCREEN_SPACE_THIN_SHADOW_INC
+    REFRACTION_MODE screenspace
+    REFRACTION_TYPE thin
+    TRANSPARENT_SHADOW
 )
 
 quader_add_filament_material(

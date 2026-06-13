@@ -188,6 +188,34 @@ TEST(Scene, RenderSnapshotCarriesEnvironmentSettings)
     EXPECT_FALSE(snapshot.environment.show_skybox);
 }
 
+TEST(Scene, RenderSnapshotCarriesTransparentMaterialSettings)
+{
+    quader::Scene scene;
+    const quader::SceneEntityId cube = scene.create_cube();
+
+    quader::PbrMaterialSettings material;
+    material.blend_mode = quader::PbrMaterialBlendMode::transparent;
+    material.transparency_mode = quader::PbrMaterialTransparencyMode::two_passes_two_sides;
+    material.opacity = 0.42f;
+    material.refraction_mode = quader::PbrMaterialRefractionMode::screen_space;
+    material.refraction_type = quader::PbrMaterialRefractionType::thin;
+    material.transmission = 0.75f;
+    material.ior = 1.33f;
+    ASSERT_TRUE(scene.set_material(cube, material));
+
+    const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
+
+    ASSERT_EQ(1U, snapshot.meshes.size());
+    const quader::PbrMaterialSettings& snapshot_material = snapshot.meshes[0].material;
+    EXPECT_EQ(quader::PbrMaterialBlendMode::transparent, snapshot_material.blend_mode);
+    EXPECT_EQ(quader::PbrMaterialTransparencyMode::two_passes_two_sides, snapshot_material.transparency_mode);
+    EXPECT_FLOAT_EQ(0.42f, snapshot_material.opacity);
+    EXPECT_EQ(quader::PbrMaterialRefractionMode::screen_space, snapshot_material.refraction_mode);
+    EXPECT_EQ(quader::PbrMaterialRefractionType::thin, snapshot_material.refraction_type);
+    EXPECT_FLOAT_EQ(0.75f, snapshot_material.transmission);
+    EXPECT_FLOAT_EQ(1.33f, snapshot_material.ior);
+}
+
 TEST(Scene, RenderSnapshotCarriesDirectionalLightRollBasis)
 {
     quader::Scene scene;

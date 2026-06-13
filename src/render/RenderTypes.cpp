@@ -19,6 +19,95 @@ float finite_or(float value, float fallback)
     return std::isfinite(value) ? value : fallback;
 }
 
+float nonnegative_finite_or(float value, float fallback)
+{
+    return std::max(finite_or(value, fallback), 0.0f);
+}
+
+Vec3 nonnegative_vec3_or(Vec3 value, Vec3 fallback)
+{
+    return Vec3 {
+        nonnegative_finite_or(value.x, fallback.x),
+        nonnegative_finite_or(value.y, fallback.y),
+        nonnegative_finite_or(value.z, fallback.z),
+    };
+}
+
+PbrMaterialBlendMode valid_or_default(PbrMaterialBlendMode mode)
+{
+    switch (mode) {
+    case PbrMaterialBlendMode::opaque:
+    case PbrMaterialBlendMode::transparent:
+    case PbrMaterialBlendMode::fade:
+    case PbrMaterialBlendMode::masked:
+    case PbrMaterialBlendMode::add:
+    case PbrMaterialBlendMode::multiply:
+    case PbrMaterialBlendMode::screen:
+        return mode;
+    }
+
+    return PbrMaterialBlendMode::opaque;
+}
+
+PbrMaterialTransparencyMode valid_or_default(PbrMaterialTransparencyMode mode)
+{
+    switch (mode) {
+    case PbrMaterialTransparencyMode::default_sorting:
+    case PbrMaterialTransparencyMode::two_passes_one_side:
+    case PbrMaterialTransparencyMode::two_passes_two_sides:
+        return mode;
+    }
+
+    return PbrMaterialTransparencyMode::default_sorting;
+}
+
+PbrMaterialRefractionMode valid_or_default(PbrMaterialRefractionMode mode)
+{
+    switch (mode) {
+    case PbrMaterialRefractionMode::none:
+    case PbrMaterialRefractionMode::cubemap:
+    case PbrMaterialRefractionMode::screen_space:
+        return mode;
+    }
+
+    return PbrMaterialRefractionMode::none;
+}
+
+PbrMaterialRefractionType valid_or_default(PbrMaterialRefractionType type)
+{
+    switch (type) {
+    case PbrMaterialRefractionType::solid:
+    case PbrMaterialRefractionType::thin:
+        return type;
+    }
+
+    return PbrMaterialRefractionType::solid;
+}
+
+PbrMaterialAbsorptionMode valid_or_default(PbrMaterialAbsorptionMode mode)
+{
+    switch (mode) {
+    case PbrMaterialAbsorptionMode::coefficients:
+    case PbrMaterialAbsorptionMode::transmittance_color:
+        return mode;
+    }
+
+    return PbrMaterialAbsorptionMode::coefficients;
+}
+
+PbrMaterialCullingMode valid_or_default(PbrMaterialCullingMode mode)
+{
+    switch (mode) {
+    case PbrMaterialCullingMode::none:
+    case PbrMaterialCullingMode::front:
+    case PbrMaterialCullingMode::back:
+    case PbrMaterialCullingMode::front_and_back:
+        return mode;
+    }
+
+    return PbrMaterialCullingMode::back;
+}
+
 float normalize_yaw(float yaw_degrees)
 {
     yaw_degrees = finite_or(yaw_degrees, 0.0f);
@@ -129,6 +218,8 @@ TextureAssetReference& material_texture_reference(PbrMaterialSettings& settings,
         return settings.roughness_texture;
     case PbrMaterialTextureSlot::metallic:
         return settings.metallic_texture;
+    case PbrMaterialTextureSlot::opacity:
+        return settings.opacity_texture;
     }
 
     return settings.albedo_texture;
@@ -143,6 +234,8 @@ const TextureAssetReference& material_texture_reference(const PbrMaterialSetting
         return settings.roughness_texture;
     case PbrMaterialTextureSlot::metallic:
         return settings.metallic_texture;
+    case PbrMaterialTextureSlot::opacity:
+        return settings.opacity_texture;
     }
 
     return settings.albedo_texture;
@@ -169,6 +262,12 @@ RenderCamera clamp_render_camera(RenderCamera camera)
 
 PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)
 {
+    settings.blend_mode = valid_or_default(settings.blend_mode);
+    settings.transparency_mode = valid_or_default(settings.transparency_mode);
+    settings.culling = valid_or_default(settings.culling);
+    settings.refraction_mode = valid_or_default(settings.refraction_mode);
+    settings.refraction_type = valid_or_default(settings.refraction_type);
+    settings.absorption_mode = valid_or_default(settings.absorption_mode);
     settings.albedo = clamp_color(settings.albedo);
     settings.roughness = std::clamp(settings.roughness, 0.0f, 1.0f);
     settings.metallic = std::clamp(settings.metallic, 0.0f, 1.0f);
@@ -177,6 +276,16 @@ PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings)
     settings.specular_color_factor = clamp_color(settings.specular_color_factor);
     settings.clear_coat = std::clamp(settings.clear_coat, 0.0f, 1.0f);
     settings.clear_coat_roughness = std::clamp(settings.clear_coat_roughness, 0.0f, 1.0f);
+    settings.opacity = std::clamp(finite_or(settings.opacity, 1.0f), 0.0f, 1.0f);
+    settings.mask_threshold = std::clamp(finite_or(settings.mask_threshold, 0.4f), 0.0f, 1.0f);
+    settings.transmission = std::clamp(finite_or(settings.transmission, 0.0f), 0.0f, 1.0f);
+    settings.ior = std::clamp(finite_or(settings.ior, 1.5f), 1.0f, 4.0f);
+    settings.absorption = nonnegative_vec3_or(settings.absorption, Vec3 {});
+    settings.transmittance_color = clamp_color(settings.transmittance_color);
+    settings.transmittance_distance = std::max(finite_or(settings.transmittance_distance, 1.0f), 0.001f);
+    settings.thickness = nonnegative_finite_or(settings.thickness, 0.5f);
+    settings.micro_thickness = nonnegative_finite_or(settings.micro_thickness, 0.0f);
+    settings.dispersion = std::clamp(finite_or(settings.dispersion, 0.0f), 0.0f, 1.0f);
     return settings;
 }
 

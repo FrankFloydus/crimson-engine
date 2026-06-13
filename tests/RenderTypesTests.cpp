@@ -26,6 +26,33 @@ TEST(RenderTypes, DefaultPbrMaterialIsMatteWhiteDielectric)
     EXPECT_FLOAT_EQ(1.0f, settings.specular_color_factor.b);
     EXPECT_FLOAT_EQ(0.0f, settings.clear_coat);
     EXPECT_FLOAT_EQ(0.0f, settings.clear_coat_roughness);
+    EXPECT_EQ(quader::PbrMaterialBlendMode::opaque, settings.blend_mode);
+    EXPECT_EQ(quader::PbrMaterialTransparencyMode::default_sorting, settings.transparency_mode);
+    EXPECT_EQ(quader::PbrMaterialCullingMode::back, settings.culling);
+    EXPECT_TRUE(settings.double_sided);
+    EXPECT_TRUE(settings.depth_write);
+    EXPECT_TRUE(settings.depth_culling);
+    EXPECT_TRUE(settings.color_write);
+    EXPECT_TRUE(settings.alpha_to_coverage);
+    EXPECT_FALSE(settings.transparent_shadow);
+    EXPECT_FLOAT_EQ(1.0f, settings.opacity);
+    EXPECT_FALSE(settings.opacity_texture.has_source());
+    EXPECT_FLOAT_EQ(0.4f, settings.mask_threshold);
+    EXPECT_EQ(quader::PbrMaterialRefractionMode::none, settings.refraction_mode);
+    EXPECT_EQ(quader::PbrMaterialRefractionType::solid, settings.refraction_type);
+    EXPECT_FLOAT_EQ(0.0f, settings.transmission);
+    EXPECT_FLOAT_EQ(1.5f, settings.ior);
+    EXPECT_EQ(quader::PbrMaterialAbsorptionMode::coefficients, settings.absorption_mode);
+    EXPECT_FLOAT_EQ(0.0f, settings.absorption.x);
+    EXPECT_FLOAT_EQ(0.0f, settings.absorption.y);
+    EXPECT_FLOAT_EQ(0.0f, settings.absorption.z);
+    EXPECT_FLOAT_EQ(1.0f, settings.transmittance_color.r);
+    EXPECT_FLOAT_EQ(1.0f, settings.transmittance_color.g);
+    EXPECT_FLOAT_EQ(1.0f, settings.transmittance_color.b);
+    EXPECT_FLOAT_EQ(1.0f, settings.transmittance_distance);
+    EXPECT_FLOAT_EQ(0.5f, settings.thickness);
+    EXPECT_FLOAT_EQ(0.0f, settings.micro_thickness);
+    EXPECT_FLOAT_EQ(0.0f, settings.dispersion);
 }
 
 TEST(RenderTypes, MaterialTextureReferenceSelectsRequestedSlot)
@@ -35,10 +62,12 @@ TEST(RenderTypes, MaterialTextureReferenceSelectsRequestedSlot)
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::albedo).source_path = "albedo.png";
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::roughness).source_path = "roughness.png";
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::metallic).source_path = "metallic.png";
+    quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::opacity).source_path = "opacity.png";
 
     EXPECT_EQ("albedo.png", settings.albedo_texture.source_path);
     EXPECT_EQ("roughness.png", settings.roughness_texture.source_path);
     EXPECT_EQ("metallic.png", settings.metallic_texture.source_path);
+    EXPECT_EQ("opacity.png", settings.opacity_texture.source_path);
 
     quader::material_texture_reference(settings, quader::PbrMaterialTextureSlot::roughness).clear();
     EXPECT_FALSE(settings.roughness_texture.has_source());
@@ -55,6 +84,22 @@ TEST(RenderTypes, ClampPbrMaterialSettings)
     settings.specular_color_factor = { 1.5f, -0.25f, 0.75f };
     settings.clear_coat = 1.5f;
     settings.clear_coat_roughness = -1.0f;
+    settings.blend_mode = static_cast<quader::PbrMaterialBlendMode>(255);
+    settings.transparency_mode = static_cast<quader::PbrMaterialTransparencyMode>(255);
+    settings.culling = static_cast<quader::PbrMaterialCullingMode>(255);
+    settings.opacity = std::numeric_limits<float>::quiet_NaN();
+    settings.mask_threshold = 1.5f;
+    settings.refraction_mode = static_cast<quader::PbrMaterialRefractionMode>(255);
+    settings.refraction_type = static_cast<quader::PbrMaterialRefractionType>(255);
+    settings.transmission = -0.5f;
+    settings.ior = 9.0f;
+    settings.absorption_mode = static_cast<quader::PbrMaterialAbsorptionMode>(255);
+    settings.absorption = { -1.0f, std::numeric_limits<float>::infinity(), 2.5f };
+    settings.transmittance_color = { -0.25f, 0.5f, 1.5f };
+    settings.transmittance_distance = -2.0f;
+    settings.thickness = std::numeric_limits<float>::quiet_NaN();
+    settings.micro_thickness = -0.1f;
+    settings.dispersion = 1.5f;
 
     const quader::PbrMaterialSettings clamped = quader::clamp_pbr_material_settings(settings);
 
@@ -70,6 +115,26 @@ TEST(RenderTypes, ClampPbrMaterialSettings)
     EXPECT_FLOAT_EQ(0.75f, clamped.specular_color_factor.b);
     EXPECT_FLOAT_EQ(1.0f, clamped.clear_coat);
     EXPECT_FLOAT_EQ(0.0f, clamped.clear_coat_roughness);
+    EXPECT_EQ(quader::PbrMaterialBlendMode::opaque, clamped.blend_mode);
+    EXPECT_EQ(quader::PbrMaterialTransparencyMode::default_sorting, clamped.transparency_mode);
+    EXPECT_EQ(quader::PbrMaterialCullingMode::back, clamped.culling);
+    EXPECT_FLOAT_EQ(1.0f, clamped.opacity);
+    EXPECT_FLOAT_EQ(1.0f, clamped.mask_threshold);
+    EXPECT_EQ(quader::PbrMaterialRefractionMode::none, clamped.refraction_mode);
+    EXPECT_EQ(quader::PbrMaterialRefractionType::solid, clamped.refraction_type);
+    EXPECT_FLOAT_EQ(0.0f, clamped.transmission);
+    EXPECT_FLOAT_EQ(4.0f, clamped.ior);
+    EXPECT_EQ(quader::PbrMaterialAbsorptionMode::coefficients, clamped.absorption_mode);
+    EXPECT_FLOAT_EQ(0.0f, clamped.absorption.x);
+    EXPECT_FLOAT_EQ(0.0f, clamped.absorption.y);
+    EXPECT_FLOAT_EQ(2.5f, clamped.absorption.z);
+    EXPECT_FLOAT_EQ(0.0f, clamped.transmittance_color.r);
+    EXPECT_FLOAT_EQ(0.5f, clamped.transmittance_color.g);
+    EXPECT_FLOAT_EQ(1.0f, clamped.transmittance_color.b);
+    EXPECT_FLOAT_EQ(0.001f, clamped.transmittance_distance);
+    EXPECT_FLOAT_EQ(0.5f, clamped.thickness);
+    EXPECT_FLOAT_EQ(0.0f, clamped.micro_thickness);
+    EXPECT_FLOAT_EQ(1.0f, clamped.dispersion);
 }
 
 TEST(RenderTypes, DefaultEnvironmentLightingUsesBuiltInIblWithHiddenSkybox)

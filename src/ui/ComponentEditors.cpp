@@ -2,10 +2,14 @@ module;
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 module quader.ui.component_editors;
 
@@ -31,6 +35,45 @@ constexpr std::array<DirectionalShadowQuality, 4> kShadowQualities {
 constexpr std::array<PointLightFalloffMode, 2> kPointLightFalloffModes {
     PointLightFalloffMode::linear,
     PointLightFalloffMode::inverse_squared,
+};
+
+constexpr std::array<PbrMaterialBlendMode, 7> kMaterialBlendModes {
+    PbrMaterialBlendMode::opaque,
+    PbrMaterialBlendMode::transparent,
+    PbrMaterialBlendMode::fade,
+    PbrMaterialBlendMode::masked,
+    PbrMaterialBlendMode::add,
+    PbrMaterialBlendMode::multiply,
+    PbrMaterialBlendMode::screen,
+};
+
+constexpr std::array<PbrMaterialTransparencyMode, 3> kMaterialTransparencyModes {
+    PbrMaterialTransparencyMode::default_sorting,
+    PbrMaterialTransparencyMode::two_passes_one_side,
+    PbrMaterialTransparencyMode::two_passes_two_sides,
+};
+
+constexpr std::array<PbrMaterialCullingMode, 4> kMaterialCullingModes {
+    PbrMaterialCullingMode::none,
+    PbrMaterialCullingMode::front,
+    PbrMaterialCullingMode::back,
+    PbrMaterialCullingMode::front_and_back,
+};
+
+constexpr std::array<PbrMaterialRefractionMode, 3> kMaterialRefractionModes {
+    PbrMaterialRefractionMode::none,
+    PbrMaterialRefractionMode::cubemap,
+    PbrMaterialRefractionMode::screen_space,
+};
+
+constexpr std::array<PbrMaterialRefractionType, 2> kMaterialRefractionTypes {
+    PbrMaterialRefractionType::solid,
+    PbrMaterialRefractionType::thin,
+};
+
+constexpr std::array<PbrMaterialAbsorptionMode, 2> kMaterialAbsorptionModes {
+    PbrMaterialAbsorptionMode::coefficients,
+    PbrMaterialAbsorptionMode::transmittance_color,
 };
 
 [[nodiscard]] std::string_view filename_or_path_text(std::string_view path)
@@ -71,6 +114,96 @@ constexpr std::array<PointLightFalloffMode, 2> kPointLightFalloffModes {
     }
 
     return "High";
+}
+
+[[nodiscard]] const char* material_blend_mode_label(PbrMaterialBlendMode mode)
+{
+    switch (mode) {
+    case PbrMaterialBlendMode::opaque:
+        return "Opaque";
+    case PbrMaterialBlendMode::transparent:
+        return "Transparent";
+    case PbrMaterialBlendMode::fade:
+        return "Fade";
+    case PbrMaterialBlendMode::masked:
+        return "Masked";
+    case PbrMaterialBlendMode::add:
+        return "Add";
+    case PbrMaterialBlendMode::multiply:
+        return "Multiply";
+    case PbrMaterialBlendMode::screen:
+        return "Screen";
+    }
+
+    return "Opaque";
+}
+
+[[nodiscard]] const char* material_transparency_mode_label(PbrMaterialTransparencyMode mode)
+{
+    switch (mode) {
+    case PbrMaterialTransparencyMode::default_sorting:
+        return "Default";
+    case PbrMaterialTransparencyMode::two_passes_one_side:
+        return "Two Passes One Side";
+    case PbrMaterialTransparencyMode::two_passes_two_sides:
+        return "Two Passes Two Sides";
+    }
+
+    return "Default";
+}
+
+[[nodiscard]] const char* material_culling_mode_label(PbrMaterialCullingMode mode)
+{
+    switch (mode) {
+    case PbrMaterialCullingMode::none:
+        return "None";
+    case PbrMaterialCullingMode::front:
+        return "Front";
+    case PbrMaterialCullingMode::back:
+        return "Back";
+    case PbrMaterialCullingMode::front_and_back:
+        return "Front And Back";
+    }
+
+    return "Back";
+}
+
+[[nodiscard]] const char* material_refraction_mode_label(PbrMaterialRefractionMode mode)
+{
+    switch (mode) {
+    case PbrMaterialRefractionMode::none:
+        return "None";
+    case PbrMaterialRefractionMode::cubemap:
+        return "Cubemap";
+    case PbrMaterialRefractionMode::screen_space:
+        return "Screen Space";
+    }
+
+    return "None";
+}
+
+[[nodiscard]] const char* material_refraction_type_label(PbrMaterialRefractionType type)
+{
+    switch (type) {
+    case PbrMaterialRefractionType::solid:
+        return "Solid";
+    case PbrMaterialRefractionType::thin:
+        return "Thin";
+    }
+
+    return "Solid";
+}
+
+[[nodiscard]] const char* material_absorption_mode_label(PbrMaterialAbsorptionMode mode)
+{
+    switch (mode) {
+    case PbrMaterialAbsorptionMode::coefficients:
+        return "Coefficients";
+    case PbrMaterialAbsorptionMode::transmittance_color:
+        return "Transmittance Color";
+    }
+
+    return "Coefficients";
 }
 
 [[nodiscard]] bool draw_vec3_drag(
@@ -183,6 +316,187 @@ void draw_texture_row(
     if (changed) {
         value = static_cast<uint8_t>(editable_value);
     }
+    return changed;
+}
+
+[[nodiscard]] bool draw_transparent_material_controls(
+    PbrMaterialSettings& settings,
+    const PbrMaterialSettings& defaults,
+    bool picker_busy,
+    MaterialComponentEditorResult& result)
+{
+    bool changed = false;
+    if (!ImGui::CollapsingHeader("Transparent")) {
+        return false;
+    }
+
+    changed |= render_resettable_combo(
+        "Blend Mode",
+        settings.blend_mode,
+        defaults.blend_mode,
+        std::span<const PbrMaterialBlendMode> { kMaterialBlendModes },
+        material_blend_mode_label,
+        "Selects how this material combines with pixels behind it.");
+    changed |= render_resettable_float_drag(
+        "Opacity",
+        settings.opacity,
+        defaults.opacity,
+        0.005f,
+        0.0f,
+        1.0f,
+        "%.3f",
+        "Alpha value multiplied into the material base color.");
+    draw_texture_row(
+        "Opacity Texture",
+        PbrMaterialTextureSlot::opacity,
+        settings,
+        picker_busy,
+        "Grayscale texture that varies opacity across the surface.",
+        result);
+    changed |= render_resettable_float_drag(
+        "Mask Threshold",
+        settings.mask_threshold,
+        defaults.mask_threshold,
+        0.005f,
+        0.0f,
+        1.0f,
+        "%.3f",
+        "Alpha cutoff used by masked materials.");
+    changed |= render_resettable_combo(
+        "Transparency Pass",
+        settings.transparency_mode,
+        defaults.transparency_mode,
+        std::span<const PbrMaterialTransparencyMode> { kMaterialTransparencyModes },
+        material_transparency_mode_label,
+        "Chooses the transparent rendering pass strategy.");
+    ImGui::Separator();
+    changed |= render_resettable_checkbox(
+        "Transparent Shadows",
+        settings.transparent_shadow,
+        defaults.transparent_shadow,
+        "Lets material alpha affect shadow opacity.");
+    changed |= render_resettable_checkbox(
+        "Double Sided",
+        settings.double_sided,
+        defaults.double_sided,
+        "Renders and lights both sides of the material.");
+    changed |= render_resettable_combo(
+        "Culling",
+        settings.culling,
+        defaults.culling,
+        std::span<const PbrMaterialCullingMode> { kMaterialCullingModes },
+        material_culling_mode_label,
+        "Controls which face orientation is skipped by rasterization.");
+    changed |= render_resettable_checkbox(
+        "Depth Write",
+        settings.depth_write,
+        defaults.depth_write,
+        "Allows the material to write depth.");
+    changed |= render_resettable_checkbox(
+        "Depth Culling",
+        settings.depth_culling,
+        defaults.depth_culling,
+        "Allows the material to depth-test against earlier surfaces.");
+    changed |= render_resettable_checkbox(
+        "Color Write",
+        settings.color_write,
+        defaults.color_write,
+        "Allows the material to write color.");
+    changed |= render_resettable_checkbox(
+        "Alpha To Coverage",
+        settings.alpha_to_coverage,
+        defaults.alpha_to_coverage,
+        "Uses alpha to coverage for masked edges when MSAA is available.");
+
+    ImGui::Separator();
+    changed |= render_resettable_combo(
+        "Refraction Mode",
+        settings.refraction_mode,
+        defaults.refraction_mode,
+        std::span<const PbrMaterialRefractionMode> { kMaterialRefractionModes },
+        material_refraction_mode_label,
+        "Chooses the source used for refracted light.");
+    changed |= render_resettable_combo(
+        "Refraction Type",
+        settings.refraction_type,
+        defaults.refraction_type,
+        std::span<const PbrMaterialRefractionType> { kMaterialRefractionTypes },
+        material_refraction_type_label,
+        "Chooses whether refraction behaves like a solid volume or a thin surface.");
+    changed |= render_resettable_float_drag(
+        "Transmission",
+        settings.transmission,
+        defaults.transmission,
+        0.005f,
+        0.0f,
+        1.0f,
+        "%.3f",
+        "How much diffuse light passes through the material.");
+    changed |= render_resettable_float_drag(
+        "IOR",
+        settings.ior,
+        defaults.ior,
+        0.005f,
+        1.0f,
+        4.0f,
+        "%.3f",
+        "Index of refraction.");
+    changed |= render_resettable_combo(
+        "Absorption Mode",
+        settings.absorption_mode,
+        defaults.absorption_mode,
+        std::span<const PbrMaterialAbsorptionMode> { kMaterialAbsorptionModes },
+        material_absorption_mode_label,
+        "Chooses direct absorption coefficients or artist-facing transmittance color.");
+    changed |= draw_vec3_drag(
+        "Absorption",
+        settings.absorption,
+        defaults.absorption,
+        0.005f,
+        "%.3f",
+        "Beer-Lambert absorption coefficients.");
+    changed |= render_resettable_srgb_color_edit(
+        "Transmittance Color",
+        settings.transmittance_color,
+        defaults.transmittance_color,
+        "Color white light becomes after traveling the transmittance distance.");
+    changed |= render_resettable_float_drag(
+        "Transmittance Distance",
+        settings.transmittance_distance,
+        defaults.transmittance_distance,
+        0.01f,
+        0.001f,
+        1000.0f,
+        "%.3f m",
+        "Distance used to derive absorption from transmittance color.");
+    changed |= render_resettable_float_drag(
+        "Thickness",
+        settings.thickness,
+        defaults.thickness,
+        0.005f,
+        0.0f,
+        1000.0f,
+        "%.3f m",
+        "Approximate optical depth for solid refractive objects.");
+    changed |= render_resettable_float_drag(
+        "Micro Thickness",
+        settings.micro_thickness,
+        defaults.micro_thickness,
+        0.0001f,
+        0.0f,
+        10.0f,
+        "%.4f m",
+        "Approximate optical depth for thin refractive objects.");
+    changed |= render_resettable_float_drag(
+        "Dispersion",
+        settings.dispersion,
+        defaults.dispersion,
+        0.001f,
+        0.0f,
+        1.0f,
+        "%.3f",
+        "Separates transmitted color by wavelength.");
+
     return changed;
 }
 
@@ -502,6 +816,8 @@ MaterialComponentEditorResult draw_material_component(PbrMaterialSettings& setti
             1.0f,
             "%.3f",
             "Roughness of the clear-coat layer.");
+
+        result.settings_changed |= draw_transparent_material_controls(settings, defaults, picker_busy, result);
 
         if (ImGui::Button("Reset PBR")) {
             settings = {};

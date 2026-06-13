@@ -58,6 +58,46 @@ enum class PbrMaterialTextureSlot : uint8_t {
     albedo,
     roughness,
     metallic,
+    opacity,
+};
+
+enum class PbrMaterialBlendMode : uint8_t {
+    opaque,
+    transparent,
+    fade,
+    masked,
+    add,
+    multiply,
+    screen,
+};
+
+enum class PbrMaterialTransparencyMode : uint8_t {
+    default_sorting,
+    two_passes_one_side,
+    two_passes_two_sides,
+};
+
+enum class PbrMaterialRefractionMode : uint8_t {
+    none,
+    cubemap,
+    screen_space,
+};
+
+enum class PbrMaterialRefractionType : uint8_t {
+    solid,
+    thin,
+};
+
+enum class PbrMaterialAbsorptionMode : uint8_t {
+    coefficients,
+    transmittance_color,
+};
+
+enum class PbrMaterialCullingMode : uint8_t {
+    none,
+    front,
+    back,
+    front_and_back,
 };
 
 struct RenderCamera {
@@ -81,6 +121,29 @@ struct PbrMaterialSettings {
     LinearColor specular_color_factor { 1.0f, 1.0f, 1.0f };
     float clear_coat = 0.0f;
     float clear_coat_roughness = 0.0f;
+    PbrMaterialBlendMode blend_mode = PbrMaterialBlendMode::opaque;
+    PbrMaterialTransparencyMode transparency_mode = PbrMaterialTransparencyMode::default_sorting;
+    PbrMaterialCullingMode culling = PbrMaterialCullingMode::back;
+    bool double_sided = true;
+    bool depth_write = true;
+    bool depth_culling = true;
+    bool color_write = true;
+    bool alpha_to_coverage = true;
+    bool transparent_shadow = false;
+    float opacity = 1.0f;
+    TextureAssetReference opacity_texture;
+    float mask_threshold = 0.4f;
+    PbrMaterialRefractionMode refraction_mode = PbrMaterialRefractionMode::none;
+    PbrMaterialRefractionType refraction_type = PbrMaterialRefractionType::solid;
+    float transmission = 0.0f;
+    float ior = 1.5f;
+    PbrMaterialAbsorptionMode absorption_mode = PbrMaterialAbsorptionMode::coefficients;
+    Vec3 absorption { 0.0f, 0.0f, 0.0f };
+    LinearColor transmittance_color { 1.0f, 1.0f, 1.0f };
+    float transmittance_distance = 1.0f;
+    float thickness = 0.5f;
+    float micro_thickness = 0.0f;
+    float dispersion = 0.0f;
 };
 
 enum class EnvironmentLightingSource : uint8_t {

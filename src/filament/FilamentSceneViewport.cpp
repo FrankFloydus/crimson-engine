@@ -10,6 +10,7 @@ module;
 #include <filament/IndexBuffer.h>
 #include <filament/LightManager.h>
 #include <filament/Material.h>
+#include <filament/MaterialEnums.h>
 #include <filament/MaterialInstance.h>
 #include <filament/RenderableManager.h>
 #include <filament/RenderTarget.h>
@@ -32,6 +33,29 @@ module;
 
 #include "diagnostics/LogMacros.h"
 #include "generated/QuaderLitPbrMaterial.inc"
+#include "generated/QuaderLitPbrOpaqueTransparentShadowMaterial.inc"
+#include "generated/QuaderLitPbrTransparentMaterial.inc"
+#include "generated/QuaderLitPbrTransparentShadowMaterial.inc"
+#include "generated/QuaderLitPbrFadeMaterial.inc"
+#include "generated/QuaderLitPbrFadeShadowMaterial.inc"
+#include "generated/QuaderLitPbrMaskedMaterial.inc"
+#include "generated/QuaderLitPbrMaskedNoAlphaToCoverageMaterial.inc"
+#include "generated/QuaderLitPbrMaskedShadowMaterial.inc"
+#include "generated/QuaderLitPbrMaskedNoAlphaToCoverageShadowMaterial.inc"
+#include "generated/QuaderLitPbrAddMaterial.inc"
+#include "generated/QuaderLitPbrAddShadowMaterial.inc"
+#include "generated/QuaderLitPbrMultiplyMaterial.inc"
+#include "generated/QuaderLitPbrMultiplyShadowMaterial.inc"
+#include "generated/QuaderLitPbrScreenMaterial.inc"
+#include "generated/QuaderLitPbrScreenShadowMaterial.inc"
+#include "generated/QuaderLitPbrRefractCubemapSolidMaterial.inc"
+#include "generated/QuaderLitPbrRefractCubemapSolidShadowMaterial.inc"
+#include "generated/QuaderLitPbrRefractCubemapThinMaterial.inc"
+#include "generated/QuaderLitPbrRefractCubemapThinShadowMaterial.inc"
+#include "generated/QuaderLitPbrRefractScreenSpaceSolidMaterial.inc"
+#include "generated/QuaderLitPbrRefractScreenSpaceSolidShadowMaterial.inc"
+#include "generated/QuaderLitPbrRefractScreenSpaceThinMaterial.inc"
+#include "generated/QuaderLitPbrRefractScreenSpaceThinShadowMaterial.inc"
 
 #include <algorithm>
 #include <array>
@@ -93,9 +117,38 @@ struct CachedMaterialTexture {
     filament::Texture* texture = nullptr;
 };
 
+enum class PbrMaterialVariant : uint8_t {
+    opaque,
+    opaque_transparent_shadow,
+    transparent,
+    transparent_shadow,
+    fade,
+    fade_shadow,
+    masked,
+    masked_no_alpha_to_coverage,
+    masked_shadow,
+    masked_no_alpha_to_coverage_shadow,
+    add,
+    add_shadow,
+    multiply,
+    multiply_shadow,
+    screen,
+    screen_shadow,
+    refract_cubemap_solid,
+    refract_cubemap_solid_shadow,
+    refract_cubemap_thin,
+    refract_cubemap_thin_shadow,
+    refract_screen_space_solid,
+    refract_screen_space_solid_shadow,
+    refract_screen_space_thin,
+    refract_screen_space_thin_shadow,
+    count,
+};
+
 struct MeshRenderable {
     utils::Entity entity;
     filament::MaterialInstance* material_instance = nullptr;
+    PbrMaterialVariant material_variant = PbrMaterialVariant::opaque;
     ViewportMeshKind mesh_kind = ViewportMeshKind::cube;
 };
 
@@ -191,12 +244,6 @@ float distance_between(Vec3 left, Vec3 right)
     return std::sqrt(squared_distance(left, right));
 }
 
-filament::math::float4 to_filament_premultiplied_color(LinearColor color, float alpha)
-{
-    const LinearRgba rgba = premultiplied_linear_rgba(color, alpha);
-    return filament::math::float4 { rgba.r, rgba.g, rgba.b, rgba.a };
-}
-
 filament::math::double3 to_filament_point(Vec3 position)
 {
     return filament::math::double3 { position.x, position.y, position.z };
@@ -243,9 +290,329 @@ const char* texture_slot_name(PbrMaterialTextureSlot slot)
         return "roughness";
     case PbrMaterialTextureSlot::metallic:
         return "metallic";
+    case PbrMaterialTextureSlot::opacity:
+        return "opacity";
     }
 
     return "unknown";
+}
+
+[[nodiscard]] bool pbr_material_uses_screen_space_refraction(const PbrMaterialSettings& settings)
+{
+    return settings.refraction_mode == PbrMaterialRefractionMode::screen_space;
+}
+
+[[nodiscard]] PbrMaterialVariant pbr_material_variant_for(PbrMaterialSettings settings)
+{
+    settings = clamp_pbr_material_settings(settings);
+    const bool transparent_shadow = settings.transparent_shadow;
+
+    switch (settings.refraction_mode) {
+    case PbrMaterialRefractionMode::cubemap:
+        if (settings.refraction_type == PbrMaterialRefractionType::thin) {
+            return transparent_shadow
+                ? PbrMaterialVariant::refract_cubemap_thin_shadow
+                : PbrMaterialVariant::refract_cubemap_thin;
+        }
+        return transparent_shadow
+            ? PbrMaterialVariant::refract_cubemap_solid_shadow
+            : PbrMaterialVariant::refract_cubemap_solid;
+    case PbrMaterialRefractionMode::screen_space:
+        if (settings.refraction_type == PbrMaterialRefractionType::thin) {
+            return transparent_shadow
+                ? PbrMaterialVariant::refract_screen_space_thin_shadow
+                : PbrMaterialVariant::refract_screen_space_thin;
+        }
+        return transparent_shadow
+            ? PbrMaterialVariant::refract_screen_space_solid_shadow
+            : PbrMaterialVariant::refract_screen_space_solid;
+    case PbrMaterialRefractionMode::none:
+        break;
+    }
+
+    switch (settings.blend_mode) {
+    case PbrMaterialBlendMode::opaque:
+        return transparent_shadow ? PbrMaterialVariant::opaque_transparent_shadow : PbrMaterialVariant::opaque;
+    case PbrMaterialBlendMode::transparent:
+        return transparent_shadow
+            ? PbrMaterialVariant::transparent_shadow
+            : PbrMaterialVariant::transparent;
+    case PbrMaterialBlendMode::fade:
+        return transparent_shadow ? PbrMaterialVariant::fade_shadow : PbrMaterialVariant::fade;
+    case PbrMaterialBlendMode::masked:
+        if (settings.alpha_to_coverage) {
+            return transparent_shadow
+                ? PbrMaterialVariant::masked_shadow
+                : PbrMaterialVariant::masked;
+        }
+        return transparent_shadow
+            ? PbrMaterialVariant::masked_no_alpha_to_coverage_shadow
+            : PbrMaterialVariant::masked_no_alpha_to_coverage;
+    case PbrMaterialBlendMode::add:
+        return transparent_shadow ? PbrMaterialVariant::add_shadow : PbrMaterialVariant::add;
+    case PbrMaterialBlendMode::multiply:
+        return transparent_shadow
+            ? PbrMaterialVariant::multiply_shadow
+            : PbrMaterialVariant::multiply;
+    case PbrMaterialBlendMode::screen:
+        return transparent_shadow
+            ? PbrMaterialVariant::screen_shadow
+            : PbrMaterialVariant::screen;
+    }
+
+    return PbrMaterialVariant::opaque;
+}
+
+[[nodiscard]] bool pbr_material_variant_uses_mask_threshold(PbrMaterialVariant variant)
+{
+    switch (variant) {
+    case PbrMaterialVariant::masked:
+    case PbrMaterialVariant::masked_no_alpha_to_coverage:
+    case PbrMaterialVariant::masked_shadow:
+    case PbrMaterialVariant::masked_no_alpha_to_coverage_shadow:
+        return true;
+    case PbrMaterialVariant::opaque:
+    case PbrMaterialVariant::opaque_transparent_shadow:
+    case PbrMaterialVariant::transparent:
+    case PbrMaterialVariant::transparent_shadow:
+    case PbrMaterialVariant::fade:
+    case PbrMaterialVariant::fade_shadow:
+    case PbrMaterialVariant::add:
+    case PbrMaterialVariant::add_shadow:
+    case PbrMaterialVariant::multiply:
+    case PbrMaterialVariant::multiply_shadow:
+    case PbrMaterialVariant::screen:
+    case PbrMaterialVariant::screen_shadow:
+    case PbrMaterialVariant::refract_cubemap_solid:
+    case PbrMaterialVariant::refract_cubemap_solid_shadow:
+    case PbrMaterialVariant::refract_cubemap_thin:
+    case PbrMaterialVariant::refract_cubemap_thin_shadow:
+    case PbrMaterialVariant::refract_screen_space_solid:
+    case PbrMaterialVariant::refract_screen_space_solid_shadow:
+    case PbrMaterialVariant::refract_screen_space_thin:
+    case PbrMaterialVariant::refract_screen_space_thin_shadow:
+    case PbrMaterialVariant::count:
+        return false;
+    }
+
+    return false;
+}
+
+[[nodiscard]] bool pbr_material_variant_uses_transparency_mode(PbrMaterialVariant variant)
+{
+    switch (variant) {
+    case PbrMaterialVariant::transparent:
+    case PbrMaterialVariant::transparent_shadow:
+    case PbrMaterialVariant::fade:
+    case PbrMaterialVariant::fade_shadow:
+    case PbrMaterialVariant::add:
+    case PbrMaterialVariant::add_shadow:
+    case PbrMaterialVariant::multiply:
+    case PbrMaterialVariant::multiply_shadow:
+    case PbrMaterialVariant::screen:
+    case PbrMaterialVariant::screen_shadow:
+        return true;
+    case PbrMaterialVariant::opaque:
+    case PbrMaterialVariant::opaque_transparent_shadow:
+    case PbrMaterialVariant::masked:
+    case PbrMaterialVariant::masked_no_alpha_to_coverage:
+    case PbrMaterialVariant::masked_shadow:
+    case PbrMaterialVariant::masked_no_alpha_to_coverage_shadow:
+    case PbrMaterialVariant::refract_cubemap_solid:
+    case PbrMaterialVariant::refract_cubemap_solid_shadow:
+    case PbrMaterialVariant::refract_cubemap_thin:
+    case PbrMaterialVariant::refract_cubemap_thin_shadow:
+    case PbrMaterialVariant::refract_screen_space_solid:
+    case PbrMaterialVariant::refract_screen_space_solid_shadow:
+    case PbrMaterialVariant::refract_screen_space_thin:
+    case PbrMaterialVariant::refract_screen_space_thin_shadow:
+    case PbrMaterialVariant::count:
+        return false;
+    }
+
+    return false;
+}
+
+[[nodiscard]] filament::TransparencyMode filament_transparency_mode(PbrMaterialTransparencyMode mode)
+{
+    switch (mode) {
+    case PbrMaterialTransparencyMode::default_sorting:
+        return filament::TransparencyMode::DEFAULT;
+    case PbrMaterialTransparencyMode::two_passes_one_side:
+        return filament::TransparencyMode::TWO_PASSES_ONE_SIDE;
+    case PbrMaterialTransparencyMode::two_passes_two_sides:
+        return filament::TransparencyMode::TWO_PASSES_TWO_SIDES;
+    }
+
+    return filament::TransparencyMode::DEFAULT;
+}
+
+[[nodiscard]] filament::MaterialInstance::CullingMode filament_culling_mode(PbrMaterialCullingMode mode)
+{
+    switch (mode) {
+    case PbrMaterialCullingMode::none:
+        return filament::MaterialInstance::CullingMode::NONE;
+    case PbrMaterialCullingMode::front:
+        return filament::MaterialInstance::CullingMode::FRONT;
+    case PbrMaterialCullingMode::back:
+        return filament::MaterialInstance::CullingMode::BACK;
+    case PbrMaterialCullingMode::front_and_back:
+        return filament::MaterialInstance::CullingMode::FRONT_AND_BACK;
+    }
+
+    return filament::MaterialInstance::CullingMode::BACK;
+}
+
+[[nodiscard]] filament::math::float3 filament_absorption(PbrMaterialSettings settings)
+{
+    settings = clamp_pbr_material_settings(settings);
+    if (settings.absorption_mode == PbrMaterialAbsorptionMode::transmittance_color) {
+        return filament::Color::absorptionAtDistance(
+            to_filament_color(settings.transmittance_color),
+            settings.transmittance_distance);
+    }
+
+    return to_filament_float3(settings.absorption);
+}
+
+struct EmbeddedMaterialPackage {
+    const unsigned char* bytes = nullptr;
+    unsigned int size = 0;
+    const char* description = "";
+};
+
+[[nodiscard]] EmbeddedMaterialPackage embedded_material_package(PbrMaterialVariant variant)
+{
+    switch (variant) {
+    case PbrMaterialVariant::opaque:
+        return { filament_assets::quader_lit_pbr_material, filament_assets::quader_lit_pbr_material_size, "opaque" };
+    case PbrMaterialVariant::opaque_transparent_shadow:
+        return {
+            filament_assets::quader_lit_pbr_opaque_transparent_shadow_material,
+            filament_assets::quader_lit_pbr_opaque_transparent_shadow_material_size,
+            "opaque transparent-shadow",
+        };
+    case PbrMaterialVariant::transparent:
+        return {
+            filament_assets::quader_lit_pbr_transparent_material,
+            filament_assets::quader_lit_pbr_transparent_material_size,
+            "transparent",
+        };
+    case PbrMaterialVariant::transparent_shadow:
+        return {
+            filament_assets::quader_lit_pbr_transparent_shadow_material,
+            filament_assets::quader_lit_pbr_transparent_shadow_material_size,
+            "transparent shadow",
+        };
+    case PbrMaterialVariant::fade:
+        return { filament_assets::quader_lit_pbr_fade_material, filament_assets::quader_lit_pbr_fade_material_size, "fade" };
+    case PbrMaterialVariant::fade_shadow:
+        return {
+            filament_assets::quader_lit_pbr_fade_shadow_material,
+            filament_assets::quader_lit_pbr_fade_shadow_material_size,
+            "fade shadow",
+        };
+    case PbrMaterialVariant::masked:
+        return { filament_assets::quader_lit_pbr_masked_material, filament_assets::quader_lit_pbr_masked_material_size, "masked" };
+    case PbrMaterialVariant::masked_no_alpha_to_coverage:
+        return {
+            filament_assets::quader_lit_pbr_masked_no_alpha_to_coverage_material,
+            filament_assets::quader_lit_pbr_masked_no_alpha_to_coverage_material_size,
+            "masked no-alpha-to-coverage",
+        };
+    case PbrMaterialVariant::masked_shadow:
+        return {
+            filament_assets::quader_lit_pbr_masked_shadow_material,
+            filament_assets::quader_lit_pbr_masked_shadow_material_size,
+            "masked shadow",
+        };
+    case PbrMaterialVariant::masked_no_alpha_to_coverage_shadow:
+        return {
+            filament_assets::quader_lit_pbr_masked_no_alpha_to_coverage_shadow_material,
+            filament_assets::quader_lit_pbr_masked_no_alpha_to_coverage_shadow_material_size,
+            "masked no-alpha-to-coverage shadow",
+        };
+    case PbrMaterialVariant::add:
+        return { filament_assets::quader_lit_pbr_add_material, filament_assets::quader_lit_pbr_add_material_size, "add" };
+    case PbrMaterialVariant::add_shadow:
+        return {
+            filament_assets::quader_lit_pbr_add_shadow_material,
+            filament_assets::quader_lit_pbr_add_shadow_material_size,
+            "add shadow",
+        };
+    case PbrMaterialVariant::multiply:
+        return {
+            filament_assets::quader_lit_pbr_multiply_material,
+            filament_assets::quader_lit_pbr_multiply_material_size,
+            "multiply",
+        };
+    case PbrMaterialVariant::multiply_shadow:
+        return {
+            filament_assets::quader_lit_pbr_multiply_shadow_material,
+            filament_assets::quader_lit_pbr_multiply_shadow_material_size,
+            "multiply shadow",
+        };
+    case PbrMaterialVariant::screen:
+        return { filament_assets::quader_lit_pbr_screen_material, filament_assets::quader_lit_pbr_screen_material_size, "screen" };
+    case PbrMaterialVariant::screen_shadow:
+        return {
+            filament_assets::quader_lit_pbr_screen_shadow_material,
+            filament_assets::quader_lit_pbr_screen_shadow_material_size,
+            "screen shadow",
+        };
+    case PbrMaterialVariant::refract_cubemap_solid:
+        return {
+            filament_assets::quader_lit_pbr_refract_cubemap_solid_material,
+            filament_assets::quader_lit_pbr_refract_cubemap_solid_material_size,
+            "cubemap solid refraction",
+        };
+    case PbrMaterialVariant::refract_cubemap_solid_shadow:
+        return {
+            filament_assets::quader_lit_pbr_refract_cubemap_solid_shadow_material,
+            filament_assets::quader_lit_pbr_refract_cubemap_solid_shadow_material_size,
+            "cubemap solid refraction shadow",
+        };
+    case PbrMaterialVariant::refract_cubemap_thin:
+        return {
+            filament_assets::quader_lit_pbr_refract_cubemap_thin_material,
+            filament_assets::quader_lit_pbr_refract_cubemap_thin_material_size,
+            "cubemap thin refraction",
+        };
+    case PbrMaterialVariant::refract_cubemap_thin_shadow:
+        return {
+            filament_assets::quader_lit_pbr_refract_cubemap_thin_shadow_material,
+            filament_assets::quader_lit_pbr_refract_cubemap_thin_shadow_material_size,
+            "cubemap thin refraction shadow",
+        };
+    case PbrMaterialVariant::refract_screen_space_solid:
+        return {
+            filament_assets::quader_lit_pbr_refract_screen_space_solid_material,
+            filament_assets::quader_lit_pbr_refract_screen_space_solid_material_size,
+            "screen-space solid refraction",
+        };
+    case PbrMaterialVariant::refract_screen_space_solid_shadow:
+        return {
+            filament_assets::quader_lit_pbr_refract_screen_space_solid_shadow_material,
+            filament_assets::quader_lit_pbr_refract_screen_space_solid_shadow_material_size,
+            "screen-space solid refraction shadow",
+        };
+    case PbrMaterialVariant::refract_screen_space_thin:
+        return {
+            filament_assets::quader_lit_pbr_refract_screen_space_thin_material,
+            filament_assets::quader_lit_pbr_refract_screen_space_thin_material_size,
+            "screen-space thin refraction",
+        };
+    case PbrMaterialVariant::refract_screen_space_thin_shadow:
+        return {
+            filament_assets::quader_lit_pbr_refract_screen_space_thin_shadow_material,
+            filament_assets::quader_lit_pbr_refract_screen_space_thin_shadow_material_size,
+            "screen-space thin refraction shadow",
+        };
+    case PbrMaterialVariant::count:
+        break;
+    }
+
+    return { filament_assets::quader_lit_pbr_material, filament_assets::quader_lit_pbr_material_size, "opaque" };
 }
 
 std::string material_texture_cache_key(
@@ -980,29 +1347,38 @@ public:
         destroy();
     }
 
-    void ensure_material()
+    [[nodiscard]] filament::Material* ensure_material(PbrMaterialVariant variant)
     {
-        if (material != nullptr) {
-            return;
+        const size_t index = static_cast<size_t>(variant);
+        if (index >= materials.size()) {
+            return ensure_material(PbrMaterialVariant::opaque);
         }
 
-        material = filament::Material::Builder()
-            .package(
-                filament_assets::quader_lit_pbr_material,
-                filament_assets::quader_lit_pbr_material_size)
+        if (materials[index] != nullptr) {
+            return materials[index];
+        }
+
+        const EmbeddedMaterialPackage package = embedded_material_package(variant);
+        materials[index] = filament::Material::Builder()
+            .package(package.bytes, package.size)
             .build(engine);
-        material = require_filament_allocation(material, "viewport mesh material");
+        return require_filament_allocation(materials[index], package.description);
     }
 
-    [[nodiscard]] filament::MaterialInstance* create_mesh_material_instance(ViewportMeshKind mesh_kind)
+    [[nodiscard]] filament::MaterialInstance* create_mesh_material_instance(
+        ViewportMeshKind mesh_kind,
+        PbrMaterialVariant variant)
     {
-        ensure_material();
+        filament::Material* material = ensure_material(variant);
         filament::MaterialInstance* material_instance = material->createInstance(
             mesh_kind == ViewportMeshKind::plane ? "Quader plane material" : "Quader cube material");
         return require_filament_allocation(material_instance, "viewport mesh material instance");
     }
 
-    void apply_settings(filament::MaterialInstance& instance, PbrMaterialSettings settings)
+    void apply_settings(
+        filament::MaterialInstance& instance,
+        PbrMaterialVariant variant,
+        PbrMaterialSettings settings)
     {
         settings = clamp_pbr_material_settings(settings);
         ensure_fallback_textures();
@@ -1022,11 +1398,16 @@ public:
             PbrMaterialTextureSlot::metallic,
             PreviewTextureEncoding::linear_red,
             fallback_scalar_texture);
+        const MaterialTextureBinding opacity_texture = resolve_texture(
+            settings.opacity_texture,
+            PbrMaterialTextureSlot::opacity,
+            PreviewTextureEncoding::linear_red,
+            fallback_scalar_texture);
 
         instance.setParameter(
             "albedo",
-            filament::RgbaType::PREMULTIPLIED_LINEAR,
-            to_filament_premultiplied_color(settings.albedo, 1.0f));
+            filament::RgbaType::LINEAR,
+            filament::math::float4 { settings.albedo.r, settings.albedo.g, settings.albedo.b, 1.0f });
         instance.setParameter("albedoTexture", albedo_texture.texture, texture_sampler);
         instance.setParameter("useAlbedoTexture", albedo_texture.use_source_texture);
         instance.setParameter("roughness", settings.roughness);
@@ -1043,13 +1424,35 @@ public:
             to_filament_color(settings.specular_color_factor));
         instance.setParameter("clearCoat", settings.clear_coat);
         instance.setParameter("clearCoatRoughness", settings.clear_coat_roughness);
+        instance.setParameter("opacity", settings.opacity);
+        instance.setParameter("opacityTexture", opacity_texture.texture, texture_sampler);
+        instance.setParameter("useOpacityTexture", opacity_texture.use_source_texture);
+        instance.setParameter("transmission", settings.transmission);
+        instance.setParameter("ior", settings.ior);
+        instance.setParameter("absorption", filament::RgbType::LINEAR, filament_absorption(settings));
+        instance.setParameter("thickness", settings.thickness);
+        instance.setParameter("microThickness", settings.micro_thickness);
+        instance.setParameter("dispersion", settings.dispersion);
+        if (pbr_material_variant_uses_mask_threshold(variant)) {
+            instance.setMaskThreshold(settings.mask_threshold);
+        }
+        if (pbr_material_variant_uses_transparency_mode(variant)) {
+            instance.setTransparencyMode(filament_transparency_mode(settings.transparency_mode));
+        }
+        instance.setCullingMode(filament_culling_mode(settings.culling));
+        instance.setDoubleSided(settings.double_sided);
+        instance.setDepthWrite(settings.depth_write);
+        instance.setDepthCulling(settings.depth_culling);
+        instance.setColorWrite(settings.color_write);
     }
 
     void destroy()
     {
-        if (material != nullptr) {
-            engine.destroy(material);
-            material = nullptr;
+        for (filament::Material*& material : materials) {
+            if (material != nullptr) {
+                engine.destroy(material);
+                material = nullptr;
+            }
         }
 
         destroy_textures();
@@ -1188,7 +1591,7 @@ private:
     }
 
     filament::Engine& engine;
-    filament::Material* material = nullptr;
+    std::array<filament::Material*, static_cast<size_t>(PbrMaterialVariant::count)> materials {};
     filament::Texture* fallback_albedo_texture = nullptr;
     filament::Texture* fallback_scalar_texture = nullptr;
     std::unordered_map<std::string, CachedMaterialTexture> texture_cache;
@@ -1323,7 +1726,7 @@ struct FilamentSceneViewport::Resources {
 
     void ensure_cube_resources()
     {
-        material_resources.ensure_material();
+        (void)material_resources.ensure_material(PbrMaterialVariant::opaque);
         if (cube_vertices != nullptr && cube_indices != nullptr) {
             return;
         }
@@ -1372,7 +1775,7 @@ struct FilamentSceneViewport::Resources {
 
     void ensure_plane_resources()
     {
-        material_resources.ensure_material();
+        (void)material_resources.ensure_material(PbrMaterialVariant::opaque);
         if (plane_vertices != nullptr && plane_indices != nullptr) {
             return;
         }
@@ -1428,7 +1831,8 @@ struct FilamentSceneViewport::Resources {
         MeshRenderable mesh;
         mesh.mesh_kind = mesh_kind;
         mesh.entity = utils::EntityManager::get().create();
-        mesh.material_instance = material_resources.create_mesh_material_instance(mesh_kind);
+        mesh.material_variant = PbrMaterialVariant::opaque;
+        mesh.material_instance = material_resources.create_mesh_material_instance(mesh_kind, mesh.material_variant);
 
         const filament::Box bounding_box =
             mesh_kind == ViewportMeshKind::plane
@@ -1608,6 +2012,26 @@ struct FilamentSceneViewport::Resources {
         return entry->second;
     }
 
+    void ensure_mesh_material_variant(MeshRenderable& renderable, const SceneRenderMesh& mesh)
+    {
+        const PbrMaterialVariant desired_variant = pbr_material_variant_for(mesh.material);
+        if (renderable.material_instance != nullptr && renderable.material_variant == desired_variant) {
+            return;
+        }
+
+        filament::MaterialInstance* next_instance =
+            material_resources.create_mesh_material_instance(renderable.mesh_kind, desired_variant);
+        filament::RenderableManager& renderables = engine.getRenderableManager();
+        const filament::RenderableManager::Instance renderable_instance = renderables.getInstance(renderable.entity);
+        renderables.setMaterialInstanceAt(renderable_instance, 0, next_instance);
+
+        if (renderable.material_instance != nullptr) {
+            engine.destroy(renderable.material_instance);
+        }
+        renderable.material_instance = next_instance;
+        renderable.material_variant = desired_variant;
+    }
+
     DirectionalLightRenderable& ensure_directional_light_entity(const SceneRenderDirectionalLight& light)
     {
         auto [entry, inserted] = directional_lights.try_emplace(light.entity_id.value);
@@ -1652,7 +2076,8 @@ struct FilamentSceneViewport::Resources {
 
             mesh_ids.insert(mesh.entity_id.value);
             MeshRenderable& renderable = ensure_mesh_entity(mesh);
-            material_resources.apply_settings(*renderable.material_instance, mesh.material);
+            ensure_mesh_material_variant(renderable, mesh);
+            material_resources.apply_settings(*renderable.material_instance, renderable.material_variant, mesh.material);
             apply_mesh_shadow_settings(renderable.entity, mesh);
             engine.getTransformManager().setTransform(
                 engine.getTransformManager().getInstance(renderable.entity),
@@ -1678,6 +2103,18 @@ struct FilamentSceneViewport::Resources {
             PointLightRenderable& renderable = ensure_point_light_entity(point_light);
             apply_point_light_settings(renderable.entity, point_light);
         }
+
+        bool uses_screen_space_refraction = false;
+        for (const SceneRenderMesh& mesh : snapshot.meshes) {
+            if (!mesh.entity_id.is_valid()) {
+                continue;
+            }
+
+            const PbrMaterialSettings material = clamp_pbr_material_settings(mesh.material);
+            uses_screen_space_refraction |= pbr_material_uses_screen_space_refraction(material);
+        }
+
+        view->setScreenSpaceRefractionEnabled(uses_screen_space_refraction);
 
         prune_scene_entities(mesh_ids, directional_light_ids, point_light_ids);
     }
