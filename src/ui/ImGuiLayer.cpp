@@ -7,6 +7,7 @@ module;
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,16 +24,18 @@ namespace {
 
 class ImGuiViewportTextureRegistry final : public IViewportTextureRegistry {
 public:
-    [[nodiscard]] uint64_t add_texture(const ViewportSampledGpuImage& image) override
+    [[nodiscard]] uint64_t add_texture(const ViewportTextureToken& texture) override
     {
-        if (image.backend != ViewportSampledGpuImageBackend::vulkan) {
+        const std::optional<ViewportVulkanTextureTokenPayload> payload =
+            unpack_vulkan_viewport_texture_token(texture);
+        if (!payload.has_value()) {
             return 0;
         }
 
         VkDescriptorSet descriptor = ImGui_ImplVulkan_AddTexture(
-            image.sampler,
-            image.image_view,
-            image.image_layout);
+            payload->sampler,
+            payload->image_view,
+            payload->image_layout);
         return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(descriptor));
     }
 
@@ -188,7 +191,7 @@ void ImGuiLayer::Impl::end_frame(VulkanSwapchain& swapchain)
 
 bool ImGuiLayer::Impl::present_viewport_gpu_image(const ViewportSampledGpuImage& image)
 {
-    return viewport_textures_ != nullptr && viewport_textures_->present_gpu_image(image);
+    return viewport_textures_ != nullptr && viewport_textures_->present_texture_token(image.texture_token());
 }
 
 bool ImGuiLayer::Impl::has_retired_viewport_gpu_textures() const noexcept

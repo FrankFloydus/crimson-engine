@@ -3,10 +3,11 @@ module;
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 export module quader.ui_shell.editor_panel_contracts;
 
-export import quader.render.driver_startup_plan;
+export import quader.render.driver_kind;
 export import quader.scene.scene;
 
 export namespace quader {
@@ -19,8 +20,16 @@ enum class CreateSceneItemKind {
 };
 
 struct EditorMainMenuInput {
-    RenderDriverKind active_driver = RenderDriverKind::vulkan;
-    RenderDriverSelection saved_selection;
+    struct RenderDriverMenuOption {
+        RenderDriverKind kind = RenderDriverKind::vulkan;
+        std::string_view label = "Vulkan";
+        bool selected = false;
+        bool enabled = true;
+        std::string_view disabled_reason;
+    };
+
+    std::string_view active_render_driver_label = "Vulkan";
+    std::span<const RenderDriverMenuOption> render_driver_options;
     bool restart_required = false;
 };
 

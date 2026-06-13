@@ -9,6 +9,7 @@ import quader.app.editor_selection;
 import quader.app.editor_command_stack;
 import quader.app.editor_hover;
 import quader.app.editor_input;
+import quader.app.editor_input_state;
 import quader.app.transform_gizmo;
 import quader.app.viewport_instance;
 import quader.app.viewport_frame_presenter;
@@ -31,6 +32,7 @@ public:
     [[nodiscard]] EditorViewportFrameResult render_frame(
         IViewportRenderer& renderer,
         IViewportFramePresenter& viewport_presenter,
+        const IEditorInputState& editor_input_state,
         IEditorShell& editor_shell,
         Scene& scene,
         const Input& input,

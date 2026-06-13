@@ -20,7 +20,7 @@ public:
 
     virtual ~IViewportTextureRegistry() = default;
 
-    [[nodiscard]] virtual uint64_t add_texture(const ViewportSampledGpuImage& image) = 0;
+    [[nodiscard]] virtual uint64_t add_texture(const ViewportTextureToken& texture) = 0;
     virtual void remove_texture(uint64_t texture_id) = 0;
 };
 
@@ -33,7 +33,7 @@ public:
 
     ~ViewportGpuTextureDescriptorCache();
 
-    [[nodiscard]] bool present(const ViewportSampledGpuImage& image);
+    [[nodiscard]] bool present(const ViewportTextureToken& texture);
     [[nodiscard]] bool has_retired_textures() const noexcept;
     void collect_retired_textures();
     void remove(ViewportId viewport_id);

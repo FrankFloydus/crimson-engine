@@ -5,11 +5,11 @@ module;
 
 export module quader.app.editor_runtime_host;
 
+export import quader.app.editor_input_state;
 export import quader.app.viewport_frame_presenter;
 export import quader.platform.app_event_dispatcher;
 export import quader.platform.file_dialog;
 export import quader.render.driver_kind;
-export import quader.render.driver_startup_plan;
 export import quader.render.status;
 export import quader.render.viewport_renderer;
 export import quader.ui_shell.editor_shell;
@@ -29,6 +29,7 @@ public:
     [[nodiscard]] virtual IEditorShell& editor_shell() = 0;
     [[nodiscard]] virtual IViewportRenderer& viewport_renderer() = 0;
     [[nodiscard]] virtual IViewportFramePresenter& viewport_frame_presenter() = 0;
+    [[nodiscard]] virtual IEditorInputState& editor_input_state() = 0;
     [[nodiscard]] virtual IImageFileDialogService& image_file_dialog() = 0;
 
     virtual void poll_events(AppEventDispatcher& dispatcher) = 0;

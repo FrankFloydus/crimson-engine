@@ -72,6 +72,7 @@ EditorViewport::~EditorViewport()
 EditorViewportFrameResult EditorViewport::render_frame(
     IViewportRenderer& renderer,
     IViewportFramePresenter& viewport_presenter,
+    const IEditorInputState& editor_input_state,
     IEditorShell& editor_shell,
     Scene& scene,
     const Input& input,
@@ -90,7 +91,7 @@ EditorViewportFrameResult EditorViewport::render_frame(
     EditorViewportFrameResult frame_result;
     std::vector<ViewportId> visible_viewport_ids;
     bool hover_payload_updated = false;
-    const bool text_input_active = viewport_presenter.text_input_active();
+    const bool text_input_active = editor_input_state.text_input_active();
     const EditorInputEnvironment tool_input_environment =
         editor_input_environment_from_input(
             input,

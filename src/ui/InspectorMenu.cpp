@@ -2,6 +2,8 @@ module;
 
 #include <imgui.h>
 
+#include <string_view>
+
 module quader.ui.inspector_menu;
 
 import quader.ui.controls;
@@ -9,21 +11,9 @@ import quader.ui.controls;
 namespace quader {
 namespace {
 
-constexpr RenderDriverKind kRenderDriverMenuItems[] {
-    RenderDriverKind::automatic,
-    RenderDriverKind::vulkan,
-    RenderDriverKind::opengl,
-    RenderDriverKind::metal,
-};
-
-[[nodiscard]] const char* render_driver_label(RenderDriverKind driver) noexcept
+[[nodiscard]] const char* c_string(std::string_view text) noexcept
 {
-    return render_driver_kind_display_name(driver).data();
-}
-
-[[nodiscard]] bool render_driver_can_be_selected(RenderDriverKind driver) noexcept
-{
-    return driver == RenderDriverKind::automatic || render_driver_is_implemented_in_this_build(driver);
+    return text.empty() ? "" : text.data();
 }
 
 void draw_create_menu(EditorMainMenuResult& result)
@@ -56,20 +46,20 @@ void draw_render_driver_menu(
         return;
     }
 
-    ImGui::TextDisabled("Active: %s", render_driver_label(input.active_driver));
+    ImGui::TextDisabled("Active: %s", c_string(input.active_render_driver_label));
     if (input.restart_required) {
         ImGui::TextDisabled("Restart required");
     }
     ImGui::Separator();
 
-    for (const RenderDriverKind driver : kRenderDriverMenuItems) {
-        const bool selected = input.saved_selection.requested_driver == driver;
-        const bool enabled = render_driver_can_be_selected(driver);
-        if (ImGui::MenuItem(render_driver_label(driver), nullptr, selected, enabled) && !selected) {
-            result.requested_render_driver = driver;
+    for (const EditorMainMenuInput::RenderDriverMenuOption& option :
+         input.render_driver_options) {
+        if (ImGui::MenuItem(c_string(option.label), nullptr, option.selected, option.enabled) &&
+            !option.selected) {
+            result.requested_render_driver = option.kind;
         }
-        if (!enabled) {
-            render_item_tooltip("This render driver is not implemented in this build.");
+        if (!option.enabled) {
+            render_item_tooltip(c_string(option.disabled_reason));
         }
     }
 }

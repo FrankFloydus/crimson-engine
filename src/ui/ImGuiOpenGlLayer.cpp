@@ -5,6 +5,7 @@ module;
 #include <imgui_impl_sdl3.h>
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -20,13 +21,15 @@ namespace {
 
 class ImGuiOpenGlViewportTextureRegistry final : public IViewportTextureRegistry {
 public:
-    [[nodiscard]] uint64_t add_texture(const ViewportSampledGpuImage& image) override
+    [[nodiscard]] uint64_t add_texture(const ViewportTextureToken& texture) override
     {
-        if (image.backend != ViewportSampledGpuImageBackend::opengl || image.opengl_texture_id == 0) {
+        const std::optional<ViewportOpenGlTextureTokenPayload> payload =
+            unpack_opengl_viewport_texture_token(texture);
+        if (!payload.has_value()) {
             return 0;
         }
 
-        return image.opengl_texture_id;
+        return payload->texture_id;
     }
 
     void remove_texture(uint64_t texture_id) override
@@ -154,7 +157,7 @@ void ImGuiOpenGlLayer::Impl::end_frame()
 
 bool ImGuiOpenGlLayer::Impl::present_viewport_gpu_image(const ViewportSampledGpuImage& image)
 {
-    return viewport_textures_ != nullptr && viewport_textures_->present_gpu_image(image);
+    return viewport_textures_ != nullptr && viewport_textures_->present_texture_token(image.texture_token());
 }
 
 bool ImGuiOpenGlLayer::Impl::has_retired_viewport_gpu_textures() const noexcept

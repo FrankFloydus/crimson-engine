@@ -19,7 +19,7 @@ public:
     ViewportTextureStore& operator=(const ViewportTextureStore&) = delete;
     ~ViewportTextureStore();
 
-    [[nodiscard]] bool present_gpu_image(const ViewportSampledGpuImage& image);
+    [[nodiscard]] bool present_texture_token(const ViewportTextureToken& texture);
     [[nodiscard]] bool has_retired_gpu_textures() const noexcept;
     void collect_retired_gpu_textures();
     void remove(ViewportId viewport_id);

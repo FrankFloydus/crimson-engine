@@ -1,6 +1,9 @@
 module;
 
+#include <array>
+#include <cstddef>
 #include <memory>
+#include <span>
 
 export module quader.app;
 
@@ -32,6 +35,8 @@ private:
     void draw_frame(float delta_seconds);
     [[nodiscard]] bool apply_editor_ui_result(const EditorUiFrameResult& result);
     [[nodiscard]] EditorUiFrameInput build_editor_ui_input();
+    [[nodiscard]] std::span<const EditorMainMenuInput::RenderDriverMenuOption>
+        build_render_driver_menu_options();
     [[nodiscard]] bool apply_main_menu_result(const EditorMainMenuResult& result);
     void save_render_driver_selection(RenderDriverKind requested_driver);
     void collect_retired_viewport_gpu_resources();
@@ -42,6 +47,8 @@ private:
     RenderDriverSettingsStore render_driver_settings_;
     RenderDriverSelection render_driver_selection_;
     bool render_driver_restart_required_ = false;
+    std::array<EditorMainMenuInput::RenderDriverMenuOption, 4> render_driver_menu_options_ {};
+    std::size_t render_driver_menu_option_count_ = 0;
     std::unique_ptr<IEditorRuntimeHost> runtime_host_;
     AppEventDispatcher event_dispatcher_;
     Input input_;

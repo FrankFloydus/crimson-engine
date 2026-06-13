@@ -1,11 +1,14 @@
 module;
 #include <tracy/Tracy.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "diagnostics/LogMacros.h"
@@ -14,9 +17,20 @@ module quader.app;
 
 import quader.app.editor_runtime_host;
 import quader.diagnostics.logger;
+import quader.render.driver_startup_plan;
 
 namespace quader {
 namespace {
+
+constexpr RenderDriverKind kRenderDriverMenuDrivers[] {
+    RenderDriverKind::automatic,
+    RenderDriverKind::vulkan,
+    RenderDriverKind::opengl,
+    RenderDriverKind::metal,
+};
+
+constexpr std::string_view kRenderDriverNotImplementedReason =
+    "This render driver is not implemented in this build.";
 
 std::optional<std::chrono::milliseconds> read_autoclose_delay()
 {
@@ -57,6 +71,25 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
     }
 
     return true;
+}
+
+[[nodiscard]] bool render_driver_can_be_selected(RenderDriverKind driver) noexcept
+{
+    return driver == RenderDriverKind::automatic || render_driver_is_implemented_in_this_build(driver);
+}
+
+[[nodiscard]] EditorMainMenuInput::RenderDriverMenuOption make_render_driver_menu_option(
+    RenderDriverKind driver,
+    RenderDriverSelection saved_selection) noexcept
+{
+    const bool enabled = render_driver_can_be_selected(driver);
+    return EditorMainMenuInput::RenderDriverMenuOption {
+        .kind = driver,
+        .label = render_driver_kind_display_name(driver),
+        .selected = saved_selection.requested_driver == driver,
+        .enabled = enabled,
+        .disabled_reason = enabled ? std::string_view {} : kRenderDriverNotImplementedReason,
+    };
 }
 
 } // namespace
@@ -130,6 +163,7 @@ void Application::draw_frame(float delta_seconds)
     const EditorViewportFrameResult viewport_result = scene_viewport_.render_frame(
         runtime_host_->viewport_renderer(),
         runtime_host_->viewport_frame_presenter(),
+        runtime_host_->editor_input_state(),
         runtime_host_->editor_shell(),
         open_scene_,
         input_,
@@ -148,16 +182,41 @@ void Application::draw_frame(float delta_seconds)
 
 EditorUiFrameInput Application::build_editor_ui_input()
 {
+    const RenderDriverKind active_driver = runtime_host_->driver_kind();
+    const std::span<const EditorMainMenuInput::RenderDriverMenuOption> render_driver_options =
+        build_render_driver_menu_options();
+
     return EditorUiFrameInput {
         .main_menu = EditorMainMenuInput {
-            .active_driver = runtime_host_->driver_kind(),
-            .saved_selection = render_driver_selection_,
+            .active_render_driver_label = render_driver_kind_display_name(active_driver),
+            .render_driver_options = render_driver_options,
             .restart_required = render_driver_restart_required_,
         },
         .scene_properties = scene_properties_.build_frame_input(
             open_scene_,
             runtime_host_->image_file_dialog(),
             selection_),
+    };
+}
+
+std::span<const EditorMainMenuInput::RenderDriverMenuOption>
+Application::build_render_driver_menu_options()
+{
+    render_driver_menu_option_count_ = 0;
+
+    for (const RenderDriverKind driver : kRenderDriverMenuDrivers) {
+        if (render_driver_menu_option_count_ >= render_driver_menu_options_.size()) {
+            break;
+        }
+
+        render_driver_menu_options_[render_driver_menu_option_count_] =
+            make_render_driver_menu_option(driver, render_driver_selection_);
+        ++render_driver_menu_option_count_;
+    }
+
+    return {
+        render_driver_menu_options_.data(),
+        render_driver_menu_option_count_,
     };
 }
 

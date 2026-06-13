@@ -254,12 +254,15 @@ set(QUADER_CORE_SOURCES
     src/platform/AppEventDispatcher.cpp
     src/platform/Input.cpp
     src/platform/NativeFileDialog.cpp
+    src/platform/SdlEditorHostServices.cpp
     src/platform/SdlEventSource.cpp
     src/platform/SdlImGuiEditorRuntimeHost.cpp
     src/platform/SdlOpenGlContext.cpp
+    src/platform/SdlOpenGlRuntimeDriver.cpp
     src/platform/SdlOpenGlTextureAllocator.cpp
     src/platform/SdlPlatformContext.cpp
     src/platform/SdlUserSettingsPaths.cpp
+    src/platform/SdlVulkanRuntimeDriver.cpp
     src/platform/SdlVulkanPresentationSurface.cpp
     src/platform/SdlWindow.cpp
     src/render/RenderEngineFactory.cpp
@@ -298,6 +301,7 @@ set(QUADER_MODULES
     src/app/EditorCamera.ixx
     src/app/EditorHover.ixx
     src/app/EditorInput.ixx
+    src/app/EditorInputState.ixx
     src/app/EditorRuntimeHost.ixx
     src/app/EditorSelection.ixx
     src/app/EditorViewport.ixx
@@ -322,11 +326,15 @@ set(QUADER_MODULES
     src/platform/FileDialog.ixx
     src/platform/Input.ixx
     src/platform/NativeFileDialog.ixx
+    src/platform/SdlEditorHostServices.ixx
     src/platform/SdlEventSource.ixx
+    src/platform/SdlImGuiRuntimeDriver.ixx
     src/platform/SdlOpenGlContext.ixx
+    src/platform/SdlOpenGlRuntimeDriver.ixx
     src/platform/SdlOpenGlTextureAllocator.ixx
     src/platform/SdlPlatformContext.ixx
     src/platform/SdlUserSettingsPaths.ixx
+    src/platform/SdlVulkanRuntimeDriver.ixx
     src/platform/SdlWindow.ixx
     src/render/IRenderEngine.ixx
     src/render/OpenGlTexture.ixx

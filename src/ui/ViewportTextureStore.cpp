@@ -15,13 +15,13 @@ public:
     {
     }
 
-    [[nodiscard]] bool present_gpu_image(const ViewportSampledGpuImage& image)
+    [[nodiscard]] bool present_texture_token(const ViewportTextureToken& texture)
     {
-        if (!image.is_valid()) {
+        if (!texture.is_valid()) {
             return false;
         }
 
-        return gpu_textures_.present(image);
+        return gpu_textures_.present(texture);
     }
 
     [[nodiscard]] bool has_retired_gpu_textures() const noexcept
@@ -60,9 +60,9 @@ ViewportTextureStore::ViewportTextureStore(IViewportTextureRegistry& texture_reg
 
 ViewportTextureStore::~ViewportTextureStore() = default;
 
-bool ViewportTextureStore::present_gpu_image(const ViewportSampledGpuImage& image)
+bool ViewportTextureStore::present_texture_token(const ViewportTextureToken& texture)
 {
-    return impl_->present_gpu_image(image);
+    return impl_->present_texture_token(texture);
 }
 
 bool ViewportTextureStore::has_retired_gpu_textures() const noexcept

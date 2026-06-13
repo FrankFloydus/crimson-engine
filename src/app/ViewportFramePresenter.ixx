@@ -15,7 +15,6 @@ public:
 
     [[nodiscard]] virtual bool present_viewport_frame(const ViewportRenderFrame& frame) = 0;
     [[nodiscard]] virtual ViewportTextureView viewport_texture(ViewportId viewport_id) const = 0;
-    [[nodiscard]] virtual bool text_input_active() const = 0;
     virtual void prune_viewport_textures(std::span<const ViewportId> live_viewport_ids) = 0;
 };
 

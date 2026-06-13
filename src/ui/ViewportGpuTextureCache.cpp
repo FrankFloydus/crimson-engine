@@ -1,7 +1,5 @@
 module;
 
-#include <vulkan/vulkan.h>
-
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -14,56 +12,12 @@ module quader.ui.viewport_gpu_texture_cache;
 namespace quader {
 namespace {
 
-struct ViewportGpuTextureKey {
-    ViewportId viewport_id;
-    ViewportGeneration generation;
-    uint64_t resource_id = 0;
-    uint64_t image_generation = 0;
-    RenderExtent extent;
-    ViewportSampledGpuImageBackend backend = ViewportSampledGpuImageBackend::vulkan;
-    VkImageView image_view = VK_NULL_HANDLE;
-    VkSampler sampler = VK_NULL_HANDLE;
-    VkImageLayout image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    uint32_t opengl_texture_id = 0;
-
-    [[nodiscard]] bool operator==(const ViewportGpuTextureKey& other) const noexcept
-    {
-        return viewport_id == other.viewport_id &&
-            generation == other.generation &&
-            resource_id == other.resource_id &&
-            image_generation == other.image_generation &&
-            extent.width == other.extent.width &&
-            extent.height == other.extent.height &&
-            backend == other.backend &&
-            image_view == other.image_view &&
-            sampler == other.sampler &&
-            image_layout == other.image_layout &&
-            opengl_texture_id == other.opengl_texture_id;
-    }
-};
-
-[[nodiscard]] ViewportGpuTextureKey key_from(const ViewportSampledGpuImage& image)
-{
-    return ViewportGpuTextureKey {
-        .viewport_id = image.handle.viewport_id,
-        .generation = image.handle.generation,
-        .resource_id = image.handle.resource_id,
-        .image_generation = image.handle.image_generation,
-        .extent = image.handle.extent,
-        .backend = image.backend,
-        .image_view = image.image_view,
-        .sampler = image.sampler,
-        .image_layout = image.image_layout,
-        .opengl_texture_id = image.opengl_texture_id,
-    };
-}
-
-[[nodiscard]] ViewportTextureUvOrigin uv_origin_from_backend(ViewportSampledGpuImageBackend backend) noexcept
+[[nodiscard]] ViewportTextureUvOrigin uv_origin_from_backend(ViewportTextureTokenBackend backend) noexcept
 {
     switch (backend) {
-    case ViewportSampledGpuImageBackend::vulkan:
+    case ViewportTextureTokenBackend::vulkan:
         return ViewportTextureUvOrigin::top_left;
-    case ViewportSampledGpuImageBackend::opengl:
+    case ViewportTextureTokenBackend::opengl:
         return ViewportTextureUvOrigin::bottom_left;
     }
 
@@ -84,19 +38,18 @@ public:
         clear();
     }
 
-    [[nodiscard]] bool present(const ViewportSampledGpuImage& image)
+    [[nodiscard]] bool present(const ViewportTextureToken& texture)
     {
-        if (!image.is_valid()) {
+        if (!texture.is_valid()) {
             return false;
         }
 
-        const ViewportGpuTextureKey key = key_from(image);
-        const auto existing = descriptors_.find(image.handle.viewport_id);
-        if (existing != descriptors_.end() && existing->second.key == key) {
+        const auto existing = descriptors_.find(texture.handle.viewport_id);
+        if (existing != descriptors_.end() && existing->second.texture == texture) {
             return true;
         }
 
-        const uint64_t texture_id = texture_registry_.add_texture(image);
+        const uint64_t texture_id = texture_registry_.add_texture(texture);
         if (texture_id == 0) {
             return false;
         }
@@ -104,16 +57,16 @@ public:
         if (existing != descriptors_.end()) {
             retire_texture(existing->second.texture_id);
             existing->second = Descriptor {
-                .key = key,
+                .texture = texture,
                 .texture_id = texture_id,
             };
             return true;
         }
 
         descriptors_.emplace(
-            image.handle.viewport_id,
+            texture.handle.viewport_id,
             Descriptor {
-                .key = key,
+                .texture = texture,
                 .texture_id = texture_id,
             });
         return true;
@@ -177,15 +130,15 @@ public:
 
         return ViewportTextureView {
             .texture_id = existing->second.texture_id,
-            .extent = existing->second.key.extent,
-            .uv_origin = uv_origin_from_backend(existing->second.key.backend),
+            .extent = existing->second.texture.handle.extent,
+            .uv_origin = uv_origin_from_backend(existing->second.texture.backend),
             .has_pixels = true,
         };
     }
 
 private:
     struct Descriptor {
-        ViewportGpuTextureKey key;
+        ViewportTextureToken texture;
         uint64_t texture_id = 0;
     };
 
@@ -208,9 +161,9 @@ ViewportGpuTextureDescriptorCache::ViewportGpuTextureDescriptorCache(IViewportTe
 
 ViewportGpuTextureDescriptorCache::~ViewportGpuTextureDescriptorCache() = default;
 
-bool ViewportGpuTextureDescriptorCache::present(const ViewportSampledGpuImage& image)
+bool ViewportGpuTextureDescriptorCache::present(const ViewportTextureToken& texture)
 {
-    return impl_->present(image);
+    return impl_->present(texture);
 }
 
 bool ViewportGpuTextureDescriptorCache::has_retired_textures() const noexcept
