@@ -106,7 +106,7 @@ void Application::draw_frame(float delta_seconds)
     }
     const EditorViewportFrameResult viewport_result = scene_viewport_.render_frame(
         render_driver_->viewport_renderer(),
-        render_driver_->imgui(),
+        render_driver_->viewport_frame_presenter(),
         open_scene_,
         input_,
         selection_,

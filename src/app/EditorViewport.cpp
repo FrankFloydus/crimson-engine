@@ -63,24 +63,6 @@ ViewportNavigationSnapshot navigation_snapshot_from(
         payload.role == DebugDrawPickRole::transform_uniform_scale;
 }
 
-void present_gpu_frame_if_available(
-    IViewportRenderer& renderer,
-    const ViewportRenderFrame& frame,
-    ImGuiLayer& imgui)
-{
-    if (!frame.payload.gpu_image.has_value() || !frame.payload.gpu_image->is_ready()) {
-        return;
-    }
-
-    std::optional<ViewportSampledGpuImage> image =
-        renderer.resolve_viewport_gpu_image(*frame.payload.gpu_image);
-    if (!image.has_value()) {
-        return;
-    }
-
-    (void)imgui.present_viewport_gpu_image(*image);
-}
-
 } // namespace
 
 EditorViewport::~EditorViewport()
@@ -90,7 +72,7 @@ EditorViewport::~EditorViewport()
 
 EditorViewportFrameResult EditorViewport::render_frame(
     IViewportRenderer& renderer,
-    ImGuiLayer& imgui,
+    IViewportFramePresenter& viewport_presenter,
     Scene& scene,
     const Input& input,
     EditorSelectionModel& selection,
@@ -100,7 +82,7 @@ EditorViewportFrameResult EditorViewport::render_frame(
 {
     ensure_viewports(renderer);
 
-    upload_completed_viewport_frames(renderer, imgui);
+    upload_completed_viewport_frames(renderer, viewport_presenter);
     if (hover.validate_against(scene)) {
         mark_scene_viewports_dirty();
     }
@@ -108,7 +90,7 @@ EditorViewportFrameResult EditorViewport::render_frame(
     EditorViewportFrameResult frame_result;
     std::vector<ViewportId> visible_viewport_ids;
     bool hover_payload_updated = false;
-    const bool text_input_active = imgui.text_input_active();
+    const bool text_input_active = viewport_presenter.text_input_active();
     const EditorInputEnvironment tool_input_environment =
         editor_input_environment_from_input(
             input,
@@ -121,7 +103,7 @@ EditorViewportFrameResult EditorViewport::render_frame(
         mark_scene_viewports_dirty();
     }
     render_scene_viewport_host(
-        imgui,
+        viewport_presenter,
         scene,
         input,
         selection,
@@ -142,7 +124,7 @@ EditorViewportFrameResult EditorViewport::render_frame(
 
     std::vector<ViewportId> owned_viewport_ids;
     append_owned_viewport_ids(owned_viewport_ids);
-    imgui.prune_viewport_textures(owned_viewport_ids);
+    viewport_presenter.prune_viewport_textures(owned_viewport_ids);
     return frame_result;
 }
 
@@ -218,7 +200,7 @@ void EditorViewport::append_owned_viewport_ids(std::vector<ViewportId>& viewport
 }
 
 void EditorViewport::render_scene_viewport_host(
-    ImGuiLayer& imgui,
+    IViewportFramePresenter& viewport_presenter,
     Scene& scene,
     const Input& input,
     EditorSelectionModel& selection,
@@ -236,7 +218,7 @@ void EditorViewport::render_scene_viewport_host(
         panes.push_back(ViewportPaneInput {
             .id = viewport.id(),
             .title = viewport_camera_preset_name(viewport.camera_preset()),
-            .texture = imgui.viewport_texture(viewport.id()),
+            .texture = viewport_presenter.viewport_texture(viewport.id()),
             .performance = performance_overlay_for(viewport, delta_seconds),
             .camera_preset = viewport.camera_preset(),
             .default_camera_preset = viewport.default_camera_preset(),
@@ -465,9 +447,11 @@ void EditorViewport::request_visible_viewport_frames(
     }
 }
 
-void EditorViewport::upload_completed_viewport_frames(IViewportRenderer& renderer, ImGuiLayer& imgui)
+void EditorViewport::upload_completed_viewport_frames(
+    IViewportRenderer& renderer,
+    IViewportFramePresenter& viewport_presenter)
 {
-    auto consume_viewport = [&renderer, &imgui](ViewportInstance& viewport) {
+    auto consume_viewport = [&renderer, &viewport_presenter](ViewportInstance& viewport) {
         std::optional<ViewportRenderFrame> frame = renderer.try_consume_viewport_frame(viewport.id());
         if (!frame.has_value()) {
             return;
@@ -478,7 +462,7 @@ void EditorViewport::upload_completed_viewport_frames(IViewportRenderer& rendere
             return;
         }
 
-        present_gpu_frame_if_available(renderer, *frame, imgui);
+        (void)viewport_presenter.present_viewport_frame(*frame);
     };
 
     for (ViewportInstance& viewport : scene_viewports_) {

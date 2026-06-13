@@ -1,10 +1,13 @@
 module;
 
 #include <memory>
+#include <optional>
+#include <span>
 
 module quader.app.render_driver_host;
 
 import quader.platform.sdl_window;
+import quader.app.viewport_frame_presenter;
 import quader.render.driver_kind;
 import quader.render.engine_factory;
 import quader.render.startup_validation;
@@ -25,7 +28,7 @@ std::unique_ptr<IViewportRenderer> create_renderer_engine_or_throw(const VulkanD
     return render_engine;
 }
 
-class VulkanRenderDriverHost final : public IRenderDriverHost {
+class VulkanRenderDriverHost final : public IRenderDriverHost, public IViewportFramePresenter {
 public:
     explicit VulkanRenderDriverHost(const SdlWindow& window)
         : window_(window)
@@ -54,6 +57,11 @@ public:
     [[nodiscard]] IViewportRenderer& viewport_renderer() override
     {
         return *viewport_renderer_;
+    }
+
+    [[nodiscard]] IViewportFramePresenter& viewport_frame_presenter() override
+    {
+        return *this;
     }
 
     [[nodiscard]] ImGuiLayer& imgui() override
@@ -89,6 +97,36 @@ public:
         if (can_collect_render_resources) {
             viewport_renderer_->collect_retired_viewport_gpu_resources();
         }
+    }
+
+    [[nodiscard]] bool present_viewport_frame(const ViewportRenderFrame& frame) override
+    {
+        if (!frame.payload.gpu_image.has_value() || !frame.payload.gpu_image->is_ready()) {
+            return false;
+        }
+
+        std::optional<ViewportSampledGpuImage> image =
+            viewport_renderer_->resolve_viewport_gpu_image(*frame.payload.gpu_image);
+        if (!image.has_value()) {
+            return false;
+        }
+
+        return imgui_.present_viewport_gpu_image(*image);
+    }
+
+    [[nodiscard]] ViewportTextureView viewport_texture(ViewportId viewport_id) const override
+    {
+        return imgui_.viewport_texture(viewport_id);
+    }
+
+    [[nodiscard]] bool text_input_active() const override
+    {
+        return imgui_.text_input_active();
+    }
+
+    void prune_viewport_textures(std::span<const ViewportId> live_viewport_ids) override
+    {
+        imgui_.prune_viewport_textures(live_viewport_ids);
     }
 
 private:

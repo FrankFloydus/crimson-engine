@@ -12,10 +12,10 @@ import quader.app.editor_input;
 import quader.app.transform_gizmo;
 import quader.app.viewport_instance;
 import quader.app.viewport_layout;
+import quader.app.viewport_frame_presenter;
 import quader.platform.input;
 import quader.render.viewport_renderer;
 import quader.scene.scene;
-import quader.ui.imgui_layer;
 import quader.ui.viewport_surface;
 
 export namespace quader {
@@ -30,7 +30,7 @@ public:
 
     [[nodiscard]] EditorViewportFrameResult render_frame(
         IViewportRenderer& renderer,
-        ImGuiLayer& imgui,
+        IViewportFramePresenter& viewport_presenter,
         Scene& scene,
         const Input& input,
         EditorSelectionModel& selection,
@@ -48,7 +48,7 @@ private:
     void append_owned_viewport_ids(std::vector<ViewportId>& viewport_ids) const;
 
     void render_scene_viewport_host(
-        ImGuiLayer& imgui,
+        IViewportFramePresenter& viewport_presenter,
         Scene& scene,
         const Input& input,
         EditorSelectionModel& selection,
@@ -79,7 +79,7 @@ private:
         const Scene& scene,
         const EditorSelectionModel& selection,
         const std::vector<ViewportId>& visible_viewport_ids);
-    void upload_completed_viewport_frames(IViewportRenderer& renderer, ImGuiLayer& imgui);
+    void upload_completed_viewport_frames(IViewportRenderer& renderer, IViewportFramePresenter& viewport_presenter);
 
     [[nodiscard]] ViewportInstance* find_viewport(ViewportId viewport_id);
     [[nodiscard]] const ViewportInstance* find_viewport(ViewportId viewport_id) const;

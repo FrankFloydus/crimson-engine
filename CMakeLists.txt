@@ -295,6 +295,7 @@ set(QUADER_MODULES
     src/app/RenderDriverHost.ixx
     src/app/ScenePropertiesPanelController.ixx
     src/app/TransformGizmo.ixx
+    src/app/ViewportFramePresenter.ixx
     src/app/ViewportInstance.ixx
     src/app/ViewportLayout.ixx
     src/diagnostics/FatalDiagnostics.ixx
