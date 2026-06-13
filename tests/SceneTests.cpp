@@ -29,6 +29,7 @@ TEST(Scene, DefaultSceneStartsEmpty)
     EXPECT_FLOAT_EQ(30000.0f, scene.environment_settings().intensity);
     EXPECT_FALSE(scene.environment_settings().show_skybox);
     EXPECT_FALSE(scene.post_processing_settings().bloom.enabled);
+    EXPECT_FALSE(scene.post_processing_settings().ambient_occlusion.enabled);
 }
 
 TEST(Scene, StoresClampedEnvironmentSettings)
@@ -65,6 +66,10 @@ TEST(Scene, StoresClampedPostProcessingSettings)
     settings.bloom.resolution = 1U;
     settings.bloom.levels = 64U;
     settings.bloom.highlight = -1.0f;
+    settings.ambient_occlusion.enabled = true;
+    settings.ambient_occlusion.radius = 12.0f;
+    settings.ambient_occlusion.resolution_scale = 1.0f;
+    settings.ambient_occlusion.ssct.sample_count = 0;
 
     scene.set_post_processing_settings(settings);
 
@@ -74,6 +79,10 @@ TEST(Scene, StoresClampedPostProcessingSettings)
     EXPECT_EQ(8U, stored.bloom.resolution);
     EXPECT_EQ(11U, stored.bloom.levels);
     EXPECT_FLOAT_EQ(10.0f, stored.bloom.highlight);
+    EXPECT_TRUE(stored.ambient_occlusion.enabled);
+    EXPECT_FLOAT_EQ(10.0f, stored.ambient_occlusion.radius);
+    EXPECT_FLOAT_EQ(1.0f, stored.ambient_occlusion.resolution_scale);
+    EXPECT_EQ(4U, stored.ambient_occlusion.ssct.sample_count);
 }
 
 TEST(Scene, CreatesDefaultRenderableAndLightEntities)
@@ -218,6 +227,10 @@ TEST(Scene, RenderSnapshotCarriesPostProcessingSettings)
     settings.bloom.enabled = true;
     settings.bloom.strength = 0.42f;
     settings.bloom.quality = quader::BloomQuality::high;
+    settings.ambient_occlusion.enabled = true;
+    settings.ambient_occlusion.algorithm = quader::AmbientOcclusionAlgorithm::ground_truth;
+    settings.ambient_occlusion.radius = 0.85f;
+    settings.ambient_occlusion.gtao.sample_slice_count = 6;
     scene.set_post_processing_settings(settings);
 
     const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
@@ -225,6 +238,12 @@ TEST(Scene, RenderSnapshotCarriesPostProcessingSettings)
     EXPECT_TRUE(snapshot.post_processing.bloom.enabled);
     EXPECT_FLOAT_EQ(0.42f, snapshot.post_processing.bloom.strength);
     EXPECT_EQ(quader::BloomQuality::high, snapshot.post_processing.bloom.quality);
+    EXPECT_TRUE(snapshot.post_processing.ambient_occlusion.enabled);
+    EXPECT_EQ(
+        quader::AmbientOcclusionAlgorithm::ground_truth,
+        snapshot.post_processing.ambient_occlusion.algorithm);
+    EXPECT_FLOAT_EQ(0.85f, snapshot.post_processing.ambient_occlusion.radius);
+    EXPECT_EQ(6U, snapshot.post_processing.ambient_occlusion.gtao.sample_slice_count);
 }
 
 TEST(Scene, RenderSnapshotCarriesEmissiveMaterialSettings)

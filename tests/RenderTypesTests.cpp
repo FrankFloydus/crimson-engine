@@ -199,6 +199,25 @@ TEST(RenderTypes, DefaultPostProcessingHasBloomReadyButDisabled)
     EXPECT_EQ(quader::BloomQuality::low, settings.bloom.quality);
     EXPECT_TRUE(settings.bloom.threshold);
     EXPECT_FLOAT_EQ(1000.0f, settings.bloom.highlight);
+
+    EXPECT_FALSE(settings.ambient_occlusion.enabled);
+    EXPECT_EQ(quader::AmbientOcclusionAlgorithm::scalable, settings.ambient_occlusion.algorithm);
+    EXPECT_FLOAT_EQ(0.3f, settings.ambient_occlusion.radius);
+    EXPECT_FLOAT_EQ(1.0f, settings.ambient_occlusion.power);
+    EXPECT_FLOAT_EQ(0.0005f, settings.ambient_occlusion.bias);
+    EXPECT_FLOAT_EQ(0.5f, settings.ambient_occlusion.resolution_scale);
+    EXPECT_FLOAT_EQ(1.0f, settings.ambient_occlusion.intensity);
+    EXPECT_FLOAT_EQ(0.05f, settings.ambient_occlusion.bilateral_threshold);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::low, settings.ambient_occlusion.quality);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::medium, settings.ambient_occlusion.low_pass_filter);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::low, settings.ambient_occlusion.upsampling);
+    EXPECT_FALSE(settings.ambient_occlusion.bent_normals);
+    EXPECT_FLOAT_EQ(0.0f, settings.ambient_occlusion.min_horizon_angle_radians);
+    EXPECT_FALSE(settings.ambient_occlusion.ssct.enabled);
+    EXPECT_EQ(4U, settings.ambient_occlusion.ssct.sample_count);
+    EXPECT_EQ(1U, settings.ambient_occlusion.ssct.ray_count);
+    EXPECT_EQ(4U, settings.ambient_occlusion.gtao.sample_slice_count);
+    EXPECT_EQ(3U, settings.ambient_occlusion.gtao.sample_steps_per_slice);
 }
 
 TEST(RenderTypes, ClampPostProcessingSettings)
@@ -212,6 +231,35 @@ TEST(RenderTypes, ClampPostProcessingSettings)
     settings.bloom.quality = static_cast<quader::BloomQuality>(255);
     settings.bloom.threshold = false;
     settings.bloom.highlight = -10.0f;
+    settings.ambient_occlusion.enabled = true;
+    settings.ambient_occlusion.algorithm = static_cast<quader::AmbientOcclusionAlgorithm>(255);
+    settings.ambient_occlusion.radius = std::numeric_limits<float>::infinity();
+    settings.ambient_occlusion.power = -2.0f;
+    settings.ambient_occlusion.bias = -1.0f;
+    settings.ambient_occlusion.resolution_scale = 0.9f;
+    settings.ambient_occlusion.intensity = 20.0f;
+    settings.ambient_occlusion.bilateral_threshold = -0.5f;
+    settings.ambient_occlusion.quality = static_cast<quader::AmbientOcclusionQuality>(255);
+    settings.ambient_occlusion.low_pass_filter = static_cast<quader::AmbientOcclusionQuality>(255);
+    settings.ambient_occlusion.upsampling = static_cast<quader::AmbientOcclusionQuality>(255);
+    settings.ambient_occlusion.bent_normals = true;
+    settings.ambient_occlusion.min_horizon_angle_radians = 9.0f;
+    settings.ambient_occlusion.ssct.enabled = true;
+    settings.ambient_occlusion.ssct.light_cone_radians = 2.0f;
+    settings.ambient_occlusion.ssct.shadow_distance = -2.0f;
+    settings.ambient_occlusion.ssct.contact_distance_max = std::numeric_limits<float>::quiet_NaN();
+    settings.ambient_occlusion.ssct.intensity = 11.0f;
+    settings.ambient_occlusion.ssct.light_direction = { 0.0f, 0.0f, 0.0f };
+    settings.ambient_occlusion.ssct.depth_bias = -0.1f;
+    settings.ambient_occlusion.ssct.depth_slope_bias = 2.0f;
+    settings.ambient_occlusion.ssct.sample_count = 0;
+    settings.ambient_occlusion.ssct.ray_count = 0;
+    settings.ambient_occlusion.gtao.sample_slice_count = 0;
+    settings.ambient_occlusion.gtao.sample_steps_per_slice = 0;
+    settings.ambient_occlusion.gtao.thickness_heuristic = -0.25f;
+    settings.ambient_occlusion.gtao.use_visibility_bitmasks = true;
+    settings.ambient_occlusion.gtao.const_thickness = -1.0f;
+    settings.ambient_occlusion.gtao.linear_thickness = true;
 
     const quader::PostProcessingSettings clamped = quader::clamp_post_processing_settings(settings);
 
@@ -223,6 +271,37 @@ TEST(RenderTypes, ClampPostProcessingSettings)
     EXPECT_EQ(quader::BloomQuality::low, clamped.bloom.quality);
     EXPECT_FALSE(clamped.bloom.threshold);
     EXPECT_FLOAT_EQ(10.0f, clamped.bloom.highlight);
+    EXPECT_TRUE(clamped.ambient_occlusion.enabled);
+    EXPECT_EQ(quader::AmbientOcclusionAlgorithm::scalable, clamped.ambient_occlusion.algorithm);
+    EXPECT_FLOAT_EQ(0.3f, clamped.ambient_occlusion.radius);
+    EXPECT_FLOAT_EQ(0.001f, clamped.ambient_occlusion.power);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.bias);
+    EXPECT_FLOAT_EQ(1.0f, clamped.ambient_occlusion.resolution_scale);
+    EXPECT_FLOAT_EQ(10.0f, clamped.ambient_occlusion.intensity);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.bilateral_threshold);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::low, clamped.ambient_occlusion.quality);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::low, clamped.ambient_occlusion.low_pass_filter);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::low, clamped.ambient_occlusion.upsampling);
+    EXPECT_TRUE(clamped.ambient_occlusion.bent_normals);
+    EXPECT_NEAR(1.570796f, clamped.ambient_occlusion.min_horizon_angle_radians, 0.000001f);
+    EXPECT_TRUE(clamped.ambient_occlusion.ssct.enabled);
+    EXPECT_NEAR(1.570796f, clamped.ambient_occlusion.ssct.light_cone_radians, 0.000001f);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.ssct.shadow_distance);
+    EXPECT_FLOAT_EQ(1.0f, clamped.ambient_occlusion.ssct.contact_distance_max);
+    EXPECT_FLOAT_EQ(10.0f, clamped.ambient_occlusion.ssct.intensity);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.ssct.light_direction.x);
+    EXPECT_FLOAT_EQ(-1.0f, clamped.ambient_occlusion.ssct.light_direction.y);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.ssct.light_direction.z);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.ssct.depth_bias);
+    EXPECT_FLOAT_EQ(1.0f, clamped.ambient_occlusion.ssct.depth_slope_bias);
+    EXPECT_EQ(4U, clamped.ambient_occlusion.ssct.sample_count);
+    EXPECT_EQ(1U, clamped.ambient_occlusion.ssct.ray_count);
+    EXPECT_EQ(4U, clamped.ambient_occlusion.gtao.sample_slice_count);
+    EXPECT_EQ(3U, clamped.ambient_occlusion.gtao.sample_steps_per_slice);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.gtao.thickness_heuristic);
+    EXPECT_TRUE(clamped.ambient_occlusion.gtao.use_visibility_bitmasks);
+    EXPECT_FLOAT_EQ(0.0f, clamped.ambient_occlusion.gtao.const_thickness);
+    EXPECT_TRUE(clamped.ambient_occlusion.gtao.linear_thickness);
 }
 
 TEST(RenderTypes, ConvertSrgbToLinearWithStandardTransferFunction)

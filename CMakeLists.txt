@@ -520,6 +520,7 @@ set(QUADER_CORE_SOURCES
     src/filament/FilamentRenderEngine.cpp
     src/filament/FilamentDebugDrawRenderer.cpp
     src/filament/FilamentEnvironmentResources.cpp
+    src/filament/FilamentPostProcessingOptions.cpp
     src/filament/FilamentSceneViewport.cpp
     src/filament/FilamentViewportVulkanPlatform.cpp
     src/math/MathTypes.cpp
@@ -590,6 +591,7 @@ set(QUADER_MODULES
     src/filament/FilamentRenderEngine.ixx
     src/filament/FilamentDebugDrawRenderer.ixx
     src/filament/FilamentEnvironmentResources.ixx
+    src/filament/FilamentPostProcessingOptions.ixx
     src/filament/FilamentSceneViewport.ixx
     src/filament/FilamentViewportVulkanPlatform.ixx
     src/math/MathTypes.ixx

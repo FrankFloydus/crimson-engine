@@ -51,6 +51,17 @@ constexpr std::array<BloomQuality, 3> kBloomQualities {
     BloomQuality::high,
 };
 
+constexpr std::array<AmbientOcclusionAlgorithm, 2> kAmbientOcclusionAlgorithms {
+    AmbientOcclusionAlgorithm::scalable,
+    AmbientOcclusionAlgorithm::ground_truth,
+};
+
+constexpr std::array<AmbientOcclusionQuality, 3> kAmbientOcclusionQualities {
+    AmbientOcclusionQuality::low,
+    AmbientOcclusionQuality::medium,
+    AmbientOcclusionQuality::high,
+};
+
 [[nodiscard]] const char* bloom_blend_mode_label(BloomBlendMode mode)
 {
     switch (mode) {
@@ -71,6 +82,32 @@ constexpr std::array<BloomQuality, 3> kBloomQualities {
     case BloomQuality::medium:
         return "Medium";
     case BloomQuality::high:
+        return "High";
+    }
+
+    return "Low";
+}
+
+[[nodiscard]] const char* ambient_occlusion_algorithm_label(AmbientOcclusionAlgorithm algorithm)
+{
+    switch (algorithm) {
+    case AmbientOcclusionAlgorithm::scalable:
+        return "Scalable";
+    case AmbientOcclusionAlgorithm::ground_truth:
+        return "Ground Truth";
+    }
+
+    return "Scalable";
+}
+
+[[nodiscard]] const char* ambient_occlusion_quality_label(AmbientOcclusionQuality quality)
+{
+    switch (quality) {
+    case AmbientOcclusionQuality::low:
+        return "Low";
+    case AmbientOcclusionQuality::medium:
+        return "Medium";
+    case AmbientOcclusionQuality::high:
         return "High";
     }
 
@@ -307,6 +344,32 @@ constexpr std::array<BloomQuality, 3> kBloomQualities {
     return changed;
 }
 
+[[nodiscard]] bool draw_vec3_drag_property(
+    const char* label,
+    Vec3& value,
+    Vec3 default_value,
+    float speed,
+    const char* format,
+    const char* tooltip)
+{
+    float values[3] { value.x, value.y, value.z };
+    const bool changed_from_default =
+        !floats_match(value.x, default_value.x) ||
+        !floats_match(value.y, default_value.y) ||
+        !floats_match(value.z, default_value.z);
+    const ResettablePropertyLayout layout = begin_resettable_property(label, tooltip, changed_from_default);
+    bool changed = ImGui::DragFloat3("##Value", values, speed, 0.0f, 0.0f, format);
+    render_item_tooltip(tooltip);
+    if (changed) {
+        value = Vec3 { values[0], values[1], values[2] };
+    }
+    if (end_resettable_property(layout)) {
+        value = default_value;
+        changed = true;
+    }
+    return changed;
+}
+
 [[nodiscard]] bool draw_post_processing_popup(
     PostProcessingSettings& settings,
     const ViewportHostUiStyle& style)
@@ -388,6 +451,254 @@ constexpr std::array<BloomQuality, 3> kBloomQualities {
                     1000000.0f,
                     "%.0f",
                     "Caps very bright highlights before bloom.");
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen)) {
+            AmbientOcclusionSettings& ambient_occlusion = settings.ambient_occlusion;
+            const AmbientOcclusionSettings& default_ambient_occlusion = defaults.ambient_occlusion;
+
+            changed |= render_resettable_checkbox(
+                "Enabled##AmbientOcclusion",
+                ambient_occlusion.enabled,
+                default_ambient_occlusion.enabled,
+                "Adds screen-space occlusion to indirect lighting.");
+
+            {
+                DisabledScope disabled(!ambient_occlusion.enabled);
+                changed |= render_resettable_combo(
+                    "Algorithm",
+                    ambient_occlusion.algorithm,
+                    default_ambient_occlusion.algorithm,
+                    std::span<const AmbientOcclusionAlgorithm> { kAmbientOcclusionAlgorithms },
+                    ambient_occlusion_algorithm_label,
+                    "Chooses the screen-space occlusion algorithm.");
+                changed |= render_resettable_float_drag(
+                    "Radius",
+                    ambient_occlusion.radius,
+                    default_ambient_occlusion.radius,
+                    0.01f,
+                    0.0f,
+                    10.0f,
+                    "%.3f",
+                    "World-space occlusion radius in meters.");
+                changed |= render_resettable_float_drag(
+                    "Intensity",
+                    ambient_occlusion.intensity,
+                    default_ambient_occlusion.intensity,
+                    0.01f,
+                    0.0f,
+                    10.0f,
+                    "%.3f",
+                    "Strength of the ambient occlusion pass.");
+                changed |= render_resettable_float_drag(
+                    "Power",
+                    ambient_occlusion.power,
+                    default_ambient_occlusion.power,
+                    0.01f,
+                    0.001f,
+                    16.0f,
+                    "%.3f",
+                    "Contrast curve applied to the occlusion term.");
+                changed |= render_resettable_float_drag(
+                    "Bias",
+                    ambient_occlusion.bias,
+                    default_ambient_occlusion.bias,
+                    0.0001f,
+                    0.0f,
+                    0.1f,
+                    "%.4f",
+                    "World-space self-occlusion bias.");
+                changed |= render_resettable_float_drag(
+                    "Resolution",
+                    ambient_occlusion.resolution_scale,
+                    default_ambient_occlusion.resolution_scale,
+                    0.5f,
+                    0.5f,
+                    1.0f,
+                    "%.1f",
+                    "AO buffer scale; Filament accepts half or full resolution.");
+                changed |= render_resettable_float_drag(
+                    "Bilateral Threshold",
+                    ambient_occlusion.bilateral_threshold,
+                    default_ambient_occlusion.bilateral_threshold,
+                    0.005f,
+                    0.0f,
+                    1.0f,
+                    "%.3f",
+                    "Depth threshold used by the bilateral filter.");
+                changed |= render_resettable_combo(
+                    "Quality##AmbientOcclusion",
+                    ambient_occlusion.quality,
+                    default_ambient_occlusion.quality,
+                    std::span<const AmbientOcclusionQuality> { kAmbientOcclusionQualities },
+                    ambient_occlusion_quality_label,
+                    "Controls sampling and filtering quality.");
+                changed |= render_resettable_combo(
+                    "Low Pass",
+                    ambient_occlusion.low_pass_filter,
+                    default_ambient_occlusion.low_pass_filter,
+                    std::span<const AmbientOcclusionQuality> { kAmbientOcclusionQualities },
+                    ambient_occlusion_quality_label,
+                    "Controls AO smoothness.");
+                changed |= render_resettable_combo(
+                    "Upsampling",
+                    ambient_occlusion.upsampling,
+                    default_ambient_occlusion.upsampling,
+                    std::span<const AmbientOcclusionQuality> { kAmbientOcclusionQualities },
+                    ambient_occlusion_quality_label,
+                    "Controls AO buffer upsampling quality.");
+                changed |= render_resettable_checkbox(
+                    "Bent Normals",
+                    ambient_occlusion.bent_normals,
+                    default_ambient_occlusion.bent_normals,
+                    "Computes bent normals for more accurate specular occlusion.");
+                changed |= render_resettable_float_drag(
+                    "Min Horizon",
+                    ambient_occlusion.min_horizon_angle_radians,
+                    default_ambient_occlusion.min_horizon_angle_radians,
+                    0.01f,
+                    0.0f,
+                    1.5708f,
+                    "%.3f",
+                    "Minimum horizon angle in radians for scalable AO.");
+
+                if (ImGui::TreeNodeEx("SSCT", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    AmbientOcclusionSsctSettings& ssct = ambient_occlusion.ssct;
+                    const AmbientOcclusionSsctSettings& default_ssct = default_ambient_occlusion.ssct;
+                    changed |= render_resettable_checkbox(
+                        "Enabled",
+                        ssct.enabled,
+                        default_ssct.enabled,
+                        "Adds screen-space cone-traced ambient shadows from a dominant light direction.");
+                    {
+                        DisabledScope ssct_disabled(!ssct.enabled);
+                        changed |= render_resettable_float_drag(
+                            "Light Cone",
+                            ssct.light_cone_radians,
+                            default_ssct.light_cone_radians,
+                            0.01f,
+                            0.0f,
+                            1.5708f,
+                            "%.3f",
+                            "Full cone angle in radians.");
+                        changed |= render_resettable_float_drag(
+                            "Shadow Distance",
+                            ssct.shadow_distance,
+                            default_ssct.shadow_distance,
+                            0.01f,
+                            0.0f,
+                            100.0f,
+                            "%.3f",
+                            "Maximum ambient shadow distance.");
+                        changed |= render_resettable_float_drag(
+                            "Contact Max",
+                            ssct.contact_distance_max,
+                            default_ssct.contact_distance_max,
+                            0.01f,
+                            0.0f,
+                            100.0f,
+                            "%.3f",
+                            "Maximum contact distance.");
+                        changed |= render_resettable_float_drag(
+                            "Intensity",
+                            ssct.intensity,
+                            default_ssct.intensity,
+                            0.01f,
+                            0.0f,
+                            10.0f,
+                            "%.3f",
+                            "SSCT shadow strength.");
+                        changed |= draw_vec3_drag_property(
+                            "Light Direction",
+                            ssct.light_direction,
+                            default_ssct.light_direction,
+                            0.01f,
+                            "%.3f",
+                            "Dominant light direction for cone tracing.");
+                        changed |= render_resettable_float_drag(
+                            "Depth Bias",
+                            ssct.depth_bias,
+                            default_ssct.depth_bias,
+                            0.001f,
+                            0.0f,
+                            1.0f,
+                            "%.3f",
+                            "World-space depth bias to reduce self-shadowing.");
+                        changed |= render_resettable_float_drag(
+                            "Slope Bias",
+                            ssct.depth_slope_bias,
+                            default_ssct.depth_slope_bias,
+                            0.001f,
+                            0.0f,
+                            1.0f,
+                            "%.3f",
+                            "Depth slope bias to reduce self-shadowing.");
+                        changed |= draw_uint8_drag_property(
+                            "Samples",
+                            ssct.sample_count,
+                            default_ssct.sample_count,
+                            1,
+                            255,
+                            "Number of cone-tracing samples.");
+                        changed |= draw_uint8_drag_property(
+                            "Rays",
+                            ssct.ray_count,
+                            default_ssct.ray_count,
+                            1,
+                            255,
+                            "Number of cone-tracing rays.");
+                    }
+                    ImGui::TreePop();
+                }
+
+                if (ImGui::TreeNodeEx("GTAO", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    AmbientOcclusionGtaoSettings& gtao = ambient_occlusion.gtao;
+                    const AmbientOcclusionGtaoSettings& default_gtao = default_ambient_occlusion.gtao;
+                    changed |= draw_uint8_drag_property(
+                        "Slices",
+                        gtao.sample_slice_count,
+                        default_gtao.sample_slice_count,
+                        1,
+                        255,
+                        "Number of angular slices used by ground-truth AO.");
+                    changed |= draw_uint8_drag_property(
+                        "Steps",
+                        gtao.sample_steps_per_slice,
+                        default_gtao.sample_steps_per_slice,
+                        1,
+                        255,
+                        "Number of integration steps per slice.");
+                    changed |= render_resettable_float_drag(
+                        "Thickness",
+                        gtao.thickness_heuristic,
+                        default_gtao.thickness_heuristic,
+                        0.001f,
+                        0.0f,
+                        1.0f,
+                        "%.3f",
+                        "Thickness heuristic used by GTAO without visibility bitmasks.");
+                    changed |= render_resettable_checkbox(
+                        "Visibility Bitmasks",
+                        gtao.use_visibility_bitmasks,
+                        default_gtao.use_visibility_bitmasks,
+                        "Enables GTAO visibility bitmasks; changing this can trigger shader recompilation.");
+                    changed |= render_resettable_float_drag(
+                        "Const Thickness",
+                        gtao.const_thickness,
+                        default_gtao.const_thickness,
+                        0.01f,
+                        0.0f,
+                        100.0f,
+                        "%.3f",
+                        "Constant screen object thickness in world units.");
+                    changed |= render_resettable_checkbox(
+                        "Linear Thickness",
+                        gtao.linear_thickness,
+                        default_gtao.linear_thickness,
+                        "Increases GTAO thickness with distance; changing this can trigger shader recompilation.");
+                    ImGui::TreePop();
+                }
             }
         }
 

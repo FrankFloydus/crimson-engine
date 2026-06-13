@@ -173,8 +173,60 @@ struct BloomSettings {
     float highlight = 1000.0f;
 };
 
+enum class AmbientOcclusionAlgorithm : uint8_t {
+    scalable,
+    ground_truth,
+};
+
+enum class AmbientOcclusionQuality : uint8_t {
+    low,
+    medium,
+    high,
+};
+
+struct AmbientOcclusionSsctSettings {
+    bool enabled = false;
+    float light_cone_radians = 1.0f;
+    float shadow_distance = 0.3f;
+    float contact_distance_max = 1.0f;
+    float intensity = 0.8f;
+    Vec3 light_direction { 0.0f, -1.0f, 0.0f };
+    float depth_bias = 0.01f;
+    float depth_slope_bias = 0.01f;
+    uint8_t sample_count = 4;
+    uint8_t ray_count = 1;
+};
+
+struct AmbientOcclusionGtaoSettings {
+    uint8_t sample_slice_count = 4;
+    uint8_t sample_steps_per_slice = 3;
+    float thickness_heuristic = 0.004f;
+    bool use_visibility_bitmasks = false;
+    float const_thickness = 0.5f;
+    bool linear_thickness = false;
+};
+
+struct AmbientOcclusionSettings {
+    bool enabled = false;
+    AmbientOcclusionAlgorithm algorithm = AmbientOcclusionAlgorithm::scalable;
+    float radius = 0.3f;
+    float power = 1.0f;
+    float bias = 0.0005f;
+    float resolution_scale = 0.5f;
+    float intensity = 1.0f;
+    float bilateral_threshold = 0.05f;
+    AmbientOcclusionQuality quality = AmbientOcclusionQuality::low;
+    AmbientOcclusionQuality low_pass_filter = AmbientOcclusionQuality::medium;
+    AmbientOcclusionQuality upsampling = AmbientOcclusionQuality::low;
+    bool bent_normals = false;
+    float min_horizon_angle_radians = 0.0f;
+    AmbientOcclusionSsctSettings ssct;
+    AmbientOcclusionGtaoSettings gtao;
+};
+
 struct PostProcessingSettings {
     BloomSettings bloom;
+    AmbientOcclusionSettings ambient_occlusion;
 };
 
 enum class EnvironmentLightingSource : uint8_t {
@@ -273,6 +325,7 @@ struct PointLightSettings {
 [[nodiscard]] RenderCamera clamp_render_camera(RenderCamera camera);
 [[nodiscard]] PbrMaterialSettings clamp_pbr_material_settings(PbrMaterialSettings settings);
 [[nodiscard]] BloomSettings clamp_bloom_settings(BloomSettings settings);
+[[nodiscard]] AmbientOcclusionSettings clamp_ambient_occlusion_settings(AmbientOcclusionSettings settings);
 [[nodiscard]] PostProcessingSettings clamp_post_processing_settings(PostProcessingSettings settings);
 [[nodiscard]] EnvironmentLightingSettings clamp_environment_lighting_settings(EnvironmentLightingSettings settings);
 [[nodiscard]] uint32_t directional_shadow_quality_map_size(DirectionalShadowQuality quality);

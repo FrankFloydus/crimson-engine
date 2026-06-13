@@ -110,6 +110,9 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     quader::PostProcessingSettings post_processing;
     post_processing.bloom.enabled = true;
     post_processing.bloom.strength = 0.25f;
+    post_processing.ambient_occlusion.enabled = true;
+    post_processing.ambient_occlusion.intensity = 1.5f;
+    post_processing.ambient_occlusion.quality = quader::AmbientOcclusionQuality::high;
     scene.set_post_processing_settings(post_processing);
 
     quader::ViewportInstance viewport =
@@ -130,6 +133,9 @@ TEST(ViewportInstance, SceneViewportBuildsSceneRenderRequest)
     EXPECT_FALSE(subject.snapshot.environment.show_skybox);
     EXPECT_TRUE(subject.snapshot.post_processing.bloom.enabled);
     EXPECT_FLOAT_EQ(0.25f, subject.snapshot.post_processing.bloom.strength);
+    EXPECT_TRUE(subject.snapshot.post_processing.ambient_occlusion.enabled);
+    EXPECT_FLOAT_EQ(1.5f, subject.snapshot.post_processing.ambient_occlusion.intensity);
+    EXPECT_EQ(quader::AmbientOcclusionQuality::high, subject.snapshot.post_processing.ambient_occlusion.quality);
     ASSERT_EQ(2U, subject.snapshot.meshes.size());
     EXPECT_TRUE(subject.snapshot.meshes[0].entity_id.is_valid());
     EXPECT_EQ(quader::ViewportMeshKind::cube, subject.snapshot.meshes[0].mesh_kind);

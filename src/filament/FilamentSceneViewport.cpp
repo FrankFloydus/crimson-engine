@@ -80,6 +80,7 @@ import quader.assets.image;
 import quader.diagnostics.logger;
 import quader.filament.debug_draw_renderer;
 import quader.filament.environment_resources;
+import quader.filament.post_processing_options;
 import quader.math.types;
 import quader.render.opengl_texture;
 import quader.render.viewport_projection_policy;
@@ -463,48 +464,6 @@ const char* texture_slot_name(PbrMaterialTextureSlot slot)
     }
 
     return filament::MaterialInstance::CullingMode::BACK;
-}
-
-[[nodiscard]] filament::View::BloomOptions::BlendMode filament_bloom_blend_mode(BloomBlendMode mode)
-{
-    switch (mode) {
-    case BloomBlendMode::add:
-        return filament::View::BloomOptions::BlendMode::ADD;
-    case BloomBlendMode::interpolate:
-        return filament::View::BloomOptions::BlendMode::INTERPOLATE;
-    }
-
-    return filament::View::BloomOptions::BlendMode::ADD;
-}
-
-[[nodiscard]] filament::QualityLevel filament_quality(BloomQuality quality)
-{
-    switch (quality) {
-    case BloomQuality::low:
-        return filament::QualityLevel::LOW;
-    case BloomQuality::medium:
-        return filament::QualityLevel::MEDIUM;
-    case BloomQuality::high:
-        return filament::QualityLevel::HIGH;
-    }
-
-    return filament::QualityLevel::LOW;
-}
-
-[[nodiscard]] filament::View::BloomOptions filament_bloom_options(BloomSettings settings)
-{
-    settings = clamp_bloom_settings(settings);
-
-    filament::View::BloomOptions options;
-    options.enabled = settings.enabled;
-    options.strength = settings.strength;
-    options.resolution = settings.resolution;
-    options.levels = settings.levels;
-    options.blendMode = filament_bloom_blend_mode(settings.blend_mode);
-    options.quality = filament_quality(settings.quality);
-    options.threshold = settings.threshold;
-    options.highlight = settings.highlight;
-    return options;
 }
 
 [[nodiscard]] filament::math::float3 filament_absorption(PbrMaterialSettings settings)
@@ -2222,6 +2181,8 @@ struct FilamentSceneViewport::Resources {
 
         const SceneRenderSnapshot& snapshot = std::get<SceneViewportSubject>(request.subject).snapshot;
         view->setBloomOptions(filament_bloom_options(snapshot.post_processing.bloom));
+        view->setAmbientOcclusionOptions(
+            filament_ambient_occlusion_options(snapshot.post_processing.ambient_occlusion));
         if (environment_resources != nullptr) {
             environment_resources->apply(snapshot.environment);
         }

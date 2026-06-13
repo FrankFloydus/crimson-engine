@@ -9,6 +9,8 @@ module quader.render.types;
 namespace quader {
 namespace {
 
+constexpr float kHalfPi = 1.57079632679489661923f;
+
 float clamp_unit_channel(float value)
 {
     return std::clamp(value, 0.0f, 1.0f);
@@ -129,6 +131,63 @@ BloomQuality valid_or_default(BloomQuality quality)
     }
 
     return BloomQuality::low;
+}
+
+AmbientOcclusionAlgorithm valid_or_default(AmbientOcclusionAlgorithm algorithm)
+{
+    switch (algorithm) {
+    case AmbientOcclusionAlgorithm::scalable:
+    case AmbientOcclusionAlgorithm::ground_truth:
+        return algorithm;
+    }
+
+    return AmbientOcclusionAlgorithm::scalable;
+}
+
+AmbientOcclusionQuality valid_or_default(AmbientOcclusionQuality quality)
+{
+    switch (quality) {
+    case AmbientOcclusionQuality::low:
+    case AmbientOcclusionQuality::medium:
+    case AmbientOcclusionQuality::high:
+        return quality;
+    }
+
+    return AmbientOcclusionQuality::low;
+}
+
+float ambient_occlusion_resolution_scale(float resolution_scale)
+{
+    resolution_scale = finite_or(resolution_scale, AmbientOcclusionSettings {}.resolution_scale);
+    return resolution_scale >= 0.75f ? 1.0f : 0.5f;
+}
+
+uint8_t sample_count_or_default(uint8_t value, uint8_t default_value)
+{
+    if (value == 0) {
+        return default_value;
+    }
+
+    return value;
+}
+
+Vec3 normalized_direction_or(Vec3 value, Vec3 fallback)
+{
+    value.x = finite_or(value.x, fallback.x);
+    value.y = finite_or(value.y, fallback.y);
+    value.z = finite_or(value.z, fallback.z);
+
+    const float length_squared = value.x * value.x + value.y * value.y + value.z * value.z;
+    if (length_squared <= 0.000001f) {
+        return fallback;
+    }
+
+    const float inverse_length = 1.0f / std::sqrt(length_squared);
+    return Vec3 {
+        value.x * inverse_length,
+        value.y * inverse_length,
+        value.z * inverse_length,
+    };
 }
 
 float normalize_yaw(float yaw_degrees)
@@ -334,9 +393,55 @@ BloomSettings clamp_bloom_settings(BloomSettings settings)
     return settings;
 }
 
+AmbientOcclusionSettings clamp_ambient_occlusion_settings(AmbientOcclusionSettings settings)
+{
+    const AmbientOcclusionSettings defaults;
+
+    settings.algorithm = valid_or_default(settings.algorithm);
+    settings.radius = std::clamp(finite_or(settings.radius, defaults.radius), 0.0f, 10.0f);
+    settings.power = std::clamp(finite_or(settings.power, defaults.power), 0.001f, 16.0f);
+    settings.bias = std::clamp(finite_or(settings.bias, defaults.bias), 0.0f, 0.1f);
+    settings.resolution_scale = ambient_occlusion_resolution_scale(settings.resolution_scale);
+    settings.intensity = std::clamp(finite_or(settings.intensity, defaults.intensity), 0.0f, 10.0f);
+    settings.bilateral_threshold =
+        std::clamp(finite_or(settings.bilateral_threshold, defaults.bilateral_threshold), 0.0f, 1.0f);
+    settings.quality = valid_or_default(settings.quality);
+    settings.low_pass_filter = valid_or_default(settings.low_pass_filter);
+    settings.upsampling = valid_or_default(settings.upsampling);
+    settings.min_horizon_angle_radians =
+        std::clamp(finite_or(settings.min_horizon_angle_radians, defaults.min_horizon_angle_radians), 0.0f, kHalfPi);
+
+    settings.ssct.light_cone_radians =
+        std::clamp(finite_or(settings.ssct.light_cone_radians, defaults.ssct.light_cone_radians), 0.0f, kHalfPi);
+    settings.ssct.shadow_distance =
+        std::clamp(finite_or(settings.ssct.shadow_distance, defaults.ssct.shadow_distance), 0.0f, 100.0f);
+    settings.ssct.contact_distance_max =
+        std::clamp(finite_or(settings.ssct.contact_distance_max, defaults.ssct.contact_distance_max), 0.0f, 100.0f);
+    settings.ssct.intensity = std::clamp(finite_or(settings.ssct.intensity, defaults.ssct.intensity), 0.0f, 10.0f);
+    settings.ssct.light_direction =
+        normalized_direction_or(settings.ssct.light_direction, defaults.ssct.light_direction);
+    settings.ssct.depth_bias = std::clamp(finite_or(settings.ssct.depth_bias, defaults.ssct.depth_bias), 0.0f, 1.0f);
+    settings.ssct.depth_slope_bias =
+        std::clamp(finite_or(settings.ssct.depth_slope_bias, defaults.ssct.depth_slope_bias), 0.0f, 1.0f);
+    settings.ssct.sample_count = sample_count_or_default(settings.ssct.sample_count, defaults.ssct.sample_count);
+    settings.ssct.ray_count = sample_count_or_default(settings.ssct.ray_count, defaults.ssct.ray_count);
+
+    settings.gtao.sample_slice_count =
+        sample_count_or_default(settings.gtao.sample_slice_count, defaults.gtao.sample_slice_count);
+    settings.gtao.sample_steps_per_slice =
+        sample_count_or_default(settings.gtao.sample_steps_per_slice, defaults.gtao.sample_steps_per_slice);
+    settings.gtao.thickness_heuristic =
+        std::clamp(finite_or(settings.gtao.thickness_heuristic, defaults.gtao.thickness_heuristic), 0.0f, 1.0f);
+    settings.gtao.const_thickness =
+        std::clamp(finite_or(settings.gtao.const_thickness, defaults.gtao.const_thickness), 0.0f, 100.0f);
+
+    return settings;
+}
+
 PostProcessingSettings clamp_post_processing_settings(PostProcessingSettings settings)
 {
     settings.bloom = clamp_bloom_settings(settings.bloom);
+    settings.ambient_occlusion = clamp_ambient_occlusion_settings(settings.ambient_occlusion);
     return settings;
 }
 
