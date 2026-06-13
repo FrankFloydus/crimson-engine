@@ -45,9 +45,10 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
     return std::nullopt;
 }
 
-std::unique_ptr<IViewportRenderer> create_renderer_engine_or_throw()
+std::unique_ptr<IViewportRenderer> create_renderer_engine_or_throw(const VulkanDevice& device)
 {
-    std::unique_ptr<IViewportRenderer> render_engine = create_default_viewport_renderer();
+    std::unique_ptr<IViewportRenderer> render_engine = create_default_viewport_renderer(
+        device.shared_device_context());
     throw_if_renderer_failed_to_start(render_engine->status());
     return render_engine;
 }
@@ -55,12 +56,13 @@ std::unique_ptr<IViewportRenderer> create_renderer_engine_or_throw()
 } // namespace
 
 Application::Application()
-    : window_("Quader Native", 1280, 800)
+    : sdl_platform_context_()
+    , window_("Quader Native", 1280, 800)
     , native_file_dialog_(window_)
     , event_source_(window_)
     , vulkan_device_(window_)
     , swapchain_(vulkan_device_, window_)
-    , render_engine_(create_renderer_engine_or_throw())
+    , render_engine_(create_renderer_engine_or_throw(vulkan_device_))
     , imgui_(window_, vulkan_device_, swapchain_)
 {
     event_dispatcher_.subscribe(input_);
@@ -118,13 +120,35 @@ void Application::draw_frame(float delta_seconds)
         open_scene_,
         input_,
         selection_,
+        hover_,
+        commands_,
         delta_seconds);
     if (viewport_result.scene_changed) {
         scene_viewport_.mark_render_state_dirty();
     }
+    collect_retired_viewport_gpu_resources();
     imgui_.end_frame(swapchain_);
 
     FrameMark;
+}
+
+void Application::collect_retired_viewport_gpu_resources()
+{
+    const bool has_retired_textures = imgui_.has_retired_viewport_gpu_textures();
+    const bool can_collect_render_resources =
+        !scene_viewport_.has_pending_render_requests() &&
+        render_engine_->has_retired_viewport_gpu_resources();
+    if (!has_retired_textures && !can_collect_render_resources) {
+        return;
+    }
+
+    vulkan_device_.wait_idle();
+    if (has_retired_textures) {
+        imgui_.collect_retired_viewport_gpu_textures();
+    }
+    if (can_collect_render_resources) {
+        render_engine_->collect_retired_viewport_gpu_resources();
+    }
 }
 
 void Application::poll_events()

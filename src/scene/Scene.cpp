@@ -170,22 +170,8 @@ SceneEntityId Scene::create_point_light(std::string name, TransformComponent tra
     return id;
 }
 
-SceneEntity& Scene::add_entity(std::string name, TransformComponent transform)
-{
-    const SceneEntityId id = create_named_entity(std::move(name), transform);
-    rebuild_entity_cache();
-    entity_cache_borrowed_ = true;
-
-    const auto found = std::ranges::find_if(entity_cache_, [id](const SceneEntity& entity) {
-        return entity.id == id;
-    });
-    return *found;
-}
-
 bool Scene::destroy_entity(SceneEntityId id)
 {
-    flush_entity_cache();
-
     const auto found = storage_->entity_by_id.find(id.value);
     if (found == storage_->entity_by_id.end()) {
         return false;
@@ -194,26 +180,18 @@ bool Scene::destroy_entity(SceneEntityId id)
     storage_->registry.destroy(found->second);
     storage_->entity_by_id.erase(found);
     std::erase(storage_->entity_order, id);
+    entity_cache_.clear();
     return true;
 }
 
 bool Scene::contains(SceneEntityId id) const
 {
-    flush_entity_cache();
     return storage_->entity_by_id.contains(id.value);
 }
 
 std::size_t Scene::entity_count() const
 {
-    flush_entity_cache();
     return storage_->entity_order.size();
-}
-
-std::span<SceneEntity> Scene::entities()
-{
-    rebuild_entity_cache();
-    entity_cache_borrowed_ = true;
-    return entity_cache_;
 }
 
 std::span<const SceneEntity> Scene::entities() const
@@ -235,10 +213,116 @@ std::optional<SceneEntity> Scene::entity(SceneEntityId id) const
     return *found;
 }
 
-TransformComponent* Scene::transform(SceneEntityId id)
+bool Scene::set_transform(SceneEntityId id, TransformComponent transform)
 {
-    flush_entity_cache();
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end()) {
+        return false;
+    }
 
+    transform.set_rotation_degrees(transform.rotation_degrees());
+    storage_->registry.emplace_or_replace<TransformComponent>(found->second, transform);
+    entity_cache_.clear();
+    return true;
+}
+
+bool Scene::set_material(SceneEntityId id, PbrMaterialSettings material)
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end() || !storage_->registry.all_of<MaterialComponent>(found->second)) {
+        return false;
+    }
+
+    storage_->registry.patch<MaterialComponent>(found->second, [material = clamp_pbr_material_settings(material)](
+        MaterialComponent& component) {
+        component.material = material;
+    });
+    entity_cache_.clear();
+    return true;
+}
+
+bool Scene::clear_material_texture(SceneEntityId id, PbrMaterialTextureSlot slot)
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end() || !storage_->registry.all_of<MaterialComponent>(found->second)) {
+        return false;
+    }
+
+    storage_->registry.patch<MaterialComponent>(found->second, [slot](MaterialComponent& component) {
+        material_texture_reference(component.material, slot).clear();
+        component.material = clamp_pbr_material_settings(component.material);
+    });
+    entity_cache_.clear();
+    return true;
+}
+
+bool Scene::set_material_texture_source(
+    SceneEntityId id,
+    PbrMaterialTextureSlot slot,
+    std::string source_path)
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end() || !storage_->registry.all_of<MaterialComponent>(found->second)) {
+        return false;
+    }
+
+    storage_->registry.patch<MaterialComponent>(
+        found->second,
+        [slot, source_path = std::move(source_path)](MaterialComponent& component) mutable {
+            material_texture_reference(component.material, slot).source_path = std::move(source_path);
+            component.material = clamp_pbr_material_settings(component.material);
+        });
+    entity_cache_.clear();
+    return true;
+}
+
+bool Scene::set_mesh_shadow_settings(SceneEntityId id, MeshShadowSettings settings)
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end() || !storage_->registry.all_of<MeshComponent>(found->second)) {
+        return false;
+    }
+
+    storage_->registry.patch<MeshComponent>(found->second, [settings](MeshComponent& component) {
+        component.casts_shadows = settings.casts_shadows;
+        component.receives_shadows = settings.receives_shadows;
+    });
+    entity_cache_.clear();
+    return true;
+}
+
+bool Scene::set_directional_light(SceneEntityId id, DirectionalLightSettings settings)
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end() ||
+        !storage_->registry.all_of<DirectionalLightComponent>(found->second)) {
+        return false;
+    }
+
+    storage_->registry.patch<DirectionalLightComponent>(
+        found->second,
+        [settings = clamp_directional_light_settings(settings)](DirectionalLightComponent& component) {
+            component.settings = settings;
+        });
+    entity_cache_.clear();
+    return true;
+}
+
+bool Scene::set_point_light(SceneEntityId id, PointLightComponent light)
+{
+    const auto found = storage_->entity_by_id.find(id.value);
+    if (found == storage_->entity_by_id.end() || !storage_->registry.all_of<PointLightComponent>(found->second)) {
+        return false;
+    }
+
+    light.settings = clamp_point_light_settings(light.settings);
+    storage_->registry.emplace_or_replace<PointLightComponent>(found->second, light);
+    entity_cache_.clear();
+    return true;
+}
+
+const TransformComponent* Scene::transform(SceneEntityId id) const
+{
     const auto found = storage_->entity_by_id.find(id.value);
     if (found == storage_->entity_by_id.end()) {
         return nullptr;
@@ -247,15 +331,8 @@ TransformComponent* Scene::transform(SceneEntityId id)
     return storage_->registry.try_get<TransformComponent>(found->second);
 }
 
-const TransformComponent* Scene::transform(SceneEntityId id) const
+const MeshComponent* Scene::mesh(SceneEntityId id) const
 {
-    return const_cast<Scene*>(this)->transform(id);
-}
-
-MeshComponent* Scene::mesh(SceneEntityId id)
-{
-    flush_entity_cache();
-
     const auto found = storage_->entity_by_id.find(id.value);
     if (found == storage_->entity_by_id.end()) {
         return nullptr;
@@ -264,15 +341,8 @@ MeshComponent* Scene::mesh(SceneEntityId id)
     return storage_->registry.try_get<MeshComponent>(found->second);
 }
 
-const MeshComponent* Scene::mesh(SceneEntityId id) const
+const MaterialComponent* Scene::material(SceneEntityId id) const
 {
-    return const_cast<Scene*>(this)->mesh(id);
-}
-
-MaterialComponent* Scene::material(SceneEntityId id)
-{
-    flush_entity_cache();
-
     const auto found = storage_->entity_by_id.find(id.value);
     if (found == storage_->entity_by_id.end()) {
         return nullptr;
@@ -281,15 +351,8 @@ MaterialComponent* Scene::material(SceneEntityId id)
     return storage_->registry.try_get<MaterialComponent>(found->second);
 }
 
-const MaterialComponent* Scene::material(SceneEntityId id) const
+const DirectionalLightComponent* Scene::directional_light(SceneEntityId id) const
 {
-    return const_cast<Scene*>(this)->material(id);
-}
-
-DirectionalLightComponent* Scene::directional_light(SceneEntityId id)
-{
-    flush_entity_cache();
-
     const auto found = storage_->entity_by_id.find(id.value);
     if (found == storage_->entity_by_id.end()) {
         return nullptr;
@@ -298,15 +361,8 @@ DirectionalLightComponent* Scene::directional_light(SceneEntityId id)
     return storage_->registry.try_get<DirectionalLightComponent>(found->second);
 }
 
-const DirectionalLightComponent* Scene::directional_light(SceneEntityId id) const
+const PointLightComponent* Scene::point_light(SceneEntityId id) const
 {
-    return const_cast<Scene*>(this)->directional_light(id);
-}
-
-PointLightComponent* Scene::point_light(SceneEntityId id)
-{
-    flush_entity_cache();
-
     const auto found = storage_->entity_by_id.find(id.value);
     if (found == storage_->entity_by_id.end()) {
         return nullptr;
@@ -315,15 +371,8 @@ PointLightComponent* Scene::point_light(SceneEntityId id)
     return storage_->registry.try_get<PointLightComponent>(found->second);
 }
 
-const PointLightComponent* Scene::point_light(SceneEntityId id) const
-{
-    return const_cast<Scene*>(this)->point_light(id);
-}
-
 SceneEntityId Scene::create_named_entity(std::string name, TransformComponent transform)
 {
-    flush_entity_cache();
-
     const SceneEntityId id { storage_->next_entity_id++ };
     const entt::entity entity = storage_->registry.create();
 
@@ -331,65 +380,15 @@ SceneEntityId Scene::create_named_entity(std::string name, TransformComponent tr
     storage_->registry.emplace<TransformComponent>(entity, transform);
     storage_->entity_by_id.emplace(id.value, entity);
     storage_->entity_order.push_back(id);
+    entity_cache_.clear();
     return id;
-}
-
-void Scene::flush_entity_cache() const
-{
-    if (!entity_cache_borrowed_ || flushing_entity_cache_) {
-        return;
-    }
-
-    flushing_entity_cache_ = true;
-
-    for (const SceneEntity& view : entity_cache_) {
-        const auto found = storage_->entity_by_id.find(view.id.value);
-        if (found == storage_->entity_by_id.end()) {
-            continue;
-        }
-
-        const entt::entity entity = found->second;
-        if (SceneEntityRecord* record = storage_->registry.try_get<SceneEntityRecord>(entity)) {
-            record->name = view.name;
-        }
-
-        TransformComponent transform = view.transform;
-        transform.set_rotation_degrees(view.transform.rotation_degrees());
-        storage_->registry.emplace_or_replace<TransformComponent>(entity, transform);
-
-        if (view.mesh.has_value()) {
-            MeshComponent mesh_component = *view.mesh;
-            storage_->registry.emplace_or_replace<MeshComponent>(entity, mesh_component);
-        } else if (storage_->registry.all_of<MeshComponent>(entity)) {
-            storage_->registry.remove<MeshComponent>(entity);
-        }
-
-        if (view.material.has_value()) {
-            storage_->registry.emplace_or_replace<MaterialComponent>(entity, *view.material);
-        } else if (storage_->registry.all_of<MaterialComponent>(entity)) {
-            storage_->registry.remove<MaterialComponent>(entity);
-        }
-
-        if (view.directional_light.has_value()) {
-            storage_->registry.emplace_or_replace<DirectionalLightComponent>(entity, *view.directional_light);
-        } else if (storage_->registry.all_of<DirectionalLightComponent>(entity)) {
-            storage_->registry.remove<DirectionalLightComponent>(entity);
-        }
-
-        if (view.point_light.has_value()) {
-            storage_->registry.emplace_or_replace<PointLightComponent>(entity, *view.point_light);
-        } else if (storage_->registry.all_of<PointLightComponent>(entity)) {
-            storage_->registry.remove<PointLightComponent>(entity);
-        }
-    }
-
-    entity_cache_borrowed_ = false;
-    flushing_entity_cache_ = false;
 }
 
 void Scene::rebuild_entity_cache() const
 {
-    flush_entity_cache();
+    if (entity_cache_.size() == storage_->entity_order.size()) {
+        return;
+    }
 
     entity_cache_.clear();
     entity_cache_.reserve(storage_->entity_order.size());

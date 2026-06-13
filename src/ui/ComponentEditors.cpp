@@ -110,7 +110,7 @@ void draw_texture_row(
 {
     const TextureAssetReference& texture = material_texture_reference(settings, slot);
 
-    ImGui::PushID(label);
+    const IdScope texture_row_id(label);
     ImGui::Spacing();
     ImGui::TextUnformatted(label);
     render_item_tooltip(row_tooltip);
@@ -137,8 +137,6 @@ void draw_texture_row(
         ImGui::TextDisabled("No texture selected");
         render_item_tooltip("This material slot will use the scalar or color property value only.");
     }
-
-    ImGui::PopID();
 }
 
 [[nodiscard]] bool draw_shadow_mode_combo(DirectionalShadowMode& mode, DirectionalShadowMode default_mode)

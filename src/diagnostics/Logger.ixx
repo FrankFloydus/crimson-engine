@@ -1,7 +1,7 @@
 module;
 
-#include <spdlog/spdlog.h>
-
+#include <format>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -22,43 +22,59 @@ public:
     static void critical(std::string_view message);
 
     template <typename... Args>
-    static void trace(spdlog::format_string_t<Args...> message, Args&&... args)
+        requires(sizeof...(Args) > 0)
+    static void trace(std::format_string<Args...> message, Args&&... args)
     {
-        spdlog::trace(message, std::forward<Args>(args)...);
+        trace(std::format(message, std::forward<Args>(args)...));
     }
 
     template <typename... Args>
-    static void debug(spdlog::format_string_t<Args...> message, Args&&... args)
+        requires(sizeof...(Args) > 0)
+    static void debug(std::format_string<Args...> message, Args&&... args)
     {
-        spdlog::debug(message, std::forward<Args>(args)...);
+        debug(std::format(message, std::forward<Args>(args)...));
     }
 
     template <typename... Args>
-    static void info(spdlog::format_string_t<Args...> message, Args&&... args)
+        requires(sizeof...(Args) > 0)
+    static void info(std::format_string<Args...> message, Args&&... args)
     {
-        spdlog::info(message, std::forward<Args>(args)...);
+        info(std::format(message, std::forward<Args>(args)...));
     }
 
     template <typename... Args>
-    static void warn(spdlog::format_string_t<Args...> message, Args&&... args)
+        requires(sizeof...(Args) > 0)
+    static void warn(std::format_string<Args...> message, Args&&... args)
     {
-        spdlog::warn(message, std::forward<Args>(args)...);
+        warn(std::format(message, std::forward<Args>(args)...));
     }
 
     template <typename... Args>
-    static void error(spdlog::format_string_t<Args...> message, Args&&... args)
+        requires(sizeof...(Args) > 0)
+    static void error(std::format_string<Args...> message, Args&&... args)
     {
-        spdlog::error(message, std::forward<Args>(args)...);
+        error(std::format(message, std::forward<Args>(args)...));
     }
 
     template <typename... Args>
-    static void critical(spdlog::format_string_t<Args...> message, Args&&... args)
+        requires(sizeof...(Args) > 0)
+    static void critical(std::format_string<Args...> message, Args&&... args)
     {
-        spdlog::critical(message, std::forward<Args>(args)...);
+        critical(std::format(message, std::forward<Args>(args)...));
     }
 
 private:
     Logger() = delete;
+};
+
+class LoggerSession final {
+public:
+    LoggerSession();
+
+    LoggerSession(const LoggerSession&) = delete;
+    LoggerSession& operator=(const LoggerSession&) = delete;
+
+    ~LoggerSession();
 };
 
 } // namespace quader

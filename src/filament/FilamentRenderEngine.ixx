@@ -5,13 +5,14 @@ module;
 export module quader.filament.render_engine;
 
 export import quader.render.engine;
+import quader.render.vulkan_device;
 export import quader.render.viewport_renderer;
 
 export namespace quader {
 
 class FilamentRenderEngine final : public IViewportRenderer {
 public:
-    FilamentRenderEngine();
+    explicit FilamentRenderEngine(VulkanSharedDeviceContext shared_device_context);
 
     FilamentRenderEngine(const FilamentRenderEngine&) = delete;
     FilamentRenderEngine& operator=(const FilamentRenderEngine&) = delete;
@@ -24,6 +25,10 @@ public:
     void release_viewport(ViewportId viewport_id) override;
     [[nodiscard]] bool request_viewport_frame(const ViewportRenderRequest& request) override;
     [[nodiscard]] std::optional<ViewportRenderFrame> try_consume_viewport_frame(ViewportId viewport_id) override;
+    [[nodiscard]] std::optional<ViewportSampledGpuImage> resolve_viewport_gpu_image(
+        const ViewportGpuImageHandle& handle) override;
+    [[nodiscard]] bool has_retired_viewport_gpu_resources() const noexcept override;
+    void collect_retired_viewport_gpu_resources() override;
 
 private:
     struct Resources;

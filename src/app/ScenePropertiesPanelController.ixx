@@ -26,7 +26,7 @@ private:
     };
 
     [[nodiscard]] bool render_create_menu(Scene& scene, EditorSelectionModel& selection);
-    void render_outliner(const Scene& scene, EditorSelectionModel& selection);
+    [[nodiscard]] bool render_outliner(const Scene& scene, EditorSelectionModel& selection);
     [[nodiscard]] bool render_property_inspector(
         Scene& scene,
         NativeFileDialogService& native_file_dialog,

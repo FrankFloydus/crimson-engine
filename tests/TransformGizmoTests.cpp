@@ -78,6 +78,22 @@ quader::TransformToolInputActions tool_actions_from_input(
     return quader::transform_tool_input_actions_from(resolved);
 }
 
+bool apply_drag_update(
+    quader::Scene& scene,
+    quader::TransformGizmoController& controller,
+    quader::ViewportCamera camera,
+    quader::ViewportProjection projection,
+    const quader::ViewportSurfaceResult& surface)
+{
+    const quader::TransformGizmoController::DragUpdate update =
+        controller.update_drag_preview(scene, camera, projection, surface);
+    if (!update.transform_changed || !update.entity_id.has_value() || !update.preview_transform.has_value()) {
+        return false;
+    }
+
+    return scene.set_transform(*update.entity_id, *update.preview_transform);
+}
+
 } // namespace
 
 TEST(TransformGizmo, HotkeysSelectMoveRotateAndScaleTools)
@@ -173,6 +189,26 @@ TEST(TransformGizmo, HoveredPayloadIsIncludedInRenderRequest)
     EXPECT_EQ(payload, *request->highlighted_payload);
 }
 
+TEST(TransformGizmo, ScaleToolRequestMarksLightsAsNonScalable)
+{
+    quader::Scene scene;
+    const quader::SceneEntityId point_light = scene.create_point_light();
+    quader::TransformGizmoController controller;
+    quader::Input input;
+
+    input.begin_frame();
+    input.handle_event(quader::AppKeyEvent { .key = quader::AppKey::e, .pressed = true });
+    ASSERT_TRUE(controller.update_tool_hotkeys(tool_actions_from_input(input)));
+
+    const std::optional<quader::TransformGizmoRequest> request =
+        controller.render_request_for_selection(scene, point_light, test_camera(), test_projection());
+
+    ASSERT_TRUE(request.has_value());
+    ASSERT_TRUE(request->target.has_value());
+    EXPECT_EQ(quader::TransformGizmoTool::scale, request->tool);
+    EXPECT_FALSE(request->target->can_scale);
+}
+
 TEST(TransformGizmo, MoveAxisDragMutatesSelectedTransform)
 {
     quader::Scene scene;
@@ -190,8 +226,9 @@ TEST(TransformGizmo, MoveAxisDragMutatesSelectedTransform)
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
 
-    EXPECT_TRUE(controller.update_drag(
+    EXPECT_TRUE(apply_drag_update(
         scene,
+        controller,
         test_camera(),
         test_projection(),
         drag_surface({ 500.0f, 300.0f })));
@@ -220,8 +257,9 @@ TEST(TransformGizmo, MovePlaneDragUsesRayPlaneIntersection)
         test_orthographic_projection(),
         drag_surface({ 460.0f, 240.0f })));
 
-    EXPECT_TRUE(controller.update_drag(
+    EXPECT_TRUE(apply_drag_update(
         scene,
+        controller,
         test_camera(),
         test_orthographic_projection(),
         drag_surface({ 520.0f, 210.0f })));
@@ -250,8 +288,9 @@ TEST(TransformGizmo, UniformScaleDragMutatesAllScaleAxes)
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
 
-    EXPECT_TRUE(controller.update_drag(
+    EXPECT_TRUE(apply_drag_update(
         scene,
+        controller,
         test_camera(),
         test_projection(),
         drag_surface({ 460.0f, 240.0f })));
@@ -280,8 +319,9 @@ TEST(TransformGizmo, UniformScaleDragWorksInOrthographicProjection)
         test_orthographic_projection(),
         drag_surface({ 400.0f, 300.0f })));
 
-    EXPECT_TRUE(controller.update_drag(
+    EXPECT_TRUE(apply_drag_update(
         scene,
+        controller,
         test_camera(),
         test_orthographic_projection(),
         drag_surface({ 460.0f, 240.0f })));
@@ -308,8 +348,9 @@ TEST(TransformGizmo, UniformScaleDragSensitivityIsCameraDistanceIndependent)
         test_camera(),
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
-    ASSERT_TRUE(far_controller.update_drag(
+    ASSERT_TRUE(apply_drag_update(
         far_scene,
+        far_controller,
         test_camera(),
         test_projection(),
         drag_surface({ 500.0f, 300.0f })));
@@ -327,8 +368,9 @@ TEST(TransformGizmo, UniformScaleDragSensitivityIsCameraDistanceIndependent)
         close_test_camera(),
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
-    ASSERT_TRUE(close_controller.update_drag(
+    ASSERT_TRUE(apply_drag_update(
         close_scene,
+        close_controller,
         close_test_camera(),
         test_projection(),
         drag_surface({ 500.0f, 300.0f })));
@@ -358,8 +400,9 @@ TEST(TransformGizmo, ScalePlaneDragMutatesOnlyPlaneAxesIndependently)
         test_orthographic_projection(),
         drag_surface({ 460.0f, 240.0f })));
 
-    EXPECT_TRUE(controller.update_drag(
+    EXPECT_TRUE(apply_drag_update(
         scene,
+        controller,
         test_camera(),
         test_orthographic_projection(),
         drag_surface({ 520.0f, 210.0f })));
@@ -386,8 +429,9 @@ TEST(TransformGizmo, ScaleAxisDragSensitivityIsCameraDistanceIndependent)
         test_camera(),
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
-    ASSERT_TRUE(far_controller.update_drag(
+    ASSERT_TRUE(apply_drag_update(
         far_scene,
+        far_controller,
         test_camera(),
         test_projection(),
         drag_surface({ 500.0f, 300.0f })));
@@ -405,8 +449,9 @@ TEST(TransformGizmo, ScaleAxisDragSensitivityIsCameraDistanceIndependent)
         close_test_camera(),
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
-    ASSERT_TRUE(close_controller.update_drag(
+    ASSERT_TRUE(apply_drag_update(
         close_scene,
+        close_controller,
         close_test_camera(),
         test_projection(),
         drag_surface({ 500.0f, 300.0f })));
@@ -438,8 +483,9 @@ TEST(TransformGizmo, RotateAxisDragWorksWhenAxisIsEdgeOnToCamera)
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
 
-    EXPECT_TRUE(controller.update_drag(
+    EXPECT_TRUE(apply_drag_update(
         scene,
+        controller,
         test_camera(),
         test_projection(),
         drag_surface({ 400.0f, 360.0f })));
@@ -451,7 +497,7 @@ TEST(TransformGizmo, RotateAxisDragWorksWhenAxisIsEdgeOnToCamera)
     EXPECT_FLOAT_EQ(0.0f, transform->get_rotation_degrees().z);
 }
 
-TEST(TransformGizmo, ScaleAxisDragDoesNotMutateLightTransform)
+TEST(TransformGizmo, ScaleAxisDragCannotStartForLightTransform)
 {
     quader::Scene scene;
     const quader::SceneEntityId point_light = scene.create_point_light();
@@ -461,18 +507,13 @@ TEST(TransformGizmo, ScaleAxisDragDoesNotMutateLightTransform)
         quader::RenderEntityId { point_light.value },
         quader::DebugDrawPickRole::transform_scale_axis,
         quader::DebugDrawAxis::x);
-    ASSERT_TRUE(controller.try_begin_drag(
+    EXPECT_FALSE(controller.try_begin_drag(
         payload,
         scene,
         test_camera(),
         test_projection(),
         drag_surface({ 400.0f, 300.0f })));
-
-    EXPECT_FALSE(controller.update_drag(
-        scene,
-        test_camera(),
-        test_projection(),
-        drag_surface({ 500.0f, 300.0f })));
+    EXPECT_FALSE(controller.is_dragging());
 
     const quader::TransformComponent* transform = scene.transform(point_light);
     ASSERT_NE(nullptr, transform);

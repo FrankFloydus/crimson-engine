@@ -42,6 +42,236 @@ private:
     bool disabled_ = false;
 };
 
+class IdScope final {
+public:
+    explicit IdScope(int id)
+    {
+        ImGui::PushID(id);
+    }
+
+    explicit IdScope(const void* id)
+    {
+        ImGui::PushID(id);
+    }
+
+    explicit IdScope(const char* id)
+    {
+        ImGui::PushID(id);
+    }
+
+    IdScope(const IdScope&) = delete;
+    IdScope& operator=(const IdScope&) = delete;
+
+    ~IdScope()
+    {
+        ImGui::PopID();
+    }
+};
+
+class StyleVarScope final {
+public:
+    StyleVarScope(ImGuiStyleVar variable, float value)
+    {
+        ImGui::PushStyleVar(variable, value);
+    }
+
+    StyleVarScope(ImGuiStyleVar variable, ImVec2 value)
+    {
+        ImGui::PushStyleVar(variable, value);
+    }
+
+    StyleVarScope(const StyleVarScope&) = delete;
+    StyleVarScope& operator=(const StyleVarScope&) = delete;
+
+    ~StyleVarScope()
+    {
+        ImGui::PopStyleVar();
+    }
+};
+
+class WindowScope final {
+public:
+    WindowScope(const char* title, bool* open = nullptr, ImGuiWindowFlags flags = 0)
+        : visible_(ImGui::Begin(title, open, flags))
+    {
+    }
+
+    WindowScope(const WindowScope&) = delete;
+    WindowScope& operator=(const WindowScope&) = delete;
+
+    ~WindowScope()
+    {
+        ImGui::End();
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
+class MainMenuBarScope final {
+public:
+    MainMenuBarScope()
+        : visible_(ImGui::BeginMainMenuBar())
+    {
+    }
+
+    MainMenuBarScope(const MainMenuBarScope&) = delete;
+    MainMenuBarScope& operator=(const MainMenuBarScope&) = delete;
+
+    ~MainMenuBarScope()
+    {
+        if (visible_) {
+            ImGui::EndMainMenuBar();
+        }
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
+class MenuScope final {
+public:
+    explicit MenuScope(const char* label, bool enabled = true)
+        : visible_(ImGui::BeginMenu(label, enabled))
+    {
+    }
+
+    MenuScope(const MenuScope&) = delete;
+    MenuScope& operator=(const MenuScope&) = delete;
+
+    ~MenuScope()
+    {
+        if (visible_) {
+            ImGui::EndMenu();
+        }
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
+class ComboScope final {
+public:
+    ComboScope(const char* label, const char* preview_value, ImGuiComboFlags flags = 0)
+        : visible_(ImGui::BeginCombo(label, preview_value, flags))
+    {
+    }
+
+    ComboScope(const ComboScope&) = delete;
+    ComboScope& operator=(const ComboScope&) = delete;
+
+    ~ComboScope()
+    {
+        if (visible_) {
+            ImGui::EndCombo();
+        }
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
+class PopupScope final {
+public:
+    explicit PopupScope(const char* id, ImGuiWindowFlags flags = 0)
+        : visible_(ImGui::BeginPopup(id, flags))
+    {
+    }
+
+    PopupScope(const PopupScope&) = delete;
+    PopupScope& operator=(const PopupScope&) = delete;
+
+    ~PopupScope()
+    {
+        if (visible_) {
+            ImGui::EndPopup();
+        }
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
+class TableScope final {
+public:
+    TableScope(
+        const char* id,
+        int column_count,
+        ImGuiTableFlags flags = 0,
+        ImVec2 outer_size = ImVec2(0.0f, 0.0f),
+        float inner_width = 0.0f)
+        : visible_(ImGui::BeginTable(id, column_count, flags, outer_size, inner_width))
+    {
+    }
+
+    TableScope(const TableScope&) = delete;
+    TableScope& operator=(const TableScope&) = delete;
+
+    ~TableScope()
+    {
+        if (visible_) {
+            ImGui::EndTable();
+        }
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
+class ChildScope final {
+public:
+    ChildScope(const char* id, ImVec2 size = ImVec2(0.0f, 0.0f), bool border = false, ImGuiWindowFlags flags = 0)
+        : visible_(ImGui::BeginChild(id, size, border, flags))
+    {
+    }
+
+    ChildScope(const ChildScope&) = delete;
+    ChildScope& operator=(const ChildScope&) = delete;
+
+    ~ChildScope()
+    {
+        ImGui::EndChild();
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept
+    {
+        return visible_;
+    }
+
+private:
+    bool visible_ = false;
+};
+
 inline void render_item_tooltip(const char* text)
 {
     if (text == nullptr || text[0] == '\0') {
@@ -173,9 +403,8 @@ inline void render_changed_marker()
 
     render_changed_marker();
     ImGui::SameLine();
-    ImGui::PushID(id);
+    const IdScope reset_id(id);
     const bool reset_clicked = ImGui::SmallButton("Reset");
-    ImGui::PopID();
     render_item_tooltip(reset_tooltip);
     return reset_clicked;
 }
@@ -308,20 +537,21 @@ template <typename Value, typename LabelForValue>
     bool changed = false;
     const ResettablePropertyLayout layout =
         begin_resettable_property(label, tooltip, value != default_value, preferred_control_width);
-    const bool combo_open = ImGui::BeginCombo("##Value", label_for_value(value));
-    render_item_tooltip(tooltip);
-    if (combo_open) {
-        for (const Value option : options) {
-            const bool selected = value == option;
-            if (ImGui::Selectable(label_for_value(option), selected)) {
-                value = option;
-                changed = true;
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
+    {
+        const ComboScope combo("##Value", label_for_value(value));
+        render_item_tooltip(tooltip);
+        if (combo) {
+            for (const Value option : options) {
+                const bool selected = value == option;
+                if (ImGui::Selectable(label_for_value(option), selected)) {
+                    value = option;
+                    changed = true;
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
             }
         }
-        ImGui::EndCombo();
     }
     if (end_resettable_property(layout)) {
         value = default_value;

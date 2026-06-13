@@ -109,4 +109,14 @@ void Logger::critical(std::string_view message)
     log_plain_message(spdlog::level::critical, message);
 }
 
+LoggerSession::LoggerSession()
+{
+    Logger::initialize();
+}
+
+LoggerSession::~LoggerSession()
+{
+    Logger::shutdown();
+}
+
 } // namespace quader

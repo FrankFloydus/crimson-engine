@@ -9,6 +9,7 @@ module;
 
 module quader.ui.viewport_surface;
 
+import quader.ui.controls;
 import quader.ui.style;
 
 namespace quader {
@@ -126,7 +127,7 @@ void draw_performance_overlay(
 ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
 {
     const ViewportSurfaceUiStyle style = viewport_surface_ui_style();
-    ImGui::PushID(static_cast<int>(input.id.value));
+    const IdScope id_scope(static_cast<int>(input.id.value));
 
     const ImVec2 available_size = ImGui::GetContentRegionAvail();
     const ImVec2 surface_size {
@@ -179,7 +180,6 @@ ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
     }
 
     if (!result.visible) {
-        ImGui::PopID();
         return result;
     }
 
@@ -187,8 +187,8 @@ ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
     const ImU32 background = ImGui::GetColorU32(style.surface_background_color);
     draw_list->AddRectFilled(image_min, image_max, background);
 
-    if (input.texture.has_pixels && input.texture.texture_id != ImTextureID {} && input.texture.extent.is_valid()) {
-        draw_list->AddImage(input.texture.texture_id, image_min, image_max);
+    if (input.texture.has_pixels && input.texture.texture_id != 0 && input.texture.extent.is_valid()) {
+        draw_list->AddImage(static_cast<ImTextureID>(input.texture.texture_id), image_min, image_max);
     } else {
         draw_centered_text(draw_list, image_min, image_max, input.empty_text, style);
     }
@@ -205,7 +205,6 @@ ViewportSurfaceResult draw_viewport_surface(const ViewportSurfaceInput& input)
         0,
         input.active ? style.active_border_thickness : style.inactive_border_thickness);
 
-    ImGui::PopID();
     return result;
 }
 

@@ -3,6 +3,7 @@ module;
 #include <cstdint>
 #include <cstddef>
 #include <optional>
+#include <utility>
 #include <vector>
 
 export module quader.render.debug_draw;
@@ -88,6 +89,91 @@ struct DebugDrawTriangle {
     std::optional<DebugDrawPickPayload> pick;
 };
 
+struct DebugDrawPoint {
+    Vec3 position;
+    float radius = 0.04f;
+    LinearRgba color;
+    std::optional<DebugDrawPickPayload> pick;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return radius > 0.0f;
+    }
+};
+
+struct DebugDrawWireSphere {
+    Vec3 center;
+    float radius = 0.0f;
+    LinearRgba color;
+    uint32_t segments = 32;
+    std::optional<DebugDrawPickPayload> pick;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return radius > 0.0f;
+    }
+};
+
+struct DebugDrawWireCylinder {
+    Vec3 start;
+    Vec3 end;
+    float radius = 0.0f;
+    LinearRgba color;
+    uint32_t segments = 24;
+    std::optional<DebugDrawPickPayload> pick;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return radius > 0.0f && segments >= 6 &&
+            (start.x != end.x || start.y != end.y || start.z != end.z);
+    }
+};
+
+struct DebugDrawBillboard {
+    Vec3 center;
+    Vec3 camera_right { 1.0f, 0.0f, 0.0f };
+    Vec3 camera_up { 0.0f, 1.0f, 0.0f };
+    float width = 0.0f;
+    float height = 0.0f;
+    LinearRgba color;
+    std::optional<DebugDrawPickPayload> pick;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return width > 0.0f && height > 0.0f &&
+            (camera_right.x != 0.0f || camera_right.y != 0.0f || camera_right.z != 0.0f) &&
+            (camera_up.x != 0.0f || camera_up.y != 0.0f || camera_up.z != 0.0f);
+    }
+};
+
+struct DebugDrawRibbon {
+    std::vector<DebugDrawVertex> points;
+    float width = 0.0f;
+    Vec3 face_normal { 0.0f, 1.0f, 0.0f };
+    std::optional<DebugDrawPickPayload> pick;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return width > 0.0f && points.size() >= 2 &&
+            (face_normal.x != 0.0f || face_normal.y != 0.0f || face_normal.z != 0.0f);
+    }
+};
+
+struct DebugDrawPersistentTrace {
+    uint64_t trace_id = 0;
+    uint64_t revision = 0;
+    std::vector<DebugDrawVertex> samples;
+    float width = 0.0f;
+    Vec3 face_normal { 0.0f, 1.0f, 0.0f };
+    std::optional<DebugDrawPickPayload> pick;
+
+    [[nodiscard]] bool is_valid() const noexcept
+    {
+        return trace_id != 0 && width > 0.0f && samples.size() >= 2 &&
+            (face_normal.x != 0.0f || face_normal.y != 0.0f || face_normal.z != 0.0f);
+    }
+};
+
 struct DebugDrawPickProxy {
     DebugDrawPickPayload payload;
     DebugDrawPickProxyKind kind = DebugDrawPickProxyKind::sphere;
@@ -125,10 +211,21 @@ struct DebugDrawPickProxy {
 
 class DebugDrawList {
 public:
+    void clear()
+    {
+        clear_keep_capacity();
+    }
+
     void clear_keep_capacity()
     {
         lines_.clear();
         triangles_.clear();
+        points_.clear();
+        wire_spheres_.clear();
+        wire_cylinders_.clear();
+        billboards_.clear();
+        ribbons_.clear();
+        persistent_traces_.clear();
         pick_proxies_.clear();
     }
 
@@ -145,6 +242,36 @@ public:
     void reserve_triangles(std::size_t count)
     {
         triangles_.reserve(count);
+    }
+
+    void reserve_points(std::size_t count)
+    {
+        points_.reserve(count);
+    }
+
+    void reserve_wire_spheres(std::size_t count)
+    {
+        wire_spheres_.reserve(count);
+    }
+
+    void reserve_wire_cylinders(std::size_t count)
+    {
+        wire_cylinders_.reserve(count);
+    }
+
+    void reserve_billboards(std::size_t count)
+    {
+        billboards_.reserve(count);
+    }
+
+    void reserve_ribbons(std::size_t count)
+    {
+        ribbons_.reserve(count);
+    }
+
+    void reserve_persistent_traces(std::size_t count)
+    {
+        persistent_traces_.reserve(count);
     }
 
     void add_line(
@@ -186,6 +313,111 @@ public:
             DebugDrawVertex { .position = b, .color = color },
             DebugDrawVertex { .position = c, .color = color },
             pick);
+    }
+
+    void add_point(
+        Vec3 position,
+        float radius,
+        LinearRgba color,
+        std::optional<DebugDrawPickPayload> pick = std::nullopt)
+    {
+        points_.push_back(DebugDrawPoint {
+            .position = position,
+            .radius = radius,
+            .color = color,
+            .pick = pick,
+        });
+    }
+
+    void add_wire_sphere(
+        Vec3 center,
+        float radius,
+        LinearRgba color,
+        std::optional<DebugDrawPickPayload> pick = std::nullopt,
+        uint32_t segments = 32)
+    {
+        wire_spheres_.push_back(DebugDrawWireSphere {
+            .center = center,
+            .radius = radius,
+            .color = color,
+            .segments = segments,
+            .pick = pick,
+        });
+    }
+
+    void add_wire_cylinder(
+        Vec3 start,
+        Vec3 end,
+        float radius,
+        LinearRgba color,
+        std::optional<DebugDrawPickPayload> pick = std::nullopt,
+        uint32_t segments = 24)
+    {
+        wire_cylinders_.push_back(DebugDrawWireCylinder {
+            .start = start,
+            .end = end,
+            .radius = radius,
+            .color = color,
+            .segments = segments,
+            .pick = pick,
+        });
+    }
+
+    void add_billboard(
+        Vec3 center,
+        Vec3 camera_right,
+        Vec3 camera_up,
+        float width,
+        float height,
+        LinearRgba color,
+        std::optional<DebugDrawPickPayload> pick = std::nullopt)
+    {
+        billboards_.push_back(DebugDrawBillboard {
+            .center = center,
+            .camera_right = camera_right,
+            .camera_up = camera_up,
+            .width = width,
+            .height = height,
+            .color = color,
+            .pick = pick,
+        });
+    }
+
+    void add_ribbon(
+        std::vector<DebugDrawVertex> points,
+        float width,
+        Vec3 face_normal = { 0.0f, 1.0f, 0.0f },
+        std::optional<DebugDrawPickPayload> pick = std::nullopt)
+    {
+        ribbons_.push_back(DebugDrawRibbon {
+            .points = std::move(points),
+            .width = width,
+            .face_normal = face_normal,
+            .pick = pick,
+        });
+    }
+
+    void add_persistent_trace(
+        uint64_t trace_id,
+        uint64_t revision,
+        std::vector<DebugDrawVertex> samples,
+        float width,
+        Vec3 face_normal = { 0.0f, 1.0f, 0.0f },
+        std::optional<DebugDrawPickPayload> pick = std::nullopt)
+    {
+        persistent_traces_.push_back(DebugDrawPersistentTrace {
+            .trace_id = trace_id,
+            .revision = revision,
+            .samples = std::move(samples),
+            .width = width,
+            .face_normal = face_normal,
+            .pick = pick,
+        });
+    }
+
+    void add_persistent_trace(DebugDrawPersistentTrace trace)
+    {
+        persistent_traces_.push_back(std::move(trace));
     }
 
     void add_pick_sphere(DebugDrawPickPayload payload, Vec3 center, float radius, uint8_t priority = 0)
@@ -258,7 +490,9 @@ public:
 
     [[nodiscard]] bool empty() const noexcept
     {
-        return lines_.empty() && triangles_.empty() && pick_proxies_.empty();
+        return lines_.empty() && triangles_.empty() && points_.empty() &&
+            wire_spheres_.empty() && wire_cylinders_.empty() && billboards_.empty() &&
+            ribbons_.empty() && persistent_traces_.empty() && pick_proxies_.empty();
     }
 
     [[nodiscard]] const std::vector<DebugDrawLine>& lines() const noexcept
@@ -271,6 +505,36 @@ public:
         return triangles_;
     }
 
+    [[nodiscard]] const std::vector<DebugDrawPoint>& points() const noexcept
+    {
+        return points_;
+    }
+
+    [[nodiscard]] const std::vector<DebugDrawWireSphere>& wire_spheres() const noexcept
+    {
+        return wire_spheres_;
+    }
+
+    [[nodiscard]] const std::vector<DebugDrawWireCylinder>& wire_cylinders() const noexcept
+    {
+        return wire_cylinders_;
+    }
+
+    [[nodiscard]] const std::vector<DebugDrawBillboard>& billboards() const noexcept
+    {
+        return billboards_;
+    }
+
+    [[nodiscard]] const std::vector<DebugDrawRibbon>& ribbons() const noexcept
+    {
+        return ribbons_;
+    }
+
+    [[nodiscard]] const std::vector<DebugDrawPersistentTrace>& persistent_traces() const noexcept
+    {
+        return persistent_traces_;
+    }
+
     [[nodiscard]] const std::vector<DebugDrawPickProxy>& pick_proxies() const noexcept
     {
         return pick_proxies_;
@@ -279,12 +543,23 @@ public:
 private:
     std::vector<DebugDrawLine> lines_;
     std::vector<DebugDrawTriangle> triangles_;
+    std::vector<DebugDrawPoint> points_;
+    std::vector<DebugDrawWireSphere> wire_spheres_;
+    std::vector<DebugDrawWireCylinder> wire_cylinders_;
+    std::vector<DebugDrawBillboard> billboards_;
+    std::vector<DebugDrawRibbon> ribbons_;
+    std::vector<DebugDrawPersistentTrace> persistent_traces_;
     std::vector<DebugDrawPickProxy> pick_proxies_;
 };
 
 struct DebugDrawFrame {
     DebugDrawList depth_tested;
     DebugDrawList overlay;
+
+    void clear()
+    {
+        clear_keep_capacity();
+    }
 
     void clear_keep_capacity()
     {

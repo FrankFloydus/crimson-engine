@@ -23,8 +23,13 @@ struct InstanceRequest {
 struct QueueSelection {
     VkPhysicalDevice physical_device = VK_NULL_HANDLE;
     uint32_t queue_family = UINT32_MAX;
+    uint32_t queue_family_available_count = 0;
     VkPhysicalDeviceType device_type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
 };
+
+constexpr uint32_t kAppQueueIndex = 0;
+constexpr uint32_t kDedicatedRendererQueueIndex = 1;
+constexpr uint32_t kDesiredGraphicsQueueCount = 2;
 
 bool extension_list_contains(const std::vector<VkExtensionProperties>& extensions, const char* name)
 {
@@ -201,6 +206,7 @@ std::optional<QueueSelection> find_queue_that_can_draw_and_present(
             return QueueSelection {
                 physical_device,
                 index,
+                queue_families[index].queueCount,
                 device_type_of(physical_device),
             };
         }
@@ -250,13 +256,41 @@ std::vector<const char*> device_extensions_for(VkPhysicalDevice physical_device)
     return extensions;
 }
 
-VkDeviceQueueCreateInfo describe_the_queue_we_need(uint32_t queue_family, const float& queue_priority)
+uint32_t choose_graphics_queue_count_to_create(uint32_t available_queue_count)
+{
+    if (available_queue_count == 0) {
+        throw std::runtime_error("Selected Vulkan graphics queue family reports zero queues.");
+    }
+
+    return std::min(available_queue_count, kDesiredGraphicsQueueCount);
+}
+
+uint32_t renderer_queue_index_for(uint32_t created_queue_count)
+{
+    return created_queue_count >= kDesiredGraphicsQueueCount ? kDedicatedRendererQueueIndex : kAppQueueIndex;
+}
+
+VulkanSharedQueueMode queue_mode_for_created_queue_count(uint32_t created_queue_count)
+{
+    return created_queue_count >= kDesiredGraphicsQueueCount
+        ? VulkanSharedQueueMode::dedicated_renderer_queue
+        : VulkanSharedQueueMode::serialized_single_queue;
+}
+
+std::vector<float> describe_graphics_queue_priorities(uint32_t queue_count)
+{
+    return std::vector<float>(queue_count, 1.0f);
+}
+
+VkDeviceQueueCreateInfo describe_the_graphics_queues_we_need(
+    uint32_t queue_family,
+    const std::vector<float>& queue_priorities)
 {
     VkDeviceQueueCreateInfo queue_info = {};
     queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queue_info.queueFamilyIndex = queue_family;
-    queue_info.queueCount = 1;
-    queue_info.pQueuePriorities = &queue_priority;
+    queue_info.queueCount = static_cast<uint32_t>(queue_priorities.size());
+    queue_info.pQueuePriorities = queue_priorities.data();
     return queue_info;
 }
 
@@ -325,6 +359,21 @@ uint32_t VulkanDevice::queue_family() const
     return queue_family_;
 }
 
+uint32_t VulkanDevice::queue_index() const
+{
+    return app_queue_index_;
+}
+
+uint32_t VulkanDevice::graphics_queue_family_available_count() const
+{
+    return queue_family_available_count_;
+}
+
+uint32_t VulkanDevice::created_graphics_queue_count() const
+{
+    return created_graphics_queue_count_;
+}
+
 VkQueue VulkanDevice::queue() const
 {
     return queue_;
@@ -340,10 +389,48 @@ const VkAllocationCallbacks* VulkanDevice::allocator() const
     return allocator_;
 }
 
+VulkanSharedQueueMode VulkanDevice::queue_mode_for_renderer() const
+{
+    return queue_mode_for_renderer_;
+}
+
+VulkanSharedDeviceContext VulkanDevice::shared_device_context() const
+{
+    const VulkanQueueContext app_graphics_queue {
+        queue_,
+        queue_family_,
+        app_queue_index_,
+    };
+
+    const VulkanQueueContext renderer_graphics_queue {
+        renderer_queue_,
+        queue_family_,
+        renderer_queue_index_,
+    };
+
+    return VulkanSharedDeviceContext {
+        instance_,
+        physical_device_,
+        device_,
+        allocator_,
+        pipeline_cache_,
+        app_graphics_queue,
+        renderer_graphics_queue,
+        queue_family_available_count_,
+        created_graphics_queue_count_,
+        queue_mode_for_renderer_,
+        true,
+        true,
+        false,
+        false,
+        false,
+    };
+}
+
 void VulkanDevice::wait_idle() const
 {
     if (device_ != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(device_);
+        check_vk(vkDeviceWaitIdle(device_), "vkDeviceWaitIdle");
     }
 }
 
@@ -368,17 +455,23 @@ void VulkanDevice::select_physical_device()
     const QueueSelection selection = choose_best_device_for_window(instance_, surface_);
     physical_device_ = selection.physical_device;
     queue_family_ = selection.queue_family;
+    queue_family_available_count_ = selection.queue_family_available_count;
 }
 
 void VulkanDevice::create_device()
 {
     const std::vector<const char*> extensions = device_extensions_for(physical_device_);
-    const float queue_priority = 1.0f;
-    const VkDeviceQueueCreateInfo queue_info = describe_the_queue_we_need(queue_family_, queue_priority);
+    created_graphics_queue_count_ = choose_graphics_queue_count_to_create(queue_family_available_count_);
+    const std::vector<float> queue_priorities = describe_graphics_queue_priorities(created_graphics_queue_count_);
+    const VkDeviceQueueCreateInfo queue_info = describe_the_graphics_queues_we_need(queue_family_, queue_priorities);
     const VkDeviceCreateInfo create_info = describe_the_device_we_want(queue_info, extensions);
 
     check_vk(vkCreateDevice(physical_device_, &create_info, allocator_, &device_), "vkCreateDevice");
-    vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
+    app_queue_index_ = kAppQueueIndex;
+    renderer_queue_index_ = renderer_queue_index_for(created_graphics_queue_count_);
+    queue_mode_for_renderer_ = queue_mode_for_created_queue_count(created_graphics_queue_count_);
+    vkGetDeviceQueue(device_, queue_family_, app_queue_index_, &queue_);
+    vkGetDeviceQueue(device_, queue_family_, renderer_queue_index_, &renderer_queue_);
 }
 
 } // namespace quader

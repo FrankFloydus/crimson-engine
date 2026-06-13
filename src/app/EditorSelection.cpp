@@ -6,14 +6,26 @@ module quader.app.editor_selection;
 
 namespace quader {
 
-void EditorSelectionModel::select_entity(SceneEntityId entity_id)
+bool EditorSelectionModel::select_entity(SceneEntityId entity_id)
 {
-    selected_entity_ = entity_id.is_valid() ? std::optional<SceneEntityId>(entity_id) : std::nullopt;
+    const std::optional<SceneEntityId> next_selection =
+        entity_id.is_valid() ? std::optional<SceneEntityId>(entity_id) : std::nullopt;
+    if (selected_entity_ == next_selection) {
+        return false;
+    }
+
+    selected_entity_ = next_selection;
+    return true;
 }
 
-void EditorSelectionModel::clear()
+bool EditorSelectionModel::clear()
 {
+    if (!selected_entity_.has_value()) {
+        return false;
+    }
+
     selected_entity_.reset();
+    return true;
 }
 
 std::optional<SceneEntityId> EditorSelectionModel::selected_entity() const noexcept

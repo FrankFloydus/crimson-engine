@@ -13,6 +13,9 @@ endif()
 
 set(QUADER_FILAMENT_SDK "C:/Users/Drako/Desktop/_QUADER_NATIVE/thirdy-party/filament-v1.71.5-windows"
     CACHE PATH "Path to the unpacked Filament SDK")
+set(QUADER_FILAMENT_BLUEVK_INCLUDE_DIR
+    "C:/Users/Drako/Desktop/_QUADER_NATIVE/thirdy-party/filament-v1.71.5-bluevk-headers/include"
+    CACHE PATH "Optional include overlay containing Filament's generated bluevk/BlueVK.h header")
 
 find_package(SDL3 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
@@ -201,6 +204,16 @@ add_custom_target(quader_generated_assets
 add_library(filament_sdk INTERFACE)
 target_include_directories(filament_sdk SYSTEM INTERFACE "${FILAMENT_INCLUDE_DIR}")
 
+if(EXISTS "${QUADER_FILAMENT_BLUEVK_INCLUDE_DIR}/bluevk/BlueVK.h")
+    target_include_directories(filament_sdk SYSTEM INTERFACE "${QUADER_FILAMENT_BLUEVK_INCLUDE_DIR}")
+else()
+    message(WARNING
+        "Filament BlueVK header overlay not found at "
+        "QUADER_FILAMENT_BLUEVK_INCLUDE_DIR=${QUADER_FILAMENT_BLUEVK_INCLUDE_DIR}. "
+        "Code that includes backend/platforms/VulkanPlatform.h will not compile until this exact "
+        "Filament-generated header is available.")
+endif()
+
 foreach(lib_name IN LISTS FILAMENT_CORE_LIBS)
     target_link_libraries(filament_sdk INTERFACE
         debug "${FILAMENT_LIBRARY_ROOT}/mdd/${lib_name}.lib"
@@ -217,30 +230,40 @@ target_link_libraries(filament_sdk INTERFACE
 set(QUADER_CORE_SOURCES
     src/assets/ImageAsset.cpp
     src/app/Application.cpp
+    src/app/EditorCommandStack.cpp
     src/app/EditorCamera.cpp
+    src/app/EditorHover.cpp
     src/app/EditorInput.cpp
     src/app/EditorSelection.cpp
     src/app/EditorViewport.cpp
+    src/app/EditorViewportPicking.cpp
     src/app/ScenePropertiesPanelController.cpp
     src/app/TransformGizmo.cpp
     src/app/ViewportInstance.cpp
     src/app/ViewportLayout.cpp
+    src/diagnostics/FatalDiagnostics.cpp
     src/diagnostics/Logger.cpp
     src/filament/FilamentRenderEngine.cpp
     src/filament/FilamentDebugDrawRenderer.cpp
     src/filament/FilamentEnvironmentResources.cpp
     src/filament/FilamentSceneViewport.cpp
+    src/filament/FilamentViewportVulkanPlatform.cpp
     src/math/MathTypes.cpp
     src/platform/FatalErrorDialog.cpp
     src/platform/AppEventDispatcher.cpp
     src/platform/Input.cpp
     src/platform/NativeFileDialog.cpp
     src/platform/SdlEventSource.cpp
+    src/platform/SdlPlatformContext.cpp
     src/platform/SdlWindow.cpp
+    src/platform/UserSettingsPaths.cpp
     src/render/RenderEngineFactory.cpp
     src/render/RenderTypes.cpp
+    src/render/DebugDrawPicking.cpp
     src/render/RendererStartupValidation.cpp
+    src/render/ViewportProjectionPolicy.cpp
     src/render/ViewportGizmos.cpp
+    src/render/VulkanViewportImageRing.cpp
     src/render/VulkanCommon.cpp
     src/render/VulkanDevice.cpp
     src/render/VulkanSwapchain.cpp
@@ -250,28 +273,34 @@ set(QUADER_CORE_SOURCES
     src/ui/ImGuiLayer.cpp
     src/ui/InspectorMenu.cpp
     src/ui/OutlinerPanel.cpp
+    src/ui/PropertyInspectorPanel.cpp
     src/ui/ViewportHostPanel.cpp
+    src/ui/ViewportGpuTextureCache.cpp
     src/ui/ViewportSurface.cpp
     src/ui/ViewportTextureStore.cpp
-    src/ui/VulkanViewportTexture.cpp
 )
 
 set(QUADER_MODULES
     src/assets/ImageAsset.ixx
     src/app/Application.ixx
+    src/app/EditorCommandStack.ixx
     src/app/EditorCamera.ixx
+    src/app/EditorHover.ixx
     src/app/EditorInput.ixx
     src/app/EditorSelection.ixx
     src/app/EditorViewport.ixx
+    src/app/EditorViewportPicking.ixx
     src/app/ScenePropertiesPanelController.ixx
     src/app/TransformGizmo.ixx
     src/app/ViewportInstance.ixx
     src/app/ViewportLayout.ixx
+    src/diagnostics/FatalDiagnostics.ixx
     src/diagnostics/Logger.ixx
     src/filament/FilamentRenderEngine.ixx
     src/filament/FilamentDebugDrawRenderer.ixx
     src/filament/FilamentEnvironmentResources.ixx
     src/filament/FilamentSceneViewport.ixx
+    src/filament/FilamentViewportVulkanPlatform.ixx
     src/math/MathTypes.ixx
     src/platform/FatalErrorDialog.ixx
     src/platform/AppEvent.ixx
@@ -279,16 +308,22 @@ set(QUADER_MODULES
     src/platform/Input.ixx
     src/platform/NativeFileDialog.ixx
     src/platform/SdlEventSource.ixx
+    src/platform/SdlPlatformContext.ixx
     src/platform/SdlWindow.ixx
+    src/platform/UserSettingsPaths.ixx
     src/render/IRenderEngine.ixx
     src/render/RendererStatus.ixx
     src/render/RenderTypes.ixx
     src/render/DebugDrawTypes.ixx
+    src/render/DebugDrawPicking.ixx
     src/render/RendererStartupValidation.ixx
     src/render/RenderEngineFactory.ixx
+    src/render/ViewportGpuImage.ixx
+    src/render/ViewportProjectionPolicy.ixx
     src/render/ViewportRenderer.ixx
     src/render/ViewportTypes.ixx
     src/render/ViewportGizmos.ixx
+    src/render/VulkanViewportImageRing.ixx
     src/render/VulkanCommon.ixx
     src/render/VulkanDevice.ixx
     src/render/VulkanSwapchain.ixx
@@ -298,12 +333,13 @@ set(QUADER_MODULES
     src/ui/ImGuiLayer.ixx
     src/ui/InspectorMenu.ixx
     src/ui/OutlinerPanel.ixx
+    src/ui/PropertyInspectorPanel.ixx
     src/ui/UiControls.ixx
     src/ui/UiStyle.ixx
     src/ui/ViewportHostPanel.ixx
+    src/ui/ViewportGpuTextureCache.ixx
     src/ui/ViewportSurface.ixx
     src/ui/ViewportTextureStore.ixx
-    src/ui/VulkanViewportTexture.ixx
 )
 
 add_library(quader_core STATIC ${QUADER_CORE_SOURCES})
@@ -320,7 +356,7 @@ target_include_directories(quader_core PRIVATE ${Stb_INCLUDE_DIR})
 
 add_dependencies(quader_core quader_generated_assets)
 
-target_link_libraries(quader_core PUBLIC
+target_link_libraries(quader_core PRIVATE
     SDL3::SDL3
     imgui::imgui
     Vulkan::Vulkan
@@ -336,24 +372,37 @@ if(MSVC)
 endif()
 
 if(QUADER_ENABLE_TRACY)
-    target_compile_definitions(quader_core PUBLIC TRACY_ENABLE)
+    target_compile_definitions(quader_core PRIVATE TRACY_ENABLE)
 endif()
 
-add_executable(quader_native src/main.cpp)
-target_link_libraries(quader_native PRIVATE quader_core)
+function(configure_quader_app_target target_name)
+    target_link_libraries(${target_name} PRIVATE quader_core)
+
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE /W4 /permissive-)
+    endif()
+
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${target_name}>
+            $<TARGET_FILE_DIR:${target_name}>
+        COMMAND_EXPAND_LISTS
+    )
+endfunction()
+
+add_executable(quader_native WIN32 src/main.cpp)
+configure_quader_app_target(quader_native)
 
 if(MSVC)
-    target_compile_options(quader_native PRIVATE /W4 /permissive-)
+    target_link_options(quader_native PRIVATE /ENTRY:mainCRTStartup)
 endif()
 
-add_custom_command(TARGET quader_native POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        $<TARGET_RUNTIME_DLLS:quader_native>
-        $<TARGET_FILE_DIR:quader_native>
-    COMMAND_EXPAND_LISTS
-)
+add_executable(quader_native_console src/main.cpp)
+configure_quader_app_target(quader_native_console)
 
 add_executable(quader_tests
+    tests/EditorCommandStackTests.cpp
+    tests/EditorHoverTests.cpp
     tests/EditorInputTests.cpp
     tests/EditorSelectionTests.cpp
     tests/EditorCameraTests.cpp
@@ -362,6 +411,9 @@ add_executable(quader_tests
     tests/RendererStartupValidationTests.cpp
     tests/SceneTests.cpp
     tests/TransformGizmoTests.cpp
+    tests/ViewportGpuTextureCacheTests.cpp
+    tests/VulkanDeviceContextTests.cpp
+    tests/VulkanViewportImageRingTests.cpp
     tests/ViewportGizmosTests.cpp
     tests/ViewportInstanceTests.cpp
     tests/ViewportLayoutTests.cpp

@@ -367,36 +367,6 @@ void append_directional_light_gizmo(
     draw.add_pick_sphere(pick, start, style.point_pick_radius, 20);
 }
 
-void append_circle(
-    DebugDrawList& draw,
-    Vec3 center,
-    Vec3 axis_a,
-    Vec3 axis_b,
-    float radius,
-    uint32_t segments,
-    LinearRgba color,
-    DebugDrawPickPayload pick)
-{
-    const uint32_t safe_segments = std::max<uint32_t>(segments, 8);
-    const float angle_step = (pi * 2.0f) / static_cast<float>(safe_segments);
-
-    for (uint32_t segment = 0; segment < safe_segments; ++segment) {
-        const float angle_a = static_cast<float>(segment) * angle_step;
-        const float angle_b = static_cast<float>(segment + 1) * angle_step;
-        const Vec3 point_a = add(
-            center,
-            add(
-                scale(axis_a, std::cos(angle_a) * radius),
-                scale(axis_b, std::sin(angle_a) * radius)));
-        const Vec3 point_b = add(
-            center,
-            add(
-                scale(axis_a, std::cos(angle_b) * radius),
-                scale(axis_b, std::sin(angle_b) * radius)));
-        draw.add_line(point_a, point_b, color, pick);
-    }
-}
-
 void append_point_light_gizmo(
     const SceneRenderPointLight& light,
     DebugDrawList& draw,
@@ -404,13 +374,8 @@ void append_point_light_gizmo(
 {
     const DebugDrawPickPayload pick = point_light_gizmo_pick_payload(light.entity_id);
     const LinearRgba color = light_gizmo_color(light.settings.color);
-    const Vec3 x_axis { 1.0f, 0.0f, 0.0f };
-    const Vec3 y_axis { 0.0f, 1.0f, 0.0f };
-    const Vec3 z_axis { 0.0f, 0.0f, 1.0f };
 
-    append_circle(draw, light.position, x_axis, y_axis, style.point_radius, style.point_ring_segments, color, pick);
-    append_circle(draw, light.position, x_axis, z_axis, style.point_radius, style.point_ring_segments, color, pick);
-    append_circle(draw, light.position, y_axis, z_axis, style.point_radius, style.point_ring_segments, color, pick);
+    draw.add_wire_sphere(light.position, style.point_radius, color, pick, style.point_ring_segments);
     draw.add_pick_sphere(pick, light.position, style.point_pick_radius, 20);
 }
 
@@ -664,8 +629,8 @@ void append_light_gizmos(
     DebugDrawList& draw = debug_draw.depth_tested;
     draw.reserve_lines(
         draw.lines().size() +
-        snapshot.directional_lights.size() * 5 +
-        snapshot.point_lights.size() * static_cast<size_t>(std::max<uint32_t>(style.point_ring_segments, 8) * 3));
+        snapshot.directional_lights.size() * 5);
+    draw.reserve_wire_spheres(draw.wire_spheres().size() + snapshot.point_lights.size());
     draw.reserve_pick_proxies(
         draw.pick_proxies().size() +
         snapshot.directional_lights.size() * 2 +
@@ -697,9 +662,9 @@ void append_transform_gizmo(
     const float world_scale = safe_world_scale(request.world_scale);
     DebugDrawList& draw = debug_draw.overlay;
 
-    draw.reserve_pick_proxies(draw.pick_proxies().size() + 12);
     switch (request.tool) {
     case TransformGizmoTool::move:
+        draw.reserve_pick_proxies(draw.pick_proxies().size() + 9);
         draw.reserve_triangles(
             draw.triangles().size() +
             static_cast<size_t>(std::max<uint32_t>(style.cone_segments, 8)) * 2U * 3U +
@@ -734,6 +699,7 @@ void append_transform_gizmo(
             request.highlighted_payload);
         break;
     case TransformGizmoTool::rotate:
+        draw.reserve_pick_proxies(draw.pick_proxies().size() + 3);
         draw.reserve_triangles(
             draw.triangles().size() +
             static_cast<size_t>(std::max<uint32_t>(style.ring_segments, 16)) * 6U * 3U);
@@ -742,6 +708,11 @@ void append_transform_gizmo(
         append_rotate_axis(draw, target, DebugDrawAxis::z, style, world_scale, request.highlighted_payload);
         break;
     case TransformGizmoTool::scale:
+        if (!target.can_scale) {
+            break;
+        }
+
+        draw.reserve_pick_proxies(draw.pick_proxies().size() + 10);
         draw.reserve_triangles(draw.triangles().size() + 3U * 12U + 3U * 12U + 3U * 2U + 12U);
         append_scale_axis(draw, target, DebugDrawAxis::x, style, world_scale, request.highlighted_payload);
         append_scale_axis(draw, target, DebugDrawAxis::y, style, world_scale, request.highlighted_payload);

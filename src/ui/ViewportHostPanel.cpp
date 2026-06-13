@@ -126,21 +126,22 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
     const ViewportLayoutState default_layout_state;
     const char* current = viewport_layout_preset_name(layout_state.preset);
     ImGui::SetNextItemWidth(style.layout_combo_width);
-    const bool combo_open = ImGui::BeginCombo("##ViewportLayoutPreset", current);
-    render_item_tooltip("Chooses the viewport arrangement. Reset restores the single-view layout and centered splitters.");
-    if (combo_open) {
-        for (ViewportLayoutPreset preset : kLayoutPresets) {
-            const bool selected = layout_state.preset == preset;
-            if (ImGui::Selectable(viewport_layout_preset_name(preset), selected)) {
-                layout_state.preset = preset;
-                layout_state.maximized_viewport.reset();
-                changed = true;
-            }
-            if (selected) {
-                ImGui::SetItemDefaultFocus();
+    {
+        const ComboScope combo("##ViewportLayoutPreset", current);
+        render_item_tooltip("Chooses the viewport arrangement. Reset restores the single-view layout and centered splitters.");
+        if (combo) {
+            for (ViewportLayoutPreset preset : kLayoutPresets) {
+                const bool selected = layout_state.preset == preset;
+                if (ImGui::Selectable(viewport_layout_preset_name(preset), selected)) {
+                    layout_state.preset = preset;
+                    layout_state.maximized_viewport.reset();
+                    changed = true;
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
             }
         }
-        ImGui::EndCombo();
     }
     if (render_changed_reset_control(
             "Viewport Layout",
@@ -168,7 +169,8 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
         ImVec2 { style.environment_popup_width, 0.0f },
         ImVec2 { style.environment_popup_width, std::numeric_limits<float>::max() });
     ImGui::SetNextWindowSize(ImVec2 { style.environment_popup_width, 0.0f }, ImGuiCond_Appearing);
-    if (ImGui::BeginPopup("EnvironmentSettingsPopup")) {
+    const PopupScope popup("EnvironmentSettingsPopup");
+    if (popup) {
         const EnvironmentLightingSettings defaults;
 
         ImGui::TextUnformatted(environment_lighting_source_name(settings.source));
@@ -216,8 +218,6 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
         if (changed) {
             settings = clamp_environment_lighting_settings(settings);
         }
-
-        ImGui::EndPopup();
     }
 
     return changed;
@@ -225,21 +225,27 @@ constexpr std::array<ViewportCameraPreset, 4> kCameraPresets {
 
 [[nodiscard]] std::optional<ViewportCameraPreset> draw_camera_combo(
     ViewportCameraPreset current,
-    ViewportCameraPreset default_preset,
     const ViewportHostUiStyle& style)
 {
     std::optional<ViewportCameraPreset> requested;
-    ViewportCameraPreset editable = current;
-    if (render_resettable_combo(
-            "##CameraPreset",
-            editable,
-            default_preset,
-            std::span<const ViewportCameraPreset> { kCameraPresets },
-            viewport_camera_preset_name,
-            "Chooses how this viewport looks at the scene. Reset returns this pane to its original view.",
-            style.camera_combo_width)) {
-        requested = editable;
+
+    ImGui::SetNextItemWidth(style.camera_combo_width);
+    {
+        const ComboScope combo("##CameraPreset", viewport_camera_preset_name(current));
+        render_item_tooltip("Chooses how this viewport looks at the scene.");
+        if (combo) {
+            for (const ViewportCameraPreset preset : kCameraPresets) {
+                const bool selected = current == preset;
+                if (ImGui::Selectable(viewport_camera_preset_name(preset), selected) && !selected) {
+                    requested = preset;
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+        }
     }
+
     return requested;
 }
 
@@ -482,15 +488,16 @@ void draw_pane_toolbar(
     const bool is_maximized = layout_state.maximized_viewport == pane.id;
     const float controls_width = style.maximize_button_width +
         (pane.camera_dropdown_enabled ?
-                style.camera_combo_width + style.resettable_control_extra_width + style.toolbar_control_gap :
+                style.camera_combo_width + style.toolbar_control_gap :
                 0.0f);
 
-    if (!ImGui::BeginTable(
+    const TableScope toolbar_table(
             "ViewportPaneToolbar",
             2,
             ImGuiTableFlags_SizingStretchProp |
                 ImGuiTableFlags_NoPadOuterX |
-                ImGuiTableFlags_NoPadInnerX)) {
+                ImGuiTableFlags_NoPadInnerX);
+    if (!toolbar_table) {
         return;
     }
 
@@ -505,7 +512,7 @@ void draw_pane_toolbar(
     ImGui::TableSetColumnIndex(1);
     if (pane.camera_dropdown_enabled) {
         if (std::optional<ViewportCameraPreset> preset =
-                draw_camera_combo(pane.camera_preset, pane.default_camera_preset, style)) {
+                draw_camera_combo(pane.camera_preset, style)) {
             result.requested_camera_preset = *preset;
         }
         ImGui::SameLine(0.0f, style.toolbar_control_gap);
@@ -514,8 +521,6 @@ void draw_pane_toolbar(
     if (ImGui::Button(is_maximized ? "Restore" : "Max", ImVec2 { style.maximize_button_width, 0.0f })) {
         result.requested_maximize_toggle = true;
     }
-
-    ImGui::EndTable();
 }
 
 ViewportPaneResult draw_pane(
@@ -531,8 +536,9 @@ ViewportPaneResult draw_pane(
     ImGui::SetCursorScreenPos(min);
     char pane_id[32] {};
     std::snprintf(pane_id, sizeof(pane_id), "ViewportPane-%llu", static_cast<unsigned long long>(pane.id.value));
-    ImGui::PushID(pane_id);
-    if (ImGui::BeginChild("ViewportPaneChild", size, true, ImGuiWindowFlags_NoScrollbar)) {
+    const IdScope pane_scope(pane_id);
+    const ChildScope child("ViewportPaneChild", size, true, ImGuiWindowFlags_NoScrollbar);
+    if (child) {
         draw_pane_toolbar(pane, layout_state, result, style);
         ImGui::Separator();
         result.surface = draw_viewport_surface(ViewportSurfaceInput {
@@ -543,8 +549,6 @@ ViewportPaneResult draw_pane(
             .active = pane.active,
         });
     }
-    ImGui::EndChild();
-    ImGui::PopID();
 
     return result;
 }
@@ -560,7 +564,8 @@ ViewportHostPanelResult draw_viewport_host_panel(
     set_initial_window_bounds(style.window);
 
     ViewportHostPanelResult result;
-    if (ImGui::Begin("Viewport")) {
+    const WindowScope window("Viewport");
+    if (window) {
         result.layout_changed |= draw_layout_combo(layout_state, style);
         ImGui::SameLine(0.0f, style.toolbar_control_gap);
         result.environment_changed |= draw_environment_popup(environment_settings, style);
@@ -569,7 +574,6 @@ ViewportHostPanelResult draw_viewport_host_panel(
         const ImVec2 content_origin = ImGui::GetCursorScreenPos();
         const ImVec2 content_size = ImGui::GetContentRegionAvail();
         if (content_size.x < style.minimum_pane_pixels || content_size.y < style.minimum_pane_pixels) {
-            ImGui::End();
             return result;
         }
 
@@ -607,7 +611,6 @@ ViewportHostPanelResult draw_viewport_host_panel(
         result.layout_changed |= draw_splitters(layout_state, content_origin, content_size, style);
     }
 
-    ImGui::End();
     return result;
 }
 

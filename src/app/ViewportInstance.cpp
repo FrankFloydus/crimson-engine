@@ -9,6 +9,8 @@ module;
 
 module quader.app.viewport_instance;
 
+import quader.diagnostics.fatal_diagnostics;
+import quader.render.viewport_projection_policy;
 import quader.render.viewport_gizmos;
 
 namespace quader {
@@ -167,6 +169,14 @@ void ViewportInstance::set_camera_preset(ViewportCameraPreset preset)
         return;
     }
 
+    record_fatal_operation(
+        "Viewport '" +
+        std::string(title_) +
+        "' camera preset changed from " +
+        viewport_camera_preset_name(camera_preset_) +
+        " to " +
+        viewport_camera_preset_name(preset) +
+        ".");
     camera_preset_ = preset;
     mark_dirty();
 }
@@ -272,7 +282,7 @@ ViewportFrameAcceptance ViewportInstance::accept_frame(const ViewportRenderFrame
         return { .accepted = false, .stale = true };
     }
 
-    if (frame.has_pixels()) {
+    if (frame.has_render_output()) {
         displayed_extent_ = frame.extent;
     } else {
         dirty_ = true;
@@ -283,7 +293,7 @@ ViewportFrameAcceptance ViewportInstance::accept_frame(const ViewportRenderFrame
         dirty_ = true;
     }
 
-    return { .accepted = frame.has_pixels(), .stale = false };
+    return { .accepted = frame.has_render_output(), .stale = false };
 }
 
 void ViewportInstance::fail_pending_request()
@@ -306,22 +316,22 @@ ViewportProjection ViewportInstance::current_projection() const
 {
     if (camera_preset_ == ViewportCameraPreset::perspective) {
         const RenderCamera render_camera = perspective_camera_.render_camera();
-        return {
+        return clamp_viewport_projection({
             .kind = ViewportProjectionKind::perspective,
             .vertical_fov_degrees = render_camera.vertical_fov_degrees,
             .orthographic_size = orthographic_size_,
             .near_plane = render_camera.near_plane,
             .far_plane = render_camera.far_plane,
-        };
+        });
     }
 
-    return {
+    return clamp_viewport_projection({
         .kind = ViewportProjectionKind::orthographic,
         .vertical_fov_degrees = 52.0f,
         .orthographic_size = orthographic_size_,
-        .near_plane = 0.01f,
+        .near_plane = 0.1f,
         .far_plane = 1000.0f,
-    };
+    });
 }
 
 bool ViewportInstance::update_scene_navigation(

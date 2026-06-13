@@ -579,6 +579,13 @@ struct Ray {
         role == DebugDrawPickRole::transform_uniform_scale;
 }
 
+[[nodiscard]] bool is_scale_pick_role(DebugDrawPickRole role)
+{
+    return role == DebugDrawPickRole::transform_scale_axis ||
+        role == DebugDrawPickRole::transform_scale_plane ||
+        role == DebugDrawPickRole::transform_uniform_scale;
+}
+
 } // namespace
 
 bool TransformGizmoController::update_tool_hotkeys(const TransformToolInputActions& actions)
@@ -668,6 +675,7 @@ std::optional<TransformGizmoRequest> TransformGizmoController::render_request_fo
             .x_axis = transform_axis_direction(*transform, DebugDrawAxis::x, active_space_),
             .y_axis = transform_axis_direction(*transform, DebugDrawAxis::y, active_space_),
             .z_axis = transform_axis_direction(*transform, DebugDrawAxis::z, active_space_),
+            .can_scale = scene_entity_can_scale(scene, *selected_entity),
         },
         .highlighted_payload = highlighted_payload,
         .world_scale = transform_gizmo_world_scale(transform->position, camera, projection),
@@ -688,6 +696,10 @@ bool TransformGizmoController::try_begin_drag(
     const SceneEntityId entity_id { payload.owner_entity_id };
     const TransformComponent* transform = scene.transform(entity_id);
     if (transform == nullptr) {
+        return false;
+    }
+
+    if (is_scale_pick_role(payload.role) && !scene_entity_can_scale(scene, entity_id)) {
         return false;
     }
 
@@ -738,31 +750,36 @@ bool TransformGizmoController::try_begin_drag(
     return true;
 }
 
-bool TransformGizmoController::update_drag(
-    Scene& scene,
+TransformGizmoController::DragUpdate TransformGizmoController::update_drag_preview(
+    const Scene& scene,
     ViewportCamera camera,
     ViewportProjection projection,
     const ViewportSurfaceResult& surface)
 {
     if (!active_drag_.has_value()) {
-        return false;
+        return {};
     }
 
     if (surface.left_released || !surface.left_down) {
         active_drag_.reset();
-        return false;
+        return DragUpdate {
+            .drag_finished = true,
+        };
     }
 
     if (!surface.pointer.has_value()) {
-        return false;
+        return {};
     }
 
-    TransformComponent* transform = scene.transform(active_drag_->entity_id);
+    const TransformComponent* transform = scene.transform(active_drag_->entity_id);
     if (transform == nullptr) {
         active_drag_.reset();
-        return false;
+        return DragUpdate {
+            .drag_finished = true,
+        };
     }
 
+    TransformComponent preview_transform = *transform;
     bool changed = false;
     if (active_drag_->role == DebugDrawPickRole::transform_move_axis) {
         const std::optional<float> amount = world_axis_drag_amount(
@@ -774,7 +791,7 @@ bool TransformGizmoController::update_drag(
             projection,
             surface.image_bounds);
         if (amount.has_value()) {
-            transform->position =
+            preview_transform.position =
                 add(active_drag_->start_transform.position, scale(active_drag_->axis_direction, *amount));
             changed = true;
         }
@@ -790,7 +807,7 @@ bool TransformGizmoController::update_drag(
             const Vec3 plane_motion = subtract(*current_plane_hit, *active_drag_->start_plane_hit);
             const float amount_u = dot(plane_motion, active_drag_->plane_axis_u);
             const float amount_v = dot(plane_motion, active_drag_->plane_axis_v);
-            transform->position = add(
+            preview_transform.position = add(
                 active_drag_->start_transform.position,
                 add(scale(active_drag_->plane_axis_u, amount_u), scale(active_drag_->plane_axis_v, amount_v)));
             changed = true;
@@ -807,12 +824,12 @@ bool TransformGizmoController::update_drag(
         if (angle_radians.has_value()) {
             Vec3 rotation = active_drag_->start_transform.get_rotation_degrees();
             add_axis_component(rotation, active_drag_->axis, radians_to_degrees(*angle_radians));
-            transform->set_rotation_degrees(rotation);
+            preview_transform.set_rotation_degrees(rotation);
             changed = true;
         }
     } else if (active_drag_->role == DebugDrawPickRole::transform_scale_axis) {
         if (!scene_entity_can_scale(scene, active_drag_->entity_id)) {
-            return false;
+            return {};
         }
 
         const std::optional<float> amount = screen_axis_scale_drag_amount(
@@ -829,12 +846,12 @@ bool TransformGizmoController::update_drag(
                 new_scale,
                 active_drag_->axis,
                 axis_component(active_drag_->start_transform.scale, active_drag_->axis) + *amount);
-            transform->scale = new_scale;
+            preview_transform.scale = new_scale;
             changed = true;
         }
     } else if (active_drag_->role == DebugDrawPickRole::transform_scale_plane) {
         if (!scene_entity_can_scale(scene, active_drag_->entity_id)) {
-            return false;
+            return {};
         }
 
         const std::optional<float> amount_u = screen_axis_scale_drag_amount(
@@ -866,19 +883,19 @@ bool TransformGizmoController::update_drag(
                 new_scale,
                 component_v,
                 axis_component(active_drag_->start_transform.scale, component_v) + *amount_v);
-            transform->scale = new_scale;
+            preview_transform.scale = new_scale;
             changed = true;
         }
     } else if (active_drag_->role == DebugDrawPickRole::transform_uniform_scale) {
         if (!scene_entity_can_scale(scene, active_drag_->entity_id)) {
-            return false;
+            return {};
         }
 
         const float amount = uniform_scale_amount(
             active_drag_->start_pointer,
             *surface.pointer,
             surface.image_bounds);
-        transform->scale = {
+        preview_transform.scale = {
             std::max(min_transform_scale, active_drag_->start_transform.scale.x + amount),
             std::max(min_transform_scale, active_drag_->start_transform.scale.y + amount),
             std::max(min_transform_scale, active_drag_->start_transform.scale.z + amount),
@@ -886,7 +903,15 @@ bool TransformGizmoController::update_drag(
         changed = true;
     }
 
-    return changed;
+    if (!changed) {
+        return {};
+    }
+
+    return DragUpdate {
+        .entity_id = active_drag_->entity_id,
+        .preview_transform = preview_transform,
+        .transform_changed = true,
+    };
 }
 
 void TransformGizmoController::cancel_drag()

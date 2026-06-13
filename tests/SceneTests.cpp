@@ -124,7 +124,9 @@ TEST(Scene, EntitySnapshotsExposeProjectOwnedComponentsWithoutOwningStorage)
     quader::TransformComponent transform;
     transform.position = { 1.0f, 2.0f, 3.0f };
     const quader::SceneEntityId cube = scene.create_cube("Snapshot Cube", transform);
-    scene.material(cube)->material.roughness = 0.42f;
+    quader::PbrMaterialSettings material_settings;
+    material_settings.roughness = 0.42f;
+    ASSERT_TRUE(scene.set_material(cube, material_settings));
 
     const std::optional<quader::SceneEntity> entity = scene.entity(cube);
 
@@ -149,8 +151,10 @@ TEST(Scene, RenderSnapshotUsesEntityIdsAndTransformDrivenLightDirection)
     quader::TransformComponent point_transform;
     point_transform.position = { 3.0f, 4.0f, 5.0f };
     const quader::SceneEntityId point_light = scene.create_point_light("Point Light", point_transform);
-    scene.point_light(point_light)->settings.range = 12.5f;
-    scene.point_light(point_light)->settings.falloff_mode = quader::PointLightFalloffMode::inverse_squared;
+    quader::PointLightComponent point_settings = *scene.point_light(point_light);
+    point_settings.settings.range = 12.5f;
+    point_settings.settings.falloff_mode = quader::PointLightFalloffMode::inverse_squared;
+    ASSERT_TRUE(scene.set_point_light(point_light, point_settings));
 
     const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
 
@@ -207,11 +211,11 @@ TEST(Scene, PlaneTransformEditsReachRenderSnapshot)
     quader::Scene scene;
     const quader::SceneEntityId plane = scene.create_plane();
 
-    quader::TransformComponent* transform = scene.transform(plane);
-    ASSERT_NE(nullptr, transform);
-    transform->position = { 2.0f, 3.0f, 4.0f };
-    transform->set_rotation_degrees({ 15.0f, 30.0f, 45.0f });
-    transform->scale = { 2.0f, 1.0f, 3.0f };
+    quader::TransformComponent transform;
+    transform.position = { 2.0f, 3.0f, 4.0f };
+    transform.set_rotation_degrees({ 15.0f, 30.0f, 45.0f });
+    transform.scale = { 2.0f, 1.0f, 3.0f };
+    ASSERT_TRUE(scene.set_transform(plane, transform));
 
     const quader::SceneRenderSnapshot snapshot = quader::build_scene_render_snapshot(scene);
 

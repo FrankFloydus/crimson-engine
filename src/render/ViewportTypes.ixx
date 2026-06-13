@@ -4,7 +4,6 @@ module;
 #include <cstdint>
 #include <optional>
 #include <variant>
-#include <vector>
 
 export module quader.render.viewport_types;
 
@@ -187,46 +186,55 @@ struct ViewportRenderRequest {
     }
 };
 
-struct RenderTextureHandle {
-    uint64_t value = 0;
+enum class ViewportGpuImageReadiness : uint8_t {
+    unavailable,
+    rendering,
+    ready,
+};
+
+struct ViewportGpuImageHandle {
+    ViewportId viewport_id;
+    ViewportGeneration generation;
+    uint32_t slot_index = UINT32_MAX;
+    uint64_t image_generation = 0;
+    uint64_t resource_id = 0;
     RenderExtent extent;
+    ViewportGpuImageReadiness readiness = ViewportGpuImageReadiness::unavailable;
 
     [[nodiscard]] bool is_valid() const noexcept
     {
-        return value != 0 && extent.is_valid();
+        return viewport_id.is_valid() &&
+            generation.is_valid() &&
+            slot_index != UINT32_MAX &&
+            image_generation != 0 &&
+            resource_id != 0 &&
+            extent.is_valid();
     }
-};
 
-struct TemporaryRgba8ReadbackFrame {
-    RenderExtent extent;
-    std::vector<uint8_t> rgba;
-
-    [[nodiscard]] bool has_pixels() const
+    [[nodiscard]] bool is_ready() const noexcept
     {
-        return extent.is_valid() &&
-            rgba.size() == static_cast<size_t>(extent.width) * static_cast<size_t>(extent.height) * 4;
+        return is_valid() && readiness == ViewportGpuImageReadiness::ready;
     }
 };
 
 struct ViewportFramePayload {
-    std::optional<RenderTextureHandle> texture;
-    std::optional<TemporaryRgba8ReadbackFrame> temporary_readback;
+    std::optional<ViewportGpuImageHandle> gpu_image;
+    bool gpu_image_pending = false;
 
-    // The current UI presentation path only knows how to upload CPU readback
-    // pixels. Texture handles are reserved for the future GPU-native path.
-    [[nodiscard]] bool has_presentable_pixels() const
+    [[nodiscard]] bool has_ready_gpu_image() const
     {
-        return temporary_readback.has_value() && temporary_readback->has_pixels();
+        return gpu_image.has_value() && gpu_image->is_ready();
     }
 
-    [[nodiscard]] bool has_unsupported_texture_payload() const
+    [[nodiscard]] bool has_pending_gpu_image() const
     {
-        return texture.has_value() && texture->is_valid() && !has_presentable_pixels();
+        return gpu_image_pending ||
+            (gpu_image.has_value() && gpu_image->is_valid() && !gpu_image->is_ready());
     }
 
-    [[nodiscard]] bool has_pixels() const
+    [[nodiscard]] bool has_render_output() const
     {
-        return has_presentable_pixels();
+        return has_ready_gpu_image();
     }
 };
 
@@ -238,14 +246,14 @@ struct ViewportRenderFrame {
     RenderExtent extent;
     ViewportFramePayload payload;
 
-    [[nodiscard]] bool has_pixels() const
+    [[nodiscard]] bool has_render_output() const
     {
         return viewport_id.is_valid() &&
             generation.is_valid() &&
             request_serial != 0 &&
             frame_id.is_valid() &&
             extent.is_valid() &&
-            payload.has_pixels();
+            payload.has_render_output();
     }
 };
 

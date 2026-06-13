@@ -15,6 +15,7 @@ module;
 #include <filament/RenderTarget.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
+#include <filament/SwapChain.h>
 #include <filament/Texture.h>
 #include <filament/TextureSampler.h>
 #include <filament/TransformManager.h>
@@ -56,6 +57,7 @@ import quader.diagnostics.logger;
 import quader.filament.debug_draw_renderer;
 import quader.filament.environment_resources;
 import quader.math.types;
+import quader.render.viewport_projection_policy;
 
 namespace quader {
 namespace {
@@ -487,7 +489,8 @@ float dynamic_lighting_far_for(
     const ViewportCamera& camera,
     const ViewportProjection& projection)
 {
-    float far_distance = std::max(projection.near_plane + 0.001f, projection.far_plane);
+    const ViewportProjection safe_projection = clamp_viewport_projection(projection);
+    float far_distance = std::max(safe_projection.near_plane + 0.001f, safe_projection.far_plane);
     for (const SceneRenderPointLight& light : snapshot.point_lights) {
         if (!light.entity_id.is_valid()) {
             continue;
@@ -504,7 +507,11 @@ float dynamic_lighting_far_for(
             distance_to_light + filament_point_light_falloff_radius(settings));
     }
 
-    return std::clamp(far_distance, projection.near_plane + 0.001f, kMaximumDynamicLightingFar);
+    far_distance = std::clamp(
+        far_distance,
+        safe_projection.near_plane + 0.001f,
+        kMaximumDynamicLightingFar);
+    return clamp_viewport_projection_for_required_far(safe_projection, far_distance).far_plane;
 }
 
 filament::View::VsmShadowOptions filament_vsm_shadow_options(const DirectionalShadowSettings& settings)
@@ -524,11 +531,439 @@ filament::View::SoftShadowOptions filament_soft_shadow_options(const Directional
     return options;
 }
 
+class ViewportSwapChainResources {
+public:
+    ViewportSwapChainResources(
+        filament::Engine& engine_ref,
+        FilamentViewportVulkanPlatform& platform_ref)
+        : engine(engine_ref)
+        , platform(platform_ref)
+    {
+    }
+
+    ViewportSwapChainResources(const ViewportSwapChainResources&) = delete;
+    ViewportSwapChainResources& operator=(const ViewportSwapChainResources&) = delete;
+
+    ~ViewportSwapChainResources()
+    {
+        destroy();
+    }
+
+    [[nodiscard]] bool ensure_size(
+        ViewportId viewport_id,
+        ViewportGeneration generation,
+        RenderExtent requested_extent,
+        filament::View& view)
+    {
+        if (!viewport_id.is_valid() || !generation.is_valid() || !requested_extent.is_valid()) {
+            return false;
+        }
+
+        if (swap_chain != nullptr &&
+            extent.width == requested_extent.width &&
+            extent.height == requested_extent.height) {
+            view.setViewport(filament::Viewport { 0, 0, extent.width, extent.height });
+            view.setRenderTarget(nullptr);
+            return false;
+        }
+
+        engine.flushAndWait();
+        destroy();
+
+        swap_chain = platform.create_viewport_swapchain(
+            engine,
+            viewport_id,
+            generation,
+            requested_extent);
+        swap_chain = require_filament_allocation(swap_chain, "viewport swapchain");
+
+        extent = requested_extent;
+        attached_view = &view;
+        attached_view->setViewport(filament::Viewport { 0, 0, extent.width, extent.height });
+        attached_view->setRenderTarget(nullptr);
+        return true;
+    }
+
+    [[nodiscard]] bool has_swapchain() const
+    {
+        return swap_chain != nullptr;
+    }
+
+    [[nodiscard]] RenderExtent current_extent() const
+    {
+        return extent;
+    }
+
+    [[nodiscard]] filament::SwapChain* current_swapchain() const
+    {
+        return swap_chain;
+    }
+
+    void destroy()
+    {
+        if (attached_view != nullptr) {
+            attached_view->setRenderTarget(nullptr);
+            attached_view = nullptr;
+        }
+
+        if (swap_chain != nullptr) {
+            engine.destroy(swap_chain);
+            swap_chain = nullptr;
+        }
+
+        extent = {};
+    }
+
+private:
+    filament::Engine& engine;
+    FilamentViewportVulkanPlatform& platform;
+    filament::SwapChain* swap_chain = nullptr;
+    filament::View* attached_view = nullptr;
+    RenderExtent extent;
+};
+
+class ViewportCameraResources {
+public:
+    explicit ViewportCameraResources(filament::Engine& engine_ref)
+        : engine(engine_ref)
+    {
+    }
+
+    ViewportCameraResources(const ViewportCameraResources&) = delete;
+    ViewportCameraResources& operator=(const ViewportCameraResources&) = delete;
+
+    ~ViewportCameraResources()
+    {
+        destroy();
+    }
+
+    void create(filament::View& view)
+    {
+        entity = utils::EntityManager::get().create();
+        camera = require_filament_allocation(engine.createCamera(entity), "viewport camera");
+        attached_view = &view;
+        attached_view->setCamera(camera);
+    }
+
+    void apply(
+        ViewportCamera camera_settings,
+        ViewportProjection projection_settings,
+        float dynamic_lighting_far,
+        RenderExtent target_extent,
+        filament::View& view)
+    {
+        camera_state = camera_settings;
+        projection_state = clamp_viewport_projection_for_required_far(
+            projection_settings,
+            dynamic_lighting_far);
+
+        const filament::math::double3 eye = to_filament_point(camera_state.position);
+        const filament::math::double3 target_point = eye + to_filament_direction(camera_state.forward);
+        camera->lookAt(eye, target_point, to_filament_up(camera_state.up));
+
+        apply_projection(target_extent, view);
+    }
+
+    void apply_projection(RenderExtent target_extent, filament::View& view) const
+    {
+        if (camera == nullptr || !target_extent.is_valid()) {
+            return;
+        }
+
+        const double aspect =
+            static_cast<double>(target_extent.width) / static_cast<double>(target_extent.height);
+
+        if (projection_state.kind == ViewportProjectionKind::orthographic) {
+            const double half_height = static_cast<double>(projection_state.orthographic_size) * 0.5;
+            const double half_width = half_height * aspect;
+            camera->setProjection(
+                filament::Camera::Projection::ORTHO,
+                -half_width,
+                half_width,
+                -half_height,
+                half_height,
+                projection_state.near_plane,
+                projection_state.far_plane);
+            view.setDynamicLightingOptions(projection_state.near_plane, projection_state.far_plane);
+            return;
+        }
+
+        camera->setProjection(
+            projection_state.vertical_fov_degrees,
+            aspect,
+            projection_state.near_plane,
+            projection_state.far_plane);
+        view.setDynamicLightingOptions(projection_state.near_plane, projection_state.far_plane);
+    }
+
+    void destroy()
+    {
+        if (attached_view != nullptr) {
+            attached_view->setCamera(nullptr);
+            attached_view = nullptr;
+        }
+
+        if (entity) {
+            engine.destroyCameraComponent(entity);
+            utils::EntityManager::get().destroy(entity);
+            entity.clear();
+        }
+
+        camera = nullptr;
+    }
+
+private:
+    filament::Engine& engine;
+    filament::Camera* camera = nullptr;
+    filament::View* attached_view = nullptr;
+    utils::Entity entity;
+    ViewportCamera camera_state;
+    ViewportProjection projection_state;
+};
+
+class PbrMaterialResources {
+public:
+    explicit PbrMaterialResources(filament::Engine& engine_ref)
+        : engine(engine_ref)
+    {
+    }
+
+    PbrMaterialResources(const PbrMaterialResources&) = delete;
+    PbrMaterialResources& operator=(const PbrMaterialResources&) = delete;
+
+    ~PbrMaterialResources()
+    {
+        destroy();
+    }
+
+    void ensure_material()
+    {
+        if (material != nullptr) {
+            return;
+        }
+
+        material = filament::Material::Builder()
+            .package(
+                filament_assets::quader_lit_pbr_material,
+                filament_assets::quader_lit_pbr_material_size)
+            .build(engine);
+        material = require_filament_allocation(material, "viewport mesh material");
+    }
+
+    [[nodiscard]] filament::MaterialInstance* create_mesh_material_instance(ViewportMeshKind mesh_kind)
+    {
+        ensure_material();
+        filament::MaterialInstance* material_instance = material->createInstance(
+            mesh_kind == ViewportMeshKind::plane ? "Quader plane material" : "Quader cube material");
+        return require_filament_allocation(material_instance, "viewport mesh material instance");
+    }
+
+    void apply_settings(filament::MaterialInstance& instance, PbrMaterialSettings settings)
+    {
+        settings = clamp_pbr_material_settings(settings);
+        ensure_fallback_textures();
+
+        const MaterialTextureBinding albedo_texture = resolve_texture(
+            settings.albedo_texture,
+            PbrMaterialTextureSlot::albedo,
+            PreviewTextureEncoding::srgb_rgba,
+            fallback_albedo_texture);
+        const MaterialTextureBinding roughness_texture = resolve_texture(
+            settings.roughness_texture,
+            PbrMaterialTextureSlot::roughness,
+            PreviewTextureEncoding::linear_red,
+            fallback_scalar_texture);
+        const MaterialTextureBinding metallic_texture = resolve_texture(
+            settings.metallic_texture,
+            PbrMaterialTextureSlot::metallic,
+            PreviewTextureEncoding::linear_red,
+            fallback_scalar_texture);
+
+        instance.setParameter(
+            "albedo",
+            filament::RgbaType::PREMULTIPLIED_LINEAR,
+            to_filament_premultiplied_color(settings.albedo, 1.0f));
+        instance.setParameter("albedoTexture", albedo_texture.texture, texture_sampler);
+        instance.setParameter("useAlbedoTexture", albedo_texture.use_source_texture);
+        instance.setParameter("roughness", settings.roughness);
+        instance.setParameter("roughnessTexture", roughness_texture.texture, texture_sampler);
+        instance.setParameter("useRoughnessTexture", roughness_texture.use_source_texture);
+        instance.setParameter("metallic", settings.metallic);
+        instance.setParameter("metallicTexture", metallic_texture.texture, texture_sampler);
+        instance.setParameter("useMetallicTexture", metallic_texture.use_source_texture);
+        instance.setParameter("reflectance", settings.reflectance);
+        instance.setParameter("specularFactor", settings.specular_factor);
+        instance.setParameter(
+            "specularColorFactor",
+            filament::RgbType::LINEAR,
+            to_filament_color(settings.specular_color_factor));
+        instance.setParameter("clearCoat", settings.clear_coat);
+        instance.setParameter("clearCoatRoughness", settings.clear_coat_roughness);
+    }
+
+    void destroy()
+    {
+        if (material != nullptr) {
+            engine.destroy(material);
+            material = nullptr;
+        }
+
+        destroy_textures();
+    }
+
+private:
+    filament::Texture* create_texture(
+        uint32_t width,
+        uint32_t height,
+        filament::Texture::InternalFormat internal_format,
+        filament::backend::PixelDataFormat pixel_format,
+        std::span<const uint8_t> pixels)
+    {
+        filament::Texture* texture = filament::Texture::Builder()
+            .width(width)
+            .height(height)
+            .levels(1)
+            .sampler(filament::Texture::Sampler::SAMPLER_2D)
+            .format(internal_format)
+            .build(engine);
+        texture = require_filament_allocation(texture, "material texture");
+
+        texture->setImage(engine, 0, make_filament_pixel_buffer_copy(pixels, pixel_format));
+        return texture;
+    }
+
+    filament::Texture* load_texture(
+        std::string_view source_path,
+        PreviewTextureEncoding encoding)
+    {
+        const ImageColorEncoding image_encoding =
+            encoding == PreviewTextureEncoding::srgb_rgba
+                ? ImageColorEncoding::srgb
+                : ImageColorEncoding::linear;
+        const Rgba8Image image = load_rgba8_image_from_file(source_path, image_encoding);
+        if (!image.has_pixels()) {
+            throw std::runtime_error("Image decoder returned no pixels for " + std::string(source_path));
+        }
+
+        if (encoding == PreviewTextureEncoding::srgb_rgba) {
+            return create_texture(
+                image.width,
+                image.height,
+                filament::Texture::InternalFormat::SRGB8_A8,
+                filament::backend::PixelDataFormat::RGBA,
+                std::span<const uint8_t>(image.rgba.data(), image.rgba.size()));
+        }
+
+        const size_t pixel_count = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
+        std::vector<uint8_t> red_channel(pixel_count);
+        for (size_t pixel_index = 0; pixel_index < pixel_count; ++pixel_index) {
+            red_channel[pixel_index] = image.rgba[pixel_index * 4];
+        }
+
+        return create_texture(
+            image.width,
+            image.height,
+            filament::Texture::InternalFormat::R8,
+            filament::backend::PixelDataFormat::R,
+            std::span<const uint8_t>(red_channel.data(), red_channel.size()));
+    }
+
+    void ensure_fallback_textures()
+    {
+        if (fallback_albedo_texture == nullptr) {
+            constexpr std::array<uint8_t, 4> white_srgb_rgba { 255, 255, 255, 255 };
+            fallback_albedo_texture = create_texture(
+                1,
+                1,
+                filament::Texture::InternalFormat::SRGB8_A8,
+                filament::backend::PixelDataFormat::RGBA,
+                std::span<const uint8_t>(white_srgb_rgba.data(), white_srgb_rgba.size()));
+        }
+
+        if (fallback_scalar_texture == nullptr) {
+            constexpr std::array<uint8_t, 1> white_linear_scalar { 255 };
+            fallback_scalar_texture = create_texture(
+                1,
+                1,
+                filament::Texture::InternalFormat::R8,
+                filament::backend::PixelDataFormat::R,
+                std::span<const uint8_t>(white_linear_scalar.data(), white_linear_scalar.size()));
+        }
+    }
+
+    MaterialTextureBinding resolve_texture(
+        const TextureAssetReference& reference,
+        PbrMaterialTextureSlot slot,
+        PreviewTextureEncoding encoding,
+        filament::Texture* fallback_texture)
+    {
+        if (!reference.has_source()) {
+            return MaterialTextureBinding { fallback_texture, false };
+        }
+
+        const std::string cache_key = material_texture_cache_key(reference.source_path, slot, encoding);
+        auto [entry, inserted] = texture_cache.try_emplace(cache_key);
+        if (inserted) {
+            try {
+                entry->second.texture = load_texture(reference.source_path, encoding);
+            } catch (const std::exception& error) {
+                QUADER_LOG_WARN(
+                    "Failed to load {} material texture '{}': {}",
+                    texture_slot_name(slot),
+                    reference.source_path,
+                    error.what());
+            }
+        }
+
+        if (entry->second.texture == nullptr) {
+            return MaterialTextureBinding { fallback_texture, false };
+        }
+
+        return MaterialTextureBinding { entry->second.texture, true };
+    }
+
+    void destroy_textures()
+    {
+        for (auto& [_, cached] : texture_cache) {
+            if (cached.texture != nullptr) {
+                engine.destroy(cached.texture);
+                cached.texture = nullptr;
+            }
+        }
+        texture_cache.clear();
+
+        if (fallback_scalar_texture != nullptr) {
+            engine.destroy(fallback_scalar_texture);
+            fallback_scalar_texture = nullptr;
+        }
+
+        if (fallback_albedo_texture != nullptr) {
+            engine.destroy(fallback_albedo_texture);
+            fallback_albedo_texture = nullptr;
+        }
+    }
+
+    filament::Engine& engine;
+    filament::Material* material = nullptr;
+    filament::Texture* fallback_albedo_texture = nullptr;
+    filament::Texture* fallback_scalar_texture = nullptr;
+    std::unordered_map<std::string, CachedMaterialTexture> texture_cache;
+    filament::TextureSampler texture_sampler {
+        filament::TextureSampler::MinFilter::LINEAR,
+        filament::TextureSampler::MagFilter::LINEAR,
+        filament::TextureSampler::WrapMode::REPEAT,
+    };
+};
+
 } // namespace
 
 struct FilamentSceneViewport::Resources {
-    explicit Resources(filament::Engine& engine_ref)
+    Resources(filament::Engine& engine_ref, FilamentViewportVulkanPlatform& platform_ref)
         : engine(engine_ref)
+        , swap_chain_resources(engine_ref, platform_ref)
+        , camera_resources(engine_ref)
+        , material_resources(engine_ref)
+        , platform(platform_ref)
     {
     }
 
@@ -575,16 +1010,8 @@ struct FilamentSceneViewport::Resources {
         }
         point_lights.clear();
 
-        if (camera_entity) {
-            engine.destroyCameraComponent(camera_entity);
-            utils::EntityManager::get().destroy(camera_entity);
-        }
-
-        if (material != nullptr) {
-            engine.destroy(material);
-        }
-
-        destroy_material_textures();
+        camera_resources.destroy();
+        material_resources.destroy();
 
         if (cube_indices != nullptr) {
             engine.destroy(cube_indices);
@@ -602,7 +1029,7 @@ struct FilamentSceneViewport::Resources {
             engine.destroy(plane_vertices);
         }
 
-        destroy_preview_target();
+        swap_chain_resources.destroy();
 
         if (view != nullptr) {
             engine.destroy(view);
@@ -636,164 +1063,12 @@ struct FilamentSceneViewport::Resources {
         clear_options.clearColor = { 0.055, 0.060, 0.070, 1.0 };
         renderer->setClearOptions(clear_options);
 
-        create_camera();
-    }
-
-    void create_camera()
-    {
-        camera_entity = utils::EntityManager::get().create();
-        camera = require_filament_allocation(engine.createCamera(camera_entity), "viewport camera");
-        view->setCamera(camera);
-    }
-
-    filament::Texture* create_material_texture(
-        uint32_t width,
-        uint32_t height,
-        filament::Texture::InternalFormat internal_format,
-        filament::backend::PixelDataFormat pixel_format,
-        std::span<const uint8_t> pixels)
-    {
-        filament::Texture* texture = filament::Texture::Builder()
-            .width(width)
-            .height(height)
-            .levels(1)
-            .sampler(filament::Texture::Sampler::SAMPLER_2D)
-            .format(internal_format)
-            .build(engine);
-        texture = require_filament_allocation(texture, "material texture");
-
-        texture->setImage(engine, 0, make_filament_pixel_buffer_copy(pixels, pixel_format));
-        return texture;
-    }
-
-    filament::Texture* load_material_texture(
-        std::string_view source_path,
-        PreviewTextureEncoding encoding)
-    {
-        const ImageColorEncoding image_encoding =
-            encoding == PreviewTextureEncoding::srgb_rgba
-                ? ImageColorEncoding::srgb
-                : ImageColorEncoding::linear;
-        const Rgba8Image image = load_rgba8_image_from_file(source_path, image_encoding);
-        if (!image.has_pixels()) {
-            throw std::runtime_error("Image decoder returned no pixels for " + std::string(source_path));
-        }
-
-        if (encoding == PreviewTextureEncoding::srgb_rgba) {
-            return create_material_texture(
-                image.width,
-                image.height,
-                filament::Texture::InternalFormat::SRGB8_A8,
-                filament::backend::PixelDataFormat::RGBA,
-                std::span<const uint8_t>(image.rgba.data(), image.rgba.size()));
-        }
-
-        const size_t pixel_count = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
-        std::vector<uint8_t> red_channel(pixel_count);
-        for (size_t pixel_index = 0; pixel_index < pixel_count; ++pixel_index) {
-            red_channel[pixel_index] = image.rgba[pixel_index * 4];
-        }
-
-        return create_material_texture(
-            image.width,
-            image.height,
-            filament::Texture::InternalFormat::R8,
-            filament::backend::PixelDataFormat::R,
-            std::span<const uint8_t>(red_channel.data(), red_channel.size()));
-    }
-
-    void ensure_fallback_material_textures()
-    {
-        if (fallback_albedo_texture == nullptr) {
-            constexpr std::array<uint8_t, 4> white_srgb_rgba { 255, 255, 255, 255 };
-            fallback_albedo_texture = create_material_texture(
-                1,
-                1,
-                filament::Texture::InternalFormat::SRGB8_A8,
-                filament::backend::PixelDataFormat::RGBA,
-                std::span<const uint8_t>(white_srgb_rgba.data(), white_srgb_rgba.size()));
-        }
-
-        if (fallback_scalar_texture == nullptr) {
-            constexpr std::array<uint8_t, 1> white_linear_scalar { 255 };
-            fallback_scalar_texture = create_material_texture(
-                1,
-                1,
-                filament::Texture::InternalFormat::R8,
-                filament::backend::PixelDataFormat::R,
-                std::span<const uint8_t>(white_linear_scalar.data(), white_linear_scalar.size()));
-        }
-    }
-
-    MaterialTextureBinding resolve_material_texture(
-        const TextureAssetReference& reference,
-        PbrMaterialTextureSlot slot,
-        PreviewTextureEncoding encoding,
-        filament::Texture* fallback_texture)
-    {
-        if (!reference.has_source()) {
-            return MaterialTextureBinding { fallback_texture, false };
-        }
-
-        const std::string cache_key = material_texture_cache_key(reference.source_path, slot, encoding);
-        auto [entry, inserted] = material_texture_cache.try_emplace(cache_key);
-        if (inserted) {
-            try {
-                entry->second.texture = load_material_texture(reference.source_path, encoding);
-            } catch (const std::exception& error) {
-                QUADER_LOG_WARN(
-                    "Failed to load {} material texture '{}': {}",
-                    texture_slot_name(slot),
-                    reference.source_path,
-                    error.what());
-            }
-        }
-
-        if (entry->second.texture == nullptr) {
-            return MaterialTextureBinding { fallback_texture, false };
-        }
-
-        return MaterialTextureBinding { entry->second.texture, true };
-    }
-
-    void destroy_material_textures()
-    {
-        for (auto& [_, cached] : material_texture_cache) {
-            if (cached.texture != nullptr) {
-                engine.destroy(cached.texture);
-                cached.texture = nullptr;
-            }
-        }
-        material_texture_cache.clear();
-
-        if (fallback_scalar_texture != nullptr) {
-            engine.destroy(fallback_scalar_texture);
-            fallback_scalar_texture = nullptr;
-        }
-
-        if (fallback_albedo_texture != nullptr) {
-            engine.destroy(fallback_albedo_texture);
-            fallback_albedo_texture = nullptr;
-        }
-    }
-
-    void ensure_material()
-    {
-        if (material != nullptr) {
-            return;
-        }
-
-        material = filament::Material::Builder()
-            .package(
-                filament_assets::quader_lit_pbr_material,
-                filament_assets::quader_lit_pbr_material_size)
-            .build(engine);
-        material = require_filament_allocation(material, "viewport mesh material");
+        camera_resources.create(*view);
     }
 
     void ensure_cube_resources()
     {
-        ensure_material();
+        material_resources.ensure_material();
         if (cube_vertices != nullptr && cube_indices != nullptr) {
             return;
         }
@@ -842,7 +1117,7 @@ struct FilamentSceneViewport::Resources {
 
     void ensure_plane_resources()
     {
-        ensure_material();
+        material_resources.ensure_material();
         if (plane_vertices != nullptr && plane_indices != nullptr) {
             return;
         }
@@ -895,15 +1170,10 @@ struct FilamentSceneViewport::Resources {
         filament::IndexBuffer* indices,
         size_t index_count)
     {
-        ensure_material();
-
         MeshRenderable mesh;
         mesh.mesh_kind = mesh_kind;
         mesh.entity = utils::EntityManager::get().create();
-        mesh.material_instance = material->createInstance(
-            mesh_kind == ViewportMeshKind::plane ? "Quader plane material" : "Quader cube material");
-        mesh.material_instance =
-            require_filament_allocation(mesh.material_instance, "viewport mesh material instance");
+        mesh.material_instance = material_resources.create_mesh_material_instance(mesh_kind);
 
         const filament::Box bounding_box =
             mesh_kind == ViewportMeshKind::plane
@@ -1087,7 +1357,12 @@ struct FilamentSceneViewport::Resources {
     {
         auto [entry, inserted] = directional_lights.try_emplace(light.entity_id.value);
         if (inserted) {
-            entry->second = create_directional_light_renderable();
+            try {
+                entry->second = create_directional_light_renderable();
+            } catch (...) {
+                directional_lights.erase(entry);
+                throw;
+            }
         }
         return entry->second;
     }
@@ -1096,7 +1371,12 @@ struct FilamentSceneViewport::Resources {
     {
         auto [entry, inserted] = point_lights.try_emplace(light.entity_id.value);
         if (inserted) {
-            entry->second = create_point_light_renderable();
+            try {
+                entry->second = create_point_light_renderable();
+            } catch (...) {
+                point_lights.erase(entry);
+                throw;
+            }
         }
         return entry->second;
     }
@@ -1117,7 +1397,7 @@ struct FilamentSceneViewport::Resources {
 
             mesh_ids.insert(mesh.entity_id.value);
             MeshRenderable& renderable = ensure_mesh_entity(mesh);
-            apply_material_settings(*renderable.material_instance, mesh.material);
+            material_resources.apply_settings(*renderable.material_instance, mesh.material);
             apply_mesh_shadow_settings(renderable.entity, mesh);
             engine.getTransformManager().setTransform(
                 engine.getTransformManager().getInstance(renderable.entity),
@@ -1145,49 +1425,6 @@ struct FilamentSceneViewport::Resources {
         }
 
         prune_scene_entities(mesh_ids, directional_light_ids, point_light_ids);
-    }
-
-    void apply_material_settings(filament::MaterialInstance& instance, PbrMaterialSettings settings)
-    {
-        settings = clamp_pbr_material_settings(settings);
-        ensure_fallback_material_textures();
-
-        const MaterialTextureBinding albedo_texture = resolve_material_texture(
-            settings.albedo_texture,
-            PbrMaterialTextureSlot::albedo,
-            PreviewTextureEncoding::srgb_rgba,
-            fallback_albedo_texture);
-        const MaterialTextureBinding roughness_texture = resolve_material_texture(
-            settings.roughness_texture,
-            PbrMaterialTextureSlot::roughness,
-            PreviewTextureEncoding::linear_red,
-            fallback_scalar_texture);
-        const MaterialTextureBinding metallic_texture = resolve_material_texture(
-            settings.metallic_texture,
-            PbrMaterialTextureSlot::metallic,
-            PreviewTextureEncoding::linear_red,
-            fallback_scalar_texture);
-
-        instance.setParameter(
-            "albedo",
-            filament::RgbaType::PREMULTIPLIED_LINEAR,
-            to_filament_premultiplied_color(settings.albedo, 1.0f));
-        instance.setParameter("albedoTexture", albedo_texture.texture, material_texture_sampler);
-        instance.setParameter("useAlbedoTexture", albedo_texture.use_source_texture);
-        instance.setParameter("roughness", settings.roughness);
-        instance.setParameter("roughnessTexture", roughness_texture.texture, material_texture_sampler);
-        instance.setParameter("useRoughnessTexture", roughness_texture.use_source_texture);
-        instance.setParameter("metallic", settings.metallic);
-        instance.setParameter("metallicTexture", metallic_texture.texture, material_texture_sampler);
-        instance.setParameter("useMetallicTexture", metallic_texture.use_source_texture);
-        instance.setParameter("reflectance", settings.reflectance);
-        instance.setParameter("specularFactor", settings.specular_factor);
-        instance.setParameter(
-            "specularColorFactor",
-            filament::RgbType::LINEAR,
-            to_filament_color(settings.specular_color_factor));
-        instance.setParameter("clearCoat", settings.clear_coat);
-        instance.setParameter("clearCoatRoughness", settings.clear_coat_roughness);
     }
 
     void apply_mesh_shadow_settings(utils::Entity mesh_entity, const SceneRenderMesh& mesh) const
@@ -1233,103 +1470,6 @@ struct FilamentSceneViewport::Resources {
         lights.setShadowOptions(light_instance, filament_shadow_options(settings.shadow));
     }
 
-    void apply_camera(
-        ViewportCamera camera_settings,
-        ViewportProjection projection_settings,
-        float dynamic_lighting_far)
-    {
-        camera_state = camera_settings;
-        projection_state = projection_settings;
-        projection_state.far_plane = std::max(projection_state.far_plane, dynamic_lighting_far);
-
-        const filament::math::double3 eye = to_filament_point(camera_state.position);
-        const filament::math::double3 target = eye + to_filament_direction(camera_state.forward);
-        camera->lookAt(eye, target, to_filament_up(camera_state.up));
-
-        apply_camera_projection();
-    }
-
-    void apply_camera_projection()
-    {
-        if (camera == nullptr || !preview_extent.is_valid()) {
-            return;
-        }
-
-        const double aspect =
-            static_cast<double>(preview_extent.width) / static_cast<double>(preview_extent.height);
-
-        if (projection_state.kind == ViewportProjectionKind::orthographic) {
-            const double half_height = static_cast<double>(projection_state.orthographic_size) * 0.5;
-            const double half_width = half_height * aspect;
-            camera->setProjection(
-                filament::Camera::Projection::ORTHO,
-                -half_width,
-                half_width,
-                -half_height,
-                half_height,
-                projection_state.near_plane,
-                projection_state.far_plane);
-            view->setDynamicLightingOptions(projection_state.near_plane, projection_state.far_plane);
-            return;
-        }
-
-        camera->setProjection(
-            projection_state.vertical_fov_degrees,
-            aspect,
-            projection_state.near_plane,
-            projection_state.far_plane);
-        view->setDynamicLightingOptions(projection_state.near_plane, projection_state.far_plane);
-    }
-
-    void ensure_preview_size(RenderExtent extent)
-    {
-        if (!extent.is_valid()) {
-            return;
-        }
-
-        if (preview_target != nullptr &&
-            preview_extent.width == extent.width &&
-            preview_extent.height == extent.height) {
-            return;
-        }
-
-        engine.flushAndWait();
-        destroy_preview_target();
-
-        const filament::Texture::Usage color_usage =
-            filament::Texture::Usage::COLOR_ATTACHMENT |
-            filament::Texture::Usage::SAMPLEABLE |
-            filament::Texture::Usage::BLIT_SRC;
-        preview_color = filament::Texture::Builder()
-            .width(extent.width)
-            .height(extent.height)
-            .levels(1)
-            .usage(color_usage)
-            .format(filament::Texture::InternalFormat::RGBA8)
-            .build(engine);
-        preview_color = require_filament_allocation(preview_color, "viewport color texture");
-
-        preview_depth = filament::Texture::Builder()
-            .width(extent.width)
-            .height(extent.height)
-            .levels(1)
-            .usage(filament::Texture::Usage::DEPTH_ATTACHMENT)
-            .format(filament::Texture::InternalFormat::DEPTH24)
-            .build(engine);
-        preview_depth = require_filament_allocation(preview_depth, "viewport depth texture");
-
-        preview_target = filament::RenderTarget::Builder()
-            .texture(filament::RenderTarget::AttachmentPoint::COLOR, preview_color)
-            .texture(filament::RenderTarget::AttachmentPoint::DEPTH, preview_depth)
-            .build(engine);
-        preview_target = require_filament_allocation(preview_target, "viewport render target");
-
-        preview_extent = extent;
-        view->setViewport(filament::Viewport { 0, 0, extent.width, extent.height });
-        view->setRenderTarget(preview_target);
-        apply_camera_projection();
-    }
-
     void render_into(const ViewportRenderRequest& request, ViewportRenderFrame& frame)
     {
         ZoneScopedN("Filament scene viewport render");
@@ -1342,95 +1482,58 @@ struct FilamentSceneViewport::Resources {
         if (debug_draw_renderer != nullptr) {
             debug_draw_renderer->render(request.debug_draw);
         }
-        apply_camera(
+        const bool resized_target = swap_chain_resources.ensure_size(
+            request.viewport_id,
+            request.generation,
+            request.extent,
+            *view);
+        camera_resources.apply(
             request.camera,
             request.projection,
-            dynamic_lighting_far_for(snapshot, request.camera, request.projection));
-        ensure_preview_size(request.extent);
-        if (preview_target == nullptr) {
+            dynamic_lighting_far_for(snapshot, request.camera, request.projection),
+            swap_chain_resources.current_extent(),
+            *view);
+        if (resized_target) {
+            camera_resources.apply_projection(swap_chain_resources.current_extent(), *view);
+        }
+        if (!swap_chain_resources.has_swapchain()) {
             return;
         }
 
-        TemporaryRgba8ReadbackFrame& readback = frame.payload.temporary_readback.emplace();
-        if (readback.extent.width != request.extent.width || readback.extent.height != request.extent.height) {
-            readback.extent = request.extent;
-            readback.rgba.assign(static_cast<size_t>(request.extent.width) * request.extent.height * 4, 0);
-        }
         frame.extent = request.extent;
 
-        renderer->renderStandaloneView(view);
-        renderer->readPixels(
-            preview_target,
-            0,
-            0,
-            readback.extent.width,
-            readback.extent.height,
-            filament::backend::PixelBufferDescriptor(
-                readback.rgba.data(),
-                readback.rgba.size(),
-                filament::backend::PixelDataFormat::RGBA,
-                filament::backend::PixelDataType::UBYTE));
-        engine.flushAndWait();
-    }
-
-    void destroy_preview_target()
-    {
-        if (view != nullptr) {
-            view->setRenderTarget(nullptr);
+        filament::SwapChain* swap_chain = swap_chain_resources.current_swapchain();
+        if (renderer->beginFrame(swap_chain)) {
+            renderer->render(view);
+            renderer->endFrame();
+            frame.payload.gpu_image = platform.take_latest_viewport_gpu_image(request.viewport_id);
+            frame.payload.gpu_image_pending = !frame.payload.gpu_image.has_value();
         }
-
-        if (preview_target != nullptr) {
-            engine.destroy(preview_target);
-            preview_target = nullptr;
-        }
-
-        if (preview_depth != nullptr) {
-            engine.destroy(preview_depth);
-            preview_depth = nullptr;
-        }
-
-        if (preview_color != nullptr) {
-            engine.destroy(preview_color);
-            preview_color = nullptr;
-        }
-
-        preview_extent = {};
     }
 
     filament::Engine& engine;
+    ViewportSwapChainResources swap_chain_resources;
+    ViewportCameraResources camera_resources;
+    PbrMaterialResources material_resources;
+    FilamentViewportVulkanPlatform& platform;
     filament::Renderer* renderer = nullptr;
     filament::Scene* scene = nullptr;
     filament::View* view = nullptr;
-    filament::Texture* preview_color = nullptr;
-    filament::Texture* preview_depth = nullptr;
-    filament::RenderTarget* preview_target = nullptr;
     filament::VertexBuffer* cube_vertices = nullptr;
     filament::IndexBuffer* cube_indices = nullptr;
     filament::VertexBuffer* plane_vertices = nullptr;
     filament::IndexBuffer* plane_indices = nullptr;
-    filament::Material* material = nullptr;
     std::unordered_map<uint32_t, MeshRenderable> meshes;
     std::unordered_map<uint32_t, DirectionalLightRenderable> directional_lights;
     std::unordered_map<uint32_t, PointLightRenderable> point_lights;
     std::unique_ptr<FilamentEnvironmentResources> environment_resources;
     std::unique_ptr<FilamentDebugDrawRenderer> debug_draw_renderer;
-    filament::Texture* fallback_albedo_texture = nullptr;
-    filament::Texture* fallback_scalar_texture = nullptr;
-    std::unordered_map<std::string, CachedMaterialTexture> material_texture_cache;
-    filament::TextureSampler material_texture_sampler {
-        filament::TextureSampler::MinFilter::LINEAR,
-        filament::TextureSampler::MagFilter::LINEAR,
-        filament::TextureSampler::WrapMode::REPEAT,
-    };
-    filament::Camera* camera = nullptr;
-    utils::Entity camera_entity;
-    RenderExtent preview_extent;
-    ViewportCamera camera_state;
-    ViewportProjection projection_state;
 };
 
-FilamentSceneViewport::FilamentSceneViewport(filament::Engine& engine)
-    : resources_(std::make_unique<Resources>(engine))
+FilamentSceneViewport::FilamentSceneViewport(
+    filament::Engine& engine,
+    FilamentViewportVulkanPlatform& platform)
+    : resources_(std::make_unique<Resources>(engine, platform))
 {
     resources_->initialize();
 }

@@ -30,8 +30,16 @@ public:
         ViewportCamera camera,
         ViewportProjection projection,
         const ViewportSurfaceResult& surface);
-    [[nodiscard]] bool update_drag(
-        Scene& scene,
+
+    struct DragUpdate {
+        std::optional<SceneEntityId> entity_id;
+        std::optional<TransformComponent> preview_transform;
+        bool transform_changed = false;
+        bool drag_finished = false;
+    };
+
+    [[nodiscard]] DragUpdate update_drag_preview(
+        const Scene& scene,
         ViewportCamera camera,
         ViewportProjection projection,
         const ViewportSurfaceResult& surface);

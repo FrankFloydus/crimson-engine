@@ -6,6 +6,8 @@ module;
 export module quader.app.editor_viewport;
 
 import quader.app.editor_selection;
+import quader.app.editor_command_stack;
+import quader.app.editor_hover;
 import quader.app.editor_input;
 import quader.app.transform_gizmo;
 import quader.app.viewport_instance;
@@ -32,9 +34,12 @@ public:
         Scene& scene,
         const Input& input,
         EditorSelectionModel& selection,
+        EditorHoverModel& hover,
+        EditorCommandStack& commands,
         float delta_seconds);
 
     [[nodiscard]] bool wants_relative_mouse_mode() const noexcept;
+    [[nodiscard]] bool has_pending_render_requests() const noexcept;
     void mark_render_state_dirty();
 
 private:
@@ -47,6 +52,9 @@ private:
         Scene& scene,
         const Input& input,
         EditorSelectionModel& selection,
+        EditorHoverModel& hover,
+        EditorCommandStack& commands,
+        bool text_input_active,
         float delta_seconds,
         std::vector<ViewportId>& visible_viewport_ids,
         bool& hover_payload_updated,
@@ -57,6 +65,9 @@ private:
         const ViewportSurfaceResult& surface,
         const Input& input,
         EditorSelectionModel& selection,
+        EditorHoverModel& hover,
+        EditorCommandStack& commands,
+        bool text_input_active,
         float delta_seconds,
         std::vector<ViewportId>& visible_viewport_ids,
         bool& hover_payload_updated,
@@ -75,16 +86,6 @@ private:
     [[nodiscard]] ViewportPerformanceOverlay performance_overlay_for(
         const ViewportInstance& viewport,
         float delta_seconds) const;
-    struct ViewportPickResult {
-        std::optional<SceneEntityId> entity_id;
-        std::optional<DebugDrawPickPayload> debug_payload;
-    };
-
-    [[nodiscard]] ViewportPickResult pick_from_surface(
-        const Scene& scene,
-        const ViewportInstance& viewport,
-        const EditorSelectionModel& selection,
-        const ViewportSurfaceResult& surface) const;
     void mark_scene_viewports_dirty();
     void mark_all_viewports_dirty();
 

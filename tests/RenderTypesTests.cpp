@@ -4,6 +4,7 @@
 #include <vector>
 
 import quader.render.types;
+import quader.render.viewport_projection_policy;
 import quader.render.viewport_types;
 
 TEST(RenderTypes, DefaultPbrMaterialIsMatteWhiteDielectric)
@@ -265,28 +266,89 @@ TEST(RenderTypes, ClampDirectionalShadowSettings)
     EXPECT_FLOAT_EQ(1.0f, clamped.penumbra_ratio_scale);
 }
 
-TEST(ViewportTypes, TextureHandlePayloadIsNotPresentableUntilGpuPresentationExists)
+TEST(ViewportTypes, GpuImagePayloadCarriesRenderOutputButNotCpuPixels)
 {
     quader::ViewportFramePayload payload;
-    payload.texture = quader::RenderTextureHandle {
-        .value = 42,
+    payload.gpu_image = quader::ViewportGpuImageHandle {
+        .viewport_id = quader::ViewportId { 3 },
+        .generation = quader::ViewportGeneration { 5 },
+        .slot_index = 1,
+        .image_generation = 7,
+        .resource_id = 42,
         .extent = { 320, 180 },
+        .readiness = quader::ViewportGpuImageReadiness::ready,
     };
 
-    EXPECT_FALSE(payload.has_pixels());
-    EXPECT_FALSE(payload.has_presentable_pixels());
-    EXPECT_TRUE(payload.has_unsupported_texture_payload());
+    EXPECT_TRUE(payload.has_ready_gpu_image());
+    EXPECT_TRUE(payload.has_render_output());
 }
 
-TEST(ViewportTypes, TemporaryReadbackPayloadIsPresentable)
+TEST(ViewportTypes, GpuImagePayloadMustBeReadyBeforeItCanBeConsumed)
 {
     quader::ViewportFramePayload payload;
-    payload.temporary_readback = quader::TemporaryRgba8ReadbackFrame {
-        .extent = { 2, 2 },
-        .rgba = std::vector<uint8_t>(16, 255),
+    payload.gpu_image = quader::ViewportGpuImageHandle {
+        .viewport_id = quader::ViewportId { 3 },
+        .generation = quader::ViewportGeneration { 5 },
+        .slot_index = 1,
+        .image_generation = 7,
+        .resource_id = 42,
+        .extent = { 320, 180 },
+        .readiness = quader::ViewportGpuImageReadiness::rendering,
     };
 
-    EXPECT_TRUE(payload.has_pixels());
-    EXPECT_TRUE(payload.has_presentable_pixels());
-    EXPECT_FALSE(payload.has_unsupported_texture_payload());
+    EXPECT_FALSE(payload.has_ready_gpu_image());
+    EXPECT_TRUE(payload.has_pending_gpu_image());
+    EXPECT_FALSE(payload.has_render_output());
+}
+
+TEST(ViewportTypes, GpuImagePayloadCanRepresentBackendPendingFrame)
+{
+    quader::ViewportFramePayload payload;
+    payload.gpu_image_pending = true;
+
+    EXPECT_FALSE(payload.has_ready_gpu_image());
+    EXPECT_TRUE(payload.has_pending_gpu_image());
+    EXPECT_FALSE(payload.has_render_output());
+}
+
+TEST(ViewportProjectionPolicy, ClampsOrthographicProjectionToRendererSafeRange)
+{
+    quader::ViewportProjection projection {
+        .kind = quader::ViewportProjectionKind::orthographic,
+        .vertical_fov_degrees = 52.0f,
+        .orthographic_size = 5.0f,
+        .near_plane = 0.01f,
+        .far_plane = 1000.0f,
+    };
+
+    const quader::ViewportProjection clamped =
+        quader::clamp_viewport_projection_for_required_far(projection, 10000.0f);
+    const quader::ViewportProjectionLimits limits = quader::viewport_projection_limits();
+
+    EXPECT_EQ(quader::ViewportProjectionKind::orthographic, clamped.kind);
+    EXPECT_FLOAT_EQ(limits.minimum_near_plane, clamped.near_plane);
+    EXPECT_FLOAT_EQ(10000.0f, clamped.far_plane);
+    EXPECT_LE(quader::viewport_projection_far_to_near_ratio(clamped), limits.maximum_far_to_near_ratio);
+}
+
+TEST(ViewportProjectionPolicy, RepairsInvalidProjectionInputs)
+{
+    quader::ViewportProjection projection {
+        .kind = quader::ViewportProjectionKind::perspective,
+        .vertical_fov_degrees = std::numeric_limits<float>::infinity(),
+        .orthographic_size = -1.0f,
+        .near_plane = -5.0f,
+        .far_plane = std::numeric_limits<float>::quiet_NaN(),
+    };
+
+    const quader::ViewportProjection clamped = quader::clamp_viewport_projection(projection);
+    const quader::ViewportProjectionLimits limits = quader::viewport_projection_limits();
+
+    EXPECT_EQ(quader::ViewportProjectionKind::perspective, clamped.kind);
+    EXPECT_GE(clamped.vertical_fov_degrees, limits.minimum_vertical_fov_degrees);
+    EXPECT_LE(clamped.vertical_fov_degrees, limits.maximum_vertical_fov_degrees);
+    EXPECT_GE(clamped.orthographic_size, limits.minimum_orthographic_size);
+    EXPECT_FLOAT_EQ(limits.minimum_near_plane, clamped.near_plane);
+    EXPECT_GT(clamped.far_plane, clamped.near_plane);
+    EXPECT_LE(quader::viewport_projection_far_to_near_ratio(clamped), limits.maximum_far_to_near_ratio);
 }

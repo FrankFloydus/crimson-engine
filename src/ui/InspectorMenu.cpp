@@ -4,14 +4,18 @@ module;
 
 module quader.ui.inspector_menu;
 
+import quader.ui.controls;
+
 namespace quader {
 
 InspectorCreateMenuResult draw_inspector_create_menu()
 {
     InspectorCreateMenuResult result;
 
-    if (ImGui::BeginMainMenuBar()) {
-        if (ImGui::BeginMenu("Create")) {
+    const MainMenuBarScope main_menu;
+    if (main_menu) {
+        const MenuScope create_menu("Create");
+        if (create_menu) {
             if (ImGui::MenuItem("Cube")) {
                 result.requested_create = CreateSceneItemKind::cube;
             }
@@ -24,11 +28,7 @@ InspectorCreateMenuResult draw_inspector_create_menu()
             if (ImGui::MenuItem("Point Light")) {
                 result.requested_create = CreateSceneItemKind::point_light;
             }
-
-            ImGui::EndMenu();
         }
-
-        ImGui::EndMainMenuBar();
     }
 
     return result;

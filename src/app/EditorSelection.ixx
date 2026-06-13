@@ -10,8 +10,8 @@ export namespace quader {
 
 class EditorSelectionModel {
 public:
-    void select_entity(SceneEntityId entity_id);
-    void clear();
+    bool select_entity(SceneEntityId entity_id);
+    bool clear();
     [[nodiscard]] std::optional<SceneEntityId> selected_entity() const noexcept;
     [[nodiscard]] bool has_selection() const noexcept;
     [[nodiscard]] bool validate_against(const Scene& scene);

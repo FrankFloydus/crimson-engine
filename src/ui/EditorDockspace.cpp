@@ -4,6 +4,8 @@ module;
 
 module quader.ui.editor_dockspace;
 
+import quader.ui.controls;
+
 namespace quader {
 
 void render_editor_dockspace()
@@ -18,10 +20,6 @@ void render_editor_dockspace()
     ImGui::SetNextWindowSize(viewport->WorkSize);
     ImGui::SetNextWindowViewport(viewport->ID);
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-
     constexpr ImGuiWindowFlags dockspace_window_flags =
         ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoTitleBar |
@@ -31,15 +29,15 @@ void render_editor_dockspace()
         ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoNavFocus;
 
-    const bool visible = ImGui::Begin("Quader Editor Dockspace", nullptr, dockspace_window_flags);
-    ImGui::PopStyleVar(3);
+    const StyleVarScope rounding(ImGuiStyleVar_WindowRounding, 0.0f);
+    const StyleVarScope border_size(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const StyleVarScope padding(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    const WindowScope window("Quader Editor Dockspace", nullptr, dockspace_window_flags);
 
-    if (visible) {
+    if (window) {
         const ImGuiID dockspace_id = ImGui::GetID("QuaderEditorDockspace");
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
     }
-
-    ImGui::End();
 }
 
 } // namespace quader

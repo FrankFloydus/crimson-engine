@@ -1,117 +1,21 @@
 module;
 
-#include <imgui.h>
-
 #include <algorithm>
-#include <limits>
-#include <cmath>
 #include <optional>
 #include <stdexcept>
-#include <utility>
+#include <string>
 #include <vector>
 
 module quader.app.editor_viewport;
 
 import quader.render.viewport_gizmos;
+import quader.app.editor_viewport_picking;
 import quader.ui.viewport_host_panel;
 
 namespace quader {
 namespace {
 
 constexpr uint32_t kMinimumRenderableViewportDimension = 64;
-
-struct Ray {
-    Vec3 origin;
-    Vec3 direction;
-};
-
-struct RayHit {
-    SceneEntityId entity_id;
-    std::optional<DebugDrawPickPayload> debug_payload;
-    float distance = 0.0f;
-    uint8_t priority = 0;
-};
-
-float degrees_to_radians(float degrees)
-{
-    constexpr float pi = 3.14159265358979323846f;
-    return degrees * pi / 180.0f;
-}
-
-[[nodiscard]] Vec3 add(Vec3 left, Vec3 right)
-{
-    return { left.x + right.x, left.y + right.y, left.z + right.z };
-}
-
-[[nodiscard]] Vec3 subtract(Vec3 left, Vec3 right)
-{
-    return { left.x - right.x, left.y - right.y, left.z - right.z };
-}
-
-[[nodiscard]] Vec3 scale(Vec3 value, float amount)
-{
-    return { value.x * amount, value.y * amount, value.z * amount };
-}
-
-[[nodiscard]] Vec3 multiply(Vec3 left, Vec3 right)
-{
-    return { left.x * right.x, left.y * right.y, left.z * right.z };
-}
-
-[[nodiscard]] Vec3 divide(Vec3 left, Vec3 right)
-{
-    return {
-        right.x != 0.0f ? left.x / right.x : left.x,
-        right.y != 0.0f ? left.y / right.y : left.y,
-        right.z != 0.0f ? left.z / right.z : left.z,
-    };
-}
-
-[[nodiscard]] float dot(Vec3 left, Vec3 right)
-{
-    return left.x * right.x + left.y * right.y + left.z * right.z;
-}
-
-[[nodiscard]] float squared_length(Vec3 value)
-{
-    return dot(value, value);
-}
-
-[[nodiscard]] Vec3 cross(Vec3 left, Vec3 right)
-{
-    return {
-        left.y * right.z - left.z * right.y,
-        left.z * right.x - left.x * right.z,
-        left.x * right.y - left.y * right.x,
-    };
-}
-
-[[nodiscard]] Vec3 normalized_or(Vec3 value, Vec3 fallback)
-{
-    const float length_squared = squared_length(value);
-    if (length_squared <= 0.000001f) {
-        return fallback;
-    }
-
-    return scale(value, 1.0f / std::sqrt(length_squared));
-}
-
-[[nodiscard]] Vec3 rotate_by_quaternion(Vec3 value, Quaternion rotation)
-{
-    const Vec3 u { rotation.x, rotation.y, rotation.z };
-    const float s = rotation.w;
-    return add(
-        add(scale(u, 2.0f * dot(u, value)), scale(value, s * s - dot(u, u))),
-        scale(cross(u, value), 2.0f * s));
-}
-
-[[nodiscard]] Vec3 inverse_rotate_by_quaternion(Vec3 value, Quaternion rotation)
-{
-    rotation.x = -rotation.x;
-    rotation.y = -rotation.y;
-    rotation.z = -rotation.z;
-    return rotate_by_quaternion(value, rotation);
-}
 
 ViewportId create_viewport_or_throw(IViewportRenderer& renderer, const char* viewport_name)
 {
@@ -126,6 +30,7 @@ ViewportId create_viewport_or_throw(IViewportRenderer& renderer, const char* vie
 ViewportNavigationSnapshot navigation_snapshot_from(
     const Input& input,
     const ResolvedEditorInput& resolved_input,
+    bool text_input_active,
     bool viewport_hovered)
 {
     const ViewportNavigationInputActions navigation_actions =
@@ -133,7 +38,7 @@ ViewportNavigationSnapshot navigation_snapshot_from(
     return ViewportNavigationSnapshot {
         .window_has_keyboard_focus = input.window_has_keyboard_focus(),
         .window_has_mouse_focus = input.window_has_mouse_focus(),
-        .text_input_active = ImGui::GetIO().WantTextInput,
+        .text_input_active = text_input_active,
         .hovered = viewport_hovered,
         .navigation_activate_pressed = navigation_actions.activate_pressed,
         .navigation_activate_released = navigation_actions.activate_released,
@@ -148,225 +53,6 @@ ViewportNavigationSnapshot navigation_snapshot_from(
     };
 }
 
-[[nodiscard]] std::optional<float> intersect_ray_sphere(
-    const Ray& ray,
-    Vec3 center,
-    float radius)
-{
-    const Vec3 offset = subtract(ray.origin, center);
-    const float a = dot(ray.direction, ray.direction);
-    const float b = 2.0f * dot(offset, ray.direction);
-    const float c = dot(offset, offset) - radius * radius;
-    const float discriminant = b * b - 4.0f * a * c;
-    if (a <= 0.0f || discriminant < 0.0f) {
-        return std::nullopt;
-    }
-
-    const float root = std::sqrt(discriminant);
-    const float near_t = (-b - root) / (2.0f * a);
-    const float far_t = (-b + root) / (2.0f * a);
-    if (near_t >= 0.0f) {
-        return near_t;
-    }
-    if (far_t >= 0.0f) {
-        return far_t;
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] std::optional<float> intersect_ray_capsule(
-    const Ray& ray,
-    Vec3 start,
-    Vec3 end,
-    float radius)
-{
-    if (radius <= 0.0f) {
-        return std::nullopt;
-    }
-
-    const Vec3 segment = subtract(end, start);
-    const float segment_length_squared = squared_length(segment);
-    if (segment_length_squared <= 0.000001f) {
-        return intersect_ray_sphere(ray, start, radius);
-    }
-
-    const float ray_length_squared = squared_length(ray.direction);
-    if (ray_length_squared <= 0.000001f) {
-        return std::nullopt;
-    }
-
-    float ray_t = 0.0f;
-    float segment_t = 0.0f;
-    const Vec3 origin_to_start = subtract(ray.origin, start);
-    const float ray_segment_dot = dot(ray.direction, segment);
-    const float origin_ray_dot = dot(origin_to_start, ray.direction);
-    const float origin_segment_dot = dot(origin_to_start, segment);
-    const float denominator = ray_length_squared * segment_length_squared - ray_segment_dot * ray_segment_dot;
-
-    if (std::abs(denominator) > 0.000001f) {
-        ray_t = (ray_segment_dot * origin_segment_dot - segment_length_squared * origin_ray_dot) / denominator;
-        segment_t = (ray_length_squared * origin_segment_dot - ray_segment_dot * origin_ray_dot) / denominator;
-    }
-
-    segment_t = std::clamp(segment_t, 0.0f, 1.0f);
-    const Vec3 segment_point = add(start, scale(segment, segment_t));
-    ray_t = dot(subtract(segment_point, ray.origin), ray.direction) / ray_length_squared;
-    ray_t = std::max(ray_t, 0.0f);
-
-    const Vec3 ray_point = add(ray.origin, scale(ray.direction, ray_t));
-    segment_t = std::clamp(dot(subtract(ray_point, start), segment) / segment_length_squared, 0.0f, 1.0f);
-    const Vec3 closest_segment_point = add(start, scale(segment, segment_t));
-    ray_t = dot(subtract(closest_segment_point, ray.origin), ray.direction) / ray_length_squared;
-    ray_t = std::max(ray_t, 0.0f);
-    const Vec3 closest_ray_point = add(ray.origin, scale(ray.direction, ray_t));
-
-    if (squared_length(subtract(closest_ray_point, closest_segment_point)) > radius * radius) {
-        return std::nullopt;
-    }
-
-    return ray_t;
-}
-
-[[nodiscard]] std::optional<float> intersect_ray_aabb(
-    const Ray& ray,
-    Vec3 bounds_min,
-    Vec3 bounds_max)
-{
-    float t_min = 0.0f;
-    float t_max = std::numeric_limits<float>::max();
-
-    const float origins[3] = { ray.origin.x, ray.origin.y, ray.origin.z };
-    const float directions[3] = { ray.direction.x, ray.direction.y, ray.direction.z };
-    const float mins[3] = { bounds_min.x, bounds_min.y, bounds_min.z };
-    const float maxes[3] = { bounds_max.x, bounds_max.y, bounds_max.z };
-
-    for (int axis = 0; axis < 3; ++axis) {
-        if (std::abs(directions[axis]) <= 0.000001f) {
-            if (origins[axis] < mins[axis] || origins[axis] > maxes[axis]) {
-                return std::nullopt;
-            }
-            continue;
-        }
-
-        float near_t = (mins[axis] - origins[axis]) / directions[axis];
-        float far_t = (maxes[axis] - origins[axis]) / directions[axis];
-        if (near_t > far_t) {
-            std::swap(near_t, far_t);
-        }
-        t_min = std::max(t_min, near_t);
-        t_max = std::min(t_max, far_t);
-        if (t_min > t_max) {
-            return std::nullopt;
-        }
-    }
-
-    return t_min;
-}
-
-[[nodiscard]] std::optional<float> intersect_ray_oriented_box(
-    const Ray& ray,
-    Vec3 center,
-    Vec3 axis_x,
-    Vec3 axis_y,
-    Vec3 axis_z,
-    Vec3 half_extents)
-{
-    axis_x = normalized_or(axis_x, { 1.0f, 0.0f, 0.0f });
-    axis_y = normalized_or(axis_y, { 0.0f, 1.0f, 0.0f });
-    axis_z = normalized_or(axis_z, { 0.0f, 0.0f, 1.0f });
-    const Vec3 origin_delta = subtract(ray.origin, center);
-    const Ray local_ray {
-        .origin = {
-            dot(origin_delta, axis_x),
-            dot(origin_delta, axis_y),
-            dot(origin_delta, axis_z),
-        },
-        .direction = {
-            dot(ray.direction, axis_x),
-            dot(ray.direction, axis_y),
-            dot(ray.direction, axis_z),
-        },
-    };
-    return intersect_ray_aabb(
-        local_ray,
-        scale(half_extents, -1.0f),
-        half_extents);
-}
-
-[[nodiscard]] std::optional<float> intersect_ray_ring(
-    const Ray& ray,
-    Vec3 center,
-    Vec3 normal,
-    float radius,
-    float thickness)
-{
-    if (radius <= 0.0f || thickness <= 0.0f) {
-        return std::nullopt;
-    }
-
-    normal = normalized_or(normal, { 0.0f, 1.0f, 0.0f });
-    const float denominator = dot(ray.direction, normal);
-    if (std::abs(denominator) <= 0.000001f) {
-        return std::nullopt;
-    }
-
-    const float t = dot(subtract(center, ray.origin), normal) / denominator;
-    if (t < 0.0f) {
-        return std::nullopt;
-    }
-
-    const Vec3 hit = add(ray.origin, scale(ray.direction, t));
-    const Vec3 center_to_hit = subtract(hit, center);
-    const Vec3 radial = subtract(center_to_hit, scale(normal, dot(center_to_hit, normal)));
-    if (std::abs(std::sqrt(squared_length(radial)) - radius) > thickness) {
-        return std::nullopt;
-    }
-
-    return t;
-}
-
-[[nodiscard]] Ray viewport_ray_from_surface_pointer(
-    const ViewportInstance& viewport,
-    const ViewportSurfaceResult& surface,
-    ViewportSurfacePointer pointer)
-{
-    const ViewportCamera camera = viewport.current_camera();
-    const ViewportProjection projection = viewport.current_projection();
-    const float aspect =
-        surface.image_bounds.height > 0.0f ? surface.image_bounds.width / surface.image_bounds.height : 1.0f;
-    const float normalized_x = surface.image_bounds.width > 0.0f
-        ? (pointer.local_x / surface.image_bounds.width) * 2.0f - 1.0f
-        : 0.0f;
-    const float normalized_y = surface.image_bounds.height > 0.0f
-        ? 1.0f - (pointer.local_y / surface.image_bounds.height) * 2.0f
-        : 0.0f;
-
-    const Vec3 forward = normalized_or(camera.forward, { 0.0f, 0.0f, -1.0f });
-    const Vec3 right = normalized_or(cross(forward, camera.up), { 1.0f, 0.0f, 0.0f });
-    const Vec3 up = normalized_or(cross(right, forward), { 0.0f, 1.0f, 0.0f });
-
-    if (projection.kind == ViewportProjectionKind::orthographic) {
-        const float half_height = projection.orthographic_size * 0.5f;
-        const float half_width = half_height * aspect;
-        return Ray {
-            .origin = add(
-                camera.position,
-                add(scale(right, normalized_x * half_width), scale(up, normalized_y * half_height))),
-            .direction = forward,
-        };
-    }
-
-    const float half_fov_radians = degrees_to_radians(projection.vertical_fov_degrees) * 0.5f;
-    const float half_height = std::tan(half_fov_radians);
-    const float half_width = half_height * aspect;
-    return Ray {
-        .origin = camera.position,
-        .direction = normalized_or(
-            add(forward, add(scale(right, normalized_x * half_width), scale(up, normalized_y * half_height))),
-            forward),
-    };
-}
-
 [[nodiscard]] bool is_transform_gizmo_payload(DebugDrawPickPayload payload)
 {
     return payload.role == DebugDrawPickRole::transform_move_axis ||
@@ -377,124 +63,22 @@ ViewportNavigationSnapshot navigation_snapshot_from(
         payload.role == DebugDrawPickRole::transform_uniform_scale;
 }
 
-[[nodiscard]] std::optional<float> intersect_mesh_entity(const Ray& ray, const SceneEntity& entity)
-{
-    if (!entity.mesh.has_value()) {
-        return std::nullopt;
-    }
-
-    const Vec3 safe_scale {
-        std::abs(entity.transform.scale.x) > 0.000001f ? entity.transform.scale.x : 1.0f,
-        std::abs(entity.transform.scale.y) > 0.000001f ? entity.transform.scale.y : 1.0f,
-        std::abs(entity.transform.scale.z) > 0.000001f ? entity.transform.scale.z : 1.0f,
-    };
-    const Ray local_ray {
-        .origin = divide(
-            inverse_rotate_by_quaternion(subtract(ray.origin, entity.transform.position), entity.transform.rotation),
-            safe_scale),
-        .direction = divide(inverse_rotate_by_quaternion(ray.direction, entity.transform.rotation), safe_scale),
-    };
-
-    const bool is_plane = entity.mesh->mesh_kind == SceneMeshKind::plane;
-    const Vec3 bounds_min = is_plane ? Vec3 { -0.5f, -0.03f, -0.5f } : Vec3 { -0.5f, -0.5f, -0.5f };
-    const Vec3 bounds_max = is_plane ? Vec3 { 0.5f, 0.03f, 0.5f } : Vec3 { 0.5f, 0.5f, 0.5f };
-    const std::optional<float> local_t = intersect_ray_aabb(local_ray, bounds_min, bounds_max);
-    if (!local_t.has_value()) {
-        return std::nullopt;
-    }
-
-    const Vec3 local_hit = add(local_ray.origin, scale(local_ray.direction, *local_t));
-    const Vec3 world_hit = add(
-        entity.transform.position,
-        rotate_by_quaternion(multiply(local_hit, safe_scale), entity.transform.rotation));
-    return std::sqrt(squared_length(subtract(world_hit, ray.origin)));
-}
-
-void upload_readback_frame_if_available(
+void present_gpu_frame_if_available(
+    IViewportRenderer& renderer,
     const ViewportRenderFrame& frame,
     ImGuiLayer& imgui)
 {
-    if (!frame.payload.temporary_readback.has_value() || !frame.payload.temporary_readback->has_pixels()) {
+    if (!frame.payload.gpu_image.has_value() || !frame.payload.gpu_image->is_ready()) {
         return;
     }
 
-    const TemporaryRgba8ReadbackFrame& readback = *frame.payload.temporary_readback;
-    imgui.upload_viewport_texture(
-        frame.viewport_id,
-        readback.extent.width,
-        readback.extent.height,
-        readback.rgba.data());
-}
-
-[[nodiscard]] bool first_hit_is_better(const RayHit& candidate, const std::optional<RayHit>& current)
-{
-    if (!current.has_value()) {
-        return true;
+    std::optional<ViewportSampledGpuImage> image =
+        renderer.resolve_viewport_gpu_image(*frame.payload.gpu_image);
+    if (!image.has_value()) {
+        return;
     }
 
-    if (candidate.priority != current->priority) {
-        return candidate.priority > current->priority;
-    }
-
-    if (candidate.distance < current->distance) {
-        return true;
-    }
-
-    return false;
-}
-
-void consider_debug_pick_proxies(
-    const Scene& scene,
-    const Ray& ray,
-    const DebugDrawList& draw,
-    std::optional<RayHit>& best_hit)
-{
-    for (const DebugDrawPickProxy& proxy : draw.pick_proxies()) {
-        if (!proxy.is_valid()) {
-            continue;
-        }
-
-        const SceneEntityId owner { proxy.payload.owner_entity_id };
-        if (!scene.contains(owner)) {
-            continue;
-        }
-
-        std::optional<float> hit_distance;
-        switch (proxy.kind) {
-        case DebugDrawPickProxyKind::sphere:
-            hit_distance = intersect_ray_sphere(ray, proxy.center, proxy.radius);
-            break;
-        case DebugDrawPickProxyKind::capsule:
-            hit_distance = intersect_ray_capsule(ray, proxy.segment_a, proxy.segment_b, proxy.radius);
-            break;
-        case DebugDrawPickProxyKind::oriented_box:
-            hit_distance = intersect_ray_oriented_box(
-                ray,
-                proxy.center,
-                proxy.axis_x,
-                proxy.axis_y,
-                proxy.axis_z,
-                proxy.half_extents);
-            break;
-        case DebugDrawPickProxyKind::ring:
-            hit_distance = intersect_ray_ring(ray, proxy.center, proxy.normal, proxy.radius, proxy.thickness);
-            break;
-        }
-
-        if (!hit_distance.has_value()) {
-            continue;
-        }
-
-        RayHit candidate {
-            .entity_id = owner,
-            .debug_payload = proxy.payload,
-            .distance = *hit_distance,
-            .priority = proxy.priority,
-        };
-        if (first_hit_is_better(candidate, best_hit)) {
-            best_hit = candidate;
-        }
-    }
+    (void)imgui.present_viewport_gpu_image(*image);
 }
 
 } // namespace
@@ -510,16 +94,21 @@ EditorViewportFrameResult EditorViewport::render_frame(
     Scene& scene,
     const Input& input,
     EditorSelectionModel& selection,
+    EditorHoverModel& hover,
+    EditorCommandStack& commands,
     float delta_seconds)
 {
     ensure_viewports(renderer);
 
     upload_completed_viewport_frames(renderer, imgui);
+    if (hover.validate_against(scene)) {
+        mark_scene_viewports_dirty();
+    }
 
     EditorViewportFrameResult frame_result;
     std::vector<ViewportId> visible_viewport_ids;
     bool hover_payload_updated = false;
-    const bool text_input_active = ImGui::GetIO().WantTextInput;
+    const bool text_input_active = imgui.text_input_active();
     const EditorInputEnvironment tool_input_environment =
         editor_input_environment_from_input(
             input,
@@ -536,11 +125,15 @@ EditorViewportFrameResult EditorViewport::render_frame(
         scene,
         input,
         selection,
+        hover,
+        commands,
+        text_input_active,
         delta_seconds,
         visible_viewport_ids,
         hover_payload_updated,
         frame_result);
-    if (!hover_payload_updated && transform_gizmo_.set_hovered_payload(std::nullopt)) {
+    if (!hover_payload_updated && hover.clear()) {
+        (void)transform_gizmo_.set_hovered_payload(std::nullopt);
         mark_scene_viewports_dirty();
     }
     release_navigation_capture_if_hidden(visible_viewport_ids);
@@ -556,6 +149,13 @@ EditorViewportFrameResult EditorViewport::render_frame(
 bool EditorViewport::wants_relative_mouse_mode() const noexcept
 {
     return mouse_locked_viewport_.has_value();
+}
+
+bool EditorViewport::has_pending_render_requests() const noexcept
+{
+    return std::any_of(scene_viewports_.begin(), scene_viewports_.end(), [](const ViewportInstance& viewport) {
+        return viewport.request_pending();
+    });
 }
 
 void EditorViewport::mark_render_state_dirty()
@@ -622,6 +222,9 @@ void EditorViewport::render_scene_viewport_host(
     Scene& scene,
     const Input& input,
     EditorSelectionModel& selection,
+    EditorHoverModel& hover,
+    EditorCommandStack& commands,
+    bool text_input_active,
     float delta_seconds,
     std::vector<ViewportId>& visible_viewport_ids,
     bool& hover_payload_updated,
@@ -632,7 +235,7 @@ void EditorViewport::render_scene_viewport_host(
     for (const ViewportInstance& viewport : scene_viewports_) {
         panes.push_back(ViewportPaneInput {
             .id = viewport.id(),
-            .title = viewport.title(),
+            .title = viewport_camera_preset_name(viewport.camera_preset()),
             .texture = imgui.viewport_texture(viewport.id()),
             .performance = performance_overlay_for(viewport, delta_seconds),
             .camera_preset = viewport.camera_preset(),
@@ -669,6 +272,9 @@ void EditorViewport::render_scene_viewport_host(
             pane.surface,
             input,
             selection,
+            hover,
+            commands,
+            text_input_active,
             delta_seconds,
             visible_viewport_ids,
             hover_payload_updated,
@@ -682,6 +288,9 @@ void EditorViewport::update_viewport_from_surface(
     const ViewportSurfaceResult& surface,
     const Input& input,
     EditorSelectionModel& selection,
+    EditorHoverModel& hover,
+    EditorCommandStack& commands,
+    bool text_input_active,
     float delta_seconds,
     std::vector<ViewportId>& visible_viewport_ids,
     bool& hover_payload_updated,
@@ -705,7 +314,7 @@ void EditorViewport::update_viewport_from_surface(
     const EditorInputEnvironment viewport_input_environment =
         editor_input_environment_from_input(
             input,
-            ImGui::GetIO().WantTextInput,
+            text_input_active,
             surface.hovered,
             navigation_captured,
             transform_gizmo_.is_dragging());
@@ -718,42 +327,79 @@ void EditorViewport::update_viewport_from_surface(
     }
 
     if (surface.hovered && surface.pointer.has_value() && !transform_gizmo_.is_dragging()) {
-        const ViewportPickResult hover_pick = pick_from_surface(scene, viewport, selection, surface);
+        const std::optional<TransformGizmoRequest> transform_gizmo =
+            transform_gizmo_.render_request_for_selection(
+                scene,
+                selection.selected_entity(),
+                viewport.current_camera(),
+                viewport.current_projection());
+        const EditorViewportPickResult hover_pick = pick_editor_viewport_surface(
+            scene,
+            viewport.current_camera(),
+            viewport.current_projection(),
+            surface,
+            transform_gizmo);
         const std::optional<DebugDrawPickPayload> hover_payload =
             hover_pick.debug_payload.has_value() && is_transform_gizmo_payload(*hover_pick.debug_payload)
             ? hover_pick.debug_payload
             : std::nullopt;
         hover_payload_updated = true;
-        if (transform_gizmo_.set_hovered_payload(hover_payload)) {
+        const bool hover_changed = hover.set_hovered_pick(hover_pick.entity_id, hover_payload);
+        const bool transform_hover_changed = transform_gizmo_.set_hovered_payload(hover.hovered_debug_payload());
+        if (hover_changed || transform_hover_changed) {
             mark_scene_viewports_dirty();
         }
     }
 
-    if (transform_gizmo_.update_drag(scene, viewport.current_camera(), viewport.current_projection(), surface)) {
-        active_viewport_ = viewport.id();
-        frame_result.scene_changed = true;
-        mark_scene_viewports_dirty();
+    const TransformGizmoController::DragUpdate drag_update =
+        transform_gizmo_.update_drag_preview(scene, viewport.current_camera(), viewport.current_projection(), surface);
+    if (drag_update.transform_changed && drag_update.entity_id.has_value() && drag_update.preview_transform.has_value()) {
+        if (commands.preview_transform_edit(scene, *drag_update.entity_id, *drag_update.preview_transform)) {
+            active_viewport_ = viewport.id();
+            frame_result.scene_changed = true;
+            mark_scene_viewports_dirty();
+        }
+    }
+    if (drag_update.drag_finished) {
+        if (commands.finish_transform_edit(scene)) {
+            frame_result.scene_changed = true;
+            mark_scene_viewports_dirty();
+        }
     }
 
     if (surface.left_clicked && !surface.dragging && !transform_gizmo_.is_dragging()) {
-        const ViewportPickResult pick = pick_from_surface(scene, viewport, selection, surface);
+        const std::optional<TransformGizmoRequest> transform_gizmo =
+            transform_gizmo_.render_request_for_selection(
+                scene,
+                selection.selected_entity(),
+                viewport.current_camera(),
+                viewport.current_projection());
+        const EditorViewportPickResult pick = pick_editor_viewport_surface(
+            scene,
+            viewport.current_camera(),
+            viewport.current_projection(),
+            surface,
+            transform_gizmo);
         if (pick.debug_payload.has_value() &&
             transform_gizmo_.try_begin_drag(
                 *pick.debug_payload,
                 scene,
                 viewport.current_camera(),
-                viewport.current_projection(),
-                surface)) {
-            selection.select_entity(SceneEntityId { pick.debug_payload->owner_entity_id });
+            viewport.current_projection(),
+            surface)) {
+            const SceneEntityId owner { pick.debug_payload->owner_entity_id };
+            (void)selection.select_entity(owner);
+            (void)commands.begin_transform_edit(scene, owner);
             active_viewport_ = viewport.id();
         } else {
-            selection.select_entity(pick.entity_id.value_or(SceneEntityId {}));
+            (void)selection.select_entity(pick.entity_id.value_or(SceneEntityId {}));
+            (void)commands.cancel_transform_edit(scene);
         }
         mark_scene_viewports_dirty();
     }
 
     const ViewportNavigationSnapshot navigation_snapshot =
-        navigation_snapshot_from(input, viewport_input, surface.hovered);
+        navigation_snapshot_from(input, viewport_input, text_input_active, surface.hovered);
     if (mouse_locked_viewport_ == viewport.id() &&
         !viewport.should_keep_navigation_mouse_lock(navigation_snapshot)) {
         mouse_locked_viewport_.reset();
@@ -832,7 +478,7 @@ void EditorViewport::upload_completed_viewport_frames(IViewportRenderer& rendere
             return;
         }
 
-        upload_readback_frame_if_available(*frame, imgui);
+        present_gpu_frame_if_available(renderer, *frame, imgui);
     };
 
     for (ViewportInstance& viewport : scene_viewports_) {
@@ -871,68 +517,6 @@ ViewportPerformanceOverlay EditorViewport::performance_overlay_for(
         .frame_delta_seconds = delta_seconds,
         .render_request_pending = viewport.request_pending(),
         .dirty = viewport.is_dirty(),
-    };
-}
-
-EditorViewport::ViewportPickResult EditorViewport::pick_from_surface(
-    const Scene& scene,
-    const ViewportInstance& viewport,
-    const EditorSelectionModel& selection,
-    const ViewportSurfaceResult& surface) const
-{
-    std::optional<ViewportSurfacePointer> pointer = surface.pointer;
-    if (!pointer.has_value() && surface.click.has_value()) {
-        pointer = ViewportSurfacePointer {
-            .local_x = surface.click->local_x,
-            .local_y = surface.click->local_y,
-        };
-    }
-
-    if (!pointer.has_value() || surface.image_bounds.width <= 0.0f || surface.image_bounds.height <= 0.0f) {
-        return {};
-    }
-
-    const Ray ray = viewport_ray_from_surface_pointer(viewport, surface, *pointer);
-    std::optional<RayHit> best_hit;
-
-    SceneRenderSnapshot snapshot = build_scene_render_snapshot(scene);
-    DebugDrawFrame debug_draw;
-    append_light_gizmos(snapshot, debug_draw);
-    const std::optional<TransformGizmoRequest> transform_gizmo =
-        transform_gizmo_.render_request_for_selection(
-            scene,
-            selection.selected_entity(),
-            viewport.current_camera(),
-            viewport.current_projection());
-    if (transform_gizmo.has_value()) {
-        append_transform_gizmo(*transform_gizmo, debug_draw);
-    }
-    consider_debug_pick_proxies(scene, ray, debug_draw.depth_tested, best_hit);
-    consider_debug_pick_proxies(scene, ray, debug_draw.overlay, best_hit);
-
-    for (const SceneEntity& entity : scene.entities()) {
-        std::optional<float> hit_distance = intersect_mesh_entity(ray, entity);
-
-        if (!hit_distance.has_value()) {
-            continue;
-        }
-
-        RayHit candidate {
-                .entity_id = entity.id,
-                .distance = *hit_distance,
-        };
-        if (first_hit_is_better(candidate, best_hit)) {
-            best_hit = candidate;
-        }
-    }
-
-    if (!best_hit.has_value()) {
-        return {};
-    }
-
-    return ViewportPickResult {
-        .entity_id = best_hit->entity_id,
-        .debug_payload = best_hit->debug_payload,
     };
 }
 

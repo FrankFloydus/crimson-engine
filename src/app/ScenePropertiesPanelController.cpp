@@ -1,20 +1,50 @@
 module;
 
-#include <imgui.h>
-
 #include <optional>
-#include <span>
 
 #include "diagnostics/LogMacros.h"
 
 module quader.app.scene_properties_panel_controller;
 
 import quader.diagnostics.logger;
-import quader.ui.component_editors;
 import quader.ui.inspector_menu;
-import quader.ui.style;
+import quader.ui.property_inspector_panel;
 
 namespace quader {
+namespace {
+
+[[nodiscard]] PropertyInspectorPanelInput make_property_inspector_input(
+    const Scene& scene,
+    const NativeFileDialogService& native_file_dialog,
+    const EditorSelectionModel& selection)
+{
+    PropertyInspectorPanelInput input {
+        .material_texture_picker_busy = native_file_dialog.has_pending_request(),
+    };
+
+    const std::optional<SceneEntityId> selected_entity = selection.selected_entity();
+    if (!selected_entity.has_value()) {
+        return input;
+    }
+
+    const std::optional<SceneEntity> entity = scene.entity(*selected_entity);
+    if (!entity.has_value()) {
+        return input;
+    }
+
+    input.entity = PropertyInspectorPanelEntity {
+        .id = entity->id,
+        .name = entity->name,
+        .transform = scene.transform(entity->id),
+        .material = scene.material(entity->id),
+        .directional_light = scene.directional_light(entity->id),
+        .point_light = scene.point_light(entity->id),
+    };
+
+    return input;
+}
+
+} // namespace
 
 bool ScenePropertiesPanelController::render_frame(
     Scene& scene,
@@ -24,7 +54,7 @@ bool ScenePropertiesPanelController::render_frame(
     bool render_state_changed = selection.validate_against(scene);
     render_state_changed |= consume_texture_picker_result_if_available(scene, native_file_dialog);
     render_state_changed |= render_create_menu(scene, selection);
-    render_outliner(scene, selection);
+    render_state_changed |= render_outliner(scene, selection);
     render_state_changed |= render_property_inspector(scene, native_file_dialog, selection);
     return render_state_changed;
 }
@@ -62,12 +92,14 @@ bool ScenePropertiesPanelController::render_create_menu(Scene& scene, EditorSele
     return false;
 }
 
-void ScenePropertiesPanelController::render_outliner(const Scene& scene, EditorSelectionModel& selection)
+bool ScenePropertiesPanelController::render_outliner(const Scene& scene, EditorSelectionModel& selection)
 {
     const OutlinerPanelResult result = outliner_panel_.draw(scene.entities(), selection.selected_entity());
     if (result.selected_entity.has_value()) {
-        selection.select_entity(*result.selected_entity);
+        return selection.select_entity(*result.selected_entity);
     }
+
+    return false;
 }
 
 bool ScenePropertiesPanelController::render_property_inspector(
@@ -75,69 +107,45 @@ bool ScenePropertiesPanelController::render_property_inspector(
     NativeFileDialogService& native_file_dialog,
     EditorSelectionModel& selection)
 {
-    const InspectorUiStyle style = inspector_ui_style();
-    set_initial_window_bounds(style.window);
+    const PropertyInspectorPanelInput input = make_property_inspector_input(scene, native_file_dialog, selection);
+    const PropertyInspectorPanelResult result = draw_property_inspector_panel(input);
+    if (!result.inspected_entity.has_value()) {
+        return false;
+    }
 
+    const SceneEntityId entity_id = *result.inspected_entity;
     bool render_state_changed = false;
-    if (!ImGui::Begin("Property Inspector")) {
-        ImGui::End();
-        return false;
+
+    if (result.changed_transform.has_value() && scene.set_transform(entity_id, *result.changed_transform)) {
+        render_state_changed = true;
     }
 
-    const std::optional<SceneEntityId> selected_entity = selection.selected_entity();
-    if (!selected_entity.has_value()) {
-        ImGui::TextDisabled("No entity selected.");
-        ImGui::End();
-        return false;
+    if (result.changed_material.has_value() && scene.set_material(entity_id, *result.changed_material)) {
+        render_state_changed = true;
     }
 
-    const std::optional<SceneEntity> entity = scene.entity(*selected_entity);
-    if (!entity.has_value()) {
-        ImGui::TextDisabled("No entity selected.");
-        ImGui::End();
-        return false;
+    if (result.requested_texture_clear.has_value() &&
+        scene.clear_material_texture(entity_id, *result.requested_texture_clear)) {
+        render_state_changed = true;
     }
 
-    ImGui::TextUnformatted(entity->name.data(), entity->name.data() + entity->name.size());
-    ImGui::Separator();
-
-    if (TransformComponent* transform = scene.transform(entity->id)) {
-        const TransformComponentEditorResult transform_result = draw_transform_component(*transform);
-        render_state_changed |= transform_result.transform_changed;
+    if (result.changed_directional_light.has_value() &&
+        scene.set_directional_light(entity_id, *result.changed_directional_light)) {
+        render_state_changed = true;
     }
 
-    if (MaterialComponent* material = scene.material(entity->id)) {
-        const MaterialComponentEditorResult material_result =
-            draw_material_component(material->material, native_file_dialog.has_pending_request());
-
-        render_state_changed |= material_result.settings_changed;
-
-        if (material_result.requested_texture_clear.has_value()) {
-            material_texture_reference(material->material, *material_result.requested_texture_clear).clear();
-            render_state_changed = true;
-        }
-
-        if (material_result.requested_texture_pick.has_value() && !native_file_dialog.has_pending_request()) {
-            pending_material_texture_pick_ = PendingMaterialTexturePick {
-                .entity_id = entity->id,
-                .slot = *material_result.requested_texture_pick,
-            };
-            native_file_dialog.request_image_file();
-        }
+    if (result.changed_point_light.has_value() && scene.set_point_light(entity_id, *result.changed_point_light)) {
+        render_state_changed = true;
     }
 
-    if (SceneDirectionalLightComponent* light = scene.directional_light(entity->id)) {
-        const DirectionalLightComponentEditorResult light_result =
-            draw_directional_light_component(light->settings);
-        render_state_changed |= light_result.settings_changed;
+    if (result.requested_texture_pick.has_value() && !native_file_dialog.has_pending_request()) {
+        pending_material_texture_pick_ = PendingMaterialTexturePick {
+            .entity_id = entity_id,
+            .slot = *result.requested_texture_pick,
+        };
+        native_file_dialog.request_image_file();
     }
 
-    if (PointLightComponent* light = scene.point_light(entity->id)) {
-        const PointLightComponentEditorResult light_result = draw_point_light_component(*light);
-        render_state_changed |= light_result.settings_changed;
-    }
-
-    ImGui::End();
     return render_state_changed;
 }
 
@@ -160,14 +168,13 @@ bool ScenePropertiesPanelController::consume_texture_picker_result_if_available(
             return false;
         }
 
-        MaterialComponent* material = scene.material(pending_pick->entity_id);
+        const MaterialComponent* material = static_cast<const Scene&>(scene).material(pending_pick->entity_id);
         if (material == nullptr) {
             QUADER_LOG_WARN("Image texture picker returned a path, but the selected entity no longer has a material.");
             return false;
         }
 
-        material_texture_reference(material->material, pending_pick->slot).source_path = result->path;
-        return true;
+        return scene.set_material_texture_source(pending_pick->entity_id, pending_pick->slot, result->path);
     }
     case NativeFileDialogStatus::failed:
         if (result->message.empty()) {

@@ -34,6 +34,10 @@ $env:QUADER_AUTOCLOSE_MS = "2000"
 ctest --test-dir .\out\build\vs2026-x64 -C Debug --output-on-failure
 ```
 
+When smoke-testing the app UI, always launch the executable from
+`C:\Users\Drako\Desktop\_QUADER_NATIVE\quader-native\out\build\vs2026-x64\Debug`.
+Before launching it, force-close any existing `quader_native.exe` process, even if the user is currently using that instance, so the test always exercises the freshly built Debug binary.
+
 Always rebuild Debug unless the user explicitly asks for Release. Do not build or smoke-test Release by default for now.
 
 ## Before Starting New Work

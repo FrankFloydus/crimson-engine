@@ -5,6 +5,7 @@ module;
 export module quader.render.viewport_renderer;
 
 export import quader.render.engine;
+export import quader.render.viewport_gpu_image;
 export import quader.render.viewport_types;
 
 export namespace quader {
@@ -21,6 +22,10 @@ public:
     virtual void release_viewport(ViewportId viewport_id) = 0;
     [[nodiscard]] virtual bool request_viewport_frame(const ViewportRenderRequest& request) = 0;
     [[nodiscard]] virtual std::optional<ViewportRenderFrame> try_consume_viewport_frame(ViewportId viewport_id) = 0;
+    [[nodiscard]] virtual std::optional<ViewportSampledGpuImage> resolve_viewport_gpu_image(
+        const ViewportGpuImageHandle& handle) = 0;
+    [[nodiscard]] virtual bool has_retired_viewport_gpu_resources() const noexcept = 0;
+    virtual void collect_retired_viewport_gpu_resources() = 0;
 };
 
 } // namespace quader

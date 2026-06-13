@@ -11,10 +11,6 @@ namespace quader {
 
 SdlWindow::SdlWindow(const char* title, int width, int height)
 {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        throw std::runtime_error(SDL_GetError());
-    }
-
     window_ = SDL_CreateWindow(
         title,
         width,
@@ -31,8 +27,6 @@ SdlWindow::~SdlWindow()
     if (window_ != nullptr) {
         SDL_DestroyWindow(window_);
     }
-
-    SDL_Quit();
 }
 
 SDL_Window* SdlWindow::native_handle() const

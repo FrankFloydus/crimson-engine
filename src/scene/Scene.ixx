@@ -132,39 +132,39 @@ public:
         std::string name = "Directional Light",
         TransformComponent transform = {});
     [[nodiscard]] SceneEntityId create_point_light(std::string name = "Point Light", TransformComponent transform = {});
-    [[nodiscard]] SceneEntity& add_entity(std::string name, TransformComponent transform = {});
 
     [[nodiscard]] bool destroy_entity(SceneEntityId id);
     [[nodiscard]] bool contains(SceneEntityId id) const;
     [[nodiscard]] std::size_t entity_count() const;
-    [[nodiscard]] std::span<SceneEntity> entities();
     [[nodiscard]] std::span<const SceneEntity> entities() const;
     [[nodiscard]] std::optional<SceneEntity> entity(SceneEntityId id) const;
 
-    [[nodiscard]] TransformComponent* transform(SceneEntityId id);
+    [[nodiscard]] bool set_transform(SceneEntityId id, TransformComponent transform);
+    [[nodiscard]] bool set_material(SceneEntityId id, PbrMaterialSettings material);
+    [[nodiscard]] bool clear_material_texture(SceneEntityId id, PbrMaterialTextureSlot slot);
+    [[nodiscard]] bool set_material_texture_source(
+        SceneEntityId id,
+        PbrMaterialTextureSlot slot,
+        std::string source_path);
+    [[nodiscard]] bool set_mesh_shadow_settings(SceneEntityId id, MeshShadowSettings settings);
+    [[nodiscard]] bool set_directional_light(SceneEntityId id, DirectionalLightSettings settings);
+    [[nodiscard]] bool set_point_light(SceneEntityId id, PointLightComponent light);
     [[nodiscard]] const TransformComponent* transform(SceneEntityId id) const;
-    [[nodiscard]] MeshComponent* mesh(SceneEntityId id);
     [[nodiscard]] const MeshComponent* mesh(SceneEntityId id) const;
-    [[nodiscard]] MaterialComponent* material(SceneEntityId id);
     [[nodiscard]] const MaterialComponent* material(SceneEntityId id) const;
-    [[nodiscard]] DirectionalLightComponent* directional_light(SceneEntityId id);
     [[nodiscard]] const DirectionalLightComponent* directional_light(SceneEntityId id) const;
-    [[nodiscard]] PointLightComponent* point_light(SceneEntityId id);
     [[nodiscard]] const PointLightComponent* point_light(SceneEntityId id) const;
 
 private:
     struct SceneStorage;
 
     [[nodiscard]] SceneEntityId create_named_entity(std::string name, TransformComponent transform);
-    void flush_entity_cache() const;
     void rebuild_entity_cache() const;
 
     std::string title_;
     EnvironmentLightingSettings environment_settings_;
     std::unique_ptr<SceneStorage> storage_;
     mutable std::vector<SceneEntity> entity_cache_;
-    mutable bool entity_cache_borrowed_ = false;
-    mutable bool flushing_entity_cache_ = false;
 };
 
 [[nodiscard]] SceneRenderSnapshot build_scene_render_snapshot(const Scene& scene);

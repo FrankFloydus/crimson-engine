@@ -8,6 +8,8 @@ module;
 
 module quader.ui.outliner_panel;
 
+import quader.ui.controls;
+
 namespace quader {
 namespace {
 
@@ -58,28 +60,25 @@ OutlinerPanelResult OutlinerPanel::draw(
         return result;
     }
 
-    if (!ImGui::Begin("Outliner", &open_)) {
-        ImGui::End();
+    const WindowScope window("Outliner", &open_);
+    if (!window) {
         return result;
     }
 
     if (entities.empty()) {
         ImGui::TextDisabled("No entities.");
-        ImGui::End();
         return result;
     }
 
     for (const SceneEntity& entity : entities) {
-        ImGui::PushID(static_cast<int>(entity.id.value));
+        const IdScope entity_id(static_cast<int>(entity.id.value));
         const bool selected = selected_entity.has_value() && *selected_entity == entity.id;
         const std::string_view label = display_name_for(entity);
         if (ImGui::Selectable(label.data(), selected)) {
             result.selected_entity = entity.id;
         }
-        ImGui::PopID();
     }
 
-    ImGui::End();
     return result;
 }
 

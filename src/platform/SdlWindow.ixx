@@ -1,6 +1,6 @@
 module;
 
-#include <SDL3/SDL_video.h>
+#include "platform/SdlForward.h"
 
 #include <cstdint>
 #include <string>

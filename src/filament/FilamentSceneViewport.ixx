@@ -6,6 +6,7 @@ module;
 
 export module quader.filament.scene_viewport;
 
+export import quader.filament.viewport_vulkan_platform;
 export import quader.render.types;
 export import quader.render.viewport_types;
 
@@ -13,7 +14,7 @@ export namespace quader {
 
 class FilamentSceneViewport {
 public:
-    explicit FilamentSceneViewport(filament::Engine& engine);
+    FilamentSceneViewport(filament::Engine& engine, FilamentViewportVulkanPlatform& platform);
 
     FilamentSceneViewport(const FilamentSceneViewport&) = delete;
     FilamentSceneViewport& operator=(const FilamentSceneViewport&) = delete;

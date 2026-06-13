@@ -1,7 +1,6 @@
 module;
 
-#include <imgui.h>
-
+#include <cstdint>
 #include <optional>
 
 export module quader.ui.viewport_surface;
@@ -11,7 +10,7 @@ export import quader.render.viewport_types;
 export namespace quader {
 
 struct ViewportTextureView {
-    ImTextureID texture_id {};
+    uint64_t texture_id = 0;
     RenderExtent extent;
     bool has_pixels = false;
 };

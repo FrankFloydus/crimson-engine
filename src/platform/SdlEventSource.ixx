@@ -1,6 +1,6 @@
 module;
 
-#include <SDL3/SDL_events.h>
+#include "platform/SdlForward.h"
 
 export module quader.platform.sdl_event_source;
 
