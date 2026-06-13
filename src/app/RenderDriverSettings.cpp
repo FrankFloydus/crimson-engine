@@ -214,11 +214,6 @@ std::string serialize_render_driver_settings(RenderDriverSelection selection)
     return contents;
 }
 
-RenderDriverSettingsStore::RenderDriverSettingsStore(const UserSettingsPaths& paths)
-    : RenderDriverSettingsStore(to_string(paths.render_driver_settings_file()))
-{
-}
-
 RenderDriverSettingsStore::RenderDriverSettingsStore(std::string settings_file)
     : settings_file_(std::move(settings_file))
 {

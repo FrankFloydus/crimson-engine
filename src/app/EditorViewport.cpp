@@ -10,7 +10,6 @@ module quader.app.editor_viewport;
 
 import quader.render.viewport_gizmos;
 import quader.app.editor_viewport_picking;
-import quader.ui.viewport_host_panel;
 
 namespace quader {
 namespace {
@@ -73,6 +72,7 @@ EditorViewport::~EditorViewport()
 EditorViewportFrameResult EditorViewport::render_frame(
     IViewportRenderer& renderer,
     IViewportFramePresenter& viewport_presenter,
+    IEditorShell& editor_shell,
     Scene& scene,
     const Input& input,
     EditorSelectionModel& selection,
@@ -104,6 +104,7 @@ EditorViewportFrameResult EditorViewport::render_frame(
     }
     render_scene_viewport_host(
         viewport_presenter,
+        editor_shell,
         scene,
         input,
         selection,
@@ -201,6 +202,7 @@ void EditorViewport::append_owned_viewport_ids(std::vector<ViewportId>& viewport
 
 void EditorViewport::render_scene_viewport_host(
     IViewportFramePresenter& viewport_presenter,
+    IEditorShell& editor_shell,
     Scene& scene,
     const Input& input,
     EditorSelectionModel& selection,
@@ -227,10 +229,16 @@ void EditorViewport::render_scene_viewport_host(
         });
     }
 
-    EnvironmentLightingSettings environment_settings = scene.environment_settings();
-    ViewportHostPanelResult result = draw_viewport_host_panel(layout_state_, environment_settings, panes);
+    const ViewportHostPanelResult result = editor_shell.draw_viewport_host(ViewportHostPanelInput {
+        .layout = layout_state_,
+        .environment = scene.environment_settings(),
+        .panes = panes,
+    });
+    if (result.layout_changed) {
+        layout_state_ = result.layout;
+    }
     if (result.environment_changed) {
-        scene.set_environment_settings(environment_settings);
+        scene.set_environment_settings(result.environment);
         frame_result.scene_changed = true;
         mark_scene_viewports_dirty();
     }

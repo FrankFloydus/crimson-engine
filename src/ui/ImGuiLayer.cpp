@@ -9,10 +9,11 @@ module;
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 module quader.ui.imgui_layer;
 
-import quader.platform.user_settings_paths;
 import quader.render.vulkan_common;
 import quader.ui.imgui_backend_common;
 import quader.ui.viewport_texture_store;
@@ -50,7 +51,11 @@ public:
 
 class ImGuiLayer::Impl {
 public:
-    Impl(const SdlWindow& window, const VulkanDevice& device, const VulkanSwapchain& swapchain);
+    Impl(
+        const SdlWindow& window,
+        const VulkanDevice& device,
+        const VulkanSwapchain& swapchain,
+        std::string imgui_ini_file);
 
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -74,7 +79,7 @@ private:
     void shutdown_backend_state();
 
     const VulkanDevice& device_;
-    UserSettingsPaths user_settings_paths_;
+    std::string imgui_ini_file_;
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     ImGuiViewportTextureRegistry texture_registry_;
     std::unique_ptr<ViewportTextureStore> viewport_textures_;
@@ -83,13 +88,18 @@ private:
     bool vulkan_backend_initialized_ = false;
 };
 
-ImGuiLayer::Impl::Impl(const SdlWindow& window, const VulkanDevice& device, const VulkanSwapchain& swapchain)
+ImGuiLayer::Impl::Impl(
+    const SdlWindow& window,
+    const VulkanDevice& device,
+    const VulkanSwapchain& swapchain,
+    std::string imgui_ini_file)
     : device_(device)
+    , imgui_ini_file_(std::move(imgui_ini_file))
 {
     try {
         descriptor_pool_ = create_descriptor_pool();
 
-        create_editor_imgui_context(user_settings_paths_.imgui_ini_file_c_str());
+        create_editor_imgui_context(imgui_ini_file_.c_str());
         imgui_context_created_ = true;
 
         if (!ImGui_ImplSDL3_InitForVulkan(window.native_handle())) {
@@ -242,8 +252,16 @@ VkDescriptorPool ImGuiLayer::Impl::create_descriptor_pool()
     return descriptor_pool;
 }
 
-ImGuiLayer::ImGuiLayer(const SdlWindow& window, const VulkanDevice& device, const VulkanSwapchain& swapchain)
-    : impl_(std::make_unique<Impl>(window, device, swapchain))
+ImGuiLayer::ImGuiLayer(
+    const SdlWindow& window,
+    const VulkanDevice& device,
+    const VulkanSwapchain& swapchain,
+    std::string imgui_ini_file)
+    : impl_(std::make_unique<Impl>(
+          window,
+          device,
+          swapchain,
+          std::move(imgui_ini_file)))
 {
 }
 

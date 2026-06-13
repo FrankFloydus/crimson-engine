@@ -6,12 +6,13 @@ module;
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "diagnostics/LogMacros.h"
 
 module quader.app;
 
-import quader.app.render_driver_host;
+import quader.app.editor_runtime_host;
 import quader.diagnostics.logger;
 
 namespace quader {
@@ -60,22 +61,23 @@ std::optional<std::chrono::milliseconds> read_autoclose_delay()
 
 } // namespace
 
-Application::Application()
-    : sdl_platform_context_()
-    , user_settings_paths_()
-    , render_driver_settings_(user_settings_paths_)
+Application::Application(UserSettingsPaths user_settings_paths)
+    : user_settings_paths_(std::move(user_settings_paths))
+    , render_driver_settings_(std::string(user_settings_paths_.render_driver_settings_file()))
     , render_driver_selection_(render_driver_settings_.load_selection())
     , render_driver_restart_required_(false)
-    , render_driver_(create_render_driver_host(render_driver_selection_))
-    , native_file_dialog_(render_driver_->window())
-    , event_source_(render_driver_->window())
+    , runtime_host_(create_editor_runtime_host(
+          render_driver_selection_,
+          EditorRuntimeHostConfig {
+              .imgui_ini_file = std::string(user_settings_paths_.imgui_ini_file()),
+          }))
 {
     event_dispatcher_.subscribe(input_);
 
-    const RendererStatus status = render_driver_->status();
+    const RendererStatus status = runtime_host_->status();
     QUADER_LOG_INFO(
         "Renderer initialized with {} driver and {} backend.",
-        render_driver_kind_display_name(render_driver_->driver_kind()),
+        render_driver_kind_display_name(runtime_host_->driver_kind()),
         status.backend_name);
 }
 
@@ -109,24 +111,26 @@ int Application::run()
         update_relative_mouse_mode();
     }
 
-    return render_driver_->status().initialized ? 0 : 2;
+    return runtime_host_->status().initialized ? 0 : 2;
 }
 
 void Application::draw_frame(float delta_seconds)
 {
     ZoneScopedN("Application frame");
 
-    render_driver_->begin_frame();
-    bool render_state_changed = scene_properties_.begin_frame(open_scene_, native_file_dialog_, selection_);
+    runtime_host_->begin_frame();
+    IImageFileDialogService& image_file_dialog = runtime_host_->image_file_dialog();
+    bool render_state_changed = scene_properties_.begin_frame(open_scene_, image_file_dialog, selection_);
     const EditorUiFrameResult editor_ui_result =
-        render_driver_->editor_shell().draw_frame(build_editor_ui_input());
+        runtime_host_->editor_shell().draw_frame(build_editor_ui_input());
     render_state_changed |= apply_editor_ui_result(editor_ui_result);
     if (render_state_changed) {
         scene_viewport_.mark_render_state_dirty();
     }
     const EditorViewportFrameResult viewport_result = scene_viewport_.render_frame(
-        render_driver_->viewport_renderer(),
-        render_driver_->viewport_frame_presenter(),
+        runtime_host_->viewport_renderer(),
+        runtime_host_->viewport_frame_presenter(),
+        runtime_host_->editor_shell(),
         open_scene_,
         input_,
         selection_,
@@ -137,7 +141,7 @@ void Application::draw_frame(float delta_seconds)
         scene_viewport_.mark_render_state_dirty();
     }
     collect_retired_viewport_gpu_resources();
-    render_driver_->end_frame();
+    runtime_host_->end_frame();
 
     FrameMark;
 }
@@ -146,13 +150,13 @@ EditorUiFrameInput Application::build_editor_ui_input()
 {
     return EditorUiFrameInput {
         .main_menu = EditorMainMenuInput {
-            .active_driver = render_driver_->driver_kind(),
+            .active_driver = runtime_host_->driver_kind(),
             .saved_selection = render_driver_selection_,
             .restart_required = render_driver_restart_required_,
         },
         .scene_properties = scene_properties_.build_frame_input(
             open_scene_,
-            native_file_dialog_,
+            runtime_host_->image_file_dialog(),
             selection_),
     };
 }
@@ -163,7 +167,7 @@ bool Application::apply_editor_ui_result(const EditorUiFrameResult& result)
     render_state_changed |= scene_properties_.apply_frame_result(
         result.scene_properties,
         open_scene_,
-        native_file_dialog_,
+        runtime_host_->image_file_dialog(),
         selection_);
     return render_state_changed;
 }
@@ -201,7 +205,7 @@ void Application::save_render_driver_selection(RenderDriverKind requested_driver
     render_driver_selection_ = selection;
     render_driver_restart_required_ = render_driver_selection_requires_restart(
         render_driver_selection_,
-        render_driver_->driver_kind());
+        runtime_host_->driver_kind());
 
     QUADER_LOG_INFO(
         "Render driver preference saved as {}. Restart required: {}.",
@@ -211,18 +215,18 @@ void Application::save_render_driver_selection(RenderDriverKind requested_driver
 
 void Application::collect_retired_viewport_gpu_resources()
 {
-    render_driver_->collect_retired_viewport_gpu_resources(
+    runtime_host_->collect_retired_viewport_gpu_resources(
         scene_viewport_.has_pending_render_requests());
 }
 
 void Application::poll_events()
 {
-    event_source_.poll_events(event_dispatcher_, render_driver_->native_event_sink());
+    runtime_host_->poll_events(event_dispatcher_);
 }
 
 void Application::update_relative_mouse_mode()
 {
-    render_driver_->window().set_relative_mouse_mode(scene_viewport_.wants_relative_mouse_mode());
+    runtime_host_->set_relative_mouse_mode(scene_viewport_.wants_relative_mouse_mode());
 }
 
 } // namespace quader

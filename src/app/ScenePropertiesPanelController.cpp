@@ -44,17 +44,17 @@ namespace {
 
 bool ScenePropertiesPanelController::begin_frame(
     Scene& scene,
-    NativeFileDialogService& native_file_dialog,
+    IImageFileDialogService& image_file_dialog,
     EditorSelectionModel& selection)
 {
     bool render_state_changed = selection.validate_against(scene);
-    render_state_changed |= consume_texture_picker_result_if_available(scene, native_file_dialog);
+    render_state_changed |= consume_texture_picker_result_if_available(scene, image_file_dialog);
     return render_state_changed;
 }
 
 ScenePropertiesPanelFrameInput ScenePropertiesPanelController::build_frame_input(
     const Scene& scene,
-    const NativeFileDialogService& native_file_dialog,
+    const IImageFileDialogService& image_file_dialog,
     const EditorSelectionModel& selection)
 {
     rebuild_outliner_rows(scene);
@@ -64,17 +64,17 @@ ScenePropertiesPanelFrameInput ScenePropertiesPanelController::build_frame_input
             .rows = outliner_rows_,
             .selected_entity = selection.selected_entity(),
         },
-        .property_inspector = make_property_inspector_input(scene, native_file_dialog, selection),
+        .property_inspector = make_property_inspector_input(scene, image_file_dialog, selection),
     };
 }
 
 PropertyInspectorPanelInput ScenePropertiesPanelController::make_property_inspector_input(
     const Scene& scene,
-    const NativeFileDialogService& native_file_dialog,
+    const IImageFileDialogService& image_file_dialog,
     const EditorSelectionModel& selection) const
 {
     PropertyInspectorPanelInput input {
-        .material_texture_picker_busy = native_file_dialog.has_pending_request(),
+        .material_texture_picker_busy = image_file_dialog.has_pending_request(),
     };
 
     const std::optional<SceneEntityId> selected_entity = selection.selected_entity();
@@ -114,11 +114,11 @@ PropertyInspectorPanelInput ScenePropertiesPanelController::make_property_inspec
 bool ScenePropertiesPanelController::apply_frame_result(
     const ScenePropertiesPanelFrameResult& result,
     Scene& scene,
-    NativeFileDialogService& native_file_dialog,
+    IImageFileDialogService& image_file_dialog,
     EditorSelectionModel& selection)
 {
     bool render_state_changed = apply_outliner_result(result.outliner, selection);
-    render_state_changed |= apply_property_inspector_result(result.property_inspector, scene, native_file_dialog);
+    render_state_changed |= apply_property_inspector_result(result.property_inspector, scene, image_file_dialog);
     return render_state_changed;
 }
 
@@ -181,7 +181,7 @@ bool ScenePropertiesPanelController::apply_outliner_result(
 bool ScenePropertiesPanelController::apply_property_inspector_result(
     const PropertyInspectorPanelResult& result,
     Scene& scene,
-    NativeFileDialogService& native_file_dialog)
+    IImageFileDialogService& image_file_dialog)
 {
     if (!result.inspected_entity.has_value()) {
         return false;
@@ -212,12 +212,12 @@ bool ScenePropertiesPanelController::apply_property_inspector_result(
         render_state_changed = true;
     }
 
-    if (result.requested_texture_pick.has_value() && !native_file_dialog.has_pending_request()) {
+    if (result.requested_texture_pick.has_value() && !image_file_dialog.has_pending_request()) {
         pending_material_texture_pick_ = PendingMaterialTexturePick {
             .entity_id = entity_id,
             .slot = *result.requested_texture_pick,
         };
-        native_file_dialog.request_image_file();
+        image_file_dialog.request_image_file();
     }
 
     return render_state_changed;
@@ -225,9 +225,9 @@ bool ScenePropertiesPanelController::apply_property_inspector_result(
 
 bool ScenePropertiesPanelController::consume_texture_picker_result_if_available(
     Scene& scene,
-    NativeFileDialogService& native_file_dialog)
+    IImageFileDialogService& image_file_dialog)
 {
-    std::optional<NativeFileDialogResult> result = native_file_dialog.try_consume_result();
+    std::optional<ImageFileDialogResult> result = image_file_dialog.try_consume_result();
     if (!result.has_value()) {
         return false;
     }
@@ -236,7 +236,7 @@ bool ScenePropertiesPanelController::consume_texture_picker_result_if_available(
     pending_material_texture_pick_.reset();
 
     switch (result->status) {
-    case NativeFileDialogStatus::selected: {
+    case ImageFileDialogStatus::selected: {
         if (!pending_pick.has_value()) {
             QUADER_LOG_WARN("Image texture picker returned a path without a pending material slot.");
             return false;
@@ -250,14 +250,14 @@ bool ScenePropertiesPanelController::consume_texture_picker_result_if_available(
 
         return scene.set_material_texture_source(pending_pick->entity_id, pending_pick->slot, result->path);
     }
-    case NativeFileDialogStatus::failed:
+    case ImageFileDialogStatus::failed:
         if (result->message.empty()) {
             QUADER_LOG_ERROR("Native image file dialog failed.");
         } else {
             QUADER_LOG_ERROR("Native image file dialog failed: {}", result->message);
         }
         return false;
-    case NativeFileDialogStatus::canceled:
+    case ImageFileDialogStatus::canceled:
         return false;
     }
 

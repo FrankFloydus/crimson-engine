@@ -7,7 +7,7 @@ export module quader.app.transform_gizmo;
 export import quader.app.editor_input;
 export import quader.render.viewport_gizmos;
 export import quader.scene.scene;
-export import quader.ui.viewport_surface;
+export import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 

@@ -238,11 +238,10 @@ set(QUADER_CORE_SOURCES
     src/app/EditorViewport.cpp
     src/app/EditorViewportPicking.cpp
     src/app/RenderDriverSettings.cpp
-    src/app/RenderDriverHost.cpp
     src/app/ScenePropertiesPanelController.cpp
     src/app/TransformGizmo.cpp
+    src/app/UserSettingsPaths.cpp
     src/app/ViewportInstance.cpp
-    src/app/ViewportLayout.cpp
     src/diagnostics/FatalDiagnostics.cpp
     src/diagnostics/Logger.cpp
     src/filament/FilamentRenderEngine.cpp
@@ -256,11 +255,13 @@ set(QUADER_CORE_SOURCES
     src/platform/Input.cpp
     src/platform/NativeFileDialog.cpp
     src/platform/SdlEventSource.cpp
+    src/platform/SdlImGuiEditorRuntimeHost.cpp
     src/platform/SdlOpenGlContext.cpp
     src/platform/SdlOpenGlTextureAllocator.cpp
     src/platform/SdlPlatformContext.cpp
+    src/platform/SdlUserSettingsPaths.cpp
+    src/platform/SdlVulkanPresentationSurface.cpp
     src/platform/SdlWindow.cpp
-    src/platform/UserSettingsPaths.cpp
     src/render/RenderEngineFactory.cpp
     src/render/RenderDriverKind.cpp
     src/render/RenderDriverStartupPlan.cpp
@@ -279,6 +280,7 @@ set(QUADER_CORE_SOURCES
     src/ui/ImGuiBackendCommon.cpp
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiOpenGlLayer.cpp
+    src/ui/ImGuiEditorShell.cpp
     src/ui/InspectorMenu.cpp
     src/ui/OutlinerPanel.cpp
     src/ui/PropertyInspectorPanel.cpp
@@ -286,7 +288,7 @@ set(QUADER_CORE_SOURCES
     src/ui/ViewportGpuTextureCache.cpp
     src/ui/ViewportSurface.cpp
     src/ui/ViewportTextureStore.cpp
-    src/ui_shell/ImGuiEditorShell.cpp
+    src/ui_shell/EditorViewportLayout.cpp
 )
 
 set(QUADER_MODULES
@@ -296,16 +298,16 @@ set(QUADER_MODULES
     src/app/EditorCamera.ixx
     src/app/EditorHover.ixx
     src/app/EditorInput.ixx
+    src/app/EditorRuntimeHost.ixx
     src/app/EditorSelection.ixx
     src/app/EditorViewport.ixx
     src/app/EditorViewportPicking.ixx
     src/app/RenderDriverSettings.ixx
-    src/app/RenderDriverHost.ixx
     src/app/ScenePropertiesPanelController.ixx
     src/app/TransformGizmo.ixx
+    src/app/UserSettingsPaths.ixx
     src/app/ViewportFramePresenter.ixx
     src/app/ViewportInstance.ixx
-    src/app/ViewportLayout.ixx
     src/diagnostics/FatalDiagnostics.ixx
     src/diagnostics/Logger.ixx
     src/filament/FilamentRenderEngine.ixx
@@ -317,14 +319,15 @@ set(QUADER_MODULES
     src/platform/FatalErrorDialog.ixx
     src/platform/AppEvent.ixx
     src/platform/AppEventDispatcher.ixx
+    src/platform/FileDialog.ixx
     src/platform/Input.ixx
     src/platform/NativeFileDialog.ixx
     src/platform/SdlEventSource.ixx
     src/platform/SdlOpenGlContext.ixx
     src/platform/SdlOpenGlTextureAllocator.ixx
     src/platform/SdlPlatformContext.ixx
+    src/platform/SdlUserSettingsPaths.ixx
     src/platform/SdlWindow.ixx
-    src/platform/UserSettingsPaths.ixx
     src/render/IRenderEngine.ixx
     src/render/OpenGlTexture.ixx
     src/render/RendererStatus.ixx
@@ -342,6 +345,8 @@ set(QUADER_MODULES
     src/render/ViewportGizmos.ixx
     src/render/VulkanViewportImageRing.ixx
     src/render/VulkanCommon.ixx
+    src/render/VulkanPresentationSurface.ixx
+    src/platform/SdlVulkanPresentationSurface.ixx
     src/render/VulkanDevice.ixx
     src/render/VulkanSwapchain.ixx
     src/scene/Scene.ixx
@@ -350,6 +355,7 @@ set(QUADER_MODULES
     src/ui/ImGuiBackendCommon.ixx
     src/ui/ImGuiLayer.ixx
     src/ui/ImGuiOpenGlLayer.ixx
+    src/ui/ImGuiEditorShell.ixx
     src/ui/InspectorMenu.ixx
     src/ui/OutlinerPanel.ixx
     src/ui/PropertyInspectorPanel.ixx
@@ -359,9 +365,10 @@ set(QUADER_MODULES
     src/ui/ViewportGpuTextureCache.ixx
     src/ui/ViewportSurface.ixx
     src/ui/ViewportTextureStore.ixx
+    src/ui_shell/EditorViewportLayout.ixx
+    src/ui_shell/EditorViewportContracts.ixx
     src/ui_shell/EditorPanelContracts.ixx
     src/ui_shell/EditorShell.ixx
-    src/ui_shell/ImGuiEditorShell.ixx
 )
 
 add_library(quader_core STATIC ${QUADER_CORE_SOURCES})
@@ -435,7 +442,9 @@ add_executable(quader_tests
     tests/RenderTypesTests.cpp
     tests/RendererStartupValidationTests.cpp
     tests/SceneTests.cpp
+    tests/ScenePropertiesPanelControllerTests.cpp
     tests/TransformGizmoTests.cpp
+    tests/UserSettingsPathsTests.cpp
     tests/ViewportGpuTextureCacheTests.cpp
     tests/VulkanDeviceContextTests.cpp
     tests/VulkanViewportImageRingTests.cpp

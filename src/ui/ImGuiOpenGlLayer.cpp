@@ -7,10 +7,11 @@ module;
 #include <memory>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 module quader.ui.imgui_opengl_layer;
 
-import quader.platform.user_settings_paths;
 import quader.ui.imgui_backend_common;
 import quader.ui.viewport_texture_store;
 
@@ -38,7 +39,11 @@ public:
 
 class ImGuiOpenGlLayer::Impl {
 public:
-    Impl(const SdlWindow& window, SdlOpenGlContext& context, const char* glsl_version);
+    Impl(
+        const SdlWindow& window,
+        SdlOpenGlContext& context,
+        std::string imgui_ini_file,
+        const char* glsl_version);
 
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -60,7 +65,7 @@ private:
     void shutdown_backend_state() noexcept;
 
     SdlOpenGlContext& context_;
-    UserSettingsPaths user_settings_paths_;
+    std::string imgui_ini_file_;
     ImGuiOpenGlViewportTextureRegistry texture_registry_;
     std::unique_ptr<ViewportTextureStore> viewport_textures_;
     bool imgui_context_created_ = false;
@@ -71,13 +76,15 @@ private:
 ImGuiOpenGlLayer::Impl::Impl(
     const SdlWindow& window,
     SdlOpenGlContext& context,
+    std::string imgui_ini_file,
     const char* glsl_version)
     : context_(context)
+    , imgui_ini_file_(std::move(imgui_ini_file))
 {
     try {
         context_.make_current();
 
-        create_editor_imgui_context(user_settings_paths_.imgui_ini_file_c_str());
+        create_editor_imgui_context(imgui_ini_file_.c_str());
         imgui_context_created_ = true;
 
         if (!ImGui_ImplSDL3_InitForOpenGL(window.native_handle(), context_.native_handle())) {
@@ -189,8 +196,13 @@ ViewportTextureView ImGuiOpenGlLayer::Impl::viewport_texture(ViewportId viewport
 ImGuiOpenGlLayer::ImGuiOpenGlLayer(
     const SdlWindow& window,
     SdlOpenGlContext& context,
+    std::string imgui_ini_file,
     const char* glsl_version)
-    : impl_(std::make_unique<Impl>(window, context, glsl_version))
+    : impl_(std::make_unique<Impl>(
+          window,
+          context,
+          std::move(imgui_ini_file),
+          glsl_version))
 {
 }
 

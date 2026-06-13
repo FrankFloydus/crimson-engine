@@ -5,6 +5,7 @@ module;
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 
 export module quader.ui.imgui_layer;
 
@@ -14,13 +15,17 @@ import quader.render.vulkan_device;
 import quader.render.vulkan_swapchain;
 export import quader.render.viewport_types;
 export import quader.ui.viewport_gpu_texture_cache;
-export import quader.ui.viewport_surface;
+export import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 
 class ImGuiLayer : public ISdlNativeEventSink {
 public:
-    ImGuiLayer(const SdlWindow& window, const VulkanDevice& device, const VulkanSwapchain& swapchain);
+    ImGuiLayer(
+        const SdlWindow& window,
+        const VulkanDevice& device,
+        const VulkanSwapchain& swapchain,
+        std::string imgui_ini_file);
 
     ImGuiLayer(const ImGuiLayer&) = delete;
     ImGuiLayer& operator=(const ImGuiLayer&) = delete;

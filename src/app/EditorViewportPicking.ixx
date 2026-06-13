@@ -6,7 +6,7 @@ export module quader.app.editor_viewport_picking;
 
 import quader.app.transform_gizmo;
 import quader.scene.scene;
-import quader.ui.viewport_surface;
+import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 

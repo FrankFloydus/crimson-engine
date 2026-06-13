@@ -15,6 +15,7 @@ module quader.ui.viewport_host_panel;
 
 import quader.ui.controls;
 import quader.ui.style;
+import quader.ui.viewport_surface;
 
 namespace quader {
 namespace {
@@ -555,15 +556,20 @@ ViewportPaneResult draw_pane(
 
 } // namespace
 
-ViewportHostPanelResult draw_viewport_host_panel(
-    ViewportLayoutState& layout_state,
-    EnvironmentLightingSettings& environment_settings,
-    std::span<const ViewportPaneInput> panes)
+ViewportHostPanelResult draw_viewport_host_panel(const ViewportHostPanelInput& input)
 {
     const ViewportHostUiStyle style = viewport_host_ui_style();
     set_initial_window_bounds(style.window);
 
     ViewportHostPanelResult result;
+    ViewportLayoutState layout_state = input.layout;
+    EnvironmentLightingSettings environment_settings = input.environment;
+    const std::span<const ViewportPaneInput> panes = input.panes;
+    auto capture_result_state = [&result, &layout_state, &environment_settings] {
+        result.layout = layout_state;
+        result.environment = environment_settings;
+    };
+
     const WindowScope window("Viewport");
     if (window) {
         result.layout_changed |= draw_layout_combo(layout_state, style);
@@ -574,6 +580,7 @@ ViewportHostPanelResult draw_viewport_host_panel(
         const ImVec2 content_origin = ImGui::GetCursorScreenPos();
         const ImVec2 content_size = ImGui::GetContentRegionAvail();
         if (content_size.x < style.minimum_pane_pixels || content_size.y < style.minimum_pane_pixels) {
+            capture_result_state();
             return result;
         }
 
@@ -611,6 +618,7 @@ ViewportHostPanelResult draw_viewport_host_panel(
         result.layout_changed |= draw_splitters(layout_state, content_origin, content_size, style);
     }
 
+    capture_result_state();
     return result;
 }
 

@@ -7,7 +7,7 @@ export module quader.ui.viewport_texture_store;
 
 export import quader.render.viewport_types;
 export import quader.ui.viewport_gpu_texture_cache;
-export import quader.ui.viewport_surface;
+export import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 

@@ -104,10 +104,10 @@ bool NativeFileDialogService::has_pending_request() const
     return state_->pending;
 }
 
-std::optional<NativeFileDialogResult> NativeFileDialogService::try_consume_result()
+std::optional<ImageFileDialogResult> NativeFileDialogService::try_consume_result()
 {
     std::lock_guard lock(state_->mutex);
-    std::optional<NativeFileDialogResult> result = std::move(state_->result);
+    std::optional<ImageFileDialogResult> result = std::move(state_->result);
     state_->result.reset();
     return result;
 }

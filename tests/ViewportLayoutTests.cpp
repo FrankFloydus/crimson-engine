@@ -6,7 +6,7 @@
 #include <span>
 #include <vector>
 
-import quader.app.viewport_layout;
+import quader.ui_shell.editor_viewport_layout;
 
 namespace {
 

@@ -6,7 +6,7 @@ module;
 #include <cstddef>
 #include <span>
 
-module quader.app.viewport_layout;
+module quader.ui_shell.editor_viewport_layout;
 
 namespace quader {
 namespace {

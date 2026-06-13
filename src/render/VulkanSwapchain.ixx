@@ -7,14 +7,14 @@ module;
 
 export module quader.render.vulkan_swapchain;
 
-export import quader.platform.sdl_window;
 export import quader.render.vulkan_device;
+export import quader.render.vulkan_presentation_surface;
 
 export namespace quader {
 
 class VulkanSwapchain {
 public:
-    VulkanSwapchain(const VulkanDevice& device, const SdlWindow& window);
+    VulkanSwapchain(const VulkanDevice& device, const IVulkanPresentationSurface& presentation_surface);
 
     VulkanSwapchain(const VulkanSwapchain&) = delete;
     VulkanSwapchain& operator=(const VulkanSwapchain&) = delete;
@@ -25,7 +25,7 @@ public:
     [[nodiscard]] uint32_t image_count() const;
     [[nodiscard]] VkRenderPass render_pass() const;
 
-    void recreate_if_needed(const SdlWindow& window);
+    void recreate_if_needed(const IVulkanPresentationSurface& presentation_surface);
     void render_current_imgui_frame();
 
 private:

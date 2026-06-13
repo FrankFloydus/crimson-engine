@@ -5,14 +5,18 @@ module;
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
-module quader.app.render_driver_host;
+module quader.app.editor_runtime_host;
 
-import quader.platform.sdl_window;
+import quader.platform.native_file_dialog;
+import quader.platform.sdl_event_source;
 import quader.platform.sdl_opengl_context;
 import quader.platform.sdl_opengl_texture_allocator;
-import quader.app.viewport_frame_presenter;
+import quader.platform.sdl_platform_context;
+import quader.platform.sdl_vulkan_presentation_surface;
+import quader.platform.sdl_window;
 import quader.render.driver_kind;
 import quader.render.driver_startup_plan;
 import quader.render.engine_factory;
@@ -23,7 +27,7 @@ import quader.render.vulkan_swapchain;
 import quader.render.viewport_renderer;
 import quader.ui.imgui_layer;
 import quader.ui.imgui_opengl_layer;
-import quader.ui_shell.imgui_editor_shell;
+import quader.ui.imgui_editor_shell;
 
 namespace quader {
 namespace {
@@ -85,21 +89,25 @@ std::unique_ptr<IViewportRenderer> create_opengl_renderer_engine_or_throw(
     return describe_default_window(RenderSurfaceKind::opengl);
 }
 
-class VulkanRenderDriverHost final : public IRenderDriverHost, public IViewportFramePresenter {
+class VulkanEditorRuntimeHost final : public IEditorRuntimeHost, public IViewportFramePresenter {
 public:
-    explicit VulkanRenderDriverHost(RenderSurfaceKind surface)
-        : window_(describe_default_window(surface))
-        , device_(window_)
-        , swapchain_(device_, window_)
+    VulkanEditorRuntimeHost(RenderSurfaceKind surface, const EditorRuntimeHostConfig& config)
+        : platform_()
+        , window_(describe_default_window(surface))
+        , native_file_dialog_(window_)
+        , event_source_(window_)
+        , presentation_surface_(window_)
+        , device_(presentation_surface_)
+        , swapchain_(device_, presentation_surface_)
         , viewport_renderer_(create_renderer_engine_or_throw(device_))
-        , imgui_(window_, device_, swapchain_)
+        , imgui_(window_, device_, swapchain_, config.imgui_ini_file)
     {
     }
 
-    VulkanRenderDriverHost(const VulkanRenderDriverHost&) = delete;
-    VulkanRenderDriverHost& operator=(const VulkanRenderDriverHost&) = delete;
+    VulkanEditorRuntimeHost(const VulkanEditorRuntimeHost&) = delete;
+    VulkanEditorRuntimeHost& operator=(const VulkanEditorRuntimeHost&) = delete;
 
-    ~VulkanRenderDriverHost() override = default;
+    ~VulkanEditorRuntimeHost() override = default;
 
     [[nodiscard]] RenderDriverKind driver_kind() const noexcept override
     {
@@ -109,11 +117,6 @@ public:
     [[nodiscard]] RendererStatus status() const override
     {
         return viewport_renderer_->status();
-    }
-
-    [[nodiscard]] SdlWindow& window() override
-    {
-        return window_;
     }
 
     [[nodiscard]] IEditorShell& editor_shell() override
@@ -131,14 +134,24 @@ public:
         return *this;
     }
 
-    [[nodiscard]] ISdlNativeEventSink& native_event_sink() override
+    [[nodiscard]] IImageFileDialogService& image_file_dialog() override
     {
-        return imgui_;
+        return native_file_dialog_;
+    }
+
+    void poll_events(AppEventDispatcher& dispatcher) override
+    {
+        event_source_.poll_events(dispatcher, imgui_);
+    }
+
+    void set_relative_mouse_mode(bool enabled) override
+    {
+        window_.set_relative_mouse_mode(enabled);
     }
 
     void begin_frame() override
     {
-        swapchain_.recreate_if_needed(window_);
+        swapchain_.recreate_if_needed(presentation_surface_);
         imgui_.begin_frame();
     }
 
@@ -197,7 +210,11 @@ public:
     }
 
 private:
+    SdlPlatformContext platform_;
     SdlWindow window_;
+    NativeFileDialogService native_file_dialog_;
+    SdlEventSource event_source_;
+    SdlVulkanPresentationSurface presentation_surface_;
     VulkanDevice device_;
     VulkanSwapchain swapchain_;
     std::unique_ptr<IViewportRenderer> viewport_renderer_;
@@ -205,21 +222,24 @@ private:
     ImGuiEditorShell editor_shell_;
 };
 
-class OpenGlRenderDriverHost final : public IRenderDriverHost, public IViewportFramePresenter {
+class OpenGlEditorRuntimeHost final : public IEditorRuntimeHost, public IViewportFramePresenter {
 public:
-    explicit OpenGlRenderDriverHost(RenderSurfaceKind surface)
-        : window_(describe_opengl_window(surface))
+    OpenGlEditorRuntimeHost(RenderSurfaceKind surface, const EditorRuntimeHostConfig& config)
+        : platform_()
+        , window_(describe_opengl_window(surface))
+        , native_file_dialog_(window_)
+        , event_source_(window_)
         , context_(window_)
         , texture_allocator_(context_)
         , viewport_renderer_(create_opengl_renderer_engine_or_throw(context_, texture_allocator_))
-        , imgui_(window_, context_)
+        , imgui_(window_, context_, config.imgui_ini_file)
     {
     }
 
-    OpenGlRenderDriverHost(const OpenGlRenderDriverHost&) = delete;
-    OpenGlRenderDriverHost& operator=(const OpenGlRenderDriverHost&) = delete;
+    OpenGlEditorRuntimeHost(const OpenGlEditorRuntimeHost&) = delete;
+    OpenGlEditorRuntimeHost& operator=(const OpenGlEditorRuntimeHost&) = delete;
 
-    ~OpenGlRenderDriverHost() override = default;
+    ~OpenGlEditorRuntimeHost() override = default;
 
     [[nodiscard]] RenderDriverKind driver_kind() const noexcept override
     {
@@ -229,11 +249,6 @@ public:
     [[nodiscard]] RendererStatus status() const override
     {
         return viewport_renderer_->status();
-    }
-
-    [[nodiscard]] SdlWindow& window() override
-    {
-        return window_;
     }
 
     [[nodiscard]] IEditorShell& editor_shell() override
@@ -251,9 +266,19 @@ public:
         return *this;
     }
 
-    [[nodiscard]] ISdlNativeEventSink& native_event_sink() override
+    [[nodiscard]] IImageFileDialogService& image_file_dialog() override
     {
-        return imgui_;
+        return native_file_dialog_;
+    }
+
+    void poll_events(AppEventDispatcher& dispatcher) override
+    {
+        event_source_.poll_events(dispatcher, imgui_);
+    }
+
+    void set_relative_mouse_mode(bool enabled) override
+    {
+        window_.set_relative_mouse_mode(enabled);
     }
 
     void begin_frame() override
@@ -320,7 +345,10 @@ public:
     }
 
 private:
+    SdlPlatformContext platform_;
     SdlWindow window_;
+    NativeFileDialogService native_file_dialog_;
+    SdlEventSource event_source_;
     SdlOpenGlContext context_;
     SdlOpenGlTextureAllocator texture_allocator_;
     std::unique_ptr<IViewportRenderer> viewport_renderer_;
@@ -328,8 +356,9 @@ private:
     ImGuiEditorShell editor_shell_;
 };
 
-[[nodiscard]] std::unique_ptr<IRenderDriverHost> create_host_for_candidate(
-    const RenderDriverStartupCandidate& candidate)
+[[nodiscard]] std::unique_ptr<IEditorRuntimeHost> create_host_for_candidate(
+    const RenderDriverStartupCandidate& candidate,
+    const EditorRuntimeHostConfig& config)
 {
     if (candidate.availability != RenderDriverBuildAvailability::implemented) {
         throw std::runtime_error(describe_render_driver_unavailable(candidate.driver));
@@ -337,9 +366,9 @@ private:
 
     switch (candidate.driver) {
     case RenderDriverKind::vulkan:
-        return std::make_unique<VulkanRenderDriverHost>(candidate.surface);
+        return std::make_unique<VulkanEditorRuntimeHost>(candidate.surface, config);
     case RenderDriverKind::opengl:
-        return std::make_unique<OpenGlRenderDriverHost>(candidate.surface);
+        return std::make_unique<OpenGlEditorRuntimeHost>(candidate.surface, config);
     case RenderDriverKind::metal:
         throw std::runtime_error(describe_render_driver_unavailable(candidate.driver));
     case RenderDriverKind::automatic:
@@ -351,15 +380,21 @@ private:
 
 } // namespace
 
-std::unique_ptr<IRenderDriverHost> create_render_driver_host(RenderDriverSelection selection)
+std::unique_ptr<IEditorRuntimeHost> create_editor_runtime_host(
+    RenderDriverSelection selection,
+    EditorRuntimeHostConfig config)
 {
+    if (config.imgui_ini_file.empty()) {
+        throw std::invalid_argument("Editor runtime host ImGui ini file path is empty.");
+    }
+
     const RenderDriverStartupPlan plan = make_render_driver_startup_plan(selection);
     std::vector<RenderDriverStartupFailure> failures;
     failures.reserve(plan.candidate_count);
 
     for (const RenderDriverStartupCandidate& candidate : plan.active_candidates()) {
         try {
-            return create_host_for_candidate(candidate);
+            return create_host_for_candidate(candidate, config);
         } catch (const std::exception& exception) {
             if (!selection.is_automatic()) {
                 throw std::runtime_error(describe_requested_render_driver_failure(
@@ -381,11 +416,6 @@ std::unique_ptr<IRenderDriverHost> create_render_driver_host(RenderDriverSelecti
     throw std::runtime_error(describe_requested_render_driver_failure(
         selection.requested_driver,
         "No startup candidate was available."));
-}
-
-std::unique_ptr<IRenderDriverHost> create_default_render_driver_host()
-{
-    return create_render_driver_host(RenderDriverSelection {});
 }
 
 } // namespace quader

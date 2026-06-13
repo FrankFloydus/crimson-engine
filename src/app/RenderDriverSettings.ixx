@@ -6,7 +6,6 @@ module;
 
 export module quader.app.render_driver_settings;
 
-export import quader.platform.user_settings_paths;
 export import quader.render.driver_kind;
 
 export namespace quader {
@@ -17,7 +16,6 @@ export namespace quader {
 
 class RenderDriverSettingsStore final {
 public:
-    explicit RenderDriverSettingsStore(const UserSettingsPaths& paths);
     explicit RenderDriverSettingsStore(std::string settings_file);
 
     [[nodiscard]] std::string_view settings_file() const noexcept;

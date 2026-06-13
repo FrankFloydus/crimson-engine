@@ -5,7 +5,7 @@ module;
 export module quader.app.viewport_frame_presenter;
 
 export import quader.render.viewport_types;
-export import quader.ui.viewport_surface;
+export import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 

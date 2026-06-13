@@ -2,27 +2,18 @@ module;
 
 #include <memory>
 #include <optional>
-#include <string>
 
 export module quader.platform.native_file_dialog;
 
+export import quader.platform.file_dialog;
 import quader.platform.sdl_window;
 
 export namespace quader {
 
-enum class NativeFileDialogStatus {
-    selected,
-    canceled,
-    failed,
-};
+export using NativeFileDialogStatus = ImageFileDialogStatus;
+export using NativeFileDialogResult = ImageFileDialogResult;
 
-struct NativeFileDialogResult {
-    NativeFileDialogStatus status = NativeFileDialogStatus::canceled;
-    std::string path;
-    std::string message;
-};
-
-class NativeFileDialogService {
+class NativeFileDialogService final : public IImageFileDialogService {
 public:
     struct SharedState;
 
@@ -31,9 +22,9 @@ public:
     NativeFileDialogService(const NativeFileDialogService&) = delete;
     NativeFileDialogService& operator=(const NativeFileDialogService&) = delete;
 
-    void request_image_file();
-    [[nodiscard]] bool has_pending_request() const;
-    [[nodiscard]] std::optional<NativeFileDialogResult> try_consume_result();
+    void request_image_file() override;
+    [[nodiscard]] bool has_pending_request() const override;
+    [[nodiscard]] std::optional<ImageFileDialogResult> try_consume_result() override;
 
 private:
     const SdlWindow& window_;

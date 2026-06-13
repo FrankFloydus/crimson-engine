@@ -5,7 +5,7 @@ module;
 #include <span>
 #include <vector>
 
-export module quader.app.viewport_layout;
+export module quader.ui_shell.editor_viewport_layout;
 
 export import quader.render.viewport_types;
 

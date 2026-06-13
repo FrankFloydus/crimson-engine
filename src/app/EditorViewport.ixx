@@ -11,12 +11,12 @@ import quader.app.editor_hover;
 import quader.app.editor_input;
 import quader.app.transform_gizmo;
 import quader.app.viewport_instance;
-import quader.app.viewport_layout;
 import quader.app.viewport_frame_presenter;
 import quader.platform.input;
 import quader.render.viewport_renderer;
 import quader.scene.scene;
-import quader.ui.viewport_surface;
+import quader.ui_shell.editor_shell;
+import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 
@@ -31,6 +31,7 @@ public:
     [[nodiscard]] EditorViewportFrameResult render_frame(
         IViewportRenderer& renderer,
         IViewportFramePresenter& viewport_presenter,
+        IEditorShell& editor_shell,
         Scene& scene,
         const Input& input,
         EditorSelectionModel& selection,
@@ -49,6 +50,7 @@ private:
 
     void render_scene_viewport_host(
         IViewportFramePresenter& viewport_presenter,
+        IEditorShell& editor_shell,
         Scene& scene,
         const Input& input,
         EditorSelectionModel& selection,

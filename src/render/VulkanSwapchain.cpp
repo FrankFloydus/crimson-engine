@@ -3,7 +3,6 @@ module;
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 #include <tracy/Tracy.hpp>
-#include <SDL3/SDL.h>
 
 #include <iterator>
 #include <memory>
@@ -16,21 +15,12 @@ import quader.render.vulkan_common;
 namespace quader {
 namespace {
 
-VkExtent2D framebuffer_size_of(const SdlWindow& window)
+VkExtent2D to_vk_extent(VulkanFramebufferExtent extent)
 {
-    int width = 0;
-    int height = 0;
-    SDL_GetWindowSizeInPixels(window.native_handle(), &width, &height);
-
     return VkExtent2D {
-        static_cast<uint32_t>(width > 0 ? width : 0),
-        static_cast<uint32_t>(height > 0 ? height : 0),
+        extent.width,
+        extent.height,
     };
-}
-
-bool window_is_minimized(const SdlWindow& window)
-{
-    return (SDL_GetWindowFlags(window.native_handle()) & SDL_WINDOW_MINIMIZED) != 0;
 }
 
 bool framebuffer_has_pixels(VkExtent2D size)
@@ -61,10 +51,10 @@ VkRenderPassBeginInfo describe_render_pass(
 } // namespace
 
 struct VulkanSwapchain::Resources {
-    Resources(const VulkanDevice& device, const SdlWindow& window)
+    Resources(const VulkanDevice& device, const IVulkanPresentationSurface& presentation_surface)
         : device_(device)
     {
-        create_or_resize(window);
+        create_or_resize(presentation_surface);
     }
 
     Resources(const Resources&) = delete;
@@ -92,14 +82,14 @@ struct VulkanSwapchain::Resources {
         return window_data_.RenderPass;
     }
 
-    void recreate_if_needed(const SdlWindow& window)
+    void recreate_if_needed(const IVulkanPresentationSurface& presentation_surface)
     {
-        if (window_is_minimized(window)) {
-            SDL_Delay(10);
+        if (presentation_surface.is_minimized()) {
+            presentation_surface.wait_while_minimized();
             return;
         }
 
-        const VkExtent2D framebuffer_size = framebuffer_size_of(window);
+        const VkExtent2D framebuffer_size = to_vk_extent(presentation_surface.framebuffer_extent());
         if (!framebuffer_has_pixels(framebuffer_size) || already_matches(framebuffer_size)) {
             return;
         }
@@ -126,13 +116,13 @@ struct VulkanSwapchain::Resources {
     }
 
 private:
-    void create_or_resize(const SdlWindow& window)
+    void create_or_resize(const IVulkanPresentationSurface& presentation_surface)
     {
         ensure_selected_queue_can_present();
         window_data_.Surface = device_.surface();
         choose_surface_format();
         choose_present_mode();
-        create_initial_swapchain(framebuffer_size_of(window));
+        create_initial_swapchain(to_vk_extent(presentation_surface.framebuffer_extent()));
     }
 
     void ensure_selected_queue_can_present() const
@@ -344,8 +334,10 @@ private:
     bool swapchain_rebuild_ = false;
 };
 
-VulkanSwapchain::VulkanSwapchain(const VulkanDevice& device, const SdlWindow& window)
-    : resources_(std::make_unique<Resources>(device, window))
+VulkanSwapchain::VulkanSwapchain(
+    const VulkanDevice& device,
+    const IVulkanPresentationSurface& presentation_surface)
+    : resources_(std::make_unique<Resources>(device, presentation_surface))
 {
 }
 
@@ -366,9 +358,9 @@ VkRenderPass VulkanSwapchain::render_pass() const
     return resources_->render_pass();
 }
 
-void VulkanSwapchain::recreate_if_needed(const SdlWindow& window)
+void VulkanSwapchain::recreate_if_needed(const IVulkanPresentationSurface& presentation_surface)
 {
-    resources_->recreate_if_needed(window);
+    resources_->recreate_if_needed(presentation_surface);
 }
 
 void VulkanSwapchain::render_current_imgui_frame()

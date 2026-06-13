@@ -4,6 +4,7 @@ module;
 
 #include <memory>
 #include <span>
+#include <string>
 
 export module quader.ui.imgui_opengl_layer;
 
@@ -19,6 +20,7 @@ public:
     ImGuiOpenGlLayer(
         const SdlWindow& window,
         SdlOpenGlContext& context,
+        std::string imgui_ini_file,
         const char* glsl_version = "#version 410 core");
 
     ImGuiOpenGlLayer(const ImGuiOpenGlLayer&) = delete;

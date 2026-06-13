@@ -3,6 +3,7 @@ module;
 export module quader.ui_shell.editor_shell;
 
 export import quader.ui_shell.editor_panel_contracts;
+export import quader.ui_shell.editor_viewport_contracts;
 
 export namespace quader {
 
@@ -24,6 +25,7 @@ public:
     virtual ~IEditorShell() = default;
 
     [[nodiscard]] virtual EditorUiFrameResult draw_frame(const EditorUiFrameInput& input) = 0;
+    [[nodiscard]] virtual ViewportHostPanelResult draw_viewport_host(const ViewportHostPanelInput& input) = 0;
 };
 
 } // namespace quader

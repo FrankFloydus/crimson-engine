@@ -8,6 +8,7 @@ import quader.app;
 import quader.diagnostics.fatal_diagnostics;
 import quader.diagnostics.logger;
 import quader.platform.fatal_error_dialog;
+import quader.platform.sdl_user_settings_paths;
 
 namespace {
 
@@ -30,7 +31,7 @@ int main(int, char**)
         quader::install_fatal_diagnostics();
         QUADER_LOG_INFO("Quader Native starting.");
 
-        quader::Application app;
+        quader::Application app(quader::resolve_sdl_user_settings_paths());
         const int exit_code = app.run();
 
         QUADER_LOG_INFO("Quader Native stopped with exit code {}.", exit_code);

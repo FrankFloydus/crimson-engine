@@ -1,6 +1,5 @@
 module;
 #include <vulkan/vulkan.h>
-#include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
 #include <cstring>
@@ -82,19 +81,17 @@ void add_extension_when_available(
     }
 }
 
-InstanceRequest describe_instance_extensions_needed_by_sdl(const SdlWindow& window)
+InstanceRequest describe_instance_extensions_needed_by_surface(
+    const IVulkanPresentationSurface& presentation_surface)
 {
-    uint32_t sdl_extension_count = 0;
-    const char* const* sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extension_count);
-    if (sdl_extensions == nullptr) {
-        throw std::runtime_error(window.last_error());
-    }
+    std::vector<const char*> surface_extensions = presentation_surface.required_instance_extensions();
 
     InstanceRequest request;
-    request.extensions.reserve(sdl_extension_count + 2);
-    for (uint32_t index = 0; index < sdl_extension_count; ++index) {
-        request.extensions.push_back(sdl_extensions[index]);
-    }
+    request.extensions.reserve(surface_extensions.size() + 2);
+    request.extensions.insert(
+        request.extensions.end(),
+        surface_extensions.begin(),
+        surface_extensions.end());
 
     const std::vector<VkExtensionProperties> available_extensions = ask_vulkan_for_instance_extensions();
     add_extension_when_available(
@@ -238,7 +235,7 @@ QueueSelection choose_best_device_for_window(VkInstance instance, VkSurfaceKHR s
     }
 
     if (!best_selection.has_value()) {
-        throw std::runtime_error("No Vulkan physical device supports graphics and presentation for this SDL window.");
+        throw std::runtime_error("No Vulkan physical device supports graphics and presentation for this window.");
     }
 
     return *best_selection;
@@ -309,10 +306,10 @@ VkDeviceCreateInfo describe_the_device_we_want(
 
 } // namespace
 
-VulkanDevice::VulkanDevice(const SdlWindow& window)
+VulkanDevice::VulkanDevice(const IVulkanPresentationSurface& presentation_surface)
 {
-    create_instance(window);
-    create_surface(window);
+    create_instance(presentation_surface);
+    create_surface(presentation_surface);
     select_physical_device();
     create_device();
 }
@@ -322,7 +319,7 @@ VulkanDevice::~VulkanDevice()
     wait_idle();
 
     if (surface_ != VK_NULL_HANDLE) {
-        SDL_Vulkan_DestroySurface(instance_, surface_, allocator_);
+        vkDestroySurfaceKHR(instance_, surface_, allocator_);
     }
 
     if (device_ != VK_NULL_HANDLE) {
@@ -434,20 +431,18 @@ void VulkanDevice::wait_idle() const
     }
 }
 
-void VulkanDevice::create_instance(const SdlWindow& window)
+void VulkanDevice::create_instance(const IVulkanPresentationSurface& presentation_surface)
 {
-    const InstanceRequest instance_request = describe_instance_extensions_needed_by_sdl(window);
+    const InstanceRequest instance_request = describe_instance_extensions_needed_by_surface(presentation_surface);
     const VkApplicationInfo app_info = describe_quader_to_vulkan();
     const VkInstanceCreateInfo create_info = describe_the_instance_we_want(app_info, instance_request);
 
     check_vk(vkCreateInstance(&create_info, allocator_, &instance_), "vkCreateInstance");
 }
 
-void VulkanDevice::create_surface(const SdlWindow& window)
+void VulkanDevice::create_surface(const IVulkanPresentationSurface& presentation_surface)
 {
-    if (!SDL_Vulkan_CreateSurface(window.native_handle(), instance_, allocator_, &surface_)) {
-        throw std::runtime_error(window.last_error());
-    }
+    surface_ = presentation_surface.create_surface(instance_, allocator_);
 }
 
 void VulkanDevice::select_physical_device()

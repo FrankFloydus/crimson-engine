@@ -6,7 +6,7 @@ module;
 
 export module quader.render.vulkan_device;
 
-export import quader.platform.sdl_window;
+export import quader.render.vulkan_presentation_surface;
 
 export namespace quader {
 
@@ -65,7 +65,7 @@ struct VulkanSharedDeviceContext {
 
 class VulkanDevice {
 public:
-    explicit VulkanDevice(const SdlWindow& window);
+    explicit VulkanDevice(const IVulkanPresentationSurface& presentation_surface);
 
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
@@ -89,8 +89,8 @@ public:
     void wait_idle() const;
 
 private:
-    void create_instance(const SdlWindow& window);
-    void create_surface(const SdlWindow& window);
+    void create_instance(const IVulkanPresentationSurface& presentation_surface);
+    void create_surface(const IVulkanPresentationSurface& presentation_surface);
     void select_physical_device();
     void create_device();
 
