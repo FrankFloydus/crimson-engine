@@ -1,0 +1,19 @@
+material {
+    name : QuaderVertexColorOverlay,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    doubleSided : true,
+    requires : [
+        color
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+        vec4 vertexColor = getColor();
+        material.baseColor = vec4(vertexColor.rgb * vertexColor.a, vertexColor.a);
+    }
+}

@@ -1,0 +1,197 @@
+#include <quader_poly/document.h>
+#include <quader_poly/poly_operation.h>
+
+#include "../internal/quader_poly_document_bridge_surface_helpers.h"
+#include "../internal/quader_poly_document_hull_plane_helpers.h"
+#include "../internal/quader_poly_document_knife_helpers.h"
+#include "../internal/quader_poly_document_mesh_internal.h"
+#include "../internal/quader_poly_document_topology_backend.h"
+#include "../internal/quader_poly_document_topology_helpers.h"
+#include "../internal/quader_poly_document_uv_helpers.h"
+
+#include <array>
+#include <cmath>
+
+#include <string_view>
+
+namespace quader_poly {
+
+using namespace document_internal;
+
+namespace {
+
+OperationResult bridge_edge_boundaries_impl(
+    Document& document,
+    Selection& selection,
+    std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices,
+    bool closed,
+    int steps);
+
+class BridgeEdgeBoundariesOperation final : public PolyOperation {
+public:
+    BridgeEdgeBoundariesOperation(
+        std::span<const ElementId> first_vertices,
+        std::span<const ElementId> second_vertices,
+        bool closed,
+        int steps = 1);
+
+    [[nodiscard]] std::string_view id() const override { return "bridge_edge_boundaries"; }
+    [[nodiscard]] std::string_view label() const override { return "Bridge Edge Boundaries"; }
+    [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
+
+private:
+    std::vector<ElementId> first_vertices_;
+    std::vector<ElementId> second_vertices_;
+    bool closed_ = false;
+    int steps_ = 1;
+};
+
+OperationResult bridge_edge_boundaries_impl(
+    Document& document,
+    Selection& selection,
+    std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices,
+    bool closed,
+    int steps)
+{
+    if (first_vertices.size() != second_vertices.size()) {
+        return { false, "Bridge needs matching boundary vertex counts." };
+    }
+    const std::size_t vertex_count = first_vertices.size();
+    const std::size_t edge_count = closed ? vertex_count : (vertex_count > 0U ? vertex_count - 1U : 0U);
+    if (vertex_count < 2U || edge_count == 0U || (!closed && vertex_count < 2U)) {
+        return { false, "Bridge needs two valid boundary edge chains." };
+    }
+
+    const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
+    std::vector<Vec3> first_outwards(vertex_count);
+    std::vector<Vec3> second_outwards(vertex_count);
+    std::vector<std::uint32_t> material_slots(edge_count, 0U);
+    std::set<std::pair<ElementId, ElementId>> used_edges;
+
+    auto append_outward = [](std::vector<Vec3>& outwards, std::size_t index, Vec3 outward) {
+        if (index < outwards.size()) {
+            outwards[index] += outward;
+        }
+    };
+
+    for (std::size_t edge_index = 0; edge_index < edge_count; ++edge_index) {
+        const std::size_t next_index = (edge_index + 1U) % vertex_count;
+        const Edge first_edge = make_edge(first_vertices[edge_index], first_vertices[next_index]);
+        const Edge second_edge = make_edge(second_vertices[edge_index], second_vertices[next_index]);
+        if (first_edge.a == invalid_element_id || first_edge.b == invalid_element_id ||
+                second_edge.a == invalid_element_id || second_edge.b == invalid_element_id ||
+                first_edge.a == first_edge.b || second_edge.a == second_edge.b ||
+                find_vertex(document, first_edge.a) == nullptr || find_vertex(document, first_edge.b) == nullptr ||
+                find_vertex(document, second_edge.a) == nullptr || find_vertex(document, second_edge.b) == nullptr) {
+            return { false, "Bridge needs valid boundary vertices." };
+        }
+        if (!used_edges.insert({ first_edge.a, first_edge.b }).second || !used_edges.insert({ second_edge.a, second_edge.b }).second) {
+            return { false, "Bridge cannot reuse the same edge in multiple boundary segments." };
+        }
+
+        const std::optional<OpenBridgeEdgeInfo> first_info = open_bridge_edge_info(document, first_edge, incidence_counts);
+        const std::optional<OpenBridgeEdgeInfo> second_info = open_bridge_edge_info(document, second_edge, incidence_counts);
+        if (!first_info.has_value() || !second_info.has_value()) {
+            return { false, "Bridge needs selected edges that belong to faces." };
+        }
+
+        const Vec3 first_outward = bridge_edge_outward_direction(document, *first_info);
+        const Vec3 second_outward = bridge_edge_outward_direction(document, *second_info);
+        append_outward(first_outwards, edge_index, first_outward);
+        append_outward(first_outwards, next_index, first_outward);
+        append_outward(second_outwards, edge_index, second_outward);
+        append_outward(second_outwards, next_index, second_outward);
+        material_slots[edge_index] = first_info->material_slot;
+    }
+
+    for (Vec3& outward : first_outwards) {
+        outward = normalize_or_zero(outward);
+    }
+    for (Vec3& outward : second_outwards) {
+        outward = normalize_or_zero(outward);
+    }
+
+    const int step_count = std::clamp(steps, 1, 64);
+    Document candidate = document;
+    std::vector<std::vector<ElementId>> rings;
+    rings.reserve(static_cast<std::size_t>(step_count + 1));
+    rings.emplace_back(first_vertices.begin(), first_vertices.end());
+    for (int step_index = 1; step_index < step_count; ++step_index) {
+        std::vector<ElementId> ring;
+        ring.reserve(vertex_count);
+        for (std::size_t vertex_index = 0; vertex_index < vertex_count; ++vertex_index) {
+            const Vertex* first_vertex = find_vertex(document, first_vertices[vertex_index]);
+            const Vertex* second_vertex = find_vertex(document, second_vertices[vertex_index]);
+            if (first_vertex == nullptr || second_vertex == nullptr) {
+                return { false, "Bridge could not find boundary vertices." };
+            }
+            ring.push_back(add_vertex(candidate, curved_bridge_position(first_vertex->position, second_vertex->position, first_outwards[vertex_index], second_outwards[vertex_index], step_index, step_count)));
+        }
+        rings.push_back(std::move(ring));
+    }
+    rings.emplace_back(second_vertices.begin(), second_vertices.end());
+
+    std::vector<ElementId> bridge_face_ids;
+    bridge_face_ids.reserve(edge_count * static_cast<std::size_t>(step_count));
+    for (std::size_t ring_index = 0; ring_index + 1U < rings.size(); ++ring_index) {
+        for (std::size_t edge_index = 0; edge_index < edge_count; ++edge_index) {
+            const std::size_t next_index = (edge_index + 1U) % vertex_count;
+            std::vector<ElementId> quad {
+                rings[ring_index][edge_index],
+                rings[ring_index][next_index],
+                rings[ring_index + 1U][next_index],
+                rings[ring_index + 1U][edge_index],
+            };
+            Face expected_face;
+            expected_face.vertices = quad;
+            const Vec3 expected_normal = face_normal(candidate, expected_face);
+            if (!append_bridge_face(candidate, std::move(quad), material_slots[edge_index], expected_normal, bridge_face_ids)) {
+                return { false, "Bridge could not create a valid stepped boundary face." };
+            }
+        }
+    }
+
+    prune_invalid_faces(candidate);
+    if (bridge_face_ids.empty() || !every_face_triangulates(candidate)) {
+        return { false, "Bridge would create invalid boundary geometry." };
+    }
+
+    document = std::move(candidate);
+    selection.clear();
+    selection.mode = SelectionMode::face;
+    selection.faces = std::move(bridge_face_ids);
+    activate_face_selection(selection, selection.faces.back());
+    return { true, {} };
+}
+
+BridgeEdgeBoundariesOperation::BridgeEdgeBoundariesOperation(
+    std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices,
+    bool closed,
+    int steps) :
+    first_vertices_(first_vertices.begin(), first_vertices.end()),
+    second_vertices_(second_vertices.begin(), second_vertices.end()),
+    closed_(closed),
+    steps_(steps)
+{}
+
+OperationResult BridgeEdgeBoundariesOperation::apply(Document& document, Selection& selection) const
+{
+    return bridge_edge_boundaries_impl(document, selection, first_vertices_, second_vertices_, closed_, steps_);
+}
+
+} // namespace
+
+OperationResult bridge_edge_boundaries(
+    Document& document,
+    Selection& selection,
+    std::span<const ElementId> first_vertices,
+    std::span<const ElementId> second_vertices,
+    bool closed,
+    int steps)
+{
+    return BridgeEdgeBoundariesOperation { first_vertices, second_vertices, closed, steps }.apply(document, selection);
+}
+} // namespace quader_poly

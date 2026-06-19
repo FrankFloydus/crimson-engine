@@ -1,0 +1,41 @@
+material {
+    name : QuaderDefaultMesh,
+    shadingModel : unlit,
+    doubleSided : true,
+    requires : [
+        uv0
+    ],
+    parameters : [
+        {
+            type : sampler2d,
+            name : baseColorTexture
+        },
+        {
+            type : sampler2d,
+            name : roughnessTexture
+        },
+        {
+            type : float4,
+            name : baseColorFactor
+        },
+        {
+            type : float,
+            name : metallicFactor
+        },
+        {
+            type : float,
+            name : roughnessFactor
+        }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec4 baseSample = texture(materialParams_baseColorTexture, getUV0());
+        vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
+
+        material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a);
+    }
+}

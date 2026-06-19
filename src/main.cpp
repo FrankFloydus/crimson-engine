@@ -1,54 +1,49 @@
-#include <exception>
-#include <optional>
-#include <string>
+#include "quader/app/App.h"
+#include "quader/core/Logger.h"
 
-#include "diagnostics/LogMacros.h"
+#include <filesystem>
 
-import quader.app;
-import quader.diagnostics.fatal_diagnostics;
-import quader.diagnostics.logger;
-import quader.filament.render_engine_factory;
-import quader.platform.fatal_error_dialog;
-import quader.platform.sdl_user_settings_paths;
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 namespace {
 
-void safely_log_fatal_error(const std::string& message)
-{
-    try {
-        QUADER_LOG_CRITICAL("Fatal error: {}", message);
-    } catch (...) {
+std::filesystem::path executablePath(int argc, char** argv) {
+    if (argc > 0 && argv && argv[0]) {
+        return std::filesystem::absolute(argv[0]);
     }
+
+#if defined(_WIN32)
+    wchar_t path[MAX_PATH] = {};
+    const DWORD count = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (count > 0) {
+        return std::filesystem::path(path);
+    }
+#endif
+
+    return std::filesystem::current_path() / "quader.exe";
 }
 
 } // namespace
 
-int main(int, char**)
-{
-    std::optional<quader::LoggerSession> logger_session;
+int main(int argc, char** argv) {
+    const std::filesystem::path exe = executablePath(argc, argv);
+    const std::filesystem::path logPath = exe.parent_path() / "quader.log";
+    quader::Logger::initialize({.filePath = logPath.string()});
+    LOG_INFO("Booting Quader from {}", exe.string());
 
-    try {
-        logger_session.emplace();
-        quader::install_fatal_diagnostics();
-        QUADER_LOG_INFO("Quader Native starting.");
-
-        const quader::FilamentRenderEngineFactory render_engine_factory;
-        quader::Application app(
-            quader::resolve_sdl_user_settings_paths(),
-            render_engine_factory);
-        const int exit_code = app.run();
-
-        QUADER_LOG_INFO("Quader Native stopped with exit code {}.", exit_code);
-        return exit_code;
-    } catch (const std::exception& error) {
-        const std::string message = error.what();
-        safely_log_fatal_error(message);
-        quader::show_fatal_error_dialog(message);
-        return 1;
-    } catch (...) {
-        const std::string message = "Unknown fatal error.";
-        safely_log_fatal_error(message);
-        quader::show_fatal_error_dialog(message);
+    quader::App app;
+    if (!app.initialize(exe)) {
+        LOG_CRITICAL("Application initialization failed");
+        app.shutdown();
+        quader::Logger::shutdown();
         return 1;
     }
+
+    const int result = app.run();
+    app.shutdown();
+    LOG_INFO("Quader shutdown complete");
+    quader::Logger::shutdown();
+    return result;
 }

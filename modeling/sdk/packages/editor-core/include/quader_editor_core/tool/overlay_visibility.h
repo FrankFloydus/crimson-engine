@@ -1,0 +1,67 @@
+#pragma once
+
+#include <quader_poly/document.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <span>
+#include <vector>
+
+namespace quader_editor_core {
+
+struct PolygonObject;
+struct SelectionOverlayLine;
+enum class SelectionOverlayLayer;
+struct ViewportCameraState;
+
+struct OverlayVisibilityBounds {
+	bool empty = true;
+	quader_poly::Vec3 min;
+	quader_poly::Vec3 max;
+};
+
+struct OverlayVisibilityTriangle {
+	std::uint32_t a = 0;
+	std::uint32_t b = 0;
+	std::uint32_t c = 0;
+	quader_poly::Vec3 normal;
+	quader_poly::Vec3 centroid;
+	OverlayVisibilityBounds bounds;
+};
+
+struct OverlayVisibilityNode {
+	OverlayVisibilityBounds bounds;
+	std::size_t start = 0;
+	std::size_t count = 0;
+	int left = -1;
+	int right = -1;
+};
+
+class OverlayVisibilityOccluder {
+public:
+	void clear();
+	void set_mesh(std::span<const quader_poly::Vec3> vertices, std::span<const std::uint32_t> indices);
+	void set_objects(std::span<const PolygonObject> objects);
+	[[nodiscard]] bool empty() const;
+	[[nodiscard]] bool line_segment_is_visible(quader_poly::Vec3 a, quader_poly::Vec3 b, const ViewportCameraState& camera) const;
+	[[nodiscard]] bool line_is_visible(const SelectionOverlayLine& line, const ViewportCameraState& camera) const;
+	void append_visible_lines(std::vector<SelectionOverlayLine>& output, std::span<const SelectionOverlayLine> lines, const ViewportCameraState& camera) const;
+	[[nodiscard]] std::vector<SelectionOverlayLine> visible_lines(std::span<const SelectionOverlayLine> lines, const ViewportCameraState& camera) const;
+	[[nodiscard]] static bool line_layer_uses_visibility(SelectionOverlayLayer layer);
+
+private:
+	void build_triangles(std::span<const quader_poly::Vec3> vertices, std::span<const std::uint32_t> indices);
+	int build_node(std::size_t start, std::size_t count);
+	[[nodiscard]] bool point_is_visible(quader_poly::Vec3 point, const ViewportCameraState& camera) const;
+	[[nodiscard]] bool hits_before_target(quader_poly::Ray ray, double target_distance, double tolerance) const;
+
+	std::vector<quader_poly::Vec3> vertices_;
+	std::vector<OverlayVisibilityTriangle> triangles_;
+	std::vector<std::size_t> order_;
+	std::vector<OverlayVisibilityNode> nodes_;
+	mutable std::vector<int> stack_;
+};
+
+[[nodiscard]] bool selection_overlay_lines_use_visibility(std::span<const SelectionOverlayLine> lines);
+
+} // namespace quader_editor_core

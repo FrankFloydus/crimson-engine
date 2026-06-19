@@ -1,27 +1,19 @@
 {
-  "name": "quader-native",
+  "name": "quader-app",
   "version-string": "0.1.0",
   "dependencies": [
-    {
-      "name": "sdl3",
-      "features": [
-        "vulkan"
-      ]
-    },
+    "entt",
+    "glm",
+    "sdl3",
     {
       "name": "imgui",
       "features": [
         "docking-experimental",
-        "opengl3-binding",
-        "sdl3-binding",
-        "vulkan-binding"
+        "sdl3-binding"
       ]
     },
     "gtest",
-    "glm",
-    "entt",
-    "spdlog",
-    "stb",
-    "tracy"
+    "lodepng",
+    "spdlog"
   ]
 }

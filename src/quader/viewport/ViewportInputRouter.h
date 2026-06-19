@@ -1,0 +1,149 @@
+#pragma once
+
+#include "quader/math/Types.h"
+#include "quader/viewport/ViewportCameraController.h"
+
+#include <cstddef>
+#include <vector>
+
+namespace quader {
+
+enum class ViewportTool {
+    Select,
+    Move,
+    Rotate,
+    Scale,
+    Box,
+    InsertEdgeLoop,
+    Knife,
+    Cut,
+    Poly,
+    Mirror,
+};
+
+enum class ViewportSelectionMode {
+    Vertex,
+    Edge,
+    Face,
+    Object,
+};
+
+enum class ViewportKey {
+    Q,
+    W,
+    R,
+    S,
+    B,
+    C,
+    P,
+    Number1,
+    Number2,
+    Number3,
+    Number4,
+    Home,
+    F,
+    Space,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    Escape,
+};
+
+enum class ViewportShortcutKind {
+    None,
+    ActivateTool,
+    SetSelectionMode,
+    FocusDocument,
+    FocusOrigin,
+    ToggleMaximized,
+    SetGridPreset,
+    CancelActiveTool,
+};
+
+struct ViewportModifiers {
+    bool primary = false;
+    bool shift = false;
+    bool alt = false;
+};
+
+struct ViewportShortcut {
+    ViewportShortcutKind kind = ViewportShortcutKind::None;
+    ViewportTool tool = ViewportTool::Select;
+    ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
+    int gridPreset = 0;
+};
+
+struct ViewportToolState {
+    ViewportTool activeTool = ViewportTool::Select;
+    ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
+    int gridPreset = 6;
+    bool maximized = false;
+};
+
+struct ViewportInputFrame {
+    bool viewportHovered = false;
+    bool viewportFocused = false;
+    bool textInputActive = false;
+    bool middlePressed = false;
+    bool middleDown = false;
+    bool middleReleased = false;
+    bool rightPressed = false;
+    bool rightDown = false;
+    bool rightReleased = false;
+    float mouseWheel = 0.0f;
+    float deltaSeconds = 1.0f / 60.0f;
+    Vec2 mouseScreen = {};
+    Vec2 mouseLocal = {};
+    Vec2 viewportSize = {};
+    ViewportModifiers modifiers = {};
+    Vec3 flyLocalDirection = {};
+    bool flyFast = false;
+    bool flySlow = false;
+    std::vector<ViewportKey> pressedKeys;
+};
+
+struct ViewportInputResult {
+    bool consumed = false;
+    bool cameraChanged = false;
+    bool shortcutHandled = false;
+    bool toolChanged = false;
+    bool selectionModeChanged = false;
+    bool navigationActive = false;
+    bool zoomedToCursor = false;
+    bool cancelRequested = false;
+    bool focusDocumentRequested = false;
+    ViewportShortcut shortcut = {};
+};
+
+class ViewportInputRouter {
+public:
+    ViewportInputResult handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera);
+    void reset();
+    void setActiveTool(ViewportTool tool);
+    void setSelectionMode(ViewportSelectionMode mode);
+
+    const ViewportToolState& state() const { return state_; }
+    bool navigating() const { return navigationMode_ != ViewportDragMode::None; }
+
+    static bool resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut);
+
+private:
+    bool handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result);
+
+    ViewportToolState state_;
+    ViewportDragMode navigationMode_ = ViewportDragMode::None;
+    bool navigationUsesRightButton_ = false;
+};
+
+const char* viewportToolId(ViewportTool tool);
+const char* viewportSelectionModeId(ViewportSelectionMode mode);
+float viewportGridWorldSizeForPreset(int preset);
+
+} // namespace quader

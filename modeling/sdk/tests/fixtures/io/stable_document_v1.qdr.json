@@ -1,0 +1,91 @@
+{
+  "format": "quader.qdr",
+  "version": 1,
+  "document": {
+    "nextObjectId": 8,
+    "activeObjectId": 7,
+    "selectionMode": "face",
+    "contentRevision": 123,
+    "selectionRevision": 45,
+    "objects": [
+      {
+        "id": 7,
+        "materialId": 3,
+        "selected": true,
+        "document": {
+          "nextVertexId": 4,
+          "nextFaceId": 2,
+          "vertices": [
+            {
+              "id": 1,
+              "position": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0
+              }
+            },
+            {
+              "id": 2,
+              "position": {
+                "x": 1.0,
+                "y": 0.0,
+                "z": 0.0
+              }
+            },
+            {
+              "id": 3,
+              "position": {
+                "x": 0.0,
+                "y": 1.0,
+                "z": 0.0
+              }
+            }
+          ],
+          "faces": [
+            {
+              "id": 1,
+              "vertices": [
+                1,
+                2,
+                3
+              ],
+              "uvs": [
+                {
+                  "x": 0.0,
+                  "y": 0.0
+                },
+                {
+                  "x": 1.0,
+                  "y": 0.0
+                },
+                {
+                  "x": 0.0,
+                  "y": 1.0
+                }
+              ],
+              "materialSlot": 9
+            }
+          ]
+        },
+        "selection": {
+          "mode": "face",
+          "vertices": [],
+          "edges": [],
+          "faces": [
+            1
+          ],
+          "active": {
+            "hasActive": true,
+            "kind": "face",
+            "vertex": 0,
+            "edge": {
+              "a": 0,
+              "b": 0
+            },
+            "face": 1
+          }
+        }
+      }
+    ]
+  }
+}
