@@ -53,6 +53,9 @@ private:
     void drawDockspace(bool& quitRequested);
     void drawMenuBar(bool& quitRequested);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
+    void enforceSidebarDockMinimums();
+    void setViewportCursorCaptured(bool captured);
+    void warpCapturedCursor(Vec2 point);
     void saveSettings();
 
     SDL_Window* window_ = nullptr;
@@ -66,6 +69,10 @@ private:
     bool initialized_ = false;
     bool dockLayoutBuilt_ = false;
     bool hasSavedDockLayout_ = false;
+    bool relativeMouseCaptured_ = false;
+    bool relativeMouseCaptureWarningIssued_ = false;
+    Vec2 relativeMouseDelta_ = {};
+    UIPanelId focusedPanel_ = UIPanelId::Viewport;
 };
 
 } // namespace quader

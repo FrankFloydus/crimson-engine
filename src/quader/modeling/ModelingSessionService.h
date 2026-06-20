@@ -1,5 +1,6 @@
 #pragma once
 
+#include "quader/modeling/ModelingActionCatalog.h"
 #include "quader/assets/MeshAsset.h"
 #include "quader/core/Types.h"
 #include "quader/math/Types.h"
@@ -10,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -141,6 +143,17 @@ struct ModelingRay {
     Vec3 direction;
 };
 
+struct ModelingViewportCamera {
+    bool orthographic = false;
+    Vec3 origin = {};
+    Vec3 xAxis = {1.0f, 0.0f, 0.0f};
+    Vec3 yAxis = {0.0f, 1.0f, 0.0f};
+    Vec3 zAxis = {0.0f, 0.0f, 1.0f};
+    Vec2 viewportSize = {1.0f, 1.0f};
+    double orthographicSize = 24.0;
+    double fovDegrees = 60.0;
+};
+
 struct ModelingTransform3 {
     Vec3 xAxis = {1.0f, 0.0f, 0.0f};
     Vec3 yAxis = {0.0f, 1.0f, 0.0f};
@@ -152,6 +165,8 @@ struct ModelingBoxToolEvent {
     Vec2 screenPosition;
     ModelingRay ray;
     double gridSize = 1.0;
+    bool hasCamera = false;
+    ModelingViewportCamera camera;
 };
 
 struct ModelingBoxPreview {
@@ -282,6 +297,9 @@ public:
     ModelingCommandResult mirrorSelection(ModelingMirrorAxis axis);
     ModelingCommandResult flipSelection(ModelingFlipOrientation orientation);
     ModelingCommandResult applyActiveMaterial(std::uint32_t materialSlot = 0);
+    [[nodiscard]] ModelingActionSet contextActionSet(const ModelingActionQuery& query = {}) const;
+    [[nodiscard]] std::vector<ModelingActionItem> contextActions(const ModelingActionQuery& query = {}) const;
+    ModelingCommandResult executeContextAction(std::string_view actionId);
     [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const;
     ModelingCommandResult executeInstantOperation(ModelingInstantOperationId operation);
     ModelingCommandResult beginTransformPreview(bool duplicateSelected);

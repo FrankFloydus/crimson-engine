@@ -13,6 +13,7 @@ struct UIStyleTokens {
     ImVec2 framePadding = {7.0f, 4.0f};
     ImVec2 itemSpacing = {8.0f, 6.0f};
     ImGuiWindowFlags panelWindowFlags = ImGuiWindowFlags_NoCollapse;
+    float sidebarMinWidth = 270.0f;
 
     ImVec4 axisX = {0.95f, 0.28f, 0.28f, 1.0f};
     ImVec4 axisY = {0.36f, 0.82f, 0.34f, 1.0f};

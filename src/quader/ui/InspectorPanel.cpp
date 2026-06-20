@@ -24,9 +24,9 @@ namespace {
 
 constexpr float RadToDeg = 57.29577951308232f;
 constexpr float DegToRad = 0.017453292519943295f;
-constexpr float kTransformLabelColumnWidth = 72.0f;
-constexpr float kAxisTextColumnWidth = 16.0f;
-constexpr float kMinAxisInputWidth = 76.0f;
+constexpr float kTransformLabelColumnWidth = 66.0f;
+constexpr float kAxisTextColumnWidth = 12.0f;
+constexpr float kMinAxisInputWidth = 34.0f;
 
 void copyNameToBuffer(const NameComponent* name, std::array<char, 128>& buffer) {
     buffer.fill('\0');
@@ -117,26 +117,8 @@ bool axisDragFloat3(const char* label,
     ImGui::PushID(label);
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const float axisChromeWidth = kAxisTextColumnWidth + ImGui::GetStyle().ItemInnerSpacing.x;
-    const float minimumInlineWidth = kTransformLabelColumnWidth + (axisChromeWidth + kMinAxisInputWidth) * 3.0f;
-
-    if (availableWidth < minimumInlineWidth) {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(label);
-
-        changed = axisDragFloat("X", style.axisX, &values[0], speed, minValue, maxValue,
-                          uiFillWidthAtLeast(kMinAxisInputWidth) - axisChromeWidth) ||
-                changed;
-        changed = axisDragFloat("Y", style.axisY, &values[1], speed, minValue, maxValue,
-                          uiFillWidthAtLeast(kMinAxisInputWidth) - axisChromeWidth) ||
-                changed;
-        changed = axisDragFloat("Z", style.axisZ, &values[2], speed, minValue, maxValue,
-                          uiFillWidthAtLeast(kMinAxisInputWidth) - axisChromeWidth) ||
-                changed;
-        ImGui::PopID();
-        return changed;
-    }
-
-    const float axisColumnWidth = (availableWidth - kTransformLabelColumnWidth) / 3.0f;
+    const float axisColumnWidth =
+            std::max((availableWidth - kTransformLabelColumnWidth) / 3.0f, axisChromeWidth + kMinAxisInputWidth);
     const float inputWidth = axisColumnWidth - axisChromeWidth;
     if (ImGui::BeginTable("##AxisDragFloat3", 4,
                 ImGuiTableFlags_SizingFixedFit |
@@ -177,9 +159,13 @@ void InspectorPanel::draw(UIContext& context) {
     SceneDocument& document = context.document;
     ModelingSessionService& modeling = context.modeling;
 
+    setNextWindowMinWidth(context.style.sidebarMinWidth);
     if (!ImGui::Begin(title(), nullptr, context.style.panelWindowFlags)) {
         ImGui::End();
         return;
+    }
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && panelFocusInputActive()) {
+        context.requestPanelFocus(id());
     }
 
     const std::vector<EntityId> selected = document.selectedEntities();

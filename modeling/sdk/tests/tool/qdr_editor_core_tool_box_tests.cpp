@@ -7,6 +7,23 @@
 #include <optional>
 #include <vector>
 
+namespace {
+
+quader_editor_core::ViewportCameraState box_front_camera()
+{
+	quader_editor_core::ViewportCameraState camera;
+	camera.projection = quader_editor_core::CameraProjection::perspective;
+	camera.transform.origin = { 0.0F, 0.0F, 5.0F };
+	camera.transform.x_axis = { 1.0F, 0.0F, 0.0F };
+	camera.transform.y_axis = { 0.0F, 1.0F, 0.0F };
+	camera.transform.z_axis = { 0.0F, 0.0F, 1.0F };
+	camera.viewport_size = { 800.0F, 600.0F };
+	camera.fov_degrees = 60.0;
+	return camera;
+}
+
+} // namespace
+
 TEST_CASE("box footprint snaps directional pairs and preserves signed size", "[editor-core][tool][box]")
 {
 	quader_editor_core::BoxToolState state;
@@ -68,6 +85,52 @@ TEST_CASE("box height preview snaps to grid and flips normal for negative height
 	CHECK(descriptor.normal.y == Catch::Approx(-1.0F));
 	CHECK(descriptor.bounds.min.y == Catch::Approx(-2.0F));
 	CHECK(descriptor.bounds.max.y == Catch::Approx(0.0F));
+}
+
+TEST_CASE("box height screen fallback follows projected growth axis", "[editor-core][tool][box]")
+{
+	quader_editor_core::BoxToolState state;
+	REQUIRE(quader_editor_core::set_box_construction_plane(state, { 0.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F }).ok);
+	REQUIRE(quader_editor_core::begin_box_footprint(
+			state,
+			{ 0.0F, -1.0F, -1.0F },
+			{ 0.0F, 1.0F, 1.0F },
+			false,
+			1.0).ok);
+
+	const quader_editor_core::ViewportCameraState camera = box_front_camera();
+	REQUIRE(quader_editor_core::begin_box_height(
+			state,
+			{ 400.0F, 300.0F },
+			0.0,
+			false,
+			true,
+			1.0,
+			camera).ok);
+
+	const quader_editor_core::BoxToolStateResult perpendicular =
+		quader_editor_core::update_box_height_preview(
+			state,
+			0.0,
+			false,
+			{ 400.0F, 396.0F },
+			true,
+			1.0,
+			camera);
+	REQUIRE(perpendicular.ok);
+	CHECK(perpendicular.state.height_distance == Catch::Approx(1.0));
+
+	const quader_editor_core::BoxToolStateResult along_axis =
+		quader_editor_core::update_box_height_preview(
+			state,
+			0.0,
+			false,
+			{ 496.0F, 300.0F },
+			true,
+			1.0,
+			camera);
+	REQUIRE(along_axis.ok);
+	CHECK(along_axis.state.height_distance == Catch::Approx(3.0));
 }
 
 TEST_CASE("box preview state and reset clear transient brush identity", "[editor-core][tool][box]")

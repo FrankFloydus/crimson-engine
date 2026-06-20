@@ -14,6 +14,7 @@
 #include "quader/scene/TransformPivot.h"
 #include "quader/ui/ConsoleModel.h"
 #include "quader/ui/UISettings.h"
+#include "quader/ui/ViewportContextMenuPolicy.h"
 #include "quader/viewport/HostViewportContractAdapter.h"
 #include "quader/viewport/ViewportCameraController.h"
 #include "quader/viewport/ViewportInputRouter.h"
@@ -27,6 +28,7 @@
 #include <iterator>
 #include <utility>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace quader;
@@ -355,7 +357,7 @@ TEST(ViewportPanelTests, ClipsOnlyPolicyDepthTestedWireOverlayInComponentModes) 
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
 }
 
-TEST(ViewportPanelTests, RmbContextMenuUsesSdkInstantOperationsAndDisabledItems) {
+TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -366,10 +368,90 @@ TEST(ViewportPanelTests, RmbContextMenuUsesSdkInstantOperationsAndDisabledItems)
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("ViewportOperationsContext"), std::string::npos);
-    EXPECT_NE(source.find("modeling.instantOperations()"), std::string::npos);
-    EXPECT_NE(source.find("ImGui::MenuItem(operation.label.c_str(), nullptr, false, operation.enabled)"), std::string::npos);
-    EXPECT_NE(source.find("modeling.executeInstantOperation(operation.operation)"), std::string::npos);
+    EXPECT_NE(source.find("modeling.contextActions(query)"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)"), std::string::npos);
+    EXPECT_NE(source.find("modeling.executeContextAction(action.actionId)"), std::string::npos);
+    EXPECT_NE(source.find("action.disabledReason"), std::string::npos);
+    EXPECT_NE(source.find("boxToolOwnsViewport()"), std::string::npos);
+    EXPECT_NE(source.find(".modalToolOwnsViewport = boxToolOwnsViewport()"), std::string::npos);
+    EXPECT_NE(source.find("modeling.pickSelect(ModelingPickSelectRequest"), std::string::npos);
+    EXPECT_NE(source.find("pendingContextMenuRequest.targetHit = summary.hasSelection"), std::string::npos);
+    EXPECT_NE(source.find(".accumulatedDragDelta = contextMenuRightDragDelta_"), std::string::npos);
+    EXPECT_NE(source.find("pendingContextMenuClick"), std::string::npos);
+    EXPECT_NE(source.find("selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1)"), std::string::npos);
+    EXPECT_NE(source.find("preserveContextMenuHover"), std::string::npos);
+    EXPECT_NE(source.find("shouldPreserveViewportContextMenuHover"), std::string::npos);
+    EXPECT_NE(source.find("flyCursorCaptureScreen_"), std::string::npos);
+    EXPECT_NE(source.find("flyCursorCaptureScreen_.x - mainViewport->Pos.x"), std::string::npos);
+    EXPECT_EQ(source.find("contextMenuRightNavigationMoved"), std::string::npos);
     EXPECT_EQ(source.find("Button(operation.label"), std::string::npos);
+}
+
+TEST(ViewportContextMenuPolicyTests, OpensForRightClickReleaseInsideViewportWithActions) {
+    EXPECT_TRUE(shouldOpenViewportContextMenu({
+            .rightPressTracked = true,
+            .rightReleased = true,
+            .releaseInsideViewport = true,
+            .targetHit = true,
+            .hasActions = true,
+            .pressScreen = {200.0f, 180.0f},
+            .releaseScreen = {201.0f, 181.0f},
+    }));
+}
+
+TEST(ViewportContextMenuPolicyTests, BlocksModalToolsMissingActionsAndDrags) {
+    ViewportContextMenuOpenRequest request{
+            .rightPressTracked = true,
+            .rightReleased = true,
+            .releaseInsideViewport = true,
+            .targetHit = true,
+            .hasActions = true,
+            .pressScreen = {200.0f, 180.0f},
+            .releaseScreen = {201.0f, 181.0f},
+    };
+
+    request.modalToolOwnsViewport = true;
+    EXPECT_FALSE(shouldOpenViewportContextMenu(request));
+
+    request.modalToolOwnsViewport = false;
+    request.targetHit = false;
+    EXPECT_FALSE(shouldOpenViewportContextMenu(request));
+
+    request.targetHit = true;
+    request.hasActions = false;
+    EXPECT_FALSE(shouldOpenViewportContextMenu(request));
+
+    request.hasActions = true;
+    request.releaseScreen = {240.0f, 180.0f};
+    EXPECT_FALSE(shouldOpenViewportContextMenu(request));
+
+    request.releaseScreen = {201.0f, 181.0f};
+    request.accumulatedDragDelta = {20.0f, 0.0f};
+    EXPECT_FALSE(shouldOpenViewportContextMenu(request));
+}
+
+TEST(ViewportContextMenuPolicyTests, PreservesHoverOnlyForClickLikeRightPress) {
+    EXPECT_TRUE(shouldPreserveViewportContextMenuHover({
+            .rightPressTracked = true,
+            .flyHudActive = false,
+            .accumulatedDragDelta = {1.0f, 1.0f},
+    }));
+
+    EXPECT_FALSE(shouldPreserveViewportContextMenuHover({
+            .rightPressTracked = false,
+            .flyHudActive = false,
+            .accumulatedDragDelta = {1.0f, 1.0f},
+    }));
+    EXPECT_FALSE(shouldPreserveViewportContextMenuHover({
+            .rightPressTracked = true,
+            .flyHudActive = true,
+            .accumulatedDragDelta = {1.0f, 1.0f},
+    }));
+    EXPECT_FALSE(shouldPreserveViewportContextMenuHover({
+            .rightPressTracked = true,
+            .flyHudActive = false,
+            .accumulatedDragDelta = {20.0f, 0.0f},
+    }));
 }
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBegin) {
@@ -673,6 +755,8 @@ TEST(UILayoutTests, AvoidsNegativeFillWidthsAndSavedStretchColumnsInPanels) {
 
     EXPECT_NE(layoutSource.find("uiFillWidthAtLeast"), std::string::npos);
     EXPECT_NE(layoutSource.find("std::max(ImGui::GetContentRegionAvail().x, minimumWidth)"), std::string::npos);
+    EXPECT_NE(layoutSource.find("setNextWindowMinWidth"), std::string::npos);
+    EXPECT_NE(layoutSource.find("ImGui::SetNextWindowSizeConstraints"), std::string::npos);
 }
 
 TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas) {
@@ -686,7 +770,9 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("kMinAxisInputWidth"), std::string::npos);
-    EXPECT_NE(source.find("availableWidth < minimumInlineWidth"), std::string::npos);
+    EXPECT_EQ(source.find("availableWidth < minimumInlineWidth"), std::string::npos);
+    EXPECT_NE(source.find("std::max((availableWidth - kTransformLabelColumnWidth) / 3.0f"), std::string::npos);
+    EXPECT_NE(source.find("setNextWindowMinWidth(context.style.sidebarMinWidth)"), std::string::npos);
     EXPECT_NE(source.find("ImGuiTableFlags_SizingFixedFit"), std::string::npos);
     EXPECT_NE(source.find("ImGuiTableFlags_NoSavedSettings"), std::string::npos);
     EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, delta"), std::string::npos);
@@ -716,6 +802,84 @@ TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_EQ(uiSystemSource.find("ImGuiDockNodeFlags_NoWindowMenuButton"), std::string::npos);
+}
+
+TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
+    const std::filesystem::path uiPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui";
+
+    std::ifstream styleFile(uiPath / "UIStyleTokens.h");
+    ASSERT_TRUE(styleFile.is_open());
+    const std::string styleSource{
+            std::istreambuf_iterator<char>(styleFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(styleSource.find("sidebarMinWidth = 270.0f"), std::string::npos);
+
+    std::ifstream outlinerFile(uiPath / "OutlinerPanel.cpp");
+    ASSERT_TRUE(outlinerFile.is_open());
+    const std::string outlinerSource{
+            std::istreambuf_iterator<char>(outlinerFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(outlinerSource.find("setNextWindowMinWidth(context.style.sidebarMinWidth)"), std::string::npos);
+
+    std::ifstream uiSystemFile(uiPath / "UISystem.cpp");
+    ASSERT_TRUE(uiSystemFile.is_open());
+    const std::string uiSystemSource{
+            std::istreambuf_iterator<char>(uiSystemFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(uiSystemSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_WarpMouseInWindow(window_, point.x, point.y)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("enforceSidebarDockMinimums()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("FindWindowByName(windowName)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("clampDockLeafNodeWidth"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGuiStyleVar_WindowMinSize"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("sidebarMinimumRatio"), std::string::npos);
+
+    std::ifstream contextFile(uiPath / "UIContext.h");
+    ASSERT_TRUE(contextFile.is_open());
+    const std::string contextSource{
+            std::istreambuf_iterator<char>(contextFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(contextSource.find("viewportRelativeMouseDelta"), std::string::npos);
+    EXPECT_NE(contextSource.find("viewportCursorCaptureRequested"), std::string::npos);
+    EXPECT_NE(contextSource.find("viewportCursorCapturePoint"), std::string::npos);
+    EXPECT_NE(contextSource.find("focusedPanelStorage"), std::string::npos);
+    EXPECT_NE(contextSource.find("requestPanelFocus"), std::string::npos);
+
+    std::ifstream layoutFile(uiPath / "UILayout.h");
+    ASSERT_TRUE(layoutFile.is_open());
+    const std::string layoutSource{
+            std::istreambuf_iterator<char>(layoutFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(layoutSource.find("panelFocusInputActive"), std::string::npos);
+
+    std::ifstream inspectorFile(uiPath / "InspectorPanel.cpp");
+    ASSERT_TRUE(inspectorFile.is_open());
+    const std::string inspectorSource{
+            std::istreambuf_iterator<char>(inspectorFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(inspectorSource.find("context.requestPanelFocus(id())"), std::string::npos);
+
+    std::ifstream consoleFile(uiPath / "ConsolePanel.cpp");
+    ASSERT_TRUE(consoleFile.is_open());
+    const std::string consoleSource{
+            std::istreambuf_iterator<char>(consoleFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(consoleSource.find("context.requestPanelFocus(id())"), std::string::npos);
+
+    std::ifstream viewportPanelFile(uiPath / "ViewportPanel.cpp");
+    ASSERT_TRUE(viewportPanelFile.is_open());
+    const std::string viewportPanelSource{
+            std::istreambuf_iterator<char>(viewportPanelFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(viewportPanelSource.find("Middle Mouse to reset"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("result.flyHudActive && !camera.flySpeedIsDefault()"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("uiContext.requestPanelFocus(UIPanelId::Viewport)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("globalEscCancelRequested"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("mouseClickedOutsideViewport"), std::string::npos);
+    EXPECT_EQ(viewportPanelSource.find("flySpeedIndicatorSeconds_"), std::string::npos);
 }
 
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
@@ -1212,6 +1376,14 @@ TEST(ViewportCameraTests, OrbitSnapUsesSdkOrthogonalSnap) {
     EXPECT_NEAR(forward.x, 0.0f, 0.001f);
     EXPECT_NEAR(forward.y, 0.0f, 0.001f);
     EXPECT_NEAR(forward.z, -1.0f, 0.001f);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_GT(camera.state().orthographicSize, 0.0f);
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({118.0f, 100.0f});
+    camera.endDrag();
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
 #else
     GTEST_SKIP() << "SDK navigation is disabled.";
 #endif
@@ -1231,12 +1403,67 @@ TEST(ViewportCameraTests, FlyLookKeepsEyeFixedAndFlyMoveAdvancesCamera) {
     EXPECT_NEAR(length(lookPose.eye - startPose.eye), 0.0f, 0.001f);
     EXPECT_LT(dot(lookForward, startForward), 0.999f);
 
-    camera.flyMove({0.0f, 0.0f, 1.0f}, 0.25f, false, false);
+    EXPECT_NEAR(camera.flySpeed(), 15.0f, 0.001f);
+    camera.adjustFlySpeed(1.0f);
+    EXPECT_NEAR(camera.flySpeed(), 16.0f, 0.001f);
+
+    camera.flyMove({0.0f, 0.0f, 1.0f}, 0.25f);
     const ViewportCameraPose movedPose = camera.pose();
     const Vec3 movedDelta = movedPose.eye - lookPose.eye;
 
-    EXPECT_GT(dot(movedDelta, lookForward), 1.49f);
+    EXPECT_GT(dot(movedDelta, lookForward), 3.7f);
     EXPECT_NEAR(length((movedPose.target - lookPose.target) - movedDelta), 0.0f, 0.001f);
+}
+
+TEST(ViewportCameraTests, FlyLookDoesNotSnapToTopOrBottomView) {
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Fly);
+    camera.updateDrag({100.0f, -1200.0f});
+    camera.endDrag();
+
+    ViewportCameraPose pose = camera.pose();
+    Vec3 forward = normalize(pose.target - pose.eye);
+    EXPECT_GT(std::sqrt(forward.x * forward.x + forward.z * forward.z), 0.001f);
+    EXPECT_GT(length(pose.up), 0.99f);
+    EXPECT_NEAR(dot(forward, pose.up), 0.0f, 0.001f);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Fly);
+    camera.updateDrag({100.0f, 1400.0f});
+    camera.endDrag();
+
+    pose = camera.pose();
+    forward = normalize(pose.target - pose.eye);
+    EXPECT_GT(std::sqrt(forward.x * forward.x + forward.z * forward.z), 0.001f);
+    EXPECT_GT(length(pose.up), 0.99f);
+    EXPECT_NEAR(dot(forward, pose.up), 0.0f, 0.001f);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+}
+
+TEST(ViewportCameraTests, PlainMiddleOrbitNearOrthogonalAxisDoesNotSnapToOrthographic) {
+#if QUADER_HAS_MODELING_SDK
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({100.0f, 100.0f});
+    camera.endDrag();
+
+    const ViewportCameraPose pose = camera.pose();
+    const Vec3 forward = normalize(pose.target - pose.eye);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_GT(std::abs(forward.x), 0.001f);
+    EXPECT_NEAR(forward.y, 0.0f, 0.001f);
+#else
+    GTEST_SKIP() << "SDK navigation is disabled.";
+#endif
 }
 
 TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
@@ -1561,6 +1788,142 @@ TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
     EXPECT_FALSE(router.navigating());
 }
 
+TEST(ViewportInputRouterTests, MiddleOrbitSamplesAltDuringDragForOrthographicSnap) {
+#if QUADER_HAS_MODELING_SDK
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.middlePressed = true;
+    input.middleDown = true;
+    input.mouseScreen = {100.0f, 100.0f};
+
+    auto result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.consumed);
+    ASSERT_TRUE(router.navigating());
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+
+    input.middlePressed = false;
+    input.modifiers.alt = true;
+    input.mouseScreen = {100.0f, 100.0f};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.cameraChanged);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+
+    input.modifiers.alt = false;
+    input.mouseScreen = {116.0f, 100.0f};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.cameraChanged);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+#else
+    GTEST_SKIP() << "SDK navigation is disabled.";
+#endif
+}
+
+TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
+#if QUADER_HAS_MODELING_SDK
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.middlePressed = true;
+    input.middleDown = true;
+    input.modifiers.alt = true;
+    input.mouseScreen = {100.0f, 100.0f};
+
+    auto result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.consumed);
+    input.middlePressed = false;
+    result = router.handleFrame(input, camera);
+    ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    ASSERT_FALSE(camera.orthographicViewLocked());
+
+    input.middleDown = false;
+    input.middleReleased = true;
+    result = router.handleFrame(input, camera);
+    ASSERT_FALSE(router.navigating());
+
+    input = {};
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.middlePressed = true;
+    input.middleDown = true;
+    input.mouseScreen = {100.0f, 100.0f};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(router.navigating());
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+#else
+    GTEST_SKIP() << "SDK navigation is disabled.";
+#endif
+}
+
+TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicViewLikeUnity) {
+#if QUADER_HAS_MODELING_SDK
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.middlePressed = true;
+    input.middleDown = true;
+    input.modifiers.alt = true;
+    input.mouseScreen = {100.0f, 100.0f};
+
+    auto result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.consumed);
+    input.middlePressed = false;
+    result = router.handleFrame(input, camera);
+    ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    ASSERT_FALSE(camera.orthographicViewLocked());
+
+    input.middleDown = false;
+    input.middleReleased = true;
+    result = router.handleFrame(input, camera);
+    ASSERT_FALSE(router.navigating());
+
+    input = {};
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.rightPressed = true;
+    input.rightDown = true;
+    input.mouseScreen = {300.0f, 240.0f};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(router.navigating());
+    EXPECT_FALSE(result.flyNavigationActive);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+#else
+    GTEST_SKIP() << "SDK navigation is disabled.";
+#endif
+}
+
 TEST(ViewportInputRouterTests, LockedOrthographicViewConsumesMiddleOrbitWithoutMovingCamera) {
     ViewportInputRouter router;
     ViewportCameraController camera;
@@ -1690,26 +2053,174 @@ TEST(ViewportInputRouterTests, RightMouseFlyNavigationConsumesMovementHotkeys) {
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_TRUE(result.flyCursorCaptureActive);
+    EXPECT_FALSE(result.flyHudActive);
 
     const ViewportCameraPose beforeMove = camera.pose();
     input.rightPressed = false;
-    input.mouseScreen = {340.0f, 240.0f};
+    input.mouseDelta = {40.0f, 0.0f};
     input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
     input.deltaSeconds = 0.25f;
     input.pressedKeys = {ViewportKey::W};
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.cameraChanged);
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_TRUE(result.flyCursorCaptureActive);
+    EXPECT_TRUE(result.flyHudActive);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
     EXPECT_GT(length(camera.pose().eye - beforeMove.eye), 1.0f);
 
-    input.rightDown = false;
-    input.rightReleased = true;
     input.flyLocalDirection = {};
     input.pressedKeys = {};
+    input.mouseDelta = {};
+    result = router.handleFrame(input, camera);
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_TRUE(result.flyCursorCaptureActive);
+    EXPECT_TRUE(result.flyHudActive);
+
+    input.rightDown = false;
+    input.rightReleased = true;
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_FALSE(router.navigating());
+    EXPECT_FALSE(result.flyHudActive);
+}
+
+TEST(ViewportInputRouterTests, RightMouseFlyNavigationIgnoresPressFrameMouseDelta) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.rightPressed = true;
+    input.rightDown = true;
+    input.mouseScreen = {300.0f, 240.0f};
+    input.mouseDelta = {250.0f, -180.0f};
+    input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
+    input.deltaSeconds = 0.25f;
+
+    const ViewportCameraPose before = camera.pose();
+    const auto result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_FALSE(result.flyHudActive);
+    EXPECT_FALSE(result.cameraChanged);
+    EXPECT_NEAR(length(camera.pose().eye - before.eye), 0.0f, 0.001f);
+    EXPECT_NEAR(
+            dot(normalize(camera.pose().target - camera.pose().eye), normalize(before.target - before.eye)),
+            1.0f,
+            0.001f);
+}
+
+TEST(ViewportInputRouterTests, RightMouseFlyLookNearOrthogonalAxisStaysPerspective) {
+#if QUADER_HAS_MODELING_SDK
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.rightPressed = true;
+    input.rightDown = true;
+    input.mouseScreen = {300.0f, 240.0f};
+
+    auto result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.consumed);
+    ASSERT_TRUE(result.flyNavigationActive);
+
+    const ViewportCameraPose before = camera.pose();
+    input.rightPressed = false;
+    input.mouseDelta = {0.0f, -2.0f};
+    input.deltaSeconds = 0.016f;
+    result = router.handleFrame(input, camera);
+
+    const ViewportCameraPose after = camera.pose();
+    const Vec3 afterForward = normalize(after.target - after.eye);
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_TRUE(result.cameraChanged);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_NEAR(length(after.eye - before.eye), 0.0f, 0.001f);
+    EXPECT_GT(std::abs(afterForward.x), 0.001f);
+#else
+    GTEST_SKIP() << "SDK navigation is disabled.";
+#endif
+}
+
+TEST(ViewportInputRouterTests, FlyWheelAdjustsNavigationSpeedInsteadOfZooming) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.rightPressed = true;
+    input.rightDown = true;
+    input.mouseScreen = {300.0f, 240.0f};
+
+    auto result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.flyNavigationActive);
+
+    const float distanceBeforeWheel = camera.state().distance;
+    const float speedBeforeWheel = camera.flySpeed();
+
+    input.rightPressed = false;
+    input.mouseWheel = 1.0f;
+    input.mouseDelta = {};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_TRUE(result.flySpeedChanged);
+    EXPECT_NEAR(result.flySpeed, speedBeforeWheel + 1.0f, 0.001f);
+    EXPECT_NEAR(camera.flySpeed(), speedBeforeWheel + 1.0f, 0.001f);
+    EXPECT_NEAR(camera.state().distance, distanceBeforeWheel, 0.001f);
+
+    input.mouseWheel = -2.0f;
+    result = router.handleFrame(input, camera);
+    EXPECT_TRUE(result.flySpeedChanged);
+    EXPECT_NEAR(camera.flySpeed(), speedBeforeWheel - 1.0f, 0.001f);
+}
+
+TEST(ViewportInputRouterTests, MiddleMouseResetsFlyNavigationSpeed) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.adjustFlySpeed(5.0f);
+    ASSERT_NEAR(camera.flySpeed(), 20.0f, 0.001f);
+    ASSERT_FALSE(camera.flySpeedIsDefault());
+
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.rightPressed = true;
+    input.rightDown = true;
+    input.mouseScreen = {300.0f, 240.0f};
+
+    auto result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.flyNavigationActive);
+
+    input.rightPressed = false;
+    input.middlePressed = true;
+    input.mouseDelta = {};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.consumed);
+    EXPECT_TRUE(result.flyNavigationActive);
+    EXPECT_TRUE(result.flySpeedChanged);
+    EXPECT_TRUE(result.flySpeedReset);
+    EXPECT_NEAR(result.flySpeed, 15.0f, 0.001f);
+    EXPECT_NEAR(camera.flySpeed(), 15.0f, 0.001f);
+    EXPECT_TRUE(camera.flySpeedIsDefault());
 }
 
 TEST(ViewportInputRouterTests, ShiftRightMouseDoesNotStartFlyNavigation) {
@@ -2111,6 +2622,266 @@ TEST(ModelingSessionServiceTests, ExposesBoxCommandContract) {
     EXPECT_TRUE(box.rebuildsMeshOnSuccess);
 }
 
+const ModelingActionPanel* findActionPanel(const ModelingActionSet& actions, std::string_view panelId) {
+    const auto found = std::find_if(actions.panels.begin(), actions.panels.end(), [&](const ModelingActionPanel& panel) {
+        return std::string_view(panel.panelId) == panelId;
+    });
+    return found == actions.panels.end() ? nullptr : &(*found);
+}
+
+const ModelingActionItem* findActionItem(const ModelingActionPanel& panel, std::string_view actionId) {
+    const auto found = std::find_if(panel.actions.begin(), panel.actions.end(), [&](const ModelingActionItem& action) {
+        return std::string_view(action.actionId) == actionId;
+    });
+    return found == panel.actions.end() ? nullptr : &(*found);
+}
+
+const ModelingActionItem* findActionItem(const std::vector<ModelingActionItem>& actions, std::string_view actionId) {
+    const auto found = std::find_if(actions.begin(), actions.end(), [&](const ModelingActionItem& action) {
+        return std::string_view(action.actionId) == actionId;
+    });
+    return found == actions.end() ? nullptr : &(*found);
+}
+
+TEST(ModelingSessionServiceTests, ContextActionsExposeObjectPanelAndExecuteHostActionIds) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Action Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    const ModelingActionSet actions = service.contextActionSet({
+            .surface = ModelingActionSurface::OperationsPanel,
+            .includeDisabled = true,
+    });
+    EXPECT_EQ(actions.surface, ModelingActionSurface::OperationsPanel);
+    EXPECT_EQ(actions.surfaceId, "operations_top_bar");
+    ASSERT_EQ(actions.panels.size(), 1u);
+
+    const ModelingActionPanel* objectPanel = findActionPanel(actions, "object_operations");
+    ASSERT_NE(objectPanel, nullptr);
+    EXPECT_EQ(objectPanel->label, "Object Operations");
+    EXPECT_EQ(objectPanel->selectionModeId, "object");
+    EXPECT_EQ(objectPanel->visibility, ModelingActionVisibility::Enabled);
+    EXPECT_EQ(findActionPanel(actions, "edge_operations"), nullptr);
+    EXPECT_EQ(findActionPanel(actions, "face_operations"), nullptr);
+
+    const ModelingActionItem* invert = findActionItem(*objectPanel, "invert_mesh");
+    ASSERT_NE(invert, nullptr);
+    EXPECT_EQ(invert->label, "Invert Mesh");
+    EXPECT_EQ(invert->operationId, "flip_face_normals");
+    EXPECT_EQ(invert->visibility, ModelingActionVisibility::Enabled);
+
+    const ModelingActionItem* combine = findActionItem(*objectPanel, "combine_mesh");
+    ASSERT_NE(combine, nullptr);
+    EXPECT_EQ(combine->operationId, "combine_meshes");
+    EXPECT_EQ(combine->visibility, ModelingActionVisibility::Disabled);
+    EXPECT_FALSE(combine->disabledReason.empty());
+
+    const ModelingCommandResult disabled = service.executeContextAction("combine_mesh");
+    EXPECT_FALSE(disabled.ok);
+
+    const ModelingCommandResult executed = service.executeContextAction("invert_mesh");
+    EXPECT_TRUE(executed.ok) << executed.message;
+#else
+    EXPECT_TRUE(service.contextActionSet().panels.empty());
+    EXPECT_TRUE(service.contextActions().empty());
+    EXPECT_FALSE(service.executeContextAction("invert_mesh").ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ContextActionsExposeEdgePanelAndDisableInsufficientCounts) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Edge Action Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
+
+    const ModelingActionSet actions = service.contextActionSet({
+            .surface = ModelingActionSurface::OperationsPanel,
+            .includeDisabled = true,
+    });
+    ASSERT_EQ(actions.panels.size(), 1u);
+    EXPECT_EQ(findActionPanel(actions, "object_operations"), nullptr);
+
+    const ModelingActionPanel* edgePanel = findActionPanel(actions, "edge_operations");
+    ASSERT_NE(edgePanel, nullptr);
+    EXPECT_EQ(edgePanel->selectionModeId, "edge");
+    EXPECT_EQ(edgePanel->visibility, ModelingActionVisibility::Enabled);
+
+    const ModelingActionItem* split = findActionItem(*edgePanel, "split_edges");
+    ASSERT_NE(split, nullptr);
+    EXPECT_EQ(split->operationId, "split_edges");
+    EXPECT_EQ(split->visibility, ModelingActionVisibility::Disabled);
+
+    const ModelingActionItem* fillHole = findActionItem(*edgePanel, "fill_hole");
+    ASSERT_NE(fillHole, nullptr);
+    EXPECT_EQ(fillHole->visibility, ModelingActionVisibility::Disabled);
+    EXPECT_FALSE(fillHole->disabledReason.empty());
+
+    ModelingActionQuery hiddenQuery;
+    hiddenQuery.surface = ModelingActionSurface::OperationsPanel;
+    hiddenQuery.includeDisabled = true;
+    hiddenQuery.includeHidden = true;
+    const ModelingActionSet allPanels = service.contextActionSet(hiddenQuery);
+    const ModelingActionPanel* hiddenObjectPanel = findActionPanel(allPanels, "object_operations");
+    ASSERT_NE(hiddenObjectPanel, nullptr);
+    EXPECT_EQ(hiddenObjectPanel->visibility, ModelingActionVisibility::Hidden);
+#else
+    EXPECT_TRUE(service.contextActionSet().panels.empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisabledForOneFace) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Face Action Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    const ModelingActionSet actions = service.contextActionSet({
+            .surface = ModelingActionSurface::OperationsPanel,
+            .includeDisabled = true,
+    });
+    ASSERT_EQ(actions.panels.size(), 1u);
+    EXPECT_EQ(findActionPanel(actions, "object_operations"), nullptr);
+    EXPECT_EQ(findActionPanel(actions, "edge_operations"), nullptr);
+
+    const ModelingActionPanel* facePanel = findActionPanel(actions, "face_operations");
+    ASSERT_NE(facePanel, nullptr);
+    EXPECT_EQ(facePanel->selectionModeId, "face");
+    EXPECT_EQ(facePanel->visibility, ModelingActionVisibility::Enabled);
+
+    const ModelingActionItem* invert = findActionItem(*facePanel, "invert_faces");
+    ASSERT_NE(invert, nullptr);
+    EXPECT_EQ(invert->operationId, "flip_face_normals");
+    EXPECT_EQ(invert->visibility, ModelingActionVisibility::Enabled);
+
+    const ModelingActionItem* bridge = findActionItem(*facePanel, "bridge_faces");
+    ASSERT_NE(bridge, nullptr);
+    EXPECT_EQ(bridge->operationId, "bridge");
+    EXPECT_EQ(bridge->visibility, ModelingActionVisibility::Disabled);
+
+    const ModelingCommandResult executed = service.executeContextAction("invert_faces");
+    EXPECT_TRUE(executed.ok) << executed.message;
+#else
+    EXPECT_TRUE(service.contextActionSet().panels.empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsContextMenu) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "RMB Face Context Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_TRUE(picked.hasSelection);
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    ModelingActionQuery query;
+    query.surface = ModelingActionSurface::ViewportContextMenu;
+    query.includeDisabled = true;
+    const std::vector<ModelingActionItem> actions = service.contextActions(query);
+    ASSERT_FALSE(actions.empty());
+
+    EXPECT_TRUE(shouldOpenViewportContextMenu({
+            .rightPressTracked = true,
+            .rightReleased = true,
+            .releaseInsideViewport = true,
+            .targetHit = picked.hasSelection,
+            .hasActions = !actions.empty(),
+            .pressScreen = {320.0f, 240.0f},
+            .releaseScreen = {320.0f, 240.0f},
+    }));
+
+    const ModelingSelectionSummary missed = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {8.0f, 8.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    EXPECT_FALSE(shouldOpenViewportContextMenu({
+            .rightPressTracked = true,
+            .rightReleased = true,
+            .releaseInsideViewport = true,
+            .targetHit = missed.hasSelection,
+            .hasActions = true,
+            .pressScreen = {100.0f, 100.0f},
+            .releaseScreen = {100.0f, 100.0f},
+    }));
+#else
+    GTEST_SKIP() << "SDK selection is disabled.";
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ContextActionsHideWhileBoxOrModalOwnsViewport) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    ModelingActionQuery contextQuery;
+    contextQuery.surface = ModelingActionSurface::ViewportContextMenu;
+    contextQuery.includeDisabled = true;
+
+    ModelingActionQuery explicitModalQuery = contextQuery;
+    explicitModalQuery.modalToolOwnsViewport = true;
+    EXPECT_TRUE(service.contextActionSet(explicitModalQuery).panels.empty());
+    EXPECT_TRUE(service.contextActions(explicitModalQuery).empty());
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Modal Action Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_FALSE(service.contextActions(contextQuery).empty());
+
+    ASSERT_TRUE(service.activateBoxTool().ok);
+    EXPECT_TRUE(service.contextActionSet().panels.empty());
+    EXPECT_TRUE(service.contextActions(contextQuery).empty());
+    EXPECT_FALSE(service.executeContextAction("invert_mesh").ok);
+
+    const ModelingCommandResult cancel = service.cancelBox();
+    ASSERT_TRUE(cancel.ok) << cancel.message;
+    EXPECT_FALSE(service.contextActions(contextQuery).empty());
+#else
+    EXPECT_TRUE(service.contextActionSet().panels.empty());
+    EXPECT_TRUE(service.contextActions(contextQuery).empty());
+#endif
+}
+
 TEST(ModelingSessionServiceTests, CreatesBoxThroughSdkWhenAvailable) {
     SceneDocument scene;
     AssetRegistry assets;
@@ -2350,6 +3121,72 @@ TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransform
     EXPECT_NEAR(overlayCenter.z, -3.0f, 0.001f);
 #else
     EXPECT_FALSE(service.selectionCenter().has_value());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMeshes) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult left = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Left Local Box",
+    });
+    ASSERT_TRUE(left.ok) << left.message;
+    const ModelingCreateBoxResult right = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Right Local Box",
+    });
+    ASSERT_TRUE(right.ok) << right.message;
+
+    TransformComponent leftTransform;
+    leftTransform.position = {-4.0f, 0.0f, 0.0f};
+    scene.setTransform(left.object.entity, leftTransform);
+    TransformComponent rightTransform;
+    rightTransform.position = {4.0f, 0.0f, 0.0f};
+    scene.setTransform(right.object.entity, rightTransform);
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
+
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = {
+                    .origin = {4.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+    const ViewportOverlayFrame hoverFrame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> hoverWireBounds;
+    for (const ViewportOverlayLine& line : hoverFrame.lines) {
+        if (line.layer != ViewportOverlayLayer::SourceWire) {
+            continue;
+        }
+        if (!hoverWireBounds) {
+            hoverWireBounds = SceneBounds{.min = line.start, .max = line.start};
+        } else {
+            includePoint(*hoverWireBounds, line.start);
+        }
+        includePoint(*hoverWireBounds, line.end);
+    }
+    ASSERT_TRUE(hoverWireBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*hoverWireBounds).x, 4.0f, 0.001f);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {
+                    .origin = {4.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedObjectCount, 1u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.selectedEntities().front(), right.object.entity);
+    EXPECT_EQ(picked.activeObjectId, right.object.sdkObjectId);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
 #endif
 }
 

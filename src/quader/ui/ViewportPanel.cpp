@@ -6,12 +6,14 @@
 #include "quader/scene/SceneEntityNaming.h"
 #include "quader/scene/TransformPivot.h"
 #include "quader/ui/UIContext.h"
+#include "quader/ui/ViewportContextMenuPolicy.h"
 #include "quader/viewport/HostViewportContractAdapter.h"
 #include "quader/viewport/ViewportModelingCommandRouter.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -73,21 +75,38 @@ void addPressedKeyPair(ViewportInputFrame& input, ImGuiKey primaryKey, ImGuiKey 
     }
 }
 
-ViewportInputFrame makeViewportInputFrame(bool hovered, bool focused, ImVec2 itemMin, ImVec2 itemSize) {
+bool viewportFocusInputActive() {
+    const ImGuiIO& io = ImGui::GetIO();
+    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+            io.MouseWheel != 0.0f ||
+            (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (std::abs(io.MouseDelta.x) > 0.0f || std::abs(io.MouseDelta.y) > 0.0f));
+}
+
+ViewportInputFrame makeViewportInputFrame(
+        bool hovered,
+        bool focused,
+        ImVec2 itemMin,
+        ImVec2 itemSize,
+        bool routeActiveNavigationInput,
+        bool useCapturedMouseDelta,
+        Vec2 capturedMouseDelta) {
     ImGuiIO& io = ImGui::GetIO();
     ViewportInputFrame input;
     input.viewportHovered = hovered;
     input.viewportFocused = focused;
     input.textInputActive = io.WantTextInput;
-    input.middlePressed = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+    input.middlePressed = (hovered || routeActiveNavigationInput) && ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
     input.middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
     input.middleReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Middle);
     input.rightPressed = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right);
     input.rightDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
     input.rightReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
-    input.mouseWheel = hovered ? io.MouseWheel : 0.0f;
+    input.mouseWheel = (hovered || routeActiveNavigationInput) ? io.MouseWheel : 0.0f;
     input.deltaSeconds = std::max(io.DeltaTime, 0.0f);
     input.mouseScreen = {io.MousePos.x, io.MousePos.y};
+    input.mouseDelta = useCapturedMouseDelta ? capturedMouseDelta : Vec2{io.MouseDelta.x, io.MouseDelta.y};
     input.mouseLocal = {io.MousePos.x - itemMin.x, io.MousePos.y - itemMin.y};
     input.viewportSize = {itemSize.x, itemSize.y};
     input.modifiers = {
@@ -95,8 +114,6 @@ ViewportInputFrame makeViewportInputFrame(bool hovered, bool focused, ImVec2 ite
             .shift = io.KeyShift,
             .alt = io.KeyAlt,
     };
-    input.flyFast = io.KeyShift;
-    input.flySlow = io.KeyCtrl || io.KeySuper;
     if (ImGui::IsKeyDown(ImGuiKey_W)) {
         input.flyLocalDirection.z += 1.0f;
     }
@@ -188,6 +205,38 @@ void drawWorldLine(ImDrawList* drawList,
     }
 }
 
+ModelingViewportCamera modelingViewportCamera(
+        const ViewportCameraController& camera,
+        Vec2 viewportSize) {
+    const ViewportCameraPose pose = camera.pose();
+    Vec3 forward = normalize(pose.target - pose.eye);
+    if (length(forward) <= 0.000001f) {
+        forward = {0.0f, 0.0f, -1.0f};
+    }
+
+    Vec3 right = normalize(cross(forward, pose.up));
+    if (length(right) <= 0.000001f) {
+        right = {1.0f, 0.0f, 0.0f};
+    }
+
+    Vec3 up = normalize(cross(right, forward));
+    if (length(up) <= 0.000001f) {
+        up = {0.0f, 1.0f, 0.0f};
+    }
+
+    const ViewportCameraState& state = camera.state();
+    return {
+            .orthographic = state.projection == ViewportProjection::Orthographic,
+            .origin = pose.eye,
+            .xAxis = right,
+            .yAxis = up,
+            .zAxis = forward * -1.0f,
+            .viewportSize = viewportSize,
+            .orthographicSize = state.orthographicSize,
+            .fovDegrees = state.fovDegrees,
+    };
+}
+
 ModelingBoxToolEvent modelingBoxEvent(
         const ViewportCameraController& camera,
         const ViewportInputFrame& input,
@@ -200,6 +249,8 @@ ModelingBoxToolEvent modelingBoxEvent(
                     .direction = ray.direction,
             },
             .gridSize = gridSize,
+            .hasCamera = true,
+            .camera = modelingViewportCamera(camera, input.viewportSize),
     };
 }
 
@@ -493,29 +544,85 @@ bool commitBoxPreview(UndoRedoManager& undoRedo,
 void drawViewportOperationsPopup(
         UndoRedoManager& undoRedo,
         ModelingSessionService& modeling,
-        ViewportInputRouter& inputRouter) {
+        ViewportInputRouter& inputRouter,
+        bool modalToolOwnsViewport) {
     if (!ImGui::BeginPopup("ViewportOperationsContext")) {
         return;
     }
 
-    const std::vector<ModelingInstantOperationDescriptor> operations = modeling.instantOperations();
-    for (const ModelingInstantOperationDescriptor& operation : operations) {
-        if (ImGui::MenuItem(operation.label.c_str(), nullptr, false, operation.enabled)) {
+    const ModelingActionQuery query{
+            .surface = ModelingActionSurface::ViewportContextMenu,
+            .modalToolOwnsViewport = modalToolOwnsViewport,
+            .includeDisabled = true,
+            .includeHidden = false,
+    };
+    const std::vector<ModelingActionItem> actions = modeling.contextActions(query);
+    for (const ModelingActionItem& action : actions) {
+        const bool enabled = action.visibility == ModelingActionVisibility::Enabled;
+        if (ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)) {
             const ModelingCommandResult result = executeTrackedModelingCommand(
                     undoRedo,
                     modeling,
-                    operation.label,
+                    action.label,
                     [&]() {
-                        return modeling.executeInstantOperation(operation.operation);
+                        return modeling.executeContextAction(action.actionId);
                     });
             if (!result.ok) {
-                LOG_ERROR("Operation '{}' failed: {}", operation.id, result.message.empty() ? "Operation failed." : result.message);
+                LOG_ERROR("Operation '{}' failed: {}", action.actionId, result.message.empty() ? "Operation failed." : result.message);
             }
             inputRouter.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+        }
+        if (!enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !action.disabledReason.empty()) {
+            ImGui::SetTooltip("%s", action.disabledReason.c_str());
         }
     }
 
     ImGui::EndPopup();
+}
+
+void drawFlyNavigationOverlay(
+        ImDrawList* drawList,
+        ImVec2 itemMin,
+        ImVec2 itemSize,
+        bool drawCrosshair,
+        bool drawSpeed,
+        bool drawResetHint,
+        float speed) {
+    const ImVec2 center{itemMin.x + itemSize.x * 0.5f, itemMin.y + itemSize.y * 0.5f};
+    if (drawCrosshair) {
+        const float gap = 4.0f;
+        const float length = 9.0f;
+        const ImU32 shadow = ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.65f));
+        const ImU32 color = ImGui::GetColorU32(ImVec4(0.94f, 0.96f, 1.0f, 0.88f));
+        drawList->AddLine({center.x - length - 1.0f, center.y}, {center.x - gap - 1.0f, center.y}, shadow, 2.0f);
+        drawList->AddLine({center.x + gap + 1.0f, center.y}, {center.x + length + 1.0f, center.y}, shadow, 2.0f);
+        drawList->AddLine({center.x, center.y - length - 1.0f}, {center.x, center.y - gap - 1.0f}, shadow, 2.0f);
+        drawList->AddLine({center.x, center.y + gap + 1.0f}, {center.x, center.y + length + 1.0f}, shadow, 2.0f);
+        drawList->AddLine({center.x - length, center.y}, {center.x - gap, center.y}, color, 1.25f);
+        drawList->AddLine({center.x + gap, center.y}, {center.x + length, center.y}, color, 1.25f);
+        drawList->AddLine({center.x, center.y - length}, {center.x, center.y - gap}, color, 1.25f);
+        drawList->AddLine({center.x, center.y + gap}, {center.x, center.y + length}, color, 1.25f);
+    }
+
+    if (!drawSpeed) {
+        return;
+    }
+
+    char label[96]{};
+    if (drawResetHint) {
+        std::snprintf(label, sizeof(label), "Speed %.1f (Middle Mouse to reset)", speed);
+    } else {
+        std::snprintf(label, sizeof(label), "Speed %.1f", speed);
+    }
+    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const ImVec2 padding{10.0f, 5.0f};
+    const ImVec2 min{
+            itemMin.x + itemSize.x * 0.5f - textSize.x * 0.5f - padding.x,
+            itemMin.y + itemSize.y - 36.0f,
+    };
+    const ImVec2 max{min.x + textSize.x + padding.x * 2.0f, min.y + textSize.y + padding.y * 2.0f};
+    drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImVec4(0.05f, 0.06f, 0.07f, 0.78f)), 4.0f);
+    drawList->AddText({min.x + padding.x, min.y + padding.y}, ImGui::GetColorU32(ImVec4(0.92f, 0.95f, 1.0f, 1.0f)), label);
 }
 
 ImU32 toImColor(std::uint32_t rgba) {
@@ -1230,7 +1337,11 @@ void ViewportPanel::draw(UIContext& context) {
             context.undoRedo,
             context.documentCommands,
             context.modeling,
-            context.defaultMaterial);
+            context.defaultMaterial,
+            context.viewportRelativeMouseDelta,
+            context.viewportCursorCaptureRequested,
+            context.viewportCursorCapturePoint,
+            context);
 }
 
 void ViewportPanel::draw(ViewportRenderer& renderer,
@@ -1241,7 +1352,11 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         UndoRedoManager& undoRedo,
         DocumentCommandService& documentCommands,
         ModelingSessionService& modeling,
-        AssetId defaultMaterial) {
+        AssetId defaultMaterial,
+        Vec2 capturedMouseDelta,
+        bool* viewportCursorCaptureRequested,
+        Vec2* viewportCursorCapturePoint,
+        const UIContext& uiContext) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     const bool visible = ImGui::Begin(
@@ -1251,6 +1366,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
     ImGui::PopStyleVar(2);
     if (!visible) {
         renderBridge.setOverlayFrame({});
+        lastFlyNavigationActive_ = false;
         ImGui::End();
         return;
     }
@@ -1265,25 +1381,84 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
     const ImVec2 itemMax = ImGui::GetItemRectMax();
     const ImVec2 itemSize{itemMax.x - itemMin.x, itemMax.y - itemMin.y};
     const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const bool focusHovered = ImGui::IsItemHovered();
+    const bool focusRequestedThisFrame = focusHovered && viewportFocusInputActive();
+    if (focusRequestedThisFrame) {
+        uiContext.requestPanelFocus(UIPanelId::Viewport);
+        ImGui::SetWindowFocus();
+    }
+    const bool appFocused =
+            uiContext.focusedPanel == UIPanelId::Viewport ||
+            (uiContext.focusedPanelStorage != nullptr && *uiContext.focusedPanelStorage == UIPanelId::Viewport);
+    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || appFocused || focusRequestedThisFrame;
+    auto boxToolOwnsViewport = [&]() {
+        return inputRouter_.state().activeTool == ViewportTool::Box || hasActiveBoxPreview(boxPreview_);
+    };
 
-    const ViewportInputFrame input = makeViewportInputFrame(hovered, focused, itemMin, itemSize);
+    const bool useCapturedMouseDelta = inputRouter_.flyCursorCaptureActive();
+    const ViewportInputFrame input =
+            makeViewportInputFrame(hovered, focused, itemMin, itemSize, inputRouter_.navigating(), useCapturedMouseDelta, capturedMouseDelta);
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     if (input.rightPressed && hovered && !input.modifiers.primary && !input.modifiers.shift && !input.modifiers.alt) {
+        flyCursorCaptureScreen_ = input.mouseScreen;
+    }
+    lastFlyNavigationActive_ = result.flyCursorCaptureActive;
+    if (result.flyCursorCaptureActive) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+        if (viewportCursorCaptureRequested != nullptr) {
+            *viewportCursorCaptureRequested = true;
+        }
+        if (viewportCursorCapturePoint != nullptr) {
+            const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+            *viewportCursorCapturePoint = {
+                    flyCursorCaptureScreen_.x - mainViewport->Pos.x,
+                    flyCursorCaptureScreen_.y - mainViewport->Pos.y,
+            };
+        }
+    }
+    const bool modalToolOwnsViewportForMenu = boxToolOwnsViewport();
+    if (!modalToolOwnsViewportForMenu &&
+            input.rightPressed &&
+            hovered &&
+            !input.modifiers.primary &&
+            !input.modifiers.shift &&
+            !input.modifiers.alt) {
         contextMenuRightPressActive_ = true;
         contextMenuRightPressScreen_ = input.mouseScreen;
+        contextMenuRightDragDelta_ = {};
     }
+    if (contextMenuRightPressActive_ && input.rightDown && !input.rightPressed) {
+        contextMenuRightDragDelta_ = contextMenuRightDragDelta_ + input.mouseDelta;
+    }
+    bool pendingContextMenuClick = false;
+    Vec2 pendingContextMenuLocalMouse = {};
+    ViewportContextMenuOpenRequest pendingContextMenuRequest;
     if (input.rightReleased && contextMenuRightPressActive_) {
-        const Vec2 delta = input.mouseScreen - contextMenuRightPressScreen_;
-        if (hovered && (delta.x * delta.x + delta.y * delta.y) <= 16.0f) {
-            ImGui::OpenPopup("ViewportOperationsContext");
+        const bool releaseInsideViewport =
+                input.mouseScreen.x >= itemMin.x &&
+                input.mouseScreen.x <= itemMax.x &&
+                input.mouseScreen.y >= itemMin.y &&
+                input.mouseScreen.y <= itemMax.y;
+        pendingContextMenuRequest = {
+                .modalToolOwnsViewport = boxToolOwnsViewport(),
+                .rightPressTracked = contextMenuRightPressActive_,
+                .rightReleased = input.rightReleased,
+                .releaseInsideViewport = releaseInsideViewport,
+                .pressScreen = contextMenuRightPressScreen_,
+                .releaseScreen = input.mouseScreen,
+                .accumulatedDragDelta = contextMenuRightDragDelta_,
+        };
+        if (isViewportContextMenuClickGesture(pendingContextMenuRequest)) {
+            pendingContextMenuClick = true;
+            pendingContextMenuLocalMouse = input.mouseLocal;
         }
         contextMenuRightPressActive_ = false;
+        contextMenuRightDragDelta_ = {};
     }
     if (!input.rightDown && !input.rightReleased) {
         contextMenuRightPressActive_ = false;
+        contextMenuRightDragDelta_ = {};
     }
-    drawViewportOperationsPopup(undoRedo, modeling, inputRouter_);
     if (result.focusDocumentRequested) {
         focusDocument(document, assets, camera);
     }
@@ -1324,8 +1499,25 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         }
     }
 
+    auto cancelActiveBoxPlacement = [&](bool exitBoxTool) {
+        const ModelingCommandResult cancel = modeling.cancelBox();
+        if (!cancel.ok) {
+            LOG_ERROR("Box cancel failed: {}", cancel.message);
+        }
+        boxPreview_ = {};
+        paintSelectionActive_ = false;
+        if (exitBoxTool) {
+            inputRouter_.setActiveTool(ViewportTool::Move);
+        }
+    };
+
     bool cancelConsumed = false;
-    if (result.cancelRequested) {
+    const bool globalEscCancelRequested =
+            boxToolOwnsViewport() &&
+            !input.textInputActive &&
+            !result.flyNavigationActive &&
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (result.cancelRequested || globalEscCancelRequested) {
         if (gizmoDragging_) {
 #if QUADER_HAS_MODELING_SDK
             if (sdkTransformPreviewActive_) {
@@ -1359,17 +1551,17 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         }
 
         if (inputRouter_.state().activeTool == ViewportTool::Box) {
-            const ModelingCommandResult cancel = modeling.cancelBox();
-            if (!cancel.ok) {
-                LOG_ERROR("Box cancel failed: {}", cancel.message);
-            }
-            boxPreview_ = {};
-            paintSelectionActive_ = false;
+            cancelActiveBoxPlacement(true);
             cancelConsumed = true;
         }
     }
 
     const bool suppressHoverWork = result.navigationActive || result.cameraChanged;
+    const bool preserveContextMenuHover = shouldPreserveViewportContextMenuHover({
+            .rightPressTracked = contextMenuRightPressActive_,
+            .flyHudActive = result.flyHudActive,
+            .accumulatedDragDelta = contextMenuRightDragDelta_,
+    });
     const bool viewCubeConsumed = drawViewCube(camera, itemMin, itemSize);
     const bool gizmoConsumed =
             viewCubeConsumed ||
@@ -1379,6 +1571,22 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
     const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     const bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
     const int leftClickCount = std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
+
+    const bool mouseClickedOutsideViewport =
+            boxToolOwnsViewport() &&
+            !hovered &&
+            !result.navigationActive &&
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) &&
+            (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                    ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+                    ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
+                    ImGui::IsMouseReleased(ImGuiMouseButton_Middle));
+    if (mouseClickedOutsideViewport) {
+        cancelActiveBoxPlacement(true);
+        cancelConsumed = true;
+    }
 
     if (inputRouter_.state().activeTool == ViewportTool::Box) {
         const float gridSize = gridSizeForPreset(inputRouter_.state().gridPreset);
@@ -1436,9 +1644,30 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                 leftClicked &&
                 !gizmoConsumed &&
                 !result.navigationActive) {
-            selectFromViewport(document, assets, modeling, camera, input.mouseLocal, input.modifiers, leftClickCount);
+            (void)selectFromViewport(document, assets, modeling, camera, input.mouseLocal, input.modifiers, leftClickCount);
             paintSelectionActive_ = inputRouter_.state().selectionMode != ViewportSelectionMode::Object;
             selectionHoverClearIssued_ = false;
+        } else if (selectionFallbackActive &&
+                pendingContextMenuClick &&
+                !gizmoConsumed) {
+            const ModelingSelectionSummary summary =
+                    selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1);
+            paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
+            selectionHoverClearIssued_ = false;
+
+            const ModelingActionQuery query{
+                    .surface = ModelingActionSurface::ViewportContextMenu,
+                    .modalToolOwnsViewport = boxToolOwnsViewport(),
+                    .includeDisabled = true,
+                    .includeHidden = false,
+            };
+            const std::vector<ModelingActionItem> actions =
+                    summary.hasSelection ? modeling.contextActions(query) : std::vector<ModelingActionItem>{};
+            pendingContextMenuRequest.targetHit = summary.hasSelection;
+            pendingContextMenuRequest.hasActions = !actions.empty();
+            if (shouldOpenViewportContextMenu(pendingContextMenuRequest)) {
+                ImGui::OpenPopup("ViewportOperationsContext");
+            }
         } else if (selectionFallbackActive &&
                 paintSelectionActive_ &&
                 leftDown &&
@@ -1479,7 +1708,9 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                     .selectedModifierPressed = input.modifiers.primary,
             });
             selectionHoverClearIssued_ = false;
-        } else if ((!hovered || !selectionFallbackActive || suppressHoverWork) && !selectionHoverClearIssued_) {
+        } else if ((!hovered || !selectionFallbackActive || suppressHoverWork) &&
+                !preserveContextMenuHover &&
+                !selectionHoverClearIssued_) {
             (void)modeling.clearSelectionHover();
             selectionHoverClearIssued_ = true;
         }
@@ -1496,6 +1727,15 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             itemMin,
             itemSize,
             inputRouter_.state().selectionMode != ViewportSelectionMode::Object);
+    drawFlyNavigationOverlay(
+            ImGui::GetWindowDrawList(),
+            itemMin,
+            itemSize,
+            result.flyHudActive,
+            result.flyHudActive && !camera.flySpeedIsDefault(),
+            result.flyHudActive,
+            camera.flySpeed());
+    drawViewportOperationsPopup(undoRedo, modeling, inputRouter_, boxToolOwnsViewport());
 
     ImGui::End();
 }
@@ -1594,7 +1834,7 @@ bool ViewportPanel::drawViewCube(ViewportCameraController& camera, ImVec2 itemMi
 #endif
 }
 
-void ViewportPanel::selectFromViewport(
+ModelingSelectionSummary ViewportPanel::selectFromViewport(
         SceneDocument& document,
         const AssetRegistry& assets,
         ModelingSessionService& modeling,
@@ -1616,7 +1856,7 @@ void ViewportPanel::selectFromViewport(
                 .altPressed = modifiers.alt,
         });
         inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
-        return;
+        return summary;
     }
 
     EntityId bestEntity = InvalidEntityId;
@@ -1675,6 +1915,12 @@ void ViewportPanel::selectFromViewport(
                 document.selection(bestEntity) != nullptr && document.selection(bestEntity)->selected;
         document.setSelected(bestEntity, modifiers.primary && alreadySelected ? false : true);
     }
+    return {
+            .mode = ModelingSelectionMode::Object,
+            .hasSelection = bestEntity != InvalidEntityId,
+            .activeKind = bestEntity != InvalidEntityId ? ModelingActiveSelectionKind::Object : ModelingActiveSelectionKind::None,
+            .selectedObjectCount = static_cast<std::uint32_t>(document.selectedEntities().size()),
+    };
 }
 
 bool ViewportPanel::drawTransformGizmo(

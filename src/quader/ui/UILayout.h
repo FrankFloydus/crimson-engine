@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <limits>
 
 namespace quader {
 
@@ -12,6 +13,20 @@ inline float uiFillWidthAtLeast(float minimumWidth) {
 
 inline void setNextItemFillWidthAtLeast(float minimumWidth) {
     ImGui::SetNextItemWidth(uiFillWidthAtLeast(minimumWidth));
+}
+
+inline void setNextWindowMinWidth(float minimumWidth) {
+    ImGui::SetNextWindowSizeConstraints(
+            {minimumWidth, 0.0f},
+            {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()});
+}
+
+inline bool panelFocusInputActive() {
+    const ImGuiIO& io = ImGui::GetIO();
+    return ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+            ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+            io.MouseWheel != 0.0f;
 }
 
 } // namespace quader

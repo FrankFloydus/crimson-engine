@@ -3,6 +3,7 @@
 #include "quader/modeling/ModelingSessionService.h"
 #include "quader/scene/SceneDocument.h"
 #include "quader/ui/UIContext.h"
+#include "quader/ui/UILayout.h"
 #include "quader/ui/UIStyleTokens.h"
 
 #include <imgui.h>
@@ -55,9 +56,13 @@ void selectEntityRange(SceneDocument& document,
 
 void OutlinerPanel::draw(UIContext& context) {
     SceneDocument& document = context.document;
+    setNextWindowMinWidth(context.style.sidebarMinWidth);
     if (!ImGui::Begin(title(), nullptr, context.style.panelWindowFlags)) {
         ImGui::End();
         return;
+    }
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && panelFocusInputActive()) {
+        context.requestPanelFocus(id());
     }
 
     const std::vector<EntityRecord> records = document.entityRecords();

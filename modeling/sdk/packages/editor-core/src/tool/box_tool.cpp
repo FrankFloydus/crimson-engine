@@ -1,10 +1,12 @@
 #include <quader_editor_core/tool/box_tool.h>
 #include <quader_editor_core/editor_tool.h>
+#include <quader_editor_core/tool/viewport_projection.h>
 
 #include "tool_math_internal.h"
 
 #include <quader_geometry/geometry.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -288,6 +290,48 @@ public:
 		return distance;
 	}
 
+	[[nodiscard]] std::optional<quader_poly::Vec2> projected_height_screen_axis(
+			const BoxToolState& state,
+			const ViewportCameraState& camera,
+			double grid_size) const
+	{
+		const BoxFootprintDescriptor footprint =
+			footprint_descriptor(state.start_point, state.end_point, state.plane.axis_u, state.plane.axis_v, grid_size);
+		if (!footprint.ok) {
+			return std::nullopt;
+		}
+
+		const quader_poly::Vec3 axis =
+			vec3_is_tiny(state.plane.normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(state.plane.normal);
+		const double probe_distance = std::max(1.0, box_grid_or_default(grid_size));
+		quader_poly::Vec2 base_screen;
+		quader_poly::Vec2 tip_screen;
+		if (!project_viewport_point(camera, footprint.center, base_screen) ||
+				!project_viewport_point(camera, footprint.center + vec3_scale(axis, probe_distance), tip_screen)) {
+			return std::nullopt;
+		}
+
+		const quader_poly::Vec2 screen_delta = vec2_sub(tip_screen, base_screen);
+		if (vec2_is_tiny(screen_delta)) {
+			return std::nullopt;
+		}
+		return vec2_normalize_or(screen_delta, { 0.0F, -1.0F });
+	}
+
+	void update_height_screen_axis(BoxToolState& state, const ViewportCameraState* camera, double grid_size) const
+	{
+		if (camera == nullptr) {
+			return;
+		}
+		const std::optional<quader_poly::Vec2> screen_axis =
+			projected_height_screen_axis(state, *camera, grid_size);
+		if (!screen_axis.has_value()) {
+			return;
+		}
+		state.height_screen_axis = *screen_axis;
+		state.height_has_screen_axis = true;
+	}
+
 	[[nodiscard]] BoxToolStateResult begin_footprint(
 			BoxToolState& state,
 			quader_poly::Vec3 raw_start,
@@ -353,13 +397,20 @@ public:
 			double axis_distance,
 			bool has_axis_distance,
 			bool grid_enabled,
-			double grid_size) const
+			double grid_size,
+			const ViewportCameraState* camera = nullptr) const
 	{
 		state.drag_state = BoxDragState::height;
 		state.height_mouse_start = screen_position;
 		state.height_start_distance = snap_height_distance(state.height_distance, grid_enabled, grid_size);
 		state.height_distance = state.height_start_distance;
+		state.height_screen_axis = { 0.0F, -1.0F };
+		state.height_has_screen_axis = false;
+		update_height_screen_axis(state, camera, grid_size);
 		state.height_axis_start = has_axis_distance && std::isfinite(axis_distance) ? axis_distance : std::numeric_limits<double>::infinity();
+		if (state.height_has_screen_axis) {
+			state.height_axis_start = std::numeric_limits<double>::infinity();
+		}
 		return box_result(state, box_ok_status(true));
 	}
 
@@ -383,10 +434,20 @@ public:
 			bool has_axis_distance,
 			quader_poly::Vec2 screen_position,
 			bool grid_enabled,
-			double grid_size) const
+			double grid_size,
+			const ViewportCameraState* camera = nullptr) const
 	{
-		double distance = state.height_start_distance + ((state.height_mouse_start.y - screen_position.y) / box_height_pixels_per_grid_step) * box_grid_or_default(grid_size);
-		if (has_axis_distance && std::isfinite(axis_distance) && std::isfinite(state.height_axis_start)) {
+		update_height_screen_axis(state, camera, grid_size);
+		const quader_poly::Vec2 screen_axis =
+			state.height_has_screen_axis ? state.height_screen_axis : quader_poly::Vec2 { 0.0F, -1.0F };
+		const double projected_pixels = vec2_dot(vec2_sub(screen_position, state.height_mouse_start), screen_axis);
+		double distance =
+			state.height_start_distance +
+			(projected_pixels / box_height_pixels_per_grid_step) * box_grid_or_default(grid_size);
+		if (!state.height_has_screen_axis &&
+				has_axis_distance &&
+				std::isfinite(axis_distance) &&
+				std::isfinite(state.height_axis_start)) {
 			distance = state.height_start_distance + axis_distance - state.height_axis_start;
 		}
 		state.height_distance = snap_height_distance(distance, grid_enabled, grid_size);
@@ -573,6 +634,25 @@ BoxToolStateResult begin_box_height(
 	return box_tool_instance().begin_height(state, screen_position, axis_distance, has_axis_distance, grid_enabled, grid_size);
 }
 
+BoxToolStateResult begin_box_height(
+		BoxToolState& state,
+		quader_poly::Vec2 screen_position,
+		double axis_distance,
+		bool has_axis_distance,
+		bool grid_enabled,
+		double grid_size,
+		const ViewportCameraState& camera)
+{
+	return box_tool_instance().begin_height(
+		state,
+		screen_position,
+		axis_distance,
+		has_axis_distance,
+		grid_enabled,
+		grid_size,
+		&camera);
+}
+
 double box_height_distance_for_ray(const BoxToolState& state, const quader_poly::Ray& ray, double grid_size)
 {
 	return box_tool_instance().height_distance_for_ray(state, ray, grid_size);
@@ -587,6 +667,25 @@ BoxToolStateResult update_box_height_preview(
 		double grid_size)
 {
 	return box_tool_instance().update_height_preview(state, axis_distance, has_axis_distance, screen_position, grid_enabled, grid_size);
+}
+
+BoxToolStateResult update_box_height_preview(
+		BoxToolState& state,
+		double axis_distance,
+		bool has_axis_distance,
+		quader_poly::Vec2 screen_position,
+		bool grid_enabled,
+		double grid_size,
+		const ViewportCameraState& camera)
+{
+	return box_tool_instance().update_height_preview(
+		state,
+		axis_distance,
+		has_axis_distance,
+		screen_position,
+		grid_enabled,
+		grid_size,
+		&camera);
 }
 
 BoxPreviewDescriptor box_preview_descriptor(const BoxToolState& state, bool grid_enabled, double grid_size)

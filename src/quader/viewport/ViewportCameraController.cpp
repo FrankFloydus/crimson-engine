@@ -16,10 +16,65 @@ namespace {
 
 constexpr float kNavigationZoomStepFactor = 1.18f;
 constexpr float kFlyMaxDeltaSeconds = 0.25f;
+constexpr float kDefaultFlySpeed = 15.0f;
+constexpr float kFlySpeedWheelStep = 1.0f;
 constexpr float kMinCameraDistance = 0.05f;
 
 float verticalFovRadians(float fovDegrees) {
     return fovDegrees * std::numbers::pi_v<float> / 180.0f;
+}
+
+Vec3 forwardFromAngles(float yawRadians, float pitchRadians) {
+    const float cp = std::cos(pitchRadians);
+    return normalize({
+        std::sin(yawRadians) * cp,
+        std::sin(pitchRadians),
+        -std::cos(yawRadians) * cp,
+    });
+}
+
+Vec3 fallbackUpForForward(Vec3 forward) {
+    if (std::abs(forward.y) > 0.999f) {
+        return forward.y < 0.0f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 0.0f, -1.0f};
+    }
+    return {0.0f, 1.0f, 0.0f};
+}
+
+struct CameraBasis {
+    Vec3 forward;
+    Vec3 up;
+};
+
+CameraBasis makeCameraBasis(Vec3 forwardDirection, Vec3 upDirection, Vec3 fallbackForward = {0.0f, 0.0f, -1.0f}) {
+    Vec3 forward = normalize(forwardDirection);
+    if (length(forward) <= 0.000001f) {
+        forward = normalize(fallbackForward);
+    }
+    if (length(forward) <= 0.000001f) {
+        forward = {0.0f, 0.0f, -1.0f};
+    }
+
+    Vec3 candidateUp = normalize(upDirection);
+    if (length(candidateUp) <= 0.000001f || std::abs(dot(candidateUp, forward)) > 0.999f) {
+        candidateUp = fallbackUpForForward(forward);
+    }
+
+    Vec3 right = normalize(cross(forward, candidateUp));
+    if (length(right) <= 0.000001f) {
+        right = {1.0f, 0.0f, 0.0f};
+    }
+
+    Vec3 up = normalize(cross(right, forward));
+    if (length(up) <= 0.000001f) {
+        up = fallbackUpForForward(forward);
+    }
+
+    return {.forward = forward, .up = up};
+}
+
+void syncAnglesForForward(ViewportCameraState& state, Vec3 forward) {
+    state.pitchRadians = std::asin(clamp(forward.y, -1.0f, 1.0f));
+    state.yawRadians = std::atan2(forward.x, -forward.z);
 }
 
 #if QUADER_HAS_MODELING_SDK
@@ -72,6 +127,25 @@ quader_poly::Transform3 makeSdkTransform(const ViewportCameraPose& pose) {
     };
 }
 
+ViewportCameraPose poseFromSdkTransform(const quader_poly::Transform3& transform, float distance) {
+    const Vec3 origin = fromSdk(transform.origin);
+    Vec3 forward = normalize(fromSdk(transform.z_axis) * -1.0f);
+    if (length(forward) <= 0.000001f) {
+        forward = {0.0f, 0.0f, -1.0f};
+    }
+
+    Vec3 up = normalize(fromSdk(transform.y_axis));
+    if (length(up) <= 0.000001f) {
+        up = {0.0f, 1.0f, 0.0f};
+    }
+
+    return {
+            .eye = origin,
+            .target = origin + forward * std::max(kMinCameraDistance, distance),
+            .up = up,
+    };
+}
+
 quader_editor_core::ViewportCameraState makeSdkCamera(
         const ViewportCameraPose& pose,
         const ViewportCameraState& state,
@@ -98,6 +172,8 @@ float distanceAlongForwardToPivot(Vec3 origin, Vec3 forward, Vec3 pivot) {
 
 void applySdkTransform(ViewportCameraState& state,
         Vec3& pivot,
+        Vec3& cameraForward,
+        Vec3& cameraUp,
         const quader_editor_core::ViewportNavigationResult& result,
         std::optional<float> preservedViewDistance = std::nullopt) {
     if (!result.ok) {
@@ -107,26 +183,23 @@ void applySdkTransform(ViewportCameraState& state,
     const Vec3 origin = fromSdk(result.camera_transform.origin);
     Vec3 forward = normalize(fromSdk(result.camera_transform.z_axis) * -1.0f);
     if (length(forward) <= 0.000001f) {
-        const float cp = std::cos(state.pitchRadians);
-        forward = normalize({
-                std::sin(state.yawRadians) * cp,
-                std::sin(state.pitchRadians),
-                -std::cos(state.yawRadians) * cp,
-        });
+        forward = forwardFromAngles(state.yawRadians, state.pitchRadians);
     }
+    const CameraBasis basis = makeCameraBasis(forward, fromSdk(result.camera_transform.y_axis), cameraForward);
 
     pivot = fromSdk(result.pivot);
     const float viewDistance = std::max(kMinCameraDistance,
-            preservedViewDistance.value_or(distanceAlongForwardToPivot(origin, forward, pivot)));
+            preservedViewDistance.value_or(distanceAlongForwardToPivot(origin, basis.forward, pivot)));
     const float clampedViewDistance = clamp(viewDistance, kMinCameraDistance, 500.0f);
 
-    state.target = origin + forward * clampedViewDistance;
+    cameraForward = basis.forward;
+    cameraUp = basis.up;
+    state.target = origin + cameraForward * clampedViewDistance;
     state.distance = clampedViewDistance;
     if (result.has_camera_size) {
         state.orthographicSize = static_cast<float>(std::max(0.0001, result.camera_size));
     }
-    state.pitchRadians = std::asin(clamp(forward.y, -1.0f, 1.0f));
-    state.yawRadians = std::atan2(forward.x, -forward.z);
+    syncAnglesForForward(state, cameraForward);
 }
 
 #endif
@@ -150,6 +223,8 @@ ViewportCameraController::ViewportCameraController() {
     const ViewportHostDefaults defaults = viewportHostDefaults();
     state_.orthographicSize = static_cast<float>(defaults.defaultOrthographicSize);
     state_.fovDegrees = static_cast<float>(defaults.defaultFovDegrees);
+    flySpeed_ = kDefaultFlySpeed;
+    syncBasisFromAngles();
 }
 
 void ViewportCameraController::setViewportSize(float width, float height) {
@@ -160,31 +235,77 @@ void ViewportCameraController::setViewportSize(float width, float height) {
 void ViewportCameraController::beginDrag(Vec2 mouse, ViewportDragMode mode) {
     dragMode_ = mode;
     lastMouse_ = mouse;
+    clearOrbitSnapSource();
+    if (mode == ViewportDragMode::Fly) {
+        state_.projection = ViewportProjection::Perspective;
+        orthographicViewLocked_ = false;
+    }
 }
 
 void ViewportCameraController::updateDrag(Vec2 mouse) {
+    updateDrag(mouse, dragMode_);
+}
+
+void ViewportCameraController::updateDrag(Vec2 mouse, ViewportDragMode mode) {
     const Vec2 delta{mouse.x - lastMouse_.x, mouse.y - lastMouse_.y};
     lastMouse_ = mouse;
+    if (dragMode_ == ViewportDragMode::OrbitSnap && mode != ViewportDragMode::OrbitSnap) {
+        clearOrbitSnapSource();
+    }
+    dragMode_ = mode;
+    updateDragDelta(delta);
+}
 
+void ViewportCameraController::updateDragDelta(Vec2 delta) {
     if (dragMode_ == ViewportDragMode::Orbit || dragMode_ == ViewportDragMode::OrbitSnap) {
         const ViewportHostDefaults defaults = viewportHostDefaults();
         if (orthographicViewLocked_) {
             state_.projection = ViewportProjection::Orthographic;
+            clearOrbitSnapSource();
             return;
         }
 #if QUADER_HAS_MODELING_SDK
         quader_editor_core::ViewportOrbitInput input;
-        input.camera_transform = makeSdkTransform(pose());
+        const bool snapToOrthographic = dragMode_ == ViewportDragMode::OrbitSnap;
+        if (!snapToOrthographic) {
+            clearOrbitSnapSource();
+        }
+        input.camera_transform = snapToOrthographic && hasOrbitSnapSource_
+                ? makeSdkTransform(orbitSnapSourcePose_)
+                : makeSdkTransform(pose());
         input.pivot = toSdk(pivot_);
         input.screen_delta = toSdk(delta);
         input.sensitivity = defaults.orbitRadiansPerPixel;
-        input.snap_to_orthogonal = dragMode_ == ViewportDragMode::OrbitSnap;
-        applySdkTransform(state_, pivot_, quader_editor_core::viewport_orbit(input));
+        input.snap_to_orthogonal = snapToOrthographic;
+        const quader_editor_core::ViewportNavigationResult orbitResult = quader_editor_core::viewport_orbit(input);
+        applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, orbitResult);
+        if (snapToOrthographic && orbitResult.ok) {
+            orbitSnapSourcePose_ = poseFromSdkTransform(orbitResult.unsnapped_camera_transform, state_.distance);
+            hasOrbitSnapSource_ = true;
+        } else {
+            clearOrbitSnapSource();
+        }
+        if (snapToOrthographic && orbitResult.orthogonal_snap) {
+            state_.projection = ViewportProjection::Orthographic;
+            state_.orthographicSize = static_cast<float>(
+                    quader_editor_core::viewport_orthographic_size_for_perspective(
+                            orbitResult.camera_transform,
+                            toSdk(pivot_),
+                            state_.fovDegrees));
+            orthographicViewLocked_ = false;
+        } else {
+            state_.projection = ViewportProjection::Perspective;
+            orthographicViewLocked_ = false;
+        }
 #else
         state_.yawRadians += delta.x * static_cast<float>(defaults.orbitRadiansPerPixel);
         state_.pitchRadians -= delta.y * static_cast<float>(defaults.orbitRadiansPerPixel);
         const float limit = std::numbers::pi_v<float> * 0.49f;
         state_.pitchRadians = clamp(state_.pitchRadians, -limit, limit);
+        syncBasisFromAngles();
+        state_.projection = ViewportProjection::Perspective;
+        orthographicViewLocked_ = false;
+        clearOrbitSnapSource();
 #endif
     } else if (dragMode_ == ViewportDragMode::Pan) {
 #if QUADER_HAS_MODELING_SDK
@@ -192,7 +313,7 @@ void ViewportCameraController::updateDrag(Vec2 mouse) {
         input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
         input.pivot = toSdk(pivot_);
         input.screen_delta = toSdk(delta);
-        applySdkTransform(state_, pivot_, quader_editor_core::viewport_pan(input));
+        applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_pan(input));
 #else
         const float verticalSpan = 2.0f * state_.distance * std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
         const float worldPerPixel = std::max(0.0001f, verticalSpan) / viewportHeight_;
@@ -208,20 +329,30 @@ void ViewportCameraController::updateDrag(Vec2 mouse) {
         input.pivot = toSdk(pivot_);
         input.screen_delta = toSdk(delta);
         input.sensitivity = defaults.flyLookRadiansPerPixel;
-        applySdkTransform(state_, pivot_, quader_editor_core::viewport_fly_look(input), state_.distance);
+        applySdkTransform(state_,
+                pivot_,
+                cameraForward_,
+                cameraUp_,
+                quader_editor_core::viewport_fly_look(input),
+                state_.distance);
 #else
         const Vec3 eye = pose().eye;
-        state_.yawRadians += delta.x * static_cast<float>(defaults.flyLookRadiansPerPixel);
+        state_.yawRadians -= delta.x * static_cast<float>(defaults.flyLookRadiansPerPixel);
         state_.pitchRadians -= delta.y * static_cast<float>(defaults.flyLookRadiansPerPixel);
         const float limit = std::numbers::pi_v<float> * 0.49f;
         state_.pitchRadians = clamp(state_.pitchRadians, -limit, limit);
+        syncBasisFromAngles();
         state_.target = eye + forward() * state_.distance;
 #endif
+        state_.projection = ViewportProjection::Perspective;
+        orthographicViewLocked_ = false;
+        clearOrbitSnapSource();
     }
 }
 
 void ViewportCameraController::endDrag() {
     dragMode_ = ViewportDragMode::None;
+    clearOrbitSnapSource();
 }
 
 void ViewportCameraController::scroll(float wheelDelta) {
@@ -230,7 +361,7 @@ void ViewportCameraController::scroll(float wheelDelta) {
     input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
     input.pivot = toSdk(pivot_);
     input.steps = wheelDelta;
-    applySdkTransform(state_, pivot_, quader_editor_core::viewport_zoom(input));
+    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom(input));
 #else
     state_.distance = zoomedDistance(wheelDelta);
 #endif
@@ -250,7 +381,7 @@ void ViewportCameraController::scrollToCursor(float wheelDelta, Vec2 localMouse)
     input.ray_direction = toSdk(ray.direction);
     input.has_cursor_target = false;
     input.steps = wheelDelta;
-    applySdkTransform(state_, pivot_, quader_editor_core::viewport_zoom_to_cursor(input));
+    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom_to_cursor(input));
 #else
     const float oldDistance = std::max(0.0001f, state_.distance);
     const float newDistance = zoomedDistance(wheelDelta);
@@ -269,6 +400,7 @@ void ViewportCameraController::scrollToCursor(float wheelDelta, Vec2 localMouse)
 }
 
 void ViewportCameraController::focusOrigin(float distance) {
+    clearOrbitSnapSource();
     pivot_ = {};
     state_.target = {};
     state_.distance = clamp(distance, kMinCameraDistance, 500.0f);
@@ -278,13 +410,14 @@ void ViewportCameraController::focusOrigin(float distance) {
 }
 
 void ViewportCameraController::focusBounds(Vec3 minBounds, Vec3 maxBounds, float margin) {
+    clearOrbitSnapSource();
 #if QUADER_HAS_MODELING_SDK
     quader_editor_core::ViewportFrameBoundsInput input;
     input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
     input.min_bounds = toSdk(minBounds);
     input.max_bounds = toSdk(maxBounds);
     input.margin = margin;
-    applySdkTransform(state_, pivot_, quader_editor_core::viewport_frame_bounds(input));
+    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_frame_bounds(input));
 #else
     const Vec3 center = (minBounds + maxBounds) * 0.5f;
     const Vec3 diagonal = maxBounds - minBounds;
@@ -299,10 +432,11 @@ void ViewportCameraController::focusBounds(Vec3 minBounds, Vec3 maxBounds, float
 }
 
 void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign) {
+    clearOrbitSnapSource();
 #if QUADER_HAS_MODELING_SDK
     const quader_editor_core::ViewportCameraState camera =
             makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    applySdkTransform(state_, pivot_,
+    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_,
             quader_editor_core::viewport_view_axis(camera, toSdk(pivot_), toSdk(axis), sign));
     state_.projection = ViewportProjection::Orthographic;
     orthographicViewLocked_ = true;
@@ -317,33 +451,23 @@ void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign) {
 }
 
 void ViewportCameraController::setViewDirection(Vec3 forwardDirection) {
+    clearOrbitSnapSource();
     const Vec3 direction = normalize(forwardDirection);
     if (length(direction) <= 0.000001f) {
         return;
     }
 
-    const float limit = std::numbers::pi_v<float> * 0.49f;
-    state_.pitchRadians = clamp(std::asin(clamp(direction.y, -1.0f, 1.0f)), -limit, limit);
-    state_.yawRadians = std::atan2(direction.x, -direction.z);
+    setCameraBasis(direction, fallbackUpForForward(direction));
     pivot_ = state_.target;
 }
 
-void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds, bool fast, bool slow) {
+void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds) {
     if (length(localDirection) <= 0.000001f) {
         return;
     }
 
-    const ViewportHostDefaults defaults = viewportHostDefaults();
-    float speed = static_cast<float>(defaults.flyBaseSpeed);
-    if (fast) {
-        speed *= static_cast<float>(defaults.flyFastMultiplier);
-    }
-    if (slow) {
-        speed *= static_cast<float>(defaults.flySlowMultiplier);
-    }
-
     const float clampedDelta = clamp(deltaSeconds, 0.0f, kFlyMaxDeltaSeconds);
-    const float distance = speed * clampedDelta;
+    const float distance = flySpeed_ * clampedDelta;
     if (distance <= 0.000001f) {
         return;
     }
@@ -353,8 +477,13 @@ void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds, 
     input.camera_transform = makeSdkTransform(pose());
     input.pivot = toSdk(pivot_);
     input.local_direction = toSdk(localDirection);
-    input.distance = quader_editor_core::viewport_fly_move_distance(deltaSeconds, fast, slow);
-    applySdkTransform(state_, pivot_, quader_editor_core::viewport_fly_move(input), state_.distance);
+    input.distance = distance;
+    applySdkTransform(state_,
+            pivot_,
+            cameraForward_,
+            cameraUp_,
+            quader_editor_core::viewport_fly_move(input),
+            state_.distance);
 #else
     const Vec3 worldDirection = normalize(
             right() * localDirection.x +
@@ -366,12 +495,25 @@ void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds, 
 #endif
 }
 
+void ViewportCameraController::adjustFlySpeed(float wheelSteps) {
+    if (std::abs(wheelSteps) <= 0.000001f) {
+        return;
+    }
+    flySpeed_ = clamp(flySpeed_ + wheelSteps * kFlySpeedWheelStep, 1.0f, 1000.0f);
+}
+
+void ViewportCameraController::resetFlySpeed() {
+    flySpeed_ = kDefaultFlySpeed;
+}
+
+bool ViewportCameraController::flySpeedIsDefault() const {
+    return std::abs(flySpeed_ - kDefaultFlySpeed) <= 0.0001f;
+}
+
 ViewportCameraPose ViewportCameraController::pose() const {
     const Vec3 fwd = forward();
     const Vec3 eye = state_.target - fwd * state_.distance;
-    const Vec3 r = right();
-    const Vec3 up = normalize(cross(r, fwd));
-    return {eye, state_.target, up};
+    return {eye, state_.target, up()};
 }
 
 ViewportRay ViewportCameraController::rayFromViewportPoint(Vec2 localMouse) const {
@@ -464,16 +606,11 @@ float ViewportCameraController::zoomedDistance(float wheelDelta) const {
 }
 
 Vec3 ViewportCameraController::forward() const {
-    const float cp = std::cos(state_.pitchRadians);
-    return normalize({
-        std::sin(state_.yawRadians) * cp,
-        std::sin(state_.pitchRadians),
-        -std::cos(state_.yawRadians) * cp,
-    });
+    return cameraForward_;
 }
 
 Vec3 ViewportCameraController::right() const {
-    Vec3 value = cross(forward(), {0.0f, 1.0f, 0.0f});
+    Vec3 value = cross(cameraForward_, cameraUp_);
     if (length(value) <= 0.000001f) {
         value = {1.0f, 0.0f, 0.0f};
     }
@@ -481,11 +618,32 @@ Vec3 ViewportCameraController::right() const {
 }
 
 Vec3 ViewportCameraController::up() const {
-    Vec3 value = cross(right(), forward());
+    Vec3 value = normalize(cameraUp_);
     if (length(value) <= 0.000001f) {
         value = {0.0f, 1.0f, 0.0f};
     }
-    return normalize(value);
+    return value;
+}
+
+void ViewportCameraController::setCameraBasis(Vec3 forwardDirection, Vec3 upDirection) {
+    const CameraBasis basis = makeCameraBasis(forwardDirection, upDirection, cameraForward_);
+    cameraForward_ = basis.forward;
+    cameraUp_ = basis.up;
+    syncAnglesFromBasis();
+}
+
+void ViewportCameraController::syncBasisFromAngles() {
+    setCameraBasis(forwardFromAngles(state_.yawRadians, state_.pitchRadians),
+            fallbackUpForForward(forwardFromAngles(state_.yawRadians, state_.pitchRadians)));
+}
+
+void ViewportCameraController::syncAnglesFromBasis() {
+    syncAnglesForForward(state_, cameraForward_);
+}
+
+void ViewportCameraController::clearOrbitSnapSource() {
+    orbitSnapSourcePose_ = {};
+    hasOrbitSnapSource_ = false;
 }
 
 } // namespace quader

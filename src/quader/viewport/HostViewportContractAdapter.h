@@ -21,9 +21,6 @@ struct ViewportHostDefaults {
     double defaultFovDegrees = 60.0;
     double orbitRadiansPerPixel = 0.006;
     double flyLookRadiansPerPixel = 0.004;
-    double flyBaseSpeed = 6.0;
-    double flyFastMultiplier = 4.0;
-    double flySlowMultiplier = 0.25;
     double selectionBoxDragThresholdPixels = 4.0;
 };
 
@@ -47,9 +44,6 @@ inline ViewportHostDefaults viewportHostDefaults() {
             .defaultFovDegrees = defaults.default_fov_degrees,
             .orbitRadiansPerPixel = defaults.orbit_radians_per_pixel,
             .flyLookRadiansPerPixel = defaults.fly_look_radians_per_pixel,
-            .flyBaseSpeed = defaults.fly_base_speed,
-            .flyFastMultiplier = defaults.fly_fast_multiplier,
-            .flySlowMultiplier = defaults.fly_slow_multiplier,
             .selectionBoxDragThresholdPixels = defaults.selection_box_drag_threshold_pixels,
     };
 #else

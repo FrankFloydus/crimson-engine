@@ -78,6 +78,11 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     camera.setViewportSize(input.viewportSize.x, input.viewportSize.y);
 
     const bool acceptsMouse = input.viewportHovered || navigating();
+    const bool hasFlyMovementInput =
+            std::abs(input.flyLocalDirection.x) > 0.000001f ||
+            std::abs(input.flyLocalDirection.y) > 0.000001f ||
+            std::abs(input.flyLocalDirection.z) > 0.000001f;
+    bool flyStartedThisFrame = false;
     if (acceptsMouse &&
             input.rightPressed &&
             !input.modifiers.primary &&
@@ -87,11 +92,29 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
                 ? ViewportDragMode::Pan
                 : ViewportDragMode::Fly;
         navigationUsesRightButton_ = true;
+        flyCursorCaptureActive_ = navigationMode_ == ViewportDragMode::Fly;
+        flyHudActive_ = false;
         camera.beginDrag(input.mouseScreen, navigationMode_);
+        flyStartedThisFrame = navigationMode_ == ViewportDragMode::Fly;
         result.consumed = true;
     }
 
     if (navigationMode_ == ViewportDragMode::Fly) {
+        if (input.middlePressed) {
+            camera.resetFlySpeed();
+            result.consumed = true;
+            result.flySpeedChanged = true;
+            result.flySpeedReset = true;
+            result.flySpeed = camera.flySpeed();
+        }
+
+        if (input.mouseWheel != 0.0f) {
+            camera.adjustFlySpeed(input.mouseWheel);
+            result.consumed = true;
+            result.flySpeedChanged = true;
+            result.flySpeed = camera.flySpeed();
+        }
+
         bool cancelFly = false;
         for (ViewportKey key : input.pressedKeys) {
             if (key == ViewportKey::Escape) {
@@ -100,9 +123,12 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             }
         }
 
-        if (input.rightDown && !cancelFly) {
-            camera.updateDrag(input.mouseScreen);
-            camera.flyMove(input.flyLocalDirection, input.deltaSeconds, input.flyFast, input.flySlow);
+        if (input.rightDown && !cancelFly && !flyStartedThisFrame) {
+            if (hasFlyMovementInput) {
+                flyHudActive_ = true;
+            }
+            camera.updateDragDelta(input.mouseDelta);
+            camera.flyMove(input.flyLocalDirection, input.deltaSeconds);
             result.consumed = true;
             result.cameraChanged = true;
         }
@@ -110,11 +136,16 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         if (input.rightReleased || !input.rightDown || cancelFly) {
             navigationMode_ = ViewportDragMode::None;
             navigationUsesRightButton_ = false;
+            flyCursorCaptureActive_ = false;
+            flyHudActive_ = false;
             camera.endDrag();
             result.consumed = true;
         }
 
         result.navigationActive = navigating();
+        result.flyNavigationActive = flyNavigating();
+        result.flyCursorCaptureActive = flyCursorCaptureActive();
+        result.flyHudActive = flyHudActive();
         return result;
     }
 
@@ -131,18 +162,26 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         const bool dragDown = navigationUsesRightButton_ ? input.rightDown : input.middleDown;
         const bool dragReleased = navigationUsesRightButton_ ? input.rightReleased : input.middleReleased;
         if (dragDown) {
+            const ViewportDragMode activeNavigationMode =
+                    !navigationUsesRightButton_ &&
+                            (navigationMode_ == ViewportDragMode::Orbit || navigationMode_ == ViewportDragMode::OrbitSnap)
+                    ? (input.modifiers.alt ? ViewportDragMode::OrbitSnap : ViewportDragMode::Orbit)
+                    : navigationMode_;
             const bool lockedOrthographicOrbit =
                     camera.orthographicViewLocked() &&
-                    (navigationMode_ == ViewportDragMode::Orbit || navigationMode_ == ViewportDragMode::OrbitSnap);
+                    (activeNavigationMode == ViewportDragMode::Orbit || activeNavigationMode == ViewportDragMode::OrbitSnap);
             if (!lockedOrthographicOrbit) {
-                camera.updateDrag(input.mouseScreen);
+                camera.updateDrag(input.mouseScreen, activeNavigationMode);
                 result.cameraChanged = true;
             }
+            navigationMode_ = activeNavigationMode;
             result.consumed = true;
         }
         if (dragReleased || !dragDown) {
             navigationMode_ = ViewportDragMode::None;
             navigationUsesRightButton_ = false;
+            flyCursorCaptureActive_ = false;
+            flyHudActive_ = false;
             camera.endDrag();
             result.consumed = true;
         }
@@ -176,12 +215,17 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     }
 
     result.navigationActive = navigating();
+    result.flyNavigationActive = flyNavigating();
+    result.flyCursorCaptureActive = flyCursorCaptureActive();
+    result.flyHudActive = flyHudActive();
     return result;
 }
 
 void ViewportInputRouter::reset() {
     navigationMode_ = ViewportDragMode::None;
     navigationUsesRightButton_ = false;
+    flyCursorCaptureActive_ = false;
+    flyHudActive_ = false;
 }
 
 void ViewportInputRouter::setActiveTool(ViewportTool tool) {

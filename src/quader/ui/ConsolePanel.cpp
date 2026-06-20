@@ -40,6 +40,9 @@ void ConsolePanel::draw(UIContext& context) {
         ImGui::End();
         return;
     }
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && panelFocusInputActive()) {
+        context.requestPanelFocus(id());
+    }
 
     if (ImGui::Button("Clear")) {
         Logger::clearMemory();

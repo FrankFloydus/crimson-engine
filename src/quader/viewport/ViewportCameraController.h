@@ -59,6 +59,7 @@ public:
     void setViewportSize(float width, float height);
     void beginDrag(Vec2 mouse, ViewportDragMode mode);
     void updateDrag(Vec2 mouse);
+    void updateDrag(Vec2 mouse, ViewportDragMode mode);
     void endDrag();
     void scroll(float wheelDelta);
     void scrollToCursor(float wheelDelta, Vec2 localMouse);
@@ -66,9 +67,14 @@ public:
     void focusBounds(Vec3 minBounds, Vec3 maxBounds, float margin = 1.25f);
     void viewAxis(ViewportViewAxis axis, int sign);
     void setViewDirection(Vec3 forwardDirection);
-    void flyMove(Vec3 localDirection, float deltaSeconds, bool fast, bool slow);
+    void updateDragDelta(Vec2 delta);
+    void flyMove(Vec3 localDirection, float deltaSeconds);
+    void adjustFlySpeed(float wheelSteps);
+    void resetFlySpeed();
 
     const ViewportCameraState& state() const { return state_; }
+    float flySpeed() const { return flySpeed_; }
+    bool flySpeedIsDefault() const;
     ViewportCameraPose pose() const;
     ViewportRay rayFromViewportPoint(Vec2 localMouse) const;
     ViewportScreenPoint projectWorldPoint(Vec3 worldPoint) const;
@@ -80,14 +86,23 @@ private:
     Vec3 forward() const;
     Vec3 right() const;
     Vec3 up() const;
+    void setCameraBasis(Vec3 forwardDirection, Vec3 upDirection);
+    void syncBasisFromAngles();
+    void syncAnglesFromBasis();
+    void clearOrbitSnapSource();
 
     ViewportCameraState state_;
+    Vec3 cameraForward_ = {0.0f, 0.0f, -1.0f};
+    Vec3 cameraUp_ = {0.0f, 1.0f, 0.0f};
     Vec3 pivot_ = {};
     float viewportWidth_ = 1.0f;
     float viewportHeight_ = 1.0f;
+    float flySpeed_ = 15.0f;
     Vec2 lastMouse_ = {};
     ViewportDragMode dragMode_ = ViewportDragMode::None;
     bool orthographicViewLocked_ = false;
+    ViewportCameraPose orbitSnapSourcePose_ = {};
+    bool hasOrbitSnapSource_ = false;
 };
 
 } // namespace quader

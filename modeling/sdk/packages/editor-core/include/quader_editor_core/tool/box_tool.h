@@ -31,8 +31,10 @@ struct BoxToolState {
 	quader_poly::Vec3 end_point;
 	double height_distance = 0.0;
 	quader_poly::Vec2 height_mouse_start;
+	quader_poly::Vec2 height_screen_axis { 0.0F, -1.0F };
 	double height_start_distance = 0.0;
 	double height_axis_start = std::numeric_limits<double>::infinity();
+	bool height_has_screen_axis = false;
 	int preview_brush_id = -1;
 	bool preview_valid = false;
 	std::vector<quader_poly::Vec3> hover_cell_points;
@@ -87,8 +89,10 @@ BoxToolStateResult begin_box_footprint(BoxToolState& state, quader_poly::Vec3 ra
 BoxToolStateResult update_box_footprint(BoxToolState& state, quader_poly::Vec3 raw_end, bool grid_enabled, double grid_size);
 BoxToolStateResult update_box_hover_cell(BoxToolState& state, quader_poly::Vec3 local_point, bool grid_enabled, double grid_size);
 BoxToolStateResult begin_box_height(BoxToolState& state, quader_poly::Vec2 screen_position, double axis_distance, bool has_axis_distance, bool grid_enabled, double grid_size);
+BoxToolStateResult begin_box_height(BoxToolState& state, quader_poly::Vec2 screen_position, double axis_distance, bool has_axis_distance, bool grid_enabled, double grid_size, const ViewportCameraState& camera);
 double box_height_distance_for_ray(const BoxToolState& state, const quader_poly::Ray& ray, double grid_size);
 BoxToolStateResult update_box_height_preview(BoxToolState& state, double axis_distance, bool has_axis_distance, quader_poly::Vec2 screen_position, bool grid_enabled, double grid_size);
+BoxToolStateResult update_box_height_preview(BoxToolState& state, double axis_distance, bool has_axis_distance, quader_poly::Vec2 screen_position, bool grid_enabled, double grid_size, const ViewportCameraState& camera);
 BoxPreviewDescriptor box_preview_descriptor(const BoxToolState& state, bool grid_enabled, double grid_size);
 std::vector<quader_poly::Vec3> box_preview_corners(const BoxPreviewDescriptor& preview);
 void set_box_preview_state(BoxToolState& state, int preview_brush_id, bool preview_valid);

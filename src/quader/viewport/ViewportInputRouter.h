@@ -140,12 +140,11 @@ struct ViewportInputFrame {
     float mouseWheel = 0.0f;
     float deltaSeconds = 1.0f / 60.0f;
     Vec2 mouseScreen = {};
+    Vec2 mouseDelta = {};
     Vec2 mouseLocal = {};
     Vec2 viewportSize = {};
     ViewportModifiers modifiers = {};
     Vec3 flyLocalDirection = {};
-    bool flyFast = false;
-    bool flySlow = false;
     std::vector<ViewportKey> pressedKeys;
 };
 
@@ -156,6 +155,12 @@ struct ViewportInputResult {
     bool toolChanged = false;
     bool selectionModeChanged = false;
     bool navigationActive = false;
+    bool flyNavigationActive = false;
+    bool flyCursorCaptureActive = false;
+    bool flyHudActive = false;
+    bool flySpeedChanged = false;
+    bool flySpeedReset = false;
+    float flySpeed = 0.0f;
     bool zoomedToCursor = false;
     bool cancelRequested = false;
     bool focusDocumentRequested = false;
@@ -173,6 +178,9 @@ public:
 
     const ViewportToolState& state() const { return state_; }
     bool navigating() const { return navigationMode_ != ViewportDragMode::None; }
+    bool flyNavigating() const { return navigationMode_ == ViewportDragMode::Fly; }
+    bool flyCursorCaptureActive() const { return flyCursorCaptureActive_; }
+    bool flyHudActive() const { return flyHudActive_; }
 
     static bool resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut);
 
@@ -182,6 +190,8 @@ private:
     ViewportToolState state_;
     ViewportDragMode navigationMode_ = ViewportDragMode::None;
     bool navigationUsesRightButton_ = false;
+    bool flyCursorCaptureActive_ = false;
+    bool flyHudActive_ = false;
 };
 
 const char* viewportToolId(ViewportTool tool);

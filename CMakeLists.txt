@@ -111,6 +111,7 @@ elseif(QUADER_BUILD_SDK_TESTS)
 endif()
 
 add_library(quader_modeling STATIC
+    src/quader/modeling/ModelingActionCatalog.cpp
     src/quader/modeling/ModelingSessionService.cpp
 )
 
@@ -143,6 +144,7 @@ add_library(quader_core STATIC
     src/quader/scene/SceneBounds.cpp
     src/quader/scene/SceneDocument.cpp
     src/quader/ui/ConsoleModel.cpp
+    src/quader/ui/ViewportContextMenuPolicy.cpp
     src/quader/ui/UISettings.cpp
     src/quader/viewport/ViewportCameraController.cpp
     src/quader/viewport/ViewportInputRouter.cpp

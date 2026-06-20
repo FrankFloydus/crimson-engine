@@ -43,6 +43,7 @@ public:
     void draw(UIContext& context) override;
 
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
+    bool flyNavigationActive() const { return lastFlyNavigationActive_; }
 
 private:
     struct GizmoStartTransform {
@@ -59,9 +60,13 @@ private:
             UndoRedoManager& undoRedo,
             DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
-            AssetId defaultMaterial);
+            AssetId defaultMaterial,
+            Vec2 capturedMouseDelta,
+            bool* viewportCursorCaptureRequested,
+            Vec2* viewportCursorCapturePoint,
+            const UIContext& uiContext);
 
-    void selectFromViewport(SceneDocument& document,
+    ModelingSelectionSummary selectFromViewport(SceneDocument& document,
             const AssetRegistry& assets,
             ModelingSessionService& modeling,
             const ViewportCameraController& camera,
@@ -90,8 +95,11 @@ private:
     GizmoAxis activeGizmoAxis_ = GizmoAxis::None;
     Vec2 lastGizmoMouse_ = {};
     Vec2 contextMenuRightPressScreen_ = {};
+    Vec2 contextMenuRightDragDelta_ = {};
     bool contextMenuRightPressActive_ = false;
+    Vec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
+    bool lastFlyNavigationActive_ = false;
     Vec3 gizmoStartWorldPivot_ = {};
     std::vector<GizmoStartTransform> gizmoStartTransforms_;
 #if QUADER_HAS_MODELING_SDK

@@ -9,12 +9,58 @@
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_internal.h>
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_mouse.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <system_error>
 
 namespace quader {
+namespace {
+
+void clampDockLeafNodeWidth(ImGuiDockNode* node, float minimumWidth) {
+    if (node == nullptr || node->ParentNode == nullptr || node->ParentNode->SplitAxis != ImGuiAxis_X) {
+        return;
+    }
+
+    ImGuiDockNode* parent = node->ParentNode;
+    ImGuiDockNode* sibling = parent->ChildNodes[0] == node ? parent->ChildNodes[1] : parent->ChildNodes[0];
+    if (sibling == nullptr || parent->Size.x <= minimumWidth + 1.0f || node->Size.x >= minimumWidth) {
+        return;
+    }
+
+    const bool nodeIsLeftChild = parent->ChildNodes[0] == node;
+    const float clampedWidth = std::min(minimumWidth, parent->Size.x - 1.0f);
+    const float siblingWidth = std::max(1.0f, parent->Size.x - clampedWidth);
+
+    node->Size.x = clampedWidth;
+    node->SizeRef.x = clampedWidth;
+    sibling->Size.x = siblingWidth;
+    sibling->SizeRef.x = siblingWidth;
+
+    if (nodeIsLeftChild) {
+        node->Pos.x = parent->Pos.x;
+        sibling->Pos.x = parent->Pos.x + clampedWidth;
+    } else {
+        sibling->Pos.x = parent->Pos.x;
+        node->Pos.x = parent->Pos.x + siblingWidth;
+    }
+
+    node->WantLockSizeOnce = true;
+    sibling->WantLockSizeOnce = true;
+}
+
+void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
+    ImGuiWindow* window = ImGui::FindWindowByName(windowName);
+    if (window == nullptr || window->DockNode == nullptr) {
+        return;
+    }
+    clampDockLeafNodeWidth(window->DockNode, minimumWidth);
+}
+
+} // namespace
 
 UISystem::~UISystem() {
     shutdown();
@@ -57,6 +103,7 @@ void UISystem::shutdown() {
         return;
     }
 
+    setViewportCursorCaptured(false);
     saveSettings();
     if (!imguiIniPath_.empty()) {
         ImGui::SaveIniSettingsToDisk(imguiIniPath_.c_str());
@@ -76,6 +123,13 @@ bool UISystem::processEvent(const SDL_Event& event) {
 
 void UISystem::beginFrame() {
     renderer_.releaseFrameResources();
+    relativeMouseDelta_ = {};
+    if (relativeMouseCaptured_) {
+        float deltaX = 0.0f;
+        float deltaY = 0.0f;
+        (void)SDL_GetRelativeMouseState(&deltaX, &deltaY);
+        relativeMouseDelta_ = {deltaX, deltaY};
+    }
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 }
@@ -92,6 +146,10 @@ void UISystem::draw(ViewportRenderer& viewport,
         bool& quitRequested) {
     drawDockspace(quitRequested);
 
+    bool viewportCursorCaptureRequested = false;
+    Vec2 viewportCursorCapturePoint = {};
+    const UIPanelId previousFocusedPanel = focusedPanel_;
+    bool panelFocusChanged = false;
     UIContext context{
             .viewport = viewport,
             .camera = camera,
@@ -104,8 +162,20 @@ void UISystem::draw(ViewportRenderer& viewport,
             .defaultMaterial = defaultMaterial,
             .quitRequested = quitRequested,
             .style = style_,
+            .viewportRelativeMouseDelta = relativeMouseDelta_,
+            .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
+            .viewportCursorCapturePoint = &viewportCursorCapturePoint,
+            .focusedPanel = focusedPanel_,
+            .previousFocusedPanel = previousFocusedPanel,
+            .focusedPanelStorage = &focusedPanel_,
+            .panelFocusChanged = &panelFocusChanged,
     };
     panels_.draw(context);
+    enforceSidebarDockMinimums();
+    setViewportCursorCaptured(viewportCursorCaptureRequested);
+    if (viewportCursorCaptureRequested) {
+        warpCapturedCursor(viewportCursorCapturePoint);
+    }
 }
 
 void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
@@ -153,7 +223,14 @@ void UISystem::drawDockspace(bool& quitRequested) {
         dockLayoutBuilt_ = true;
     }
 
+    enforceSidebarDockMinimums();
+    const ImVec2 savedWindowMinSize = ImGui::GetStyle().WindowMinSize;
+    ImGui::PushStyleVar(
+            ImGuiStyleVar_WindowMinSize,
+            ImVec2(std::max(savedWindowMinSize.x, style_.sidebarMinWidth), savedWindowMinSize.y));
     ImGui::DockSpace(dockspaceId, {0.0f, 0.0f}, ImGuiDockNodeFlags_AutoHideTabBar);
+    ImGui::PopStyleVar();
+    enforceSidebarDockMinimums();
 
     ImGui::End();
 }
@@ -200,8 +277,11 @@ void UISystem::buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize)
     if (panels_.isVisible(UIPanelId::Console)) {
         consoleId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Down, 0.24f, nullptr, &mainId);
     }
-    const ImGuiID outlinerId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Left, 0.18f, nullptr, &mainId);
-    const ImGuiID inspectorId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Right, 0.24f, nullptr, &mainId);
+    const float sidebarMinimumRatio = style_.sidebarMinWidth / std::max(dockspaceSize.x, 1.0f);
+    const float outlinerRatio = std::clamp(std::max(0.18f, sidebarMinimumRatio), 0.18f, 0.35f);
+    const float inspectorRatio = std::clamp(std::max(0.24f, sidebarMinimumRatio), 0.24f, 0.35f);
+    const ImGuiID outlinerId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Left, outlinerRatio, nullptr, &mainId);
+    const ImGuiID inspectorId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Right, inspectorRatio, nullptr, &mainId);
 
     ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Outliner), outlinerId);
     ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Viewport), mainId);
@@ -210,6 +290,47 @@ void UISystem::buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize)
         ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Console), consoleId);
     }
     ImGui::DockBuilderFinish(dockspaceId);
+}
+
+void UISystem::enforceSidebarDockMinimums() {
+    clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), style_.sidebarMinWidth);
+    clampDockedWindowWidth(uiPanelKey(UIPanelId::Inspector), style_.sidebarMinWidth);
+}
+
+void UISystem::setViewportCursorCaptured(bool captured) {
+    if (window_ == nullptr || relativeMouseCaptured_ == captured) {
+        return;
+    }
+
+    if (!SDL_SetWindowRelativeMouseMode(window_, captured)) {
+        if (!relativeMouseCaptureWarningIssued_) {
+            LOG_WARN("Unable to {} viewport relative mouse mode: {}",
+                    captured ? "enable" : "disable",
+                    SDL_GetError());
+            relativeMouseCaptureWarningIssued_ = true;
+        }
+        return;
+    }
+
+    relativeMouseCaptured_ = captured;
+    relativeMouseCaptureWarningIssued_ = false;
+    if (captured) {
+        float discardX = 0.0f;
+        float discardY = 0.0f;
+        (void)SDL_GetRelativeMouseState(&discardX, &discardY);
+        relativeMouseDelta_ = {};
+    }
+}
+
+void UISystem::warpCapturedCursor(Vec2 point) {
+    if (window_ == nullptr || !relativeMouseCaptured_) {
+        return;
+    }
+    SDL_WarpMouseInWindow(window_, point.x, point.y);
+    float discardX = 0.0f;
+    float discardY = 0.0f;
+    (void)SDL_GetRelativeMouseState(&discardX, &discardY);
+    relativeMouseDelta_ = {};
 }
 
 void UISystem::saveSettings() {

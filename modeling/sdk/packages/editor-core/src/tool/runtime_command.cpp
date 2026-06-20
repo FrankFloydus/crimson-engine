@@ -289,7 +289,14 @@ CommandResult begin_box_height(
 	const EditorRuntimeStatus before = runtime.status();
 	runtime.set_box_grid_size(settings.grid_size);
 	const double axis_distance = runtime.box_height_distance_for_ray(settings.ray);
-	const BoxToolStateResult result = runtime.begin_box_height(
+	const BoxToolStateResult result = settings.has_camera ?
+		runtime.begin_box_height(
+			settings.screen_position,
+			axis_distance,
+			std::isfinite(axis_distance),
+			settings.camera,
+			true) :
+		runtime.begin_box_height(
 			settings.screen_position,
 			axis_distance,
 			std::isfinite(axis_distance),
@@ -304,7 +311,14 @@ CommandResult update_box_height(
 	const EditorRuntimeStatus before = runtime.status();
 	runtime.set_box_grid_size(settings.grid_size);
 	const double axis_distance = runtime.box_height_distance_for_ray(settings.ray);
-	const BoxToolStateResult result = runtime.update_box_height_preview(
+	const BoxToolStateResult result = settings.has_camera ?
+		runtime.update_box_height_preview(
+			axis_distance,
+			std::isfinite(axis_distance),
+			settings.screen_position,
+			settings.camera,
+			true) :
+		runtime.update_box_height_preview(
 			axis_distance,
 			std::isfinite(axis_distance),
 			settings.screen_position,

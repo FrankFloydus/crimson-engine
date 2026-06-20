@@ -129,6 +129,8 @@ struct BoxHeightRuntimeCommandSettings {
 	quader_poly::Vec2 screen_position;
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
+	bool has_camera = false;
+	ViewportCameraState camera;
 };
 
 struct CreateBoxFromBoundsRuntimeCommandSettings {

@@ -863,6 +863,23 @@ BoxToolStateResult EditorRuntime::begin_box_height(
 		state_.box_grid_size);
 }
 
+BoxToolStateResult EditorRuntime::begin_box_height(
+		quader_poly::Vec2 screen_position,
+		double axis_distance,
+		bool has_axis_distance,
+		const ViewportCameraState& camera,
+		bool grid_enabled)
+{
+	return quader_editor_core::begin_box_height(
+		state_.box,
+		screen_position,
+		axis_distance,
+		has_axis_distance,
+		grid_enabled,
+		state_.box_grid_size,
+		camera);
+}
+
 BoxToolStateResult EditorRuntime::update_box_height_preview(
 		double axis_distance,
 		bool has_axis_distance,
@@ -876,6 +893,23 @@ BoxToolStateResult EditorRuntime::update_box_height_preview(
 		screen_position,
 		grid_enabled,
 		state_.box_grid_size);
+}
+
+BoxToolStateResult EditorRuntime::update_box_height_preview(
+		double axis_distance,
+		bool has_axis_distance,
+		quader_poly::Vec2 screen_position,
+		const ViewportCameraState& camera,
+		bool grid_enabled)
+{
+	return quader_editor_core::update_box_height_preview(
+		state_.box,
+		axis_distance,
+		has_axis_distance,
+		screen_position,
+		grid_enabled,
+		state_.box_grid_size,
+		camera);
 }
 
 BoxPreviewDescriptor EditorRuntime::box_preview_descriptor(bool grid_enabled) const
