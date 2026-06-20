@@ -4,7 +4,10 @@
 #include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneEntityNaming.h"
+#include "quader/scene/TransformPivot.h"
 #include "quader/ui/UIContext.h"
+#include "quader/viewport/HostViewportContractAdapter.h"
+#include "quader/viewport/ViewportModelingCommandRouter.h"
 
 #include <algorithm>
 #include <array>
@@ -433,65 +436,6 @@ void drawViewportOperationsPopup(ModelingSessionService& modeling, ViewportInput
     ImGui::EndPopup();
 }
 
-ModelingMirrorAxis toModelingMirrorAxis(ViewportMirrorAxis axis) {
-    switch (axis) {
-    case ViewportMirrorAxis::X:
-        return ModelingMirrorAxis::X;
-    case ViewportMirrorAxis::Y:
-        return ModelingMirrorAxis::Y;
-    case ViewportMirrorAxis::Z:
-        return ModelingMirrorAxis::Z;
-    }
-    return ModelingMirrorAxis::X;
-}
-
-std::optional<ModelingCommandResult> executeModelingShortcut(
-        ModelingSessionService& modeling,
-        const ViewportShortcut& shortcut) {
-    switch (shortcut.kind) {
-    case ViewportShortcutKind::DeleteSelection:
-        return modeling.deleteSelection();
-    case ViewportShortcutKind::SelectAll:
-        return modeling.selectAll();
-    case ViewportShortcutKind::InvertSelection:
-        return modeling.invertSelection();
-    case ViewportShortcutKind::Copy:
-        return modeling.copySelection();
-    case ViewportShortcutKind::Paste:
-        return modeling.pasteSelection();
-    case ViewportShortcutKind::Duplicate:
-        return modeling.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
-    case ViewportShortcutKind::Undo:
-        return modeling.undo();
-    case ViewportShortcutKind::Redo:
-        return modeling.redo();
-    case ViewportShortcutKind::RepeatLastAction:
-        return modeling.repeatLastAction();
-    case ViewportShortcutKind::MergeActive:
-        return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToActive);
-    case ViewportShortcutKind::MergeCenter:
-        return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToCenter);
-    case ViewportShortcutKind::MirrorAxis:
-        return modeling.mirrorSelection(toModelingMirrorAxis(shortcut.mirrorAxis));
-    case ViewportShortcutKind::FlipHorizontal:
-        return modeling.flipSelection(ModelingFlipOrientation::Horizontal);
-    case ViewportShortcutKind::FlipVertical:
-        return modeling.flipSelection(ModelingFlipOrientation::Vertical);
-    case ViewportShortcutKind::ApplyMaterial:
-        return modeling.applyActiveMaterial();
-    case ViewportShortcutKind::None:
-    case ViewportShortcutKind::ActivateTool:
-    case ViewportShortcutKind::SetSelectionMode:
-    case ViewportShortcutKind::FocusDocument:
-    case ViewportShortcutKind::FocusOrigin:
-    case ViewportShortcutKind::ToggleMaximized:
-    case ViewportShortcutKind::SetGridPreset:
-    case ViewportShortcutKind::CancelActiveTool:
-        return std::nullopt;
-    }
-    return std::nullopt;
-}
-
 ImU32 toImColor(std::uint32_t rgba) {
     return static_cast<ImU32>(rgba);
 }
@@ -671,13 +615,6 @@ quader_editor_core::ViewportInteractionTool toSdkTool(ViewportTool tool) {
     }
 }
 
-bool toolAllowsSelectionFallback(ViewportTool tool) {
-    return tool == ViewportTool::Select ||
-            tool == ViewportTool::Move ||
-            tool == ViewportTool::Rotate ||
-            tool == ViewportTool::Scale;
-}
-
 quader_editor_core::TransformAxis toSdkAxis(ViewportPanel::GizmoAxis axis) {
     switch (axis) {
     case ViewportPanel::GizmoAxis::X:
@@ -720,19 +657,6 @@ ModelingTransformAxis toModelingTransformAxis(ViewportPanel::GizmoAxis axis) {
         return ModelingTransformAxis::None;
     }
     return ModelingTransformAxis::None;
-}
-
-ModelingTransformTool toModelingTransformTool(ViewportTool tool) {
-    switch (tool) {
-    case ViewportTool::Move:
-        return ModelingTransformTool::Move;
-    case ViewportTool::Rotate:
-        return ModelingTransformTool::Rotate;
-    case ViewportTool::Scale:
-        return ModelingTransformTool::Scale;
-    default:
-        return ModelingTransformTool::Move;
-    }
 }
 
 ViewportPanel::GizmoAxis fromSdkAxis(quader_editor_core::TransformAxis axis) {
@@ -1293,6 +1217,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             boxPreview_ = {};
             if (!command.ok) {
                 LOG_ERROR("Box tool activation failed: {}", command.message);
+                inputRouter_.setActiveTool(ViewportTool::Select);
             }
         } else if (hasActiveBoxPreview(boxPreview_)) {
             const ModelingCommandResult cancel = modeling.cancelBox();
@@ -1304,7 +1229,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
     }
 
     if (result.shortcutHandled) {
-        if (const std::optional<ModelingCommandResult> command = executeModelingShortcut(modeling, result.shortcut)) {
+        if (const std::optional<ModelingCommandResult> command =
+                        executeViewportModelingShortcut(modeling, result.shortcut)) {
             if (!command->ok) {
                 LOG_ERROR("Viewport shortcut failed: {}", command->message.empty() ? "Command failed." : command->message);
             }
@@ -1419,7 +1345,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             boxPreview_ = {};
         }
 
-        const bool selectionFallbackActive = toolAllowsSelectionFallback(inputRouter_.state().activeTool);
+        const bool selectionFallbackActive = viewportToolAllowsSelectionFallback(inputRouter_.state().activeTool);
         if (selectionFallbackActive &&
                 leftClicked &&
                 !gizmoConsumed &&
@@ -1963,7 +1889,7 @@ bool ViewportPanel::drawTransformGizmo(
                     gizmoStartTransforms_.push_back(GizmoStartTransform{
                             .entity = entity,
                             .transform = *selectedTransform,
-                            .localPivot = transformPoint(inverse(composeTransform(selectedTransform->spatialTransform())), gizmoPivot),
+                            .localPivot = localPivotForWorldPoint(*selectedTransform, gizmoPivot),
                     });
                 }
             }
@@ -1998,7 +1924,7 @@ bool ViewportPanel::drawTransformGizmo(
             } else if (commit.changed) {
                 ModelingRepeatTransform repeat;
                 repeat.active = true;
-                repeat.tool = toModelingTransformTool(tool);
+                repeat.tool = viewportToolToModelingTransformTool(tool);
                 repeat.operation =
                         sdkTransformPreviewExtrude_ ? ModelingTransformOperation::Extrude :
                         sdkTransformPreviewInset_ ? ModelingTransformOperation::Inset :
@@ -2037,9 +1963,7 @@ bool ViewportPanel::drawTransformGizmo(
 
     const Vec2 currentMouse{mouse.x, mouse.y};
     auto pinStartPivot = [&](TransformComponent& next, const GizmoStartTransform& start) {
-        Transform spatial = next.spatialTransform();
-        spatial.position = {};
-        next.position = gizmoStartWorldPivot_ - transformPoint(composeTransform(spatial), start.localPivot);
+        pinLocalPivotToWorldPoint(next, start.localPivot, gizmoStartWorldPivot_);
     };
 
 #if QUADER_HAS_MODELING_SDK
@@ -2130,8 +2054,7 @@ bool ViewportPanel::drawTransformGizmo(
         if (tool == ViewportTool::Move) {
             next.position = start.transform.position + previewMoveDelta;
         } else if (tool == ViewportTool::Rotate) {
-            next.rotationEuler = next.rotationEuler + previewRotationDelta;
-            pinStartPivot(next, start);
+            applyWorldRotationDeltaAroundPivot(next, previewRotationDelta, start.localPivot, gizmoStartWorldPivot_);
         } else if (tool == ViewportTool::Scale) {
             next.scale.x = std::max(start.transform.scale.x * previewScaleFactor.x, 0.001f);
             next.scale.y = std::max(start.transform.scale.y * previewScaleFactor.y, 0.001f);
@@ -2212,8 +2135,9 @@ bool ViewportPanel::drawTransformGizmo(
             applyAxis(next.position.x, next.position.y, next.position.z, screenAxisDelta(activeGizmoAxis_) * worldPerPixel);
         } else if (tool == ViewportTool::Rotate) {
             const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
-            applyAxis(next.rotationEuler.x, next.rotationEuler.y, next.rotationEuler.z, screenDelta * 0.01f);
-            pinStartPivot(next, start);
+            Vec3 worldRotationDelta = {};
+            applyAxis(worldRotationDelta.x, worldRotationDelta.y, worldRotationDelta.z, screenDelta * 0.01f);
+            applyWorldRotationDeltaAroundPivot(next, worldRotationDelta, start.localPivot, gizmoStartWorldPivot_);
         } else if (tool == ViewportTool::Scale) {
             applyAxis(next.scale.x, next.scale.y, next.scale.z, screenAxisDelta(activeGizmoAxis_) * 0.01f);
             next.scale.x = std::max(next.scale.x, 0.001f);

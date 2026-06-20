@@ -54,8 +54,9 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     LOG_INFO("Filament renderer created");
     scene_ = engine_->createScene();
     LOG_INFO("Filament scene created");
+    const EnvironmentDocument& environment = config.settings.environment;
     skybox_ = filament::Skybox::Builder()
-            .color({0.051f, 0.051f, 0.051f, 1.0f})
+            .color({environment.clearColor.x, environment.clearColor.y, environment.clearColor.z, environment.clearAlpha})
             .build(*engine_);
     scene_->setSkybox(skybox_);
     LOG_INFO("Filament skybox created");
@@ -63,7 +64,7 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     filament::Renderer::ClearOptions clear;
     clear.clear = true;
     clear.discard = true;
-    clear.clearColor = {0.051, 0.051, 0.051, 1.0};
+    clear.clearColor = {environment.clearColor.x, environment.clearColor.y, environment.clearColor.z, environment.clearAlpha};
     renderer_->setClearOptions(clear);
 
     try {

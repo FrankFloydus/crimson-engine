@@ -1,5 +1,6 @@
 #pragma once
 
+#include "quader/assets/AssetRevision.h"
 #include "quader/core/ColorSpace.h"
 #include "quader/core/Types.h"
 
@@ -25,6 +26,7 @@ enum class TextureUsage {
 
 struct TextureAsset {
     AssetId id = InvalidAssetId;
+    TextureAssetRevision revision;
     std::string name;
     TextureUsage usage = TextureUsage::Unknown;
     TextureColorSpace colorSpace = TextureColorSpace::Srgb;

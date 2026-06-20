@@ -2,6 +2,7 @@
 
 #include "quader/core/Logger.h"
 #include "quader/ui/UIContext.h"
+#include "quader/ui/UILayout.h"
 #include "quader/ui/UIStyleTokens.h"
 
 #include <imgui.h>
@@ -72,7 +73,7 @@ void ConsolePanel::draw(UIContext& context) {
         ImGui::EndCombo();
     }
 
-    ImGui::SetNextItemWidth(-1.0f);
+    setNextItemFillWidthAtLeast(120.0f);
     ImGui::InputTextWithHint("##ConsoleSearch", "Filter logs", &filter_.searchText);
     ImGui::Separator();
 

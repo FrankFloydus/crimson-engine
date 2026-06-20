@@ -152,9 +152,10 @@ TEST_CASE("mesh flip mutates selected objects in place around each mesh center",
 	REQUIRE(flip.ok);
 	REQUIRE(flip.changed);
 	REQUIRE(session.objects().size() == 2U);
-	REQUIRE(session.selected_object_ids().size() == 2U);
-	CHECK(std::find(session.selected_object_ids().begin(), session.selected_object_ids().end(), first_id) != session.selected_object_ids().end());
-	CHECK(std::find(session.selected_object_ids().begin(), session.selected_object_ids().end(), second_id) != session.selected_object_ids().end());
+	const std::vector<int> selected_ids = session.selected_object_ids();
+	REQUIRE(selected_ids.size() == 2U);
+	CHECK(std::find(selected_ids.begin(), selected_ids.end(), first_id) != selected_ids.end());
+	CHECK(std::find(selected_ids.begin(), selected_ids.end(), second_id) != selected_ids.end());
 	CHECK(session.active_object_id() == first_id);
 
 	const quader_editor_core::PolygonObject* first_flipped = find_object(session, first_id);

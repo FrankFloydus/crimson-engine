@@ -20,7 +20,7 @@ void applyUIStyle(const UIStyleTokens& tokens) {
     style.TabRounding = 4.0f;
     style.WindowBorderSize = 1.0f;
     style.FrameBorderSize = 0.0f;
-    style.WindowMenuButtonPosition = ImGuiDir_None;
+    style.WindowMenuButtonPosition = ImGuiDir_Left;
 }
 
 void loadUIDefaultFont(const std::filesystem::path& executableDir, const UIStyleTokens& tokens) {

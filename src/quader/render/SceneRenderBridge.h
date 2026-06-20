@@ -40,9 +40,12 @@ private:
         EntityId sourceEntity = InvalidEntityId;
         AssetId mesh = InvalidAssetId;
         AssetId material = InvalidAssetId;
+        std::uint64_t meshRevision = 0;
+        std::uint64_t materialRevision = 0;
         filament::VertexBuffer* vertexBuffer = nullptr;
         filament::IndexBuffer* indexBuffer = nullptr;
-        filament::MaterialInstance* materialInstance = nullptr;
+        std::vector<std::uint32_t> materialSlots;
+        std::vector<filament::MaterialInstance*> materialInstances;
     };
 
     struct OverlayProxy {
@@ -59,6 +62,16 @@ private:
 
     void rebuild(const SceneDocument& document, const AssetRegistry& assets);
     void rebuildOverlayProxies();
+    bool renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const;
+    MeshProxy createMeshProxy(EntityId entityId,
+            AssetId meshId,
+            const MeshAsset& mesh,
+            AssetId materialId,
+            const MaterialDocument* material,
+            const AssetRegistry& assets,
+            const TransformComponent& transform);
+    void updateMeshProxyTransform(const MeshProxy& proxy, const TransformComponent& transform);
+    filament::MaterialInstance* createMeshMaterialInstance(const AssetRegistry& assets, const MaterialDocument* material);
     void destroyMeshProxy(MeshProxy& proxy);
     void destroyOverlayProxy(OverlayProxy& proxy);
     void destroyLightProxy(LightProxy& proxy);
@@ -76,23 +89,28 @@ private:
     filament::Material* overlayMaterial_ = nullptr;
     std::filesystem::path resourceRoot_;
     std::uint64_t syncedRevision_ = 0;
+    std::uint64_t syncedAssetRevision_ = 0;
     bool hasSynced_ = false;
     std::unordered_map<EntityId, MeshProxy> meshProxies_;
     std::vector<OverlayProxy> overlayProxies_;
     std::unordered_map<EntityId, LightProxy> lightProxies_;
     struct TextureCacheKey {
         AssetId id = InvalidAssetId;
+        std::uint64_t revision = 0;
         TextureColorSpace colorSpace = TextureColorSpace::Srgb;
 
         bool operator==(const TextureCacheKey& other) const {
-            return id == other.id && colorSpace == other.colorSpace;
+            return id == other.id && revision == other.revision && colorSpace == other.colorSpace;
         }
     };
 
     struct TextureCacheKeyHash {
         std::size_t operator()(const TextureCacheKey& key) const {
             const auto colorSpace = static_cast<std::size_t>(key.colorSpace);
-            return std::hash<AssetId>{}(key.id) ^ (colorSpace + 0x9e3779b97f4a7c15ull + (std::hash<AssetId>{}(key.id) << 6u) + (std::hash<AssetId>{}(key.id) >> 2u));
+            std::size_t hash = std::hash<AssetId>{}(key.id);
+            hash ^= std::hash<std::uint64_t>{}(key.revision) + 0x9e3779b97f4a7c15ull + (hash << 6u) + (hash >> 2u);
+            hash ^= colorSpace + 0x9e3779b97f4a7c15ull + (hash << 6u) + (hash >> 2u);
+            return hash;
         }
     };
 

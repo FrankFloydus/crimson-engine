@@ -65,6 +65,12 @@ testable, and future-friendly.
   of scattering hardcoded values across panels.
 - Persist dock layout through ImGui's ini file and panel visibility through `UISettings`; keep these
   under the user profile rather than repo-local files.
+- Keep ImGui's dock/window menu button available (`WindowMenuButtonPosition` must not be
+  `ImGuiDir_None`) so users can restore and hide tab bars from docked panels.
+- Avoid fragile fill-width widgets in resizable dock panels. Do not put `SetNextItemWidth(-1.0f)`
+  inside collapsing table cells or use saved stretch table columns for inspector-style form rows.
+  Use responsive fixed/minimum widths or `UILayout` helpers so inputs cannot collapse to 1px after a
+  splitter resize.
 - For scene object names, use `SceneEntityNaming`. Mesh names start as `Mesh`, then `Mesh_1`,
   `Mesh_2`, etc.; do not show or create user-facing `SDK Object X`, `Mesh_0`, or `Mesh 0` names.
 - Do not append text type suffixes such as `[Mesh]` or `[Light]` in the outliner. Use plain entity
@@ -80,6 +86,9 @@ testable, and future-friendly.
 - SDK transform previews are transactions. `begin_transform_preview(true)` creates a zero-offset
   duplicate, selects the duplicate, and uses that post-duplicate state as the preview base. Preview
   update deltas are absolute from drag start, not accumulated frame deltas.
+- Native transform component inputs and viewport gizmo transforms should both behave in global/world
+  space unless a future product requirement explicitly introduces local-space editing. Share pivot
+  and world-delta helpers instead of adding direct local Euler/scale mutations in individual panels.
 - Do not treat SDK `content_revision` alone as a unique identity for every live preview mesh state.
   Preview code can restore a base state and reapply a new delta, so bridge code that renders or
   caches scene objects must force-refresh during transform preview begin/update/active commit/cancel.

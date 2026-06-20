@@ -8,7 +8,7 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/vs2022",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/Users/Drako/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "QUADER_BUILD_TESTS": "ON"
       }
@@ -20,9 +20,20 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/vs2026",
       "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "C:/Users/Drako/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "QUADER_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "vs2026-sdk-tests",
+      "displayName": "Visual Studio 2026 x64 + copied SDK tests",
+      "inherits": "vs2026",
+      "binaryDir": "${sourceDir}/build/vs2026-sdk-tests",
+      "cacheVariables": {
+        "QUADER_BUILD_SDK_TESTS": "ON",
+        "QUADER_SDK_ALLOW_EXTERNAL_OPENMESH_FETCH": "OFF",
+        "QUADER_SDK_ALLOW_EXTERNAL_CATCH2_FETCH": "OFF"
       }
     }
   ],
@@ -46,6 +57,16 @@
       "name": "vs2026-release",
       "configurePreset": "vs2026",
       "configuration": "Release"
+    },
+    {
+      "name": "vs2026-sdk-tests-debug",
+      "configurePreset": "vs2026-sdk-tests",
+      "configuration": "Debug",
+      "jobs": 1,
+      "targets": [
+        "quader_tests",
+        "quader_sdk_tests"
+      ]
     }
   ],
   "testPresets": [
@@ -63,6 +84,22 @@
       "configuration": "Debug",
       "output": {
         "outputOnFailure": true
+      }
+    },
+    {
+      "name": "vs2026-sdk-tests-debug",
+      "configurePreset": "vs2026-sdk-tests",
+      "configuration": "Debug",
+      "filter": {
+        "include": {
+          "name": "^qdr_"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "timeout": 30
       }
     }
   ]

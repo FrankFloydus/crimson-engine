@@ -1,5 +1,7 @@
 #pragma once
 
+#include "quader/render/RenderSettings.h"
+
 #include <string_view>
 
 namespace quader {
@@ -12,6 +14,7 @@ enum class RendererBackend {
 
 struct RenderConfig {
     RendererBackend backend = RendererBackend::Vulkan;
+    RenderSettings settings;
 };
 
 inline const char* toString(RendererBackend backend) {

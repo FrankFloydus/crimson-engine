@@ -1,5 +1,7 @@
 #include "quader/viewport/ViewportCameraController.h"
 
+#include "quader/viewport/HostViewportContractAdapter.h"
+
 #if QUADER_HAS_MODELING_SDK
 #include <quader_editor_core/tool/viewport_navigation.h>
 #include <quader_editor_core/tool/viewport_projection.h>
@@ -12,12 +14,7 @@
 namespace quader {
 namespace {
 
-constexpr float kOrbitRadiansPerPixel = 0.006f;
-constexpr float kFlyLookRadiansPerPixel = 0.004f;
 constexpr float kNavigationZoomStepFactor = 1.18f;
-constexpr float kFlyBaseSpeed = 6.0f;
-constexpr float kFlyFastMultiplier = 4.0f;
-constexpr float kFlySlowMultiplier = 0.25f;
 constexpr float kFlyMaxDeltaSeconds = 0.25f;
 constexpr float kMinCameraDistance = 0.05f;
 
@@ -149,6 +146,12 @@ Vec3 fallbackForwardForAxis(ViewportViewAxis axis, int sign) {
 
 } // namespace
 
+ViewportCameraController::ViewportCameraController() {
+    const ViewportHostDefaults defaults = viewportHostDefaults();
+    state_.orthographicSize = static_cast<float>(defaults.defaultOrthographicSize);
+    state_.fovDegrees = static_cast<float>(defaults.defaultFovDegrees);
+}
+
 void ViewportCameraController::setViewportSize(float width, float height) {
     viewportWidth_ = std::max(1.0f, width);
     viewportHeight_ = std::max(1.0f, height);
@@ -164,6 +167,7 @@ void ViewportCameraController::updateDrag(Vec2 mouse) {
     lastMouse_ = mouse;
 
     if (dragMode_ == ViewportDragMode::Orbit || dragMode_ == ViewportDragMode::OrbitSnap) {
+        const ViewportHostDefaults defaults = viewportHostDefaults();
         if (orthographicViewLocked_) {
             state_.projection = ViewportProjection::Orthographic;
             return;
@@ -173,12 +177,12 @@ void ViewportCameraController::updateDrag(Vec2 mouse) {
         input.camera_transform = makeSdkTransform(pose());
         input.pivot = toSdk(pivot_);
         input.screen_delta = toSdk(delta);
-        input.sensitivity = kOrbitRadiansPerPixel;
+        input.sensitivity = defaults.orbitRadiansPerPixel;
         input.snap_to_orthogonal = dragMode_ == ViewportDragMode::OrbitSnap;
         applySdkTransform(state_, pivot_, quader_editor_core::viewport_orbit(input));
 #else
-        state_.yawRadians += delta.x * kOrbitRadiansPerPixel;
-        state_.pitchRadians -= delta.y * kOrbitRadiansPerPixel;
+        state_.yawRadians += delta.x * static_cast<float>(defaults.orbitRadiansPerPixel);
+        state_.pitchRadians -= delta.y * static_cast<float>(defaults.orbitRadiansPerPixel);
         const float limit = std::numbers::pi_v<float> * 0.49f;
         state_.pitchRadians = clamp(state_.pitchRadians, -limit, limit);
 #endif
@@ -197,17 +201,18 @@ void ViewportCameraController::updateDrag(Vec2 mouse) {
         pivot_ = pivot_ + pan;
 #endif
     } else if (dragMode_ == ViewportDragMode::Fly) {
+        const ViewportHostDefaults defaults = viewportHostDefaults();
 #if QUADER_HAS_MODELING_SDK
         quader_editor_core::ViewportFlyLookInput input;
         input.camera_transform = makeSdkTransform(pose());
         input.pivot = toSdk(pivot_);
         input.screen_delta = toSdk(delta);
-        input.sensitivity = kFlyLookRadiansPerPixel;
+        input.sensitivity = defaults.flyLookRadiansPerPixel;
         applySdkTransform(state_, pivot_, quader_editor_core::viewport_fly_look(input), state_.distance);
 #else
         const Vec3 eye = pose().eye;
-        state_.yawRadians += delta.x * kFlyLookRadiansPerPixel;
-        state_.pitchRadians -= delta.y * kFlyLookRadiansPerPixel;
+        state_.yawRadians += delta.x * static_cast<float>(defaults.flyLookRadiansPerPixel);
+        state_.pitchRadians -= delta.y * static_cast<float>(defaults.flyLookRadiansPerPixel);
         const float limit = std::numbers::pi_v<float> * 0.49f;
         state_.pitchRadians = clamp(state_.pitchRadians, -limit, limit);
         state_.target = eye + forward() * state_.distance;
@@ -328,12 +333,13 @@ void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds, 
         return;
     }
 
-    float speed = kFlyBaseSpeed;
+    const ViewportHostDefaults defaults = viewportHostDefaults();
+    float speed = static_cast<float>(defaults.flyBaseSpeed);
     if (fast) {
-        speed *= kFlyFastMultiplier;
+        speed *= static_cast<float>(defaults.flyFastMultiplier);
     }
     if (slow) {
-        speed *= kFlySlowMultiplier;
+        speed *= static_cast<float>(defaults.flySlowMultiplier);
     }
 
     const float clampedDelta = clamp(deltaSeconds, 0.0f, kFlyMaxDeltaSeconds);

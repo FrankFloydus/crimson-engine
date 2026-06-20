@@ -2,14 +2,18 @@
 #include "quader/assets/BakeService.h"
 #include "quader/assets/MaterialDocument.h"
 #include "quader/core/Logger.h"
+#include "quader/document/DocumentCommandService.h"
+#include "quader/document/ProjectDocument.h"
 #include "quader/geometry/UVSphere.h"
 #include "quader/modeling/ModelingSessionService.h"
 #include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneDocument.h"
 #include "quader/scene/SceneEntityNaming.h"
+#include "quader/scene/TransformPivot.h"
 #include "quader/ui/ConsoleModel.h"
 #include "quader/ui/UISettings.h"
+#include "quader/viewport/HostViewportContractAdapter.h"
 #include "quader/viewport/ViewportCameraController.h"
 #include "quader/viewport/ViewportInputRouter.h"
 
@@ -284,6 +288,47 @@ TEST(SceneRenderBridgeTests, DoesNotUseRawLineOrPointFallbackForSelectionOverlay
     EXPECT_EQ(source.find("PrimitiveType::POINTS"), std::string::npos);
 }
 
+TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("tangentFrameFromNormal(vertex.normal)"), std::string::npos);
+    EXPECT_NE(source.find("filament::VertexAttribute::TANGENTS"), std::string::npos);
+    EXPECT_NE(source.find("renderPrimitiveSpansFor"), std::string::npos);
+    EXPECT_NE(source.find("primitive.indexOffset"), std::string::npos);
+    EXPECT_NE(source.find("primitive.indexCount"), std::string::npos);
+    EXPECT_NE(source.find("primitive.materialSlot"), std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("syncedAssetRevision_"), std::string::npos);
+    EXPECT_NE(source.find("renderAssetRevisionsChanged"), std::string::npos);
+    EXPECT_NE(source.find("existing->second.meshRevision != mesh->revision.value"), std::string::npos);
+    EXPECT_NE(source.find("existing->second.materialRevision != materialRevision"), std::string::npos);
+    EXPECT_NE(source.find("updateMeshProxyTransform(existing->second, transform)"), std::string::npos);
+    const std::size_t rebuildStart = source.find("void SceneRenderBridge::rebuild(");
+    const std::size_t overlayStart = source.find("void SceneRenderBridge::rebuildOverlayProxies", rebuildStart);
+    ASSERT_NE(rebuildStart, std::string::npos);
+    ASSERT_NE(overlayStart, std::string::npos);
+    const std::string rebuildSource = source.substr(rebuildStart, overlayStart - rebuildStart);
+    EXPECT_EQ(rebuildSource.find("meshProxies_.clear()"), std::string::npos);
+}
+
 TEST(ViewportPanelTests, ClipsOnlyPolicyDepthTestedWireOverlayInComponentModes) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
@@ -371,6 +416,21 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
     EXPECT_LT(duplicateStart, beginPreview);
     EXPECT_LT(updatePreview, localFallback);
     EXPECT_NE(source.find("repeat.duplicateSelected = sdkTransformPreviewDuplicateSelected_"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, previewRotationDelta"), std::string::npos);
+    EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, worldRotationDelta"), std::string::npos);
+    EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + previewRotationDelta"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
@@ -580,6 +640,83 @@ TEST(UIStyleTokensTests, LoadsInterAtConfiguredEighteenPixelBaseSize) {
     EXPECT_NE(source.find("io.FontDefault = font"), std::string::npos);
 }
 
+TEST(UILayoutTests, AvoidsNegativeFillWidthsAndSavedStretchColumnsInPanels) {
+    const std::filesystem::path uiPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui";
+
+    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(uiPath)) {
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+        const std::filesystem::path path = entry.path();
+        if (path.extension() != ".cpp" && path.extension() != ".h") {
+            continue;
+        }
+
+        std::ifstream sourceFile(path);
+        ASSERT_TRUE(sourceFile.is_open()) << path.string();
+        const std::string source{
+                std::istreambuf_iterator<char>(sourceFile),
+                std::istreambuf_iterator<char>()};
+
+        EXPECT_EQ(source.find("SetNextItemWidth(-1.0f)"), std::string::npos) << path.string();
+        EXPECT_EQ(source.find("ImGuiTableFlags_SizingStretchProp"), std::string::npos) << path.string();
+    }
+
+    const std::filesystem::path layoutPath = uiPath / "UILayout.h";
+    std::ifstream layoutFile(layoutPath);
+    ASSERT_TRUE(layoutFile.is_open()) << layoutPath.string();
+    const std::string layoutSource{
+            std::istreambuf_iterator<char>(layoutFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(layoutSource.find("uiFillWidthAtLeast"), std::string::npos);
+    EXPECT_NE(layoutSource.find("std::max(ImGui::GetContentRegionAvail().x, minimumWidth)"), std::string::npos);
+}
+
+TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "InspectorPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("kMinAxisInputWidth"), std::string::npos);
+    EXPECT_NE(source.find("availableWidth < minimumInlineWidth"), std::string::npos);
+    EXPECT_NE(source.find("ImGuiTableFlags_SizingFixedFit"), std::string::npos);
+    EXPECT_NE(source.find("ImGuiTableFlags_NoSavedSettings"), std::string::npos);
+    EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, delta"), std::string::npos);
+    EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + delta"), std::string::npos);
+}
+
+TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
+    const std::filesystem::path stylePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.cpp";
+    std::ifstream styleFile(stylePath);
+    ASSERT_TRUE(styleFile.is_open()) << stylePath.string();
+
+    const std::string styleSource{
+            std::istreambuf_iterator<char>(styleFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(styleSource.find("style.WindowMenuButtonPosition = ImGuiDir_Left"), std::string::npos);
+    EXPECT_EQ(styleSource.find("style.WindowMenuButtonPosition = ImGuiDir_None"), std::string::npos);
+
+    const std::filesystem::path uiSystemPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+    std::ifstream uiSystemFile(uiSystemPath);
+    ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+
+    const std::string uiSystemSource{
+            std::istreambuf_iterator<char>(uiSystemFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_EQ(uiSystemSource.find("ImGuiDockNodeFlags_NoWindowMenuButton"), std::string::npos);
+}
+
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "app" / "App.cpp";
@@ -777,6 +914,73 @@ TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
     EXPECT_NEAR(center.z, 0.0f, 0.001f);
 }
 
+TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringRotation) {
+    TransformComponent transform;
+    const Vec3 worldPivot{0.0f, 1.0f, 0.0f};
+    const Vec3 localPivot = localPivotForWorldPoint(transform, worldPivot);
+
+    TransformComponent rotated = transform;
+    rotated.rotationEuler.z = 1.57079632679f;
+    pinLocalPivotToWorldPoint(rotated, localPivot, worldPivot);
+
+    const Vec3 pinnedWorldPivot = transformPoint(composeTransform(rotated.spatialTransform()), localPivot);
+    EXPECT_NEAR(pinnedWorldPivot.x, worldPivot.x, 0.001f);
+    EXPECT_NEAR(pinnedWorldPivot.y, worldPivot.y, 0.001f);
+    EXPECT_NEAR(pinnedWorldPivot.z, worldPivot.z, 0.001f);
+    EXPECT_NEAR(rotated.position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(rotated.position.y, 1.0f, 0.001f);
+}
+
+TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringScale) {
+    TransformComponent transform;
+    const Vec3 worldPivot{0.0f, 1.0f, 0.0f};
+    const Vec3 localPivot = localPivotForWorldPoint(transform, worldPivot);
+
+    TransformComponent scaled = transform;
+    scaled.scale = {2.0f, 3.0f, 4.0f};
+    pinLocalPivotToWorldPoint(scaled, localPivot, worldPivot);
+
+    const Vec3 pinnedWorldPivot = transformPoint(composeTransform(scaled.spatialTransform()), localPivot);
+    EXPECT_NEAR(pinnedWorldPivot.x, worldPivot.x, 0.001f);
+    EXPECT_NEAR(pinnedWorldPivot.y, worldPivot.y, 0.001f);
+    EXPECT_NEAR(pinnedWorldPivot.z, worldPivot.z, 0.001f);
+    EXPECT_NEAR(scaled.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(scaled.position.y, -2.0f, 0.001f);
+}
+
+TEST(TransformPivotTests, AppliesRotationDeltaInGlobalSpace) {
+    constexpr float HalfPi = 1.57079632679f;
+    TransformComponent transform;
+    transform.rotationEuler = {0.0f, 0.0f, HalfPi};
+
+    TransformComponent rotated = transform;
+    applyWorldRotationDeltaAroundPivot(rotated, {HalfPi, 0.0f, 0.0f}, {}, {});
+
+    const glm::mat4 current = glm::mat4_cast(toGlm(quatFromEulerRadians(transform.rotationEuler)));
+    const glm::mat4 delta = glm::mat4_cast(toGlm(quatFromEulerRadians({HalfPi, 0.0f, 0.0f})));
+    const Mat4 expectedWorldRotation = fromGlm(delta * current);
+    const Mat4 actualWorldRotation = composeTransform(rotated.spatialTransform());
+
+    const std::array<Vec3, 3> basis = {{
+            {1.0f, 0.0f, 0.0f},
+            {0.0f, 1.0f, 0.0f},
+            {0.0f, 0.0f, 1.0f},
+    }};
+    for (const Vec3 axis : basis) {
+        const Vec3 expected = transformVector(expectedWorldRotation, axis);
+        const Vec3 actual = transformVector(actualWorldRotation, axis);
+        EXPECT_NEAR(actual.x, expected.x, 0.001f);
+        EXPECT_NEAR(actual.y, expected.y, 0.001f);
+        EXPECT_NEAR(actual.z, expected.z, 0.001f);
+    }
+
+    TransformComponent locallyAdded = transform;
+    locallyAdded.rotationEuler = locallyAdded.rotationEuler + Vec3{HalfPi, 0.0f, 0.0f};
+    const Vec3 worldSpaceY = transformVector(actualWorldRotation, {0.0f, 1.0f, 0.0f});
+    const Vec3 localSpaceY = transformVector(composeTransform(locallyAdded.spatialTransform()), {0.0f, 1.0f, 0.0f});
+    EXPECT_GT(length(worldSpaceY - localSpaceY), 0.1f);
+}
+
 TEST(MathTypesTests, ComposeTransformRoundTripsPoints) {
     const Transform transform{
             .position = {2.0f, 3.0f, 4.0f},
@@ -805,6 +1009,10 @@ TEST(UVSphereTests, GeneratesExpectedTopology) {
     EXPECT_EQ(sphere.indices.size(), 192u);
     EXPECT_NEAR(length(sphere.vertices[0].position), 2.0f, 0.001f);
     EXPECT_TRUE(sphere.hasStableCpuTopology);
+    ASSERT_EQ(sphere.primitives.size(), 1u);
+    EXPECT_EQ(sphere.primitives.front().indexOffset, 0u);
+    EXPECT_EQ(sphere.primitives.front().indexCount, sphere.indices.size());
+    EXPECT_EQ(sphere.primitives.front().materialSlot, 0u);
 }
 
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
@@ -1030,7 +1238,7 @@ TEST(ViewportCameraTests, FlyLookKeepsEyeFixedAndFlyMoveAdvancesCamera) {
     EXPECT_NEAR(length((movedPose.target - lookPose.target) - movedDelta), 0.0f, 0.001f);
 }
 
-TEST(ViewportInputRouterTests, ToolHotkeysMatchUnityViewportShortcuts) {
+TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
     ViewportInputRouter router;
     ViewportCameraController camera;
     ViewportInputFrame input;
@@ -1039,8 +1247,9 @@ TEST(ViewportInputRouterTests, ToolHotkeysMatchUnityViewportShortcuts) {
 
     input.pressedKeys = {ViewportKey::B};
     auto result = router.handleFrame(input, camera);
-    EXPECT_TRUE(result.shortcutHandled);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Box);
+    EXPECT_EQ(result.shortcutHandled, viewportToolHasNativeController(ViewportTool::Box));
+    EXPECT_EQ(router.state().activeTool,
+            viewportToolHasNativeController(ViewportTool::Box) ? ViewportTool::Box : ViewportTool::Select);
 
     input.pressedKeys = {ViewportKey::Q};
     result = router.handleFrame(input, camera);
@@ -1057,24 +1266,36 @@ TEST(ViewportInputRouterTests, ToolHotkeysMatchUnityViewportShortcuts) {
     input.pressedKeys = {ViewportKey::S};
     result = router.handleFrame(input, camera);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Scale);
+}
+
+TEST(ViewportInputRouterTests, UnimplementedModalToolHotkeysDoNotEnterInertModes) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
 
     input.modifiers.shift = true;
     input.pressedKeys = {ViewportKey::R};
-    result = router.handleFrame(input, camera);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::InsertEdgeLoop);
+    ViewportInputResult result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
 
     input.pressedKeys = {ViewportKey::C};
     result = router.handleFrame(input, camera);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Cut);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
 
     input.modifiers.shift = false;
     input.pressedKeys = {ViewportKey::C};
     result = router.handleFrame(input, camera);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Knife);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
 
     input.pressedKeys = {ViewportKey::P};
     result = router.handleFrame(input, camera);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Poly);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
 }
 
 TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
@@ -1187,11 +1408,26 @@ TEST(ViewportInputRouterTests, SelectionModeHotkeysMatchUnityViewportShortcuts) 
 }
 
 TEST(ViewportInputRouterTests, GridPresetWorldSizesMatchUnityMapUnitContract) {
+    ViewportInputRouter router;
+    EXPECT_EQ(router.state().gridPreset, viewportDefaultGridPreset());
+    EXPECT_EQ(viewportDefaultGridPreset(), 6);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(1), 1.0f / 32.0f, 0.0001f);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(6), 1.0f, 0.0001f);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(10), 16.0f, 0.0001f);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(-4), 1.0f / 32.0f, 0.0001f);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(99), 16.0f, 0.0001f);
+}
+
+TEST(ViewportInputRouterTests, ToolActivationSupportTracksNativeControllers) {
+    EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Select));
+    EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Move));
+    EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Rotate));
+    EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Scale));
+    EXPECT_EQ(viewportToolHasNativeController(ViewportTool::Box), viewportToolHasHostContract(ViewportTool::Box));
+    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::InsertEdgeLoop));
+    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::Knife));
+    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::Cut));
+    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::Poly));
 }
 
 TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
@@ -1511,6 +1747,153 @@ TEST(AssetRegistryTests, StoresMaterialMeshAndTextureMetadata) {
     ASSERT_NE(registry.texture(texture), nullptr);
     EXPECT_EQ(registry.texture(texture)->usage, TextureUsage::Curvature);
     EXPECT_EQ(registry.texture(texture)->colorSpace, TextureColorSpace::Linear);
+}
+
+TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
+    AssetRegistry registry;
+    MeshAsset meshAsset = generateUVSphere();
+    meshAsset.name = "Source";
+    const AssetId mesh = registry.addMesh(std::move(meshAsset));
+    const AssetId material = registry.addMaterial(makeDefaultQuaderMaterial());
+    const AssetId texture = registry.addTexture(TextureAsset{
+        .name = "Mask",
+        .usage = TextureUsage::Mask,
+        .width = 16,
+        .height = 16,
+        .generated = true,
+    });
+
+    EXPECT_EQ(registry.meshRevision(mesh).value, 1u);
+    EXPECT_EQ(registry.materialRevision(material).value, 1u);
+    EXPECT_EQ(registry.textureRevision(texture).value, 1u);
+    EXPECT_EQ(registry.revision(), 3u);
+
+    MeshAsset replacement = generateUVSphere();
+    replacement.id = 999;
+    replacement.revision = MeshAssetRevision{99};
+    replacement.name = "Replacement";
+    ASSERT_TRUE(registry.replaceMesh(mesh, std::move(replacement)));
+
+    const MeshAsset* replacedMesh = registry.mesh(mesh);
+    ASSERT_NE(replacedMesh, nullptr);
+    EXPECT_EQ(replacedMesh->id, mesh);
+    EXPECT_EQ(replacedMesh->revision.value, 2u);
+    EXPECT_EQ(replacedMesh->name, "Replacement");
+    EXPECT_EQ(registry.revision(), 4u);
+
+    ASSERT_TRUE(registry.updateMesh(mesh, [](MeshAsset& asset) {
+        asset.id = 999;
+        asset.revision = MeshAssetRevision{99};
+        asset.name = "Scoped Mesh";
+    }));
+    ASSERT_TRUE(registry.updateMaterial(material, [](MaterialDocument& asset) {
+        asset.id = 999;
+        asset.revision = MaterialAssetRevision{99};
+        asset.name = "Scoped Material";
+    }));
+    ASSERT_TRUE(registry.updateTexture(texture, [](TextureAsset& asset) {
+        asset.id = 999;
+        asset.revision = TextureAssetRevision{99};
+        asset.width = 32;
+    }));
+
+    ASSERT_NE(registry.mesh(mesh), nullptr);
+    ASSERT_NE(registry.material(material), nullptr);
+    ASSERT_NE(registry.texture(texture), nullptr);
+    EXPECT_EQ(registry.mesh(mesh)->id, mesh);
+    EXPECT_EQ(registry.material(material)->id, material);
+    EXPECT_EQ(registry.texture(texture)->id, texture);
+    EXPECT_EQ(registry.mesh(mesh)->revision.value, 3u);
+    EXPECT_EQ(registry.material(material)->revision.value, 2u);
+    EXPECT_EQ(registry.texture(texture)->revision.value, 2u);
+    EXPECT_EQ(registry.texture(texture)->width, 32u);
+    EXPECT_EQ(registry.revision(), 7u);
+    EXPECT_FALSE(registry.updateMesh(InvalidAssetId, [](MeshAsset&) {}));
+    EXPECT_EQ(registry.meshRevision(InvalidAssetId).value, 0u);
+}
+
+TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
+    ProjectDocument document(ProjectDocumentRecord{
+        .id = 17,
+        .name = "Authored Project",
+    });
+
+    MeshAsset meshAsset = generateUVSphere();
+    meshAsset.name = "Authored Mesh";
+    const AssetId mesh = document.assets().addMesh(std::move(meshAsset));
+    const EntityId entity = document.scene().createEntity("Authored Mesh");
+    document.scene().setMesh(entity, MeshComponent{.mesh = mesh});
+
+    const ProjectObjectId object = document.createObjectRecord(ProjectObjectRecord{
+        .sceneEntity = entity,
+        .mesh = mesh,
+        .authoredName = "Authored Mesh",
+    });
+
+    ASSERT_NE(object, InvalidProjectObjectId);
+    EXPECT_EQ(document.id(), 17u);
+    EXPECT_EQ(document.name(), "Authored Project");
+    EXPECT_EQ(document.revision(), 1u);
+    const ProjectObjectRecord* record = document.objectRecord(object);
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->id, object);
+    EXPECT_EQ(record->sceneEntity, entity);
+    EXPECT_EQ(record->mesh, mesh);
+    EXPECT_EQ(record->authoredName, "Authored Mesh");
+    ASSERT_NE(document.scene().mesh(entity), nullptr);
+    EXPECT_EQ(document.scene().mesh(entity)->mesh, mesh);
+
+    EXPECT_EQ(document.upsertObjectRecord(ProjectObjectRecord{
+        .id = 42,
+        .sceneEntity = entity,
+        .mesh = mesh,
+        .authoredName = "Imported Stable Record",
+    }), 42u);
+    EXPECT_EQ(document.createObjectRecord(ProjectObjectRecord{}), 43u);
+    const std::vector<ProjectObjectRecord> records = document.objectRecords();
+    ASSERT_EQ(records.size(), 3u);
+    EXPECT_EQ(records[0].id, object);
+    EXPECT_EQ(records[1].id, 42u);
+    EXPECT_EQ(records[2].id, 43u);
+
+    document.rename("Renamed Project");
+    EXPECT_EQ(document.name(), "Renamed Project");
+    EXPECT_EQ(document.revision(), 4u);
+}
+
+TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    DocumentCommandService commands(scene);
+
+    DocumentCommandResult result = commands.renameEntity(entity, "Brush_1");
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+    EXPECT_TRUE(commands.canUndo());
+    EXPECT_FALSE(commands.canRedo());
+
+    result = commands.undo();
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush");
+    EXPECT_FALSE(commands.canUndo());
+    EXPECT_TRUE(commands.canRedo());
+
+    result = commands.redo();
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+
+    TransformComponent transform;
+    transform.position = {3.0f, 2.0f, 1.0f};
+    ASSERT_TRUE(commands.setTransform(entity, transform).ok);
+    ASSERT_NE(scene.transform(entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 3.0f);
+    EXPECT_TRUE(commands.undo().ok);
+    ASSERT_NE(scene.transform(entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
 }
 
 TEST(ModelingSessionServiceTests, ExposesBoxCommandContract) {

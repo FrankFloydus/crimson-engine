@@ -1,5 +1,6 @@
 #pragma once
 
+#include "quader/assets/AssetRevision.h"
 #include "quader/core/Types.h"
 #include "quader/math/Types.h"
 
@@ -16,6 +17,7 @@ inline constexpr const char* Roughness = "roughnessTexture";
 
 struct MaterialDocument {
     AssetId id = InvalidAssetId;
+    MaterialAssetRevision revision;
     std::string name;
     Vec3 baseColor = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;

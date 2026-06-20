@@ -164,6 +164,8 @@ struct ViewportInputResult {
 
 class ViewportInputRouter {
 public:
+    ViewportInputRouter();
+
     ViewportInputResult handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera);
     void reset();
     void setActiveTool(ViewportTool tool);

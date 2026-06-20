@@ -1,5 +1,7 @@
 #include "quader/viewport/ViewportInputRouter.h"
 
+#include "quader/viewport/HostViewportContractAdapter.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -66,6 +68,10 @@ ViewportShortcut mirrorShortcut(ViewportMirrorAxis axis) {
 }
 
 } // namespace
+
+ViewportInputRouter::ViewportInputRouter() {
+    state_.gridPreset = viewportDefaultGridPreset();
+}
 
 ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera) {
     ViewportInputResult result;
@@ -179,6 +185,9 @@ void ViewportInputRouter::reset() {
 }
 
 void ViewportInputRouter::setActiveTool(ViewportTool tool) {
+    if (!viewportToolHasNativeController(tool)) {
+        return;
+    }
     state_.activeTool = tool;
 }
 
@@ -187,6 +196,10 @@ void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
 }
 
 bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut) {
+    if (resolveViewportShortcutFromHostContract(key, modifiers, shortcut)) {
+        return true;
+    }
+
     if (primaryOnly(modifiers)) {
         switch (key) {
         case ViewportKey::A:
@@ -370,6 +383,9 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
 bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result) {
     switch (shortcut.kind) {
     case ViewportShortcutKind::ActivateTool:
+        if (!viewportToolHasNativeController(shortcut.tool)) {
+            return false;
+        }
         result.toolChanged = state_.activeTool != shortcut.tool;
         state_.activeTool = shortcut.tool;
         return true;
@@ -459,9 +475,7 @@ const char* viewportSelectionModeId(ViewportSelectionMode mode) {
 }
 
 float viewportGridWorldSizeForPreset(int preset) {
-    const int clampedPreset = std::clamp(preset, 1, 10);
-    const float mapUnits = std::pow(2.0f, static_cast<float>(clampedPreset - 1));
-    return mapUnits / 32.0f;
+    return viewportGridWorldSizeFromContract(preset);
 }
 
 } // namespace quader

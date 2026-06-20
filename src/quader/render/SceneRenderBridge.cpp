@@ -12,6 +12,7 @@
 #include <filament/TextureSampler.h>
 #include <filament/TransformManager.h>
 #include <lodepng.h>
+#include <math/mat3.h>
 #include <math/mat4.h>
 #include <math/vec4.h>
 #include <utils/EntityManager.h>
@@ -23,8 +24,10 @@
 #include <cstdint>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -37,7 +40,7 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
 struct RenderVertex {
     filament::math::float3 position;
-    filament::math::float3 normal;
+    filament::math::float4 tangentFrame;
     filament::math::float2 uv;
     std::uint32_t color;
 };
@@ -100,6 +103,30 @@ filament::math::mat4f makeTransform(const TransformComponent& transform) {
     const auto rotationZ = filament::math::mat4f::rotation(transform.rotationEuler.z, filament::math::float3{0.0f, 0.0f, 1.0f});
     const auto scale = filament::math::mat4f::scaling(toFilament(transform.scale));
     return translation * rotationZ * rotationY * rotationX * scale;
+}
+
+filament::math::float4 tangentFrameFromNormal(Vec3 normal) {
+    if (length(normal) <= 0.000001f) {
+        normal = {0.0f, 1.0f, 0.0f};
+    } else {
+        normal = normalize(normal);
+    }
+
+    const Vec3 reference = std::fabs(normal.y) < 0.999f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+    Vec3 tangent = cross(reference, normal);
+    if (length(tangent) <= 0.000001f) {
+        tangent = {1.0f, 0.0f, 0.0f};
+    } else {
+        tangent = normalize(tangent);
+    }
+    const Vec3 bitangent = cross(normal, tangent);
+    const filament::math::mat3f tangentFrame{
+            toFilament(tangent),
+            toFilament(bitangent),
+            toFilament(normal),
+    };
+    const filament::math::quatf packed = filament::math::mat3f::packTangentFrame(tangentFrame, sizeof(float));
+    return {packed.x, packed.y, packed.z, packed.w};
 }
 
 template <typename T>
@@ -182,6 +209,48 @@ std::uint8_t mipLevelCount(unsigned width, unsigned height) {
     return levels;
 }
 
+std::uint64_t renderMaterialRevision(const AssetRegistry& assets, const MaterialDocument* material) {
+    if (!material) {
+        return 0;
+    }
+
+    std::uint64_t hash = hashCombine(kFnvOffset, material->revision.value);
+    std::vector<std::string> textureSlots;
+    textureSlots.reserve(material->textureSlots.size());
+    for (const auto& [slot, texture] : material->textureSlots) {
+        textureSlots.push_back(slot);
+    }
+    std::sort(textureSlots.begin(), textureSlots.end());
+    for (const std::string& slot : textureSlots) {
+        const AssetId textureId = material->textureSlots.at(slot);
+        hash = hashCombine(hash, std::hash<std::string>{}(slot));
+        hash = hashCombine(hash, textureId);
+        hash = hashCombine(hash, assets.textureRevision(textureId).value);
+    }
+    return hash;
+}
+
+std::vector<MeshPrimitiveSpan> renderPrimitiveSpansFor(const MeshAsset& mesh) {
+    std::vector<MeshPrimitiveSpan> spans;
+    spans.reserve(mesh.primitives.empty() ? 1u : mesh.primitives.size());
+    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
+        const std::uint64_t offset = primitive.indexOffset;
+        const std::uint64_t count = primitive.indexCount;
+        if (count == 0u || offset >= mesh.indices.size() || offset + count > mesh.indices.size()) {
+            continue;
+        }
+        spans.push_back(primitive);
+    }
+    if (spans.empty() && !mesh.indices.empty()) {
+        spans.push_back(MeshPrimitiveSpan{
+                .indexOffset = 0,
+                .indexCount = static_cast<std::uint32_t>(mesh.indices.size()),
+                .materialSlot = 0,
+        });
+    }
+    return spans;
+}
+
 } // namespace
 
 SceneRenderBridge::~SceneRenderBridge() {
@@ -239,6 +308,7 @@ void SceneRenderBridge::shutdown() {
     overlayMaterial_ = nullptr;
     resourceRoot_.clear();
     syncedRevision_ = 0;
+    syncedAssetRevision_ = 0;
     hasSynced_ = false;
 }
 
@@ -247,12 +317,19 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
         return;
     }
 
-    if (hasSynced_ && syncedRevision_ == document.revision()) {
+    const bool documentUnchanged = hasSynced_ && syncedRevision_ == document.revision();
+    const bool assetsUnchanged = hasSynced_ && syncedAssetRevision_ == assets.revision();
+    if (documentUnchanged && assetsUnchanged) {
+        return;
+    }
+    if (documentUnchanged && !renderAssetRevisionsChanged(document, assets)) {
+        syncedAssetRevision_ = assets.revision();
         return;
     }
 
     rebuild(document, assets);
     syncedRevision_ = document.revision();
+    syncedAssetRevision_ = assets.revision();
     hasSynced_ = true;
 }
 
@@ -271,24 +348,9 @@ void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame) {
 }
 
 void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegistry& assets) {
-    for (auto& [id, proxy] : meshProxies_) {
-        destroyMeshProxy(proxy);
-    }
-    meshProxies_.clear();
-
-    for (auto& [id, proxy] : lightProxies_) {
-        destroyLightProxy(proxy);
-    }
-    lightProxies_.clear();
-    selectedOverlayFrame_ = {};
-    externalOverlayTriangleSignature_ = overlayTriangleSignature(externalOverlayFrame_);
-
+    std::unordered_set<EntityId> liveMeshEntities;
+    std::unordered_set<EntityId> liveLightEntities;
     auto& entityManager = utils::EntityManager::get();
-    auto& transformManager = engine_->getTransformManager();
-    const filament::TextureSampler sampler(
-            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
-            filament::TextureSampler::MagFilter::LINEAR,
-            filament::TextureSampler::WrapMode::REPEAT);
 
     for (const EntityId entityId : document.entities()) {
         const VisibilityComponent* visibility = document.visibility(entityId);
@@ -301,74 +363,45 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
         if (const auto* meshComponent = document.mesh(entityId)) {
             const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
             if (!mesh || mesh->vertices.empty() || mesh->indices.empty()) {
+                if (auto existing = meshProxies_.find(entityId); existing != meshProxies_.end()) {
+                    destroyMeshProxy(existing->second);
+                    meshProxies_.erase(existing);
+                }
                 LOG_WARN("Skipping render entity {} because its mesh asset is missing or empty", entityId);
-                continue;
+            } else {
+                liveMeshEntities.insert(entityId);
+                const MaterialComponent* materialComponent = document.material(entityId);
+                const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
+                const MaterialDocument* material = materialComponent ? assets.material(materialComponent->material) : nullptr;
+                const std::uint64_t materialRevision = renderMaterialRevision(assets, material);
+
+                auto existing = meshProxies_.find(entityId);
+                const bool rebuildProxy =
+                        existing == meshProxies_.end() ||
+                        existing->second.mesh != meshComponent->mesh ||
+                        existing->second.meshRevision != mesh->revision.value ||
+                        existing->second.material != materialId ||
+                        existing->second.materialRevision != materialRevision;
+                if (rebuildProxy) {
+                    if (existing != meshProxies_.end()) {
+                        destroyMeshProxy(existing->second);
+                        meshProxies_.erase(existing);
+                    }
+                    MeshProxy proxy = createMeshProxy(entityId, meshComponent->mesh, *mesh, materialId, material, assets, transform);
+                    meshProxies_.emplace(entityId, std::move(proxy));
+                } else {
+                    updateMeshProxyTransform(existing->second, transform);
+                }
             }
-
-            const MaterialComponent* materialComponent = document.material(entityId);
-            const MaterialDocument* material = materialComponent ? assets.material(materialComponent->material) : nullptr;
-
-            MeshProxy proxy;
-            proxy.entity = entityManager.create();
-            proxy.sourceEntity = entityId;
-            proxy.mesh = meshComponent->mesh;
-            proxy.material = materialComponent ? materialComponent->material : InvalidAssetId;
-            proxy.materialInstance = meshMaterial_->createInstance();
-            proxy.materialInstance->setCullingMode(filament::MaterialInstance::CullingMode::BACK);
-            proxy.materialInstance->setParameter(MaterialTextureSlot::BaseColor,
-                    resolveTexture(assets, material, MaterialTextureSlot::BaseColor, fallbackAlbedoTexture_),
-                    sampler);
-            proxy.materialInstance->setParameter(MaterialTextureSlot::Roughness,
-                    resolveTexture(assets, material, MaterialTextureSlot::Roughness, fallbackRoughnessTexture_),
-                    sampler);
-            const Vec3 baseColor = material ? material->baseColor : Vec3{1.0f, 1.0f, 1.0f};
-            proxy.materialInstance->setParameter("baseColorFactor", filament::math::float4{baseColor.x, baseColor.y, baseColor.z, 1.0f});
-            proxy.materialInstance->setParameter("metallicFactor", material ? material->metallic : 0.0f);
-            proxy.materialInstance->setParameter("roughnessFactor", material ? material->roughness : 1.0f);
-
-            std::vector<RenderVertex> vertices;
-            vertices.reserve(mesh->vertices.size());
-            for (const MeshVertex& vertex : mesh->vertices) {
-                vertices.push_back({
-                        toFilament(vertex.position),
-                        toFilament(vertex.normal),
-                        {vertex.uv.x, vertex.uv.y},
-                        vertex.rgba,
-                });
-            }
-
-            proxy.vertexBuffer = filament::VertexBuffer::Builder()
-                    .vertexCount(static_cast<std::uint32_t>(vertices.size()))
-                    .bufferCount(1)
-                    .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(RenderVertex, position), sizeof(RenderVertex))
-                    .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(RenderVertex, uv), sizeof(RenderVertex))
-                    .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(RenderVertex, color), sizeof(RenderVertex))
-                    .normalized(filament::VertexAttribute::COLOR)
-                    .build(*engine_);
-            proxy.vertexBuffer->setBufferAt(*engine_, 0, makeBufferDescriptor(vertices));
-
-            proxy.indexBuffer = filament::IndexBuffer::Builder()
-                    .indexCount(static_cast<std::uint32_t>(mesh->indices.size()))
-                    .bufferType(filament::IndexBuffer::IndexType::UINT)
-                    .build(*engine_);
-            proxy.indexBuffer->setBuffer(*engine_, makeBufferDescriptor(mesh->indices));
-
-            filament::RenderableManager::Builder(1)
-                    .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                            proxy.vertexBuffer, proxy.indexBuffer)
-                    .material(0, proxy.materialInstance)
-                    .boundingBox(computeBounds(*mesh))
-                    .castShadows(false)
-                    .receiveShadows(false)
-                    .build(*engine_, proxy.entity);
-
-            transformManager.create(proxy.entity);
-            transformManager.setTransform(transformManager.getInstance(proxy.entity), makeTransform(transform));
-            scene_->addEntity(proxy.entity);
-            meshProxies_.emplace(entityId, proxy);
         }
 
         if (const auto* light = document.light(entityId)) {
+            liveLightEntities.insert(entityId);
+            if (auto existing = lightProxies_.find(entityId); existing != lightProxies_.end()) {
+                destroyLightProxy(existing->second);
+                lightProxies_.erase(existing);
+            }
+
             LightProxy proxy;
             proxy.entity = entityManager.create();
             proxy.sourceEntity = entityId;
@@ -384,7 +417,164 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
         }
     }
 
-    rebuildOverlayProxies();
+    for (auto it = meshProxies_.begin(); it != meshProxies_.end();) {
+        if (!liveMeshEntities.contains(it->first)) {
+            destroyMeshProxy(it->second);
+            it = meshProxies_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    for (auto it = lightProxies_.begin(); it != lightProxies_.end();) {
+        if (!liveLightEntities.contains(it->first)) {
+            destroyLightProxy(it->second);
+            it = lightProxies_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+bool SceneRenderBridge::renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const {
+    for (const EntityId entityId : document.entities()) {
+        const VisibilityComponent* visibility = document.visibility(entityId);
+        if (visibility && !visibility->visible) {
+            continue;
+        }
+        const MeshComponent* meshComponent = document.mesh(entityId);
+        if (!meshComponent) {
+            continue;
+        }
+        const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
+        if (!mesh || mesh->vertices.empty() || mesh->indices.empty()) {
+            if (meshProxies_.contains(entityId)) {
+                return true;
+            }
+            continue;
+        }
+
+        const auto existing = meshProxies_.find(entityId);
+        if (existing == meshProxies_.end()) {
+            return true;
+        }
+        const MaterialComponent* materialComponent = document.material(entityId);
+        const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
+        const MaterialDocument* material = materialComponent ? assets.material(materialComponent->material) : nullptr;
+        if (existing->second.mesh != meshComponent->mesh ||
+                existing->second.meshRevision != mesh->revision.value ||
+                existing->second.material != materialId ||
+                existing->second.materialRevision != renderMaterialRevision(assets, material)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+SceneRenderBridge::MeshProxy SceneRenderBridge::createMeshProxy(EntityId entityId,
+        AssetId meshId,
+        const MeshAsset& mesh,
+        AssetId materialId,
+        const MaterialDocument* material,
+        const AssetRegistry& assets,
+        const TransformComponent& transform) {
+    MeshProxy proxy;
+    proxy.entity = utils::EntityManager::get().create();
+    proxy.sourceEntity = entityId;
+    proxy.mesh = meshId;
+    proxy.meshRevision = mesh.revision.value;
+    proxy.material = materialId;
+    proxy.materialRevision = renderMaterialRevision(assets, material);
+
+    std::vector<RenderVertex> vertices;
+    vertices.reserve(mesh.vertices.size());
+    for (const MeshVertex& vertex : mesh.vertices) {
+        vertices.push_back({
+                toFilament(vertex.position),
+                tangentFrameFromNormal(vertex.normal),
+                {vertex.uv.x, vertex.uv.y},
+                vertex.rgba,
+        });
+    }
+
+    proxy.vertexBuffer = filament::VertexBuffer::Builder()
+            .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+            .bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(RenderVertex, position), sizeof(RenderVertex))
+            .attribute(filament::VertexAttribute::TANGENTS, 0, AttributeType::FLOAT4, offsetof(RenderVertex, tangentFrame), sizeof(RenderVertex))
+            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(RenderVertex, uv), sizeof(RenderVertex))
+            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(RenderVertex, color), sizeof(RenderVertex))
+            .normalized(filament::VertexAttribute::COLOR)
+            .build(*engine_);
+    proxy.vertexBuffer->setBufferAt(*engine_, 0, makeBufferDescriptor(vertices));
+
+    proxy.indexBuffer = filament::IndexBuffer::Builder()
+            .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
+            .bufferType(filament::IndexBuffer::IndexType::UINT)
+            .build(*engine_);
+    proxy.indexBuffer->setBuffer(*engine_, makeBufferDescriptor(mesh.indices));
+
+    const std::vector<MeshPrimitiveSpan> primitiveSpans = renderPrimitiveSpansFor(mesh);
+    proxy.materialSlots.reserve(primitiveSpans.size());
+    proxy.materialInstances.reserve(primitiveSpans.size());
+    filament::RenderableManager::Builder builder(primitiveSpans.size());
+    for (std::size_t primitiveIndex = 0; primitiveIndex < primitiveSpans.size(); ++primitiveIndex) {
+        const MeshPrimitiveSpan& primitive = primitiveSpans[primitiveIndex];
+        filament::MaterialInstance* materialInstance = createMeshMaterialInstance(assets, material);
+        proxy.materialSlots.push_back(primitive.materialSlot);
+        proxy.materialInstances.push_back(materialInstance);
+        builder.geometry(primitiveIndex,
+                filament::RenderableManager::PrimitiveType::TRIANGLES,
+                proxy.vertexBuffer,
+                proxy.indexBuffer,
+                primitive.indexOffset,
+                primitive.indexCount);
+        builder.material(primitiveIndex, materialInstance);
+    }
+    builder.boundingBox(computeBounds(mesh))
+            .castShadows(false)
+            .receiveShadows(false)
+            .build(*engine_, proxy.entity);
+
+    engine_->getTransformManager().create(proxy.entity);
+    updateMeshProxyTransform(proxy, transform);
+    scene_->addEntity(proxy.entity);
+    return proxy;
+}
+
+void SceneRenderBridge::updateMeshProxyTransform(const MeshProxy& proxy, const TransformComponent& transform) {
+    if (!engine_ || !proxy.entity) {
+        return;
+    }
+
+    auto& transformManager = engine_->getTransformManager();
+    filament::TransformManager::Instance instance = transformManager.getInstance(proxy.entity);
+    if (!instance) {
+        transformManager.create(proxy.entity);
+        instance = transformManager.getInstance(proxy.entity);
+    }
+    transformManager.setTransform(instance, makeTransform(transform));
+}
+
+filament::MaterialInstance* SceneRenderBridge::createMeshMaterialInstance(const AssetRegistry& assets, const MaterialDocument* material) {
+    const filament::TextureSampler sampler(
+            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
+            filament::TextureSampler::MagFilter::LINEAR,
+            filament::TextureSampler::WrapMode::REPEAT);
+
+    filament::MaterialInstance* materialInstance = meshMaterial_->createInstance();
+    materialInstance->setCullingMode(filament::MaterialInstance::CullingMode::BACK);
+    materialInstance->setParameter(MaterialTextureSlot::BaseColor,
+            resolveTexture(assets, material, MaterialTextureSlot::BaseColor, fallbackAlbedoTexture_),
+            sampler);
+    materialInstance->setParameter(MaterialTextureSlot::Roughness,
+            resolveTexture(assets, material, MaterialTextureSlot::Roughness, fallbackRoughnessTexture_),
+            sampler);
+    const Vec3 baseColor = material ? material->baseColor : Vec3{1.0f, 1.0f, 1.0f};
+    materialInstance->setParameter("baseColorFactor", filament::math::float4{baseColor.x, baseColor.y, baseColor.z, 1.0f});
+    materialInstance->setParameter("metallicFactor", material ? material->metallic : 0.0f);
+    materialInstance->setParameter("roughnessFactor", material ? material->roughness : 1.0f);
+    return materialInstance;
 }
 
 void SceneRenderBridge::rebuildOverlayProxies() {
@@ -519,10 +709,14 @@ void SceneRenderBridge::destroyMeshProxy(MeshProxy& proxy) {
         engine_->getRenderableManager().destroy(proxy.entity);
         engine_->getTransformManager().destroy(proxy.entity);
     }
-    if (proxy.materialInstance) {
-        engine_->destroy(proxy.materialInstance);
-        proxy.materialInstance = nullptr;
+    for (filament::MaterialInstance*& materialInstance : proxy.materialInstances) {
+        if (materialInstance) {
+            engine_->destroy(materialInstance);
+            materialInstance = nullptr;
+        }
     }
+    proxy.materialInstances.clear();
+    proxy.materialSlots.clear();
     if (proxy.vertexBuffer) {
         engine_->destroy(proxy.vertexBuffer);
         proxy.vertexBuffer = nullptr;
@@ -601,6 +795,7 @@ filament::Texture* SceneRenderBridge::resolveTexture(const AssetRegistry& assets
     }
     const TextureCacheKey cacheKey{
             .id = it->second,
+            .revision = texture->revision.value,
             .colorSpace = texture->colorSpace,
     };
     if (const auto cached = textureCache_.find(cacheKey); cached != textureCache_.end()) {

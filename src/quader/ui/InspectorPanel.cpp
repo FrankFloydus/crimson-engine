@@ -1,8 +1,11 @@
 #include "quader/ui/InspectorPanel.h"
 
 #include "quader/modeling/ModelingSessionService.h"
+#include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneDocument.h"
+#include "quader/scene/TransformPivot.h"
 #include "quader/ui/UIContext.h"
+#include "quader/ui/UILayout.h"
 #include "quader/ui/UIStyleTokens.h"
 
 #include <imgui.h>
@@ -11,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -18,6 +22,9 @@ namespace {
 
 constexpr float RadToDeg = 57.29577951308232f;
 constexpr float DegToRad = 0.017453292519943295f;
+constexpr float kTransformLabelColumnWidth = 72.0f;
+constexpr float kAxisTextColumnWidth = 16.0f;
+constexpr float kMinAxisInputWidth = 76.0f;
 
 void copyNameToBuffer(const NameComponent* name, std::array<char, 128>& buffer) {
     buffer.fill('\0');
@@ -84,13 +91,15 @@ bool axisDragFloat(const char* axis,
         float* value,
         float speed,
         float minValue,
-        float maxValue) {
+        float maxValue,
+        float inputWidth) {
     ImGui::PushID(axis);
     ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(axis);
     ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+    ImGui::SetNextItemWidth(std::max(inputWidth, kMinAxisInputWidth));
     const bool changed = ImGui::DragFloat("##value", value, speed, minValue, maxValue, "%.3f");
     ImGui::PopID();
     return changed;
@@ -103,11 +112,38 @@ bool axisDragFloat3(const char* label,
         float minValue = 0.0f,
         float maxValue = 0.0f) {
     bool changed = false;
-    if (ImGui::BeginTable(label, 4, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 72.0f);
-        ImGui::TableSetupColumn("X");
-        ImGui::TableSetupColumn("Y");
-        ImGui::TableSetupColumn("Z");
+    ImGui::PushID(label);
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float axisChromeWidth = kAxisTextColumnWidth + ImGui::GetStyle().ItemInnerSpacing.x;
+    const float minimumInlineWidth = kTransformLabelColumnWidth + (axisChromeWidth + kMinAxisInputWidth) * 3.0f;
+
+    if (availableWidth < minimumInlineWidth) {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+
+        changed = axisDragFloat("X", style.axisX, &values[0], speed, minValue, maxValue,
+                          uiFillWidthAtLeast(kMinAxisInputWidth) - axisChromeWidth) ||
+                changed;
+        changed = axisDragFloat("Y", style.axisY, &values[1], speed, minValue, maxValue,
+                          uiFillWidthAtLeast(kMinAxisInputWidth) - axisChromeWidth) ||
+                changed;
+        changed = axisDragFloat("Z", style.axisZ, &values[2], speed, minValue, maxValue,
+                          uiFillWidthAtLeast(kMinAxisInputWidth) - axisChromeWidth) ||
+                changed;
+        ImGui::PopID();
+        return changed;
+    }
+
+    const float axisColumnWidth = (availableWidth - kTransformLabelColumnWidth) / 3.0f;
+    const float inputWidth = axisColumnWidth - axisChromeWidth;
+    if (ImGui::BeginTable("##AxisDragFloat3", 4,
+                ImGuiTableFlags_SizingFixedFit |
+                        ImGuiTableFlags_NoSavedSettings |
+                        ImGuiTableFlags_NoPadOuterX)) {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, kTransformLabelColumnWidth);
+        ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
+        ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
+        ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
         ImGui::TableNextRow();
 
         ImGui::TableSetColumnIndex(0);
@@ -115,16 +151,23 @@ bool axisDragFloat3(const char* label,
         ImGui::TextUnformatted(label);
 
         ImGui::TableSetColumnIndex(1);
-        changed = axisDragFloat("X", style.axisX, &values[0], speed, minValue, maxValue) || changed;
+        changed = axisDragFloat("X", style.axisX, &values[0], speed, minValue, maxValue, inputWidth) || changed;
         ImGui::TableSetColumnIndex(2);
-        changed = axisDragFloat("Y", style.axisY, &values[1], speed, minValue, maxValue) || changed;
+        changed = axisDragFloat("Y", style.axisY, &values[1], speed, minValue, maxValue, inputWidth) || changed;
         ImGui::TableSetColumnIndex(3);
-        changed = axisDragFloat("Z", style.axisZ, &values[2], speed, minValue, maxValue) || changed;
+        changed = axisDragFloat("Z", style.axisZ, &values[2], speed, minValue, maxValue, inputWidth) || changed;
 
         ImGui::EndTable();
     }
+    ImGui::PopID();
     return changed;
 }
+
+struct SelectedTransformPivot {
+    EntityId entity = InvalidEntityId;
+    TransformComponent transform;
+    Vec3 localPivot = {};
+};
 
 } // namespace
 
@@ -223,6 +266,36 @@ void InspectorPanel::draw(UIContext& context) {
             transform = document.transform(primary);
         };
 
+        auto selectedTransformPivots = [&](Vec3 worldPivot) {
+            std::vector<SelectedTransformPivot> records;
+            records.reserve(selected.size());
+            for (const EntityId id : selected) {
+                if (const TransformComponent* current = document.transform(id)) {
+                    records.push_back(SelectedTransformPivot{
+                            .entity = id,
+                            .transform = *current,
+                            .localPivot = localPivotForWorldPoint(*current, worldPivot),
+                    });
+                }
+            }
+            return records;
+        };
+
+        auto applyToSelectedTransformRecords = [&](Vec3 worldPivot, auto apply) {
+            const std::vector<SelectedTransformPivot> records = selectedTransformPivots(worldPivot);
+            for (const SelectedTransformPivot& record : records) {
+                TransformComponent next = record.transform;
+                apply(next, record.localPivot, worldPivot);
+                document.setTransform(record.entity, next);
+            }
+            transform = document.transform(primary);
+        };
+
+        auto selectedTransformPivot = [&]() {
+            const std::optional<SceneBounds> bounds = selectedWorldBounds(document, context.assets);
+            return bounds ? boundsCenter(*bounds) : transform->position;
+        };
+
         float position[3] = {transform->position.x, transform->position.y, transform->position.z};
         if (axisDragFloat3("Position", position, context.style, 0.05f)) {
             const Vec3 previous = transform->position;
@@ -242,16 +315,17 @@ void InspectorPanel::draw(UIContext& context) {
             const Vec3 previous = transform->rotationEuler;
             const Vec3 nextRotation{rotation[0] * DegToRad, rotation[1] * DegToRad, rotation[2] * DegToRad};
             const Vec3 delta = nextRotation - previous;
-            applyToSelectedTransforms([&](TransformComponent& next) {
-                next.rotationEuler = next.rotationEuler + delta;
+            applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {
+                applyWorldRotationDeltaAroundPivot(next, delta, localPivot, worldPivot);
             });
         }
 
         float scale[3] = {transform->scale.x, transform->scale.y, transform->scale.z};
         if (axisDragFloat3("Scale", scale, context.style, 0.02f, 0.001f, 1000.0f)) {
             const Vec3 ratio = componentScaleRatio({scale[0], scale[1], scale[2]}, transform->scale);
-            applyToSelectedTransforms([&](TransformComponent& next) {
+            applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {
                 next.scale = clampScale(multiplyComponents(next.scale, ratio));
+                pinLocalPivotToWorldPoint(next, localPivot, worldPivot);
             });
         }
     }

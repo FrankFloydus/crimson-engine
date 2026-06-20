@@ -7,11 +7,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(QUADER_BUILD_TESTS "Build Quader tests" ON)
+option(QUADER_BUILD_SDK_TESTS "Build the copied Quader modeling SDK tests from the app build." OFF)
 option(QUADER_ENABLE_MODELING_SDK "Enable the copied native Quader modeling SDK when present." ON)
 
+set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-windows")
+if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{FILAMENT_SDK_ROOT}" _QUADER_DEFAULT_FILAMENT_SDK_ROOT)
+endif()
 set(FILAMENT_SDK_ROOT
-    "C:/Users/Drako/Desktop/quader-windows/_SOURCES/filament-v1.71.6-windows"
+    "${_QUADER_DEFAULT_FILAMENT_SDK_ROOT}"
     CACHE PATH "Path to the Filament binary SDK")
+
 set(QUADER_MODELING_SDK_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/modeling/sdk"
     CACHE PATH "Path to the copied native Quader modeling SDK")
@@ -21,9 +27,47 @@ if(NOT EXISTS "${QUADER_MODELING_SDK_DIR}/CMakeLists.txt"
         "${CMAKE_CURRENT_SOURCE_DIR}/modeling/sdk"
         CACHE PATH "Path to the copied native Quader modeling SDK" FORCE)
 endif()
+
+set(_QUADER_SDK_OPENMESH_COMMIT "5f016723f9f183770cffe5787a6f9f628e2914d8")
+set(_QUADER_SDK_CATCH2_COMMIT "644821ce28cb25d7992a4d0375b1d83214392592")
+
+set(_QUADER_DEFAULT_OPENMESH_SOURCE_DIR "")
+if(DEFINED ENV{QUADER_SDK_OPENMESH_SOURCE_DIR} AND NOT "$ENV{QUADER_SDK_OPENMESH_SOURCE_DIR}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{QUADER_SDK_OPENMESH_SOURCE_DIR}" _QUADER_DEFAULT_OPENMESH_SOURCE_DIR)
+else()
+    set(_QUADER_LOCAL_OPENMESH_SOURCE_DIR
+        "${QUADER_MODELING_SDK_DIR}/thirdparty/openmesh/openmesh-${_QUADER_SDK_OPENMESH_COMMIT}")
+    if(EXISTS "${_QUADER_LOCAL_OPENMESH_SOURCE_DIR}/CMakeLists.txt")
+        set(_QUADER_DEFAULT_OPENMESH_SOURCE_DIR "${_QUADER_LOCAL_OPENMESH_SOURCE_DIR}")
+    elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{USERPROFILE}/Desktop/_QUADER_DEV/_deps/openmesh-${_QUADER_SDK_OPENMESH_COMMIT}" _QUADER_DEV_OPENMESH_SOURCE_DIR)
+        if(EXISTS "${_QUADER_DEV_OPENMESH_SOURCE_DIR}/CMakeLists.txt")
+            set(_QUADER_DEFAULT_OPENMESH_SOURCE_DIR "${_QUADER_DEV_OPENMESH_SOURCE_DIR}")
+        endif()
+    endif()
+endif()
 set(QUADER_SDK_OPENMESH_SOURCE_DIR
-    "C:/Users/Drako/Desktop/_QUADER_DEV/_deps/openmesh-5f016723f9f183770cffe5787a6f9f628e2914d8"
+    "${_QUADER_DEFAULT_OPENMESH_SOURCE_DIR}"
     CACHE PATH "Path to the local OpenMesh source checkout used by the copied SDK")
+
+set(_QUADER_DEFAULT_CATCH2_SOURCE_DIR "")
+if(DEFINED ENV{QUADER_SDK_CATCH2_SOURCE_DIR} AND NOT "$ENV{QUADER_SDK_CATCH2_SOURCE_DIR}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{QUADER_SDK_CATCH2_SOURCE_DIR}" _QUADER_DEFAULT_CATCH2_SOURCE_DIR)
+else()
+    set(_QUADER_LOCAL_CATCH2_SOURCE_DIR
+        "${QUADER_MODELING_SDK_DIR}/thirdparty/catch2/catch2-${_QUADER_SDK_CATCH2_COMMIT}")
+    if(EXISTS "${_QUADER_LOCAL_CATCH2_SOURCE_DIR}/CMakeLists.txt")
+        set(_QUADER_DEFAULT_CATCH2_SOURCE_DIR "${_QUADER_LOCAL_CATCH2_SOURCE_DIR}")
+    elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{USERPROFILE}/Desktop/_QUADER_DEV/_deps/catch2-${_QUADER_SDK_CATCH2_COMMIT}" _QUADER_DEV_CATCH2_SOURCE_DIR)
+        if(EXISTS "${_QUADER_DEV_CATCH2_SOURCE_DIR}/CMakeLists.txt")
+            set(_QUADER_DEFAULT_CATCH2_SOURCE_DIR "${_QUADER_DEV_CATCH2_SOURCE_DIR}")
+        endif()
+    endif()
+endif()
+set(QUADER_SDK_CATCH2_SOURCE_DIR
+    "${_QUADER_DEFAULT_CATCH2_SOURCE_DIR}"
+    CACHE PATH "Path to the local Catch2 source checkout used by the copied SDK tests")
 
 if(MSVC)
     if(POLICY CMP0141)
@@ -38,14 +82,32 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
 
+if(QUADER_BUILD_TESTS OR QUADER_BUILD_SDK_TESTS)
+    enable_testing()
+endif()
+
+if(QUADER_BUILD_SDK_TESTS AND NOT QUADER_ENABLE_MODELING_SDK)
+    message(FATAL_ERROR "QUADER_BUILD_SDK_TESTS requires QUADER_ENABLE_MODELING_SDK=ON.")
+endif()
+
 set(QUADER_HAS_MODELING_SDK OFF)
 if(QUADER_ENABLE_MODELING_SDK AND EXISTS "${QUADER_MODELING_SDK_DIR}/CMakeLists.txt")
-    set(BUILD_TESTING OFF CACHE BOOL "Build SDK tests from the app integration." FORCE)
+    set(BUILD_TESTING ${QUADER_BUILD_SDK_TESTS} CACHE BOOL "Build SDK tests from the app integration." FORCE)
     set(QUADER_SDK_ALLOW_EXTERNAL_OPENMESH_FETCH OFF CACHE BOOL "Disable SDK network OpenMesh fetches from the app integration." FORCE)
     set(QUADER_SDK_ALLOW_EXTERNAL_CATCH2_FETCH OFF CACHE BOOL "Disable SDK network Catch2 fetches from the app integration." FORCE)
     set(QUADER_ENABLE_TRACY OFF CACHE BOOL "Disable SDK Tracy instrumentation from the app integration." FORCE)
     add_subdirectory("${QUADER_MODELING_SDK_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/quader-modeling-sdk" EXCLUDE_FROM_ALL)
     set(QUADER_HAS_MODELING_SDK ON)
+    if(QUADER_BUILD_SDK_TESTS)
+        get_property(_QUADER_SDK_TEST_TARGETS GLOBAL PROPERTY QUADER_SDK_TEST_TARGETS)
+        if(_QUADER_SDK_TEST_TARGETS)
+            add_custom_target(quader_sdk_tests DEPENDS ${_QUADER_SDK_TEST_TARGETS})
+        else()
+            message(FATAL_ERROR "QUADER_BUILD_SDK_TESTS is ON, but the copied SDK did not register any test targets.")
+        endif()
+    endif()
+elseif(QUADER_BUILD_SDK_TESTS)
+    message(FATAL_ERROR "QUADER_BUILD_SDK_TESTS is ON, but QUADER_MODELING_SDK_DIR does not contain CMakeLists.txt: ${QUADER_MODELING_SDK_DIR}")
 endif()
 
 add_library(quader_modeling STATIC
@@ -74,6 +136,8 @@ add_library(quader_core STATIC
     src/quader/assets/BakeService.cpp
     src/quader/assets/MaterialDocument.cpp
     src/quader/core/Logger.cpp
+    src/quader/document/DocumentCommandService.cpp
+    src/quader/document/ProjectDocument.cpp
     src/quader/geometry/UVSphere.cpp
     src/quader/scene/SceneBounds.cpp
     src/quader/scene/SceneDocument.cpp
@@ -97,9 +161,6 @@ function(quader_filament_lib out_var lib_name)
         PARENT_SCOPE)
 endfunction()
 
-add_library(filament_sdk INTERFACE)
-target_include_directories(filament_sdk INTERFACE "${FILAMENT_SDK_ROOT}/include")
-
 set(QUADER_FILAMENT_LIB_NAMES
     filament
     backend
@@ -116,6 +177,36 @@ set(QUADER_FILAMENT_LIB_NAMES
     shaders
     zstd
 )
+
+function(quader_require_existing_path required_path description)
+    if(NOT EXISTS "${required_path}")
+        message(FATAL_ERROR "Missing ${description}: ${required_path}")
+    endif()
+endfunction()
+
+function(quader_validate_filament_sdk sdk_root)
+    if("${sdk_root}" STREQUAL "")
+        message(FATAL_ERROR "FILAMENT_SDK_ROOT is empty. Set FILAMENT_SDK_ROOT or pass -DFILAMENT_SDK_ROOT=<path>.")
+    endif()
+
+    quader_require_existing_path("${sdk_root}" "Filament SDK root")
+    quader_require_existing_path("${sdk_root}/include/filament/Engine.h" "Filament SDK header include/filament/Engine.h")
+    quader_require_existing_path("${sdk_root}/bin/matc.exe" "Filament material compiler bin/matc.exe")
+
+    foreach(_quader_filament_runtime IN ITEMS md mdd)
+        foreach(_quader_filament_lib IN LISTS QUADER_FILAMENT_LIB_NAMES)
+            quader_require_existing_path(
+                "${sdk_root}/lib/x86_64/${_quader_filament_runtime}/${_quader_filament_lib}.lib"
+                "Filament ${_quader_filament_runtime} library ${_quader_filament_lib}.lib")
+        endforeach()
+    endforeach()
+    quader_require_existing_path("${sdk_root}/lib/x86_64/mdd/matdbg.lib" "Filament debug library matdbg.lib")
+endfunction()
+
+quader_validate_filament_sdk("${FILAMENT_SDK_ROOT}")
+
+add_library(filament_sdk INTERFACE)
+target_include_directories(filament_sdk INTERFACE "${FILAMENT_SDK_ROOT}/include")
 
 foreach(lib_name IN LISTS QUADER_FILAMENT_LIB_NAMES)
     quader_filament_lib(lib_path "${lib_name}")
@@ -243,11 +334,11 @@ if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHN
 endif()
 
 if(QUADER_BUILD_TESTS)
-    enable_testing()
     find_package(GTest CONFIG REQUIRED)
 
     add_executable(quader_tests
         tests/core_tests.cpp
+        tests/build_guardrail_tests.cpp
     )
     target_compile_definitions(quader_tests PRIVATE QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_core GTest::gtest GTest::gtest_main)

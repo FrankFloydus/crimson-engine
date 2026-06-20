@@ -246,6 +246,7 @@ MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
     mesh.name = "Mesh";
     mesh.vertices.reserve(compiled.vertices.size());
     mesh.indices = compiled.indices;
+    mesh.primitives.reserve(compiled.primitives.size());
     mesh.hasStableCpuTopology = true;
 
     for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
@@ -254,6 +255,13 @@ MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
                 .normal = fromSdk(vertex.normal),
                 .uv = {vertex.uv0.x, vertex.uv0.y},
                 .rgba = vertex.color,
+        });
+    }
+    for (const quader_poly::CompiledPrimitive& primitive : compiled.primitives) {
+        mesh.primitives.push_back(MeshPrimitiveSpan{
+                .indexOffset = primitive.index_offset,
+                .indexCount = primitive.index_count,
+                .materialSlot = primitive.material_slot,
         });
     }
 

@@ -54,6 +54,8 @@ struct ViewportScreenPoint {
 
 class ViewportCameraController {
 public:
+    ViewportCameraController();
+
     void setViewportSize(float width, float height);
     void beginDrag(Vec2 mouse, ViewportDragMode mode);
     void updateDrag(Vec2 mouse);

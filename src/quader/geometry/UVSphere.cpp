@@ -71,6 +71,11 @@ MeshAsset generateUVSphere(const UVSphereOptions& options) {
             mesh.indices.push_back(c);
         }
     }
+    mesh.primitives.push_back(MeshPrimitiveSpan{
+            .indexOffset = 0,
+            .indexCount = static_cast<std::uint32_t>(mesh.indices.size()),
+            .materialSlot = 0,
+    });
 
     return mesh;
 }
