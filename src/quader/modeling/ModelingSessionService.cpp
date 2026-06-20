@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #if QUADER_HAS_MODELING_SDK
@@ -485,12 +486,33 @@ public:
 
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const {
 #if QUADER_HAS_MODELING_SDK
-        return fromSdk(quader_editor_core::build_selection_overlay_frame(
-                session_.objects(),
-                session_.selection_mode(),
-                runtime_.hover()),
-                entityByObject_,
-                scene_);
+        const quader_editor_core::SelectionHoverState& hover = runtime_.hover();
+        const std::uint64_t contentRevision = session_.state().content_revision;
+        const std::uint64_t selectionRevision = session_.state().selection_revision;
+        const std::uint64_t sceneRevision = scene_.revision();
+        const quader_editor_core::SelectionMode selectionMode = session_.selection_mode();
+        if (selectionOverlayCacheValid_ &&
+                selectionOverlayCacheContentRevision_ == contentRevision &&
+                selectionOverlayCacheSelectionRevision_ == selectionRevision &&
+                selectionOverlayCacheSceneRevision_ == sceneRevision &&
+                selectionOverlayCacheSelectionMode_ == selectionMode &&
+                hoverMatches(selectionOverlayCacheHover_, hover)) {
+            return selectionOverlayCacheFrame_;
+        }
+
+        selectionOverlayCacheFrame_ = fromSdk(quader_editor_core::build_selection_overlay_frame(
+                    session_.objects(),
+                    selectionMode,
+                    hover),
+                    entityByObject_,
+                    scene_);
+        selectionOverlayCacheValid_ = true;
+        selectionOverlayCacheContentRevision_ = contentRevision;
+        selectionOverlayCacheSelectionRevision_ = selectionRevision;
+        selectionOverlayCacheSceneRevision_ = sceneRevision;
+        selectionOverlayCacheSelectionMode_ = selectionMode;
+        selectionOverlayCacheHover_ = hover;
+        return selectionOverlayCacheFrame_;
 #else
         return {};
 #endif
@@ -523,14 +545,29 @@ public:
 
     void syncSceneSelectionFromSdk() {
 #if QUADER_HAS_MODELING_SDK
-        syncSceneObjectsFromSdk();
+        if (!sceneObjectsSyncedForCurrentSdkContent()) {
+            syncSceneObjectsFromSdk();
+        }
         std::vector<int> selectedObjectIds = session_.selected_object_ids();
         const int activeObjectId = session_.active_object_id();
-        scene_.clearSelection();
+        std::unordered_set<EntityId> desiredSelection;
+        desiredSelection.reserve(selectedObjectIds.size());
         for (const int objectId : selectedObjectIds) {
             const auto it = entityByObject_.find(objectId);
             if (it != entityByObject_.end()) {
-                scene_.setSelected(it->second, true);
+                desiredSelection.insert(it->second);
+            }
+        }
+
+        for (const EntityId entity : scene_.selectedEntities()) {
+            if (!desiredSelection.contains(entity)) {
+                scene_.setSelected(entity, false);
+            }
+        }
+        for (const EntityId entity : desiredSelection) {
+            const SelectionComponent* selection = scene_.selection(entity);
+            if (selection == nullptr || !selection->selected) {
+                scene_.setSelected(entity, true);
             }
         }
         const auto active = entityByObject_.find(activeObjectId);
@@ -1255,6 +1292,39 @@ public:
 
 private:
 #if QUADER_HAS_MODELING_SDK
+    static bool hoverMatches(
+            const quader_editor_core::SelectionHoverState& left,
+            const quader_editor_core::SelectionHoverState& right) {
+        return left.object_id == right.object_id &&
+                left.kind == right.kind &&
+                left.vertex_id == right.vertex_id &&
+                left.edge == right.edge &&
+                left.face_id == right.face_id &&
+                left.selected_modifier_pressed == right.selected_modifier_pressed &&
+                left.candidate_object_id == right.candidate_object_id;
+    }
+
+    [[nodiscard]] bool sceneObjectsSyncedForCurrentSdkContent() const {
+        if (!sceneObjectsSyncValid_ || syncedSdkContentRevision_ != session_.state().content_revision) {
+            return false;
+        }
+        if (entityByObject_.size() != session_.objects().size()) {
+            return false;
+        }
+        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+            const auto entity = entityByObject_.find(object.id);
+            if (entity == entityByObject_.end() || !scene_.exists(entity->second)) {
+                return false;
+            }
+            const ModelingObjectComponent* modelingObject = scene_.modelingObject(entity->second);
+            const MeshComponent* mesh = scene_.mesh(entity->second);
+            if (modelingObject == nullptr || mesh == nullptr || mesh->mesh == InvalidAssetId) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     ModelingCommandResult updateTransformPreviewResult(const quader_editor_core::CommandResult& result) {
         if (result.ok) {
             syncSceneObjectsFromSdk();
@@ -1270,6 +1340,10 @@ private:
 
     void syncSceneObjectsFromSdk() {
 #if QUADER_HAS_MODELING_SDK
+        if (sceneObjectsSyncedForCurrentSdkContent()) {
+            return;
+        }
+
         std::unordered_map<std::uint32_t, AssetId> materialBySlot;
         std::optional<AssetId> firstModelingMaterial;
         for (const auto& [objectId, entity] : entityByObject_) {
@@ -1322,11 +1396,20 @@ private:
             if (meshId == InvalidAssetId || !assets_.replaceMesh(meshId, std::move(mesh))) {
                 meshId = assets_.addMesh(toMeshAsset(object));
             }
-            scene_.setModelingObject(entity, ModelingObjectComponent{
+            const ModelingObjectComponent nextObject{
                     .objectId = object.id,
                     .materialSlot = materialSlot,
-            });
-            scene_.setMesh(entity, MeshComponent{.mesh = meshId});
+            };
+            const ModelingObjectComponent* currentObject = scene_.modelingObject(entity);
+            if (currentObject == nullptr ||
+                    currentObject->objectId != nextObject.objectId ||
+                    currentObject->materialSlot != nextObject.materialSlot) {
+                scene_.setModelingObject(entity, nextObject);
+            }
+            const MeshComponent* currentMesh = scene_.mesh(entity);
+            if (currentMesh == nullptr || currentMesh->mesh != meshId) {
+                scene_.setMesh(entity, MeshComponent{.mesh = meshId});
+            }
         }
 
         std::vector<int> removedObjects;
@@ -1343,6 +1426,8 @@ private:
             objectByEntity_.erase(entity);
             entityByObject_.erase(objectId);
         }
+        syncedSdkContentRevision_ = session_.state().content_revision;
+        sceneObjectsSyncValid_ = true;
 #endif
     }
 
@@ -1440,6 +1525,16 @@ private:
     quader_editor_core::EditorSession session_;
     quader_editor_core::EditorRuntime runtime_;
     quader_editor_core::RepeatLastActionState repeatLastAction_;
+    bool sceneObjectsSyncValid_ = false;
+    std::uint64_t syncedSdkContentRevision_ = 0;
+    mutable bool selectionOverlayCacheValid_ = false;
+    mutable std::uint64_t selectionOverlayCacheContentRevision_ = 0;
+    mutable std::uint64_t selectionOverlayCacheSelectionRevision_ = 0;
+    mutable std::uint64_t selectionOverlayCacheSceneRevision_ = 0;
+    mutable quader_editor_core::SelectionMode selectionOverlayCacheSelectionMode_ =
+            quader_editor_core::SelectionMode::object;
+    mutable quader_editor_core::SelectionHoverState selectionOverlayCacheHover_;
+    mutable ViewportOverlayFrame selectionOverlayCacheFrame_;
 #endif
 };
 

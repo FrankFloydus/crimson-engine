@@ -58,7 +58,13 @@ private:
             ViewportModifiers modifiers,
             int clickCount);
     bool drawViewCube(ViewportCameraController& camera, ImVec2 itemMin, ImVec2 itemSize);
-    bool drawTransformGizmo(SceneDocument& document, const AssetRegistry& assets, ModelingSessionService& modeling, ViewportCameraController& camera, SceneRenderBridge& renderBridge, ImVec2 itemMin, ImVec2 itemSize);
+    bool drawTransformGizmo(SceneDocument& document,
+            const AssetRegistry& assets,
+            ModelingSessionService& modeling,
+            ViewportCameraController& camera,
+            ImVec2 itemMin,
+            ImVec2 itemSize,
+            bool suppressHoverWork);
 
     ViewportInputRouter inputRouter_;
     int createdBoxCount_ = 1;
@@ -73,6 +79,7 @@ private:
     Vec2 lastGizmoMouse_ = {};
     Vec2 contextMenuRightPressScreen_ = {};
     bool contextMenuRightPressActive_ = false;
+    bool selectionHoverClearIssued_ = false;
     Vec3 gizmoStartWorldPivot_ = {};
     std::vector<GizmoStartTransform> gizmoStartTransforms_;
 #if QUADER_HAS_MODELING_SDK

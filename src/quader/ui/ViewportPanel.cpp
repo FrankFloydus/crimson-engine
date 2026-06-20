@@ -1345,8 +1345,12 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         }
     }
 
+    const bool suppressHoverWork = result.navigationActive || result.cameraChanged;
     const bool viewCubeConsumed = drawViewCube(camera, itemMin, itemSize);
-    const bool gizmoConsumed = viewCubeConsumed || cancelConsumed || drawTransformGizmo(document, assets, modeling, camera, renderBridge, itemMin, itemSize);
+    const bool gizmoConsumed =
+            viewCubeConsumed ||
+            cancelConsumed ||
+            drawTransformGizmo(document, assets, modeling, camera, itemMin, itemSize, suppressHoverWork);
     const bool leftClicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     const bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
@@ -1357,7 +1361,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         const ModelingBoxToolEvent boxEvent = modelingBoxEvent(camera, input, gridSize);
         bool boxActionConsumed = false;
 
-        if (hovered && !leftDown && boxPreview_.dragState == ModelingBoxDragState::Idle) {
+        if (hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState == ModelingBoxDragState::Idle) {
             boxPreview_ = modeling.updateBoxHover(boxEvent);
             logBoxPreviewFailure("Box hover", boxPreview_);
         }
@@ -1389,7 +1393,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             logBoxPreviewFailure("Box height begin", boxPreview_);
         }
 
-        if (!boxActionConsumed && hovered && !leftDown && boxPreview_.dragState == ModelingBoxDragState::Height) {
+        if (!boxActionConsumed && hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState == ModelingBoxDragState::Height) {
             boxPreview_ = modeling.updateBoxHeight(boxEvent);
             logBoxPreviewFailure("Box height update", boxPreview_);
         }
@@ -1411,12 +1415,13 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                 !result.navigationActive) {
             selectFromViewport(document, assets, modeling, camera, input.mouseLocal, input.modifiers, leftClickCount);
             paintSelectionActive_ = inputRouter_.state().selectionMode != ViewportSelectionMode::Object;
+            selectionHoverClearIssued_ = false;
         } else if (selectionFallbackActive &&
                 paintSelectionActive_ &&
                 leftDown &&
                 hovered &&
                 !gizmoConsumed &&
-                !result.navigationActive) {
+                !suppressHoverWork) {
             const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
             const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
                     .ray = {
@@ -1431,6 +1436,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             });
             inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
             paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
+            selectionHoverClearIssued_ = false;
         }
 
         if (leftReleased) {
@@ -1439,7 +1445,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
 
         if (selectionFallbackActive &&
                 hovered &&
-                !result.navigationActive &&
+                !suppressHoverWork &&
                 !gizmoConsumed) {
             const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
             (void)modeling.updateSelectionHover(ModelingHoverRequest{
@@ -1449,8 +1455,10 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                     },
                     .selectedModifierPressed = input.modifiers.primary,
             });
-        } else if (!hovered || !selectionFallbackActive) {
+            selectionHoverClearIssued_ = false;
+        } else if ((!hovered || !selectionFallbackActive || suppressHoverWork) && !selectionHoverClearIssued_) {
             (void)modeling.clearSelectionHover();
+            selectionHoverClearIssued_ = true;
         }
     }
 
@@ -1651,9 +1659,9 @@ bool ViewportPanel::drawTransformGizmo(
         const AssetRegistry& assets,
         ModelingSessionService& modeling,
         ViewportCameraController& camera,
-        SceneRenderBridge& renderBridge,
         ImVec2 itemMin,
-        ImVec2 itemSize) {
+        ImVec2 itemSize,
+        bool suppressHoverWork) {
     const EntityId selected = document.primarySelection();
     if (selected == InvalidEntityId) {
 #if QUADER_HAS_MODELING_SDK
@@ -1668,7 +1676,6 @@ bool ViewportPanel::drawTransformGizmo(
             sdkTransformPreviewInset_ = false;
         }
 #endif
-        renderBridge.setOverlayFrame({});
         gizmoDragging_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
         return false;
@@ -1688,13 +1695,11 @@ bool ViewportPanel::drawTransformGizmo(
             sdkTransformPreviewInset_ = false;
         }
 #endif
-        renderBridge.setOverlayFrame({});
         return false;
     }
 
     const ViewportTool tool = inputRouter_.state().activeTool;
     if (tool != ViewportTool::Move && tool != ViewportTool::Rotate && tool != ViewportTool::Scale) {
-        renderBridge.setOverlayFrame({});
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
 #if QUADER_HAS_MODELING_SDK
             if (sdkTransformPreviewActive_) {
@@ -1735,7 +1740,6 @@ bool ViewportPanel::drawTransformGizmo(
             sdkTransformPreviewInset_ = false;
         }
 #endif
-        renderBridge.setOverlayFrame({});
         gizmoDragging_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
         return false;
@@ -1752,7 +1756,7 @@ bool ViewportPanel::drawTransformGizmo(
 #if QUADER_HAS_MODELING_SDK
     quader_editor_core::TransformGizmoFrameInput sdkInput =
             makeSdkGizmoInput(camera, gizmoPivot, tool, activeGizmoAxis_, GizmoAxis::None, activeGridSize, itemSize);
-    if (!gizmoDragging_ && mouseInsideViewport) {
+    if (!gizmoDragging_ && mouseInsideViewport && !suppressHoverWork) {
         const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         const quader_editor_core::TransformGizmoPickHit hoverHit =
                 quader_editor_core::pick_transform_gizmo(sdkInput, toSdk(localMouse));
@@ -1760,10 +1764,8 @@ bool ViewportPanel::drawTransformGizmo(
     }
     const quader_editor_core::TransformGizmoFrame sdkFrame =
             quader_editor_core::build_transform_gizmo_frame(sdkInput);
-    renderBridge.setOverlayFrame({});
     drawUnityStyleGizmo(sdkFrame, camera, itemMin, itemSize);
 #else
-    renderBridge.setOverlayFrame({});
 #endif
 
     const ViewportCameraPose pose = camera.pose();

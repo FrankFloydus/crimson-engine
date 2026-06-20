@@ -101,6 +101,7 @@ private:
     filament::Texture* fallbackRoughnessTexture_ = nullptr;
     ViewportOverlayFrame selectedOverlayFrame_;
     ViewportOverlayFrame externalOverlayFrame_;
+    std::uint64_t externalOverlayTriangleSignature_ = 0;
 };
 
 } // namespace quader

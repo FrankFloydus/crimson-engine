@@ -312,6 +312,24 @@ TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
     EXPECT_EQ(source.find("preview.footprint[1], preview.footprint[3]"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const bool suppressHoverWork = result.navigationActive || result.cameraChanged"), std::string::npos);
+    EXPECT_NE(source.find("drawTransformGizmo(document, assets, modeling, camera, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
+    EXPECT_NE(source.find("mouseInsideViewport && !suppressHoverWork"), std::string::npos);
+    EXPECT_NE(source.find("hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState"), std::string::npos);
+    EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
+    EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
+}
+
 TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
@@ -333,6 +351,41 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     EXPECT_NE(source.find("TextureCacheKey cacheKey"), std::string::npos);
     EXPECT_NE(source.find(".colorSpace = texture->colorSpace"), std::string::npos);
     EXPECT_EQ(source.find("bool srgb"), std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenTrianglePayloadIsUnchanged) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("overlayTriangleSignature"), std::string::npos);
+    EXPECT_NE(source.find("externalOverlayTriangleSignature_"), std::string::npos);
+    EXPECT_NE(source.find("if (triangleSignature == externalOverlayTriangleSignature_)"), std::string::npos);
+    EXPECT_NE(source.find("externalOverlayFrame_ = std::move(frame);\n        return;"), std::string::npos);
+    EXPECT_NE(source.find("rebuildOverlayProxies();"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "modeling" / "ModelingSessionService.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("selectionOverlayCacheValid_"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCacheContentRevision_ == contentRevision"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCacheSelectionRevision_ == selectionRevision"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCacheSceneRevision_ == sceneRevision"), std::string::npos);
+    EXPECT_NE(source.find("hoverMatches(selectionOverlayCacheHover_, hover)"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCacheFrame_ = fromSdk"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
@@ -1639,6 +1692,37 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
 #else
     EXPECT_TRUE(service.instantOperations().empty());
     EXPECT_FALSE(service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, RepeatedSelectionSyncDoesNotDirtySceneOrResyncMeshes) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Selection Sync Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    scene.clearSelection();
+    scene.setSelected(box.object.entity, true);
+    service.syncObjectSelectionFromScene();
+    service.syncSceneSelectionFromSdk();
+
+    const std::uint64_t sceneRevision = scene.revision();
+    const ModelingSelectionSummary summary = service.selectionSummary();
+    service.syncSceneSelectionFromSdk();
+
+    EXPECT_EQ(scene.revision(), sceneRevision);
+    EXPECT_EQ(service.selectionSummary().contentRevision, summary.contentRevision);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, summary.selectionRevision);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
 #endif
 }
 

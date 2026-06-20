@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
@@ -30,6 +31,9 @@ namespace quader {
 namespace {
 
 using AttributeType = filament::backend::ElementType;
+
+constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
 struct RenderVertex {
     filament::math::float3 position;
@@ -49,6 +53,34 @@ struct OverlayRenderState {
     float polygonOffsetConstant = 0.0f;
     std::uint16_t blendOrder = 0;
 };
+
+std::uint64_t hashCombine(std::uint64_t hash, std::uint64_t value) {
+    hash ^= value;
+    hash *= kFnvPrime;
+    return hash;
+}
+
+std::uint64_t hashFloat(std::uint64_t hash, float value) {
+    return hashCombine(hash, std::bit_cast<std::uint32_t>(value));
+}
+
+std::uint64_t hashVec3(std::uint64_t hash, Vec3 value) {
+    hash = hashFloat(hash, value.x);
+    hash = hashFloat(hash, value.y);
+    return hashFloat(hash, value.z);
+}
+
+std::uint64_t overlayTriangleSignature(const ViewportOverlayFrame& frame) {
+    std::uint64_t hash = hashCombine(kFnvOffset, frame.triangles.size());
+    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
+        hash = hashCombine(hash, static_cast<std::uint32_t>(triangle.layer));
+        hash = hashCombine(hash, triangle.color);
+        hash = hashVec3(hash, triangle.a);
+        hash = hashVec3(hash, triangle.b);
+        hash = hashVec3(hash, triangle.c);
+    }
+    return hash;
+}
 
 filament::math::float3 directionFromTransform(const TransformComponent& transform) {
     const float yaw = transform.rotationEuler.y;
@@ -190,6 +222,8 @@ void SceneRenderBridge::shutdown() {
     }
     lightProxies_.clear();
     selectedOverlayFrame_ = {};
+    externalOverlayFrame_ = {};
+    externalOverlayTriangleSignature_ = overlayTriangleSignature(externalOverlayFrame_);
 
     for (auto& [id, texture] : textureCache_) {
         destroyTexture(texture);
@@ -223,7 +257,14 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
 }
 
 void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame) {
+    const std::uint64_t triangleSignature = overlayTriangleSignature(frame);
+    if (triangleSignature == externalOverlayTriangleSignature_) {
+        externalOverlayFrame_ = std::move(frame);
+        return;
+    }
+
     externalOverlayFrame_ = std::move(frame);
+    externalOverlayTriangleSignature_ = triangleSignature;
     if (engine_ && scene_ && overlayMaterial_) {
         rebuildOverlayProxies();
     }
@@ -240,6 +281,7 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
     }
     lightProxies_.clear();
     selectedOverlayFrame_ = {};
+    externalOverlayTriangleSignature_ = overlayTriangleSignature(externalOverlayFrame_);
 
     auto& entityManager = utils::EntityManager::get();
     auto& transformManager = engine_->getTransformManager();
