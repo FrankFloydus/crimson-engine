@@ -1,9 +1,12 @@
 #pragma once
 
+#include "quader/core/UndoRedoManager.h"
 #include "quader/modeling/ModelingSessionService.h"
 #include "quader/viewport/ViewportInputRouter.h"
 
 #include <optional>
+#include <string>
+#include <utility>
 
 namespace quader {
 
@@ -39,12 +42,50 @@ inline ModelingTransformTool viewportToolToModelingTransformTool(ViewportTool to
     return ModelingTransformTool::Move;
 }
 
+inline UndoRedoResult toUndoRedoResult(ModelingCommandResult result) {
+    return {
+            .ok = result.ok,
+            .changed = result.changed,
+            .message = std::move(result.message),
+    };
+}
+
+inline ModelingCommandResult toModelingCommandResult(UndoRedoResult result) {
+    return {
+            .ok = result.ok,
+            .changed = result.changed,
+            .message = std::move(result.message),
+    };
+}
+
+template <typename Apply>
+inline ModelingCommandResult executeTrackedModelingCommand(
+        UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling,
+        std::string label,
+        Apply apply) {
+    return toModelingCommandResult(undoRedo.executeExternal(
+            std::move(label),
+            [&]() {
+                return toUndoRedoResult(apply());
+            },
+            [&]() {
+                return toUndoRedoResult(modeling.undo());
+            },
+            [&]() {
+                return toUndoRedoResult(modeling.redo());
+            }));
+}
+
 inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
+        UndoRedoManager& undoRedo,
         ModelingSessionService& modeling,
         const ViewportShortcut& shortcut) {
     switch (shortcut.kind) {
     case ViewportShortcutKind::DeleteSelection:
-        return modeling.deleteSelection();
+        return executeTrackedModelingCommand(undoRedo, modeling, "Delete Selection", [&]() {
+            return modeling.deleteSelection();
+        });
     case ViewportShortcutKind::SelectAll:
         return modeling.selectAll();
     case ViewportShortcutKind::InvertSelection:
@@ -52,27 +93,57 @@ inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
     case ViewportShortcutKind::Copy:
         return modeling.copySelection();
     case ViewportShortcutKind::Paste:
-        return modeling.pasteSelection();
+        return executeTrackedModelingCommand(undoRedo, modeling, "Paste Selection", [&]() {
+            return modeling.pasteSelection();
+        });
     case ViewportShortcutKind::Duplicate:
-        return modeling.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+        return executeTrackedModelingCommand(undoRedo, modeling, "Duplicate Meshes", [&]() {
+            return modeling.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+        });
     case ViewportShortcutKind::Undo:
-        return modeling.undo();
+        if (undoRedo.canUndo()) {
+            return toModelingCommandResult(undoRedo.undo());
+        }
+        if (modeling.canUndo()) {
+            return modeling.undo();
+        }
+        return ModelingCommandResult{.ok = false, .message = "No command to undo"};
     case ViewportShortcutKind::Redo:
-        return modeling.redo();
+        if (undoRedo.canRedo()) {
+            return toModelingCommandResult(undoRedo.redo());
+        }
+        if (modeling.canRedo()) {
+            return modeling.redo();
+        }
+        return ModelingCommandResult{.ok = false, .message = "No command to redo"};
     case ViewportShortcutKind::RepeatLastAction:
-        return modeling.repeatLastAction();
+        return executeTrackedModelingCommand(undoRedo, modeling, "Repeat Last Action", [&]() {
+            return modeling.repeatLastAction();
+        });
     case ViewportShortcutKind::MergeActive:
-        return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToActive);
+        return executeTrackedModelingCommand(undoRedo, modeling, "Merge To Active", [&]() {
+            return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToActive);
+        });
     case ViewportShortcutKind::MergeCenter:
-        return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToCenter);
+        return executeTrackedModelingCommand(undoRedo, modeling, "Merge To Center", [&]() {
+            return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToCenter);
+        });
     case ViewportShortcutKind::MirrorAxis:
-        return modeling.mirrorSelection(viewportMirrorAxisToModeling(shortcut.mirrorAxis));
+        return executeTrackedModelingCommand(undoRedo, modeling, "Mirror Selection", [&]() {
+            return modeling.mirrorSelection(viewportMirrorAxisToModeling(shortcut.mirrorAxis));
+        });
     case ViewportShortcutKind::FlipHorizontal:
-        return modeling.flipSelection(ModelingFlipOrientation::Horizontal);
+        return executeTrackedModelingCommand(undoRedo, modeling, "Flip Horizontal", [&]() {
+            return modeling.flipSelection(ModelingFlipOrientation::Horizontal);
+        });
     case ViewportShortcutKind::FlipVertical:
-        return modeling.flipSelection(ModelingFlipOrientation::Vertical);
+        return executeTrackedModelingCommand(undoRedo, modeling, "Flip Vertical", [&]() {
+            return modeling.flipSelection(ModelingFlipOrientation::Vertical);
+        });
     case ViewportShortcutKind::ApplyMaterial:
-        return modeling.applyActiveMaterial();
+        return executeTrackedModelingCommand(undoRedo, modeling, "Apply Material", [&]() {
+            return modeling.applyActiveMaterial();
+        });
     case ViewportShortcutKind::None:
     case ViewportShortcutKind::ActivateTool:
     case ViewportShortcutKind::SetSelectionMode:

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "quader/assets/AssetRegistry.h"
+#include "quader/core/UndoRedoManager.h"
 #include "quader/core/Types.h"
+#include "quader/document/DocumentCommandService.h"
 #include "quader/modeling/ModelingSessionService.h"
 #include "quader/render/ImGuiFilamentRenderer.h"
 #include "quader/render/RenderSystem.h"
@@ -37,6 +39,8 @@ public:
             SceneRenderBridge& renderBridge,
             SceneDocument& document,
             AssetRegistry& assets,
+            UndoRedoManager& undoRedo,
+            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
             AssetId defaultMaterial,
             bool& quitRequested);

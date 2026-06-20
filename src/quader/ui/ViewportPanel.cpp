@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if QUADER_HAS_MODELING_SDK
@@ -375,49 +376,124 @@ bool pointVisibleFromCamera(
     return nearestHit >= pointDistance - 0.035f;
 }
 
-bool commitBoxPlacement(ModelingSessionService& modeling,
+bool applyDefaultMaterialToSelection(SceneDocument& document, AssetId defaultMaterial) {
+    if (defaultMaterial == InvalidAssetId) {
+        return true;
+    }
+    bool applied = false;
+    for (const EntityId entity : document.selectedEntities()) {
+        document.setMaterial(entity, MaterialComponent{.material = defaultMaterial});
+        applied = true;
+    }
+    return applied;
+}
+
+UndoRedoResult modelingResult(ModelingCommandResult result) {
+    return toUndoRedoResult(std::move(result));
+}
+
+UndoRedoResult createBoxResult(ModelingCreateBoxResult result) {
+    return {
+            .ok = result.ok,
+            .changed = result.changed,
+            .message = std::move(result.message),
+    };
+}
+
+bool commitBoxPlacement(UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling,
         AssetId defaultMaterial,
         SceneDocument& document,
         const BoxPlacement& placement,
         const std::string& name) {
-    const ModelingCreateBoxResult result = modeling.createBoxFromBounds({
-            .bounds = placement.localBounds,
-            .name = name,
-    });
+    auto applyNativeState = [&]() {
+        const std::vector<EntityId> selected = document.selectedEntities();
+        if (selected.empty()) {
+            return;
+        }
+        const EntityId entity = selected.front();
+        document.setTransform(entity, placement.transform);
+        if (defaultMaterial != InvalidAssetId) {
+            document.setMaterial(entity, MaterialComponent{.material = defaultMaterial});
+        }
+        document.clearSelection();
+        document.setSelected(entity, true);
+    };
+
+    const UndoRedoResult result = undoRedo.executeExternal(
+            "Create Box",
+            [&]() {
+                const ModelingCreateBoxResult created = modeling.createBoxFromBounds({
+                        .bounds = placement.localBounds,
+                        .name = name,
+                });
+                if (created.ok && created.changed) {
+                    document.setTransform(created.object.entity, placement.transform);
+                    if (defaultMaterial != InvalidAssetId) {
+                        document.setMaterial(created.object.entity, MaterialComponent{.material = defaultMaterial});
+                    }
+                    document.clearSelection();
+                    document.setSelected(created.object.entity, true);
+                }
+                return createBoxResult(std::move(created));
+            },
+            [&]() {
+                return modelingResult(modeling.undo());
+            },
+            [&]() {
+                UndoRedoResult redo = modelingResult(modeling.redo());
+                if (redo.ok && redo.changed) {
+                    applyNativeState();
+                }
+                return redo;
+            });
 
     if (!result.ok) {
         LOG_ERROR("Box creation failed: {}", result.message);
         return false;
     }
-
-    document.setTransform(result.object.entity, placement.transform);
-    if (defaultMaterial != InvalidAssetId) {
-        document.setMaterial(result.object.entity, MaterialComponent{.material = defaultMaterial});
-    }
-    document.clearSelection();
-    document.setSelected(result.object.entity, true);
-    return true;
+    return result.changed;
 }
 
-bool commitBoxPreview(ModelingSessionService& modeling,
+bool commitBoxPreview(UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling,
         AssetId defaultMaterial,
         SceneDocument& document,
         const std::string& name) {
-    const ModelingCreateBoxResult result = modeling.commitBox(name);
+    const UndoRedoResult result = undoRedo.executeExternal(
+            "Create Box",
+            [&]() {
+                const ModelingCreateBoxResult committed = modeling.commitBox(name);
+                if (committed.ok && committed.changed) {
+                    if (defaultMaterial != InvalidAssetId) {
+                        document.setMaterial(committed.object.entity, MaterialComponent{.material = defaultMaterial});
+                    }
+                    document.clearSelection();
+                    document.setSelected(committed.object.entity, true);
+                }
+                return createBoxResult(std::move(committed));
+            },
+            [&]() {
+                return modelingResult(modeling.undo());
+            },
+            [&]() {
+                UndoRedoResult redo = modelingResult(modeling.redo());
+                if (redo.ok && redo.changed) {
+                    applyDefaultMaterialToSelection(document, defaultMaterial);
+                }
+                return redo;
+            });
     if (!result.ok) {
         LOG_ERROR("Box commit failed: {}", result.message);
         return false;
     }
-
-    if (defaultMaterial != InvalidAssetId) {
-        document.setMaterial(result.object.entity, MaterialComponent{.material = defaultMaterial});
-    }
-    document.clearSelection();
-    document.setSelected(result.object.entity, true);
-    return true;
+    return result.changed;
 }
 
-void drawViewportOperationsPopup(ModelingSessionService& modeling, ViewportInputRouter& inputRouter) {
+void drawViewportOperationsPopup(
+        UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling,
+        ViewportInputRouter& inputRouter) {
     if (!ImGui::BeginPopup("ViewportOperationsContext")) {
         return;
     }
@@ -425,7 +501,13 @@ void drawViewportOperationsPopup(ModelingSessionService& modeling, ViewportInput
     const std::vector<ModelingInstantOperationDescriptor> operations = modeling.instantOperations();
     for (const ModelingInstantOperationDescriptor& operation : operations) {
         if (ImGui::MenuItem(operation.label.c_str(), nullptr, false, operation.enabled)) {
-            const ModelingCommandResult result = modeling.executeInstantOperation(operation.operation);
+            const ModelingCommandResult result = executeTrackedModelingCommand(
+                    undoRedo,
+                    modeling,
+                    operation.label,
+                    [&]() {
+                        return modeling.executeInstantOperation(operation.operation);
+                    });
             if (!result.ok) {
                 LOG_ERROR("Operation '{}' failed: {}", operation.id, result.message.empty() ? "Operation failed." : result.message);
             }
@@ -1145,6 +1227,8 @@ void ViewportPanel::draw(UIContext& context) {
             context.renderBridge,
             context.document,
             context.assets,
+            context.undoRedo,
+            context.documentCommands,
             context.modeling,
             context.defaultMaterial);
 }
@@ -1154,6 +1238,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         SceneRenderBridge& renderBridge,
         SceneDocument& document,
         AssetRegistry& assets,
+        UndoRedoManager& undoRedo,
+        DocumentCommandService& documentCommands,
         ModelingSessionService& modeling,
         AssetId defaultMaterial) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -1197,7 +1283,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
     if (!input.rightDown && !input.rightReleased) {
         contextMenuRightPressActive_ = false;
     }
-    drawViewportOperationsPopup(modeling, inputRouter_);
+    drawViewportOperationsPopup(undoRedo, modeling, inputRouter_);
     if (result.focusDocumentRequested) {
         focusDocument(document, assets, camera);
     }
@@ -1230,7 +1316,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
 
     if (result.shortcutHandled) {
         if (const std::optional<ModelingCommandResult> command =
-                        executeViewportModelingShortcut(modeling, result.shortcut)) {
+                        executeViewportModelingShortcut(undoRedo, modeling, result.shortcut)) {
             if (!command->ok) {
                 LOG_ERROR("Viewport shortcut failed: {}", command->message.empty() ? "Command failed." : command->message);
             }
@@ -1288,7 +1374,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
     const bool gizmoConsumed =
             viewCubeConsumed ||
             cancelConsumed ||
-            drawTransformGizmo(document, assets, modeling, camera, itemMin, itemSize, suppressHoverWork);
+            drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, itemMin, itemSize, suppressHoverWork);
     const bool leftClicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     const bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
@@ -1307,7 +1393,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         if (leftClicked && !gizmoConsumed && !result.navigationActive) {
             if (boxPreview_.dragState == ModelingBoxDragState::Height) {
                 const std::string name = SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
-                if (commitBoxPreview(modeling, defaultMaterial, document, name)) {
+                if (commitBoxPreview(undoRedo, modeling, defaultMaterial, document, name)) {
                     inputRouter_.setSelectionMode(ViewportSelectionMode::Object);
                     (void)modeling.setSelectionMode(ModelingSelectionMode::Object);
                     inputRouter_.setActiveTool(ViewportTool::Move);
@@ -1594,6 +1680,8 @@ void ViewportPanel::selectFromViewport(
 bool ViewportPanel::drawTransformGizmo(
         SceneDocument& document,
         const AssetRegistry& assets,
+        UndoRedoManager& undoRedo,
+        DocumentCommandService& documentCommands,
         ModelingSessionService& modeling,
         ViewportCameraController& camera,
         ImVec2 itemMin,
@@ -1916,9 +2004,17 @@ bool ViewportPanel::drawTransformGizmo(
 
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const bool wasDragging = gizmoDragging_;
+        bool sdkPreviewHandled = false;
 #if QUADER_HAS_MODELING_SDK
         if (wasDragging && sdkTransformPreviewActive_) {
-            const ModelingCommandResult commit = modeling.commitTransformPreview();
+            sdkPreviewHandled = true;
+            const ModelingCommandResult commit = executeTrackedModelingCommand(
+                    undoRedo,
+                    modeling,
+                    "Transform Selection",
+                    [&]() {
+                        return modeling.commitTransformPreview();
+                    });
             if (!commit.ok) {
                 LOG_ERROR("Transform preview commit failed: {}", commit.message);
             } else if (commit.changed) {
@@ -1946,6 +2042,26 @@ bool ViewportPanel::drawTransformGizmo(
             sdkTransformPreviewInset_ = false;
         }
 #endif
+        if (wasDragging && !sdkPreviewHandled) {
+            std::vector<DocumentTransformEdit> edits;
+            edits.reserve(gizmoStartTransforms_.size());
+            for (const GizmoStartTransform& start : gizmoStartTransforms_) {
+                if (start.entity == InvalidEntityId) {
+                    continue;
+                }
+                if (const TransformComponent* current = document.transform(start.entity)) {
+                    edits.push_back(DocumentTransformEdit{
+                            .entity = start.entity,
+                            .before = start.transform,
+                            .after = *current,
+                    });
+                }
+            }
+            const DocumentCommandResult recorded = documentCommands.setTransforms(std::move(edits));
+            if (!recorded.ok) {
+                LOG_ERROR("Transform command record failed: {}", recorded.message);
+            }
+        }
         gizmoDragging_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
         gizmoStartTransforms_.clear();

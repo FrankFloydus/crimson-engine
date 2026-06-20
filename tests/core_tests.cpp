@@ -2,6 +2,7 @@
 #include "quader/assets/BakeService.h"
 #include "quader/assets/MaterialDocument.h"
 #include "quader/core/Logger.h"
+#include "quader/core/UndoRedoManager.h"
 #include "quader/document/DocumentCommandService.h"
 #include "quader/document/ProjectDocument.h"
 #include "quader/geometry/UVSphere.h"
@@ -462,7 +463,7 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const bool suppressHoverWork = result.navigationActive || result.cameraChanged"), std::string::npos);
-    EXPECT_NE(source.find("drawTransformGizmo(document, assets, modeling, camera, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
+    EXPECT_NE(source.find("drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
     EXPECT_NE(source.find("mouseInsideViewport && !suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find("hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
@@ -1864,24 +1865,27 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
-    DocumentCommandService commands(scene);
+    UndoRedoManager undoRedo;
+    DocumentCommandService commands(scene, undoRedo);
 
     DocumentCommandResult result = commands.renameEntity(entity, "Brush_1");
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush_1");
-    EXPECT_TRUE(commands.canUndo());
-    EXPECT_FALSE(commands.canRedo());
+    EXPECT_TRUE(undoRedo.canUndo());
+    EXPECT_FALSE(undoRedo.canRedo());
+    ASSERT_NE(undoRedo.undoLabel(), nullptr);
+    EXPECT_EQ(*undoRedo.undoLabel(), "Rename Entity");
 
-    result = commands.undo();
+    result = undoRedo.undo();
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush");
-    EXPECT_FALSE(commands.canUndo());
-    EXPECT_TRUE(commands.canRedo());
+    EXPECT_FALSE(undoRedo.canUndo());
+    EXPECT_TRUE(undoRedo.canRedo());
 
-    result = commands.redo();
+    result = undoRedo.redo();
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush_1");
@@ -1891,9 +1895,205 @@ TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
     ASSERT_TRUE(commands.setTransform(entity, transform).ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 3.0f);
-    EXPECT_TRUE(commands.undo().ok);
+    EXPECT_TRUE(undoRedo.undo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+}
+
+TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
+    SceneDocument scene;
+    const EntityId first = scene.createEntity("First");
+    const EntityId second = scene.createEntity("Second");
+    UndoRedoManager undoRedo;
+    DocumentCommandService commands(scene, undoRedo);
+
+    DocumentCommandResult result = commands.setVisibility({
+            {.entity = first, .before = true, .after = false},
+            {.entity = second, .before = true, .after = false},
+    });
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.visibility(first), nullptr);
+    ASSERT_NE(scene.visibility(second), nullptr);
+    EXPECT_FALSE(scene.visibility(first)->visible);
+    EXPECT_FALSE(scene.visibility(second)->visible);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(scene.visibility(first)->visible);
+    EXPECT_TRUE(scene.visibility(second)->visible);
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_FALSE(scene.visibility(first)->visible);
+    EXPECT_FALSE(scene.visibility(second)->visible);
+
+    TransformComponent firstAfter;
+    firstAfter.position = {1.0f, 0.0f, 0.0f};
+    TransformComponent secondAfter;
+    secondAfter.position = {0.0f, 2.0f, 0.0f};
+    result = commands.setTransforms({
+            {.entity = first, .before = *scene.transform(first), .after = firstAfter},
+            {.entity = second, .before = *scene.transform(second), .after = secondAfter},
+    });
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 1.0f);
+    EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 2.0f);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
+    EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 0.0f);
+}
+
+TEST(UndoRedoManagerTests, NoopCommandsDoNotClearRedoButNewCommandsDo) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    UndoRedoManager undoRedo;
+    DocumentCommandService commands(scene, undoRedo);
+
+    ASSERT_TRUE(commands.renameEntity(entity, "Brush_1").ok);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    DocumentCommandResult result = commands.renameEntity(entity, "Brush");
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(result.changed);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    result = commands.setVisible(entity, true);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(result.changed);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    result = commands.renameEntity(entity, "Brush_2");
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    EXPECT_FALSE(undoRedo.canRedo());
+}
+
+TEST(UndoRedoManagerTests, ExternalCommandsShareUndoOrderWithDocumentCommands) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    UndoRedoManager undoRedo;
+    DocumentCommandService commands(scene, undoRedo);
+    int externalValue = 0;
+
+    UndoRedoResult result = undoRedo.executeExternal(
+            "External Edit",
+            [&]() {
+                externalValue = 1;
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+            [&]() {
+                externalValue = 0;
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+            [&]() {
+                externalValue = 1;
+                return UndoRedoResult{.ok = true, .changed = true};
+            });
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(commands.renameEntity(entity, "Brush_1").ok);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(scene.name(entity)->name, "Brush");
+    EXPECT_EQ(externalValue, 1);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(externalValue, 0);
+
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_EQ(externalValue, 1);
+
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+}
+
+TEST(UndoRedoManagerTests, FailedExecuteAndFailedRestoreDoNotCorruptStacks) {
+    UndoRedoManager undoRedo;
+    int value = 0;
+
+    UndoRedoResult result = undoRedo.execute(UndoRedoCommand{
+            .label = "Set Value",
+            .undo = [&]() {
+                value = 0;
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+            .redo = [&]() {
+                value = 1;
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+    });
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    result = undoRedo.execute(UndoRedoCommand{
+            .label = "Noop",
+            .undo = []() {
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+            .redo = []() {
+                return UndoRedoResult{.ok = true, .changed = false};
+            },
+    });
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(result.changed);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    result = undoRedo.execute(UndoRedoCommand{
+            .label = "Failed",
+            .undo = []() {
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+            .redo = []() {
+                return UndoRedoResult{.ok = false, .message = "failed"};
+            },
+    });
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    result = undoRedo.redo();
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(value, 1);
+    EXPECT_TRUE(undoRedo.canUndo());
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    bool failUndo = true;
+    bool failRedo = false;
+    result = undoRedo.execute(UndoRedoCommand{
+            .label = "Fragile",
+            .undo = [&]() {
+                if (failUndo) {
+                    return UndoRedoResult{.ok = false, .message = "undo failed"};
+                }
+                value = 1;
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+            .redo = [&]() {
+                if (failRedo) {
+                    return UndoRedoResult{.ok = false, .message = "redo failed"};
+                }
+                value = 2;
+                return UndoRedoResult{.ok = true, .changed = true};
+            },
+    });
+    ASSERT_TRUE(result.ok) << result.message;
+    result = undoRedo.undo();
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(undoRedo.canUndo());
+    EXPECT_FALSE(undoRedo.canRedo());
+
+    failUndo = false;
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    failRedo = true;
+    result = undoRedo.redo();
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(undoRedo.canRedo());
+
+    failRedo = false;
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_TRUE(undoRedo.canUndo());
 }
 
 TEST(ModelingSessionServiceTests, ExposesBoxCommandContract) {
@@ -2357,12 +2557,17 @@ TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory)
     ModelingSessionService service(scene, assets);
 
 #if QUADER_HAS_MODELING_SDK
+    EXPECT_FALSE(service.canUndo());
+    EXPECT_FALSE(service.canRedo());
+
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Shortcut Source",
     });
     ASSERT_TRUE(box.ok) << box.message;
     EXPECT_EQ(scene.entities().size(), 1u);
+    EXPECT_TRUE(service.canUndo());
+    EXPECT_FALSE(service.canRedo());
 
     ModelingCommandResult command = service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
     ASSERT_TRUE(command.ok) << command.message;
@@ -2386,11 +2591,13 @@ TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory)
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
     EXPECT_EQ(scene.entities().size(), 3u);
+    EXPECT_TRUE(service.canRedo());
 
     command = service.redo();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
     EXPECT_EQ(scene.entities().size(), 4u);
+    EXPECT_FALSE(service.canRedo());
 
     command = service.mirrorSelection(ModelingMirrorAxis::X);
     ASSERT_TRUE(command.ok) << command.message;
@@ -2407,6 +2614,8 @@ TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory)
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
 #else
+    EXPECT_FALSE(service.canUndo());
+    EXPECT_FALSE(service.canRedo());
     EXPECT_FALSE(service.copySelection().ok);
     EXPECT_FALSE(service.pasteSelection().ok);
     EXPECT_FALSE(service.undo().ok);

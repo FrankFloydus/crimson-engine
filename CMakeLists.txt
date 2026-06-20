@@ -136,6 +136,7 @@ add_library(quader_core STATIC
     src/quader/assets/BakeService.cpp
     src/quader/assets/MaterialDocument.cpp
     src/quader/core/Logger.cpp
+    src/quader/core/UndoRedoManager.cpp
     src/quader/document/DocumentCommandService.cpp
     src/quader/document/ProjectDocument.cpp
     src/quader/geometry/UVSphere.cpp

@@ -1,5 +1,6 @@
 #include "quader/ui/InspectorPanel.h"
 
+#include "quader/document/DocumentCommandService.h"
 #include "quader/modeling/ModelingSessionService.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneDocument.h"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -220,7 +222,7 @@ void InspectorPanel::draw(UIContext& context) {
         copyNameToBuffer(document.name(primary), nameBuffer);
         if (ImGui::InputText("Name", nameBuffer.data(), nameBuffer.size(),
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
-            document.renameEntity(primary, nameBuffer.data());
+            (void)context.documentCommands.renameEntity(primary, nameBuffer.data());
         }
     }
 
@@ -235,9 +237,18 @@ void InspectorPanel::draw(UIContext& context) {
     if (hasVisibility) {
         bool visible = allVisible;
         if (ImGui::Checkbox("Visible", &visible)) {
+            std::vector<DocumentVisibilityEdit> edits;
+            edits.reserve(selected.size());
             for (const EntityId id : selected) {
-                document.setVisible(id, visible);
+                if (const VisibilityComponent* current = document.visibility(id)) {
+                    edits.push_back(DocumentVisibilityEdit{
+                            .entity = id,
+                            .before = current->visible,
+                            .after = visible,
+                    });
+                }
             }
+            (void)context.documentCommands.setVisibility(std::move(edits));
         }
     }
 
@@ -256,13 +267,21 @@ void InspectorPanel::draw(UIContext& context) {
         }
 
         auto applyToSelectedTransforms = [&](auto mutate) {
+            std::vector<DocumentTransformEdit> edits;
+            edits.reserve(selected.size());
             for (const EntityId id : selected) {
                 if (TransformComponent* current = document.transform(id)) {
-                    TransformComponent next = *current;
+                    const TransformComponent before = *current;
+                    TransformComponent next = before;
                     mutate(next);
-                    document.setTransform(id, next);
+                    edits.push_back(DocumentTransformEdit{
+                            .entity = id,
+                            .before = before,
+                            .after = next,
+                    });
                 }
             }
+            (void)context.documentCommands.setTransforms(std::move(edits));
             transform = document.transform(primary);
         };
 
@@ -283,11 +302,18 @@ void InspectorPanel::draw(UIContext& context) {
 
         auto applyToSelectedTransformRecords = [&](Vec3 worldPivot, auto apply) {
             const std::vector<SelectedTransformPivot> records = selectedTransformPivots(worldPivot);
+            std::vector<DocumentTransformEdit> edits;
+            edits.reserve(records.size());
             for (const SelectedTransformPivot& record : records) {
                 TransformComponent next = record.transform;
                 apply(next, record.localPivot, worldPivot);
-                document.setTransform(record.entity, next);
+                edits.push_back(DocumentTransformEdit{
+                        .entity = record.entity,
+                        .before = record.transform,
+                        .after = next,
+                });
             }
+            (void)context.documentCommands.setTransforms(std::move(edits));
             transform = document.transform(primary);
         };
 

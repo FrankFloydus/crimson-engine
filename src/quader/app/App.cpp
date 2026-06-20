@@ -38,6 +38,8 @@ bool App::initialize(const std::filesystem::path& executablePath) {
     ui_.initialize(window_.sdlWindow(), renderSystem_, executableDir);
     LOG_INFO("UI system initialized");
 
+    undoRedo_ = std::make_unique<UndoRedoManager>();
+    documentCommands_ = std::make_unique<DocumentCommandService>(document_, *undoRedo_);
     modeling_ = std::make_unique<ModelingSessionService>(document_, assets_);
     createStartupScene();
 
@@ -63,7 +65,16 @@ int App::run() {
 
         ui_.beginFrame();
         bool quitRequested = false;
-        ui_.draw(viewportRenderer_, viewportCamera_, renderBridge_, document_, assets_, *modeling_, defaultMaterial_, quitRequested);
+        ui_.draw(viewportRenderer_,
+                viewportCamera_,
+                renderBridge_,
+                document_,
+                assets_,
+                *undoRedo_,
+                *documentCommands_,
+                *modeling_,
+                defaultMaterial_,
+                quitRequested);
         if (quitRequested) {
             running_ = false;
         }
@@ -93,6 +104,8 @@ void App::shutdown() {
     viewportRenderer_.shutdown();
     renderSystem_.shutdown();
     modeling_.reset();
+    documentCommands_.reset();
+    undoRedo_.reset();
     window_.destroy();
 }
 

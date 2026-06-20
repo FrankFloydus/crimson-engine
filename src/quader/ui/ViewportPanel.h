@@ -1,7 +1,9 @@
 #pragma once
 
-#include "quader/core/Types.h"
 #include "quader/assets/AssetRegistry.h"
+#include "quader/core/Types.h"
+#include "quader/core/UndoRedoManager.h"
+#include "quader/document/DocumentCommandService.h"
 #include "quader/modeling/ModelingSessionService.h"
 #include "quader/render/SceneRenderBridge.h"
 #include "quader/render/ViewportRenderer.h"
@@ -40,13 +42,6 @@ public:
     bool canToggle() const override { return false; }
     void draw(UIContext& context) override;
 
-    void draw(ViewportRenderer& renderer,
-            ViewportCameraController& camera,
-            SceneRenderBridge& renderBridge,
-            SceneDocument& document,
-            AssetRegistry& assets,
-            ModelingSessionService& modeling,
-            AssetId defaultMaterial);
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
 
 private:
@@ -55,6 +50,16 @@ private:
         TransformComponent transform;
         Vec3 localPivot = {};
     };
+
+    void draw(ViewportRenderer& renderer,
+            ViewportCameraController& camera,
+            SceneRenderBridge& renderBridge,
+            SceneDocument& document,
+            AssetRegistry& assets,
+            UndoRedoManager& undoRedo,
+            DocumentCommandService& documentCommands,
+            ModelingSessionService& modeling,
+            AssetId defaultMaterial);
 
     void selectFromViewport(SceneDocument& document,
             const AssetRegistry& assets,
@@ -66,6 +71,8 @@ private:
     bool drawViewCube(ViewportCameraController& camera, ImVec2 itemMin, ImVec2 itemSize);
     bool drawTransformGizmo(SceneDocument& document,
             const AssetRegistry& assets,
+            UndoRedoManager& undoRedo,
+            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
             ViewportCameraController& camera,
             ImVec2 itemMin,

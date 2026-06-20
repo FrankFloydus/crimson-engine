@@ -527,6 +527,22 @@ public:
 #endif
     }
 
+    [[nodiscard]] bool canUndo() const {
+#if QUADER_HAS_MODELING_SDK
+        return session_.history_status().can_undo;
+#else
+        return false;
+#endif
+    }
+
+    [[nodiscard]] bool canRedo() const {
+#if QUADER_HAS_MODELING_SDK
+        return session_.history_status().can_redo;
+#else
+        return false;
+#endif
+    }
+
     void syncObjectSelectionFromScene() {
 #if QUADER_HAS_MODELING_SDK
         if (session_.selection_mode() != quader_editor_core::SelectionMode::object) {
@@ -1455,8 +1471,9 @@ private:
         const std::uint64_t contentBefore = session_.state().content_revision;
         const quader_editor_core::EditorRuntimeCommandResult result =
                 quader_editor_core::execute_runtime_command(session_, runtime_, noSettingsRuntimeCommand(commandId));
-        if (mayChangeContent && session_.state().content_revision != contentBefore) {
-            syncSceneObjectsFromSdk();
+        if (mayChangeContent &&
+                (session_.state().content_revision != contentBefore || result.command.changed)) {
+            syncSceneObjectsFromSdk(result.command.changed);
         }
         syncSceneSelectionFromSdk();
         return {
@@ -1606,6 +1623,14 @@ ModelingSelectionSummary ModelingSessionService::selectionSummary() const {
 
 ViewportOverlayFrame ModelingSessionService::selectionOverlayFrame() const {
     return impl_->selectionOverlayFrame();
+}
+
+bool ModelingSessionService::canUndo() const {
+    return impl_->canUndo();
+}
+
+bool ModelingSessionService::canRedo() const {
+    return impl_->canRedo();
 }
 
 void ModelingSessionService::syncObjectSelectionFromScene() {

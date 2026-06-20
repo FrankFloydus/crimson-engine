@@ -1,9 +1,9 @@
 #pragma once
 
+#include "quader/core/UndoRedoManager.h"
 #include "quader/core/Types.h"
 #include "quader/scene/Components.h"
 
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -11,38 +11,33 @@ namespace quader {
 
 class SceneDocument;
 
-struct DocumentCommandResult {
-    bool ok = false;
-    bool changed = false;
-    std::string message;
+using DocumentCommandResult = UndoRedoResult;
+
+struct DocumentTransformEdit {
+    EntityId entity = InvalidEntityId;
+    TransformComponent before;
+    TransformComponent after;
+};
+
+struct DocumentVisibilityEdit {
+    EntityId entity = InvalidEntityId;
+    bool before = true;
+    bool after = true;
 };
 
 class DocumentCommandService {
 public:
-    explicit DocumentCommandService(SceneDocument& scene);
+    DocumentCommandService(SceneDocument& scene, UndoRedoManager& undoRedo);
 
     DocumentCommandResult renameEntity(EntityId entity, std::string name);
     DocumentCommandResult setVisible(EntityId entity, bool visible);
+    DocumentCommandResult setVisibility(std::vector<DocumentVisibilityEdit> edits);
     DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
-
-    DocumentCommandResult undo();
-    DocumentCommandResult redo();
-
-    bool canUndo() const { return !undoStack_.empty(); }
-    bool canRedo() const { return !redoStack_.empty(); }
+    DocumentCommandResult setTransforms(std::vector<DocumentTransformEdit> edits);
 
 private:
-    struct Command {
-        std::string label;
-        std::function<void()> undo;
-        std::function<void()> redo;
-    };
-
-    DocumentCommandResult execute(Command command);
-
     SceneDocument& scene_;
-    std::vector<Command> undoStack_;
-    std::vector<Command> redoStack_;
+    UndoRedoManager& undoRedo_;
 };
 
 } // namespace quader

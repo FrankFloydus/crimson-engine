@@ -2,6 +2,7 @@
 
 #include "quader/scene/SceneDocument.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
@@ -12,6 +13,20 @@ DocumentCommandResult missingEntityResult() {
             .ok = false,
             .changed = false,
             .message = "Entity does not exist",
+    };
+}
+
+DocumentCommandResult okChangedResult() {
+    return {
+            .ok = true,
+            .changed = true,
+    };
+}
+
+DocumentCommandResult okUnchangedResult() {
+    return {
+            .ok = true,
+            .changed = false,
     };
 }
 
@@ -27,10 +42,45 @@ bool sameTransform(const TransformComponent& left, const TransformComponent& rig
             left.scale.z == right.scale.z;
 }
 
+std::vector<DocumentTransformEdit> normalizedTransformEdits(
+        const SceneDocument& scene,
+        std::vector<DocumentTransformEdit> edits) {
+    std::vector<DocumentTransformEdit> result;
+    result.reserve(edits.size());
+    for (const DocumentTransformEdit& edit : edits) {
+        if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || sameTransform(edit.before, edit.after)) {
+            continue;
+        }
+        result.push_back(edit);
+    }
+    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.entity < rhs.entity;
+    });
+    return result;
+}
+
+std::vector<DocumentVisibilityEdit> normalizedVisibilityEdits(
+        const SceneDocument& scene,
+        std::vector<DocumentVisibilityEdit> edits) {
+    std::vector<DocumentVisibilityEdit> result;
+    result.reserve(edits.size());
+    for (const DocumentVisibilityEdit& edit : edits) {
+        if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || edit.before == edit.after) {
+            continue;
+        }
+        result.push_back(edit);
+    }
+    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.entity < rhs.entity;
+    });
+    return result;
+}
+
 } // namespace
 
-DocumentCommandService::DocumentCommandService(SceneDocument& scene)
-    : scene_(scene) {}
+DocumentCommandService::DocumentCommandService(SceneDocument& scene, UndoRedoManager& undoRedo)
+    : scene_(scene)
+    , undoRedo_(undoRedo) {}
 
 DocumentCommandResult DocumentCommandService::renameEntity(EntityId entity, std::string name) {
     const NameComponent* currentName = scene_.name(entity);
@@ -42,13 +92,13 @@ DocumentCommandResult DocumentCommandService::renameEntity(EntityId entity, std:
     }
 
     const std::string before = currentName->name;
-    return execute(Command{
+    return undoRedo_.execute(UndoRedoCommand{
             .label = "Rename Entity",
             .undo = [this, entity, before]() {
-                scene_.renameEntity(entity, before);
+                return scene_.renameEntity(entity, before) ? okChangedResult() : missingEntityResult();
             },
             .redo = [this, entity, after = std::move(name)]() {
-                scene_.renameEntity(entity, after);
+                return scene_.renameEntity(entity, after) ? okChangedResult() : missingEntityResult();
             },
     });
 }
@@ -62,14 +112,36 @@ DocumentCommandResult DocumentCommandService::setVisible(EntityId entity, bool v
         return {.ok = true, .changed = false};
     }
 
-    const bool before = currentVisibility->visible;
-    return execute(Command{
+    return setVisibility({DocumentVisibilityEdit{
+            .entity = entity,
+            .before = currentVisibility->visible,
+            .after = visible,
+    }});
+}
+
+DocumentCommandResult DocumentCommandService::setVisibility(std::vector<DocumentVisibilityEdit> edits) {
+    edits = normalizedVisibilityEdits(scene_, std::move(edits));
+    if (edits.empty()) {
+        return okUnchangedResult();
+    }
+
+    return undoRedo_.execute(UndoRedoCommand{
             .label = "Set Visibility",
-            .undo = [this, entity, before]() {
-                scene_.setVisible(entity, before);
+            .undo = [this, edits]() {
+                for (const DocumentVisibilityEdit& edit : edits) {
+                    if (!scene_.setVisible(edit.entity, edit.before)) {
+                        return missingEntityResult();
+                    }
+                }
+                return okChangedResult();
             },
-            .redo = [this, entity, visible]() {
-                scene_.setVisible(entity, visible);
+            .redo = [this, edits]() {
+                for (const DocumentVisibilityEdit& edit : edits) {
+                    if (!scene_.setVisible(edit.entity, edit.after)) {
+                        return missingEntityResult();
+                    }
+                }
+                return okChangedResult();
             },
     });
 }
@@ -83,55 +155,40 @@ DocumentCommandResult DocumentCommandService::setTransform(EntityId entity, Tran
         return {.ok = true, .changed = false};
     }
 
-    const TransformComponent before = *currentTransform;
-    return execute(Command{
+    return setTransforms({DocumentTransformEdit{
+            .entity = entity,
+            .before = *currentTransform,
+            .after = transform,
+    }});
+}
+
+DocumentCommandResult DocumentCommandService::setTransforms(std::vector<DocumentTransformEdit> edits) {
+    edits = normalizedTransformEdits(scene_, std::move(edits));
+    if (edits.empty()) {
+        return okUnchangedResult();
+    }
+
+    return undoRedo_.execute(UndoRedoCommand{
             .label = "Set Transform",
-            .undo = [this, entity, before]() {
-                scene_.setTransform(entity, before);
+            .undo = [this, edits]() {
+                for (const DocumentTransformEdit& edit : edits) {
+                    if (!scene_.exists(edit.entity)) {
+                        return missingEntityResult();
+                    }
+                    scene_.setTransform(edit.entity, edit.before);
+                }
+                return okChangedResult();
             },
-            .redo = [this, entity, after = transform]() {
-                scene_.setTransform(entity, after);
+            .redo = [this, edits]() {
+                for (const DocumentTransformEdit& edit : edits) {
+                    if (!scene_.exists(edit.entity)) {
+                        return missingEntityResult();
+                    }
+                    scene_.setTransform(edit.entity, edit.after);
+                }
+                return okChangedResult();
             },
     });
-}
-
-DocumentCommandResult DocumentCommandService::undo() {
-    if (undoStack_.empty()) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = "No command to undo",
-        };
-    }
-
-    Command command = std::move(undoStack_.back());
-    undoStack_.pop_back();
-    command.undo();
-    redoStack_.push_back(std::move(command));
-    return {.ok = true, .changed = true};
-}
-
-DocumentCommandResult DocumentCommandService::redo() {
-    if (redoStack_.empty()) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = "No command to redo",
-        };
-    }
-
-    Command command = std::move(redoStack_.back());
-    redoStack_.pop_back();
-    command.redo();
-    undoStack_.push_back(std::move(command));
-    return {.ok = true, .changed = true};
-}
-
-DocumentCommandResult DocumentCommandService::execute(Command command) {
-    command.redo();
-    undoStack_.push_back(std::move(command));
-    redoStack_.clear();
-    return {.ok = true, .changed = true};
 }
 
 } // namespace quader

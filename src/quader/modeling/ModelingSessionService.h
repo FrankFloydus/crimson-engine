@@ -264,6 +264,8 @@ public:
     [[nodiscard]] ModelingSelectionMode selectionMode() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
+    [[nodiscard]] bool canUndo() const;
+    [[nodiscard]] bool canRedo() const;
 
     void syncObjectSelectionFromScene();
     void syncSceneSelectionFromSdk();

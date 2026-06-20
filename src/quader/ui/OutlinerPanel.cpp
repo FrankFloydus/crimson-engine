@@ -1,5 +1,6 @@
 #include "quader/ui/OutlinerPanel.h"
 
+#include "quader/modeling/ModelingSessionService.h"
 #include "quader/scene/SceneDocument.h"
 #include "quader/ui/UIContext.h"
 #include "quader/ui/UIStyleTokens.h"
@@ -62,6 +63,7 @@ void OutlinerPanel::draw(UIContext& context) {
     const std::vector<EntityRecord> records = document.entityRecords();
     const std::vector<EntityId> selected = document.selectedEntities();
     const ImGuiIO& io = ImGui::GetIO();
+    bool selectionChanged = false;
 
     for (const EntityRecord& record : records) {
         ImGui::PushID(static_cast<int>(record.id));
@@ -76,9 +78,24 @@ void OutlinerPanel::draw(UIContext& context) {
                 document.setSelected(record.id, true);
             }
             outlinerAnchor_ = record.id;
+            selectionChanged = true;
         }
 
         ImGui::PopID();
+    }
+
+    if (selectionChanged) {
+        const std::vector<EntityId> desiredSelection = document.selectedEntities();
+        const EntityId activeSelection = document.primarySelection();
+        (void)context.modeling.setSelectionMode(ModelingSelectionMode::Object);
+        document.clearSelection();
+        for (const EntityId entity : desiredSelection) {
+            document.setSelected(entity, true);
+        }
+        if (activeSelection != InvalidEntityId) {
+            document.setActiveSelection(activeSelection);
+        }
+        context.modeling.syncObjectSelectionFromScene();
     }
 
     ImGui::End();
