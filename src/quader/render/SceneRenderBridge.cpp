@@ -140,6 +140,16 @@ void appendOverlayTriangle(std::vector<RenderVertex>& vertices, const ViewportOv
     vertices.push_back({toFilament(triangle.c), {}, {}, linearColor});
 }
 
+std::uint8_t mipLevelCount(unsigned width, unsigned height) {
+    unsigned dimension = std::max(width, height);
+    std::uint8_t levels = 1;
+    while (dimension > 1u) {
+        dimension /= 2u;
+        ++levels;
+    }
+    return levels;
+}
+
 } // namespace
 
 SceneRenderBridge::~SceneRenderBridge() {
@@ -234,7 +244,7 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
     auto& entityManager = utils::EntityManager::get();
     auto& transformManager = engine_->getTransformManager();
     const filament::TextureSampler sampler(
-            filament::TextureSampler::MinFilter::LINEAR,
+            filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
             filament::TextureSampler::MagFilter::LINEAR,
             filament::TextureSampler::WrapMode::REPEAT);
 
@@ -262,6 +272,7 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
             proxy.mesh = meshComponent->mesh;
             proxy.material = materialComponent ? materialComponent->material : InvalidAssetId;
             proxy.materialInstance = meshMaterial_->createInstance();
+            proxy.materialInstance->setCullingMode(filament::MaterialInstance::CullingMode::BACK);
             proxy.materialInstance->setParameter(MaterialTextureSlot::BaseColor,
                     resolveTexture(assets, material, MaterialTextureSlot::BaseColor, fallbackAlbedoTexture_),
                     sampler);
@@ -577,15 +588,21 @@ filament::Texture* SceneRenderBridge::loadTextureAsset(const TextureAsset& textu
         return nullptr;
     }
 
+    const std::uint8_t levels = mipLevelCount(width, height);
     filament::Texture* loaded = filament::Texture::Builder()
             .width(width)
             .height(height)
-            .levels(1)
+            .levels(levels)
             .sampler(filament::Texture::Sampler::SAMPLER_2D)
             .format(texture.colorSpace == TextureColorSpace::Srgb ? filament::Texture::InternalFormat::SRGB8_A8 : filament::Texture::InternalFormat::RGBA8)
-            .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
+            .usage(filament::Texture::Usage::UPLOADABLE |
+                    filament::Texture::Usage::SAMPLEABLE |
+                    filament::Texture::Usage::GEN_MIPMAPPABLE)
             .build(*engine_);
     loaded->setImage(*engine_, 0, makePixelBufferDescriptor(pixels.data(), pixels.size()));
+    if (levels > 1u) {
+        loaded->generateMipmaps(*engine_);
+    }
     LOG_INFO("Loaded material texture '{}' ({}x{})", path.string(), width, height);
     return loaded;
 }

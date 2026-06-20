@@ -20,6 +20,76 @@ class SceneDocument;
 enum class ModelingCommandId {
     ActivateBoxTool,
     CreateBoxFromBounds,
+    SelectAll,
+    InvertSelection,
+    ClearSelection,
+    DeleteSelection,
+    ExecuteInstantOperation,
+};
+
+enum class ModelingInstantOperationId {
+    DeleteSelection,
+    DuplicateMeshes,
+    CombineMeshes,
+    ExtractFaces,
+    DetachFaces,
+    Bridge,
+    SnapVerticesToActive,
+    ConnectVertices,
+    DissolveVertices,
+    BevelVertices,
+    MergeVerticesToActive,
+    MergeVerticesToCenter,
+    SnapEdgesToActive,
+    ConnectEdges,
+    SplitEdges,
+    DissolveEdges,
+    MergeEdges,
+    CollapseEdges,
+    FillHole,
+    CombineFaces,
+    CollapseFaces,
+    RadialAlign,
+    FlipFaceNormals,
+    RecalculateFaceNormals,
+    ShadeFacesSmooth,
+    ShadeFacesFlat,
+    HardenEdgeNormals,
+    SoftenEdgeNormals,
+};
+
+enum class ModelingMirrorAxis {
+    X,
+    Y,
+    Z,
+};
+
+enum class ModelingFlipOrientation {
+    Horizontal,
+    Vertical,
+};
+
+enum class ModelingTransformTool {
+    Move,
+    Rotate,
+    Scale,
+};
+
+enum class ModelingTransformOperation {
+    Transform,
+    Extrude,
+    Inset,
+};
+
+enum class ModelingTransformAxis {
+    None,
+    X,
+    Y,
+    Z,
+    XY,
+    XZ,
+    YZ,
+    All,
 };
 
 struct ModelingCommandDescriptor {
@@ -29,6 +99,14 @@ struct ModelingCommandDescriptor {
     std::string shortcut;
     bool viewportScoped = true;
     bool rebuildsMeshOnSuccess = false;
+};
+
+struct ModelingInstantOperationDescriptor {
+    ModelingInstantOperationId operation = ModelingInstantOperationId::DeleteSelection;
+    std::string id;
+    std::string label;
+    bool enabled = false;
+    bool rebuildsMeshOnSuccess = true;
 };
 
 struct ModelingBounds {
@@ -61,6 +139,13 @@ enum class ModelingActiveSelectionKind {
 struct ModelingRay {
     Vec3 origin;
     Vec3 direction;
+};
+
+struct ModelingTransform3 {
+    Vec3 xAxis = {1.0f, 0.0f, 0.0f};
+    Vec3 yAxis = {0.0f, 1.0f, 0.0f};
+    Vec3 zAxis = {0.0f, 0.0f, 1.0f};
+    Vec3 origin = {};
 };
 
 struct ModelingBoxToolEvent {
@@ -140,6 +225,17 @@ struct ModelingCommandResult {
     std::string message;
 };
 
+struct ModelingRepeatTransform {
+    bool active = false;
+    ModelingTransformTool tool = ModelingTransformTool::Move;
+    ModelingTransformOperation operation = ModelingTransformOperation::Transform;
+    ModelingTransformAxis axis = ModelingTransformAxis::None;
+    bool duplicateSelected = false;
+    Vec3 moveDelta = {};
+    double rotateAngleDegrees = 0.0;
+    Vec3 scale = {1.0f, 1.0f, 1.0f};
+};
+
 struct ModelingCreateBoxResult {
     bool ok = false;
     bool changed = false;
@@ -172,6 +268,28 @@ public:
     void syncObjectSelectionFromScene();
     void syncSceneSelectionFromSdk();
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode);
+    ModelingCommandResult selectAll();
+    ModelingCommandResult invertSelection();
+    ModelingCommandResult clearSelection();
+    ModelingCommandResult deleteSelection();
+    ModelingCommandResult copySelection();
+    ModelingCommandResult pasteSelection();
+    ModelingCommandResult undo();
+    ModelingCommandResult redo();
+    ModelingCommandResult repeatLastAction();
+    ModelingCommandResult mirrorSelection(ModelingMirrorAxis axis);
+    ModelingCommandResult flipSelection(ModelingFlipOrientation orientation);
+    ModelingCommandResult applyActiveMaterial(std::uint32_t materialSlot = 0);
+    [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const;
+    ModelingCommandResult executeInstantOperation(ModelingInstantOperationId operation);
+    ModelingCommandResult beginTransformPreview(bool duplicateSelected);
+    ModelingCommandResult updateTransformTranslatePreview(Vec3 delta);
+    ModelingCommandResult updateTransformMatrixPreview(const ModelingTransform3& transform, Vec3 pivot);
+    ModelingCommandResult updateTransformExtrudePreview(Vec3 offset, float closedEdgeLedgeSize = 0.0f);
+    ModelingCommandResult updateTransformInsetPreview(const ModelingTransform3& transform, Vec3 pivot);
+    ModelingCommandResult commitTransformPreview();
+    ModelingCommandResult cancelTransformPreview();
+    ModelingCommandResult recordRepeatableTransform(const ModelingRepeatTransform& transform);
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request);
     ModelingCommandResult clearSelectionHover();

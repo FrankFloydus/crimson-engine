@@ -89,7 +89,7 @@ TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
     EXPECT_EQ(source.find("color,"), std::string::npos);
 }
 
-TEST(QuaderMeshMaterialTests, MatchesUnitySceneUnlitTextureTimesColor) {
+TEST(QuaderMeshMaterialTests, MatchesUnitySceneUnlitTextureTransformTimesColor) {
     const std::filesystem::path materialPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "quader_mesh.mat";
     std::ifstream materialFile(materialPath);
@@ -100,7 +100,9 @@ TEST(QuaderMeshMaterialTests, MatchesUnitySceneUnlitTextureTimesColor) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("shadingModel : unlit"), std::string::npos);
-    EXPECT_NE(source.find("texture(materialParams_baseColorTexture, getUV0())"), std::string::npos);
+    EXPECT_EQ(source.find("doubleSided : true"), std::string::npos);
+    EXPECT_NE(source.find("vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y)"), std::string::npos);
+    EXPECT_NE(source.find("texture(materialParams_baseColorTexture, uv)"), std::string::npos);
     EXPECT_NE(source.find("baseSample.rgb * materialParams.baseColorFactor.rgb"), std::string::npos);
     EXPECT_NE(source.find("material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a)"), std::string::npos);
     EXPECT_EQ(source.find("roughnessValue"), std::string::npos);
@@ -259,6 +261,57 @@ TEST(ViewportPanelTests, ClipsOnlyPolicyDepthTestedWireOverlayInComponentModes) 
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, RmbContextMenuUsesSdkInstantOperationsAndDisabledItems) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("ViewportOperationsContext"), std::string::npos);
+    EXPECT_NE(source.find("modeling.instantOperations()"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::MenuItem(operation.label.c_str(), nullptr, false, operation.enabled)"), std::string::npos);
+    EXPECT_NE(source.find("modeling.executeInstantOperation(operation.operation)"), std::string::npos);
+    EXPECT_EQ(source.find("Button(operation.label"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBegin) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("sdkTransformPreviewExtrude_ = sdkPreviewDriven && topologyModifier && tool == ViewportTool::Move"), std::string::npos);
+    EXPECT_NE(source.find("sdkTransformPreviewInset_ = sdkPreviewDriven && topologyModifier && tool == ViewportTool::Scale"), std::string::npos);
+    EXPECT_NE(source.find("if (sdkTransformPreviewExtrude_)"), std::string::npos);
+    EXPECT_NE(source.find("tool == ViewportTool::Scale && sdkTransformPreviewInset_"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("ImGuiStyleVar_WindowPadding"), std::string::npos);
+    EXPECT_NE(source.find("ImGuiStyleVar_WindowBorderSize"), std::string::npos);
+    EXPECT_NE(source.find("ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse"), std::string::npos);
+    EXPECT_NE(source.find("IM_COL32(255, 235, 41, 209)"), std::string::npos);
+    EXPECT_EQ(source.find("preview.footprint[0], preview.footprint[2]"), std::string::npos);
+    EXPECT_EQ(source.find("preview.footprint[1], preview.footprint[3]"), std::string::npos);
+}
+
 TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
@@ -272,6 +325,11 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     EXPECT_NE(source.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb)"), std::string::npos);
     EXPECT_NE(source.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Linear)"), std::string::npos);
     EXPECT_NE(source.find("texture.colorSpace == TextureColorSpace::Srgb ? filament::Texture::InternalFormat::SRGB8_A8 : filament::Texture::InternalFormat::RGBA8"), std::string::npos);
+    EXPECT_NE(source.find("MinFilter::LINEAR_MIPMAP_LINEAR"), std::string::npos);
+    EXPECT_NE(source.find("mipLevelCount(width, height)"), std::string::npos);
+    EXPECT_NE(source.find("Texture::Usage::GEN_MIPMAPPABLE"), std::string::npos);
+    EXPECT_NE(source.find("generateMipmaps(*engine_)"), std::string::npos);
+    EXPECT_NE(source.find("setCullingMode(filament::MaterialInstance::CullingMode::BACK)"), std::string::npos);
     EXPECT_NE(source.find("TextureCacheKey cacheKey"), std::string::npos);
     EXPECT_NE(source.find(".colorSpace = texture->colorSpace"), std::string::npos);
     EXPECT_EQ(source.find("bool srgb"), std::string::npos);
@@ -845,6 +903,91 @@ TEST(ViewportInputRouterTests, ToolHotkeysMatchUnityViewportShortcuts) {
     EXPECT_EQ(router.state().activeTool, ViewportTool::Poly);
 }
 
+TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
+    struct ShortcutCase {
+        const char* label;
+        ViewportKey key;
+        ViewportModifiers modifiers;
+        ViewportShortcutKind kind;
+        ViewportShortcutContext context;
+        ViewportMirrorAxis mirrorAxis = ViewportMirrorAxis::X;
+        bool checkMirrorAxis = false;
+    };
+
+    const ViewportModifiers primary{.primary = true};
+    const ViewportModifiers primaryShift{.primary = true, .shift = true};
+    const ViewportModifiers shift{.shift = true};
+    const std::array<ShortcutCase, 19> shortcuts{{
+            {"Ctrl+A select all", ViewportKey::A, primary, ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global},
+            {"Ctrl+I invert selection", ViewportKey::I, primary, ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global},
+            {"Delete delete selection", ViewportKey::Delete, {}, ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global},
+            {"Backspace delete selection", ViewportKey::Backspace, {}, ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global},
+            {"Ctrl+D duplicate", ViewportKey::D, primary, ViewportShortcutKind::Duplicate, ViewportShortcutContext::Global},
+            {"Ctrl+C copy", ViewportKey::C, primary, ViewportShortcutKind::Copy, ViewportShortcutContext::Global},
+            {"Ctrl+V paste", ViewportKey::V, primary, ViewportShortcutKind::Paste, ViewportShortcutContext::Global},
+            {"Ctrl+Z undo", ViewportKey::Z, primary, ViewportShortcutKind::Undo, ViewportShortcutContext::Global},
+            {"Ctrl+Y redo", ViewportKey::Y, primary, ViewportShortcutKind::Redo, ViewportShortcutContext::Global},
+            {"Ctrl+Shift+Z redo", ViewportKey::Z, primaryShift, ViewportShortcutKind::Redo, ViewportShortcutContext::Global},
+            {"Ctrl+R repeat", ViewportKey::R, primary, ViewportShortcutKind::RepeatLastAction, ViewportShortcutContext::Global},
+            {"M merge active", ViewportKey::M, {}, ViewportShortcutKind::MergeActive, ViewportShortcutContext::Viewport},
+            {"Shift+M merge center", ViewportKey::M, shift, ViewportShortcutKind::MergeCenter, ViewportShortcutContext::Viewport},
+            {"Shift+X mirror X", ViewportKey::X, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::X, true},
+            {"Shift+Y mirror Y", ViewportKey::Y, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::Y, true},
+            {"Shift+Z mirror Z", ViewportKey::Z, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::Z, true},
+            {"Shift+H flip horizontal", ViewportKey::H, shift, ViewportShortcutKind::FlipHorizontal, ViewportShortcutContext::Viewport},
+            {"Shift+V flip vertical", ViewportKey::V, shift, ViewportShortcutKind::FlipVertical, ViewportShortcutContext::Viewport},
+            {"Shift+T apply material", ViewportKey::T, shift, ViewportShortcutKind::ApplyMaterial, ViewportShortcutContext::Viewport},
+    }};
+
+    for (const ShortcutCase& shortcutCase : shortcuts) {
+        SCOPED_TRACE(shortcutCase.label);
+        ViewportInputRouter router;
+        ViewportCameraController camera;
+        ViewportInputFrame input;
+        input.viewportFocused = true;
+        input.viewportSize = {800.0f, 600.0f};
+        input.modifiers = shortcutCase.modifiers;
+        input.pressedKeys = {shortcutCase.key};
+
+        const auto result = router.handleFrame(input, camera);
+
+        EXPECT_TRUE(result.shortcutHandled);
+        EXPECT_TRUE(result.consumed);
+        EXPECT_EQ(result.shortcut.kind, shortcutCase.kind);
+        EXPECT_EQ(result.shortcut.context, shortcutCase.context);
+        if (shortcutCase.checkMirrorAxis) {
+            EXPECT_EQ(result.shortcut.mirrorAxis, shortcutCase.mirrorAxis);
+        }
+    }
+}
+
+TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.modifiers.shift = true;
+
+    router.setSelectionMode(ViewportSelectionMode::Face);
+    input.pressedKeys = {ViewportKey::H};
+    ViewportInputResult result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_FALSE(result.consumed);
+
+    router.setSelectionMode(ViewportSelectionMode::Edge);
+    input.pressedKeys = {ViewportKey::V};
+    result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_FALSE(result.consumed);
+
+    router.setSelectionMode(ViewportSelectionMode::Object);
+    input.pressedKeys = {ViewportKey::H};
+    result = router.handleFrame(input, camera);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FlipHorizontal);
+}
+
 TEST(ViewportInputRouterTests, SelectionModeHotkeysMatchUnityViewportShortcuts) {
     ViewportInputRouter router;
     ViewportCameraController camera;
@@ -1303,6 +1446,407 @@ TEST(ModelingSessionServiceTests, SyncsSceneSelectionToSdkSelectionCenter) {
 #else
     service.syncObjectSelectionFromScene();
     EXPECT_FALSE(service.selectionCenter().has_value());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectionCommandsStaySynchronizedWithScene) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult first = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "First Box",
+    });
+    ASSERT_TRUE(first.ok) << first.message;
+    const ModelingCreateBoxResult second = service.createBoxFromBounds({
+        .bounds = {.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+        .name = "Second Box",
+    });
+    ASSERT_TRUE(second.ok) << second.message;
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+
+    const ModelingCommandResult selectAll = service.selectAll();
+    ASSERT_TRUE(selectAll.ok) << selectAll.message;
+    EXPECT_TRUE(selectAll.changed);
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 2u);
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+
+    const ModelingCommandResult invertAll = service.invertSelection();
+    ASSERT_TRUE(invertAll.ok) << invertAll.message;
+    EXPECT_TRUE(scene.selectedEntities().empty());
+
+    scene.setSelected(first.object.entity, true);
+    service.syncObjectSelectionFromScene();
+    const ModelingCommandResult invertOne = service.invertSelection();
+    ASSERT_TRUE(invertOne.ok) << invertOne.message;
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.selectedEntities().front(), second.object.entity);
+#else
+    EXPECT_FALSE(service.selectAll().ok);
+    EXPECT_FALSE(service.invertSelection().ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ElementSelectionCommandsWorkAcrossDifferentMeshes) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult first = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "First Component Box",
+    });
+    ASSERT_TRUE(first.ok) << first.message;
+    const ModelingCreateBoxResult second = service.createBoxFromBounds({
+        .bounds = {.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+        .name = "Second Component Box",
+    });
+    ASSERT_TRUE(second.ok) << second.message;
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    ModelingSelectionSummary summary = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(summary.mode, ModelingSelectionMode::Face);
+    ASSERT_EQ(summary.selectedFaceCount, 1u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.selectedEntities().front(), first.object.entity);
+
+    summary = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {5.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+            .shiftPressed = true,
+    });
+    EXPECT_EQ(summary.selectedFaceCount, 2u);
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+
+    const std::optional<Vec3> center = service.selectionCenter();
+    ASSERT_TRUE(center.has_value());
+    EXPECT_NEAR(center->x, 2.5f, 0.001f);
+    EXPECT_NEAR(center->z, 1.0f, 0.001f);
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    ASSERT_TRUE(service.selectAll().ok);
+    summary = service.selectionSummary();
+    EXPECT_EQ(summary.mode, ModelingSelectionMode::Face);
+    EXPECT_EQ(summary.selectedFaceCount, 12u);
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+
+    ASSERT_TRUE(service.invertSelection().ok);
+    summary = service.selectionSummary();
+    EXPECT_EQ(summary.selectedFaceCount, 0u);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+#else
+    EXPECT_FALSE(service.selectAll().ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransforms) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Moved Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    TransformComponent moved;
+    moved.position = {7.0f, 2.0f, -3.0f};
+    scene.setTransform(box.object.entity, moved);
+    scene.clearSelection();
+    scene.setSelected(box.object.entity, true);
+    service.syncObjectSelectionFromScene();
+
+    const std::optional<Vec3> center = service.selectionCenter();
+    ASSERT_TRUE(center.has_value());
+    EXPECT_NEAR(center->x, 7.0f, 0.001f);
+    EXPECT_NEAR(center->y, 2.0f, 0.001f);
+    EXPECT_NEAR(center->z, -3.0f, 0.001f);
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    ASSERT_FALSE(frame.lines.empty());
+    std::optional<SceneBounds> overlayBounds;
+    for (const ViewportOverlayLine& line : frame.lines) {
+        if (!overlayBounds) {
+            overlayBounds = SceneBounds{.min = line.start, .max = line.start};
+        } else {
+            includePoint(*overlayBounds, line.start);
+        }
+        includePoint(*overlayBounds, line.end);
+    }
+    ASSERT_TRUE(overlayBounds.has_value());
+    const Vec3 overlayCenter = boundsCenter(*overlayBounds);
+    EXPECT_NEAR(overlayCenter.x, 7.0f, 0.001f);
+    EXPECT_NEAR(overlayCenter.y, 2.0f, 0.001f);
+    EXPECT_NEAR(overlayCenter.z, -3.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.selectionCenter().has_value());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelection) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Source Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    const AssetId defaultMaterial = assets.addMaterial(makeDefaultQuaderMaterial());
+    scene.setMaterial(box.object.entity, MaterialComponent{.material = defaultMaterial});
+    EXPECT_EQ(scene.entities().size(), 1u);
+
+    const std::vector<ModelingInstantOperationDescriptor> objectOps = service.instantOperations();
+    const auto duplicate = std::find_if(objectOps.begin(), objectOps.end(), [](const ModelingInstantOperationDescriptor& operation) {
+        return operation.operation == ModelingInstantOperationId::DuplicateMeshes;
+    });
+    ASSERT_NE(duplicate, objectOps.end());
+    EXPECT_TRUE(duplicate->enabled);
+
+    const ModelingCommandResult duplicated = service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+    ASSERT_TRUE(duplicated.ok) << duplicated.message;
+    EXPECT_TRUE(duplicated.changed);
+    EXPECT_EQ(scene.entities().size(), 2u);
+    EXPECT_EQ(service.objects().size(), 2u);
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_NE(scene.selectedEntities().front(), box.object.entity);
+    const MaterialComponent* duplicateMaterial = scene.material(scene.selectedEntities().front());
+    ASSERT_NE(duplicateMaterial, nullptr);
+    EXPECT_EQ(duplicateMaterial->material, defaultMaterial);
+
+    const ModelingCommandResult deleted = service.executeInstantOperation(ModelingInstantOperationId::DeleteSelection);
+    ASSERT_TRUE(deleted.ok) << deleted.message;
+    EXPECT_TRUE(deleted.changed);
+    EXPECT_EQ(scene.entities().size(), 1u);
+    EXPECT_EQ(service.objects().size(), 1u);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+#else
+    EXPECT_TRUE(service.instantOperations().empty());
+    EXPECT_FALSE(service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Zero Delta Preview Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {
+                    .origin = {0.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    const MeshComponent* meshComponent = scene.mesh(box.object.entity);
+    ASSERT_NE(meshComponent, nullptr);
+    const MeshAsset* sourceMesh = assets.mesh(meshComponent->mesh);
+    ASSERT_NE(sourceMesh, nullptr);
+    const std::size_t sourceIndexCount = sourceMesh->indices.size();
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformExtrudePreview({0.0f, 0.0f, 1.0f}, 1.0f).ok);
+    const MeshAsset* extrudedMesh = assets.mesh(meshComponent->mesh);
+    ASSERT_NE(extrudedMesh, nullptr);
+    ASSERT_GT(extrudedMesh->indices.size(), sourceIndexCount);
+
+    ASSERT_TRUE(service.updateTransformExtrudePreview({0.0f, 0.0f, 0.0f}, 1.0f).ok);
+    const MeshAsset* restoredMesh = assets.mesh(meshComponent->mesh);
+    ASSERT_NE(restoredMesh, nullptr);
+    EXPECT_EQ(restoredMesh->indices.size(), sourceIndexCount);
+
+    ASSERT_TRUE(service.cancelTransformPreview().ok);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Shortcut Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    EXPECT_EQ(scene.entities().size(), 1u);
+
+    ModelingCommandResult command = service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), 2u);
+
+    command = service.repeatLastAction();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), 3u);
+
+    command = service.copySelection();
+    ASSERT_TRUE(command.ok) << command.message;
+
+    command = service.pasteSelection();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), 4u);
+
+    command = service.undo();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), 3u);
+
+    command = service.redo();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), 4u);
+
+    command = service.mirrorSelection(ModelingMirrorAxis::X);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), 5u);
+
+    const std::size_t entityCountBeforeFlip = scene.entities().size();
+    command = service.flipSelection(ModelingFlipOrientation::Horizontal);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(scene.entities().size(), entityCountBeforeFlip);
+
+    command = service.applyActiveMaterial(7u);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+#else
+    EXPECT_FALSE(service.copySelection().ok);
+    EXPECT_FALSE(service.pasteSelection().ok);
+    EXPECT_FALSE(service.undo().ok);
+    EXPECT_FALSE(service.redo().ok);
+    EXPECT_FALSE(service.repeatLastAction().ok);
+    EXPECT_FALSE(service.mirrorSelection(ModelingMirrorAxis::X).ok);
+    EXPECT_FALSE(service.flipSelection(ModelingFlipOrientation::Horizontal).ok);
+    EXPECT_FALSE(service.applyActiveMaterial(7u).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedTransformPreview) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Repeat Move Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformTranslatePreview({2.0f, 0.0f, 0.0f}).ok);
+    ModelingCommandResult command = service.commitTransformPreview();
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(command.changed);
+
+    command = service.recordRepeatableTransform({
+        .active = true,
+        .tool = ModelingTransformTool::Move,
+        .operation = ModelingTransformOperation::Transform,
+        .axis = ModelingTransformAxis::X,
+        .moveDelta = {2.0f, 0.0f, 0.0f},
+    });
+    ASSERT_TRUE(command.ok) << command.message;
+
+    std::optional<Vec3> center = service.selectionCenter();
+    ASSERT_TRUE(center.has_value());
+    EXPECT_NEAR(center->x, 2.0f, 0.001f);
+
+    command = service.repeatLastAction();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    center = service.selectionCenter();
+    ASSERT_TRUE(center.has_value());
+    EXPECT_NEAR(center->x, 4.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.recordRepeatableTransform({.active = true}).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Repeat Extrude Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {
+                    .origin = {0.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    const std::optional<MeshAsset> before = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(before.has_value());
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformExtrudePreview({0.0f, 0.0f, 1.0f}, 1.0f).ok);
+    ModelingCommandResult command = service.commitTransformPreview();
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(command.changed);
+
+    command = service.recordRepeatableTransform({
+        .active = true,
+        .tool = ModelingTransformTool::Move,
+        .operation = ModelingTransformOperation::Extrude,
+        .axis = ModelingTransformAxis::Z,
+        .moveDelta = {0.0f, 0.0f, 1.0f},
+    });
+    ASSERT_TRUE(command.ok) << command.message;
+
+    const std::optional<MeshAsset> afterFirst = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(afterFirst.has_value());
+    ASSERT_GT(afterFirst->indices.size(), before->indices.size());
+
+    command = service.repeatLastAction();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+
+    const std::optional<MeshAsset> afterRepeat = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(afterRepeat.has_value());
+    EXPECT_GT(afterRepeat->indices.size(), afterFirst->indices.size());
+#else
+    EXPECT_FALSE(service.recordRepeatableTransform({.active = true}).ok);
 #endif
 }
 

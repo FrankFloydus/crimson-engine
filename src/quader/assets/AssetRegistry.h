@@ -15,6 +15,7 @@ public:
     AssetId addMesh(MeshAsset mesh);
     AssetId addMaterial(MaterialDocument material);
     AssetId addTexture(TextureAsset texture);
+    bool replaceMesh(AssetId id, MeshAsset mesh);
 
     MeshAsset* mesh(AssetId id);
     MaterialDocument* material(AssetId id);

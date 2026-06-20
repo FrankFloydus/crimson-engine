@@ -28,14 +28,30 @@ enum class ViewportSelectionMode {
     Object,
 };
 
+enum class ViewportMirrorAxis {
+    X,
+    Y,
+    Z,
+};
+
 enum class ViewportKey {
+    A,
     Q,
     W,
+    D,
+    H,
+    I,
+    M,
     R,
     S,
     B,
     C,
     P,
+    T,
+    V,
+    X,
+    Y,
+    Z,
     Number1,
     Number2,
     Number3,
@@ -54,6 +70,13 @@ enum class ViewportKey {
     F9,
     F10,
     Escape,
+    Delete,
+    Backspace,
+};
+
+enum class ViewportShortcutContext {
+    Global,
+    Viewport,
 };
 
 enum class ViewportShortcutKind {
@@ -65,6 +88,21 @@ enum class ViewportShortcutKind {
     ToggleMaximized,
     SetGridPreset,
     CancelActiveTool,
+    DeleteSelection,
+    SelectAll,
+    InvertSelection,
+    Copy,
+    Paste,
+    Duplicate,
+    Undo,
+    Redo,
+    RepeatLastAction,
+    MergeActive,
+    MergeCenter,
+    MirrorAxis,
+    FlipHorizontal,
+    FlipVertical,
+    ApplyMaterial,
 };
 
 struct ViewportModifiers {
@@ -75,8 +113,10 @@ struct ViewportModifiers {
 
 struct ViewportShortcut {
     ViewportShortcutKind kind = ViewportShortcutKind::None;
+    ViewportShortcutContext context = ViewportShortcutContext::Viewport;
     ViewportTool tool = ViewportTool::Select;
     ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
+    ViewportMirrorAxis mirrorAxis = ViewportMirrorAxis::X;
     int gridPreset = 0;
 };
 

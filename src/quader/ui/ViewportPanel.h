@@ -64,9 +64,15 @@ private:
     int createdBoxCount_ = 1;
     ModelingBoxPreview boxPreview_;
     bool gizmoDragging_ = false;
+    bool sdkTransformPreviewActive_ = false;
+    bool sdkTransformPreviewDuplicateSelected_ = false;
+    bool sdkTransformPreviewExtrude_ = false;
+    bool sdkTransformPreviewInset_ = false;
     bool paintSelectionActive_ = false;
     GizmoAxis activeGizmoAxis_ = GizmoAxis::None;
     Vec2 lastGizmoMouse_ = {};
+    Vec2 contextMenuRightPressScreen_ = {};
+    bool contextMenuRightPressActive_ = false;
     Vec3 gizmoStartWorldPivot_ = {};
     std::vector<GizmoStartTransform> gizmoStartTransforms_;
 #if QUADER_HAS_MODELING_SDK

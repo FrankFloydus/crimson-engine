@@ -23,6 +23,16 @@ AssetId AssetRegistry::addTexture(TextureAsset texture) {
     return id;
 }
 
+bool AssetRegistry::replaceMesh(AssetId id, MeshAsset mesh) {
+    auto it = meshes_.find(id);
+    if (it == meshes_.end()) {
+        return false;
+    }
+    mesh.id = id;
+    it->second = std::move(mesh);
+    return true;
+}
+
 MeshAsset* AssetRegistry::mesh(AssetId id) {
     auto it = meshes_.find(id);
     return it == meshes_.end() ? nullptr : &it->second;

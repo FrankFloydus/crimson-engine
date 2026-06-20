@@ -30,6 +30,8 @@ struct BoxPlacement {
     TransformComponent transform;
 };
 
+ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode);
+
 float distanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
     const ImVec2 ab{b.x - a.x, b.y - a.y};
     const ImVec2 ap{point.x - a.x, point.y - a.y};
@@ -104,11 +106,21 @@ ViewportInputFrame makeViewportInputFrame(bool hovered, bool focused, ImVec2 ite
 
     addPressedKey(input, ImGuiKey_Q, ViewportKey::Q);
     addPressedKey(input, ImGuiKey_W, ViewportKey::W);
+    addPressedKey(input, ImGuiKey_A, ViewportKey::A);
+    addPressedKey(input, ImGuiKey_D, ViewportKey::D);
+    addPressedKey(input, ImGuiKey_H, ViewportKey::H);
+    addPressedKey(input, ImGuiKey_I, ViewportKey::I);
+    addPressedKey(input, ImGuiKey_M, ViewportKey::M);
     addPressedKey(input, ImGuiKey_R, ViewportKey::R);
     addPressedKey(input, ImGuiKey_S, ViewportKey::S);
     addPressedKey(input, ImGuiKey_B, ViewportKey::B);
     addPressedKey(input, ImGuiKey_C, ViewportKey::C);
     addPressedKey(input, ImGuiKey_P, ViewportKey::P);
+    addPressedKey(input, ImGuiKey_T, ViewportKey::T);
+    addPressedKey(input, ImGuiKey_V, ViewportKey::V);
+    addPressedKey(input, ImGuiKey_X, ViewportKey::X);
+    addPressedKey(input, ImGuiKey_Y, ViewportKey::Y);
+    addPressedKey(input, ImGuiKey_Z, ViewportKey::Z);
     addPressedKeyPair(input, ImGuiKey_1, ImGuiKey_Keypad1, ViewportKey::Number1);
     addPressedKeyPair(input, ImGuiKey_2, ImGuiKey_Keypad2, ViewportKey::Number2);
     addPressedKeyPair(input, ImGuiKey_3, ImGuiKey_Keypad3, ViewportKey::Number3);
@@ -127,6 +139,8 @@ ViewportInputFrame makeViewportInputFrame(bool hovered, bool focused, ImVec2 ite
     addPressedKey(input, ImGuiKey_F9, ViewportKey::F9);
     addPressedKey(input, ImGuiKey_F10, ViewportKey::F10);
     addPressedKey(input, ImGuiKey_Escape, ViewportKey::Escape);
+    addPressedKey(input, ImGuiKey_Delete, ViewportKey::Delete);
+    addPressedKey(input, ImGuiKey_Backspace, ViewportKey::Backspace);
 
     return input;
 }
@@ -202,8 +216,7 @@ void drawBoxPreview(ImDrawList* drawList,
         return;
     }
 
-    const ImU32 color = IM_COL32(84, 180, 255, 230);
-    const ImU32 baseColor = IM_COL32(84, 180, 255, 110);
+    const ImU32 color = IM_COL32(255, 235, 41, 209);
     if (preview.cornerCount >= 8U) {
         constexpr std::array<std::array<int, 2>, 12> edges = {{
                 {{0, 1}}, {{1, 2}}, {{2, 3}}, {{3, 0}},
@@ -223,8 +236,6 @@ void drawBoxPreview(ImDrawList* drawList,
             const Vec3 b = preview.footprint[(index + 1U) % preview.footprintCount];
             drawWorldLine(drawList, a, b, camera, itemMin, itemSize, color, 2.0f);
         }
-        drawWorldLine(drawList, preview.footprint[0], preview.footprint[2], camera, itemMin, itemSize, baseColor, 1.0f);
-        drawWorldLine(drawList, preview.footprint[1], preview.footprint[3], camera, itemMin, itemSize, baseColor, 1.0f);
     }
 }
 
@@ -401,6 +412,84 @@ bool commitBoxPreview(ModelingSessionService& modeling,
     return true;
 }
 
+void drawViewportOperationsPopup(ModelingSessionService& modeling, ViewportInputRouter& inputRouter) {
+    if (!ImGui::BeginPopup("ViewportOperationsContext")) {
+        return;
+    }
+
+    const std::vector<ModelingInstantOperationDescriptor> operations = modeling.instantOperations();
+    for (const ModelingInstantOperationDescriptor& operation : operations) {
+        if (ImGui::MenuItem(operation.label.c_str(), nullptr, false, operation.enabled)) {
+            const ModelingCommandResult result = modeling.executeInstantOperation(operation.operation);
+            if (!result.ok) {
+                LOG_ERROR("Operation '{}' failed: {}", operation.id, result.message.empty() ? "Operation failed." : result.message);
+            }
+            inputRouter.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+        }
+    }
+
+    ImGui::EndPopup();
+}
+
+ModelingMirrorAxis toModelingMirrorAxis(ViewportMirrorAxis axis) {
+    switch (axis) {
+    case ViewportMirrorAxis::X:
+        return ModelingMirrorAxis::X;
+    case ViewportMirrorAxis::Y:
+        return ModelingMirrorAxis::Y;
+    case ViewportMirrorAxis::Z:
+        return ModelingMirrorAxis::Z;
+    }
+    return ModelingMirrorAxis::X;
+}
+
+std::optional<ModelingCommandResult> executeModelingShortcut(
+        ModelingSessionService& modeling,
+        const ViewportShortcut& shortcut) {
+    switch (shortcut.kind) {
+    case ViewportShortcutKind::DeleteSelection:
+        return modeling.deleteSelection();
+    case ViewportShortcutKind::SelectAll:
+        return modeling.selectAll();
+    case ViewportShortcutKind::InvertSelection:
+        return modeling.invertSelection();
+    case ViewportShortcutKind::Copy:
+        return modeling.copySelection();
+    case ViewportShortcutKind::Paste:
+        return modeling.pasteSelection();
+    case ViewportShortcutKind::Duplicate:
+        return modeling.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+    case ViewportShortcutKind::Undo:
+        return modeling.undo();
+    case ViewportShortcutKind::Redo:
+        return modeling.redo();
+    case ViewportShortcutKind::RepeatLastAction:
+        return modeling.repeatLastAction();
+    case ViewportShortcutKind::MergeActive:
+        return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToActive);
+    case ViewportShortcutKind::MergeCenter:
+        return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToCenter);
+    case ViewportShortcutKind::MirrorAxis:
+        return modeling.mirrorSelection(toModelingMirrorAxis(shortcut.mirrorAxis));
+    case ViewportShortcutKind::FlipHorizontal:
+        return modeling.flipSelection(ModelingFlipOrientation::Horizontal);
+    case ViewportShortcutKind::FlipVertical:
+        return modeling.flipSelection(ModelingFlipOrientation::Vertical);
+    case ViewportShortcutKind::ApplyMaterial:
+        return modeling.applyActiveMaterial();
+    case ViewportShortcutKind::None:
+    case ViewportShortcutKind::ActivateTool:
+    case ViewportShortcutKind::SetSelectionMode:
+    case ViewportShortcutKind::FocusDocument:
+    case ViewportShortcutKind::FocusOrigin:
+    case ViewportShortcutKind::ToggleMaximized:
+    case ViewportShortcutKind::SetGridPreset:
+    case ViewportShortcutKind::CancelActiveTool:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 ImU32 toImColor(std::uint32_t rgba) {
     return static_cast<ImU32>(rgba);
 }
@@ -558,6 +647,15 @@ Vec3 fromSdk(quader_poly::Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
+ModelingTransform3 fromSdk(quader_poly::Transform3 value) {
+    return {
+            .xAxis = fromSdk(value.x_axis),
+            .yAxis = fromSdk(value.y_axis),
+            .zAxis = fromSdk(value.z_axis),
+            .origin = fromSdk(value.origin),
+    };
+}
+
 quader_editor_core::ViewportInteractionTool toSdkTool(ViewportTool tool) {
     switch (tool) {
     case ViewportTool::Move:
@@ -598,6 +696,41 @@ quader_editor_core::TransformAxis toSdkAxis(ViewportPanel::GizmoAxis axis) {
         return quader_editor_core::TransformAxis::none;
     }
     return quader_editor_core::TransformAxis::none;
+}
+
+ModelingTransformAxis toModelingTransformAxis(ViewportPanel::GizmoAxis axis) {
+    switch (axis) {
+    case ViewportPanel::GizmoAxis::X:
+        return ModelingTransformAxis::X;
+    case ViewportPanel::GizmoAxis::Y:
+        return ModelingTransformAxis::Y;
+    case ViewportPanel::GizmoAxis::Z:
+        return ModelingTransformAxis::Z;
+    case ViewportPanel::GizmoAxis::XY:
+        return ModelingTransformAxis::XY;
+    case ViewportPanel::GizmoAxis::XZ:
+        return ModelingTransformAxis::XZ;
+    case ViewportPanel::GizmoAxis::YZ:
+        return ModelingTransformAxis::YZ;
+    case ViewportPanel::GizmoAxis::All:
+        return ModelingTransformAxis::All;
+    case ViewportPanel::GizmoAxis::None:
+        return ModelingTransformAxis::None;
+    }
+    return ModelingTransformAxis::None;
+}
+
+ModelingTransformTool toModelingTransformTool(ViewportTool tool) {
+    switch (tool) {
+    case ViewportTool::Move:
+        return ModelingTransformTool::Move;
+    case ViewportTool::Rotate:
+        return ModelingTransformTool::Rotate;
+    case ViewportTool::Scale:
+        return ModelingTransformTool::Scale;
+    default:
+        return ModelingTransformTool::Move;
+    }
 }
 
 ViewportPanel::GizmoAxis fromSdkAxis(quader_editor_core::TransformAxis axis) {
@@ -1087,7 +1220,14 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         AssetRegistry& assets,
         ModelingSessionService& modeling,
         AssetId defaultMaterial) {
-    if (!ImGui::Begin("Viewport")) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const bool visible = ImGui::Begin(
+            "Viewport",
+            nullptr,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar(2);
+    if (!visible) {
         renderBridge.setOverlayFrame({});
         ImGui::End();
         return;
@@ -1107,6 +1247,21 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
 
     const ViewportInputFrame input = makeViewportInputFrame(hovered, focused, itemMin, itemSize);
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
+    if (input.rightPressed && hovered && !input.modifiers.primary && !input.modifiers.shift && !input.modifiers.alt) {
+        contextMenuRightPressActive_ = true;
+        contextMenuRightPressScreen_ = input.mouseScreen;
+    }
+    if (input.rightReleased && contextMenuRightPressActive_) {
+        const Vec2 delta = input.mouseScreen - contextMenuRightPressScreen_;
+        if (hovered && (delta.x * delta.x + delta.y * delta.y) <= 16.0f) {
+            ImGui::OpenPopup("ViewportOperationsContext");
+        }
+        contextMenuRightPressActive_ = false;
+    }
+    if (!input.rightDown && !input.rightReleased) {
+        contextMenuRightPressActive_ = false;
+    }
+    drawViewportOperationsPopup(modeling, inputRouter_);
     if (result.focusDocumentRequested) {
         focusDocument(document, assets, camera);
     }
@@ -1136,12 +1291,35 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         }
     }
 
+    if (result.shortcutHandled) {
+        if (const std::optional<ModelingCommandResult> command = executeModelingShortcut(modeling, result.shortcut)) {
+            if (!command->ok) {
+                LOG_ERROR("Viewport shortcut failed: {}", command->message.empty() ? "Command failed." : command->message);
+            }
+            inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+        }
+    }
+
     bool cancelConsumed = false;
     if (result.cancelRequested) {
         if (gizmoDragging_) {
-            for (const GizmoStartTransform& start : gizmoStartTransforms_) {
-                if (start.entity != InvalidEntityId && document.transform(start.entity) != nullptr) {
-                    document.setTransform(start.entity, start.transform);
+#if QUADER_HAS_MODELING_SDK
+            if (sdkTransformPreviewActive_) {
+                const ModelingCommandResult cancel = modeling.cancelTransformPreview();
+                if (!cancel.ok) {
+                    LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
+                }
+                sdkTransformPreviewActive_ = false;
+                sdkTransformPreviewDuplicateSelected_ = false;
+                sdkTransformPreviewExtrude_ = false;
+                sdkTransformPreviewInset_ = false;
+            } else
+#endif
+            {
+                for (const GizmoStartTransform& start : gizmoStartTransforms_) {
+                    if (start.entity != InvalidEntityId && document.transform(start.entity) != nullptr) {
+                        document.setTransform(start.entity, start.transform);
+                    }
                 }
             }
             gizmoStartTransforms_.clear();
@@ -1478,6 +1656,18 @@ bool ViewportPanel::drawTransformGizmo(
         ImVec2 itemSize) {
     const EntityId selected = document.primarySelection();
     if (selected == InvalidEntityId) {
+#if QUADER_HAS_MODELING_SDK
+        if (sdkTransformPreviewActive_) {
+            const ModelingCommandResult cancel = modeling.cancelTransformPreview();
+            if (!cancel.ok) {
+                LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
+            }
+            sdkTransformPreviewActive_ = false;
+            sdkTransformPreviewDuplicateSelected_ = false;
+            sdkTransformPreviewExtrude_ = false;
+            sdkTransformPreviewInset_ = false;
+        }
+#endif
         renderBridge.setOverlayFrame({});
         gizmoDragging_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
@@ -1486,6 +1676,18 @@ bool ViewportPanel::drawTransformGizmo(
 
     TransformComponent* transform = document.transform(selected);
     if (!transform) {
+#if QUADER_HAS_MODELING_SDK
+        if (sdkTransformPreviewActive_) {
+            const ModelingCommandResult cancel = modeling.cancelTransformPreview();
+            if (!cancel.ok) {
+                LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
+            }
+            sdkTransformPreviewActive_ = false;
+            sdkTransformPreviewDuplicateSelected_ = false;
+            sdkTransformPreviewExtrude_ = false;
+            sdkTransformPreviewInset_ = false;
+        }
+#endif
         renderBridge.setOverlayFrame({});
         return false;
     }
@@ -1494,6 +1696,18 @@ bool ViewportPanel::drawTransformGizmo(
     if (tool != ViewportTool::Move && tool != ViewportTool::Rotate && tool != ViewportTool::Scale) {
         renderBridge.setOverlayFrame({});
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+#if QUADER_HAS_MODELING_SDK
+            if (sdkTransformPreviewActive_) {
+                const ModelingCommandResult cancel = modeling.cancelTransformPreview();
+                if (!cancel.ok) {
+                    LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
+                }
+                sdkTransformPreviewActive_ = false;
+                sdkTransformPreviewDuplicateSelected_ = false;
+                sdkTransformPreviewExtrude_ = false;
+                sdkTransformPreviewInset_ = false;
+            }
+#endif
             gizmoDragging_ = false;
             activeGizmoAxis_ = GizmoAxis::None;
         }
@@ -1509,6 +1723,18 @@ bool ViewportPanel::drawTransformGizmo(
             (selectionBounds ? boundsCenter(*selectionBounds) : sdkSelectionCenter.value_or(transform->position));
     const ViewportScreenPoint projectedPivot = camera.projectWorldPoint(gizmoPivot);
     if (!projectedPivot.visible) {
+#if QUADER_HAS_MODELING_SDK
+        if (sdkTransformPreviewActive_) {
+            const ModelingCommandResult cancel = modeling.cancelTransformPreview();
+            if (!cancel.ok) {
+                LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
+            }
+            sdkTransformPreviewActive_ = false;
+            sdkTransformPreviewDuplicateSelected_ = false;
+            sdkTransformPreviewExtrude_ = false;
+            sdkTransformPreviewInset_ = false;
+        }
+#endif
         renderBridge.setOverlayFrame({});
         gizmoDragging_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
@@ -1689,6 +1915,32 @@ bool ViewportPanel::drawTransformGizmo(
                 activeGizmoAxis_ = GizmoAxis::None;
                 return consumed;
             }
+#if QUADER_HAS_MODELING_SDK
+            const bool duplicateSelected = !componentSelectionMode && io.KeyShift;
+            const bool topologyModifier = componentSelectionMode && io.KeyShift;
+            const bool sdkPreviewDriven = componentSelectionMode || duplicateSelected;
+            sdkTransformPreviewExtrude_ = sdkPreviewDriven && topologyModifier && tool == ViewportTool::Move;
+            sdkTransformPreviewInset_ = sdkPreviewDriven && topologyModifier && tool == ViewportTool::Scale;
+            if (sdkPreviewDriven) {
+                const ModelingCommandResult beginPreview = modeling.beginTransformPreview(duplicateSelected);
+                if (!beginPreview.ok) {
+                    LOG_ERROR("Transform preview begin failed: {}", beginPreview.message);
+                    activeGizmoAxis_ = GizmoAxis::None;
+                    sdkTransformPreviewActive_ = false;
+                    sdkTransformPreviewDuplicateSelected_ = false;
+                    sdkTransformPreviewExtrude_ = false;
+                    sdkTransformPreviewInset_ = false;
+                    return consumed;
+                }
+                sdkTransformPreviewActive_ = true;
+                sdkTransformPreviewDuplicateSelected_ = duplicateSelected;
+            } else {
+                sdkTransformPreviewActive_ = false;
+                sdkTransformPreviewDuplicateSelected_ = false;
+                sdkTransformPreviewExtrude_ = false;
+                sdkTransformPreviewInset_ = false;
+            }
+#endif
             gizmoDragging_ = true;
             lastGizmoMouse_ = {mouse.x, mouse.y};
             gizmoStartWorldPivot_ = gizmoPivot;
@@ -1703,6 +1955,18 @@ bool ViewportPanel::drawTransformGizmo(
                 }
             }
             if (gizmoStartTransforms_.empty()) {
+#if QUADER_HAS_MODELING_SDK
+                if (sdkTransformPreviewActive_) {
+                    const ModelingCommandResult cancel = modeling.cancelTransformPreview();
+                    if (!cancel.ok) {
+                        LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
+                    }
+                    sdkTransformPreviewActive_ = false;
+                    sdkTransformPreviewDuplicateSelected_ = false;
+                    sdkTransformPreviewExtrude_ = false;
+                    sdkTransformPreviewInset_ = false;
+                }
+#endif
                 gizmoDragging_ = false;
                 activeGizmoAxis_ = GizmoAxis::None;
                 return consumed;
@@ -1713,6 +1977,36 @@ bool ViewportPanel::drawTransformGizmo(
 
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const bool wasDragging = gizmoDragging_;
+#if QUADER_HAS_MODELING_SDK
+        if (wasDragging && sdkTransformPreviewActive_) {
+            const ModelingCommandResult commit = modeling.commitTransformPreview();
+            if (!commit.ok) {
+                LOG_ERROR("Transform preview commit failed: {}", commit.message);
+            } else if (commit.changed) {
+                ModelingRepeatTransform repeat;
+                repeat.active = true;
+                repeat.tool = toModelingTransformTool(tool);
+                repeat.operation =
+                        sdkTransformPreviewExtrude_ ? ModelingTransformOperation::Extrude :
+                        sdkTransformPreviewInset_ ? ModelingTransformOperation::Inset :
+                        ModelingTransformOperation::Transform;
+                repeat.axis = toModelingTransformAxis(activeGizmoAxis_);
+                repeat.duplicateSelected = sdkTransformPreviewDuplicateSelected_;
+                repeat.moveDelta = fromSdk(sdkMoveDrag_.preview_delta);
+                repeat.rotateAngleDegrees = sdkRotateDrag_.preview_angle_degrees;
+                repeat.scale = fromSdk(sdkScaleDrag_.preview_scale);
+
+                const ModelingCommandResult record = modeling.recordRepeatableTransform(repeat);
+                if (!record.ok) {
+                    LOG_ERROR("Transform repeat record failed: {}", record.message);
+                }
+            }
+            sdkTransformPreviewActive_ = false;
+            sdkTransformPreviewDuplicateSelected_ = false;
+            sdkTransformPreviewExtrude_ = false;
+            sdkTransformPreviewInset_ = false;
+        }
+#endif
         gizmoDragging_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
         gizmoStartTransforms_.clear();
@@ -1745,6 +2039,7 @@ bool ViewportPanel::drawTransformGizmo(
     Vec3 previewMoveDelta = {};
     Vec3 previewRotationDelta = {};
     Vec3 previewScaleFactor = {1.0f, 1.0f, 1.0f};
+    ModelingTransform3 previewMatrixTransform = {};
 
     if (tool == ViewportTool::Move && sdkMoveDrag_.active) {
         const quader_editor_core::MovePreviewResult preview =
@@ -1775,6 +2070,7 @@ bool ViewportPanel::drawTransformGizmo(
             } else if (activeGizmoAxis_ == GizmoAxis::Z) {
                 previewRotationDelta.z = angleRadians;
             }
+            previewMatrixTransform = fromSdk(preview.transform);
             previewOk = true;
         }
     } else if (tool == ViewportTool::Scale && sdkScaleDrag_.active) {
@@ -1786,12 +2082,34 @@ bool ViewportPanel::drawTransformGizmo(
                         activeGridSize);
         if (preview.ok) {
             previewScaleFactor = fromSdk(preview.preview_scale);
+            previewMatrixTransform = fromSdk(preview.transform);
             previewOk = true;
         }
     }
 
     if (!previewOk) {
         return consumed;
+    }
+
+    if (sdkTransformPreviewActive_) {
+        ModelingCommandResult command;
+        if (tool == ViewportTool::Move) {
+            if (sdkTransformPreviewExtrude_) {
+                command = modeling.updateTransformExtrudePreview(
+                        previewMoveDelta,
+                        static_cast<float>(std::max(activeGridSize, 0.0001)));
+            } else {
+                command = modeling.updateTransformTranslatePreview(previewMoveDelta);
+            }
+        } else if (tool == ViewportTool::Scale && sdkTransformPreviewInset_) {
+            command = modeling.updateTransformInsetPreview(previewMatrixTransform, gizmoStartWorldPivot_);
+        } else {
+            command = modeling.updateTransformMatrixPreview(previewMatrixTransform, gizmoStartWorldPivot_);
+        }
+        if (!command.ok) {
+            LOG_ERROR("Transform preview update failed: {}", command.message);
+        }
+        return true;
     }
 
     for (const GizmoStartTransform& start : gizmoStartTransforms_) {

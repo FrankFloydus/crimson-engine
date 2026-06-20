@@ -1,7 +1,6 @@
 material {
     name : QuaderDefaultMesh,
     shadingModel : unlit,
-    doubleSided : true,
     requires : [
         uv0
     ],
@@ -33,7 +32,8 @@ fragment {
     void material(inout MaterialInputs material) {
         prepareMaterial(material);
 
-        vec4 baseSample = texture(materialParams_baseColorTexture, getUV0());
+        vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y);
+        vec4 baseSample = texture(materialParams_baseColorTexture, uv);
         vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
 
         material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a);

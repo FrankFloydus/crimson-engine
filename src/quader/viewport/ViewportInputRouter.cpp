@@ -18,9 +18,25 @@ bool shiftOnly(ViewportModifiers modifiers) {
     return !modifiers.primary && !modifiers.alt && modifiers.shift;
 }
 
+bool primaryOnly(ViewportModifiers modifiers) {
+    return modifiers.primary && !modifiers.alt && !modifiers.shift;
+}
+
+bool primaryShiftOnly(ViewportModifiers modifiers) {
+    return modifiers.primary && !modifiers.alt && modifiers.shift;
+}
+
+ViewportShortcut commandShortcut(ViewportShortcutKind kind, ViewportShortcutContext context) {
+    return {
+        .kind = kind,
+        .context = context,
+    };
+}
+
 ViewportShortcut toolShortcut(ViewportTool tool) {
     return {
         .kind = ViewportShortcutKind::ActivateTool,
+        .context = ViewportShortcutContext::Viewport,
         .tool = tool,
     };
 }
@@ -28,6 +44,7 @@ ViewportShortcut toolShortcut(ViewportTool tool) {
 ViewportShortcut selectionShortcut(ViewportSelectionMode mode) {
     return {
         .kind = ViewportShortcutKind::SetSelectionMode,
+        .context = ViewportShortcutContext::Viewport,
         .selectionMode = mode,
     };
 }
@@ -35,7 +52,16 @@ ViewportShortcut selectionShortcut(ViewportSelectionMode mode) {
 ViewportShortcut gridShortcut(int preset) {
     return {
         .kind = ViewportShortcutKind::SetGridPreset,
+        .context = ViewportShortcutContext::Viewport,
         .gridPreset = preset,
+    };
+}
+
+ViewportShortcut mirrorShortcut(ViewportMirrorAxis axis) {
+    return {
+        .kind = ViewportShortcutKind::MirrorAxis,
+        .context = ViewportShortcutContext::Viewport,
+        .mirrorAxis = axis,
     };
 }
 
@@ -161,8 +187,51 @@ void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
 }
 
 bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut) {
+    if (primaryOnly(modifiers)) {
+        switch (key) {
+        case ViewportKey::A:
+            shortcut = commandShortcut(ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::C:
+            shortcut = commandShortcut(ViewportShortcutKind::Copy, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::D:
+            shortcut = commandShortcut(ViewportShortcutKind::Duplicate, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::I:
+            shortcut = commandShortcut(ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::R:
+            shortcut = commandShortcut(ViewportShortcutKind::RepeatLastAction, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::V:
+            shortcut = commandShortcut(ViewportShortcutKind::Paste, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::Y:
+            shortcut = commandShortcut(ViewportShortcutKind::Redo, ViewportShortcutContext::Global);
+            return true;
+        case ViewportKey::Z:
+            shortcut = commandShortcut(ViewportShortcutKind::Undo, ViewportShortcutContext::Global);
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    if (primaryShiftOnly(modifiers)) {
+        if (key == ViewportKey::Z) {
+            shortcut = commandShortcut(ViewportShortcutKind::Redo, ViewportShortcutContext::Global);
+            return true;
+        }
+        return false;
+    }
+
     if (key == ViewportKey::Escape && unmodified(modifiers)) {
         shortcut.kind = ViewportShortcutKind::CancelActiveTool;
+        return true;
+    }
+    if ((key == ViewportKey::Delete || key == ViewportKey::Backspace) && unmodified(modifiers)) {
+        shortcut = commandShortcut(ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global);
         return true;
     }
     if (key == ViewportKey::Home && unmodified(modifiers)) {
@@ -195,6 +264,34 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
             shortcut = toolShortcut(ViewportTool::Cut);
             return true;
         }
+        if (key == ViewportKey::M) {
+            shortcut = commandShortcut(ViewportShortcutKind::MergeCenter, ViewportShortcutContext::Viewport);
+            return true;
+        }
+        if (key == ViewportKey::T) {
+            shortcut = commandShortcut(ViewportShortcutKind::ApplyMaterial, ViewportShortcutContext::Viewport);
+            return true;
+        }
+        if (key == ViewportKey::X) {
+            shortcut = mirrorShortcut(ViewportMirrorAxis::X);
+            return true;
+        }
+        if (key == ViewportKey::Y) {
+            shortcut = mirrorShortcut(ViewportMirrorAxis::Y);
+            return true;
+        }
+        if (key == ViewportKey::Z) {
+            shortcut = mirrorShortcut(ViewportMirrorAxis::Z);
+            return true;
+        }
+        if (key == ViewportKey::H) {
+            shortcut = commandShortcut(ViewportShortcutKind::FlipHorizontal, ViewportShortcutContext::Viewport);
+            return true;
+        }
+        if (key == ViewportKey::V) {
+            shortcut = commandShortcut(ViewportShortcutKind::FlipVertical, ViewportShortcutContext::Viewport);
+            return true;
+        }
         return false;
     }
 
@@ -216,6 +313,9 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
         return true;
     case ViewportKey::C:
         shortcut = toolShortcut(ViewportTool::Knife);
+        return true;
+    case ViewportKey::M:
+        shortcut = commandShortcut(ViewportShortcutKind::MergeActive, ViewportShortcutContext::Viewport);
         return true;
     case ViewportKey::P:
         shortcut = toolShortcut(ViewportTool::Poly);
@@ -293,6 +393,24 @@ bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, Viewp
         return true;
     case ViewportShortcutKind::CancelActiveTool:
         result.cancelRequested = true;
+        return true;
+    case ViewportShortcutKind::DeleteSelection:
+    case ViewportShortcutKind::SelectAll:
+    case ViewportShortcutKind::InvertSelection:
+    case ViewportShortcutKind::Copy:
+    case ViewportShortcutKind::Paste:
+    case ViewportShortcutKind::Duplicate:
+    case ViewportShortcutKind::Undo:
+    case ViewportShortcutKind::Redo:
+    case ViewportShortcutKind::RepeatLastAction:
+    case ViewportShortcutKind::MergeActive:
+    case ViewportShortcutKind::MergeCenter:
+    case ViewportShortcutKind::MirrorAxis:
+        return true;
+    case ViewportShortcutKind::FlipHorizontal:
+    case ViewportShortcutKind::FlipVertical:
+        return state_.selectionMode == ViewportSelectionMode::Object;
+    case ViewportShortcutKind::ApplyMaterial:
         return true;
     case ViewportShortcutKind::None:
         return false;
