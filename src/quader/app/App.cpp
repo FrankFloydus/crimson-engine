@@ -19,13 +19,6 @@ bool App::initialize(const std::filesystem::path& executablePath) {
         return false;
     }
 
-    LOG_INFO("Initializing viewport renderer");
-    viewportRenderer_.initialize(renderSystem_.engine(),
-            renderSystem_.scene(),
-            renderSystem_.textures(),
-            renderSystem_.groundGridMaterial());
-    LOG_INFO("Viewport renderer initialized");
-
     LOG_INFO("Initializing scene render bridge");
     renderBridge_.initialize(renderSystem_.engine(),
             renderSystem_.scene(),
@@ -67,9 +60,7 @@ int App::run() {
 
         ui_.beginFrame();
         bool quitRequested = false;
-        ui_.draw(viewportRenderer_,
-                viewportCamera_,
-                renderBridge_,
+        ui_.draw(renderBridge_,
                 document_,
                 assets_,
                 *undoRedo_,
@@ -80,16 +71,14 @@ int App::run() {
         if (quitRequested) {
             running_ = false;
         }
-        viewportRenderer_.updateCamera(viewportCamera_);
-        const float gridWorldSize = viewportGridWorldSizeForPreset(ui_.viewportToolState().gridPreset);
-        viewportRenderer_.updateGroundGrid(viewportCamera_, gridWorldSize);
         renderBridge_.sync(document_, assets_);
 
         window_.refreshPixelSize();
         ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
+        ui_.prepareViewports(renderBridge_);
 
         if (renderSystem_.beginFrame()) {
-            viewportRenderer_.render(renderSystem_.renderer());
+            ui_.renderViewports(renderSystem_);
             ui_.render(renderSystem_);
             renderSystem_.endFrame();
         }
@@ -103,7 +92,6 @@ int App::run() {
 void App::shutdown() {
     ui_.shutdown();
     renderBridge_.shutdown();
-    viewportRenderer_.shutdown();
     renderSystem_.shutdown();
     modeling_.reset();
     documentCommands_.reset();

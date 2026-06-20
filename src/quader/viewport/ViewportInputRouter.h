@@ -176,6 +176,7 @@ public:
     void reset();
     void setActiveTool(ViewportTool tool);
     void setSelectionMode(ViewportSelectionMode mode);
+    void setMaximized(bool maximized);
 
     const ViewportToolState& state() const { return state_; }
     bool navigating() const { return navigationMode_ != ViewportDragMode::None; }

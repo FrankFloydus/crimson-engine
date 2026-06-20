@@ -239,6 +239,10 @@ void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
     state_.selectionMode = mode;
 }
 
+void ViewportInputRouter::setMaximized(bool maximized) {
+    state_.maximized = maximized;
+}
+
 bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut) {
     if (resolveViewportShortcutFromHostContract(key, modifiers, shortcut)) {
         return true;

@@ -96,6 +96,7 @@ UISettingsPaths UISettings::resolvePaths(const std::filesystem::path& executable
     paths.directory = localAppDataDirectory(executableDir);
     paths.imguiIniFile = paths.directory / "quader_ui.ini";
     paths.settingsFile = paths.directory / "ui_settings.ini";
+    paths.viewportSettingsFile = paths.directory / "viewport_settings.ini";
     return paths;
 }
 

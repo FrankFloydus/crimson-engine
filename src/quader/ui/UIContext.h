@@ -12,13 +12,9 @@ class ModelingSessionService;
 class SceneDocument;
 class SceneRenderBridge;
 class UndoRedoManager;
-class ViewportCameraController;
-class ViewportRenderer;
 struct UIStyleTokens;
 
 struct UIContext {
-    ViewportRenderer& viewport;
-    ViewportCameraController& camera;
     SceneRenderBridge& renderBridge;
     SceneDocument& document;
     AssetRegistry& assets;

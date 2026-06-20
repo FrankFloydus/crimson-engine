@@ -273,6 +273,12 @@ void vertex_mode_hover_candidate_exposes_unselected_handles()
 		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), hover.hover);
 	require_test(point_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::unselected_vertex) > 0,
 		"vertex hover candidate should expose unselected vertex handles before click selection");
+	require_test(std::all_of(frame.points.begin(), frame.points.end(), [&](const quader_editor_core::SelectionOverlayPoint& point) {
+			return point.layer != quader_editor_core::SelectionOverlayLayer::unselected_vertex ||
+				(point.object_id == hover.hover.candidate_object_id &&
+					point.vertex_id != quader_poly::invalid_element_id);
+		}),
+		"vertex hover candidate handles should carry owner object and vertex ids");
 }
 
 void hover_only_overlay_omits_selected_base_geometry()

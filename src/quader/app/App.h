@@ -8,10 +8,8 @@
 #include "quader/platform/PlatformWindow.h"
 #include "quader/render/RenderSystem.h"
 #include "quader/render/SceneRenderBridge.h"
-#include "quader/render/ViewportRenderer.h"
 #include "quader/scene/SceneDocument.h"
 #include "quader/ui/UISystem.h"
-#include "quader/viewport/ViewportCameraController.h"
 
 #include <filesystem>
 #include <memory>
@@ -29,10 +27,8 @@ private:
 
     PlatformWindow window_;
     RenderSystem renderSystem_;
-    ViewportRenderer viewportRenderer_;
     SceneRenderBridge renderBridge_;
     UISystem ui_;
-    ViewportCameraController viewportCamera_;
     AssetRegistry assets_;
     SceneDocument document_;
     std::unique_ptr<UndoRedoManager> undoRedo_;

@@ -105,16 +105,24 @@ testable, and future-friendly.
   depth/draw-on-top decisions centralized there.
 - `ModelingSessionService` should transport SDK overlay payloads and use the overlay policy for
   presentation color mapping. Do not scatter Unity color constants through unrelated files.
-- `SceneRenderBridge` renders face/fill triangle overlays only. Do not reintroduce raw Filament
-  `LINES`/`POINTS` or unfeathered triangle-strip fallbacks for selection overlays; that regressed
-  line quality and removed the Unity-like cyan source wire.
-- Wire and vertex overlays are currently drawn in `ViewportPanel` as policy-driven ImGui
-  screen-space overlays to preserve crisp line quality. In element modes, only policy-depth-tested
-  layers (`SourceWire`, `OpenEdge`, `HoverFaceEdge`, `HoverEdge`, `UnselectedVertex`) are clipped
-  against scene geometry; selected handles stay on top.
-- The current CPU clipping is a bridge until a proper Filament overlay shader matches Unity's
-  `QuaderOverlayLine.shader` and `QuaderOverlayPoint.shader`. Any replacement must preserve
-  Unity-style screen-space feathering, widths, point visuals, and view-space depth bias.
+- `SceneRenderBridge` renders face/fill triangle overlays and GPU screen-space wire/vertex
+  overlays. Do not reintroduce raw Filament `LINES`/`POINTS`, ImGui wire fallbacks, or unfeathered
+  triangle-strip shortcuts for selection overlays; those regressed line quality, depth behavior,
+  and Unity-like source wire visibility.
+- Wire and vertex overlays are built as screen-space quads in `SceneRenderBridge` from the
+  `ViewportOverlayCamera` passed by `ViewportPanel`. The overlay materials live at
+  `resources/materials/quader_overlay_line.mat` and `resources/materials/quader_overlay_point.mat`
+  and must use `vertexDomain : device` with `POSITION` bound as `FLOAT4`.
+- Filament device-domain overlay vertices must be normalized device coordinates with `w = 1`.
+  Do not feed perspective clip-space positions with varying `w`; that caused selected/source wires
+  to disappear or explode into giant viewport-sized cages. Let Filament perform its own backend
+  Y/z fixups for Vulkan/Metal/OpenGL.
+- Apply Unity-style overlay depth bias in view space before projection. Lines must be clipped
+  against the near plane before pixel expansion. Device-domain overlay renderables must disable
+  renderable culling because world-space bounds are not meaningful for final device-space quads.
+- Filament uses reversed depth. For depth-tested overlay passes, use `DepthFunc::GE`, not Unity's
+  literal `LessEqual` enum mapping. Draw-on-top layers use `DepthFunc::A`; depth-stamped face color
+  passes use `DepthFunc::E`.
 - Unity overlay contract: `SourceWire`, `OpenEdge`, `HoverFaceEdge`, and `HoverEdge` are
   depth-tested; `SelectedFaceEdge`, `SelectedEdge`, and `DiagnosticEdge` draw on top; selected,
   hovered, and snap vertices draw on top; face fills use Unity's depth-stamped two-pass behavior.
@@ -169,4 +177,6 @@ Manual smoke checklist:
 - Dockspace appears.
 - Console panel is docked in-app and receives log lines.
 - Viewport panel docks/moves and renders Quader SDK-created meshes with the default material.
+- Create and select a cube, capture the viewport, and verify selected/source mesh wires are visible
+  on the cube with no giant viewport-sized overlay lines.
 - MMB orbits, Shift+MMB pans, mouse wheel zooms.

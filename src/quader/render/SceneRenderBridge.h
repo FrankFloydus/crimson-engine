@@ -16,6 +16,8 @@
 #include <utils/Entity.h>
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <unordered_map>
 #include <vector>
@@ -36,8 +38,14 @@ public:
     void shutdown();
     void sync(const SceneDocument& document, const AssetRegistry& assets);
     void setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera);
+    void setOverlayFrame(std::size_t viewportIndex,
+            std::uint8_t layerMask,
+            ViewportOverlayFrame frame,
+            ViewportOverlayCamera camera);
 
 private:
+    static constexpr std::size_t kMaxViewportOverlaySlots = 4u;
+
     struct MeshProxy {
         utils::Entity entity;
         EntityId sourceEntity = InvalidEntityId;
@@ -63,13 +71,23 @@ private:
         std::vector<OverlayProxy> proxies;
     };
 
+    struct OverlaySlot {
+        ViewportOverlayFrame frame;
+        std::uint64_t frameSignature = 0;
+        ViewportOverlayCamera camera;
+        std::uint64_t cameraSignature = 0;
+        std::uint8_t layerMask = 0;
+        std::array<OverlayProxyGroup, 15> proxyGroups;
+    };
+
     struct LightProxy {
         utils::Entity entity;
         EntityId sourceEntity = InvalidEntityId;
     };
 
     void rebuild(const SceneDocument& document, const AssetRegistry& assets);
-    void rebuildOverlayProxies();
+    void rebuildOverlayProxies(OverlaySlot& slot);
+    void destroyOverlaySlot(OverlaySlot& slot);
     bool renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const;
     MeshProxy createMeshProxy(EntityId entityId,
             AssetId meshId,
@@ -102,7 +120,7 @@ private:
     std::uint64_t syncedAssetRevision_ = 0;
     bool hasSynced_ = false;
     std::unordered_map<EntityId, MeshProxy> meshProxies_;
-    std::array<OverlayProxyGroup, 15> overlayProxyGroups_;
+    std::array<OverlaySlot, kMaxViewportOverlaySlots> overlaySlots_;
     std::unordered_map<EntityId, LightProxy> lightProxies_;
     struct TextureCacheKey {
         AssetId id = InvalidAssetId;
@@ -127,11 +145,6 @@ private:
     std::unordered_map<TextureCacheKey, filament::Texture*, TextureCacheKeyHash> textureCache_;
     filament::Texture* fallbackAlbedoTexture_ = nullptr;
     filament::Texture* fallbackRoughnessTexture_ = nullptr;
-    ViewportOverlayFrame selectedOverlayFrame_;
-    ViewportOverlayFrame externalOverlayFrame_;
-    std::uint64_t externalOverlaySignature_ = 0;
-    ViewportOverlayCamera overlayCamera_;
-    std::uint64_t overlayCameraSignature_ = 0;
 };
 
 } // namespace quader

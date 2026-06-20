@@ -24,7 +24,11 @@
 #include <quader_editor_core/runtime_command.h>
 #include <quader_editor_core/session.h>
 #include <quader_editor_core/tool/mirror_tool.h>
+#include <quader_editor_core/tool/move_tool.h>
+#include <quader_editor_core/tool/rotate_tool.h>
+#include <quader_editor_core/tool/scale_tool.h>
 #include <quader_editor_core/tool/selection_edit.h>
+#include <quader_editor_core/tool/transform_drag.h>
 #include <quader_host_contract/host_contract.h>
 #include <quader_poly/document.h>
 #endif
@@ -135,6 +139,15 @@ Vec3 fromSdk(quader_poly::Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
+ModelingTransform3 fromSdk(quader_poly::Transform3 value) {
+    return {
+            .xAxis = fromSdk(value.x_axis),
+            .yAxis = fromSdk(value.y_axis),
+            .zAxis = fromSdk(value.z_axis),
+            .origin = fromSdk(value.origin),
+    };
+}
+
 ModelingSelectionMode fromSdk(quader_editor_core::SelectionMode mode) {
     switch (mode) {
     case quader_editor_core::SelectionMode::vertex:
@@ -197,6 +210,28 @@ quader_editor_core::TransformAxis toSdk(ModelingTransformAxis axis) {
     return quader_editor_core::TransformAxis::none;
 }
 
+ModelingTransformAxis fromSdk(quader_editor_core::TransformAxis axis) {
+    switch (axis) {
+    case quader_editor_core::TransformAxis::x:
+        return ModelingTransformAxis::X;
+    case quader_editor_core::TransformAxis::y:
+        return ModelingTransformAxis::Y;
+    case quader_editor_core::TransformAxis::z:
+        return ModelingTransformAxis::Z;
+    case quader_editor_core::TransformAxis::xy:
+        return ModelingTransformAxis::XY;
+    case quader_editor_core::TransformAxis::xz:
+        return ModelingTransformAxis::XZ;
+    case quader_editor_core::TransformAxis::yz:
+        return ModelingTransformAxis::YZ;
+    case quader_editor_core::TransformAxis::all:
+        return ModelingTransformAxis::All;
+    case quader_editor_core::TransformAxis::none:
+        return ModelingTransformAxis::None;
+    }
+    return ModelingTransformAxis::None;
+}
+
 quader_editor_core::ViewportInteractionTool toSdk(ModelingTransformTool tool) {
     switch (tool) {
     case ModelingTransformTool::Move:
@@ -209,6 +244,19 @@ quader_editor_core::ViewportInteractionTool toSdk(ModelingTransformTool tool) {
     return quader_editor_core::ViewportInteractionTool::unknown;
 }
 
+ModelingTransformTool fromSdk(quader_editor_core::ViewportInteractionTool tool) {
+    switch (tool) {
+    case quader_editor_core::ViewportInteractionTool::move:
+        return ModelingTransformTool::Move;
+    case quader_editor_core::ViewportInteractionTool::rotate:
+        return ModelingTransformTool::Rotate;
+    case quader_editor_core::ViewportInteractionTool::scale:
+        return ModelingTransformTool::Scale;
+    default:
+        return ModelingTransformTool::Move;
+    }
+}
+
 quader_editor_core::TransformDragOperation toSdk(ModelingTransformOperation operation) {
     switch (operation) {
     case ModelingTransformOperation::Transform:
@@ -219,6 +267,18 @@ quader_editor_core::TransformDragOperation toSdk(ModelingTransformOperation oper
         return quader_editor_core::TransformDragOperation::inset;
     }
     return quader_editor_core::TransformDragOperation::transform;
+}
+
+ModelingTransformOperation fromSdk(quader_editor_core::TransformDragOperation operation) {
+    switch (operation) {
+    case quader_editor_core::TransformDragOperation::transform:
+        return ModelingTransformOperation::Transform;
+    case quader_editor_core::TransformDragOperation::extrude:
+        return ModelingTransformOperation::Extrude;
+    case quader_editor_core::TransformDragOperation::inset:
+        return ModelingTransformOperation::Inset;
+    }
+    return ModelingTransformOperation::Transform;
 }
 
 quader_editor_core::ViewportFlipOrientation toSdk(ModelingFlipOrientation orientation) {
@@ -400,9 +460,8 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader_poly::Vec3 value) {
 std::uint64_t objectPickFaceGeometrySignature(
         const quader_editor_core::PolygonObject& object,
         quader_poly::PickOptions pickOptions = {}) {
+    (void)pickOptions;
     std::uint64_t hash = mixPickGeometryHash(kPickGeometryHashSeed, object.id);
-    hash = mixPickGeometryHash(hash, pickOptions.has_hidden_material_slot ? 1U : 0U);
-    hash = mixPickGeometryHash(hash, pickOptions.hidden_material_slot);
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.faces.size()));
     for (const quader_poly::Vertex& vertex : object.document.vertices) {
@@ -786,8 +845,8 @@ public:
         }
 
         selectionOverlayCacheFrame_ = fromSdk(selectionOverlayCurrentFrame(hover),
-                    entityByObject_,
-                    scene_);
+                entityByObject_,
+                scene_);
         selectionOverlayCacheValid_ = true;
         selectionOverlayCacheContentRevision_ = contentRevision;
         selectionOverlayCacheSelectionRevision_ = selectionRevision;
@@ -897,6 +956,7 @@ public:
 
         const quader_editor_core::EditorRuntimeCommandResult result =
                 quader_editor_core::execute_runtime_command(session_, runtime_, command);
+        invalidateSelectionOverlayCaches();
         syncSceneSelectionFromSdk();
         return {
                 .ok = result.command.ok,
@@ -1349,6 +1409,9 @@ public:
     ModelingCommandResult beginTransformPreview(bool duplicateSelected) {
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::CommandResult result = session_.begin_transform_preview(duplicateSelected);
+        if (result.ok) {
+            invalidateSelectionOverlayCaches();
+        }
         if (result.changed) {
             syncSceneObjectsFromSdk(true);
             syncSceneSelectionFromSdk();
@@ -1408,6 +1471,9 @@ public:
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::PreviewTransactionFinishResult finish =
                 session_.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
+        if (finish.before.active) {
+            invalidateSelectionOverlayCaches();
+        }
         syncSceneObjectsFromSdk(finish.before.active);
         syncSceneSelectionFromSdk();
         return {
@@ -1423,6 +1489,9 @@ public:
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::PreviewTransactionFinishResult finish =
                 session_.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
+        if (finish.before.active) {
+            invalidateSelectionOverlayCaches();
+        }
         syncSceneObjectsFromSdk(finish.before.active);
         syncSceneSelectionFromSdk();
         return {
@@ -1463,6 +1532,215 @@ public:
         return {.ok = true};
 #else
         (void)transform;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingTransformDragPreview beginTransformDrag(const ModelingTransformDragBeginRequest& request) {
+#if QUADER_HAS_MODELING_SDK
+        if (runtime_.transform_drag_active() || hasTransformPreview()) {
+            (void)cancelTransformDrag();
+        }
+        if (!session_.has_selection() || request.axis == ModelingTransformAxis::None) {
+            return transformDragPreview(false);
+        }
+
+        const quader_editor_core::ViewportInteractionTool tool = toSdk(request.tool);
+        const quader_editor_core::TransformDragOperation operation =
+                quader_editor_core::sanitize_transform_drag_operation(
+                        toSdk(request.operation),
+                        tool,
+                        session_.selection_mode());
+        const quader_editor_core::TransformAxis axis = toSdk(request.axis);
+        const quader_poly::Vec3 pivot = toSdk(request.pivot);
+        const bool previewDriven =
+                request.duplicateSelected ||
+                session_.selection_mode() != quader_editor_core::SelectionMode::object;
+
+        runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
+        activeTransformDragPreviewDriven_ = previewDriven;
+        activeTransformDragDuplicateSelected_ = request.duplicateSelected;
+
+        if (previewDriven) {
+            const quader_editor_core::CommandResult beginPreview =
+                    session_.begin_transform_preview(request.duplicateSelected);
+            if (!beginPreview.ok) {
+                clearTransformDragRuntimeState();
+                return {
+                        .ok = false,
+                        .message = beginPreview.message.empty()
+                                ? "Could not start transform preview."
+                                : beginPreview.message,
+                };
+            }
+            invalidateSelectionOverlayCaches();
+            if (beginPreview.changed) {
+                syncSceneObjectsFromSdk(true);
+                syncSceneSelectionFromSdk();
+            }
+        }
+
+        const quader_editor_core::ViewportCameraState camera = toSdk(request.camera);
+        const quader_poly::Vec2 screenPosition = toSdk(request.screenPosition);
+        const quader_poly::Vec2 screenPivot = toSdk(request.screenPivot);
+        const quader_poly::Vec2 screenTip = toSdk(request.screenTip);
+
+        if (tool == quader_editor_core::ViewportInteractionTool::move) {
+            quader_editor_core::MoveBeginInput begin;
+            begin.axis = axis;
+            begin.has_world_direction = request.hasWorldDirection;
+            begin.world_direction = toSdk(request.worldDirection);
+            begin.center_local = {};
+            begin.has_world_center = true;
+            begin.world_center = pivot;
+            begin.has_screen_axis = true;
+            begin.screen_pivot = screenPivot;
+            begin.screen_tip = screenTip;
+            begin.screen_position = screenPosition;
+            begin.has_start_ray = true;
+            begin.start_ray = toSdk(request.ray);
+            begin.has_camera = true;
+            begin.camera_transform = camera.transform;
+            const quader_editor_core::MoveBeginResult beginResult = quader_editor_core::begin_move_drag(begin);
+            if (!beginResult.ok) {
+                (void)cancelTransformDrag();
+                return {.ok = false, .message = beginResult.message.empty() ? "Move drag failed." : beginResult.message};
+            }
+            runtime_.set_transform_drag_move_state(beginResult.state);
+        } else if (tool == quader_editor_core::ViewportInteractionTool::rotate) {
+            quader_editor_core::RotateBeginInput begin;
+            begin.axis = axis;
+            begin.object_ids = session_.selected_object_ids();
+            begin.pivot = pivot;
+            begin.screen_position = screenPosition;
+            begin.has_screen_pivot = true;
+            begin.screen_pivot = screenPivot;
+            begin.has_world_direction = request.hasWorldDirection;
+            begin.world_direction = toSdk(request.worldDirection);
+            begin.has_world_pivot = true;
+            begin.world_pivot = pivot;
+            begin.has_camera = true;
+            begin.camera_transform = camera.transform;
+            const quader_editor_core::RotateBeginResult beginResult = quader_editor_core::begin_rotate_drag(begin);
+            if (!beginResult.ok) {
+                (void)cancelTransformDrag();
+                return {.ok = false, .message = beginResult.message.empty() ? "Rotate drag failed." : beginResult.message};
+            }
+            runtime_.set_transform_drag_rotate_state(beginResult.state);
+        } else if (tool == quader_editor_core::ViewportInteractionTool::scale) {
+            quader_editor_core::ScaleBeginInput begin;
+            begin.axis = axis;
+            begin.object_ids = session_.selected_object_ids();
+            begin.pivot = pivot;
+            begin.screen_position = screenPosition;
+            begin.has_screen_pivot = true;
+            begin.screen_pivot = screenPivot;
+            begin.has_screen_tip = true;
+            begin.screen_tip = screenTip;
+            const quader_editor_core::Bounds3 bounds = session_.selection_bounds();
+            begin.bounds.has_bounds = !bounds.empty;
+            begin.bounds.min = bounds.min;
+            begin.bounds.max = bounds.max;
+            const quader_editor_core::ScaleBeginResult beginResult = quader_editor_core::begin_scale_drag(begin);
+            if (!beginResult.ok) {
+                (void)cancelTransformDrag();
+                return {.ok = false, .message = beginResult.message.empty() ? "Scale drag failed." : beginResult.message};
+            }
+            runtime_.set_transform_drag_scale_state(beginResult.state);
+        } else {
+            clearTransformDragRuntimeState();
+            return {.ok = false, .message = "Transform drag only supports move, rotate, or scale."};
+        }
+
+        return applyTransformDragPreview({
+                .screenPosition = request.screenPosition,
+                .ray = request.ray,
+                .camera = request.camera,
+                .gridSize = request.gridSize,
+                .vertexSnapRadius = request.vertexSnapRadius,
+                .precision = false,
+        });
+#else
+        (void)request;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingTransformDragPreview updateTransformDrag(const ModelingTransformDragUpdateRequest& request) {
+#if QUADER_HAS_MODELING_SDK
+        if (!runtime_.transform_drag_active()) {
+            if (hasTransformPreview()) {
+                (void)cancelTransformDrag();
+            }
+            return transformDragPreview(false);
+        }
+        return applyTransformDragPreview(request);
+#else
+        (void)request;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingTransformDragPreview commitTransformDrag() {
+#if QUADER_HAS_MODELING_SDK
+        const bool previewDriven = activeTransformDragPreviewDriven_;
+        const quader_editor_core::TransformDragState repeatDrag = runtime_.transform_drag_state();
+        bool changed = false;
+
+        if (previewDriven) {
+            const quader_editor_core::PreviewTransactionFinishResult finish =
+                    session_.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
+            if (finish.before.active) {
+                invalidateSelectionOverlayCaches();
+            }
+            syncSceneObjectsFromSdk(finish.before.active);
+            syncSceneSelectionFromSdk();
+            const bool ok =
+                    !finish.before.active ||
+                    finish.before.kind == quader_editor_core::PreviewTransactionKind::transform;
+            if (!ok) {
+                clearTransformDragRuntimeState();
+                return {
+                        .ok = false,
+                        .previewDriven = previewDriven,
+                        .message = "Active preview transaction was not a transform preview.",
+                };
+            }
+            changed = finish.before.changed;
+            if (changed && repeatDrag.active) {
+                quader_editor_core::record_repeatable_transform(
+                        repeatLastAction_,
+                        session_,
+                        repeatDrag,
+                        activeTransformDragDuplicateSelected_);
+            }
+        }
+
+        ModelingTransformDragPreview preview = transformDragPreview(changed);
+        preview.previewDriven = previewDriven;
+        clearTransformDragRuntimeState();
+        return preview;
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult cancelTransformDrag() {
+#if QUADER_HAS_MODELING_SDK
+        const bool activeBefore = runtime_.transform_drag_active() || hasTransformPreview();
+        const quader_editor_core::PreviewTransactionFinishResult finish =
+                runtime_.cancel_transform_preview_state(session_);
+        if (finish.before.active) {
+            invalidateSelectionOverlayCaches();
+        }
+        syncSceneObjectsFromSdk(finish.before.active);
+        syncSceneSelectionFromSdk();
+        clearTransformDragRuntimeState();
+        return {
+                .ok = true,
+                .changed = activeBefore && finish.restored,
+        };
+#else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
     }
@@ -1821,6 +2099,7 @@ private:
     struct OverlayBaseObjectCacheEntry {
         int objectId = -1;
         std::uint64_t geometrySignature = 0;
+        quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
         bool selected = false;
         quader_poly::Selection selection;
         quader_editor_core::SelectionOverlayFrame frame;
@@ -1834,6 +2113,11 @@ private:
         quader_editor_core::SelectionOverlayFrame frame;
         std::vector<OverlayBaseObjectCacheEntry> objectEntries;
     };
+
+    void invalidateSelectionOverlayCaches() const {
+        selectionOverlayCacheValid_ = false;
+        overlayBaseCache_.valid = false;
+    }
 
     static bool hoverMatches(
             const quader_editor_core::SelectionHoverState& left,
@@ -1870,6 +2154,7 @@ private:
 
     ModelingCommandResult updateTransformPreviewResult(const quader_editor_core::CommandResult& result) {
         if (result.ok) {
+            invalidateSelectionOverlayCaches();
             syncSceneObjectsFromSdk(true);
             syncSceneSelectionFromSdk();
         }
@@ -1878,6 +2163,118 @@ private:
                 .changed = result.changed,
                 .message = result.message,
         };
+    }
+
+    [[nodiscard]] bool hasTransformPreview() const {
+        const quader_editor_core::PreviewTransactionStatus status = session_.preview_transaction_status();
+        return status.active && status.kind == quader_editor_core::PreviewTransactionKind::transform;
+    }
+
+    void clearTransformDragRuntimeState() {
+        runtime_.clear_transform_drag_state();
+        runtime_.clear_gizmo_hover();
+        activeTransformDragPreviewDriven_ = false;
+        activeTransformDragDuplicateSelected_ = false;
+    }
+
+    [[nodiscard]] bool scenePreviewTransformForDrag(
+            const quader_editor_core::TransformDragState& drag,
+            quader_poly::Transform3& outTransform) const {
+        outTransform = {};
+        if (!drag.active ||
+                !drag.scene_transform_preview_eligible ||
+                drag.operation != quader_editor_core::TransformDragOperation::transform) {
+            return false;
+        }
+        if (drag.tool == quader_editor_core::ViewportInteractionTool::move) {
+            outTransform.origin = drag.move.preview_delta;
+            return true;
+        }
+        if (drag.tool == quader_editor_core::ViewportInteractionTool::rotate && drag.rotate.active) {
+            quader_editor_core::RotateToolState rotate = drag.rotate;
+            const quader_editor_core::RotatePreviewResult preview =
+                    quader_editor_core::preview_rotate_from_angle_degrees(
+                            rotate,
+                            drag.rotate.preview_angle_degrees,
+                            0.0);
+            if (!preview.ok) {
+                return false;
+            }
+            outTransform = preview.pivoted_transform;
+            return true;
+        }
+        if (drag.tool == quader_editor_core::ViewportInteractionTool::scale && drag.scale.active) {
+            quader_editor_core::ScaleToolState scale = drag.scale;
+            const quader_editor_core::ScalePreviewResult preview =
+                    quader_editor_core::preview_scale_from_scale(scale, drag.scale.preview_scale);
+            if (!preview.ok) {
+                return false;
+            }
+            outTransform = preview.pivoted_transform;
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] ModelingTransformDragPreview transformDragPreview(bool changed) const {
+        ModelingTransformDragPreview preview;
+        preview.ok = true;
+        const quader_editor_core::TransformDragState drag = runtime_.transform_drag_state();
+        preview.active = drag.active;
+        preview.changed = changed;
+        preview.previewDriven = activeTransformDragPreviewDriven_;
+        preview.tool = fromSdk(drag.tool);
+        preview.operation = fromSdk(drag.operation);
+        preview.axis = fromSdk(drag.axis);
+        preview.pivot = fromSdk(drag.pivot);
+        preview.moveDelta = fromSdk(drag.move.preview_delta);
+        preview.rotateAngleDegrees = drag.rotate.preview_angle_degrees;
+        preview.scale = fromSdk(drag.scale.preview_scale);
+        preview.contentRevision = session_.state().content_revision;
+        preview.selectionRevision = session_.state().selection_revision;
+        preview.sceneTransform = drag.scene_transform_preview_eligible;
+        quader_poly::Transform3 sceneTransform;
+        if (scenePreviewTransformForDrag(drag, sceneTransform)) {
+            preview.hasScenePreviewTransform = true;
+            preview.scenePreviewTransform = fromSdk(sceneTransform);
+        }
+        return preview;
+    }
+
+    ModelingTransformDragPreview applyTransformDragPreview(const ModelingTransformDragUpdateRequest& request) {
+        quader_editor_core::TransformDragPreviewInput input;
+        input.camera = toSdk(request.camera);
+        input.screen_position = toSdk(request.screenPosition);
+        input.ray = toSdk(request.ray);
+        input.grid_size = request.gridSize;
+        input.precision = request.precision;
+        if (request.vertexSnapRadius > 0.0) {
+            input.vertex_snap_enabled = true;
+            input.vertex_snap_radius = request.vertexSnapRadius;
+            input.snap_object_bounds = cachedPickObjectBounds();
+            input.snap_face_geometry = cachedPickFaceGeometry();
+        }
+
+        const quader_editor_core::CommandResult result =
+                runtime_.apply_transform_drag_preview(session_, input);
+        if (!result.ok) {
+            const bool previewDriven = activeTransformDragPreviewDriven_;
+            (void)cancelTransformDrag();
+            return {
+                    .ok = false,
+                    .previewDriven = previewDriven,
+                    .message = result.message.empty()
+                            ? "Could not update transform drag preview."
+                            : result.message,
+            };
+        }
+
+        invalidateSelectionOverlayCaches();
+        if (activeTransformDragPreviewDriven_) {
+            syncSceneObjectsFromSdk(true);
+            syncSceneSelectionFromSdk();
+        }
+        return transformDragPreview(result.changed);
     }
 #endif
 
@@ -2125,6 +2522,7 @@ private:
             for (auto it = previousEntries.begin(); it != previousEntries.end(); ++it) {
                 if (it->objectId == object.id &&
                         it->geometrySignature == signature &&
+                        it->selectionMode == selectionMode &&
                         it->selected == object.selected &&
                         sdkSelectionMatches(it->selection, object.selection)) {
                     reusable = it;
@@ -2139,12 +2537,14 @@ private:
             } else {
                 entry.objectId = object.id;
                 entry.geometrySignature = signature;
+                entry.selectionMode = selectionMode;
                 entry.selected = object.selected;
                 entry.selection = object.selection;
                 entry.frame = quader_editor_core::build_selection_overlay_frame(
                         std::span<const quader_editor_core::PolygonObject>(&object, 1U),
                         selectionMode,
-                        emptyHover);
+                        emptyHover,
+                        {});
             }
             appendOverlayFrame(next.frame, entry.frame);
             next.objectEntries.push_back(std::move(entry));
@@ -2161,17 +2561,28 @@ private:
                 quader_editor_core::build_selection_hover_overlay_frame(
                         session_.objects(),
                         session_.selection_mode(),
-                        hover);
+                        hover,
+                        {});
+        const auto appendTransformDragSnapPoints = [&](quader_editor_core::SelectionOverlayFrame& frame) {
+            if (!runtime_.transform_drag_active()) {
+                return;
+            }
+            std::vector<quader_editor_core::SelectionOverlayPoint> snapPoints =
+                    quader_editor_core::transform_drag_snap_overlay_points(runtime_.transform_drag_state());
+            frame.points.insert(frame.points.end(), snapPoints.begin(), snapPoints.end());
+        };
         if (hoverFrame.hover_target_selected) {
             quader_editor_core::SelectionOverlayFrame frame;
             frame.hover_target_selected = hoverFrame.hover_target_selected;
             appendSelectedHoverFilteredBaseFrame(frame, base, hoverFrame);
             appendOverlayFrame(frame, hoverFrame);
+            appendTransformDragSnapPoints(frame);
             return frame;
         }
 
         quader_editor_core::SelectionOverlayFrame frame = base;
         appendOverlayFrame(frame, hoverFrame);
+        appendTransformDragSnapPoints(frame);
         return frame;
     }
 
@@ -2313,6 +2724,8 @@ private:
     mutable ViewportOverlayFrame selectionOverlayCacheFrame_;
     mutable PickingCache pickingCache_;
     mutable OverlayBaseCache overlayBaseCache_;
+    bool activeTransformDragPreviewDriven_ = false;
+    bool activeTransformDragDuplicateSelected_ = false;
 #endif
 };
 
@@ -2485,6 +2898,22 @@ ModelingCommandResult ModelingSessionService::cancelTransformPreview() {
 
 ModelingCommandResult ModelingSessionService::recordRepeatableTransform(const ModelingRepeatTransform& transform) {
     return impl_->recordRepeatableTransform(transform);
+}
+
+ModelingTransformDragPreview ModelingSessionService::beginTransformDrag(const ModelingTransformDragBeginRequest& request) {
+    return impl_->beginTransformDrag(request);
+}
+
+ModelingTransformDragPreview ModelingSessionService::updateTransformDrag(const ModelingTransformDragUpdateRequest& request) {
+    return impl_->updateTransformDrag(request);
+}
+
+ModelingTransformDragPreview ModelingSessionService::commitTransformDrag() {
+    return impl_->commitTransformDrag();
+}
+
+ModelingCommandResult ModelingSessionService::cancelTransformDrag() {
+    return impl_->cancelTransformDrag();
 }
 
 ModelingSelectionSummary ModelingSessionService::pickSelect(const ModelingPickSelectRequest& request) {

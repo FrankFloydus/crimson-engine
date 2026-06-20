@@ -28,12 +28,14 @@ public:
     void initialize(filament::Engine& engine,
             filament::Scene& scene,
             TextureRegistry& textureRegistry,
-            filament::Material& groundGridMaterial);
+            filament::Material& groundGridMaterial,
+            std::uint8_t gridLayerMask);
     void shutdown();
 
     void resize(std::uint32_t width, std::uint32_t height);
     void updateCamera(const ViewportCameraController& controller);
     void updateGroundGrid(const ViewportCameraController& controller, float gridWorldSpacing, bool visible = true);
+    void setOverlayVisible(bool visible);
     void render(filament::Renderer& renderer);
 
     ImTextureID textureId() const { return textureId_; }
@@ -43,6 +45,7 @@ public:
 private:
     void createGroundGrid();
     void updateGroundGridMesh(float width, float height);
+    void updateVisibleLayers();
     void destroyGroundGrid();
     void destroyRenderTarget();
 
@@ -59,7 +62,9 @@ private:
     filament::MaterialInstance* groundGridMaterialInstance_ = nullptr;
     float groundGridMeshWidth_ = 0.0f;
     float groundGridMeshHeight_ = 0.0f;
-    bool groundGridInScene_ = false;
+    bool groundGridVisible_ = true;
+    bool overlayVisible_ = false;
+    std::uint8_t gridLayerMask_ = 0x04u;
     filament::Texture* colorTexture_ = nullptr;
     filament::Texture* depthTexture_ = nullptr;
     filament::RenderTarget* renderTarget_ = nullptr;

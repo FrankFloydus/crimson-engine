@@ -3,6 +3,7 @@
 #include "quader/core/ColorSpace.h"
 #include "quader/core/Logger.h"
 #include "quader/render/FilamentUtils.h"
+#include "quader/render/RenderLayers.h"
 
 #include <backend/BufferDescriptor.h>
 #include <filament/RenderableManager.h>
@@ -162,16 +163,19 @@ ViewportRenderer::~ViewportRenderer() {
 void ViewportRenderer::initialize(filament::Engine& engine,
         filament::Scene& scene,
         TextureRegistry& textureRegistry,
-        filament::Material& groundGridMaterial) {
+        filament::Material& groundGridMaterial,
+        std::uint8_t gridLayerMask) {
     engine_ = &engine;
     scene_ = &scene;
     textureRegistry_ = &textureRegistry;
     groundGridMaterial_ = &groundGridMaterial;
+    gridLayerMask_ = gridLayerMask == 0u ? viewportGridLayerMask(0) : gridLayerMask;
     LOG_INFO("Creating viewport Filament view");
     view_ = engine_->createView();
     view_->setName("Main Viewport");
     view_->setScene(scene_);
     view_->setPostProcessingEnabled(false);
+    updateVisibleLayers();
 
     LOG_INFO("Creating viewport camera");
     cameraEntity_ = utils::EntityManager::get().create();
@@ -275,13 +279,8 @@ void ViewportRenderer::updateGroundGrid(const ViewportCameraController& controll
         return;
     }
 
-    if (visible && !groundGridInScene_) {
-        scene_->addEntity(groundGridEntity_);
-        groundGridInScene_ = true;
-    } else if (!visible && groundGridInScene_) {
-        scene_->remove(groundGridEntity_);
-        groundGridInScene_ = false;
-    }
+    groundGridVisible_ = visible;
+    updateVisibleLayers();
     if (!visible) {
         return;
     }
@@ -320,6 +319,14 @@ void ViewportRenderer::updateGroundGrid(const ViewportCameraController& controll
     groundGridMaterialInstance_->setParameter("viewportHeight", static_cast<float>(std::max(1u, height_)));
     groundGridMaterialInstance_->setParameter("visibleGridSize", spacing);
     groundGridMaterialInstance_->setParameter("minGridWorldSpacing", 0.001f);
+}
+
+void ViewportRenderer::setOverlayVisible(bool visible) {
+    if (overlayVisible_ == visible) {
+        return;
+    }
+    overlayVisible_ = visible;
+    updateVisibleLayers();
 }
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
@@ -363,14 +370,27 @@ void ViewportRenderer::createGroundGrid() {
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
                     groundGridVertexBuffer_, groundGridIndexBuffer_)
             .material(0, groundGridMaterialInstance_)
+            .layerMask(kViewportAllLayerMask, gridLayerMask_)
             .boundingBox(groundGridBounds())
             .castShadows(false)
             .receiveShadows(false)
             .build(*engine_, groundGridEntity_);
 
-    engine_->getTransformManager().create(groundGridEntity_);
     scene_->addEntity(groundGridEntity_);
-    groundGridInScene_ = true;
+    engine_->getTransformManager().create(groundGridEntity_);
+    groundGridVisible_ = true;
+    updateVisibleLayers();
+}
+
+void ViewportRenderer::updateVisibleLayers() {
+    if (!view_) {
+        return;
+    }
+    std::uint8_t visibleLayers = kViewportSceneLayerMask;
+    if (groundGridVisible_ || overlayVisible_) {
+        visibleLayers |= gridLayerMask_;
+    }
+    view_->setVisibleLayers(kViewportAllLayerMask, visibleLayers);
 }
 
 void ViewportRenderer::updateGroundGridMesh(float width, float height) {
@@ -403,12 +423,11 @@ void ViewportRenderer::destroyGroundGrid() {
         return;
     }
     if (groundGridEntity_) {
-        if (scene_ && groundGridInScene_) {
+        if (scene_) {
             scene_->remove(groundGridEntity_);
         }
         engine_->getRenderableManager().destroy(groundGridEntity_);
         engine_->getTransformManager().destroy(groundGridEntity_);
-        groundGridInScene_ = false;
     }
     if (groundGridMaterialInstance_) {
         engine_->destroy(groundGridMaterialInstance_);

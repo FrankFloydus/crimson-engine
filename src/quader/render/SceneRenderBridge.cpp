@@ -2,6 +2,7 @@
 
 #include "quader/core/Logger.h"
 #include "quader/render/FilamentUtils.h"
+#include "quader/render/RenderLayers.h"
 #include "quader/render/ViewportOverlayPolicy.h"
 
 #include <backend/BufferDescriptor.h>
@@ -172,14 +173,6 @@ std::uint64_t overlayLayerSignature(const ViewportOverlayFrame& frame, ViewportO
         hash = hashVec3(hash, point.position);
     }
     return hash;
-}
-
-std::uint64_t overlayLayerSignature(
-        const ViewportOverlayFrame& selectedFrame,
-        const ViewportOverlayFrame& externalFrame,
-        ViewportOverlayLayer layer) {
-    std::uint64_t hash = overlayLayerSignature(selectedFrame, layer);
-    return hashCombine(hash, overlayLayerSignature(externalFrame, layer));
 }
 
 filament::math::float3 directionFromTransform(const TransformComponent& transform) {
@@ -546,22 +539,14 @@ void SceneRenderBridge::shutdown() {
     }
     meshProxies_.clear();
 
-    for (OverlayProxyGroup& group : overlayProxyGroups_) {
-        for (OverlayProxy& proxy : group.proxies) {
-            destroyOverlayProxy(proxy);
-        }
-        group.proxies.clear();
-        group.signature = 0;
+    for (OverlaySlot& slot : overlaySlots_) {
+        destroyOverlaySlot(slot);
     }
 
     for (auto& [id, proxy] : lightProxies_) {
         destroyLightProxy(proxy);
     }
     lightProxies_.clear();
-    selectedOverlayFrame_ = {};
-    externalOverlayFrame_ = {};
-    externalOverlaySignature_ = overlayFrameSignature(externalOverlayFrame_);
-
     for (auto& [id, texture] : textureCache_) {
         destroyTexture(texture);
     }
@@ -580,8 +565,6 @@ void SceneRenderBridge::shutdown() {
     syncedRevision_ = 0;
     syncedAssetRevision_ = 0;
     hasSynced_ = false;
-    overlayCamera_ = {};
-    overlayCameraSignature_ = 0;
 }
 
 void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry& assets) {
@@ -606,26 +589,45 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
 }
 
 void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
-    const std::uint64_t signature = overlayFrameSignature(frame);
-    camera = sanitizedOverlayCamera(camera);
-    const std::uint64_t cameraSignature = overlayCameraSignature(camera);
-    const bool cameraChanged = cameraSignature != overlayCameraSignature_;
-    if (signature == externalOverlaySignature_ && !cameraChanged) {
-        externalOverlayFrame_ = std::move(frame);
+    setOverlayFrame(0u, kViewportOverlayLayerMask, std::move(frame), camera);
+}
+
+void SceneRenderBridge::setOverlayFrame(
+        std::size_t viewportIndex,
+        std::uint8_t layerMask,
+        ViewportOverlayFrame frame,
+        ViewportOverlayCamera camera) {
+    if (viewportIndex >= overlaySlots_.size()) {
         return;
     }
 
-    externalOverlayFrame_ = std::move(frame);
-    externalOverlaySignature_ = signature;
-    if (cameraChanged) {
-        overlayCamera_ = camera;
-        overlayCameraSignature_ = cameraSignature;
-        for (OverlayProxyGroup& group : overlayProxyGroups_) {
+    if (layerMask == 0u) {
+        layerMask = kViewportOverlayLayerMask;
+    }
+
+    OverlaySlot& slot = overlaySlots_[viewportIndex];
+    const std::uint64_t signature = overlayFrameSignature(frame);
+    camera = sanitizedOverlayCamera(camera);
+    const std::uint64_t cameraSignature = overlayCameraSignature(camera);
+    const bool cameraChanged = cameraSignature != slot.cameraSignature;
+    const bool layerChanged = layerMask != slot.layerMask;
+    if (signature == slot.frameSignature && !cameraChanged && !layerChanged) {
+        slot.frame = std::move(frame);
+        return;
+    }
+
+    slot.frame = std::move(frame);
+    slot.frameSignature = signature;
+    if (cameraChanged || layerChanged) {
+        slot.camera = camera;
+        slot.cameraSignature = cameraSignature;
+        slot.layerMask = layerMask;
+        for (OverlayProxyGroup& group : slot.proxyGroups) {
             group.signature = 0;
         }
     }
     if (engine_ && scene_ && overlayMaterial_ && overlayLineMaterial_ && overlayPointMaterial_) {
-        rebuildOverlayProxies();
+        rebuildOverlayProxies(slot);
     }
 }
 
@@ -859,7 +861,7 @@ filament::MaterialInstance* SceneRenderBridge::createMeshMaterialInstance(const 
     return materialInstance;
 }
 
-void SceneRenderBridge::rebuildOverlayProxies() {
+void SceneRenderBridge::rebuildOverlayProxies(OverlaySlot& slot) {
     if (!engine_ || !scene_ || !overlayMaterial_ || !overlayLineMaterial_ || !overlayPointMaterial_) {
         return;
     }
@@ -883,7 +885,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         return indices;
     };
 
-    auto buildTriangleOverlay = [this, &configureOverlayMaterial, &makeSequentialIndices](
+    auto buildTriangleOverlay = [this, &slot, &configureOverlayMaterial, &makeSequentialIndices](
                                 const std::vector<RenderVertex>& vertices,
                                 const OverlayRenderState& state,
                                 std::vector<OverlayProxy>& targetProxies) {
@@ -917,6 +919,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
                 .material(0, proxy.materialInstance)
                 .blendOrder(0, state.blendOrder)
                 .globalBlendOrderEnabled(0, true)
+                .layerMask(kViewportAllLayerMask, slot.layerMask)
                 .boundingBox(overlayMeshBounds())
                 .culling(false)
                 .castShadows(false)
@@ -926,7 +929,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         targetProxies.push_back(proxy);
     };
 
-    auto buildLineOverlay = [this, &configureOverlayMaterial](
+    auto buildLineOverlay = [this, &slot, &configureOverlayMaterial](
                                     const std::vector<OverlayLineVertex>& vertices,
                                     const std::vector<std::uint32_t>& indices,
                                     const OverlayRenderState& state,
@@ -964,6 +967,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
                 .material(0, proxy.materialInstance)
                 .blendOrder(0, state.blendOrder)
                 .globalBlendOrderEnabled(0, true)
+                .layerMask(kViewportAllLayerMask, slot.layerMask)
                 .boundingBox(overlayMeshBounds())
                 .culling(false)
                 .castShadows(false)
@@ -973,7 +977,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         targetProxies.push_back(proxy);
     };
 
-    auto buildPointOverlay = [this, &configureOverlayMaterial](
+    auto buildPointOverlay = [this, &slot, &configureOverlayMaterial](
                                      const std::vector<OverlayPointVertex>& vertices,
                                      const std::vector<std::uint32_t>& indices,
                                      const OverlayRenderState& state,
@@ -1012,6 +1016,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
                 .material(0, proxy.materialInstance)
                 .blendOrder(0, state.blendOrder)
                 .globalBlendOrderEnabled(0, true)
+                .layerMask(kViewportAllLayerMask, slot.layerMask)
                 .boundingBox(overlayMeshBounds())
                 .culling(false)
                 .castShadows(false)
@@ -1080,8 +1085,8 @@ void SceneRenderBridge::rebuildOverlayProxies() {
     };
 
     for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
-        const std::uint64_t layerSignature = overlayLayerSignature(selectedOverlayFrame_, externalOverlayFrame_, layer);
-        OverlayProxyGroup& group = overlayProxyGroups_[static_cast<std::size_t>(layer)];
+        const std::uint64_t layerSignature = overlayLayerSignature(slot.frame, layer);
+        OverlayProxyGroup& group = slot.proxyGroups[static_cast<std::size_t>(layer)];
         if (group.signature == layerSignature) {
             continue;
         }
@@ -1094,9 +1099,8 @@ void SceneRenderBridge::rebuildOverlayProxies() {
 
         std::uint16_t blendOrder = static_cast<std::uint16_t>(viewportOverlayDrawOrder(layer) * 64);
         std::vector<RenderVertex> triangleVertices;
-        triangleVertices.reserve((selectedOverlayFrame_.triangles.size() + externalOverlayFrame_.triangles.size()) * 3u);
-        appendTrianglesForLayer(triangleVertices, selectedOverlayFrame_, layer);
-        appendTrianglesForLayer(triangleVertices, externalOverlayFrame_, layer);
+        triangleVertices.reserve(slot.frame.triangles.size() * 3u);
+        appendTrianglesForLayer(triangleVertices, slot.frame, layer);
         if (!triangleVertices.empty()) {
             if (viewportOverlayLayerUsesDepthStampedFaceFill(layer)) {
                 buildTriangleOverlay(triangleVertices,
@@ -1118,9 +1122,8 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         };
 
         std::vector<const ViewportOverlayLine*> lines;
-        lines.reserve(selectedOverlayFrame_.lines.size() + externalOverlayFrame_.lines.size());
-        appendLinesForLayer(lines, selectedOverlayFrame_, layer);
-        appendLinesForLayer(lines, externalOverlayFrame_, layer);
+        lines.reserve(slot.frame.lines.size());
+        appendLinesForLayer(lines, slot.frame, layer);
         std::vector<LineBatchKey> lineKeys;
         for (const ViewportOverlayLine* line : lines) {
             const LineBatchKey key{
@@ -1142,7 +1145,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
             const float depthBias = viewportOverlayDepthBias(layer, ViewportOverlayGeometryKind::Lines);
             for (const ViewportOverlayLine* line : lines) {
                 if (line->color == key.color && viewportOverlayLineWidthPixels(layer, line->widthPixels) == key.widthPixels) {
-                    (void)appendOverlayLineQuad(lineVertices, lineIndices, *line, overlayCamera_, key.widthPixels, depthBias);
+                    (void)appendOverlayLineQuad(lineVertices, lineIndices, *line, slot.camera, key.widthPixels, depthBias);
                 }
             }
             buildLineOverlay(lineVertices,
@@ -1154,9 +1157,8 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         }
 
         std::vector<const ViewportOverlayPoint*> points;
-        points.reserve(selectedOverlayFrame_.points.size() + externalOverlayFrame_.points.size());
-        appendPointsForLayer(points, selectedOverlayFrame_, layer);
-        appendPointsForLayer(points, externalOverlayFrame_, layer);
+        points.reserve(slot.frame.points.size());
+        appendPointsForLayer(points, slot.frame, layer);
         auto buildPointPass = [&](bool outline) {
             std::vector<float> pointSizes;
             for (const ViewportOverlayPoint* point : points) {
@@ -1187,7 +1189,7 @@ void SceneRenderBridge::rebuildOverlayProxies() {
                     const std::uint32_t color = outline && !outlineUsesNativeColor
                             ? kOverlayVertexOutlineColor
                             : point->color;
-                    (void)appendOverlayPointQuad(pointVertices, pointIndices, point->position, color, overlayCamera_, sizePixels, depthBias);
+                    (void)appendOverlayPointQuad(pointVertices, pointIndices, point->position, color, slot.camera, sizePixels, depthBias);
                 }
                 buildPointOverlay(pointVertices,
                         pointIndices,
@@ -1237,6 +1239,21 @@ void SceneRenderBridge::destroyMeshProxy(MeshProxy& proxy) {
         utils::EntityManager::get().destroy(proxy.entity);
         proxy.entity.clear();
     }
+}
+
+void SceneRenderBridge::destroyOverlaySlot(OverlaySlot& slot) {
+    for (OverlayProxyGroup& group : slot.proxyGroups) {
+        for (OverlayProxy& proxy : group.proxies) {
+            destroyOverlayProxy(proxy);
+        }
+        group.proxies.clear();
+        group.signature = 0;
+    }
+    slot.frame = {};
+    slot.frameSignature = overlayFrameSignature(slot.frame);
+    slot.camera = {};
+    slot.cameraSignature = 0;
+    slot.layerMask = 0;
 }
 
 void SceneRenderBridge::destroyOverlayProxy(OverlayProxy& proxy) {

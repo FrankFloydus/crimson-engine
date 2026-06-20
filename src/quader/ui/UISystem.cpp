@@ -77,7 +77,7 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
     const std::uintmax_t iniSize = iniExists ? std::filesystem::file_size(settingsPaths_.imguiIniFile, error) : 0u;
     hasSavedDockLayout_ = iniExists && !error && iniSize > 0u;
 
-    registerPanels();
+    registerPanels(renderSystem);
     panels_.applySettings(settings_);
 
     IMGUI_CHECKVERSION();
@@ -109,6 +109,9 @@ void UISystem::shutdown() {
         ImGui::SaveIniSettingsToDisk(imguiIniPath_.c_str());
     }
 
+    if (viewportPanel_ != nullptr) {
+        viewportPanel_->shutdown();
+    }
     renderer_.shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
@@ -134,9 +137,7 @@ void UISystem::beginFrame() {
     ImGui::NewFrame();
 }
 
-void UISystem::draw(ViewportRenderer& viewport,
-        ViewportCameraController& camera,
-        SceneRenderBridge& renderBridge,
+void UISystem::draw(SceneRenderBridge& renderBridge,
         SceneDocument& document,
         AssetRegistry& assets,
         UndoRedoManager& undoRedo,
@@ -151,8 +152,6 @@ void UISystem::draw(ViewportRenderer& viewport,
     const UIPanelId previousFocusedPanel = focusedPanel_;
     bool panelFocusChanged = false;
     UIContext context{
-            .viewport = viewport,
-            .camera = camera,
             .renderBridge = renderBridge,
             .document = document,
             .assets = assets,
@@ -183,14 +182,27 @@ void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t f
     renderer_.prepare(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
 }
 
+void UISystem::prepareViewports(SceneRenderBridge& renderBridge) {
+    if (viewportPanel_ != nullptr) {
+        viewportPanel_->prepareViewports(renderBridge);
+    }
+}
+
+void UISystem::renderViewports(RenderSystem& renderSystem) {
+    if (viewportPanel_ != nullptr) {
+        viewportPanel_->renderViewports(renderSystem.renderer());
+    }
+}
+
 void UISystem::render(RenderSystem& renderSystem) {
     renderer_.render(renderSystem.renderer());
 }
 
-void UISystem::registerPanels() {
+void UISystem::registerPanels(RenderSystem& renderSystem) {
     panels_.add(std::make_unique<OutlinerPanel>());
 
     auto viewport = std::make_unique<ViewportPanel>();
+    viewport->initialize(renderSystem);
     viewportPanel_ = viewport.get();
     panels_.add(std::move(viewport));
 
@@ -260,6 +272,18 @@ void UISystem::drawMenuBar(bool& quitRequested) {
                 }
             }
             ImGui::EndMenu();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Layout")) {
+        if (viewportPanel_ != nullptr) {
+            for (const ViewportLayoutOption& option : viewportLayoutOptions()) {
+                const bool selected = viewportPanel_->viewportLayout() == option.id;
+                if (ImGui::MenuItem(option.label.data(), nullptr, selected)) {
+                    viewportPanel_->setViewportLayout(option.id);
+                }
+            }
         }
         ImGui::EndMenu();
     }

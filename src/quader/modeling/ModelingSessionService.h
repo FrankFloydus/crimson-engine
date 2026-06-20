@@ -253,6 +253,52 @@ struct ModelingRepeatTransform {
     Vec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
+struct ModelingTransformDragBeginRequest {
+    ModelingTransformTool tool = ModelingTransformTool::Move;
+    ModelingTransformOperation operation = ModelingTransformOperation::Transform;
+    ModelingTransformAxis axis = ModelingTransformAxis::None;
+    Vec3 pivot = {};
+    Vec2 screenPosition = {};
+    Vec2 screenPivot = {};
+    Vec2 screenTip = {};
+    bool hasWorldDirection = false;
+    Vec3 worldDirection = {};
+    ModelingRay ray;
+    ModelingViewportCamera camera;
+    double gridSize = 1.0;
+    double vertexSnapRadius = 0.3;
+    bool duplicateSelected = false;
+};
+
+struct ModelingTransformDragUpdateRequest {
+    Vec2 screenPosition = {};
+    ModelingRay ray;
+    ModelingViewportCamera camera;
+    double gridSize = 1.0;
+    double vertexSnapRadius = 0.3;
+    bool precision = false;
+};
+
+struct ModelingTransformDragPreview {
+    bool ok = false;
+    bool active = false;
+    bool changed = false;
+    bool previewDriven = false;
+    std::string message;
+    ModelingTransformTool tool = ModelingTransformTool::Move;
+    ModelingTransformOperation operation = ModelingTransformOperation::Transform;
+    ModelingTransformAxis axis = ModelingTransformAxis::None;
+    Vec3 pivot = {};
+    Vec3 moveDelta = {};
+    double rotateAngleDegrees = 0.0;
+    Vec3 scale = {1.0f, 1.0f, 1.0f};
+    std::uint64_t contentRevision = 0;
+    std::uint64_t selectionRevision = 0;
+    bool sceneTransform = false;
+    bool hasScenePreviewTransform = false;
+    ModelingTransform3 scenePreviewTransform = {};
+};
+
 struct ModelingCreateBoxResult {
     bool ok = false;
     bool changed = false;
@@ -312,6 +358,10 @@ public:
     ModelingCommandResult commitTransformPreview();
     ModelingCommandResult cancelTransformPreview();
     ModelingCommandResult recordRepeatableTransform(const ModelingRepeatTransform& transform);
+    ModelingTransformDragPreview beginTransformDrag(const ModelingTransformDragBeginRequest& request);
+    ModelingTransformDragPreview updateTransformDrag(const ModelingTransformDragUpdateRequest& request);
+    ModelingTransformDragPreview commitTransformDrag();
+    ModelingCommandResult cancelTransformDrag();
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request);
     ModelingCommandResult clearSelectionHover();

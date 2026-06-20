@@ -148,6 +148,8 @@ add_library(quader_core STATIC
     src/quader/ui/UISettings.cpp
     src/quader/viewport/ViewportCameraController.cpp
     src/quader/viewport/ViewportInputRouter.cpp
+    src/quader/viewport/ViewportLayout.cpp
+    src/quader/viewport/ViewportSettings.cpp
 )
 
 target_include_directories(quader_core PUBLIC src)
@@ -263,6 +265,7 @@ quader_compile_material(ground_grid_material resources/materials/ground_grid.mat
 
 add_library(quader_runtime STATIC
     src/quader/app/App.cpp
+    src/quader/platform/FatalErrorHandler.cpp
     src/quader/platform/PlatformWindow.cpp
     src/quader/render/FilamentUtils.cpp
     src/quader/render/ImGuiFilamentRenderer.cpp
@@ -293,6 +296,9 @@ target_link_libraries(quader_runtime
         imgui::imgui
         lodepng
 )
+if(WIN32)
+    target_link_libraries(quader_runtime PUBLIC Dbghelp)
+endif()
 add_dependencies(quader_runtime
     quader_mesh_material
     vertex_color_overlay_material

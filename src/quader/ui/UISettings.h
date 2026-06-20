@@ -10,6 +10,7 @@ struct UISettingsPaths {
     std::filesystem::path directory;
     std::filesystem::path imguiIniFile;
     std::filesystem::path settingsFile;
+    std::filesystem::path viewportSettingsFile;
 };
 
 class UISettings {

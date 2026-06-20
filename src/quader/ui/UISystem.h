@@ -14,7 +14,6 @@
 #include "quader/ui/UISettings.h"
 #include "quader/ui/UIStyleTokens.h"
 #include "quader/ui/ViewportPanel.h"
-#include "quader/viewport/ViewportCameraController.h"
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
@@ -34,9 +33,7 @@ public:
 
     bool processEvent(const SDL_Event& event);
     void beginFrame();
-    void draw(ViewportRenderer& viewport,
-            ViewportCameraController& camera,
-            SceneRenderBridge& renderBridge,
+    void draw(SceneRenderBridge& renderBridge,
             SceneDocument& document,
             AssetRegistry& assets,
             UndoRedoManager& undoRedo,
@@ -45,11 +42,13 @@ public:
             AssetId defaultMaterial,
             bool& quitRequested);
     void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
+    void prepareViewports(SceneRenderBridge& renderBridge);
+    void renderViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
     const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }
 
 private:
-    void registerPanels();
+    void registerPanels(RenderSystem& renderSystem);
     void drawDockspace(bool& quitRequested);
     void drawMenuBar(bool& quitRequested);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);

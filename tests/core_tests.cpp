@@ -18,11 +18,14 @@
 #include "quader/viewport/HostViewportContractAdapter.h"
 #include "quader/viewport/ViewportCameraController.h"
 #include "quader/viewport/ViewportInputRouter.h"
+#include "quader/viewport/ViewportLayout.h"
+#include "quader/viewport/ViewportSettings.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -37,6 +40,66 @@ using namespace quader;
 #define QUADER_SOURCE_DIR "."
 #endif
 
+void expectColorNear(ViewportSettingColor actual, ViewportSettingColor expected) {
+    EXPECT_NEAR(actual.r, expected.r, 0.001f);
+    EXPECT_NEAR(actual.g, expected.g, 0.001f);
+    EXPECT_NEAR(actual.b, expected.b, 0.001f);
+    EXPECT_NEAR(actual.a, expected.a, 0.001f);
+}
+
+ModelingViewportCamera testOrthographicViewportCamera() {
+    return {
+            .orthographic = true,
+            .origin = {0.0f, 0.0f, 10.0f},
+            .xAxis = {1.0f, 0.0f, 0.0f},
+            .yAxis = {0.0f, 1.0f, 0.0f},
+            .zAxis = {0.0f, 0.0f, 1.0f},
+            .viewportSize = {100.0f, 100.0f},
+            .orthographicSize = 100.0,
+            .fovDegrees = 60.0,
+    };
+}
+
+ModelingRay testViewportForwardRay(float x = 0.0f) {
+    return {
+            .origin = {x, 0.0f, 10.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+}
+
+ModelingTransformDragBeginRequest testXMoveDragBeginRequest(
+        Vec3 pivot = {},
+        ModelingTransformOperation operation = ModelingTransformOperation::Transform,
+        bool duplicateSelected = false) {
+    return {
+            .tool = ModelingTransformTool::Move,
+            .operation = operation,
+            .axis = ModelingTransformAxis::X,
+            .pivot = pivot,
+            .screenPosition = {0.0f, 0.0f},
+            .screenPivot = {0.0f, 0.0f},
+            .screenTip = {10.0f, 0.0f},
+            .hasWorldDirection = true,
+            .worldDirection = {1.0f, 0.0f, 0.0f},
+            .ray = testViewportForwardRay(),
+            .camera = testOrthographicViewportCamera(),
+            .gridSize = 1.0,
+            .vertexSnapRadius = 0.3,
+            .duplicateSelected = duplicateSelected,
+    };
+}
+
+ModelingTransformDragUpdateRequest testXMoveDragUpdateRequest(float screenX) {
+    return {
+            .screenPosition = {screenX, 0.0f},
+            .ray = testViewportForwardRay(),
+            .camera = testOrthographicViewportCamera(),
+            .gridSize = 1.0,
+            .vertexSnapRadius = 0.3,
+            .precision = false,
+    };
+}
+
 TEST(LoggerTests, RoutesMessagesToMemorySink) {
     Logger::initialize(LoggerConfig{.name = "test", .filePath = "test.log", .maxEntries = 16});
     Logger::clearMemory();
@@ -46,6 +109,42 @@ TEST(LoggerTests, RoutesMessagesToMemorySink) {
     const auto entries = Logger::entriesSnapshot();
     ASSERT_FALSE(entries.empty());
     EXPECT_NE(entries.back().message.find("hello quader"), std::string::npos);
+}
+
+TEST(FatalErrorHandlerTests, MainInstallsReportableFatalErrorBoundary) {
+    const std::filesystem::path mainPath = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "main.cpp";
+    std::ifstream mainFile(mainPath);
+    ASSERT_TRUE(mainFile.is_open()) << mainPath.string();
+    const std::string mainSource{std::istreambuf_iterator<char>(mainFile), std::istreambuf_iterator<char>()};
+
+    const std::filesystem::path handlerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "platform" / "FatalErrorHandler.cpp";
+    std::ifstream handlerFile(handlerPath);
+    ASSERT_TRUE(handlerFile.is_open()) << handlerPath.string();
+    const std::string handlerSource{std::istreambuf_iterator<char>(handlerFile), std::istreambuf_iterator<char>()};
+    const std::filesystem::path cmakePath = std::filesystem::path(QUADER_SOURCE_DIR) / "CMakeLists.txt";
+    std::ifstream cmakeFile(cmakePath);
+    ASSERT_TRUE(cmakeFile.is_open()) << cmakePath.string();
+    const std::string cmakeSource{std::istreambuf_iterator<char>(cmakeFile), std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(mainSource.find("installFatalErrorHandler(logPath)"), std::string::npos);
+    EXPECT_NE(mainSource.find("reportFatalErrorAndExit"), std::string::npos);
+    EXPECT_NE(mainSource.find("FatalErrorCode::UnhandledCppException"), std::string::npos);
+    EXPECT_NE(handlerSource.find("Quader Fatal Error"), std::string::npos);
+    EXPECT_NE(handlerSource.find("Error code:"), std::string::npos);
+    EXPECT_NE(handlerSource.find("Quick message:"), std::string::npos);
+    EXPECT_NE(handlerSource.find("A stack trace was written to this log file"), std::string::npos);
+    EXPECT_NE(handlerSource.find("Stack trace (most recent call first):"), std::string::npos);
+    EXPECT_NE(handlerSource.find("CaptureStackBackTrace"), std::string::npos);
+    EXPECT_NE(handlerSource.find("StackWalk64"), std::string::npos);
+    EXPECT_NE(handlerSource.find("SymFromAddr"), std::string::npos);
+    EXPECT_NE(handlerSource.find("QDR-FATAL-0000"), std::string::npos);
+    EXPECT_NE(handlerSource.find("QDR-FATAL-0001"), std::string::npos);
+    EXPECT_NE(handlerSource.find("QDR-FATAL-0002"), std::string::npos);
+    EXPECT_NE(handlerSource.find("Internal runtime abort."), std::string::npos);
+    EXPECT_NE(handlerSource.find("SIGABRT"), std::string::npos);
+    EXPECT_NE(handlerSource.find("_set_abort_behavior"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("Dbghelp"), std::string::npos);
 }
 
 TEST(ConsoleModelTests, FiltersByLevelAndSearch) {
@@ -102,6 +201,58 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
     EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Outliner));
     EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Inspector));
     EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
+
+    std::filesystem::remove(path);
+}
+
+TEST(ViewportSettingsTests, DefaultsMirrorUnityViewportSettingsState) {
+    const ViewportSettings settings = ViewportSettings::defaults();
+
+    ASSERT_EQ(viewportSettingsSections().size(), 8u);
+    EXPECT_EQ(viewportSettingsSections()[0].label, "Scene");
+    EXPECT_TRUE(viewportSettingsSections()[0].defaultExpanded);
+    EXPECT_EQ(viewportSettingsSections()[1].label, "Grid");
+    EXPECT_EQ(viewportSettingsSections()[2].label, "Selection");
+    EXPECT_EQ(viewportSettingsSections()[3].label, "Overlay");
+    EXPECT_EQ(viewportSettingsSections()[4].label, "Vertices");
+    EXPECT_EQ(viewportSettingsSections()[5].label, "Measurements");
+    EXPECT_EQ(viewportSettingsSections()[6].label, "Picking");
+    EXPECT_EQ(viewportSettingsSections()[7].label, "Gizmo");
+
+    expectColorNear(settings.color(ViewportColorSettingId::Background), {0.0509804f, 0.0509804f, 0.0509804f, 1.0f});
+    expectColorNear(settings.color(ViewportColorSettingId::SelectionWire), {1.0f, 0.827451f, 0.121569f, 1.0f});
+    expectColorNear(settings.color(ViewportColorSettingId::SourceWire), {0.360784f, 0.878431f, 1.0f, 0.921569f});
+    EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GridMinorLineSize), 0.32f);
+    EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::SelectionEdgeLineSize), 2.5f);
+    EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::PickVertexRadius), 0.3f);
+    EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GizmoSize), 1.0f);
+    EXPECT_TRUE(viewportBoolSettings().empty());
+}
+
+TEST(ViewportSettingsTests, SavesLoadsAndClampsUnityPreferenceKeys) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_viewport_settings_round_trip.ini";
+    std::filesystem::remove(path);
+
+    ViewportSettings settings = ViewportSettings::defaults();
+    EXPECT_TRUE(settings.setColor(ViewportColorSettingId::Background, {0.25f, 0.5f, 0.75f, 0.6f}));
+    EXPECT_TRUE(settings.setFloatValue(ViewportFloatSettingId::GizmoSize, 10.0f));
+    ASSERT_TRUE(settings.save(path));
+
+    const ViewportSettings loaded = ViewportSettings::load(path);
+    expectColorNear(loaded.color(ViewportColorSettingId::Background), {0.25098f, 0.501961f, 0.74902f, 0.6f});
+    EXPECT_FLOAT_EQ(loaded.floatValue(ViewportFloatSettingId::GizmoSize), 2.0f);
+
+    {
+        std::ifstream sourceFile(path);
+        ASSERT_TRUE(sourceFile.is_open()) << path.string();
+        const std::string source{
+                std::istreambuf_iterator<char>(sourceFile),
+                std::istreambuf_iterator<char>()};
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"), std::string::npos);
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"), std::string::npos);
+        EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.ShowSpecialTextures"), std::string::npos);
+    }
 
     std::filesystem::remove(path);
 }
@@ -389,8 +540,10 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("makeViewportOverlayCamera(camera, itemSize)"), std::string::npos);
-    EXPECT_NE(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));"), std::string::npos);
+    EXPECT_NE(source.find("refreshCachedSelectionOverlayFrame(document, modeling)"), std::string::npos);
+    EXPECT_NE(source.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
+    EXPECT_NE(source.find("makeViewportOverlayCamera(paneState.camera, {paneState.renderSize.x, paneState.renderSize.y})"), std::string::npos);
+    EXPECT_EQ(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));"), std::string::npos);
     EXPECT_EQ(source.find("drawSelectionOverlay2d"), std::string::npos);
     EXPECT_EQ(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
     EXPECT_EQ(source.find("pointVisibleFromCamera"), std::string::npos);
@@ -398,6 +551,118 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
     EXPECT_EQ(source.find("renderBridge.setOverlayFrame(selectionOverlay, camera"), std::string::npos);
     EXPECT_EQ(source.find("shouldDrawOverlayLayer2d"), std::string::npos);
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("void ViewportPanel::drawPaneDecorations("), std::string::npos);
+    EXPECT_NE(source.find("drawViewCube(paneState.camera, itemMin, itemSize, false)"), std::string::npos);
+    EXPECT_NE(source.find("drawTransformGizmo(\n            document,\n            assets,\n            undoRedo,\n            documentCommands,\n            modeling,\n            paneState.camera"), std::string::npos);
+    EXPECT_NE(source.find("true,\n            false);"), std::string::npos);
+    EXPECT_NE(source.find("if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))"), std::string::npos);
+    EXPECT_NE(source.find("if (!interactive) {\n        return false;\n    }\n\n    bool consumed = gizmoDragging_;"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("result.shortcut.kind == ViewportShortcutKind::ToggleMaximized"), std::string::npos);
+    EXPECT_NE(source.find("focusedPaneId_ = paneState.id"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("if (drawPane.focusHovered && !splitConsumed)"), std::string::npos);
+    EXPECT_NE(source.find("focusedPaneId_ = drawPane.pane->id"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    std::ifstream headerFile(headerPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(header.find("bool gizmoDragPaneActive_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportPaneId gizmoDragPaneId_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportPaneId paneId"), std::string::npos);
+
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const bool gizmoDragLocksInput = gizmoDragging_ && gizmoDragPaneActive_"), std::string::npos);
+    EXPECT_NE(source.find("if (!gizmoDragLocksInput)"), std::string::npos);
+    EXPECT_NE(source.find("drawPane.pane->id == gizmoDragPaneId_"), std::string::npos);
+    EXPECT_NE(source.find("inputOwnsActiveGizmoDrag"), std::string::npos);
+    EXPECT_NE(source.find("gizmoDragPaneActive_ = true"), std::string::npos);
+    EXPECT_NE(source.find("gizmoDragPaneId_ = paneId"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    std::ifstream headerFile(headerPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(header.find("ViewportPaneId paneId"), std::string::npos);
+    EXPECT_NE(header.find("Vec3 cameraEye"), std::string::npos);
+    EXPECT_NE(header.find("Vec3 cameraForward"), std::string::npos);
+    EXPECT_NE(header.find("Vec3 cameraRight"), std::string::npos);
+    EXPECT_NE(header.find("Vec3 cameraUp"), std::string::npos);
+    EXPECT_NE(header.find("ViewportOverlayProjection cameraProjection"), std::string::npos);
+    EXPECT_NE(header.find("paneId == other.paneId"), std::string::npos);
+    EXPECT_NE(header.find("vec3Matches(cameraEye, other.cameraEye)"), std::string::npos);
+    EXPECT_NE(header.find("cameraProjection == other.cameraProjection"), std::string::npos);
+
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const ViewportOverlayCamera overlayCamera = makeViewportOverlayCamera(camera, itemSize)"), std::string::npos);
+    EXPECT_NE(source.find(".paneId = paneState.id"), std::string::npos);
+    EXPECT_NE(source.find(".cameraEye = overlayCamera.eye"), std::string::npos);
+    EXPECT_NE(source.find(".cameraForward = overlayCamera.forward"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
@@ -509,10 +774,14 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBeg
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("sdkTransformPreviewExtrude_ = sdkPreviewDriven && topologyModifier && tool == ViewportTool::Move"), std::string::npos);
-    EXPECT_NE(source.find("sdkTransformPreviewInset_ = sdkPreviewDriven && topologyModifier && tool == ViewportTool::Scale"), std::string::npos);
-    EXPECT_NE(source.find("if (sdkTransformPreviewExtrude_)"), std::string::npos);
-    EXPECT_NE(source.find("tool == ViewportTool::Scale && sdkTransformPreviewInset_"), std::string::npos);
+    EXPECT_NE(source.find("const bool topologyModifier = componentSelectionMode && io.KeyShift"), std::string::npos);
+    EXPECT_NE(source.find("topologyModifier && tool == ViewportTool::Move ? ModelingTransformOperation::Extrude"), std::string::npos);
+    EXPECT_NE(source.find("topologyModifier && tool == ViewportTool::Scale ? ModelingTransformOperation::Inset"), std::string::npos);
+    EXPECT_NE(source.find(".operation = operation"), std::string::npos);
+    EXPECT_NE(source.find("modeling.beginTransformDrag({"), std::string::npos);
+    EXPECT_NE(source.find("modeling.updateTransformDrag({"), std::string::npos);
+    EXPECT_EQ(source.find("sdkTransformPreviewExtrude_"), std::string::npos);
+    EXPECT_EQ(source.find("sdkTransformPreviewInset_"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBegin) {
@@ -527,23 +796,44 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
 
     const std::size_t duplicateStart =
             source.find("const bool duplicateSelected = !componentSelectionMode && io.KeyShift");
-    const std::size_t previewDriven =
-            source.find("const bool sdkPreviewDriven = componentSelectionMode || duplicateSelected");
-    const std::size_t beginPreview =
-            source.find("modeling.beginTransformPreview(duplicateSelected)");
-    const std::size_t updatePreview =
-            source.find("command = modeling.updateTransformTranslatePreview(previewMoveDelta);");
+    const std::size_t beginPreview = source.find("modeling.beginTransformDrag({");
+    const std::size_t duplicateField = source.find(".duplicateSelected = duplicateSelected", beginPreview);
+    const std::size_t updatePreview = source.find("modeling.updateTransformDrag({");
     const std::size_t localFallback =
             source.find("for (const GizmoStartTransform& start : gizmoStartTransforms_)", updatePreview);
+    const std::size_t commitPreview = source.find("modeling.commitTransformDrag()");
 
     ASSERT_NE(duplicateStart, std::string::npos);
-    ASSERT_NE(previewDriven, std::string::npos);
     ASSERT_NE(beginPreview, std::string::npos);
+    ASSERT_NE(duplicateField, std::string::npos);
     ASSERT_NE(updatePreview, std::string::npos);
     ASSERT_NE(localFallback, std::string::npos);
+    ASSERT_NE(commitPreview, std::string::npos);
     EXPECT_LT(duplicateStart, beginPreview);
+    EXPECT_LT(beginPreview, duplicateField);
     EXPECT_LT(updatePreview, localFallback);
-    EXPECT_NE(source.find("repeat.duplicateSelected = sdkTransformPreviewDuplicateSelected_"), std::string::npos);
+    EXPECT_EQ(source.find("modeling.beginTransformPreview(duplicateSelected)"), std::string::npos);
+    EXPECT_EQ(source.find("modeling.recordRepeatableTransform"), std::string::npos);
+    EXPECT_EQ(source.find("sdkTransformPreviewDuplicateSelected_"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("modeling.beginTransformDrag({"), std::string::npos);
+    EXPECT_NE(source.find("modeling.updateTransformDrag({"), std::string::npos);
+    EXPECT_NE(source.find("modeling.commitTransformDrag()"), std::string::npos);
+    EXPECT_EQ(source.find("quader_editor_core::begin_move_drag"), std::string::npos);
+    EXPECT_EQ(source.find("quader_editor_core::preview_move_from_viewport"), std::string::npos);
+    EXPECT_EQ(source.find("quader_editor_core::preview_rotate_from_screen_position"), std::string::npos);
+    EXPECT_EQ(source.find("quader_editor_core::preview_scale_from_screen_position"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
@@ -590,7 +880,9 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const bool suppressHoverWork = result.navigationActive || result.cameraChanged"), std::string::npos);
-    EXPECT_NE(source.find("drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
+    EXPECT_NE(source.find("drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, paneState.id, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
+    EXPECT_NE(source.find("drawTransformGizmo(\n            document,\n            assets,\n            undoRedo,\n            documentCommands,\n            modeling,\n            paneState.camera"), std::string::npos);
+    EXPECT_NE(source.find("if (interactive) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
     EXPECT_NE(source.find("mouseInsideViewport && !suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find("lastHoverWorkKey_"), std::string::npos);
     EXPECT_NE(source.find("claimHoverWork(hoverWorkKey)"), std::string::npos);
@@ -638,18 +930,20 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
 
     EXPECT_NE(source.find("overlayFrameSignature"), std::string::npos);
     EXPECT_NE(source.find("overlayLayerSignature"), std::string::npos);
-    EXPECT_NE(source.find("overlayProxyGroups_"), std::string::npos);
+    EXPECT_NE(source.find("overlaySlots_"), std::string::npos);
+    EXPECT_NE(source.find("slot.proxyGroups"), std::string::npos);
     EXPECT_NE(source.find("frame.lines.size()"), std::string::npos);
     EXPECT_NE(source.find("frame.points.size()"), std::string::npos);
     EXPECT_NE(source.find("hashFloat(hash, line.widthPixels)"), std::string::npos);
     EXPECT_NE(source.find("hashFloat(hash, point.sizePixels)"), std::string::npos);
-    EXPECT_NE(source.find("externalOverlaySignature_"), std::string::npos);
+    EXPECT_NE(source.find("slot.frameSignature"), std::string::npos);
     EXPECT_NE(source.find("overlayCameraSignature"), std::string::npos);
-    EXPECT_NE(source.find("const bool cameraChanged = cameraSignature != overlayCameraSignature_"), std::string::npos);
-    EXPECT_NE(source.find("if (signature == externalOverlaySignature_ && !cameraChanged)"), std::string::npos);
-    EXPECT_NE(source.find("externalOverlayFrame_ = std::move(frame);\n        return;"), std::string::npos);
+    EXPECT_NE(source.find("const bool cameraChanged = cameraSignature != slot.cameraSignature"), std::string::npos);
+    EXPECT_NE(source.find("const bool layerChanged = layerMask != slot.layerMask"), std::string::npos);
+    EXPECT_NE(source.find("if (signature == slot.frameSignature && !cameraChanged && !layerChanged)"), std::string::npos);
+    EXPECT_NE(source.find("slot.frame = std::move(frame);\n        return;"), std::string::npos);
     EXPECT_NE(source.find("group.signature = 0;"), std::string::npos);
-    EXPECT_NE(source.find("rebuildOverlayProxies();"), std::string::npos);
+    EXPECT_NE(source.find("rebuildOverlayProxies(slot);"), std::string::npos);
     EXPECT_NE(source.find("if (group.signature == layerSignature)"), std::string::npos);
     EXPECT_NE(source.find("viewportOverlayDrawOrder(layer) * 64"), std::string::npos);
 }
@@ -677,6 +971,31 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
     EXPECT_NE(source.find("objectPickFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, SelectionOverlayCacheKeyIncludesSelectionMode) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    std::ifstream headerFile(headerPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(header.find("ModelingSelectionMode cachedSelectionOverlayMode_"), std::string::npos);
+
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("cachedSelectionOverlayMode_ != overlaySummary.mode"), std::string::npos);
+    EXPECT_NE(source.find("cachedSelectionOverlayMode_ = overlaySummary.mode"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
@@ -707,6 +1026,58 @@ TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
     EXPECT_NE(source.find("TextureSampleColorSpace::LinearSrgb"), std::string::npos);
     EXPECT_NE(source.find("srgbToLinear(0.8f)"), std::string::npos);
     EXPECT_EQ(source.find(".format(Texture::InternalFormat::SRGB8_A8)"), std::string::npos);
+}
+
+TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame) {
+    const std::filesystem::path rendererPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "ViewportRenderer.cpp";
+    std::ifstream rendererFile(rendererPath);
+    ASSERT_TRUE(rendererFile.is_open()) << rendererPath.string();
+    const std::string rendererSource{
+            std::istreambuf_iterator<char>(rendererFile),
+            std::istreambuf_iterator<char>()};
+
+    const std::filesystem::path appPath = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "app" / "App.cpp";
+    std::ifstream appFile(appPath);
+    ASSERT_TRUE(appFile.is_open()) << appPath.string();
+    const std::string appSource{std::istreambuf_iterator<char>(appFile), std::istreambuf_iterator<char>()};
+
+    const std::filesystem::path viewportPanelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream viewportPanelFile(viewportPanelPath);
+    ASSERT_TRUE(viewportPanelFile.is_open()) << viewportPanelPath.string();
+    const std::string viewportPanelSource{
+            std::istreambuf_iterator<char>(viewportPanelFile),
+            std::istreambuf_iterator<char>()};
+
+    const std::filesystem::path bridgePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+    std::ifstream bridgeFile(bridgePath);
+    ASSERT_TRUE(bridgeFile.is_open()) << bridgePath.string();
+    const std::string bridgeSource{std::istreambuf_iterator<char>(bridgeFile), std::istreambuf_iterator<char>()};
+
+    const std::size_t renderStart = rendererSource.find("void ViewportRenderer::render");
+    const std::size_t renderEnd = rendererSource.find("void ViewportRenderer::createGroundGrid");
+    ASSERT_NE(renderStart, std::string::npos);
+    ASSERT_NE(renderEnd, std::string::npos);
+    const std::string renderFunction = rendererSource.substr(renderStart, renderEnd - renderStart);
+    EXPECT_EQ(renderFunction.find("scene_->addEntity"), std::string::npos);
+    EXPECT_EQ(renderFunction.find("scene_->remove"), std::string::npos);
+    EXPECT_NE(rendererSource.find(".layerMask(kViewportAllLayerMask, gridLayerMask_)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("view_->setVisibleLayers(kViewportAllLayerMask, visibleLayers)"), std::string::npos);
+
+    const std::size_t prepareViewports = appSource.find("ui_.prepareViewports(renderBridge_)");
+    const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
+    ASSERT_NE(prepareViewports, std::string::npos);
+    ASSERT_NE(beginFrame, std::string::npos);
+    EXPECT_LT(prepareViewports, beginFrame);
+
+    EXPECT_NE(viewportPanelSource.find("void ViewportPanel::prepareViewports(SceneRenderBridge& renderBridge)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("viewportGridLayerMask(viewportPaneIndex(paneId))"), std::string::npos);
+    EXPECT_NE(bridgeSource.find(".layerMask(kViewportAllLayerMask, slot.layerMask)"), std::string::npos);
+    EXPECT_NE(bridgeSource.find("void SceneRenderBridge::rebuildOverlayProxies(OverlaySlot& slot)"), std::string::npos);
 }
 
 TEST(ImGuiFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
@@ -949,6 +1320,38 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     EXPECT_NE(viewportPanelSource.find("globalEscCancelRequested"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("mouseClickedOutsideViewport"), std::string::npos);
     EXPECT_EQ(viewportPanelSource.find("flySpeedIndicatorSeconds_"), std::string::npos);
+}
+
+TEST(UISystemTests, TopMenuExposesViewportLayoutOptions) {
+    const std::filesystem::path uiSystemPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+    std::ifstream uiSystemFile(uiSystemPath);
+    ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+
+    const std::string uiSystemSource{
+            std::istreambuf_iterator<char>(uiSystemFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Layout\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportLayoutOptions()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportPanel_->setViewportLayout(option.id)"), std::string::npos);
+}
+
+TEST(UISystemTests, TopMenuDoesNotExposeIncompleteViewportSettingsPanel) {
+    const std::filesystem::path uiSystemPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+    std::ifstream uiSystemFile(uiSystemPath);
+    ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+
+    const std::string uiSystemSource{
+            std::istreambuf_iterator<char>(uiSystemFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_EQ(uiSystemSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("drawSettingsPanel"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("viewportSettingsSections()"), std::string::npos);
 }
 
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
@@ -1247,6 +1650,186 @@ TEST(UVSphereTests, GeneratesExpectedTopology) {
     EXPECT_EQ(sphere.primitives.front().indexOffset, 0u);
     EXPECT_EQ(sphere.primitives.front().indexCount, sphere.indices.size());
     EXPECT_EQ(sphere.primitives.front().materialSlot, 0u);
+}
+
+namespace {
+
+void expectViewportPlacement(
+        const ViewportPanePlacement& placement,
+        ViewportPaneId paneId,
+        float x,
+        float y,
+        float width,
+        float height) {
+    EXPECT_EQ(placement.paneId, paneId);
+    EXPECT_NEAR(placement.normalizedRect.x, x, 0.001f);
+    EXPECT_NEAR(placement.normalizedRect.y, y, 0.001f);
+    EXPECT_NEAR(placement.normalizedRect.width, width, 0.001f);
+    EXPECT_NEAR(placement.normalizedRect.height, height, 0.001f);
+}
+
+void expectViewportSplitHandle(
+        const ViewportSplitHandle& handle,
+        ViewportSplitHandleId id,
+        ViewportSplitHandleAxis axis,
+        float position,
+        float start,
+        float end) {
+    EXPECT_EQ(handle.id, id);
+    EXPECT_EQ(handle.axis, axis);
+    EXPECT_NEAR(handle.position, position, 0.001f);
+    EXPECT_NEAR(handle.start, start, 0.001f);
+    EXPECT_NEAR(handle.end, end, 0.001f);
+}
+
+ViewportLayoutState makeDistinctViewportLayoutState() {
+    ViewportLayoutState state;
+    state.setHandlePosition(ViewportSplitHandleId::TwoHorizontal, 0.25f);
+    state.setHandlePosition(ViewportSplitHandleId::TwoVertical, 0.35f);
+    state.setHandlePosition(ViewportSplitHandleId::ThreePrimary, 0.60f);
+    state.setHandlePosition(ViewportSplitHandleId::ThreeSecondary, 0.40f);
+    state.setHandlePosition(ViewportSplitHandleId::FourVertical, 0.30f);
+    state.setHandlePosition(ViewportSplitHandleId::FourHorizontal, 0.70f);
+    return state;
+}
+
+} // namespace
+
+TEST(ViewportLayoutTests, OptionLabelsMatchUnityViewportLayoutModel) {
+    const auto& options = viewportLayoutOptions();
+
+    ASSERT_EQ(options.size(), 8u);
+    EXPECT_EQ(options[0].id, ViewportLayoutId::Single);
+    EXPECT_EQ(options[0].label, "Single View");
+    EXPECT_EQ(options[1].id, ViewportLayoutId::TwoHorizontal);
+    EXPECT_EQ(options[1].label, "Two-View Horizontal");
+    EXPECT_EQ(options[2].id, ViewportLayoutId::TwoVertical);
+    EXPECT_EQ(options[2].label, "Two-View Vertical");
+    EXPECT_EQ(options[3].id, ViewportLayoutId::ThreePrimaryRight);
+    EXPECT_EQ(options[3].label, "Three-View Primary Right");
+    EXPECT_EQ(options[4].id, ViewportLayoutId::ThreePrimaryLeft);
+    EXPECT_EQ(options[4].label, "Three-View Primary Left");
+    EXPECT_EQ(options[5].id, ViewportLayoutId::ThreePrimaryBottom);
+    EXPECT_EQ(options[5].label, "Three-View Primary Bottom");
+    EXPECT_EQ(options[6].id, ViewportLayoutId::ThreePrimaryTop);
+    EXPECT_EQ(options[6].label, "Three-View Primary Top");
+    EXPECT_EQ(options[7].id, ViewportLayoutId::FourQuad);
+    EXPECT_EQ(options[7].label, "Four-View Quad");
+
+    EXPECT_EQ(viewportLayoutLabel(ViewportLayoutId::ThreePrimaryTop), "Three-View Primary Top");
+}
+
+TEST(ViewportLayoutTests, BuildPlacementsMatchUnityNormalizedRects) {
+    const ViewportLayoutState state = makeDistinctViewportLayoutState();
+
+    std::vector<ViewportPanePlacement> placements = viewportLayoutPlacements(ViewportLayoutId::Single, state);
+    ASSERT_EQ(placements.size(), 1u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 1.0f, 1.0f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::TwoHorizontal, state);
+    ASSERT_EQ(placements.size(), 2u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 0.25f, 1.0f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Top, 0.25f, 0.0f, 0.75f, 1.0f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::TwoVertical, state);
+    ASSERT_EQ(placements.size(), 2u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 1.0f, 0.35f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Top, 0.0f, 0.35f, 1.0f, 0.65f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::ThreePrimaryRight, state);
+    ASSERT_EQ(placements.size(), 3u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Top, 0.0f, 0.0f, 0.60f, 0.40f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Side, 0.0f, 0.40f, 0.60f, 0.60f);
+    expectViewportPlacement(placements[2], ViewportPaneId::Perspective, 0.60f, 0.0f, 0.40f, 1.0f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::ThreePrimaryLeft, state);
+    ASSERT_EQ(placements.size(), 3u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 0.60f, 1.0f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Top, 0.60f, 0.0f, 0.40f, 0.40f);
+    expectViewportPlacement(placements[2], ViewportPaneId::Side, 0.60f, 0.40f, 0.40f, 0.60f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::ThreePrimaryBottom, state);
+    ASSERT_EQ(placements.size(), 3u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Top, 0.0f, 0.0f, 0.40f, 0.60f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Side, 0.40f, 0.0f, 0.60f, 0.60f);
+    expectViewportPlacement(placements[2], ViewportPaneId::Perspective, 0.0f, 0.60f, 1.0f, 0.40f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::ThreePrimaryTop, state);
+    ASSERT_EQ(placements.size(), 3u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 1.0f, 0.60f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Top, 0.0f, 0.60f, 0.40f, 0.40f);
+    expectViewportPlacement(placements[2], ViewportPaneId::Side, 0.40f, 0.60f, 0.60f, 0.40f);
+
+    placements = viewportLayoutPlacements(ViewportLayoutId::FourQuad, state);
+    ASSERT_EQ(placements.size(), 4u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 0.30f, 0.70f);
+    expectViewportPlacement(placements[1], ViewportPaneId::Top, 0.30f, 0.0f, 0.70f, 0.70f);
+    expectViewportPlacement(placements[2], ViewportPaneId::Front, 0.0f, 0.70f, 0.30f, 0.30f);
+    expectViewportPlacement(placements[3], ViewportPaneId::Side, 0.30f, 0.70f, 0.70f, 0.30f);
+}
+
+TEST(ViewportLayoutTests, BuildSplitHandlesMatchUnityAxesAndSpans) {
+    const ViewportLayoutState state = makeDistinctViewportLayoutState();
+
+    EXPECT_TRUE(viewportLayoutSplitHandles(ViewportLayoutId::Single, state).empty());
+
+    std::vector<ViewportSplitHandle> handles = viewportLayoutSplitHandles(ViewportLayoutId::TwoHorizontal, state);
+    ASSERT_EQ(handles.size(), 1u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::TwoHorizontal, ViewportSplitHandleAxis::Vertical, 0.25f, 0.0f, 1.0f);
+
+    handles = viewportLayoutSplitHandles(ViewportLayoutId::TwoVertical, state);
+    ASSERT_EQ(handles.size(), 1u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::TwoVertical, ViewportSplitHandleAxis::Horizontal, 0.35f, 0.0f, 1.0f);
+
+    handles = viewportLayoutSplitHandles(ViewportLayoutId::ThreePrimaryRight, state);
+    ASSERT_EQ(handles.size(), 2u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::ThreePrimary, ViewportSplitHandleAxis::Vertical, 0.60f, 0.0f, 1.0f);
+    expectViewportSplitHandle(handles[1], ViewportSplitHandleId::ThreeSecondary, ViewportSplitHandleAxis::Horizontal, 0.40f, 0.0f, 0.60f);
+
+    handles = viewportLayoutSplitHandles(ViewportLayoutId::ThreePrimaryLeft, state);
+    ASSERT_EQ(handles.size(), 2u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::ThreePrimary, ViewportSplitHandleAxis::Vertical, 0.60f, 0.0f, 1.0f);
+    expectViewportSplitHandle(handles[1], ViewportSplitHandleId::ThreeSecondary, ViewportSplitHandleAxis::Horizontal, 0.40f, 0.60f, 1.0f);
+
+    handles = viewportLayoutSplitHandles(ViewportLayoutId::ThreePrimaryBottom, state);
+    ASSERT_EQ(handles.size(), 2u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::ThreePrimary, ViewportSplitHandleAxis::Horizontal, 0.60f, 0.0f, 1.0f);
+    expectViewportSplitHandle(handles[1], ViewportSplitHandleId::ThreeSecondary, ViewportSplitHandleAxis::Vertical, 0.40f, 0.0f, 0.60f);
+
+    handles = viewportLayoutSplitHandles(ViewportLayoutId::ThreePrimaryTop, state);
+    ASSERT_EQ(handles.size(), 2u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::ThreePrimary, ViewportSplitHandleAxis::Horizontal, 0.60f, 0.0f, 1.0f);
+    expectViewportSplitHandle(handles[1], ViewportSplitHandleId::ThreeSecondary, ViewportSplitHandleAxis::Vertical, 0.40f, 0.60f, 1.0f);
+
+    handles = viewportLayoutSplitHandles(ViewportLayoutId::FourQuad, state);
+    ASSERT_EQ(handles.size(), 2u);
+    expectViewportSplitHandle(handles[0], ViewportSplitHandleId::FourVertical, ViewportSplitHandleAxis::Vertical, 0.30f, 0.0f, 1.0f);
+    expectViewportSplitHandle(handles[1], ViewportSplitHandleId::FourHorizontal, ViewportSplitHandleAxis::Horizontal, 0.70f, 0.0f, 1.0f);
+}
+
+TEST(ViewportLayoutTests, SplitStateDefaultsAndClampsLikeUnity) {
+    ViewportLayoutState state;
+
+    EXPECT_FLOAT_EQ(state.twoHorizontalSplit(), 0.5f);
+    EXPECT_FLOAT_EQ(state.twoVerticalSplit(), 0.5f);
+    EXPECT_FLOAT_EQ(state.threePrimarySplit(), 0.5f);
+    EXPECT_FLOAT_EQ(state.threeSecondarySplit(), 0.5f);
+    EXPECT_FLOAT_EQ(state.fourVerticalSplit(), 0.5f);
+    EXPECT_FLOAT_EQ(state.fourHorizontalSplit(), 0.5f);
+
+    state.setHandlePosition(ViewportSplitHandleId::TwoHorizontal, -1.0f);
+    state.setHandlePosition(ViewportSplitHandleId::TwoVertical, 2.0f);
+    state.setHandlePosition(ViewportSplitHandleId::ThreePrimary, 0.14f);
+    state.setHandlePosition(ViewportSplitHandleId::ThreeSecondary, 0.86f);
+    state.setHandlePosition(ViewportSplitHandleId::FourVertical, 0.40f);
+    state.setHandlePosition(ViewportSplitHandleId::FourHorizontal, 0.65f);
+
+    EXPECT_FLOAT_EQ(state.twoHorizontalSplit(), ViewportLayoutState::MinSplit);
+    EXPECT_FLOAT_EQ(state.twoVerticalSplit(), ViewportLayoutState::MaxSplit);
+    EXPECT_FLOAT_EQ(state.threePrimarySplit(), ViewportLayoutState::MinSplit);
+    EXPECT_FLOAT_EQ(state.threeSecondarySplit(), ViewportLayoutState::MaxSplit);
+    EXPECT_FLOAT_EQ(state.fourVerticalSplit(), 0.40f);
+    EXPECT_FLOAT_EQ(state.fourHorizontalSplit(), 0.65f);
 }
 
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
@@ -3363,6 +3946,53 @@ TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMesh
 #endif
 }
 
+TEST(ModelingSessionServiceTests, VertexHoverCandidatePointsRespectSceneTransforms) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Hover Candidate Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    TransformComponent transform;
+    transform.position = {4.0f, 0.0f, 0.0f};
+    scene.setTransform(box.object.entity, transform);
+
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    ASSERT_TRUE(service.clearSelection().ok);
+
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = {
+                    .origin = {4.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> pointBounds;
+    for (const ViewportOverlayPoint& point : frame.points) {
+        if (point.layer != ViewportOverlayLayer::UnselectedVertex) {
+            continue;
+        }
+        if (!pointBounds) {
+            pointBounds = SceneBounds{.min = point.position, .max = point.position};
+        } else {
+            includePoint(*pointBounds, point.position);
+        }
+    }
+
+    ASSERT_TRUE(pointBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*pointBounds).x, 4.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
 TEST(ModelingSessionServiceTests, SelectedComponentHoverKeepsHoverColor) {
     SceneDocument scene;
     AssetRegistry assets;
@@ -3538,6 +4168,374 @@ TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
     ASSERT_TRUE(service.cancelTransformPreview().ok);
 #else
     EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ComponentTransformPreviewRefreshesSelectionOverlayEveryUpdate) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Preview Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {
+                    .origin = {0.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformTranslatePreview({1.0f, 0.0f, 0.0f}).ok);
+    const ViewportOverlayFrame firstFrame = service.selectionOverlayFrame();
+
+    ASSERT_TRUE(service.updateTransformTranslatePreview({3.0f, 0.0f, 0.0f}).ok);
+    const ViewportOverlayFrame secondFrame = service.selectionOverlayFrame();
+
+    auto selectedFaceEdgeBounds = [](const ViewportOverlayFrame& frame) {
+        std::optional<SceneBounds> bounds;
+        for (const ViewportOverlayLine& line : frame.lines) {
+            if (line.layer != ViewportOverlayLayer::SelectedFaceEdge &&
+                    line.layer != ViewportOverlayLayer::SelectedEdge) {
+                continue;
+            }
+            if (!bounds) {
+                bounds = SceneBounds{.min = line.start, .max = line.start};
+            } else {
+                includePoint(*bounds, line.start);
+            }
+            includePoint(*bounds, line.end);
+        }
+        return bounds;
+    };
+
+    const std::optional<SceneBounds> firstBounds = selectedFaceEdgeBounds(firstFrame);
+    const std::optional<SceneBounds> secondBounds = selectedFaceEdgeBounds(secondFrame);
+    ASSERT_TRUE(firstBounds.has_value());
+    ASSERT_TRUE(secondBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*firstBounds).x, 1.0f, 0.001f);
+    EXPECT_NEAR(boundsCenter(*secondBounds).x, 3.0f, 0.001f);
+
+    ASSERT_TRUE(service.cancelTransformPreview().ok);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesVertexHandlesEveryUpdate) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Preview Vertex Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    const ModelingCommandResult selectAll = service.selectAll();
+    ASSERT_TRUE(selectAll.ok) << selectAll.message;
+    ASSERT_GT(service.selectionSummary().selectedVertexCount, 0u);
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformTranslatePreview({1.0f, 0.0f, 0.0f}).ok);
+    const ViewportOverlayFrame firstFrame = service.selectionOverlayFrame();
+
+    ASSERT_TRUE(service.updateTransformTranslatePreview({3.0f, 0.0f, 0.0f}).ok);
+    const ViewportOverlayFrame secondFrame = service.selectionOverlayFrame();
+
+    auto selectedVertexBounds = [](const ViewportOverlayFrame& frame) {
+        std::optional<SceneBounds> bounds;
+        for (const ViewportOverlayPoint& point : frame.points) {
+            if (point.layer != ViewportOverlayLayer::SelectedVertex) {
+                continue;
+            }
+            if (!bounds) {
+                bounds = SceneBounds{.min = point.position, .max = point.position};
+            } else {
+                includePoint(*bounds, point.position);
+            }
+        }
+        return bounds;
+    };
+
+    const std::optional<SceneBounds> firstBounds = selectedVertexBounds(firstFrame);
+    const std::optional<SceneBounds> secondBounds = selectedVertexBounds(secondFrame);
+    ASSERT_TRUE(firstBounds.has_value());
+    ASSERT_TRUE(secondBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*firstBounds).x, 1.0f, 0.001f);
+    EXPECT_NEAR(boundsCenter(*secondBounds).x, 3.0f, 0.001f);
+
+    ASSERT_TRUE(service.cancelTransformPreview().ok);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesEdgeHandlesEveryUpdate) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Preview Edge Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
+    const ModelingCommandResult selectAll = service.selectAll();
+    ASSERT_TRUE(selectAll.ok) << selectAll.message;
+    ASSERT_GT(service.selectionSummary().selectedEdgeCount, 0u);
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformTranslatePreview({1.0f, 0.0f, 0.0f}).ok);
+    const ViewportOverlayFrame firstFrame = service.selectionOverlayFrame();
+
+    ASSERT_TRUE(service.updateTransformTranslatePreview({3.0f, 0.0f, 0.0f}).ok);
+    const ViewportOverlayFrame secondFrame = service.selectionOverlayFrame();
+
+    auto selectedEdgeBounds = [](const ViewportOverlayFrame& frame) {
+        std::optional<SceneBounds> bounds;
+        for (const ViewportOverlayLine& line : frame.lines) {
+            if (line.layer != ViewportOverlayLayer::SelectedEdge &&
+                    line.layer != ViewportOverlayLayer::SelectedFaceEdge) {
+                continue;
+            }
+            if (!bounds) {
+                bounds = SceneBounds{.min = line.start, .max = line.start};
+            } else {
+                includePoint(*bounds, line.start);
+            }
+            includePoint(*bounds, line.end);
+        }
+        return bounds;
+    };
+
+    const std::optional<SceneBounds> firstBounds = selectedEdgeBounds(firstFrame);
+    const std::optional<SceneBounds> secondBounds = selectedEdgeBounds(secondFrame);
+    ASSERT_TRUE(firstBounds.has_value());
+    ASSERT_TRUE(secondBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*firstBounds).x, 1.0f, 0.001f);
+    EXPECT_NEAR(boundsCenter(*secondBounds).x, 3.0f, 0.001f);
+
+    ASSERT_TRUE(service.cancelTransformPreview().ok);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ComponentTransformCommitKeepsHoverHandlesOnCommittedGeometry) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Commit Hover Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    ASSERT_TRUE(service.selectAll().ok);
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformTranslatePreview({2.0f, 0.0f, 0.0f}).ok);
+    const ModelingCommandResult commit = service.commitTransformPreview();
+    ASSERT_TRUE(commit.ok) << commit.message;
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = {
+                    .origin = {2.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> pointBounds;
+    for (const ViewportOverlayPoint& point : frame.points) {
+        if (point.layer != ViewportOverlayLayer::UnselectedVertex) {
+            continue;
+        }
+        if (!pointBounds) {
+            pointBounds = SceneBounds{.min = point.position, .max = point.position};
+        } else {
+            includePoint(*pointBounds, point.position);
+        }
+    }
+
+    ASSERT_TRUE(pointBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*pointBounds).x, 2.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ComponentTransformCancelRestoresMeshAndOverlayTogether) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Cancel Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    ASSERT_TRUE(service.selectAll().ok);
+
+    ASSERT_TRUE(service.beginTransformPreview(false).ok);
+    ASSERT_TRUE(service.updateTransformTranslatePreview({2.0f, 0.0f, 0.0f}).ok);
+    std::optional<SceneBounds> selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 2.0f, 0.001f);
+
+    ModelingCommandResult cancel = service.cancelTransformPreview();
+    ASSERT_TRUE(cancel.ok) << cancel.message;
+    selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 0.0f, 0.001f);
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> pointBounds;
+    for (const ViewportOverlayPoint& point : frame.points) {
+        if (point.layer != ViewportOverlayLayer::SelectedVertex) {
+            continue;
+        }
+        if (!pointBounds) {
+            pointBounds = SceneBounds{.min = point.position, .max = point.position};
+        } else {
+            includePoint(*pointBounds, point.position);
+        }
+    }
+
+    ASSERT_TRUE(pointBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*pointBounds).x, 0.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, TransformDragComponentSelectionCommitsOverlayOnCommittedGeometry) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Drag Commit Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    ASSERT_TRUE(service.selectAll().ok);
+
+    ModelingTransformDragPreview begin = service.beginTransformDrag(testXMoveDragBeginRequest());
+    ASSERT_TRUE(begin.ok) << begin.message;
+    EXPECT_TRUE(begin.active);
+    EXPECT_TRUE(begin.previewDriven);
+
+    ModelingTransformDragPreview update = service.updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_TRUE(update.previewDriven);
+    EXPECT_NEAR(update.moveDelta.x, 2.0f, 0.001f);
+
+    ModelingTransformDragPreview commit = service.commitTransformDrag();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    EXPECT_TRUE(commit.previewDriven);
+    EXPECT_TRUE(commit.changed);
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = {
+                    .origin = {2.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> pointBounds;
+    for (const ViewportOverlayPoint& point : frame.points) {
+        if (point.layer != ViewportOverlayLayer::UnselectedVertex) {
+            continue;
+        }
+        if (!pointBounds) {
+            pointBounds = SceneBounds{.min = point.position, .max = point.position};
+        } else {
+            includePoint(*pointBounds, point.position);
+        }
+    }
+
+    ASSERT_TRUE(pointBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*pointBounds).x, 2.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest()).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, TransformDragComponentCancelRestoresMeshOverlayAndRuntime) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Drag Cancel Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    ASSERT_TRUE(service.selectAll().ok);
+
+    ModelingTransformDragPreview begin = service.beginTransformDrag(testXMoveDragBeginRequest());
+    ASSERT_TRUE(begin.ok) << begin.message;
+    ASSERT_TRUE(begin.previewDriven);
+
+    ModelingTransformDragPreview update = service.updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    std::optional<SceneBounds> selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 2.0f, 0.001f);
+
+    const ModelingCommandResult cancel = service.cancelTransformDrag();
+    ASSERT_TRUE(cancel.ok) << cancel.message;
+    selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 0.0f, 0.001f);
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> pointBounds;
+    for (const ViewportOverlayPoint& point : frame.points) {
+        if (point.layer != ViewportOverlayLayer::SelectedVertex) {
+            continue;
+        }
+        if (!pointBounds) {
+            pointBounds = SceneBounds{.min = point.position, .max = point.position};
+        } else {
+            includePoint(*pointBounds, point.position);
+        }
+    }
+
+    ASSERT_TRUE(pointBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*pointBounds).x, 0.0f, 0.001f);
+
+    ModelingTransformDragPreview afterCancelUpdate = service.updateTransformDrag(testXMoveDragUpdateRequest(3.0f));
+    EXPECT_TRUE(afterCancelUpdate.ok);
+    EXPECT_FALSE(afterCancelUpdate.active);
+#else
+    EXPECT_FALSE(service.cancelTransformDrag().ok);
 #endif
 }
 
@@ -3840,6 +4838,114 @@ TEST(ModelingSessionServiceTests, VertexSelectionModeExposesUnityOverlayPoints) 
     EXPECT_GT(vertexPoint->sizePixels, 0.0f);
 #else
     EXPECT_TRUE(service.selectionOverlayFrame().points.empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToVertexModeShowsHandlesImmediately) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Mode Switch Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    scene.clearSelection();
+    scene.setSelected(box.object.entity, true);
+    service.syncObjectSelectionFromScene();
+
+    const ViewportOverlayFrame objectFrame = service.selectionOverlayFrame();
+    ASSERT_FALSE(objectFrame.lines.empty());
+
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+    const ModelingSelectionSummary vertexSummary = service.selectionSummary();
+    EXPECT_EQ(vertexSummary.mode, ModelingSelectionMode::Vertex);
+    EXPECT_EQ(vertexSummary.selectedObjectCount, 1u);
+    const ViewportOverlayFrame vertexFrame = service.selectionOverlayFrame();
+    const auto vertexPoint = std::find_if(vertexFrame.points.begin(), vertexFrame.points.end(), [](const ViewportOverlayPoint& point) {
+        return point.layer == ViewportOverlayLayer::UnselectedVertex ||
+                point.layer == ViewportOverlayLayer::SelectedVertex;
+    });
+    ASSERT_NE(vertexPoint, vertexFrame.points.end());
+    EXPECT_GT(vertexPoint->sizePixels, 0.0f);
+#else
+    EXPECT_TRUE(service.selectionOverlayFrame().points.empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToEdgeModeShowsHandlesImmediately) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Edge Mode Switch Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    scene.clearSelection();
+    scene.setSelected(box.object.entity, true);
+    service.syncObjectSelectionFromScene();
+
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
+    const ModelingSelectionSummary edgeSummary = service.selectionSummary();
+    EXPECT_EQ(edgeSummary.mode, ModelingSelectionMode::Edge);
+    EXPECT_EQ(edgeSummary.selectedObjectCount, 1u);
+    const ViewportOverlayFrame edgeFrame = service.selectionOverlayFrame();
+    const auto edgeLine = std::find_if(edgeFrame.lines.begin(), edgeFrame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.layer == ViewportOverlayLayer::SourceWire ||
+                line.layer == ViewportOverlayLayer::SelectedEdge ||
+                line.layer == ViewportOverlayLayer::SelectedFaceEdge;
+    });
+    ASSERT_NE(edgeLine, edgeFrame.lines.end());
+    EXPECT_GT(edgeLine->widthPixels, 0.0f);
+#else
+    EXPECT_TRUE(service.selectionOverlayFrame().lines.empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToFaceModeShowsHandlesImmediately) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Face Mode Switch Overlay Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    scene.clearSelection();
+    scene.setSelected(box.object.entity, true);
+    service.syncObjectSelectionFromScene();
+
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+    const ModelingSelectionSummary faceSummary = service.selectionSummary();
+    EXPECT_EQ(faceSummary.mode, ModelingSelectionMode::Face);
+    EXPECT_EQ(faceSummary.selectedObjectCount, 1u);
+    const ViewportOverlayFrame faceFrame = service.selectionOverlayFrame();
+    const auto visiblePrimitive =
+            !faceFrame.triangles.empty() ||
+            std::any_of(faceFrame.lines.begin(), faceFrame.lines.end(), [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::SourceWire ||
+                        line.layer == ViewportOverlayLayer::SelectedFaceEdge ||
+                        line.layer == ViewportOverlayLayer::SelectedEdge;
+            });
+    EXPECT_TRUE(visiblePrimitive);
+#else
+    EXPECT_TRUE(service.selectionOverlayFrame().triangles.empty());
 #endif
 }
 

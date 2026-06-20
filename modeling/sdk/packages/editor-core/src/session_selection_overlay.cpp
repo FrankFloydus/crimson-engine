@@ -695,6 +695,8 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 						vertex.position,
 						style.handle_color_abgr,
 						style.vertex_point_size_pixels,
+						object.id,
+						vertex.id,
 					});
 				}
 			}
