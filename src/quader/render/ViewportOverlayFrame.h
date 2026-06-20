@@ -55,6 +55,24 @@ struct ViewportOverlayPoint {
     float sizePixels = 8.0f;
 };
 
+enum class ViewportOverlayProjection {
+    Perspective,
+    Orthographic,
+};
+
+struct ViewportOverlayCamera {
+    Vec3 eye;
+    Vec3 forward = {0.0f, 0.0f, -1.0f};
+    Vec3 right = {1.0f, 0.0f, 0.0f};
+    Vec3 up = {0.0f, 1.0f, 0.0f};
+    Vec2 viewportSize = {1.0f, 1.0f};
+    ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
+    float orthographicSize = 24.0f;
+    float fovDegrees = 60.0f;
+    float nearPlane = 0.05f;
+    float farPlane = 1000.0f;
+};
+
 struct ViewportOverlayFrame {
     std::vector<ViewportOverlayLine> lines;
     std::vector<ViewportOverlayTriangle> triangles;

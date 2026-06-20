@@ -30,6 +30,8 @@ public:
     filament::Scene& scene() { return *scene_; }
     filament::Material& quaderMeshMaterial() { return *quaderMeshMaterial_; }
     filament::Material& vertexColorOverlayMaterial() { return *vertexColorOverlayMaterial_; }
+    filament::Material& overlayLineMaterial() { return *overlayLineMaterial_; }
+    filament::Material& overlayPointMaterial() { return *overlayPointMaterial_; }
     filament::Material& imguiMaterial() { return *imguiMaterial_; }
     filament::Material& groundGridMaterial() { return *groundGridMaterial_; }
     TextureRegistry& textures() { return textureRegistry_; }
@@ -42,6 +44,8 @@ private:
     filament::Skybox* skybox_ = nullptr;
     filament::Material* quaderMeshMaterial_ = nullptr;
     filament::Material* vertexColorOverlayMaterial_ = nullptr;
+    filament::Material* overlayLineMaterial_ = nullptr;
+    filament::Material* overlayPointMaterial_ = nullptr;
     filament::Material* imguiMaterial_ = nullptr;
     filament::Material* groundGridMaterial_ = nullptr;
     TextureRegistry textureRegistry_;

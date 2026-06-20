@@ -14,6 +14,7 @@
 
 #include <imgui.h>
 
+#include <cstdint>
 #include <vector>
 
 #if QUADER_HAS_MODELING_SDK
@@ -52,6 +53,45 @@ private:
         Vec3 localPivot = {};
     };
 
+    struct HoverWorkKey {
+        bool valid = false;
+        ViewportTool activeTool = ViewportTool::Select;
+        ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
+        ModelingBoxDragState boxDragState = ModelingBoxDragState::Idle;
+        int gridPreset = 0;
+        Vec2 mouseLocal = {};
+        Vec2 viewportSize = {};
+        bool primaryModifier = false;
+        bool shiftModifier = false;
+        bool altModifier = false;
+        bool gizmoConsumed = false;
+        std::uint64_t sceneRevision = 0;
+        std::uint64_t assetRevision = 0;
+        std::uint64_t contentRevision = 0;
+        std::uint64_t selectionRevision = 0;
+
+        [[nodiscard]] bool matches(const HoverWorkKey& other) const {
+            return valid &&
+                    other.valid &&
+                    activeTool == other.activeTool &&
+                    selectionMode == other.selectionMode &&
+                    boxDragState == other.boxDragState &&
+                    gridPreset == other.gridPreset &&
+                    mouseLocal.x == other.mouseLocal.x &&
+                    mouseLocal.y == other.mouseLocal.y &&
+                    viewportSize.x == other.viewportSize.x &&
+                    viewportSize.y == other.viewportSize.y &&
+                    primaryModifier == other.primaryModifier &&
+                    shiftModifier == other.shiftModifier &&
+                    altModifier == other.altModifier &&
+                    gizmoConsumed == other.gizmoConsumed &&
+                    sceneRevision == other.sceneRevision &&
+                    assetRevision == other.assetRevision &&
+                    contentRevision == other.contentRevision &&
+                    selectionRevision == other.selectionRevision;
+        }
+    };
+
     void draw(ViewportRenderer& renderer,
             ViewportCameraController& camera,
             SceneRenderBridge& renderBridge,
@@ -72,7 +112,9 @@ private:
             const ViewportCameraController& camera,
             Vec2 localMouse,
             ViewportModifiers modifiers,
-            int clickCount);
+            int clickCount,
+            bool preserveSelectionOnMiss = false,
+            bool preserveSelectionOnSelectedHit = false);
     bool drawViewCube(ViewportCameraController& camera, ImVec2 itemMin, ImVec2 itemSize);
     bool drawTransformGizmo(SceneDocument& document,
             const AssetRegistry& assets,
@@ -100,6 +142,13 @@ private:
     Vec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
     bool lastFlyNavigationActive_ = false;
+    HoverWorkKey lastHoverWorkKey_;
+    ViewportOverlayFrame cachedSelectionOverlayFrame_;
+    bool cachedSelectionOverlayFrameValid_ = false;
+    bool cachedSelectionOverlayFrameDirty_ = true;
+    std::uint64_t cachedSelectionOverlayContentRevision_ = 0;
+    std::uint64_t cachedSelectionOverlaySelectionRevision_ = 0;
+    std::uint64_t cachedSelectionOverlaySceneRevision_ = 0;
     Vec3 gizmoStartWorldPivot_ = {};
     std::vector<GizmoStartTransform> gizmoStartTransforms_;
 #if QUADER_HAS_MODELING_SDK

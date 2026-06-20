@@ -179,6 +179,40 @@ TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {
     EXPECT_NE(source.find("vec4(vertexColor.rgb * vertexColor.a, vertexColor.a)"), std::string::npos);
 }
 
+TEST(OverlayMaterialTests, LineAndPointMaterialsMirrorUnityScreenSpaceOverlayExpansion) {
+    const std::filesystem::path lineMaterialPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "quader_overlay_line.mat";
+    std::ifstream lineMaterialFile(lineMaterialPath);
+    ASSERT_TRUE(lineMaterialFile.is_open()) << lineMaterialPath.string();
+    const std::string lineSource{
+            std::istreambuf_iterator<char>(lineMaterialFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(lineSource.find("vertexDomain : device"), std::string::npos);
+    EXPECT_NE(lineSource.find("requires : [\n        color,\n        custom0"), std::string::npos);
+    EXPECT_NE(lineSource.find("material.lineDistancePixels = getCustom0()"), std::string::npos);
+    EXPECT_EQ(lineSource.find("material.worldPosition"), std::string::npos);
+    EXPECT_EQ(lineSource.find("getClipFromViewMatrix()"), std::string::npos);
+    EXPECT_EQ(lineSource.find("name : nearPlane"), std::string::npos);
+    EXPECT_NE(lineSource.find("variable_lineDistancePixels.x"), std::string::npos);
+
+    const std::filesystem::path pointMaterialPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "quader_overlay_point.mat";
+    std::ifstream pointMaterialFile(pointMaterialPath);
+    ASSERT_TRUE(pointMaterialFile.is_open()) << pointMaterialPath.string();
+    const std::string pointSource{
+            std::istreambuf_iterator<char>(pointMaterialFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(pointSource.find("vertexDomain : device"), std::string::npos);
+    EXPECT_NE(pointSource.find("requires : [\n        uv0,\n        color"), std::string::npos);
+    EXPECT_EQ(pointSource.find("material.worldPosition"), std::string::npos);
+    EXPECT_EQ(pointSource.find("getClipFromViewMatrix()"), std::string::npos);
+    EXPECT_EQ(pointSource.find("name : nearPlane"), std::string::npos);
+    EXPECT_NE(pointSource.find("variable_pointUv.xy"), std::string::npos);
+    EXPECT_NE(pointSource.find("materialParams.innerRadius"), std::string::npos);
+}
+
 TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
     const std::array<ViewportOverlayLayer, 15> expected{{
             ViewportOverlayLayer::SelectedVisibleFace,
@@ -234,7 +268,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
     EXPECT_FALSE(viewportOverlayLayerIsSuppressedByTransientHover(ViewportOverlayLayer::SourceWire));
 }
 
-TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSizes) {
+TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedVisibleFace, rgba8(255, 255, 255)), kOverlaySelectionFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedFaceEdge, rgba8(255, 255, 255)), kOverlaySelectionWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SourceWire, kOverlaySelectedVertexColor), kOverlaySelectionWireColor);
@@ -247,8 +281,10 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSizes) {
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 2.5f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::OpenEdge, 2.0f), 1.0f);
     EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::UnselectedVertex, 8.0f), 7.0f);
-    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::SelectedVertex, 8.0f), 7.5f);
+    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::SelectedVertex, 9.0f), 7.5f);
+    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::HoverVertex, 8.0f), 7.5f);
     EXPECT_TRUE(viewportOverlayPointHasOutline(ViewportOverlayLayer::SelectedVertex));
+    EXPECT_FLOAT_EQ(viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer::SelectedVertex), 1.0f);
     EXPECT_TRUE(viewportOverlayPointIsOutlineOnly(ViewportOverlayLayer::SnapTargetVertex));
     EXPECT_FLOAT_EQ(viewportOverlayPointInnerRadius(ViewportOverlayLayer::SnapTargetVertex), 0.62f);
 }
@@ -269,13 +305,13 @@ TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
     EXPECT_NE(source.find("setDepthFunc(state.depthFunc)"), std::string::npos);
     EXPECT_NE(source.find("setTransparencyMode(state.transparencyMode)"), std::string::npos);
     EXPECT_NE(source.find("setPolygonOffset(state.polygonOffsetScale, state.polygonOffsetConstant)"), std::string::npos);
-    EXPECT_NE(source.find("DepthFunc::LE"), std::string::npos);
+    EXPECT_NE(source.find("DepthFunc::GE"), std::string::npos);
     EXPECT_NE(source.find("DepthFunc::E"), std::string::npos);
     EXPECT_NE(source.find("CullingMode::BACK"), std::string::npos);
     EXPECT_NE(source.find("TransparencyMode::TWO_PASSES_ONE_SIDE"), std::string::npos);
 }
 
-TEST(SceneRenderBridgeTests, DoesNotUseRawLineOrPointFallbackForSelectionOverlay) {
+TEST(SceneRenderBridgeTests, UsesUnityStyleQuadMaterialsForSelectionLineAndPointOverlay) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -285,8 +321,19 @@ TEST(SceneRenderBridgeTests, DoesNotUseRawLineOrPointFallbackForSelectionOverlay
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_EQ(source.find("appendOverlayLineQuad"), std::string::npos);
-    EXPECT_EQ(source.find("appendOverlayPoint"), std::string::npos);
+    EXPECT_NE(source.find("appendOverlayLineQuad"), std::string::npos);
+    EXPECT_NE(source.find("appendOverlayPointQuad"), std::string::npos);
+    EXPECT_NE(source.find("overlayLineMaterial_->createInstance()"), std::string::npos);
+    EXPECT_NE(source.find("overlayPointMaterial_->createInstance()"), std::string::npos);
+    EXPECT_NE(source.find("filament::VertexAttribute::CUSTOM0"), std::string::npos);
+    EXPECT_NE(source.find("AttributeType::FLOAT4, offsetof(OverlayLineVertex, position)"), std::string::npos);
+    EXPECT_NE(source.find("AttributeType::FLOAT4, offsetof(OverlayPointVertex, position)"), std::string::npos);
+    EXPECT_NE(source.find("projectOverlayViewPoint"), std::string::npos);
+    EXPECT_NE(source.find("nearPlaneDistance(a, camera)"), std::string::npos);
+    EXPECT_NE(source.find("setParameter(\"lineWidth\", widthPixels)"), std::string::npos);
+    EXPECT_EQ(source.find("setParameter(\"pointSize\", pointSizePixels)"), std::string::npos);
+    EXPECT_EQ(source.find("setParameter(\"nearPlane\""), std::string::npos);
+    EXPECT_NE(source.find("LineBatchKey"), std::string::npos);
     EXPECT_EQ(source.find("PrimitiveType::LINES"), std::string::npos);
     EXPECT_EQ(source.find("PrimitiveType::POINTS"), std::string::npos);
 }
@@ -332,7 +379,7 @@ TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
     EXPECT_EQ(rebuildSource.find("meshProxies_.clear()"), std::string::npos);
 }
 
-TEST(ViewportPanelTests, ClipsOnlyPolicyDepthTestedWireOverlayInComponentModes) {
+TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisibilityClipping) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -342,16 +389,12 @@ TEST(ViewportPanelTests, ClipsOnlyPolicyDepthTestedWireOverlayInComponentModes) 
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("renderBridge.setOverlayFrame(selectionOverlay);"), std::string::npos);
-    EXPECT_NE(source.find("drawSelectionOverlay2d"), std::string::npos);
-    EXPECT_NE(source.find("kViewportOverlayDrawOrder"), std::string::npos);
-    EXPECT_NE(source.find("viewportOverlayLineWidthPixels"), std::string::npos);
-    EXPECT_NE(source.find("viewportOverlayPointSizePixels"), std::string::npos);
-    EXPECT_NE(source.find("viewportOverlayDepthTested(layer, ViewportOverlayGeometryKind::Lines)"), std::string::npos);
-    EXPECT_NE(source.find("viewportOverlayDepthTested(layer, ViewportOverlayGeometryKind::Points)"), std::string::npos);
-    EXPECT_NE(source.find("inputRouter_.state().selectionMode != ViewportSelectionMode::Object"), std::string::npos);
-    EXPECT_NE(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
-    EXPECT_NE(source.find("pointVisibleFromCamera"), std::string::npos);
+    EXPECT_NE(source.find("makeViewportOverlayCamera(camera, itemSize)"), std::string::npos);
+    EXPECT_NE(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));"), std::string::npos);
+    EXPECT_EQ(source.find("drawSelectionOverlay2d"), std::string::npos);
+    EXPECT_EQ(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
+    EXPECT_EQ(source.find("pointVisibleFromCamera"), std::string::npos);
+    EXPECT_EQ(source.find("rayIntersectsTriangle(Vec3 origin"), std::string::npos);
     EXPECT_EQ(source.find("renderBridge.setOverlayFrame(selectionOverlay, camera"), std::string::npos);
     EXPECT_EQ(source.find("shouldDrawOverlayLayer2d"), std::string::npos);
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
@@ -378,7 +421,9 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(source.find("pendingContextMenuRequest.targetHit = summary.hasSelection"), std::string::npos);
     EXPECT_NE(source.find(".accumulatedDragDelta = contextMenuRightDragDelta_"), std::string::npos);
     EXPECT_NE(source.find("pendingContextMenuClick"), std::string::npos);
-    EXPECT_NE(source.find("selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1)"), std::string::npos);
+    EXPECT_NE(source.find("selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1, true, true)"), std::string::npos);
+    EXPECT_NE(source.find(".preserveSelectionOnMiss = preserveSelectionOnMiss"), std::string::npos);
+    EXPECT_NE(source.find(".preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit"), std::string::npos);
     EXPECT_NE(source.find("preserveContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("shouldPreserveViewportContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("flyCursorCaptureScreen_"), std::string::npos);
@@ -547,9 +592,15 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("const bool suppressHoverWork = result.navigationActive || result.cameraChanged"), std::string::npos);
     EXPECT_NE(source.find("drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
     EXPECT_NE(source.find("mouseInsideViewport && !suppressHoverWork"), std::string::npos);
-    EXPECT_NE(source.find("hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState"), std::string::npos);
+    EXPECT_NE(source.find("lastHoverWorkKey_"), std::string::npos);
+    EXPECT_NE(source.find("claimHoverWork(hoverWorkKey)"), std::string::npos);
+    EXPECT_NE(source.find("result.gridPresetChanged"), std::string::npos);
+    EXPECT_NE(source.find("const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover"), std::string::npos);
+    EXPECT_NE(source.find("if (hoverUpdate.changed)"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
+    EXPECT_NE(source.find("cachedSelectionOverlayFrameDirty_"), std::string::npos);
+    EXPECT_EQ(source.find("|| suppressHoverWork) &&"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
@@ -575,7 +626,7 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     EXPECT_EQ(source.find("bool srgb"), std::string::npos);
 }
 
-TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenTrianglePayloadIsUnchanged) {
+TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchanged) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -585,11 +636,22 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenTrianglePayloadIsUnchan
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("overlayTriangleSignature"), std::string::npos);
-    EXPECT_NE(source.find("externalOverlayTriangleSignature_"), std::string::npos);
-    EXPECT_NE(source.find("if (triangleSignature == externalOverlayTriangleSignature_)"), std::string::npos);
+    EXPECT_NE(source.find("overlayFrameSignature"), std::string::npos);
+    EXPECT_NE(source.find("overlayLayerSignature"), std::string::npos);
+    EXPECT_NE(source.find("overlayProxyGroups_"), std::string::npos);
+    EXPECT_NE(source.find("frame.lines.size()"), std::string::npos);
+    EXPECT_NE(source.find("frame.points.size()"), std::string::npos);
+    EXPECT_NE(source.find("hashFloat(hash, line.widthPixels)"), std::string::npos);
+    EXPECT_NE(source.find("hashFloat(hash, point.sizePixels)"), std::string::npos);
+    EXPECT_NE(source.find("externalOverlaySignature_"), std::string::npos);
+    EXPECT_NE(source.find("overlayCameraSignature"), std::string::npos);
+    EXPECT_NE(source.find("const bool cameraChanged = cameraSignature != overlayCameraSignature_"), std::string::npos);
+    EXPECT_NE(source.find("if (signature == externalOverlaySignature_ && !cameraChanged)"), std::string::npos);
     EXPECT_NE(source.find("externalOverlayFrame_ = std::move(frame);\n        return;"), std::string::npos);
+    EXPECT_NE(source.find("group.signature = 0;"), std::string::npos);
     EXPECT_NE(source.find("rebuildOverlayProxies();"), std::string::npos);
+    EXPECT_NE(source.find("if (group.signature == layerSignature)"), std::string::npos);
+    EXPECT_NE(source.find("viewportOverlayDrawOrder(layer) * 64"), std::string::npos);
 }
 
 TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
@@ -607,7 +669,14 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(source.find("selectionOverlayCacheSelectionRevision_ == selectionRevision"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCacheSceneRevision_ == sceneRevision"), std::string::npos);
     EXPECT_NE(source.find("hoverMatches(selectionOverlayCacheHover_, hover)"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayCacheFrame_ = fromSdk"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCacheFrame_ = fromSdk(selectionOverlayCurrentFrame(hover)"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayBaseFrame()"), std::string::npos);
+    EXPECT_NE(source.find("overlayBaseCache_"), std::string::npos);
+    EXPECT_NE(source.find("build_selection_hover_overlay_frame"), std::string::npos);
+    EXPECT_NE(source.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
+    EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
+    EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
+    EXPECT_NE(source.find("objectPickFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
@@ -1644,6 +1713,25 @@ TEST(ViewportInputRouterTests, GridPresetWorldSizesMatchUnityMapUnitContract) {
     EXPECT_NEAR(viewportGridWorldSizeForPreset(10), 16.0f, 0.0001f);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(-4), 1.0f / 32.0f, 0.0001f);
     EXPECT_NEAR(viewportGridWorldSizeForPreset(99), 16.0f, 0.0001f);
+}
+
+TEST(ViewportInputRouterTests, GridPresetShortcutReportsOnlyActualChanges) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+
+    input.pressedKeys = {ViewportKey::F7};
+    ViewportInputResult result = router.handleFrame(input, camera);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_TRUE(result.gridPresetChanged);
+    EXPECT_EQ(router.state().gridPreset, 7);
+
+    result = router.handleFrame(input, camera);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_FALSE(result.gridPresetChanged);
+    EXPECT_EQ(router.state().gridPreset, 7);
 }
 
 TEST(ViewportInputRouterTests, ToolActivationSupportTracksNativeControllers) {
@@ -2812,6 +2900,23 @@ TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsCon
     ASSERT_TRUE(picked.hasSelection);
     ASSERT_EQ(picked.selectedFaceCount, 1u);
 
+    const ModelingSelectionSummary multiPicked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, -5.0f}, .direction = {0.0f, 0.0f, 1.0f}},
+            .clickCount = 1,
+            .shiftPressed = true,
+    });
+    ASSERT_TRUE(multiPicked.hasSelection);
+    ASSERT_EQ(multiPicked.selectedFaceCount, 2u);
+
+    const ModelingSelectionSummary rmbOnAlreadySelected = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+            .preserveSelectionOnMiss = true,
+            .preserveSelectionOnSelectedHit = true,
+    });
+    ASSERT_TRUE(rmbOnAlreadySelected.hasSelection);
+    EXPECT_EQ(rmbOnAlreadySelected.selectedFaceCount, 2u);
+
     ModelingActionQuery query;
     query.surface = ModelingActionSurface::ViewportContextMenu;
     query.includeDisabled = true;
@@ -2822,27 +2927,89 @@ TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsCon
             .rightPressTracked = true,
             .rightReleased = true,
             .releaseInsideViewport = true,
-            .targetHit = picked.hasSelection,
+            .targetHit = rmbOnAlreadySelected.hasSelection,
             .hasActions = !actions.empty(),
             .pressScreen = {320.0f, 240.0f},
             .releaseScreen = {320.0f, 240.0f},
     }));
 
-    const ModelingSelectionSummary missed = service.pickSelect(ModelingPickSelectRequest{
+    const ModelingSelectionSummary missedWithPreservedSelection = service.pickSelect(ModelingPickSelectRequest{
             .ray = {.origin = {8.0f, 8.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
             .clickCount = 1,
+            .preserveSelectionOnMiss = true,
     });
-    EXPECT_FALSE(shouldOpenViewportContextMenu({
+    ASSERT_TRUE(missedWithPreservedSelection.hasSelection);
+    EXPECT_EQ(missedWithPreservedSelection.selectedFaceCount, 2u);
+    EXPECT_TRUE(shouldOpenViewportContextMenu({
             .rightPressTracked = true,
             .rightReleased = true,
             .releaseInsideViewport = true,
-            .targetHit = missed.hasSelection,
+            .targetHit = missedWithPreservedSelection.hasSelection,
             .hasActions = true,
             .pressScreen = {100.0f, 100.0f},
             .releaseScreen = {100.0f, 100.0f},
     }));
+
+    const ModelingSelectionSummary missedWithoutPreservingSelection = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {8.0f, 8.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    EXPECT_FALSE(missedWithoutPreservingSelection.hasSelection);
 #else
     GTEST_SKIP() << "SDK selection is disabled.";
+#endif
+}
+
+TEST(ModelingSessionServiceTests, RmbObjectPickOnSelectedMultiSelectionPreservesSelection) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult left = service.createBoxFromBounds({
+            .bounds = {.min = {-4.0f, -1.0f, -1.0f}, .max = {-2.0f, 1.0f, 1.0f}},
+            .name = "Left RMB Context Box",
+    });
+    ASSERT_TRUE(left.ok) << left.message;
+    const ModelingCreateBoxResult right = service.createBoxFromBounds({
+            .bounds = {.min = {2.0f, -1.0f, -1.0f}, .max = {4.0f, 1.0f, 1.0f}},
+            .name = "Right RMB Context Box",
+    });
+    ASSERT_TRUE(right.ok) << right.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
+    ASSERT_TRUE(service.clearSelection().ok);
+
+    const ModelingRay leftRay{
+            .origin = {-3.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingRay rightRay{
+            .origin = {3.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+
+    ModelingSelectionSummary summary = service.pickSelect(ModelingPickSelectRequest{
+            .ray = leftRay,
+            .clickCount = 1,
+    });
+    ASSERT_EQ(summary.selectedObjectCount, 1u);
+
+    summary = service.pickSelect(ModelingPickSelectRequest{
+            .ray = rightRay,
+            .clickCount = 1,
+            .shiftPressed = true,
+    });
+    ASSERT_EQ(summary.selectedObjectCount, 2u);
+
+    summary = service.pickSelect(ModelingPickSelectRequest{
+            .ray = leftRay,
+            .clickCount = 1,
+            .preserveSelectionOnMiss = true,
+            .preserveSelectionOnSelectedHit = true,
+    });
+    EXPECT_EQ(summary.selectedObjectCount, 2u);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
 #endif
 }
 
@@ -2962,6 +3129,9 @@ TEST(ModelingSessionServiceTests, SyncsSceneSelectionToSdkSelectionCenter) {
     EXPECT_FLOAT_EQ(center->x, 0.0f);
     EXPECT_FLOAT_EQ(center->y, 0.0f);
     EXPECT_FLOAT_EQ(center->z, 0.0f);
+    const std::uint64_t firstSelectionRevision = service.selectionSummary().selectionRevision;
+    service.syncObjectSelectionFromScene();
+    EXPECT_EQ(service.selectionSummary().selectionRevision, firstSelectionRevision);
 
     scene.clearSelection();
     scene.setSelected(second.object.entity, true);
@@ -2971,6 +3141,9 @@ TEST(ModelingSessionServiceTests, SyncsSceneSelectionToSdkSelectionCenter) {
     EXPECT_FLOAT_EQ(center->x, 11.0f);
     EXPECT_FLOAT_EQ(center->y, 4.0f);
     EXPECT_FLOAT_EQ(center->z, -1.0f);
+    const std::uint64_t secondSelectionRevision = service.selectionSummary().selectionRevision;
+    service.syncObjectSelectionFromScene();
+    EXPECT_EQ(service.selectionSummary().selectionRevision, secondSelectionRevision);
 #else
     service.syncObjectSelectionFromScene();
     EXPECT_FALSE(service.selectionCenter().has_value());
@@ -3185,6 +3358,54 @@ TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMesh
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.selectedEntities().front(), right.object.entity);
     EXPECT_EQ(picked.activeObjectId, right.object.sdkObjectId);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectedComponentHoverKeepsHoverColor) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Selected Hover Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingRay frontFaceRay{
+            .origin = {0.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = frontFaceRay,
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontFaceRay,
+            .selectedModifierPressed = false,
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    const auto hoverFaceCount = std::count_if(frame.triangles.begin(), frame.triangles.end(), [](const ViewportOverlayTriangle& triangle) {
+        return triangle.layer == ViewportOverlayLayer::HoverFace;
+    });
+    const auto hoverFaceEdgeCount = std::count_if(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.layer == ViewportOverlayLayer::HoverFaceEdge;
+    });
+    const auto selectedFaceEdgeCount = std::count_if(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.layer == ViewportOverlayLayer::SelectedFaceEdge;
+    });
+
+    EXPECT_GT(hoverFaceCount, 0);
+    EXPECT_GT(hoverFaceEdgeCount, 0);
+    EXPECT_GT(selectedFaceEdgeCount, 0);
 #else
     EXPECT_FALSE(service.sdkAvailable());
 #endif

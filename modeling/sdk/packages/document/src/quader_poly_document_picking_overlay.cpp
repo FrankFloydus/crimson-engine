@@ -84,11 +84,60 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
     return nearest;
 }
 
-std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const Ray& ray)
+bool face_can_be_picked(const Face& face, const PickOptions& options)
+{
+    return !options.hides_material_slot(face.material_slot);
+}
+
+bool vertex_can_be_picked(const Document& document, ElementId vertex_id, const PickOptions& options)
+{
+    if (!options.has_hidden_material_slot) {
+        return true;
+    }
+
+    bool used_by_face = false;
+    for (const Face& face : document.faces) {
+        if (!face_uses_vertex(face, vertex_id)) {
+            continue;
+        }
+
+        used_by_face = true;
+        if (face_can_be_picked(face, options)) {
+            return true;
+        }
+    }
+    return !used_by_face;
+}
+
+bool edge_can_be_picked(const Document& document, Edge edge, const PickOptions& options)
+{
+    if (!options.has_hidden_material_slot) {
+        return true;
+    }
+
+    bool used_by_face = false;
+    for (const Face& face : document.faces) {
+        if (!face_uses_edge(face, edge)) {
+            continue;
+        }
+
+        used_by_face = true;
+        if (face_can_be_picked(face, options)) {
+            return true;
+        }
+    }
+    return !used_by_face;
+}
+
+std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const Ray& ray, const PickOptions& options = {})
 {
     QDR_PROFILE_SCOPE("qdr_document.nearest_face_ray_hit");
     std::optional<FaceRayHit> nearest;
     for (const Face& face : document.faces) {
+        if (!face_can_be_picked(face, options)) {
+            continue;
+        }
+
         const Vec3 normal = face_normal(document, face);
         if (dot(normal, ray.direction) >= -epsilon) {
             continue;
@@ -143,10 +192,19 @@ bool edge_pick_is_occluded(const Document& document, Edge edge, float ray_distan
 
 std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document)
 {
+    return build_face_pick_geometry(document, {});
+}
+
+std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document, const PickOptions& options)
+{
     QDR_PROFILE_SCOPE("qdr_document.build_face_pick_geometry");
     std::vector<PickFaceTriangle> result;
     result.reserve(document.faces.size());
     for (const Face& face : document.faces) {
+        if (!face_can_be_picked(face, options)) {
+            continue;
+        }
+
         const Vec3 normal = face_normal(document, face);
         const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
         for (const Triangle& triangle : triangles) {
@@ -215,11 +273,15 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
     float best_pick_distance = std::numeric_limits<float>::max();
     const std::optional<FaceRayHit> surface_hit =
         options.mode == SelectionMode::vertex || options.mode == SelectionMode::edge ?
-            nearest_face_ray_hit(document, ray) :
+            nearest_face_ray_hit(document, ray, options) :
             std::optional<FaceRayHit> {};
 
     if (options.mode == SelectionMode::vertex) {
         for (const Vertex& vertex : document.vertices) {
+            if (!vertex_can_be_picked(document, vertex.id, options)) {
+                continue;
+            }
+
             float ray_distance = 0.0F;
             const float distance = point_ray_distance(ray, vertex.position, ray_distance);
             if (distance <= options.vertex_radius &&
@@ -243,6 +305,10 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
 
     if (options.mode == SelectionMode::edge) {
         for (const Edge& edge : document_edges(document)) {
+            if (!edge_can_be_picked(document, edge, options)) {
+                continue;
+            }
+
             const Vertex* a = find_vertex(document, edge.a);
             const Vertex* b = find_vertex(document, edge.b);
             if (a == nullptr || b == nullptr) {
@@ -272,6 +338,10 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
     }
 
     for (const Face& face : document.faces) {
+        if (!face_can_be_picked(face, options)) {
+            continue;
+        }
+
         const Vec3 normal = face_normal(document, face);
         if (dot(normal, ray.direction) >= -epsilon) {
             continue;

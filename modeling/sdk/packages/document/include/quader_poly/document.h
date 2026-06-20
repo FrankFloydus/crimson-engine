@@ -275,6 +275,13 @@ struct PickOptions {
     SelectionMode mode = SelectionMode::vertex;
     float vertex_radius = 0.12F;
     float edge_radius = 0.10F;
+    bool has_hidden_material_slot = false;
+    std::uint32_t hidden_material_slot = 0;
+
+    [[nodiscard]] bool hides_material_slot(std::uint32_t material_slot) const
+    {
+        return has_hidden_material_slot && material_slot == hidden_material_slot;
+    }
 };
 
 struct PickResult {
@@ -450,6 +457,7 @@ void select_edge_loop(const Document& document, Selection& selection, Edge seed_
 
 [[nodiscard]] PickResult pick_element(const Document& document, const Ray& local_ray, const PickOptions& options);
 [[nodiscard]] std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document);
+[[nodiscard]] std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document, const PickOptions& options);
 [[nodiscard]] PickResult pick_face_geometry(std::span<const PickFaceTriangle> triangles, const Ray& local_ray);
 [[nodiscard]] OverlayData build_edge_loop_preview(
     const Document& document,

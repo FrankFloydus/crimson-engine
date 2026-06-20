@@ -315,6 +315,39 @@ void hover_only_overlay_omits_selected_base_geometry()
 		"hover-only overlay should not rebuild selected face masks");
 }
 
+void selected_component_hover_keeps_normal_hover_primitives()
+{
+	quader_editor_core::EditorSession session;
+	require_test(session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
+		"selected component hover fixture should create a box");
+	session.set_selection_mode(quader_editor_core::SelectionMode::face);
+	const quader_poly::Ray front_center_ray { { 0.0F, 0.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } };
+	require_test(
+		session.pick_select_face(quader_editor_core::SelectionEditOperation::replace, front_center_ray),
+		"selected component hover fixture should select a face");
+
+	const quader_editor_core::SelectionHoverUpdateResult hover = quader_editor_core::update_selection_hover(
+		session.objects(),
+		session.selection_mode(),
+		{},
+		front_center_ray,
+		false);
+	require_test(hover.hover.kind == quader_editor_core::SelectionHoverKind::face,
+		"selected component hover fixture should hover the selected face");
+	require_test(
+		quader_editor_core::selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover.hover),
+		"selected component hover fixture should confirm the hovered face is selected");
+
+	const quader_editor_core::SelectionOverlayFrame frame =
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), hover.hover);
+	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_face_edge) > 0,
+		"selected component hover should keep the selected face edges");
+	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::hover_face) > 0,
+		"selected component hover should keep the normal hover face fill");
+	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::hover_face_edge) > 0,
+		"selected component hover should keep the normal hover face edges");
+}
+
 void selected_hover_overlay_primitives_carry_stable_owner_keys()
 {
 	quader_editor_core::EditorSession session;
@@ -505,6 +538,7 @@ TEST_CASE("qdr_editor_core_overlay_tests", "[editor-core-overlay]")
 	component_hover_source_wire_candidate_is_sticky_until_replaced();
 	vertex_mode_hover_candidate_exposes_unselected_handles();
 	hover_only_overlay_omits_selected_base_geometry();
+	selected_component_hover_keeps_normal_hover_primitives();
 	selected_hover_overlay_primitives_carry_stable_owner_keys();
 	selected_plane_overlay_marks_open_edges();
 	top_loop_bevel_overlay_emits_selected_strip_topology();

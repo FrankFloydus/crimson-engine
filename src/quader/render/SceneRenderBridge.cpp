@@ -37,12 +37,37 @@ using AttributeType = filament::backend::ElementType;
 
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+constexpr float kPi = 3.14159265358979323846f;
 
 struct RenderVertex {
     filament::math::float3 position;
     filament::math::float4 tangentFrame;
     filament::math::float2 uv;
     std::uint32_t color;
+};
+
+struct OverlayLineVertex {
+    filament::math::float4 position;
+    filament::math::float4 lineDistancePixels;
+    std::uint32_t color;
+};
+
+struct OverlayPointVertex {
+    filament::math::float4 position;
+    filament::math::float2 uv;
+    std::uint32_t color;
+};
+
+struct OverlayViewPoint {
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
+
+struct OverlayProjectedPoint {
+    filament::math::float4 device;
+    Vec2 pixel;
+    bool valid = false;
 };
 
 struct OverlayRenderState {
@@ -73,7 +98,7 @@ std::uint64_t hashVec3(std::uint64_t hash, Vec3 value) {
     return hashFloat(hash, value.z);
 }
 
-std::uint64_t overlayTriangleSignature(const ViewportOverlayFrame& frame) {
+std::uint64_t overlayFrameSignature(const ViewportOverlayFrame& frame) {
     std::uint64_t hash = hashCombine(kFnvOffset, frame.triangles.size());
     for (const ViewportOverlayTriangle& triangle : frame.triangles) {
         hash = hashCombine(hash, static_cast<std::uint32_t>(triangle.layer));
@@ -82,7 +107,79 @@ std::uint64_t overlayTriangleSignature(const ViewportOverlayFrame& frame) {
         hash = hashVec3(hash, triangle.b);
         hash = hashVec3(hash, triangle.c);
     }
+    hash = hashCombine(hash, frame.lines.size());
+    for (const ViewportOverlayLine& line : frame.lines) {
+        hash = hashCombine(hash, static_cast<std::uint32_t>(line.layer));
+        hash = hashCombine(hash, line.color);
+        hash = hashFloat(hash, line.widthPixels);
+        hash = hashVec3(hash, line.start);
+        hash = hashVec3(hash, line.end);
+    }
+    hash = hashCombine(hash, frame.points.size());
+    for (const ViewportOverlayPoint& point : frame.points) {
+        hash = hashCombine(hash, static_cast<std::uint32_t>(point.layer));
+        hash = hashCombine(hash, point.color);
+        hash = hashFloat(hash, point.sizePixels);
+        hash = hashVec3(hash, point.position);
+    }
     return hash;
+}
+
+std::uint64_t overlayCameraSignature(const ViewportOverlayCamera& camera) {
+    std::uint64_t hash = hashCombine(kFnvOffset, static_cast<std::uint32_t>(camera.projection));
+    hash = hashVec3(hash, camera.eye);
+    hash = hashVec3(hash, camera.forward);
+    hash = hashVec3(hash, camera.right);
+    hash = hashVec3(hash, camera.up);
+    hash = hashFloat(hash, camera.viewportSize.x);
+    hash = hashFloat(hash, camera.viewportSize.y);
+    hash = hashFloat(hash, camera.orthographicSize);
+    hash = hashFloat(hash, camera.fovDegrees);
+    hash = hashFloat(hash, camera.nearPlane);
+    hash = hashFloat(hash, camera.farPlane);
+    return hash;
+}
+
+std::uint64_t overlayLayerSignature(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
+    std::uint64_t hash = hashCombine(kFnvOffset, static_cast<std::uint32_t>(layer));
+    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
+        if (triangle.layer != layer) {
+            continue;
+        }
+        hash = hashCombine(hash, static_cast<std::uint32_t>(triangle.layer));
+        hash = hashCombine(hash, triangle.color);
+        hash = hashVec3(hash, triangle.a);
+        hash = hashVec3(hash, triangle.b);
+        hash = hashVec3(hash, triangle.c);
+    }
+    for (const ViewportOverlayLine& line : frame.lines) {
+        if (line.layer != layer) {
+            continue;
+        }
+        hash = hashCombine(hash, static_cast<std::uint32_t>(line.layer));
+        hash = hashCombine(hash, line.color);
+        hash = hashFloat(hash, line.widthPixels);
+        hash = hashVec3(hash, line.start);
+        hash = hashVec3(hash, line.end);
+    }
+    for (const ViewportOverlayPoint& point : frame.points) {
+        if (point.layer != layer) {
+            continue;
+        }
+        hash = hashCombine(hash, static_cast<std::uint32_t>(point.layer));
+        hash = hashCombine(hash, point.color);
+        hash = hashFloat(hash, point.sizePixels);
+        hash = hashVec3(hash, point.position);
+    }
+    return hash;
+}
+
+std::uint64_t overlayLayerSignature(
+        const ViewportOverlayFrame& selectedFrame,
+        const ViewportOverlayFrame& externalFrame,
+        ViewportOverlayLayer layer) {
+    std::uint64_t hash = overlayLayerSignature(selectedFrame, layer);
+    return hashCombine(hash, overlayLayerSignature(externalFrame, layer));
 }
 
 filament::math::float3 directionFromTransform(const TransformComponent& transform) {
@@ -162,33 +259,10 @@ filament::LightManager::Type toFilamentLightType(LightType type) {
     return filament::LightManager::Type::DIRECTIONAL;
 }
 
-filament::Box computeOverlayBounds(const std::vector<RenderVertex>& vertices) {
-    if (vertices.empty()) {
-        return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
-    }
-
-    filament::math::float3 minValue{
-            std::numeric_limits<float>::max(),
-            std::numeric_limits<float>::max(),
-            std::numeric_limits<float>::max(),
-    };
-    filament::math::float3 maxValue{
-            std::numeric_limits<float>::lowest(),
-            std::numeric_limits<float>::lowest(),
-            std::numeric_limits<float>::lowest(),
-    };
-
-    for (const RenderVertex& vertex : vertices) {
-        minValue.x = std::min(minValue.x, vertex.position.x);
-        minValue.y = std::min(minValue.y, vertex.position.y);
-        minValue.z = std::min(minValue.z, vertex.position.z);
-        maxValue.x = std::max(maxValue.x, vertex.position.x);
-        maxValue.y = std::max(maxValue.y, vertex.position.y);
-        maxValue.z = std::max(maxValue.z, vertex.position.z);
-    }
-
+filament::Box overlayMeshBounds() {
     filament::Box box;
-    box.set(minValue, maxValue);
+    const filament::math::float3 halfExtent{500000.0f, 500000.0f, 500000.0f};
+    box.set(-halfExtent, halfExtent);
     return box;
 }
 
@@ -197,6 +271,193 @@ void appendOverlayTriangle(std::vector<RenderVertex>& vertices, const ViewportOv
     vertices.push_back({toFilament(triangle.a), {}, {}, linearColor});
     vertices.push_back({toFilament(triangle.b), {}, {}, linearColor});
     vertices.push_back({toFilament(triangle.c), {}, {}, linearColor});
+}
+
+ViewportOverlayCamera sanitizedOverlayCamera(ViewportOverlayCamera camera) {
+    camera.forward = normalize(camera.forward);
+    if (length(camera.forward) <= 0.000001f) {
+        camera.forward = {0.0f, 0.0f, -1.0f};
+    }
+    camera.right = normalize(camera.right);
+    if (length(camera.right) <= 0.000001f || std::abs(dot(camera.right, camera.forward)) > 0.999f) {
+        const Vec3 reference = std::abs(camera.forward.y) < 0.999f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+        camera.right = normalize(cross(camera.forward, reference));
+    }
+    camera.up = normalize(cross(camera.right, camera.forward));
+    if (length(camera.up) <= 0.000001f) {
+        camera.up = {0.0f, 1.0f, 0.0f};
+    }
+    camera.viewportSize.x = std::max(camera.viewportSize.x, 1.0f);
+    camera.viewportSize.y = std::max(camera.viewportSize.y, 1.0f);
+    camera.orthographicSize = std::max(camera.orthographicSize, 0.0001f);
+    camera.fovDegrees = std::clamp(camera.fovDegrees, 1.0f, 170.0f);
+    camera.nearPlane = std::max(camera.nearPlane, 0.0001f);
+    camera.farPlane = std::max(camera.farPlane, camera.nearPlane + 0.001f);
+    return camera;
+}
+
+OverlayViewPoint viewPointFor(const ViewportOverlayCamera& camera, Vec3 world) {
+    const Vec3 relative = world - camera.eye;
+    const float depth = dot(relative, camera.forward);
+    return {
+            .x = dot(relative, camera.right),
+            .y = dot(relative, camera.up),
+            .z = -depth,
+    };
+}
+
+OverlayViewPoint lerpViewPoint(OverlayViewPoint a, OverlayViewPoint b, float t) {
+    return {
+            .x = a.x + (b.x - a.x) * t,
+            .y = a.y + (b.y - a.y) * t,
+            .z = a.z + (b.z - a.z) * t,
+    };
+}
+
+void applyOverlayDepthBias(OverlayViewPoint& point, float depthBias) {
+    if (depthBias > 0.0f && point.z < -0.0001f) {
+        point.z += std::min(depthBias, -point.z * 0.5f);
+    }
+}
+
+float nearPlaneDistance(const OverlayViewPoint& point, const ViewportOverlayCamera& camera) {
+    return -point.z - camera.nearPlane;
+}
+
+OverlayProjectedPoint projectOverlayViewPoint(const ViewportOverlayCamera& camera, OverlayViewPoint point) {
+    OverlayProjectedPoint projected;
+
+    if (camera.projection == ViewportOverlayProjection::Perspective) {
+        const float depth = -point.z;
+        if (depth <= 0.000001f) {
+            return projected;
+        }
+        const float aspect = camera.viewportSize.x / camera.viewportSize.y;
+        const float tanHalfFov = std::tan((camera.fovDegrees * kPi / 180.0f) * 0.5f);
+        projected.device = {
+                point.x / (depth * tanHalfFov * aspect),
+                point.y / (depth * tanHalfFov),
+                1.0f - (2.0f * camera.nearPlane / depth),
+                1.0f,
+        };
+    } else {
+        const float aspect = camera.viewportSize.x / camera.viewportSize.y;
+        const float halfHeight = camera.orthographicSize * 0.5f;
+        const float halfWidth = halfHeight * aspect;
+        projected.device = {
+                point.x / halfWidth,
+                point.y / halfHeight,
+                (-2.0f / (camera.farPlane - camera.nearPlane)) * point.z -
+                        ((camera.farPlane + camera.nearPlane) / (camera.farPlane - camera.nearPlane)),
+                1.0f,
+        };
+    }
+
+    const Vec2 ndc{projected.device.x, projected.device.y};
+    projected.pixel = {
+            (ndc.x * 0.5f + 0.5f) * camera.viewportSize.x,
+            (ndc.y * 0.5f + 0.5f) * camera.viewportSize.y,
+    };
+    projected.valid = true;
+    return projected;
+}
+
+filament::math::float4 withPixelOffset(filament::math::float4 device, Vec2 pixelOffset, const ViewportOverlayCamera& camera) {
+    device.x += pixelOffset.x * 2.0f / camera.viewportSize.x;
+    device.y += pixelOffset.y * 2.0f / camera.viewportSize.y;
+    return device;
+}
+
+bool appendOverlayLineQuad(
+        std::vector<OverlayLineVertex>& vertices,
+        std::vector<std::uint32_t>& indices,
+        const ViewportOverlayLine& line,
+        const ViewportOverlayCamera& camera,
+        float widthPixels,
+        float depthBias) {
+    const std::uint32_t linearColor = rgba8SrgbToLinear(line.color);
+    OverlayViewPoint a = viewPointFor(camera, line.start);
+    OverlayViewPoint b = viewPointFor(camera, line.end);
+    applyOverlayDepthBias(a, depthBias);
+    applyOverlayDepthBias(b, depthBias);
+
+    const float aNear = nearPlaneDistance(a, camera);
+    const float bNear = nearPlaneDistance(b, camera);
+    if (aNear < 0.0f && bNear < 0.0f) {
+        return false;
+    }
+    if (aNear < 0.0f || bNear < 0.0f) {
+        const float t = std::clamp(aNear / (aNear - bNear), 0.0f, 1.0f);
+        const OverlayViewPoint clipped = lerpViewPoint(a, b, t);
+        if (aNear < 0.0f) {
+            a = clipped;
+        } else {
+            b = clipped;
+        }
+    }
+
+    const OverlayProjectedPoint projectedA = projectOverlayViewPoint(camera, a);
+    const OverlayProjectedPoint projectedB = projectOverlayViewPoint(camera, b);
+    if (!projectedA.valid || !projectedB.valid) {
+        return false;
+    }
+
+    Vec2 pixelDirection = projectedB.pixel - projectedA.pixel;
+    if ((pixelDirection.x * pixelDirection.x + pixelDirection.y * pixelDirection.y) <= 0.000001f) {
+        pixelDirection = {1.0f, 0.0f};
+    }
+    const Vec2 pixelNormal = std::abs(pixelDirection.x) > std::abs(pixelDirection.y)
+            ? Vec2{0.0f, 1.0f}
+            : Vec2{1.0f, 0.0f};
+    const float sideDistance = (std::max(widthPixels, 1.0f) + kOverlayLineFeatherPixels) * 0.5f;
+
+    const std::uint32_t offset = static_cast<std::uint32_t>(vertices.size());
+    vertices.push_back({withPixelOffset(projectedA.device, pixelNormal * -sideDistance, camera), {-sideDistance, 0.0f, 0.0f, 0.0f}, linearColor});
+    vertices.push_back({withPixelOffset(projectedB.device, pixelNormal * -sideDistance, camera), {-sideDistance, 0.0f, 0.0f, 0.0f}, linearColor});
+    vertices.push_back({withPixelOffset(projectedB.device, pixelNormal * sideDistance, camera), {sideDistance, 0.0f, 0.0f, 0.0f}, linearColor});
+    vertices.push_back({withPixelOffset(projectedA.device, pixelNormal * sideDistance, camera), {sideDistance, 0.0f, 0.0f, 0.0f}, linearColor});
+    indices.push_back(offset);
+    indices.push_back(offset + 1u);
+    indices.push_back(offset + 2u);
+    indices.push_back(offset);
+    indices.push_back(offset + 2u);
+    indices.push_back(offset + 3u);
+    return true;
+}
+
+bool appendOverlayPointQuad(
+        std::vector<OverlayPointVertex>& vertices,
+        std::vector<std::uint32_t>& indices,
+        Vec3 position,
+        std::uint32_t color,
+        const ViewportOverlayCamera& camera,
+        float sizePixels,
+        float depthBias) {
+    const std::uint32_t linearColor = rgba8SrgbToLinear(color);
+    OverlayViewPoint center = viewPointFor(camera, position);
+    applyOverlayDepthBias(center, depthBias);
+    if (nearPlaneDistance(center, camera) < 0.0f) {
+        return false;
+    }
+
+    const OverlayProjectedPoint projected = projectOverlayViewPoint(camera, center);
+    if (!projected.valid) {
+        return false;
+    }
+
+    const float halfSize = std::max(sizePixels, 1.0f) * 0.5f;
+    const std::uint32_t offset = static_cast<std::uint32_t>(vertices.size());
+    vertices.push_back({withPixelOffset(projected.device, {-halfSize, -halfSize}, camera), {0.0f, 0.0f}, linearColor});
+    vertices.push_back({withPixelOffset(projected.device, {halfSize, -halfSize}, camera), {1.0f, 0.0f}, linearColor});
+    vertices.push_back({withPixelOffset(projected.device, {halfSize, halfSize}, camera), {1.0f, 1.0f}, linearColor});
+    vertices.push_back({withPixelOffset(projected.device, {-halfSize, halfSize}, camera), {0.0f, 1.0f}, linearColor});
+    indices.push_back(offset);
+    indices.push_back(offset + 1u);
+    indices.push_back(offset + 2u);
+    indices.push_back(offset);
+    indices.push_back(offset + 2u);
+    indices.push_back(offset + 3u);
+    return true;
 }
 
 std::uint8_t mipLevelCount(unsigned width, unsigned height) {
@@ -261,11 +522,15 @@ void SceneRenderBridge::initialize(filament::Engine& engine,
         filament::Scene& scene,
         filament::Material& meshMaterial,
         filament::Material& overlayMaterial,
+        filament::Material& overlayLineMaterial,
+        filament::Material& overlayPointMaterial,
         std::filesystem::path resourceRoot) {
     engine_ = &engine;
     scene_ = &scene;
     meshMaterial_ = &meshMaterial;
     overlayMaterial_ = &overlayMaterial;
+    overlayLineMaterial_ = &overlayLineMaterial;
+    overlayPointMaterial_ = &overlayPointMaterial;
     resourceRoot_ = std::move(resourceRoot);
     fallbackAlbedoTexture_ = createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb);
     fallbackRoughnessTexture_ = createSolidTexture(255, 255, 255, 255, TextureColorSpace::Linear);
@@ -281,10 +546,13 @@ void SceneRenderBridge::shutdown() {
     }
     meshProxies_.clear();
 
-    for (OverlayProxy& proxy : overlayProxies_) {
-        destroyOverlayProxy(proxy);
+    for (OverlayProxyGroup& group : overlayProxyGroups_) {
+        for (OverlayProxy& proxy : group.proxies) {
+            destroyOverlayProxy(proxy);
+        }
+        group.proxies.clear();
+        group.signature = 0;
     }
-    overlayProxies_.clear();
 
     for (auto& [id, proxy] : lightProxies_) {
         destroyLightProxy(proxy);
@@ -292,7 +560,7 @@ void SceneRenderBridge::shutdown() {
     lightProxies_.clear();
     selectedOverlayFrame_ = {};
     externalOverlayFrame_ = {};
-    externalOverlayTriangleSignature_ = overlayTriangleSignature(externalOverlayFrame_);
+    externalOverlaySignature_ = overlayFrameSignature(externalOverlayFrame_);
 
     for (auto& [id, texture] : textureCache_) {
         destroyTexture(texture);
@@ -306,14 +574,18 @@ void SceneRenderBridge::shutdown() {
     scene_ = nullptr;
     meshMaterial_ = nullptr;
     overlayMaterial_ = nullptr;
+    overlayLineMaterial_ = nullptr;
+    overlayPointMaterial_ = nullptr;
     resourceRoot_.clear();
     syncedRevision_ = 0;
     syncedAssetRevision_ = 0;
     hasSynced_ = false;
+    overlayCamera_ = {};
+    overlayCameraSignature_ = 0;
 }
 
 void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry& assets) {
-    if (!engine_ || !scene_ || !meshMaterial_ || !overlayMaterial_) {
+    if (!engine_ || !scene_ || !meshMaterial_ || !overlayMaterial_ || !overlayLineMaterial_ || !overlayPointMaterial_) {
         return;
     }
 
@@ -333,16 +605,26 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
     hasSynced_ = true;
 }
 
-void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame) {
-    const std::uint64_t triangleSignature = overlayTriangleSignature(frame);
-    if (triangleSignature == externalOverlayTriangleSignature_) {
+void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
+    const std::uint64_t signature = overlayFrameSignature(frame);
+    camera = sanitizedOverlayCamera(camera);
+    const std::uint64_t cameraSignature = overlayCameraSignature(camera);
+    const bool cameraChanged = cameraSignature != overlayCameraSignature_;
+    if (signature == externalOverlaySignature_ && !cameraChanged) {
         externalOverlayFrame_ = std::move(frame);
         return;
     }
 
     externalOverlayFrame_ = std::move(frame);
-    externalOverlayTriangleSignature_ = triangleSignature;
-    if (engine_ && scene_ && overlayMaterial_) {
+    externalOverlaySignature_ = signature;
+    if (cameraChanged) {
+        overlayCamera_ = camera;
+        overlayCameraSignature_ = cameraSignature;
+        for (OverlayProxyGroup& group : overlayProxyGroups_) {
+            group.signature = 0;
+        }
+    }
+    if (engine_ && scene_ && overlayMaterial_ && overlayLineMaterial_ && overlayPointMaterial_) {
         rebuildOverlayProxies();
     }
 }
@@ -578,38 +860,43 @@ filament::MaterialInstance* SceneRenderBridge::createMeshMaterialInstance(const 
 }
 
 void SceneRenderBridge::rebuildOverlayProxies() {
-    for (OverlayProxy& proxy : overlayProxies_) {
-        destroyOverlayProxy(proxy);
-    }
-    overlayProxies_.clear();
-
-    if (!engine_ || !scene_ || !overlayMaterial_) {
+    if (!engine_ || !scene_ || !overlayMaterial_ || !overlayLineMaterial_ || !overlayPointMaterial_) {
         return;
     }
 
-    auto buildOverlay = [this](const std::vector<RenderVertex>& vertices,
-                                filament::RenderableManager::PrimitiveType primitiveType,
-                                const OverlayRenderState& state) {
+    auto configureOverlayMaterial = [](filament::MaterialInstance& material, const OverlayRenderState& state) {
+        material.setColorWrite(state.colorWrite);
+        material.setDepthWrite(state.depthWrite);
+        material.setDepthCulling(state.depthCulling);
+        material.setDepthFunc(state.depthFunc);
+        material.setCullingMode(state.cullingMode);
+        material.setTransparencyMode(state.transparencyMode);
+        material.setPolygonOffset(state.polygonOffsetScale, state.polygonOffsetConstant);
+    };
+
+    auto makeSequentialIndices = [](std::size_t vertexCount) {
+        std::vector<std::uint32_t> indices;
+        indices.reserve(vertexCount);
+        for (std::uint32_t index = 0; index < vertexCount; ++index) {
+            indices.push_back(index);
+        }
+        return indices;
+    };
+
+    auto buildTriangleOverlay = [this, &configureOverlayMaterial, &makeSequentialIndices](
+                                const std::vector<RenderVertex>& vertices,
+                                const OverlayRenderState& state,
+                                std::vector<OverlayProxy>& targetProxies) {
         if (vertices.empty()) {
             return;
         }
 
-        std::vector<std::uint32_t> indices;
-        indices.reserve(vertices.size());
-        for (std::uint32_t index = 0; index < vertices.size(); ++index) {
-            indices.push_back(index);
-        }
+        std::vector<std::uint32_t> indices = makeSequentialIndices(vertices.size());
 
         OverlayProxy proxy;
         proxy.entity = utils::EntityManager::get().create();
         proxy.materialInstance = overlayMaterial_->createInstance();
-        proxy.materialInstance->setColorWrite(state.colorWrite);
-        proxy.materialInstance->setDepthWrite(state.depthWrite);
-        proxy.materialInstance->setDepthCulling(state.depthCulling);
-        proxy.materialInstance->setDepthFunc(state.depthFunc);
-        proxy.materialInstance->setCullingMode(state.cullingMode);
-        proxy.materialInstance->setTransparencyMode(state.transparencyMode);
-        proxy.materialInstance->setPolygonOffset(state.polygonOffsetScale, state.polygonOffsetConstant);
+        configureOverlayMaterial(*proxy.materialInstance, state);
         proxy.vertexBuffer = filament::VertexBuffer::Builder()
                 .vertexCount(static_cast<std::uint32_t>(vertices.size()))
                 .bufferCount(1)
@@ -626,16 +913,112 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         proxy.indexBuffer->setBuffer(*engine_, makeBufferDescriptor(indices));
 
         filament::RenderableManager::Builder(1)
-                .geometry(0, primitiveType, proxy.vertexBuffer, proxy.indexBuffer)
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
                 .material(0, proxy.materialInstance)
                 .blendOrder(0, state.blendOrder)
                 .globalBlendOrderEnabled(0, true)
-                .boundingBox(computeOverlayBounds(vertices))
+                .boundingBox(overlayMeshBounds())
+                .culling(false)
                 .castShadows(false)
                 .receiveShadows(false)
                 .build(*engine_, proxy.entity);
         scene_->addEntity(proxy.entity);
-        overlayProxies_.push_back(proxy);
+        targetProxies.push_back(proxy);
+    };
+
+    auto buildLineOverlay = [this, &configureOverlayMaterial](
+                                    const std::vector<OverlayLineVertex>& vertices,
+                                    const std::vector<std::uint32_t>& indices,
+                                    const OverlayRenderState& state,
+                                    float widthPixels,
+                                    float depthBias,
+                                    std::vector<OverlayProxy>& targetProxies) {
+        if (vertices.empty() || indices.empty()) {
+            return;
+        }
+
+        OverlayProxy proxy;
+        proxy.entity = utils::EntityManager::get().create();
+        proxy.materialInstance = overlayLineMaterial_->createInstance();
+        configureOverlayMaterial(*proxy.materialInstance, state);
+        proxy.materialInstance->setParameter("lineWidth", widthPixels);
+        proxy.materialInstance->setParameter("featherPixels", kOverlayLineFeatherPixels);
+        (void)depthBias;
+        proxy.vertexBuffer = filament::VertexBuffer::Builder()
+                .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+                .bufferCount(1)
+                .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT4, offsetof(OverlayLineVertex, position), sizeof(OverlayLineVertex))
+                .attribute(filament::VertexAttribute::CUSTOM0, 0, AttributeType::FLOAT4, offsetof(OverlayLineVertex, lineDistancePixels), sizeof(OverlayLineVertex))
+                .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayLineVertex, color), sizeof(OverlayLineVertex))
+                .normalized(filament::VertexAttribute::COLOR)
+                .build(*engine_);
+        proxy.vertexBuffer->setBufferAt(*engine_, 0, makeBufferDescriptor(vertices));
+        proxy.indexBuffer = filament::IndexBuffer::Builder()
+                .indexCount(static_cast<std::uint32_t>(indices.size()))
+                .bufferType(filament::IndexBuffer::IndexType::UINT)
+                .build(*engine_);
+        proxy.indexBuffer->setBuffer(*engine_, makeBufferDescriptor(indices));
+
+        filament::RenderableManager::Builder(1)
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
+                .material(0, proxy.materialInstance)
+                .blendOrder(0, state.blendOrder)
+                .globalBlendOrderEnabled(0, true)
+                .boundingBox(overlayMeshBounds())
+                .culling(false)
+                .castShadows(false)
+                .receiveShadows(false)
+                .build(*engine_, proxy.entity);
+        scene_->addEntity(proxy.entity);
+        targetProxies.push_back(proxy);
+    };
+
+    auto buildPointOverlay = [this, &configureOverlayMaterial](
+                                     const std::vector<OverlayPointVertex>& vertices,
+                                     const std::vector<std::uint32_t>& indices,
+                                     const OverlayRenderState& state,
+                                     float pointSizePixels,
+                                     float innerRadius,
+                                     float depthBias,
+                                     std::vector<OverlayProxy>& targetProxies) {
+        if (vertices.empty() || indices.empty()) {
+            return;
+        }
+
+        OverlayProxy proxy;
+        proxy.entity = utils::EntityManager::get().create();
+        proxy.materialInstance = overlayPointMaterial_->createInstance();
+        configureOverlayMaterial(*proxy.materialInstance, state);
+        proxy.materialInstance->setParameter("innerRadius", innerRadius);
+        (void)pointSizePixels;
+        (void)depthBias;
+        proxy.vertexBuffer = filament::VertexBuffer::Builder()
+                .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+                .bufferCount(1)
+                .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT4, offsetof(OverlayPointVertex, position), sizeof(OverlayPointVertex))
+                .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(OverlayPointVertex, uv), sizeof(OverlayPointVertex))
+                .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayPointVertex, color), sizeof(OverlayPointVertex))
+                .normalized(filament::VertexAttribute::COLOR)
+                .build(*engine_);
+        proxy.vertexBuffer->setBufferAt(*engine_, 0, makeBufferDescriptor(vertices));
+        proxy.indexBuffer = filament::IndexBuffer::Builder()
+                .indexCount(static_cast<std::uint32_t>(indices.size()))
+                .bufferType(filament::IndexBuffer::IndexType::UINT)
+                .build(*engine_);
+        proxy.indexBuffer->setBuffer(*engine_, makeBufferDescriptor(indices));
+
+        filament::RenderableManager::Builder(1)
+                .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
+                .material(0, proxy.materialInstance)
+                .blendOrder(0, state.blendOrder)
+                .globalBlendOrderEnabled(0, true)
+                .boundingBox(overlayMeshBounds())
+                .culling(false)
+                .castShadows(false)
+                .receiveShadows(false)
+                .build(*engine_, proxy.entity);
+        scene_->addEntity(proxy.entity);
+        targetProxies.push_back(proxy);
     };
 
     auto appendTrianglesForLayer = [](std::vector<RenderVertex>& vertices,
@@ -644,6 +1027,26 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         for (const ViewportOverlayTriangle& triangle : frame.triangles) {
             if (triangle.layer == layer) {
                 appendOverlayTriangle(vertices, triangle);
+            }
+        }
+    };
+
+    auto appendLinesForLayer = [](std::vector<const ViewportOverlayLine*>& lines,
+                                        const ViewportOverlayFrame& frame,
+                                        ViewportOverlayLayer layer) {
+        for (const ViewportOverlayLine& line : frame.lines) {
+            if (line.layer == layer) {
+                lines.push_back(&line);
+            }
+        }
+    };
+
+    auto appendPointsForLayer = [](std::vector<const ViewportOverlayPoint*>& points,
+                                         const ViewportOverlayFrame& frame,
+                                         ViewportOverlayLayer layer) {
+        for (const ViewportOverlayPoint& point : frame.points) {
+            if (point.layer == layer) {
+                points.push_back(&point);
             }
         }
     };
@@ -658,10 +1061,10 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         state.depthWrite = depthStamp;
         state.colorWrite = !depthStamp;
         state.depthCulling = depthStamp || faceColorPass || !drawOnTop;
-        state.depthFunc = depthStamp ? filament::MaterialInstance::DepthFunc::LE :
+        state.depthFunc = depthStamp ? filament::MaterialInstance::DepthFunc::GE :
                 faceColorPass ? filament::MaterialInstance::DepthFunc::E :
                 drawOnTop ? filament::MaterialInstance::DepthFunc::A :
-                filament::MaterialInstance::DepthFunc::LE;
+                filament::MaterialInstance::DepthFunc::GE;
         state.cullingMode = kind == ViewportOverlayGeometryKind::Triangles
                 ? filament::MaterialInstance::CullingMode::BACK
                 : filament::MaterialInstance::CullingMode::NONE;
@@ -676,25 +1079,130 @@ void SceneRenderBridge::rebuildOverlayProxies() {
         return state;
     };
 
-    std::uint16_t blendOrder = 0;
     for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
+        const std::uint64_t layerSignature = overlayLayerSignature(selectedOverlayFrame_, externalOverlayFrame_, layer);
+        OverlayProxyGroup& group = overlayProxyGroups_[static_cast<std::size_t>(layer)];
+        if (group.signature == layerSignature) {
+            continue;
+        }
+
+        for (OverlayProxy& proxy : group.proxies) {
+            destroyOverlayProxy(proxy);
+        }
+        group.proxies.clear();
+        group.signature = layerSignature;
+
+        std::uint16_t blendOrder = static_cast<std::uint16_t>(viewportOverlayDrawOrder(layer) * 64);
         std::vector<RenderVertex> triangleVertices;
         triangleVertices.reserve((selectedOverlayFrame_.triangles.size() + externalOverlayFrame_.triangles.size()) * 3u);
         appendTrianglesForLayer(triangleVertices, selectedOverlayFrame_, layer);
         appendTrianglesForLayer(triangleVertices, externalOverlayFrame_, layer);
         if (!triangleVertices.empty()) {
             if (viewportOverlayLayerUsesDepthStampedFaceFill(layer)) {
-                buildOverlay(triangleVertices,
-                        filament::RenderableManager::PrimitiveType::TRIANGLES,
-                        makeOverlayState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false));
-                buildOverlay(triangleVertices,
-                        filament::RenderableManager::PrimitiveType::TRIANGLES,
-                        makeOverlayState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, false, true));
+                buildTriangleOverlay(triangleVertices,
+                        makeOverlayState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
+                        group.proxies);
+                buildTriangleOverlay(triangleVertices,
+                        makeOverlayState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, false, true),
+                        group.proxies);
             } else {
-                buildOverlay(triangleVertices,
-                        filament::RenderableManager::PrimitiveType::TRIANGLES,
-                        makeOverlayState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++));
+                buildTriangleOverlay(triangleVertices,
+                        makeOverlayState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++),
+                        group.proxies);
             }
+        }
+
+        struct LineBatchKey {
+            std::uint32_t color = 0;
+            float widthPixels = 0.0f;
+        };
+
+        std::vector<const ViewportOverlayLine*> lines;
+        lines.reserve(selectedOverlayFrame_.lines.size() + externalOverlayFrame_.lines.size());
+        appendLinesForLayer(lines, selectedOverlayFrame_, layer);
+        appendLinesForLayer(lines, externalOverlayFrame_, layer);
+        std::vector<LineBatchKey> lineKeys;
+        for (const ViewportOverlayLine* line : lines) {
+            const LineBatchKey key{
+                    .color = line->color,
+                    .widthPixels = viewportOverlayLineWidthPixels(layer, line->widthPixels),
+            };
+            const auto existing = std::find_if(lineKeys.begin(), lineKeys.end(), [&](const LineBatchKey& candidate) {
+                return candidate.color == key.color && candidate.widthPixels == key.widthPixels;
+            });
+            if (existing == lineKeys.end()) {
+                lineKeys.push_back(key);
+            }
+        }
+        for (const LineBatchKey& key : lineKeys) {
+            std::vector<OverlayLineVertex> lineVertices;
+            std::vector<std::uint32_t> lineIndices;
+            lineVertices.reserve(lines.size() * 4u);
+            lineIndices.reserve(lines.size() * 6u);
+            const float depthBias = viewportOverlayDepthBias(layer, ViewportOverlayGeometryKind::Lines);
+            for (const ViewportOverlayLine* line : lines) {
+                if (line->color == key.color && viewportOverlayLineWidthPixels(layer, line->widthPixels) == key.widthPixels) {
+                    (void)appendOverlayLineQuad(lineVertices, lineIndices, *line, overlayCamera_, key.widthPixels, depthBias);
+                }
+            }
+            buildLineOverlay(lineVertices,
+                    lineIndices,
+                    makeOverlayState(layer, ViewportOverlayGeometryKind::Lines, blendOrder++),
+                    key.widthPixels,
+                    depthBias,
+                    group.proxies);
+        }
+
+        std::vector<const ViewportOverlayPoint*> points;
+        points.reserve(selectedOverlayFrame_.points.size() + externalOverlayFrame_.points.size());
+        appendPointsForLayer(points, selectedOverlayFrame_, layer);
+        appendPointsForLayer(points, externalOverlayFrame_, layer);
+        auto buildPointPass = [&](bool outline) {
+            std::vector<float> pointSizes;
+            for (const ViewportOverlayPoint* point : points) {
+                const float baseSize = viewportOverlayPointSizePixels(layer, point->sizePixels);
+                const bool outlineUsesNativeColor = layer == ViewportOverlayLayer::SnapTargetVertex;
+                const float sizePixels = outline && !outlineUsesNativeColor
+                        ? baseSize + viewportOverlayPointOutlineGrowthPixels(layer)
+                        : baseSize;
+                if (std::find(pointSizes.begin(), pointSizes.end(), sizePixels) == pointSizes.end()) {
+                    pointSizes.push_back(sizePixels);
+                }
+            }
+            for (const float sizePixels : pointSizes) {
+                std::vector<OverlayPointVertex> pointVertices;
+                std::vector<std::uint32_t> pointIndices;
+                pointVertices.reserve(points.size() * 4u);
+                pointIndices.reserve(points.size() * 6u);
+                const float depthBias = viewportOverlayDepthBias(layer, ViewportOverlayGeometryKind::Points);
+                for (const ViewportOverlayPoint* point : points) {
+                    const float baseSize = viewportOverlayPointSizePixels(layer, point->sizePixels);
+                    const bool outlineUsesNativeColor = layer == ViewportOverlayLayer::SnapTargetVertex;
+                    const float pointSize = outline && !outlineUsesNativeColor
+                            ? baseSize + viewportOverlayPointOutlineGrowthPixels(layer)
+                            : baseSize;
+                    if (pointSize != sizePixels) {
+                        continue;
+                    }
+                    const std::uint32_t color = outline && !outlineUsesNativeColor
+                            ? kOverlayVertexOutlineColor
+                            : point->color;
+                    (void)appendOverlayPointQuad(pointVertices, pointIndices, point->position, color, overlayCamera_, sizePixels, depthBias);
+                }
+                buildPointOverlay(pointVertices,
+                        pointIndices,
+                        makeOverlayState(layer, ViewportOverlayGeometryKind::Points, blendOrder++),
+                        sizePixels,
+                        outline && viewportOverlayPointIsOutlineOnly(layer) ? viewportOverlayPointInnerRadius(layer) : 0.0f,
+                        depthBias,
+                        group.proxies);
+            }
+        };
+        if (viewportOverlayPointHasOutline(layer)) {
+            buildPointPass(true);
+        }
+        if (!viewportOverlayPointIsOutlineOnly(layer)) {
+            buildPointPass(false);
         }
     }
 }

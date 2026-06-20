@@ -154,6 +154,7 @@ struct ViewportInputResult {
     bool shortcutHandled = false;
     bool toolChanged = false;
     bool selectionModeChanged = false;
+    bool gridPresetChanged = false;
     bool navigationActive = false;
     bool flyNavigationActive = false;
     bool flyCursorCaptureActive = false;

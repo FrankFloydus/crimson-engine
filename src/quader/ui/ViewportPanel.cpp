@@ -1,7 +1,6 @@
 #include "quader/ui/ViewportPanel.h"
 
 #include "quader/core/Logger.h"
-#include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneEntityNaming.h"
 #include "quader/scene/TransformPivot.h"
@@ -82,6 +81,38 @@ bool viewportFocusInputActive() {
             ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
             io.MouseWheel != 0.0f ||
             (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (std::abs(io.MouseDelta.x) > 0.0f || std::abs(io.MouseDelta.y) > 0.0f));
+}
+
+ViewportOverlayCamera makeViewportOverlayCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
+    const ViewportCameraPose pose = camera.pose();
+    Vec3 forward = normalize(pose.target - pose.eye);
+    if (length(forward) <= 0.000001f) {
+        forward = {0.0f, 0.0f, -1.0f};
+    }
+    Vec3 right = normalize(cross(forward, pose.up));
+    if (length(right) <= 0.000001f) {
+        right = {1.0f, 0.0f, 0.0f};
+    }
+    Vec3 up = normalize(cross(right, forward));
+    if (length(up) <= 0.000001f) {
+        up = {0.0f, 1.0f, 0.0f};
+    }
+
+    const ViewportCameraState& state = camera.state();
+    return {
+            .eye = pose.eye,
+            .forward = forward,
+            .right = right,
+            .up = up,
+            .viewportSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)},
+            .projection = state.projection == ViewportProjection::Orthographic
+                    ? ViewportOverlayProjection::Orthographic
+                    : ViewportOverlayProjection::Perspective,
+            .orthographicSize = state.orthographicSize,
+            .fovDegrees = state.fovDegrees,
+            .nearPlane = state.nearPlane,
+            .farPlane = state.farPlane,
+    };
 }
 
 ViewportInputFrame makeViewportInputFrame(
@@ -341,92 +372,6 @@ bool rayIntersectsBounds(Vec3 origin, Vec3 direction, const SceneBounds& bounds,
     return tMax >= 0.0f;
 }
 
-bool rayIntersectsTriangle(Vec3 origin, Vec3 direction, Vec3 a, Vec3 b, Vec3 c, float& outDistance) {
-    constexpr float epsilon = 0.000001f;
-    const Vec3 edgeA = b - a;
-    const Vec3 edgeB = c - a;
-    const Vec3 h = cross(direction, edgeB);
-    const float determinant = dot(edgeA, h);
-    if (std::abs(determinant) < epsilon) {
-        return false;
-    }
-
-    const float inverseDeterminant = 1.0f / determinant;
-    const Vec3 s = origin - a;
-    const float u = inverseDeterminant * dot(s, h);
-    if (u < 0.0f || u > 1.0f) {
-        return false;
-    }
-
-    const Vec3 q = cross(s, edgeA);
-    const float v = inverseDeterminant * dot(direction, q);
-    if (v < 0.0f || u + v > 1.0f) {
-        return false;
-    }
-
-    const float distance = inverseDeterminant * dot(edgeB, q);
-    if (distance <= epsilon) {
-        return false;
-    }
-
-    outDistance = distance;
-    return true;
-}
-
-bool pointVisibleFromCamera(
-        Vec3 point,
-        const ViewportCameraController& camera,
-        const SceneDocument& document,
-        const AssetRegistry& assets) {
-    const ViewportCameraPose pose = camera.pose();
-    const Vec3 toPoint = point - pose.eye;
-    const float pointDistance = length(toPoint);
-    if (pointDistance <= 0.0001f) {
-        return true;
-    }
-
-    const Vec3 rayDirection = toPoint / pointDistance;
-    float nearestHit = std::numeric_limits<float>::max();
-    for (const EntityId entity : document.entities()) {
-        const VisibilityComponent* visibility = document.visibility(entity);
-        if (visibility && !visibility->visible) {
-            continue;
-        }
-
-        const MeshComponent* meshComponent = document.mesh(entity);
-        const TransformComponent* transform = document.transform(entity);
-        if (!meshComponent || !transform) {
-            continue;
-        }
-
-        const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
-        if (!mesh || mesh->vertices.empty() || mesh->indices.size() < 3u) {
-            continue;
-        }
-
-        const Mat4 worldFromLocal = composeTransform(transform->spatialTransform());
-        for (std::size_t index = 0; index + 2u < mesh->indices.size(); index += 3u) {
-            const std::uint32_t ia = mesh->indices[index];
-            const std::uint32_t ib = mesh->indices[index + 1u];
-            const std::uint32_t ic = mesh->indices[index + 2u];
-            if (ia >= mesh->vertices.size() || ib >= mesh->vertices.size() || ic >= mesh->vertices.size()) {
-                continue;
-            }
-
-            const Vec3 a = transformPoint(worldFromLocal, mesh->vertices[ia].position);
-            const Vec3 b = transformPoint(worldFromLocal, mesh->vertices[ib].position);
-            const Vec3 c = transformPoint(worldFromLocal, mesh->vertices[ic].position);
-
-            float hitDistance = 0.0f;
-            if (rayIntersectsTriangle(pose.eye, rayDirection, a, b, c, hitDistance)) {
-                nearestHit = std::min(nearestHit, hitDistance);
-            }
-        }
-    }
-
-    return nearestHit >= pointDistance - 0.035f;
-}
-
 bool applyDefaultMaterialToSelection(SceneDocument& document, AssetId defaultMaterial) {
     if (defaultMaterial == InvalidAssetId) {
         return true;
@@ -623,114 +568,6 @@ void drawFlyNavigationOverlay(
     const ImVec2 max{min.x + textSize.x + padding.x * 2.0f, min.y + textSize.y + padding.y * 2.0f};
     drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImVec4(0.05f, 0.06f, 0.07f, 0.78f)), 4.0f);
     drawList->AddText({min.x + padding.x, min.y + padding.y}, ImGui::GetColorU32(ImVec4(0.92f, 0.95f, 1.0f, 1.0f)), label);
-}
-
-ImU32 toImColor(std::uint32_t rgba) {
-    return static_cast<ImU32>(rgba);
-}
-
-void drawOverlayPoint(ImDrawList* drawList,
-        ImVec2 center,
-        ViewportOverlayLayer layer,
-        float nativeSizePixels,
-        ImU32 color) {
-    const float fillSize = viewportOverlayPointSizePixels(layer, nativeSizePixels);
-    const float half = fillSize * 0.5f;
-
-    if (viewportOverlayPointIsOutlineOnly(layer)) {
-        drawList->AddCircle(center, half, color, 24, std::max(1.0f, half * (1.0f - viewportOverlayPointInnerRadius(layer))));
-        return;
-    }
-
-    if (viewportOverlayPointHasOutline(layer)) {
-        const float outlineHalf = half + viewportOverlayPointOutlineGrowthPixels(layer) * 0.5f;
-        drawList->AddRectFilled(
-                {center.x - outlineHalf, center.y - outlineHalf},
-                {center.x + outlineHalf, center.y + outlineHalf},
-                toImColor(kOverlayVertexOutlineColor));
-    }
-    drawList->AddRectFilled(
-            {center.x - half, center.y - half},
-            {center.x + half, center.y + half},
-            color);
-}
-
-void drawVisibilityClippedOverlayLine(
-        ImDrawList* drawList,
-        const ViewportOverlayLine& line,
-        const ViewportCameraController& camera,
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    constexpr int sampleCount = 33;
-    std::array<Vec3, sampleCount> points{};
-    std::array<bool, sampleCount> visible{};
-    for (int index = 0; index < sampleCount; ++index) {
-        const float t = static_cast<float>(index) / static_cast<float>(sampleCount - 1);
-        points[static_cast<std::size_t>(index)] = line.start + (line.end - line.start) * t;
-        visible[static_cast<std::size_t>(index)] =
-                pointVisibleFromCamera(points[static_cast<std::size_t>(index)], camera, document, assets);
-    }
-
-    for (int index = 0; index + 1 < sampleCount; ++index) {
-        if (!visible[static_cast<std::size_t>(index)] || !visible[static_cast<std::size_t>(index + 1)]) {
-            continue;
-        }
-
-        const std::optional<ImVec2> start =
-                projectWorldToViewport(points[static_cast<std::size_t>(index)], camera, itemMin, itemSize);
-        const std::optional<ImVec2> end =
-                projectWorldToViewport(points[static_cast<std::size_t>(index + 1)], camera, itemMin, itemSize);
-        if (start && end) {
-            drawList->AddLine(*start, *end, toImColor(line.color), viewportOverlayLineWidthPixels(line.layer, line.widthPixels));
-        }
-    }
-}
-
-void drawSelectionOverlay2d(
-        ImDrawList* drawList,
-        const ViewportOverlayFrame& frame,
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize,
-        bool componentSelectionMode) {
-    for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
-        const bool depthTestedLine =
-                componentSelectionMode && viewportOverlayDepthTested(layer, ViewportOverlayGeometryKind::Lines);
-        const bool depthTestedPoint =
-                componentSelectionMode && viewportOverlayDepthTested(layer, ViewportOverlayGeometryKind::Points);
-
-        for (const ViewportOverlayLine& line : frame.lines) {
-            if (line.layer != layer) {
-                continue;
-            }
-            if (depthTestedLine) {
-                drawVisibilityClippedOverlayLine(drawList, line, camera, document, assets, itemMin, itemSize);
-                continue;
-            }
-            const std::optional<ImVec2> start = projectWorldToViewport(line.start, camera, itemMin, itemSize);
-            const std::optional<ImVec2> end = projectWorldToViewport(line.end, camera, itemMin, itemSize);
-            if (start && end) {
-                drawList->AddLine(*start, *end, toImColor(line.color), viewportOverlayLineWidthPixels(layer, line.widthPixels));
-            }
-        }
-
-        for (const ViewportOverlayPoint& point : frame.points) {
-            if (point.layer != layer) {
-                continue;
-            }
-            if (depthTestedPoint && !pointVisibleFromCamera(point.position, camera, document, assets)) {
-                continue;
-            }
-            const std::optional<ImVec2> screen = projectWorldToViewport(point.position, camera, itemMin, itemSize);
-            if (screen) {
-                drawOverlayPoint(drawList, *screen, layer, point.sizePixels, toImColor(point.color));
-            }
-        }
-    }
 }
 
 ModelingSelectionMode toModelingSelectionMode(ViewportSelectionMode mode) {
@@ -1365,7 +1202,7 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
     if (!visible) {
-        renderBridge.setOverlayFrame({});
+        renderBridge.setOverlayFrame({}, makeViewportOverlayCamera(camera, {1.0f, 1.0f}));
         lastFlyNavigationActive_ = false;
         ImGui::End();
         return;
@@ -1469,10 +1306,14 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             LOG_ERROR("Selection mode change failed: {}", command.message);
         }
         paintSelectionActive_ = false;
+        lastHoverWorkKey_.valid = false;
+        cachedSelectionOverlayFrameDirty_ = true;
     }
     if (result.toolChanged) {
         LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
         paintSelectionActive_ = false;
+        lastHoverWorkKey_.valid = false;
+        cachedSelectionOverlayFrameDirty_ = true;
         if (inputRouter_.state().activeTool == ViewportTool::Box) {
             const ModelingCommandResult command = modeling.activateBoxTool();
             boxPreview_ = {};
@@ -1496,6 +1337,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                 LOG_ERROR("Viewport shortcut failed: {}", command->message.empty() ? "Command failed." : command->message);
             }
             inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
         }
     }
 
@@ -1506,6 +1349,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         }
         boxPreview_ = {};
         paintSelectionActive_ = false;
+        lastHoverWorkKey_.valid = false;
+        cachedSelectionOverlayFrameDirty_ = true;
         if (exitBoxTool) {
             inputRouter_.setActiveTool(ViewportTool::Move);
         }
@@ -1546,7 +1391,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             sdkRotateDrag_ = {};
             sdkScaleDrag_ = {};
 #endif
-            renderBridge.setOverlayFrame({});
+            renderBridge.setOverlayFrame({}, makeViewportOverlayCamera(camera, itemSize));
+            cachedSelectionOverlayFrameDirty_ = true;
             cancelConsumed = true;
         }
 
@@ -1563,6 +1409,9 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             .accumulatedDragDelta = contextMenuRightDragDelta_,
     });
     const bool viewCubeConsumed = drawViewCube(camera, itemMin, itemSize);
+    if (suppressHoverWork || viewCubeConsumed || result.gridPresetChanged) {
+        lastHoverWorkKey_.valid = false;
+    }
     const bool gizmoConsumed =
             viewCubeConsumed ||
             cancelConsumed ||
@@ -1588,12 +1437,45 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
         cancelConsumed = true;
     }
 
+    const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();
+    auto makeHoverWorkKey = [&](bool consumedByGizmo) {
+        return HoverWorkKey{
+                .valid = true,
+                .activeTool = inputRouter_.state().activeTool,
+                .selectionMode = inputRouter_.state().selectionMode,
+                .boxDragState = boxPreview_.dragState,
+                .gridPreset = inputRouter_.state().gridPreset,
+                .mouseLocal = input.mouseLocal,
+                .viewportSize = input.viewportSize,
+                .primaryModifier = input.modifiers.primary,
+                .shiftModifier = input.modifiers.shift,
+                .altModifier = input.modifiers.alt,
+                .gizmoConsumed = consumedByGizmo,
+                .sceneRevision = document.revision(),
+                .assetRevision = assets.revision(),
+                .contentRevision = hoverSelectionSummary.contentRevision,
+                .selectionRevision = hoverSelectionSummary.selectionRevision,
+        };
+    };
+    auto claimHoverWork = [&](const HoverWorkKey& key) {
+        if (lastHoverWorkKey_.matches(key)) {
+            return false;
+        }
+        lastHoverWorkKey_ = key;
+        return true;
+    };
+
     if (inputRouter_.state().activeTool == ViewportTool::Box) {
         const float gridSize = gridSizeForPreset(inputRouter_.state().gridPreset);
         const ModelingBoxToolEvent boxEvent = modelingBoxEvent(camera, input, gridSize);
         bool boxActionConsumed = false;
 
-        if (hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState == ModelingBoxDragState::Idle) {
+        HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+        if (hovered &&
+                !leftDown &&
+                !suppressHoverWork &&
+                boxPreview_.dragState == ModelingBoxDragState::Idle &&
+                claimHoverWork(hoverWorkKey)) {
             boxPreview_ = modeling.updateBoxHover(boxEvent);
             logBoxPreviewFailure("Box hover", boxPreview_);
         }
@@ -1611,20 +1493,30 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                 boxPreview_ = modeling.beginBoxFootprint(boxEvent);
                 logBoxPreviewFailure("Box footprint begin", boxPreview_);
             }
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
             boxActionConsumed = true;
         }
 
         if (!boxActionConsumed && boxPreview_.dragState == ModelingBoxDragState::Footprint && leftDown) {
             boxPreview_ = modeling.updateBoxFootprint(boxEvent);
             logBoxPreviewFailure("Box footprint update", boxPreview_);
+            lastHoverWorkKey_.valid = false;
         }
 
         if (!boxActionConsumed && boxPreview_.dragState == ModelingBoxDragState::Footprint && leftReleased) {
             boxPreview_ = modeling.beginBoxHeight(boxEvent);
             logBoxPreviewFailure("Box height begin", boxPreview_);
+            lastHoverWorkKey_.valid = false;
         }
 
-        if (!boxActionConsumed && hovered && !leftDown && !suppressHoverWork && boxPreview_.dragState == ModelingBoxDragState::Height) {
+        hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+        if (!boxActionConsumed &&
+                hovered &&
+                !leftDown &&
+                !suppressHoverWork &&
+                boxPreview_.dragState == ModelingBoxDragState::Height &&
+                claimHoverWork(hoverWorkKey)) {
             boxPreview_ = modeling.updateBoxHeight(boxEvent);
             logBoxPreviewFailure("Box height update", boxPreview_);
         }
@@ -1647,11 +1539,13 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             (void)selectFromViewport(document, assets, modeling, camera, input.mouseLocal, input.modifiers, leftClickCount);
             paintSelectionActive_ = inputRouter_.state().selectionMode != ViewportSelectionMode::Object;
             selectionHoverClearIssued_ = false;
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
         } else if (selectionFallbackActive &&
                 pendingContextMenuClick &&
                 !gizmoConsumed) {
             const ModelingSelectionSummary summary =
-                    selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1);
+                    selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1, true, true);
             paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
             selectionHoverClearIssued_ = false;
 
@@ -1668,6 +1562,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             if (shouldOpenViewportContextMenu(pendingContextMenuRequest)) {
                 ImGui::OpenPopup("ViewportOperationsContext");
             }
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
         } else if (selectionFallbackActive &&
                 paintSelectionActive_ &&
                 leftDown &&
@@ -1689,6 +1585,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
             inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
             paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
             selectionHoverClearIssued_ = false;
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
         }
 
         if (leftReleased) {
@@ -1699,34 +1597,50 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
                 hovered &&
                 !suppressHoverWork &&
                 !gizmoConsumed) {
-            const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
-            (void)modeling.updateSelectionHover(ModelingHoverRequest{
-                    .ray = {
-                            .origin = worldRay.origin,
-                            .direction = worldRay.direction,
-                    },
-                    .selectedModifierPressed = input.modifiers.primary,
-            });
-            selectionHoverClearIssued_ = false;
-        } else if ((!hovered || !selectionFallbackActive || suppressHoverWork) &&
+            const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+            if (claimHoverWork(hoverWorkKey)) {
+                const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
+                const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover(ModelingHoverRequest{
+                        .ray = {
+                                .origin = worldRay.origin,
+                                .direction = worldRay.direction,
+                        },
+                        .selectedModifierPressed = input.modifiers.primary,
+                });
+                if (hoverUpdate.changed) {
+                    cachedSelectionOverlayFrameDirty_ = true;
+                }
+                selectionHoverClearIssued_ = false;
+            }
+        } else if ((!hovered || !selectionFallbackActive) &&
                 !preserveContextMenuHover &&
                 !selectionHoverClearIssued_) {
-            (void)modeling.clearSelectionHover();
+            const ModelingCommandResult clearHover = modeling.clearSelectionHover();
+            if (clearHover.changed) {
+                cachedSelectionOverlayFrameDirty_ = true;
+            }
             selectionHoverClearIssued_ = true;
+            lastHoverWorkKey_.valid = false;
         }
     }
 
-    const ViewportOverlayFrame selectionOverlay = modeling.selectionOverlayFrame();
-    renderBridge.setOverlayFrame(selectionOverlay);
-    drawSelectionOverlay2d(
-            ImGui::GetWindowDrawList(),
-            selectionOverlay,
-            document,
-            assets,
-            camera,
-            itemMin,
-            itemSize,
-            inputRouter_.state().selectionMode != ViewportSelectionMode::Object);
+    const ModelingSelectionSummary overlaySummary = modeling.selectionSummary();
+    const bool overlayRevisionChanged =
+            !cachedSelectionOverlayFrameValid_ ||
+            cachedSelectionOverlayContentRevision_ != overlaySummary.contentRevision ||
+            cachedSelectionOverlaySelectionRevision_ != overlaySummary.selectionRevision ||
+            cachedSelectionOverlaySceneRevision_ != document.revision();
+    if (cachedSelectionOverlayFrameDirty_ || overlayRevisionChanged) {
+        cachedSelectionOverlayFrame_ = modeling.selectionOverlayFrame();
+        renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));
+        cachedSelectionOverlayFrameValid_ = true;
+        cachedSelectionOverlayFrameDirty_ = false;
+        cachedSelectionOverlayContentRevision_ = overlaySummary.contentRevision;
+        cachedSelectionOverlaySelectionRevision_ = overlaySummary.selectionRevision;
+        cachedSelectionOverlaySceneRevision_ = document.revision();
+    } else {
+        renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));
+    }
     drawFlyNavigationOverlay(
             ImGui::GetWindowDrawList(),
             itemMin,
@@ -1841,7 +1755,9 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
         const ViewportCameraController& camera,
         Vec2 localMouse,
         ViewportModifiers modifiers,
-        int clickCount) {
+        int clickCount,
+        bool preserveSelectionOnMiss,
+        bool preserveSelectionOnSelectedHit) {
     const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
     if (modeling.sdkAvailable()) {
         const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
@@ -1854,6 +1770,8 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
                 .shiftPressed = modifiers.shift,
                 .commandPressed = modifiers.primary,
                 .altPressed = modifiers.alt,
+                .preserveSelectionOnMiss = preserveSelectionOnMiss,
+                .preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit,
         });
         inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
         return summary;
@@ -1907,18 +1825,27 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
         }
     }
 
-    if (!modifiers.primary && !modifiers.shift) {
+    const bool bestEntitySelected =
+            bestEntity != InvalidEntityId &&
+            document.selection(bestEntity) != nullptr &&
+            document.selection(bestEntity)->selected;
+    const bool preserveSelectedHit = preserveSelectionOnSelectedHit && bestEntitySelected;
+    if (!modifiers.primary &&
+            !modifiers.shift &&
+            !preserveSelectedHit &&
+            (!preserveSelectionOnMiss || bestEntity != InvalidEntityId)) {
         document.clearSelection();
     }
-    if (bestEntity != InvalidEntityId) {
+    if (bestEntity != InvalidEntityId && !preserveSelectedHit) {
         const bool alreadySelected =
                 document.selection(bestEntity) != nullptr && document.selection(bestEntity)->selected;
         document.setSelected(bestEntity, modifiers.primary && alreadySelected ? false : true);
     }
+    const bool hasSelection = !document.selectedEntities().empty();
     return {
             .mode = ModelingSelectionMode::Object,
-            .hasSelection = bestEntity != InvalidEntityId,
-            .activeKind = bestEntity != InvalidEntityId ? ModelingActiveSelectionKind::Object : ModelingActiveSelectionKind::None,
+            .hasSelection = hasSelection,
+            .activeKind = hasSelection ? ModelingActiveSelectionKind::Object : ModelingActiveSelectionKind::None,
             .selectedObjectCount = static_cast<std::uint32_t>(document.selectedEntities().size()),
     };
 }

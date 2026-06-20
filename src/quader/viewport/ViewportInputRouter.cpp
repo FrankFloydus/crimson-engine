@@ -449,6 +449,7 @@ bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, Viewp
         state_.maximized = !state_.maximized;
         return true;
     case ViewportShortcutKind::SetGridPreset:
+        result.gridPresetChanged = state_.gridPreset != shortcut.gridPreset;
         state_.gridPreset = shortcut.gridPreset;
         return true;
     case ViewportShortcutKind::CancelActiveTool:

@@ -78,6 +78,8 @@ struct PickSelectRuntimeCommandSettings {
 	bool alt_pressed = false;
 	double vertex_radius = 0.0;
 	double edge_radius = 0.0;
+	bool has_hidden_material_slot = false;
+	std::uint32_t hidden_material_slot = 0;
 };
 
 struct InsertEdgeLoopPickRuntimeCommandSettings {

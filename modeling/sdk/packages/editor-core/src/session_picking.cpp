@@ -31,6 +31,60 @@ void keep_component_edit_target(PolygonObject& object, int& active_object_id)
 	}
 }
 
+bool edge_visible_for_pick_expansion(
+		const quader_poly::Document& document,
+		quader_poly::Edge edge,
+		const quader_poly::PickOptions& options)
+{
+	if (!options.has_hidden_material_slot) {
+		return true;
+	}
+	bool has_incident_face = false;
+	for (const quader_poly::Face& face : document.faces) {
+		if (face.vertices.size() < 2) {
+			continue;
+		}
+		bool uses_edge = false;
+		for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+			const quader_poly::ElementId a = face.vertices[index];
+			const quader_poly::ElementId b = face.vertices[(index + 1U) % face.vertices.size()];
+			if ((a == edge.a && b == edge.b) || (a == edge.b && b == edge.a)) {
+				uses_edge = true;
+				break;
+			}
+		}
+		if (!uses_edge) {
+			continue;
+		}
+		has_incident_face = true;
+		if (!options.hides_material_slot(face.material_slot)) {
+			return true;
+		}
+	}
+	return !has_incident_face;
+}
+
+bool vertex_visible_for_pick_expansion(
+		const quader_poly::Document& document,
+		quader_poly::ElementId vertex_id,
+		const quader_poly::PickOptions& options)
+{
+	if (!options.has_hidden_material_slot) {
+		return true;
+	}
+	bool has_incident_face = false;
+	for (const quader_poly::Face& face : document.faces) {
+		if (std::find(face.vertices.begin(), face.vertices.end(), vertex_id) == face.vertices.end()) {
+			continue;
+		}
+		has_incident_face = true;
+		if (!options.hides_material_slot(face.material_slot)) {
+			return true;
+		}
+	}
+	return !has_incident_face;
+}
+
 quader_geometry::Vec2f to_geometry_vec2(quader_poly::Vec2 value)
 {
 	return quader_geometry::Vec2f(value);
@@ -150,6 +204,7 @@ quader_poly::PickResult pick_object_element(
 std::optional<PickHitRecord> nearest_surface_hit(
 		const std::vector<PolygonObject>& objects,
 		const quader_poly::Ray& ray,
+		const quader_poly::PickOptions& options,
 		std::span<const PickObjectBounds> object_bounds,
 		std::span<const PickObjectFaceGeometry> face_geometry = {});
 bool component_pick_is_occluded_by_surface(
@@ -178,7 +233,7 @@ bool pick_nearest_object(
 	hit.distance = std::numeric_limits<float>::max();
 	const std::optional<PickHitRecord> surface_hit =
 			objects.size() > 1U && (options.mode == quader_poly::SelectionMode::vertex || options.mode == quader_poly::SelectionMode::edge) ?
-				nearest_surface_hit(objects, ray, object_bounds, face_geometry) :
+				nearest_surface_hit(objects, ray, options, object_bounds, face_geometry) :
 				std::optional<PickHitRecord> {};
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (!ray_intersects_object_pick_bounds(
@@ -317,10 +372,11 @@ PickHitRecord make_pick_hit_record(const PolygonObject& object, int object_index
 std::optional<PickHitRecord> nearest_surface_hit(
 		const std::vector<PolygonObject>& objects,
 		const quader_poly::Ray& ray,
+		const quader_poly::PickOptions& options,
 		std::span<const PickObjectBounds> object_bounds,
 		std::span<const PickObjectFaceGeometry> face_geometry)
 {
-	quader_poly::PickOptions surface_options;
+	quader_poly::PickOptions surface_options = options;
 	surface_options.mode = quader_poly::SelectionMode::face;
 	const PickRequest surface_request { ray, surface_options };
 	std::optional<PickHitRecord> nearest;
@@ -484,13 +540,20 @@ quader_poly::PickOptions selection_pick_options_from_radii(double vertex_radius,
 
 std::vector<PickObjectFaceGeometry> build_pick_face_geometry(const std::vector<PolygonObject>& objects)
 {
+	return build_pick_face_geometry(objects, {});
+}
+
+std::vector<PickObjectFaceGeometry> build_pick_face_geometry(
+		const std::vector<PolygonObject>& objects,
+		quader_poly::PickOptions pick_options)
+{
 	QDR_PROFILE_SCOPE("qdr_editor_core.build_pick_face_geometry");
 	std::vector<PickObjectFaceGeometry> result;
 	result.reserve(objects.size());
 	for (const PolygonObject& object : objects) {
 		result.push_back({
 			object.id,
-			quader_poly::build_face_pick_geometry(object.document),
+			quader_poly::build_face_pick_geometry(object.document, pick_options),
 		});
 	}
 	return result;
@@ -502,7 +565,7 @@ std::optional<PickHitRecord> pick_nearest(const std::vector<PolygonObject>& obje
 	std::optional<PickHitRecord> nearest;
 	const std::optional<PickHitRecord> surface_hit =
 			objects.size() > 1U && (request.options.mode == quader_poly::SelectionMode::vertex || request.options.mode == quader_poly::SelectionMode::edge) ?
-				nearest_surface_hit(objects, request.ray, {}) :
+				nearest_surface_hit(objects, request.ray, request.options, {}) :
 				std::optional<PickHitRecord> {};
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (!ray_intersects_object_pick_bounds(objects[index], request.ray, request.options, nullptr)) {
@@ -546,7 +609,7 @@ std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject>& objects, c
 	std::vector<PickHitRecord> hits;
 	const std::optional<PickHitRecord> surface_hit =
 			objects.size() > 1U && (request.options.mode == quader_poly::SelectionMode::vertex || request.options.mode == quader_poly::SelectionMode::edge) ?
-				nearest_surface_hit(objects, request.ray, {}) :
+				nearest_surface_hit(objects, request.ray, request.options, {}) :
 				std::optional<PickHitRecord> {};
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (!ray_intersects_object_pick_bounds(objects[index], request.ray, request.options, nullptr)) {
@@ -582,7 +645,7 @@ std::vector<PickHitRecord> pick_all(
 	std::vector<PickHitRecord> hits;
 	const std::optional<PickHitRecord> surface_hit =
 			objects.size() > 1U && (request.options.mode == quader_poly::SelectionMode::vertex || request.options.mode == quader_poly::SelectionMode::edge) ?
-				nearest_surface_hit(objects, request.ray, object_bounds, face_geometry) :
+				nearest_surface_hit(objects, request.ray, request.options, object_bounds, face_geometry) :
 				std::optional<PickHitRecord> {};
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (!ray_intersects_object_pick_bounds(
@@ -1151,7 +1214,13 @@ bool pick_select(
 	return true;
 }
 
-bool pick_select_face(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id)
+bool pick_select_face(
+		std::vector<PolygonObject>& objects,
+		SelectionMode& mode,
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		int& active_object_id,
+		quader_poly::PickOptions pick_options)
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool add_selection_value = operation == SelectionEditOperation::add;
@@ -1165,7 +1234,7 @@ bool pick_select_face(std::vector<PolygonObject>& objects, SelectionMode& mode, 
 	mode = SelectionMode::face;
 	int hit_index = -1;
 	quader_poly::PickResult hit;
-	quader_poly::PickOptions options;
+	quader_poly::PickOptions options = pick_options;
 	options.mode = quader_poly::SelectionMode::face;
 	if (!pick_nearest_object(objects, ray, options, hit_index, hit)) {
 		if (replace_selection) {
@@ -1205,7 +1274,13 @@ bool pick_select_face(std::vector<PolygonObject>& objects, SelectionMode& mode, 
 	return true;
 }
 
-bool pick_select_all_faces(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id)
+bool pick_select_all_faces(
+		std::vector<PolygonObject>& objects,
+		SelectionMode& mode,
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		int& active_object_id,
+		quader_poly::PickOptions pick_options)
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
@@ -1218,7 +1293,7 @@ bool pick_select_all_faces(std::vector<PolygonObject>& objects, SelectionMode& m
 	mode = SelectionMode::face;
 	int hit_index = -1;
 	quader_poly::PickResult hit;
-	quader_poly::PickOptions options;
+	quader_poly::PickOptions options = pick_options;
 	options.mode = quader_poly::SelectionMode::face;
 	if (!pick_nearest_object(objects, ray, options, hit_index, hit)) {
 		if (replace_selection) {
@@ -1254,9 +1329,15 @@ bool pick_select_all_faces(std::vector<PolygonObject>& objects, SelectionMode& m
 	}
 	object.selection.faces.reserve(object.document.faces.size());
 	for (const quader_poly::Face& face : object.document.faces) {
-		if (!quader_poly::selection_contains_face(object.selection, face.id)) {
+		if (!options.hides_material_slot(face.material_slot) &&
+				!quader_poly::selection_contains_face(object.selection, face.id)) {
 			object.selection.faces.push_back(face.id);
 		}
+	}
+	if (object.selection.faces.empty()) {
+		object.selected = false;
+		normalize_active_object_id(objects, active_object_id);
+		return was_edit_target;
 	}
 	object.selection.has_active = !object.selection.faces.empty();
 	object.selection.active_kind = quader_poly::ElementKind::face;
@@ -1307,6 +1388,9 @@ bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& m
 	}
 	if (remove_selection_value) {
 		for (const quader_poly::Edge& loop_edge : loop_edges) {
+			if (!edge_visible_for_pick_expansion(object.document, loop_edge, options)) {
+				continue;
+			}
 			const quader_poly::Edge normalized = quader_poly::make_edge(loop_edge.a, loop_edge.b);
 			std::erase_if(object.selection.edges, [normalized](quader_poly::Edge edge) {
 				return quader_poly::make_edge(edge.a, edge.b) == normalized;
@@ -1314,7 +1398,8 @@ bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& m
 		}
 	} else {
 		for (const quader_poly::Edge& loop_edge : loop_edges) {
-			if (!quader_poly::selection_contains(object.selection, loop_edge)) {
+			if (edge_visible_for_pick_expansion(object.document, loop_edge, options) &&
+					!quader_poly::selection_contains(object.selection, loop_edge)) {
 				object.selection.edges.push_back(quader_poly::make_edge(loop_edge.a, loop_edge.b));
 			}
 		}
@@ -1375,7 +1460,8 @@ bool pick_select_all_vertices(std::vector<PolygonObject>& objects, SelectionMode
 		object.selection.vertices.clear();
 	} else {
 		for (const quader_poly::Vertex& vertex : object.document.vertices) {
-			if (!quader_poly::selection_contains(object.selection, vertex.id)) {
+			if (vertex_visible_for_pick_expansion(object.document, vertex.id, options) &&
+					!quader_poly::selection_contains(object.selection, vertex.id)) {
 				object.selection.vertices.push_back(vertex.id);
 			}
 		}

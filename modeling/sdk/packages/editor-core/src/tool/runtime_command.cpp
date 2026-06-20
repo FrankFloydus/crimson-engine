@@ -140,8 +140,10 @@ CommandResult pick_select(EditorSession& session, PickSelectRuntimeCommandSettin
 	const SelectionMode mode = session.selection_mode();
 	SelectionEditOperation operation =
 			selection_edit_operation_from_modifiers(settings.control_pressed, settings.shift_pressed);
-	const quader_poly::PickOptions pick_options =
+	quader_poly::PickOptions pick_options =
 		selection_pick_options_from_radii(settings.vertex_radius, settings.edge_radius);
+	pick_options.has_hidden_material_slot = settings.has_hidden_material_slot;
+	pick_options.hidden_material_slot = settings.hidden_material_slot;
 	const bool paint_stroke = settings.click_count == 0;
 	if (paint_stroke) {
 		if (mode == SelectionMode::object) {
@@ -154,7 +156,7 @@ CommandResult pick_select(EditorSession& session, PickSelectRuntimeCommandSettin
 	}
 	const bool multi_click = settings.click_count > 1;
 	if (multi_click && mode == SelectionMode::face) {
-		return { true, session.pick_select_all_faces(operation, settings.ray), "" };
+		return { true, session.pick_select_all_faces(operation, settings.ray, pick_options), "" };
 	}
 	if (multi_click && mode == SelectionMode::edge) {
 		return { true, session.pick_select_edge_loop(operation, settings.ray, pick_options), "" };

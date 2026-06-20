@@ -1,0 +1,49 @@
+material {
+    name : QuaderOverlayPoint,
+    shadingModel : unlit,
+    blending : transparent,
+    depthWrite : false,
+    depthCulling : false,
+    doubleSided : true,
+    vertexDomain : device,
+    requires : [
+        uv0,
+        color
+    ],
+    variables : [
+        pointUv
+    ],
+    parameters : [
+        {
+            type : float,
+            name : innerRadius
+        }
+    ]
+}
+
+vertex {
+    void materialVertex(inout MaterialVertexInputs material) {
+        material.pointUv = float4(material.uv0, 0.0, 0.0);
+    }
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec4 color = getColor();
+        if (materialParams.innerRadius > 0.0) {
+            float2 centered = variable_pointUv.xy - 0.5;
+            float distanceFromCenter = length(centered);
+            if (distanceFromCenter > 0.5) {
+                discard;
+            }
+            float innerRadius = saturate(materialParams.innerRadius) * 0.5;
+            if (distanceFromCenter < innerRadius) {
+                discard;
+            }
+        }
+
+        material.baseColor = vec4(color.rgb * color.a, color.a);
+    }
+}

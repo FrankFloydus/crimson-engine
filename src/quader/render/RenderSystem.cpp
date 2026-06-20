@@ -72,6 +72,10 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
         quaderMeshMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "quader_mesh.filamat");
         LOG_INFO("Loading vertex color overlay material");
         vertexColorOverlayMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "vertex_color_overlay.filamat");
+        LOG_INFO("Loading overlay line material");
+        overlayLineMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "quader_overlay_line.filamat");
+        LOG_INFO("Loading overlay point material");
+        overlayPointMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "quader_overlay_point.filamat");
         LOG_INFO("Loading ImGui material");
         imguiMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "imgui.filamat");
         LOG_INFO("Loading ground grid material");
@@ -99,6 +103,14 @@ void RenderSystem::shutdown() {
     if (vertexColorOverlayMaterial_) {
         engine_->destroy(vertexColorOverlayMaterial_);
         vertexColorOverlayMaterial_ = nullptr;
+    }
+    if (overlayLineMaterial_) {
+        engine_->destroy(overlayLineMaterial_);
+        overlayLineMaterial_ = nullptr;
+    }
+    if (overlayPointMaterial_) {
+        engine_->destroy(overlayPointMaterial_);
+        overlayPointMaterial_ = nullptr;
     }
     if (imguiMaterial_) {
         engine_->destroy(imguiMaterial_);

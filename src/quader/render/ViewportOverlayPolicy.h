@@ -63,6 +63,10 @@ inline constexpr float kOverlayLineDepthBias = 0.02f;
 inline constexpr float kOverlayPointDepthBias = 0.01f;
 inline constexpr float kOverlayFillDepthBias = 0.035f;
 inline constexpr float kOverlayLineFeatherPixels = 1.0f;
+inline constexpr float kOverlayVertexSizePixels = 7.0f;
+inline constexpr float kOverlaySelectedVertexGrowthPixels = 0.5f;
+inline constexpr float kOverlayHoverVertexGrowthPixels = 0.5f;
+inline constexpr float kOverlayVertexOutlineSizePixels = 1.0f;
 
 inline constexpr int viewportOverlayDrawOrder(ViewportOverlayLayer layer) {
     for (int index = 0; index < static_cast<int>(kViewportOverlayDrawOrder.size()); ++index) {
@@ -171,20 +175,22 @@ inline constexpr float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer
 inline constexpr float viewportOverlayPointSizePixels(ViewportOverlayLayer layer, float nativeSizePixels = 8.0f) {
     switch (layer) {
     case ViewportOverlayLayer::UnselectedVertex:
-        return 7.0f;
+        return kOverlayVertexSizePixels;
     case ViewportOverlayLayer::SelectedVertex:
+        return kOverlayVertexSizePixels + kOverlaySelectedVertexGrowthPixels;
     case ViewportOverlayLayer::HoverVertex:
-        return 7.5f;
+        return kOverlayVertexSizePixels + kOverlayHoverVertexGrowthPixels;
     default:
-        return nativeSizePixels < 2.0f ? 2.0f : nativeSizePixels;
+        break;
     }
+    return nativeSizePixels < 2.0f ? 2.0f : nativeSizePixels;
 }
 
 inline constexpr float viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SelectedVertex ||
                     layer == ViewportOverlayLayer::HoverVertex ||
                     layer == ViewportOverlayLayer::SnapTargetVertex
-            ? 2.0f
+            ? kOverlayVertexOutlineSizePixels
             : 0.0f;
 }
 

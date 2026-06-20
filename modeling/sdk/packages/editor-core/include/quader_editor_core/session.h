@@ -795,6 +795,7 @@ std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject>& objects, c
 std::vector<PickHitRecord> pick_all(const std::vector<PolygonObject>& objects, const PickRequest& request, std::span<const PickObjectBounds> object_bounds, std::span<const PickObjectFaceGeometry> face_geometry);
 quader_poly::PickOptions selection_pick_options_from_radii(double vertex_radius, double edge_radius);
 std::vector<PickObjectFaceGeometry> build_pick_face_geometry(const std::vector<PolygonObject>& objects);
+std::vector<PickObjectFaceGeometry> build_pick_face_geometry(const std::vector<PolygonObject>& objects, quader_poly::PickOptions pick_options);
 std::string pick_hit_signature(const PickHitRecord& hit);
 std::string pick_hits_signature(const std::vector<PickHitRecord>& hits);
 bool pick_hit_target_is_selected(const PickSelectionState& selection, const PickHitRecord& hit);
@@ -892,8 +893,8 @@ bool pick_select(
 	int& active_object_id,
 	quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
 	bool allow_component_fallback = true);
-bool pick_select_face(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id);
-bool pick_select_all_faces(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id);
+bool pick_select_face(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
+bool pick_select_all_faces(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 bool pick_select_all_vertices(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 
@@ -1084,8 +1085,8 @@ public:
 		const quader_poly::Ray& ray,
 		quader_poly::PickOptions pick_options = quader_poly::PickOptions(),
 		bool allow_component_fallback = true);
-	bool pick_select_face(SelectionEditOperation operation, const quader_poly::Ray& ray);
-	bool pick_select_all_faces(SelectionEditOperation operation, const quader_poly::Ray& ray);
+	bool pick_select_face(SelectionEditOperation operation, const quader_poly::Ray& ray, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
+	bool pick_select_all_faces(SelectionEditOperation operation, const quader_poly::Ray& ray, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 	bool pick_select_edge_loop(SelectionEditOperation operation, const quader_poly::Ray& ray, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 	bool pick_select_all_vertices(SelectionEditOperation operation, const quader_poly::Ray& ray, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 

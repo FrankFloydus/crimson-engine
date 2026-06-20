@@ -4,6 +4,7 @@
 #include <quader_poly/document.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -12,6 +13,8 @@
 #include <vector>
 
 namespace {
+
+constexpr std::uint32_t hidden_slot = 99U;
 
 quader_editor_core::PolygonObject cube_object(int id, quader_poly::Vec3 offset = {})
 {
@@ -39,6 +42,53 @@ quader_poly::Ray miss_ray()
 bool nearly_equal(float a, float b)
 {
 	return std::abs(a - b) <= 0.000001F;
+}
+
+quader_poly::PickOptions hidden_slot_pick_options(quader_poly::SelectionMode mode)
+{
+	quader_poly::PickOptions options;
+	options.mode = mode;
+	options.has_hidden_material_slot = true;
+	options.hidden_material_slot = hidden_slot;
+	return options;
+}
+
+quader_editor_core::PolygonObject stacked_face_object()
+{
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	quader_poly::Document& document = object.document;
+	const quader_poly::ElementId back0 = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId back1 = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId back2 = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId back3 = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId front0 = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.2F });
+	const quader_poly::ElementId front1 = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.2F });
+	const quader_poly::ElementId front2 = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.2F });
+	const quader_poly::ElementId front3 = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.2F });
+	[[maybe_unused]] const quader_poly::ElementId back_face =
+		quader_poly::add_face(document, std::array { back0, back1, back2, back3 }, 0U);
+	[[maybe_unused]] const quader_poly::ElementId front_face =
+		quader_poly::add_face(document, std::array { front0, front1, front2, front3 }, hidden_slot);
+	return object;
+}
+
+quader_editor_core::PolygonObject adjacent_face_object()
+{
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	quader_poly::Document& document = object.document;
+	const quader_poly::ElementId left0 = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId shared0 = quader_poly::add_vertex(document, { 0.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId shared1 = quader_poly::add_vertex(document, { 0.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId left1 = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId right0 = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId right1 = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	[[maybe_unused]] const quader_poly::ElementId visible_face =
+		quader_poly::add_face(document, std::array { left0, shared0, shared1, left1 }, 0U);
+	[[maybe_unused]] const quader_poly::ElementId hidden_face =
+		quader_poly::add_face(document, std::array { shared0, right0, right1, shared1 }, hidden_slot);
+	return object;
 }
 
 quader_editor_core::PickObjectBounds pick_bounds_for_object(const quader_editor_core::PolygonObject& object)
@@ -281,6 +331,74 @@ void session_pick_selects_faces_through_shared_picking()
 		"pick_nearest should expose the same face hit through editor-core records");
 }
 
+void hidden_material_slot_filter_rebuilds_cached_face_geometry()
+{
+	const std::vector<quader_editor_core::PolygonObject> objects { stacked_face_object() };
+	const std::vector<quader_editor_core::PickObjectBounds> bounds { pick_bounds_for_object(objects[0]) };
+	quader_poly::PickOptions face_options;
+	face_options.mode = quader_poly::SelectionMode::face;
+	std::vector<quader_editor_core::PickObjectFaceGeometry> unfiltered_geometry =
+		quader_editor_core::build_pick_face_geometry(objects, face_options);
+	std::vector<quader_editor_core::PickObjectFaceGeometry> filtered_geometry =
+		quader_editor_core::build_pick_face_geometry(objects, hidden_slot_pick_options(quader_poly::SelectionMode::face));
+	require_test(unfiltered_geometry[0].triangles.size() > filtered_geometry[0].triangles.size(),
+		"hidden-slot face geometry should exclude hidden triangles");
+
+	const std::optional<quader_editor_core::PickHitRecord> unfiltered_hit =
+		quader_editor_core::pick_nearest(objects, { front_center_ray(), face_options }, bounds, unfiltered_geometry);
+	const std::optional<quader_editor_core::PickHitRecord> filtered_hit =
+		quader_editor_core::pick_nearest(
+			objects,
+			{ front_center_ray(), hidden_slot_pick_options(quader_poly::SelectionMode::face) },
+			bounds,
+			filtered_geometry);
+	require_test(unfiltered_hit.has_value() && filtered_hit.has_value(),
+		"cached picking should hit with and without hidden-slot filtering");
+	require_test(unfiltered_hit->face_id != filtered_hit->face_id,
+		"filtered cached picking should not reuse the unfiltered hidden face");
+}
+
+void hidden_material_slot_filter_limits_all_face_selection()
+{
+	std::vector<quader_editor_core::PolygonObject> objects { adjacent_face_object() };
+	quader_editor_core::SelectionMode mode = quader_editor_core::SelectionMode::face;
+	int active_object_id = -1;
+	const bool selected =
+		quader_editor_core::pick_select_all_faces(
+			objects,
+			mode,
+			quader_editor_core::SelectionEditOperation::replace,
+			{ { -0.5F, 0.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+			active_object_id,
+			hidden_slot_pick_options(quader_poly::SelectionMode::face));
+	require_test(selected && objects[0].selection.faces.size() == 1U,
+		"all-face selection should select only pickable visible faces");
+	const quader_poly::Face* selected_face = quader_poly::find_face(objects[0].document, objects[0].selection.faces.front());
+	require_test(selected_face != nullptr && selected_face->material_slot == 0U,
+		"all-face selection should not include hidden material-slot faces");
+}
+
+void hidden_material_slot_filter_limits_all_vertex_selection()
+{
+	std::vector<quader_editor_core::PolygonObject> objects { adjacent_face_object() };
+	quader_editor_core::SelectionMode mode = quader_editor_core::SelectionMode::vertex;
+	int active_object_id = -1;
+	const bool selected =
+		quader_editor_core::pick_select_all_vertices(
+			objects,
+			mode,
+			quader_editor_core::SelectionEditOperation::replace,
+			{ { 0.0F, 1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+			active_object_id,
+			hidden_slot_pick_options(quader_poly::SelectionMode::vertex));
+	require_test(selected && objects[0].selection.vertices.size() == 4U,
+		"all-vertex selection should select only vertices incident to visible faces");
+
+	const quader_poly::ElementId hidden_only_vertex = objects[0].document.faces.back().vertices[1];
+	require_test(!quader_poly::selection_contains(objects[0].selection, hidden_only_vertex),
+		"all-vertex selection should not include hidden-only vertices");
+}
+
 void editor_session_pick_select_reports_only_material_selection_changes()
 {
 	quader_editor_core::EditorSession session;
@@ -439,6 +557,9 @@ TEST_CASE("qdr_editor_core_picking_tests", "[editor-core-picking]")
 	hover_can_use_precomputed_object_bounds();
 	hover_can_use_precomputed_face_geometry();
 	session_pick_selects_faces_through_shared_picking();
+	hidden_material_slot_filter_rebuilds_cached_face_geometry();
+	hidden_material_slot_filter_limits_all_face_selection();
+	hidden_material_slot_filter_limits_all_vertex_selection();
 	editor_session_pick_select_reports_only_material_selection_changes();
 	default_component_picking_has_editor_leeway();
 	selection_pick_options_normalize_host_radius_inputs();

@@ -15,6 +15,7 @@
 #include <filament/VertexBuffer.h>
 #include <utils/Entity.h>
 
+#include <array>
 #include <filesystem>
 #include <unordered_map>
 #include <vector>
@@ -29,10 +30,12 @@ public:
             filament::Scene& scene,
             filament::Material& meshMaterial,
             filament::Material& overlayMaterial,
+            filament::Material& overlayLineMaterial,
+            filament::Material& overlayPointMaterial,
             std::filesystem::path resourceRoot);
     void shutdown();
     void sync(const SceneDocument& document, const AssetRegistry& assets);
-    void setOverlayFrame(ViewportOverlayFrame frame);
+    void setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera);
 
 private:
     struct MeshProxy {
@@ -53,6 +56,11 @@ private:
         filament::VertexBuffer* vertexBuffer = nullptr;
         filament::IndexBuffer* indexBuffer = nullptr;
         filament::MaterialInstance* materialInstance = nullptr;
+    };
+
+    struct OverlayProxyGroup {
+        std::uint64_t signature = 0;
+        std::vector<OverlayProxy> proxies;
     };
 
     struct LightProxy {
@@ -87,12 +95,14 @@ private:
     filament::Scene* scene_ = nullptr;
     filament::Material* meshMaterial_ = nullptr;
     filament::Material* overlayMaterial_ = nullptr;
+    filament::Material* overlayLineMaterial_ = nullptr;
+    filament::Material* overlayPointMaterial_ = nullptr;
     std::filesystem::path resourceRoot_;
     std::uint64_t syncedRevision_ = 0;
     std::uint64_t syncedAssetRevision_ = 0;
     bool hasSynced_ = false;
     std::unordered_map<EntityId, MeshProxy> meshProxies_;
-    std::vector<OverlayProxy> overlayProxies_;
+    std::array<OverlayProxyGroup, 15> overlayProxyGroups_;
     std::unordered_map<EntityId, LightProxy> lightProxies_;
     struct TextureCacheKey {
         AssetId id = InvalidAssetId;
@@ -119,7 +129,9 @@ private:
     filament::Texture* fallbackRoughnessTexture_ = nullptr;
     ViewportOverlayFrame selectedOverlayFrame_;
     ViewportOverlayFrame externalOverlayFrame_;
-    std::uint64_t externalOverlayTriangleSignature_ = 0;
+    std::uint64_t externalOverlaySignature_ = 0;
+    ViewportOverlayCamera overlayCamera_;
+    std::uint64_t overlayCameraSignature_ = 0;
 };
 
 } // namespace quader

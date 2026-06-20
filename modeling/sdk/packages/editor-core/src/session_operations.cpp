@@ -266,10 +266,13 @@ bool EditorSession::pick_select(
 	return changed;
 }
 
-bool EditorSession::pick_select_face(SelectionEditOperation operation, const quader_poly::Ray& ray)
+bool EditorSession::pick_select_face(
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		quader_poly::PickOptions pick_options)
 {
 	const SelectionSnapshot before = capture_selection_snapshot(state_.objects, state_.selection_mode, state_.active_object_id);
-	quader_editor_core::pick_select_face(state_.objects, state_.selection_mode, operation, ray, state_.active_object_id);
+	quader_editor_core::pick_select_face(state_.objects, state_.selection_mode, operation, ray, state_.active_object_id, pick_options);
 	const bool changed = selection_changed_since(before, state_.objects, state_.selection_mode, state_.active_object_id);
 	if (changed) {
 		clear_light_selection_state(state_.lights, state_.active_light_id);
@@ -278,10 +281,13 @@ bool EditorSession::pick_select_face(SelectionEditOperation operation, const qua
 	return changed;
 }
 
-bool EditorSession::pick_select_all_faces(SelectionEditOperation operation, const quader_poly::Ray& ray)
+bool EditorSession::pick_select_all_faces(
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		quader_poly::PickOptions pick_options)
 {
 	const SelectionSnapshot before = capture_selection_snapshot(state_.objects, state_.selection_mode, state_.active_object_id);
-	quader_editor_core::pick_select_all_faces(state_.objects, state_.selection_mode, operation, ray, state_.active_object_id);
+	quader_editor_core::pick_select_all_faces(state_.objects, state_.selection_mode, operation, ray, state_.active_object_id, pick_options);
 	const bool changed = selection_changed_since(before, state_.objects, state_.selection_mode, state_.active_object_id);
 	if (changed) {
 		clear_light_selection_state(state_.lights, state_.active_light_id);

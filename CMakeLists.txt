@@ -256,6 +256,8 @@ set(QUADER_DEFAULT_ROUGHNESS_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/defa
 
 quader_compile_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
 quader_compile_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
+quader_compile_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
+quader_compile_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
 quader_compile_material(imgui_material resources/materials/imgui.mat imgui)
 quader_compile_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
@@ -291,11 +293,23 @@ target_link_libraries(quader_runtime
         imgui::imgui
         lodepng
 )
-add_dependencies(quader_runtime quader_mesh_material vertex_color_overlay_material imgui_material ground_grid_material)
+add_dependencies(quader_runtime
+    quader_mesh_material
+    vertex_color_overlay_material
+    quader_overlay_line_material
+    quader_overlay_point_material
+    imgui_material
+    ground_grid_material)
 
 add_executable(quader WIN32 src/main.cpp)
 target_link_libraries(quader PRIVATE quader_runtime)
-add_dependencies(quader quader_mesh_material vertex_color_overlay_material imgui_material ground_grid_material)
+add_dependencies(quader
+    quader_mesh_material
+    vertex_color_overlay_material
+    quader_overlay_line_material
+    quader_overlay_point_material
+    imgui_material
+    ground_grid_material)
 
 if(MSVC)
     target_link_options(quader PRIVATE /ENTRY:mainCRTStartup)
@@ -311,6 +325,12 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${vertex_color_overlay_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/vertex_color_overlay.filamat"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${quader_overlay_line_material_OUTPUT}"
+            "$<TARGET_FILE_DIR:quader>/materials/quader_overlay_line.filamat"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${quader_overlay_point_material_OUTPUT}"
+            "$<TARGET_FILE_DIR:quader>/materials/quader_overlay_point.filamat"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${imgui_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat"

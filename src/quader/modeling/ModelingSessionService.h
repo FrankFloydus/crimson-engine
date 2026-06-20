@@ -199,6 +199,8 @@ struct ModelingPickSelectRequest {
     bool shiftPressed = false;
     bool commandPressed = false;
     bool altPressed = false;
+    bool preserveSelectionOnMiss = false;
+    bool preserveSelectionOnSelectedHit = false;
     double vertexRadius = 0.3;
     double edgeRadius = 0.2;
 };
