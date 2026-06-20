@@ -53,6 +53,25 @@ testable, and future-friendly.
 - Use the `Logger` macros (`LOG_INFO`, `LOG_ERROR`, etc.) instead of direct `spdlog` calls outside
   the logging layer.
 
+## UI Architecture Rules
+
+- Use `UI` casing for UI infrastructure types (`UISystem`, `UIPanel`, `UIContext`,
+  `UIPanelManager`, `UISettings`, `UIStyleTokens`), not `Ui`.
+- Keep `UISystem` as the composition root for ImGui initialization, menus, dockspace, layout
+  persistence, and panel registration. Put panel contents in concrete `UIPanel` classes such as
+  `ViewportPanel`, `OutlinerPanel`, `InspectorPanel`, and `ConsolePanel`.
+- Route frame dependencies through `UIContext`. Do not make panels reach sideways into app globals.
+- Put shared UI colors, font size, paddings, and other visual constants in `UIStyleTokens` instead
+  of scattering hardcoded values across panels.
+- Persist dock layout through ImGui's ini file and panel visibility through `UISettings`; keep these
+  under the user profile rather than repo-local files.
+- For scene object names, use `SceneEntityNaming`. Mesh names start as `Mesh`, then `Mesh_1`,
+  `Mesh_2`, etc.; do not show or create user-facing `SDK Object X`, `Mesh_0`, or `Mesh 0` names.
+- Do not append text type suffixes such as `[Mesh]` or `[Light]` in the outliner. Use plain entity
+  names until icon support is added.
+- Do not create placeholder startup scene content such as default meshes or fake lights unless a
+  product requirement explicitly asks for it.
+
 ## Transform Preview And Scene Sync Rules
 
 - Unity Shift+gizmo behavior is the reference: Shift duplicates only in object selection mode for
