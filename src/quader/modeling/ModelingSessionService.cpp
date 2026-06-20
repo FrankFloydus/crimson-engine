@@ -952,7 +952,7 @@ public:
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::CommandResult result = session_.begin_transform_preview(duplicateSelected);
         if (result.changed) {
-            syncSceneObjectsFromSdk();
+            syncSceneObjectsFromSdk(true);
             syncSceneSelectionFromSdk();
         }
         return {
@@ -1010,7 +1010,7 @@ public:
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::PreviewTransactionFinishResult finish =
                 session_.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
-        syncSceneObjectsFromSdk();
+        syncSceneObjectsFromSdk(finish.before.active);
         syncSceneSelectionFromSdk();
         return {
                 .ok = !finish.before.active || finish.before.kind == quader_editor_core::PreviewTransactionKind::transform,
@@ -1025,7 +1025,7 @@ public:
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::PreviewTransactionFinishResult finish =
                 session_.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
-        syncSceneObjectsFromSdk();
+        syncSceneObjectsFromSdk(finish.before.active);
         syncSceneSelectionFromSdk();
         return {
                 .ok = !finish.before.active || finish.before.kind == quader_editor_core::PreviewTransactionKind::transform,
@@ -1327,7 +1327,7 @@ private:
 
     ModelingCommandResult updateTransformPreviewResult(const quader_editor_core::CommandResult& result) {
         if (result.ok) {
-            syncSceneObjectsFromSdk();
+            syncSceneObjectsFromSdk(true);
             syncSceneSelectionFromSdk();
         }
         return {
@@ -1338,9 +1338,9 @@ private:
     }
 #endif
 
-    void syncSceneObjectsFromSdk() {
+    void syncSceneObjectsFromSdk(bool force = false) {
 #if QUADER_HAS_MODELING_SDK
-        if (sceneObjectsSyncedForCurrentSdkContent()) {
+        if (!force && sceneObjectsSyncedForCurrentSdkContent()) {
             return;
         }
 
@@ -1393,8 +1393,11 @@ private:
             if (const MeshComponent* meshComponent = scene_.mesh(entity)) {
                 meshId = meshComponent->mesh;
             }
+            bool meshContentsReplaced = false;
             if (meshId == InvalidAssetId || !assets_.replaceMesh(meshId, std::move(mesh))) {
                 meshId = assets_.addMesh(toMeshAsset(object));
+            } else {
+                meshContentsReplaced = true;
             }
             const ModelingObjectComponent nextObject{
                     .objectId = object.id,
@@ -1407,7 +1410,7 @@ private:
                 scene_.setModelingObject(entity, nextObject);
             }
             const MeshComponent* currentMesh = scene_.mesh(entity);
-            if (currentMesh == nullptr || currentMesh->mesh != meshId) {
+            if (currentMesh == nullptr || currentMesh->mesh != meshId || meshContentsReplaced) {
                 scene_.setMesh(entity, MeshComponent{.mesh = meshId});
             }
         }

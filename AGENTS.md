@@ -53,6 +53,23 @@ testable, and future-friendly.
 - Use the `Logger` macros (`LOG_INFO`, `LOG_ERROR`, etc.) instead of direct `spdlog` calls outside
   the logging layer.
 
+## Transform Preview And Scene Sync Rules
+
+- Unity Shift+gizmo behavior is the reference: Shift duplicates only in object selection mode for
+  Move/Rotate/Scale; in component modes Shift maps to topology behavior (`Move -> Extrude`,
+  `Scale -> Inset`) and must not duplicate objects.
+- SDK transform previews are transactions. `begin_transform_preview(true)` creates a zero-offset
+  duplicate, selects the duplicate, and uses that post-duplicate state as the preview base. Preview
+  update deltas are absolute from drag start, not accumulated frame deltas.
+- Do not treat SDK `content_revision` alone as a unique identity for every live preview mesh state.
+  Preview code can restore a base state and reapply a new delta, so bridge code that renders or
+  caches scene objects must force-refresh during transform preview begin/update/active commit/cancel.
+- If `AssetRegistry::replaceMesh` mutates an existing mesh under the same `AssetId`, make sure the
+  `SceneDocument` revision changes before relying on `SceneRenderBridge::sync`; otherwise rendering
+  can show stale geometry while SDK picking/selection sees the updated mesh.
+- For Shift duplicate regressions, keep app-level coverage that verifies duplicate preview updates
+  move beyond the first offset, commit at the final position, and remain pick-selectable.
+
 ## Overlay And Selection Rules
 
 - `src/quader/render/ViewportOverlayPolicy.h` is this app's local mirror of Unity overlay

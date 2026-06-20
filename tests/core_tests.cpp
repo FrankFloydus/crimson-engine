@@ -294,6 +294,37 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBeg
     EXPECT_NE(source.find("tool == ViewportTool::Scale && sdkTransformPreviewInset_"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBegin) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    const std::size_t duplicateStart =
+            source.find("const bool duplicateSelected = !componentSelectionMode && io.KeyShift");
+    const std::size_t previewDriven =
+            source.find("const bool sdkPreviewDriven = componentSelectionMode || duplicateSelected");
+    const std::size_t beginPreview =
+            source.find("modeling.beginTransformPreview(duplicateSelected)");
+    const std::size_t updatePreview =
+            source.find("command = modeling.updateTransformTranslatePreview(previewMoveDelta);");
+    const std::size_t localFallback =
+            source.find("for (const GizmoStartTransform& start : gizmoStartTransforms_)", updatePreview);
+
+    ASSERT_NE(duplicateStart, std::string::npos);
+    ASSERT_NE(previewDriven, std::string::npos);
+    ASSERT_NE(beginPreview, std::string::npos);
+    ASSERT_NE(updatePreview, std::string::npos);
+    ASSERT_NE(localFallback, std::string::npos);
+    EXPECT_LT(duplicateStart, beginPreview);
+    EXPECT_LT(updatePreview, localFallback);
+    EXPECT_NE(source.find("repeat.duplicateSelected = sdkTransformPreviewDuplicateSelected_"), std::string::npos);
+}
+
 TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
@@ -1767,6 +1798,74 @@ TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
     ASSERT_TRUE(service.cancelTransformPreview().ok);
 #else
     EXPECT_FALSE(service.beginTransformPreview(false).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMeshAndKeepsDuplicateSelectable) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Shift Duplicate Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(scene.entities().size(), 1u);
+
+    const ModelingCommandResult begin = service.beginTransformPreview(true);
+    ASSERT_TRUE(begin.ok) << begin.message;
+    ASSERT_TRUE(begin.changed);
+    ASSERT_EQ(scene.entities().size(), 2u);
+    ASSERT_EQ(service.objects().size(), 2u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+
+    const EntityId duplicateEntity = scene.selectedEntities().front();
+    EXPECT_NE(duplicateEntity, box.object.entity);
+    const std::optional<int> duplicateSdkObjectId = service.sdkObjectForEntity(duplicateEntity);
+    ASSERT_TRUE(duplicateSdkObjectId.has_value());
+    EXPECT_NE(*duplicateSdkObjectId, box.object.sdkObjectId);
+
+    const ModelingCommandResult firstMove = service.updateTransformTranslatePreview({1.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(firstMove.ok) << firstMove.message;
+    ASSERT_TRUE(firstMove.changed);
+    std::optional<SceneBounds> selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 1.0f, 0.001f);
+
+    const std::uint64_t revisionAfterFirstMove = scene.revision();
+    const ModelingCommandResult secondMove = service.updateTransformTranslatePreview({3.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(secondMove.ok) << secondMove.message;
+    ASSERT_TRUE(secondMove.changed);
+    EXPECT_GT(scene.revision(), revisionAfterFirstMove);
+    selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 3.0f, 0.001f);
+
+    const ModelingCommandResult commit = service.commitTransformPreview();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    ASSERT_TRUE(commit.changed);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.selectedEntities().front(), duplicateEntity);
+    selectedBounds = selectedWorldBounds(scene, assets);
+    ASSERT_TRUE(selectedBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedBounds).x, 3.0f, 0.001f);
+
+    ASSERT_TRUE(service.clearSelection().ok);
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {
+                    .origin = {3.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .clickCount = 1,
+    });
+    EXPECT_EQ(picked.selectedObjectCount, 1u);
+    EXPECT_EQ(picked.activeObjectId, *duplicateSdkObjectId);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(service.sdkObjectForEntity(scene.selectedEntities().front()), duplicateSdkObjectId);
+#else
+    EXPECT_FALSE(service.beginTransformPreview(true).ok);
 #endif
 }
 
