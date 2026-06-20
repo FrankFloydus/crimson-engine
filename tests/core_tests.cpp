@@ -7,7 +7,9 @@
 #include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneDocument.h"
+#include "quader/scene/SceneEntityNaming.h"
 #include "quader/ui/ConsoleModel.h"
+#include "quader/ui/UISettings.h"
 #include "quader/viewport/ViewportCameraController.h"
 #include "quader/viewport/ViewportInputRouter.h"
 
@@ -49,6 +51,52 @@ TEST(ConsoleModelTests, FiltersByLevelAndSearch) {
 
     ASSERT_EQ(filtered.size(), 1u);
     EXPECT_EQ(filtered[0].message, "vulkan failed");
+}
+
+TEST(ConsoleModelTests, RespectsMinimumSeverityLevels) {
+    std::vector<LogEntry> entries = {
+        {.level = spdlog::level::trace, .message = "trace"},
+        {.level = spdlog::level::debug, .message = "debug"},
+        {.level = spdlog::level::info, .message = "info"},
+        {.level = spdlog::level::warn, .message = "warn"},
+        {.level = spdlog::level::err, .message = "error"},
+        {.level = spdlog::level::critical, .message = "critical"},
+    };
+
+    EXPECT_EQ(ConsoleModel::filter(entries, {.minimumLevel = spdlog::level::trace}).size(), 6u);
+    EXPECT_EQ(ConsoleModel::filter(entries, {.minimumLevel = spdlog::level::info}).size(), 4u);
+    EXPECT_EQ(ConsoleModel::filter(entries, {.minimumLevel = spdlog::level::warn}).size(), 3u);
+    EXPECT_EQ(ConsoleModel::filter(entries, {.minimumLevel = spdlog::level::err}).size(), 2u);
+    EXPECT_TRUE(ConsoleModel::filter(entries, {.minimumLevel = spdlog::level::off}).empty());
+}
+
+TEST(UISettingsTests, DefaultsKeepConsoleHidden) {
+    const UISettings settings = UISettings::defaults();
+
+    EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Outliner));
+    EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Inspector));
+    EXPECT_FALSE(settings.isPanelVisible(UIPanelId::Console));
+    EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Viewport));
+}
+
+TEST(UISettingsTests, RoundTripsPanelVisibility) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_ui_settings_round_trip.ini";
+    std::filesystem::remove(path);
+
+    UISettings settings = UISettings::defaults();
+    settings.setPanelVisible(UIPanelId::Outliner, false);
+    settings.setPanelVisible(UIPanelId::Inspector, true);
+    settings.setPanelVisible(UIPanelId::Console, true);
+
+    ASSERT_TRUE(settings.save(path));
+    const UISettings loaded = UISettings::load(path);
+
+    EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Outliner));
+    EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Inspector));
+    EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
+
+    std::filesystem::remove(path);
 }
 
 TEST(GroundGridMaterialTests, UsesUnityStyleUserWorldAnchoring) {
@@ -506,9 +554,18 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
     EXPECT_NE(source.find("TextureSampleColorSpace::DisplaySrgb : it->second.sampleColorSpace"), std::string::npos);
 }
 
-TEST(UiSystemTests, LoadsInterAtEighteenPixelBaseSize) {
+TEST(UIStyleTokensTests, LoadsInterAtConfiguredEighteenPixelBaseSize) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.h";
+    std::ifstream headerFile(headerPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UiSystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -516,10 +573,28 @@ TEST(UiSystemTests, LoadsInterAtEighteenPixelBaseSize) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("AddFontFromFileTTF(fontPath.string().c_str(), 18.0f"), std::string::npos);
+    EXPECT_NE(header.find("fontSize = 18.0f"), std::string::npos);
+    EXPECT_NE(source.find("AddFontFromFileTTF(fontPath.string().c_str(), tokens.fontSize"), std::string::npos);
     EXPECT_EQ(source.find("AddFontFromFileTTF(fontPath.string().c_str(), 16.0f"), std::string::npos);
     EXPECT_EQ(source.find("AddFontFromFileTTF(fontPath.string().c_str(), 15.0f"), std::string::npos);
     EXPECT_NE(source.find("io.FontDefault = font"), std::string::npos);
+}
+
+TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "app" / "App.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_EQ(source.find("createBoxFromBounds({"), std::string::npos);
+    EXPECT_EQ(source.find("Startup scene created SDK box"), std::string::npos);
+    EXPECT_EQ(source.find("startup box"), std::string::npos);
+    EXPECT_EQ(source.find("Fake Directional Light"), std::string::npos);
+    EXPECT_EQ(source.find("document_.setLight"), std::string::npos);
 }
 
 TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
@@ -567,6 +642,21 @@ TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
     EXPECT_TRUE(scene.selectedEntities().empty());
     EXPECT_EQ(scene.primarySelection(), InvalidEntityId);
     EXPECT_GT(scene.revision(), 0u);
+}
+
+TEST(SceneEntityNamingTests, MeshNamesStartAtBaseNameThenUseOneBasedSuffixes) {
+    SceneDocument scene;
+
+    EXPECT_EQ(SceneEntityNaming::nextNameForKind(scene, SceneEntityKind::Mesh), "Mesh");
+
+    const EntityId first = scene.createEntity("Mesh");
+    scene.setMesh(first, MeshComponent{.mesh = 1});
+    EXPECT_EQ(SceneEntityNaming::nextNameForKind(scene, SceneEntityKind::Mesh), "Mesh_1");
+
+    const EntityId second = scene.createEntity("Mesh_1");
+    scene.setMesh(second, MeshComponent{.mesh = 2});
+    EXPECT_EQ(SceneEntityNaming::nextNameForKind(scene, SceneEntityKind::Mesh), "Mesh_2");
+    EXPECT_NE(SceneEntityNaming::nextNameForKind(scene, SceneEntityKind::Mesh), "Mesh_0");
 }
 
 TEST(SceneDocumentTests, TracksMultipleSelectedEntitiesInStableOrder) {
@@ -1709,8 +1799,17 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     EXPECT_EQ(service.objects().size(), 2u);
     EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
-    EXPECT_NE(scene.selectedEntities().front(), box.object.entity);
-    const MaterialComponent* duplicateMaterial = scene.material(scene.selectedEntities().front());
+    const EntityId duplicateEntity = scene.selectedEntities().front();
+    EXPECT_NE(duplicateEntity, box.object.entity);
+    ASSERT_NE(scene.name(duplicateEntity), nullptr);
+    EXPECT_EQ(scene.name(duplicateEntity)->name, "Mesh");
+    EXPECT_EQ(scene.name(duplicateEntity)->name.find("SDK Object"), std::string::npos);
+    const MeshComponent* duplicateMesh = scene.mesh(duplicateEntity);
+    ASSERT_NE(duplicateMesh, nullptr);
+    const MeshAsset* duplicateMeshAsset = assets.mesh(duplicateMesh->mesh);
+    ASSERT_NE(duplicateMeshAsset, nullptr);
+    EXPECT_EQ(duplicateMeshAsset->name, "Mesh");
+    const MaterialComponent* duplicateMaterial = scene.material(duplicateEntity);
     ASSERT_NE(duplicateMaterial, nullptr);
     EXPECT_EQ(duplicateMaterial->material, defaultMaterial);
 

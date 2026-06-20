@@ -111,33 +111,6 @@ void App::createStartupScene() {
     });
     MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader", albedoTexture, roughnessTexture);
     defaultMaterial_ = assets_.addMaterial(std::move(defaultMaterial));
-
-    if (modeling_ && modeling_->sdkAvailable()) {
-        const ModelingCreateBoxResult box = modeling_->createBoxFromBounds({
-                .bounds = {
-                        .min = {-1.0f, -1.0f, -1.0f},
-                        .max = {1.0f, 1.0f, 1.0f},
-                },
-                .name = "Box",
-        });
-        if (box.ok) {
-            document_.setMaterial(box.object.entity, MaterialComponent{.material = defaultMaterial_});
-            LOG_INFO("Startup scene created SDK box entity {} with mesh asset {}", box.object.entity, box.object.mesh);
-        } else {
-            LOG_ERROR("Unable to create startup SDK box: {}", box.message);
-        }
-    } else {
-        LOG_ERROR("Modeling SDK is unavailable; startup box was not created");
-    }
-
-    const EntityId lightEntity = document_.createEntity("Fake Directional Light");
-    document_.setTransform(lightEntity, TransformComponent{.rotationEuler = {-0.65f, -0.55f, 0.0f}});
-    document_.setLight(lightEntity, LightComponent{
-            .type = LightType::Directional,
-            .color = {1.0f, 0.95f, 0.88f},
-            .intensity = 90000.0f,
-            .castsShadows = false,
-    });
 }
 
 } // namespace quader

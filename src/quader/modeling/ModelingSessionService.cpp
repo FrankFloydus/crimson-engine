@@ -4,6 +4,7 @@
 #include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneDocument.h"
+#include "quader/scene/SceneEntityNaming.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -242,7 +243,7 @@ MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
     const quader_poly::CompiledMesh compiled = quader_poly::compile_document(object.document);
 
     MeshAsset mesh;
-    mesh.name = "SDK Object " + std::to_string(object.id);
+    mesh.name = "Mesh";
     mesh.vertices.reserve(compiled.vertices.size());
     mesh.indices = compiled.indices;
     mesh.hasStableCpuTopology = true;
@@ -1364,10 +1365,11 @@ private:
             const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
             const auto existing = entityByObject_.find(object.id);
             if (existing == entityByObject_.end()) {
+                const std::string name = SceneEntityNaming::nextNameForKind(scene_, SceneEntityKind::Mesh);
                 MeshAsset mesh = toMeshAsset(object);
-                mesh.name = "SDK Object " + std::to_string(object.id);
+                mesh.name = name;
                 const AssetId meshId = assets_.addMesh(std::move(mesh));
-                const EntityId entity = scene_.createEntity("SDK Object " + std::to_string(object.id));
+                const EntityId entity = scene_.createEntity(name);
                 scene_.setModelingObject(entity, ModelingObjectComponent{
                         .objectId = object.id,
                         .materialSlot = materialSlot,
@@ -1394,10 +1396,16 @@ private:
                 meshId = meshComponent->mesh;
             }
             bool meshContentsReplaced = false;
-            if (meshId == InvalidAssetId || !assets_.replaceMesh(meshId, std::move(mesh))) {
-                meshId = assets_.addMesh(toMeshAsset(object));
-            } else {
+            if (meshId == InvalidAssetId) {
+                meshId = assets_.addMesh(std::move(mesh));
+            } else if (assets_.replaceMesh(meshId, std::move(mesh))) {
                 meshContentsReplaced = true;
+            } else {
+                MeshAsset replacement = toMeshAsset(object);
+                if (const NameComponent* name = scene_.name(entity)) {
+                    replacement.name = name->name;
+                }
+                meshId = assets_.addMesh(std::move(replacement));
             }
             const ModelingObjectComponent nextObject{
                     .objectId = object.id,

@@ -23,13 +23,13 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-struct UiVertex {
+struct UIVertex {
     filament::math::float3 position;
     filament::math::float2 uv;
     std::uint32_t color;
 };
 
-struct UiPrimitive {
+struct UIPrimitive {
     std::uint32_t indexOffset = 0;
     std::uint32_t indexCount = 0;
     filament::Texture* texture = nullptr;
@@ -185,7 +185,7 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
             continue;
         }
 
-        std::vector<UiVertex> vertices;
+        std::vector<UIVertex> vertices;
         vertices.reserve(commandList->VtxBuffer.Size);
         for (const ImDrawVert& vertex : commandList->VtxBuffer) {
             vertices.push_back({
@@ -196,7 +196,7 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
         }
 
         std::vector<std::uint32_t> indices;
-        std::vector<UiPrimitive> primitives;
+        std::vector<UIPrimitive> primitives;
         indices.reserve(commandList->IdxBuffer.Size);
         primitives.reserve(commandList->CmdBuffer.Size);
 
@@ -281,9 +281,9 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
         resource.vertexBuffer = filament::VertexBuffer::Builder()
                     .vertexCount(static_cast<std::uint32_t>(vertices.size()))
                     .bufferCount(1)
-                    .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(UiVertex, position), sizeof(UiVertex))
-                    .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(UiVertex, uv), sizeof(UiVertex))
-                    .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(UiVertex, color), sizeof(UiVertex))
+                    .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(UIVertex, position), sizeof(UIVertex))
+                    .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(UIVertex, uv), sizeof(UIVertex))
+                    .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(UIVertex, color), sizeof(UIVertex))
                     .normalized(filament::VertexAttribute::COLOR)
                     .build(*engine_);
         resource.vertexBuffer->setBufferAt(*engine_, 0, makeBufferDescriptor(vertices));
@@ -304,7 +304,7 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
 
         resource.materialInstances.reserve(primitives.size());
         for (std::size_t primitiveIndex = 0; primitiveIndex < primitives.size(); ++primitiveIndex) {
-            const UiPrimitive& primitive = primitives[primitiveIndex];
+            const UIPrimitive& primitive = primitives[primitiveIndex];
             filament::MaterialInstance* materialInstance = material_->createInstance();
             materialInstance->setParameter("albedo", primitive.texture, sampler);
             const float encodeToSrgb = primitive.sampleColorSpace == TextureSampleColorSpace::LinearSrgb ? 1.0f : 0.0f;

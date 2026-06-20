@@ -8,7 +8,9 @@
 #include "quader/render/SceneRenderBridge.h"
 #include "quader/render/ViewportRenderer.h"
 #include "quader/scene/SceneDocument.h"
-#include "quader/ui/ConsolePanel.h"
+#include "quader/ui/UIPanelManager.h"
+#include "quader/ui/UISettings.h"
+#include "quader/ui/UIStyleTokens.h"
 #include "quader/ui/ViewportPanel.h"
 #include "quader/viewport/ViewportCameraController.h"
 
@@ -17,12 +19,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 namespace quader {
 
-class UiSystem {
+class UISystem {
 public:
-    ~UiSystem();
+    ~UISystem();
 
     void initialize(SDL_Window* window, RenderSystem& renderSystem, const std::filesystem::path& executableDir);
     void shutdown();
@@ -39,21 +42,26 @@ public:
             bool& quitRequested);
     void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
     void render(RenderSystem& renderSystem);
-    const ViewportToolState& viewportToolState() const { return viewportPanel_.toolState(); }
+    const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }
 
 private:
+    void registerPanels();
     void drawDockspace(bool& quitRequested);
-    void drawOutliner(SceneDocument& document);
-    void drawInspector(SceneDocument& document, ModelingSessionService& modeling);
-    void applyTheme();
+    void drawMenuBar(bool& quitRequested);
+    void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
+    void saveSettings();
 
     SDL_Window* window_ = nullptr;
     ImGuiFilamentRenderer renderer_;
-    ViewportPanel viewportPanel_;
-    ConsolePanel consolePanel_;
+    UIStyleTokens style_;
+    UIPanelManager panels_;
+    ViewportPanel* viewportPanel_ = nullptr;
+    UISettings settings_;
+    UISettingsPaths settingsPaths_;
+    std::string imguiIniPath_;
     bool initialized_ = false;
     bool dockLayoutBuilt_ = false;
-    EntityId outlinerAnchor_ = InvalidEntityId;
+    bool hasSavedDockLayout_ = false;
 };
 
 } // namespace quader

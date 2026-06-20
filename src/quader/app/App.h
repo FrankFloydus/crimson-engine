@@ -8,7 +8,7 @@
 #include "quader/render/SceneRenderBridge.h"
 #include "quader/render/ViewportRenderer.h"
 #include "quader/scene/SceneDocument.h"
-#include "quader/ui/UiSystem.h"
+#include "quader/ui/UISystem.h"
 #include "quader/viewport/ViewportCameraController.h"
 
 #include <filesystem>
@@ -29,7 +29,7 @@ private:
     RenderSystem renderSystem_;
     ViewportRenderer viewportRenderer_;
     SceneRenderBridge renderBridge_;
-    UiSystem ui_;
+    UISystem ui_;
     ViewportCameraController viewportCamera_;
     AssetRegistry assets_;
     SceneDocument document_;

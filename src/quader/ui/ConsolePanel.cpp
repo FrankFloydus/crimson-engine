@@ -1,6 +1,8 @@
 #include "quader/ui/ConsolePanel.h"
 
 #include "quader/core/Logger.h"
+#include "quader/ui/UIContext.h"
+#include "quader/ui/UIStyleTokens.h"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -30,26 +32,10 @@ const char* levelName(spdlog::level::level_enum level) {
     }
 }
 
-ImVec4 levelColor(spdlog::level::level_enum level) {
-    switch (level) {
-    case spdlog::level::warn:
-        return {1.0f, 0.78f, 0.32f, 1.0f};
-    case spdlog::level::err:
-    case spdlog::level::critical:
-        return {1.0f, 0.32f, 0.32f, 1.0f};
-    case spdlog::level::debug:
-        return {0.48f, 0.72f, 1.0f, 1.0f};
-    case spdlog::level::trace:
-        return {0.62f, 0.62f, 0.62f, 1.0f};
-    default:
-        return {0.86f, 0.88f, 0.90f, 1.0f};
-    }
-}
-
 } // namespace
 
-void ConsolePanel::draw() {
-    if (!ImGui::Begin("Console")) {
+void ConsolePanel::draw(UIContext& context) {
+    if (!ImGui::Begin(title(), nullptr, context.style.panelWindowFlags)) {
         ImGui::End();
         return;
     }
@@ -68,6 +54,7 @@ void ConsolePanel::draw() {
         spdlog::level::warn,
         spdlog::level::err,
         spdlog::level::critical,
+        spdlog::level::off,
     };
 
     const char* preview = levelName(filter_.minimumLevel);
@@ -96,7 +83,7 @@ void ConsolePanel::draw() {
         while (clipper.Step()) {
             for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
                 const LogEntry& entry = filtered[static_cast<std::size_t>(row)];
-                ImGui::PushStyleColor(ImGuiCol_Text, levelColor(entry.level));
+                ImGui::PushStyleColor(ImGuiCol_Text, uiLogLevelColor(context.style, entry.level));
                 ImGui::TextUnformatted(entry.message.c_str());
                 ImGui::PopStyleColor();
             }

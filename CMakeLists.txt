@@ -78,6 +78,7 @@ add_library(quader_core STATIC
     src/quader/scene/SceneBounds.cpp
     src/quader/scene/SceneDocument.cpp
     src/quader/ui/ConsoleModel.cpp
+    src/quader/ui/UISettings.cpp
     src/quader/viewport/ViewportCameraController.cpp
     src/quader/viewport/ViewportInputRouter.cpp
 )
@@ -175,7 +176,11 @@ add_library(quader_runtime STATIC
     src/quader/render/TextureRegistry.cpp
     src/quader/render/ViewportRenderer.cpp
     src/quader/ui/ConsolePanel.cpp
-    src/quader/ui/UiSystem.cpp
+    src/quader/ui/InspectorPanel.cpp
+    src/quader/ui/OutlinerPanel.cpp
+    src/quader/ui/UIPanelManager.cpp
+    src/quader/ui/UISystem.cpp
+    src/quader/ui/UIStyleTokens.cpp
     src/quader/ui/ViewportPanel.cpp
 )
 

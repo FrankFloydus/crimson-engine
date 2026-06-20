@@ -3,6 +3,8 @@
 #include "quader/core/Logger.h"
 #include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
+#include "quader/scene/SceneEntityNaming.h"
+#include "quader/ui/UIContext.h"
 
 #include <algorithm>
 #include <array>
@@ -1213,6 +1215,16 @@ void drawUnityStyleGizmo(
 
 } // namespace
 
+void ViewportPanel::draw(UIContext& context) {
+    draw(context.viewport,
+            context.camera,
+            context.renderBridge,
+            context.document,
+            context.assets,
+            context.modeling,
+            context.defaultMaterial);
+}
+
 void ViewportPanel::draw(ViewportRenderer& renderer,
         ViewportCameraController& camera,
         SceneRenderBridge& renderBridge,
@@ -1368,9 +1380,8 @@ void ViewportPanel::draw(ViewportRenderer& renderer,
 
         if (leftClicked && !gizmoConsumed && !result.navigationActive) {
             if (boxPreview_.dragState == ModelingBoxDragState::Height) {
-                const std::string name = "Box " + std::to_string(createdBoxCount_);
+                const std::string name = SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
                 if (commitBoxPreview(modeling, defaultMaterial, document, name)) {
-                    ++createdBoxCount_;
                     inputRouter_.setSelectionMode(ViewportSelectionMode::Object);
                     (void)modeling.setSelectionMode(ModelingSelectionMode::Object);
                     inputRouter_.setActiveTool(ViewportTool::Move);

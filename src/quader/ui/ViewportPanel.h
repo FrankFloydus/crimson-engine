@@ -6,6 +6,7 @@
 #include "quader/render/SceneRenderBridge.h"
 #include "quader/render/ViewportRenderer.h"
 #include "quader/scene/SceneDocument.h"
+#include "quader/ui/UIPanel.h"
 #include "quader/viewport/ViewportCameraController.h"
 #include "quader/viewport/ViewportInputRouter.h"
 
@@ -21,7 +22,7 @@
 
 namespace quader {
 
-class ViewportPanel {
+class ViewportPanel final : public UIPanel {
 public:
     enum class GizmoAxis {
         None,
@@ -33,6 +34,11 @@ public:
         YZ,
         All,
     };
+
+    UIPanelId id() const override { return UIPanelId::Viewport; }
+    const char* title() const override { return uiPanelKey(UIPanelId::Viewport); }
+    bool canToggle() const override { return false; }
+    void draw(UIContext& context) override;
 
     void draw(ViewportRenderer& renderer,
             ViewportCameraController& camera,
@@ -67,7 +73,6 @@ private:
             bool suppressHoverWork);
 
     ViewportInputRouter inputRouter_;
-    int createdBoxCount_ = 1;
     ModelingBoxPreview boxPreview_;
     bool gizmoDragging_ = false;
     bool sdkTransformPreviewActive_ = false;

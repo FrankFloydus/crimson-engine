@@ -1,12 +1,16 @@
 #pragma once
 
 #include "quader/ui/ConsoleModel.h"
+#include "quader/ui/UIPanel.h"
 
 namespace quader {
 
-class ConsolePanel {
+class ConsolePanel final : public UIPanel {
 public:
-    void draw();
+    UIPanelId id() const override { return UIPanelId::Console; }
+    const char* title() const override { return uiPanelKey(UIPanelId::Console); }
+    bool defaultVisible() const override { return false; }
+    void draw(UIContext& context) override;
 
 private:
     ConsoleFilter filter_;
