@@ -8,6 +8,7 @@
 #include "quader/render/SceneRenderBridge.h"
 #include "quader/render/ViewportRenderer.h"
 #include "quader/scene/SceneDocument.h"
+#include "quader/ui/NavigationGizmo.h"
 #include "quader/ui/UIPanel.h"
 #include "quader/viewport/ViewportCameraController.h"
 #include "quader/viewport/ViewportInputRouter.h"
@@ -57,6 +58,8 @@ public:
     ViewportLayoutId viewportLayout() const { return layoutId_; }
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
+    bool navigationGizmoVisible() const { return navigationGizmo_.visible(); }
+    void setNavigationGizmoVisible(bool visible) { navigationGizmo_.setVisible(visible); }
 
 private:
     struct Pane {
@@ -194,7 +197,6 @@ private:
             int clickCount,
             bool preserveSelectionOnMiss = false,
             bool preserveSelectionOnSelectedHit = false);
-    bool drawViewCube(ViewportCameraController& camera, ImVec2 itemMin, ImVec2 itemSize, bool interactive = true);
     bool drawTransformGizmo(SceneDocument& document,
             const AssetRegistry& assets,
             UndoRedoManager& undoRedo,
@@ -233,6 +235,7 @@ private:
     Vec2 contextMenuRightPressScreen_ = {};
     Vec2 contextMenuRightDragDelta_ = {};
     bool contextMenuRightPressActive_ = false;
+    NavigationGizmo navigationGizmo_;
     Vec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
     bool lastFlyNavigationActive_ = false;

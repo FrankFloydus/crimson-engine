@@ -276,6 +276,7 @@ add_library(quader_runtime STATIC
     src/quader/render/ViewportRenderer.cpp
     src/quader/ui/ConsolePanel.cpp
     src/quader/ui/InspectorPanel.cpp
+    src/quader/ui/NavigationGizmo.cpp
     src/quader/ui/OutlinerPanel.cpp
     src/quader/ui/UIPanelManager.cpp
     src/quader/ui/UISystem.cpp

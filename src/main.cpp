@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <string_view>
 
 #if defined(_WIN32)
 #include <Windows.h>
@@ -28,18 +29,37 @@ std::filesystem::path executablePath(int argc, char** argv) {
     return std::filesystem::current_path() / "quader.exe";
 }
 
+struct CommandLineOptions {
+    bool borderlessWindow = false;
+};
+
+CommandLineOptions parseCommandLine(int argc, char** argv) {
+    CommandLineOptions options;
+    for (int index = 1; index < argc; ++index) {
+        const std::string_view argument = argv[index] != nullptr ? std::string_view(argv[index]) : std::string_view();
+        if (argument == "--borderless-window" || argument == "--window-borderless") {
+            options.borderlessWindow = true;
+        }
+    }
+    return options;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     const std::filesystem::path exe = executablePath(argc, argv);
+    const CommandLineOptions commandLine = parseCommandLine(argc, argv);
     const std::filesystem::path logPath = exe.parent_path() / "quader.log";
     quader::Logger::initialize({.filePath = logPath.string()});
     quader::installFatalErrorHandler(logPath);
     LOG_INFO("Booting Quader from {}", exe.string());
+    if (commandLine.borderlessWindow) {
+        LOG_INFO("Borderless window mode enabled");
+    }
 
     try {
         auto app = std::make_unique<quader::App>();
-        if (!app->initialize(exe)) {
+        if (!app->initialize(exe, {.borderlessWindow = commandLine.borderlessWindow})) {
             LOG_CRITICAL("Application initialization failed");
             app->shutdown();
             quader::Logger::shutdown();

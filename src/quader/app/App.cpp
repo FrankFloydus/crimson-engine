@@ -7,10 +7,10 @@
 
 namespace quader {
 
-bool App::initialize(const std::filesystem::path& executablePath) {
+bool App::initialize(const std::filesystem::path& executablePath, AppOptions options) {
     const std::filesystem::path executableDir = executablePath.parent_path();
 
-    if (!window_.create("Quader", 1600, 960)) {
+    if (!window_.create("Quader", 1600, 960, {.borderless = options.borderlessWindow})) {
         return false;
     }
 

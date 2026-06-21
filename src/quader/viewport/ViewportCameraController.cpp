@@ -431,7 +431,7 @@ void ViewportCameraController::focusBounds(Vec3 minBounds, Vec3 maxBounds, float
 #endif
 }
 
-void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign) {
+void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign, ViewportAxisLock lock) {
     clearOrbitSnapSource();
 #if QUADER_HAS_MODELING_SDK
     const quader_editor_core::ViewportCameraState camera =
@@ -439,15 +439,23 @@ void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign) {
     applySdkTransform(state_, pivot_, cameraForward_, cameraUp_,
             quader_editor_core::viewport_view_axis(camera, toSdk(pivot_), toSdk(axis), sign));
     state_.projection = ViewportProjection::Orthographic;
-    orthographicViewLocked_ = true;
+    orthographicViewLocked_ = lock == ViewportAxisLock::Locked;
 #else
     setViewDirection(fallbackForwardForAxis(axis, sign));
     const float visibleHeight = 2.0f * std::max(kMinCameraDistance, state_.distance) *
             std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
     state_.orthographicSize = std::max(0.0001f, visibleHeight);
     state_.projection = ViewportProjection::Orthographic;
-    orthographicViewLocked_ = true;
+    orthographicViewLocked_ = lock == ViewportAxisLock::Locked;
 #endif
+}
+
+void ViewportCameraController::unlockOrthographicView() {
+    clearOrbitSnapSource();
+    orthographicViewLocked_ = false;
+    if (state_.projection == ViewportProjection::Orthographic) {
+        state_.projection = ViewportProjection::Perspective;
+    }
 }
 
 void ViewportCameraController::setViewDirection(Vec3 forwardDirection) {

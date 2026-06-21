@@ -92,6 +92,21 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
     expectContains(rootCMake, "lib/x86_64/mdd/matdbg.lib");
 }
 
+TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
+    const std::string mainSource = readSourceFile("src/main.cpp");
+    const std::string appHeader = readSourceFile("src/quader/app/App.h");
+    const std::string appSource = readSourceFile("src/quader/app/App.cpp");
+    const std::string platformHeader = readSourceFile("src/quader/platform/PlatformWindow.h");
+    const std::string platformSource = readSourceFile("src/quader/platform/PlatformWindow.cpp");
+
+    expectContains(mainSource, "--borderless-window");
+    expectContains(mainSource, "commandLine.borderlessWindow");
+    expectContains(appHeader, "struct AppOptions");
+    expectContains(appSource, ".borderless = options.borderlessWindow");
+    expectContains(platformHeader, "struct PlatformWindowOptions");
+    expectContains(platformSource, "SDL_WINDOW_BORDERLESS");
+}
+
 TEST(DependencyLicenseGuardrailTests, SdkThirdPartyManifestHasLicenseEvidence) {
     const std::string manifest = readSourceFile("modeling/sdk/thirdparty/THIRD_PARTY_MANIFEST.md");
 

@@ -11,17 +11,23 @@ PlatformWindow::~PlatformWindow() {
     destroy();
 }
 
-bool PlatformWindow::create(const char* title, int width, int height) {
+bool PlatformWindow::create(const char* title, int width, int height, PlatformWindowOptions options) {
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         LOG_ERROR("SDL_Init failed: {}", SDL_GetError());
         return false;
+    }
+
+    SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    if (options.borderless) {
+        flags |= SDL_WINDOW_BORDERLESS;
+        LOG_INFO("Creating borderless platform window");
     }
 
     window_ = SDL_CreateWindow(
             title,
             width,
             height,
-            SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+            flags);
 
     if (!window_) {
         LOG_ERROR("SDL_CreateWindow failed: {}", SDL_GetError());

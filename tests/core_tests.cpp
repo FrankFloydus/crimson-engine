@@ -23,6 +23,10 @@
 
 #include <gtest/gtest.h>
 
+#if QUADER_HAS_MODELING_SDK
+#include <quader_editor_core/tool/viewport_navigation.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -214,6 +218,7 @@ TEST(UISettingsTests, DefaultsKeepConsoleHidden) {
     EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Inspector));
     EXPECT_FALSE(settings.isPanelVisible(UIPanelId::Console));
     EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Viewport));
+    EXPECT_TRUE(settings.navigationGizmoVisible());
 }
 
 TEST(UISettingsTests, RoundTripsPanelVisibility) {
@@ -225,6 +230,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
     settings.setPanelVisible(UIPanelId::Outliner, false);
     settings.setPanelVisible(UIPanelId::Inspector, true);
     settings.setPanelVisible(UIPanelId::Console, true);
+    settings.setNavigationGizmoVisible(false);
 
     ASSERT_TRUE(settings.save(path));
     const UISettings loaded = UISettings::load(path);
@@ -232,8 +238,44 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
     EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Outliner));
     EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Inspector));
     EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
+    EXPECT_FALSE(loaded.navigationGizmoVisible());
 
     std::filesystem::remove(path);
+}
+
+TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
+    const std::filesystem::path uiSystemPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+    const std::filesystem::path viewportPanelHeaderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    const std::filesystem::path uiSettingsSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISettings.cpp";
+
+    std::ifstream uiSystemFile(uiSystemPath);
+    std::ifstream viewportPanelHeaderFile(viewportPanelHeaderPath);
+    std::ifstream uiSettingsSourceFile(uiSettingsSourcePath);
+    ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+    ASSERT_TRUE(viewportPanelHeaderFile.is_open()) << viewportPanelHeaderPath.string();
+    ASSERT_TRUE(uiSettingsSourceFile.is_open()) << uiSettingsSourcePath.string();
+
+    const std::string uiSystemSource{
+            std::istreambuf_iterator<char>(uiSystemFile),
+            std::istreambuf_iterator<char>()};
+    const std::string viewportPanelHeader{
+            std::istreambuf_iterator<char>(viewportPanelHeaderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string uiSettingsSource{
+            std::istreambuf_iterator<char>(uiSettingsSourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Show\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Navigation Gizmo\""), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportPanel_->setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("settings_.setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportPanel_->setNavigationGizmoVisible(settings_.navigationGizmoVisible())"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("bool navigationGizmoVisible() const"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("NavigationGizmo navigationGizmo_"), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("NavigationGizmo="), std::string::npos);
 }
 
 TEST(ViewportSettingsTests, DefaultsMirrorUnityViewportSettingsState) {
@@ -644,18 +686,54 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
 TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path navigationGizmoPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "NavigationGizmo.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream navigationGizmoFile(navigationGizmoPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(navigationGizmoFile.is_open()) << navigationGizmoPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string navigationGizmoSource{
+            std::istreambuf_iterator<char>(navigationGizmoFile),
+            std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("void ViewportPanel::drawPaneDecorations("), std::string::npos);
-    EXPECT_NE(source.find("drawViewCube(paneState.camera, itemMin, itemSize, false)"), std::string::npos);
+    EXPECT_NE(source.find("navigationGizmo_.draw(paneState.camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false)"), std::string::npos);
+    EXPECT_NE(source.find("const bool navigationGizmoConsumed = navigationGizmo_.draw("), std::string::npos);
+    EXPECT_EQ(source.find("drawViewCube("), std::string::npos);
+    EXPECT_EQ(source.find("navigationGizmoVisible_"), std::string::npos);
     EXPECT_NE(source.find("drawTransformGizmo(\n            document,\n            assets,\n            undoRedo,\n            documentCommands,\n            modeling,\n            paneState.camera"), std::string::npos);
     EXPECT_NE(source.find("true,\n            false);"), std::string::npos);
-    EXPECT_NE(source.find("if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || !hoverHit.hit)"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("input.widget_size = 70.0;"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("input.margin = {46.0f, 46.0f};"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("hoverHit.kind == quader_editor_core::ViewCubeHitKind::face"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("IM_COL32(255, 221, 111, 255)"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("drawList->Flags &= ~ImDrawListFlags_AntiAliasedFill"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("for (const quader_editor_core::ViewCubeEdgePrimitive& edge : primitives.edges)"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("neutralEdgeColor"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("for (const quader_editor_core::ViewCubeEdgePrimitive& edge : primitives.axis_edges)"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("coloredEdgeIndices"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("coloredBottomVertex"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("edgeTouchesColoredBottomVertex"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("point.y > coloredBottomVertex->y + 0.5f"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("edge.axis != marker.axis"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("distanceToSegmentSquared(\n                    markerCenter"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("staticXAxisEnd"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("staticYAxisEnd"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("staticZAxisEnd"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("toViewCubeScreenPoint(edge.screen_start)"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("constexpr float labelSize = 11.5f"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("IM_COL32(17, 22, 28, 255)"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("nearestCubeCornerTo"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("highlighted ? IM_COL32(255, 244, 184, 255)"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("point.x += 1.5f"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("markerCenter.x + 1.0f"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("marker.depth >= 0.0 ? 1.0f : 0.42f"), std::string::npos);
+    EXPECT_EQ(navigationGizmoSource.find("marker.depth >= 0.0 ? 8.0f : 6.5f"), std::string::npos);
     EXPECT_NE(source.find("if (!interactive) {\n        return false;\n    }\n\n    auto fallbackGizmoHit = [&]()"), std::string::npos);
     EXPECT_NE(source.find("bool consumed = gizmoDragging_;"), std::string::npos);
 }
@@ -729,16 +807,36 @@ TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
 TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
     const std::filesystem::path headerPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    const std::filesystem::path navigationGizmoHeaderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "NavigationGizmo.h";
+    const std::filesystem::path navigationGizmoSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "NavigationGizmo.cpp";
     std::ifstream headerFile(headerPath);
+    std::ifstream navigationGizmoHeaderFile(navigationGizmoHeaderPath);
+    std::ifstream navigationGizmoSourceFile(navigationGizmoSourcePath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+    ASSERT_TRUE(navigationGizmoHeaderFile.is_open()) << navigationGizmoHeaderPath.string();
+    ASSERT_TRUE(navigationGizmoSourceFile.is_open()) << navigationGizmoSourcePath.string();
 
     const std::string header{
             std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string navigationGizmoHeader{
+            std::istreambuf_iterator<char>(navigationGizmoHeaderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string navigationGizmoSource{
+            std::istreambuf_iterator<char>(navigationGizmoSourceFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(header.find("bool gizmoDragPaneActive_"), std::string::npos);
     EXPECT_NE(header.find("ViewportPaneId gizmoDragPaneId_"), std::string::npos);
     EXPECT_NE(header.find("ViewportPaneId paneId"), std::string::npos);
+    EXPECT_NE(header.find("NavigationGizmo navigationGizmo_"), std::string::npos);
+    EXPECT_EQ(header.find("viewCubeDragPaneActive_"), std::string::npos);
+    EXPECT_NE(navigationGizmoHeader.find("bool inputLocked() const"), std::string::npos);
+    EXPECT_NE(navigationGizmoHeader.find("ViewportPaneId lockedPaneId() const"), std::string::npos);
+    EXPECT_NE(navigationGizmoHeader.find("bool dragPaneActive_"), std::string::npos);
+    EXPECT_NE(navigationGizmoHeader.find("ViewportPaneId dragPaneId_"), std::string::npos);
 
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
@@ -750,11 +848,16 @@ TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const bool gizmoDragLocksInput = gizmoDragging_ && gizmoDragPaneActive_"), std::string::npos);
-    EXPECT_NE(source.find("if (!gizmoDragLocksInput)"), std::string::npos);
+    EXPECT_NE(source.find("const bool navigationGizmoDragLocksInput = navigationGizmo_.inputLocked()"), std::string::npos);
+    EXPECT_NE(source.find("if (!gizmoDragLocksInput && !navigationGizmoDragLocksInput)"), std::string::npos);
     EXPECT_NE(source.find("drawPane.pane->id == gizmoDragPaneId_"), std::string::npos);
+    EXPECT_NE(source.find("drawPane.pane->id == navigationGizmo_.lockedPaneId()"), std::string::npos);
     EXPECT_NE(source.find("inputOwnsActiveGizmoDrag"), std::string::npos);
+    EXPECT_NE(source.find("inputOwnsActiveNavigationGizmoDrag"), std::string::npos);
     EXPECT_NE(source.find("gizmoDragPaneActive_ = true"), std::string::npos);
     EXPECT_NE(source.find("gizmoDragPaneId_ = paneId"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("dragPaneActive_ = true"), std::string::npos);
+    EXPECT_NE(navigationGizmoSource.find("dragPaneId_ = paneId"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
@@ -2385,6 +2488,70 @@ TEST(ViewportCameraTests, ViewAxisUsesSdkNavigationPolicy) {
     EXPECT_TRUE(camera.orthographicViewLocked());
     EXPECT_GT(camera.state().orthographicSize, 0.0f);
     EXPECT_GT(length(pose.up), 0.99f);
+}
+
+TEST(ViewportCameraTests, ViewCubeAxisSnapDoesNotLockOrbit) {
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.viewAxis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+
+    ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    ASSERT_FALSE(camera.orthographicViewLocked());
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({160.0f, 120.0f});
+    camera.endDrag();
+
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+}
+
+TEST(ViewportCameraTests, ViewCubePrimitivesExposeVisibleAxisEdges) {
+#if QUADER_HAS_MODELING_SDK
+    quader_editor_core::ViewCubePrimitiveInput input;
+    input.viewport_size = {200.0f, 200.0f};
+    input.widget_size = 70.0;
+    input.camera_transform.x_axis = {0.70710678f, 0.0f, -0.70710678f};
+    input.camera_transform.y_axis = {-0.40824829f, 0.81649658f, -0.40824829f};
+    input.camera_transform.z_axis = {0.57735027f, 0.57735027f, 0.57735027f};
+
+    const quader_editor_core::ViewCubePrimitives primitives =
+            quader_editor_core::build_view_cube_primitives(input);
+
+    EXPECT_TRUE(primitives.ok);
+    EXPECT_EQ(primitives.faces.size(), 3u);
+    EXPECT_EQ(primitives.edges.size(), 9u);
+
+    std::array<bool, 3> hasAxis = {false, false, false};
+    for (const quader_editor_core::ViewCubeEdgePrimitive& edge : primitives.edges) {
+        const float dx = edge.screen_end.x - edge.screen_start.x;
+        const float dy = edge.screen_end.y - edge.screen_start.y;
+        EXPECT_GT(dx * dx + dy * dy, 1.0f);
+        switch (edge.axis) {
+        case quader_editor_core::ViewAxis::x:
+            hasAxis[0] = true;
+            break;
+        case quader_editor_core::ViewAxis::y:
+            hasAxis[1] = true;
+            break;
+        case quader_editor_core::ViewAxis::z:
+            hasAxis[2] = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasAxis[0]);
+    EXPECT_TRUE(hasAxis[1]);
+    EXPECT_TRUE(hasAxis[2]);
+
+    EXPECT_EQ(primitives.axis_edges.size(), 3u);
+    for (const quader_editor_core::ViewCubeEdgePrimitive& edge : primitives.axis_edges) {
+        EXPECT_FLOAT_EQ(edge.local_start.x, 1.0f);
+        EXPECT_FLOAT_EQ(edge.local_start.y, -1.0f);
+        EXPECT_FLOAT_EQ(edge.local_start.z, 1.0f);
+    }
+#else
+    GTEST_SKIP() << "Modeling SDK disabled";
+#endif
 }
 
 TEST(ViewportCameraTests, OrthographicAxisViewBuildsParallelPickingRays) {

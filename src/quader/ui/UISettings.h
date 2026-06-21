@@ -23,11 +23,14 @@ public:
 
     bool isPanelVisible(UIPanelId id) const;
     void setPanelVisible(UIPanelId id, bool visible);
+    bool navigationGizmoVisible() const { return navigationGizmoVisible_; }
+    void setNavigationGizmoVisible(bool visible) { navigationGizmoVisible_ = visible; }
 
 private:
     bool outlinerVisible_ = true;
     bool inspectorVisible_ = true;
     bool consoleVisible_ = false;
+    bool navigationGizmoVisible_ = true;
 };
 
 } // namespace quader

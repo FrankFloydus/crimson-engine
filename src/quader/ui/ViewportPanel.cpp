@@ -1150,31 +1150,6 @@ ImU32 axisImColor(quader_editor_core::TransformAxis axis, float alpha = 1.0f) {
     }
 }
 
-ImU32 viewAxisImColor(quader_editor_core::ViewAxis axis, float alpha = 1.0f) {
-    const std::uint8_t a = alphaByte(alpha);
-    switch (axis) {
-    case quader_editor_core::ViewAxis::x:
-        return IM_COL32(235, 76, 82, a);
-    case quader_editor_core::ViewAxis::y:
-        return IM_COL32(90, 205, 118, a);
-    case quader_editor_core::ViewAxis::z:
-        return IM_COL32(78, 142, 255, a);
-    }
-    return IM_COL32(255, 255, 255, a);
-}
-
-ViewportViewAxis toViewportViewAxis(quader_editor_core::ViewAxis axis) {
-    switch (axis) {
-    case quader_editor_core::ViewAxis::x:
-        return ViewportViewAxis::X;
-    case quader_editor_core::ViewAxis::y:
-        return ViewportViewAxis::Y;
-    case quader_editor_core::ViewAxis::z:
-        return ViewportViewAxis::Z;
-    }
-    return ViewportViewAxis::Z;
-}
-
 quader_editor_core::ViewportCameraState makeSdkCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
     const ViewportCameraPose pose = camera.pose();
     const Vec3 forward = normalize(pose.target - pose.eye);
@@ -1925,8 +1900,9 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     const bool splitConsumed = handleSplitInput(canvasMin, available, splitHandles);
     DrawPane* inputPane = nullptr;
     const bool gizmoDragLocksInput = gizmoDragging_ && gizmoDragPaneActive_;
+    const bool navigationGizmoDragLocksInput = navigationGizmo_.inputLocked();
     for (DrawPane& drawPane : drawPanes) {
-        if (!gizmoDragLocksInput) {
+        if (!gizmoDragLocksInput && !navigationGizmoDragLocksInput) {
             if (drawPane.focusHovered && !splitConsumed) {
                 focusedPaneId_ = drawPane.pane->id;
             } else if (drawPane.focusHovered && viewportFocusInputActive()) {
@@ -1935,7 +1911,9 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         }
         if (gizmoDragLocksInput && drawPane.pane->id == gizmoDragPaneId_) {
             inputPane = &drawPane;
-        } else if (!gizmoDragLocksInput && drawPane.hovered && !splitConsumed) {
+        } else if (navigationGizmoDragLocksInput && drawPane.pane->id == navigationGizmo_.lockedPaneId()) {
+            inputPane = &drawPane;
+        } else if (!gizmoDragLocksInput && !navigationGizmoDragLocksInput && drawPane.hovered && !splitConsumed) {
             inputPane = &drawPane;
         }
         drawPaneChrome(*drawPane.pane, drawPane.itemMin, drawPane.itemSize);
@@ -1951,6 +1929,8 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     if (inputPane != nullptr) {
         const bool inputOwnsActiveGizmoDrag =
                 gizmoDragLocksInput && inputPane->pane->id == gizmoDragPaneId_;
+        const bool inputOwnsActiveNavigationGizmoDrag =
+                navigationGizmoDragLocksInput && inputPane->pane->id == navigationGizmo_.lockedPaneId();
         drawPaneContents(*inputPane->pane,
                 document,
                 assets,
@@ -1964,8 +1944,8 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                 uiContext,
                 inputPane->itemMin,
                 inputPane->itemSize,
-                (inputPane->hovered && !splitConsumed) || inputOwnsActiveGizmoDrag,
-                (inputPane->focusHovered && !splitConsumed) || inputOwnsActiveGizmoDrag);
+                (inputPane->hovered && !splitConsumed) || inputOwnsActiveGizmoDrag || inputOwnsActiveNavigationGizmoDrag,
+                (inputPane->focusHovered && !splitConsumed) || inputOwnsActiveGizmoDrag || inputOwnsActiveNavigationGizmoDrag);
     }
     for (DrawPane& drawPane : drawPanes) {
         if (&drawPane == inputPane) {
@@ -1995,7 +1975,7 @@ void ViewportPanel::drawPaneDecorations(
         ModelingSessionService& modeling,
         ImVec2 itemMin,
         ImVec2 itemSize) {
-    drawViewCube(paneState.camera, itemMin, itemSize, false);
+    navigationGizmo_.draw(paneState.camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false);
     (void)drawTransformGizmo(
             document,
             assets,
@@ -2304,12 +2284,19 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             .flyHudActive = result.flyHudActive,
             .accumulatedDragDelta = contextMenuRightDragDelta_,
     });
-    const bool viewCubeConsumed = drawViewCube(camera, itemMin, itemSize);
-    if (suppressHoverWork || viewCubeConsumed || result.gridPresetChanged) {
+    const bool navigationGizmoConsumed = navigationGizmo_.draw(
+            camera,
+            paneState.id,
+            itemMin,
+            itemSize,
+            capturedMouseDelta,
+            viewportCursorCaptureRequested,
+            viewportCursorCapturePoint);
+    if (suppressHoverWork || navigationGizmoConsumed || result.gridPresetChanged) {
         lastHoverWorkKey_.valid = false;
     }
     const bool gizmoConsumed =
-            viewCubeConsumed ||
+            navigationGizmoConsumed ||
             cancelConsumed ||
             drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, paneState.id, itemMin, itemSize, suppressHoverWork);
     const ImGuiIO& io = ImGui::GetIO();
@@ -2856,101 +2843,6 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             result.flyHudActive,
             camera.flySpeed());
     drawViewportOperationsPopup(undoRedo, modeling, inputRouter_, modalToolOwnsViewport());
-}
-
-bool ViewportPanel::drawViewCube(ViewportCameraController& camera, ImVec2 itemMin, ImVec2 itemSize, bool interactive) {
-#if QUADER_HAS_MODELING_SDK
-    quader_editor_core::ViewCubePrimitiveInput input;
-    input.camera_transform = makeSdkCamera(camera, itemSize).transform;
-    input.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-
-    const quader_editor_core::ViewCubePrimitives primitives = quader_editor_core::build_view_cube_primitives(input);
-    if (!primitives.ok) {
-        return false;
-    }
-
-    ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const ImVec2 center{itemMin.x + primitives.screen_position.x, itemMin.y + primitives.screen_position.y};
-    const ImVec2 rectMin{itemMin.x + primitives.rect_position.x, itemMin.y + primitives.rect_position.y};
-    const ImVec2 rectMax{rectMin.x + primitives.rect_size.x, rectMin.y + primitives.rect_size.y};
-
-    drawList->AddCircleFilled(center, primitives.rect_size.x * 0.55f, IM_COL32(18, 22, 28, 168), 32);
-    drawList->AddRect(rectMin, rectMax, IM_COL32(255, 255, 255, 72), 4.0f, 0, 1.0f);
-
-    for (const quader_editor_core::ViewCubeFacePrimitive& face : primitives.faces) {
-        std::vector<ImVec2> polygon;
-        polygon.reserve(face.polygon.size());
-        for (quader_poly::Vec2 point : face.polygon) {
-            polygon.push_back({itemMin.x + point.x, itemMin.y + point.y});
-        }
-        if (polygon.size() < 3u) {
-            continue;
-        }
-
-        drawList->AddConvexPolyFilled(
-                polygon.data(),
-                static_cast<int>(polygon.size()),
-                viewAxisImColor(face.axis, face.sign > 0 ? 0.32f : 0.20f));
-        drawList->AddPolyline(
-                polygon.data(),
-                static_cast<int>(polygon.size()),
-                viewAxisImColor(face.axis, 0.9f),
-                ImDrawFlags_Closed,
-                1.0f);
-
-        const std::string_view label = quader_editor_core::view_axis_label(face.axis, face.sign);
-        const ImVec2 textSize = ImGui::CalcTextSize(label.data(), label.data() + label.size());
-        drawList->AddText(
-                {itemMin.x + face.screen_position.x - textSize.x * 0.5f,
-                        itemMin.y + face.screen_position.y - textSize.y * 0.5f},
-                IM_COL32(248, 250, 252, 230),
-                label.data(),
-                label.data() + label.size());
-    }
-
-    for (const quader_editor_core::ViewCubeAxisMarkerPrimitive& marker : primitives.axis_markers) {
-        const ImVec2 markerCenter{itemMin.x + marker.screen_position.x, itemMin.y + marker.screen_position.y};
-        const ImU32 markerColor = viewAxisImColor(marker.axis, marker.depth >= 0.0 ? 1.0f : 0.45f);
-        drawList->AddCircleFilled(markerCenter, 8.0f, IM_COL32(18, 22, 28, 215), 16);
-        drawList->AddCircle(markerCenter, 8.0f, markerColor, 16, 1.5f);
-
-        const std::string_view label = quader_editor_core::view_axis_label(marker.axis, marker.sign);
-        const ImVec2 textSize = ImGui::CalcTextSize(label.data(), label.data() + label.size());
-        drawList->AddText(
-                {markerCenter.x - textSize.x * 0.5f, markerCenter.y - textSize.y * 0.5f},
-                IM_COL32(248, 250, 252, 240),
-                label.data(),
-                label.data() + label.size());
-    }
-
-    const ImGuiIO& io = ImGui::GetIO();
-    const ImVec2 mouse = io.MousePos;
-    const bool mouseInsideViewport =
-            mouse.x >= itemMin.x && mouse.y >= itemMin.y &&
-            mouse.x <= itemMin.x + itemSize.x && mouse.y <= itemMin.y + itemSize.y;
-    if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        return false;
-    }
-
-    quader_editor_core::ViewCubePickInput pickInput;
-    pickInput.primitives = input;
-    pickInput.screen_position = {mouse.x - itemMin.x, mouse.y - itemMin.y};
-    const quader_editor_core::ViewCubeHit hit = quader_editor_core::pick_view_cube(pickInput);
-    if (!hit.hit) {
-        return false;
-    }
-
-    if (hit.kind == quader_editor_core::ViewCubeHitKind::face) {
-        camera.viewAxis(toViewportViewAxis(hit.axis), hit.sign);
-    }
-    return true;
-#else
-    (void)camera;
-    (void)itemMin;
-    (void)itemSize;
-    (void)interactive;
-    return false;
-#endif
 }
 
 ModelingSelectionSummary ViewportPanel::selectFromViewport(

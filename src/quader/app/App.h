@@ -16,9 +16,13 @@
 
 namespace quader {
 
+struct AppOptions {
+    bool borderlessWindow = false;
+};
+
 class App {
 public:
-    bool initialize(const std::filesystem::path& executablePath);
+    bool initialize(const std::filesystem::path& executablePath, AppOptions options = {});
     int run();
     void shutdown();
 

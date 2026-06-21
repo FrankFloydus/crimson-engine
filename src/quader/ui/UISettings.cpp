@@ -85,6 +85,8 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             settings.inspectorVisible_ = parseBool(value, settings.inspectorVisible_);
         } else if (key == uiPanelKey(UIPanelId::Console)) {
             settings.consoleVisible_ = parseBool(value, settings.consoleVisible_);
+        } else if (key == "NavigationGizmo") {
+            settings.navigationGizmoVisible_ = parseBool(value, settings.navigationGizmoVisible_);
         }
     }
 
@@ -113,6 +115,8 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << uiPanelKey(UIPanelId::Outliner) << '=' << (outlinerVisible_ ? "true" : "false") << '\n';
     file << uiPanelKey(UIPanelId::Inspector) << '=' << (inspectorVisible_ ? "true" : "false") << '\n';
     file << uiPanelKey(UIPanelId::Console) << '=' << (consoleVisible_ ? "true" : "false") << '\n';
+    file << "\n[Show]\n";
+    file << "NavigationGizmo=" << (navigationGizmoVisible_ ? "true" : "false") << '\n';
     return true;
 }
 

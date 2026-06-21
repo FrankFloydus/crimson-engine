@@ -7,6 +7,10 @@
 
 namespace quader {
 
+struct PlatformWindowOptions {
+    bool borderless = false;
+};
+
 class PlatformWindow {
 public:
     PlatformWindow() = default;
@@ -15,7 +19,7 @@ public:
     PlatformWindow(const PlatformWindow&) = delete;
     PlatformWindow& operator=(const PlatformWindow&) = delete;
 
-    bool create(const char* title, int width, int height);
+    bool create(const char* title, int width, int height, PlatformWindowOptions options = {});
     void destroy();
 
     SDL_Window* sdlWindow() const { return window_; }

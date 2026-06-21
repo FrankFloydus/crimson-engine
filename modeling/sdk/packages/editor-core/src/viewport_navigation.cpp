@@ -454,6 +454,48 @@ quader_poly::Vec2 polygon_center(const std::vector<quader_poly::Vec2>& polygon)
 	return { static_cast<float>(x / size), static_cast<float>(y / size) };
 }
 
+struct ViewCubeFaceDefinition {
+	int axis_index;
+	int sign;
+	quader_poly::Vec3 normal;
+	std::array<quader_poly::Vec3, 4> vertices;
+};
+
+const std::array<ViewCubeFaceDefinition, 6>& view_cube_face_definitions()
+{
+	static const std::array<ViewCubeFaceDefinition, 6> definitions = { {
+		{ 0, 1, { 1.0F, 0.0F, 0.0F }, { quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F } } },
+		{ 0, -1, { -1.0F, 0.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F } } },
+		{ 1, 1, { 0.0F, 1.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F } } },
+		{ 1, -1, { 0.0F, -1.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F } } },
+		{ 2, 1, { 0.0F, 0.0F, 1.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F } } },
+		{ 2, -1, { 0.0F, 0.0F, -1.0F }, { quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F } } },
+	} };
+	return definitions;
+}
+
+bool view_cube_same_corner(quader_poly::Vec3 left, quader_poly::Vec3 right)
+{
+	return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+bool view_cube_same_edge(quader_poly::Vec3 left_start, quader_poly::Vec3 left_end, quader_poly::Vec3 right_start, quader_poly::Vec3 right_end)
+{
+	return (view_cube_same_corner(left_start, right_start) && view_cube_same_corner(left_end, right_end)) ||
+		(view_cube_same_corner(left_start, right_end) && view_cube_same_corner(left_end, right_start));
+}
+
+ViewAxis view_cube_edge_axis(quader_poly::Vec3 start, quader_poly::Vec3 end)
+{
+	if (std::abs(start.x - end.x) > 0.5F) {
+		return ViewAxis::x;
+	}
+	if (std::abs(start.y - end.y) > 0.5F) {
+		return ViewAxis::y;
+	}
+	return ViewAxis::z;
+}
+
 bool point_in_polygon(const std::vector<quader_poly::Vec2>& polygon, quader_poly::Vec2 point)
 {
 	std::vector<quader_geometry::Vec2d> geometry_polygon;
@@ -470,22 +512,9 @@ bool point_in_polygon(const std::vector<quader_poly::Vec2>& polygon, quader_poly
 std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double scale)
 {
 	const quader_poly::Transform3 camera_basis = orthonormalized_basis(camera_transform);
-	const struct FaceDefinition {
-		int axis_index;
-		int sign;
-		quader_poly::Vec3 normal;
-		std::array<quader_poly::Vec3, 4> vertices;
-	} face_definitions[6] = {
-		{ 0, 1, { 1.0F, 0.0F, 0.0F }, { quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F } } },
-		{ 0, -1, { -1.0F, 0.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F } } },
-		{ 1, 1, { 0.0F, 1.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F } } },
-		{ 1, -1, { 0.0F, -1.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F } } },
-		{ 2, 1, { 0.0F, 0.0F, 1.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F } } },
-		{ 2, -1, { 0.0F, 0.0F, -1.0F }, { quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F } } },
-	};
 
 	std::vector<ViewCubeFacePrimitive> faces;
-	for (const FaceDefinition& definition : face_definitions) {
+	for (const ViewCubeFaceDefinition& definition : view_cube_face_definitions()) {
 		const double normal_depth = geometry_dot(camera_basis.z_axis, definition.normal);
 		if (normal_depth <= view_cube_face_visibility_epsilon) {
 			continue;
@@ -502,6 +531,80 @@ std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_
 		return left.depth < right.depth;
 	});
 	return faces;
+}
+
+std::vector<ViewCubeEdgePrimitive> build_view_cube_edges_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double scale)
+{
+	const quader_poly::Transform3 camera_basis = orthonormalized_basis(camera_transform);
+	struct EdgeKey {
+		quader_poly::Vec3 start;
+		quader_poly::Vec3 end;
+	};
+
+	std::vector<EdgeKey> emitted_edges;
+	std::vector<ViewCubeEdgePrimitive> edges;
+	for (const ViewCubeFaceDefinition& definition : view_cube_face_definitions()) {
+		const double normal_depth = geometry_dot(camera_basis.z_axis, definition.normal);
+		if (normal_depth <= view_cube_face_visibility_epsilon) {
+			continue;
+		}
+
+		for (std::size_t index = 0; index < definition.vertices.size(); ++index) {
+			const quader_poly::Vec3 start = definition.vertices[index];
+			const quader_poly::Vec3 end = definition.vertices[(index + 1u) % definition.vertices.size()];
+			const bool already_emitted = std::any_of(
+				emitted_edges.begin(),
+				emitted_edges.end(),
+				[&](const EdgeKey& edge) {
+					return view_cube_same_edge(start, end, edge.start, edge.end);
+				});
+			if (already_emitted) {
+				continue;
+			}
+
+			emitted_edges.push_back({ start, end });
+			ViewCubeEdgePrimitive edge;
+			edge.axis = view_cube_edge_axis(start, end);
+			edge.depth = (view_cube_depth(camera_transform, start) + view_cube_depth(camera_transform, end)) * 0.5;
+			edge.local_start = start;
+			edge.local_end = end;
+			edge.screen_start = project_view_cube_point(camera_transform, start, center, scale);
+			edge.screen_end = project_view_cube_point(camera_transform, end, center, scale);
+			edges.push_back(edge);
+		}
+	}
+
+	std::sort(edges.begin(), edges.end(), [](const ViewCubeEdgePrimitive& left, const ViewCubeEdgePrimitive& right) {
+		return left.depth < right.depth;
+	});
+	return edges;
+}
+
+std::vector<ViewCubeEdgePrimitive> build_view_cube_axis_edges_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double scale)
+{
+	const quader_poly::Vec3 anchor { 1.0F, -1.0F, 1.0F };
+	const struct AxisEdgeDefinition {
+		ViewAxis axis;
+		quader_poly::Vec3 end;
+	} axis_edges[3] = {
+		{ ViewAxis::x, { -1.0F, -1.0F, 1.0F } },
+		{ ViewAxis::y, { 1.0F, 1.0F, 1.0F } },
+		{ ViewAxis::z, { 1.0F, -1.0F, -1.0F } },
+	};
+
+	std::vector<ViewCubeEdgePrimitive> edges;
+	edges.reserve(3u);
+	for (const AxisEdgeDefinition& definition : axis_edges) {
+		ViewCubeEdgePrimitive edge;
+		edge.axis = definition.axis;
+		edge.depth = (view_cube_depth(camera_transform, anchor) + view_cube_depth(camera_transform, definition.end)) * 0.5;
+		edge.local_start = anchor;
+		edge.local_end = definition.end;
+		edge.screen_start = project_view_cube_point(camera_transform, anchor, center, scale);
+		edge.screen_end = project_view_cube_point(camera_transform, definition.end, center, scale);
+		edges.push_back(edge);
+	}
+	return edges;
 }
 
 std::vector<ViewCubeAxisMarkerPrimitive> build_view_cube_markers_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double radius)
@@ -1045,6 +1148,8 @@ ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& inpu
 	};
 	primitives.rect_size = { static_cast<float>(widget_size), static_cast<float>(widget_size) };
 	primitives.faces = build_view_cube_faces_for_state(input.camera_transform, center, cube_scale);
+	primitives.edges = build_view_cube_edges_for_state(input.camera_transform, center, cube_scale);
+	primitives.axis_edges = build_view_cube_axis_edges_for_state(input.camera_transform, center, cube_scale);
 	primitives.axis_markers = build_view_cube_markers_for_state(input.camera_transform, center, marker_radius);
 	return primitives;
 }

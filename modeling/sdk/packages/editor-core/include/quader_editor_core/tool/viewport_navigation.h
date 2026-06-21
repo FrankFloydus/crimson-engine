@@ -206,6 +206,15 @@ struct ViewCubeAxisMarkerPrimitive {
 	quader_poly::Vec2 screen_position;
 };
 
+struct ViewCubeEdgePrimitive {
+	ViewAxis axis = ViewAxis::x;
+	double depth = 0.0;
+	quader_poly::Vec3 local_start;
+	quader_poly::Vec3 local_end;
+	quader_poly::Vec2 screen_start;
+	quader_poly::Vec2 screen_end;
+};
+
 struct ViewCubePrimitiveInput {
 	quader_poly::Transform3 camera_transform;
 	quader_poly::Vec2 viewport_size;
@@ -219,6 +228,8 @@ struct ViewCubePrimitives {
 	quader_poly::Vec2 rect_position;
 	quader_poly::Vec2 rect_size;
 	std::vector<ViewCubeFacePrimitive> faces;
+	std::vector<ViewCubeEdgePrimitive> edges;
+	std::vector<ViewCubeEdgePrimitive> axis_edges;
 	std::vector<ViewCubeAxisMarkerPrimitive> axis_markers;
 };
 

@@ -18,6 +18,11 @@ enum class ViewportViewAxis {
     Z,
 };
 
+enum class ViewportAxisLock {
+    Locked,
+    Unlocked,
+};
+
 enum class ViewportProjection {
     Perspective,
     Orthographic,
@@ -65,7 +70,8 @@ public:
     void scrollToCursor(float wheelDelta, Vec2 localMouse);
     void focusOrigin(float distance = 64.0f);
     void focusBounds(Vec3 minBounds, Vec3 maxBounds, float margin = 1.25f);
-    void viewAxis(ViewportViewAxis axis, int sign);
+    void viewAxis(ViewportViewAxis axis, int sign, ViewportAxisLock lock = ViewportAxisLock::Locked);
+    void unlockOrthographicView();
     void setViewDirection(Vec3 forwardDirection);
     void updateDragDelta(Vec2 delta);
     void flyMove(Vec3 localDirection, float deltaSeconds);

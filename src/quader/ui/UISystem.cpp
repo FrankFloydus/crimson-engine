@@ -101,6 +101,9 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
 
     registerPanels(renderSystem);
     panels_.applySettings(settings_);
+    if (viewportPanel_ != nullptr) {
+        viewportPanel_->setNavigationGizmoVisible(settings_.navigationGizmoVisible());
+    }
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -329,6 +332,17 @@ void UISystem::drawMenuBar(bool& quitRequested, ModelingSessionService& modeling
         toolMenuItem("Cut", "Shift+C", ViewportTool::Cut);
         toolMenuItem("Poly", "P", ViewportTool::Poly);
         toolMenuItem("Mirror", nullptr, ViewportTool::Mirror);
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Show")) {
+        bool navigationGizmoVisible =
+                viewportPanel_ != nullptr && viewportPanel_->navigationGizmoVisible();
+        if (ImGui::MenuItem("Navigation Gizmo", nullptr, &navigationGizmoVisible, viewportPanel_ != nullptr)) {
+            viewportPanel_->setNavigationGizmoVisible(navigationGizmoVisible);
+            settings_.setNavigationGizmoVisible(navigationGizmoVisible);
+            saveSettings();
+        }
         ImGui::EndMenu();
     }
 
@@ -733,6 +747,9 @@ void UISystem::destroyIcons() {
 
 void UISystem::saveSettings() {
     panels_.writeSettings(settings_);
+    if (viewportPanel_ != nullptr) {
+        settings_.setNavigationGizmoVisible(viewportPanel_->navigationGizmoVisible());
+    }
     if (!settings_.save(settingsPaths_.settingsFile)) {
         LOG_WARN("Unable to save UI settings to {}", settingsPaths_.settingsFile.string());
     }
