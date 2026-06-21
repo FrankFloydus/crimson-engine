@@ -781,6 +781,16 @@ TEST_CASE("editor runtime command facade drives insert edge loop preview and com
 	REQUIRE(runtime.insert_edge_loop_state().factor == Catch::Approx(hover_factor));
 	REQUIRE_FALSE(session.history_status().can_undo);
 
+	const qec::EditorRuntimeCommandResult release_hover_result =
+		qec::execute_runtime_command(
+			session,
+			runtime,
+			insert_edge_loop_pick_command(qec::EditorRuntimeCommandId::update_insert_edge_loop_hover));
+	REQUIRE(release_hover_result.command.ok);
+	REQUIRE(runtime.insert_edge_loop_state().dragging);
+	REQUIRE_FALSE(runtime.insert_edge_loop_state().preview_lines.empty());
+	REQUIRE_FALSE(session.history_status().can_undo);
+
 	const qec::EditorRuntimeCommandResult update_result =
 		qec::execute_runtime_command(
 			session,

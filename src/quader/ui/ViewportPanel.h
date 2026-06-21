@@ -53,6 +53,7 @@ public:
     void prepareViewports(SceneRenderBridge& renderBridge);
     void renderViewports(filament::Renderer& renderer);
     void setViewportLayout(ViewportLayoutId layoutId);
+    bool activateToolFromMenu(ViewportTool tool, ModelingSessionService& modeling);
     ViewportLayoutId viewportLayout() const { return layoutId_; }
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
@@ -217,6 +218,9 @@ private:
     std::vector<ViewportPaneId> activeRenderPanes_;
     ViewportInputRouter inputRouter_;
     ModelingBoxPreview boxPreview_;
+    bool insertEdgeLoopDragActive_ = false;
+    bool cutDragActive_ = false;
+    bool mirrorDragActive_ = false;
     bool gizmoDragging_ = false;
     bool gizmoDragPaneActive_ = false;
     ViewportPaneId gizmoDragPaneId_ = ViewportPaneId::Perspective;
@@ -240,6 +244,7 @@ private:
     std::uint64_t cachedSelectionOverlaySelectionRevision_ = 0;
     std::uint64_t cachedSelectionOverlaySceneRevision_ = 0;
     std::uint64_t cachedSelectionOverlayAssetRevision_ = 0;
+    std::uint64_t cachedSelectionOverlayToolSignature_ = 0;
     ModelingSelectionMode cachedSelectionOverlayMode_ = ModelingSelectionMode::Object;
     Vec3 gizmoStartWorldPivot_ = {};
     Vec2 gizmoStartMouse_ = {};

@@ -26,6 +26,13 @@ namespace quader {
 
 class SceneRenderBridge {
 public:
+    struct PreviewMesh {
+        EntityId sourceEntity = InvalidEntityId;
+        AssetId material = InvalidAssetId;
+        MeshAsset mesh;
+        Mat4 transform;
+    };
+
     ~SceneRenderBridge();
 
     void initialize(filament::Engine& engine,
@@ -37,6 +44,7 @@ public:
             std::filesystem::path resourceRoot);
     void shutdown();
     void sync(const SceneDocument& document, const AssetRegistry& assets);
+    void setToolPreviewMeshes(std::vector<PreviewMesh> meshes, const AssetRegistry& assets);
     void setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera);
     void setOverlayFrame(std::size_t viewportIndex,
             std::uint8_t layerMask,
@@ -77,7 +85,7 @@ private:
         ViewportOverlayCamera camera;
         std::uint64_t cameraSignature = 0;
         std::uint8_t layerMask = 0;
-        std::array<OverlayProxyGroup, 15> proxyGroups;
+        std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxyGroups;
     };
 
     struct LightProxy {
@@ -88,6 +96,7 @@ private:
     void rebuild(const SceneDocument& document, const AssetRegistry& assets);
     void rebuildOverlayProxies(OverlaySlot& slot);
     void destroyOverlaySlot(OverlaySlot& slot);
+    void destroyToolPreviewMeshes();
     bool renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const;
     MeshProxy createMeshProxy(EntityId entityId,
             AssetId meshId,
@@ -120,6 +129,8 @@ private:
     std::uint64_t syncedAssetRevision_ = 0;
     bool hasSynced_ = false;
     std::unordered_map<EntityId, MeshProxy> meshProxies_;
+    std::vector<MeshProxy> toolPreviewMeshProxies_;
+    std::uint64_t toolPreviewMeshSignature_ = 0;
     std::array<OverlaySlot, kMaxViewportOverlaySlots> overlaySlots_;
     std::unordered_map<EntityId, LightProxy> lightProxies_;
     struct TextureCacheKey {

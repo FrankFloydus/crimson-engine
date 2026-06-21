@@ -25,7 +25,7 @@ const qhc::HostActionDescriptor& require_action(std::string_view id)
 TEST_CASE("host contract action catalog links panel actions to descriptor-only operations or tools", "[host-contract]")
 {
 	const std::span<const qhc::HostActionDescriptor> actions = qhc::action_catalog();
-	REQUIRE(actions.size() == 45U);
+	REQUIRE(actions.size() == 46U);
 
 	for (const qhc::HostActionDescriptor& action : actions) {
 		CHECK_FALSE(action.id.empty());
@@ -57,6 +57,7 @@ TEST_CASE("host contract action catalog preserves operation panel visibility and
 	CHECK_FALSE(require_action("insert_edge_loop_tool").show_in_operations_panel);
 	CHECK_FALSE(require_action("knife_tool").show_in_operations_panel);
 	CHECK_FALSE(require_action("cut_tool").show_in_operations_panel);
+	CHECK_FALSE(require_action("mirror_tool").show_in_operations_panel);
 	CHECK_FALSE(require_action("poly_tool").show_in_operations_panel);
 	CHECK_FALSE(require_action("apply_active_material").show_in_operations_panel);
 	CHECK(require_action("bevel_edges").show_in_operations_panel);
@@ -94,6 +95,12 @@ TEST_CASE("host contract action catalog describes selection requirements", "[hos
 	CHECK(apply_material.availability.selection_mode == qhc::HostSelectionMode::face);
 	CHECK(apply_material.availability.minimum_selected_faces == 1U);
 	CHECK_FALSE(apply_material.show_in_operations_panel);
+
+	const qhc::HostActionDescriptor& mirror_tool = require_action("mirror_tool");
+	CHECK(mirror_tool.kind == qhc::HostActionKind::tool);
+	CHECK(same_text(mirror_tool.tool_id, "mirror"));
+	CHECK(mirror_tool.availability.selection_mode == qhc::HostSelectionMode::object);
+	CHECK(mirror_tool.availability.minimum_selected_objects == 1U);
 }
 
 TEST_CASE("host contract action ids disambiguate shared labels and shared SDK operations", "[host-contract]")

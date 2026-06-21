@@ -1136,7 +1136,7 @@ public:
 	CommandResult inset_selected_faces(float amount);
 	CommandResult insert_edge_loop(float factor);
 	CommandResult insert_edge_loop(int object_id, quader_poly::Edge edge, float factor);
-	bool set_insert_edge_loop_preview_from_pick(InsertEdgeLoopToolState& state, SelectionHoverState& hover, const quader_poly::Ray& ray, double grid_size, bool snap_enabled, bool dragging) const;
+	bool set_insert_edge_loop_preview_from_pick(InsertEdgeLoopToolState& state, SelectionHoverState& hover, const quader_poly::Ray& ray, double grid_size, quader_poly::PickOptions pick_options, bool snap_enabled, bool dragging) const;
 	bool update_insert_edge_loop_drag_factor(InsertEdgeLoopToolState& state, SelectionHoverState& hover, const quader_poly::Ray& ray, double grid_size, bool snap_enabled) const;
 CommandResult commit_knife_tool(KnifeToolState& state);
 CommandResult commit_cut_tool(CutToolState& state);

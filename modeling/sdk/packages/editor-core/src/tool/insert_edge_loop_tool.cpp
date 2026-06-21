@@ -237,12 +237,12 @@ bool EditorSession::set_insert_edge_loop_preview_from_pick(
 		SelectionHoverState& hover,
 		const quader_poly::Ray& ray,
 		double grid_size,
+		quader_poly::PickOptions pick_options,
 		bool snap_enabled,
 		bool dragging) const
 {
-	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::edge;
-	const std::optional<PickHitRecord> hit = pick_nearest({ ray, options });
+	pick_options.mode = quader_poly::SelectionMode::edge;
+	const std::optional<PickHitRecord> hit = pick_nearest({ ray, pick_options });
 	if (!hit.has_value() || hit->kind != quader_poly::ElementKind::edge) {
 		if (update_insert_edge_loop_locked_seed(state, state_.objects, hover, ray, grid_size, snap_enabled, dragging)) {
 			return true;

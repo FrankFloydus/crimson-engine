@@ -429,6 +429,11 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
 }
 
 bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result) {
+    const bool modalToolGestureKeyActive =
+            state_.activeTool == ViewportTool::Knife ||
+            state_.activeTool == ViewportTool::Cut ||
+            state_.activeTool == ViewportTool::Mirror ||
+            state_.activeTool == ViewportTool::Poly;
     switch (shortcut.kind) {
     case ViewportShortcutKind::ActivateTool:
         if (!viewportToolHasNativeController(shortcut.tool)) {
@@ -442,6 +447,9 @@ bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, Viewp
         state_.selectionMode = shortcut.selectionMode;
         return true;
     case ViewportShortcutKind::FocusDocument:
+        if (modalToolGestureKeyActive) {
+            return false;
+        }
         result.focusDocumentRequested = true;
         result.cameraChanged = true;
         return true;
@@ -450,6 +458,9 @@ bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, Viewp
         result.cameraChanged = true;
         return true;
     case ViewportShortcutKind::ToggleMaximized:
+        if (modalToolGestureKeyActive) {
+            return false;
+        }
         state_.maximized = !state_.maximized;
         return true;
     case ViewportShortcutKind::SetGridPreset:

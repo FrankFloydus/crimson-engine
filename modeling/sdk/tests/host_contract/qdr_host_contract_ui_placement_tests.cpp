@@ -40,9 +40,10 @@ bool is_known_panel(std::string_view id)
 		qhc::find_operation_panel_descriptor(id) != nullptr;
 }
 
+template <std::size_t N>
 void check_toolbar_order(
 		std::string_view surface_id,
-		const std::array<std::string_view, 6>& expected)
+		const std::array<std::string_view, N>& expected)
 {
 	std::size_t index = 0;
 	for (const qhc::HostUiPlacementDescriptor& placement : qhc::ui_placement_catalog()) {
@@ -129,7 +130,7 @@ TEST_CASE("host contract UI groups and shell targets are discoverable", "[host-c
 TEST_CASE("host contract UI placements resolve to known descriptor-only targets", "[host-contract]")
 {
 	const std::span<const qhc::HostUiPlacementDescriptor> placements = qhc::ui_placement_catalog();
-	REQUIRE(placements.size() == 30U);
+	REQUIRE(placements.size() == 31U);
 
 	for (const qhc::HostUiPlacementDescriptor& placement : placements) {
 		CHECK_FALSE(placement.id.empty());
@@ -198,12 +199,13 @@ TEST_CASE("host contract main menu placement preserves editor shell groups", "[h
 
 TEST_CASE("host contract toolbar placement mirrors current Unity chrome order", "[host-contract]")
 {
-	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 6> {{
+	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 7> {{
 		"move",
 		"rotate",
 		"scale",
 		"knife",
 		"cut",
+		"mirror",
 		"poly",
 	}});
 

@@ -27,7 +27,7 @@ struct ViewportOverlayLayerPolicy {
     bool suppressedByTransientHover = false;
 };
 
-inline constexpr std::array<ViewportOverlayLayer, 15> kViewportOverlayDrawOrder{{
+inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kViewportOverlayDrawOrder{{
         ViewportOverlayLayer::SelectedVisibleFace,
         ViewportOverlayLayer::SelectedFaceMask,
         ViewportOverlayLayer::SourceWire,
@@ -43,6 +43,12 @@ inline constexpr std::array<ViewportOverlayLayer, 15> kViewportOverlayDrawOrder{
         ViewportOverlayLayer::SelectedVertex,
         ViewportOverlayLayer::HoverVertex,
         ViewportOverlayLayer::SnapTargetVertex,
+        ViewportOverlayLayer::ToolPlane,
+        ViewportOverlayLayer::ToolPreviewFill,
+        ViewportOverlayLayer::ToolPlaneLine,
+        ViewportOverlayLayer::ToolPreviewLine,
+        ViewportOverlayLayer::ToolPreviewSeam,
+        ViewportOverlayLayer::ToolHandle,
 }};
 
 inline constexpr std::uint32_t kOverlaySelectionFaceColor = 0x081facffU;
@@ -58,6 +64,15 @@ inline constexpr std::uint32_t kOverlayVertexColor = 0xffffe66bU;
 inline constexpr std::uint32_t kOverlaySelectedVertexColor = 0xff1fadffU;
 inline constexpr std::uint32_t kOverlayHoverVertexColor = 0xff38ff00U;
 inline constexpr std::uint32_t kOverlayVertexOutlineColor = 0xe6000000U;
+inline constexpr std::uint32_t kOverlayToolPlaneColor = rgba8(209, 219, 224, 46);
+inline constexpr std::uint32_t kOverlayToolPlaneLineColor = rgba8(235, 245, 255, 148);
+inline constexpr std::uint32_t kOverlayToolHandleColor = rgba8(0, 245, 255, 255);
+inline constexpr std::uint32_t kOverlayCutPreviewKeepFillColor = rgba8(13, 184, 242, 41);
+inline constexpr std::uint32_t kOverlayCutPreviewKeepBothDiscardFillColor = rgba8(255, 184, 46, 41);
+inline constexpr std::uint32_t kOverlayCutPreviewDiscardFillColor = rgba8(255, 31, 15, 66);
+inline constexpr std::uint32_t kOverlayCutPreviewKeepBothOutlineColor = rgba8(255, 184, 46, 230);
+inline constexpr std::uint32_t kOverlayCutPreviewDiscardOutlineColor = rgba8(255, 15, 5, 240);
+inline constexpr std::uint32_t kOverlayCutPreviewSeamColor = rgba8(255, 122, 5, 255);
 
 inline constexpr float kOverlayLineDepthBias = 0.02f;
 inline constexpr float kOverlayPointDepthBias = 0.01f;
@@ -84,21 +99,35 @@ inline constexpr bool viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverl
             layer == ViewportOverlayLayer::HoverFace;
 }
 
+inline constexpr bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
+    return layer == ViewportOverlayLayer::ToolPlane ||
+            layer == ViewportOverlayLayer::ToolPreviewFill;
+}
+
 inline constexpr bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SelectedFaceEdge ||
             layer == ViewportOverlayLayer::SelectedEdge ||
-            layer == ViewportOverlayLayer::DiagnosticEdge;
+            layer == ViewportOverlayLayer::DiagnosticEdge ||
+            layer == ViewportOverlayLayer::ToolPlaneLine ||
+            layer == ViewportOverlayLayer::ToolPreviewLine ||
+            layer == ViewportOverlayLayer::ToolPreviewSeam ||
+            layer == ViewportOverlayLayer::ToolHandle;
 }
 
 inline constexpr bool viewportOverlayPointDrawsOnTop(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SelectedVertex ||
             layer == ViewportOverlayLayer::HoverVertex ||
-            layer == ViewportOverlayLayer::SnapTargetVertex;
+            layer == ViewportOverlayLayer::SnapTargetVertex ||
+            layer == ViewportOverlayLayer::ToolHandle;
 }
 
 inline constexpr ViewportOverlayDepthMode viewportOverlayDepthMode(
         ViewportOverlayLayer layer,
         ViewportOverlayGeometryKind kind) {
+    if (layer == ViewportOverlayLayer::ToolPlane ||
+            layer == ViewportOverlayLayer::ToolPreviewFill) {
+        return ViewportOverlayDepthMode::DrawOnTop;
+    }
     if (kind == ViewportOverlayGeometryKind::Lines && viewportOverlayLineDrawsOnTop(layer)) {
         return ViewportOverlayDepthMode::DrawOnTop;
     }
@@ -169,6 +198,14 @@ inline constexpr float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer
         return 1.0f;
     case ViewportOverlayLayer::DiagnosticEdge:
         return 4.0f;
+    case ViewportOverlayLayer::ToolPlaneLine:
+        return 1.0f;
+    case ViewportOverlayLayer::ToolPreviewLine:
+        return 1.15f;
+    case ViewportOverlayLayer::ToolPreviewSeam:
+        return 2.25f;
+    case ViewportOverlayLayer::ToolHandle:
+        return 2.0f;
     default:
         return 1.0f;
     }
@@ -253,6 +290,16 @@ inline constexpr std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer laye
         return viewportOverlayIsNativeRemoveColor(originalRgba) ? kOverlayRemoveWireColor : kOverlayHoverVertexColor;
     case ViewportOverlayLayer::SnapTargetVertex:
         return originalRgba;
+    case ViewportOverlayLayer::ToolPlane:
+        return kOverlayToolPlaneColor;
+    case ViewportOverlayLayer::ToolPlaneLine:
+        return kOverlayToolPlaneLineColor;
+    case ViewportOverlayLayer::ToolPreviewFill:
+    case ViewportOverlayLayer::ToolPreviewLine:
+    case ViewportOverlayLayer::ToolPreviewSeam:
+        return originalRgba;
+    case ViewportOverlayLayer::ToolHandle:
+        return kOverlayToolHandleColor;
     }
     return originalRgba;
 }

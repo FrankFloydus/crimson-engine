@@ -50,6 +50,7 @@ TEST_CASE("host contract tool catalog exposes host glue hints without executable
 	CHECK(same_text(require_tool("insert_edge_loop").primary_shortcut, "Shift+R"));
 	CHECK(same_text(require_tool("knife").primary_shortcut, "C"));
 	CHECK(same_text(require_tool("cut").primary_shortcut, "Shift+C"));
+	CHECK(same_text(require_tool("mirror").primary_shortcut, ""));
 	CHECK(same_text(require_tool("poly").primary_shortcut, "P"));
 
 	CHECK(require_tool("move").transform_tool);
@@ -63,6 +64,7 @@ TEST_CASE("host contract tool catalog exposes host glue hints without executable
 	CHECK(require_tool("insert_edge_loop").modal_tool);
 	CHECK(require_tool("knife").modal_tool);
 	CHECK(require_tool("cut").modal_tool);
+	CHECK(require_tool("mirror").modal_tool);
 	CHECK(require_tool("poly").modal_tool);
 	CHECK_FALSE(require_tool("move").modal_tool);
 }

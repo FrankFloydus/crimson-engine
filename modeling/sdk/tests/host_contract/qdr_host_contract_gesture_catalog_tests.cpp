@@ -130,11 +130,12 @@ TEST_CASE("host contract gesture catalog preserves viewport routing priority", "
 	CHECK(active_tools.requires_active_tool);
 	CHECK(active_tools.consumes_pointer_when_active);
 	CHECK(active_tools.suppresses_gizmo_and_measurements);
-	check_tool_order(active_tools, std::array<std::string_view, 5> {{
+	check_tool_order(active_tools, std::array<std::string_view, 6> {{
 		"box",
 		"insert_edge_loop",
 		"knife",
 		"cut",
+		"mirror",
 		"poly",
 	}});
 }

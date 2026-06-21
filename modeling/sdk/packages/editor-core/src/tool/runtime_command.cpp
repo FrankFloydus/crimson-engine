@@ -394,10 +394,15 @@ CommandResult update_insert_edge_loop_hover(
 {
 	const EditorRuntimeToolActivationResult activation =
 		runtime.set_active_tool(session, ViewportInteractionTool::insert_edge_loop);
+	if (runtime.insert_edge_loop_state().dragging) {
+		return { true, activation.applied || activation.transform_preview_cancelled, "" };
+	}
 	const bool preview_changed = runtime.set_insert_edge_loop_preview_from_pick(
 			session,
 			settings.ray,
 			settings.grid_size,
+			settings.vertex_radius,
+			settings.edge_radius,
 			settings.snap_enabled,
 			false);
 	return { true, activation.applied || activation.transform_preview_cancelled || preview_changed, "" };
@@ -414,6 +419,8 @@ CommandResult begin_insert_edge_loop_drag(
 			session,
 			settings.ray,
 			settings.grid_size,
+			settings.vertex_radius,
+			settings.edge_radius,
 			settings.snap_enabled,
 			true);
 	const bool dragging_before = runtime.status().insert_edge_loop_dragging;

@@ -67,6 +67,37 @@ ModelingRay testViewportForwardRay(float x = 0.0f) {
     };
 }
 
+ModelingToolRayEvent testInsertEdgeLoopEvent(float edgeY = 0.0f, float edgeX = 1.0f) {
+    return {
+            .screenPosition = {},
+            .ray = {
+                    .origin = {edgeX, edgeY, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .camera = testOrthographicViewportCamera(),
+            .gridSize = 1.0,
+            .vertexRadius = 0.3,
+            .edgeRadius = 0.2,
+            .snapEnabled = false,
+    };
+}
+
+ModelingToolRayEvent testDrawnPlaneEvent(float x, bool dragging = false) {
+    ModelingViewportCamera camera = testOrthographicViewportCamera();
+    camera.orthographic = false;
+    return {
+            .screenPosition = {},
+            .ray = {
+                    .origin = {x, 2.0f, 0.0f},
+                    .direction = {0.0f, -1.0f, 0.0f},
+            },
+            .camera = camera,
+            .gridSize = 0.5,
+            .snapEnabled = true,
+            .dragging = dragging,
+    };
+}
+
 ModelingTransformDragBeginRequest testXMoveDragBeginRequest(
         Vec3 pivot = {},
         ModelingTransformOperation operation = ModelingTransformOperation::Transform,
@@ -365,7 +396,7 @@ TEST(OverlayMaterialTests, LineAndPointMaterialsMirrorUnityScreenSpaceOverlayExp
 }
 
 TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
-    const std::array<ViewportOverlayLayer, 15> expected{{
+    const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
             ViewportOverlayLayer::SelectedVisibleFace,
             ViewportOverlayLayer::SelectedFaceMask,
             ViewportOverlayLayer::SourceWire,
@@ -381,6 +412,12 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
             ViewportOverlayLayer::SelectedVertex,
             ViewportOverlayLayer::HoverVertex,
             ViewportOverlayLayer::SnapTargetVertex,
+            ViewportOverlayLayer::ToolPlane,
+            ViewportOverlayLayer::ToolPreviewFill,
+            ViewportOverlayLayer::ToolPlaneLine,
+            ViewportOverlayLayer::ToolPreviewLine,
+            ViewportOverlayLayer::ToolPreviewSeam,
+            ViewportOverlayLayer::ToolHandle,
     }};
 
     EXPECT_EQ(kViewportOverlayDrawOrder, expected);
@@ -406,6 +443,12 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
             ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::HoverVertex, ViewportOverlayGeometryKind::Points),
             ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::ToolPlane, ViewportOverlayGeometryKind::Triangles),
+            ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::ToolPlaneLine, ViewportOverlayGeometryKind::Lines),
+            ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::ToolHandle, ViewportOverlayGeometryKind::Points),
+            ViewportOverlayDepthMode::DrawOnTop);
 
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::SelectedVisibleFace));
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::SelectedXrayFace));
@@ -426,14 +469,20 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SourceWire, rgba8(255, 255, 255)), kOverlaySourceWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverFace, kOverlayRemoveWireColor), kOverlayRemoveFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverEdge, kOverlayRemoveFaceColor), kOverlayRemoveWireColor);
+    EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolPlane, rgba8(255, 255, 255)), kOverlayToolPlaneColor);
+    EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolPlaneLine, rgba8(255, 255, 255)), kOverlayToolPlaneLineColor);
+    EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolHandle, rgba8(255, 255, 255)), kOverlayToolHandleColor);
 
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SourceWire, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SelectedEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::OpenEdge, 2.0f), 2.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::ToolPlaneLine, 1.0f), 1.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::ToolHandle, 2.0f), 2.0f);
     EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::UnselectedVertex, 8.0f), 8.0f);
     EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::SelectedVertex, 9.0f), 9.0f);
     EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::HoverVertex, 8.0f), 8.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::ToolHandle, 8.0f), 8.0f);
     EXPECT_TRUE(viewportOverlayPointHasOutline(ViewportOverlayLayer::SelectedVertex));
     EXPECT_FLOAT_EQ(viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer::SelectedVertex), 1.0f);
     EXPECT_TRUE(viewportOverlayPointIsOutlineOnly(ViewportOverlayLayer::SnapTargetVertex));
@@ -460,6 +509,12 @@ TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
     EXPECT_NE(source.find("DepthFunc::E"), std::string::npos);
     EXPECT_NE(source.find("CullingMode::BACK"), std::string::npos);
     EXPECT_NE(source.find("TransparencyMode::TWO_PASSES_ONE_SIDE"), std::string::npos);
+    EXPECT_NE(source.find("viewportOverlayTriangleIsTwoSided(layer)"), std::string::npos);
+    EXPECT_NE(source.find("CullingMode::NONE"), std::string::npos);
+    EXPECT_NE(source.find("TransparencyMode::TWO_PASSES_TWO_SIDES"), std::string::npos);
+    EXPECT_NE(source.find("setToolPreviewMeshes(std::vector<PreviewMesh> meshes"), std::string::npos);
+    EXPECT_NE(source.find("toolPreviewMeshProxies_"), std::string::npos);
+    EXPECT_NE(source.find("destroyToolPreviewMeshes()"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, UsesUnityStyleQuadMaterialsForSelectionLineAndPointOverlay) {
@@ -751,9 +806,12 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(source.find("modeling.contextActions(query)"), std::string::npos);
     EXPECT_NE(source.find("ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)"), std::string::npos);
     EXPECT_NE(source.find("modeling.executeContextAction(action.actionId)"), std::string::npos);
+    EXPECT_NE(source.find("action.previewKind != ModelingActionPreviewKind::None ?"), std::string::npos);
+    EXPECT_EQ(source.find("action.operationId == \"bridge\""), std::string::npos);
+    EXPECT_EQ(source.find("uiContext.requestToolSettingsPanel()"), std::string::npos);
     EXPECT_NE(source.find("action.disabledReason"), std::string::npos);
-    EXPECT_NE(source.find("boxToolOwnsViewport()"), std::string::npos);
-    EXPECT_NE(source.find(".modalToolOwnsViewport = boxToolOwnsViewport()"), std::string::npos);
+    EXPECT_NE(source.find("modalToolOwnsViewport()"), std::string::npos);
+    EXPECT_NE(source.find(".modalToolOwnsViewport = modalToolOwnsViewport()"), std::string::npos);
     EXPECT_NE(source.find("modeling.pickSelect(ModelingPickSelectRequest"), std::string::npos);
     EXPECT_NE(source.find("pendingContextMenuRequest.targetHit = summary.hasSelection"), std::string::npos);
     EXPECT_NE(source.find(".accumulatedDragDelta = contextMenuRightDragDelta_"), std::string::npos);
@@ -767,6 +825,57 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(source.find("flyCursorCaptureScreen_.x - mainViewport->Pos.x"), std::string::npos);
     EXPECT_EQ(source.find("contextMenuRightNavigationMoved"), std::string::npos);
     EXPECT_EQ(source.find("Button(operation.label"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    std::ifstream headerFile(headerPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(header.find("bool insertEdgeLoopDragActive_ = false"), std::string::npos);
+    EXPECT_NE(source.find("const bool insertEdgeLoopDragRelease"), std::string::npos);
+    EXPECT_NE(source.find("!insertEdgeLoopDragRelease"), std::string::npos);
+    EXPECT_NE(source.find("modeling.beginInsertEdgeLoopDrag(makeModelingToolEvent(true))"), std::string::npos);
+    EXPECT_NE(source.find("insertEdgeLoopDragActive_ = command.ok && modeling.toolStatus().insertEdgeLoopDragging"), std::string::npos);
+    EXPECT_NE(source.find("const bool insertEdgeLoopDragging"), std::string::npos);
+    EXPECT_NE(source.find("!leftReleased"), std::string::npos);
+    EXPECT_NE(source.find("!insertEdgeLoopDragging"), std::string::npos);
+    EXPECT_NE(source.find("leftDown &&"), std::string::npos);
+    EXPECT_NE(source.find("leftReleased && insertEdgeLoopDragging"), std::string::npos);
+    EXPECT_NE(source.find("return modeling.commitInsertEdgeLoopDrag()"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const Vec2 leftClickLocal"), std::string::npos);
+    EXPECT_NE(source.find("makeModelingToolEventAt(leftClickLocal)"), std::string::npos);
+    EXPECT_NE(source.find("makeModelingToolEventAt(leftClickLocal, true)"), std::string::npos);
+    EXPECT_NE(source.find("modeling.updateCutHover(makeModelingToolEvent(true))"), std::string::npos);
+    EXPECT_NE(source.find("modeling.updateMirrorHover(makeModelingToolEvent(true))"), std::string::npos);
+    EXPECT_EQ(source.find("afterClick.cutDraggingNewPoint"), std::string::npos);
+    EXPECT_EQ(source.find("afterClick.mirrorDraggingNewPoint"), std::string::npos);
 }
 
 TEST(ViewportContextMenuPolicyTests, OpensForRightClickReleaseInsideViewportWithActions) {
@@ -1069,6 +1178,10 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(source.find("selectionOverlayCacheContentRevision_ == contentRevision"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCacheSelectionRevision_ == selectionRevision"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCacheSceneRevision_ == sceneRevision"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCacheToolSignature_ == toolSignature"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayToolSignature()"), std::string::npos);
+    EXPECT_NE(source.find("runtime_.cut_state()"), std::string::npos);
+    EXPECT_NE(source.find("runtime_.mirror_state()"), std::string::npos);
     EXPECT_NE(source.find("hoverMatches(selectionOverlayCacheHover_, hover)"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCacheFrame_ = fromSdk(selectionOverlayCurrentFrame(hover)"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayBaseFrame()"), std::string::npos);
@@ -1103,6 +1216,8 @@ TEST(ViewportPanelTests, SelectionOverlayCacheKeyIncludesSelectionMode) {
 
     EXPECT_NE(source.find("cachedSelectionOverlayMode_ != overlaySummary.mode"), std::string::npos);
     EXPECT_NE(source.find("cachedSelectionOverlayMode_ = overlaySummary.mode"), std::string::npos);
+    EXPECT_NE(source.find("toolOverlaySignature(modeling)"), std::string::npos);
+    EXPECT_NE(source.find("cachedSelectionOverlayToolSignature_"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
@@ -1433,6 +1548,9 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
     EXPECT_NE(uiSystemSource.find("ImGui::Begin(\"Settings\", &settingsPanelOpen_, ImGuiWindowFlags_NoDocking)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::Begin(\"Tool Settings\", &toolSettingsPanelOpen_, ImGuiWindowFlags_NoDocking)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::SetNextWindowViewport(viewport->ID)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::SetNextWindowPos("), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
@@ -1485,6 +1603,7 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     EXPECT_NE(viewportPanelSource.find("uiContext.requestPanelFocus(UIPanelId::Viewport)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("globalEscCancelRequested"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("mouseClickedOutsideViewport"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("!io.WantCaptureMouse"), std::string::npos);
     EXPECT_EQ(viewportPanelSource.find("flySpeedIndicatorSeconds_"), std::string::npos);
 }
 
@@ -1515,11 +1634,72 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
 
     EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Tool Settings\")"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolSettingsPanelOpen_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("drawSettingsPanel"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("drawToolSettingsPanel"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modeling.toolSettingsTarget()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modeling.toolPreviewMeshes()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("switch (target.kind)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modeling.setInteractionSettings(settings)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolSettingsPanelOpen_ = false;"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolSettingsPanelOpen_ = result.ok ? false : modeling.toolSettingsTarget().active"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::RadioButton(\"Discard Left\""), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::RadioButton(\"Discard Right\""), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::RadioButton(\"Keep Both\""), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modeling.commitActiveOperationPreview()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modeling.cancelActiveOperationPreview()"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("No active tool settings."), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("ImGui::Combo(\"Keep Mode\""), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("ImGui::CollapsingHeader(\"Bridge\")"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("ImGui::CollapsingHeader(\"Edge Bevel\""), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("ImGui::CollapsingHeader(\"Merge by Distance\""), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportSettingsSections()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_AlphaBar"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_NoInputs"), std::string::npos);
+
+    const std::filesystem::path uiContextPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIContext.h";
+    std::ifstream uiContextFile(uiContextPath);
+    ASSERT_TRUE(uiContextFile.is_open()) << uiContextPath.string();
+
+    const std::string uiContextSource{
+            std::istreambuf_iterator<char>(uiContextFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_EQ(uiContextSource.find("toolSettingsPanelOpenRequested"), std::string::npos);
+    EXPECT_EQ(uiContextSource.find("requestToolSettingsPanel"), std::string::npos);
+}
+
+TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
+    const std::filesystem::path uiSystemPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+    std::ifstream uiSystemFile(uiSystemPath);
+    ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+
+    const std::string uiSystemSource{
+            std::istreambuf_iterator<char>(uiSystemFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Tools\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("activateToolFromMenu(tool, modeling)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Insert Edge Loop\", \"Shift+R\", ViewportTool::InsertEdgeLoop)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Knife\", \"C\", ViewportTool::Knife)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Cut\", \"Shift+C\", ViewportTool::Cut)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Poly\", \"P\", ViewportTool::Poly)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Mirror\", nullptr, ViewportTool::Mirror)"), std::string::npos);
+
+    const std::filesystem::path viewportPanelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream viewportPanelFile(viewportPanelPath);
+    ASSERT_TRUE(viewportPanelFile.is_open()) << viewportPanelPath.string();
+
+    const std::string viewportPanelSource{
+            std::istreambuf_iterator<char>(viewportPanelFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(viewportPanelSource.find("ViewportPanel::activateToolFromMenu"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("modeling.activateViewportTool(toModelingViewportTool(tool))"), std::string::npos);
 }
 
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
@@ -2388,7 +2568,7 @@ TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
     EXPECT_EQ(router.state().activeTool, ViewportTool::Scale);
 }
 
-TEST(ViewportInputRouterTests, UnimplementedModalToolHotkeysDoNotEnterInertModes) {
+TEST(ViewportInputRouterTests, ModalToolHotkeysActivateNativeControllers) {
     ViewportInputRouter router;
     ViewportCameraController camera;
     ViewportInputFrame input;
@@ -2398,24 +2578,24 @@ TEST(ViewportInputRouterTests, UnimplementedModalToolHotkeysDoNotEnterInertModes
     input.modifiers.shift = true;
     input.pressedKeys = {ViewportKey::R};
     ViewportInputResult result = router.handleFrame(input, camera);
-    EXPECT_FALSE(result.shortcutHandled);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::InsertEdgeLoop);
 
     input.pressedKeys = {ViewportKey::C};
     result = router.handleFrame(input, camera);
-    EXPECT_FALSE(result.shortcutHandled);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Cut);
 
     input.modifiers.shift = false;
     input.pressedKeys = {ViewportKey::C};
     result = router.handleFrame(input, camera);
-    EXPECT_FALSE(result.shortcutHandled);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Knife);
 
     input.pressedKeys = {ViewportKey::P};
     result = router.handleFrame(input, camera);
-    EXPECT_FALSE(result.shortcutHandled);
-    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Poly);
 }
 
 TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
@@ -2563,10 +2743,36 @@ TEST(ViewportInputRouterTests, ToolActivationSupportTracksNativeControllers) {
     EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Rotate));
     EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Scale));
     EXPECT_EQ(viewportToolHasNativeController(ViewportTool::Box), viewportToolHasHostContract(ViewportTool::Box));
-    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::InsertEdgeLoop));
-    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::Knife));
-    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::Cut));
-    EXPECT_FALSE(viewportToolHasNativeController(ViewportTool::Poly));
+    EXPECT_EQ(viewportToolHasNativeController(ViewportTool::InsertEdgeLoop), viewportToolHasHostContract(ViewportTool::InsertEdgeLoop));
+    EXPECT_EQ(viewportToolHasNativeController(ViewportTool::Knife), viewportToolHasHostContract(ViewportTool::Knife));
+    EXPECT_EQ(viewportToolHasNativeController(ViewportTool::Cut), viewportToolHasHostContract(ViewportTool::Cut));
+    EXPECT_EQ(viewportToolHasNativeController(ViewportTool::Poly), viewportToolHasHostContract(ViewportTool::Poly));
+    EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Mirror));
+}
+
+TEST(ViewportInputRouterTests, ModalToolGestureKeysAreNotConsumedByViewShortcuts) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+
+    router.setActiveTool(ViewportTool::Cut);
+    input.pressedKeys = {ViewportKey::F};
+    ViewportInputResult result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_FALSE(result.focusDocumentRequested);
+
+    input.pressedKeys = {ViewportKey::Space};
+    result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_FALSE(router.state().maximized);
+
+    router.setActiveTool(ViewportTool::Mirror);
+    input.pressedKeys = {ViewportKey::Space};
+    result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_FALSE(router.state().maximized);
 }
 
 TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
@@ -3648,6 +3854,16 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeEdgePanelAndDisableInsuffi
     EXPECT_EQ(edgePanel->selectionModeId, "edge");
     EXPECT_EQ(edgePanel->visibility, ModelingActionVisibility::Enabled);
 
+    const ModelingActionItem* bevel = findActionItem(*edgePanel, "bevel_edges");
+    ASSERT_NE(bevel, nullptr);
+    EXPECT_EQ(bevel->operationId, "edge_bevel");
+    EXPECT_EQ(bevel->previewKind, ModelingActionPreviewKind::EdgeBevel);
+
+    const ModelingActionItem* interpolatedBridge = findActionItem(*edgePanel, "interpolated_bridge_edges");
+    ASSERT_NE(interpolatedBridge, nullptr);
+    EXPECT_EQ(interpolatedBridge->operationId, "bridge");
+    EXPECT_EQ(interpolatedBridge->previewKind, ModelingActionPreviewKind::Bridge);
+
     const ModelingActionItem* split = findActionItem(*edgePanel, "split_edges");
     ASSERT_NE(split, nullptr);
     EXPECT_EQ(split->operationId, "split_edges");
@@ -3668,6 +3884,65 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeEdgePanelAndDisableInsuffi
     EXPECT_EQ(hiddenObjectPanel->visibility, ModelingActionVisibility::Hidden);
 #else
     EXPECT_TRUE(service.contextActionSet().panels.empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndLiveUpdate) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Bevel Preview Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
+    ASSERT_TRUE(service.selectAll().ok);
+
+    const ModelingCommandResult begin = service.executeContextAction("bevel_edges");
+    ASSERT_TRUE(begin.ok) << begin.message;
+
+    ModelingToolSettingsTarget target = service.toolSettingsTarget();
+    EXPECT_TRUE(target.active);
+    EXPECT_TRUE(target.operationPreviewActive);
+    EXPECT_EQ(target.kind, ModelingToolSettingsTargetKind::EdgeBevel);
+    EXPECT_EQ(target.actionId, "bevel_edges");
+    EXPECT_EQ(target.operationId, "edge_bevel");
+    EXPECT_EQ(target.label, "Bevel Edges");
+
+    const std::optional<MeshAsset> previewBefore = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(previewBefore.has_value());
+    auto meshPositionFingerprint = [](const MeshAsset& mesh) {
+        double value = 0.0;
+        for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
+            const Vec3& position = mesh.vertices[index].position;
+            const double weight = static_cast<double>(index + 1);
+            value += weight * (
+                    static_cast<double>(position.x * position.x) * 0.31 +
+                    static_cast<double>(position.y * position.y) * 0.53 +
+                    static_cast<double>(position.z * position.z) * 0.71);
+        }
+        return value;
+    };
+
+    ModelingInteractionSettings settings = service.interactionSettings();
+    settings.edgeBevelWidth = 0.25;
+    const ModelingCommandResult update = service.setInteractionSettings(settings);
+    EXPECT_TRUE(update.ok) << update.message;
+    EXPECT_TRUE(update.changed);
+
+    const std::optional<MeshAsset> previewAfter = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(previewAfter.has_value());
+    EXPECT_NE(meshPositionFingerprint(*previewAfter), meshPositionFingerprint(*previewBefore));
+
+    const ModelingCommandResult cancel = service.cancelActiveOperationPreview();
+    EXPECT_TRUE(cancel.ok) << cancel.message;
+    EXPECT_FALSE(service.toolSettingsTarget().active);
+#else
+    EXPECT_FALSE(service.toolSettingsTarget().active);
+    EXPECT_FALSE(service.cancelActiveOperationPreview().ok);
 #endif
 }
 
@@ -3712,6 +3987,11 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisa
     ASSERT_NE(bridge, nullptr);
     EXPECT_EQ(bridge->operationId, "bridge");
     EXPECT_EQ(bridge->visibility, ModelingActionVisibility::Disabled);
+
+    const ModelingActionItem* interpolatedBridge = findActionItem(*facePanel, "interpolated_bridge_faces");
+    ASSERT_NE(interpolatedBridge, nullptr);
+    EXPECT_EQ(interpolatedBridge->operationId, "bridge");
+    EXPECT_EQ(interpolatedBridge->previewKind, ModelingActionPreviewKind::Bridge);
 
     const ModelingCommandResult executed = service.executeContextAction("invert_faces");
     EXPECT_TRUE(executed.ok) << executed.message;
@@ -3934,6 +4214,496 @@ TEST(ModelingSessionServiceTests, CreatesBoxThroughSdkWhenAvailable) {
     EXPECT_FALSE(result.message.empty());
     EXPECT_EQ(assets.meshCount(), 0u);
     EXPECT_TRUE(scene.entities().empty());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Edge Loop Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    const std::optional<MeshAsset> before = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(before.has_value());
+
+    ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Edge);
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopActive);
+
+    command = service.beginInsertEdgeLoopDrag(testInsertEdgeLoopEvent());
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopDragging);
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopHasPreview);
+
+    command = service.commitInsertEdgeLoopDrag();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopActive);
+    EXPECT_FALSE(service.toolStatus().insertEdgeLoopDragging);
+    EXPECT_FALSE(service.toolStatus().insertEdgeLoopHasPreview);
+
+    const std::optional<MeshAsset> after = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(after.has_value());
+    EXPECT_GT(after->vertices.size(), before->vertices.size());
+    EXPECT_GT(after->indices.size(), before->indices.size());
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, InsertEdgeLoopCommitSurvivesReleaseFrameHover) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Release Hover Edge Loop Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    std::optional<MeshAsset> before = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(before.has_value());
+
+    ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop);
+    ASSERT_TRUE(command.ok) << command.message;
+    command = service.beginInsertEdgeLoopDrag(testInsertEdgeLoopEvent());
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_TRUE(service.toolStatus().insertEdgeLoopDragging);
+
+    command = service.updateInsertEdgeLoopHover(testInsertEdgeLoopEvent());
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopDragging);
+
+    command = service.commitInsertEdgeLoopDrag();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+
+    std::optional<MeshAsset> after = service.compileObjectMesh(box.object.sdkObjectId);
+    ASSERT_TRUE(after.has_value());
+    EXPECT_GT(after->vertices.size(), before->vertices.size());
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Near Edge Loop Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop);
+    ASSERT_TRUE(command.ok) << command.message;
+
+    ModelingToolRayEvent event = testInsertEdgeLoopEvent(0.0f, 0.86f);
+    event.edgeRadius = 0.2;
+    command = service.beginInsertEdgeLoopDrag(event);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopDragging);
+    EXPECT_TRUE(service.toolStatus().insertEdgeLoopHasPreview);
+
+    command = service.commitInsertEdgeLoopDrag();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, CutAndMirrorEmitUnityDrawnPlaneOverlay) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Plane Overlay Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    const AssetId previewMaterial = assets.addMaterial(makeDefaultQuaderMaterial("Mirror Preview Material"));
+    scene.setMaterial(box.object.entity, MaterialComponent{.material = previewMaterial});
+
+    auto expectDrawnPlaneOverlay = [&](ModelingViewportTool tool) {
+        ModelingCommandResult command = service.activateViewportTool(tool);
+        ASSERT_TRUE(command.ok) << command.message;
+        command = tool == ModelingViewportTool::Cut
+                ? service.clickCut(testDrawnPlaneEvent(0.0f))
+                : service.clickMirror(testDrawnPlaneEvent(0.0f));
+        ASSERT_TRUE(command.ok) << command.message;
+        command = tool == ModelingViewportTool::Cut
+                ? service.updateCutHover(testDrawnPlaneEvent(1.0f, false))
+                : service.updateMirrorHover(testDrawnPlaneEvent(1.0f, false));
+        ASSERT_TRUE(command.ok) << command.message;
+
+        const ViewportOverlayFrame hoverOnlyFrame = service.selectionOverlayFrame();
+        const auto hoverOnlyHandleLines = static_cast<std::size_t>(std::count_if(
+                hoverOnlyFrame.lines.begin(),
+                hoverOnlyFrame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::ToolHandle &&
+                            line.color == kOverlayToolHandleColor &&
+                            line.widthPixels == 2.0f;
+                }));
+        const auto hoverOnlyHandlePoints = static_cast<std::size_t>(std::count_if(
+                hoverOnlyFrame.points.begin(),
+                hoverOnlyFrame.points.end(),
+                [](const ViewportOverlayPoint& point) {
+                    return point.layer == ViewportOverlayLayer::ToolHandle &&
+                            point.color == kOverlayToolHandleColor &&
+                            point.sizePixels == 8.0f;
+                }));
+        const auto hoverOnlyPreviewFills = static_cast<std::size_t>(std::count_if(
+                hoverOnlyFrame.triangles.begin(),
+                hoverOnlyFrame.triangles.end(),
+                [](const ViewportOverlayTriangle& triangle) {
+                    return triangle.layer == ViewportOverlayLayer::ToolPreviewFill;
+                }));
+        const auto hoverOnlyPreviewLines = static_cast<std::size_t>(std::count_if(
+                hoverOnlyFrame.lines.begin(),
+                hoverOnlyFrame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::ToolPreviewLine ||
+                            line.layer == ViewportOverlayLayer::ToolPreviewSeam;
+                }));
+        EXPECT_EQ(hoverOnlyHandleLines, 1u);
+        EXPECT_EQ(hoverOnlyHandlePoints, 2u);
+        EXPECT_EQ(hoverOnlyPreviewFills, 0u);
+        EXPECT_EQ(hoverOnlyPreviewLines, 0u);
+
+        command = tool == ModelingViewportTool::Cut
+                ? service.updateCutHover(testDrawnPlaneEvent(1.0f, true))
+                : service.updateMirrorHover(testDrawnPlaneEvent(1.0f, true));
+        ASSERT_TRUE(command.ok) << command.message;
+
+        const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+        const auto toolPlanes = static_cast<std::size_t>(std::count_if(
+                frame.triangles.begin(),
+                frame.triangles.end(),
+                [](const ViewportOverlayTriangle& triangle) {
+                    return triangle.layer == ViewportOverlayLayer::ToolPlane &&
+                            triangle.color == kOverlayToolPlaneColor;
+                }));
+        const auto planeLines = static_cast<std::size_t>(std::count_if(
+                frame.lines.begin(),
+                frame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::ToolPlaneLine &&
+                            line.color == kOverlayToolPlaneLineColor &&
+                            line.widthPixels == 1.0f;
+                }));
+        const auto handleLines = static_cast<std::size_t>(std::count_if(
+                frame.lines.begin(),
+                frame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::ToolHandle &&
+                            line.color == kOverlayToolHandleColor &&
+                            line.widthPixels == 2.0f;
+                }));
+        const auto handlePoints = static_cast<std::size_t>(std::count_if(
+                frame.points.begin(),
+                frame.points.end(),
+                [](const ViewportOverlayPoint& point) {
+                    return point.layer == ViewportOverlayLayer::ToolHandle &&
+                            point.color == kOverlayToolHandleColor &&
+                            point.sizePixels == 8.0f;
+                }));
+        EXPECT_EQ(toolPlanes, 2u);
+        EXPECT_EQ(planeLines, 4u);
+        EXPECT_EQ(handleLines, 1u);
+        EXPECT_EQ(handlePoints, 2u);
+
+        command = tool == ModelingViewportTool::Cut
+                ? service.endCutDrag()
+                : service.endMirrorDrag();
+        ASSERT_TRUE(command.ok) << command.message;
+
+        const ViewportOverlayFrame previewFrame = service.selectionOverlayFrame();
+        const auto previewFills = static_cast<std::size_t>(std::count_if(
+                previewFrame.triangles.begin(),
+                previewFrame.triangles.end(),
+                [](const ViewportOverlayTriangle& triangle) {
+                    return triangle.layer == ViewportOverlayLayer::ToolPreviewFill;
+                }));
+        const auto previewLines = static_cast<std::size_t>(std::count_if(
+                previewFrame.lines.begin(),
+                previewFrame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::ToolPreviewLine ||
+                            line.layer == ViewportOverlayLayer::ToolPreviewSeam;
+                }));
+        if (tool == ModelingViewportTool::Cut) {
+            EXPECT_GT(previewFills, 0u);
+            EXPECT_GT(previewLines, 0u);
+
+            const ViewportOverlayFrame keepBothFrame = previewFrame;
+            ModelingCommandResult modeResult = service.setCutMode(ModelingCutMode::DiscardLeft);
+            ASSERT_TRUE(modeResult.ok) << modeResult.message;
+            const ViewportOverlayFrame discardLeftFrame = service.selectionOverlayFrame();
+            const auto keepBothOrangeFills = static_cast<std::size_t>(std::count_if(
+                    keepBothFrame.triangles.begin(),
+                    keepBothFrame.triangles.end(),
+                    [](const ViewportOverlayTriangle& triangle) {
+                        return triangle.layer == ViewportOverlayLayer::ToolPreviewFill &&
+                                triangle.color == kOverlayCutPreviewKeepBothDiscardFillColor;
+                    }));
+            const auto discardLeftRedFills = static_cast<std::size_t>(std::count_if(
+                    discardLeftFrame.triangles.begin(),
+                    discardLeftFrame.triangles.end(),
+                    [](const ViewportOverlayTriangle& triangle) {
+                        return triangle.layer == ViewportOverlayLayer::ToolPreviewFill &&
+                                triangle.color == kOverlayCutPreviewDiscardFillColor;
+                    }));
+            EXPECT_GT(keepBothOrangeFills, 0u);
+            EXPECT_GT(discardLeftRedFills, 0u);
+        } else {
+            EXPECT_EQ(previewFills, 0u);
+            EXPECT_EQ(previewLines, 0u);
+            const std::vector<ModelingToolPreviewMesh> previewMeshes = service.toolPreviewMeshes();
+            ASSERT_FALSE(previewMeshes.empty());
+            EXPECT_EQ(previewMeshes.front().sourceEntity, box.object.entity);
+            EXPECT_EQ(previewMeshes.front().material, previewMaterial);
+            EXPECT_GT(previewMeshes.front().mesh.vertices.size(), 0u);
+            EXPECT_GT(previewMeshes.front().mesh.indices.size(), 0u);
+        }
+        (void)service.cancelActiveModalTool();
+    };
+
+    expectDrawnPlaneOverlay(ModelingViewportTool::Cut);
+    expectDrawnPlaneOverlay(ModelingViewportTool::Mirror);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Cut).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, CutToolDragEndAndFinalizeSplitMesh) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Cut Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(scene.entities().size(), 1u);
+
+    ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::Cut);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().cutActive);
+
+    command = service.clickCut(testDrawnPlaneEvent(0.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().cutDragging);
+    EXPECT_TRUE(service.toolStatus().cutDraggingNewPoint);
+    EXPECT_EQ(service.toolStatus().cutPointCount, 2);
+    EXPECT_EQ(service.toolStatus().cutCapturedPointCount, 1);
+    EXPECT_TRUE(service.toolStatus().cutHasLine);
+    EXPECT_FALSE(service.toolStatus().cutCanPreview);
+
+    command = service.updateCutHover(testDrawnPlaneEvent(1.0f, false));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().cutDragging);
+    EXPECT_TRUE(service.toolStatus().cutDraggingNewPoint);
+    EXPECT_EQ(service.toolStatus().cutCapturedPointCount, 1);
+    EXPECT_EQ(service.toolStatus().cutPointCount, 2);
+    EXPECT_TRUE(service.toolStatus().cutHasLine);
+
+    command = service.updateCutHover(testDrawnPlaneEvent(1.0f, true));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().cutDragging);
+    EXPECT_TRUE(service.toolStatus().cutDraggingNewPoint);
+    EXPECT_EQ(service.toolStatus().cutCapturedPointCount, 2);
+    EXPECT_EQ(service.toolStatus().cutPointCount, 2);
+    EXPECT_TRUE(service.toolStatus().cutHasLine);
+    command = service.endCutDrag();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_FALSE(service.toolStatus().cutDragging);
+    EXPECT_EQ(service.toolStatus().cutCapturedPointCount, 2);
+    EXPECT_EQ(service.toolStatus().cutPointCount, 2);
+    EXPECT_TRUE(service.toolStatus().cutCanPreview);
+    EXPECT_TRUE(service.toolStatus().cutPreviewValid);
+
+    command = service.finalizeCutTool();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Select);
+    EXPECT_FALSE(service.toolStatus().cutActive);
+    EXPECT_FALSE(service.toolSettingsTarget().active);
+    EXPECT_GT(scene.entities().size(), 1u);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Cut).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, CutToolActivationPromotesSelectedSceneMeshToObjectMode) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Cut Activation Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+
+    ModelingCommandResult command = service.setSelectionMode(ModelingSelectionMode::Vertex);
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Vertex);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+
+    command = service.activateViewportTool(ModelingViewportTool::Cut);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+    EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Cut);
+    EXPECT_TRUE(service.toolStatus().cutActive);
+    EXPECT_TRUE(service.toolSettingsTarget().active);
+    EXPECT_EQ(service.toolSettingsTarget().kind, ModelingToolSettingsTargetKind::Cut);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Cut).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, CutAndMirrorActivationPromotesSdkSelectionWhenSceneSelectionIsStale) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Drawn Plane Activation Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+
+    scene.clearSelection();
+    ASSERT_TRUE(scene.selectedEntities().empty());
+
+    ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::Mirror);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+    EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Mirror);
+    EXPECT_TRUE(service.toolStatus().mirrorActive);
+    EXPECT_FALSE(service.toolSettingsTarget().active);
+    EXPECT_EQ(scene.selectedEntities().size(), 1u);
+
+    command = service.activateViewportTool(ModelingViewportTool::Cut);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+    EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Cut);
+    EXPECT_TRUE(service.toolStatus().cutActive);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Mirror).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, MirrorToolDrawnPlaneFinalizeDuplicatesSelection) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}},
+        .name = "Mirror Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(scene.entities().size(), 1u);
+
+    ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::Mirror);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().mirrorActive);
+
+    command = service.clickMirror(testDrawnPlaneEvent(0.0f));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().mirrorDragging);
+    EXPECT_TRUE(service.toolStatus().mirrorDraggingNewPoint);
+    EXPECT_EQ(service.toolStatus().mirrorPointCount, 2);
+    EXPECT_EQ(service.toolStatus().mirrorCapturedPointCount, 1);
+    EXPECT_TRUE(service.toolStatus().mirrorHasLine);
+    EXPECT_FALSE(service.toolStatus().mirrorCanPreview);
+
+    command = service.updateMirrorHover(testDrawnPlaneEvent(1.0f, false));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().mirrorDragging);
+    EXPECT_TRUE(service.toolStatus().mirrorDraggingNewPoint);
+    EXPECT_EQ(service.toolStatus().mirrorCapturedPointCount, 1);
+    EXPECT_EQ(service.toolStatus().mirrorPointCount, 2);
+    EXPECT_TRUE(service.toolStatus().mirrorHasLine);
+
+    command = service.updateMirrorHover(testDrawnPlaneEvent(1.0f, true));
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(service.toolStatus().mirrorDragging);
+    EXPECT_TRUE(service.toolStatus().mirrorDraggingNewPoint);
+    EXPECT_EQ(service.toolStatus().mirrorCapturedPointCount, 2);
+    EXPECT_EQ(service.toolStatus().mirrorPointCount, 2);
+    EXPECT_TRUE(service.toolStatus().mirrorHasLine);
+    command = service.endMirrorDrag();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_FALSE(service.toolStatus().mirrorDragging);
+    EXPECT_EQ(service.toolStatus().mirrorCapturedPointCount, 2);
+    EXPECT_EQ(service.toolStatus().mirrorPointCount, 2);
+    EXPECT_TRUE(service.toolStatus().mirrorCanPreview);
+    EXPECT_TRUE(service.toolStatus().mirrorPreviewValid);
+
+    command = service.finalizeMirrorTool();
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_TRUE(command.changed);
+    EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Select);
+    EXPECT_FALSE(service.toolStatus().mirrorActive);
+    EXPECT_EQ(scene.entities().size(), 2u);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Mirror).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, MirrorToolActivationPromotesSelectedSceneMeshToObjectMode) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}},
+        .name = "Mirror Activation Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+
+    ModelingCommandResult command = service.setSelectionMode(ModelingSelectionMode::Face);
+    ASSERT_TRUE(command.ok) << command.message;
+    ASSERT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Face);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+
+    command = service.activateViewportTool(ModelingViewportTool::Mirror);
+    ASSERT_TRUE(command.ok) << command.message;
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Object);
+    EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
+    EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Mirror);
+    EXPECT_TRUE(service.toolStatus().mirrorActive);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Mirror).ok);
 #endif
 }
 

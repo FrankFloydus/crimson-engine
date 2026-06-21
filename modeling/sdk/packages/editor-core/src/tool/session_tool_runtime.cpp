@@ -1018,14 +1018,19 @@ bool EditorRuntime::set_insert_edge_loop_preview_from_pick(
 		EditorSession& session,
 		const quader_poly::Ray& ray,
 		double grid_size,
+		double vertex_radius,
+		double edge_radius,
 		bool snap_enabled,
 		bool dragging)
 {
+	quader_poly::PickOptions pick_options =
+		selection_pick_options_from_radii(vertex_radius, edge_radius);
 	return session.set_insert_edge_loop_preview_from_pick(
 		state_.insert_edge_loop,
 		state_.hover,
 		ray,
 		grid_size,
+		pick_options,
 		snap_enabled,
 		dragging);
 }

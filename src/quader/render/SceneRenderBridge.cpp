@@ -501,6 +501,51 @@ std::vector<MeshPrimitiveSpan> renderPrimitiveSpansFor(const MeshAsset& mesh) {
     return spans;
 }
 
+std::uint64_t meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh) {
+    hash = hashCombine(hash, mesh.vertices.size());
+    for (const MeshVertex& vertex : mesh.vertices) {
+        hash = hashVec3(hash, vertex.position);
+        hash = hashVec3(hash, vertex.normal);
+        hash = hashFloat(hash, vertex.uv.x);
+        hash = hashFloat(hash, vertex.uv.y);
+        hash = hashCombine(hash, vertex.rgba);
+    }
+    hash = hashCombine(hash, mesh.indices.size());
+    for (const std::uint32_t index : mesh.indices) {
+        hash = hashCombine(hash, index);
+    }
+    hash = hashCombine(hash, mesh.primitives.size());
+    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
+        hash = hashCombine(hash, primitive.indexOffset);
+        hash = hashCombine(hash, primitive.indexCount);
+        hash = hashCombine(hash, primitive.materialSlot);
+    }
+    return hash;
+}
+
+std::uint64_t previewMeshSignature(
+        const SceneRenderBridge::PreviewMesh& previewMesh,
+        const AssetRegistry& assets) {
+    const MaterialDocument* material = assets.material(previewMesh.material);
+    std::uint64_t hash = hashCombine(kFnvOffset, previewMesh.sourceEntity);
+    hash = hashCombine(hash, previewMesh.material);
+    hash = hashCombine(hash, renderMaterialRevision(assets, material));
+    for (const float value : previewMesh.transform.values) {
+        hash = hashFloat(hash, value);
+    }
+    return meshAssetSignature(hash, previewMesh.mesh);
+}
+
+std::uint64_t previewMeshesSignature(
+        const std::vector<SceneRenderBridge::PreviewMesh>& previewMeshes,
+        const AssetRegistry& assets) {
+    std::uint64_t hash = hashCombine(kFnvOffset, previewMeshes.size());
+    for (const SceneRenderBridge::PreviewMesh& previewMesh : previewMeshes) {
+        hash = hashCombine(hash, previewMeshSignature(previewMesh, assets));
+    }
+    return hash;
+}
+
 } // namespace
 
 SceneRenderBridge::~SceneRenderBridge() {
@@ -534,6 +579,7 @@ void SceneRenderBridge::shutdown() {
         destroyMeshProxy(proxy);
     }
     meshProxies_.clear();
+    destroyToolPreviewMeshes();
 
     for (OverlaySlot& slot : overlaySlots_) {
         destroyOverlaySlot(slot);
@@ -582,6 +628,35 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
     syncedRevision_ = document.revision();
     syncedAssetRevision_ = assets.revision();
     hasSynced_ = true;
+}
+
+void SceneRenderBridge::setToolPreviewMeshes(std::vector<PreviewMesh> meshes, const AssetRegistry& assets) {
+    if (!engine_ || !scene_ || !meshMaterial_) {
+        return;
+    }
+
+    const std::uint64_t signature = previewMeshesSignature(meshes, assets);
+    if (signature == toolPreviewMeshSignature_) {
+        return;
+    }
+
+    destroyToolPreviewMeshes();
+    toolPreviewMeshSignature_ = signature;
+    toolPreviewMeshProxies_.reserve(meshes.size());
+    for (const PreviewMesh& previewMesh : meshes) {
+        if (previewMesh.mesh.vertices.empty() || previewMesh.mesh.indices.empty()) {
+            continue;
+        }
+        const MaterialDocument* material = assets.material(previewMesh.material);
+        toolPreviewMeshProxies_.push_back(createMeshProxy(
+                previewMesh.sourceEntity,
+                InvalidAssetId,
+                previewMesh.mesh,
+                previewMesh.material,
+                material,
+                assets,
+                previewMesh.transform));
+    }
 }
 
 void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
@@ -1065,10 +1140,14 @@ void SceneRenderBridge::rebuildOverlayProxies(OverlaySlot& slot) {
                 faceColorPass ? filament::MaterialInstance::DepthFunc::E :
                 drawOnTop ? filament::MaterialInstance::DepthFunc::A :
                 filament::MaterialInstance::DepthFunc::GE;
-        state.cullingMode = kind == ViewportOverlayGeometryKind::Triangles
+        const bool twoSidedTriangle = kind == ViewportOverlayGeometryKind::Triangles &&
+                viewportOverlayTriangleIsTwoSided(layer);
+        state.cullingMode = kind == ViewportOverlayGeometryKind::Triangles && !twoSidedTriangle
                 ? filament::MaterialInstance::CullingMode::BACK
                 : filament::MaterialInstance::CullingMode::NONE;
-        state.transparencyMode = kind == ViewportOverlayGeometryKind::Triangles
+        state.transparencyMode = kind == ViewportOverlayGeometryKind::Triangles && twoSidedTriangle
+                ? filament::MaterialInstance::TransparencyMode::TWO_PASSES_TWO_SIDES
+                : kind == ViewportOverlayGeometryKind::Triangles
                 ? filament::MaterialInstance::TransparencyMode::TWO_PASSES_ONE_SIDE
                 : filament::MaterialInstance::TransparencyMode::DEFAULT;
         if (kind == ViewportOverlayGeometryKind::Triangles) {
@@ -1234,6 +1313,14 @@ void SceneRenderBridge::destroyMeshProxy(MeshProxy& proxy) {
         utils::EntityManager::get().destroy(proxy.entity);
         proxy.entity.clear();
     }
+}
+
+void SceneRenderBridge::destroyToolPreviewMeshes() {
+    for (MeshProxy& proxy : toolPreviewMeshProxies_) {
+        destroyMeshProxy(proxy);
+    }
+    toolPreviewMeshProxies_.clear();
+    toolPreviewMeshSignature_ = 0;
 }
 
 void SceneRenderBridge::destroyOverlaySlot(OverlaySlot& slot) {

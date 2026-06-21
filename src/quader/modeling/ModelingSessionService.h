@@ -77,6 +77,25 @@ enum class ModelingTransformTool {
     Scale,
 };
 
+enum class ModelingViewportTool {
+    Select,
+    Move,
+    Rotate,
+    Scale,
+    Box,
+    InsertEdgeLoop,
+    Knife,
+    Cut,
+    Poly,
+    Mirror,
+};
+
+enum class ModelingCutMode {
+    DiscardLeft,
+    DiscardRight,
+    KeepBoth,
+};
+
 enum class ModelingTransformOperation {
     Transform,
     Extrude,
@@ -169,6 +188,18 @@ struct ModelingBoxToolEvent {
     ModelingViewportCamera camera;
 };
 
+struct ModelingToolRayEvent {
+    Vec2 screenPosition;
+    ModelingRay ray;
+    ModelingViewportCamera camera;
+    double gridSize = 1.0;
+    double vertexRadius = 0.3;
+    double edgeRadius = 0.2;
+    bool snapEnabled = true;
+    bool constrainAxis = false;
+    bool dragging = false;
+};
+
 struct ModelingBoxPreview {
     bool ok = false;
     bool valid = false;
@@ -253,6 +284,84 @@ struct ModelingRepeatTransform {
     Vec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
+struct ModelingToolStatus {
+    ModelingViewportTool activeTool = ModelingViewportTool::Select;
+    bool modalToolOwnsViewport = false;
+    bool insertEdgeLoopActive = false;
+    bool insertEdgeLoopDragging = false;
+    bool insertEdgeLoopHasPreview = false;
+    bool knifeActive = false;
+    bool knifeHasCurrent = false;
+    bool knifeCanCommit = false;
+    bool cutActive = false;
+    bool cutCanPreview = false;
+    bool cutPreviewValid = false;
+    bool cutDragging = false;
+    bool cutDraggingNewPoint = false;
+    bool cutDraggingLine = false;
+    int cutDraggingPointIndex = -1;
+    int cutPointCount = 0;
+    int cutCapturedPointCount = 0;
+    bool cutHasLine = false;
+    std::array<Vec3, 3> cutPoints = {};
+    ModelingCutMode cutMode = ModelingCutMode::KeepBoth;
+    bool mirrorActive = false;
+    bool mirrorCanPreview = false;
+    bool mirrorPreviewValid = false;
+    bool mirrorDragging = false;
+    bool mirrorDraggingNewPoint = false;
+    bool mirrorDraggingLine = false;
+    int mirrorDraggingPointIndex = -1;
+    int mirrorPointCount = 0;
+    int mirrorCapturedPointCount = 0;
+    bool mirrorHasLine = false;
+    std::array<Vec3, 3> mirrorPoints = {};
+    bool polyActive = false;
+    bool polyClosed = false;
+    bool polyHasCurrent = false;
+    bool polyCanCommit = false;
+    int polyPointCount = 0;
+};
+
+enum class ModelingToolSettingsTargetKind {
+    None,
+    Cut,
+    Mirror,
+    Bridge,
+    EdgeBevel,
+    Thicken,
+    SliceQuad,
+    MergeByDistance,
+};
+
+struct ModelingToolSettingsTarget {
+    ModelingToolSettingsTargetKind kind = ModelingToolSettingsTargetKind::None;
+    bool active = false;
+    bool operationPreviewActive = false;
+    std::string label;
+    std::string actionId;
+    std::string operationId;
+};
+
+struct ModelingInteractionSettings {
+    int bridgeSteps = 1;
+    double edgeBevelWidth = 1.0;
+    double edgeBevelProfile = 0.5;
+    int edgeBevelSegments = 1;
+    double thickenThickness = 0.25;
+    bool thickenFromCenter = false;
+    int sliceQuadXSlices = 1;
+    int sliceQuadYSlices = 1;
+    double mergeByDistanceTolerance = 0.125;
+    ModelingCutMode cutMode = ModelingCutMode::KeepBoth;
+};
+
+struct ModelingToolPreviewMesh {
+    EntityId sourceEntity = InvalidEntityId;
+    AssetId material = InvalidAssetId;
+    MeshAsset mesh;
+};
+
 struct ModelingTransformDragBeginRequest {
     ModelingTransformTool tool = ModelingTransformTool::Move;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
@@ -327,6 +436,7 @@ public:
     [[nodiscard]] ModelingSelectionMode selectionMode() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
+    [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const;
     [[nodiscard]] bool canUndo() const;
     [[nodiscard]] bool canRedo() const;
 
@@ -345,9 +455,16 @@ public:
     ModelingCommandResult mirrorSelection(ModelingMirrorAxis axis);
     ModelingCommandResult flipSelection(ModelingFlipOrientation orientation);
     ModelingCommandResult applyActiveMaterial(std::uint32_t materialSlot = 0);
+    [[nodiscard]] bool modalToolOwnsViewport() const;
+    [[nodiscard]] ModelingToolStatus toolStatus() const;
+    [[nodiscard]] ModelingToolSettingsTarget toolSettingsTarget() const;
+    [[nodiscard]] ModelingInteractionSettings interactionSettings() const;
+    ModelingCommandResult setInteractionSettings(const ModelingInteractionSettings& settings);
     [[nodiscard]] ModelingActionSet contextActionSet(const ModelingActionQuery& query = {}) const;
     [[nodiscard]] std::vector<ModelingActionItem> contextActions(const ModelingActionQuery& query = {}) const;
     ModelingCommandResult executeContextAction(std::string_view actionId);
+    ModelingCommandResult commitActiveOperationPreview();
+    ModelingCommandResult cancelActiveOperationPreview();
     [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const;
     ModelingCommandResult executeInstantOperation(ModelingInstantOperationId operation);
     ModelingCommandResult beginTransformPreview(bool duplicateSelected);
@@ -365,6 +482,32 @@ public:
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request);
     ModelingCommandResult clearSelectionHover();
+    ModelingCommandResult activateViewportTool(ModelingViewportTool tool);
+    ModelingCommandResult cancelActiveModalTool();
+    ModelingCommandResult updateInsertEdgeLoopHover(const ModelingToolRayEvent& event);
+    ModelingCommandResult beginInsertEdgeLoopDrag(const ModelingToolRayEvent& event);
+    ModelingCommandResult updateInsertEdgeLoopDrag(const ModelingToolRayEvent& event);
+    ModelingCommandResult commitInsertEdgeLoopDrag();
+    ModelingCommandResult updateKnifeHover(const ModelingToolRayEvent& event);
+    ModelingCommandResult acceptKnifePoint(const ModelingToolRayEvent& event);
+    ModelingCommandResult commitKnifeTool();
+    ModelingCommandResult updateCutHover(const ModelingToolRayEvent& event);
+    ModelingCommandResult clickCut(const ModelingToolRayEvent& event);
+    ModelingCommandResult beginCutPointDrag(int pointIndex);
+    ModelingCommandResult beginCutLineDrag(const ModelingToolRayEvent& event);
+    ModelingCommandResult endCutDrag();
+    ModelingCommandResult setCutMode(ModelingCutMode mode);
+    ModelingCommandResult cycleCutMode();
+    ModelingCommandResult finalizeCutTool();
+    ModelingCommandResult updateMirrorHover(const ModelingToolRayEvent& event);
+    ModelingCommandResult clickMirror(const ModelingToolRayEvent& event);
+    ModelingCommandResult beginMirrorPointDrag(int pointIndex);
+    ModelingCommandResult beginMirrorLineDrag(const ModelingToolRayEvent& event);
+    ModelingCommandResult endMirrorDrag();
+    ModelingCommandResult finalizeMirrorTool();
+    ModelingCommandResult updatePolyHover(const ModelingToolRayEvent& event);
+    ModelingCommandResult acceptPolyPoint();
+    ModelingCommandResult commitPolyTool();
     ModelingCommandResult activateBoxTool();
     ModelingCreateBoxResult createBoxFromBounds(const ModelingCreateBoxRequest& request);
     ModelingBoxPreview updateBoxHover(const ModelingBoxToolEvent& event);

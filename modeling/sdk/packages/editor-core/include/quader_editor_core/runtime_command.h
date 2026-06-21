@@ -85,6 +85,8 @@ struct PickSelectRuntimeCommandSettings {
 struct InsertEdgeLoopPickRuntimeCommandSettings {
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
+	double vertex_radius = 0.0;
+	double edge_radius = 0.0;
 	bool snap_enabled = true;
 };
 

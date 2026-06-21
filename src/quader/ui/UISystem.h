@@ -54,9 +54,10 @@ public:
 
 private:
     void registerPanels(RenderSystem& renderSystem);
-    void drawDockspace(bool& quitRequested);
-    void drawMenuBar(bool& quitRequested);
+    void drawDockspace(bool& quitRequested, ModelingSessionService& modeling);
+    void drawMenuBar(bool& quitRequested, ModelingSessionService& modeling);
     void drawSettingsPanel();
+    void drawToolSettingsPanel(ModelingSessionService& modeling, UndoRedoManager& undoRedo);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
     void enforceSidebarDockMinimums();
     void setViewportCursorCaptured(bool captured);
@@ -81,6 +82,7 @@ private:
     ViewportSettings viewportSettings_;
     std::string imguiIniPath_;
     bool settingsPanelOpen_ = false;
+    bool toolSettingsPanelOpen_ = false;
     bool initialized_ = false;
     bool dockLayoutBuilt_ = false;
     bool hasSavedDockLayout_ = false;

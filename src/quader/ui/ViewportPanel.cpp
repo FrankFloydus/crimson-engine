@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <string>
@@ -38,6 +39,71 @@ namespace quader {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
+constexpr std::uint64_t kViewportPanelHashOffset = 1469598103934665603ull;
+constexpr std::uint64_t kViewportPanelHashPrime = 1099511628211ull;
+
+std::uint64_t mixViewportPanelHash(std::uint64_t hash, std::uint64_t value) {
+    hash ^= value;
+    hash *= kViewportPanelHashPrime;
+    return hash;
+}
+
+std::uint64_t mixViewportPanelHash(std::uint64_t hash, bool value) {
+    return mixViewportPanelHash(hash, value ? 1ull : 0ull);
+}
+
+std::uint64_t mixViewportPanelHash(std::uint64_t hash, float value) {
+    return mixViewportPanelHash(hash, static_cast<std::uint64_t>(std::hash<float>{}(value)));
+}
+
+std::uint64_t mixViewportPanelHash(std::uint64_t hash, double value) {
+    return mixViewportPanelHash(hash, static_cast<std::uint64_t>(std::hash<double>{}(value)));
+}
+
+std::uint64_t mixViewportPanelHash(std::uint64_t hash, Vec3 value) {
+    hash = mixViewportPanelHash(hash, value.x);
+    hash = mixViewportPanelHash(hash, value.y);
+    return mixViewportPanelHash(hash, value.z);
+}
+
+template <typename Enum>
+std::uint64_t mixViewportPanelEnum(std::uint64_t hash, Enum value) {
+    return mixViewportPanelHash(hash, static_cast<std::uint64_t>(value));
+}
+
+std::uint64_t toolOverlaySignature(ModelingSessionService& modeling) {
+    const ModelingToolStatus status = modeling.toolStatus();
+    const ModelingInteractionSettings settings = modeling.interactionSettings();
+    std::uint64_t hash = mixViewportPanelEnum(kViewportPanelHashOffset, status.activeTool);
+    hash = mixViewportPanelEnum(hash, settings.cutMode);
+    hash = mixViewportPanelHash(hash, status.cutActive);
+    hash = mixViewportPanelHash(hash, status.cutCanPreview);
+    hash = mixViewportPanelHash(hash, status.cutPreviewValid);
+    hash = mixViewportPanelHash(hash, status.cutDragging);
+    hash = mixViewportPanelHash(hash, status.cutDraggingNewPoint);
+    hash = mixViewportPanelHash(hash, status.cutDraggingLine);
+    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.cutDraggingPointIndex));
+    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.cutPointCount));
+    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.cutCapturedPointCount));
+    hash = mixViewportPanelHash(hash, status.cutHasLine);
+    for (const Vec3 point : status.cutPoints) {
+        hash = mixViewportPanelHash(hash, point);
+    }
+    hash = mixViewportPanelHash(hash, status.mirrorActive);
+    hash = mixViewportPanelHash(hash, status.mirrorCanPreview);
+    hash = mixViewportPanelHash(hash, status.mirrorPreviewValid);
+    hash = mixViewportPanelHash(hash, status.mirrorDragging);
+    hash = mixViewportPanelHash(hash, status.mirrorDraggingNewPoint);
+    hash = mixViewportPanelHash(hash, status.mirrorDraggingLine);
+    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.mirrorDraggingPointIndex));
+    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.mirrorPointCount));
+    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.mirrorCapturedPointCount));
+    hash = mixViewportPanelHash(hash, status.mirrorHasLine);
+    for (const Vec3 point : status.mirrorPoints) {
+        hash = mixViewportPanelHash(hash, point);
+    }
+    return hash;
+}
 
 std::uint32_t settingColorRgba(ViewportSettingColor color) {
     return static_cast<std::uint32_t>(normalizedToByte(color.r)) |
@@ -471,6 +537,52 @@ void drawWorldLine(ImDrawList* drawList,
     }
 }
 
+std::optional<int> hitDrawnPlaneCapturedPoint(
+        const std::array<Vec3, 3>& points,
+        int capturedPointCount,
+        Vec2 mouseLocal,
+        const ViewportCameraController& camera,
+        ImVec2 itemMin,
+        ImVec2 itemSize) {
+    constexpr float kPointHitRadiusPixels = 10.0f;
+    const ImVec2 mouse{itemMin.x + mouseLocal.x, itemMin.y + mouseLocal.y};
+    const int count = std::min(capturedPointCount, 2);
+    for (int index = count - 1; index >= 0; --index) {
+        const std::optional<ImVec2> screen =
+                projectWorldToViewport(points[static_cast<std::size_t>(index)], camera, itemMin, itemSize);
+        if (!screen) {
+            continue;
+        }
+        if (distanceSquared(mouse, *screen) <= kPointHitRadiusPixels * kPointHitRadiusPixels) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+bool hitDrawnPlaneLine(
+        const std::array<Vec3, 3>& points,
+        int capturedPointCount,
+        bool hasLine,
+        Vec2 mouseLocal,
+        const ViewportCameraController& camera,
+        ImVec2 itemMin,
+        ImVec2 itemSize) {
+    constexpr float kLineHitRadiusPixels = 10.0f;
+    if (!hasLine || capturedPointCount < 2) {
+        return false;
+    }
+
+    const std::optional<ImVec2> start = projectWorldToViewport(points[0], camera, itemMin, itemSize);
+    const std::optional<ImVec2> end = projectWorldToViewport(points[1], camera, itemMin, itemSize);
+    if (!start || !end) {
+        return false;
+    }
+
+    const ImVec2 mouse{itemMin.x + mouseLocal.x, itemMin.y + mouseLocal.y};
+    return distanceToSegmentSquared(mouse, *start, *end) <= kLineHitRadiusPixels * kLineHitRadiusPixels;
+}
+
 ModelingViewportCamera modelingViewportCamera(
         const ViewportCameraController& camera,
         Vec2 viewportSize) {
@@ -740,13 +852,15 @@ void drawViewportOperationsPopup(
     for (const ModelingActionItem& action : actions) {
         const bool enabled = action.visibility == ModelingActionVisibility::Enabled;
         if (ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)) {
-            const ModelingCommandResult result = executeTrackedModelingCommand(
-                    undoRedo,
-                    modeling,
-                    action.label,
-                    [&]() {
-                        return modeling.executeContextAction(action.actionId);
-                    });
+            const ModelingCommandResult result = action.previewKind != ModelingActionPreviewKind::None ?
+                    modeling.executeContextAction(action.actionId) :
+                    executeTrackedModelingCommand(
+                            undoRedo,
+                            modeling,
+                            action.label,
+                            [&]() {
+                                return modeling.executeContextAction(action.actionId);
+                            });
             if (!result.ok) {
                 LOG_ERROR("Operation '{}' failed: {}", action.actionId, result.message.empty() ? "Operation failed." : result.message);
             }
@@ -878,6 +992,58 @@ quader_editor_core::ViewportInteractionTool toSdkTool(ViewportTool tool) {
     default:
         return quader_editor_core::ViewportInteractionTool::select;
     }
+}
+
+ModelingViewportTool toModelingViewportTool(ViewportTool tool) {
+    switch (tool) {
+    case ViewportTool::Move:
+        return ModelingViewportTool::Move;
+    case ViewportTool::Rotate:
+        return ModelingViewportTool::Rotate;
+    case ViewportTool::Scale:
+        return ModelingViewportTool::Scale;
+    case ViewportTool::Box:
+        return ModelingViewportTool::Box;
+    case ViewportTool::InsertEdgeLoop:
+        return ModelingViewportTool::InsertEdgeLoop;
+    case ViewportTool::Knife:
+        return ModelingViewportTool::Knife;
+    case ViewportTool::Cut:
+        return ModelingViewportTool::Cut;
+    case ViewportTool::Poly:
+        return ModelingViewportTool::Poly;
+    case ViewportTool::Mirror:
+        return ModelingViewportTool::Mirror;
+    case ViewportTool::Select:
+        return ModelingViewportTool::Select;
+    }
+    return ModelingViewportTool::Select;
+}
+
+ViewportTool fromModelingViewportTool(ModelingViewportTool tool) {
+    switch (tool) {
+    case ModelingViewportTool::Move:
+        return ViewportTool::Move;
+    case ModelingViewportTool::Rotate:
+        return ViewportTool::Rotate;
+    case ModelingViewportTool::Scale:
+        return ViewportTool::Scale;
+    case ModelingViewportTool::Box:
+        return ViewportTool::Box;
+    case ModelingViewportTool::InsertEdgeLoop:
+        return ViewportTool::InsertEdgeLoop;
+    case ModelingViewportTool::Knife:
+        return ViewportTool::Knife;
+    case ModelingViewportTool::Cut:
+        return ViewportTool::Cut;
+    case ModelingViewportTool::Poly:
+        return ViewportTool::Poly;
+    case ModelingViewportTool::Mirror:
+        return ViewportTool::Mirror;
+    case ModelingViewportTool::Select:
+        return ViewportTool::Select;
+    }
+    return ViewportTool::Select;
 }
 
 quader_editor_core::TransformAxis toSdkAxis(ViewportPanel::GizmoAxis axis) {
@@ -1488,6 +1654,28 @@ void ViewportPanel::setViewportLayout(ViewportLayoutId layoutId) {
     }
 }
 
+bool ViewportPanel::activateToolFromMenu(ViewportTool tool, ModelingSessionService& modeling) {
+    LOG_INFO("Tools menu requested viewport tool {}", viewportToolId(tool));
+    const ModelingCommandResult command = modeling.activateViewportTool(toModelingViewportTool(tool));
+    if (!command.ok) {
+        LOG_ERROR("Viewport tool activation failed: {}", command.message.empty() ? "Command failed." : command.message);
+        return false;
+    }
+    const ViewportTool activeTool = fromModelingViewportTool(modeling.toolStatus().activeTool);
+    LOG_INFO("Viewport tool activated from menu: requested {}, active {}", viewportToolId(tool), viewportToolId(activeTool));
+    inputRouter_.setActiveTool(activeTool);
+    inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+    boxPreview_ = {};
+    insertEdgeLoopDragActive_ = false;
+    cutDragActive_ = false;
+    mirrorDragActive_ = false;
+    paintSelectionActive_ = false;
+    selectionHoverClearIssued_ = false;
+    lastHoverWorkKey_.valid = false;
+    cachedSelectionOverlayFrameDirty_ = true;
+    return true;
+}
+
 ViewportPanel::Pane& ViewportPanel::pane(ViewportPaneId paneId) {
     return panes_[viewportPaneIndex(paneId)];
 }
@@ -1827,12 +2015,14 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
         const AssetRegistry& assets,
         ModelingSessionService& modeling) {
     const ModelingSelectionSummary overlaySummary = modeling.selectionSummary();
+    const std::uint64_t overlayToolSignature = toolOverlaySignature(modeling);
     const bool overlayRevisionChanged =
             !cachedSelectionOverlayFrameValid_ ||
             cachedSelectionOverlayContentRevision_ != overlaySummary.contentRevision ||
             cachedSelectionOverlaySelectionRevision_ != overlaySummary.selectionRevision ||
             cachedSelectionOverlaySceneRevision_ != document.revision() ||
             cachedSelectionOverlayAssetRevision_ != assets.revision() ||
+            cachedSelectionOverlayToolSignature_ != overlayToolSignature ||
             cachedSelectionOverlayMode_ != overlaySummary.mode;
     if (!cachedSelectionOverlayFrameDirty_ && !overlayRevisionChanged) {
         return;
@@ -1846,6 +2036,7 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
     cachedSelectionOverlaySelectionRevision_ = overlaySummary.selectionRevision;
     cachedSelectionOverlaySceneRevision_ = document.revision();
     cachedSelectionOverlayAssetRevision_ = assets.revision();
+    cachedSelectionOverlayToolSignature_ = overlayToolSignature;
     cachedSelectionOverlayMode_ = overlaySummary.mode;
 }
 
@@ -1875,16 +2066,52 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             uiContext.focusedPanel == UIPanelId::Viewport ||
             (uiContext.focusedPanelStorage != nullptr && *uiContext.focusedPanelStorage == UIPanelId::Viewport);
     const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || appFocused || focusRequestedThisFrame;
-    auto boxToolOwnsViewport = [&]() {
-        return inputRouter_.state().activeTool == ViewportTool::Box || hasActiveBoxPreview(boxPreview_);
+    auto modalToolOwnsViewport = [&]() {
+        return inputRouter_.state().activeTool == ViewportTool::Box ||
+                inputRouter_.state().activeTool == ViewportTool::InsertEdgeLoop ||
+                inputRouter_.state().activeTool == ViewportTool::Knife ||
+                inputRouter_.state().activeTool == ViewportTool::Cut ||
+                inputRouter_.state().activeTool == ViewportTool::Mirror ||
+                inputRouter_.state().activeTool == ViewportTool::Poly ||
+                hasActiveBoxPreview(boxPreview_) ||
+                modeling.modalToolOwnsViewport();
     };
 
     const bool useCapturedMouseDelta = inputRouter_.flyCursorCaptureActive();
     const ViewportInputFrame input =
             makeViewportInputFrame(hovered, focused, itemMin, itemSize, inputRouter_.navigating(), useCapturedMouseDelta, capturedMouseDelta);
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
+    bool operationPreviewShortcutConsumed = false;
+    const ModelingToolSettingsTarget toolSettingsTarget = modeling.toolSettingsTarget();
+    if (result.shortcutHandled && toolSettingsTarget.operationPreviewActive) {
+        if (result.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
+            inputRouter_.setMaximized(!inputRouter_.state().maximized);
+            const ModelingCommandResult command = executeTrackedModelingCommand(
+                    undoRedo,
+                    modeling,
+                    toolSettingsTarget.label.empty() ? std::string("Apply Tool Preview") : std::string("Apply ") + toolSettingsTarget.label,
+                    [&]() {
+                        return modeling.commitActiveOperationPreview();
+                    });
+            if (!command.ok) {
+                LOG_ERROR("Tool preview apply failed: {}", command.message.empty() ? "Command failed." : command.message);
+            }
+            operationPreviewShortcutConsumed = true;
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
+        } else if (result.shortcut.kind == ViewportShortcutKind::CancelActiveTool) {
+            const ModelingCommandResult command = modeling.cancelActiveOperationPreview();
+            if (!command.ok) {
+                LOG_ERROR("Tool preview cancel failed: {}", command.message.empty() ? "Command failed." : command.message);
+            }
+            operationPreviewShortcutConsumed = true;
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
+        }
+    }
     if (hovered &&
             result.shortcutHandled &&
+            !operationPreviewShortcutConsumed &&
             result.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
         focusedPaneId_ = paneState.id;
     }
@@ -1905,7 +2132,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             };
         }
     }
-    const bool modalToolOwnsViewportForMenu = boxToolOwnsViewport();
+    const bool modalToolOwnsViewportForMenu = modalToolOwnsViewport();
     if (!modalToolOwnsViewportForMenu &&
             input.rightPressed &&
             hovered &&
@@ -1929,7 +2156,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 input.mouseScreen.y >= itemMin.y &&
                 input.mouseScreen.y <= itemMax.y;
         pendingContextMenuRequest = {
-                .modalToolOwnsViewport = boxToolOwnsViewport(),
+                .modalToolOwnsViewport = modalToolOwnsViewport(),
                 .rightPressTracked = contextMenuRightPressActive_,
                 .rightReleased = input.rightReleased,
                 .releaseInsideViewport = releaseInsideViewport,
@@ -1958,31 +2185,35 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             LOG_ERROR("Selection mode change failed: {}", command.message);
         }
         paintSelectionActive_ = false;
+        insertEdgeLoopDragActive_ = false;
+        cutDragActive_ = false;
+        mirrorDragActive_ = false;
         lastHoverWorkKey_.valid = false;
         cachedSelectionOverlayFrameDirty_ = true;
     }
     if (result.toolChanged) {
         LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
         paintSelectionActive_ = false;
+        insertEdgeLoopDragActive_ = false;
+        cutDragActive_ = false;
+        mirrorDragActive_ = false;
         lastHoverWorkKey_.valid = false;
         cachedSelectionOverlayFrameDirty_ = true;
-        if (inputRouter_.state().activeTool == ViewportTool::Box) {
-            const ModelingCommandResult command = modeling.activateBoxTool();
-            boxPreview_ = {};
-            if (!command.ok) {
-                LOG_ERROR("Box tool activation failed: {}", command.message);
-                inputRouter_.setActiveTool(ViewportTool::Select);
-            }
-        } else if (hasActiveBoxPreview(boxPreview_)) {
-            const ModelingCommandResult cancel = modeling.cancelBox();
-            if (!cancel.ok) {
-                LOG_ERROR("Box cancel failed: {}", cancel.message);
-            }
+        const ModelingCommandResult command =
+                modeling.activateViewportTool(toModelingViewportTool(inputRouter_.state().activeTool));
+        if (!command.ok) {
+            LOG_ERROR("Viewport tool activation failed: {}", command.message);
+            inputRouter_.setActiveTool(ViewportTool::Select);
+            (void)modeling.activateViewportTool(ModelingViewportTool::Select);
+        } else {
+            inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+        }
+        if (inputRouter_.state().activeTool == ViewportTool::Box || hasActiveBoxPreview(boxPreview_)) {
             boxPreview_ = {};
         }
     }
 
-    if (result.shortcutHandled) {
+    if (result.shortcutHandled && !operationPreviewShortcutConsumed) {
         if (const std::optional<ModelingCommandResult> command =
                         executeViewportModelingShortcut(undoRedo, modeling, result.shortcut)) {
             if (!command->ok) {
@@ -2001,6 +2232,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
         boxPreview_ = {};
         paintSelectionActive_ = false;
+        insertEdgeLoopDragActive_ = false;
+        cutDragActive_ = false;
+        mirrorDragActive_ = false;
         lastHoverWorkKey_.valid = false;
         cachedSelectionOverlayFrameDirty_ = true;
         if (exitBoxTool) {
@@ -2010,11 +2244,11 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
 
     bool cancelConsumed = false;
     const bool globalEscCancelRequested =
-            boxToolOwnsViewport() &&
+            modalToolOwnsViewport() &&
             !input.textInputActive &&
             !result.flyNavigationActive &&
             ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-    if (result.cancelRequested || globalEscCancelRequested) {
+    if (!operationPreviewShortcutConsumed && (result.cancelRequested || globalEscCancelRequested)) {
         if (gizmoDragging_) {
 #if QUADER_HAS_MODELING_SDK
             const bool previewDrivenCancel = modelingTransformDragPreviewDriven_;
@@ -2044,8 +2278,22 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             cancelConsumed = true;
         }
 
-        if (inputRouter_.state().activeTool == ViewportTool::Box) {
-            cancelActiveBoxPlacement(true);
+        if (modalToolOwnsViewport()) {
+            if (inputRouter_.state().activeTool == ViewportTool::Box || hasActiveBoxPreview(boxPreview_)) {
+                cancelActiveBoxPlacement(true);
+            } else {
+                const ModelingCommandResult cancel = modeling.cancelActiveModalTool();
+                if (!cancel.ok) {
+                    LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
+                }
+                inputRouter_.setActiveTool(ViewportTool::Move);
+                paintSelectionActive_ = false;
+                insertEdgeLoopDragActive_ = false;
+                cutDragActive_ = false;
+                mirrorDragActive_ = false;
+                lastHoverWorkKey_.valid = false;
+                cachedSelectionOverlayFrameDirty_ = true;
+            }
             cancelConsumed = true;
         }
     }
@@ -2064,13 +2312,34 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             viewCubeConsumed ||
             cancelConsumed ||
             drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, paneState.id, itemMin, itemSize, suppressHoverWork);
+    const ImGuiIO& io = ImGui::GetIO();
     const bool leftClicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     const bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    const ImVec2 leftClickScreen = io.MouseClickedPos[ImGuiMouseButton_Left];
+    const Vec2 leftClickLocal = leftClicked ?
+            Vec2{leftClickScreen.x - itemMin.x, leftClickScreen.y - itemMin.y} :
+            input.mouseLocal;
     const int leftClickCount = std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
+    const ModelingToolStatus releaseToolStatus = modeling.toolStatus();
+    const bool insertEdgeLoopDragRelease =
+            inputRouter_.state().activeTool == ViewportTool::InsertEdgeLoop &&
+            (insertEdgeLoopDragActive_ || releaseToolStatus.insertEdgeLoopDragging) &&
+            leftReleased;
+    const bool drawnPlaneDragRelease =
+            (inputRouter_.state().activeTool == ViewportTool::Cut ||
+                    inputRouter_.state().activeTool == ViewportTool::Mirror) &&
+            (cutDragActive_ ||
+                    mirrorDragActive_ ||
+                    releaseToolStatus.cutDragging ||
+                    releaseToolStatus.mirrorDragging) &&
+            leftReleased;
 
     const bool mouseClickedOutsideViewport =
-            boxToolOwnsViewport() &&
+            modalToolOwnsViewport() &&
+            !io.WantCaptureMouse &&
+            !insertEdgeLoopDragRelease &&
+            !drawnPlaneDragRelease &&
             !hovered &&
             !result.navigationActive &&
             ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) &&
@@ -2081,7 +2350,18 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     ImGui::IsMouseReleased(ImGuiMouseButton_Right) ||
                     ImGui::IsMouseReleased(ImGuiMouseButton_Middle));
     if (mouseClickedOutsideViewport) {
-        cancelActiveBoxPlacement(true);
+        if (inputRouter_.state().activeTool == ViewportTool::Box) {
+            cancelActiveBoxPlacement(true);
+        } else {
+            const ModelingCommandResult cancel = modeling.cancelActiveModalTool();
+            if (!cancel.ok) {
+                LOG_ERROR("Modal tool cancel failed: {}", cancel.message);
+            }
+            inputRouter_.setActiveTool(ViewportTool::Move);
+            insertEdgeLoopDragActive_ = false;
+            cutDragActive_ = false;
+            mirrorDragActive_ = false;
+        }
         cancelConsumed = true;
     }
 
@@ -2122,6 +2402,35 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
         lastHoverWorkKey_ = key;
         return true;
+    };
+    auto makeModelingToolEventAt = [&](Vec2 mouseLocal, bool dragging = false) {
+        const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
+        return ModelingToolRayEvent{
+                .screenPosition = mouseLocal,
+                .ray = {
+                        .origin = worldRay.origin,
+                        .direction = worldRay.direction,
+                },
+                .camera = modelingViewportCamera(camera, {itemSize.x, itemSize.y}),
+                .gridSize = std::max(static_cast<double>(gridSizeForPreset(inputRouter_.state().gridPreset)), 0.0001),
+                .vertexRadius = activeViewportSettings().floatValue(ViewportFloatSettingId::PickVertexRadius),
+                .edgeRadius = activeViewportSettings().floatValue(ViewportFloatSettingId::PickEdgeRadius),
+                .snapEnabled = !input.modifiers.primary,
+                .constrainAxis = input.modifiers.shift,
+                .dragging = dragging,
+        };
+    };
+    auto makeModelingToolEvent = [&](bool dragging = false) {
+        return makeModelingToolEventAt(input.mouseLocal, dragging);
+    };
+    auto handleToolCommandResult = [&](std::string_view label, const ModelingCommandResult& command) {
+        if (!command.ok) {
+            LOG_ERROR("{} failed: {}", label, command.message.empty() ? "Command failed." : command.message);
+        }
+        if (command.changed) {
+            lastHoverWorkKey_.valid = false;
+            cachedSelectionOverlayFrameDirty_ = true;
+        }
     };
 
     if (inputRouter_.state().activeTool == ViewportTool::Box) {
@@ -2181,6 +2490,250 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
 
         drawBoxPreview(ImGui::GetWindowDrawList(), boxPreview_, camera, itemMin, itemSize);
+    } else if (inputRouter_.state().activeTool == ViewportTool::InsertEdgeLoop ||
+            inputRouter_.state().activeTool == ViewportTool::Knife ||
+            inputRouter_.state().activeTool == ViewportTool::Cut ||
+            inputRouter_.state().activeTool == ViewportTool::Mirror ||
+            inputRouter_.state().activeTool == ViewportTool::Poly) {
+        if (hasActiveBoxPreview(boxPreview_)) {
+            const ModelingCommandResult cancel = modeling.cancelBox();
+            if (!cancel.ok) {
+                LOG_ERROR("Box cancel failed: {}", cancel.message);
+            }
+            boxPreview_ = {};
+        }
+
+        const bool canInteractWithModalTool = hovered && !gizmoConsumed && !result.navigationActive;
+        const bool finalizePressed =
+                !input.textInputActive &&
+                !result.navigationActive &&
+                (ImGui::IsKeyPressed(ImGuiKey_Space, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
+
+        if (inputRouter_.state().activeTool == ViewportTool::InsertEdgeLoop) {
+            const bool insertEdgeLoopDragging =
+                    insertEdgeLoopDragActive_ || modeling.toolStatus().insertEdgeLoopDragging;
+            if (canInteractWithModalTool &&
+                    !leftDown &&
+                    !leftReleased &&
+                    !insertEdgeLoopDragging &&
+                    !suppressHoverWork) {
+                const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+                if (claimHoverWork(hoverWorkKey)) {
+                    handleToolCommandResult("Insert edge loop hover",
+                            modeling.updateInsertEdgeLoopHover(makeModelingToolEvent()));
+                }
+            }
+            if (canInteractWithModalTool && leftClicked) {
+                const ModelingCommandResult command =
+                        modeling.beginInsertEdgeLoopDrag(makeModelingToolEvent(true));
+                handleToolCommandResult("Insert edge loop drag begin", command);
+                insertEdgeLoopDragActive_ = command.ok && modeling.toolStatus().insertEdgeLoopDragging;
+            } else if (canInteractWithModalTool &&
+                    leftDown &&
+                    insertEdgeLoopDragging) {
+                handleToolCommandResult("Insert edge loop drag update",
+                        modeling.updateInsertEdgeLoopDrag(makeModelingToolEvent(true)));
+            }
+            if (leftReleased && insertEdgeLoopDragging) {
+                const ModelingCommandResult command = executeTrackedModelingCommand(
+                        undoRedo,
+                        modeling,
+                        "Insert Edge Loop",
+                        [&]() {
+                            return modeling.commitInsertEdgeLoopDrag();
+                        });
+                handleToolCommandResult("Insert edge loop commit", command);
+                insertEdgeLoopDragActive_ = false;
+                inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+            }
+        } else if (inputRouter_.state().activeTool == ViewportTool::Knife) {
+            if (canInteractWithModalTool && !suppressHoverWork) {
+                const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+                if (claimHoverWork(hoverWorkKey)) {
+                    handleToolCommandResult("Knife hover", modeling.updateKnifeHover(makeModelingToolEvent()));
+                }
+            }
+            if (canInteractWithModalTool && leftClicked) {
+                handleToolCommandResult("Knife point", modeling.acceptKnifePoint(makeModelingToolEvent()));
+            }
+            if (finalizePressed) {
+                const ModelingCommandResult command = executeTrackedModelingCommand(
+                        undoRedo,
+                        modeling,
+                        "Knife",
+                        [&]() {
+                            return modeling.commitKnifeTool();
+                        });
+                handleToolCommandResult("Knife commit", command);
+                if (command.ok) {
+                    inputRouter_.setActiveTool(ViewportTool::Move);
+                    inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+                }
+            }
+        } else if (inputRouter_.state().activeTool == ViewportTool::Cut) {
+            if (canInteractWithModalTool && !suppressHoverWork && !(leftDown && cutDragActive_)) {
+                const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+                if (claimHoverWork(hoverWorkKey)) {
+                    handleToolCommandResult("Cut hover", modeling.updateCutHover(makeModelingToolEvent()));
+                }
+            }
+            if (canInteractWithModalTool && leftClicked) {
+                const ModelingToolStatus before = modeling.toolStatus();
+                ModelingCommandResult command;
+                if (const std::optional<int> pointIndex = hitDrawnPlaneCapturedPoint(
+                            before.cutPoints,
+                            before.cutCapturedPointCount,
+                            leftClickLocal,
+                            camera,
+                            itemMin,
+                            itemSize)) {
+                    command = modeling.beginCutPointDrag(*pointIndex);
+                    handleToolCommandResult("Cut point drag begin", command);
+                } else if (hitDrawnPlaneLine(
+                            before.cutPoints,
+                            before.cutCapturedPointCount,
+                            before.cutHasLine,
+                            leftClickLocal,
+                            camera,
+                            itemMin,
+                            itemSize)) {
+                    command = modeling.beginCutLineDrag(makeModelingToolEventAt(leftClickLocal, true));
+                    handleToolCommandResult("Cut line drag begin", command);
+                } else {
+                    command = modeling.clickCut(makeModelingToolEventAt(leftClickLocal));
+                    handleToolCommandResult("Cut point", command);
+                }
+                cutDragActive_ = command.ok && modeling.toolStatus().cutDragging;
+            } else if (canInteractWithModalTool &&
+                    leftDown &&
+                    (cutDragActive_ || modeling.toolStatus().cutDragging)) {
+                handleToolCommandResult("Cut drag update", modeling.updateCutHover(makeModelingToolEvent(true)));
+                cutDragActive_ = modeling.toolStatus().cutDragging;
+            }
+            if (leftReleased && (cutDragActive_ || modeling.toolStatus().cutDragging)) {
+                const ModelingCommandResult command = modeling.endCutDrag();
+                handleToolCommandResult("Cut drag end", command);
+                cutDragActive_ = false;
+            }
+            if (!input.textInputActive &&
+                    !result.navigationActive &&
+                    ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+                handleToolCommandResult("Cut mode", modeling.cycleCutMode());
+            }
+            if (finalizePressed) {
+                const ModelingToolStatus status = modeling.toolStatus();
+                if (status.cutDragging) {
+                    LOG_ERROR("Cut commit failed: finish the current drag before committing.");
+                } else if (!status.cutCanPreview || !status.cutPreviewValid) {
+                    LOG_ERROR("Cut commit failed: place a valid cut line first.");
+                } else {
+                    const ModelingCommandResult command = executeTrackedModelingCommand(
+                            undoRedo,
+                            modeling,
+                            "Cut",
+                            [&]() {
+                                return modeling.finalizeCutTool();
+                            });
+                    handleToolCommandResult("Cut commit", command);
+                    if (command.ok) {
+                        inputRouter_.setActiveTool(ViewportTool::Select);
+                        inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+                    }
+                }
+            }
+        } else if (inputRouter_.state().activeTool == ViewportTool::Mirror) {
+            if (canInteractWithModalTool && !suppressHoverWork && !(leftDown && mirrorDragActive_)) {
+                const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+                if (claimHoverWork(hoverWorkKey)) {
+                    handleToolCommandResult("Mirror hover", modeling.updateMirrorHover(makeModelingToolEvent()));
+                }
+            }
+            if (canInteractWithModalTool && leftClicked) {
+                const ModelingToolStatus before = modeling.toolStatus();
+                ModelingCommandResult command;
+                if (const std::optional<int> pointIndex = hitDrawnPlaneCapturedPoint(
+                            before.mirrorPoints,
+                            before.mirrorCapturedPointCount,
+                            leftClickLocal,
+                            camera,
+                            itemMin,
+                            itemSize)) {
+                    command = modeling.beginMirrorPointDrag(*pointIndex);
+                    handleToolCommandResult("Mirror point drag begin", command);
+                } else if (hitDrawnPlaneLine(
+                            before.mirrorPoints,
+                            before.mirrorCapturedPointCount,
+                            before.mirrorHasLine,
+                            leftClickLocal,
+                            camera,
+                            itemMin,
+                            itemSize)) {
+                    command = modeling.beginMirrorLineDrag(makeModelingToolEventAt(leftClickLocal, true));
+                    handleToolCommandResult("Mirror line drag begin", command);
+                } else {
+                    command = modeling.clickMirror(makeModelingToolEventAt(leftClickLocal));
+                    handleToolCommandResult("Mirror point", command);
+                }
+                mirrorDragActive_ = command.ok && modeling.toolStatus().mirrorDragging;
+            } else if (canInteractWithModalTool &&
+                    leftDown &&
+                    (mirrorDragActive_ || modeling.toolStatus().mirrorDragging)) {
+                handleToolCommandResult("Mirror drag update", modeling.updateMirrorHover(makeModelingToolEvent(true)));
+                mirrorDragActive_ = modeling.toolStatus().mirrorDragging;
+            }
+            if (leftReleased && (mirrorDragActive_ || modeling.toolStatus().mirrorDragging)) {
+                const ModelingCommandResult command = modeling.endMirrorDrag();
+                handleToolCommandResult("Mirror drag end", command);
+                mirrorDragActive_ = false;
+            }
+            if (finalizePressed) {
+                const ModelingToolStatus status = modeling.toolStatus();
+                if (status.mirrorDragging) {
+                    LOG_ERROR("Mirror commit failed: finish the current drag before committing.");
+                } else if (!status.mirrorCanPreview || !status.mirrorPreviewValid) {
+                    LOG_ERROR("Mirror commit failed: place a valid mirror line first.");
+                } else {
+                    const ModelingCommandResult command = executeTrackedModelingCommand(
+                            undoRedo,
+                            modeling,
+                            "Mirror",
+                            [&]() {
+                                return modeling.finalizeMirrorTool();
+                            });
+                    handleToolCommandResult("Mirror commit", command);
+                    if (command.ok) {
+                        inputRouter_.setActiveTool(ViewportTool::Select);
+                        inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+                    }
+                }
+            }
+        } else if (inputRouter_.state().activeTool == ViewportTool::Poly) {
+            if (canInteractWithModalTool && !suppressHoverWork) {
+                const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
+                if (claimHoverWork(hoverWorkKey)) {
+                    handleToolCommandResult("Poly hover", modeling.updatePolyHover(makeModelingToolEvent()));
+                }
+            }
+            if (canInteractWithModalTool && leftClicked) {
+                handleToolCommandResult("Poly point", modeling.acceptPolyPoint());
+            }
+            if (finalizePressed) {
+                const ModelingCommandResult command = executeTrackedModelingCommand(
+                        undoRedo,
+                        modeling,
+                        "Poly",
+                        [&]() {
+                            return modeling.commitPolyTool();
+                        });
+                handleToolCommandResult("Poly commit", command);
+                if (command.ok) {
+                    inputRouter_.setActiveTool(ViewportTool::Move);
+                    inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+                }
+            }
+        }
     } else {
         if (hasActiveBoxPreview(boxPreview_)) {
             const ModelingCommandResult cancel = modeling.cancelBox();
@@ -2214,7 +2767,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
 
             const ModelingActionQuery query{
                     .surface = ModelingActionSurface::ViewportContextMenu,
-                    .modalToolOwnsViewport = boxToolOwnsViewport(),
+                    .modalToolOwnsViewport = modalToolOwnsViewport(),
                     .includeDisabled = true,
                     .includeHidden = false,
             };
@@ -2302,7 +2855,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             result.flyHudActive && !camera.flySpeedIsDefault(),
             result.flyHudActive,
             camera.flySpeed());
-    drawViewportOperationsPopup(undoRedo, modeling, inputRouter_, boxToolOwnsViewport());
+    drawViewportOperationsPopup(undoRedo, modeling, inputRouter_, modalToolOwnsViewport());
 }
 
 bool ViewportPanel::drawViewCube(ViewportCameraController& camera, ImVec2 itemMin, ImVec2 itemSize, bool interactive) {

@@ -120,12 +120,13 @@ TEST_CASE("custom engine shell can assemble chrome from public host descriptors"
 	CHECK(contains_target(operation_bar_items, "edge_operations"));
 	CHECK(contains_target(operation_bar_items, "face_operations"));
 
-	REQUIRE(viewport_toolbar_items.size() == 6U);
+	REQUIRE(viewport_toolbar_items.size() == 7U);
 	CHECK(contains_target(viewport_toolbar_items, "move"));
 	CHECK(contains_target(viewport_toolbar_items, "rotate"));
 	CHECK(contains_target(viewport_toolbar_items, "scale"));
 	CHECK(contains_target(viewport_toolbar_items, "knife"));
 	CHECK(contains_target(viewport_toolbar_items, "cut"));
+	CHECK(contains_target(viewport_toolbar_items, "mirror"));
 	CHECK(contains_target(viewport_toolbar_items, "poly"));
 
 	REQUIRE(settings_panel_items.size() == 6U);

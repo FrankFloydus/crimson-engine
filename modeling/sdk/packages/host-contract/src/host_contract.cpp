@@ -174,7 +174,7 @@ HostActionDescriptor tool_action(
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-	static const std::array<HostActionDescriptor, 45> descriptors {{
+	static const std::array<HostActionDescriptor, 46> descriptors {{
 		operation_action("invert_mesh", "Invert Mesh", "flip_face_normals",
 			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
 		operation_action("recalculate_outside_mesh", "Recalculate Outside", "recalculate_face_normals",
@@ -221,6 +221,8 @@ std::span<const HostActionDescriptor> action_descriptors()
 			action_availability(HostSelectionMode::edge, 0, 0, HostActiveSelectionKind::none, false)),
 		tool_action("cut_tool", "Cut", "cut",
 			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false)),
+		tool_action("mirror_tool", "Mirror", "mirror",
+			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
 		tool_action("poly_tool", "Poly", "poly",
 			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false)),
 		operation_action("apply_active_material", "Apply Active Material", "assign_material",
@@ -358,7 +360,7 @@ std::span<const HostUiGroupDescriptor> ui_group_descriptors()
 
 std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 {
-	static constexpr std::array<HostUiPlacementDescriptor, 30> descriptors {{
+	static constexpr std::array<HostUiPlacementDescriptor, 31> descriptors {{
 		{ "menu_open_editor", "main_menu", "editor", "Open Editor", HostUiPlacementTargetKind::editor_action, "open_editor", 0, false },
 		{ "menu_new_document", "main_menu", "file", "New Document", HostUiPlacementTargetKind::editor_action, "new_document", 100, false },
 		{ "menu_open_document", "main_menu", "file", "Open...", HostUiPlacementTargetKind::editor_action, "open_document", 110, false },
@@ -382,7 +384,8 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 		{ "toolbar_scale_tool", "viewport_tool_toolbar", "transform_tools", "Scale", HostUiPlacementTargetKind::tool, "scale", 20, false },
 		{ "toolbar_knife_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Knife", HostUiPlacementTargetKind::tool, "knife", 30, false },
 		{ "toolbar_cut_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Cut", HostUiPlacementTargetKind::tool, "cut", 40, false },
-		{ "toolbar_poly_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Poly", HostUiPlacementTargetKind::tool, "poly", 50, false },
+		{ "toolbar_mirror_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Mirror", HostUiPlacementTargetKind::tool, "mirror", 50, false },
+		{ "toolbar_poly_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Poly", HostUiPlacementTargetKind::tool, "poly", 60, false },
 		{ "settings_interpolated_bridge", "tool_settings_panel", "operation_settings", "Interpolated Bridge", HostUiPlacementTargetKind::preference_group, "operation.bridge", 0, false, HostUiVisibilityCondition::bridge_preview_active },
 		{ "settings_edge_bevel", "tool_settings_panel", "operation_settings", "Bevel Edges", HostUiPlacementTargetKind::preference_group, "operation.edge_bevel", 10, false, HostUiVisibilityCondition::edge_bevel_preview_active },
 		{ "settings_thicken", "tool_settings_panel", "operation_settings", "Thicken", HostUiPlacementTargetKind::preference_group, "operation.thicken", 20, false, HostUiVisibilityCondition::thicken_preview_active },
@@ -445,11 +448,12 @@ std::span<const HostToolGroupDescriptor> tool_group_descriptors()
 		"rotate",
 		"scale",
 	}};
-	static constexpr std::array<std::string_view, 5> modal_modeling_tools {{
+	static constexpr std::array<std::string_view, 6> modal_modeling_tools {{
 		"box",
 		"insert_edge_loop",
 		"knife",
 		"cut",
+		"mirror",
 		"poly",
 	}};
 	static constexpr std::array<HostToolGroupDescriptor, 2> descriptors {{
@@ -524,6 +528,7 @@ bool is_modal_tool(quader_editor_core::ViewportInteractionTool tool)
 		tool == quader_editor_core::ViewportInteractionTool::insert_edge_loop ||
 		tool == quader_editor_core::ViewportInteractionTool::knife ||
 		tool == quader_editor_core::ViewportInteractionTool::cut ||
+		tool == quader_editor_core::ViewportInteractionTool::mirror ||
 		tool == quader_editor_core::ViewportInteractionTool::poly;
 }
 
@@ -710,11 +715,12 @@ HostGestureDescriptor gesture(
 
 std::span<const HostGestureDescriptor> gesture_descriptors()
 {
-	static constexpr std::array<std::string_view, 5> modal_tools {{
+	static constexpr std::array<std::string_view, 6> modal_tools {{
 		"box",
 		"insert_edge_loop",
 		"knife",
 		"cut",
+		"mirror",
 		"poly",
 	}};
 	static constexpr std::array<std::string_view, 3> transform_tools {{

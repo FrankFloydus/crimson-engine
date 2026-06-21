@@ -23,7 +23,15 @@ enum class ViewportOverlayLayer {
     OpenEdge = 12,
     SnapTargetVertex = 13,
     DiagnosticEdge = 14,
+    ToolPlane = 15,
+    ToolPreviewFill = 16,
+    ToolPlaneLine = 17,
+    ToolPreviewLine = 18,
+    ToolPreviewSeam = 19,
+    ToolHandle = 20,
 };
+
+inline constexpr std::size_t kViewportOverlayLayerCount = 21u;
 
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
     return static_cast<std::uint32_t>(r) |

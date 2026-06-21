@@ -95,13 +95,13 @@ inline bool viewportToolHasNativeController(ViewportTool tool) {
     case ViewportTool::Scale:
         return true;
     case ViewportTool::Box:
-        return viewportToolHasHostContract(tool);
     case ViewportTool::InsertEdgeLoop:
     case ViewportTool::Knife:
     case ViewportTool::Cut:
     case ViewportTool::Poly:
+        return viewportToolHasHostContract(tool);
     case ViewportTool::Mirror:
-        return false;
+        return true;
     }
     return false;
 }
@@ -270,7 +270,7 @@ inline bool viewportToolFromContractId(std::string_view id, ViewportTool& tool) 
         tool = ViewportTool::Poly;
         return true;
     }
-    if (id == "mirror") {
+    if (id == "mirror" || id == "mirror_tool") {
         tool = ViewportTool::Mirror;
         return true;
     }

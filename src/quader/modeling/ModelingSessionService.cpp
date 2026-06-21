@@ -7,9 +7,11 @@
 #include "quader/scene/SceneEntityNaming.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -23,8 +25,10 @@
 #include <quader_editor_core/repeat_last_action.h>
 #include <quader_editor_core/runtime_command.h>
 #include <quader_editor_core/session.h>
+#include <quader_editor_core/tool/cut_tool.h>
 #include <quader_editor_core/tool/mirror_tool.h>
 #include <quader_editor_core/tool/move_tool.h>
+#include <quader_editor_core/tool/viewport_projection.h>
 #include <quader_editor_core/tool/rotate_tool.h>
 #include <quader_editor_core/tool/scale_tool.h>
 #include <quader_editor_core/tool/selection_edit.h>
@@ -81,20 +85,143 @@ quader_poly::Transform3 toSdk(const ModelingTransform3& transform) {
     };
 }
 
-quader_editor_core::EditorOperationSettings defaultSettingsForOperation(
+quader_editor_core::ViewportInteractionTool toSdk(ModelingViewportTool tool) {
+    switch (tool) {
+    case ModelingViewportTool::Move:
+        return quader_editor_core::ViewportInteractionTool::move;
+    case ModelingViewportTool::Rotate:
+        return quader_editor_core::ViewportInteractionTool::rotate;
+    case ModelingViewportTool::Scale:
+        return quader_editor_core::ViewportInteractionTool::scale;
+    case ModelingViewportTool::Box:
+        return quader_editor_core::ViewportInteractionTool::box;
+    case ModelingViewportTool::InsertEdgeLoop:
+        return quader_editor_core::ViewportInteractionTool::insert_edge_loop;
+    case ModelingViewportTool::Knife:
+        return quader_editor_core::ViewportInteractionTool::knife;
+    case ModelingViewportTool::Cut:
+        return quader_editor_core::ViewportInteractionTool::cut;
+    case ModelingViewportTool::Poly:
+        return quader_editor_core::ViewportInteractionTool::poly;
+    case ModelingViewportTool::Mirror:
+        return quader_editor_core::ViewportInteractionTool::mirror;
+    case ModelingViewportTool::Select:
+        return quader_editor_core::ViewportInteractionTool::select;
+    }
+    return quader_editor_core::ViewportInteractionTool::select;
+}
+
+ModelingViewportTool fromSdkViewportTool(quader_editor_core::ViewportInteractionTool tool) {
+    switch (tool) {
+    case quader_editor_core::ViewportInteractionTool::move:
+        return ModelingViewportTool::Move;
+    case quader_editor_core::ViewportInteractionTool::rotate:
+        return ModelingViewportTool::Rotate;
+    case quader_editor_core::ViewportInteractionTool::scale:
+        return ModelingViewportTool::Scale;
+    case quader_editor_core::ViewportInteractionTool::box:
+        return ModelingViewportTool::Box;
+    case quader_editor_core::ViewportInteractionTool::insert_edge_loop:
+        return ModelingViewportTool::InsertEdgeLoop;
+    case quader_editor_core::ViewportInteractionTool::knife:
+        return ModelingViewportTool::Knife;
+    case quader_editor_core::ViewportInteractionTool::cut:
+        return ModelingViewportTool::Cut;
+    case quader_editor_core::ViewportInteractionTool::poly:
+        return ModelingViewportTool::Poly;
+    case quader_editor_core::ViewportInteractionTool::mirror:
+        return ModelingViewportTool::Mirror;
+    case quader_editor_core::ViewportInteractionTool::select:
+    case quader_editor_core::ViewportInteractionTool::extend:
+    case quader_editor_core::ViewportInteractionTool::extrude:
+    case quader_editor_core::ViewportInteractionTool::unknown:
+        break;
+    }
+    return ModelingViewportTool::Select;
+}
+
+quader_editor_core::CutMode toSdk(ModelingCutMode mode) {
+    switch (mode) {
+    case ModelingCutMode::DiscardLeft:
+        return quader_editor_core::CutMode::keep_back;
+    case ModelingCutMode::DiscardRight:
+        return quader_editor_core::CutMode::keep_front;
+    case ModelingCutMode::KeepBoth:
+        return quader_editor_core::CutMode::keep_both;
+    }
+    return quader_editor_core::CutMode::keep_both;
+}
+
+ModelingCutMode fromSdk(quader_editor_core::CutMode mode) {
+    switch (mode) {
+    case quader_editor_core::CutMode::keep_back:
+        return ModelingCutMode::DiscardLeft;
+    case quader_editor_core::CutMode::keep_front:
+        return ModelingCutMode::DiscardRight;
+    case quader_editor_core::CutMode::keep_both:
+        return ModelingCutMode::KeepBoth;
+    }
+    return ModelingCutMode::KeepBoth;
+}
+
+ModelingInteractionSettings normalizeInteractionSettings(ModelingInteractionSettings settings) {
+    settings.bridgeSteps = quader_editor_core::normalize_bridge_operation_settings(
+            quader_editor_core::BridgeOperationSettings{.steps = settings.bridgeSteps}).steps;
+    const quader_editor_core::EdgeBevelOperationSettings edgeBevel =
+            quader_editor_core::normalize_edge_bevel_operation_settings({
+                    .width = settings.edgeBevelWidth,
+                    .profile = settings.edgeBevelProfile,
+                    .segments = settings.edgeBevelSegments,
+            });
+    settings.edgeBevelWidth = edgeBevel.width;
+    settings.edgeBevelProfile = edgeBevel.profile;
+    settings.edgeBevelSegments = edgeBevel.segments;
+    const quader_editor_core::ThickenOperationSettings thicken =
+            quader_editor_core::normalize_thicken_operation_settings({
+                    .thickness = settings.thickenThickness,
+                    .from_center = settings.thickenFromCenter,
+            });
+    settings.thickenThickness = thicken.thickness;
+    settings.thickenFromCenter = thicken.from_center;
+    const quader_editor_core::SliceQuadOperationSettings slice =
+            quader_editor_core::normalize_slice_quad_operation_settings({
+                    .x_slices = settings.sliceQuadXSlices,
+                    .y_slices = settings.sliceQuadYSlices,
+            });
+    settings.sliceQuadXSlices = slice.x_slices;
+    settings.sliceQuadYSlices = slice.y_slices;
+    settings.mergeByDistanceTolerance = quader_editor_core::normalize_merge_by_distance_operation_settings(
+            quader_editor_core::MergeByDistanceOperationSettings{.tolerance = settings.mergeByDistanceTolerance}).tolerance;
+    return settings;
+}
+
+quader_editor_core::EditorOperationSettings settingsForOperation(
         quader_editor_core::EditorOperationId operation,
+        const ModelingInteractionSettings& interactionSettings,
         std::string_view actionId = {}) {
     switch (operation) {
     case quader_editor_core::EditorOperationId::bridge:
-        return quader_editor_core::BridgeOperationSettings{};
+        return quader_editor_core::BridgeOperationSettings{.steps = interactionSettings.bridgeSteps};
     case quader_editor_core::EditorOperationId::edge_bevel:
-        return quader_editor_core::EdgeBevelOperationSettings{};
+        return quader_editor_core::EdgeBevelOperationSettings{
+                .width = interactionSettings.edgeBevelWidth,
+                .profile = interactionSettings.edgeBevelProfile,
+                .segments = interactionSettings.edgeBevelSegments,
+        };
     case quader_editor_core::EditorOperationId::thicken:
-        return quader_editor_core::ThickenOperationSettings{};
+        return quader_editor_core::ThickenOperationSettings{
+                .thickness = interactionSettings.thickenThickness,
+                .from_center = interactionSettings.thickenFromCenter,
+        };
     case quader_editor_core::EditorOperationId::slice_quad:
-        return quader_editor_core::SliceQuadOperationSettings{};
+        return quader_editor_core::SliceQuadOperationSettings{
+                .x_slices = interactionSettings.sliceQuadXSlices,
+                .y_slices = interactionSettings.sliceQuadYSlices,
+        };
     case quader_editor_core::EditorOperationId::merge_by_distance:
-        return quader_editor_core::MergeByDistanceOperationSettings{};
+        return quader_editor_core::MergeByDistanceOperationSettings{
+                .tolerance = interactionSettings.mergeByDistanceTolerance,
+        };
     case quader_editor_core::EditorOperationId::bevel_vertices:
         return quader_editor_core::BevelVerticesOperationSettings{};
     case quader_editor_core::EditorOperationId::duplicate_meshes:
@@ -133,6 +260,67 @@ quader_editor_core::EditorOperationSettings defaultSettingsForOperation(
         return quader_editor_core::SelectionOperationSettings{};
     }
     return quader_editor_core::SelectionOperationSettings{};
+}
+
+ModelingToolSettingsTargetKind toolSettingsTargetKindForPreview(quader_editor_core::PreviewTransactionKind kind) {
+    switch (kind) {
+    case quader_editor_core::PreviewTransactionKind::bridge:
+        return ModelingToolSettingsTargetKind::Bridge;
+    case quader_editor_core::PreviewTransactionKind::edge_bevel:
+        return ModelingToolSettingsTargetKind::EdgeBevel;
+    case quader_editor_core::PreviewTransactionKind::thicken:
+        return ModelingToolSettingsTargetKind::Thicken;
+    case quader_editor_core::PreviewTransactionKind::slice_quad:
+        return ModelingToolSettingsTargetKind::SliceQuad;
+    case quader_editor_core::PreviewTransactionKind::merge_by_distance:
+        return ModelingToolSettingsTargetKind::MergeByDistance;
+    case quader_editor_core::PreviewTransactionKind::none:
+    case quader_editor_core::PreviewTransactionKind::transform:
+        break;
+    }
+    return ModelingToolSettingsTargetKind::None;
+}
+
+std::optional<quader_editor_core::EditorOperationId> operationForPreviewKind(
+        quader_editor_core::PreviewTransactionKind kind) {
+    switch (kind) {
+    case quader_editor_core::PreviewTransactionKind::bridge:
+        return quader_editor_core::EditorOperationId::bridge;
+    case quader_editor_core::PreviewTransactionKind::edge_bevel:
+        return quader_editor_core::EditorOperationId::edge_bevel;
+    case quader_editor_core::PreviewTransactionKind::thicken:
+        return quader_editor_core::EditorOperationId::thicken;
+    case quader_editor_core::PreviewTransactionKind::slice_quad:
+        return quader_editor_core::EditorOperationId::slice_quad;
+    case quader_editor_core::PreviewTransactionKind::merge_by_distance:
+        return quader_editor_core::EditorOperationId::merge_by_distance;
+    case quader_editor_core::PreviewTransactionKind::none:
+    case quader_editor_core::PreviewTransactionKind::transform:
+        break;
+    }
+    return std::nullopt;
+}
+
+const char* fallbackToolSettingsLabel(ModelingToolSettingsTargetKind kind) {
+    switch (kind) {
+    case ModelingToolSettingsTargetKind::Cut:
+        return "Cut";
+    case ModelingToolSettingsTargetKind::Mirror:
+        return "Mirror";
+    case ModelingToolSettingsTargetKind::Bridge:
+        return "Interpolated Bridge";
+    case ModelingToolSettingsTargetKind::EdgeBevel:
+        return "Bevel Edges";
+    case ModelingToolSettingsTargetKind::Thicken:
+        return "Distance";
+    case ModelingToolSettingsTargetKind::SliceQuad:
+        return "Slice Quad";
+    case ModelingToolSettingsTargetKind::MergeByDistance:
+        return "Merge by Distance";
+    case ModelingToolSettingsTargetKind::None:
+        break;
+    }
+    return "Tool Settings";
 }
 
 Vec3 fromSdk(quader_poly::Vec3 value) {
@@ -343,6 +531,9 @@ bool objectEffectivelyVisible(
         int objectId,
         const std::unordered_map<int, EntityId>& entityByObject,
         const SceneDocument& scene) {
+    if (objectId < 0) {
+        return true;
+    }
     const auto entity = entityByObject.find(objectId);
     return entity != entityByObject.end() && scene.isEffectivelyVisible(entity->second);
 }
@@ -395,9 +586,475 @@ ViewportOverlayFrame fromSdk(
     return result;
 }
 
-MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
-    const quader_poly::CompiledMesh compiled = quader_poly::compile_document(object.document);
+struct DrawnPlanePreviewFrame {
+    Vec3 lineStart;
+    Vec3 lineEnd;
+    Vec3 normal;
+    Vec3 side;
+    float lineLength = 0.0f;
+};
 
+bool buildDrawnPlanePreviewFrame(
+        Vec3 point0,
+        Vec3 point1,
+        Vec3 support,
+        DrawnPlanePreviewFrame& frame) {
+    const Vec3 line = point1 - point0;
+    const float lineLength = length(line);
+    if (lineLength <= 0.0001f) {
+        return false;
+    }
+
+    const Vec3 lineDirection = line / lineLength;
+    const Vec3 supportVector = support - point0;
+    Vec3 normal = cross(line, supportVector);
+    if (length(normal) <= 0.000001f) {
+        normal = cross(lineDirection, {0.0f, 1.0f, 0.0f});
+        if (length(normal) <= 0.000001f) {
+            normal = cross(lineDirection, {0.0f, 0.0f, 1.0f});
+        }
+    }
+    normal = normalize(normal);
+    if (length(normal) <= 0.000001f) {
+        return false;
+    }
+
+    Vec3 side = cross(normal, lineDirection);
+    if (length(side) <= 0.000001f) {
+        side = {0.0f, 1.0f, 0.0f};
+    }
+    side = normalize(side);
+    frame = {
+            .lineStart = point0,
+            .lineEnd = point1,
+            .normal = normal,
+            .side = side,
+            .lineLength = lineLength,
+    };
+    return true;
+}
+
+void appendDrawnPlaneToolOverlay(
+        ViewportOverlayFrame& frame,
+        std::span<const quader_poly::Vec3> visiblePoints,
+        quader_poly::Vec3 supportPoint,
+        bool hasLine) {
+    std::array<Vec3, 3> points{};
+    const std::size_t count = std::min<std::size_t>(visiblePoints.size(), points.size());
+    for (std::size_t index = 0; index < count; ++index) {
+        points[index] = fromSdk(visiblePoints[index]);
+    }
+    if (count <= 0U) {
+        return;
+    }
+
+    for (std::size_t index = 0; index < count; ++index) {
+        frame.points.push_back({
+                .layer = ViewportOverlayLayer::ToolHandle,
+                .position = points[index],
+                .color = kOverlayToolHandleColor,
+                .sizePixels = 8.0f,
+        });
+    }
+
+    if (!hasLine || count < 2U) {
+        return;
+    }
+
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::ToolHandle,
+            .start = points[0],
+            .end = points[1],
+            .color = kOverlayToolHandleColor,
+            .widthPixels = 2.0f,
+    });
+
+    DrawnPlanePreviewFrame planeFrame;
+    if (!buildDrawnPlanePreviewFrame(points[0], points[1], fromSdk(supportPoint), planeFrame)) {
+        return;
+    }
+
+    const Vec3 side = planeFrame.side * planeFrame.lineLength;
+    const std::array<Vec3, 4> corners{{
+            planeFrame.lineStart,
+            planeFrame.lineEnd,
+            planeFrame.lineEnd + side,
+            planeFrame.lineStart + side,
+    }};
+
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::ToolPlane,
+            .a = corners[0],
+            .b = corners[1],
+            .c = corners[2],
+            .color = kOverlayToolPlaneColor,
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::ToolPlane,
+            .a = corners[0],
+            .b = corners[2],
+            .c = corners[3],
+            .color = kOverlayToolPlaneColor,
+    });
+    for (std::size_t index = 0; index < corners.size(); ++index) {
+        frame.lines.push_back({
+                .layer = ViewportOverlayLayer::ToolPlaneLine,
+                .start = corners[index],
+                .end = corners[(index + 1U) % corners.size()],
+                .color = kOverlayToolPlaneLineColor,
+                .widthPixels = 1.0f,
+        });
+    }
+}
+
+float sdkLengthSquared(quader_poly::Vec3 value) {
+    return value.x * value.x + value.y * value.y + value.z * value.z;
+}
+
+void mixToolStateHash(std::uint64_t& hash, std::uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+}
+
+void mixToolStateHash(std::uint64_t& hash, bool value) {
+    mixToolStateHash(hash, value ? 1ULL : 0ULL);
+}
+
+void mixToolStateHash(std::uint64_t& hash, int value) {
+    mixToolStateHash(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+}
+
+void mixToolStateHash(std::uint64_t& hash, double value) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    mixToolStateHash(hash, bits);
+}
+
+void mixToolStateHash(std::uint64_t& hash, quader_poly::Vec3 value) {
+    mixToolStateHash(hash, static_cast<double>(value.x));
+    mixToolStateHash(hash, static_cast<double>(value.y));
+    mixToolStateHash(hash, static_cast<double>(value.z));
+}
+
+quader_poly::Vec3 drawnPlaneSupportPoint(
+        std::span<const quader_poly::Vec3> visiblePoints,
+        quader_poly::Vec3 faceNormal) {
+    if (visiblePoints.size() > 2U) {
+        return visiblePoints[2];
+    }
+    if (visiblePoints.size() > 1U && sdkLengthSquared(faceNormal) > 0.000001f) {
+        return visiblePoints[0] + faceNormal;
+    }
+    return {};
+}
+
+struct PreviewTriangleMesh {
+    std::vector<Vec3> vertices;
+    std::vector<std::uint32_t> indices;
+
+    [[nodiscard]] bool empty() const {
+        return vertices.empty() || indices.empty();
+    }
+};
+
+PreviewTriangleMesh previewMeshFromDocuments(const std::vector<quader_poly::Document>& documents) {
+    PreviewTriangleMesh mesh;
+    for (const quader_poly::Document& document : documents) {
+        const quader_poly::CompiledMesh compiled = quader_poly::compile_document(document);
+        const std::uint32_t vertexOffset = static_cast<std::uint32_t>(mesh.vertices.size());
+        mesh.vertices.reserve(mesh.vertices.size() + compiled.vertices.size());
+        mesh.indices.reserve(mesh.indices.size() + compiled.indices.size());
+        for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
+            mesh.vertices.push_back(fromSdk(vertex.position));
+        }
+        for (const std::uint32_t index : compiled.indices) {
+            if (index < compiled.vertices.size()) {
+                mesh.indices.push_back(vertexOffset + index);
+            }
+        }
+    }
+    return mesh;
+}
+
+void appendPreviewMeshFill(
+        ViewportOverlayFrame& frame,
+        const PreviewTriangleMesh& mesh,
+        std::uint32_t color) {
+    if (mesh.empty()) {
+        return;
+    }
+
+    for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
+        const std::uint32_t ia = mesh.indices[index];
+        const std::uint32_t ib = mesh.indices[index + 1U];
+        const std::uint32_t ic = mesh.indices[index + 2U];
+        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
+            continue;
+        }
+        frame.triangles.push_back({
+                .layer = ViewportOverlayLayer::ToolPreviewFill,
+                .a = mesh.vertices[ia],
+                .b = mesh.vertices[ib],
+                .c = mesh.vertices[ic],
+                .color = color,
+        });
+    }
+}
+
+constexpr float kCutPreviewPlaneQuantization = 0.0001f;
+constexpr float kCutPreviewFeatureEdgeCosine = 0.985f;
+
+struct CutPreviewPointKey {
+    long long x = 0;
+    long long y = 0;
+    long long z = 0;
+};
+
+long long quantizeCutPreviewCoordinate(float value) {
+    return static_cast<long long>(std::llround(value / kCutPreviewPlaneQuantization));
+}
+
+CutPreviewPointKey cutPreviewPointKey(Vec3 value) {
+    return {
+            .x = quantizeCutPreviewCoordinate(value.x),
+            .y = quantizeCutPreviewCoordinate(value.y),
+            .z = quantizeCutPreviewCoordinate(value.z),
+    };
+}
+
+bool cutPreviewPointKeyLess(const CutPreviewPointKey& left, const CutPreviewPointKey& right) {
+    if (left.x != right.x) {
+        return left.x < right.x;
+    }
+    if (left.y != right.y) {
+        return left.y < right.y;
+    }
+    return left.z < right.z;
+}
+
+struct CutPreviewEdgeKey {
+    CutPreviewPointKey a;
+    CutPreviewPointKey b;
+
+    CutPreviewEdgeKey(Vec3 first, Vec3 second) {
+        CutPreviewPointKey firstKey = cutPreviewPointKey(first);
+        CutPreviewPointKey secondKey = cutPreviewPointKey(second);
+        if (cutPreviewPointKeyLess(secondKey, firstKey)) {
+            a = secondKey;
+            b = firstKey;
+        } else {
+            a = firstKey;
+            b = secondKey;
+        }
+    }
+
+    [[nodiscard]] bool operator<(const CutPreviewEdgeKey& other) const {
+        if (cutPreviewPointKeyLess(a, other.a)) {
+            return true;
+        }
+        if (cutPreviewPointKeyLess(other.a, a)) {
+            return false;
+        }
+        return cutPreviewPointKeyLess(b, other.b);
+    }
+};
+
+struct CutPreviewEdgeAccumulator {
+    Vec3 a;
+    Vec3 b;
+    Vec3 normal;
+    bool hasNormal = false;
+    bool hasCapTriangle = false;
+    bool hasSideTriangle = false;
+    bool feature = false;
+    int count = 0;
+
+    void add(Vec3 first, Vec3 second, bool onPlane, bool capTriangle, Vec3 triangleNormal) {
+        if (length(first - second) <= 0.000001f) {
+            return;
+        }
+        if (count == 0) {
+            a = first;
+            b = second;
+            normal = triangleNormal;
+            hasNormal = true;
+        } else if (hasNormal && std::fabs(dot(normal, triangleNormal)) < kCutPreviewFeatureEdgeCosine) {
+            feature = true;
+        }
+
+        ++count;
+        if (onPlane && capTriangle) {
+            hasCapTriangle = true;
+        }
+        if (!capTriangle) {
+            hasSideTriangle = true;
+        }
+    }
+
+    [[nodiscard]] bool seam() const {
+        return hasCapTriangle && hasSideTriangle;
+    }
+
+    [[nodiscard]] bool outline() const {
+        return count == 1 || feature;
+    }
+};
+
+float signedDistanceToPlane(Vec3 point, Vec3 planePoint, Vec3 planeNormal) {
+    return dot(point - planePoint, planeNormal);
+}
+
+float previewMeshBoundsMagnitude(const PreviewTriangleMesh& mesh) {
+    if (mesh.vertices.empty()) {
+        return 0.0f;
+    }
+
+    Vec3 min = mesh.vertices.front();
+    Vec3 max = mesh.vertices.front();
+    for (const Vec3 vertex : mesh.vertices) {
+        min.x = std::min(min.x, vertex.x);
+        min.y = std::min(min.y, vertex.y);
+        min.z = std::min(min.z, vertex.z);
+        max.x = std::max(max.x, vertex.x);
+        max.y = std::max(max.y, vertex.y);
+        max.z = std::max(max.z, vertex.z);
+    }
+    return length(max - min);
+}
+
+void addCutPreviewEdge(
+        std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator>& edges,
+        Vec3 a,
+        Vec3 b,
+        bool onPlane,
+        bool capTriangle,
+        Vec3 triangleNormal) {
+    if (length(a - b) <= 0.000001f) {
+        return;
+    }
+    edges[CutPreviewEdgeKey(a, b)].add(a, b, onPlane, capTriangle, triangleNormal);
+}
+
+std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collectPreviewEdges(
+        const PreviewTriangleMesh& mesh,
+        std::optional<Vec3> planePoint,
+        Vec3 planeNormal) {
+    std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges;
+    if (mesh.empty()) {
+        return edges;
+    }
+
+    const bool hasPlane = planePoint.has_value() && length(planeNormal) > 0.000001f;
+    const Vec3 normalizedPlaneNormal = hasPlane ? normalize(planeNormal) : Vec3{};
+    const float planeScale = std::max(1.0f, previewMeshBoundsMagnitude(mesh));
+    const float planeEpsilon = std::max(kCutPreviewPlaneQuantization * 8.0f, planeScale * 0.00002f);
+
+    for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
+        const std::uint32_t ia = mesh.indices[index];
+        const std::uint32_t ib = mesh.indices[index + 1U];
+        const std::uint32_t ic = mesh.indices[index + 2U];
+        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
+            continue;
+        }
+
+        const Vec3 a = mesh.vertices[ia];
+        const Vec3 b = mesh.vertices[ib];
+        const Vec3 c = mesh.vertices[ic];
+        Vec3 triangleNormal = cross(b - a, c - a);
+        if (length(triangleNormal) <= 0.000001f) {
+            continue;
+        }
+        triangleNormal = normalize(triangleNormal);
+
+        float da = 1.0f;
+        float db = 1.0f;
+        float dc = 1.0f;
+        bool capTriangle = false;
+        if (hasPlane) {
+            da = signedDistanceToPlane(a, *planePoint, normalizedPlaneNormal);
+            db = signedDistanceToPlane(b, *planePoint, normalizedPlaneNormal);
+            dc = signedDistanceToPlane(c, *planePoint, normalizedPlaneNormal);
+            capTriangle = std::fabs(da) <= planeEpsilon &&
+                    std::fabs(db) <= planeEpsilon &&
+                    std::fabs(dc) <= planeEpsilon;
+        }
+
+        addCutPreviewEdge(edges, a, b, hasPlane && std::fabs(da) <= planeEpsilon && std::fabs(db) <= planeEpsilon, capTriangle, triangleNormal);
+        addCutPreviewEdge(edges, b, c, hasPlane && std::fabs(db) <= planeEpsilon && std::fabs(dc) <= planeEpsilon, capTriangle, triangleNormal);
+        addCutPreviewEdge(edges, c, a, hasPlane && std::fabs(dc) <= planeEpsilon && std::fabs(da) <= planeEpsilon, capTriangle, triangleNormal);
+    }
+    return edges;
+}
+
+void appendPreviewLine(
+        ViewportOverlayFrame& frame,
+        ViewportOverlayLayer layer,
+        Vec3 start,
+        Vec3 end,
+        std::uint32_t color,
+        float widthPixels) {
+    if (length(start - end) <= 0.000001f) {
+        return;
+    }
+    frame.lines.push_back({
+            .layer = layer,
+            .start = start,
+            .end = end,
+            .color = color,
+            .widthPixels = widthPixels,
+    });
+}
+
+void appendCutPreviewResultLines(
+        ViewportOverlayFrame& frame,
+        const PreviewTriangleMesh& mesh,
+        Vec3 planePoint,
+        Vec3 planeNormal,
+        std::uint32_t outlineColor) {
+    const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
+            collectPreviewEdges(mesh, planePoint, planeNormal);
+    for (const auto& [key, edge] : edges) {
+        (void)key;
+        if (edge.outline()) {
+            appendPreviewLine(frame,
+                    ViewportOverlayLayer::ToolPreviewLine,
+                    edge.a,
+                    edge.b,
+                    outlineColor,
+                    1.15f);
+        }
+        if (edge.seam()) {
+            appendPreviewLine(frame,
+                    ViewportOverlayLayer::ToolPreviewSeam,
+                    edge.a,
+                    edge.b,
+                    kOverlayCutPreviewSeamColor,
+                    2.25f);
+        }
+    }
+}
+
+void appendPreviewFeatureLines(
+        ViewportOverlayFrame& frame,
+        const PreviewTriangleMesh& mesh,
+        std::uint32_t color) {
+    const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
+            collectPreviewEdges(mesh, std::nullopt, {});
+    for (const auto& [key, edge] : edges) {
+        (void)key;
+        if (!edge.outline()) {
+            continue;
+        }
+        appendPreviewLine(frame,
+                ViewportOverlayLayer::ToolPreviewLine,
+                edge.a,
+                edge.b,
+                color,
+                1.0f);
+    }
+}
+
+MeshAsset toMeshAsset(const quader_poly::CompiledMesh& compiled) {
     MeshAsset mesh;
     mesh.name = "Mesh";
     mesh.vertices.reserve(compiled.vertices.size());
@@ -422,6 +1079,14 @@ MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
     }
 
     return mesh;
+}
+
+MeshAsset toMeshAsset(const quader_poly::Document& document) {
+    return toMeshAsset(quader_poly::compile_document(document));
+}
+
+MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
+    return toMeshAsset(object.document);
 }
 
 const quader_editor_core::PolygonObject* findObject(
@@ -852,11 +1517,13 @@ public:
         const std::uint64_t selectionRevision = session_.state().selection_revision;
         const std::uint64_t sceneRevision = scene_.revision();
         const quader_editor_core::SelectionMode selectionMode = session_.selection_mode();
+        const std::uint64_t toolSignature = selectionOverlayToolSignature();
         if (selectionOverlayCacheValid_ &&
                 selectionOverlayCacheContentRevision_ == contentRevision &&
                 selectionOverlayCacheSelectionRevision_ == selectionRevision &&
                 selectionOverlayCacheSceneRevision_ == sceneRevision &&
                 selectionOverlayCacheSelectionMode_ == selectionMode &&
+                selectionOverlayCacheToolSignature_ == toolSignature &&
                 hoverMatches(selectionOverlayCacheHover_, hover)) {
             return selectionOverlayCacheFrame_;
         }
@@ -864,13 +1531,112 @@ public:
         selectionOverlayCacheFrame_ = fromSdk(selectionOverlayCurrentFrame(hover),
                 entityByObject_,
                 scene_);
+        const quader_editor_core::CutToolState& cut = runtime_.cut_state();
+        if (quader_editor_core::cut_is_active(cut)) {
+            const std::vector<quader_poly::Vec3> cutPoints =
+                    quader_editor_core::cut_overlay_points(cut, runtime_.cut_hover().position, runtime_.cut_hover().valid);
+            if (quader_editor_core::cut_can_preview(cut) && cut.preview_valid) {
+                const std::vector<quader_editor_core::PolygonObject> previewObjects =
+                        sceneTransformedObjectsForPicking();
+                const PreviewTriangleMesh keepMesh = previewMeshFromDocuments(runtime_.cut_preview_documents(
+                        previewObjects,
+                        quader_editor_core::CutPreviewMeshSide::keep));
+                const PreviewTriangleMesh discardMesh = previewMeshFromDocuments(runtime_.cut_preview_documents(
+                        previewObjects,
+                        quader_editor_core::CutPreviewMeshSide::discard));
+
+                if (cut.mode == quader_editor_core::CutMode::keep_both) {
+                    appendPreviewMeshFill(selectionOverlayCacheFrame_, keepMesh, kOverlayCutPreviewKeepFillColor);
+                    appendPreviewMeshFill(selectionOverlayCacheFrame_, discardMesh, kOverlayCutPreviewKeepBothDiscardFillColor);
+                } else {
+                    appendPreviewMeshFill(selectionOverlayCacheFrame_, discardMesh, kOverlayCutPreviewDiscardFillColor);
+                }
+
+                const PreviewTriangleMesh& lineSource = !discardMesh.empty() ? discardMesh : keepMesh;
+                if (!lineSource.empty() && cutPoints.size() >= 2U) {
+                    const std::uint32_t outlineColor = cut.mode == quader_editor_core::CutMode::keep_both
+                            ? kOverlayCutPreviewKeepBothOutlineColor
+                            : kOverlayCutPreviewDiscardOutlineColor;
+                    appendCutPreviewResultLines(selectionOverlayCacheFrame_,
+                            lineSource,
+                            fromSdk(cutPoints[0]),
+                            fromSdk(cut.face_normal),
+                            outlineColor);
+                }
+            }
+            appendDrawnPlaneToolOverlay(
+                    selectionOverlayCacheFrame_,
+                    cutPoints,
+                    drawnPlaneSupportPoint(cutPoints, cut.face_normal),
+                    cutPoints.size() >= 2U);
+        }
+        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
+        if (quader_editor_core::mirror_is_active(mirror)) {
+            const std::vector<quader_poly::Vec3> mirrorPoints =
+                    quader_editor_core::mirror_overlay_points(
+                            mirror,
+                            runtime_.mirror_hover().position,
+                            runtime_.mirror_hover().valid);
+            appendDrawnPlaneToolOverlay(
+                    selectionOverlayCacheFrame_,
+                    mirrorPoints,
+                    drawnPlaneSupportPoint(mirrorPoints, mirror.plane.face_normal),
+                    mirrorPoints.size() >= 2U);
+        }
         selectionOverlayCacheValid_ = true;
         selectionOverlayCacheContentRevision_ = contentRevision;
         selectionOverlayCacheSelectionRevision_ = selectionRevision;
         selectionOverlayCacheSceneRevision_ = sceneRevision;
         selectionOverlayCacheSelectionMode_ = selectionMode;
+        selectionOverlayCacheToolSignature_ = toolSignature;
         selectionOverlayCacheHover_ = hover;
         return selectionOverlayCacheFrame_;
+#else
+        return {};
+#endif
+    }
+
+    [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const {
+#if QUADER_HAS_MODELING_SDK
+        std::vector<ModelingToolPreviewMesh> previewMeshes;
+        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
+        if (!quader_editor_core::mirror_is_active(mirror) ||
+                !quader_editor_core::mirror_can_preview(mirror) ||
+                !mirror.preview_valid) {
+            return previewMeshes;
+        }
+
+        const std::vector<quader_editor_core::PolygonObject> previewObjects =
+                sceneTransformedObjectsForPicking();
+        const std::vector<quader_poly::Document> documents =
+                runtime_.mirror_preview_documents(previewObjects);
+        previewMeshes.reserve(documents.size());
+        std::size_t documentIndex = 0;
+        for (const int objectId : mirror.target_object_ids) {
+            if (documentIndex >= documents.size()) {
+                break;
+            }
+            MeshAsset mesh = toMeshAsset(documents[documentIndex++]);
+            if (mesh.vertices.empty() || mesh.indices.empty()) {
+                continue;
+            }
+
+            EntityId sourceEntity = InvalidEntityId;
+            AssetId material = InvalidAssetId;
+            if (const auto entity = entityByObject_.find(objectId); entity != entityByObject_.end()) {
+                sourceEntity = entity->second;
+                if (const MaterialComponent* materialComponent = scene_.material(sourceEntity)) {
+                    material = materialComponent->material;
+                }
+            }
+
+            previewMeshes.push_back(ModelingToolPreviewMesh{
+                    .sourceEntity = sourceEntity,
+                    .material = material,
+                    .mesh = std::move(mesh),
+            });
+        }
+        return previewMeshes;
 #else
         return {};
 #endif
@@ -892,10 +1658,13 @@ public:
 #endif
     }
 
-    void syncObjectSelectionFromScene() {
+    void syncObjectSelectionFromScene(bool forceObjectMode = false) {
 #if QUADER_HAS_MODELING_SDK
-        if (session_.selection_mode() != quader_editor_core::SelectionMode::object) {
+        if (!forceObjectMode && session_.selection_mode() != quader_editor_core::SelectionMode::object) {
             return;
+        }
+        if (!sceneObjectsSyncedForCurrentSdkContent()) {
+            syncSceneObjectsFromSdk();
         }
 
         std::vector<int> objectIds;
@@ -917,11 +1686,55 @@ public:
         std::sort(currentObjectIds.begin(), currentObjectIds.end());
         std::vector<int> desiredObjectIds = objectIds;
         std::sort(desiredObjectIds.begin(), desiredObjectIds.end());
-        if (currentObjectIds == desiredObjectIds && session_.active_object_id() == activeObjectId) {
+        const bool alreadyObjectMode = session_.selection_mode() == quader_editor_core::SelectionMode::object;
+        if ((!forceObjectMode || alreadyObjectMode) &&
+                currentObjectIds == desiredObjectIds &&
+                session_.active_object_id() == activeObjectId) {
             return;
         }
 
         session_.set_selected_object_ids(objectIds, activeObjectId);
+#endif
+    }
+
+    void promoteDrawnPlaneToolObjectSelection() {
+#if QUADER_HAS_MODELING_SDK
+        if (!sceneObjectsSyncedForCurrentSdkContent()) {
+            syncSceneObjectsFromSdk();
+        }
+
+        std::vector<int> sceneObjectIds;
+        sceneObjectIds.reserve(scene_.selectedEntities().size());
+        int activeObjectId = -1;
+        for (const EntityId entity : scene_.selectedEntities()) {
+            const auto it = objectByEntity_.find(entity);
+            if (it == objectByEntity_.end()) {
+                continue;
+            }
+            sceneObjectIds.push_back(it->second);
+            if (entity == scene_.primarySelection()) {
+                activeObjectId = it->second;
+            }
+        }
+
+        if (!sceneObjectIds.empty()) {
+            if (activeObjectId <= 0) {
+                activeObjectId = sceneObjectIds.back();
+            }
+            session_.set_selected_object_ids(sceneObjectIds, activeObjectId);
+            syncSceneSelectionFromSdk();
+            invalidateSelectionOverlayCaches();
+            return;
+        }
+
+        std::vector<int> sdkObjectIds = session_.selected_object_ids();
+        if (sdkObjectIds.empty()) {
+            return;
+        }
+        activeObjectId = session_.active_object_id() > 0 ? session_.active_object_id() : sdkObjectIds.back();
+        session_.set_selected_object_ids(sdkObjectIds, activeObjectId);
+        syncSceneSelectionFromSdk();
+        invalidateSelectionOverlayCaches();
 #endif
     }
 
@@ -1190,6 +2003,144 @@ public:
 #endif
     }
 
+    [[nodiscard]] ModelingToolStatus toolStatus() const {
+        ModelingToolStatus status;
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::EditorRuntimeStatus sdkStatus = runtime_.status();
+        status.activeTool = fromSdkViewportTool(sdkStatus.active_tool);
+        status.modalToolOwnsViewport = modalToolOwnsViewport();
+        status.insertEdgeLoopActive = sdkStatus.insert_edge_loop_active;
+        status.insertEdgeLoopDragging = sdkStatus.insert_edge_loop_dragging;
+        status.insertEdgeLoopHasPreview = sdkStatus.insert_edge_loop_has_preview;
+        status.knifeActive = sdkStatus.knife_active;
+        status.knifeHasCurrent = sdkStatus.knife_has_current;
+        status.knifeCanCommit = sdkStatus.knife_can_commit;
+        status.cutActive = sdkStatus.cut_active;
+        status.cutCanPreview = sdkStatus.cut_can_preview;
+        status.cutPreviewValid = sdkStatus.cut_preview_valid;
+        const quader_editor_core::CutToolState& cut = runtime_.cut_state();
+        const std::vector<quader_poly::Vec3> cutOverlayPoints =
+                quader_editor_core::cut_overlay_points(cut, runtime_.cut_hover().position, runtime_.cut_hover().valid);
+        status.cutDragging = quader_editor_core::cut_is_dragging(cut);
+        status.cutDraggingNewPoint = cut.dragging_new_point;
+        status.cutDraggingLine = cut.dragging_line;
+        status.cutDraggingPointIndex = cut.dragging_point_index;
+        status.cutPointCount = static_cast<int>(std::min<std::size_t>(
+                cutOverlayPoints.size(),
+                status.cutPoints.size()));
+        status.cutCapturedPointCount = static_cast<int>(std::min<std::size_t>(
+                cut.points.size(),
+                status.cutPoints.size()));
+        status.cutHasLine = cutOverlayPoints.size() >= 2U;
+        for (int index = 0; index < status.cutPointCount; ++index) {
+            status.cutPoints[static_cast<std::size_t>(index)] =
+                    fromSdk(cutOverlayPoints[static_cast<std::size_t>(index)]);
+        }
+        status.cutMode = fromSdk(cut.mode);
+        status.mirrorActive = sdkStatus.mirror_active;
+        status.mirrorCanPreview = sdkStatus.mirror_can_preview;
+        status.mirrorPreviewValid = sdkStatus.mirror_preview_valid;
+        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
+        const std::vector<quader_poly::Vec3> mirrorOverlayPoints =
+                quader_editor_core::mirror_overlay_points(
+                        mirror,
+                        runtime_.mirror_hover().position,
+                        runtime_.mirror_hover().valid);
+        status.mirrorDragging = quader_editor_core::mirror_is_dragging(mirror);
+        status.mirrorDraggingNewPoint = mirror.plane.dragging_new_point;
+        status.mirrorDraggingLine = mirror.plane.dragging_line;
+        status.mirrorDraggingPointIndex = mirror.plane.dragging_point_index;
+        status.mirrorPointCount = static_cast<int>(std::min<std::size_t>(
+                mirrorOverlayPoints.size(),
+                status.mirrorPoints.size()));
+        status.mirrorCapturedPointCount = static_cast<int>(std::min<std::size_t>(
+                mirror.plane.points.size(),
+                status.mirrorPoints.size()));
+        status.mirrorHasLine = mirrorOverlayPoints.size() >= 2U;
+        for (int index = 0; index < status.mirrorPointCount; ++index) {
+            status.mirrorPoints[static_cast<std::size_t>(index)] =
+                    fromSdk(mirrorOverlayPoints[static_cast<std::size_t>(index)]);
+        }
+        status.polyActive = sdkStatus.poly_active;
+        status.polyClosed = sdkStatus.poly_closed;
+        status.polyHasCurrent = sdkStatus.poly_has_current;
+        status.polyCanCommit = sdkStatus.poly_can_commit;
+        status.polyPointCount = sdkStatus.poly_point_count;
+#endif
+        return status;
+    }
+
+    [[nodiscard]] ModelingToolSettingsTarget toolSettingsTarget() const {
+        ModelingToolSettingsTarget target;
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::PreviewTransactionStatus preview = session_.preview_transaction_status();
+        const ModelingToolSettingsTargetKind previewKind = preview.active ?
+                toolSettingsTargetKindForPreview(preview.kind) :
+                ModelingToolSettingsTargetKind::None;
+        if (previewKind != ModelingToolSettingsTargetKind::None) {
+            target.kind = previewKind;
+            target.active = true;
+            target.operationPreviewActive = true;
+            target.label = activePreviewLabel_.empty() ? fallbackToolSettingsLabel(previewKind) : activePreviewLabel_;
+            target.actionId = activePreviewActionId_;
+            target.operationId = activePreviewOperationId_;
+            if (target.operationId.empty()) {
+                if (const std::optional<quader_editor_core::EditorOperationId> operation =
+                            operationForPreviewKind(preview.kind)) {
+                    if (const quader_editor_core::EditorOperation* schema =
+                                quader_editor_core::editor_operation_for_id(*operation)) {
+                        target.operationId = std::string(schema->id());
+                    }
+                }
+            }
+            return target;
+        }
+
+        const quader_editor_core::EditorRuntimeStatus sdkStatus = runtime_.status();
+        if (sdkStatus.cut_active) {
+            target.kind = ModelingToolSettingsTargetKind::Cut;
+            target.active = true;
+            target.label = fallbackToolSettingsLabel(ModelingToolSettingsTargetKind::Cut);
+            return target;
+        }
+#endif
+        return target;
+    }
+
+    [[nodiscard]] ModelingInteractionSettings interactionSettings() const {
+        return interactionSettings_;
+    }
+
+    ModelingCommandResult setInteractionSettings(const ModelingInteractionSettings& settings) {
+        const ModelingToolSettingsTarget activeTarget = toolSettingsTarget();
+        const ModelingInteractionSettings normalized = normalizeInteractionSettings(settings);
+        const bool cutModeChanged = normalized.cutMode != interactionSettings_.cutMode;
+        const bool changed = normalized.bridgeSteps != interactionSettings_.bridgeSteps ||
+                normalized.edgeBevelWidth != interactionSettings_.edgeBevelWidth ||
+                normalized.edgeBevelProfile != interactionSettings_.edgeBevelProfile ||
+                normalized.edgeBevelSegments != interactionSettings_.edgeBevelSegments ||
+                normalized.thickenThickness != interactionSettings_.thickenThickness ||
+                normalized.thickenFromCenter != interactionSettings_.thickenFromCenter ||
+                normalized.sliceQuadXSlices != interactionSettings_.sliceQuadXSlices ||
+                normalized.sliceQuadYSlices != interactionSettings_.sliceQuadYSlices ||
+                normalized.mergeByDistanceTolerance != interactionSettings_.mergeByDistanceTolerance ||
+                cutModeChanged;
+        interactionSettings_ = normalized;
+        if (cutModeChanged) {
+            return setCutMode(normalized.cutMode);
+        }
+        if (changed && activeTarget.operationPreviewActive) {
+#if QUADER_HAS_MODELING_SDK
+            ModelingCommandResult result = updateActiveOperationPreviewSettings();
+            result.changed = result.changed || changed;
+            return result;
+#else
+            return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+        }
+        return {.ok = true, .changed = changed};
+    }
+
     [[nodiscard]] bool modalToolOwnsViewport() const {
 #if QUADER_HAS_MODELING_SDK
         switch (runtime_.active_tool()) {
@@ -1197,6 +2148,7 @@ public:
         case quader_editor_core::ViewportInteractionTool::insert_edge_loop:
         case quader_editor_core::ViewportInteractionTool::knife:
         case quader_editor_core::ViewportInteractionTool::cut:
+        case quader_editor_core::ViewportInteractionTool::mirror:
         case quader_editor_core::ViewportInteractionTool::poly:
             return true;
         case quader_editor_core::ViewportInteractionTool::select:
@@ -1205,7 +2157,6 @@ public:
         case quader_editor_core::ViewportInteractionTool::extrude:
         case quader_editor_core::ViewportInteractionTool::rotate:
         case quader_editor_core::ViewportInteractionTool::scale:
-        case quader_editor_core::ViewportInteractionTool::mirror:
         case quader_editor_core::ViewportInteractionTool::unknown:
             break;
         }
@@ -1225,6 +2176,126 @@ public:
     [[nodiscard]] std::vector<ModelingActionItem> contextActions(ModelingActionQuery query) const {
         return ModelingActionCatalog::actionsFor(selectionSummary(), effectiveActionQuery(query));
     }
+
+    void resetSettingsForPreviewAction(ModelingActionPreviewKind previewKind) {
+        const ModelingInteractionSettings defaults = normalizeInteractionSettings(ModelingInteractionSettings{});
+        switch (previewKind) {
+        case ModelingActionPreviewKind::EdgeBevel:
+            interactionSettings_.edgeBevelWidth = defaults.edgeBevelWidth;
+            interactionSettings_.edgeBevelProfile = defaults.edgeBevelProfile;
+            interactionSettings_.edgeBevelSegments = defaults.edgeBevelSegments;
+            return;
+        case ModelingActionPreviewKind::Thicken:
+            interactionSettings_.thickenThickness = defaults.thickenThickness;
+            interactionSettings_.thickenFromCenter = defaults.thickenFromCenter;
+            return;
+        case ModelingActionPreviewKind::MergeByDistance:
+            interactionSettings_.mergeByDistanceTolerance = defaults.mergeByDistanceTolerance;
+            return;
+        case ModelingActionPreviewKind::Bridge:
+        case ModelingActionPreviewKind::SliceQuad:
+        case ModelingActionPreviewKind::None:
+            return;
+        }
+    }
+
+#if QUADER_HAS_MODELING_SDK
+    void clearInactiveOperationPreviewMetadata() {
+        if (!session_.preview_transaction_status().active) {
+            activePreviewActionId_.clear();
+            activePreviewOperationId_.clear();
+            activePreviewLabel_.clear();
+        }
+    }
+
+    ModelingCommandResult executeSdkOperationCommand(
+            quader_editor_core::EditorOperationId sdkOperation,
+            quader_editor_core::EditorOperationCommandPhase phase,
+            quader_editor_core::EditorOperationSettings settings) {
+        quader_editor_core::EditorOperationCommand command;
+        command.operation_id = sdkOperation;
+        command.phase = phase;
+        command.settings = std::move(settings);
+
+        const quader_editor_core::PreviewTransactionStatus previewBefore = session_.preview_transaction_status();
+        const std::uint64_t contentBefore = session_.state().content_revision;
+        const quader_editor_core::EditorOperationCommandResult result =
+                quader_editor_core::execute_command(session_, command);
+
+        quader_editor_core::record_repeatable_operation(repeatLastAction_, command, result.command);
+
+        const bool previewPhase = phase != quader_editor_core::EditorOperationCommandPhase::execute;
+        const bool previewFinished = result.preview_finish.has_value() && result.preview_finish->before.active;
+        const bool sceneChanged = session_.state().content_revision != contentBefore;
+        if (sceneChanged || previewPhase || previewBefore.active || previewFinished) {
+            invalidateSelectionOverlayCaches();
+            syncSceneObjectsFromSdk(previewPhase || previewBefore.active || previewFinished);
+        }
+        if (result.command.ok || sceneChanged || previewPhase || previewBefore.active || previewFinished) {
+            syncSceneSelectionFromSdk();
+        }
+        clearInactiveOperationPreviewMetadata();
+
+        return {
+                .ok = result.command.ok,
+                .changed = result.command.changed,
+                .message = result.command.message,
+        };
+    }
+
+    ModelingCommandResult beginOperationPreview(
+            const ModelingActionItem& action,
+            const quader_editor_core::EditorOperation& operation) {
+        if (!operation.supports_preview()) {
+            return {.ok = false, .message = "Action does not support a live settings preview."};
+        }
+
+        resetSettingsForPreviewAction(action.previewKind);
+        ModelingCommandResult result = executeSdkOperationCommand(
+                operation.operation_id(),
+                quader_editor_core::EditorOperationCommandPhase::begin_preview,
+                settingsForOperation(operation.operation_id(), interactionSettings_, action.actionId));
+        if (result.ok) {
+            activePreviewActionId_ = action.actionId;
+            activePreviewOperationId_ = action.operationId;
+            activePreviewLabel_ = action.label.empty() ?
+                    fallbackToolSettingsLabel(toolSettingsTargetKindForPreview(session_.preview_transaction_status().kind)) :
+                    action.label;
+        }
+        return result;
+    }
+
+    ModelingCommandResult updateActiveOperationPreviewSettings() {
+        const quader_editor_core::PreviewTransactionStatus preview = session_.preview_transaction_status();
+        if (!preview.active) {
+            return {.ok = false, .message = "No active operation preview."};
+        }
+        const std::optional<quader_editor_core::EditorOperationId> operation = operationForPreviewKind(preview.kind);
+        if (!operation.has_value()) {
+            return {.ok = false, .message = "Active preview does not have editable operation settings."};
+        }
+        return executeSdkOperationCommand(
+                *operation,
+                quader_editor_core::EditorOperationCommandPhase::update_preview,
+                settingsForOperation(*operation, interactionSettings_, activePreviewActionId_));
+    }
+
+    ModelingCommandResult finishActiveOperationPreview(bool commit) {
+        const quader_editor_core::PreviewTransactionStatus preview = session_.preview_transaction_status();
+        if (!preview.active) {
+            return {.ok = false, .message = "No active operation preview."};
+        }
+        const std::optional<quader_editor_core::EditorOperationId> operation = operationForPreviewKind(preview.kind);
+        if (!operation.has_value()) {
+            return {.ok = false, .message = "Active preview does not belong to a settings operation."};
+        }
+        return executeSdkOperationCommand(
+                *operation,
+                commit ? quader_editor_core::EditorOperationCommandPhase::commit_preview :
+                         quader_editor_core::EditorOperationCommandPhase::cancel_preview,
+                settingsForOperation(*operation, interactionSettings_, activePreviewActionId_));
+    }
+#endif
 
     ModelingCommandResult executeContextAction(std::string_view actionId) {
 #if QUADER_HAS_MODELING_SDK
@@ -1265,11 +2336,31 @@ public:
             return {.ok = false, .message = "Action references an unknown modeling operation."};
         }
 
+        if (found->previewKind != ModelingActionPreviewKind::None) {
+            return beginOperationPreview(*found, *operation);
+        }
+
         return executeSdkOperation(
                 operation->operation_id(),
-                defaultSettingsForOperation(operation->operation_id(), found->actionId));
+                settingsForOperation(operation->operation_id(), interactionSettings_, found->actionId));
 #else
         (void)actionId;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult commitActiveOperationPreview() {
+#if QUADER_HAS_MODELING_SDK
+        return finishActiveOperationPreview(true);
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult cancelActiveOperationPreview() {
+#if QUADER_HAS_MODELING_SDK
+        return finishActiveOperationPreview(false);
+#else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
     }
@@ -1321,24 +2412,10 @@ public:
     ModelingCommandResult executeSdkOperation(
             quader_editor_core::EditorOperationId sdkOperation,
             quader_editor_core::EditorOperationSettings settings) {
-        quader_editor_core::EditorOperationCommand command;
-        command.operation_id = sdkOperation;
-        command.phase = quader_editor_core::EditorOperationCommandPhase::execute;
-        command.settings = std::move(settings);
-
-        const std::uint64_t contentBefore = session_.state().content_revision;
-        const quader_editor_core::EditorOperationCommandResult result =
-                quader_editor_core::execute_command(session_, command);
-        if (session_.state().content_revision != contentBefore) {
-            syncSceneObjectsFromSdk();
-        }
-        syncSceneSelectionFromSdk();
-        quader_editor_core::record_repeatable_operation(repeatLastAction_, command, result.command);
-        return {
-                .ok = result.command.ok,
-                .changed = result.command.changed,
-                .message = result.command.message,
-        };
+        return executeSdkOperationCommand(
+                sdkOperation,
+                quader_editor_core::EditorOperationCommandPhase::execute,
+                std::move(settings));
     }
 #endif
 
@@ -1366,7 +2443,7 @@ public:
             break;
         case ModelingInstantOperationId::Bridge:
             sdkOperation = quader_editor_core::EditorOperationId::bridge;
-            settings = quader_editor_core::BridgeOperationSettings{};
+            settings = settingsForOperation(sdkOperation, interactionSettings_);
             break;
         case ModelingInstantOperationId::SnapVerticesToActive:
             sdkOperation = quader_editor_core::EditorOperationId::snap_vertices_to_active;
@@ -1943,6 +3020,27 @@ public:
     }
 
 #if QUADER_HAS_MODELING_SDK
+    ModelingCommandResult executeRuntimeCommand(
+            const quader_editor_core::EditorRuntimeCommand& command,
+            bool mayChangeContent) {
+        const std::uint64_t contentBefore = session_.state().content_revision;
+        const quader_editor_core::EditorRuntimeCommandResult result =
+                quader_editor_core::execute_runtime_command(session_, runtime_, command);
+        if (mayChangeContent &&
+                (session_.state().content_revision != contentBefore || result.command.changed)) {
+            syncSceneObjectsFromSdk(result.command.changed);
+        }
+        syncSceneSelectionFromSdk();
+        if (result.command.changed) {
+            invalidateSelectionOverlayCaches();
+        }
+        return {
+                .ok = result.command.ok,
+                .changed = result.command.changed,
+                .message = result.command.message,
+        };
+    }
+
     ModelingCommandResult setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool tool) {
         quader_editor_core::SetActiveToolRuntimeCommandSettings settings;
         settings.tool = tool;
@@ -1951,15 +3049,454 @@ public:
         command.command_id = quader_editor_core::EditorRuntimeCommandId::set_active_tool;
         command.settings = settings;
 
-        const quader_editor_core::EditorRuntimeCommandResult result =
-                quader_editor_core::execute_runtime_command(session_, runtime_, command);
-        return {
-                .ok = result.command.ok,
-                .changed = result.command.changed,
-                .message = result.command.message,
-        };
+        return executeRuntimeCommand(command, false);
     }
 #endif
+
+    ModelingCommandResult activateViewportTool(ModelingViewportTool tool) {
+#if QUADER_HAS_MODELING_SDK
+        if (tool == ModelingViewportTool::Cut || tool == ModelingViewportTool::Mirror) {
+            promoteDrawnPlaneToolObjectSelection();
+        }
+        if (tool == ModelingViewportTool::Cut) {
+            ModelingCommandResult activated = executeRuntimeCommand(
+                    noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::activate_cut),
+                    false);
+            if (activated.ok) {
+                const ModelingCommandResult modeResult = setCutMode(interactionSettings_.cutMode);
+                activated.ok = modeResult.ok;
+                activated.changed = activated.changed || modeResult.changed;
+                if (!modeResult.message.empty()) {
+                    activated.message = modeResult.message;
+                }
+            }
+            return activated;
+        }
+        if (tool == ModelingViewportTool::Mirror) {
+            return executeRuntimeCommand(
+                    noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::activate_mirror),
+                    false);
+        }
+        return setActiveRuntimeTool(toSdk(tool));
+#else
+        (void)tool;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult cancelActiveModalTool() {
+#if QUADER_HAS_MODELING_SDK
+        switch (runtime_.active_tool()) {
+        case quader_editor_core::ViewportInteractionTool::box:
+            return cancelBox();
+        case quader_editor_core::ViewportInteractionTool::insert_edge_loop:
+            (void)executeRuntimeCommand(noSettingsRuntimeCommand(
+                    quader_editor_core::EditorRuntimeCommandId::cancel_insert_edge_loop), false);
+            return setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+        case quader_editor_core::ViewportInteractionTool::knife:
+            runtime_.reset_knife_state();
+            invalidateSelectionOverlayCaches();
+            return setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+        case quader_editor_core::ViewportInteractionTool::cut:
+            (void)executeRuntimeCommand(noSettingsRuntimeCommand(
+                    quader_editor_core::EditorRuntimeCommandId::cancel_cut), false);
+            return setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+        case quader_editor_core::ViewportInteractionTool::mirror:
+            (void)executeRuntimeCommand(noSettingsRuntimeCommand(
+                    quader_editor_core::EditorRuntimeCommandId::cancel_mirror), false);
+            return setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+        case quader_editor_core::ViewportInteractionTool::poly:
+            runtime_.reset_poly_state();
+            invalidateSelectionOverlayCaches();
+            return setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+        case quader_editor_core::ViewportInteractionTool::select:
+        case quader_editor_core::ViewportInteractionTool::move:
+        case quader_editor_core::ViewportInteractionTool::extend:
+        case quader_editor_core::ViewportInteractionTool::extrude:
+        case quader_editor_core::ViewportInteractionTool::rotate:
+        case quader_editor_core::ViewportInteractionTool::scale:
+        case quader_editor_core::ViewportInteractionTool::unknown:
+            break;
+        }
+        return {.ok = true};
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult updateInsertEdgeLoopHover(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::InsertEdgeLoopPickRuntimeCommandSettings settings;
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.vertex_radius = event.vertexRadius;
+        settings.edge_radius = event.edgeRadius;
+        settings.snap_enabled = event.snapEnabled;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::update_insert_edge_loop_hover;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult beginInsertEdgeLoopDrag(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::InsertEdgeLoopPickRuntimeCommandSettings settings;
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.vertex_radius = event.vertexRadius;
+        settings.edge_radius = event.edgeRadius;
+        settings.snap_enabled = event.snapEnabled;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::begin_insert_edge_loop_drag;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult updateInsertEdgeLoopDrag(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::InsertEdgeLoopPickRuntimeCommandSettings settings;
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.vertex_radius = event.vertexRadius;
+        settings.edge_radius = event.edgeRadius;
+        settings.snap_enabled = event.snapEnabled;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::update_insert_edge_loop_drag;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult commitInsertEdgeLoopDrag() {
+#if QUADER_HAS_MODELING_SDK
+        return executeRuntimeCommand(
+                noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::commit_insert_edge_loop_drag),
+                true);
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult updateKnifeHover(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        const bool changed = runtime_.update_knife_preview_from_pick(
+                session_,
+                toSdk(event.ray),
+                toSdk(event.camera),
+                event.gridSize,
+                event.snapEnabled,
+                event.constrainAxis);
+        if (changed) {
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = true, .changed = changed};
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult acceptKnifePoint(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        const bool changed = runtime_.accept_knife_current_point(session_, toSdk(event.camera), event.gridSize);
+        if (changed) {
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = true, .changed = changed};
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult commitKnifeTool() {
+#if QUADER_HAS_MODELING_SDK
+        const std::uint64_t contentBefore = session_.state().content_revision;
+        const quader_editor_core::CommandResult result = runtime_.commit_knife_tool(session_);
+        if (session_.state().content_revision != contentBefore || result.changed) {
+            syncSceneObjectsFromSdk(result.changed);
+        }
+        syncSceneSelectionFromSdk();
+        invalidateSelectionOverlayCaches();
+        if (result.ok) {
+            const ModelingCommandResult selectTool = setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+            return {
+                    .ok = selectTool.ok,
+                    .changed = result.changed || selectTool.changed,
+                    .message = !result.message.empty() ? result.message : selectTool.message,
+            };
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult updateCutHover(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::CutRayRuntimeCommandSettings settings;
+        settings.camera = toSdk(event.camera);
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.dragging = event.dragging;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::update_cut_hover;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult clickCut(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::CutRayRuntimeCommandSettings settings;
+        settings.camera = toSdk(event.camera);
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.dragging = event.dragging;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::click_cut;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult beginCutPointDrag(int pointIndex) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::CutPointDragRuntimeCommandSettings settings;
+        settings.point_index = pointIndex;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::begin_cut_point_drag;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)pointIndex;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult beginCutLineDrag(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::CutRayRuntimeCommandSettings settings;
+        settings.camera = toSdk(event.camera);
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.dragging = true;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::begin_cut_line_drag;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult endCutDrag() {
+#if QUADER_HAS_MODELING_SDK
+        return executeRuntimeCommand(
+                noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::end_cut_drag),
+                false);
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult setCutMode(ModelingCutMode mode) {
+        interactionSettings_.cutMode = mode;
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::SetCutModeRuntimeCommandSettings settings;
+        settings.mode = quader_editor_core::cut_mode_id(toSdk(mode));
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::set_cut_mode;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        return {.ok = true, .changed = true};
+#endif
+    }
+
+    ModelingCommandResult cycleCutMode() {
+#if QUADER_HAS_MODELING_SDK
+        return setCutMode(fromSdk(quader_editor_core::next_cut_mode(toSdk(interactionSettings_.cutMode))));
+#else
+        interactionSettings_.cutMode =
+                interactionSettings_.cutMode == ModelingCutMode::DiscardLeft ? ModelingCutMode::DiscardRight :
+                interactionSettings_.cutMode == ModelingCutMode::DiscardRight ? ModelingCutMode::KeepBoth :
+                ModelingCutMode::DiscardLeft;
+        return {.ok = true, .changed = true};
+#endif
+    }
+
+    ModelingCommandResult finalizeCutTool() {
+#if QUADER_HAS_MODELING_SDK
+        return executeRuntimeCommand(
+                noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::finalize_cut),
+                true);
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult updateMirrorHover(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::MirrorRayRuntimeCommandSettings settings;
+        settings.camera = toSdk(event.camera);
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.dragging = event.dragging;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::update_mirror_hover;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult clickMirror(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::MirrorRayRuntimeCommandSettings settings;
+        settings.camera = toSdk(event.camera);
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.dragging = event.dragging;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::click_mirror;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult beginMirrorPointDrag(int pointIndex) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::MirrorPointDragRuntimeCommandSettings settings;
+        settings.point_index = pointIndex;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::begin_mirror_point_drag;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)pointIndex;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult beginMirrorLineDrag(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::MirrorRayRuntimeCommandSettings settings;
+        settings.camera = toSdk(event.camera);
+        settings.ray = toSdk(event.ray);
+        settings.grid_size = event.gridSize;
+        settings.dragging = true;
+        quader_editor_core::EditorRuntimeCommand command;
+        command.command_id = quader_editor_core::EditorRuntimeCommandId::begin_mirror_line_drag;
+        command.settings = settings;
+        return executeRuntimeCommand(command, false);
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult endMirrorDrag() {
+#if QUADER_HAS_MODELING_SDK
+        return executeRuntimeCommand(
+                noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::end_mirror_drag),
+                false);
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult finalizeMirrorTool() {
+#if QUADER_HAS_MODELING_SDK
+        return executeRuntimeCommand(
+                noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::finalize_mirror),
+                true);
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult updatePolyHover(const ModelingToolRayEvent& event) {
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::ViewportCameraState camera = toSdk(event.camera);
+        const quader_editor_core::CutGridPointResult gridPoint =
+                quader_editor_core::viewport_grid_point_from_ray(camera, toSdk(event.ray), event.gridSize, event.snapEnabled);
+        if (!gridPoint.ok) {
+            return {.ok = true, .message = gridPoint.message};
+        }
+        const quader_editor_core::PolyToolResult result = runtime_.update_poly_hover(
+                gridPoint.position,
+                gridPoint.plane_normal,
+                event.constrainAxis,
+                event.gridSize,
+                event.snapEnabled);
+        if (result.changed) {
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        (void)event;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult acceptPolyPoint() {
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::PolyToolResult result = runtime_.accept_poly_current_point();
+        if (result.changed) {
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult commitPolyTool() {
+#if QUADER_HAS_MODELING_SDK
+        const std::uint64_t contentBefore = session_.state().content_revision;
+        const quader_editor_core::CommandResult result = runtime_.commit_poly_tool(session_);
+        if (session_.state().content_revision != contentBefore || result.changed) {
+            syncSceneObjectsFromSdk(result.changed);
+        }
+        syncSceneSelectionFromSdk();
+        invalidateSelectionOverlayCaches();
+        if (result.ok) {
+            const ModelingCommandResult selectTool = setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool::select);
+            return {
+                    .ok = selectTool.ok,
+                    .changed = result.changed || selectTool.changed,
+                    .message = !result.message.empty() ? result.message : selectTool.message,
+            };
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
 
     ModelingCommandResult activateBoxTool() {
 #if QUADER_HAS_MODELING_SDK
@@ -2177,6 +3714,61 @@ private:
                 left.face_id == right.face_id &&
                 left.selected_modifier_pressed == right.selected_modifier_pressed &&
                 left.candidate_object_id == right.candidate_object_id;
+    }
+
+    [[nodiscard]] std::uint64_t selectionOverlayToolSignature() const {
+        std::uint64_t hash = 1469598103934665603ULL;
+        mixToolStateHash(hash, static_cast<int>(runtime_.active_tool()));
+
+        const quader_editor_core::CutToolState& cut = runtime_.cut_state();
+        const quader_editor_core::CutHoverState& cutHover = runtime_.cut_hover();
+        mixToolStateHash(hash, quader_editor_core::cut_is_active(cut));
+        mixToolStateHash(hash, static_cast<int>(cut.points.size()));
+        for (const quader_poly::Vec3& point : cut.points) {
+            mixToolStateHash(hash, point);
+        }
+        mixToolStateHash(hash, static_cast<int>(cut.target_object_ids.size()));
+        for (const int objectId : cut.target_object_ids) {
+            mixToolStateHash(hash, objectId);
+        }
+        mixToolStateHash(hash, cut.source_object_id);
+        mixToolStateHash(hash, cut.face_normal);
+        mixToolStateHash(hash, static_cast<int>(cut.mode));
+        mixToolStateHash(hash, cut.dragging_point_index);
+        mixToolStateHash(hash, cut.dragging_new_point);
+        mixToolStateHash(hash, cut.dragging_line);
+        mixToolStateHash(hash, cut.drag_line_anchor);
+        mixToolStateHash(hash, cut.preview_valid);
+        mixToolStateHash(hash, cut.preview_counts.target_count);
+        mixToolStateHash(hash, cut.preview_counts.split_count);
+        mixToolStateHash(hash, cut.preview_counts.removed_count);
+        mixToolStateHash(hash, cutHover.valid);
+        mixToolStateHash(hash, cutHover.object_id);
+        mixToolStateHash(hash, cutHover.position);
+
+        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
+        const quader_editor_core::MirrorHoverState& mirrorHover = runtime_.mirror_hover();
+        mixToolStateHash(hash, quader_editor_core::mirror_is_active(mirror));
+        mixToolStateHash(hash, static_cast<int>(mirror.plane.points.size()));
+        for (const quader_poly::Vec3& point : mirror.plane.points) {
+            mixToolStateHash(hash, point);
+        }
+        mixToolStateHash(hash, mirror.plane.face_normal);
+        mixToolStateHash(hash, mirror.plane.dragging_point_index);
+        mixToolStateHash(hash, mirror.plane.dragging_new_point);
+        mixToolStateHash(hash, mirror.plane.dragging_line);
+        mixToolStateHash(hash, mirror.plane.drag_line_anchor);
+        mixToolStateHash(hash, static_cast<int>(mirror.target_object_ids.size()));
+        for (const int objectId : mirror.target_object_ids) {
+            mixToolStateHash(hash, objectId);
+        }
+        mixToolStateHash(hash, mirror.preview_valid);
+        mixToolStateHash(hash, mirror.preview_counts.target_count);
+        mixToolStateHash(hash, mirror.preview_counts.mirrored_count);
+        mixToolStateHash(hash, mirrorHover.valid);
+        mixToolStateHash(hash, mirrorHover.object_id);
+        mixToolStateHash(hash, mirrorHover.position);
+        return hash;
     }
 
     [[nodiscard]] bool sceneObjectsSyncedForCurrentSdkContent() const {
@@ -2623,18 +4215,32 @@ private:
                     quader_editor_core::transform_drag_snap_overlay_points(runtime_.transform_drag_state());
             frame.points.insert(frame.points.end(), snapPoints.begin(), snapPoints.end());
         };
+        const auto appendRuntimeToolOverlay = [&](quader_editor_core::SelectionOverlayFrame& frame) {
+            const quader_editor_core::InsertEdgeLoopToolState& insertLoop = runtime_.insert_edge_loop_state();
+            frame.lines.insert(frame.lines.end(), insertLoop.preview_lines.begin(), insertLoop.preview_lines.end());
+
+            const quader_editor_core::KnifeToolState& knife = runtime_.knife_state();
+            frame.lines.insert(frame.lines.end(), knife.preview_lines.begin(), knife.preview_lines.end());
+            frame.points.insert(frame.points.end(), knife.preview_points.begin(), knife.preview_points.end());
+
+            const quader_editor_core::PolyToolState& poly = runtime_.poly_state();
+            frame.lines.insert(frame.lines.end(), poly.preview_lines.begin(), poly.preview_lines.end());
+            frame.points.insert(frame.points.end(), poly.preview_points.begin(), poly.preview_points.end());
+        };
         if (hoverFrame.hover_target_selected) {
             quader_editor_core::SelectionOverlayFrame frame;
             frame.hover_target_selected = hoverFrame.hover_target_selected;
             appendSelectedHoverFilteredBaseFrame(frame, base, hoverFrame);
             appendOverlayFrame(frame, hoverFrame);
             appendTransformDragSnapPoints(frame);
+            appendRuntimeToolOverlay(frame);
             return frame;
         }
 
         quader_editor_core::SelectionOverlayFrame frame = base;
         appendOverlayFrame(frame, hoverFrame);
         appendTransformDragSnapPoints(frame);
+        appendRuntimeToolOverlay(frame);
         return frame;
     }
 
@@ -2671,19 +4277,7 @@ private:
     }
 
     ModelingCommandResult executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId commandId, bool mayChangeContent) {
-        const std::uint64_t contentBefore = session_.state().content_revision;
-        const quader_editor_core::EditorRuntimeCommandResult result =
-                quader_editor_core::execute_runtime_command(session_, runtime_, noSettingsRuntimeCommand(commandId));
-        if (mayChangeContent &&
-                (session_.state().content_revision != contentBefore || result.command.changed)) {
-            syncSceneObjectsFromSdk(result.command.changed);
-        }
-        syncSceneSelectionFromSdk();
-        return {
-                .ok = result.command.ok,
-                .changed = result.command.changed,
-                .message = result.command.message,
-        };
+        return executeRuntimeCommand(noSettingsRuntimeCommand(commandId), mayChangeContent);
     }
 #endif
 
@@ -2772,13 +4366,22 @@ private:
     mutable std::uint64_t selectionOverlayCacheSceneRevision_ = 0;
     mutable quader_editor_core::SelectionMode selectionOverlayCacheSelectionMode_ =
             quader_editor_core::SelectionMode::object;
+    mutable std::uint64_t selectionOverlayCacheToolSignature_ = 0;
     mutable quader_editor_core::SelectionHoverState selectionOverlayCacheHover_;
     mutable ViewportOverlayFrame selectionOverlayCacheFrame_;
     mutable PickingCache pickingCache_;
     mutable OverlayBaseCache overlayBaseCache_;
     bool activeTransformDragPreviewDriven_ = false;
     bool activeTransformDragDuplicateSelected_ = false;
+    std::string activePreviewActionId_;
+    std::string activePreviewOperationId_;
+    std::string activePreviewLabel_;
 #endif
+    ModelingInteractionSettings interactionSettings_
+#if QUADER_HAS_MODELING_SDK
+            = normalizeInteractionSettings(ModelingInteractionSettings{})
+#endif
+            ;
 };
 
 ModelingSessionService::ModelingSessionService(SceneDocument& scene, AssetRegistry& assets)
@@ -2830,6 +4433,10 @@ ModelingSelectionSummary ModelingSessionService::selectionSummary() const {
 
 ViewportOverlayFrame ModelingSessionService::selectionOverlayFrame() const {
     return impl_->selectionOverlayFrame();
+}
+
+std::vector<ModelingToolPreviewMesh> ModelingSessionService::toolPreviewMeshes() const {
+    return impl_->toolPreviewMeshes();
 }
 
 bool ModelingSessionService::canUndo() const {
@@ -2900,6 +4507,26 @@ ModelingCommandResult ModelingSessionService::applyActiveMaterial(std::uint32_t 
     return impl_->applyActiveMaterial(materialSlot);
 }
 
+bool ModelingSessionService::modalToolOwnsViewport() const {
+    return impl_->modalToolOwnsViewport();
+}
+
+ModelingToolStatus ModelingSessionService::toolStatus() const {
+    return impl_->toolStatus();
+}
+
+ModelingToolSettingsTarget ModelingSessionService::toolSettingsTarget() const {
+    return impl_->toolSettingsTarget();
+}
+
+ModelingInteractionSettings ModelingSessionService::interactionSettings() const {
+    return impl_->interactionSettings();
+}
+
+ModelingCommandResult ModelingSessionService::setInteractionSettings(const ModelingInteractionSettings& settings) {
+    return impl_->setInteractionSettings(settings);
+}
+
 ModelingActionSet ModelingSessionService::contextActionSet(const ModelingActionQuery& query) const {
     return impl_->contextActionSet(query);
 }
@@ -2910,6 +4537,14 @@ std::vector<ModelingActionItem> ModelingSessionService::contextActions(const Mod
 
 ModelingCommandResult ModelingSessionService::executeContextAction(std::string_view actionId) {
     return impl_->executeContextAction(actionId);
+}
+
+ModelingCommandResult ModelingSessionService::commitActiveOperationPreview() {
+    return impl_->commitActiveOperationPreview();
+}
+
+ModelingCommandResult ModelingSessionService::cancelActiveOperationPreview() {
+    return impl_->cancelActiveOperationPreview();
 }
 
 std::vector<ModelingInstantOperationDescriptor> ModelingSessionService::instantOperations() const {
@@ -2978,6 +4613,110 @@ ModelingCommandResult ModelingSessionService::updateSelectionHover(const Modelin
 
 ModelingCommandResult ModelingSessionService::clearSelectionHover() {
     return impl_->clearSelectionHover();
+}
+
+ModelingCommandResult ModelingSessionService::activateViewportTool(ModelingViewportTool tool) {
+    return impl_->activateViewportTool(tool);
+}
+
+ModelingCommandResult ModelingSessionService::cancelActiveModalTool() {
+    return impl_->cancelActiveModalTool();
+}
+
+ModelingCommandResult ModelingSessionService::updateInsertEdgeLoopHover(const ModelingToolRayEvent& event) {
+    return impl_->updateInsertEdgeLoopHover(event);
+}
+
+ModelingCommandResult ModelingSessionService::beginInsertEdgeLoopDrag(const ModelingToolRayEvent& event) {
+    return impl_->beginInsertEdgeLoopDrag(event);
+}
+
+ModelingCommandResult ModelingSessionService::updateInsertEdgeLoopDrag(const ModelingToolRayEvent& event) {
+    return impl_->updateInsertEdgeLoopDrag(event);
+}
+
+ModelingCommandResult ModelingSessionService::commitInsertEdgeLoopDrag() {
+    return impl_->commitInsertEdgeLoopDrag();
+}
+
+ModelingCommandResult ModelingSessionService::updateKnifeHover(const ModelingToolRayEvent& event) {
+    return impl_->updateKnifeHover(event);
+}
+
+ModelingCommandResult ModelingSessionService::acceptKnifePoint(const ModelingToolRayEvent& event) {
+    return impl_->acceptKnifePoint(event);
+}
+
+ModelingCommandResult ModelingSessionService::commitKnifeTool() {
+    return impl_->commitKnifeTool();
+}
+
+ModelingCommandResult ModelingSessionService::updateCutHover(const ModelingToolRayEvent& event) {
+    return impl_->updateCutHover(event);
+}
+
+ModelingCommandResult ModelingSessionService::clickCut(const ModelingToolRayEvent& event) {
+    return impl_->clickCut(event);
+}
+
+ModelingCommandResult ModelingSessionService::beginCutPointDrag(int pointIndex) {
+    return impl_->beginCutPointDrag(pointIndex);
+}
+
+ModelingCommandResult ModelingSessionService::beginCutLineDrag(const ModelingToolRayEvent& event) {
+    return impl_->beginCutLineDrag(event);
+}
+
+ModelingCommandResult ModelingSessionService::endCutDrag() {
+    return impl_->endCutDrag();
+}
+
+ModelingCommandResult ModelingSessionService::setCutMode(ModelingCutMode mode) {
+    return impl_->setCutMode(mode);
+}
+
+ModelingCommandResult ModelingSessionService::cycleCutMode() {
+    return impl_->cycleCutMode();
+}
+
+ModelingCommandResult ModelingSessionService::finalizeCutTool() {
+    return impl_->finalizeCutTool();
+}
+
+ModelingCommandResult ModelingSessionService::updateMirrorHover(const ModelingToolRayEvent& event) {
+    return impl_->updateMirrorHover(event);
+}
+
+ModelingCommandResult ModelingSessionService::clickMirror(const ModelingToolRayEvent& event) {
+    return impl_->clickMirror(event);
+}
+
+ModelingCommandResult ModelingSessionService::beginMirrorPointDrag(int pointIndex) {
+    return impl_->beginMirrorPointDrag(pointIndex);
+}
+
+ModelingCommandResult ModelingSessionService::beginMirrorLineDrag(const ModelingToolRayEvent& event) {
+    return impl_->beginMirrorLineDrag(event);
+}
+
+ModelingCommandResult ModelingSessionService::endMirrorDrag() {
+    return impl_->endMirrorDrag();
+}
+
+ModelingCommandResult ModelingSessionService::finalizeMirrorTool() {
+    return impl_->finalizeMirrorTool();
+}
+
+ModelingCommandResult ModelingSessionService::updatePolyHover(const ModelingToolRayEvent& event) {
+    return impl_->updatePolyHover(event);
+}
+
+ModelingCommandResult ModelingSessionService::acceptPolyPoint() {
+    return impl_->acceptPolyPoint();
+}
+
+ModelingCommandResult ModelingSessionService::commitPolyTool() {
+    return impl_->commitPolyTool();
 }
 
 ModelingCommandResult ModelingSessionService::activateBoxTool() {

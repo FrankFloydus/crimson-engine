@@ -298,6 +298,8 @@ public:
 			EditorSession& session,
 			const quader_poly::Ray& ray,
 			double grid_size,
+			double vertex_radius,
+			double edge_radius,
 			bool snap_enabled,
 			bool dragging);
 	[[nodiscard]] bool update_insert_edge_loop_drag_factor(
