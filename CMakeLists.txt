@@ -325,6 +325,7 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials/default"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/fonts"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${quader_mesh_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat"
@@ -349,6 +350,12 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/OFL.txt"
             "$<TARGET_FILE_DIR:quader>/fonts/OFL.txt"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/mesh_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/mesh_icon.png"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/empty_icon.png"
+            "$<TARGET_FILE_DIR:quader>/icons/empty_icon.png"
     VERBATIM)
 
 if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}")

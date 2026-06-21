@@ -170,7 +170,9 @@ private:
             ModelingSessionService& modeling,
             ImVec2 itemMin,
             ImVec2 itemSize);
-    void refreshCachedSelectionOverlayFrame(const SceneDocument& document, ModelingSessionService& modeling);
+    void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
+            const AssetRegistry& assets,
+            ModelingSessionService& modeling);
     Pane& pane(ViewportPaneId paneId);
     const Pane& pane(ViewportPaneId paneId) const;
     std::vector<ViewportPanePlacement> activePanePlacements() const;
@@ -178,6 +180,7 @@ private:
     void resetPaneCamera(Pane& pane);
     void drawPaneChrome(const Pane& pane, ImVec2 itemMin, ImVec2 itemSize) const;
     bool handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles);
+    const ViewportSettings& activeViewportSettings() const;
     static ImVec2 paneRectMin(ImVec2 viewportMin, ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
     static ImVec2 paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
 
@@ -204,6 +207,8 @@ private:
             bool interactive = true);
 
     std::array<Pane, kViewportPaneCount> panes_;
+    ViewportSettings fallbackViewportSettings_ = ViewportSettings::defaults();
+    const ViewportSettings* viewportSettings_ = nullptr;
     ViewportLayoutState layoutState_;
     ViewportLayoutId layoutId_ = ViewportLayoutId::Single;
     ViewportPaneId focusedPaneId_ = ViewportPaneId::Perspective;
@@ -217,6 +222,7 @@ private:
     ViewportPaneId gizmoDragPaneId_ = ViewportPaneId::Perspective;
     bool modelingTransformDragActive_ = false;
     bool modelingTransformDragPreviewDriven_ = false;
+    bool sceneOnlyGizmoDrag_ = false;
     bool paintSelectionActive_ = false;
     GizmoAxis activeGizmoAxis_ = GizmoAxis::None;
     Vec2 lastGizmoMouse_ = {};
@@ -233,8 +239,10 @@ private:
     std::uint64_t cachedSelectionOverlayContentRevision_ = 0;
     std::uint64_t cachedSelectionOverlaySelectionRevision_ = 0;
     std::uint64_t cachedSelectionOverlaySceneRevision_ = 0;
+    std::uint64_t cachedSelectionOverlayAssetRevision_ = 0;
     ModelingSelectionMode cachedSelectionOverlayMode_ = ModelingSelectionMode::Object;
     Vec3 gizmoStartWorldPivot_ = {};
+    Vec2 gizmoStartMouse_ = {};
     std::vector<GizmoStartTransform> gizmoStartTransforms_;
 };
 

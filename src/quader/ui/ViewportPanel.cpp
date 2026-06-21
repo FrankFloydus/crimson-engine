@@ -1,6 +1,8 @@
 #include "quader/ui/ViewportPanel.h"
 
+#include "quader/core/ColorSpace.h"
 #include "quader/core/Logger.h"
+#include "quader/render/ViewportOverlayPolicy.h"
 #include "quader/scene/SceneBounds.h"
 #include "quader/scene/SceneEntityNaming.h"
 #include "quader/scene/TransformPivot.h"
@@ -20,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -35,6 +38,98 @@ namespace quader {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
+
+std::uint32_t settingColorRgba(ViewportSettingColor color) {
+    return static_cast<std::uint32_t>(normalizedToByte(color.r)) |
+            (static_cast<std::uint32_t>(normalizedToByte(color.g)) << 8u) |
+            (static_cast<std::uint32_t>(normalizedToByte(color.b)) << 16u) |
+            (static_cast<std::uint32_t>(normalizedToByte(color.a)) << 24u);
+}
+
+std::uint32_t settingColor(const ViewportSettings& settings, ViewportColorSettingId id) {
+    return settingColorRgba(settings.color(id));
+}
+
+void applyViewportSettingsToOverlayFrame(ViewportOverlayFrame& frame, const ViewportSettings& settings) {
+    for (ViewportOverlayTriangle& triangle : frame.triangles) {
+        switch (triangle.layer) {
+        case ViewportOverlayLayer::SelectedVisibleFace:
+        case ViewportOverlayLayer::SelectedXrayFace:
+        case ViewportOverlayLayer::SelectedFaceMask:
+            triangle.color = settingColor(settings, ViewportColorSettingId::SelectionFace);
+            break;
+        case ViewportOverlayLayer::HoverFace:
+            triangle.color = viewportOverlayIsNativeRemoveColor(triangle.color)
+                    ? settingColor(settings, ViewportColorSettingId::RemoveSelectionFace)
+                    : settingColor(settings, ViewportColorSettingId::HoverFace);
+            break;
+        default:
+            break;
+        }
+    }
+
+    for (ViewportOverlayLine& line : frame.lines) {
+        switch (line.layer) {
+        case ViewportOverlayLayer::SourceWire:
+            line.color = line.color == kOverlaySelectionWireColor
+                    ? settingColor(settings, ViewportColorSettingId::SelectionWire)
+                    : settingColor(settings, ViewportColorSettingId::SourceWire);
+            line.widthPixels = settings.floatValue(ViewportFloatSettingId::SourceWireLineSize);
+            break;
+        case ViewportOverlayLayer::SelectedFaceEdge:
+            line.color = settingColor(settings, ViewportColorSettingId::SelectionWire);
+            line.widthPixels = settings.floatValue(ViewportFloatSettingId::SelectionFaceWireLineSize);
+            break;
+        case ViewportOverlayLayer::SelectedEdge:
+            line.color = settingColor(settings, ViewportColorSettingId::SelectionWire);
+            line.widthPixels = settings.floatValue(ViewportFloatSettingId::SelectionEdgeLineSize);
+            break;
+        case ViewportOverlayLayer::HoverFaceEdge:
+        case ViewportOverlayLayer::HoverEdge:
+            line.color = viewportOverlayIsNativeRemoveColor(line.color)
+                    ? settingColor(settings, ViewportColorSettingId::RemoveSelectionWire)
+                    : settingColor(settings, ViewportColorSettingId::HoverWire);
+            line.widthPixels = settings.floatValue(ViewportFloatSettingId::HoverWireLineSize);
+            break;
+        case ViewportOverlayLayer::OpenEdge:
+            line.color = settingColor(settings, ViewportColorSettingId::OpenEdge);
+            line.widthPixels = settings.floatValue(ViewportFloatSettingId::OpenEdgeLineSize);
+            break;
+        case ViewportOverlayLayer::DiagnosticEdge:
+            line.color = settingColor(settings, ViewportColorSettingId::DiagnosticEdge);
+            line.widthPixels = settings.floatValue(ViewportFloatSettingId::DiagnosticEdgeLineSize);
+            break;
+        default:
+            break;
+        }
+    }
+
+    const float vertexSize = settings.floatValue(ViewportFloatSettingId::VertexSize);
+    for (ViewportOverlayPoint& point : frame.points) {
+        switch (point.layer) {
+        case ViewportOverlayLayer::UnselectedVertex:
+            point.color = settingColor(settings, ViewportColorSettingId::Vertex);
+            point.sizePixels = vertexSize;
+            break;
+        case ViewportOverlayLayer::SelectedVertex:
+            point.color = settingColor(settings, ViewportColorSettingId::SelectedVertex);
+            point.sizePixels = vertexSize + settings.floatValue(ViewportFloatSettingId::SelectedVertexGrowth);
+            break;
+        case ViewportOverlayLayer::HoverVertex:
+            point.color = viewportOverlayIsNativeRemoveColor(point.color)
+                    ? settingColor(settings, ViewportColorSettingId::RemoveSelectionVertex)
+                    : settingColor(settings, ViewportColorSettingId::HoverVertex);
+            point.sizePixels = vertexSize + settings.floatValue(ViewportFloatSettingId::HoverVertexGrowth);
+            break;
+        case ViewportOverlayLayer::SnapTargetVertex:
+            point.color = settingColor(settings, ViewportColorSettingId::HoverVertex);
+            point.sizePixels = vertexSize + settings.floatValue(ViewportFloatSettingId::HoverVertexGrowth);
+            break;
+        default:
+            break;
+        }
+    }
+}
 
 struct BoxPlacement {
     ModelingBounds localBounds;
@@ -64,6 +159,142 @@ float distanceSquared(ImVec2 a, ImVec2 b) {
     const float dx = a.x - b.x;
     const float dy = a.y - b.y;
     return dx * dx + dy * dy;
+}
+
+std::uint64_t edgeKey(std::uint32_t a, std::uint32_t b) {
+    if (b < a) {
+        std::swap(a, b);
+    }
+    return (static_cast<std::uint64_t>(a) << 32u) | static_cast<std::uint64_t>(b);
+}
+
+bool entitySelected(const SceneDocument& document, EntityId entity) {
+    const SelectionComponent* selection = document.selection(entity);
+    return selection != nullptr && selection->selected;
+}
+
+bool hasSelectedAncestor(const SceneDocument& document, EntityId entity) {
+    EntityId parent = document.parent(entity);
+    while (parent != InvalidEntityId) {
+        if (entitySelected(document, parent)) {
+            return true;
+        }
+        parent = document.parent(parent);
+    }
+    return false;
+}
+
+Vec3 parentLocalPointForWorldPoint(const SceneDocument& document, EntityId entity, Vec3 worldPoint) {
+    const EntityId parent = document.parent(entity);
+    if (parent == InvalidEntityId) {
+        return worldPoint;
+    }
+    return transformPoint(inverse(document.worldTransformMatrix(parent)), worldPoint);
+}
+
+Vec3 parentLocalVectorForWorldVector(const SceneDocument& document, EntityId entity, Vec3 worldVector) {
+    const EntityId parent = document.parent(entity);
+    if (parent == InvalidEntityId) {
+        return worldVector;
+    }
+    return transformVector(inverse(document.worldTransformMatrix(parent)), worldVector);
+}
+
+Vec3 documentLocalPivotForWorldPoint(const SceneDocument& document, EntityId entity, Vec3 worldPivot) {
+    return transformPoint(inverse(document.worldTransformMatrix(entity)), worldPivot);
+}
+
+void pinDocumentLocalPivotToWorldPoint(
+        const SceneDocument& document,
+        EntityId entity,
+        TransformComponent& transform,
+        Vec3 localPivot,
+        Vec3 worldPivot) {
+    Transform spatial = transform.spatialTransform();
+    spatial.position = {};
+    transform.position =
+            parentLocalPointForWorldPoint(document, entity, worldPivot) -
+            transformPoint(composeTransform(spatial), localPivot);
+}
+
+void applyDocumentWorldRotationDeltaAroundPivot(
+        const SceneDocument& document,
+        EntityId entity,
+        TransformComponent& transform,
+        Vec3 worldRotationDeltaRadians,
+        Vec3 localPivot,
+        Vec3 worldPivot) {
+    transform.rotationEuler = eulerRadiansAfterWorldRotationDelta(
+            transform.rotationEuler,
+            parentLocalVectorForWorldVector(document, entity, worldRotationDeltaRadians));
+    pinDocumentLocalPivotToWorldPoint(document, entity, transform, localPivot, worldPivot);
+}
+
+void appendMeshSelectionWire(
+        ViewportOverlayFrame& frame,
+        const SceneDocument& document,
+        const AssetRegistry& assets,
+        EntityId entity) {
+    if (!document.isEffectivelyVisible(entity)) {
+        return;
+    }
+
+    const MeshComponent* meshComponent = document.mesh(entity);
+    if (meshComponent == nullptr) {
+        return;
+    }
+
+    const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
+    if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.size() < 3u) {
+        return;
+    }
+
+    const Mat4 worldFromLocal = document.worldTransformMatrix(entity);
+    std::unordered_set<std::uint64_t> emittedEdges;
+    emittedEdges.reserve(mesh->indices.size());
+
+    auto appendEdge = [&](std::uint32_t a, std::uint32_t b) {
+        if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || a == b) {
+            return;
+        }
+        const std::uint64_t key = edgeKey(a, b);
+        if (!emittedEdges.insert(key).second) {
+            return;
+        }
+        frame.lines.push_back(ViewportOverlayLine{
+                .layer = ViewportOverlayLayer::SourceWire,
+                .start = transformPoint(worldFromLocal, mesh->vertices[a].position),
+                .end = transformPoint(worldFromLocal, mesh->vertices[b].position),
+                .color = kOverlaySelectionWireColor,
+                .widthPixels = 0.0f,
+        });
+    };
+
+    for (std::size_t index = 0; index + 2u < mesh->indices.size(); index += 3u) {
+        const std::uint32_t a = mesh->indices[index];
+        const std::uint32_t b = mesh->indices[index + 1u];
+        const std::uint32_t c = mesh->indices[index + 2u];
+        appendEdge(a, b);
+        appendEdge(b, c);
+        appendEdge(c, a);
+    }
+}
+
+void appendHierarchySelectionWires(
+        ViewportOverlayFrame& frame,
+        const SceneDocument& document,
+        const AssetRegistry& assets) {
+    for (const EntityId selected : document.selectedEntities()) {
+        if (!document.hasChildren(selected)) {
+            continue;
+        }
+        for (const EntityId descendant : document.descendants(selected, false)) {
+            if (entitySelected(document, descendant)) {
+                continue;
+            }
+            appendMeshSelectionWire(frame, document, assets, descendant);
+        }
+    }
 }
 
 void addPressedKey(ViewportInputFrame& input, ImGuiKey imguiKey, ViewportKey viewportKey) {
@@ -805,6 +1036,7 @@ quader_editor_core::TransformGizmoFrameInput makeSdkGizmoInput(
         ViewportPanel::GizmoAxis activeAxis,
         ViewportPanel::GizmoAxis hoverAxis,
         double gridSize,
+        float gizmoSizeScale,
         ImVec2 itemSize) {
     quader_editor_core::TransformGizmoFrameInput input;
     input.tool = toSdkTool(tool);
@@ -815,7 +1047,7 @@ quader_editor_core::TransformGizmoFrameInput makeSdkGizmoInput(
     input.pivot = toSdk(pivot);
     input.camera = makeSdkCamera(camera, itemSize);
     input.grid_size = gridSize;
-    input.gizmo_size_pixels = 68.0;
+    input.gizmo_size_pixels = 68.0 * std::max(gizmoSizeScale, 0.1f);
     input.pick_radius_pixels = 12.0;
     input.ring_segments = 64;
     return input;
@@ -1212,18 +1444,21 @@ void ViewportPanel::shutdown() {
 
 void ViewportPanel::prepareViewports(SceneRenderBridge& renderBridge) {
     const float gridWorldSize = viewportGridWorldSizeForPreset(inputRouter_.state().gridPreset);
+    const ViewportSettings& settings = activeViewportSettings();
     for (ViewportPaneId paneId : activeRenderPanes_) {
         Pane& paneState = pane(paneId);
         if (!paneState.initialized || !paneState.visibleThisFrame) {
             continue;
         }
         paneState.renderer.updateCamera(paneState.camera);
-        paneState.renderer.updateGroundGrid(paneState.camera, gridWorldSize);
+        paneState.renderer.updateGroundGrid(paneState.camera, gridWorldSize, settings);
         paneState.renderer.setOverlayVisible(true);
+        ViewportOverlayFrame overlayFrame = cachedSelectionOverlayFrameValid_ ? cachedSelectionOverlayFrame_ : ViewportOverlayFrame{};
+        applyViewportSettingsToOverlayFrame(overlayFrame, settings);
         renderBridge.setOverlayFrame(
                 viewportPaneIndex(paneId),
                 viewportGridLayerMask(viewportPaneIndex(paneId)),
-                cachedSelectionOverlayFrameValid_ ? cachedSelectionOverlayFrame_ : ViewportOverlayFrame{},
+                std::move(overlayFrame),
                 makeViewportOverlayCamera(paneState.camera, {paneState.renderSize.x, paneState.renderSize.y}));
     }
 }
@@ -1397,7 +1632,12 @@ ImVec2 ViewportPanel::paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect n
     return {absolute.width, absolute.height};
 }
 
+const ViewportSettings& ViewportPanel::activeViewportSettings() const {
+    return viewportSettings_ != nullptr ? *viewportSettings_ : fallbackViewportSettings_;
+}
+
 void ViewportPanel::draw(UIContext& context) {
+    viewportSettings_ = &context.viewportSettings;
     draw(context.renderBridge,
             context.document,
             context.assets,
@@ -1552,7 +1792,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                 drawPane.itemMin,
                 drawPane.itemSize);
     }
-    refreshCachedSelectionOverlayFrame(document, modeling);
+    refreshCachedSelectionOverlayFrame(document, assets, modeling);
     ImGui::SetCursorScreenPos({canvasMin.x, canvasMin.y + available.y});
     ImGui::End();
 }
@@ -1583,6 +1823,7 @@ void ViewportPanel::drawPaneDecorations(
 
 void ViewportPanel::refreshCachedSelectionOverlayFrame(
         const SceneDocument& document,
+        const AssetRegistry& assets,
         ModelingSessionService& modeling) {
     const ModelingSelectionSummary overlaySummary = modeling.selectionSummary();
     const bool overlayRevisionChanged =
@@ -1590,17 +1831,20 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
             cachedSelectionOverlayContentRevision_ != overlaySummary.contentRevision ||
             cachedSelectionOverlaySelectionRevision_ != overlaySummary.selectionRevision ||
             cachedSelectionOverlaySceneRevision_ != document.revision() ||
+            cachedSelectionOverlayAssetRevision_ != assets.revision() ||
             cachedSelectionOverlayMode_ != overlaySummary.mode;
     if (!cachedSelectionOverlayFrameDirty_ && !overlayRevisionChanged) {
         return;
     }
 
     cachedSelectionOverlayFrame_ = modeling.selectionOverlayFrame();
+    appendHierarchySelectionWires(cachedSelectionOverlayFrame_, document, assets);
     cachedSelectionOverlayFrameValid_ = true;
     cachedSelectionOverlayFrameDirty_ = false;
     cachedSelectionOverlayContentRevision_ = overlaySummary.contentRevision;
     cachedSelectionOverlaySelectionRevision_ = overlaySummary.selectionRevision;
     cachedSelectionOverlaySceneRevision_ = document.revision();
+    cachedSelectionOverlayAssetRevision_ = assets.revision();
     cachedSelectionOverlayMode_ = overlaySummary.mode;
 }
 
@@ -1794,6 +2038,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             activeGizmoAxis_ = GizmoAxis::None;
             modelingTransformDragActive_ = false;
             modelingTransformDragPreviewDriven_ = false;
+            sceneOnlyGizmoDrag_ = false;
             cachedSelectionOverlayFrameDirty_ = true;
             cancelConsumed = true;
         }
@@ -1951,8 +2196,12 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 !result.navigationActive) {
             (void)selectFromViewport(document, assets, modeling, camera, input.mouseLocal, input.modifiers, leftClickCount);
             paintSelectionActive_ = inputRouter_.state().selectionMode != ViewportSelectionMode::Object;
-            selectionHoverClearIssued_ = false;
-            lastHoverWorkKey_.valid = false;
+            const ModelingCommandResult clearHover = modeling.clearSelectionHover();
+            if (clearHover.changed) {
+                cachedSelectionOverlayFrameDirty_ = true;
+            }
+            selectionHoverClearIssued_ = true;
+            lastHoverWorkKey_ = makeHoverWorkKey(gizmoConsumed);
             cachedSelectionOverlayFrameDirty_ = true;
         } else if (selectionFallbackActive &&
                 pendingContextMenuClick &&
@@ -1984,6 +2233,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 !gizmoConsumed &&
                 !suppressHoverWork) {
             const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
+            const ViewportSettings& settings = activeViewportSettings();
             const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
                     .ray = {
                             .origin = worldRay.origin,
@@ -1994,6 +2244,8 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     .shiftPressed = input.modifiers.shift,
                     .commandPressed = input.modifiers.primary,
                     .altPressed = input.modifiers.alt,
+                    .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                    .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
             });
             inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
             paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
@@ -2013,12 +2265,15 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             const HoverWorkKey hoverWorkKey = makeHoverWorkKey(gizmoConsumed);
             if (claimHoverWork(hoverWorkKey)) {
                 const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
+                const ViewportSettings& settings = activeViewportSettings();
                 const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover(ModelingHoverRequest{
                         .ray = {
                                 .origin = worldRay.origin,
                                 .direction = worldRay.direction,
                         },
                         .selectedModifierPressed = input.modifiers.primary,
+                        .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                        .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
                 });
                 if (hoverUpdate.changed) {
                     cachedSelectionOverlayFrameDirty_ = true;
@@ -2037,7 +2292,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
     }
 
-    refreshCachedSelectionOverlayFrame(document, modeling);
+    refreshCachedSelectionOverlayFrame(document, assets, modeling);
     drawFlyNavigationOverlay(
             ImGui::GetWindowDrawList(),
             itemMin,
@@ -2156,6 +2411,7 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
         bool preserveSelectionOnSelectedHit) {
     const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
     if (modeling.sdkAvailable()) {
+        const ViewportSettings& settings = activeViewportSettings();
         const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
                 .ray = {
                         .origin = worldRay.origin,
@@ -2168,6 +2424,8 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
                 .altPressed = modifiers.alt,
                 .preserveSelectionOnMiss = preserveSelectionOnMiss,
                 .preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit,
+                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
         });
         inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
         return summary;
@@ -2178,13 +2436,13 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
 
     for (const EntityId id : document.entities()) {
         const VisibilityComponent* visibility = document.visibility(id);
-        if (visibility && (!visibility->visible || !visibility->selectable)) {
+        if (!document.isEffectivelyVisible(id) ||
+                (visibility != nullptr && !visibility->selectable)) {
             continue;
         }
 
         const MeshComponent* meshComponent = document.mesh(id);
-        const TransformComponent* transform = document.transform(id);
-        if (!meshComponent || !transform) {
+        if (!meshComponent || document.transform(id) == nullptr) {
             continue;
         }
 
@@ -2198,7 +2456,7 @@ ModelingSelectionSummary ViewportPanel::selectFromViewport(
             continue;
         }
 
-        const Mat4 worldFromLocal = composeTransform(transform->spatialTransform());
+        const Mat4 worldFromLocal = document.worldTransformMatrix(id);
         const Mat4 localFromWorld = inverse(worldFromLocal);
         const Vec3 localOrigin = transformPoint(localFromWorld, worldRay.origin);
         const Vec3 unnormalizedLocalDirection = transformVector(localFromWorld, worldRay.direction);
@@ -2273,6 +2531,7 @@ bool ViewportPanel::drawTransformGizmo(
 #endif
         modelingTransformDragActive_ = false;
         modelingTransformDragPreviewDriven_ = false;
+        sceneOnlyGizmoDrag_ = false;
         gizmoDragging_ = false;
         gizmoDragPaneActive_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
@@ -2294,6 +2553,7 @@ bool ViewportPanel::drawTransformGizmo(
 #endif
         modelingTransformDragActive_ = false;
         modelingTransformDragPreviewDriven_ = false;
+        sceneOnlyGizmoDrag_ = false;
         gizmoDragging_ = false;
         gizmoDragPaneActive_ = false;
         return false;
@@ -2315,6 +2575,7 @@ bool ViewportPanel::drawTransformGizmo(
 #endif
             modelingTransformDragActive_ = false;
             modelingTransformDragPreviewDriven_ = false;
+            sceneOnlyGizmoDrag_ = false;
             gizmoDragging_ = false;
             gizmoDragPaneActive_ = false;
             activeGizmoAxis_ = GizmoAxis::None;
@@ -2325,12 +2586,17 @@ bool ViewportPanel::drawTransformGizmo(
     if (interactive) {
         modeling.syncObjectSelectionFromScene();
     }
+    const bool componentSelectionMode = modeling.selectionMode() != ModelingSelectionMode::Object;
     const std::optional<SceneBounds> selectionBounds = selectedWorldBounds(document, assets);
     const std::optional<Vec3> sdkSelectionCenter = modeling.selectionCenter();
-    const bool componentSelectionMode = modeling.selectionMode() != ModelingSelectionMode::Object;
+    const Vec3 selectedWorldPosition = transformPoint(document.worldTransformMatrix(selected), Vec3{});
+    const bool usePrimaryEntityPivot =
+            !componentSelectionMode &&
+            (document.modelingObject(selected) == nullptr || document.hasChildren(selected));
     const Vec3 gizmoPivot =
             (componentSelectionMode && sdkSelectionCenter) ? *sdkSelectionCenter :
-            (selectionBounds ? boundsCenter(*selectionBounds) : sdkSelectionCenter.value_or(transform->position));
+            usePrimaryEntityPivot ? selectedWorldPosition :
+            (selectionBounds ? boundsCenter(*selectionBounds) : sdkSelectionCenter.value_or(selectedWorldPosition));
     const ViewportScreenPoint projectedPivot = camera.projectWorldPoint(gizmoPivot);
     if (!projectedPivot.visible) {
         if (!interactive) {
@@ -2346,6 +2612,7 @@ bool ViewportPanel::drawTransformGizmo(
 #endif
         modelingTransformDragActive_ = false;
         modelingTransformDragPreviewDriven_ = false;
+        sceneOnlyGizmoDrag_ = false;
         gizmoDragging_ = false;
         gizmoDragPaneActive_ = false;
         activeGizmoAxis_ = GizmoAxis::None;
@@ -2359,10 +2626,32 @@ bool ViewportPanel::drawTransformGizmo(
             mouse.x >= itemMin.x && mouse.y >= itemMin.y &&
             mouse.x <= itemMin.x + itemSize.x && mouse.y <= itemMin.y + itemSize.y;
     const double activeGridSize = std::max(static_cast<double>(gridSizeForPreset(inputRouter_.state().gridPreset)), 0.0001);
+    bool selectedHasModelingObjectTransform = false;
+    bool selectedHasSceneOnlyTransform = false;
+    bool selectedHasHierarchyTransform = false;
+    for (const EntityId entity : document.selectedEntities()) {
+        if (document.transform(entity) == nullptr) {
+            continue;
+        }
+        if (document.modelingObject(entity) != nullptr) {
+            selectedHasModelingObjectTransform = true;
+        } else {
+            selectedHasSceneOnlyTransform = true;
+        }
+        selectedHasHierarchyTransform =
+                selectedHasHierarchyTransform ||
+                document.parent(entity) != InvalidEntityId ||
+                document.hasChildren(entity);
+    }
+    const bool useModelingTransformDrag =
+            selectedHasModelingObjectTransform &&
+            !selectedHasSceneOnlyTransform &&
+            (componentSelectionMode || !selectedHasHierarchyTransform);
 
 #if QUADER_HAS_MODELING_SDK
+    const float gizmoSizeScale = activeViewportSettings().floatValue(ViewportFloatSettingId::GizmoSize);
     quader_editor_core::TransformGizmoFrameInput sdkInput =
-            makeSdkGizmoInput(camera, gizmoPivot, tool, activeGizmoAxis_, GizmoAxis::None, activeGridSize, itemSize);
+            makeSdkGizmoInput(camera, gizmoPivot, tool, activeGizmoAxis_, GizmoAxis::None, activeGridSize, gizmoSizeScale, itemSize);
     if (interactive && !gizmoDragging_ && mouseInsideViewport && !suppressHoverWork) {
         const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         const quader_editor_core::TransformGizmoPickHit hoverHit =
@@ -2377,7 +2666,7 @@ bool ViewportPanel::drawTransformGizmo(
 
     const ViewportCameraPose pose = camera.pose();
     const float cameraDistance = std::max(length(pose.eye - gizmoPivot), 0.1f);
-    const float worldLength = std::clamp(cameraDistance * 0.22f, 0.35f, 8.0f);
+    const float worldLength = std::clamp(cameraDistance * 0.22f * gizmoSizeScale, 0.35f, 8.0f);
     const std::array<Vec3, 3> axisVectors = {{
             {1.0f, 0.0f, 0.0f},
             {0.0f, 1.0f, 0.0f},
@@ -2417,6 +2706,30 @@ bool ViewportPanel::drawTransformGizmo(
         return false;
     }
 
+    auto fallbackGizmoHit = [&]() {
+        if (tool == ViewportTool::Rotate) {
+            const float radius = std::sqrt(distanceSquared(mouse, origin));
+            const float baseRadius = std::clamp(std::min(itemSize.x, itemSize.y) * 0.075f, 34.0f, 92.0f);
+            if (std::abs(radius - baseRadius) < 8.0f) {
+                return GizmoAxis::X;
+            }
+            if (std::abs(radius - baseRadius * 0.78f) < 8.0f) {
+                return GizmoAxis::Y;
+            }
+            if (std::abs(radius - baseRadius * 0.56f) < 8.0f) {
+                return GizmoAxis::Z;
+            }
+            return GizmoAxis::None;
+        }
+
+        for (std::size_t index = 0; index < axisEnds.size(); ++index) {
+            if (axisEnds[index] && distanceToSegmentSquared(mouse, origin, *axisEnds[index]) < 144.0f) {
+                return axes[index];
+            }
+        }
+        return GizmoAxis::None;
+    };
+
     bool consumed = gizmoDragging_;
     if (!gizmoDragging_ && mouseInsideViewport && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
 #if QUADER_HAS_MODELING_SDK
@@ -2427,72 +2740,83 @@ bool ViewportPanel::drawTransformGizmo(
         const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         sdkHit = quader_editor_core::pick_transform_gizmo(sdkInput, toSdk(localMouse));
         activeGizmoAxis_ = sdkHit.hit ? fromSdkAxis(sdkHit.axis) : GizmoAxis::None;
-#else
-        if (tool == ViewportTool::Rotate) {
-            const float radius = std::sqrt(distanceSquared(mouse, origin));
-            const float baseRadius = std::clamp(std::min(itemSize.x, itemSize.y) * 0.075f, 34.0f, 92.0f);
-            if (std::abs(radius - baseRadius) < 8.0f) {
-                activeGizmoAxis_ = GizmoAxis::X;
-            } else if (std::abs(radius - baseRadius * 0.78f) < 8.0f) {
-                activeGizmoAxis_ = GizmoAxis::Y;
-            } else if (std::abs(radius - baseRadius * 0.56f) < 8.0f) {
-                activeGizmoAxis_ = GizmoAxis::Z;
-            }
-        } else {
-            for (std::size_t index = 0; index < axisEnds.size(); ++index) {
-                if (axisEnds[index] && distanceToSegmentSquared(mouse, origin, *axisEnds[index]) < 100.0f) {
-                    activeGizmoAxis_ = axes[index];
-                    break;
-                }
-            }
+        if (activeGizmoAxis_ == GizmoAxis::None && !useModelingTransformDrag) {
+            activeGizmoAxis_ = fallbackGizmoHit();
         }
+#else
+        activeGizmoAxis_ = fallbackGizmoHit();
 #endif
 
         if (activeGizmoAxis_ != GizmoAxis::None) {
+            bool hasEditableTransform = false;
+            bool hasLockedTransform = false;
+            for (const EntityId entity : document.selectedEntities()) {
+                if (document.transform(entity) == nullptr) {
+                    continue;
+                }
+                if (document.isEffectivelyLocked(entity)) {
+                    hasLockedTransform = true;
+                } else {
+                    hasEditableTransform = true;
+                }
+            }
+            if (!hasEditableTransform || hasLockedTransform) {
+                activeGizmoAxis_ = GizmoAxis::None;
+                return consumed;
+            }
+
             bool dragReady = true;
 #if QUADER_HAS_MODELING_SDK
-            dragReady = false;
+            if (useModelingTransformDrag) {
+                dragReady = false;
 
-            const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
-            const quader_poly::Vec2 sdkScreenPivot = toSdk(projectedPivot.position);
-            const quader_poly::Vec2 sdkScreenTip = sdkHit.hit ? sdkHit.screen_tip : sdkScreenPivot;
-            const ViewportRay startRay = camera.rayFromViewportPoint(localMouse);
-            const bool duplicateSelected = !componentSelectionMode && io.KeyShift;
-            const bool topologyModifier = componentSelectionMode && io.KeyShift;
-            const ModelingTransformOperation operation =
-                    topologyModifier && tool == ViewportTool::Move ? ModelingTransformOperation::Extrude :
-                    topologyModifier && tool == ViewportTool::Scale ? ModelingTransformOperation::Inset :
-                    ModelingTransformOperation::Transform;
-            const ModelingTransformDragPreview beginPreview = modeling.beginTransformDrag({
-                    .tool = viewportToolToModelingTransformTool(tool),
-                    .operation = operation,
-                    .axis = toModelingTransformAxis(activeGizmoAxis_),
-                    .pivot = gizmoPivot,
-                    .screenPosition = localMouse,
-                    .screenPivot = projectedPivot.position,
-                    .screenTip = fromSdk(sdkScreenTip),
-                    .hasWorldDirection = sdkHit.hit,
-                    .worldDirection = fromSdk(sdkHit.world_direction),
-                    .ray = {
-                            .origin = startRay.origin,
-                            .direction = startRay.direction,
-                    },
-                    .camera = modelingViewportCamera(camera, {itemSize.x, itemSize.y}),
-                    .gridSize = activeGridSize,
-                    .vertexSnapRadius = 0.3,
-                    .duplicateSelected = duplicateSelected,
-            });
-            if (!beginPreview.ok) {
-                LOG_ERROR("Transform drag begin failed: {}", beginPreview.message);
+                const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+                const quader_poly::Vec2 sdkScreenPivot = toSdk(projectedPivot.position);
+                const quader_poly::Vec2 sdkScreenTip = sdkHit.hit ? sdkHit.screen_tip : sdkScreenPivot;
+                const ViewportRay startRay = camera.rayFromViewportPoint(localMouse);
+                const bool duplicateSelected = !componentSelectionMode && io.KeyShift;
+                const bool topologyModifier = componentSelectionMode && io.KeyShift;
+                const ModelingTransformOperation operation =
+                        topologyModifier && tool == ViewportTool::Move ? ModelingTransformOperation::Extrude :
+                        topologyModifier && tool == ViewportTool::Scale ? ModelingTransformOperation::Inset :
+                        ModelingTransformOperation::Transform;
+                const ModelingTransformDragPreview beginPreview = modeling.beginTransformDrag({
+                        .tool = viewportToolToModelingTransformTool(tool),
+                        .operation = operation,
+                        .axis = toModelingTransformAxis(activeGizmoAxis_),
+                        .pivot = gizmoPivot,
+                        .screenPosition = localMouse,
+                        .screenPivot = projectedPivot.position,
+                        .screenTip = fromSdk(sdkScreenTip),
+                        .hasWorldDirection = sdkHit.hit,
+                        .worldDirection = fromSdk(sdkHit.world_direction),
+                        .ray = {
+                                .origin = startRay.origin,
+                                .direction = startRay.direction,
+                        },
+                        .camera = modelingViewportCamera(camera, {itemSize.x, itemSize.y}),
+                        .gridSize = activeGridSize,
+                        .vertexSnapRadius = 0.3,
+                        .duplicateSelected = duplicateSelected,
+                });
+                if (!beginPreview.ok) {
+                    LOG_ERROR("Transform drag begin failed: {}", beginPreview.message);
+                }
+                dragReady = beginPreview.ok && beginPreview.active;
+                modelingTransformDragActive_ = dragReady;
+                modelingTransformDragPreviewDriven_ = beginPreview.previewDriven;
+                sceneOnlyGizmoDrag_ = false;
+            } else {
+                modelingTransformDragActive_ = false;
+                modelingTransformDragPreviewDriven_ = false;
+                sceneOnlyGizmoDrag_ = true;
             }
-            dragReady = beginPreview.ok && beginPreview.active;
-            modelingTransformDragActive_ = dragReady;
-            modelingTransformDragPreviewDriven_ = beginPreview.previewDriven;
 #endif
 
             if (!dragReady) {
                 modelingTransformDragActive_ = false;
                 modelingTransformDragPreviewDriven_ = false;
+                sceneOnlyGizmoDrag_ = false;
                 activeGizmoAxis_ = GizmoAxis::None;
                 return consumed;
             }
@@ -2500,14 +2824,21 @@ bool ViewportPanel::drawTransformGizmo(
             gizmoDragPaneActive_ = true;
             gizmoDragPaneId_ = paneId;
             lastGizmoMouse_ = {mouse.x, mouse.y};
+            gizmoStartMouse_ = lastGizmoMouse_;
             gizmoStartWorldPivot_ = gizmoPivot;
             gizmoStartTransforms_.clear();
             for (const EntityId entity : document.selectedEntities()) {
+                if (document.isEffectivelyLocked(entity)) {
+                    continue;
+                }
+                if (hasSelectedAncestor(document, entity)) {
+                    continue;
+                }
                 if (const TransformComponent* selectedTransform = document.transform(entity)) {
                     gizmoStartTransforms_.push_back(GizmoStartTransform{
                             .entity = entity,
                             .transform = *selectedTransform,
-                            .localPivot = localPivotForWorldPoint(*selectedTransform, gizmoPivot),
+                            .localPivot = documentLocalPivotForWorldPoint(document, entity, gizmoPivot),
                     });
                 }
             }
@@ -2521,6 +2852,7 @@ bool ViewportPanel::drawTransformGizmo(
                 }
                 modelingTransformDragActive_ = false;
                 modelingTransformDragPreviewDriven_ = false;
+                sceneOnlyGizmoDrag_ = false;
 #endif
                 gizmoDragging_ = false;
                 gizmoDragPaneActive_ = false;
@@ -2535,7 +2867,7 @@ bool ViewportPanel::drawTransformGizmo(
         const bool wasDragging = gizmoDragging_;
         bool modelingPreviewHandled = false;
 #if QUADER_HAS_MODELING_SDK
-        if (wasDragging) {
+        if (wasDragging && !sceneOnlyGizmoDrag_) {
             ModelingTransformDragPreview committedPreview;
             const ModelingCommandResult commit = executeTrackedModelingCommand(
                     undoRedo,
@@ -2583,6 +2915,7 @@ bool ViewportPanel::drawTransformGizmo(
         gizmoStartTransforms_.clear();
         modelingTransformDragActive_ = false;
         modelingTransformDragPreviewDriven_ = false;
+        sceneOnlyGizmoDrag_ = false;
         return consumed || wasDragging;
     }
 
@@ -2592,10 +2925,11 @@ bool ViewportPanel::drawTransformGizmo(
 
     const Vec2 currentMouse{mouse.x, mouse.y};
     auto pinStartPivot = [&](TransformComponent& next, const GizmoStartTransform& start) {
-        pinLocalPivotToWorldPoint(next, start.localPivot, gizmoStartWorldPivot_);
+        pinDocumentLocalPivotToWorldPoint(document, start.entity, next, start.localPivot, gizmoStartWorldPivot_);
     };
 
 #if QUADER_HAS_MODELING_SDK
+    if (!sceneOnlyGizmoDrag_) {
     const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
     const ViewportRay dragRay = camera.rayFromViewportPoint(localMouse);
     const bool precision = io.KeyCtrl || io.KeySuper;
@@ -2639,9 +2973,15 @@ bool ViewportPanel::drawTransformGizmo(
     for (const GizmoStartTransform& start : gizmoStartTransforms_) {
         TransformComponent next = start.transform;
         if (tool == ViewportTool::Move) {
-            next.position = start.transform.position + previewMoveDelta;
+            next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, previewMoveDelta);
         } else if (tool == ViewportTool::Rotate) {
-            applyWorldRotationDeltaAroundPivot(next, previewRotationDelta, start.localPivot, gizmoStartWorldPivot_);
+            applyDocumentWorldRotationDeltaAroundPivot(
+                    document,
+                    start.entity,
+                    next,
+                    previewRotationDelta,
+                    start.localPivot,
+                    gizmoStartWorldPivot_);
         } else if (tool == ViewportTool::Scale) {
             next.scale.x = std::max(start.transform.scale.x * previewScaleFactor.x, 0.001f);
             next.scale.y = std::max(start.transform.scale.y * previewScaleFactor.y, 0.001f);
@@ -2650,8 +2990,10 @@ bool ViewportPanel::drawTransformGizmo(
         }
         document.setTransform(start.entity, next);
     }
-#else
-    const Vec2 delta = currentMouse - lastGizmoMouse_;
+    } else
+#endif
+    {
+    const Vec2 delta = currentMouse - gizmoStartMouse_;
     lastGizmoMouse_ = currentMouse;
 
     const float worldPerPixel =
@@ -2719,12 +3061,20 @@ bool ViewportPanel::drawTransformGizmo(
     for (const GizmoStartTransform& start : gizmoStartTransforms_) {
         TransformComponent next = start.transform;
         if (tool == ViewportTool::Move) {
-            applyAxis(next.position.x, next.position.y, next.position.z, screenAxisDelta(activeGizmoAxis_) * worldPerPixel);
+            Vec3 worldMoveDelta = {};
+            applyAxis(worldMoveDelta.x, worldMoveDelta.y, worldMoveDelta.z, screenAxisDelta(activeGizmoAxis_) * worldPerPixel);
+            next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, worldMoveDelta);
         } else if (tool == ViewportTool::Rotate) {
             const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
             Vec3 worldRotationDelta = {};
             applyAxis(worldRotationDelta.x, worldRotationDelta.y, worldRotationDelta.z, screenDelta * 0.01f);
-            applyWorldRotationDeltaAroundPivot(next, worldRotationDelta, start.localPivot, gizmoStartWorldPivot_);
+            applyDocumentWorldRotationDeltaAroundPivot(
+                    document,
+                    start.entity,
+                    next,
+                    worldRotationDelta,
+                    start.localPivot,
+                    gizmoStartWorldPivot_);
         } else if (tool == ViewportTool::Scale) {
             applyAxis(next.scale.x, next.scale.y, next.scale.z, screenAxisDelta(activeGizmoAxis_) * 0.01f);
             next.scale.x = std::max(next.scale.x, 0.001f);
@@ -2734,7 +3084,7 @@ bool ViewportPanel::drawTransformGizmo(
         }
         document.setTransform(start.entity, next);
     }
-#endif
+    }
 
     return true;
 }

@@ -48,7 +48,10 @@ std::vector<DocumentTransformEdit> normalizedTransformEdits(
     std::vector<DocumentTransformEdit> result;
     result.reserve(edits.size());
     for (const DocumentTransformEdit& edit : edits) {
-        if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || sameTransform(edit.before, edit.after)) {
+        if (edit.entity == InvalidEntityId ||
+                !scene.exists(edit.entity) ||
+                scene.isEffectivelyLocked(edit.entity) ||
+                sameTransform(edit.before, edit.after)) {
             continue;
         }
         result.push_back(edit);
@@ -65,6 +68,23 @@ std::vector<DocumentVisibilityEdit> normalizedVisibilityEdits(
     std::vector<DocumentVisibilityEdit> result;
     result.reserve(edits.size());
     for (const DocumentVisibilityEdit& edit : edits) {
+        if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || edit.before == edit.after) {
+            continue;
+        }
+        result.push_back(edit);
+    }
+    std::sort(result.begin(), result.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.entity < rhs.entity;
+    });
+    return result;
+}
+
+std::vector<DocumentLockEdit> normalizedLockEdits(
+        const SceneDocument& scene,
+        std::vector<DocumentLockEdit> edits) {
+    std::vector<DocumentLockEdit> result;
+    result.reserve(edits.size());
+    for (const DocumentLockEdit& edit : edits) {
         if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || edit.before == edit.after) {
             continue;
         }
@@ -138,6 +158,49 @@ DocumentCommandResult DocumentCommandService::setVisibility(std::vector<Document
             .redo = [this, edits]() {
                 for (const DocumentVisibilityEdit& edit : edits) {
                     if (!scene_.setVisible(edit.entity, edit.after)) {
+                        return missingEntityResult();
+                    }
+                }
+                return okChangedResult();
+            },
+    });
+}
+
+DocumentCommandResult DocumentCommandService::setLocked(EntityId entity, bool locked) {
+    const LockComponent* currentLock = scene_.lock(entity);
+    if (!currentLock) {
+        return missingEntityResult();
+    }
+    if (currentLock->locked == locked) {
+        return {.ok = true, .changed = false};
+    }
+
+    return setLocks({DocumentLockEdit{
+            .entity = entity,
+            .before = currentLock->locked,
+            .after = locked,
+    }});
+}
+
+DocumentCommandResult DocumentCommandService::setLocks(std::vector<DocumentLockEdit> edits) {
+    edits = normalizedLockEdits(scene_, std::move(edits));
+    if (edits.empty()) {
+        return okUnchangedResult();
+    }
+
+    return undoRedo_.execute(UndoRedoCommand{
+            .label = "Set Lock",
+            .undo = [this, edits]() {
+                for (const DocumentLockEdit& edit : edits) {
+                    if (!scene_.setLocked(edit.entity, edit.before)) {
+                        return missingEntityResult();
+                    }
+                }
+                return okChangedResult();
+            },
+            .redo = [this, edits]() {
+                for (const DocumentLockEdit& edit : edits) {
+                    if (!scene_.setLocked(edit.entity, edit.after)) {
                         return missingEntityResult();
                     }
                 }

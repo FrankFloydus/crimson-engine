@@ -91,6 +91,7 @@ const char* activeSelectionKindLabel(ModelingActiveSelectionKind kind) {
 bool axisDragFloat(const char* axis,
         ImVec4 color,
         float* value,
+        bool mixed,
         float speed,
         float minValue,
         float maxValue,
@@ -102,13 +103,22 @@ bool axisDragFloat(const char* axis,
     ImGui::PopStyleColor();
     ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::SetNextItemWidth(std::max(inputWidth, kMinAxisInputWidth));
-    const bool changed = ImGui::DragFloat("##value", value, speed, minValue, maxValue, "%.3f");
+    bool changed = false;
+    if (mixed) {
+        char mixedText[] = "Mixed";
+        ImGui::BeginDisabled();
+        ImGui::InputText("##value", mixedText, sizeof(mixedText), ImGuiInputTextFlags_ReadOnly);
+        ImGui::EndDisabled();
+    } else {
+        changed = ImGui::DragFloat("##value", value, speed, minValue, maxValue, "%.3f");
+    }
     ImGui::PopID();
     return changed;
 }
 
 bool axisDragFloat3(const char* label,
         float values[3],
+        const std::array<bool, 3>& mixed,
         const UIStyleTokens& style,
         float speed,
         float minValue = 0.0f,
@@ -135,11 +145,11 @@ bool axisDragFloat3(const char* label,
         ImGui::TextUnformatted(label);
 
         ImGui::TableSetColumnIndex(1);
-        changed = axisDragFloat("X", style.axisX, &values[0], speed, minValue, maxValue, inputWidth) || changed;
+        changed = axisDragFloat("X", style.axisX, &values[0], mixed[0], speed, minValue, maxValue, inputWidth) || changed;
         ImGui::TableSetColumnIndex(2);
-        changed = axisDragFloat("Y", style.axisY, &values[1], speed, minValue, maxValue, inputWidth) || changed;
+        changed = axisDragFloat("Y", style.axisY, &values[1], mixed[1], speed, minValue, maxValue, inputWidth) || changed;
         ImGui::TableSetColumnIndex(3);
-        changed = axisDragFloat("Z", style.axisZ, &values[2], speed, minValue, maxValue, inputWidth) || changed;
+        changed = axisDragFloat("Z", style.axisZ, &values[2], mixed[2], speed, minValue, maxValue, inputWidth) || changed;
 
         ImGui::EndTable();
     }
@@ -152,6 +162,86 @@ struct SelectedTransformPivot {
     TransformComponent transform;
     Vec3 localPivot = {};
 };
+
+struct BoolAggregate {
+    bool hasValue = false;
+    bool allTrue = true;
+    bool anyTrue = false;
+
+    bool mixed() const {
+        return anyTrue && !allTrue;
+    }
+};
+
+BoolAggregate aggregateVisibility(const SceneDocument& document, const std::vector<EntityId>& selected) {
+    BoolAggregate result;
+    for (const EntityId id : selected) {
+        if (const VisibilityComponent* visibility = document.visibility(id)) {
+            result.hasValue = true;
+            result.allTrue = result.allTrue && visibility->visible;
+            result.anyTrue = result.anyTrue || visibility->visible;
+        }
+    }
+    return result;
+}
+
+BoolAggregate aggregateLock(const SceneDocument& document, const std::vector<EntityId>& selected) {
+    BoolAggregate result;
+    for (const EntityId id : selected) {
+        if (const LockComponent* lock = document.lock(id)) {
+            result.hasValue = true;
+            result.allTrue = result.allTrue && lock->locked;
+            result.anyTrue = result.anyTrue || lock->locked;
+        }
+    }
+    return result;
+}
+
+bool sameFloat(float a, float b) {
+    return std::fabs(a - b) <= 0.0001f;
+}
+
+std::array<bool, 3> mixedPositionAxes(const SceneDocument& document,
+        const std::vector<EntityId>& selected,
+        const TransformComponent& primary) {
+    std::array<bool, 3> mixed{false, false, false};
+    for (const EntityId id : selected) {
+        if (const TransformComponent* transform = document.transform(id)) {
+            mixed[0] = mixed[0] || !sameFloat(transform->position.x, primary.position.x);
+            mixed[1] = mixed[1] || !sameFloat(transform->position.y, primary.position.y);
+            mixed[2] = mixed[2] || !sameFloat(transform->position.z, primary.position.z);
+        }
+    }
+    return mixed;
+}
+
+std::array<bool, 3> mixedRotationAxes(const SceneDocument& document,
+        const std::vector<EntityId>& selected,
+        const TransformComponent& primary) {
+    std::array<bool, 3> mixed{false, false, false};
+    for (const EntityId id : selected) {
+        if (const TransformComponent* transform = document.transform(id)) {
+            mixed[0] = mixed[0] || !sameFloat(transform->rotationEuler.x, primary.rotationEuler.x);
+            mixed[1] = mixed[1] || !sameFloat(transform->rotationEuler.y, primary.rotationEuler.y);
+            mixed[2] = mixed[2] || !sameFloat(transform->rotationEuler.z, primary.rotationEuler.z);
+        }
+    }
+    return mixed;
+}
+
+std::array<bool, 3> mixedScaleAxes(const SceneDocument& document,
+        const std::vector<EntityId>& selected,
+        const TransformComponent& primary) {
+    std::array<bool, 3> mixed{false, false, false};
+    for (const EntityId id : selected) {
+        if (const TransformComponent* transform = document.transform(id)) {
+            mixed[0] = mixed[0] || !sameFloat(transform->scale.x, primary.scale.x);
+            mixed[1] = mixed[1] || !sameFloat(transform->scale.y, primary.scale.y);
+            mixed[2] = mixed[2] || !sameFloat(transform->scale.z, primary.scale.z);
+        }
+    }
+    return mixed;
+}
 
 } // namespace
 
@@ -212,16 +302,9 @@ void InspectorPanel::draw(UIContext& context) {
         }
     }
 
-    bool hasVisibility = false;
-    bool allVisible = true;
-    for (const EntityId id : selected) {
-        if (const VisibilityComponent* visibility = document.visibility(id)) {
-            hasVisibility = true;
-            allVisible = allVisible && visibility->visible;
-        }
-    }
-    if (hasVisibility) {
-        bool visible = allVisible;
+    const BoolAggregate visibilityAggregate = aggregateVisibility(document, selected);
+    if (visibilityAggregate.hasValue) {
+        bool visible = visibilityAggregate.allTrue;
         if (ImGui::Checkbox("Visible", &visible)) {
             std::vector<DocumentVisibilityEdit> edits;
             edits.reserve(selected.size());
@@ -235,6 +318,33 @@ void InspectorPanel::draw(UIContext& context) {
                 }
             }
             (void)context.documentCommands.setVisibility(std::move(edits));
+        }
+        if (visibilityAggregate.mixed()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Mixed");
+        }
+    }
+
+    const BoolAggregate lockAggregate = aggregateLock(document, selected);
+    if (lockAggregate.hasValue) {
+        bool locked = lockAggregate.allTrue;
+        if (ImGui::Checkbox("Locked", &locked)) {
+            std::vector<DocumentLockEdit> edits;
+            edits.reserve(selected.size());
+            for (const EntityId id : selected) {
+                if (const LockComponent* current = document.lock(id)) {
+                    edits.push_back(DocumentLockEdit{
+                            .entity = id,
+                            .before = current->locked,
+                            .after = locked,
+                    });
+                }
+            }
+            (void)context.documentCommands.setLocks(std::move(edits));
+        }
+        if (lockAggregate.mixed()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Mixed");
         }
     }
 
@@ -256,6 +366,9 @@ void InspectorPanel::draw(UIContext& context) {
             std::vector<DocumentTransformEdit> edits;
             edits.reserve(selected.size());
             for (const EntityId id : selected) {
+                if (document.isEffectivelyLocked(id)) {
+                    continue;
+                }
                 if (TransformComponent* current = document.transform(id)) {
                     const TransformComponent before = *current;
                     TransformComponent next = before;
@@ -275,6 +388,9 @@ void InspectorPanel::draw(UIContext& context) {
             std::vector<SelectedTransformPivot> records;
             records.reserve(selected.size());
             for (const EntityId id : selected) {
+                if (document.isEffectivelyLocked(id)) {
+                    continue;
+                }
                 if (const TransformComponent* current = document.transform(id)) {
                     records.push_back(SelectedTransformPivot{
                             .entity = id,
@@ -309,7 +425,8 @@ void InspectorPanel::draw(UIContext& context) {
         };
 
         float position[3] = {transform->position.x, transform->position.y, transform->position.z};
-        if (axisDragFloat3("Position", position, context.style, 0.05f)) {
+        const std::array<bool, 3> positionMixed = mixedPositionAxes(document, selected, *transform);
+        if (axisDragFloat3("Position", position, positionMixed, context.style, 0.05f)) {
             const Vec3 previous = transform->position;
             const Vec3 nextPosition{position[0], position[1], position[2]};
             const Vec3 delta = nextPosition - previous;
@@ -323,7 +440,8 @@ void InspectorPanel::draw(UIContext& context) {
                 transform->rotationEuler.y * RadToDeg,
                 transform->rotationEuler.z * RadToDeg,
         };
-        if (axisDragFloat3("Rotation", rotation, context.style, 0.5f)) {
+        const std::array<bool, 3> rotationMixed = mixedRotationAxes(document, selected, *transform);
+        if (axisDragFloat3("Rotation", rotation, rotationMixed, context.style, 0.5f)) {
             const Vec3 previous = transform->rotationEuler;
             const Vec3 nextRotation{rotation[0] * DegToRad, rotation[1] * DegToRad, rotation[2] * DegToRad};
             const Vec3 delta = nextRotation - previous;
@@ -333,7 +451,8 @@ void InspectorPanel::draw(UIContext& context) {
         }
 
         float scale[3] = {transform->scale.x, transform->scale.y, transform->scale.z};
-        if (axisDragFloat3("Scale", scale, context.style, 0.02f, 0.001f, 1000.0f)) {
+        const std::array<bool, 3> scaleMixed = mixedScaleAxes(document, selected, *transform);
+        if (axisDragFloat3("Scale", scale, scaleMixed, context.style, 0.02f, 0.001f, 1000.0f)) {
             const Vec3 ratio = componentScaleRatio({scale[0], scale[1], scale[2]}, transform->scale);
             applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {
                 next.scale = clampScale(multiplyComponents(next.scale, ratio));

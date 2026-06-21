@@ -39,6 +39,7 @@ using AttributeType = filament::backend::ElementType;
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 constexpr float kPi = 3.14159265358979323846f;
+constexpr float kMeshTextureAnisotropy = 8.0f;
 
 struct RenderVertex {
     filament::math::float3 position;
@@ -175,24 +176,19 @@ std::uint64_t overlayLayerSignature(const ViewportOverlayFrame& frame, ViewportO
     return hash;
 }
 
-filament::math::float3 directionFromTransform(const TransformComponent& transform) {
-    const float yaw = transform.rotationEuler.y;
-    const float pitch = transform.rotationEuler.x;
-    const float cp = std::cos(pitch);
-    return toFilament(normalize({
-            std::sin(yaw) * cp,
-            -std::cos(pitch),
-            std::cos(yaw) * cp,
-    }));
+filament::math::float3 directionFromMatrix(const Mat4& transform) {
+    return toFilament(normalize(transformVector(transform, {0.0f, -1.0f, 1.0f})));
 }
 
-filament::math::mat4f makeTransform(const TransformComponent& transform) {
-    const auto translation = filament::math::mat4f::translation(toFilament(transform.position));
-    const auto rotationX = filament::math::mat4f::rotation(transform.rotationEuler.x, filament::math::float3{1.0f, 0.0f, 0.0f});
-    const auto rotationY = filament::math::mat4f::rotation(transform.rotationEuler.y, filament::math::float3{0.0f, 1.0f, 0.0f});
-    const auto rotationZ = filament::math::mat4f::rotation(transform.rotationEuler.z, filament::math::float3{0.0f, 0.0f, 1.0f});
-    const auto scale = filament::math::mat4f::scaling(toFilament(transform.scale));
-    return translation * rotationZ * rotationY * rotationX * scale;
+filament::math::mat4f makeTransform(const Mat4& transform) {
+    const glm::mat4 glmTransform = toGlm(transform);
+    filament::math::mat4f result;
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            result[column][row] = glmTransform[column][row];
+        }
+    }
+    return result;
 }
 
 filament::math::float4 tangentFrameFromNormal(Vec3 normal) {
@@ -637,12 +633,11 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
     auto& entityManager = utils::EntityManager::get();
 
     for (const EntityId entityId : document.entities()) {
-        const VisibilityComponent* visibility = document.visibility(entityId);
-        if (visibility && !visibility->visible) {
+        if (!document.isEffectivelyVisible(entityId)) {
             continue;
         }
 
-        const TransformComponent transform = document.transform(entityId) ? *document.transform(entityId) : TransformComponent{};
+        const Mat4 worldTransform = document.worldTransformMatrix(entityId);
 
         if (const auto* meshComponent = document.mesh(entityId)) {
             const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
@@ -671,10 +666,10 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
                         destroyMeshProxy(existing->second);
                         meshProxies_.erase(existing);
                     }
-                    MeshProxy proxy = createMeshProxy(entityId, meshComponent->mesh, *mesh, materialId, material, assets, transform);
+                    MeshProxy proxy = createMeshProxy(entityId, meshComponent->mesh, *mesh, materialId, material, assets, worldTransform);
                     meshProxies_.emplace(entityId, std::move(proxy));
                 } else {
-                    updateMeshProxyTransform(existing->second, transform);
+                    updateMeshProxyTransform(existing->second, worldTransform);
                 }
             }
         }
@@ -693,7 +688,7 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
             filament::LightManager::Builder(toFilamentLightType(light->type))
                     .color({light->color.x, light->color.y, light->color.z})
                     .intensity(light->intensity)
-                    .direction(directionFromTransform(transform))
+                    .direction(directionFromMatrix(worldTransform))
                     .castShadows(light->castsShadows)
                     .build(*engine_, proxy.entity);
             scene_->addEntity(proxy.entity);
@@ -722,8 +717,7 @@ void SceneRenderBridge::rebuild(const SceneDocument& document, const AssetRegist
 
 bool SceneRenderBridge::renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const {
     for (const EntityId entityId : document.entities()) {
-        const VisibilityComponent* visibility = document.visibility(entityId);
-        if (visibility && !visibility->visible) {
+        if (!document.isEffectivelyVisible(entityId)) {
             continue;
         }
         const MeshComponent* meshComponent = document.mesh(entityId);
@@ -761,7 +755,7 @@ SceneRenderBridge::MeshProxy SceneRenderBridge::createMeshProxy(EntityId entityI
         AssetId materialId,
         const MaterialDocument* material,
         const AssetRegistry& assets,
-        const TransformComponent& transform) {
+        const Mat4& worldTransform) {
     MeshProxy proxy;
     proxy.entity = utils::EntityManager::get().create();
     proxy.sourceEntity = entityId;
@@ -821,12 +815,12 @@ SceneRenderBridge::MeshProxy SceneRenderBridge::createMeshProxy(EntityId entityI
             .build(*engine_, proxy.entity);
 
     engine_->getTransformManager().create(proxy.entity);
-    updateMeshProxyTransform(proxy, transform);
+    updateMeshProxyTransform(proxy, worldTransform);
     scene_->addEntity(proxy.entity);
     return proxy;
 }
 
-void SceneRenderBridge::updateMeshProxyTransform(const MeshProxy& proxy, const TransformComponent& transform) {
+void SceneRenderBridge::updateMeshProxyTransform(const MeshProxy& proxy, const Mat4& worldTransform) {
     if (!engine_ || !proxy.entity) {
         return;
     }
@@ -837,14 +831,15 @@ void SceneRenderBridge::updateMeshProxyTransform(const MeshProxy& proxy, const T
         transformManager.create(proxy.entity);
         instance = transformManager.getInstance(proxy.entity);
     }
-    transformManager.setTransform(instance, makeTransform(transform));
+    transformManager.setTransform(instance, makeTransform(worldTransform));
 }
 
 filament::MaterialInstance* SceneRenderBridge::createMeshMaterialInstance(const AssetRegistry& assets, const MaterialDocument* material) {
-    const filament::TextureSampler sampler(
+    filament::TextureSampler sampler(
             filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR,
             filament::TextureSampler::MagFilter::LINEAR,
             filament::TextureSampler::WrapMode::REPEAT);
+    sampler.setAnisotropy(kMeshTextureAnisotropy);
 
     filament::MaterialInstance* materialInstance = meshMaterial_->createInstance();
     materialInstance->setCullingMode(filament::MaterialInstance::CullingMode::BACK);

@@ -5,7 +5,6 @@
 
 #include <filament/Material.h>
 #include <filament/Renderer.h>
-#include <filament/Skybox.h>
 #include <math/vec4.h>
 
 #include <stdexcept>
@@ -55,12 +54,6 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     scene_ = engine_->createScene();
     LOG_INFO("Filament scene created");
     const EnvironmentDocument& environment = config.settings.environment;
-    skybox_ = filament::Skybox::Builder()
-            .color({environment.clearColor.x, environment.clearColor.y, environment.clearColor.z, environment.clearAlpha})
-            .build(*engine_);
-    scene_->setSkybox(skybox_);
-    LOG_INFO("Filament skybox created");
-
     filament::Renderer::ClearOptions clear;
     clear.clear = true;
     clear.discard = true;

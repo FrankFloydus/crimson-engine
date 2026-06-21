@@ -15,9 +15,16 @@ namespace quader {
 struct EntityRecord {
     EntityId id = InvalidEntityId;
     std::string name;
+    EntityKind kind = EntityKind::Generic;
+    EntityId parent = InvalidEntityId;
+    int depth = 0;
     bool visible = true;
+    bool effectivelyVisible = true;
+    bool locked = false;
+    bool effectivelyLocked = false;
     bool selected = false;
     bool active = false;
+    bool hasChildren = false;
     bool hasMesh = false;
     bool hasLight = false;
     bool hasModelingObject = false;
@@ -25,15 +32,19 @@ struct EntityRecord {
 
 class SceneDocument {
 public:
-    EntityId createEntity(std::string name);
+    EntityId createEntity(std::string name, EntityKind kind = EntityKind::Generic);
+    EntityId createEmpty(std::string name);
     bool destroyEntity(EntityId id);
     bool exists(EntityId id) const;
 
     bool renameEntity(EntityId id, std::string name);
+    bool setEntityKind(EntityId id, EntityKind kind);
     bool setVisible(EntityId id, bool visible);
+    bool setLocked(EntityId id, bool locked);
     bool setSelected(EntityId id, bool selected);
     bool setActiveSelection(EntityId id);
     void clearSelection();
+    bool setParent(EntityId child, EntityId parent, bool preserveWorldTransform = true);
 
     void setTransform(EntityId id, TransformComponent transform);
     void setModelingObject(EntityId id, ModelingObjectComponent object);
@@ -43,7 +54,10 @@ public:
 
     NameComponent* name(EntityId id);
     TransformComponent* transform(EntityId id);
+    EntityKindComponent* entityKind(EntityId id);
+    HierarchyComponent* hierarchy(EntityId id);
     VisibilityComponent* visibility(EntityId id);
+    LockComponent* lock(EntityId id);
     SelectionComponent* selection(EntityId id);
     ModelingObjectComponent* modelingObject(EntityId id);
     MeshComponent* mesh(EntityId id);
@@ -52,7 +66,10 @@ public:
 
     const NameComponent* name(EntityId id) const;
     const TransformComponent* transform(EntityId id) const;
+    const EntityKindComponent* entityKind(EntityId id) const;
+    const HierarchyComponent* hierarchy(EntityId id) const;
     const VisibilityComponent* visibility(EntityId id) const;
+    const LockComponent* lock(EntityId id) const;
     const SelectionComponent* selection(EntityId id) const;
     const ModelingObjectComponent* modelingObject(EntityId id) const;
     const MeshComponent* mesh(EntityId id) const;
@@ -60,9 +77,22 @@ public:
     const LightComponent* light(EntityId id) const;
 
     std::vector<EntityId> entities() const;
+    std::vector<EntityId> rootEntities() const;
+    std::vector<EntityId> children(EntityId id) const;
+    std::vector<EntityId> descendants(EntityId id, bool includeSelf = true) const;
+    std::vector<EntityId> entityTreeOrder() const;
     std::vector<EntityRecord> entityRecords() const;
+    std::vector<EntityRecord> entityRecordsTreeOrder() const;
     std::vector<EntityId> selectedEntities() const;
     EntityId primarySelection() const;
+    EntityId parent(EntityId id) const;
+    bool hasChildren(EntityId id) const;
+    bool isDescendantOf(EntityId entity, EntityId possibleAncestor) const;
+    EntityKind kind(EntityId id) const;
+    bool isEffectivelyVisible(EntityId id) const;
+    bool isEffectivelyLocked(EntityId id) const;
+    Mat4 localTransformMatrix(EntityId id) const;
+    Mat4 worldTransformMatrix(EntityId id) const;
 
     entt::registry& registry() { return registry_; }
     const entt::registry& registry() const { return registry_; }
@@ -76,6 +106,9 @@ private:
     entt::entity requireEntity(EntityId id) const;
     bool isSelected(EntityId id) const;
     EntityId firstSelectedEntity() const;
+    EntityRecord makeEntityRecord(EntityId id, int depth, EntityId active) const;
+    void appendTreeOrder(EntityId id, std::vector<EntityId>& ids) const;
+    void appendEntityRecords(EntityId id, int depth, EntityId active, std::vector<EntityRecord>& records) const;
 
     EntityId nextId_ = 1;
     EntityId activeSelection_ = InvalidEntityId;

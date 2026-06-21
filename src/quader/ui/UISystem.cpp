@@ -6,13 +6,19 @@
 #include "quader/ui/OutlinerPanel.h"
 #include "quader/ui/UIContext.h"
 
+#include <backend/PixelBufferDescriptor.h>
+#include <backend/DriverEnums.h>
+#include <filament/Texture.h>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_internal.h>
+#include <lodepng.h>
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_mouse.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <system_error>
@@ -60,6 +66,17 @@ void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
     clampDockLeafNodeWidth(window->DockNode, minimumWidth);
 }
 
+filament::backend::PixelBufferDescriptor makePixelBufferDescriptor(const unsigned char* pixels, std::size_t byteCount) {
+    auto* bytes = new std::byte[byteCount];
+    std::memcpy(bytes, pixels, byteCount);
+    return {bytes, byteCount,
+            filament::backend::PixelDataFormat::RGBA,
+            filament::backend::PixelDataType::UBYTE,
+            [](void* buffer, std::size_t, void*) {
+                delete[] static_cast<std::byte*>(buffer);
+            }};
+}
+
 } // namespace
 
 UISystem::~UISystem() {
@@ -72,6 +89,7 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
     std::error_code error;
     std::filesystem::create_directories(settingsPaths_.directory, error);
     settings_ = UISettings::load(settingsPaths_.settingsFile);
+    viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile);
     imguiIniPath_ = settingsPaths_.imguiIniFile.string();
     const bool iniExists = std::filesystem::exists(settingsPaths_.imguiIniFile, error);
     const std::uintmax_t iniSize = iniExists ? std::filesystem::file_size(settingsPaths_.imguiIniFile, error) : 0u;
@@ -94,6 +112,7 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
     ImGui_ImplSDL3_InitForOther(window_);
     LOG_INFO("Initializing ImGui Filament renderer");
     renderer_.initialize(renderSystem.engine(), renderSystem.imguiMaterial(), renderSystem.textures());
+    loadIcons(renderSystem.engine(), renderSystem.textures(), executableDir);
     initialized_ = true;
     LOG_INFO("ImGui docking UI initialized");
 }
@@ -105,6 +124,7 @@ void UISystem::shutdown() {
 
     setViewportCursorCaptured(false);
     saveSettings();
+    saveViewportSettings();
     if (!imguiIniPath_.empty()) {
         ImGui::SaveIniSettingsToDisk(imguiIniPath_.c_str());
     }
@@ -113,6 +133,7 @@ void UISystem::shutdown() {
         viewportPanel_->shutdown();
     }
     renderer_.shutdown();
+    destroyIcons();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     initialized_ = false;
@@ -161,6 +182,8 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
             .defaultMaterial = defaultMaterial,
             .quitRequested = quitRequested,
             .style = style_,
+            .icons = icons_,
+            .viewportSettings = viewportSettings_,
             .viewportRelativeMouseDelta = relativeMouseDelta_,
             .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
             .viewportCursorCapturePoint = &viewportCursorCapturePoint,
@@ -170,6 +193,7 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
             .panelFocusChanged = &panelFocusChanged,
     };
     panels_.draw(context);
+    drawSettingsPanel();
     enforceSidebarDockMinimums();
     setViewportCursorCaptured(viewportCursorCaptureRequested);
     if (viewportCursorCaptureRequested) {
@@ -259,6 +283,13 @@ void UISystem::drawMenuBar(bool& quitRequested) {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Settings")) {
+            settingsPanelOpen_ = true;
+        }
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("View")) {
         if (ImGui::BeginMenu("Toolbars")) {
             for (const std::unique_ptr<UIPanel>& panel : panels_.panels()) {
@@ -289,6 +320,75 @@ void UISystem::drawMenuBar(bool& quitRequested) {
     }
 
     ImGui::EndMenuBar();
+}
+
+void UISystem::drawSettingsPanel() {
+    if (!settingsPanelOpen_) {
+        return;
+    }
+
+    bool changed = false;
+    ImGui::SetNextWindowSize({420.0f, 560.0f}, ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Settings", &settingsPanelOpen_, ImGuiWindowFlags_NoDocking)) {
+        if (ImGui::Button("Reset to Defaults")) {
+            viewportSettings_.resetToDefaults();
+            changed = true;
+        }
+
+        for (const ViewportSettingsSectionDescriptor& section : viewportSettingsSections()) {
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None;
+            if (section.defaultExpanded) {
+                flags |= ImGuiTreeNodeFlags_DefaultOpen;
+            }
+            if (!ImGui::CollapsingHeader(section.label.data(), flags)) {
+                continue;
+            }
+
+            for (const ViewportColorSettingDescriptor& descriptor : viewportColorSettings()) {
+                if (descriptor.section != section.id) {
+                    continue;
+                }
+                ViewportSettingColor color = viewportSettings_.color(descriptor.id);
+                float values[4] = {color.r, color.g, color.b, color.a};
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::ColorEdit4(descriptor.label.data(),
+                            values,
+                            ImGuiColorEditFlags_NoInputs |
+                                    ImGuiColorEditFlags_AlphaBar |
+                                    ImGuiColorEditFlags_AlphaPreviewHalf)) {
+                    changed = viewportSettings_.setColor(descriptor.id,
+                                      ViewportSettingColor{values[0], values[1], values[2], values[3]}) ||
+                            changed;
+                }
+            }
+
+            for (const ViewportFloatSettingDescriptor& descriptor : viewportFloatSettings()) {
+                if (descriptor.section != section.id) {
+                    continue;
+                }
+                float value = viewportSettings_.floatValue(descriptor.id);
+                ImGui::SetNextItemWidth(220.0f);
+                if (ImGui::SliderFloat(descriptor.label.data(), &value, descriptor.minimum, descriptor.maximum, "%.3f")) {
+                    changed = viewportSettings_.setFloatValue(descriptor.id, value) || changed;
+                }
+            }
+
+            for (const ViewportBoolSettingDescriptor& descriptor : viewportBoolSettings()) {
+                if (descriptor.section != section.id) {
+                    continue;
+                }
+                bool value = viewportSettings_.boolValue(descriptor.id);
+                if (ImGui::Checkbox(descriptor.label.data(), &value)) {
+                    changed = viewportSettings_.setBoolValue(descriptor.id, value) || changed;
+                }
+            }
+        }
+    }
+    ImGui::End();
+
+    if (changed) {
+        saveViewportSettings();
+    }
 }
 
 void UISystem::buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize) {
@@ -357,10 +457,80 @@ void UISystem::warpCapturedCursor(Vec2 point) {
     relativeMouseDelta_ = {};
 }
 
+void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir) {
+    iconEngine_ = &engine;
+    iconTextureRegistry_ = &textures;
+
+    auto load = [&](const char* filename) {
+        const std::filesystem::path iconPath = executableDir / "icons" / filename;
+        std::vector<unsigned char> pixels;
+        unsigned width = 0;
+        unsigned height = 0;
+        const unsigned error = lodepng::decode(pixels, width, height, iconPath.string());
+        if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
+            LOG_WARN("Unable to load UI icon {}: {}", iconPath.string(), lodepng_error_text(error));
+            return ImTextureID_Invalid;
+        }
+
+        const std::size_t rowByteCount = static_cast<std::size_t>(width) * 4u;
+        std::vector<unsigned char> flipped(pixels.size());
+        for (unsigned y = 0; y < height; ++y) {
+            const std::size_t sourceOffset = static_cast<std::size_t>(y) * rowByteCount;
+            const std::size_t targetOffset = static_cast<std::size_t>(height - 1u - y) * rowByteCount;
+            std::memcpy(flipped.data() + targetOffset, pixels.data() + sourceOffset, rowByteCount);
+        }
+
+        filament::Texture* texture = filament::Texture::Builder()
+                .width(width)
+                .height(height)
+                .levels(1)
+                .format(filament::Texture::InternalFormat::RGBA8)
+                .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
+                .build(engine);
+        texture->setImage(engine, 0, makePixelBufferDescriptor(flipped.data(), flipped.size()));
+        const ImTextureID id = textures.registerTexture(texture);
+        iconTextures_.push_back(texture);
+        iconTextureIds_.push_back(id);
+        return id;
+    };
+
+    icons_.mesh = load("mesh_icon.png");
+    icons_.empty = load("empty_icon.png");
+}
+
+void UISystem::destroyIcons() {
+    if (iconTextureRegistry_ != nullptr) {
+        for (const ImTextureID id : iconTextureIds_) {
+            if (id != ImTextureID_Invalid) {
+                iconTextureRegistry_->unregisterTexture(id);
+            }
+        }
+    }
+    iconTextureIds_.clear();
+
+    if (iconEngine_ != nullptr) {
+        for (filament::Texture* texture : iconTextures_) {
+            if (texture != nullptr) {
+                iconEngine_->destroy(texture);
+            }
+        }
+    }
+    iconTextures_.clear();
+    icons_ = UIIconSet{};
+    iconEngine_ = nullptr;
+    iconTextureRegistry_ = nullptr;
+}
+
 void UISystem::saveSettings() {
     panels_.writeSettings(settings_);
     if (!settings_.save(settingsPaths_.settingsFile)) {
         LOG_WARN("Unable to save UI settings to {}", settingsPaths_.settingsFile.string());
+    }
+}
+
+void UISystem::saveViewportSettings() {
+    if (!viewportSettings_.save(settingsPaths_.viewportSettingsFile)) {
+        LOG_WARN("Unable to save viewport settings to {}", settingsPaths_.viewportSettingsFile.string());
     }
 }
 

@@ -9,6 +9,7 @@
 namespace quader {
 
 enum class SceneEntityKind {
+    Empty,
     Mesh,
     Light,
     Generic,
@@ -46,6 +47,8 @@ private:
 
     static std::string baseNameForKind(SceneEntityKind kind) {
         switch (kind) {
+        case SceneEntityKind::Empty:
+            return "Empty";
         case SceneEntityKind::Mesh:
             return "Mesh";
         case SceneEntityKind::Light:

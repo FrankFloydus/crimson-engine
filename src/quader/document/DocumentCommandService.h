@@ -25,6 +25,12 @@ struct DocumentVisibilityEdit {
     bool after = true;
 };
 
+struct DocumentLockEdit {
+    EntityId entity = InvalidEntityId;
+    bool before = false;
+    bool after = false;
+};
+
 class DocumentCommandService {
 public:
     DocumentCommandService(SceneDocument& scene, UndoRedoManager& undoRedo);
@@ -32,6 +38,8 @@ public:
     DocumentCommandResult renameEntity(EntityId entity, std::string name);
     DocumentCommandResult setVisible(EntityId entity, bool visible);
     DocumentCommandResult setVisibility(std::vector<DocumentVisibilityEdit> edits);
+    DocumentCommandResult setLocked(EntityId entity, bool locked);
+    DocumentCommandResult setLocks(std::vector<DocumentLockEdit> edits);
     DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult setTransforms(std::vector<DocumentTransformEdit> edits);
 

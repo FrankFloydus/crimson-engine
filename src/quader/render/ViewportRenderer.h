@@ -2,6 +2,7 @@
 
 #include "quader/render/TextureRegistry.h"
 #include "quader/viewport/ViewportCameraController.h"
+#include "quader/viewport/ViewportSettings.h"
 
 #include <filament/Camera.h>
 #include <filament/Engine.h>
@@ -34,7 +35,10 @@ public:
 
     void resize(std::uint32_t width, std::uint32_t height);
     void updateCamera(const ViewportCameraController& controller);
-    void updateGroundGrid(const ViewportCameraController& controller, float gridWorldSpacing, bool visible = true);
+    void updateGroundGrid(const ViewportCameraController& controller,
+            float gridWorldSpacing,
+            const ViewportSettings& settings,
+            bool visible = true);
     void setOverlayVisible(bool visible);
     void render(filament::Renderer& renderer);
 
@@ -64,6 +68,7 @@ private:
     float groundGridMeshHeight_ = 0.0f;
     bool groundGridVisible_ = true;
     bool overlayVisible_ = false;
+    ViewportSettingColor backgroundColor_ = {0.0f, 0.0f, 0.0f, 1.0f};
     std::uint8_t gridLayerMask_ = 0x04u;
     filament::Texture* colorTexture_ = nullptr;
     filament::Texture* depthTexture_ = nullptr;

@@ -95,8 +95,8 @@ private:
             AssetId materialId,
             const MaterialDocument* material,
             const AssetRegistry& assets,
-            const TransformComponent& transform);
-    void updateMeshProxyTransform(const MeshProxy& proxy, const TransformComponent& transform);
+            const Mat4& worldTransform);
+    void updateMeshProxyTransform(const MeshProxy& proxy, const Mat4& worldTransform);
     filament::MaterialInstance* createMeshMaterialInstance(const AssetRegistry& assets, const MaterialDocument* material);
     void destroyMeshProxy(MeshProxy& proxy);
     void destroyOverlayProxy(OverlayProxy& proxy);

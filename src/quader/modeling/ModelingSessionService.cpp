@@ -336,7 +336,15 @@ Vec3 transformObjectPoint(
     if (transform == nullptr) {
         return point;
     }
-    return transformPoint(composeTransform(transform->spatialTransform()), point);
+    return transformPoint(scene.worldTransformMatrix(entity->second), point);
+}
+
+bool objectEffectivelyVisible(
+        int objectId,
+        const std::unordered_map<int, EntityId>& entityByObject,
+        const SceneDocument& scene) {
+    const auto entity = entityByObject.find(objectId);
+    return entity != entityByObject.end() && scene.isEffectivelyVisible(entity->second);
 }
 
 ViewportOverlayFrame fromSdk(
@@ -350,6 +358,9 @@ ViewportOverlayFrame fromSdk(
     result.hoverTargetSelected = frame.hover_target_selected;
 
     for (const quader_editor_core::SelectionOverlayTriangle& triangle : frame.triangles) {
+        if (!objectEffectivelyVisible(triangle.object_id, entityByObject, scene)) {
+            continue;
+        }
         result.triangles.push_back(ViewportOverlayTriangle{
                 .layer = fromSdk(triangle.layer),
                 .a = transformObjectPoint(triangle.object_id, fromSdk(triangle.a), entityByObject, scene),
@@ -359,6 +370,9 @@ ViewportOverlayFrame fromSdk(
         });
     }
     for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
+        if (!objectEffectivelyVisible(line.object_id, entityByObject, scene)) {
+            continue;
+        }
         result.lines.push_back(ViewportOverlayLine{
                 .layer = fromSdk(line.layer),
                 .start = transformObjectPoint(line.object_id, fromSdk(line.start), entityByObject, scene),
@@ -368,6 +382,9 @@ ViewportOverlayFrame fromSdk(
         });
     }
     for (const quader_editor_core::SelectionOverlayPoint& point : frame.points) {
+        if (!objectEffectivelyVisible(point.object_id, entityByObject, scene)) {
+            continue;
+        }
         result.points.push_back(ViewportOverlayPoint{
                 .layer = fromSdk(point.layer),
                 .position = transformObjectPoint(point.object_id, fromSdk(point.position), entityByObject, scene),
@@ -947,6 +964,19 @@ public:
 
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode) {
 #if QUADER_HAS_MODELING_SDK
+        std::vector<EntityId> sceneOnlySelection;
+        sceneOnlySelection.reserve(scene_.selectedEntities().size());
+        for (const EntityId entity : scene_.selectedEntities()) {
+            if (scene_.modelingObject(entity) == nullptr) {
+                sceneOnlySelection.push_back(entity);
+            }
+        }
+        const EntityId activeSceneOnlySelection =
+                scene_.modelingObject(scene_.primarySelection()) == nullptr ? scene_.primarySelection() : InvalidEntityId;
+        if (!sceneOnlySelection.empty()) {
+            syncObjectSelectionFromScene();
+        }
+
         quader_editor_core::SetSelectionModeRuntimeCommandSettings settings;
         settings.selection_mode = static_cast<int>(toSdk(mode));
 
@@ -957,7 +987,18 @@ public:
         const quader_editor_core::EditorRuntimeCommandResult result =
                 quader_editor_core::execute_runtime_command(session_, runtime_, command);
         invalidateSelectionOverlayCaches();
+        if (mode == ModelingSelectionMode::Object && !sceneOnlySelection.empty()) {
+            syncObjectSelectionFromScene();
+        }
         syncSceneSelectionFromSdk();
+        for (const EntityId entity : sceneOnlySelection) {
+            if (scene_.exists(entity)) {
+                scene_.setSelected(entity, true);
+            }
+        }
+        if (activeSceneOnlySelection != InvalidEntityId && scene_.exists(activeSceneOnlySelection)) {
+            scene_.setActiveSelection(activeSceneOnlySelection);
+        }
         return {
                 .ok = result.command.ok,
                 .changed = result.command.changed,
@@ -2397,20 +2438,24 @@ private:
             return pickingCache_.objects;
         }
 
-        pickingCache_.objects = session_.objects();
-        for (quader_editor_core::PolygonObject& object : pickingCache_.objects) {
+        pickingCache_.objects.clear();
+        const std::vector<quader_editor_core::PolygonObject> sdkObjects = session_.objects();
+        pickingCache_.objects.reserve(sdkObjects.size());
+        for (quader_editor_core::PolygonObject object : sdkObjects) {
             const auto entity = entityByObject_.find(object.id);
             if (entity == entityByObject_.end()) {
                 continue;
             }
-            const TransformComponent* transform = scene_.transform(entity->second);
-            if (transform == nullptr) {
+            const VisibilityComponent* visibility = scene_.visibility(entity->second);
+            if (!scene_.isEffectivelyVisible(entity->second) ||
+                    (visibility != nullptr && !visibility->selectable)) {
                 continue;
             }
-            const Mat4 worldFromObject = composeTransform(transform->spatialTransform());
+            const Mat4 worldFromObject = scene_.worldTransformMatrix(entity->second);
             for (quader_poly::Vertex& vertex : object.document.vertices) {
                 vertex.position = toSdk(transformPoint(worldFromObject, fromSdk(vertex.position)));
             }
+            pickingCache_.objects.push_back(std::move(object));
         }
         pickingCache_.contentRevision = contentRevision;
         pickingCache_.selectionRevision = selectionRevision;

@@ -97,6 +97,15 @@ GroundGridPlane groundGridPlane(const ViewportCameraController& controller, cons
     return GroundGridPlane::XZ;
 }
 
+filament::math::float4 settingColor(ViewportSettingColor color) {
+    return {
+            srgbToLinear(color.r),
+            srgbToLinear(color.g),
+            srgbToLinear(color.b),
+            color.a,
+    };
+}
+
 filament::math::float2 groundGridPlaneSize(GroundGridPlane plane, const ViewportCameraController& controller, std::uint32_t width, std::uint32_t height) {
     if (controller.state().projection != ViewportProjection::Orthographic) {
         return {kGroundPlaneSize, kGroundPlaneSize};
@@ -110,13 +119,13 @@ filament::math::float2 groundGridPlaneSize(GroundGridPlane plane, const Viewport
     return {planeHeight * aspect, planeHeight};
 }
 
-GroundGridAxes groundGridAxes(GroundGridPlane plane) {
+GroundGridAxes groundGridAxes(GroundGridPlane plane, const ViewportSettings& settings) {
     const filament::math::float3 quaderX{1.0f, 0.0f, 0.0f};
     const filament::math::float3 quaderY{0.0f, 1.0f, 0.0f};
     const filament::math::float3 quaderZ{0.0f, 0.0f, -1.0f};
-    const filament::math::float4 xColor{srgbToLinear(1.0f), srgbToLinear(0.239f), srgbToLinear(0.0f), 0.72f};
-    const filament::math::float4 yColor{srgbToLinear(0.29f), srgbToLinear(0.58f), srgbToLinear(0.0f), 0.0f};
-    const filament::math::float4 zColor{srgbToLinear(0.059f), srgbToLinear(0.612f), srgbToLinear(1.0f), 0.72f};
+    const filament::math::float4 xColor = settingColor(settings.color(ViewportColorSettingId::GridXAxis));
+    const filament::math::float4 yColor = settingColor(settings.color(ViewportColorSettingId::GridYAxis));
+    const filament::math::float4 zColor = settingColor(settings.color(ViewportColorSettingId::GridZAxis));
 
     if (plane == GroundGridPlane::YZ) {
         return {quaderZ, quaderY, zColor, yColor};
@@ -145,12 +154,13 @@ filament::math::mat4f groundGridTransform(GroundGridPlane plane, const ViewportC
 GroundGridPlacement groundGridPlacement(const ViewportCameraController& controller,
         const ViewportCameraPose& pose,
         std::uint32_t width,
-        std::uint32_t height) {
+        std::uint32_t height,
+        const ViewportSettings& settings) {
     GroundGridPlacement placement;
     placement.plane = groundGridPlane(controller, pose);
     placement.transform = groundGridTransform(placement.plane, pose);
     placement.planeSize = groundGridPlaneSize(placement.plane, controller, width, height);
-    placement.axes = groundGridAxes(placement.plane);
+    placement.axes = groundGridAxes(placement.plane, settings);
     return placement;
 }
 
@@ -274,19 +284,24 @@ void ViewportRenderer::updateCamera(const ViewportCameraController& controller) 
     }
 }
 
-void ViewportRenderer::updateGroundGrid(const ViewportCameraController& controller, float gridWorldSpacing, bool visible) {
+void ViewportRenderer::updateGroundGrid(
+        const ViewportCameraController& controller,
+        float gridWorldSpacing,
+        const ViewportSettings& settings,
+        bool visible) {
     if (!engine_ || !scene_ || !groundGridEntity_) {
         return;
     }
 
     groundGridVisible_ = visible;
+    backgroundColor_ = settings.color(ViewportColorSettingId::Background);
     updateVisibleLayers();
     if (!visible) {
         return;
     }
 
     const ViewportCameraPose pose = controller.pose();
-    const GroundGridPlacement grid = groundGridPlacement(controller, pose, width_, height_);
+    const GroundGridPlacement grid = groundGridPlacement(controller, pose, width_, height_, settings);
     updateGroundGridMesh(grid.planeSize.x, grid.planeSize.y);
     auto& transformManager = engine_->getTransformManager();
     const filament::TransformManager::Instance transform = transformManager.getInstance(groundGridEntity_);
@@ -300,8 +315,8 @@ void ViewportRenderer::updateGroundGrid(const ViewportCameraController& controll
 
     const float spacing = std::max(gridWorldSpacing, 0.0001f);
     const float parentSpacing = std::max(kParentGridWorldSize, spacing);
-    groundGridMaterialInstance_->setParameter("gridColor", filament::math::float4{srgbToLinear(0.8f), srgbToLinear(0.8f), srgbToLinear(0.8f), 0.05f});
-    groundGridMaterialInstance_->setParameter("majorGridColor", filament::math::float4{srgbToLinear(0.298f), srgbToLinear(0.298f), srgbToLinear(0.298f), 0.459f});
+    groundGridMaterialInstance_->setParameter("gridColor", settingColor(settings.color(ViewportColorSettingId::GridMinor)));
+    groundGridMaterialInstance_->setParameter("majorGridColor", settingColor(settings.color(ViewportColorSettingId::GridMajor)));
     groundGridMaterialInstance_->setParameter("originUColor", grid.axes.uColor);
     groundGridMaterialInstance_->setParameter("originVColor", grid.axes.vColor);
     groundGridMaterialInstance_->setParameter("cameraPosition", filament::math::float3{pose.eye.x, pose.eye.y, pose.eye.z});
@@ -309,9 +324,9 @@ void ViewportRenderer::updateGroundGrid(const ViewportCameraController& controll
     groundGridMaterialInstance_->setParameter("gridVAxis", grid.axes.vAxis);
     groundGridMaterialInstance_->setParameter("gridSize", spacing);
     groundGridMaterialInstance_->setParameter("parentGridSize", parentSpacing);
-    groundGridMaterialInstance_->setParameter("lineThickness", 0.32f);
-    groundGridMaterialInstance_->setParameter("majorLineThickness", 0.36f);
-    groundGridMaterialInstance_->setParameter("axisLineThickness", 0.65f);
+    groundGridMaterialInstance_->setParameter("lineThickness", settings.floatValue(ViewportFloatSettingId::GridMinorLineSize));
+    groundGridMaterialInstance_->setParameter("majorLineThickness", settings.floatValue(ViewportFloatSettingId::GridMajorLineSize));
+    groundGridMaterialInstance_->setParameter("axisLineThickness", settings.floatValue(ViewportFloatSettingId::GridAxisLineSize));
     groundGridMaterialInstance_->setParameter("fadeStart", kGroundGridFadeStart);
     groundGridMaterialInstance_->setParameter("fadeEnd", kGroundGridFadeEnd);
     groundGridMaterialInstance_->setParameter("planeHalfSize", std::max(grid.planeSize.x, grid.planeSize.y) * 0.5f);
@@ -331,6 +346,11 @@ void ViewportRenderer::setOverlayVisible(bool visible) {
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
     if (view_ && renderTarget_) {
+        filament::Renderer::ClearOptions clear;
+        clear.clear = true;
+        clear.discard = true;
+        clear.clearColor = {backgroundColor_.r, backgroundColor_.g, backgroundColor_.b, backgroundColor_.a};
+        renderer.setClearOptions(clear);
         renderer.render(view_);
     }
 }

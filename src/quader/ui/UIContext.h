@@ -2,7 +2,9 @@
 
 #include "quader/core/Types.h"
 #include "quader/math/Types.h"
+#include "quader/ui/UIIconSet.h"
 #include "quader/ui/UIPanel.h"
+#include "quader/viewport/ViewportSettings.h"
 
 namespace quader {
 
@@ -24,6 +26,8 @@ struct UIContext {
     AssetId defaultMaterial = InvalidAssetId;
     bool& quitRequested;
     const UIStyleTokens& style;
+    const UIIconSet& icons;
+    ViewportSettings& viewportSettings;
     Vec2 viewportRelativeMouseDelta = {};
     bool* viewportCursorCaptureRequested = nullptr;
     Vec2* viewportCursorCapturePoint = nullptr;

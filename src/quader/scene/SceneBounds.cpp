@@ -62,8 +62,7 @@ Vec3 boundsCenter(const SceneBounds& bounds) {
 }
 
 std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity) {
-    const VisibilityComponent* visibility = document.visibility(entity);
-    if (visibility && !visibility->visible) {
+    if (!document.isEffectivelyVisible(entity)) {
         return std::nullopt;
     }
 
@@ -72,7 +71,7 @@ std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, cons
         return std::nullopt;
     }
 
-    const Mat4 worldFromLocal = composeTransform(transform->spatialTransform());
+    const Mat4 worldFromLocal = document.worldTransformMatrix(entity);
     const MeshComponent* meshComponent = document.mesh(entity);
     if (meshComponent) {
         if (const MeshAsset* mesh = assets.mesh(meshComponent->mesh)) {
@@ -91,7 +90,8 @@ std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, cons
         }
     }
 
-    return SceneBounds{.min = transform->position, .max = transform->position};
+    const Vec3 worldPosition = transformPoint(worldFromLocal, {});
+    return SceneBounds{.min = worldPosition, .max = worldPosition};
 }
 
 std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {

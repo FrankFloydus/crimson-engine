@@ -427,13 +427,13 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverFace, kOverlayRemoveWireColor), kOverlayRemoveFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverEdge, kOverlayRemoveFaceColor), kOverlayRemoveWireColor);
 
-    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SourceWire, 3.0f), 1.5f);
-    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SelectedEdge, 3.0f), 2.5f);
-    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 2.5f);
-    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::OpenEdge, 2.0f), 1.0f);
-    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::UnselectedVertex, 8.0f), 7.0f);
-    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::SelectedVertex, 9.0f), 7.5f);
-    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::HoverVertex, 8.0f), 7.5f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SourceWire, 3.0f), 3.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SelectedEdge, 3.0f), 3.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 3.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::OpenEdge, 2.0f), 2.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::UnselectedVertex, 8.0f), 8.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::SelectedVertex, 9.0f), 9.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::HoverVertex, 8.0f), 8.0f);
     EXPECT_TRUE(viewportOverlayPointHasOutline(ViewportOverlayLayer::SelectedVertex));
     EXPECT_FLOAT_EQ(viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer::SelectedVertex), 1.0f);
     EXPECT_TRUE(viewportOverlayPointIsOutlineOnly(ViewportOverlayLayer::SnapTargetVertex));
@@ -521,13 +521,44 @@ TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
     EXPECT_NE(source.find("renderAssetRevisionsChanged"), std::string::npos);
     EXPECT_NE(source.find("existing->second.meshRevision != mesh->revision.value"), std::string::npos);
     EXPECT_NE(source.find("existing->second.materialRevision != materialRevision"), std::string::npos);
-    EXPECT_NE(source.find("updateMeshProxyTransform(existing->second, transform)"), std::string::npos);
+    EXPECT_NE(source.find("updateMeshProxyTransform(existing->second, worldTransform)"), std::string::npos);
     const std::size_t rebuildStart = source.find("void SceneRenderBridge::rebuild(");
     const std::size_t overlayStart = source.find("void SceneRenderBridge::rebuildOverlayProxies", rebuildStart);
     ASSERT_NE(rebuildStart, std::string::npos);
     ASSERT_NE(overlayStart, std::string::npos);
     const std::string rebuildSource = source.substr(rebuildStart, overlayStart - rebuildStart);
     EXPECT_EQ(rebuildSource.find("meshProxies_.clear()"), std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("kMeshTextureAnisotropy"), std::string::npos);
+    EXPECT_NE(source.find("sampler.setAnisotropy(kMeshTextureAnisotropy)"), std::string::npos);
+    EXPECT_NE(source.find("filament::TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR"), std::string::npos);
+}
+
+TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "RenderSystem.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("renderer_->setClearOptions(clear)"), std::string::npos);
+    EXPECT_NE(source.find("clear.clearColor = {environment.clearColor.x"), std::string::npos);
+    EXPECT_EQ(source.find("scene_->setSkybox(skybox_)"), std::string::npos);
+    EXPECT_EQ(source.find("Skybox::Builder()"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisibilityClipping) {
@@ -540,7 +571,9 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("refreshCachedSelectionOverlayFrame(document, modeling)"), std::string::npos);
+    EXPECT_NE(source.find("refreshCachedSelectionOverlayFrame(document, assets, modeling)"), std::string::npos);
+    EXPECT_NE(source.find("appendHierarchySelectionWires(cachedSelectionOverlayFrame_, document, assets)"), std::string::npos);
+    EXPECT_NE(source.find("cachedSelectionOverlayAssetRevision_ != assets.revision()"), std::string::npos);
     EXPECT_NE(source.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
     EXPECT_NE(source.find("makeViewportOverlayCamera(paneState.camera, {paneState.renderSize.x, paneState.renderSize.y})"), std::string::npos);
     EXPECT_EQ(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));"), std::string::npos);
@@ -568,7 +601,8 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     EXPECT_NE(source.find("drawTransformGizmo(\n            document,\n            assets,\n            undoRedo,\n            documentCommands,\n            modeling,\n            paneState.camera"), std::string::npos);
     EXPECT_NE(source.find("true,\n            false);"), std::string::npos);
     EXPECT_NE(source.find("if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))"), std::string::npos);
-    EXPECT_NE(source.find("if (!interactive) {\n        return false;\n    }\n\n    bool consumed = gizmoDragging_;"), std::string::npos);
+    EXPECT_NE(source.find("if (!interactive) {\n        return false;\n    }\n\n    auto fallbackGizmoHit = [&]()"), std::string::npos);
+    EXPECT_NE(source.find("bool consumed = gizmoDragging_;"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
@@ -846,9 +880,42 @@ TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, previewRotationDelta"), std::string::npos);
-    EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, worldRotationDelta"), std::string::npos);
+    EXPECT_NE(source.find("applyDocumentWorldRotationDeltaAroundPivot(\n                    document,\n                    start.entity,\n                    next,\n                    previewRotationDelta"), std::string::npos);
+    EXPECT_NE(source.find("applyDocumentWorldRotationDeltaAroundPivot(\n                    document,\n                    start.entity,\n                    next,\n                    worldRotationDelta"), std::string::npos);
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + previewRotationDelta"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+    std::ifstream headerFile(headerPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(header.find("bool sceneOnlyGizmoDrag_"), std::string::npos);
+
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("selectedHasSceneOnlyTransform"), std::string::npos);
+    EXPECT_NE(source.find("selectedHasHierarchyTransform"), std::string::npos);
+    EXPECT_NE(source.find("componentSelectionMode || !selectedHasHierarchyTransform"), std::string::npos);
+    EXPECT_NE(source.find("activeGizmoAxis_ = fallbackGizmoHit()"), std::string::npos);
+    EXPECT_NE(source.find("parentLocalVectorForWorldVector(document, start.entity"), std::string::npos);
+    EXPECT_NE(source.find("documentLocalPivotForWorldPoint(document, entity, gizmoPivot)"), std::string::npos);
+    EXPECT_NE(source.find("sceneOnlyGizmoDrag_ = true"), std::string::npos);
+    EXPECT_NE(source.find("if (wasDragging && !sceneOnlyGizmoDrag_)"), std::string::npos);
+    EXPECT_NE(source.find("if (!sceneOnlyGizmoDrag_)"), std::string::npos);
+    EXPECT_NE(source.find("transformPoint(document.worldTransformMatrix(selected), Vec3{})"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
@@ -889,6 +956,8 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("result.gridPresetChanged"), std::string::npos);
     EXPECT_NE(source.find("const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover"), std::string::npos);
     EXPECT_NE(source.find("if (hoverUpdate.changed)"), std::string::npos);
+    EXPECT_NE(source.find("const ModelingCommandResult clearHover = modeling.clearSelectionHover()"), std::string::npos);
+    EXPECT_NE(source.find("lastHoverWorkKey_ = makeHoverWorkKey(gizmoConsumed)"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
     EXPECT_NE(source.find("cachedSelectionOverlayFrameDirty_"), std::string::npos);
@@ -1024,7 +1093,8 @@ TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
 
     EXPECT_NE(source.find(".format(Texture::InternalFormat::RGBA8)"), std::string::npos);
     EXPECT_NE(source.find("TextureSampleColorSpace::LinearSrgb"), std::string::npos);
-    EXPECT_NE(source.find("srgbToLinear(0.8f)"), std::string::npos);
+    EXPECT_NE(source.find("settings.color(ViewportColorSettingId::GridMinor)"), std::string::npos);
+    EXPECT_NE(source.find("settings.floatValue(ViewportFloatSettingId::GridMinorLineSize)"), std::string::npos);
     EXPECT_EQ(source.find(".format(Texture::InternalFormat::SRGB8_A8)"), std::string::npos);
 }
 
@@ -1219,6 +1289,45 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + delta"), std::string::npos);
 }
 
+TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "OutlinerPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("entityRecordsTreeOrder()"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::TreeNodeEx"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::Image"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::OpenPopupOnItemClick(\"EntityContext\""), std::string::npos);
+    EXPECT_NE(source.find("ImGui::BeginPopup(\"EntityContext\")"), std::string::npos);
+    EXPECT_NE(source.find("MenuItem(\"Delete\")"), std::string::npos);
+    EXPECT_NE(source.find("MenuItem(\"Duplicate\")"), std::string::npos);
+    EXPECT_NE(source.find("MenuItem(\"Group\")"), std::string::npos);
+    EXPECT_NE(source.find("MenuItem(\"Ungroup\""), std::string::npos);
+    EXPECT_NE(source.find("ImGuiKey_G"), std::string::npos);
+    EXPECT_NE(source.find("createEmpty"), std::string::npos);
+}
+
+TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "OutlinerPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("ImGuiTreeNodeFlags_Selected"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::TextUnformatted(record.name.c_str())"), std::string::npos);
+    EXPECT_EQ(source.find("ImGui::Selectable(record.name.c_str(), record.selected"), std::string::npos);
+    EXPECT_EQ(source.find("ImGuiSelectableFlags_AllowOverlap"), std::string::npos);
+}
+
 TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
     const std::filesystem::path stylePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.cpp";
@@ -1267,6 +1376,7 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     const std::string uiSystemSource{
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
+    EXPECT_NE(uiSystemSource.find("ImGui::Begin(\"Settings\", &settingsPanelOpen_, ImGuiWindowFlags_NoDocking)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
@@ -1337,7 +1447,7 @@ TEST(UISystemTests, TopMenuExposesViewportLayoutOptions) {
     EXPECT_NE(uiSystemSource.find("viewportPanel_->setViewportLayout(option.id)"), std::string::npos);
 }
 
-TEST(UISystemTests, TopMenuDoesNotExposeIncompleteViewportSettingsPanel) {
+TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     const std::filesystem::path uiSystemPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
     std::ifstream uiSystemFile(uiSystemPath);
@@ -1347,11 +1457,13 @@ TEST(UISystemTests, TopMenuDoesNotExposeIncompleteViewportSettingsPanel) {
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_EQ(uiSystemSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("drawSettingsPanel"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("viewportSettingsSections()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("drawSettingsPanel"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportSettingsSections()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_AlphaBar"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_NoInputs"), std::string::npos);
 }
 
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
@@ -1484,6 +1596,78 @@ TEST(SceneDocumentTests, PromotesPrimarySelectionWhenActiveEntityIsDestroyed) {
     EXPECT_EQ(scene.primarySelection(), first);
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.selectedEntities().front(), first);
+}
+
+TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
+    SceneDocument scene;
+    const EntityId group = scene.createEmpty("Empty");
+    const EntityId child = scene.createEntity("Mesh");
+    const EntityId grandchild = scene.createEntity("Nested");
+    const EntityId sibling = scene.createEntity("Sibling");
+
+    scene.setTransform(group, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+    scene.setTransform(child, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+    scene.setTransform(grandchild, TransformComponent{.position = {0.0f, 3.0f, 0.0f}});
+    ASSERT_TRUE(scene.setParent(child, group, false));
+    ASSERT_TRUE(scene.setParent(grandchild, child, false));
+
+    EXPECT_EQ(scene.parent(child), group);
+    EXPECT_TRUE(scene.isDescendantOf(grandchild, group));
+    EXPECT_FALSE(scene.setParent(group, grandchild));
+
+    const std::vector<EntityId> treeOrder = scene.entityTreeOrder();
+    ASSERT_EQ(treeOrder.size(), 4u);
+    EXPECT_EQ(treeOrder[0], group);
+    EXPECT_EQ(treeOrder[1], child);
+    EXPECT_EQ(treeOrder[2], grandchild);
+    EXPECT_EQ(treeOrder[3], sibling);
+
+    const std::vector<EntityRecord> records = scene.entityRecordsTreeOrder();
+    ASSERT_EQ(records.size(), 4u);
+    EXPECT_EQ(records[0].kind, EntityKind::Empty);
+    EXPECT_TRUE(records[0].hasChildren);
+    EXPECT_EQ(records[1].parent, group);
+    EXPECT_EQ(records[1].depth, 1);
+    EXPECT_EQ(records[2].depth, 2);
+
+    const Vec3 worldPoint = transformPoint(scene.worldTransformMatrix(grandchild), {});
+    EXPECT_FLOAT_EQ(worldPoint.x, 12.0f);
+    EXPECT_FLOAT_EQ(worldPoint.y, 3.0f);
+    EXPECT_FLOAT_EQ(worldPoint.z, 0.0f);
+
+    ASSERT_TRUE(scene.setVisible(group, false));
+    EXPECT_TRUE(scene.visibility(child)->visible);
+    EXPECT_FALSE(scene.isEffectivelyVisible(child));
+    ASSERT_TRUE(scene.setLocked(group, true));
+    EXPECT_TRUE(scene.isEffectivelyLocked(grandchild));
+}
+
+TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
+    SceneDocument scene;
+    const EntityId group = scene.createEmpty("Group");
+    const EntityId child = scene.createEntity("Child");
+    const EntityId leaf = scene.createEntity("Leaf");
+
+    scene.setTransform(group, TransformComponent{.position = {10.0f, 0.0f, 0.0f}});
+    scene.setTransform(child, TransformComponent{.position = {2.0f, 0.0f, 0.0f}});
+    scene.setTransform(leaf, TransformComponent{.position = {1.0f, 0.0f, 0.0f}});
+    ASSERT_TRUE(scene.setParent(child, group, false));
+
+    const Vec3 before = transformPoint(scene.worldTransformMatrix(child), {});
+    ASSERT_TRUE(scene.setParent(child, InvalidEntityId, true));
+    const Vec3 after = transformPoint(scene.worldTransformMatrix(child), {});
+    EXPECT_FLOAT_EQ(before.x, after.x);
+    EXPECT_FLOAT_EQ(before.y, after.y);
+    ASSERT_NE(scene.transform(child), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 12.0f);
+
+    ASSERT_TRUE(scene.setParent(leaf, group, false));
+    scene.setSelected(leaf, true);
+    EXPECT_TRUE(scene.destroyEntity(group));
+    EXPECT_FALSE(scene.exists(group));
+    EXPECT_FALSE(scene.exists(leaf));
+    EXPECT_TRUE(scene.exists(child));
+    EXPECT_TRUE(scene.selectedEntities().empty());
 }
 
 TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
@@ -3086,6 +3270,7 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     SceneDocument scene;
     const EntityId first = scene.createEntity("First");
     const EntityId second = scene.createEntity("Second");
+    const EntityId locked = scene.createEntity("Locked");
     UndoRedoManager undoRedo;
     DocumentCommandService commands(scene, undoRedo);
 
@@ -3122,6 +3307,22 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     ASSERT_TRUE(undoRedo.undo().ok);
     EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
     EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 0.0f);
+
+    result = commands.setLocked(locked, true);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.lock(locked), nullptr);
+    EXPECT_TRUE(scene.lock(locked)->locked);
+
+    TransformComponent lockedAfter;
+    lockedAfter.position = {5.0f, 0.0f, 0.0f};
+    result = commands.setTransform(locked, lockedAfter);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(result.changed);
+    EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 0.0f);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FALSE(scene.lock(locked)->locked);
 }
 
 TEST(UndoRedoManagerTests, NoopCommandsDoNotClearRedoButNewCommandsDo) {
@@ -4807,6 +5008,37 @@ TEST(ModelingSessionServiceTests, SceneObjectSyncDoesNotResetComponentSelectionM
 #else
     service.syncObjectSelectionFromScene();
     EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Object);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectionModeSwitchPreservesSceneOnlySelection) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Stale Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    const EntityId empty = scene.createEmpty("Empty");
+    scene.clearSelection();
+    scene.setSelected(empty, true);
+
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.selectedEntities().front(), empty);
+    EXPECT_EQ(scene.primarySelection(), empty);
+#else
+    const EntityId empty = scene.createEmpty("Empty");
+    scene.setSelected(empty, true);
+    EXPECT_FALSE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
+    EXPECT_EQ(scene.primarySelection(), empty);
 #endif
 }
 

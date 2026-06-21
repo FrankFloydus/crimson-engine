@@ -154,7 +154,9 @@ inline constexpr ViewportOverlayLayerPolicy viewportOverlayLayerPolicy(ViewportO
 }
 
 inline constexpr float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWidthPixels = 1.0f) {
-    (void)nativeWidthPixels;
+    if (nativeWidthPixels > 0.0f) {
+        return nativeWidthPixels;
+    }
     switch (layer) {
     case ViewportOverlayLayer::SourceWire:
         return 1.5f;
@@ -173,6 +175,9 @@ inline constexpr float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer
 }
 
 inline constexpr float viewportOverlayPointSizePixels(ViewportOverlayLayer layer, float nativeSizePixels = 8.0f) {
+    if (nativeSizePixels >= 2.0f) {
+        return nativeSizePixels;
+    }
     switch (layer) {
     case ViewportOverlayLayer::UnselectedVertex:
         return kOverlayVertexSizePixels;

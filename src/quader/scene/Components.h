@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace quader {
 
@@ -33,9 +34,29 @@ struct TransformComponent {
     }
 };
 
+enum class EntityKind {
+    Empty,
+    Mesh,
+    Light,
+    Generic,
+};
+
+struct EntityKindComponent {
+    EntityKind kind = EntityKind::Generic;
+};
+
+struct HierarchyComponent {
+    EntityId parent = InvalidEntityId;
+    std::vector<EntityId> children;
+};
+
 struct VisibilityComponent {
     bool visible = true;
     bool selectable = true;
+};
+
+struct LockComponent {
+    bool locked = false;
 };
 
 struct SelectionComponent {
