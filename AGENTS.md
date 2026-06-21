@@ -15,7 +15,7 @@ testable, and future-friendly.
 - The original Unity package lives at
   `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\package\com.qvertexworks.quader`.
 - The original SDK lives at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\sdk`. This app keeps a
-  copied SDK under `modeling/sdk`; preserve the SDK boundary and adapt native-app behavior around
+  copied SDK under `sdk`; preserve the SDK boundary and adapt native-app behavior around
   it instead of rewriting SDK semantics in UI or renderer code.
 - For portable modeling, selection, picking, overlay payloads, box creation, navigation, and gizmo
   semantics, check SDK/editor-core first. Important files include:
@@ -100,7 +100,7 @@ testable, and future-friendly.
 
 ## Overlay And Selection Rules
 
-- `src/quader/render/ViewportOverlayPolicy.h` is this app's local mirror of Unity overlay
+- `src/render/ViewportOverlayPolicy.h` is this app's local mirror of Unity overlay
   presentation policy. Keep layer draw order, colors, alpha, widths, point sizes, and
   depth/draw-on-top decisions centralized there.
 - `ModelingSessionService` should transport SDK overlay payloads and use the overlay policy for

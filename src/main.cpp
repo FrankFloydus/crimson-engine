@@ -1,6 +1,6 @@
-#include "quader/app/App.h"
-#include "quader/core/Logger.h"
-#include "quader/platform/FatalErrorHandler.h"
+#include "app/App.h"
+#include "core/Logger.h"
+#include "platform/FatalErrorHandler.h"
 
 #include <exception>
 #include <filesystem>

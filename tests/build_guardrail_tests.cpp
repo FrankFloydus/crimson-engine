@@ -36,8 +36,8 @@ void expectMissing(const std::string& source, const std::string& needle) {
 
 TEST(BuildGuardrailTests, CopiedSdkTestsAreExplicitAndOfflineByDefault) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string sdkCMake = readSourceFile("modeling/sdk/CMakeLists.txt");
-    const std::string catch2CMake = readSourceFile("modeling/sdk/cmake/QuaderCatch2.cmake");
+    const std::string sdkCMake = readSourceFile("sdk/CMakeLists.txt");
+    const std::string catch2CMake = readSourceFile("sdk/cmake/QuaderCatch2.cmake");
     const std::string presets = readSourceFile("CMakePresets.json");
 
     expectContains(rootCMake, "option(QUADER_BUILD_SDK_TESTS");
@@ -94,10 +94,10 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
 
 TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
     const std::string mainSource = readSourceFile("src/main.cpp");
-    const std::string appHeader = readSourceFile("src/quader/app/App.h");
-    const std::string appSource = readSourceFile("src/quader/app/App.cpp");
-    const std::string platformHeader = readSourceFile("src/quader/platform/PlatformWindow.h");
-    const std::string platformSource = readSourceFile("src/quader/platform/PlatformWindow.cpp");
+    const std::string appHeader = readSourceFile("src/app/App.h");
+    const std::string appSource = readSourceFile("src/app/App.cpp");
+    const std::string platformHeader = readSourceFile("src/platform/PlatformWindow.h");
+    const std::string platformSource = readSourceFile("src/platform/PlatformWindow.cpp");
 
     expectContains(mainSource, "--borderless-window");
     expectContains(mainSource, "commandLine.borderlessWindow");
@@ -108,7 +108,7 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
 }
 
 TEST(DependencyLicenseGuardrailTests, SdkThirdPartyManifestHasLicenseEvidence) {
-    const std::string manifest = readSourceFile("modeling/sdk/thirdparty/THIRD_PARTY_MANIFEST.md");
+    const std::string manifest = readSourceFile("sdk/thirdparty/THIRD_PARTY_MANIFEST.md");
 
     expectContains(manifest, "OpenMesh");
     expectContains(manifest, "licenses/openmesh-BSD-3-Clause.txt");
@@ -121,9 +121,9 @@ TEST(DependencyLicenseGuardrailTests, SdkThirdPartyManifestHasLicenseEvidence) {
     expectContains(manifest, "Geometric Tools Engine Mathematics");
     expectContains(manifest, "licenses/geometrictools-BSL-1.0.txt");
 
-    EXPECT_FALSE(readSourceFile("modeling/sdk/thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
-    EXPECT_FALSE(readSourceFile("modeling/sdk/thirdparty/licenses/catch2-BSL-1.0.txt").empty());
-    EXPECT_FALSE(readSourceFile("modeling/sdk/thirdparty/licenses/earcut-hpp-ISC.txt").empty());
-    EXPECT_FALSE(readSourceFile("modeling/sdk/thirdparty/licenses/nlohmann-json-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("modeling/sdk/thirdparty/licenses/geometrictools-BSL-1.0.txt").empty());
+    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
+    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/catch2-BSL-1.0.txt").empty());
+    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/earcut-hpp-ISC.txt").empty());
+    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/nlohmann-json-MIT.txt").empty());
+    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/geometrictools-BSL-1.0.txt").empty());
 }

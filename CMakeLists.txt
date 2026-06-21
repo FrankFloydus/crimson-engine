@@ -19,12 +19,12 @@ set(FILAMENT_SDK_ROOT
     CACHE PATH "Path to the Filament binary SDK")
 
 set(QUADER_MODELING_SDK_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/modeling/sdk"
+    "${CMAKE_CURRENT_SOURCE_DIR}/sdk"
     CACHE PATH "Path to the copied native Quader modeling SDK")
 if(NOT EXISTS "${QUADER_MODELING_SDK_DIR}/CMakeLists.txt"
-        AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modeling/sdk/CMakeLists.txt")
+        AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sdk/CMakeLists.txt")
     set(QUADER_MODELING_SDK_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/modeling/sdk"
+        "${CMAKE_CURRENT_SOURCE_DIR}/sdk"
         CACHE PATH "Path to the copied native Quader modeling SDK" FORCE)
 endif()
 
@@ -111,8 +111,8 @@ elseif(QUADER_BUILD_SDK_TESTS)
 endif()
 
 add_library(quader_modeling STATIC
-    src/quader/modeling/ModelingActionCatalog.cpp
-    src/quader/modeling/ModelingSessionService.cpp
+    src/modeling/ModelingActionCatalog.cpp
+    src/modeling/ModelingSessionService.cpp
 )
 
 target_include_directories(quader_modeling PUBLIC src)
@@ -133,23 +133,23 @@ if(QUADER_HAS_MODELING_SDK)
 endif()
 
 add_library(quader_core STATIC
-    src/quader/assets/AssetRegistry.cpp
-    src/quader/assets/BakeService.cpp
-    src/quader/assets/MaterialDocument.cpp
-    src/quader/core/Logger.cpp
-    src/quader/core/UndoRedoManager.cpp
-    src/quader/document/DocumentCommandService.cpp
-    src/quader/document/ProjectDocument.cpp
-    src/quader/geometry/UVSphere.cpp
-    src/quader/scene/SceneBounds.cpp
-    src/quader/scene/SceneDocument.cpp
-    src/quader/ui/ConsoleModel.cpp
-    src/quader/ui/ViewportContextMenuPolicy.cpp
-    src/quader/ui/UISettings.cpp
-    src/quader/viewport/ViewportCameraController.cpp
-    src/quader/viewport/ViewportInputRouter.cpp
-    src/quader/viewport/ViewportLayout.cpp
-    src/quader/viewport/ViewportSettings.cpp
+    src/assets/AssetRegistry.cpp
+    src/assets/BakeService.cpp
+    src/assets/MaterialDocument.cpp
+    src/core/Logger.cpp
+    src/core/UndoRedoManager.cpp
+    src/document/DocumentCommandService.cpp
+    src/document/ProjectDocument.cpp
+    src/geometry/UVSphere.cpp
+    src/scene/SceneBounds.cpp
+    src/scene/SceneDocument.cpp
+    src/ui/ConsoleModel.cpp
+    src/ui/ViewportContextMenuPolicy.cpp
+    src/ui/UISettings.cpp
+    src/viewport/ViewportCameraController.cpp
+    src/viewport/ViewportInputRouter.cpp
+    src/viewport/ViewportLayout.cpp
+    src/viewport/ViewportSettings.cpp
 )
 
 target_include_directories(quader_core PUBLIC src)
@@ -264,24 +264,24 @@ quader_compile_material(imgui_material resources/materials/imgui.mat imgui)
 quader_compile_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_runtime STATIC
-    src/quader/app/App.cpp
-    src/quader/platform/FatalErrorHandler.cpp
-    src/quader/platform/PlatformWindow.cpp
-    src/quader/render/FilamentUtils.cpp
-    src/quader/render/ImGuiFilamentRenderer.cpp
-    src/quader/render/MaterialCompilerService.cpp
-    src/quader/render/RenderSystem.cpp
-    src/quader/render/SceneRenderBridge.cpp
-    src/quader/render/TextureRegistry.cpp
-    src/quader/render/ViewportRenderer.cpp
-    src/quader/ui/ConsolePanel.cpp
-    src/quader/ui/InspectorPanel.cpp
-    src/quader/ui/NavigationGizmo.cpp
-    src/quader/ui/OutlinerPanel.cpp
-    src/quader/ui/UIPanelManager.cpp
-    src/quader/ui/UISystem.cpp
-    src/quader/ui/UIStyleTokens.cpp
-    src/quader/ui/ViewportPanel.cpp
+    src/app/App.cpp
+    src/platform/FatalErrorHandler.cpp
+    src/platform/PlatformWindow.cpp
+    src/render/FilamentUtils.cpp
+    src/render/ImGuiFilamentRenderer.cpp
+    src/render/MaterialCompilerService.cpp
+    src/render/RenderSystem.cpp
+    src/render/SceneRenderBridge.cpp
+    src/render/TextureRegistry.cpp
+    src/render/ViewportRenderer.cpp
+    src/ui/ConsolePanel.cpp
+    src/ui/InspectorPanel.cpp
+    src/ui/NavigationGizmo.cpp
+    src/ui/OutlinerPanel.cpp
+    src/ui/UIPanelManager.cpp
+    src/ui/UISystem.cpp
+    src/ui/UIStyleTokens.cpp
+    src/ui/ViewportPanel.cpp
 )
 
 target_include_directories(quader_runtime PUBLIC src)

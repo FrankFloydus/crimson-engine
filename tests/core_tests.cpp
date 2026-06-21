@@ -1,25 +1,25 @@
-#include "quader/assets/AssetRegistry.h"
-#include "quader/assets/BakeService.h"
-#include "quader/assets/MaterialDocument.h"
-#include "quader/core/Logger.h"
-#include "quader/core/UndoRedoManager.h"
-#include "quader/document/DocumentCommandService.h"
-#include "quader/document/ProjectDocument.h"
-#include "quader/geometry/UVSphere.h"
-#include "quader/modeling/ModelingSessionService.h"
-#include "quader/render/ViewportOverlayPolicy.h"
-#include "quader/scene/SceneBounds.h"
-#include "quader/scene/SceneDocument.h"
-#include "quader/scene/SceneEntityNaming.h"
-#include "quader/scene/TransformPivot.h"
-#include "quader/ui/ConsoleModel.h"
-#include "quader/ui/UISettings.h"
-#include "quader/ui/ViewportContextMenuPolicy.h"
-#include "quader/viewport/HostViewportContractAdapter.h"
-#include "quader/viewport/ViewportCameraController.h"
-#include "quader/viewport/ViewportInputRouter.h"
-#include "quader/viewport/ViewportLayout.h"
-#include "quader/viewport/ViewportSettings.h"
+#include "assets/AssetRegistry.h"
+#include "assets/BakeService.h"
+#include "assets/MaterialDocument.h"
+#include "core/Logger.h"
+#include "core/UndoRedoManager.h"
+#include "document/DocumentCommandService.h"
+#include "document/ProjectDocument.h"
+#include "geometry/UVSphere.h"
+#include "modeling/ModelingSessionService.h"
+#include "render/ViewportOverlayPolicy.h"
+#include "scene/SceneBounds.h"
+#include "scene/SceneDocument.h"
+#include "scene/SceneEntityNaming.h"
+#include "scene/TransformPivot.h"
+#include "ui/ConsoleModel.h"
+#include "ui/UISettings.h"
+#include "ui/ViewportContextMenuPolicy.h"
+#include "viewport/HostViewportContractAdapter.h"
+#include "viewport/ViewportCameraController.h"
+#include "viewport/ViewportInputRouter.h"
+#include "viewport/ViewportLayout.h"
+#include "viewport/ViewportSettings.h"
 
 #include <gtest/gtest.h>
 
@@ -153,7 +153,7 @@ TEST(FatalErrorHandlerTests, MainInstallsReportableFatalErrorBoundary) {
     const std::string mainSource{std::istreambuf_iterator<char>(mainFile), std::istreambuf_iterator<char>()};
 
     const std::filesystem::path handlerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "platform" / "FatalErrorHandler.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "platform" / "FatalErrorHandler.cpp";
     std::ifstream handlerFile(handlerPath);
     ASSERT_TRUE(handlerFile.is_open()) << handlerPath.string();
     const std::string handlerSource{std::istreambuf_iterator<char>(handlerFile), std::istreambuf_iterator<char>()};
@@ -245,11 +245,11 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
 
 TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
     const std::filesystem::path uiSystemPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
     const std::filesystem::path viewportPanelHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     const std::filesystem::path uiSettingsSourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISettings.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISettings.cpp";
 
     std::ifstream uiSystemFile(uiSystemPath);
     std::ifstream viewportPanelHeaderFile(viewportPanelHeaderPath);
@@ -533,7 +533,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
 
 TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -561,7 +561,7 @@ TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
 
 TEST(SceneRenderBridgeTests, UsesUnityStyleQuadMaterialsForSelectionLineAndPointOverlay) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -588,7 +588,7 @@ TEST(SceneRenderBridgeTests, UsesUnityStyleQuadMaterialsForSelectionLineAndPoint
 
 TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -606,7 +606,7 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
 
 TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -629,7 +629,7 @@ TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
 
 TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -644,7 +644,7 @@ TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
 
 TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "RenderSystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "RenderSystem.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -660,7 +660,7 @@ TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
 
 TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisibilityClipping) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -685,9 +685,9 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
 
 TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     const std::filesystem::path navigationGizmoPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "NavigationGizmo.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "NavigationGizmo.cpp";
     std::ifstream sourceFile(sourcePath);
     std::ifstream navigationGizmoFile(navigationGizmoPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
@@ -740,7 +740,7 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
 
 TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -761,7 +761,7 @@ TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
 TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) /
-            "modeling" / "sdk" / "packages" / "editor-core" / "src" / "transform_gizmo.cpp";
+            "sdk" / "packages" / "editor-core" / "src" / "transform_gizmo.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -778,7 +778,7 @@ TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) 
 
 TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -792,7 +792,7 @@ TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
 
 TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -806,11 +806,11 @@ TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
 
 TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     const std::filesystem::path navigationGizmoHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "NavigationGizmo.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "NavigationGizmo.h";
     const std::filesystem::path navigationGizmoSourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "NavigationGizmo.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "NavigationGizmo.cpp";
     std::ifstream headerFile(headerPath);
     std::ifstream navigationGizmoHeaderFile(navigationGizmoHeaderPath);
     std::ifstream navigationGizmoSourceFile(navigationGizmoSourcePath);
@@ -839,7 +839,7 @@ TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
     EXPECT_NE(navigationGizmoHeader.find("ViewportPaneId dragPaneId_"), std::string::npos);
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -862,7 +862,7 @@ TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
 
 TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -881,7 +881,7 @@ TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
     EXPECT_NE(header.find("cameraProjection == other.cameraProjection"), std::string::npos);
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -897,7 +897,7 @@ TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
 
 TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -932,7 +932,7 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
 
 TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -941,7 +941,7 @@ TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
             std::istreambuf_iterator<char>()};
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -964,7 +964,7 @@ TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
 
 TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1050,7 +1050,7 @@ TEST(ViewportContextMenuPolicyTests, PreservesHoverOnlyForClickLikeRightPress) {
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBegin) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1070,7 +1070,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBeg
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBegin) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1103,7 +1103,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
 
 TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1122,7 +1122,7 @@ TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
 
 TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1137,7 +1137,7 @@ TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
 
 TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -1148,7 +1148,7 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     EXPECT_NE(header.find("bool sceneOnlyGizmoDrag_"), std::string::npos);
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1170,7 +1170,7 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
 
 TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1188,7 +1188,7 @@ TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
 
 TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1216,7 +1216,7 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
 
 TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1239,7 +1239,7 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
 
 TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchanged) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1269,7 +1269,7 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
 
 TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "modeling" / "ModelingSessionService.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionService.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1298,7 +1298,7 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
 
 TEST(ViewportPanelTests, SelectionOverlayCacheKeyIncludesSelectionMode) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -1309,7 +1309,7 @@ TEST(ViewportPanelTests, SelectionOverlayCacheKeyIncludesSelectionMode) {
     EXPECT_NE(header.find("ModelingSelectionMode cachedSelectionOverlayMode_"), std::string::npos);
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1325,7 +1325,7 @@ TEST(ViewportPanelTests, SelectionOverlayCacheKeyIncludesSelectionMode) {
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1339,7 +1339,7 @@ TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEnc
 
 TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "ViewportRenderer.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportRenderer.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1356,20 +1356,20 @@ TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
 
 TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame) {
     const std::filesystem::path rendererPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "ViewportRenderer.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportRenderer.cpp";
     std::ifstream rendererFile(rendererPath);
     ASSERT_TRUE(rendererFile.is_open()) << rendererPath.string();
     const std::string rendererSource{
             std::istreambuf_iterator<char>(rendererFile),
             std::istreambuf_iterator<char>()};
 
-    const std::filesystem::path appPath = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "app" / "App.cpp";
+    const std::filesystem::path appPath = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "app" / "App.cpp";
     std::ifstream appFile(appPath);
     ASSERT_TRUE(appFile.is_open()) << appPath.string();
     const std::string appSource{std::istreambuf_iterator<char>(appFile), std::istreambuf_iterator<char>()};
 
     const std::filesystem::path viewportPanelPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream viewportPanelFile(viewportPanelPath);
     ASSERT_TRUE(viewportPanelFile.is_open()) << viewportPanelPath.string();
     const std::string viewportPanelSource{
@@ -1377,7 +1377,7 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
             std::istreambuf_iterator<char>()};
 
     const std::filesystem::path bridgePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     std::ifstream bridgeFile(bridgePath);
     ASSERT_TRUE(bridgeFile.is_open()) << bridgePath.string();
     const std::string bridgeSource{std::istreambuf_iterator<char>(bridgeFile), std::istreambuf_iterator<char>()};
@@ -1408,7 +1408,7 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
 
 TEST(ImGuiFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
     const std::filesystem::path rendererPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "ImGuiFilamentRenderer.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ImGuiFilamentRenderer.cpp";
     std::ifstream rendererFile(rendererPath);
     ASSERT_TRUE(rendererFile.is_open()) << rendererPath.string();
 
@@ -1437,7 +1437,7 @@ TEST(ImGuiFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested)
 
 TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "TextureRegistry.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "TextureRegistry.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -1451,7 +1451,7 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
     EXPECT_NE(headerSource.find("TextureSampleColorSpace sampleColorSpace(ImTextureID id) const"), std::string::npos);
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "render" / "TextureRegistry.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "TextureRegistry.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1465,7 +1465,7 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
 
 TEST(UIStyleTokensTests, LoadsInterAtConfiguredEighteenPixelBaseSize) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UIStyleTokens.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -1474,7 +1474,7 @@ TEST(UIStyleTokensTests, LoadsInterAtConfiguredEighteenPixelBaseSize) {
             std::istreambuf_iterator<char>()};
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UIStyleTokens.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1491,7 +1491,7 @@ TEST(UIStyleTokensTests, LoadsInterAtConfiguredEighteenPixelBaseSize) {
 
 TEST(UILayoutTests, AvoidsNegativeFillWidthsAndSavedStretchColumnsInPanels) {
     const std::filesystem::path uiPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui";
 
     for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(uiPath)) {
         if (!entry.is_regular_file()) {
@@ -1527,7 +1527,7 @@ TEST(UILayoutTests, AvoidsNegativeFillWidthsAndSavedStretchColumnsInPanels) {
 
 TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "InspectorPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "InspectorPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1547,7 +1547,7 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
 
 TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "OutlinerPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "OutlinerPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1570,7 +1570,7 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
 
 TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "OutlinerPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "OutlinerPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1586,7 +1586,7 @@ TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
 
 TEST(OutlinerPanelTests, KeepsRootRowsTightlyInset) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "OutlinerPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "OutlinerPanel.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1604,7 +1604,7 @@ TEST(OutlinerPanelTests, KeepsRootRowsTightlyInset) {
 
 TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
     const std::filesystem::path stylePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIStyleTokens.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UIStyleTokens.cpp";
     std::ifstream styleFile(stylePath);
     ASSERT_TRUE(styleFile.is_open()) << stylePath.string();
 
@@ -1616,7 +1616,7 @@ TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
     EXPECT_EQ(styleSource.find("style.WindowMenuButtonPosition = ImGuiDir_None"), std::string::npos);
 
     const std::filesystem::path uiSystemPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
     std::ifstream uiSystemFile(uiSystemPath);
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
 
@@ -1629,7 +1629,7 @@ TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
 
 TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     const std::filesystem::path uiPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui";
 
     std::ifstream styleFile(uiPath / "UIStyleTokens.h");
     ASSERT_TRUE(styleFile.is_open());
@@ -1712,7 +1712,7 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
 
 TEST(UISystemTests, TopMenuExposesViewportLayoutOptions) {
     const std::filesystem::path uiSystemPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
     std::ifstream uiSystemFile(uiSystemPath);
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
 
@@ -1727,7 +1727,7 @@ TEST(UISystemTests, TopMenuExposesViewportLayoutOptions) {
 
 TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     const std::filesystem::path uiSystemPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
     std::ifstream uiSystemFile(uiSystemPath);
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
 
@@ -1764,7 +1764,7 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_NoInputs"), std::string::npos);
 
     const std::filesystem::path uiContextPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UIContext.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UIContext.h";
     std::ifstream uiContextFile(uiContextPath);
     ASSERT_TRUE(uiContextFile.is_open()) << uiContextPath.string();
 
@@ -1777,7 +1777,7 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
 
 TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
     const std::filesystem::path uiSystemPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "UISystem.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
     std::ifstream uiSystemFile(uiSystemPath);
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
 
@@ -1794,7 +1794,7 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
     EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Mirror\", nullptr, ViewportTool::Mirror)"), std::string::npos);
 
     const std::filesystem::path viewportPanelPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream viewportPanelFile(viewportPanelPath);
     ASSERT_TRUE(viewportPanelFile.is_open()) << viewportPanelPath.string();
 
@@ -1807,7 +1807,7 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
 
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "app" / "App.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "app" / "App.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
