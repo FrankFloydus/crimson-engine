@@ -25,6 +25,20 @@ inline const char* uiPanelKey(UIPanelId id) {
     return "Unknown";
 }
 
+inline const char* uiPanelLocalizationKey(UIPanelId id) {
+    switch (id) {
+    case UIPanelId::Viewport:
+        return "ui.panel.viewport";
+    case UIPanelId::Outliner:
+        return "ui.panel.outliner";
+    case UIPanelId::Inspector:
+        return "ui.panel.inspector";
+    case UIPanelId::Console:
+        return "ui.panel.console";
+    }
+    return "ui.panel.unknown";
+}
+
 class UIPanel {
 public:
     virtual ~UIPanel() = default;

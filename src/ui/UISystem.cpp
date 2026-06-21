@@ -80,6 +80,10 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
     std::error_code error;
     std::filesystem::create_directories(settingsPaths_.directory, error);
     settings_ = UISettings::load(settingsPaths_.settingsFile);
+    localization_.load(executableDir / "locales", settings_.locale());
+    if (settings_.locale() != localization_.currentLocale()) {
+        settings_.setLocale(localization_.currentLocale());
+    }
     viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile);
     imguiIniPath_ = settingsPaths_.imguiIniFile.string();
     const bool iniExists = std::filesystem::exists(settingsPaths_.imguiIniFile, error);
@@ -166,6 +170,7 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
     Vec2 viewportCursorCapturePoint = {};
     const UIPanelId previousFocusedPanel = focusedPanel_;
     bool panelFocusChanged = false;
+    bool settingsChanged = false;
     UIContext context{
             .renderBridge = renderBridge,
             .document = document,
@@ -177,6 +182,8 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
             .quitRequested = quitRequested,
             .style = style_,
             .icons = icons_,
+            .localization = localization_,
+            .settings = settings_,
             .viewportSettings = viewportSettings_,
             .viewportRelativeMouseDelta = relativeMouseDelta_,
             .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
@@ -185,10 +192,14 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
             .previousFocusedPanel = previousFocusedPanel,
             .focusedPanelStorage = &focusedPanel_,
             .panelFocusChanged = &panelFocusChanged,
+            .settingsChanged = &settingsChanged,
     };
     panels_.draw(context);
     if (viewportSettingsPanel_.draw(context, settingsPanelOpen_)) {
         saveViewportSettings();
+    }
+    if (settingsChanged) {
+        saveSettings();
     }
     toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
     std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
@@ -265,6 +276,7 @@ void UISystem::drawDockspace(bool& quitRequested, ModelingSessionService& modeli
             .viewportPanel = viewportPanel_,
             .panels = panels_,
             .settings = settings_,
+            .localization = localization_,
             .viewportSettingsPanelOpen = settingsPanelOpen_,
             .toolSettingsPanelOpen = toolSettingsPanelOpen_,
     });

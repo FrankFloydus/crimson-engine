@@ -1,8 +1,11 @@
 #include "ui/ModalToolOverlayRenderer.h"
 
+#include "core/LocalizationService.h"
+
 #include <array>
 #include <cstdio>
 #include <optional>
+#include <string>
 
 namespace quader {
 namespace {
@@ -83,7 +86,8 @@ void ModalToolOverlayRenderer::drawFlyNavigationOverlay(
         bool drawCrosshair,
         bool drawSpeed,
         bool drawResetHint,
-        float speed) const {
+        float speed,
+        const LocalizationService& localization) const {
     const ImVec2 center{itemMin.x + itemSize.x * 0.5f, itemMin.y + itemSize.y * 0.5f};
     if (drawCrosshair) {
         const float gap = 4.0f;
@@ -104,13 +108,21 @@ void ModalToolOverlayRenderer::drawFlyNavigationOverlay(
         return;
     }
 
-    char label[96]{};
+    char speedValue[32]{};
+    std::snprintf(speedValue, sizeof(speedValue), "%.1f", speed);
+    std::string label;
     if (drawResetHint) {
-        std::snprintf(label, sizeof(label), "Speed %.1f (Middle Mouse to reset)", speed);
+        label = localization.format(
+                "viewport.fly_navigation.speed_with_reset",
+                "Speed {speed} (Middle Mouse to reset)",
+                {{"speed", speedValue}});
     } else {
-        std::snprintf(label, sizeof(label), "Speed %.1f", speed);
+        label = localization.format(
+                "viewport.fly_navigation.speed",
+                "Speed {speed}",
+                {{"speed", speedValue}});
     }
-    const ImVec2 textSize = ImGui::CalcTextSize(label);
+    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
     const ImVec2 padding{10.0f, 5.0f};
     const ImVec2 min{
             itemMin.x + itemSize.x * 0.5f - textSize.x * 0.5f - padding.x,
@@ -118,7 +130,7 @@ void ModalToolOverlayRenderer::drawFlyNavigationOverlay(
     };
     const ImVec2 max{min.x + textSize.x + padding.x * 2.0f, min.y + textSize.y + padding.y * 2.0f};
     drawList->AddRectFilled(min, max, ImGui::GetColorU32(ImVec4(0.05f, 0.06f, 0.07f, 0.78f)), 4.0f);
-    drawList->AddText({min.x + padding.x, min.y + padding.y}, ImGui::GetColorU32(ImVec4(0.92f, 0.95f, 1.0f, 1.0f)), label);
+    drawList->AddText({min.x + padding.x, min.y + padding.y}, ImGui::GetColorU32(ImVec4(0.92f, 0.95f, 1.0f, 1.0f)), label.c_str());
 }
 
 } // namespace quader

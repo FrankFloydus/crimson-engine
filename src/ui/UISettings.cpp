@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -87,6 +88,8 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             settings.consoleVisible_ = parseBool(value, settings.consoleVisible_);
         } else if (key == "NavigationGizmo") {
             settings.navigationGizmoVisible_ = parseBool(value, settings.navigationGizmoVisible_);
+        } else if (key == "Locale") {
+            settings.setLocale(value);
         }
     }
 
@@ -117,6 +120,8 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << uiPanelKey(UIPanelId::Console) << '=' << (consoleVisible_ ? "true" : "false") << '\n';
     file << "\n[Show]\n";
     file << "NavigationGizmo=" << (navigationGizmoVisible_ ? "true" : "false") << '\n';
+    file << "\n[Localization]\n";
+    file << "Locale=" << locale_ << '\n';
     return true;
 }
 
@@ -147,6 +152,13 @@ void UISettings::setPanelVisible(UIPanelId id, bool visible) {
     case UIPanelId::Console:
         consoleVisible_ = visible;
         break;
+    }
+}
+
+void UISettings::setLocale(std::string locale) {
+    locale = trim(std::move(locale));
+    if (!locale.empty()) {
+        locale_ = std::move(locale);
     }
 }
 

@@ -1,5 +1,6 @@
 #include "ui/ViewportPanel.h"
 
+#include "core/LocalizationService.h"
 #include "core/Logger.h"
 #include "render/overlay/ViewportOverlayStyleResolver.h"
 #include "render/ViewportOverlayPolicy.h"
@@ -495,18 +496,25 @@ void ViewportPanel::resetPaneCamera(Pane& paneState) {
     paneController_.resetCamera(paneState.id, paneState.camera);
 }
 
-void ViewportPanel::drawPaneChrome(const Pane& paneState, ImVec2 itemMin, ImVec2 itemSize) const {
+void ViewportPanel::drawPaneChrome(
+        const Pane& paneState,
+        ImVec2 itemMin,
+        ImVec2 itemSize,
+        const LocalizationService& localization) const {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
     const ImU32 dividerColor = IM_COL32(19, 19, 20, 255);
     const ImU32 focusedColor = IM_COL32(46, 46, 48, 242);
     drawList->AddRect(itemMin, itemMax, paneState.id == focusedPaneId_ ? focusedColor : dividerColor, 0.0f, 0, 1.0f);
-    const std::string_view label = viewportPaneLabel(paneState.id);
-    const ImVec2 textSize = ImGui::CalcTextSize(label.data());
+    std::string key = "viewport.pane.";
+    key.append(viewportPaneStableId(paneState.id));
+    key.append(".label");
+    const std::string label = localization.text(key, viewportPaneLabel(paneState.id));
+    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
     const ImVec2 labelMin{itemMin.x + 8.0f, itemMin.y + 7.0f};
     const ImVec2 labelMax{labelMin.x + textSize.x + 12.0f, labelMin.y + textSize.y + 6.0f};
     drawList->AddRectFilled(labelMin, labelMax, IM_COL32(16, 18, 21, 176), 3.0f);
-    drawList->AddText({labelMin.x + 6.0f, labelMin.y + 3.0f}, IM_COL32(228, 231, 236, 230), label.data());
+    drawList->AddText({labelMin.x + 6.0f, labelMin.y + 3.0f}, IM_COL32(228, 231, 236, 230), label.c_str());
 }
 
 bool ViewportPanel::handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles) {
@@ -609,8 +617,10 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         const UIContext& uiContext) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const std::string windowTitle =
+            uiContext.localization.imguiLabel("ui.panel.viewport", uiPanelKey(UIPanelId::Viewport), "Viewport");
     const bool visible = ImGui::Begin(
-            "Viewport",
+            windowTitle.c_str(),
             nullptr,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
@@ -697,7 +707,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         } else if (!transformDragLocksInput && !navigationGizmoDragLocksInput && drawPane.hovered && !splitConsumed) {
             inputPane = &drawPane;
         }
-        drawPaneChrome(*drawPane.pane, drawPane.itemMin, drawPane.itemSize);
+        drawPaneChrome(*drawPane.pane, drawPane.itemMin, drawPane.itemSize, uiContext.localization);
     }
     if (inputPane == nullptr) {
         for (DrawPane& drawPane : drawPanes) {
@@ -1382,8 +1392,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             result.flyHudActive,
             result.flyHudActive && !camera.flySpeedIsDefault(),
             result.flyHudActive,
-            camera.flySpeed());
-    contextMenuPresenter_.drawOperationsPopup(undoRedo, modeling, inputRouter_, modalToolOwnsViewport());
+            camera.flySpeed(),
+            uiContext.localization);
+    contextMenuPresenter_.drawOperationsPopup(undoRedo, modeling, inputRouter_, uiContext.localization, modalToolOwnsViewport());
 }
 
 } // namespace quader

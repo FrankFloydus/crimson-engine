@@ -10,6 +10,8 @@ public:
 
 protected:
     const char* title() const override { return "Tool Settings"; }
+    const char* titleKey() const override { return "ui.panel.tool_settings"; }
+    const char* titleStableId() const override { return "floating.tool_settings"; }
     ImVec2 defaultSize() const override { return {340.0f, 220.0f}; }
     void beforeBegin(UIContext& context, bool& open) override;
     void drawContent(UIContext& context, bool& open) override;

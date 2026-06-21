@@ -38,6 +38,7 @@ class Renderer;
 namespace quader {
 
 class RenderSystem;
+class LocalizationService;
 
 class ViewportPanel final : public UIPanel {
 public:
@@ -113,7 +114,7 @@ private:
     std::vector<ViewportPanePlacement> activePanePlacements() const;
     std::vector<ViewportSplitHandle> activeSplitHandles() const;
     void resetPaneCamera(Pane& pane);
-    void drawPaneChrome(const Pane& pane, ImVec2 itemMin, ImVec2 itemSize) const;
+    void drawPaneChrome(const Pane& pane, ImVec2 itemMin, ImVec2 itemSize, const LocalizationService& localization) const;
     bool handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles);
     const ViewportSettings& activeViewportSettings() const;
     static ImVec2 paneRectMin(ImVec2 viewportMin, ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);

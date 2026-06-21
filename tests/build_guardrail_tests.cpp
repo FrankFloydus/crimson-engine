@@ -92,6 +92,19 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
     expectContains(rootCMake, "lib/x86_64/mdd/matdbg.lib");
 }
 
+TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+
+    expectContains(rootCMake, "src/core/LocalizationService.cpp");
+    expectContains(rootCMake, "tests/localization_tests.cpp");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/locales");
+    expectContains(rootCMake, "resources/locales");
+    expectContains(rootCMake, "copy_directory");
+
+    EXPECT_FALSE(readSourceFile("resources/locales/en-US.lang").empty());
+    EXPECT_FALSE(readSourceFile("resources/locales/it-IT.lang").empty());
+}
+
 TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
     const std::string mainSource = readSourceFile("src/main.cpp");
     const std::string appHeader = readSourceFile("src/app/App.h");

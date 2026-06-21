@@ -1,5 +1,6 @@
 #include "ui/InspectorPanel.h"
 
+#include "core/LocalizationService.h"
 #include "document/DocumentCommandService.h"
 #include "modeling/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
@@ -15,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -55,7 +57,21 @@ Vec3 clampScale(Vec3 scale) {
     };
 }
 
-const char* selectionModeLabel(ModelingSelectionMode mode) {
+const char* selectionModeKey(ModelingSelectionMode mode) {
+    switch (mode) {
+    case ModelingSelectionMode::Vertex:
+        return "selection.mode.vertex";
+    case ModelingSelectionMode::Edge:
+        return "selection.mode.edge";
+    case ModelingSelectionMode::Face:
+        return "selection.mode.face";
+    case ModelingSelectionMode::Object:
+        return "selection.mode.object";
+    }
+    return "selection.mode.object";
+}
+
+const char* selectionModeFallback(ModelingSelectionMode mode) {
     switch (mode) {
     case ModelingSelectionMode::Vertex:
         return "Vertex";
@@ -69,7 +85,25 @@ const char* selectionModeLabel(ModelingSelectionMode mode) {
     return "Object";
 }
 
-const char* activeSelectionKindLabel(ModelingActiveSelectionKind kind) {
+const char* activeSelectionKindKey(ModelingActiveSelectionKind kind) {
+    switch (kind) {
+    case ModelingActiveSelectionKind::None:
+        return "selection.active.none";
+    case ModelingActiveSelectionKind::Object:
+        return "selection.active.object";
+    case ModelingActiveSelectionKind::Vertex:
+        return "selection.active.vertex";
+    case ModelingActiveSelectionKind::Edge:
+        return "selection.active.edge";
+    case ModelingActiveSelectionKind::Face:
+        return "selection.active.face";
+    case ModelingActiveSelectionKind::Light:
+        return "selection.active.light";
+    }
+    return "selection.active.none";
+}
+
+const char* activeSelectionKindFallback(ModelingActiveSelectionKind kind) {
     switch (kind) {
     case ModelingActiveSelectionKind::None:
         return "None";
@@ -91,6 +125,7 @@ bool axisDragFloat(const char* axis,
         ImVec4 color,
         float* value,
         bool mixed,
+        const char* mixedLabel,
         float speed,
         float minValue,
         float maxValue,
@@ -104,9 +139,10 @@ bool axisDragFloat(const char* axis,
     ImGui::SetNextItemWidth(std::max(inputWidth, kMinAxisInputWidth));
     bool changed = false;
     if (mixed) {
-        char mixedText[] = "Mixed";
+        std::array<char, 64> mixedBuffer{};
+        std::snprintf(mixedBuffer.data(), mixedBuffer.size(), "%s", mixedLabel);
         ImGui::BeginDisabled();
-        ImGui::InputText("##value", mixedText, sizeof(mixedText), ImGuiInputTextFlags_ReadOnly);
+        ImGui::InputText("##value", mixedBuffer.data(), mixedBuffer.size(), ImGuiInputTextFlags_ReadOnly);
         ImGui::EndDisabled();
     } else {
         changed = ImGui::DragFloat("##value", value, speed, minValue, maxValue, "%.3f");
@@ -115,15 +151,17 @@ bool axisDragFloat(const char* axis,
     return changed;
 }
 
-bool axisDragFloat3(const char* label,
+bool axisDragFloat3(const char* stableId,
+        const char* label,
         float values[3],
         const std::array<bool, 3>& mixed,
+        const char* mixedLabel,
         const UIStyleTokens& style,
         float speed,
         float minValue = 0.0f,
         float maxValue = 0.0f) {
     bool changed = false;
-    ImGui::PushID(label);
+    ImGui::PushID(stableId);
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const float axisChromeWidth = kAxisTextColumnWidth + ImGui::GetStyle().ItemInnerSpacing.x;
     const float axisColumnWidth =
@@ -144,11 +182,11 @@ bool axisDragFloat3(const char* label,
         ImGui::TextUnformatted(label);
 
         ImGui::TableSetColumnIndex(1);
-        changed = axisDragFloat("X", style.axisX, &values[0], mixed[0], speed, minValue, maxValue, inputWidth) || changed;
+        changed = axisDragFloat("X", style.axisX, &values[0], mixed[0], mixedLabel, speed, minValue, maxValue, inputWidth) || changed;
         ImGui::TableSetColumnIndex(2);
-        changed = axisDragFloat("Y", style.axisY, &values[1], mixed[1], speed, minValue, maxValue, inputWidth) || changed;
+        changed = axisDragFloat("Y", style.axisY, &values[1], mixed[1], mixedLabel, speed, minValue, maxValue, inputWidth) || changed;
         ImGui::TableSetColumnIndex(3);
-        changed = axisDragFloat("Z", style.axisZ, &values[2], mixed[2], speed, minValue, maxValue, inputWidth) || changed;
+        changed = axisDragFloat("Z", style.axisZ, &values[2], mixed[2], mixedLabel, speed, minValue, maxValue, inputWidth) || changed;
 
         ImGui::EndTable();
     }
@@ -256,15 +294,25 @@ void InspectorPanel::drawContent(UIContext& context) {
 
     const std::vector<EntityId> selected = document.selectedEntities();
     const ModelingSelectionSummary selection = modeling.selectionSummary();
+    LocalizationService& localization = context.localization;
+    const std::string mixedLabel = localization.text("ui.inspector.mixed", "Mixed");
+    const std::string modePrefix = localization.text("ui.inspector.mode", "Mode");
+    const std::string activePrefix = localization.text("ui.inspector.active", "Active");
+    const std::string verticesPrefix = localization.text("ui.inspector.vertices", "Vertices");
+    const std::string edgesPrefix = localization.text("ui.inspector.edges", "Edges");
+    const std::string facesPrefix = localization.text("ui.inspector.faces", "Faces");
     if (selected.empty()) {
         if (selection.hasSelection) {
-            ImGui::Text("Mode: %s", selectionModeLabel(selection.mode));
-            ImGui::Text("Active: %s", activeSelectionKindLabel(selection.activeKind));
-            ImGui::Text("Vertices: %u", selection.selectedVertexCount);
-            ImGui::Text("Edges: %u", selection.selectedEdgeCount);
-            ImGui::Text("Faces: %u", selection.selectedFaceCount);
+            const std::string mode = localization.text(selectionModeKey(selection.mode), selectionModeFallback(selection.mode));
+            const std::string active = localization.text(activeSelectionKindKey(selection.activeKind), activeSelectionKindFallback(selection.activeKind));
+            ImGui::Text("%s: %s", modePrefix.c_str(), mode.c_str());
+            ImGui::Text("%s: %s", activePrefix.c_str(), active.c_str());
+            ImGui::Text("%s: %u", verticesPrefix.c_str(), selection.selectedVertexCount);
+            ImGui::Text("%s: %u", edgesPrefix.c_str(), selection.selectedEdgeCount);
+            ImGui::Text("%s: %u", facesPrefix.c_str(), selection.selectedFaceCount);
         } else {
-            ImGui::TextUnformatted("No selection");
+            const std::string noSelection = localization.text("ui.inspector.no_selection", "No selection");
+            ImGui::TextUnformatted(noSelection.c_str());
         }
         return;
     }
@@ -273,25 +321,32 @@ void InspectorPanel::drawContent(UIContext& context) {
     if (primary == InvalidEntityId) {
         primary = selected.front();
     }
-    ImGui::Text("%llu selected", static_cast<unsigned long long>(selected.size()));
-    ImGui::Text("Mode: %s", selectionModeLabel(selection.mode));
+    const std::string selectedCount = localization.format(
+            "ui.inspector.selected_count",
+            "{count} selected",
+            {{"count", std::to_string(selected.size())}});
+    ImGui::TextUnformatted(selectedCount.c_str());
+    const std::string mode = localization.text(selectionModeKey(selection.mode), selectionModeFallback(selection.mode));
+    ImGui::Text("%s: %s", modePrefix.c_str(), mode.c_str());
     if (selection.mode != ModelingSelectionMode::Object) {
-        ImGui::Text("Active: %s", activeSelectionKindLabel(selection.activeKind));
+        const std::string active = localization.text(activeSelectionKindKey(selection.activeKind), activeSelectionKindFallback(selection.activeKind));
+        ImGui::Text("%s: %s", activePrefix.c_str(), active.c_str());
         if (selection.selectedVertexCount > 0u) {
-            ImGui::Text("Vertices: %u", selection.selectedVertexCount);
+            ImGui::Text("%s: %u", verticesPrefix.c_str(), selection.selectedVertexCount);
         }
         if (selection.selectedEdgeCount > 0u) {
-            ImGui::Text("Edges: %u", selection.selectedEdgeCount);
+            ImGui::Text("%s: %u", edgesPrefix.c_str(), selection.selectedEdgeCount);
         }
         if (selection.selectedFaceCount > 0u) {
-            ImGui::Text("Faces: %u", selection.selectedFaceCount);
+            ImGui::Text("%s: %u", facesPrefix.c_str(), selection.selectedFaceCount);
         }
     }
 
     if (selected.size() == 1u) {
         std::array<char, 128> nameBuffer;
         copyNameToBuffer(document.name(primary), nameBuffer);
-        if (ImGui::InputText("Name", nameBuffer.data(), nameBuffer.size(),
+        const std::string nameLabel = localization.imguiLabel("ui.inspector.name", "ui.inspector.name", "Name");
+        if (ImGui::InputText(nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
             (void)context.documentCommands.renameEntity(primary, nameBuffer.data());
         }
@@ -300,7 +355,8 @@ void InspectorPanel::drawContent(UIContext& context) {
     const BoolAggregate visibilityAggregate = aggregateVisibility(document, selected);
     if (visibilityAggregate.hasValue) {
         bool visible = visibilityAggregate.allTrue;
-        if (ImGui::Checkbox("Visible", &visible)) {
+        const std::string visibleLabel = localization.imguiLabel("ui.inspector.visible", "ui.inspector.visible", "Visible");
+        if (ImGui::Checkbox(visibleLabel.c_str(), &visible)) {
             std::vector<DocumentVisibilityEdit> edits;
             edits.reserve(selected.size());
             for (const EntityId id : selected) {
@@ -316,14 +372,15 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
         if (visibilityAggregate.mixed()) {
             ImGui::SameLine();
-            ImGui::TextDisabled("Mixed");
+            ImGui::TextDisabled("%s", mixedLabel.c_str());
         }
     }
 
     const BoolAggregate lockAggregate = aggregateLock(document, selected);
     if (lockAggregate.hasValue) {
         bool locked = lockAggregate.allTrue;
-        if (ImGui::Checkbox("Locked", &locked)) {
+        const std::string lockedLabel = localization.imguiLabel("ui.inspector.locked", "ui.inspector.locked", "Locked");
+        if (ImGui::Checkbox(lockedLabel.c_str(), &locked)) {
             std::vector<DocumentLockEdit> edits;
             edits.reserve(selected.size());
             for (const EntityId id : selected) {
@@ -339,7 +396,7 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
         if (lockAggregate.mixed()) {
             ImGui::SameLine();
-            ImGui::TextDisabled("Mixed");
+            ImGui::TextDisabled("%s", mixedLabel.c_str());
         }
     }
 
@@ -352,9 +409,14 @@ void InspectorPanel::drawContent(UIContext& context) {
             }
         }
 
-        ImGui::SeparatorText("Transform");
+        const std::string transformLabel = localization.text("ui.inspector.transform", "Transform");
+        ImGui::SeparatorText(transformLabel.c_str());
         if (selected.size() > 1u) {
-            ImGui::TextDisabled("%llu spatial entities", static_cast<unsigned long long>(transformCount));
+            const std::string spatialEntities = localization.format(
+                    "ui.inspector.spatial_entities",
+                    "{count} spatial entities",
+                    {{"count", std::to_string(transformCount)}});
+            ImGui::TextDisabled("%s", spatialEntities.c_str());
         }
 
         auto applyToSelectedTransforms = [&](auto mutate) {
@@ -421,7 +483,8 @@ void InspectorPanel::drawContent(UIContext& context) {
 
         float position[3] = {transform->position.x, transform->position.y, transform->position.z};
         const std::array<bool, 3> positionMixed = mixedPositionAxes(document, selected, *transform);
-        if (axisDragFloat3("Position", position, positionMixed, context.style, 0.05f)) {
+        const std::string positionLabel = localization.text("ui.inspector.position", "Position");
+        if (axisDragFloat3("position", positionLabel.c_str(), position, positionMixed, mixedLabel.c_str(), context.style, 0.05f)) {
             const Vec3 previous = transform->position;
             const Vec3 nextPosition{position[0], position[1], position[2]};
             const Vec3 delta = nextPosition - previous;
@@ -436,7 +499,8 @@ void InspectorPanel::drawContent(UIContext& context) {
                 transform->rotationEuler.z * RadToDeg,
         };
         const std::array<bool, 3> rotationMixed = mixedRotationAxes(document, selected, *transform);
-        if (axisDragFloat3("Rotation", rotation, rotationMixed, context.style, 0.5f)) {
+        const std::string rotationLabel = localization.text("ui.inspector.rotation", "Rotation");
+        if (axisDragFloat3("rotation", rotationLabel.c_str(), rotation, rotationMixed, mixedLabel.c_str(), context.style, 0.5f)) {
             const Vec3 previous = transform->rotationEuler;
             const Vec3 nextRotation{rotation[0] * DegToRad, rotation[1] * DegToRad, rotation[2] * DegToRad};
             const Vec3 delta = nextRotation - previous;
@@ -447,7 +511,8 @@ void InspectorPanel::drawContent(UIContext& context) {
 
         float scale[3] = {transform->scale.x, transform->scale.y, transform->scale.z};
         const std::array<bool, 3> scaleMixed = mixedScaleAxes(document, selected, *transform);
-        if (axisDragFloat3("Scale", scale, scaleMixed, context.style, 0.02f, 0.001f, 1000.0f)) {
+        const std::string scaleLabel = localization.text("ui.inspector.scale", "Scale");
+        if (axisDragFloat3("scale", scaleLabel.c_str(), scale, scaleMixed, mixedLabel.c_str(), context.style, 0.02f, 0.001f, 1000.0f)) {
             const Vec3 ratio = componentScaleRatio({scale[0], scale[1], scale[2]}, transform->scale);
             applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {
                 next.scale = clampScale(multiplyComponents(next.scale, ratio));
@@ -464,9 +529,12 @@ void InspectorPanel::drawContent(UIContext& context) {
             lightCount += document.light(id) ? 1u : 0u;
         }
 
-        ImGui::SeparatorText("Components");
-        ImGui::Text("Meshes: %llu", static_cast<unsigned long long>(meshCount));
-        ImGui::Text("Lights: %llu", static_cast<unsigned long long>(lightCount));
+        const std::string componentsLabel = localization.text("ui.inspector.components", "Components");
+        ImGui::SeparatorText(componentsLabel.c_str());
+        const std::string meshesLabel = localization.text("ui.inspector.meshes", "Meshes");
+        const std::string lightsLabel = localization.text("ui.inspector.lights", "Lights");
+        ImGui::Text("%s: %llu", meshesLabel.c_str(), static_cast<unsigned long long>(meshCount));
+        ImGui::Text("%s: %llu", lightsLabel.c_str(), static_cast<unsigned long long>(lightCount));
     }
 }
 

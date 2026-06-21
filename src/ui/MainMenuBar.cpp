@@ -1,5 +1,6 @@
 #include "ui/MainMenuBar.h"
 
+#include "core/LocalizationService.h"
 #include "ui/UIPanelManager.h"
 #include "ui/ViewportPanel.h"
 #include "viewport/ViewportLayout.h"
@@ -7,14 +8,45 @@
 
 #include <imgui.h>
 
+#include <string>
+
 namespace quader {
+namespace {
+
+std::string toolLabel(const LocalizationService& localization, const Tool& tool) {
+    std::string key = "viewport.tool.";
+    key.append(tool.id());
+    key.append(".label");
+    std::string stableId = "viewport.tool.";
+    stableId.append(tool.id());
+    return localization.imguiLabel(key, stableId, tool.label());
+}
+
+std::string layoutLabel(const LocalizationService& localization, const ViewportLayoutOption& option) {
+    std::string key = "viewport.layout.";
+    key.append(viewportLayoutStableId(option.id));
+    key.append(".label");
+    std::string stableId = "viewport.layout.";
+    stableId.append(viewportLayoutStableId(option.id));
+    return localization.imguiLabel(key, stableId, option.label);
+}
+
+std::string panelMenuLabel(const LocalizationService& localization, const UIPanel& panel) {
+    std::string stableId = "ui.panel.";
+    stableId.append(uiPanelKey(panel.id()));
+    return localization.imguiLabel(uiPanelLocalizationKey(panel.id()), stableId, panel.title());
+}
+
+} // namespace
 
 void FileMenu::draw(MainMenuBarContext& context) const {
-    if (!ImGui::BeginMenu("File")) {
+    const std::string label = context.localization.imguiLabel("ui.menu.file", "ui.menu.file", "File");
+    if (!ImGui::BeginMenu(label.c_str())) {
         return;
     }
 
-    if (ImGui::MenuItem("Exit")) {
+    const std::string exitLabel = context.localization.imguiLabel("ui.menu.file.exit", "ui.menu.file.exit", "Exit");
+    if (ImGui::MenuItem(exitLabel.c_str())) {
         context.quitRequested = true;
     }
 
@@ -22,14 +54,18 @@ void FileMenu::draw(MainMenuBarContext& context) const {
 }
 
 void EditMenu::draw(MainMenuBarContext& context) const {
-    if (!ImGui::BeginMenu("Edit")) {
+    const std::string label = context.localization.imguiLabel("ui.menu.edit", "ui.menu.edit", "Edit");
+    if (!ImGui::BeginMenu(label.c_str())) {
         return;
     }
 
-    if (ImGui::MenuItem("Settings")) {
+    const std::string settingsLabel = context.localization.imguiLabel("ui.menu.edit.settings", "ui.menu.edit.settings", "Settings");
+    if (ImGui::MenuItem(settingsLabel.c_str())) {
         context.viewportSettingsPanelOpen = true;
     }
-    if (ImGui::MenuItem("Tool Settings")) {
+    const std::string toolSettingsLabel =
+            context.localization.imguiLabel("ui.menu.edit.tool_settings", "ui.menu.edit.tool_settings", "Tool Settings");
+    if (ImGui::MenuItem(toolSettingsLabel.c_str())) {
         context.toolSettingsPanelOpen = true;
     }
 
@@ -37,7 +73,8 @@ void EditMenu::draw(MainMenuBarContext& context) const {
 }
 
 void ToolsMenu::draw(MainMenuBarContext& context) const {
-    if (!ImGui::BeginMenu("Tools")) {
+    const std::string label = context.localization.imguiLabel("ui.menu.tools", "ui.menu.tools", "Tools");
+    if (!ImGui::BeginMenu(label.c_str())) {
         return;
     }
 
@@ -60,7 +97,8 @@ void ToolsMenu::draw(MainMenuBarContext& context) const {
         const bool enabled =
                 context.viewportPanel != nullptr &&
                 viewportToolAvailable(tool->viewportTool());
-        if (ImGui::MenuItem(tool->label().data(), shortcut, selected, enabled)) {
+        const std::string localizedLabel = toolLabel(context.localization, *tool);
+        if (ImGui::MenuItem(localizedLabel.c_str(), shortcut, selected, enabled)) {
             (void)context.viewportPanel->activateToolFromMenu(tool->viewportTool(), context.modeling);
         }
     }
@@ -69,13 +107,16 @@ void ToolsMenu::draw(MainMenuBarContext& context) const {
 }
 
 void ShowMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
-    if (!ImGui::BeginMenu("Show")) {
+    const std::string label = context.localization.imguiLabel("ui.menu.show", "ui.menu.show", "Show");
+    if (!ImGui::BeginMenu(label.c_str())) {
         return;
     }
 
     bool navigationGizmoVisible =
             context.viewportPanel != nullptr && context.viewportPanel->navigationGizmoVisible();
-    if (ImGui::MenuItem("Navigation Gizmo", nullptr, &navigationGizmoVisible, context.viewportPanel != nullptr)) {
+    const std::string gizmoLabel =
+            context.localization.imguiLabel("ui.menu.show.navigation_gizmo", "ui.menu.show.navigation_gizmo", "Navigation Gizmo");
+    if (ImGui::MenuItem(gizmoLabel.c_str(), nullptr, &navigationGizmoVisible, context.viewportPanel != nullptr)) {
         context.viewportPanel->setNavigationGizmoVisible(navigationGizmoVisible);
         context.settings.setNavigationGizmoVisible(navigationGizmoVisible);
         result.settingsChanged = true;
@@ -85,17 +126,20 @@ void ShowMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) cons
 }
 
 void ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
-    if (!ImGui::BeginMenu("View")) {
+    const std::string label = context.localization.imguiLabel("ui.menu.view", "ui.menu.view", "View");
+    if (!ImGui::BeginMenu(label.c_str())) {
         return;
     }
 
-    if (ImGui::BeginMenu("Toolbars")) {
+    const std::string toolbarsLabel = context.localization.imguiLabel("ui.menu.view.toolbars", "ui.menu.view.toolbars", "Toolbars");
+    if (ImGui::BeginMenu(toolbarsLabel.c_str())) {
         for (const std::unique_ptr<UIPanel>& panel : context.panels.panels()) {
             if (!panel->canToggle()) {
                 continue;
             }
             bool visible = context.panels.isVisible(panel->id());
-            if (ImGui::MenuItem(panel->title(), nullptr, &visible)) {
+            const std::string localizedLabel = panelMenuLabel(context.localization, *panel);
+            if (ImGui::MenuItem(localizedLabel.c_str(), nullptr, &visible)) {
                 context.panels.setVisible(panel->id(), visible);
                 result.settingsChanged = true;
             }
@@ -107,14 +151,16 @@ void ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) cons
 }
 
 void LayoutMenu::draw(MainMenuBarContext& context) const {
-    if (!ImGui::BeginMenu("Layout")) {
+    const std::string label = context.localization.imguiLabel("ui.menu.layout", "ui.menu.layout", "Layout");
+    if (!ImGui::BeginMenu(label.c_str())) {
         return;
     }
 
     if (context.viewportPanel != nullptr) {
         for (const ViewportLayoutOption& option : viewportLayoutOptions()) {
             const bool selected = context.viewportPanel->viewportLayout() == option.id;
-            if (ImGui::MenuItem(option.label.data(), nullptr, selected)) {
+            const std::string localizedLabel = layoutLabel(context.localization, option);
+            if (ImGui::MenuItem(localizedLabel.c_str(), nullptr, selected)) {
                 context.viewportPanel->setViewportLayout(option.id);
             }
         }

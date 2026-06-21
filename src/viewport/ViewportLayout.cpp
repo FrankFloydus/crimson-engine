@@ -87,12 +87,48 @@ const std::array<ViewportLayoutOption, 8>& viewportLayoutOptions() {
     return kViewportLayoutOptions;
 }
 
+std::string_view viewportLayoutStableId(ViewportLayoutId layoutId) {
+    switch (layoutId) {
+    case ViewportLayoutId::Single:
+        return "single";
+    case ViewportLayoutId::TwoHorizontal:
+        return "two_horizontal";
+    case ViewportLayoutId::TwoVertical:
+        return "two_vertical";
+    case ViewportLayoutId::ThreePrimaryRight:
+        return "three_primary_right";
+    case ViewportLayoutId::ThreePrimaryLeft:
+        return "three_primary_left";
+    case ViewportLayoutId::ThreePrimaryBottom:
+        return "three_primary_bottom";
+    case ViewportLayoutId::ThreePrimaryTop:
+        return "three_primary_top";
+    case ViewportLayoutId::FourQuad:
+        return "four_quad";
+    }
+    return "unknown";
+}
+
 std::string_view viewportLayoutLabel(ViewportLayoutId layoutId) {
     const auto found = std::find_if(kViewportLayoutOptions.begin(), kViewportLayoutOptions.end(),
             [layoutId](const ViewportLayoutOption& option) {
                 return option.id == layoutId;
             });
     return found != kViewportLayoutOptions.end() ? found->label : "Unknown Layout";
+}
+
+std::string_view viewportPaneStableId(ViewportPaneId paneId) {
+    switch (paneId) {
+    case ViewportPaneId::Perspective:
+        return "perspective";
+    case ViewportPaneId::Top:
+        return "top";
+    case ViewportPaneId::Front:
+        return "front";
+    case ViewportPaneId::Side:
+        return "side";
+    }
+    return "viewport";
 }
 
 std::string_view viewportPaneLabel(ViewportPaneId paneId) {

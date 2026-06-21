@@ -103,7 +103,9 @@ constexpr std::size_t kViewportPaneCount = 4u;
 
 std::size_t viewportPaneIndex(ViewportPaneId paneId);
 const std::array<ViewportLayoutOption, 8>& viewportLayoutOptions();
+std::string_view viewportLayoutStableId(ViewportLayoutId layoutId);
 std::string_view viewportLayoutLabel(ViewportLayoutId layoutId);
+std::string_view viewportPaneStableId(ViewportPaneId paneId);
 std::string_view viewportPaneLabel(ViewportPaneId paneId);
 ViewportView viewportViewForPane(ViewportPaneId paneId);
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId);

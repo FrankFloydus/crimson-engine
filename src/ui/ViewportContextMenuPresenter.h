@@ -2,6 +2,7 @@
 
 namespace quader {
 
+class LocalizationService;
 class ModelingSessionService;
 class UndoRedoManager;
 class ViewportInputRouter;
@@ -12,6 +13,7 @@ public:
             UndoRedoManager& undoRedo,
             ModelingSessionService& modeling,
             ViewportInputRouter& inputRouter,
+            LocalizationService& localization,
             bool modalToolOwnsViewport) const;
 };
 

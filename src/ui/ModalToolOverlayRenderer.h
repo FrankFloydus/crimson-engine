@@ -7,6 +7,8 @@
 
 namespace quader {
 
+class LocalizationService;
+
 class ModalToolOverlayRenderer {
 public:
     void drawBoxPreview(
@@ -23,7 +25,8 @@ public:
             bool drawCrosshair,
             bool drawSpeed,
             bool drawResetHint,
-            float speed) const;
+            float speed,
+            const LocalizationService& localization) const;
 };
 
 } // namespace quader

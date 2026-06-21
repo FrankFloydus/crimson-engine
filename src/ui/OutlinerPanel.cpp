@@ -1,5 +1,6 @@
 #include "ui/OutlinerPanel.h"
 
+#include "core/LocalizationService.h"
 #include "document/DocumentCommandService.h"
 #include "modeling/ModelingSessionService.h"
 #include "modeling/tools/ModelingCommandToolCatalog.h"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -434,20 +436,24 @@ void OutlinerPanel::drawContent(UIContext& context) {
             }
         }
         if (ImGui::BeginPopup("EntityContext")) {
-            if (ImGui::MenuItem("Delete")) {
+            const std::string deleteLabel = context.localization.imguiLabel("ui.outliner.delete", "ui.outliner.delete", "Delete");
+            if (ImGui::MenuItem(deleteLabel.c_str())) {
                 pendingAction = PendingOutlinerAction::Delete;
                 pendingTarget = record.id;
             }
-            if (ImGui::MenuItem("Duplicate")) {
+            const std::string duplicateLabel = context.localization.imguiLabel("ui.outliner.duplicate", "ui.outliner.duplicate", "Duplicate");
+            if (ImGui::MenuItem(duplicateLabel.c_str())) {
                 pendingAction = PendingOutlinerAction::Duplicate;
                 pendingTarget = record.id;
             }
-            if (ImGui::MenuItem("Group")) {
+            const std::string groupLabel = context.localization.imguiLabel("ui.outliner.group", "ui.outliner.group", "Group");
+            if (ImGui::MenuItem(groupLabel.c_str())) {
                 pendingAction = PendingOutlinerAction::Group;
                 pendingTarget = record.id;
             }
             const bool canUngroup = record.kind == EntityKind::Empty && record.hasChildren;
-            if (ImGui::MenuItem("Ungroup", nullptr, false, canUngroup)) {
+            const std::string ungroupLabel = context.localization.imguiLabel("ui.outliner.ungroup", "ui.outliner.ungroup", "Ungroup");
+            if (ImGui::MenuItem(ungroupLabel.c_str(), nullptr, false, canUngroup)) {
                 pendingAction = PendingOutlinerAction::Ungroup;
                 pendingTarget = record.id;
             }

@@ -304,6 +304,7 @@ TEST(UISettingsTests, DefaultsKeepConsoleHidden) {
     EXPECT_FALSE(settings.isPanelVisible(UIPanelId::Console));
     EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Viewport));
     EXPECT_TRUE(settings.navigationGizmoVisible());
+    EXPECT_EQ(settings.locale(), "en-US");
 }
 
 TEST(UISettingsTests, RoundTripsPanelVisibility) {
@@ -316,6 +317,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
     settings.setPanelVisible(UIPanelId::Inspector, true);
     settings.setPanelVisible(UIPanelId::Console, true);
     settings.setNavigationGizmoVisible(false);
+    settings.setLocale("it-IT");
 
     ASSERT_TRUE(settings.save(path));
     const UISettings loaded = UISettings::load(path);
@@ -324,6 +326,7 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
     EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Inspector));
     EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
     EXPECT_FALSE(loaded.navigationGizmoVisible());
+    EXPECT_EQ(loaded.locale(), "it-IT");
 
     std::filesystem::remove(path);
 }
@@ -361,8 +364,9 @@ TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(mainMenuBarSource.find("void ShowMenu::draw"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Show\")"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(\"Navigation Gizmo\""), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.show"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.show.navigation_gizmo"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(gizmoLabel.c_str()"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("context.viewportPanel->setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("context.settings.setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("result.settingsChanged = true"), std::string::npos);
@@ -1208,7 +1212,9 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(source.find("contextMenuPresenter_.drawOperationsPopup"), std::string::npos);
     EXPECT_NE(presenter.find("ViewportOperationsContext"), std::string::npos);
     EXPECT_NE(presenter.find("modeling.contextActions(query)"), std::string::npos);
-    EXPECT_NE(presenter.find("ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)"), std::string::npos);
+    EXPECT_NE(presenter.find("labelKey.append(action.actionId)"), std::string::npos);
+    EXPECT_NE(presenter.find("localization.imguiLabel(labelKey, stableId, action.label)"), std::string::npos);
+    EXPECT_NE(presenter.find("ImGui::MenuItem(label.c_str(), nullptr, false, enabled)"), std::string::npos);
     EXPECT_NE(presenter.find("findModelingCommandTool(action.actionId)"), std::string::npos);
     EXPECT_NE(presenter.find("executeTrackedCommandTool(undoRedo, modeling, commandTool->id())"), std::string::npos);
     EXPECT_EQ(presenter.find("modeling.executeContextAction(action.actionId)"), std::string::npos);
@@ -2066,10 +2072,14 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
     EXPECT_NE(source.find("drawList->AddImage"), std::string::npos);
     EXPECT_NE(source.find("ImGui::OpenPopupOnItemClick(\"EntityContext\""), std::string::npos);
     EXPECT_NE(source.find("ImGui::BeginPopup(\"EntityContext\")"), std::string::npos);
-    EXPECT_NE(source.find("MenuItem(\"Delete\")"), std::string::npos);
-    EXPECT_NE(source.find("MenuItem(\"Duplicate\")"), std::string::npos);
-    EXPECT_NE(source.find("MenuItem(\"Group\")"), std::string::npos);
-    EXPECT_NE(source.find("MenuItem(\"Ungroup\""), std::string::npos);
+    EXPECT_NE(source.find("ui.outliner.delete"), std::string::npos);
+    EXPECT_NE(source.find("ui.outliner.duplicate"), std::string::npos);
+    EXPECT_NE(source.find("ui.outliner.group"), std::string::npos);
+    EXPECT_NE(source.find("ui.outliner.ungroup"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::MenuItem(deleteLabel.c_str())"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::MenuItem(duplicateLabel.c_str())"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::MenuItem(groupLabel.c_str())"), std::string::npos);
+    EXPECT_NE(source.find("ImGui::MenuItem(ungroupLabel.c_str()"), std::string::npos);
     EXPECT_NE(source.find("ImGuiKey_G"), std::string::npos);
     EXPECT_NE(source.find("context.documentCommands.groupSelection"), std::string::npos);
     EXPECT_NE(source.find("context.documentCommands.ungroupSelection"), std::string::npos);
@@ -2141,6 +2151,30 @@ TEST(OutlinerPanelTests, KeepsRootRowsTightlyInset) {
     EXPECT_NE(source.find("record.hasChildren ? ImGui::GetTreeNodeToLabelSpacing() : kOutlinerRowLeftPadding"), std::string::npos);
     EXPECT_NE(source.find("drawList->AddImage(icon"), std::string::npos);
     EXPECT_EQ(source.find("ImGui::SetCursorScreenPos"), std::string::npos);
+}
+
+TEST(UIPanelLocalizationTests, DockedPanelsUseLocalizedTitlesWithStableWindowIds) {
+    const std::filesystem::path uiPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui";
+    std::ifstream dockPanelFile(uiPath / "UIDockPanel.h");
+    std::ifstream viewportPanelFile(uiPath / "ViewportPanel.cpp");
+    ASSERT_TRUE(dockPanelFile.is_open());
+    ASSERT_TRUE(viewportPanelFile.is_open());
+
+    const std::string dockPanelSource{
+            std::istreambuf_iterator<char>(dockPanelFile),
+            std::istreambuf_iterator<char>()};
+    const std::string viewportPanelSource{
+            std::istreambuf_iterator<char>(viewportPanelFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(dockPanelSource.find("context.localization.imguiLabel(uiPanelLocalizationKey(id()), uiPanelKey(id()), title())"),
+            std::string::npos);
+    EXPECT_NE(dockPanelSource.find("ImGui::Begin(windowTitle.c_str(), nullptr"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("uiContext.localization.imguiLabel(\"ui.panel.viewport\", uiPanelKey(UIPanelId::Viewport), \"Viewport\")"),
+            std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ImGui::Begin("), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("windowTitle.c_str()"), std::string::npos);
 }
 
 TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
@@ -2218,7 +2252,8 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
             std::istreambuf_iterator<char>(floatingPanelFile),
             std::istreambuf_iterator<char>()};
     EXPECT_NE(floatingPanelSource.find("ImGuiWindowFlags_NoDocking"), std::string::npos);
-    EXPECT_NE(floatingPanelSource.find("ImGui::Begin(title(), &open"), std::string::npos);
+    EXPECT_NE(floatingPanelSource.find("context.localization.imguiLabel(titleKey(), titleStableId(), title())"), std::string::npos);
+    EXPECT_NE(floatingPanelSource.find("ImGui::Begin(windowTitle.c_str(), &open"), std::string::npos);
 
     std::ifstream toolSettingsPanelFile(uiPath / "ToolSettingsPanel.cpp");
     ASSERT_TRUE(toolSettingsPanelFile.is_open());
@@ -2303,7 +2338,9 @@ TEST(UISystemTests, TopMenuExposesViewportLayoutOptions) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(mainMenuBarSource.find("void LayoutMenu::draw"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Layout\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.layout"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("layoutLabel(context.localization, option)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("viewportLayoutStableId(option.id)"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("viewportLayoutOptions()"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("context.viewportPanel->setViewportLayout(option.id)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("mainMenuBar_.draw"), std::string::npos);
@@ -2348,9 +2385,11 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(mainMenuBarSource.find("void EditMenu::draw"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(\"Tool Settings\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.edit"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.edit.settings"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.edit.tool_settings"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(settingsLabel.c_str())"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(toolSettingsLabel.c_str())"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("context.viewportSettingsPanelOpen = true"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("context.toolSettingsPanelOpen = true"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
@@ -2364,9 +2403,12 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     EXPECT_NE(toolSettingsPanelSource.find("context.modeling.setInteractionSettings(settings)"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("open = false;"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("open = result.ok ? false : context.modeling.toolSettingsTarget().active"), std::string::npos);
-    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(\"Discard Left\""), std::string::npos);
-    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(\"Discard Right\""), std::string::npos);
-    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(\"Keep Both\""), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("tool_settings.cut.discard_left"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("tool_settings.cut.discard_right"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("tool_settings.cut.keep_both"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(discardLeft.c_str()"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(discardRight.c_str()"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(keepBoth.c_str()"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("ModelingPreviewCommandService::commit"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("ModelingPreviewCommandService::cancel"), std::string::npos);
     EXPECT_NE(modelingPreviewCommandServiceSource.find("commitActiveOperationPreview()"), std::string::npos);
@@ -2403,7 +2445,9 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(mainMenuBarSource.find("void ToolsMenu::draw"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Tools\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ui.menu.tools"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("toolLabel(context.localization, *tool)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("viewport.tool."), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("viewportToolCatalog()"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("activateToolFromMenu(tool->viewportTool(), context.modeling)"), std::string::npos);
 

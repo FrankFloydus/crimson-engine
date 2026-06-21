@@ -3,6 +3,7 @@
 #include "ui/UIPanel.h"
 
 #include <filesystem>
+#include <string>
 
 namespace quader {
 
@@ -25,8 +26,11 @@ public:
     void setPanelVisible(UIPanelId id, bool visible);
     bool navigationGizmoVisible() const { return navigationGizmoVisible_; }
     void setNavigationGizmoVisible(bool visible) { navigationGizmoVisible_ = visible; }
+    const std::string& locale() const { return locale_; }
+    void setLocale(std::string locale);
 
 private:
+    std::string locale_ = "en-US";
     bool outlinerVisible_ = true;
     bool inspectorVisible_ = true;
     bool consoleVisible_ = false;

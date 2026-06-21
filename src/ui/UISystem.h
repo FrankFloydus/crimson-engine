@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/AssetRegistry.h"
+#include "core/LocalizationService.h"
 #include "core/UndoRedoManager.h"
 #include "core/Types.h"
 #include "document/DocumentCommandService.h"
@@ -76,6 +77,7 @@ private:
     ToolSettingsPanel toolSettingsPanel_;
     ViewportPanel* viewportPanel_ = nullptr;
     UIIconSet icons_;
+    LocalizationService localization_;
     std::vector<filament::Texture*> iconTextures_;
     std::vector<ImTextureID> iconTextureIds_;
     filament::Engine* iconEngine_ = nullptr;

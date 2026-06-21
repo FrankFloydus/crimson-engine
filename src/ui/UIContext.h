@@ -10,10 +10,12 @@ namespace quader {
 
 class AssetRegistry;
 class DocumentCommandService;
+class LocalizationService;
 class ModelingSessionService;
 class SceneDocument;
 class SceneRenderBridge;
 class UndoRedoManager;
+class UISettings;
 struct UIStyleTokens;
 
 struct UIContext {
@@ -27,6 +29,8 @@ struct UIContext {
     bool& quitRequested;
     const UIStyleTokens& style;
     const UIIconSet& icons;
+    LocalizationService& localization;
+    UISettings& settings;
     ViewportSettings& viewportSettings;
     Vec2 viewportRelativeMouseDelta = {};
     bool* viewportCursorCaptureRequested = nullptr;
@@ -35,6 +39,7 @@ struct UIContext {
     UIPanelId previousFocusedPanel = UIPanelId::Viewport;
     UIPanelId* focusedPanelStorage = nullptr;
     bool* panelFocusChanged = nullptr;
+    bool* settingsChanged = nullptr;
 
     void requestPanelFocus(UIPanelId panel) const {
         if (focusedPanelStorage == nullptr) {

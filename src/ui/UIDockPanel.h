@@ -1,11 +1,14 @@
 #pragma once
 
+#include "core/LocalizationService.h"
 #include "ui/UIContext.h"
 #include "ui/UILayout.h"
 #include "ui/UIPanel.h"
 #include "ui/UIStyleTokens.h"
 
 #include <imgui.h>
+
+#include <string>
 
 namespace quader {
 
@@ -19,7 +22,8 @@ public:
             setNextWindowMinWidth(minWidth);
         }
 
-        if (!ImGui::Begin(title(), nullptr, windowFlags(context))) {
+        const std::string windowTitle = context.localization.imguiLabel(uiPanelLocalizationKey(id()), uiPanelKey(id()), title());
+        if (!ImGui::Begin(windowTitle.c_str(), nullptr, windowFlags(context))) {
             ImGui::End();
             return;
         }

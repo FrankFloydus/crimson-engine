@@ -1,5 +1,6 @@
 #include "ui/ViewportContextMenuPresenter.h"
 
+#include "core/LocalizationService.h"
 #include "core/Logger.h"
 #include "modeling/ModelingActionCatalog.h"
 #include "modeling/ModelingSessionService.h"
@@ -9,6 +10,7 @@
 
 #include <imgui.h>
 
+#include <string>
 #include <vector>
 
 namespace quader {
@@ -34,6 +36,7 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
         UndoRedoManager& undoRedo,
         ModelingSessionService& modeling,
         ViewportInputRouter& inputRouter,
+        LocalizationService& localization,
         bool modalToolOwnsViewport) const {
     if (!ImGui::BeginPopup("ViewportOperationsContext")) {
         return;
@@ -48,7 +51,13 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
     const std::vector<ModelingActionItem> actions = modeling.contextActions(query);
     for (const ModelingActionItem& action : actions) {
         const bool enabled = action.visibility == ModelingActionVisibility::Enabled;
-        if (ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)) {
+        std::string labelKey = "modeling.action.";
+        labelKey.append(action.actionId);
+        labelKey.append(".label");
+        std::string stableId = "modeling.action.";
+        stableId.append(action.actionId);
+        const std::string label = localization.imguiLabel(labelKey, stableId, action.label);
+        if (ImGui::MenuItem(label.c_str(), nullptr, false, enabled)) {
             const CommandTool* commandTool = findModelingCommandTool(action.actionId);
             const ModelingCommandResult result = commandTool != nullptr ?
                     (commandTool->previewKind() != ModelingActionPreviewKind::None ?

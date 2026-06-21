@@ -164,6 +164,7 @@ add_library(quader_core STATIC
     src/assets/AssetRegistry.cpp
     src/assets/BakeService.cpp
     src/assets/MaterialDocument.cpp
+    src/core/LocalizationService.cpp
     src/core/Logger.cpp
     src/core/UndoRedoManager.cpp
     src/document/DocumentCommandService.cpp
@@ -391,6 +392,7 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials/default"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/fonts"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/locales"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${quader_mesh_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat"
@@ -421,6 +423,9 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/empty_icon.png"
             "$<TARGET_FILE_DIR:quader>/icons/empty_icon.png"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales"
+            "$<TARGET_FILE_DIR:quader>/locales"
     VERBATIM)
 
 if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}")
@@ -440,6 +445,7 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/core_tests.cpp
         tests/build_guardrail_tests.cpp
+        tests/localization_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
         tests/oop_source_of_truth_tests.cpp
         tests/modeling_session_service_split_tests.cpp

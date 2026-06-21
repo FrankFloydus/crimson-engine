@@ -1,5 +1,6 @@
 #include "ui/ConsolePanel.h"
 
+#include "core/LocalizationService.h"
 #include "core/Logger.h"
 #include "ui/UIContext.h"
 #include "ui/UILayout.h"
@@ -10,11 +11,31 @@
 #include <spdlog/common.h>
 
 #include <array>
+#include <string>
 
 namespace quader {
 namespace {
 
-const char* levelName(spdlog::level::level_enum level) {
+const char* levelKey(spdlog::level::level_enum level) {
+    switch (level) {
+    case spdlog::level::trace:
+        return "ui.console.level.trace";
+    case spdlog::level::debug:
+        return "ui.console.level.debug";
+    case spdlog::level::info:
+        return "ui.console.level.info";
+    case spdlog::level::warn:
+        return "ui.console.level.warn";
+    case spdlog::level::err:
+        return "ui.console.level.error";
+    case spdlog::level::critical:
+        return "ui.console.level.critical";
+    default:
+        return "ui.console.level.off";
+    }
+}
+
+const char* levelFallback(spdlog::level::level_enum level) {
     switch (level) {
     case spdlog::level::trace:
         return "Trace";
@@ -37,11 +58,16 @@ const char* levelName(spdlog::level::level_enum level) {
 
 void ConsolePanel::drawContent(UIContext& context) {
     // UIDockPanel routes hover input through context.requestPanelFocus(id()) before content draws.
-    if (ImGui::Button("Clear")) {
+    const std::string clearLabel = context.localization.imguiLabel("ui.console.clear", "ui.console.clear", "Clear");
+    if (ImGui::Button(clearLabel.c_str())) {
         Logger::clearMemory();
     }
     ImGui::SameLine();
-    ImGui::Checkbox("Auto-scroll", &autoScroll_);
+    const std::string autoScrollLabel = context.localization.imguiLabel(
+            "ui.console.auto_scroll",
+            "ui.console.auto_scroll",
+            "Auto-scroll");
+    ImGui::Checkbox(autoScrollLabel.c_str(), &autoScroll_);
     ImGui::SameLine();
 
     const std::array levels = {
@@ -54,12 +80,16 @@ void ConsolePanel::drawContent(UIContext& context) {
         spdlog::level::off,
     };
 
-    const char* preview = levelName(filter_.minimumLevel);
+    const std::string preview = context.localization.text(levelKey(filter_.minimumLevel), levelFallback(filter_.minimumLevel));
     ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::BeginCombo("Level", preview)) {
+    const std::string levelLabel = context.localization.imguiLabel("ui.console.level", "ui.console.level", "Level");
+    if (ImGui::BeginCombo(levelLabel.c_str(), preview.c_str())) {
         for (const spdlog::level::level_enum level : levels) {
             const bool selected = level == filter_.minimumLevel;
-            if (ImGui::Selectable(levelName(level), selected)) {
+            std::string stableId = "ui.console.level.";
+            stableId.append(levelFallback(level));
+            const std::string itemLabel = context.localization.imguiLabel(levelKey(level), stableId, levelFallback(level));
+            if (ImGui::Selectable(itemLabel.c_str(), selected)) {
                 filter_.minimumLevel = level;
             }
             if (selected) {
@@ -70,7 +100,8 @@ void ConsolePanel::drawContent(UIContext& context) {
     }
 
     setNextItemFillWidthAtLeast(120.0f);
-    ImGui::InputTextWithHint("##ConsoleSearch", "Filter logs", &filter_.searchText);
+    const std::string searchHint = context.localization.text("ui.console.filter_logs", "Filter logs");
+    ImGui::InputTextWithHint("##ConsoleSearch", searchHint.c_str(), &filter_.searchText);
     ImGui::Separator();
 
     const auto filtered = ConsoleModel::filter(Logger::entriesSnapshot(), filter_);

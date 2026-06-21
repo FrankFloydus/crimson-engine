@@ -4,6 +4,7 @@
 
 namespace quader {
 
+class LocalizationService;
 class ModelingSessionService;
 class UIPanelManager;
 class ViewportPanel;
@@ -14,6 +15,7 @@ struct MainMenuBarContext {
     ViewportPanel* viewportPanel = nullptr;
     UIPanelManager& panels;
     UISettings& settings;
+    LocalizationService& localization;
     bool& viewportSettingsPanelOpen;
     bool& toolSettingsPanelOpen;
 };
