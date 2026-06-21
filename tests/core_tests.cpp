@@ -4,9 +4,26 @@
 #include "core/Logger.h"
 #include "core/UndoRedoManager.h"
 #include "document/DocumentCommandService.h"
+#include "document/SceneTransformPreviewTransaction.h"
+#include "document/commands/ApplyEntityTransformCommand.h"
+#include "document/commands/BatchDocumentCommand.h"
+#include "document/commands/CreateEntityCommand.h"
+#include "document/commands/DestroyEntityCommand.h"
+#include "document/commands/DuplicateEntityCommand.h"
+#include "document/commands/GroupSelectionCommand.h"
+#include "document/commands/RenameEntityCommand.h"
+#include "document/commands/ReparentEntityCommand.h"
+#include "document/commands/SelectEntitiesCommand.h"
+#include "document/commands/SetLockCommand.h"
+#include "document/commands/SetVisibilityCommand.h"
+#include "document/commands/UngroupSelectionCommand.h"
 #include "document/ProjectDocument.h"
+#include "document/ProjectSession.h"
+#include "editor/EditorCommandService.h"
+#include "editor/ModelingHistoryCommand.h"
 #include "geometry/UVSphere.h"
 #include "modeling/ModelingSessionService.h"
+#include "render/overlay/ViewportOverlayStyleResolver.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -16,7 +33,9 @@
 #include "ui/UISettings.h"
 #include "ui/ViewportContextMenuPolicy.h"
 #include "viewport/HostViewportContractAdapter.h"
+#include "viewport/ViewportCameraAdapter.h"
 #include "viewport/ViewportCameraController.h"
+#include "viewport/ViewportGridPlacementPolicy.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportLayout.h"
 #include "viewport/ViewportSettings.h"
@@ -33,6 +52,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <type_traits>
 #include <utility>
 #include <string>
 #include <string_view>
@@ -44,11 +65,75 @@ using namespace quader;
 #define QUADER_SOURCE_DIR "."
 #endif
 
+static_assert(std::is_base_of_v<IUndoableCommand, ModelingHistoryCommand>);
+static_assert(std::is_base_of_v<ModelingHistoryCommand, DuplicateMeshesHistoryCommand>);
+
+class TestValueCommand final : public IUndoableCommand {
+public:
+    TestValueCommand(
+            std::string label,
+            int& value,
+            int before,
+            int after,
+            bool* failUndo = nullptr,
+            bool* failRedo = nullptr,
+            bool undoChanged = true,
+            bool redoChanged = true)
+        : label_(std::move(label))
+        , value_(value)
+        , before_(before)
+        , after_(after)
+        , failUndo_(failUndo)
+        , failRedo_(failRedo)
+        , undoChanged_(undoChanged)
+        , redoChanged_(redoChanged) {}
+
+    [[nodiscard]] const std::string& label() const override { return label_; }
+
+    CommandResult undo() override {
+        if (failUndo_ != nullptr && *failUndo_) {
+            return commandInvalidResult("undo failed");
+        }
+        value_ = before_;
+        return {
+                .ok = true,
+                .changed = undoChanged_,
+        };
+    }
+
+    CommandResult redo() override {
+        if (failRedo_ != nullptr && *failRedo_) {
+            return commandInvalidResult("redo failed");
+        }
+        value_ = after_;
+        return {
+                .ok = true,
+                .changed = redoChanged_,
+        };
+    }
+
+private:
+    std::string label_;
+    int& value_;
+    int before_ = 0;
+    int after_ = 0;
+    bool* failUndo_ = nullptr;
+    bool* failRedo_ = nullptr;
+    bool undoChanged_ = true;
+    bool redoChanged_ = true;
+};
+
 void expectColorNear(ViewportSettingColor actual, ViewportSettingColor expected) {
     EXPECT_NEAR(actual.r, expected.r, 0.001f);
     EXPECT_NEAR(actual.g, expected.g, 0.001f);
     EXPECT_NEAR(actual.b, expected.b, 0.001f);
     EXPECT_NEAR(actual.a, expected.a, 0.001f);
+}
+
+void expectVec3Near(Vec3 actual, Vec3 expected) {
+    EXPECT_NEAR(actual.x, expected.x, 0.001f);
+    EXPECT_NEAR(actual.y, expected.y, 0.001f);
+    EXPECT_NEAR(actual.z, expected.z, 0.001f);
 }
 
 ModelingViewportCamera testOrthographicViewportCamera() {
@@ -244,6 +329,8 @@ TEST(UISettingsTests, RoundTripsPanelVisibility) {
 }
 
 TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
+    const std::filesystem::path mainMenuBarPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "MainMenuBar.cpp";
     const std::filesystem::path uiSystemPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
     const std::filesystem::path viewportPanelHeaderPath =
@@ -251,13 +338,18 @@ TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
     const std::filesystem::path uiSettingsSourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISettings.cpp";
 
+    std::ifstream mainMenuBarFile(mainMenuBarPath);
     std::ifstream uiSystemFile(uiSystemPath);
     std::ifstream viewportPanelHeaderFile(viewportPanelHeaderPath);
     std::ifstream uiSettingsSourceFile(uiSettingsSourcePath);
+    ASSERT_TRUE(mainMenuBarFile.is_open()) << mainMenuBarPath.string();
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
     ASSERT_TRUE(viewportPanelHeaderFile.is_open()) << viewportPanelHeaderPath.string();
     ASSERT_TRUE(uiSettingsSourceFile.is_open()) << uiSettingsSourcePath.string();
 
+    const std::string mainMenuBarSource{
+            std::istreambuf_iterator<char>(mainMenuBarFile),
+            std::istreambuf_iterator<char>()};
     const std::string uiSystemSource{
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
@@ -268,10 +360,12 @@ TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
             std::istreambuf_iterator<char>(uiSettingsSourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Show\")"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Navigation Gizmo\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportPanel_->setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("settings_.setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("void ShowMenu::draw"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Show\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(\"Navigation Gizmo\""), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("context.viewportPanel->setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("context.settings.setNavigationGizmoVisible(navigationGizmoVisible)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("result.settingsChanged = true"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportPanel_->setNavigationGizmoVisible(settings_.navigationGizmoVisible())"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("bool navigationGizmoVisible() const"), std::string::npos);
     EXPECT_NE(viewportPanelHeader.find("NavigationGizmo navigationGizmo_"), std::string::npos);
@@ -531,64 +625,212 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
     EXPECT_FLOAT_EQ(viewportOverlayPointInnerRadius(ViewportOverlayLayer::SnapTargetVertex), 0.62f);
 }
 
-TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToSdkOverlayFrame) {
+    ViewportSettings settings = ViewportSettings::defaults();
+    ASSERT_TRUE(settings.setColor(ViewportColorSettingId::SourceWire, {1.0f, 0.0f, 0.0f, 1.0f}));
+    ASSERT_TRUE(settings.setColor(ViewportColorSettingId::SelectionWire, {0.0f, 1.0f, 0.0f, 1.0f}));
+    ASSERT_TRUE(settings.setColor(ViewportColorSettingId::RemoveSelectionWire, {0.0f, 0.0f, 1.0f, 1.0f}));
+    ASSERT_TRUE(settings.setColor(ViewportColorSettingId::RemoveSelectionFace, {1.0f, 0.0f, 1.0f, 1.0f}));
+    ASSERT_TRUE(settings.setColor(ViewportColorSettingId::HoverVertex, {1.0f, 1.0f, 0.0f, 1.0f}));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::SourceWireLineSize, 2.0f));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::SelectionEdgeLineSize, 3.0f));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::HoverWireLineSize, 4.0f));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::VertexSize, 8.0f));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::HoverVertexGrowth, 2.0f));
 
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    ViewportOverlayFrame frame;
+    frame.triangles.push_back({.layer = ViewportOverlayLayer::HoverFace, .color = kOverlayRemoveFaceColor});
+    frame.lines.push_back({.layer = ViewportOverlayLayer::SourceWire, .color = rgba8(255, 255, 255)});
+    frame.lines.push_back({.layer = ViewportOverlayLayer::SourceWire, .color = kOverlaySelectionWireColor});
+    frame.lines.push_back({.layer = ViewportOverlayLayer::HoverEdge, .color = kOverlayRemoveWireColor});
+    frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge, .color = rgba8(255, 255, 255)});
+    frame.points.push_back({.layer = ViewportOverlayLayer::SnapTargetVertex});
+
+    ViewportOverlayStyleResolver::apply(frame, settings);
+
+    ASSERT_EQ(frame.triangles.size(), 1u);
+    ASSERT_EQ(frame.lines.size(), 4u);
+    ASSERT_EQ(frame.points.size(), 1u);
+    EXPECT_EQ(frame.triangles[0].color, rgba8(255, 0, 255));
+    EXPECT_EQ(frame.lines[0].color, rgba8(255, 0, 0));
+    EXPECT_FLOAT_EQ(frame.lines[0].widthPixels, 2.0f);
+    EXPECT_EQ(frame.lines[1].color, rgba8(0, 255, 0));
+    EXPECT_FLOAT_EQ(frame.lines[1].widthPixels, 2.0f);
+    EXPECT_EQ(frame.lines[2].color, rgba8(0, 0, 255));
+    EXPECT_FLOAT_EQ(frame.lines[2].widthPixels, 4.0f);
+    EXPECT_EQ(frame.lines[3].color, rgba8(0, 255, 0));
+    EXPECT_FLOAT_EQ(frame.lines[3].widthPixels, 3.0f);
+    EXPECT_EQ(frame.points[0].color, rgba8(255, 255, 0));
+    EXPECT_FLOAT_EQ(frame.points[0].sizePixels, 10.0f);
+}
+
+TEST(ViewportCameraAdapterTests, BuildsOverlayAndModelingCamerasFromSharedBasis) {
+    ViewportCameraController camera;
+    const ViewportOverlayCamera overlay = ViewportCameraAdapter::overlayCamera(camera, {0.0f, 240.0f});
+    const ModelingViewportCamera modeling = ViewportCameraAdapter::modelingCamera(camera, {640.0f, 360.0f});
+
+    EXPECT_EQ(overlay.projection, ViewportOverlayProjection::Perspective);
+    EXPECT_FALSE(modeling.orthographic);
+    EXPECT_FLOAT_EQ(overlay.viewportSize.x, 1.0f);
+    EXPECT_FLOAT_EQ(overlay.viewportSize.y, 240.0f);
+    expectVec3Near(modeling.origin, overlay.eye);
+    expectVec3Near(modeling.xAxis, overlay.right);
+    expectVec3Near(modeling.yAxis, overlay.up);
+    expectVec3Near(modeling.zAxis, overlay.forward * -1.0f);
+    EXPECT_NEAR(length(overlay.forward), 1.0f, 0.001f);
+    EXPECT_NEAR(length(overlay.right), 1.0f, 0.001f);
+    EXPECT_NEAR(length(overlay.up), 1.0f, 0.001f);
+}
+
+TEST(ViewportGridPlacementPolicyTests, ResolvesPerspectiveAndOrthographicPlanesWithoutFilament) {
+    ViewportCameraController camera;
+    camera.setViewportSize(200.0f, 100.0f);
+
+    const ViewportGridPlacement perspective =
+            ViewportGridPlacementPolicy::placement(camera, 200u, 100u);
+    EXPECT_EQ(perspective.plane, ViewportGridPlane::XZ);
+    EXPECT_EQ(perspective.rotation, ViewportGridRotation::Identity);
+    EXPECT_FLOAT_EQ(perspective.planeSize.x, kViewportGridDefaultPlaneSize);
+    EXPECT_FLOAT_EQ(perspective.planeSize.y, kViewportGridDefaultPlaneSize);
+    expectVec3Near(perspective.axes.uAxis, {1.0f, 0.0f, 0.0f});
+    expectVec3Near(perspective.axes.vAxis, {0.0f, 0.0f, -1.0f});
+    EXPECT_EQ(perspective.axes.uColor, ViewportColorSettingId::GridXAxis);
+    EXPECT_EQ(perspective.axes.vColor, ViewportColorSettingId::GridZAxis);
+
+    camera.viewAxis(ViewportViewAxis::X, 1);
+    const ViewportGridPlacement side =
+            ViewportGridPlacementPolicy::placement(camera, 200u, 100u);
+    const float orthoPlaneHeight = camera.state().orthographicSize * kViewportGridOrthographicMargin;
+    EXPECT_EQ(side.plane, ViewportGridPlane::YZ);
+    EXPECT_EQ(side.rotation, ViewportGridRotation::NegativeHalfPiAroundZ);
+    EXPECT_FLOAT_EQ(side.origin.x, kViewportGridPlaneOffset);
+    EXPECT_FLOAT_EQ(side.planeSize.x, orthoPlaneHeight);
+    EXPECT_FLOAT_EQ(side.planeSize.y, orthoPlaneHeight * 2.0f);
+    expectVec3Near(side.axes.uAxis, {0.0f, 0.0f, -1.0f});
+    expectVec3Near(side.axes.vAxis, {0.0f, 1.0f, 0.0f});
+    EXPECT_EQ(side.axes.uColor, ViewportColorSettingId::GridZAxis);
+    EXPECT_EQ(side.axes.vColor, ViewportColorSettingId::GridYAxis);
+
+    camera.viewAxis(ViewportViewAxis::Z, 1);
+    const ViewportGridPlacement front =
+            ViewportGridPlacementPolicy::placement(camera, 200u, 100u);
+    EXPECT_EQ(front.plane, ViewportGridPlane::XY);
+    EXPECT_EQ(front.rotation, ViewportGridRotation::PositiveHalfPiAroundX);
+    EXPECT_FLOAT_EQ(front.origin.z, kViewportGridPlaneOffset);
+    EXPECT_FLOAT_EQ(front.planeSize.x, camera.state().orthographicSize * kViewportGridOrthographicMargin * 2.0f);
+    EXPECT_FLOAT_EQ(front.planeSize.y, camera.state().orthographicSize * kViewportGridOrthographicMargin);
+    expectVec3Near(front.axes.uAxis, {1.0f, 0.0f, 0.0f});
+    expectVec3Near(front.axes.vAxis, {0.0f, 1.0f, 0.0f});
+}
+
+TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
+    const std::filesystem::path bridgePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
+    const std::filesystem::path builderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayRenderableBuilder.cpp";
+    const std::filesystem::path proxyFactoryPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayProxyFactory.cpp";
+    const std::filesystem::path toolPreviewCachePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ToolPreviewRenderableCache.cpp";
+    std::ifstream bridgeFile(bridgePath);
+    std::ifstream builderFile(builderPath);
+    std::ifstream proxyFactoryFile(proxyFactoryPath);
+    std::ifstream toolPreviewCacheFile(toolPreviewCachePath);
+    ASSERT_TRUE(bridgeFile.is_open()) << bridgePath.string();
+    ASSERT_TRUE(builderFile.is_open()) << builderPath.string();
+    ASSERT_TRUE(proxyFactoryFile.is_open()) << proxyFactoryPath.string();
+    ASSERT_TRUE(toolPreviewCacheFile.is_open()) << toolPreviewCachePath.string();
+
+    const std::string bridgeSource{
+            std::istreambuf_iterator<char>(bridgeFile),
+            std::istreambuf_iterator<char>()};
+    const std::string builderSource{
+            std::istreambuf_iterator<char>(builderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string proxyFactorySource{
+            std::istreambuf_iterator<char>(proxyFactoryFile),
+            std::istreambuf_iterator<char>()};
+    const std::string toolPreviewCacheSource{
+            std::istreambuf_iterator<char>(toolPreviewCacheFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("viewportOverlayLayerUsesDepthStampedFaceFill"), std::string::npos);
-    EXPECT_NE(source.find("setColorWrite(state.colorWrite)"), std::string::npos);
-    EXPECT_NE(source.find("setDepthWrite(state.depthWrite)"), std::string::npos);
-    EXPECT_NE(source.find("setDepthFunc(state.depthFunc)"), std::string::npos);
-    EXPECT_NE(source.find("setTransparencyMode(state.transparencyMode)"), std::string::npos);
-    EXPECT_NE(source.find("setPolygonOffset(state.polygonOffsetScale, state.polygonOffsetConstant)"), std::string::npos);
-    EXPECT_NE(source.find("DepthFunc::GE"), std::string::npos);
-    EXPECT_NE(source.find("DepthFunc::E"), std::string::npos);
-    EXPECT_NE(source.find("CullingMode::BACK"), std::string::npos);
-    EXPECT_NE(source.find("TransparencyMode::TWO_PASSES_ONE_SIDE"), std::string::npos);
-    EXPECT_NE(source.find("viewportOverlayTriangleIsTwoSided(layer)"), std::string::npos);
-    EXPECT_NE(source.find("CullingMode::NONE"), std::string::npos);
-    EXPECT_NE(source.find("TransparencyMode::TWO_PASSES_TWO_SIDES"), std::string::npos);
-    EXPECT_NE(source.find("setToolPreviewMeshes(std::vector<PreviewMesh> meshes"), std::string::npos);
-    EXPECT_NE(source.find("toolPreviewMeshProxies_"), std::string::npos);
-    EXPECT_NE(source.find("destroyToolPreviewMeshes()"), std::string::npos);
+    EXPECT_NE(builderSource.find("viewportOverlayLayerUsesDepthStampedFaceFill"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("setColorWrite(state.colorWrite)"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("setDepthWrite(state.depthWrite)"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("setDepthFunc(toFilamentDepthFunc(state.depthFunc))"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("setTransparencyMode(toFilamentTransparencyMode(state.transparencyMode))"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("setPolygonOffset(state.polygonOffsetScale, state.polygonOffsetConstant)"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("DepthFunc::GE"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("DepthFunc::E"), std::string::npos);
+    EXPECT_NE(builderSource.find("OverlayCullingMode::Back"), std::string::npos);
+    EXPECT_NE(builderSource.find("OverlayTransparencyMode::TwoPassesOneSide"), std::string::npos);
+    EXPECT_NE(builderSource.find("viewportOverlayTriangleIsTwoSided(layer)"), std::string::npos);
+    EXPECT_NE(builderSource.find("OverlayCullingMode::None"), std::string::npos);
+    EXPECT_NE(builderSource.find("OverlayTransparencyMode::TwoPassesTwoSides"), std::string::npos);
+    EXPECT_NE(bridgeSource.find("setToolPreviewMeshes(std::vector<PreviewMesh> meshes"), std::string::npos);
+    EXPECT_NE(bridgeSource.find("toolPreviewCache_.setMeshes(meshes, assets)"), std::string::npos);
+    EXPECT_NE(toolPreviewCacheSource.find("meshProxies_"), std::string::npos);
+    EXPECT_NE(toolPreviewCacheSource.find("void ToolPreviewRenderableCache::clear()"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, UsesUnityStyleQuadMaterialsForSelectionLineAndPointOverlay) {
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    const std::filesystem::path proxyFactoryPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayProxyFactory.cpp";
+    const std::filesystem::path lineBuilderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayLineMeshBuilder.cpp";
+    const std::filesystem::path pointBuilderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayPointMeshBuilder.cpp";
+    const std::filesystem::path renderableBuilderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayRenderableBuilder.h";
+    const std::filesystem::path projectorPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayCameraProjector.cpp";
+    std::ifstream proxyFactoryFile(proxyFactoryPath);
+    std::ifstream lineBuilderFile(lineBuilderPath);
+    std::ifstream pointBuilderFile(pointBuilderPath);
+    std::ifstream renderableBuilderFile(renderableBuilderPath);
+    std::ifstream projectorFile(projectorPath);
+    ASSERT_TRUE(proxyFactoryFile.is_open()) << proxyFactoryPath.string();
+    ASSERT_TRUE(lineBuilderFile.is_open()) << lineBuilderPath.string();
+    ASSERT_TRUE(pointBuilderFile.is_open()) << pointBuilderPath.string();
+    ASSERT_TRUE(renderableBuilderFile.is_open()) << renderableBuilderPath.string();
+    ASSERT_TRUE(projectorFile.is_open()) << projectorPath.string();
 
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    const std::string proxyFactorySource{
+            std::istreambuf_iterator<char>(proxyFactoryFile),
+            std::istreambuf_iterator<char>()};
+    const std::string lineBuilderSource{
+            std::istreambuf_iterator<char>(lineBuilderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string pointBuilderSource{
+            std::istreambuf_iterator<char>(pointBuilderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string renderableBuilderSource{
+            std::istreambuf_iterator<char>(renderableBuilderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string projectorSource{
+            std::istreambuf_iterator<char>(projectorFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("appendOverlayLineQuad"), std::string::npos);
-    EXPECT_NE(source.find("appendOverlayPointQuad"), std::string::npos);
-    EXPECT_NE(source.find("overlayLineMaterial_->createInstance()"), std::string::npos);
-    EXPECT_NE(source.find("overlayPointMaterial_->createInstance()"), std::string::npos);
-    EXPECT_NE(source.find("filament::VertexAttribute::CUSTOM0"), std::string::npos);
-    EXPECT_NE(source.find("AttributeType::FLOAT4, offsetof(OverlayLineVertex, position)"), std::string::npos);
-    EXPECT_NE(source.find("AttributeType::FLOAT4, offsetof(OverlayPointVertex, position)"), std::string::npos);
-    EXPECT_NE(source.find("projectOverlayViewPoint"), std::string::npos);
-    EXPECT_NE(source.find("nearPlaneDistance(a, camera)"), std::string::npos);
-    EXPECT_NE(source.find("setParameter(\"lineWidth\", widthPixels)"), std::string::npos);
-    EXPECT_EQ(source.find("setParameter(\"pointSize\", pointSizePixels)"), std::string::npos);
-    EXPECT_EQ(source.find("setParameter(\"nearPlane\""), std::string::npos);
-    EXPECT_NE(source.find("LineBatchKey"), std::string::npos);
-    EXPECT_EQ(source.find("PrimitiveType::LINES"), std::string::npos);
-    EXPECT_EQ(source.find("PrimitiveType::POINTS"), std::string::npos);
+    EXPECT_NE(lineBuilderSource.find("appendLineQuad"), std::string::npos);
+    EXPECT_NE(pointBuilderSource.find("appendPointQuad"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("overlayLineMaterial_->createInstance()"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("overlayPointMaterial_->createInstance()"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("filament::VertexAttribute::CUSTOM0"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("AttributeType::FLOAT4, offsetof(OverlayLineVertex, position)"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("AttributeType::FLOAT4, offsetof(OverlayPointVertex, position)"), std::string::npos);
+    EXPECT_NE(projectorSource.find("OverlayProjectedPoint project"), std::string::npos);
+    EXPECT_NE(projectorSource.find("nearPlaneDistance(a)"), std::string::npos);
+    EXPECT_NE(proxyFactorySource.find("setParameter(\"lineWidth\", batch.widthPixels)"), std::string::npos);
+    EXPECT_EQ(proxyFactorySource.find("setParameter(\"pointSize\", pointSizePixels)"), std::string::npos);
+    EXPECT_EQ(proxyFactorySource.find("setParameter(\"nearPlane\""), std::string::npos);
+    EXPECT_NE(renderableBuilderSource.find("LineBatchKey"), std::string::npos);
+    EXPECT_EQ(proxyFactorySource.find("PrimitiveType::LINES"), std::string::npos);
+    EXPECT_EQ(proxyFactorySource.find("PrimitiveType::POINTS"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "MeshRenderableFactory.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -605,31 +847,39 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
 }
 
 TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    const std::filesystem::path syncSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderSyncService.cpp";
+    const std::filesystem::path cacheSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "MeshRenderableCache.cpp";
+    std::ifstream syncSourceFile(syncSourcePath);
+    std::ifstream cacheSourceFile(cacheSourcePath);
+    ASSERT_TRUE(syncSourceFile.is_open()) << syncSourcePath.string();
+    ASSERT_TRUE(cacheSourceFile.is_open()) << cacheSourcePath.string();
 
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    const std::string syncSource{
+            std::istreambuf_iterator<char>(syncSourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string cacheSource{
+            std::istreambuf_iterator<char>(cacheSourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("syncedAssetRevision_"), std::string::npos);
-    EXPECT_NE(source.find("renderAssetRevisionsChanged"), std::string::npos);
-    EXPECT_NE(source.find("existing->second.meshRevision != mesh->revision.value"), std::string::npos);
-    EXPECT_NE(source.find("existing->second.materialRevision != materialRevision"), std::string::npos);
-    EXPECT_NE(source.find("updateMeshProxyTransform(existing->second, worldTransform)"), std::string::npos);
-    const std::size_t rebuildStart = source.find("void SceneRenderBridge::rebuild(");
-    const std::size_t overlayStart = source.find("void SceneRenderBridge::rebuildOverlayProxies", rebuildStart);
+    EXPECT_NE(syncSource.find("syncedAssetRevision_"), std::string::npos);
+    EXPECT_NE(syncSource.find("renderAssetRevisionsChanged"), std::string::npos);
+    EXPECT_NE(syncSource.find("meshCache_->needsRebuild"), std::string::npos);
+    EXPECT_NE(syncSource.find("materialBinding_->materialRevision"), std::string::npos);
+    EXPECT_NE(cacheSource.find("existing->second.meshRevision != mesh.revision.value"), std::string::npos);
+    EXPECT_NE(cacheSource.find("existing->second.materialRevision != materialRevision"), std::string::npos);
+    EXPECT_NE(cacheSource.find("factory_->updateTransform(existing->second, worldTransform)"), std::string::npos);
+    const std::size_t rebuildStart = syncSource.find("void SceneRenderSyncService::rebuild(");
     ASSERT_NE(rebuildStart, std::string::npos);
-    ASSERT_NE(overlayStart, std::string::npos);
-    const std::string rebuildSource = source.substr(rebuildStart, overlayStart - rebuildStart);
+    const std::string rebuildSource = syncSource.substr(rebuildStart);
+    EXPECT_NE(rebuildSource.find("meshCache_->removeExcept(liveMeshEntities)"), std::string::npos);
     EXPECT_EQ(rebuildSource.find("meshProxies_.clear()"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "MaterialBindingService.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -669,11 +919,12 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("refreshCachedSelectionOverlayFrame(document, assets, modeling)"), std::string::npos);
-    EXPECT_NE(source.find("appendHierarchySelectionWires(cachedSelectionOverlayFrame_, document, assets)"), std::string::npos);
-    EXPECT_NE(source.find("cachedSelectionOverlayAssetRevision_ != assets.revision()"), std::string::npos);
+    EXPECT_NE(source.find("appendHierarchySelectionWires(frame, document, assets)"), std::string::npos);
+    EXPECT_NE(source.find(".assetRevision = assets.revision()"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCache_.needsRefresh(key)"), std::string::npos);
     EXPECT_NE(source.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
-    EXPECT_NE(source.find("makeViewportOverlayCamera(paneState.camera, {paneState.renderSize.x, paneState.renderSize.y})"), std::string::npos);
-    EXPECT_EQ(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, makeViewportOverlayCamera(camera, itemSize));"), std::string::npos);
+    EXPECT_NE(source.find("ViewportCameraAdapter::overlayCamera(paneState.camera, paneState.renderSize)"), std::string::npos);
+    EXPECT_EQ(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, ViewportCameraAdapter::overlayCamera(camera, itemSize));"), std::string::npos);
     EXPECT_EQ(source.find("drawSelectionOverlay2d"), std::string::npos);
     EXPECT_EQ(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
     EXPECT_EQ(source.find("pointVisibleFromCamera"), std::string::npos);
@@ -686,15 +937,22 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
 TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path transformGizmoPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     const std::filesystem::path navigationGizmoPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "NavigationGizmo.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream transformGizmoFile(transformGizmoPath);
     std::ifstream navigationGizmoFile(navigationGizmoPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(transformGizmoFile.is_open()) << transformGizmoPath.string();
     ASSERT_TRUE(navigationGizmoFile.is_open()) << navigationGizmoPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string transformGizmoSource{
+            std::istreambuf_iterator<char>(transformGizmoFile),
             std::istreambuf_iterator<char>()};
     const std::string navigationGizmoSource{
             std::istreambuf_iterator<char>(navigationGizmoFile),
@@ -705,8 +963,9 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     EXPECT_NE(source.find("const bool navigationGizmoConsumed = navigationGizmo_.draw("), std::string::npos);
     EXPECT_EQ(source.find("drawViewCube("), std::string::npos);
     EXPECT_EQ(source.find("navigationGizmoVisible_"), std::string::npos);
-    EXPECT_NE(source.find("drawTransformGizmo(\n            document,\n            assets,\n            undoRedo,\n            documentCommands,\n            modeling,\n            paneState.camera"), std::string::npos);
-    EXPECT_NE(source.find("true,\n            false);"), std::string::npos);
+    EXPECT_NE(source.find("transformGizmoController_.draw({"), std::string::npos);
+    EXPECT_NE(source.find(".interactive = false"), std::string::npos);
+    EXPECT_EQ(source.find("drawTransformGizmo("), std::string::npos);
     EXPECT_NE(navigationGizmoSource.find("if (!interactive || !mouseInsideViewport || !ImGui::IsMouseClicked(ImGuiMouseButton_Left) || !hoverHit.hit)"), std::string::npos);
     EXPECT_NE(navigationGizmoSource.find("input.widget_size = 70.0;"), std::string::npos);
     EXPECT_NE(navigationGizmoSource.find("input.margin = {46.0f, 46.0f};"), std::string::npos);
@@ -734,13 +993,13 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     EXPECT_EQ(navigationGizmoSource.find("markerCenter.x + 1.0f"), std::string::npos);
     EXPECT_EQ(navigationGizmoSource.find("marker.depth >= 0.0 ? 1.0f : 0.42f"), std::string::npos);
     EXPECT_EQ(navigationGizmoSource.find("marker.depth >= 0.0 ? 8.0f : 6.5f"), std::string::npos);
-    EXPECT_NE(source.find("if (!interactive) {\n        return false;\n    }\n\n    auto fallbackGizmoHit = [&]()"), std::string::npos);
-    EXPECT_NE(source.find("bool consumed = gizmoDragging_;"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("if (!interactive) {\n        return false;\n    }\n\n    auto fallbackHit = [&]()"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("bool consumed = dragging_;"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -807,19 +1066,33 @@ TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
 TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
     const std::filesystem::path headerPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
+    const std::filesystem::path transformGizmoHeaderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.h";
+    const std::filesystem::path transformGizmoSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     const std::filesystem::path navigationGizmoHeaderPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "NavigationGizmo.h";
     const std::filesystem::path navigationGizmoSourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "NavigationGizmo.cpp";
     std::ifstream headerFile(headerPath);
+    std::ifstream transformGizmoHeaderFile(transformGizmoHeaderPath);
+    std::ifstream transformGizmoSourceFile(transformGizmoSourcePath);
     std::ifstream navigationGizmoHeaderFile(navigationGizmoHeaderPath);
     std::ifstream navigationGizmoSourceFile(navigationGizmoSourcePath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+    ASSERT_TRUE(transformGizmoHeaderFile.is_open()) << transformGizmoHeaderPath.string();
+    ASSERT_TRUE(transformGizmoSourceFile.is_open()) << transformGizmoSourcePath.string();
     ASSERT_TRUE(navigationGizmoHeaderFile.is_open()) << navigationGizmoHeaderPath.string();
     ASSERT_TRUE(navigationGizmoSourceFile.is_open()) << navigationGizmoSourcePath.string();
 
     const std::string header{
             std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string transformGizmoHeader{
+            std::istreambuf_iterator<char>(transformGizmoHeaderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string transformGizmoSource{
+            std::istreambuf_iterator<char>(transformGizmoSourceFile),
             std::istreambuf_iterator<char>()};
     const std::string navigationGizmoHeader{
             std::istreambuf_iterator<char>(navigationGizmoHeaderFile),
@@ -828,8 +1101,12 @@ TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
             std::istreambuf_iterator<char>(navigationGizmoSourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(header.find("bool gizmoDragPaneActive_"), std::string::npos);
-    EXPECT_NE(header.find("ViewportPaneId gizmoDragPaneId_"), std::string::npos);
+    EXPECT_EQ(header.find("gizmoDragPaneActive_"), std::string::npos);
+    EXPECT_EQ(header.find("gizmoDragPaneId_"), std::string::npos);
+    EXPECT_NE(transformGizmoHeader.find("bool dragLocksInput() const"), std::string::npos);
+    EXPECT_NE(transformGizmoHeader.find("ViewportPaneId dragPaneId() const"), std::string::npos);
+    EXPECT_NE(transformGizmoHeader.find("bool dragPaneActive_"), std::string::npos);
+    EXPECT_NE(transformGizmoHeader.find("ViewportPaneId dragPaneId_"), std::string::npos);
     EXPECT_NE(header.find("ViewportPaneId paneId"), std::string::npos);
     EXPECT_NE(header.find("NavigationGizmo navigationGizmo_"), std::string::npos);
     EXPECT_EQ(header.find("viewCubeDragPaneActive_"), std::string::npos);
@@ -847,27 +1124,41 @@ TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("const bool gizmoDragLocksInput = gizmoDragging_ && gizmoDragPaneActive_"), std::string::npos);
+    EXPECT_NE(source.find("const bool transformDragLocksInput = transformGizmoController_.dragLocksInput()"), std::string::npos);
     EXPECT_NE(source.find("const bool navigationGizmoDragLocksInput = navigationGizmo_.inputLocked()"), std::string::npos);
-    EXPECT_NE(source.find("if (!gizmoDragLocksInput && !navigationGizmoDragLocksInput)"), std::string::npos);
-    EXPECT_NE(source.find("drawPane.pane->id == gizmoDragPaneId_"), std::string::npos);
+    EXPECT_NE(source.find("if (!transformDragLocksInput && !navigationGizmoDragLocksInput)"), std::string::npos);
+    EXPECT_NE(source.find("drawPane.pane->id == transformGizmoController_.dragPaneId()"), std::string::npos);
     EXPECT_NE(source.find("drawPane.pane->id == navigationGizmo_.lockedPaneId()"), std::string::npos);
     EXPECT_NE(source.find("inputOwnsActiveGizmoDrag"), std::string::npos);
     EXPECT_NE(source.find("inputOwnsActiveNavigationGizmoDrag"), std::string::npos);
-    EXPECT_NE(source.find("gizmoDragPaneActive_ = true"), std::string::npos);
-    EXPECT_NE(source.find("gizmoDragPaneId_ = paneId"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("dragPaneActive_ = true"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("dragPaneId_ = request.paneId"), std::string::npos);
     EXPECT_NE(navigationGizmoSource.find("dragPaneActive_ = true"), std::string::npos);
     EXPECT_NE(navigationGizmoSource.find("dragPaneId_ = paneId"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportHoverController.h";
+    const std::filesystem::path controllerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportHoverController.cpp";
+    const std::filesystem::path panelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream headerFile(headerPath);
+    std::ifstream controllerFile(controllerPath);
+    std::ifstream panelFile(panelPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+    ASSERT_TRUE(controllerFile.is_open()) << controllerPath.string();
+    ASSERT_TRUE(panelFile.is_open()) << panelPath.string();
 
     const std::string header{
             std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string controller{
+            std::istreambuf_iterator<char>(controllerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string panel{
+            std::istreambuf_iterator<char>(panelFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(header.find("ViewportPaneId paneId"), std::string::npos);
@@ -876,52 +1167,65 @@ TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
     EXPECT_NE(header.find("Vec3 cameraRight"), std::string::npos);
     EXPECT_NE(header.find("Vec3 cameraUp"), std::string::npos);
     EXPECT_NE(header.find("ViewportOverlayProjection cameraProjection"), std::string::npos);
-    EXPECT_NE(header.find("paneId == other.paneId"), std::string::npos);
-    EXPECT_NE(header.find("vec3Matches(cameraEye, other.cameraEye)"), std::string::npos);
-    EXPECT_NE(header.find("cameraProjection == other.cameraProjection"), std::string::npos);
-
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
-
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
-            std::istreambuf_iterator<char>()};
-
-    EXPECT_NE(source.find("const ViewportOverlayCamera overlayCamera = makeViewportOverlayCamera(camera, itemSize)"), std::string::npos);
-    EXPECT_NE(source.find(".paneId = paneState.id"), std::string::npos);
-    EXPECT_NE(source.find(".cameraEye = overlayCamera.eye"), std::string::npos);
-    EXPECT_NE(source.find(".cameraForward = overlayCamera.forward"), std::string::npos);
+    EXPECT_NE(header.find("bool primaryModifier"), std::string::npos);
+    EXPECT_NE(controller.find("paneId == other.paneId"), std::string::npos);
+    EXPECT_NE(controller.find("vec3Matches(cameraEye, other.cameraEye)"), std::string::npos);
+    EXPECT_NE(controller.find("cameraProjection == other.cameraProjection"), std::string::npos);
+    EXPECT_NE(controller.find("primaryModifier == other.primaryModifier"), std::string::npos);
+    EXPECT_NE(controller.find("const ViewportOverlayCamera overlayCamera = ViewportCameraAdapter::overlayCamera(camera, request.viewportSize)"), std::string::npos);
+    EXPECT_NE(controller.find(".cameraEye = overlayCamera.eye"), std::string::npos);
+    EXPECT_NE(controller.find(".cameraForward = overlayCamera.forward"), std::string::npos);
+    EXPECT_NE(controller.find(".primaryModifier = request.modifiers.primary"), std::string::npos);
+    EXPECT_NE(panel.find("hoverController_.makeKey(camera, ViewportHoverWorkRequest"), std::string::npos);
+    EXPECT_NE(panel.find(".paneId = paneState.id"), std::string::npos);
+    EXPECT_NE(panel.find(".modifiers = input.modifiers"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path selectionControllerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportSelectionController.cpp";
+    const std::filesystem::path presenterPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportContextMenuPresenter.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream selectionControllerFile(selectionControllerPath);
+    std::ifstream presenterFile(presenterPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(selectionControllerFile.is_open()) << selectionControllerPath.string();
+    ASSERT_TRUE(presenterFile.is_open()) << presenterPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string selectionController{
+            std::istreambuf_iterator<char>(selectionControllerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string presenter{
+            std::istreambuf_iterator<char>(presenterFile),
+            std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("ViewportOperationsContext"), std::string::npos);
-    EXPECT_NE(source.find("modeling.contextActions(query)"), std::string::npos);
-    EXPECT_NE(source.find("ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)"), std::string::npos);
-    EXPECT_NE(source.find("modeling.executeContextAction(action.actionId)"), std::string::npos);
-    EXPECT_NE(source.find("action.previewKind != ModelingActionPreviewKind::None ?"), std::string::npos);
-    EXPECT_EQ(source.find("action.operationId == \"bridge\""), std::string::npos);
-    EXPECT_EQ(source.find("uiContext.requestToolSettingsPanel()"), std::string::npos);
-    EXPECT_NE(source.find("action.disabledReason"), std::string::npos);
+    EXPECT_NE(source.find("contextMenuPresenter_.drawOperationsPopup"), std::string::npos);
+    EXPECT_NE(presenter.find("ViewportOperationsContext"), std::string::npos);
+    EXPECT_NE(presenter.find("modeling.contextActions(query)"), std::string::npos);
+    EXPECT_NE(presenter.find("ImGui::MenuItem(action.label.c_str(), nullptr, false, enabled)"), std::string::npos);
+    EXPECT_NE(presenter.find("findModelingCommandTool(action.actionId)"), std::string::npos);
+    EXPECT_NE(presenter.find("executeTrackedCommandTool(undoRedo, modeling, commandTool->id())"), std::string::npos);
+    EXPECT_EQ(presenter.find("modeling.executeContextAction(action.actionId)"), std::string::npos);
+    EXPECT_EQ(presenter.find("action.operationId == \"bridge\""), std::string::npos);
+    EXPECT_EQ(presenter.find("uiContext.requestToolSettingsPanel()"), std::string::npos);
+    EXPECT_NE(presenter.find("action.disabledReason"), std::string::npos);
     EXPECT_NE(source.find("modalToolOwnsViewport()"), std::string::npos);
     EXPECT_NE(source.find(".modalToolOwnsViewport = modalToolOwnsViewport()"), std::string::npos);
     EXPECT_NE(source.find("modeling.pickSelect(ModelingPickSelectRequest"), std::string::npos);
     EXPECT_NE(source.find("pendingContextMenuRequest.targetHit = summary.hasSelection"), std::string::npos);
     EXPECT_NE(source.find(".accumulatedDragDelta = contextMenuRightDragDelta_"), std::string::npos);
     EXPECT_NE(source.find("pendingContextMenuClick"), std::string::npos);
-    EXPECT_NE(source.find("selectFromViewport(document, assets, modeling, camera, pendingContextMenuLocalMouse, {}, 1, true, true)"), std::string::npos);
-    EXPECT_NE(source.find(".preserveSelectionOnMiss = preserveSelectionOnMiss"), std::string::npos);
-    EXPECT_NE(source.find(".preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit"), std::string::npos);
+    EXPECT_NE(source.find("selectionController_.pickSelection("), std::string::npos);
+    EXPECT_NE(source.find("pendingContextMenuLocalMouse"), std::string::npos);
+    EXPECT_EQ(source.find("selectFromViewport"), std::string::npos);
+    EXPECT_NE(selectionController.find(".preserveSelectionOnMiss = preserveSelectionOnMiss"), std::string::npos);
+    EXPECT_NE(selectionController.find(".preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit"), std::string::npos);
     EXPECT_NE(source.find("preserveContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("shouldPreserveViewportContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("flyCursorCaptureScreen_"), std::string::npos);
@@ -930,14 +1234,68 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_EQ(source.find("Button(operation.label"), std::string::npos);
 }
 
-TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
+TEST(ViewportPanelTests, UsesSplitInputFocusAndContextMenuHelpers) {
     const std::filesystem::path headerPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream headerFile(headerPath);
+    std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
     const std::string header{
             std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(header.find("ViewportInputFrameBuilder inputFrameBuilder_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportFocusController focusController_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportContextMenuPresenter contextMenuPresenter_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportShortcutController shortcutController_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportHoverController hoverController_"), std::string::npos);
+    EXPECT_NE(header.find("ViewportPaneOverlayCache selectionOverlayCache_"), std::string::npos);
+    EXPECT_NE(source.find("focusController_.resolve(focusHovered, uiContext, UIPanelId::Viewport)"), std::string::npos);
+    EXPECT_NE(source.find("focusController_.inputActive()"), std::string::npos);
+    EXPECT_NE(source.find("inputFrameBuilder_.build"), std::string::npos);
+    EXPECT_NE(source.find("contextMenuPresenter_.drawOperationsPopup"), std::string::npos);
+    EXPECT_NE(source.find("shortcutController_.handleOperationPreviewShortcut"), std::string::npos);
+    EXPECT_NE(source.find("shortcutController_.handleModelingShortcut"), std::string::npos);
+    EXPECT_NE(source.find("hoverController_.makeKey"), std::string::npos);
+    EXPECT_NE(source.find("hoverController_.claim"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCache_.markDirty"), std::string::npos);
+    EXPECT_EQ(source.find("ViewportInputFrame makeViewportInputFrame"), std::string::npos);
+    EXPECT_EQ(source.find("bool viewportFocusInputActive()"), std::string::npos);
+    EXPECT_EQ(source.find("void drawViewportOperationsPopup"), std::string::npos);
+    EXPECT_EQ(source.find("executeViewportModelingShortcut(undoRedo, modeling, result.shortcut)"), std::string::npos);
+    EXPECT_EQ(source.find("lastHoverWorkKey_"), std::string::npos);
+    EXPECT_EQ(source.find("cachedSelectionOverlayFrameDirty_"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
+    const std::filesystem::path headerPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
+    const std::filesystem::path toolStatePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "Tool.h";
+    const std::filesystem::path dragToolPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "DragCommitTool.cpp";
+    std::ifstream headerFile(headerPath);
+    std::ifstream toolStateFile(toolStatePath);
+    std::ifstream dragToolFile(dragToolPath);
+    ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+    ASSERT_TRUE(toolStateFile.is_open()) << toolStatePath.string();
+    ASSERT_TRUE(dragToolFile.is_open()) << dragToolPath.string();
+
+    const std::string header{
+            std::istreambuf_iterator<char>(headerFile),
+            std::istreambuf_iterator<char>()};
+    const std::string toolState{
+            std::istreambuf_iterator<char>(toolStateFile),
+            std::istreambuf_iterator<char>()};
+    const std::string dragTool{
+            std::istreambuf_iterator<char>(dragToolFile),
             std::istreambuf_iterator<char>()};
 
     const std::filesystem::path sourcePath =
@@ -949,36 +1307,44 @@ TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(header.find("bool insertEdgeLoopDragActive_ = false"), std::string::npos);
+    EXPECT_EQ(header.find("insertEdgeLoopDragActive_"), std::string::npos);
+    EXPECT_NE(toolState.find("bool insertEdgeLoopDragActive = false"), std::string::npos);
     EXPECT_NE(source.find("const bool insertEdgeLoopDragRelease"), std::string::npos);
     EXPECT_NE(source.find("!insertEdgeLoopDragRelease"), std::string::npos);
-    EXPECT_NE(source.find("modeling.beginInsertEdgeLoopDrag(makeModelingToolEvent(true))"), std::string::npos);
-    EXPECT_NE(source.find("insertEdgeLoopDragActive_ = command.ok && modeling.toolStatus().insertEdgeLoopDragging"), std::string::npos);
-    EXPECT_NE(source.find("const bool insertEdgeLoopDragging"), std::string::npos);
-    EXPECT_NE(source.find("!leftReleased"), std::string::npos);
-    EXPECT_NE(source.find("!insertEdgeLoopDragging"), std::string::npos);
-    EXPECT_NE(source.find("leftDown &&"), std::string::npos);
-    EXPECT_NE(source.find("leftReleased && insertEdgeLoopDragging"), std::string::npos);
-    EXPECT_NE(source.find("return modeling.commitInsertEdgeLoopDrag()"), std::string::npos);
+    EXPECT_NE(dragTool.find("context.modeling.beginInsertEdgeLoopDrag(context.makeToolEventAt(pointer.mouseLocal, true))"), std::string::npos);
+    EXPECT_NE(dragTool.find("context.modalState->insertEdgeLoopDragActive = command.ok && context.modeling.toolStatus().insertEdgeLoopDragging"), std::string::npos);
+    EXPECT_NE(dragTool.find("const bool dragging"), std::string::npos);
+    EXPECT_NE(dragTool.find("!pointer.leftReleased"), std::string::npos);
+    EXPECT_NE(dragTool.find("!dragging"), std::string::npos);
+    EXPECT_NE(dragTool.find("pointer.leftDown && dragging"), std::string::npos);
+    EXPECT_NE(dragTool.find("pointer.leftReleased && dragging"), std::string::npos);
+    EXPECT_NE(dragTool.find("context.modeling.commitInsertEdgeLoopDrag()"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path drawnPlaneToolPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "DrawnPlaneTool.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream drawnPlaneToolFile(drawnPlaneToolPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(drawnPlaneToolFile.is_open()) << drawnPlaneToolPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string drawnPlaneTool{
+            std::istreambuf_iterator<char>(drawnPlaneToolFile),
+            std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const Vec2 leftClickLocal"), std::string::npos);
-    EXPECT_NE(source.find("makeModelingToolEventAt(leftClickLocal)"), std::string::npos);
-    EXPECT_NE(source.find("makeModelingToolEventAt(leftClickLocal, true)"), std::string::npos);
-    EXPECT_NE(source.find("modeling.updateCutHover(makeModelingToolEvent(true))"), std::string::npos);
-    EXPECT_NE(source.find("modeling.updateMirrorHover(makeModelingToolEvent(true))"), std::string::npos);
-    EXPECT_EQ(source.find("afterClick.cutDraggingNewPoint"), std::string::npos);
-    EXPECT_EQ(source.find("afterClick.mirrorDraggingNewPoint"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("context.makeToolEventAt(pointer.leftClickLocal, true)"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("context.makeToolEventAt(pointer.leftClickLocal, false)"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("context.modeling.updateCutHover(context.makeToolEventAt(pointer.mouseLocal, true))"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("context.modeling.updateMirrorHover(context.makeToolEventAt(pointer.mouseLocal, true))"), std::string::npos);
+    EXPECT_EQ(drawnPlaneTool.find("afterClick.cutDraggingNewPoint"), std::string::npos);
+    EXPECT_EQ(drawnPlaneTool.find("afterClick.mirrorDraggingNewPoint"), std::string::npos);
 }
 
 TEST(ViewportContextMenuPolicyTests, OpensForRightClickReleaseInsideViewportWithActions) {
@@ -1050,7 +1416,7 @@ TEST(ViewportContextMenuPolicyTests, PreservesHoverOnlyForClickLikeRightPress) {
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBegin) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1059,8 +1425,8 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBeg
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const bool topologyModifier = componentSelectionMode && io.KeyShift"), std::string::npos);
-    EXPECT_NE(source.find("topologyModifier && tool == ViewportTool::Move ? ModelingTransformOperation::Extrude"), std::string::npos);
-    EXPECT_NE(source.find("topologyModifier && tool == ViewportTool::Scale ? ModelingTransformOperation::Inset"), std::string::npos);
+    EXPECT_NE(source.find("topologyModifier && tool == ViewportToolId::Move ? ModelingTransformOperation::Extrude"), std::string::npos);
+    EXPECT_NE(source.find("topologyModifier && tool == ViewportToolId::Scale ? ModelingTransformOperation::Inset"), std::string::npos);
     EXPECT_NE(source.find(".operation = operation"), std::string::npos);
     EXPECT_NE(source.find("modeling.beginTransformDrag({"), std::string::npos);
     EXPECT_NE(source.find("modeling.updateTransformDrag({"), std::string::npos);
@@ -1070,7 +1436,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBeg
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBegin) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1084,7 +1450,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
     const std::size_t duplicateField = source.find(".duplicateSelected = duplicateSelected", beginPreview);
     const std::size_t updatePreview = source.find("modeling.updateTransformDrag({");
     const std::size_t localFallback =
-            source.find("for (const GizmoStartTransform& start : gizmoStartTransforms_)", updatePreview);
+            source.find("for (const StartTransform& start : startTransforms_)", updatePreview);
     const std::size_t commitPreview = source.find("modeling.commitTransformDrag()");
 
     ASSERT_NE(duplicateStart, std::string::npos);
@@ -1103,7 +1469,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
 
 TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1122,7 +1488,7 @@ TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
 
 TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1130,14 +1496,15 @@ TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("applyDocumentWorldRotationDeltaAroundPivot(\n                    document,\n                    start.entity,\n                    next,\n                    previewRotationDelta"), std::string::npos);
-    EXPECT_NE(source.find("applyDocumentWorldRotationDeltaAroundPivot(\n                    document,\n                    start.entity,\n                    next,\n                    worldRotationDelta"), std::string::npos);
+    EXPECT_NE(source.find("applyDocumentWorldRotationDeltaAroundPivot("), std::string::npos);
+    EXPECT_NE(source.find("previewRotationDelta"), std::string::npos);
+    EXPECT_NE(source.find("worldRotationDelta"), std::string::npos);
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + previewRotationDelta"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.h";
     std::ifstream headerFile(headerPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
 
@@ -1145,10 +1512,10 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
             std::istreambuf_iterator<char>(headerFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(header.find("bool sceneOnlyGizmoDrag_"), std::string::npos);
+    EXPECT_NE(header.find("bool sceneOnlyDrag_"), std::string::npos);
 
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1159,173 +1526,273 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     EXPECT_NE(source.find("selectedHasSceneOnlyTransform"), std::string::npos);
     EXPECT_NE(source.find("selectedHasHierarchyTransform"), std::string::npos);
     EXPECT_NE(source.find("componentSelectionMode || !selectedHasHierarchyTransform"), std::string::npos);
-    EXPECT_NE(source.find("activeGizmoAxis_ = fallbackGizmoHit()"), std::string::npos);
+    EXPECT_NE(source.find("activeAxis_ = fallbackHit()"), std::string::npos);
     EXPECT_NE(source.find("parentLocalVectorForWorldVector(document, start.entity"), std::string::npos);
-    EXPECT_NE(source.find("documentLocalPivotForWorldPoint(document, entity, gizmoPivot)"), std::string::npos);
-    EXPECT_NE(source.find("sceneOnlyGizmoDrag_ = true"), std::string::npos);
-    EXPECT_NE(source.find("if (wasDragging && !sceneOnlyGizmoDrag_)"), std::string::npos);
-    EXPECT_NE(source.find("if (!sceneOnlyGizmoDrag_)"), std::string::npos);
+    EXPECT_NE(source.find("documentLocalPivotForWorldPoint(document, entity, pivot)"), std::string::npos);
+    EXPECT_NE(source.find("sceneOnlyDrag_ = true"), std::string::npos);
+    EXPECT_NE(source.find("if (wasDragging && !sceneOnlyDrag_)"), std::string::npos);
+    EXPECT_NE(source.find("if (!sceneOnlyDrag_)"), std::string::npos);
     EXPECT_NE(source.find("transformPoint(document.worldTransformMatrix(selected), Vec3{})"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path overlayRendererPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ModalToolOverlayRenderer.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream overlayRendererFile(overlayRendererPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(overlayRendererFile.is_open()) << overlayRendererPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string overlayRenderer{
+            std::istreambuf_iterator<char>(overlayRendererFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("ImGuiStyleVar_WindowPadding"), std::string::npos);
     EXPECT_NE(source.find("ImGuiStyleVar_WindowBorderSize"), std::string::npos);
     EXPECT_NE(source.find("ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse"), std::string::npos);
-    EXPECT_NE(source.find("IM_COL32(255, 235, 41, 209)"), std::string::npos);
-    EXPECT_EQ(source.find("preview.footprint[0], preview.footprint[2]"), std::string::npos);
-    EXPECT_EQ(source.find("preview.footprint[1], preview.footprint[3]"), std::string::npos);
+    EXPECT_NE(overlayRenderer.find("IM_COL32(255, 235, 41, 209)"), std::string::npos);
+    EXPECT_EQ(overlayRenderer.find("preview.footprint[0], preview.footprint[2]"), std::string::npos);
+    EXPECT_EQ(overlayRenderer.find("preview.footprint[1], preview.footprint[3]"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path transformGizmoPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream transformGizmoFile(transformGizmoPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(transformGizmoFile.is_open()) << transformGizmoPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string transformGizmoSource{
+            std::istreambuf_iterator<char>(transformGizmoFile),
+            std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const bool suppressHoverWork = result.navigationActive || result.cameraChanged"), std::string::npos);
-    EXPECT_NE(source.find("drawTransformGizmo(document, assets, undoRedo, documentCommands, modeling, camera, paneState.id, itemMin, itemSize, suppressHoverWork)"), std::string::npos);
-    EXPECT_NE(source.find("drawTransformGizmo(\n            document,\n            assets,\n            undoRedo,\n            documentCommands,\n            modeling,\n            paneState.camera"), std::string::npos);
-    EXPECT_NE(source.find("if (interactive) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
-    EXPECT_NE(source.find("mouseInsideViewport && !suppressHoverWork"), std::string::npos);
-    EXPECT_NE(source.find("lastHoverWorkKey_"), std::string::npos);
-    EXPECT_NE(source.find("claimHoverWork(hoverWorkKey)"), std::string::npos);
+    EXPECT_NE(source.find("transformGizmoController_.draw({"), std::string::npos);
+    EXPECT_NE(source.find(".suppressHoverWork = suppressHoverWork"), std::string::npos);
+    EXPECT_NE(source.find(".suppressHoverWork = true"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("if (interactive) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("mouseInsideViewport && !request.suppressHoverWork"), std::string::npos);
+    EXPECT_NE(source.find("hoverController_.invalidate()"), std::string::npos);
+    EXPECT_NE(source.find("hoverController_.claim(hoverWorkKey)"), std::string::npos);
     EXPECT_NE(source.find("result.gridPresetChanged"), std::string::npos);
     EXPECT_NE(source.find("const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover"), std::string::npos);
     EXPECT_NE(source.find("if (hoverUpdate.changed)"), std::string::npos);
     EXPECT_NE(source.find("const ModelingCommandResult clearHover = modeling.clearSelectionHover()"), std::string::npos);
-    EXPECT_NE(source.find("lastHoverWorkKey_ = makeHoverWorkKey(gizmoConsumed)"), std::string::npos);
+    EXPECT_EQ(source.find("hoverController_.remember("), std::string::npos);
+    EXPECT_NE(source.find("const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();\n    auto makeViewportHoverWorkKey"), std::string::npos);
+    EXPECT_EQ(source.find("auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {\n        const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();"), std::string::npos);
+    EXPECT_NE(source.find("auto preserveSelectionHoverAfterSelection = [&]()"), std::string::npos);
+    EXPECT_NE(source.find("auto preserveSelectionHoverAfterSelection = [&]() {\n        selectionHoverClearIssued_ = false;\n        hoverController_.invalidate();\n        selectionOverlayCache_.markDirty();\n    };"), std::string::npos);
+    EXPECT_EQ(source.find("auto suppressSelectionHoverAfterSelection = [&]()"), std::string::npos);
+    EXPECT_EQ(source.find("suppressSelectionHoverAfterSelection();"), std::string::npos);
+    EXPECT_NE(source.find("paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;\n            preserveSelectionHoverAfterSelection();"), std::string::npos);
+    EXPECT_NE(source.find("paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;\n            selectionHoverClearIssued_ = false;\n            hoverController_.invalidate();\n            selectionOverlayCache_.markDirty();"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
-    EXPECT_NE(source.find("cachedSelectionOverlayFrameDirty_"), std::string::npos);
+    EXPECT_NE(source.find("selectionOverlayCache_.markDirty()"), std::string::npos);
     EXPECT_EQ(source.find("|| suppressHoverWork) &&"), std::string::npos);
 }
 
-TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+TEST(ModelingSessionServiceTests, SelectedHoverOverlayContractDoesNotSuppressNormalHover) {
+    const std::filesystem::path appOverlayPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionServices.cpp";
+    const std::filesystem::path sdkOverlayPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "sdk" / "packages" / "editor-core" / "src" /
+            "session_selection_overlay.cpp";
+    std::ifstream appOverlayFile(appOverlayPath);
+    std::ifstream sdkOverlayFile(sdkOverlayPath);
+    ASSERT_TRUE(appOverlayFile.is_open()) << appOverlayPath.string();
+    ASSERT_TRUE(sdkOverlayFile.is_open()) << sdkOverlayPath.string();
 
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    const std::string appOverlay{
+            std::istreambuf_iterator<char>(appOverlayFile),
+            std::istreambuf_iterator<char>()};
+    const std::string sdkOverlay{
+            std::istreambuf_iterator<char>(sdkOverlayFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb)"), std::string::npos);
-    EXPECT_NE(source.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Linear)"), std::string::npos);
-    EXPECT_NE(source.find("texture.colorSpace == TextureColorSpace::Srgb ? filament::Texture::InternalFormat::SRGB8_A8 : filament::Texture::InternalFormat::RGBA8"), std::string::npos);
-    EXPECT_NE(source.find("MinFilter::LINEAR_MIPMAP_LINEAR"), std::string::npos);
-    EXPECT_NE(source.find("mipLevelCount(width, height)"), std::string::npos);
-    EXPECT_NE(source.find("Texture::Usage::GEN_MIPMAPPABLE"), std::string::npos);
-    EXPECT_NE(source.find("generateMipmaps(*engine_)"), std::string::npos);
-    EXPECT_NE(source.find("setCullingMode(filament::MaterialInstance::CullingMode::BACK)"), std::string::npos);
-    EXPECT_NE(source.find("TextureCacheKey cacheKey"), std::string::npos);
-    EXPECT_NE(source.find(".colorSpace = texture->colorSpace"), std::string::npos);
-    EXPECT_EQ(source.find("bool srgb"), std::string::npos);
+    EXPECT_EQ(appOverlay.find("selectedHoverTarget && !hover.selected_modifier_pressed"), std::string::npos);
+    EXPECT_NE(appOverlay.find("selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover)"), std::string::npos);
+    EXPECT_EQ(appOverlay.find("selection_hover_target_is_selected(session.objects(), session.selection_mode(), hover)"), std::string::npos);
+    EXPECT_EQ(appOverlay.find("if (hoverFrame.hover_target_selected)"), std::string::npos);
+    EXPECT_NE(
+            sdkOverlay.find("frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target"),
+            std::string::npos);
+}
+
+TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
+    const std::filesystem::path textureSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "TextureBindingService.cpp";
+    const std::filesystem::path materialSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "MaterialBindingService.cpp";
+    std::ifstream textureSourceFile(textureSourcePath);
+    std::ifstream materialSourceFile(materialSourcePath);
+    ASSERT_TRUE(textureSourceFile.is_open()) << textureSourcePath.string();
+    ASSERT_TRUE(materialSourceFile.is_open()) << materialSourcePath.string();
+
+    const std::string textureSource{
+            std::istreambuf_iterator<char>(textureSourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string materialSource{
+            std::istreambuf_iterator<char>(materialSourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb)"), std::string::npos);
+    EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Linear)"), std::string::npos);
+    EXPECT_NE(textureSource.find("texture.colorSpace == TextureColorSpace::Srgb ? filament::Texture::InternalFormat::SRGB8_A8 : filament::Texture::InternalFormat::RGBA8"), std::string::npos);
+    EXPECT_NE(materialSource.find("MinFilter::LINEAR_MIPMAP_LINEAR"), std::string::npos);
+    EXPECT_NE(textureSource.find("mipLevelCount(width, height)"), std::string::npos);
+    EXPECT_NE(textureSource.find("Texture::Usage::GEN_MIPMAPPABLE"), std::string::npos);
+    EXPECT_NE(textureSource.find("generateMipmaps(*engine_)"), std::string::npos);
+    EXPECT_NE(materialSource.find("setCullingMode(filament::MaterialInstance::CullingMode::BACK)"), std::string::npos);
+    EXPECT_NE(textureSource.find("TextureCacheKey cacheKey"), std::string::npos);
+    EXPECT_NE(textureSource.find(".colorSpace = texture->colorSpace"), std::string::npos);
+    EXPECT_EQ(textureSource.find("bool srgb"), std::string::npos);
+    EXPECT_EQ(materialSource.find("bool srgb"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchanged) {
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    const std::filesystem::path cacheSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayRenderableCache.cpp";
+    const std::filesystem::path cacheHeaderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayRenderableCache.h";
+    const std::filesystem::path builderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayRenderableBuilder.cpp";
+    std::ifstream cacheSourceFile(cacheSourcePath);
+    std::ifstream cacheHeaderFile(cacheHeaderPath);
+    std::ifstream builderFile(builderPath);
+    ASSERT_TRUE(cacheSourceFile.is_open()) << cacheSourcePath.string();
+    ASSERT_TRUE(cacheHeaderFile.is_open()) << cacheHeaderPath.string();
+    ASSERT_TRUE(builderFile.is_open()) << builderPath.string();
 
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    const std::string cacheSource{
+            std::istreambuf_iterator<char>(cacheSourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string cacheHeader{
+            std::istreambuf_iterator<char>(cacheHeaderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string builderSource{
+            std::istreambuf_iterator<char>(builderFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("overlayFrameSignature"), std::string::npos);
-    EXPECT_NE(source.find("overlayLayerSignature"), std::string::npos);
-    EXPECT_NE(source.find("overlaySlots_"), std::string::npos);
-    EXPECT_NE(source.find("slot.proxyGroups"), std::string::npos);
-    EXPECT_NE(source.find("frame.lines.size()"), std::string::npos);
-    EXPECT_NE(source.find("frame.points.size()"), std::string::npos);
-    EXPECT_NE(source.find("hashFloat(hash, line.widthPixels)"), std::string::npos);
-    EXPECT_NE(source.find("hashFloat(hash, point.sizePixels)"), std::string::npos);
-    EXPECT_NE(source.find("slot.frameSignature"), std::string::npos);
-    EXPECT_NE(source.find("overlayCameraSignature"), std::string::npos);
-    EXPECT_NE(source.find("const bool cameraChanged = cameraSignature != slot.cameraSignature"), std::string::npos);
-    EXPECT_NE(source.find("const bool layerChanged = layerMask != slot.layerMask"), std::string::npos);
-    EXPECT_NE(source.find("if (signature == slot.frameSignature && !cameraChanged && !layerChanged)"), std::string::npos);
-    EXPECT_NE(source.find("slot.frame = std::move(frame);\n        return;"), std::string::npos);
-    EXPECT_NE(source.find("group.signature = 0;"), std::string::npos);
-    EXPECT_NE(source.find("rebuildOverlayProxies(slot);"), std::string::npos);
-    EXPECT_NE(source.find("if (group.signature == layerSignature)"), std::string::npos);
-    EXPECT_NE(source.find("viewportOverlayDrawOrder(layer) * 64"), std::string::npos);
+    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::frameSignature"), std::string::npos);
+    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::layerSignature"), std::string::npos);
+    EXPECT_NE(cacheHeader.find("std::array<OverlaySlot, kMaxViewportOverlaySlots> slots_"), std::string::npos);
+    EXPECT_NE(cacheSource.find("slot.proxyGroups"), std::string::npos);
+    EXPECT_NE(builderSource.find("frame.lines.size()"), std::string::npos);
+    EXPECT_NE(builderSource.find("frame.points.size()"), std::string::npos);
+    EXPECT_NE(builderSource.find("hashFloat(hash, line.widthPixels)"), std::string::npos);
+    EXPECT_NE(builderSource.find("hashFloat(hash, point.sizePixels)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("slot.frameSignature"), std::string::npos);
+    EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::cameraSignature"), std::string::npos);
+    EXPECT_NE(cacheSource.find("const bool cameraChanged = cameraSignature != slot.cameraSignature"), std::string::npos);
+    EXPECT_NE(cacheSource.find("const bool layerChanged = layerMask != slot.layerMask"), std::string::npos);
+    EXPECT_NE(cacheSource.find("if (signature == slot.frameSignature && !cameraChanged && !layerChanged)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("slot.frame = std::move(frame);\n        return false;"), std::string::npos);
+    EXPECT_NE(cacheSource.find("group.signature = 0;"), std::string::npos);
+    EXPECT_NE(cacheSource.find("rebuildSlot(slot);"), std::string::npos);
+    EXPECT_NE(cacheSource.find("if (group.signature == layerSignature)"), std::string::npos);
+    EXPECT_NE(cacheSource.find("factory_->createLayerProxies(plan, slot.layerMask)"), std::string::npos);
+    EXPECT_NE(builderSource.find("viewportOverlayDrawOrder(layer) * 64"), std::string::npos);
 }
 
 TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionService.cpp";
+    const std::filesystem::path splitSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionServices.cpp";
+    const std::filesystem::path overlayHeaderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "session" / "ModelingOverlayService.h";
+    const std::filesystem::path selectionHeaderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "session" / "ModelingSelectionService.h";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream splitSourceFile(splitSourcePath);
+    std::ifstream overlayHeaderFile(overlayHeaderPath);
+    std::ifstream selectionHeaderFile(selectionHeaderPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(splitSourceFile.is_open()) << splitSourcePath.string();
+    ASSERT_TRUE(overlayHeaderFile.is_open()) << overlayHeaderPath.string();
+    ASSERT_TRUE(selectionHeaderFile.is_open()) << selectionHeaderPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string splitSource{
+            std::istreambuf_iterator<char>(splitSourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string overlayHeader{
+            std::istreambuf_iterator<char>(overlayHeaderFile),
+            std::istreambuf_iterator<char>()};
+    const std::string selectionHeader{
+            std::istreambuf_iterator<char>(selectionHeaderFile),
+            std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("selectionOverlayCacheValid_"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayCacheContentRevision_ == contentRevision"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayCacheSelectionRevision_ == selectionRevision"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayCacheSceneRevision_ == sceneRevision"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayCacheToolSignature_ == toolSignature"), std::string::npos);
+    EXPECT_NE(overlayHeader.find("SelectionOverlayCache selectionOverlayCache_"), std::string::npos);
+    EXPECT_NE(splitSource.find("selectionOverlayCache_.matches("), std::string::npos);
+    EXPECT_NE(source.find("contentRevision,\n                    selectionRevision,\n                    sceneRevision"), std::string::npos);
+    EXPECT_NE(source.find("selectionMode,\n                    toolSignature,\n                    hover"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayToolSignature()"), std::string::npos);
     EXPECT_NE(source.find("runtime_.cut_state()"), std::string::npos);
     EXPECT_NE(source.find("runtime_.mirror_state()"), std::string::npos);
-    EXPECT_NE(source.find("hoverMatches(selectionOverlayCacheHover_, hover)"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayCacheFrame_ = fromSdk(selectionOverlayCurrentFrame(hover)"), std::string::npos);
-    EXPECT_NE(source.find("selectionOverlayBaseFrame()"), std::string::npos);
-    EXPECT_NE(source.find("overlayBaseCache_"), std::string::npos);
-    EXPECT_NE(source.find("build_selection_hover_overlay_frame"), std::string::npos);
-    EXPECT_NE(source.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
+    EXPECT_NE(splitSource.find("selectionOverlayCache_.frame()"), std::string::npos);
+    EXPECT_NE(source.find("ViewportOverlayFrame frame = fromSdk(overlayService_.selectionOverlayCurrentFrame(session_, runtime_, hover)"), std::string::npos);
+    EXPECT_NE(splitSource.find("selectionOverlayCache_.store("), std::string::npos);
+    EXPECT_NE(splitSource.find("selectionOverlayBaseFrame(session)"), std::string::npos);
+    EXPECT_NE(overlayHeader.find("overlayBaseCache_"), std::string::npos);
+    EXPECT_NE(splitSource.find("build_selection_hover_overlay_frame"), std::string::npos);
+    EXPECT_NE(splitSource.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
     EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
-    EXPECT_NE(source.find("objectPickFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
+    EXPECT_NE(selectionHeader.find("faceGeometryEntries"), std::string::npos);
+    EXPECT_NE(splitSource.find("objectPickFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, SelectionOverlayCacheKeyIncludesSelectionMode) {
     const std::filesystem::path headerPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPaneOverlayCache.h";
+    const std::filesystem::path cachePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPaneOverlayCache.cpp";
+    const std::filesystem::path panelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream headerFile(headerPath);
+    std::ifstream cacheFile(cachePath);
+    std::ifstream panelFile(panelPath);
     ASSERT_TRUE(headerFile.is_open()) << headerPath.string();
+    ASSERT_TRUE(cacheFile.is_open()) << cachePath.string();
+    ASSERT_TRUE(panelFile.is_open()) << panelPath.string();
 
     const std::string header{
             std::istreambuf_iterator<char>(headerFile),
             std::istreambuf_iterator<char>()};
-
-    EXPECT_NE(header.find("ModelingSelectionMode cachedSelectionOverlayMode_"), std::string::npos);
-
-    const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
-
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    const std::string cache{
+            std::istreambuf_iterator<char>(cacheFile),
+            std::istreambuf_iterator<char>()};
+    const std::string panel{
+            std::istreambuf_iterator<char>(panelFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("cachedSelectionOverlayMode_ != overlaySummary.mode"), std::string::npos);
-    EXPECT_NE(source.find("cachedSelectionOverlayMode_ = overlaySummary.mode"), std::string::npos);
-    EXPECT_NE(source.find("toolOverlaySignature(modeling)"), std::string::npos);
-    EXPECT_NE(source.find("cachedSelectionOverlayToolSignature_"), std::string::npos);
+    EXPECT_NE(header.find("ModelingSelectionMode selectionMode"), std::string::npos);
+    EXPECT_NE(header.find("std::uint64_t toolSignature"), std::string::npos);
+    EXPECT_NE(cache.find("key_.selectionMode != key.selectionMode"), std::string::npos);
+    EXPECT_NE(cache.find("key_.toolSignature != key.toolSignature"), std::string::npos);
+    EXPECT_NE(panel.find(".selectionMode = overlaySummary.mode"), std::string::npos);
+    EXPECT_NE(panel.find(".toolSignature = toolOverlaySignature(modeling)"), std::string::npos);
 }
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayFaceFillBuilder.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1339,18 +1806,25 @@ TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEnc
 
 TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportRenderer.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportRenderTarget.cpp";
+    const std::filesystem::path gridSourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportGridRenderer.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream gridSourceFile(gridSourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(gridSourceFile.is_open()) << gridSourcePath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string gridSource{
+            std::istreambuf_iterator<char>(gridSourceFile),
+            std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find(".format(Texture::InternalFormat::RGBA8)"), std::string::npos);
     EXPECT_NE(source.find("TextureSampleColorSpace::LinearSrgb"), std::string::npos);
-    EXPECT_NE(source.find("settings.color(ViewportColorSettingId::GridMinor)"), std::string::npos);
-    EXPECT_NE(source.find("settings.floatValue(ViewportFloatSettingId::GridMinorLineSize)"), std::string::npos);
+    EXPECT_NE(gridSource.find("settings.color(ViewportColorSettingId::GridMinor)"), std::string::npos);
+    EXPECT_NE(gridSource.find("settings.floatValue(ViewportFloatSettingId::GridMinorLineSize)"), std::string::npos);
     EXPECT_EQ(source.find(".format(Texture::InternalFormat::SRGB8_A8)"), std::string::npos);
 }
 
@@ -1361,6 +1835,20 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     ASSERT_TRUE(rendererFile.is_open()) << rendererPath.string();
     const std::string rendererSource{
             std::istreambuf_iterator<char>(rendererFile),
+            std::istreambuf_iterator<char>()};
+    const std::filesystem::path gridRendererPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportGridRenderer.cpp";
+    const std::filesystem::path coordinatorPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "ViewportRenderPassCoordinator.cpp";
+    std::ifstream gridRendererFile(gridRendererPath);
+    std::ifstream coordinatorFile(coordinatorPath);
+    ASSERT_TRUE(gridRendererFile.is_open()) << gridRendererPath.string();
+    ASSERT_TRUE(coordinatorFile.is_open()) << coordinatorPath.string();
+    const std::string gridRendererSource{
+            std::istreambuf_iterator<char>(gridRendererFile),
+            std::istreambuf_iterator<char>()};
+    const std::string coordinatorSource{
+            std::istreambuf_iterator<char>(coordinatorFile),
             std::istreambuf_iterator<char>()};
 
     const std::filesystem::path appPath = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "app" / "App.cpp";
@@ -1376,21 +1864,29 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
             std::istreambuf_iterator<char>(viewportPanelFile),
             std::istreambuf_iterator<char>()};
 
-    const std::filesystem::path bridgePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream bridgeFile(bridgePath);
-    ASSERT_TRUE(bridgeFile.is_open()) << bridgePath.string();
-    const std::string bridgeSource{std::istreambuf_iterator<char>(bridgeFile), std::istreambuf_iterator<char>()};
+    const std::filesystem::path overlayCachePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayRenderableCache.cpp";
+    const std::filesystem::path overlayProxyFactoryPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayProxyFactory.cpp";
+    std::ifstream overlayCacheFile(overlayCachePath);
+    std::ifstream overlayProxyFactoryFile(overlayProxyFactoryPath);
+    ASSERT_TRUE(overlayCacheFile.is_open()) << overlayCachePath.string();
+    ASSERT_TRUE(overlayProxyFactoryFile.is_open()) << overlayProxyFactoryPath.string();
+    const std::string overlayCacheSource{std::istreambuf_iterator<char>(overlayCacheFile), std::istreambuf_iterator<char>()};
+    const std::string overlayProxyFactorySource{std::istreambuf_iterator<char>(overlayProxyFactoryFile), std::istreambuf_iterator<char>()};
 
     const std::size_t renderStart = rendererSource.find("void ViewportRenderer::render");
-    const std::size_t renderEnd = rendererSource.find("void ViewportRenderer::createGroundGrid");
+    const std::size_t renderEnd = rendererSource.find("void ViewportRenderer::updateVisibleLayers");
     ASSERT_NE(renderStart, std::string::npos);
     ASSERT_NE(renderEnd, std::string::npos);
     const std::string renderFunction = rendererSource.substr(renderStart, renderEnd - renderStart);
     EXPECT_EQ(renderFunction.find("scene_->addEntity"), std::string::npos);
     EXPECT_EQ(renderFunction.find("scene_->remove"), std::string::npos);
-    EXPECT_NE(rendererSource.find(".layerMask(kViewportAllLayerMask, gridLayerMask_)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("view_->setVisibleLayers(kViewportAllLayerMask, visibleLayers)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("gridRenderer_.update(controller, width(), height(), gridWorldSpacing, settings, visible)"), std::string::npos);
+    EXPECT_NE(gridRendererSource.find(".layerMask(kViewportAllLayerMask, gridLayerMask_)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("renderPassCoordinator_.applyVisibleLayers(view_)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("renderPassCoordinator_.render(renderer, view_, renderTarget_.renderTarget())"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("view->setVisibleLayers(kViewportAllLayerMask, visibleLayerMask())"), std::string::npos);
 
     const std::size_t prepareViewports = appSource.find("ui_.prepareViewports(renderBridge_)");
     const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
@@ -1402,8 +1898,8 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("viewportGridLayerMask(viewportPaneIndex(paneId))"), std::string::npos);
-    EXPECT_NE(bridgeSource.find(".layerMask(kViewportAllLayerMask, slot.layerMask)"), std::string::npos);
-    EXPECT_NE(bridgeSource.find("void SceneRenderBridge::rebuildOverlayProxies(OverlaySlot& slot)"), std::string::npos);
+    EXPECT_NE(overlayProxyFactorySource.find(".layerMask(kViewportAllLayerMask, layerMask)"), std::string::npos);
+    EXPECT_NE(overlayCacheSource.find("void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot)"), std::string::npos);
 }
 
 TEST(ImGuiFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
@@ -1538,7 +2034,8 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
     EXPECT_NE(source.find("kMinAxisInputWidth"), std::string::npos);
     EXPECT_EQ(source.find("availableWidth < minimumInlineWidth"), std::string::npos);
     EXPECT_NE(source.find("std::max((availableWidth - kTransformLabelColumnWidth) / 3.0f"), std::string::npos);
-    EXPECT_NE(source.find("setNextWindowMinWidth(context.style.sidebarMinWidth)"), std::string::npos);
+    EXPECT_NE(source.find("InspectorPanel::minimumWidth"), std::string::npos);
+    EXPECT_NE(source.find("context.style.sidebarMinWidth"), std::string::npos);
     EXPECT_NE(source.find("ImGuiTableFlags_SizingFixedFit"), std::string::npos);
     EXPECT_NE(source.find("ImGuiTableFlags_NoSavedSettings"), std::string::npos);
     EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, delta"), std::string::npos);
@@ -1565,7 +2062,42 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
     EXPECT_NE(source.find("MenuItem(\"Group\")"), std::string::npos);
     EXPECT_NE(source.find("MenuItem(\"Ungroup\""), std::string::npos);
     EXPECT_NE(source.find("ImGuiKey_G"), std::string::npos);
-    EXPECT_NE(source.find("createEmpty"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.groupSelection"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.ungroupSelection"), std::string::npos);
+}
+
+TEST(OutlinerPanelTests, RoutesDocumentMutationsThroughDocumentCommands) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "OutlinerPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("context.documentCommands.selectEntities"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.createEntity"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.destroyEntity"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.reparentEntity"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.groupSelection"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.ungroupSelection"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.renameEntity"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.applyEntityTransform"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.setVisible"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.setLocked"), std::string::npos);
+
+    EXPECT_EQ(source.find("document.clearSelection("), std::string::npos);
+    EXPECT_EQ(source.find("document.setSelected("), std::string::npos);
+    EXPECT_EQ(source.find("document.setActiveSelection("), std::string::npos);
+    EXPECT_EQ(source.find("document.createEntity("), std::string::npos);
+    EXPECT_EQ(source.find("document.createEmpty("), std::string::npos);
+    EXPECT_EQ(source.find("document.destroyEntity("), std::string::npos);
+    EXPECT_EQ(source.find("document.setParent("), std::string::npos);
+    EXPECT_EQ(source.find("document.setTransform("), std::string::npos);
+    EXPECT_EQ(source.find("document.setEntityKind("), std::string::npos);
+    EXPECT_EQ(source.find("context.document.clearSelection("), std::string::npos);
+    EXPECT_EQ(source.find("context.document.setSelected("), std::string::npos);
 }
 
 TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
@@ -1638,22 +2170,29 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
             std::istreambuf_iterator<char>()};
     EXPECT_NE(styleSource.find("sidebarMinWidth = 270.0f"), std::string::npos);
 
+    std::ifstream dockPanelFile(uiPath / "UIDockPanel.h");
+    ASSERT_TRUE(dockPanelFile.is_open());
+    const std::string dockPanelSource{
+            std::istreambuf_iterator<char>(dockPanelFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(dockPanelSource.find("setNextWindowMinWidth(minWidth)"), std::string::npos);
+    EXPECT_NE(dockPanelSource.find("context.requestPanelFocus(id())"), std::string::npos);
+
     std::ifstream outlinerFile(uiPath / "OutlinerPanel.cpp");
     ASSERT_TRUE(outlinerFile.is_open());
     const std::string outlinerSource{
             std::istreambuf_iterator<char>(outlinerFile),
             std::istreambuf_iterator<char>()};
-    EXPECT_NE(outlinerSource.find("setNextWindowMinWidth(context.style.sidebarMinWidth)"), std::string::npos);
+    EXPECT_NE(outlinerSource.find("OutlinerPanel::minimumWidth"), std::string::npos);
+    EXPECT_NE(outlinerSource.find("context.style.sidebarMinWidth"), std::string::npos);
 
     std::ifstream uiSystemFile(uiPath / "UISystem.cpp");
     ASSERT_TRUE(uiSystemFile.is_open());
     const std::string uiSystemSource{
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
-    EXPECT_NE(uiSystemSource.find("ImGui::Begin(\"Settings\", &settingsPanelOpen_, ImGuiWindowFlags_NoDocking)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::Begin(\"Tool Settings\", &toolSettingsPanelOpen_, ImGuiWindowFlags_NoDocking)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::SetNextWindowViewport(viewport->ID)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::SetNextWindowPos("), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportSettingsPanel_.draw(context, settingsPanelOpen_)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolSettingsPanel_.draw(context, toolSettingsPanelOpen_)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
@@ -1663,6 +2202,22 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     EXPECT_NE(uiSystemSource.find("clampDockLeafNodeWidth"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("ImGuiStyleVar_WindowMinSize"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("sidebarMinimumRatio"), std::string::npos);
+
+    std::ifstream floatingPanelFile(uiPath / "UIFloatingPanel.h");
+    ASSERT_TRUE(floatingPanelFile.is_open());
+    const std::string floatingPanelSource{
+            std::istreambuf_iterator<char>(floatingPanelFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(floatingPanelSource.find("ImGuiWindowFlags_NoDocking"), std::string::npos);
+    EXPECT_NE(floatingPanelSource.find("ImGui::Begin(title(), &open"), std::string::npos);
+
+    std::ifstream toolSettingsPanelFile(uiPath / "ToolSettingsPanel.cpp");
+    ASSERT_TRUE(toolSettingsPanelFile.is_open());
+    const std::string toolSettingsPanelSource{
+            std::istreambuf_iterator<char>(toolSettingsPanelFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::SetNextWindowViewport(viewport->ID)"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::SetNextWindowPos("), std::string::npos);
 
     std::ifstream contextFile(uiPath / "UIContext.h");
     ASSERT_TRUE(contextFile.is_open());
@@ -1687,23 +2242,34 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     const std::string inspectorSource{
             std::istreambuf_iterator<char>(inspectorFile),
             std::istreambuf_iterator<char>()};
-    EXPECT_NE(inspectorSource.find("context.requestPanelFocus(id())"), std::string::npos);
+    EXPECT_NE(inspectorSource.find("InspectorPanel::minimumWidth"), std::string::npos);
 
     std::ifstream consoleFile(uiPath / "ConsolePanel.cpp");
     ASSERT_TRUE(consoleFile.is_open());
     const std::string consoleSource{
             std::istreambuf_iterator<char>(consoleFile),
             std::istreambuf_iterator<char>()};
-    EXPECT_NE(consoleSource.find("context.requestPanelFocus(id())"), std::string::npos);
+    EXPECT_NE(consoleSource.find("ConsolePanel::drawContent"), std::string::npos);
 
     std::ifstream viewportPanelFile(uiPath / "ViewportPanel.cpp");
+    std::ifstream viewportFocusFile(uiPath / "ViewportFocusController.cpp");
+    std::ifstream modalOverlayFile(uiPath / "ModalToolOverlayRenderer.cpp");
     ASSERT_TRUE(viewportPanelFile.is_open());
+    ASSERT_TRUE(viewportFocusFile.is_open());
+    ASSERT_TRUE(modalOverlayFile.is_open());
     const std::string viewportPanelSource{
             std::istreambuf_iterator<char>(viewportPanelFile),
             std::istreambuf_iterator<char>()};
-    EXPECT_NE(viewportPanelSource.find("Middle Mouse to reset"), std::string::npos);
+    const std::string viewportFocusSource{
+            std::istreambuf_iterator<char>(viewportFocusFile),
+            std::istreambuf_iterator<char>()};
+    const std::string modalOverlaySource{
+            std::istreambuf_iterator<char>(modalOverlayFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(modalOverlaySource.find("Middle Mouse to reset"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("result.flyHudActive && !camera.flySpeedIsDefault()"), std::string::npos);
-    EXPECT_NE(viewportPanelSource.find("uiContext.requestPanelFocus(UIPanelId::Viewport)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("focusController_.resolve(focusHovered, uiContext, UIPanelId::Viewport)"), std::string::npos);
+    EXPECT_NE(viewportFocusSource.find("uiContext.requestPanelFocus(panelId)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("globalEscCancelRequested"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("mouseClickedOutsideViewport"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("!io.WantCaptureMouse"), std::string::npos);
@@ -1711,57 +2277,99 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
 }
 
 TEST(UISystemTests, TopMenuExposesViewportLayoutOptions) {
+    const std::filesystem::path mainMenuBarPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "MainMenuBar.cpp";
     const std::filesystem::path uiSystemPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
+    std::ifstream mainMenuBarFile(mainMenuBarPath);
     std::ifstream uiSystemFile(uiSystemPath);
+    ASSERT_TRUE(mainMenuBarFile.is_open()) << mainMenuBarPath.string();
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
 
+    const std::string mainMenuBarSource{
+            std::istreambuf_iterator<char>(mainMenuBarFile),
+            std::istreambuf_iterator<char>()};
     const std::string uiSystemSource{
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Layout\")"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportLayoutOptions()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportPanel_->setViewportLayout(option.id)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("void LayoutMenu::draw"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Layout\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("viewportLayoutOptions()"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("context.viewportPanel->setViewportLayout(option.id)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("mainMenuBar_.draw"), std::string::npos);
 }
 
 TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
+    const std::filesystem::path mainMenuBarPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "MainMenuBar.cpp";
     const std::filesystem::path uiSystemPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
+    const std::filesystem::path toolSettingsPanelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ToolSettingsPanel.cpp";
+    const std::filesystem::path modelingPreviewCommandServicePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "ModelingPreviewCommandService.h";
+    const std::filesystem::path viewportSettingsPanelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportSettingsPanel.cpp";
+    std::ifstream mainMenuBarFile(mainMenuBarPath);
     std::ifstream uiSystemFile(uiSystemPath);
+    std::ifstream toolSettingsPanelFile(toolSettingsPanelPath);
+    std::ifstream modelingPreviewCommandServiceFile(modelingPreviewCommandServicePath);
+    std::ifstream viewportSettingsPanelFile(viewportSettingsPanelPath);
+    ASSERT_TRUE(mainMenuBarFile.is_open()) << mainMenuBarPath.string();
     ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+    ASSERT_TRUE(toolSettingsPanelFile.is_open()) << toolSettingsPanelPath.string();
+    ASSERT_TRUE(modelingPreviewCommandServiceFile.is_open()) << modelingPreviewCommandServicePath.string();
+    ASSERT_TRUE(viewportSettingsPanelFile.is_open()) << viewportSettingsPanelPath.string();
 
+    const std::string mainMenuBarSource{
+            std::istreambuf_iterator<char>(mainMenuBarFile),
+            std::istreambuf_iterator<char>()};
     const std::string uiSystemSource{
             std::istreambuf_iterator<char>(uiSystemFile),
             std::istreambuf_iterator<char>()};
+    const std::string toolSettingsPanelSource{
+            std::istreambuf_iterator<char>(toolSettingsPanelFile),
+            std::istreambuf_iterator<char>()};
+    const std::string modelingPreviewCommandServiceSource{
+            std::istreambuf_iterator<char>(modelingPreviewCommandServiceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string viewportSettingsPanelSource{
+            std::istreambuf_iterator<char>(viewportSettingsPanelFile),
+            std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::MenuItem(\"Tool Settings\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("void EditMenu::draw"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Edit\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(\"Settings\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::MenuItem(\"Tool Settings\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("context.viewportSettingsPanelOpen = true"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("context.toolSettingsPanelOpen = true"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("toolSettingsPanelOpen_"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("drawSettingsPanel"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("drawToolSettingsPanel"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modeling.toolSettingsTarget()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportSettingsPanel_.draw(context, settingsPanelOpen_)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("toolSettingsPanel_.draw(context, toolSettingsPanelOpen_)"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("context.modeling.toolSettingsTarget()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("modeling.toolPreviewMeshes()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("switch (target.kind)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modeling.setInteractionSettings(settings)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolSettingsPanelOpen_ = false;"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolSettingsPanelOpen_ = result.ok ? false : modeling.toolSettingsTarget().active"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::RadioButton(\"Discard Left\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::RadioButton(\"Discard Right\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGui::RadioButton(\"Keep Both\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modeling.commitActiveOperationPreview()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modeling.cancelActiveOperationPreview()"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("No active tool settings."), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("ImGui::Combo(\"Keep Mode\""), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("ImGui::CollapsingHeader(\"Bridge\")"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("ImGui::CollapsingHeader(\"Edge Bevel\""), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("ImGui::CollapsingHeader(\"Merge by Distance\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportSettingsSections()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_AlphaBar"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("ImGuiColorEditFlags_NoInputs"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("switch (target.kind)"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("context.modeling.setInteractionSettings(settings)"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("open = false;"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("open = result.ok ? false : context.modeling.toolSettingsTarget().active"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(\"Discard Left\""), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(\"Discard Right\""), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(\"Keep Both\""), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ModelingPreviewCommandService::commit"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("ModelingPreviewCommandService::cancel"), std::string::npos);
+    EXPECT_NE(modelingPreviewCommandServiceSource.find("commitActiveOperationPreview()"), std::string::npos);
+    EXPECT_NE(modelingPreviewCommandServiceSource.find("cancelActiveOperationPreview()"), std::string::npos);
+    EXPECT_EQ(toolSettingsPanelSource.find("No active tool settings."), std::string::npos);
+    EXPECT_EQ(toolSettingsPanelSource.find("ImGui::Combo(\"Keep Mode\""), std::string::npos);
+    EXPECT_EQ(toolSettingsPanelSource.find("ImGui::CollapsingHeader(\"Bridge\")"), std::string::npos);
+    EXPECT_EQ(toolSettingsPanelSource.find("ImGui::CollapsingHeader(\"Edge Bevel\""), std::string::npos);
+    EXPECT_EQ(toolSettingsPanelSource.find("ImGui::CollapsingHeader(\"Merge by Distance\""), std::string::npos);
+    EXPECT_NE(viewportSettingsPanelSource.find("viewportSettingsSections()"), std::string::npos);
+    EXPECT_NE(viewportSettingsPanelSource.find("ImGuiColorEditFlags_AlphaBar"), std::string::npos);
+    EXPECT_NE(viewportSettingsPanelSource.find("ImGuiColorEditFlags_NoInputs"), std::string::npos);
 
     const std::filesystem::path uiContextPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UIContext.h";
@@ -1776,22 +2384,33 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
 }
 
 TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
-    const std::filesystem::path uiSystemPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "UISystem.cpp";
-    std::ifstream uiSystemFile(uiSystemPath);
-    ASSERT_TRUE(uiSystemFile.is_open()) << uiSystemPath.string();
+    const std::filesystem::path mainMenuBarPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "MainMenuBar.cpp";
+    std::ifstream mainMenuBarFile(mainMenuBarPath);
+    ASSERT_TRUE(mainMenuBarFile.is_open()) << mainMenuBarPath.string();
 
-    const std::string uiSystemSource{
-            std::istreambuf_iterator<char>(uiSystemFile),
+    const std::string mainMenuBarSource{
+            std::istreambuf_iterator<char>(mainMenuBarFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(uiSystemSource.find("ImGui::BeginMenu(\"Tools\")"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("activateToolFromMenu(tool, modeling)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Insert Edge Loop\", \"Shift+R\", ViewportTool::InsertEdgeLoop)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Knife\", \"C\", ViewportTool::Knife)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Cut\", \"Shift+C\", ViewportTool::Cut)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Poly\", \"P\", ViewportTool::Poly)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toolMenuItem(\"Mirror\", nullptr, ViewportTool::Mirror)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("void ToolsMenu::draw"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("ImGui::BeginMenu(\"Tools\")"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("viewportToolCatalog()"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("activateToolFromMenu(tool->viewportTool(), context.modeling)"), std::string::npos);
+
+    const std::filesystem::path toolCatalogPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "ViewportToolCatalog.cpp";
+    std::ifstream toolCatalogFile(toolCatalogPath);
+    ASSERT_TRUE(toolCatalogFile.is_open()) << toolCatalogPath.string();
+
+    const std::string toolCatalogSource{
+            std::istreambuf_iterator<char>(toolCatalogFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(toolCatalogSource.find("InsertEdgeLoopTool"), std::string::npos);
+    EXPECT_NE(toolCatalogSource.find("KnifeTool"), std::string::npos);
+    EXPECT_NE(toolCatalogSource.find("CutTool"), std::string::npos);
+    EXPECT_NE(toolCatalogSource.find("PolyTool"), std::string::npos);
+    EXPECT_NE(toolCatalogSource.find("MirrorTool"), std::string::npos);
 
     const std::filesystem::path viewportPanelPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
@@ -1802,7 +2421,8 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
             std::istreambuf_iterator<char>(viewportPanelFile),
             std::istreambuf_iterator<char>()};
     EXPECT_NE(viewportPanelSource.find("ViewportPanel::activateToolFromMenu"), std::string::npos);
-    EXPECT_NE(viewportPanelSource.find("modeling.activateViewportTool(toModelingViewportTool(tool))"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("toolDefinition->activate(modeling)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("activeTool->activate(modeling)"), std::string::npos);
 }
 
 TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
@@ -3529,14 +4149,14 @@ TEST(AssetRegistryTests, StoresMaterialMeshAndTextureMetadata) {
     AssetRegistry registry;
     const AssetId mesh = registry.addMesh(generateUVSphere());
     const AssetId material = registry.addMaterial(makeDefaultQuaderMaterial());
-    const AssetId texture = registry.addTexture(TextureAsset{
-        .name = "Curvature",
-        .usage = TextureUsage::Curvature,
-        .colorSpace = TextureColorSpace::Linear,
-        .width = 512,
-        .height = 512,
-        .generated = true,
-    });
+    TextureAsset textureAsset;
+    textureAsset.name = "Curvature";
+    textureAsset.usage = TextureUsage::Curvature;
+    textureAsset.colorSpace = TextureColorSpace::Linear;
+    textureAsset.width = 512;
+    textureAsset.height = 512;
+    textureAsset.generated = true;
+    const AssetId texture = registry.addTexture(std::move(textureAsset));
 
     ASSERT_NE(registry.mesh(mesh), nullptr);
     ASSERT_NE(registry.material(material), nullptr);
@@ -3551,13 +4171,13 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
     meshAsset.name = "Source";
     const AssetId mesh = registry.addMesh(std::move(meshAsset));
     const AssetId material = registry.addMaterial(makeDefaultQuaderMaterial());
-    const AssetId texture = registry.addTexture(TextureAsset{
-        .name = "Mask",
-        .usage = TextureUsage::Mask,
-        .width = 16,
-        .height = 16,
-        .generated = true,
-    });
+    TextureAsset textureAsset;
+    textureAsset.name = "Mask";
+    textureAsset.usage = TextureUsage::Mask;
+    textureAsset.width = 16;
+    textureAsset.height = 16;
+    textureAsset.generated = true;
+    const AssetId texture = registry.addTexture(std::move(textureAsset));
 
     EXPECT_EQ(registry.meshRevision(mesh).value, 1u);
     EXPECT_EQ(registry.materialRevision(material).value, 1u);
@@ -3606,6 +4226,47 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
     EXPECT_EQ(registry.revision(), 7u);
     EXPECT_FALSE(registry.updateMesh(InvalidAssetId, [](MeshAsset&) {}));
     EXPECT_EQ(registry.meshRevision(InvalidAssetId).value, 0u);
+}
+
+TEST(AssetProjectArchitectureTests, NamedTypedStoresStampDocumentsWithoutAssetRegistryCeremony) {
+    static_assert(std::is_base_of_v<TypedAssetStore<MeshAsset, MeshAssetRevision>, MeshAssetStore>);
+    static_assert(std::is_base_of_v<TypedAssetStore<MaterialDocument, MaterialAssetRevision>, MaterialAssetStore>);
+    static_assert(std::is_base_of_v<TypedAssetStore<TextureAsset, TextureAssetRevision>, TextureAssetStore>);
+    static_assert(std::is_final_v<MeshAssetStore>);
+    static_assert(std::is_final_v<MaterialAssetStore>);
+    static_assert(std::is_final_v<TextureAssetStore>);
+
+    MeshAssetStore meshes;
+    MeshAsset mesh;
+    mesh.name = "Mesh Source";
+    const AssetId meshId = meshes.add(41, std::move(mesh));
+    ASSERT_EQ(meshId, 41u);
+    ASSERT_NE(meshes.get(meshId), nullptr);
+    EXPECT_EQ(meshes.get(meshId)->id, meshId);
+    EXPECT_EQ(meshes.get(meshId)->revision.value, 1u);
+    EXPECT_EQ(meshes.get(meshId)->name, "Mesh Source");
+
+    ASSERT_TRUE(meshes.update(meshId, [](MeshAsset& asset) {
+        asset.name = "Mesh Updated";
+    }));
+    ASSERT_NE(meshes.get(meshId), nullptr);
+    EXPECT_EQ(meshes.get(meshId)->revision.value, 2u);
+    EXPECT_EQ(meshes.get(meshId)->name, "Mesh Updated");
+
+    MaterialAssetStore materials;
+    const AssetId materialId = materials.add(7, makeDefaultQuaderMaterial("Material Source"));
+    ASSERT_NE(materials.get(materialId), nullptr);
+    EXPECT_EQ(materials.get(materialId)->revision.value, 1u);
+    EXPECT_EQ(materials.get(materialId)->name, "Material Source");
+
+    TextureAssetStore textures;
+    TextureAsset texture;
+    texture.name = "Texture Source";
+    texture.usage = TextureUsage::Mask;
+    const AssetId textureId = textures.add(9, std::move(texture));
+    ASSERT_NE(textures.get(textureId), nullptr);
+    EXPECT_EQ(textures.get(textureId)->revision.value, 1u);
+    EXPECT_EQ(textures.get(textureId)->usage, TextureUsage::Mask);
 }
 
 TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
@@ -3657,6 +4318,98 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
     EXPECT_EQ(document.revision(), 4u);
 }
 
+TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWiredTogether) {
+    ProjectSessionService service;
+    std::unique_ptr<ProjectSession> session = service.createSession(ProjectDocumentRecord{
+            .id = 42,
+            .name = "Architecture Session",
+    });
+    ASSERT_NE(session, nullptr);
+    EXPECT_EQ(session->document().id(), 42u);
+    EXPECT_EQ(session->document().name(), "Architecture Session");
+    EXPECT_EQ(&session->scene(), &session->document().scene());
+    EXPECT_EQ(&session->assets(), &session->document().assets());
+
+    const AssetId material = session->assets().addMaterial(makeDefaultQuaderMaterial("Session Material"));
+    ASSERT_NE(session->document().assets().material(material), nullptr);
+    EXPECT_EQ(session->document().assets().material(material)->name, "Session Material");
+
+    EntityId entity = InvalidEntityId;
+    DocumentCommandResult result = session->documentCommands().createEntity(
+            "Session Entity",
+            EntityKind::Mesh,
+            InvalidEntityId,
+            {},
+            &entity);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(entity, InvalidEntityId);
+    EXPECT_TRUE(session->scene().exists(entity));
+    EXPECT_TRUE(session->undoRedo().canUndo());
+    ASSERT_TRUE(session->undoRedo().undo().ok);
+    EXPECT_FALSE(session->scene().exists(entity));
+
+    ProjectDocument existing(ProjectDocumentRecord{
+            .id = 99,
+            .name = "Opened Session",
+    });
+    const EntityId authoredEntity = existing.scene().createEntity("Authored Mesh");
+    const ProjectObjectId object = existing.createObjectRecord(ProjectObjectRecord{
+            .sceneEntity = authoredEntity,
+            .authoredName = "Authored Mesh",
+    });
+    std::unique_ptr<ProjectSession> opened = service.openSession(std::move(existing));
+    ASSERT_NE(opened, nullptr);
+    EXPECT_EQ(opened->document().id(), 99u);
+    EXPECT_EQ(opened->document().name(), "Opened Session");
+    EXPECT_NE(opened->document().objectRecord(object), nullptr);
+    EXPECT_EQ(opened->document().entityForObjectId(object), authoredEntity);
+}
+
+TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectureTypes) {
+    const std::filesystem::path assetDocumentPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "assets" / "AssetDocument.h";
+    const std::filesystem::path typedStorePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "assets" / "TypedAssetStore.h";
+    const std::filesystem::path registryPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "assets" / "AssetRegistry.h";
+    const std::filesystem::path projectSessionPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "document" / "ProjectSession.h";
+
+    std::ifstream assetDocumentFile(assetDocumentPath);
+    std::ifstream typedStoreFile(typedStorePath);
+    std::ifstream registryFile(registryPath);
+    std::ifstream projectSessionFile(projectSessionPath);
+    ASSERT_TRUE(assetDocumentFile.is_open()) << assetDocumentPath.string();
+    ASSERT_TRUE(typedStoreFile.is_open()) << typedStorePath.string();
+    ASSERT_TRUE(registryFile.is_open()) << registryPath.string();
+    ASSERT_TRUE(projectSessionFile.is_open()) << projectSessionPath.string();
+
+    const std::string assetDocumentSource{
+            std::istreambuf_iterator<char>(assetDocumentFile),
+            std::istreambuf_iterator<char>()};
+    const std::string typedStoreSource{
+            std::istreambuf_iterator<char>(typedStoreFile),
+            std::istreambuf_iterator<char>()};
+    const std::string registrySource{
+            std::istreambuf_iterator<char>(registryFile),
+            std::istreambuf_iterator<char>()};
+    const std::string projectSessionSource{
+            std::istreambuf_iterator<char>(projectSessionFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(assetDocumentSource.find("struct AssetDocumentBase"), std::string::npos);
+    EXPECT_NE(typedStoreSource.find("class TypedAssetStore"), std::string::npos);
+    EXPECT_NE(registrySource.find("class MeshAssetStore final"), std::string::npos);
+    EXPECT_NE(registrySource.find("class MaterialAssetStore final"), std::string::npos);
+    EXPECT_NE(registrySource.find("class TextureAssetStore final"), std::string::npos);
+    EXPECT_NE(registrySource.find("MeshAssetStore meshes_"), std::string::npos);
+    EXPECT_NE(registrySource.find("MaterialAssetStore materials_"), std::string::npos);
+    EXPECT_NE(registrySource.find("TextureAssetStore textures_"), std::string::npos);
+    EXPECT_NE(projectSessionSource.find("class ProjectSession"), std::string::npos);
+    EXPECT_NE(projectSessionSource.find("class ProjectSessionService final"), std::string::npos);
+    EXPECT_NE(projectSessionSource.find("openSession(ProjectDocument document)"), std::string::npos);
+}
+
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
@@ -3693,6 +4446,286 @@ TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
     EXPECT_TRUE(undoRedo.undo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+}
+
+TEST(EditorCommandServiceTests, ExecutesCommandsThroughSharedUndoStack) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    UndoRedoManager undoRedo;
+    DocumentCommandService documentCommands(scene, undoRedo);
+    EditorCommandService editorCommands(undoRedo, documentCommands);
+
+    CommandResult result = editorCommands.execute(
+            std::make_unique<RenameEntityCommand>(scene, entity, "Brush", "Brush_1"));
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+    EXPECT_TRUE(editorCommands.canUndo());
+
+    result = editorCommands.undo();
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush");
+    EXPECT_TRUE(editorCommands.canRedo());
+
+    result = editorCommands.redo();
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+}
+
+TEST(DocumentCommandTests, TypedCommandsExecuteDirectlyThroughUndoRedoManager) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    UndoRedoManager undoRedo;
+
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<RenameEntityCommand>(scene, entity, "Brush", "Brush_1"));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.name(entity), nullptr);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+    ASSERT_NE(undoRedo.undoLabel(), nullptr);
+    EXPECT_EQ(*undoRedo.undoLabel(), "Rename Entity");
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(scene.name(entity)->name, "Brush");
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+
+    TransformComponent beforeTransform = *scene.transform(entity);
+    TransformComponent afterTransform = beforeTransform;
+    afterTransform.position = {4.0f, 5.0f, 6.0f};
+
+    std::vector<std::unique_ptr<IUndoableCommand>> batchCommands;
+    batchCommands.push_back(std::make_unique<SetVisibilityCommand>(scene, entity, true, false));
+    batchCommands.push_back(std::make_unique<SetLockCommand>(scene, entity, false, true));
+    batchCommands.push_back(std::make_unique<ApplyEntityTransformCommand>(
+            scene,
+            entity,
+            beforeTransform,
+            afterTransform,
+            "Set Transform"));
+    result = undoRedo.execute(
+            std::make_unique<BatchDocumentCommand>("Batch Edit", std::move(batchCommands)));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(scene.visibility(entity)->visible);
+    EXPECT_TRUE(scene.lock(entity)->locked);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+    ASSERT_NE(undoRedo.undoLabel(), nullptr);
+    EXPECT_EQ(*undoRedo.undoLabel(), "Batch Edit");
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(scene.visibility(entity)->visible);
+    EXPECT_FALSE(scene.lock(entity)->locked);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+
+    int value = 0;
+    result = undoRedo.execute(std::make_unique<TestValueCommand>("Value Edit", value, 0, 1));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(value, 1);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(value, 0);
+}
+
+TEST(DocumentCommandTests, BatchDocumentCommandRollsBackFailedRedoAndUndo) {
+    UndoRedoManager undoRedo;
+
+    int first = 0;
+    int second = 0;
+    bool failSecondRedo = true;
+    std::vector<std::unique_ptr<IUndoableCommand>> redoCommands;
+    redoCommands.push_back(std::make_unique<TestValueCommand>("First", first, 0, 1));
+    redoCommands.push_back(std::make_unique<TestValueCommand>("Second", second, 0, 2, nullptr, &failSecondRedo));
+
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<BatchDocumentCommand>("Failing Redo Batch", std::move(redoCommands)));
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(first, 0);
+    EXPECT_EQ(second, 0);
+    EXPECT_FALSE(undoRedo.canUndo());
+
+    bool failFirstUndo = false;
+    std::vector<std::unique_ptr<IUndoableCommand>> undoCommands;
+    undoCommands.push_back(std::make_unique<TestValueCommand>("First", first, 0, 1, &failFirstUndo));
+    undoCommands.push_back(std::make_unique<TestValueCommand>("Second", second, 0, 2));
+
+    result = undoRedo.execute(
+            std::make_unique<BatchDocumentCommand>("Failing Undo Batch", std::move(undoCommands)));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(first, 1);
+    EXPECT_EQ(second, 2);
+
+    failFirstUndo = true;
+    result = undoRedo.undo();
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(first, 1);
+    EXPECT_EQ(second, 2);
+    EXPECT_TRUE(undoRedo.canUndo());
+    EXPECT_FALSE(undoRedo.canRedo());
+}
+
+TEST(DocumentCommandTests, SceneTransformPreviewTransactionCommitsAndCancelsThroughUndoRedo) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    UndoRedoManager undoRedo;
+
+    TransformComponent previewTransform = *scene.transform(entity);
+    previewTransform.position = {2.0f, 0.0f, 0.0f};
+    {
+        SceneTransformPreviewTransaction transaction(scene, {entity}, "Move Preview");
+        DocumentCommandResult result = transaction.previewTransform(entity, previewTransform);
+        ASSERT_TRUE(result.ok) << result.message;
+        EXPECT_TRUE(result.changed);
+        ASSERT_NE(scene.transform(entity), nullptr);
+        EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+
+        result = transaction.cancel();
+        ASSERT_TRUE(result.ok) << result.message;
+        EXPECT_TRUE(result.changed);
+        ASSERT_NE(scene.transform(entity), nullptr);
+        EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+    }
+
+    previewTransform.position = {4.0f, 0.0f, 0.0f};
+    SceneTransformPreviewTransaction transaction(scene, {entity}, "Move Preview");
+    ASSERT_TRUE(transaction.previewTransform(entity, previewTransform).ok);
+    DocumentCommandResult result = transaction.commit(undoRedo);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.transform(entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+    ASSERT_NE(undoRedo.undoLabel(), nullptr);
+    EXPECT_EQ(*undoRedo.undoLabel(), "Move Preview");
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_NE(scene.transform(entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_NE(scene.transform(entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+}
+
+TEST(DocumentCommandTests, TypedEntityCommandsRoundTripHierarchySelectionAndTransforms) {
+    SceneDocument scene;
+    const EntityId parent = scene.createEntity("Parent");
+    TransformComponent parentTransform;
+    parentTransform.position = {10.0f, 0.0f, 0.0f};
+    scene.setTransform(parent, parentTransform);
+
+    const EntityId child = scene.createEntity("Child");
+    TransformComponent childTransform;
+    childTransform.position = {1.0f, 0.0f, 0.0f};
+    scene.setTransform(child, childTransform);
+    ASSERT_TRUE(scene.setParent(child, parent, false));
+
+    UndoRedoManager undoRedo;
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<ReparentEntityCommand>(scene, child, InvalidEntityId, true));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(scene.parent(child), InvalidEntityId);
+    ASSERT_NE(scene.transform(child), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 11.0f);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(scene.parent(child), parent);
+    ASSERT_NE(scene.transform(child), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_EQ(scene.parent(child), InvalidEntityId);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 11.0f);
+
+    TransformComponent moved = *scene.transform(child);
+    moved.position.y = 4.0f;
+    result = undoRedo.execute(
+            std::make_unique<ApplyEntityTransformCommand>(scene, child, *scene.transform(child), moved));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.y, 4.0f);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.y, 0.0f);
+
+    result = undoRedo.execute(
+            std::make_unique<SelectEntitiesCommand>(scene, std::vector<EntityId>{parent, child}, parent));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+    EXPECT_EQ(scene.primarySelection(), parent);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(scene.selectedEntities().empty());
+}
+
+TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
+    SceneDocument scene;
+    UndoRedoManager undoRedo;
+
+    auto create = std::make_unique<CreateEntityCommand>(
+            scene,
+            "Created",
+            EntityKind::Light,
+            InvalidEntityId,
+            TransformComponent{.position = {2.0f, 0.0f, 0.0f}},
+            true);
+    CreateEntityCommand* createCommand = create.get();
+    UndoRedoResult result = undoRedo.execute(std::move(create));
+    ASSERT_TRUE(result.ok) << result.message;
+    EntityId created = createCommand->entity();
+    ASSERT_NE(created, InvalidEntityId);
+    EXPECT_TRUE(scene.exists(created));
+    EXPECT_EQ(scene.kind(created), EntityKind::Light);
+    ASSERT_NE(scene.transform(created), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(created)->position.x, 2.0f);
+    EXPECT_EQ(scene.primarySelection(), created);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FALSE(scene.exists(created));
+    ASSERT_TRUE(undoRedo.redo().ok);
+    created = createCommand->entity();
+    EXPECT_TRUE(scene.exists(created));
+
+    const EntityId source = scene.createEntity("Source", EntityKind::Mesh);
+    scene.setMesh(source, MeshComponent{.mesh = 42});
+    scene.setMaterial(source, MaterialComponent{.material = 7});
+    TransformComponent sourceTransform;
+    sourceTransform.position = {3.0f, 0.0f, 0.0f};
+    scene.setTransform(source, sourceTransform);
+    const EntityId leaf = scene.createEntity("Leaf");
+    TransformComponent leafTransform;
+    leafTransform.position = {0.0f, 1.0f, 0.0f};
+    scene.setTransform(leaf, leafTransform);
+    ASSERT_TRUE(scene.setParent(leaf, source, false));
+
+    auto duplicate = std::make_unique<DuplicateEntityCommand>(scene, source);
+    DuplicateEntityCommand* duplicateCommand = duplicate.get();
+    result = undoRedo.execute(std::move(duplicate));
+    ASSERT_TRUE(result.ok) << result.message;
+    const EntityId duplicateRoot = duplicateCommand->duplicateEntity();
+    ASSERT_TRUE(scene.exists(duplicateRoot));
+    ASSERT_NE(scene.name(duplicateRoot), nullptr);
+    EXPECT_EQ(scene.name(duplicateRoot)->name, "Source_1");
+    ASSERT_NE(scene.mesh(duplicateRoot), nullptr);
+    EXPECT_EQ(scene.mesh(duplicateRoot)->mesh, 42u);
+    ASSERT_EQ(scene.children(duplicateRoot).size(), 1u);
+    EXPECT_EQ(scene.primarySelection(), duplicateRoot);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FALSE(scene.exists(duplicateRoot));
+
+    scene.clearSelection();
+    scene.setSelected(source, true);
+    auto destroy = std::make_unique<DestroyEntityCommand>(scene, source);
+    DestroyEntityCommand* destroyCommand = destroy.get();
+    result = undoRedo.execute(std::move(destroy));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(scene.exists(source));
+    EXPECT_FALSE(scene.exists(leaf));
+    ASSERT_TRUE(undoRedo.undo().ok);
+    const EntityId restored = destroyCommand->entity();
+    ASSERT_TRUE(scene.exists(restored));
+    ASSERT_NE(scene.name(restored), nullptr);
+    EXPECT_EQ(scene.name(restored)->name, "Source");
+    ASSERT_NE(scene.mesh(restored), nullptr);
+    EXPECT_EQ(scene.mesh(restored)->mesh, 42u);
+    ASSERT_EQ(scene.children(restored).size(), 1u);
+    EXPECT_EQ(scene.primarySelection(), restored);
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_FALSE(scene.exists(restored));
 }
 
 TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
@@ -3754,6 +4787,93 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     EXPECT_FALSE(scene.lock(locked)->locked);
 }
 
+TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleCommands) {
+    SceneDocument scene;
+    UndoRedoManager undoRedo;
+    DocumentCommandService commands(scene, undoRedo);
+
+    EntityId first = InvalidEntityId;
+    EntityId second = InvalidEntityId;
+    DocumentCommandResult result = commands.createEntity("First", EntityKind::Generic, InvalidEntityId, {}, &first);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(first, InvalidEntityId);
+    result = commands.createEntity("Second", EntityKind::Generic, InvalidEntityId, {}, &second);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(second, InvalidEntityId);
+
+    TransformComponent moved;
+    moved.position = {5.0f, 0.0f, 0.0f};
+    result = commands.applyEntityTransform(first, moved);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(scene.transform(first), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 5.0f);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
+    ASSERT_TRUE(undoRedo.redo().ok);
+
+    result = commands.selectEntities({first, second}, second);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+    EXPECT_EQ(scene.primarySelection(), second);
+
+    EntityId group = InvalidEntityId;
+    TransformComponent groupTransform;
+    groupTransform.position = {2.0f, 0.0f, 0.0f};
+    result = commands.groupSelection("Group", groupTransform, &group);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(scene.exists(group));
+    EXPECT_EQ(scene.parent(first), group);
+    EXPECT_EQ(scene.parent(second), group);
+    EXPECT_EQ(scene.primarySelection(), group);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FALSE(scene.exists(group));
+    EXPECT_EQ(scene.parent(first), InvalidEntityId);
+    EXPECT_EQ(scene.parent(second), InvalidEntityId);
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+    EXPECT_EQ(scene.primarySelection(), second);
+
+    ASSERT_TRUE(undoRedo.redo().ok);
+    const EntityId regrouped = scene.primarySelection();
+    ASSERT_TRUE(scene.exists(regrouped));
+    EXPECT_EQ(scene.parent(first), regrouped);
+    EXPECT_EQ(scene.parent(second), regrouped);
+
+    result = commands.ungroupSelection();
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(scene.exists(regrouped));
+    EXPECT_EQ(scene.parent(first), InvalidEntityId);
+    EXPECT_EQ(scene.parent(second), InvalidEntityId);
+    EXPECT_EQ(scene.selectedEntities().size(), 2u);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    const EntityId restoredGroup = scene.primarySelection();
+    ASSERT_TRUE(scene.exists(restoredGroup));
+    EXPECT_EQ(scene.parent(first), restoredGroup);
+    EXPECT_EQ(scene.parent(second), restoredGroup);
+
+    result = commands.reparentEntity(first, InvalidEntityId, true);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(scene.parent(first), InvalidEntityId);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(scene.parent(first), restoredGroup);
+
+    EntityId duplicate = InvalidEntityId;
+    result = commands.duplicateEntity(first, &duplicate);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(scene.exists(duplicate));
+    EXPECT_EQ(scene.parent(duplicate), restoredGroup);
+    EXPECT_EQ(scene.primarySelection(), duplicate);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FALSE(scene.exists(duplicate));
+
+    result = commands.destroyEntity(second);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(scene.exists(second));
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(scene.exists(scene.primarySelection()));
+}
+
 TEST(UndoRedoManagerTests, NoopCommandsDoNotClearRedoButNewCommandsDo) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
@@ -3787,20 +4907,8 @@ TEST(UndoRedoManagerTests, ExternalCommandsShareUndoOrderWithDocumentCommands) {
     DocumentCommandService commands(scene, undoRedo);
     int externalValue = 0;
 
-    UndoRedoResult result = undoRedo.executeExternal(
-            "External Edit",
-            [&]() {
-                externalValue = 1;
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-            [&]() {
-                externalValue = 0;
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-            [&]() {
-                externalValue = 1;
-                return UndoRedoResult{.ok = true, .changed = true};
-            });
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("External Edit", externalValue, 0, 1));
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_TRUE(commands.renameEntity(entity, "Brush_1").ok);
 
@@ -3821,46 +4929,27 @@ TEST(UndoRedoManagerTests, ExternalCommandsShareUndoOrderWithDocumentCommands) {
 TEST(UndoRedoManagerTests, FailedExecuteAndFailedRestoreDoNotCorruptStacks) {
     UndoRedoManager undoRedo;
     int value = 0;
+    bool failUndo = false;
+    bool failRedo = false;
 
-    UndoRedoResult result = undoRedo.execute(UndoRedoCommand{
-            .label = "Set Value",
-            .undo = [&]() {
-                value = 0;
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-            .redo = [&]() {
-                value = 1;
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-    });
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("Set Value", value, 0, 1));
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_TRUE(undoRedo.undo().ok);
     EXPECT_TRUE(undoRedo.canRedo());
 
-    result = undoRedo.execute(UndoRedoCommand{
-            .label = "Noop",
-            .undo = []() {
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-            .redo = []() {
-                return UndoRedoResult{.ok = true, .changed = false};
-            },
-    });
+    result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("Noop", value, value, value, nullptr, nullptr, true, false));
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_FALSE(result.changed);
     EXPECT_TRUE(undoRedo.canRedo());
 
-    result = undoRedo.execute(UndoRedoCommand{
-            .label = "Failed",
-            .undo = []() {
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-            .redo = []() {
-                return UndoRedoResult{.ok = false, .message = "failed"};
-            },
-    });
+    failRedo = true;
+    result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("Failed", value, 0, 2, nullptr, &failRedo));
     EXPECT_FALSE(result.ok);
     EXPECT_TRUE(undoRedo.canRedo());
+    failRedo = false;
 
     result = undoRedo.redo();
     ASSERT_TRUE(result.ok) << result.message;
@@ -3869,25 +4958,9 @@ TEST(UndoRedoManagerTests, FailedExecuteAndFailedRestoreDoNotCorruptStacks) {
     ASSERT_TRUE(undoRedo.undo().ok);
     EXPECT_TRUE(undoRedo.canRedo());
 
-    bool failUndo = true;
-    bool failRedo = false;
-    result = undoRedo.execute(UndoRedoCommand{
-            .label = "Fragile",
-            .undo = [&]() {
-                if (failUndo) {
-                    return UndoRedoResult{.ok = false, .message = "undo failed"};
-                }
-                value = 1;
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-            .redo = [&]() {
-                if (failRedo) {
-                    return UndoRedoResult{.ok = false, .message = "redo failed"};
-                }
-                value = 2;
-                return UndoRedoResult{.ok = true, .changed = true};
-            },
-    });
+    failUndo = true;
+    result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("Fragile", value, 1, 2, &failUndo, &failRedo));
     ASSERT_TRUE(result.ok) << result.message;
     result = undoRedo.undo();
     EXPECT_FALSE(result.ok);
@@ -5187,7 +6260,7 @@ TEST(ModelingSessionServiceTests, VertexHoverCandidatePointsRespectSceneTransfor
 #endif
 }
 
-TEST(ModelingSessionServiceTests, SelectedComponentHoverKeepsHoverColor) {
+TEST(ModelingSessionServiceTests, SelectedHoverAndModifierRemovePreviewStayDistinct) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -5209,6 +6282,8 @@ TEST(ModelingSessionServiceTests, SelectedComponentHoverKeepsHoverColor) {
             .clickCount = 1,
     });
     ASSERT_EQ(picked.selectedFaceCount, 1u);
+    const ModelingSelectionSummary selectedBeforeHover = service.selectionSummary();
+    const std::uint64_t sceneRevisionBeforeHover = scene.revision();
 
     const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
             .ray = frontFaceRay,
@@ -5226,10 +6301,330 @@ TEST(ModelingSessionServiceTests, SelectedComponentHoverKeepsHoverColor) {
     const auto selectedFaceEdgeCount = std::count_if(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
         return line.layer == ViewportOverlayLayer::SelectedFaceEdge;
     });
+    const bool normalHoverUsesHoverFaceColor = std::any_of(
+            frame.triangles.begin(),
+            frame.triangles.end(),
+            [](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == ViewportOverlayLayer::HoverFace &&
+                        triangle.color == kOverlayHoverFaceColor;
+            });
+    const bool normalHoverUsesHoverWireColor = std::any_of(
+            frame.lines.begin(),
+            frame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverFaceEdge &&
+                        line.color == kOverlayHoverWireColor;
+            });
 
+    EXPECT_FALSE(frame.hoverTargetSelected);
     EXPECT_GT(hoverFaceCount, 0);
     EXPECT_GT(hoverFaceEdgeCount, 0);
-    EXPECT_GT(selectedFaceEdgeCount, 0);
+    EXPECT_EQ(selectedFaceEdgeCount, 0);
+    EXPECT_TRUE(normalHoverUsesHoverFaceColor);
+    EXPECT_TRUE(normalHoverUsesHoverWireColor);
+    EXPECT_EQ(scene.revision(), sceneRevisionBeforeHover);
+    EXPECT_EQ(service.selectionSummary().selectedFaceCount, selectedBeforeHover.selectedFaceCount);
+    EXPECT_EQ(service.selectionSummary().contentRevision, selectedBeforeHover.contentRevision);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
+
+    const ModelingCommandResult modifierHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontFaceRay,
+            .selectedModifierPressed = true,
+    });
+    ASSERT_TRUE(modifierHover.ok) << modifierHover.message;
+
+    const ViewportOverlayFrame modifierFrame = service.selectionOverlayFrame();
+    EXPECT_TRUE(modifierFrame.hoverTargetSelected);
+    const auto modifierHoverFaceCount = std::count_if(
+            modifierFrame.triangles.begin(),
+            modifierFrame.triangles.end(),
+            [](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == ViewportOverlayLayer::HoverFace;
+            });
+    const auto modifierHoverFaceEdgeCount = std::count_if(
+            modifierFrame.lines.begin(),
+            modifierFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverFaceEdge;
+            });
+    const bool modifierUsesRemoveFaceColor = std::any_of(
+            modifierFrame.triangles.begin(),
+            modifierFrame.triangles.end(),
+            [](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == ViewportOverlayLayer::HoverFace &&
+                        triangle.color == kOverlayRemoveFaceColor;
+            });
+    const bool modifierUsesRemoveWireColor = std::any_of(
+            modifierFrame.lines.begin(),
+            modifierFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverFaceEdge &&
+                        line.color == kOverlayRemoveWireColor;
+            });
+
+    EXPECT_GT(modifierHoverFaceCount, 0);
+    EXPECT_GT(modifierHoverFaceEdgeCount, 0);
+    EXPECT_TRUE(modifierUsesRemoveFaceColor);
+    EXPECT_TRUE(modifierUsesRemoveWireColor);
+    EXPECT_EQ(scene.revision(), sceneRevisionBeforeHover);
+    EXPECT_EQ(service.selectionSummary().selectedFaceCount, selectedBeforeHover.selectedFaceCount);
+    EXPECT_EQ(service.selectionSummary().contentRevision, selectedBeforeHover.contentRevision);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectionClickPreservesHoverAndCtrlShowsRemovePreviewUntilHoverOut) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Hover Preserved Selection Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingRay frontFaceRay{
+            .origin = {0.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingCommandResult initialHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontFaceRay,
+            .selectedModifierPressed = false,
+    });
+    ASSERT_TRUE(initialHover.ok) << initialHover.message;
+    ASSERT_TRUE(initialHover.changed);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = frontFaceRay,
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    const ViewportOverlayFrame afterClickFrame = service.selectionOverlayFrame();
+    const bool hoverFaceStillVisible = std::any_of(
+            afterClickFrame.triangles.begin(),
+            afterClickFrame.triangles.end(),
+            [](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == ViewportOverlayLayer::HoverFace &&
+                        triangle.color == kOverlayHoverFaceColor;
+            });
+    const bool hoverFaceEdgeStillVisible = std::any_of(
+            afterClickFrame.lines.begin(),
+            afterClickFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverFaceEdge &&
+                        line.color == kOverlayHoverWireColor;
+            });
+    const bool selectedFaceWireVisibleUnderHover = std::any_of(
+            afterClickFrame.lines.begin(),
+            afterClickFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::SelectedFaceEdge;
+            });
+    EXPECT_FALSE(afterClickFrame.hoverTargetSelected);
+    EXPECT_TRUE(hoverFaceStillVisible);
+    EXPECT_TRUE(hoverFaceEdgeStillVisible);
+    EXPECT_FALSE(selectedFaceWireVisibleUnderHover);
+
+    const ModelingCommandResult modifierHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontFaceRay,
+            .selectedModifierPressed = true,
+    });
+    ASSERT_TRUE(modifierHover.ok) << modifierHover.message;
+
+    const ViewportOverlayFrame modifierHoverFrame = service.selectionOverlayFrame();
+    const bool removeFaceVisible = std::any_of(
+            modifierHoverFrame.triangles.begin(),
+            modifierHoverFrame.triangles.end(),
+            [](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == ViewportOverlayLayer::HoverFace &&
+                        triangle.color == kOverlayRemoveFaceColor;
+            });
+    const bool removeFaceEdgeVisible = std::any_of(
+            modifierHoverFrame.lines.begin(),
+            modifierHoverFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverFaceEdge &&
+                        line.color == kOverlayRemoveWireColor;
+            });
+    EXPECT_TRUE(modifierHoverFrame.hoverTargetSelected);
+    EXPECT_TRUE(removeFaceVisible);
+    EXPECT_TRUE(removeFaceEdgeVisible);
+
+    const ModelingCommandResult clearHover = service.clearSelectionHover();
+    ASSERT_TRUE(clearHover.ok) << clearHover.message;
+    ASSERT_TRUE(clearHover.changed);
+
+    const ViewportOverlayFrame afterClearFrame = service.selectionOverlayFrame();
+    const bool hoverFaceCleared = std::none_of(
+            afterClearFrame.triangles.begin(),
+            afterClearFrame.triangles.end(),
+            [](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == ViewportOverlayLayer::HoverFace;
+            });
+    const bool selectedFaceWireAfterClear = std::any_of(
+            afterClearFrame.lines.begin(),
+            afterClearFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::SelectedFaceEdge;
+            });
+    EXPECT_TRUE(hoverFaceCleared);
+    EXPECT_TRUE(selectedFaceWireAfterClear);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectedEdgeHoverAndModifierRemovePreviewStayDistinct) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Selected Edge Remove Hover Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
+
+    const ModelingRay frontRightEdgeRay{
+            .origin = {1.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = frontRightEdgeRay,
+            .clickCount = 1,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_GT(picked.selectedEdgeCount, 0u);
+    const ModelingSelectionSummary selectedBeforeHover = service.selectionSummary();
+
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontRightEdgeRay,
+            .selectedModifierPressed = false,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    EXPECT_FALSE(frame.hoverTargetSelected);
+    const bool hasSelectedEdge = std::any_of(
+            frame.lines.begin(),
+            frame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::SelectedEdge ||
+                        line.layer == ViewportOverlayLayer::SelectedFaceEdge;
+            });
+    const bool hasNormalHoverEdge = std::any_of(
+            frame.lines.begin(),
+            frame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverEdge &&
+                        line.color == kOverlayHoverWireColor;
+            });
+    EXPECT_FALSE(hasSelectedEdge);
+    EXPECT_TRUE(hasNormalHoverEdge);
+    EXPECT_EQ(service.selectionSummary().selectedEdgeCount, selectedBeforeHover.selectedEdgeCount);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
+
+    const ModelingCommandResult modifierHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontRightEdgeRay,
+            .selectedModifierPressed = true,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_TRUE(modifierHover.ok) << modifierHover.message;
+
+    const ViewportOverlayFrame modifierFrame = service.selectionOverlayFrame();
+    EXPECT_TRUE(modifierFrame.hoverTargetSelected);
+    const bool hasRemoveHoverEdge = std::any_of(
+            modifierFrame.lines.begin(),
+            modifierFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::HoverEdge &&
+                        line.color == kOverlayRemoveWireColor;
+            });
+    EXPECT_TRUE(hasRemoveHoverEdge);
+    EXPECT_EQ(service.selectionSummary().selectedEdgeCount, selectedBeforeHover.selectedEdgeCount);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, SelectedVertexHoverAndModifierRemovePreviewStayDistinct) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Selected Vertex Remove Hover Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+
+    const ModelingCommandResult selectAll = service.selectAll();
+    ASSERT_TRUE(selectAll.ok) << selectAll.message;
+    ASSERT_GT(service.selectionSummary().selectedVertexCount, 0u);
+    const ModelingSelectionSummary selectedBeforeHover = service.selectionSummary();
+
+    const ModelingRay frontCornerRay{
+            .origin = {1.0f, 1.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingCommandResult normalHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontCornerRay,
+            .selectedModifierPressed = false,
+            .vertexRadius = 0.4f,
+    });
+    ASSERT_TRUE(normalHover.ok) << normalHover.message;
+
+    const ViewportOverlayFrame normalFrame = service.selectionOverlayFrame();
+    EXPECT_FALSE(normalFrame.hoverTargetSelected);
+    const bool hasSelectedHandle = std::any_of(
+            normalFrame.points.begin(),
+            normalFrame.points.end(),
+            [](const ViewportOverlayPoint& point) {
+                return point.layer == ViewportOverlayLayer::SelectedVertex;
+            });
+    const bool hasNormalHoverHandle = std::any_of(
+            normalFrame.points.begin(),
+            normalFrame.points.end(),
+            [](const ViewportOverlayPoint& point) {
+                return point.layer == ViewportOverlayLayer::HoverVertex &&
+                        point.color == kOverlayHoverVertexColor;
+            });
+    EXPECT_TRUE(hasSelectedHandle);
+    EXPECT_TRUE(hasNormalHoverHandle);
+    EXPECT_EQ(service.selectionSummary().selectedVertexCount, selectedBeforeHover.selectedVertexCount);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
+
+    const ModelingCommandResult hover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontCornerRay,
+            .selectedModifierPressed = true,
+            .vertexRadius = 0.4f,
+    });
+    ASSERT_TRUE(hover.ok) << hover.message;
+
+    const ViewportOverlayFrame frame = service.selectionOverlayFrame();
+    EXPECT_TRUE(frame.hoverTargetSelected);
+    const bool hasRemoveHoverHandle = std::any_of(
+            frame.points.begin(),
+            frame.points.end(),
+            [](const ViewportOverlayPoint& point) {
+                return point.layer == ViewportOverlayLayer::HoverVertex &&
+                        point.color == kOverlayRemoveWireColor;
+            });
+    EXPECT_TRUE(hasRemoveHoverHandle);
+    EXPECT_EQ(service.selectionSummary().selectedVertexCount, selectedBeforeHover.selectedVertexCount);
+    EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
 #else
     EXPECT_FALSE(service.sdkAvailable());
 #endif

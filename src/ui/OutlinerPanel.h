@@ -1,17 +1,18 @@
 #pragma once
 
 #include "core/Types.h"
-#include "ui/UIPanel.h"
+#include "ui/UIDockPanel.h"
 
 namespace quader {
 
-class OutlinerPanel final : public UIPanel {
+class OutlinerPanel final : public UIDockPanel {
 public:
     UIPanelId id() const override { return UIPanelId::Outliner; }
-    const char* title() const override { return uiPanelKey(UIPanelId::Outliner); }
-    void draw(UIContext& context) override;
 
 private:
+    float minimumWidth(const UIContext& context) const override;
+    void drawContent(UIContext& context) override;
+
     EntityId outlinerAnchor_ = InvalidEntityId;
 };
 

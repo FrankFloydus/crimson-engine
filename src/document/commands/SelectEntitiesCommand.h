@@ -1,0 +1,38 @@
+#pragma once
+
+#include "document/commands/DocumentCommandSceneHelpers.h"
+#include "document/commands/SceneCommand.h"
+
+#include <vector>
+
+namespace quader {
+
+class SelectEntitiesCommand final : public SceneCommand {
+public:
+    SelectEntitiesCommand(
+            SceneDocument& scene,
+            std::vector<EntityId> entities,
+            EntityId active = InvalidEntityId)
+        : SceneCommand(scene, "Select Entities")
+        , before_(documentCommandCaptureSelection(scene))
+        , after_(documentCommandSelectionFor(scene, entities, active)) {}
+
+    DocumentCommandResult undo() override {
+        documentCommandApplySelection(scene(), before_);
+        return documentCommandChangedResult();
+    }
+
+    DocumentCommandResult redo() override {
+        if (documentCommandSameSelection(before_, after_)) {
+            return documentCommandUnchangedResult();
+        }
+        documentCommandApplySelection(scene(), after_);
+        return documentCommandChangedResult();
+    }
+
+private:
+    DocumentSelectionState before_;
+    DocumentSelectionState after_;
+};
+
+} // namespace quader

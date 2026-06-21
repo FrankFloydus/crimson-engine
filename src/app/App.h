@@ -1,18 +1,13 @@
 #pragma once
 
-#include "assets/AssetRegistry.h"
-#include "core/UndoRedoManager.h"
 #include "core/Types.h"
-#include "document/DocumentCommandService.h"
-#include "modeling/ModelingSessionService.h"
+#include "document/ProjectSession.h"
 #include "platform/PlatformWindow.h"
 #include "render/RenderSystem.h"
 #include "render/SceneRenderBridge.h"
-#include "scene/SceneDocument.h"
 #include "ui/UISystem.h"
 
 #include <filesystem>
-#include <memory>
 
 namespace quader {
 
@@ -33,11 +28,7 @@ private:
     RenderSystem renderSystem_;
     SceneRenderBridge renderBridge_;
     UISystem ui_;
-    AssetRegistry assets_;
-    SceneDocument document_;
-    std::unique_ptr<UndoRedoManager> undoRedo_;
-    std::unique_ptr<DocumentCommandService> documentCommands_;
-    std::unique_ptr<ModelingSessionService> modeling_;
+    ProjectSession projectSession_;
     AssetId defaultMaterial_ = InvalidAssetId;
     bool running_ = false;
 };

@@ -1,10 +1,10 @@
 #include "modeling/ModelingSessionService.h"
 
 #include "assets/AssetRegistry.h"
+#include "modeling/ModelingSessionServices.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
-#include "scene/SceneEntityNaming.h"
 
 #include <algorithm>
 #include <cmath>
@@ -89,6 +89,10 @@ quader_editor_core::ViewportInteractionTool toSdk(ModelingViewportTool tool) {
     switch (tool) {
     case ModelingViewportTool::Move:
         return quader_editor_core::ViewportInteractionTool::move;
+    case ModelingViewportTool::Extend:
+        return quader_editor_core::ViewportInteractionTool::extend;
+    case ModelingViewportTool::Extrude:
+        return quader_editor_core::ViewportInteractionTool::extrude;
     case ModelingViewportTool::Rotate:
         return quader_editor_core::ViewportInteractionTool::rotate;
     case ModelingViewportTool::Scale:
@@ -115,6 +119,10 @@ ModelingViewportTool fromSdkViewportTool(quader_editor_core::ViewportInteraction
     switch (tool) {
     case quader_editor_core::ViewportInteractionTool::move:
         return ModelingViewportTool::Move;
+    case quader_editor_core::ViewportInteractionTool::extend:
+        return ModelingViewportTool::Extend;
+    case quader_editor_core::ViewportInteractionTool::extrude:
+        return ModelingViewportTool::Extrude;
     case quader_editor_core::ViewportInteractionTool::rotate:
         return ModelingViewportTool::Rotate;
     case quader_editor_core::ViewportInteractionTool::scale:
@@ -132,8 +140,6 @@ ModelingViewportTool fromSdkViewportTool(quader_editor_core::ViewportInteraction
     case quader_editor_core::ViewportInteractionTool::mirror:
         return ModelingViewportTool::Mirror;
     case quader_editor_core::ViewportInteractionTool::select:
-    case quader_editor_core::ViewportInteractionTool::extend:
-    case quader_editor_core::ViewportInteractionTool::extrude:
     case quader_editor_core::ViewportInteractionTool::unknown:
         break;
     }
@@ -162,37 +168,6 @@ ModelingCutMode fromSdk(quader_editor_core::CutMode mode) {
         return ModelingCutMode::KeepBoth;
     }
     return ModelingCutMode::KeepBoth;
-}
-
-ModelingInteractionSettings normalizeInteractionSettings(ModelingInteractionSettings settings) {
-    settings.bridgeSteps = quader_editor_core::normalize_bridge_operation_settings(
-            quader_editor_core::BridgeOperationSettings{.steps = settings.bridgeSteps}).steps;
-    const quader_editor_core::EdgeBevelOperationSettings edgeBevel =
-            quader_editor_core::normalize_edge_bevel_operation_settings({
-                    .width = settings.edgeBevelWidth,
-                    .profile = settings.edgeBevelProfile,
-                    .segments = settings.edgeBevelSegments,
-            });
-    settings.edgeBevelWidth = edgeBevel.width;
-    settings.edgeBevelProfile = edgeBevel.profile;
-    settings.edgeBevelSegments = edgeBevel.segments;
-    const quader_editor_core::ThickenOperationSettings thicken =
-            quader_editor_core::normalize_thicken_operation_settings({
-                    .thickness = settings.thickenThickness,
-                    .from_center = settings.thickenFromCenter,
-            });
-    settings.thickenThickness = thicken.thickness;
-    settings.thickenFromCenter = thicken.from_center;
-    const quader_editor_core::SliceQuadOperationSettings slice =
-            quader_editor_core::normalize_slice_quad_operation_settings({
-                    .x_slices = settings.sliceQuadXSlices,
-                    .y_slices = settings.sliceQuadYSlices,
-            });
-    settings.sliceQuadXSlices = slice.x_slices;
-    settings.sliceQuadYSlices = slice.y_slices;
-    settings.mergeByDistanceTolerance = quader_editor_core::normalize_merge_by_distance_operation_settings(
-            quader_editor_core::MergeByDistanceOperationSettings{.tolerance = settings.mergeByDistanceTolerance}).tolerance;
-    return settings;
 }
 
 quader_editor_core::EditorOperationSettings settingsForOperation(
@@ -1202,9 +1177,10 @@ bool edgesMatchUnordered(quader_poly::Edge left, quader_poly::Edge right) {
 }
 
 bool hoverFrameSuppressesTriangle(
+        bool suppressBaseUnderHover,
         const quader_editor_core::SelectionOverlayFrame& hoverFrame,
         const quader_editor_core::SelectionOverlayTriangle& triangle) {
-    if (!hoverFrame.hover_target_selected) {
+    if (!suppressBaseUnderHover) {
         return false;
     }
     if (triangle.layer != quader_editor_core::SelectionOverlayLayer::selected_visible_face &&
@@ -1223,9 +1199,10 @@ bool hoverFrameSuppressesTriangle(
 }
 
 bool hoverFrameSuppressesLine(
+        bool suppressBaseUnderHover,
         const quader_editor_core::SelectionOverlayFrame& hoverFrame,
         const quader_editor_core::SelectionOverlayLine& line) {
-    if (!hoverFrame.hover_target_selected) {
+    if (!suppressBaseUnderHover) {
         return false;
     }
     if (line.layer != quader_editor_core::SelectionOverlayLayer::selected_face_edge &&
@@ -1248,9 +1225,10 @@ bool hoverFrameSuppressesLine(
 }
 
 bool hoverFrameSuppressesPoint(
+        bool suppressBaseUnderHover,
         const quader_editor_core::SelectionOverlayFrame& hoverFrame,
         const quader_editor_core::SelectionOverlayPoint& point) {
-    if (!hoverFrame.hover_target_selected || point.layer != quader_editor_core::SelectionOverlayLayer::selected_vertex) {
+    if (!suppressBaseUnderHover || point.layer != quader_editor_core::SelectionOverlayLayer::selected_vertex) {
         return false;
     }
     return std::any_of(
@@ -1266,22 +1244,23 @@ bool hoverFrameSuppressesPoint(
 void appendSelectedHoverFilteredBaseFrame(
         quader_editor_core::SelectionOverlayFrame& target,
         const quader_editor_core::SelectionOverlayFrame& base,
-        const quader_editor_core::SelectionOverlayFrame& hoverFrame) {
+        const quader_editor_core::SelectionOverlayFrame& hoverFrame,
+        bool suppressBaseUnderHover) {
     target.triangles.reserve(target.triangles.size() + base.triangles.size());
     target.lines.reserve(target.lines.size() + base.lines.size());
     target.points.reserve(target.points.size() + base.points.size());
     for (const quader_editor_core::SelectionOverlayTriangle& triangle : base.triangles) {
-        if (!hoverFrameSuppressesTriangle(hoverFrame, triangle)) {
+        if (!hoverFrameSuppressesTriangle(suppressBaseUnderHover, hoverFrame, triangle)) {
             target.triangles.push_back(triangle);
         }
     }
     for (const quader_editor_core::SelectionOverlayLine& line : base.lines) {
-        if (!hoverFrameSuppressesLine(hoverFrame, line)) {
+        if (!hoverFrameSuppressesLine(suppressBaseUnderHover, hoverFrame, line)) {
             target.lines.push_back(line);
         }
     }
     for (const quader_editor_core::SelectionOverlayPoint& point : base.points) {
-        if (!hoverFrameSuppressesPoint(hoverFrame, point)) {
+        if (!hoverFrameSuppressesPoint(suppressBaseUnderHover, hoverFrame, point)) {
             target.points.push_back(point);
         }
     }
@@ -1359,7 +1338,8 @@ quader_editor_core::EditorRuntimeCommand noSettingsRuntimeCommand(quader_editor_
 
 class ModelingSessionService::Impl {
 public:
-    Impl(SceneDocument& scene, AssetRegistry& assets) : scene_(scene), assets_(assets) {}
+    Impl(SceneDocument& scene, AssetRegistry& assets)
+        : scene_(scene), assets_(assets), sceneSyncService_(objectRegistry_) {}
 
     [[nodiscard]] bool sdkAvailable() const {
 #if QUADER_HAS_MODELING_SDK
@@ -1378,40 +1358,15 @@ public:
     }
 
     [[nodiscard]] std::vector<ModelingObjectRecord> objects() const {
-        std::vector<ModelingObjectRecord> records;
-        records.reserve(entityByObject_.size());
-        for (const auto& [sdkObjectId, entity] : entityByObject_) {
-            ModelingObjectRecord record;
-            record.sdkObjectId = sdkObjectId;
-            record.entity = entity;
-            if (const MeshComponent* mesh = scene_.mesh(entity)) {
-                record.mesh = mesh->mesh;
-            }
-            if (const NameComponent* name = scene_.name(entity)) {
-                record.name = name->name;
-            }
-            records.push_back(std::move(record));
-        }
-        std::sort(records.begin(), records.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.entity < rhs.entity;
-        });
-        return records;
+        return objectRegistry_.records(scene_);
     }
 
     [[nodiscard]] std::optional<EntityId> entityForSdkObject(int sdkObjectId) const {
-        const auto it = entityByObject_.find(sdkObjectId);
-        if (it == entityByObject_.end()) {
-            return std::nullopt;
-        }
-        return it->second;
+        return objectRegistry_.entityForSdkObject(sdkObjectId);
     }
 
     [[nodiscard]] std::optional<int> sdkObjectForEntity(EntityId entity) const {
-        const auto it = objectByEntity_.find(entity);
-        if (it == objectByEntity_.end()) {
-            return std::nullopt;
-        }
-        return it->second;
+        return objectRegistry_.sdkObjectForEntity(entity);
     }
 
     [[nodiscard]] std::optional<MeshAsset> compileObjectMesh(int sdkObjectId) const {
@@ -1420,7 +1375,7 @@ public:
         if (object == nullptr) {
             return std::nullopt;
         }
-        return toMeshAsset(*object);
+        return meshSyncService_.compileObjectMesh(*object);
 #else
         (void)sdkObjectId;
         return std::nullopt;
@@ -1447,7 +1402,11 @@ public:
                 if (vertex == nullptr) {
                     continue;
                 }
-                const Vec3 world = transformObjectPoint(object.id, fromSdk(vertex->position), entityByObject_, scene_);
+                const Vec3 world = transformObjectPoint(
+                        object.id,
+                        fromSdk(vertex->position),
+                        objectRegistry_.entitiesByObject(),
+                        scene_);
                 if (!bounds) {
                     bounds = SceneBounds{.min = world, .max = world};
                 } else {
@@ -1518,18 +1477,18 @@ public:
         const std::uint64_t sceneRevision = scene_.revision();
         const quader_editor_core::SelectionMode selectionMode = session_.selection_mode();
         const std::uint64_t toolSignature = selectionOverlayToolSignature();
-        if (selectionOverlayCacheValid_ &&
-                selectionOverlayCacheContentRevision_ == contentRevision &&
-                selectionOverlayCacheSelectionRevision_ == selectionRevision &&
-                selectionOverlayCacheSceneRevision_ == sceneRevision &&
-                selectionOverlayCacheSelectionMode_ == selectionMode &&
-                selectionOverlayCacheToolSignature_ == toolSignature &&
-                hoverMatches(selectionOverlayCacheHover_, hover)) {
-            return selectionOverlayCacheFrame_;
+        if (overlayService_.selectionFrameMatches(
+                    contentRevision,
+                    selectionRevision,
+                    sceneRevision,
+                    selectionMode,
+                    toolSignature,
+                    hover)) {
+            return overlayService_.selectionFrame();
         }
 
-        selectionOverlayCacheFrame_ = fromSdk(selectionOverlayCurrentFrame(hover),
-                entityByObject_,
+        ViewportOverlayFrame frame = fromSdk(overlayService_.selectionOverlayCurrentFrame(session_, runtime_, hover),
+                objectRegistry_.entitiesByObject(),
                 scene_);
         const quader_editor_core::CutToolState& cut = runtime_.cut_state();
         if (quader_editor_core::cut_is_active(cut)) {
@@ -1546,10 +1505,10 @@ public:
                         quader_editor_core::CutPreviewMeshSide::discard));
 
                 if (cut.mode == quader_editor_core::CutMode::keep_both) {
-                    appendPreviewMeshFill(selectionOverlayCacheFrame_, keepMesh, kOverlayCutPreviewKeepFillColor);
-                    appendPreviewMeshFill(selectionOverlayCacheFrame_, discardMesh, kOverlayCutPreviewKeepBothDiscardFillColor);
+                    appendPreviewMeshFill(frame, keepMesh, kOverlayCutPreviewKeepFillColor);
+                    appendPreviewMeshFill(frame, discardMesh, kOverlayCutPreviewKeepBothDiscardFillColor);
                 } else {
-                    appendPreviewMeshFill(selectionOverlayCacheFrame_, discardMesh, kOverlayCutPreviewDiscardFillColor);
+                    appendPreviewMeshFill(frame, discardMesh, kOverlayCutPreviewDiscardFillColor);
                 }
 
                 const PreviewTriangleMesh& lineSource = !discardMesh.empty() ? discardMesh : keepMesh;
@@ -1557,7 +1516,7 @@ public:
                     const std::uint32_t outlineColor = cut.mode == quader_editor_core::CutMode::keep_both
                             ? kOverlayCutPreviewKeepBothOutlineColor
                             : kOverlayCutPreviewDiscardOutlineColor;
-                    appendCutPreviewResultLines(selectionOverlayCacheFrame_,
+                    appendCutPreviewResultLines(frame,
                             lineSource,
                             fromSdk(cutPoints[0]),
                             fromSdk(cut.face_normal),
@@ -1565,7 +1524,7 @@ public:
                 }
             }
             appendDrawnPlaneToolOverlay(
-                    selectionOverlayCacheFrame_,
+                    frame,
                     cutPoints,
                     drawnPlaneSupportPoint(cutPoints, cut.face_normal),
                     cutPoints.size() >= 2U);
@@ -1578,19 +1537,20 @@ public:
                             runtime_.mirror_hover().position,
                             runtime_.mirror_hover().valid);
             appendDrawnPlaneToolOverlay(
-                    selectionOverlayCacheFrame_,
+                    frame,
                     mirrorPoints,
                     drawnPlaneSupportPoint(mirrorPoints, mirror.plane.face_normal),
                     mirrorPoints.size() >= 2U);
         }
-        selectionOverlayCacheValid_ = true;
-        selectionOverlayCacheContentRevision_ = contentRevision;
-        selectionOverlayCacheSelectionRevision_ = selectionRevision;
-        selectionOverlayCacheSceneRevision_ = sceneRevision;
-        selectionOverlayCacheSelectionMode_ = selectionMode;
-        selectionOverlayCacheToolSignature_ = toolSignature;
-        selectionOverlayCacheHover_ = hover;
-        return selectionOverlayCacheFrame_;
+        overlayService_.storeSelectionFrame(
+                std::move(frame),
+                contentRevision,
+                selectionRevision,
+                sceneRevision,
+                selectionMode,
+                toolSignature,
+                hover);
+        return overlayService_.selectionFrame();
 #else
         return {};
 #endif
@@ -1623,7 +1583,8 @@ public:
 
             EntityId sourceEntity = InvalidEntityId;
             AssetId material = InvalidAssetId;
-            if (const auto entity = entityByObject_.find(objectId); entity != entityByObject_.end()) {
+            if (const auto entity = objectRegistry_.entitiesByObject().find(objectId);
+                    entity != objectRegistry_.entitiesByObject().end()) {
                 sourceEntity = entity->second;
                 if (const MaterialComponent* materialComponent = scene_.material(sourceEntity)) {
                     material = materialComponent->material;
@@ -1670,15 +1631,15 @@ public:
         std::vector<int> objectIds;
         objectIds.reserve(scene_.selectedEntities().size());
         for (const EntityId entity : scene_.selectedEntities()) {
-            const auto it = objectByEntity_.find(entity);
-            if (it != objectByEntity_.end()) {
+            const auto it = objectRegistry_.objectsByEntity().find(entity);
+            if (it != objectRegistry_.objectsByEntity().end()) {
                 objectIds.push_back(it->second);
             }
         }
 
         int activeObjectId = -1;
-        const auto primary = objectByEntity_.find(scene_.primarySelection());
-        if (primary != objectByEntity_.end()) {
+        const auto primary = objectRegistry_.objectsByEntity().find(scene_.primarySelection());
+        if (primary != objectRegistry_.objectsByEntity().end()) {
             activeObjectId = primary->second;
         }
 
@@ -1707,8 +1668,8 @@ public:
         sceneObjectIds.reserve(scene_.selectedEntities().size());
         int activeObjectId = -1;
         for (const EntityId entity : scene_.selectedEntities()) {
-            const auto it = objectByEntity_.find(entity);
-            if (it == objectByEntity_.end()) {
+            const auto it = objectRegistry_.objectsByEntity().find(entity);
+            if (it == objectRegistry_.objectsByEntity().end()) {
                 continue;
             }
             sceneObjectIds.push_back(it->second);
@@ -1748,8 +1709,8 @@ public:
         std::unordered_set<EntityId> desiredSelection;
         desiredSelection.reserve(selectedObjectIds.size());
         for (const int objectId : selectedObjectIds) {
-            const auto it = entityByObject_.find(objectId);
-            if (it != entityByObject_.end()) {
+            const auto it = objectRegistry_.entitiesByObject().find(objectId);
+            if (it != objectRegistry_.entitiesByObject().end()) {
                 desiredSelection.insert(it->second);
             }
         }
@@ -1765,8 +1726,8 @@ public:
                 scene_.setSelected(entity, true);
             }
         }
-        const auto active = entityByObject_.find(activeObjectId);
-        if (active != entityByObject_.end()) {
+        const auto active = objectRegistry_.entitiesByObject().find(activeObjectId);
+        if (active != objectRegistry_.entitiesByObject().end()) {
             const SelectionComponent* selection = scene_.selection(active->second);
             if (selection && selection->selected) {
                 scene_.setActiveSelection(active->second);
@@ -1857,7 +1818,7 @@ public:
 
     ModelingCommandResult copySelection() {
 #if QUADER_HAS_MODELING_SDK
-        return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::copy_selected_meshes, false);
+        return executeRuntimeNoSettings(clipboardService_.copyCommand(), false);
 #else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
@@ -1866,7 +1827,7 @@ public:
     ModelingCommandResult pasteSelection() {
 #if QUADER_HAS_MODELING_SDK
         quader_editor_core::EditorRuntimeCommand command;
-        command.command_id = quader_editor_core::EditorRuntimeCommandId::paste_copied_meshes;
+        command.command_id = clipboardService_.pasteCommand();
         command.settings = quader_editor_core::PasteCopiedMeshesRuntimeCommandSettings {};
         const std::uint64_t contentBefore = session_.state().content_revision;
         const quader_editor_core::EditorRuntimeCommandResult result =
@@ -1887,7 +1848,7 @@ public:
 
     ModelingCommandResult undo() {
 #if QUADER_HAS_MODELING_SDK
-        return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::undo, true);
+        return executeRuntimeNoSettings(historyBridge_.undoCommand(), true);
 #else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
@@ -1895,7 +1856,7 @@ public:
 
     ModelingCommandResult redo() {
 #if QUADER_HAS_MODELING_SDK
-        return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::redo, true);
+        return executeRuntimeNoSettings(historyBridge_.redoCommand(), true);
 #else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
@@ -1904,8 +1865,7 @@ public:
     ModelingCommandResult repeatLastAction() {
 #if QUADER_HAS_MODELING_SDK
         const std::uint64_t contentBefore = session_.state().content_revision;
-        const quader_editor_core::CommandResult result =
-                quader_editor_core::execute_repeat_last_action(session_, repeatLastAction_);
+        const quader_editor_core::CommandResult result = historyBridge_.executeRepeatLastAction(session_);
         if (session_.state().content_revision != contentBefore) {
             syncSceneObjectsFromSdk();
         }
@@ -1991,7 +1951,7 @@ public:
             syncSceneObjectsFromSdk();
         }
         syncSceneSelectionFromSdk();
-        quader_editor_core::record_repeatable_operation(repeatLastAction_, command, result.command);
+        historyBridge_.recordOperation(command, result.command);
         return {
                 .ok = result.command.ok,
                 .changed = result.command.changed,
@@ -2081,19 +2041,18 @@ public:
             target.kind = previewKind;
             target.active = true;
             target.operationPreviewActive = true;
-            target.label = activePreviewLabel_.empty() ? fallbackToolSettingsLabel(previewKind) : activePreviewLabel_;
-            target.actionId = activePreviewActionId_;
-            target.operationId = activePreviewOperationId_;
-            if (target.operationId.empty()) {
-                if (const std::optional<quader_editor_core::EditorOperationId> operation =
-                            operationForPreviewKind(preview.kind)) {
-                    if (const quader_editor_core::EditorOperation* schema =
-                                quader_editor_core::editor_operation_for_id(*operation)) {
-                        target.operationId = std::string(schema->id());
-                    }
+            std::string fallbackOperationId;
+            if (const std::optional<quader_editor_core::EditorOperationId> operation =
+                        operationForPreviewKind(preview.kind)) {
+                if (const quader_editor_core::EditorOperation* schema =
+                            quader_editor_core::editor_operation_for_id(*operation)) {
+                    fallbackOperationId = std::string(schema->id());
                 }
             }
-            return target;
+            return toolSettingsService_.operationPreviewTarget(
+                    previewKind,
+                    fallbackToolSettingsLabel(previewKind),
+                    fallbackOperationId);
         }
 
         const quader_editor_core::EditorRuntimeStatus sdkStatus = runtime_.status();
@@ -2108,24 +2067,15 @@ public:
     }
 
     [[nodiscard]] ModelingInteractionSettings interactionSettings() const {
-        return interactionSettings_;
+        return interactionSettingsService_.settings();
     }
 
     ModelingCommandResult setInteractionSettings(const ModelingInteractionSettings& settings) {
         const ModelingToolSettingsTarget activeTarget = toolSettingsTarget();
-        const ModelingInteractionSettings normalized = normalizeInteractionSettings(settings);
-        const bool cutModeChanged = normalized.cutMode != interactionSettings_.cutMode;
-        const bool changed = normalized.bridgeSteps != interactionSettings_.bridgeSteps ||
-                normalized.edgeBevelWidth != interactionSettings_.edgeBevelWidth ||
-                normalized.edgeBevelProfile != interactionSettings_.edgeBevelProfile ||
-                normalized.edgeBevelSegments != interactionSettings_.edgeBevelSegments ||
-                normalized.thickenThickness != interactionSettings_.thickenThickness ||
-                normalized.thickenFromCenter != interactionSettings_.thickenFromCenter ||
-                normalized.sliceQuadXSlices != interactionSettings_.sliceQuadXSlices ||
-                normalized.sliceQuadYSlices != interactionSettings_.sliceQuadYSlices ||
-                normalized.mergeByDistanceTolerance != interactionSettings_.mergeByDistanceTolerance ||
-                cutModeChanged;
-        interactionSettings_ = normalized;
+        const ModelingInteractionSettings previous = interactionSettingsService_.settings();
+        const ModelingInteractionSettings normalized = interactionSettingsService_.normalize(settings);
+        const bool cutModeChanged = normalized.cutMode != previous.cutMode;
+        const bool changed = interactionSettingsService_.setNormalized(normalized);
         if (cutModeChanged) {
             return setCutMode(normalized.cutMode);
         }
@@ -2143,68 +2093,31 @@ public:
 
     [[nodiscard]] bool modalToolOwnsViewport() const {
 #if QUADER_HAS_MODELING_SDK
-        switch (runtime_.active_tool()) {
-        case quader_editor_core::ViewportInteractionTool::box:
-        case quader_editor_core::ViewportInteractionTool::insert_edge_loop:
-        case quader_editor_core::ViewportInteractionTool::knife:
-        case quader_editor_core::ViewportInteractionTool::cut:
-        case quader_editor_core::ViewportInteractionTool::mirror:
-        case quader_editor_core::ViewportInteractionTool::poly:
-            return true;
-        case quader_editor_core::ViewportInteractionTool::select:
-        case quader_editor_core::ViewportInteractionTool::move:
-        case quader_editor_core::ViewportInteractionTool::extend:
-        case quader_editor_core::ViewportInteractionTool::extrude:
-        case quader_editor_core::ViewportInteractionTool::rotate:
-        case quader_editor_core::ViewportInteractionTool::scale:
-        case quader_editor_core::ViewportInteractionTool::unknown:
-            break;
-        }
+        return modalToolRuntime_.ownsViewport(fromSdkViewportTool(runtime_.active_tool()));
 #endif
         return false;
     }
 
     [[nodiscard]] ModelingActionQuery effectiveActionQuery(ModelingActionQuery query) const {
-        query.modalToolOwnsViewport = query.modalToolOwnsViewport || modalToolOwnsViewport();
-        return query;
+        return contextActionService_.effectiveActionQuery(query, modalToolOwnsViewport());
     }
 
     [[nodiscard]] ModelingActionSet contextActionSet(ModelingActionQuery query) const {
-        return ModelingActionCatalog::actionSetFor(selectionSummary(), effectiveActionQuery(query));
+        return contextActionService_.actionSet(selectionSummary(), query, modalToolOwnsViewport());
     }
 
     [[nodiscard]] std::vector<ModelingActionItem> contextActions(ModelingActionQuery query) const {
-        return ModelingActionCatalog::actionsFor(selectionSummary(), effectiveActionQuery(query));
+        return contextActionService_.actions(selectionSummary(), query, modalToolOwnsViewport());
     }
 
     void resetSettingsForPreviewAction(ModelingActionPreviewKind previewKind) {
-        const ModelingInteractionSettings defaults = normalizeInteractionSettings(ModelingInteractionSettings{});
-        switch (previewKind) {
-        case ModelingActionPreviewKind::EdgeBevel:
-            interactionSettings_.edgeBevelWidth = defaults.edgeBevelWidth;
-            interactionSettings_.edgeBevelProfile = defaults.edgeBevelProfile;
-            interactionSettings_.edgeBevelSegments = defaults.edgeBevelSegments;
-            return;
-        case ModelingActionPreviewKind::Thicken:
-            interactionSettings_.thickenThickness = defaults.thickenThickness;
-            interactionSettings_.thickenFromCenter = defaults.thickenFromCenter;
-            return;
-        case ModelingActionPreviewKind::MergeByDistance:
-            interactionSettings_.mergeByDistanceTolerance = defaults.mergeByDistanceTolerance;
-            return;
-        case ModelingActionPreviewKind::Bridge:
-        case ModelingActionPreviewKind::SliceQuad:
-        case ModelingActionPreviewKind::None:
-            return;
-        }
+        interactionSettingsService_.resetForPreviewAction(previewKind);
     }
 
 #if QUADER_HAS_MODELING_SDK
     void clearInactiveOperationPreviewMetadata() {
         if (!session_.preview_transaction_status().active) {
-            activePreviewActionId_.clear();
-            activePreviewOperationId_.clear();
-            activePreviewLabel_.clear();
+            toolSettingsService_.clearPreviewMetadata();
         }
     }
 
@@ -2212,35 +2125,37 @@ public:
             quader_editor_core::EditorOperationId sdkOperation,
             quader_editor_core::EditorOperationCommandPhase phase,
             quader_editor_core::EditorOperationSettings settings) {
-        quader_editor_core::EditorOperationCommand command;
-        command.operation_id = sdkOperation;
-        command.phase = phase;
-        command.settings = std::move(settings);
+        SdkOperationExecutor::OperationCommand operationCommand;
+        operationCommand.operation = sdkOperation;
+        operationCommand.phase = phase;
+        operationCommand.settings = std::move(settings);
+        const quader_editor_core::EditorOperationCommand command =
+                SdkOperationExecutor::makeCommand(operationCommand);
 
         const quader_editor_core::PreviewTransactionStatus previewBefore = session_.preview_transaction_status();
         const std::uint64_t contentBefore = session_.state().content_revision;
         const quader_editor_core::EditorOperationCommandResult result =
-                quader_editor_core::execute_command(session_, command);
+                sdkOperationExecutor_.execute(session_, operationCommand);
 
-        quader_editor_core::record_repeatable_operation(repeatLastAction_, command, result.command);
+        historyBridge_.recordOperation(command, result.command);
 
-        const bool previewPhase = phase != quader_editor_core::EditorOperationCommandPhase::execute;
-        const bool previewFinished = result.preview_finish.has_value() && result.preview_finish->before.active;
-        const bool sceneChanged = session_.state().content_revision != contentBefore;
-        if (sceneChanged || previewPhase || previewBefore.active || previewFinished) {
+        const ModelingCommandExecutor::SyncPlan syncPlan = commandExecutor_.operationSyncPlan(
+                phase,
+                previewBefore,
+                result,
+                contentBefore,
+                session_.state().content_revision);
+        if (syncPlan.invalidateOverlay) {
             invalidateSelectionOverlayCaches();
-            syncSceneObjectsFromSdk(previewPhase || previewBefore.active || previewFinished);
         }
-        if (result.command.ok || sceneChanged || previewPhase || previewBefore.active || previewFinished) {
+        if (syncPlan.syncMeshes) {
+            syncSceneObjectsFromSdk(syncPlan.forceMeshSync);
+        }
+        if (syncPlan.syncSelection) {
             syncSceneSelectionFromSdk();
         }
         clearInactiveOperationPreviewMetadata();
-
-        return {
-                .ok = result.command.ok,
-                .changed = result.command.changed,
-                .message = result.command.message,
-        };
+        return commandExecutor_.fromSdk(result.command);
     }
 
     ModelingCommandResult beginOperationPreview(
@@ -2254,13 +2169,17 @@ public:
         ModelingCommandResult result = executeSdkOperationCommand(
                 operation.operation_id(),
                 quader_editor_core::EditorOperationCommandPhase::begin_preview,
-                settingsForOperation(operation.operation_id(), interactionSettings_, action.actionId));
+                settingsForOperation(
+                        operation.operation_id(),
+                        interactionSettingsService_.settings(),
+                        action.actionId));
         if (result.ok) {
-            activePreviewActionId_ = action.actionId;
-            activePreviewOperationId_ = action.operationId;
-            activePreviewLabel_ = action.label.empty() ?
-                    fallbackToolSettingsLabel(toolSettingsTargetKindForPreview(session_.preview_transaction_status().kind)) :
-                    action.label;
+            toolSettingsService_.setPreviewMetadata(
+                    action.actionId,
+                    action.operationId,
+                    action.label.empty()
+                            ? fallbackToolSettingsLabel(toolSettingsTargetKindForPreview(session_.preview_transaction_status().kind))
+                            : action.label);
         }
         return result;
     }
@@ -2277,7 +2196,10 @@ public:
         return executeSdkOperationCommand(
                 *operation,
                 quader_editor_core::EditorOperationCommandPhase::update_preview,
-                settingsForOperation(*operation, interactionSettings_, activePreviewActionId_));
+                settingsForOperation(
+                        *operation,
+                        interactionSettingsService_.settings(),
+                        toolSettingsService_.activePreviewActionId()));
     }
 
     ModelingCommandResult finishActiveOperationPreview(bool commit) {
@@ -2293,7 +2215,10 @@ public:
                 *operation,
                 commit ? quader_editor_core::EditorOperationCommandPhase::commit_preview :
                          quader_editor_core::EditorOperationCommandPhase::cancel_preview,
-                settingsForOperation(*operation, interactionSettings_, activePreviewActionId_));
+                settingsForOperation(
+                        *operation,
+                        interactionSettingsService_.settings(),
+                        toolSettingsService_.activePreviewActionId()));
     }
 #endif
 
@@ -2342,7 +2267,10 @@ public:
 
         return executeSdkOperation(
                 operation->operation_id(),
-                settingsForOperation(operation->operation_id(), interactionSettings_, found->actionId));
+                settingsForOperation(
+                        operation->operation_id(),
+                        interactionSettingsService_.settings(),
+                        found->actionId));
 #else
         (void)actionId;
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
@@ -2425,99 +2353,15 @@ public:
             return deleteSelection();
         }
 
-        quader_editor_core::EditorOperationId sdkOperation = quader_editor_core::EditorOperationId::delete_selection;
-        quader_editor_core::EditorOperationSettings settings = quader_editor_core::SelectionOperationSettings{};
-        switch (operation) {
-        case ModelingInstantOperationId::DuplicateMeshes:
-            sdkOperation = quader_editor_core::EditorOperationId::duplicate_meshes;
-            settings = quader_editor_core::DuplicateMeshesOperationSettings{};
-            break;
-        case ModelingInstantOperationId::CombineMeshes:
-            sdkOperation = quader_editor_core::EditorOperationId::combine_meshes;
-            break;
-        case ModelingInstantOperationId::ExtractFaces:
-            sdkOperation = quader_editor_core::EditorOperationId::extract_faces;
-            break;
-        case ModelingInstantOperationId::DetachFaces:
-            sdkOperation = quader_editor_core::EditorOperationId::detach_faces;
-            break;
-        case ModelingInstantOperationId::Bridge:
-            sdkOperation = quader_editor_core::EditorOperationId::bridge;
-            settings = settingsForOperation(sdkOperation, interactionSettings_);
-            break;
-        case ModelingInstantOperationId::SnapVerticesToActive:
-            sdkOperation = quader_editor_core::EditorOperationId::snap_vertices_to_active;
-            break;
-        case ModelingInstantOperationId::ConnectVertices:
-            sdkOperation = quader_editor_core::EditorOperationId::connect_vertices;
-            break;
-        case ModelingInstantOperationId::DissolveVertices:
-            sdkOperation = quader_editor_core::EditorOperationId::dissolve_vertices;
-            break;
-        case ModelingInstantOperationId::BevelVertices:
-            sdkOperation = quader_editor_core::EditorOperationId::bevel_vertices;
-            settings = quader_editor_core::BevelVerticesOperationSettings{};
-            break;
-        case ModelingInstantOperationId::MergeVerticesToActive:
-            sdkOperation = quader_editor_core::EditorOperationId::merge_vertices_to_active;
-            break;
-        case ModelingInstantOperationId::MergeVerticesToCenter:
-            sdkOperation = quader_editor_core::EditorOperationId::merge_vertices_to_center;
-            break;
-        case ModelingInstantOperationId::SnapEdgesToActive:
-            sdkOperation = quader_editor_core::EditorOperationId::snap_edges_to_active;
-            break;
-        case ModelingInstantOperationId::ConnectEdges:
-            sdkOperation = quader_editor_core::EditorOperationId::connect_edges;
-            break;
-        case ModelingInstantOperationId::SplitEdges:
-            sdkOperation = quader_editor_core::EditorOperationId::split_edges;
-            break;
-        case ModelingInstantOperationId::DissolveEdges:
-            sdkOperation = quader_editor_core::EditorOperationId::dissolve_edges;
-            break;
-        case ModelingInstantOperationId::MergeEdges:
-            sdkOperation = quader_editor_core::EditorOperationId::merge_edges;
-            break;
-        case ModelingInstantOperationId::CollapseEdges:
-            sdkOperation = quader_editor_core::EditorOperationId::collapse_edges;
-            break;
-        case ModelingInstantOperationId::FillHole:
-            sdkOperation = quader_editor_core::EditorOperationId::fill_hole;
-            break;
-        case ModelingInstantOperationId::CombineFaces:
-            sdkOperation = quader_editor_core::EditorOperationId::combine_faces;
-            break;
-        case ModelingInstantOperationId::CollapseFaces:
-            sdkOperation = quader_editor_core::EditorOperationId::collapse_faces;
-            break;
-        case ModelingInstantOperationId::RadialAlign:
-            sdkOperation = quader_editor_core::EditorOperationId::radial_align;
-            break;
-        case ModelingInstantOperationId::FlipFaceNormals:
-            sdkOperation = quader_editor_core::EditorOperationId::flip_face_normals;
-            break;
-        case ModelingInstantOperationId::RecalculateFaceNormals:
-            sdkOperation = quader_editor_core::EditorOperationId::recalculate_face_normals;
-            settings = quader_editor_core::RecalculateFaceNormalsOperationSettings{};
-            break;
-        case ModelingInstantOperationId::ShadeFacesSmooth:
-            sdkOperation = quader_editor_core::EditorOperationId::shade_faces_smooth;
-            break;
-        case ModelingInstantOperationId::ShadeFacesFlat:
-            sdkOperation = quader_editor_core::EditorOperationId::shade_faces_flat;
-            break;
-        case ModelingInstantOperationId::HardenEdgeNormals:
-            sdkOperation = quader_editor_core::EditorOperationId::harden_edge_normals;
-            break;
-        case ModelingInstantOperationId::SoftenEdgeNormals:
-            sdkOperation = quader_editor_core::EditorOperationId::soften_edge_normals;
-            break;
-        case ModelingInstantOperationId::DeleteSelection:
-            break;
+        const std::optional<SdkOperationExecutor::OperationCommand> command =
+                sdkOperationExecutor_.operationForInstantCommand(
+                        operation,
+                        interactionSettingsService_.settings());
+        if (!command.has_value()) {
+            return {.ok = false, .message = "Instant operation is not mapped to an SDK operation."};
         }
 
-        return executeSdkOperation(sdkOperation, std::move(settings));
+        return executeSdkOperation(command->operation, command->settings);
 #else
         (void)operation;
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
@@ -2594,10 +2438,7 @@ public:
         }
         syncSceneObjectsFromSdk(finish.before.active);
         syncSceneSelectionFromSdk();
-        return {
-                .ok = !finish.before.active || finish.before.kind == quader_editor_core::PreviewTransactionKind::transform,
-                .changed = finish.before.changed,
-        };
+        return transformPreviewService_.finishResult(finish, false);
 #else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
@@ -2612,10 +2453,7 @@ public:
         }
         syncSceneObjectsFromSdk(finish.before.active);
         syncSceneSelectionFromSdk();
-        return {
-                .ok = !finish.before.active || finish.before.kind == quader_editor_core::PreviewTransactionKind::transform,
-                .changed = finish.restored,
-        };
+        return transformPreviewService_.finishResult(finish, true);
 #else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
@@ -2642,8 +2480,7 @@ public:
         drag.scale.axis = drag.axis;
         drag.scale.preview_scale = toSdk(transform.scale);
 
-        quader_editor_core::record_repeatable_transform(
-                repeatLastAction_,
+        historyBridge_.recordTransform(
                 session_,
                 drag,
                 transform.duplicateSelected);
@@ -2683,8 +2520,7 @@ public:
                     operation == quader_editor_core::TransformDragOperation::transform;
             runtime_.set_transform_drag_state(drag);
         }
-        activeTransformDragPreviewDriven_ = previewDriven;
-        activeTransformDragDuplicateSelected_ = request.duplicateSelected;
+        transformDragController_.setPreviewDriven(previewDriven, request.duplicateSelected);
 
         if (previewDriven) {
             const quader_editor_core::CommandResult beginPreview =
@@ -2808,7 +2644,7 @@ public:
 
     ModelingTransformDragPreview commitTransformDrag() {
 #if QUADER_HAS_MODELING_SDK
-        const bool previewDriven = activeTransformDragPreviewDriven_;
+        const bool previewDriven = transformDragController_.previewDriven();
         const quader_editor_core::TransformDragState repeatDrag = runtime_.transform_drag_state();
         bool changed = false;
 
@@ -2833,11 +2669,10 @@ public:
             }
             changed = finish.before.changed;
             if (changed && repeatDrag.active) {
-                quader_editor_core::record_repeatable_transform(
-                        repeatLastAction_,
+                historyBridge_.recordTransform(
                         session_,
                         repeatDrag,
-                        activeTransformDragDuplicateSelected_);
+                        transformDragController_.duplicateSelected());
             }
         }
 
@@ -3026,19 +2861,21 @@ public:
         const std::uint64_t contentBefore = session_.state().content_revision;
         const quader_editor_core::EditorRuntimeCommandResult result =
                 quader_editor_core::execute_runtime_command(session_, runtime_, command);
-        if (mayChangeContent &&
-                (session_.state().content_revision != contentBefore || result.command.changed)) {
-            syncSceneObjectsFromSdk(result.command.changed);
+        const ModelingCommandExecutor::SyncPlan syncPlan = commandExecutor_.runtimeSyncPlan(
+                mayChangeContent,
+                contentBefore,
+                session_.state().content_revision,
+                result.command);
+        if (syncPlan.syncMeshes) {
+            syncSceneObjectsFromSdk(syncPlan.forceMeshSync);
         }
-        syncSceneSelectionFromSdk();
-        if (result.command.changed) {
+        if (syncPlan.syncSelection) {
+            syncSceneSelectionFromSdk();
+        }
+        if (syncPlan.invalidateOverlay) {
             invalidateSelectionOverlayCaches();
         }
-        return {
-                .ok = result.command.ok,
-                .changed = result.command.changed,
-                .message = result.command.message,
-        };
+        return commandExecutor_.fromSdk(result.command);
     }
 
     ModelingCommandResult setActiveRuntimeTool(quader_editor_core::ViewportInteractionTool tool) {
@@ -3063,7 +2900,7 @@ public:
                     noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::activate_cut),
                     false);
             if (activated.ok) {
-                const ModelingCommandResult modeResult = setCutMode(interactionSettings_.cutMode);
+                const ModelingCommandResult modeResult = setCutMode(interactionSettingsService_.settings().cutMode);
                 activated.ok = modeResult.ok;
                 activated.changed = activated.changed || modeResult.changed;
                 if (!modeResult.message.empty()) {
@@ -3319,7 +3156,7 @@ public:
     }
 
     ModelingCommandResult setCutMode(ModelingCutMode mode) {
-        interactionSettings_.cutMode = mode;
+        interactionSettingsService_.setCutMode(mode);
 #if QUADER_HAS_MODELING_SDK
         quader_editor_core::SetCutModeRuntimeCommandSettings settings;
         settings.mode = quader_editor_core::cut_mode_id(toSdk(mode));
@@ -3334,12 +3171,9 @@ public:
 
     ModelingCommandResult cycleCutMode() {
 #if QUADER_HAS_MODELING_SDK
-        return setCutMode(fromSdk(quader_editor_core::next_cut_mode(toSdk(interactionSettings_.cutMode))));
+        return setCutMode(fromSdk(quader_editor_core::next_cut_mode(toSdk(interactionSettingsService_.settings().cutMode))));
 #else
-        interactionSettings_.cutMode =
-                interactionSettings_.cutMode == ModelingCutMode::DiscardLeft ? ModelingCutMode::DiscardRight :
-                interactionSettings_.cutMode == ModelingCutMode::DiscardRight ? ModelingCutMode::KeepBoth :
-                ModelingCutMode::DiscardLeft;
+        interactionSettingsService_.cycleCutModeWithoutSdk();
         return {.ok = true, .changed = true};
 #endif
     }
@@ -3663,57 +3497,8 @@ public:
 
 private:
 #if QUADER_HAS_MODELING_SDK
-    struct PickFaceGeometryCacheEntry {
-        int objectId = -1;
-        std::uint64_t geometrySignature = 0;
-    };
-
-    struct PickingCache {
-        bool objectsValid = false;
-        bool boundsValid = false;
-        bool faceGeometryValid = false;
-        std::uint64_t contentRevision = 0;
-        std::uint64_t selectionRevision = 0;
-        std::uint64_t sceneRevision = 0;
-        std::vector<quader_editor_core::PolygonObject> objects;
-        std::vector<quader_editor_core::PickObjectBounds> bounds;
-        std::vector<quader_editor_core::PickObjectFaceGeometry> faceGeometry;
-        std::vector<PickFaceGeometryCacheEntry> faceGeometryEntries;
-    };
-
-    struct OverlayBaseObjectCacheEntry {
-        int objectId = -1;
-        std::uint64_t geometrySignature = 0;
-        quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
-        bool selected = false;
-        quader_poly::Selection selection;
-        quader_editor_core::SelectionOverlayFrame frame;
-    };
-
-    struct OverlayBaseCache {
-        bool valid = false;
-        std::uint64_t contentRevision = 0;
-        std::uint64_t selectionRevision = 0;
-        quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
-        quader_editor_core::SelectionOverlayFrame frame;
-        std::vector<OverlayBaseObjectCacheEntry> objectEntries;
-    };
-
     void invalidateSelectionOverlayCaches() const {
-        selectionOverlayCacheValid_ = false;
-        overlayBaseCache_.valid = false;
-    }
-
-    static bool hoverMatches(
-            const quader_editor_core::SelectionHoverState& left,
-            const quader_editor_core::SelectionHoverState& right) {
-        return left.object_id == right.object_id &&
-                left.kind == right.kind &&
-                left.vertex_id == right.vertex_id &&
-                left.edge == right.edge &&
-                left.face_id == right.face_id &&
-                left.selected_modifier_pressed == right.selected_modifier_pressed &&
-                left.candidate_object_id == right.candidate_object_id;
+        overlayService_.invalidate();
     }
 
     [[nodiscard]] std::uint64_t selectionOverlayToolSignature() const {
@@ -3772,24 +3557,7 @@ private:
     }
 
     [[nodiscard]] bool sceneObjectsSyncedForCurrentSdkContent() const {
-        if (!sceneObjectsSyncValid_ || syncedSdkContentRevision_ != session_.state().content_revision) {
-            return false;
-        }
-        if (entityByObject_.size() != session_.objects().size()) {
-            return false;
-        }
-        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-            const auto entity = entityByObject_.find(object.id);
-            if (entity == entityByObject_.end() || !scene_.exists(entity->second)) {
-                return false;
-            }
-            const ModelingObjectComponent* modelingObject = scene_.modelingObject(entity->second);
-            const MeshComponent* mesh = scene_.mesh(entity->second);
-            if (modelingObject == nullptr || mesh == nullptr || mesh->mesh == InvalidAssetId) {
-                return false;
-            }
-        }
-        return true;
+        return sceneSyncService_.sceneObjectsSyncedForCurrentSdkContent(session_, scene_);
     }
 
     ModelingCommandResult updateTransformPreviewResult(const quader_editor_core::CommandResult& result) {
@@ -3806,15 +3574,13 @@ private:
     }
 
     [[nodiscard]] bool hasTransformPreview() const {
-        const quader_editor_core::PreviewTransactionStatus status = session_.preview_transaction_status();
-        return status.active && status.kind == quader_editor_core::PreviewTransactionKind::transform;
+        return transformPreviewService_.hasTransformPreview(session_);
     }
 
     void clearTransformDragRuntimeState() {
         runtime_.clear_transform_drag_state();
         runtime_.clear_gizmo_hover();
-        activeTransformDragPreviewDriven_ = false;
-        activeTransformDragDuplicateSelected_ = false;
+        transformDragController_.clear();
     }
 
     [[nodiscard]] bool scenePreviewTransformForDrag(
@@ -3862,7 +3628,7 @@ private:
         const quader_editor_core::TransformDragState drag = runtime_.transform_drag_state();
         preview.active = drag.active;
         preview.changed = changed;
-        preview.previewDriven = activeTransformDragPreviewDriven_;
+        preview.previewDriven = transformDragController_.previewDriven();
         preview.tool = fromSdk(drag.tool);
         preview.operation = fromSdk(drag.operation);
         preview.axis = fromSdk(drag.axis);
@@ -3898,7 +3664,7 @@ private:
         const quader_editor_core::CommandResult result =
                 runtime_.apply_transform_drag_preview(session_, input);
         if (!result.ok) {
-            const bool previewDriven = activeTransformDragPreviewDriven_;
+            const bool previewDriven = transformDragController_.previewDriven();
             (void)cancelTransformDrag();
             return {
                     .ok = false,
@@ -3910,7 +3676,7 @@ private:
         }
 
         invalidateSelectionOverlayCaches();
-        if (activeTransformDragPreviewDriven_) {
+        if (transformDragController_.previewDriven()) {
             syncSceneObjectsFromSdk(true);
             syncSceneSelectionFromSdk();
         }
@@ -3920,328 +3686,26 @@ private:
 
     void syncSceneObjectsFromSdk(bool force = false) {
 #if QUADER_HAS_MODELING_SDK
-        if (!force && sceneObjectsSyncedForCurrentSdkContent()) {
-            return;
-        }
-
-        std::unordered_map<std::uint32_t, AssetId> materialBySlot;
-        std::optional<AssetId> firstModelingMaterial;
-        for (const auto& [objectId, entity] : entityByObject_) {
-            const ModelingObjectComponent* modelingObject = scene_.modelingObject(entity);
-            const MaterialComponent* material = scene_.material(entity);
-            if (modelingObject == nullptr || material == nullptr || material->material == InvalidAssetId) {
-                continue;
-            }
-            materialBySlot.try_emplace(modelingObject->materialSlot, material->material);
-            if (!firstModelingMaterial) {
-                firstModelingMaterial = material->material;
-            }
-        }
-
-        std::unordered_map<int, bool> liveObjects;
-        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-            liveObjects[object.id] = true;
-            const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
-            const auto existing = entityByObject_.find(object.id);
-            if (existing == entityByObject_.end()) {
-                const std::string name = SceneEntityNaming::nextNameForKind(scene_, SceneEntityKind::Mesh);
-                MeshAsset mesh = toMeshAsset(object);
-                mesh.name = name;
-                const AssetId meshId = assets_.addMesh(std::move(mesh));
-                const EntityId entity = scene_.createEntity(name);
-                scene_.setModelingObject(entity, ModelingObjectComponent{
-                        .objectId = object.id,
-                        .materialSlot = materialSlot,
-                });
-                scene_.setMesh(entity, MeshComponent{.mesh = meshId});
-                const auto material = materialBySlot.find(materialSlot);
-                if (material != materialBySlot.end()) {
-                    scene_.setMaterial(entity, MaterialComponent{.material = material->second});
-                } else if (firstModelingMaterial) {
-                    scene_.setMaterial(entity, MaterialComponent{.material = *firstModelingMaterial});
-                }
-                entityByObject_[object.id] = entity;
-                objectByEntity_[entity] = object.id;
-                continue;
-            }
-
-            const EntityId entity = existing->second;
-            MeshAsset mesh = toMeshAsset(object);
-            if (const NameComponent* name = scene_.name(entity)) {
-                mesh.name = name->name;
-            }
-            AssetId meshId = InvalidAssetId;
-            if (const MeshComponent* meshComponent = scene_.mesh(entity)) {
-                meshId = meshComponent->mesh;
-            }
-            bool meshContentsReplaced = false;
-            if (meshId == InvalidAssetId) {
-                meshId = assets_.addMesh(std::move(mesh));
-            } else if (assets_.replaceMesh(meshId, std::move(mesh))) {
-                meshContentsReplaced = true;
-            } else {
-                MeshAsset replacement = toMeshAsset(object);
-                if (const NameComponent* name = scene_.name(entity)) {
-                    replacement.name = name->name;
-                }
-                meshId = assets_.addMesh(std::move(replacement));
-            }
-            const ModelingObjectComponent nextObject{
-                    .objectId = object.id,
-                    .materialSlot = materialSlot,
-            };
-            const ModelingObjectComponent* currentObject = scene_.modelingObject(entity);
-            if (currentObject == nullptr ||
-                    currentObject->objectId != nextObject.objectId ||
-                    currentObject->materialSlot != nextObject.materialSlot) {
-                scene_.setModelingObject(entity, nextObject);
-            }
-            const MeshComponent* currentMesh = scene_.mesh(entity);
-            if (currentMesh == nullptr || currentMesh->mesh != meshId || meshContentsReplaced) {
-                scene_.setMesh(entity, MeshComponent{.mesh = meshId});
-            }
-        }
-
-        std::vector<int> removedObjects;
-        for (const auto& [objectId, entity] : entityByObject_) {
-            if (!liveObjects.contains(objectId)) {
-                removedObjects.push_back(objectId);
-            }
-        }
-        for (const int objectId : removedObjects) {
-            const EntityId entity = entityByObject_[objectId];
-            if (scene_.exists(entity)) {
-                scene_.destroyEntity(entity);
-            }
-            objectByEntity_.erase(entity);
-            entityByObject_.erase(objectId);
-        }
-        syncedSdkContentRevision_ = session_.state().content_revision;
-        sceneObjectsSyncValid_ = true;
+        meshSyncService_.syncSceneObjectsFromSdk(session_, scene_, assets_, sceneSyncService_, force);
 #endif
     }
 
 #if QUADER_HAS_MODELING_SDK
     [[nodiscard]] const std::vector<quader_editor_core::PolygonObject>& cachedSceneTransformedObjectsForPicking() const {
-        const std::uint64_t contentRevision = session_.state().content_revision;
-        const std::uint64_t selectionRevision = session_.state().selection_revision;
-        const std::uint64_t sceneRevision = scene_.revision();
-        const bool geometryChanged =
-                !pickingCache_.objectsValid ||
-                pickingCache_.contentRevision != contentRevision ||
-                pickingCache_.sceneRevision != sceneRevision;
-        if (pickingCache_.objectsValid &&
-                pickingCache_.contentRevision == contentRevision &&
-                pickingCache_.selectionRevision == selectionRevision &&
-                pickingCache_.sceneRevision == sceneRevision) {
-            return pickingCache_.objects;
-        }
-
-        pickingCache_.objects.clear();
-        const std::vector<quader_editor_core::PolygonObject> sdkObjects = session_.objects();
-        pickingCache_.objects.reserve(sdkObjects.size());
-        for (quader_editor_core::PolygonObject object : sdkObjects) {
-            const auto entity = entityByObject_.find(object.id);
-            if (entity == entityByObject_.end()) {
-                continue;
-            }
-            const VisibilityComponent* visibility = scene_.visibility(entity->second);
-            if (!scene_.isEffectivelyVisible(entity->second) ||
-                    (visibility != nullptr && !visibility->selectable)) {
-                continue;
-            }
-            const Mat4 worldFromObject = scene_.worldTransformMatrix(entity->second);
-            for (quader_poly::Vertex& vertex : object.document.vertices) {
-                vertex.position = toSdk(transformPoint(worldFromObject, fromSdk(vertex.position)));
-            }
-            pickingCache_.objects.push_back(std::move(object));
-        }
-        pickingCache_.contentRevision = contentRevision;
-        pickingCache_.selectionRevision = selectionRevision;
-        pickingCache_.sceneRevision = sceneRevision;
-        pickingCache_.objectsValid = true;
-        if (geometryChanged) {
-            pickingCache_.boundsValid = false;
-            pickingCache_.faceGeometryValid = false;
-        }
-        return pickingCache_.objects;
+        return selectionService_.cachedSceneTransformedObjectsForPicking(session_, scene_, objectRegistry_);
     }
 
     [[nodiscard]] std::vector<quader_editor_core::PolygonObject> sceneTransformedObjectsForPicking() const {
-        return cachedSceneTransformedObjectsForPicking();
+        return selectionService_.sceneTransformedObjectsForPicking(session_, scene_, objectRegistry_);
     }
 
     [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds>& cachedPickObjectBounds() const {
-        const std::vector<quader_editor_core::PolygonObject>& objects = cachedSceneTransformedObjectsForPicking();
-        if (pickingCache_.boundsValid) {
-            return pickingCache_.bounds;
-        }
-
-        pickingCache_.bounds.clear();
-        pickingCache_.bounds.reserve(objects.size());
-        for (const quader_editor_core::PolygonObject& object : objects) {
-            pickingCache_.bounds.push_back(buildObjectPickBounds(object));
-        }
-        pickingCache_.boundsValid = true;
-        return pickingCache_.bounds;
+        return selectionService_.cachedPickObjectBounds(session_, scene_, objectRegistry_);
     }
 
     [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry>& cachedPickFaceGeometry(
             quader_poly::PickOptions pickOptions = {}) const {
-        const std::vector<quader_editor_core::PolygonObject>& objects = cachedSceneTransformedObjectsForPicking();
-        if (pickingCache_.faceGeometryValid) {
-            bool signaturesMatch = pickingCache_.faceGeometryEntries.size() == objects.size();
-            for (std::size_t index = 0; signaturesMatch && index < objects.size(); ++index) {
-                signaturesMatch =
-                        pickingCache_.faceGeometryEntries[index].objectId == objects[index].id &&
-                        pickingCache_.faceGeometryEntries[index].geometrySignature ==
-                                objectPickFaceGeometrySignature(objects[index], pickOptions);
-            }
-            if (signaturesMatch) {
-                return pickingCache_.faceGeometry;
-            }
-        }
-
-        std::vector<PickFaceGeometryCacheEntry> previousEntries = std::move(pickingCache_.faceGeometryEntries);
-        std::vector<quader_editor_core::PickObjectFaceGeometry> previousGeometry = std::move(pickingCache_.faceGeometry);
-        std::vector<PickFaceGeometryCacheEntry> nextEntries;
-        std::vector<quader_editor_core::PickObjectFaceGeometry> nextGeometry;
-        nextEntries.reserve(objects.size());
-        nextGeometry.reserve(objects.size());
-
-        for (const quader_editor_core::PolygonObject& object : objects) {
-            const std::uint64_t signature = objectPickFaceGeometrySignature(object, pickOptions);
-            auto reusable = previousEntries.end();
-            for (auto it = previousEntries.begin(); it != previousEntries.end(); ++it) {
-                if (it->objectId == object.id && it->geometrySignature == signature) {
-                    reusable = it;
-                    break;
-                }
-            }
-            if (reusable != previousEntries.end()) {
-                const std::size_t index = static_cast<std::size_t>(std::distance(previousEntries.begin(), reusable));
-                nextGeometry.push_back(std::move(previousGeometry[index]));
-                reusable->objectId = -1;
-            } else {
-                nextGeometry.push_back({
-                        object.id,
-                        quader_poly::build_face_pick_geometry(object.document, pickOptions),
-                });
-            }
-            nextEntries.push_back({
-                    .objectId = object.id,
-                    .geometrySignature = signature,
-            });
-        }
-
-        pickingCache_.faceGeometry = std::move(nextGeometry);
-        pickingCache_.faceGeometryEntries = std::move(nextEntries);
-        pickingCache_.faceGeometryValid = true;
-        return pickingCache_.faceGeometry;
-    }
-
-    [[nodiscard]] const quader_editor_core::SelectionOverlayFrame& selectionOverlayBaseFrame() const {
-        const std::uint64_t contentRevision = session_.state().content_revision;
-        const std::uint64_t selectionRevision = session_.state().selection_revision;
-        const quader_editor_core::SelectionMode selectionMode = session_.selection_mode();
-        if (overlayBaseCache_.valid &&
-                overlayBaseCache_.contentRevision == contentRevision &&
-                overlayBaseCache_.selectionRevision == selectionRevision &&
-                overlayBaseCache_.selectionMode == selectionMode) {
-            return overlayBaseCache_.frame;
-        }
-
-        std::vector<OverlayBaseObjectCacheEntry> previousEntries = std::move(overlayBaseCache_.objectEntries);
-        OverlayBaseCache next;
-        next.valid = true;
-        next.contentRevision = contentRevision;
-        next.selectionRevision = selectionRevision;
-        next.selectionMode = selectionMode;
-        next.objectEntries.reserve(session_.objects().size());
-
-        const quader_editor_core::SelectionHoverState emptyHover;
-        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-            const std::uint64_t signature = objectPickFaceGeometrySignature(object);
-            auto reusable = previousEntries.end();
-            for (auto it = previousEntries.begin(); it != previousEntries.end(); ++it) {
-                if (it->objectId == object.id &&
-                        it->geometrySignature == signature &&
-                        it->selectionMode == selectionMode &&
-                        it->selected == object.selected &&
-                        sdkSelectionMatches(it->selection, object.selection)) {
-                    reusable = it;
-                    break;
-                }
-            }
-
-            OverlayBaseObjectCacheEntry entry;
-            if (reusable != previousEntries.end()) {
-                entry = std::move(*reusable);
-                reusable->objectId = -1;
-            } else {
-                entry.objectId = object.id;
-                entry.geometrySignature = signature;
-                entry.selectionMode = selectionMode;
-                entry.selected = object.selected;
-                entry.selection = object.selection;
-                entry.frame = quader_editor_core::build_selection_overlay_frame(
-                        std::span<const quader_editor_core::PolygonObject>(&object, 1U),
-                        selectionMode,
-                        emptyHover,
-                        {});
-            }
-            appendOverlayFrame(next.frame, entry.frame);
-            next.objectEntries.push_back(std::move(entry));
-        }
-
-        overlayBaseCache_ = std::move(next);
-        return overlayBaseCache_.frame;
-    }
-
-    [[nodiscard]] quader_editor_core::SelectionOverlayFrame selectionOverlayCurrentFrame(
-            const quader_editor_core::SelectionHoverState& hover) const {
-        const quader_editor_core::SelectionOverlayFrame& base = selectionOverlayBaseFrame();
-        quader_editor_core::SelectionOverlayFrame hoverFrame =
-                quader_editor_core::build_selection_hover_overlay_frame(
-                        session_.objects(),
-                        session_.selection_mode(),
-                        hover,
-                        {});
-        const auto appendTransformDragSnapPoints = [&](quader_editor_core::SelectionOverlayFrame& frame) {
-            if (!runtime_.transform_drag_active()) {
-                return;
-            }
-            std::vector<quader_editor_core::SelectionOverlayPoint> snapPoints =
-                    quader_editor_core::transform_drag_snap_overlay_points(runtime_.transform_drag_state());
-            frame.points.insert(frame.points.end(), snapPoints.begin(), snapPoints.end());
-        };
-        const auto appendRuntimeToolOverlay = [&](quader_editor_core::SelectionOverlayFrame& frame) {
-            const quader_editor_core::InsertEdgeLoopToolState& insertLoop = runtime_.insert_edge_loop_state();
-            frame.lines.insert(frame.lines.end(), insertLoop.preview_lines.begin(), insertLoop.preview_lines.end());
-
-            const quader_editor_core::KnifeToolState& knife = runtime_.knife_state();
-            frame.lines.insert(frame.lines.end(), knife.preview_lines.begin(), knife.preview_lines.end());
-            frame.points.insert(frame.points.end(), knife.preview_points.begin(), knife.preview_points.end());
-
-            const quader_editor_core::PolyToolState& poly = runtime_.poly_state();
-            frame.lines.insert(frame.lines.end(), poly.preview_lines.begin(), poly.preview_lines.end());
-            frame.points.insert(frame.points.end(), poly.preview_points.begin(), poly.preview_points.end());
-        };
-        if (hoverFrame.hover_target_selected) {
-            quader_editor_core::SelectionOverlayFrame frame;
-            frame.hover_target_selected = hoverFrame.hover_target_selected;
-            appendSelectedHoverFilteredBaseFrame(frame, base, hoverFrame);
-            appendOverlayFrame(frame, hoverFrame);
-            appendTransformDragSnapPoints(frame);
-            appendRuntimeToolOverlay(frame);
-            return frame;
-        }
-
-        quader_editor_core::SelectionOverlayFrame frame = base;
-        appendOverlayFrame(frame, hoverFrame);
-        appendTransformDragSnapPoints(frame);
-        appendRuntimeToolOverlay(frame);
-        return frame;
+        return selectionService_.cachedPickFaceGeometry(session_, scene_, objectRegistry_, pickOptions);
     }
 
     void applyPickedSelection(
@@ -4262,7 +3726,7 @@ private:
                     picked != pickingObjects.end() ? picked->selection : quader_poly::Selection{};
             changed = changed ||
                     object.selected != nextSelected ||
-                    !sdkSelectionMatches(object.selection, nextSelection);
+                    !ModelingSelectionService::selectionMatches(object.selection, nextSelection);
             object.selected = nextSelected;
             object.selection = nextSelection;
         }
@@ -4283,34 +3747,13 @@ private:
 
     ModelingCreateBoxResult createSceneObjectFromLatest(const std::string& name, const std::string& message) {
 #if QUADER_HAS_MODELING_SDK
-        const quader_editor_core::PolygonObject& object = session_.objects().back();
-        MeshAsset mesh = toMeshAsset(object);
-        mesh.name = name;
-        const AssetId meshId = assets_.addMesh(std::move(mesh));
-
-        const EntityId entity = scene_.createEntity(name);
-        scene_.setModelingObject(entity, ModelingObjectComponent{
-                .objectId = object.id,
-                .materialSlot = static_cast<std::uint32_t>(object.material_id),
-        });
-        scene_.setMesh(entity, MeshComponent{.mesh = meshId});
-        scene_.clearSelection();
-        scene_.setSelected(entity, true);
-
-        entityByObject_[object.id] = entity;
-        objectByEntity_[entity] = object.id;
-
-        return {
-                .ok = true,
-                .changed = true,
-                .message = message,
-                .object = {
-                        .sdkObjectId = object.id,
-                        .entity = entity,
-                        .mesh = meshId,
-                        .name = name,
-                },
-        };
+        return meshSyncService_.createSceneObjectFromLatest(
+                session_,
+                scene_,
+                assets_,
+                sceneSyncService_,
+                name,
+                message);
 #else
         (void)name;
         (void)message;
@@ -4351,37 +3794,26 @@ private:
 
     SceneDocument& scene_;
     AssetRegistry& assets_;
-    std::unordered_map<int, EntityId> entityByObject_;
-    std::unordered_map<EntityId, int> objectByEntity_;
+    ModelingObjectRegistry objectRegistry_;
+    SceneModelingSyncService sceneSyncService_;
+    ModelingMeshSyncService meshSyncService_;
+    ModelingSelectionService selectionService_;
+    mutable ModelingOverlayService overlayService_;
+    ModelingCommandExecutor commandExecutor_;
+    ModelingContextActionService contextActionService_;
+    SdkOperationExecutor sdkOperationExecutor_;
+    TransformPreviewService transformPreviewService_;
+    ModelingInteractionSettingsService interactionSettingsService_;
+    ModelingToolSettingsService toolSettingsService_;
+    TransformDragController transformDragController_;
+    ModalToolRuntime modalToolRuntime_;
+    ModelingClipboardService clipboardService_;
+    ModelingHistoryBridge historyBridge_;
 
 #if QUADER_HAS_MODELING_SDK
     quader_editor_core::EditorSession session_;
     quader_editor_core::EditorRuntime runtime_;
-    quader_editor_core::RepeatLastActionState repeatLastAction_;
-    bool sceneObjectsSyncValid_ = false;
-    std::uint64_t syncedSdkContentRevision_ = 0;
-    mutable bool selectionOverlayCacheValid_ = false;
-    mutable std::uint64_t selectionOverlayCacheContentRevision_ = 0;
-    mutable std::uint64_t selectionOverlayCacheSelectionRevision_ = 0;
-    mutable std::uint64_t selectionOverlayCacheSceneRevision_ = 0;
-    mutable quader_editor_core::SelectionMode selectionOverlayCacheSelectionMode_ =
-            quader_editor_core::SelectionMode::object;
-    mutable std::uint64_t selectionOverlayCacheToolSignature_ = 0;
-    mutable quader_editor_core::SelectionHoverState selectionOverlayCacheHover_;
-    mutable ViewportOverlayFrame selectionOverlayCacheFrame_;
-    mutable PickingCache pickingCache_;
-    mutable OverlayBaseCache overlayBaseCache_;
-    bool activeTransformDragPreviewDriven_ = false;
-    bool activeTransformDragDuplicateSelected_ = false;
-    std::string activePreviewActionId_;
-    std::string activePreviewOperationId_;
-    std::string activePreviewLabel_;
 #endif
-    ModelingInteractionSettings interactionSettings_
-#if QUADER_HAS_MODELING_SDK
-            = normalizeInteractionSettings(ModelingInteractionSettings{})
-#endif
-            ;
 };
 
 ModelingSessionService::ModelingSessionService(SceneDocument& scene, AssetRegistry& assets)

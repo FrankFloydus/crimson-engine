@@ -1,9 +1,13 @@
 #pragma once
 
 #include "core/UndoRedoManager.h"
+#include "editor/ModelingHistoryCommand.h"
 #include "modeling/ModelingSessionService.h"
+#include "modeling/tools/ModelingCommandToolCatalog.h"
 #include "viewport/ViewportInputRouter.h"
+#include "viewport/tools/ViewportToolCatalog.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -23,58 +27,64 @@ inline ModelingMirrorAxis viewportMirrorAxisToModeling(ViewportMirrorAxis axis) 
 }
 
 inline ModelingTransformTool viewportToolToModelingTransformTool(ViewportTool tool) {
-    switch (tool) {
-    case ViewportTool::Move:
-        return ModelingTransformTool::Move;
-    case ViewportTool::Rotate:
-        return ModelingTransformTool::Rotate;
-    case ViewportTool::Scale:
-        return ModelingTransformTool::Scale;
-    case ViewportTool::Select:
-    case ViewportTool::Box:
-    case ViewportTool::InsertEdgeLoop:
-    case ViewportTool::Knife:
-    case ViewportTool::Cut:
-    case ViewportTool::Poly:
-    case ViewportTool::Mirror:
-        return ModelingTransformTool::Move;
+    return viewportToolTransformTool(tool);
+}
+
+inline ModelingCommandResult toModelingCommandResult(CommandResult result) {
+    return {
+            .ok = result.ok,
+            .changed = result.changed,
+            .message = std::move(result.message),
+    };
+}
+
+class ViewportCommandToolHistoryCommand final : public ModelingHistoryCommand {
+public:
+    ViewportCommandToolHistoryCommand(ModelingSessionService& modeling, const CommandTool& tool)
+        : ModelingHistoryCommand(modeling, std::string(tool.label()))
+        , tool_(tool) {}
+
+private:
+    ModelingCommandResult executeInitial() override {
+        return tool_.execute(modeling());
     }
-    return ModelingTransformTool::Move;
-}
 
-inline UndoRedoResult toUndoRedoResult(ModelingCommandResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
-}
+    const CommandTool& tool_;
+};
 
-inline ModelingCommandResult toModelingCommandResult(UndoRedoResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
-}
-
-template <typename Apply>
-inline ModelingCommandResult executeTrackedModelingCommand(
+inline ModelingCommandResult executeTrackedCommandTool(
         UndoRedoManager& undoRedo,
         ModelingSessionService& modeling,
-        std::string label,
-        Apply apply) {
-    return toModelingCommandResult(undoRedo.executeExternal(
-            std::move(label),
-            [&]() {
-                return toUndoRedoResult(apply());
-            },
-            [&]() {
-                return toUndoRedoResult(modeling.undo());
-            },
-            [&]() {
-                return toUndoRedoResult(modeling.redo());
-            }));
+        std::string_view toolId) {
+    const CommandTool* tool = findModelingCommandTool(toolId);
+    if (tool == nullptr) {
+        return {
+                .ok = false,
+                .changed = false,
+                .message = "Command tool is not registered.",
+        };
+    }
+
+    if (tool->historyPolicy().mode != ModelingCommandHistoryMode::ModelingUndoRedo) {
+        return tool->execute(modeling);
+    }
+
+    return toModelingCommandResult(
+            undoRedo.execute(std::make_unique<ViewportCommandToolHistoryCommand>(modeling, *tool)));
+}
+
+inline ModelingCommandResult executeCommandTool(
+        ModelingSessionService& modeling,
+        std::string_view toolId) {
+    const CommandTool* tool = findModelingCommandTool(toolId);
+    if (tool == nullptr) {
+        return {
+                .ok = false,
+                .changed = false,
+                .message = "Command tool is not registered.",
+        };
+    }
+    return tool->execute(modeling);
 }
 
 inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
@@ -83,23 +93,17 @@ inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
         const ViewportShortcut& shortcut) {
     switch (shortcut.kind) {
     case ViewportShortcutKind::DeleteSelection:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Delete Selection", [&]() {
-            return modeling.deleteSelection();
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "delete_selection");
     case ViewportShortcutKind::SelectAll:
-        return modeling.selectAll();
+        return executeCommandTool(modeling, "select_all");
     case ViewportShortcutKind::InvertSelection:
-        return modeling.invertSelection();
+        return executeCommandTool(modeling, "invert_selection");
     case ViewportShortcutKind::Copy:
-        return modeling.copySelection();
+        return executeCommandTool(modeling, "copy_selection");
     case ViewportShortcutKind::Paste:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Paste Selection", [&]() {
-            return modeling.pasteSelection();
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "paste_selection");
     case ViewportShortcutKind::Duplicate:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Duplicate Meshes", [&]() {
-            return modeling.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "duplicate_meshes");
     case ViewportShortcutKind::Undo:
         if (undoRedo.canUndo()) {
             return toModelingCommandResult(undoRedo.undo());
@@ -117,33 +121,22 @@ inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
         }
         return ModelingCommandResult{.ok = false, .message = "No command to redo"};
     case ViewportShortcutKind::RepeatLastAction:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Repeat Last Action", [&]() {
-            return modeling.repeatLastAction();
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "repeat_last_action");
     case ViewportShortcutKind::MergeActive:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Merge To Active", [&]() {
-            return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToActive);
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "merge_vertices_to_active");
     case ViewportShortcutKind::MergeCenter:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Merge To Center", [&]() {
-            return modeling.executeInstantOperation(ModelingInstantOperationId::MergeVerticesToCenter);
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "merge_vertices_to_center");
     case ViewportShortcutKind::MirrorAxis:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Mirror Selection", [&]() {
-            return modeling.mirrorSelection(viewportMirrorAxisToModeling(shortcut.mirrorAxis));
-        });
+        return executeTrackedCommandTool(
+                undoRedo,
+                modeling,
+                modelingMirrorSelectionToolId(viewportMirrorAxisToModeling(shortcut.mirrorAxis)));
     case ViewportShortcutKind::FlipHorizontal:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Flip Horizontal", [&]() {
-            return modeling.flipSelection(ModelingFlipOrientation::Horizontal);
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "flip_horizontal");
     case ViewportShortcutKind::FlipVertical:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Flip Vertical", [&]() {
-            return modeling.flipSelection(ModelingFlipOrientation::Vertical);
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "flip_vertical");
     case ViewportShortcutKind::ApplyMaterial:
-        return executeTrackedModelingCommand(undoRedo, modeling, "Apply Material", [&]() {
-            return modeling.applyActiveMaterial();
-        });
+        return executeTrackedCommandTool(undoRedo, modeling, "assign_material");
     case ViewportShortcutKind::None:
     case ViewportShortcutKind::ActivateTool:
     case ViewportShortcutKind::SetSelectionMode:

@@ -80,6 +80,8 @@ enum class ModelingTransformTool {
 enum class ModelingViewportTool {
     Select,
     Move,
+    Extend,
+    Extrude,
     Rotate,
     Scale,
     Box,

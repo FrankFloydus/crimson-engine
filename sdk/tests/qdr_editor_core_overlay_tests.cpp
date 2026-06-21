@@ -38,10 +38,30 @@ std::size_t line_count_for_layer_and_color(
 	}));
 }
 
+std::size_t triangle_count_for_layer_and_color(
+	const quader_editor_core::SelectionOverlayFrame& frame,
+	quader_editor_core::SelectionOverlayLayer layer,
+	std::uint32_t color_abgr)
+{
+	return static_cast<std::size_t>(std::count_if(frame.triangles.begin(), frame.triangles.end(), [layer, color_abgr](const quader_editor_core::SelectionOverlayTriangle& triangle) {
+		return triangle.layer == layer && triangle.color_abgr == color_abgr;
+	}));
+}
+
 std::size_t point_count_for_layer(const quader_editor_core::SelectionOverlayFrame& frame, quader_editor_core::SelectionOverlayLayer layer)
 {
 	return static_cast<std::size_t>(std::count_if(frame.points.begin(), frame.points.end(), [layer](const quader_editor_core::SelectionOverlayPoint& point) {
 		return point.layer == layer;
+	}));
+}
+
+std::size_t point_count_for_layer_and_color(
+	const quader_editor_core::SelectionOverlayFrame& frame,
+	quader_editor_core::SelectionOverlayLayer layer,
+	std::uint32_t color_abgr)
+{
+	return static_cast<std::size_t>(std::count_if(frame.points.begin(), frame.points.end(), [layer, color_abgr](const quader_editor_core::SelectionOverlayPoint& point) {
+		return point.layer == layer && point.color_abgr == color_abgr;
 	}));
 }
 
@@ -344,14 +364,32 @@ void selected_component_hover_keeps_normal_hover_primitives()
 		quader_editor_core::selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover.hover),
 		"selected component hover fixture should confirm the hovered face is selected");
 
+	quader_editor_core::SelectionOverlayStyle style;
 	const quader_editor_core::SelectionOverlayFrame frame =
-		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), hover.hover);
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), hover.hover, style);
+	require_test(!frame.hover_target_selected,
+		"selected component hover without the modifier should not become remove-preview hover");
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_face_edge) > 0,
 		"selected component hover should keep the selected face edges");
 	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::hover_face) > 0,
 		"selected component hover should keep the normal hover face fill");
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::hover_face_edge) > 0,
 		"selected component hover should keep the normal hover face edges");
+	require_test(triangle_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::hover_face, style.hover_face_color_abgr) > 0,
+		"selected component hover without the modifier should use normal hover face color");
+	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::hover_face_edge, style.hover_face_edge_color_abgr) > 0,
+		"selected component hover without the modifier should use normal hover edge color");
+
+	quader_editor_core::SelectionHoverState remove_hover = hover.hover;
+	remove_hover.selected_modifier_pressed = true;
+	const quader_editor_core::SelectionOverlayFrame remove_frame =
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), remove_hover, style);
+	require_test(remove_frame.hover_target_selected,
+		"selected component hover with the modifier should become remove-preview hover");
+	require_test(triangle_count_for_layer_and_color(remove_frame, quader_editor_core::SelectionOverlayLayer::hover_face, style.hover_selected_face_color_abgr) > 0,
+		"selected component hover with the modifier should use selected-hover face color");
+	require_test(line_count_for_layer_and_color(remove_frame, quader_editor_core::SelectionOverlayLayer::hover_face_edge, style.hover_selected_line_color_abgr) > 0,
+		"selected component hover with the modifier should use selected-hover edge color");
 }
 
 void selected_hover_overlay_primitives_carry_stable_owner_keys()

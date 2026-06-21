@@ -1,18 +1,18 @@
 #pragma once
 
 #include "ui/ConsoleModel.h"
-#include "ui/UIPanel.h"
+#include "ui/UIDockPanel.h"
 
 namespace quader {
 
-class ConsolePanel final : public UIPanel {
+class ConsolePanel final : public UIDockPanel {
 public:
     UIPanelId id() const override { return UIPanelId::Console; }
-    const char* title() const override { return uiPanelKey(UIPanelId::Console); }
     bool defaultVisible() const override { return false; }
-    void draw(UIContext& context) override;
 
 private:
+    void drawContent(UIContext& context) override;
+
     ConsoleFilter filter_;
     bool autoScroll_ = true;
 };

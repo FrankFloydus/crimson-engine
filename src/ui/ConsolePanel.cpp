@@ -35,15 +35,8 @@ const char* levelName(spdlog::level::level_enum level) {
 
 } // namespace
 
-void ConsolePanel::draw(UIContext& context) {
-    if (!ImGui::Begin(title(), nullptr, context.style.panelWindowFlags)) {
-        ImGui::End();
-        return;
-    }
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && panelFocusInputActive()) {
-        context.requestPanelFocus(id());
-    }
-
+void ConsolePanel::drawContent(UIContext& context) {
+    // UIDockPanel routes hover input through context.requestPanelFocus(id()) before content draws.
     if (ImGui::Button("Clear")) {
         Logger::clearMemory();
     }
@@ -97,7 +90,6 @@ void ConsolePanel::draw(UIContext& context) {
         }
     }
     ImGui::EndChild();
-    ImGui::End();
 }
 
 } // namespace quader

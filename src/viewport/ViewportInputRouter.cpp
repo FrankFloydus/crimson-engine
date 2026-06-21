@@ -1,6 +1,8 @@
 #include "viewport/ViewportInputRouter.h"
 
 #include "viewport/HostViewportContractAdapter.h"
+#include "viewport/tools/ViewportToolCatalog.h"
+#include "viewport/tools/ViewportToolRuntime.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,7 +37,7 @@ ViewportShortcut commandShortcut(ViewportShortcutKind kind, ViewportShortcutCont
     };
 }
 
-ViewportShortcut toolShortcut(ViewportTool tool) {
+ViewportShortcut toolShortcut(ViewportToolId tool) {
     return {
         .kind = ViewportShortcutKind::ActivateTool,
         .context = ViewportShortcutContext::Viewport,
@@ -69,9 +71,13 @@ ViewportShortcut mirrorShortcut(ViewportMirrorAxis axis) {
 
 } // namespace
 
-ViewportInputRouter::ViewportInputRouter() {
+ViewportInputRouter::ViewportInputRouter()
+    : toolRuntime_(std::make_unique<ViewportToolRuntime>()) {
     state_.gridPreset = viewportDefaultGridPreset();
+    toolRuntime_->syncActiveTool(state_.activeTool);
 }
+
+ViewportInputRouter::~ViewportInputRouter() = default;
 
 ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera) {
     ViewportInputResult result;
@@ -228,11 +234,8 @@ void ViewportInputRouter::reset() {
     flyHudActive_ = false;
 }
 
-void ViewportInputRouter::setActiveTool(ViewportTool tool) {
-    if (!viewportToolHasNativeController(tool)) {
-        return;
-    }
-    state_.activeTool = tool;
+void ViewportInputRouter::setActiveTool(ViewportToolId tool) {
+    (void)toolRuntime_->setActiveTool(state_, tool);
 }
 
 void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
@@ -241,6 +244,43 @@ void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
 
 void ViewportInputRouter::setMaximized(bool maximized) {
     state_.maximized = maximized;
+}
+
+bool ViewportInputRouter::activeToolOwnsViewport() const {
+    return toolRuntime_ != nullptr && toolRuntime_->activeToolOwnsViewport();
+}
+
+bool ViewportInputRouter::activeToolBlocksViewportFocusShortcuts() const {
+    return toolRuntime_ != nullptr && toolRuntime_->activeToolBlocksViewportFocusShortcuts();
+}
+
+bool ViewportInputRouter::activeToolAllowsSelectionFallback() const {
+    return toolRuntime_ != nullptr && toolRuntime_->toolAllowsSelectionFallback(state_.activeTool);
+}
+
+bool ViewportInputRouter::hasActiveModalPreview() const {
+    return toolRuntime_ != nullptr && toolRuntime_->hasActiveModalPreview();
+}
+
+const ModelingBoxPreview& ViewportInputRouter::boxPreview() const {
+    static const ModelingBoxPreview emptyPreview;
+    return toolRuntime_ != nullptr ? toolRuntime_->boxPreview() : emptyPreview;
+}
+
+void ViewportInputRouter::clearModalToolState() {
+    if (toolRuntime_ != nullptr) {
+        toolRuntime_->clearModalToolState();
+    }
+}
+
+void ViewportInputRouter::clearModalDragState() {
+    if (toolRuntime_ != nullptr) {
+        toolRuntime_->clearModalDragState();
+    }
+}
+
+const ViewportTool* ViewportInputRouter::activeTool() const {
+    return toolRuntime_ != nullptr ? toolRuntime_->activeTool() : findViewportTool(state_.activeTool);
 }
 
 bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut) {
@@ -318,11 +358,11 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
 
     if (modifiers.shift) {
         if (key == ViewportKey::R) {
-            shortcut = toolShortcut(ViewportTool::InsertEdgeLoop);
+            shortcut = toolShortcut(ViewportToolId::InsertEdgeLoop);
             return true;
         }
         if (key == ViewportKey::C) {
-            shortcut = toolShortcut(ViewportTool::Cut);
+            shortcut = toolShortcut(ViewportToolId::Cut);
             return true;
         }
         if (key == ViewportKey::M) {
@@ -358,28 +398,28 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
 
     switch (key) {
     case ViewportKey::Q:
-        shortcut = toolShortcut(ViewportTool::Select);
+        shortcut = toolShortcut(ViewportToolId::Select);
         return true;
     case ViewportKey::W:
-        shortcut = toolShortcut(ViewportTool::Move);
+        shortcut = toolShortcut(ViewportToolId::Move);
         return true;
     case ViewportKey::R:
-        shortcut = toolShortcut(ViewportTool::Rotate);
+        shortcut = toolShortcut(ViewportToolId::Rotate);
         return true;
     case ViewportKey::S:
-        shortcut = toolShortcut(ViewportTool::Scale);
+        shortcut = toolShortcut(ViewportToolId::Scale);
         return true;
     case ViewportKey::B:
-        shortcut = toolShortcut(ViewportTool::Box);
+        shortcut = toolShortcut(ViewportToolId::Box);
         return true;
     case ViewportKey::C:
-        shortcut = toolShortcut(ViewportTool::Knife);
+        shortcut = toolShortcut(ViewportToolId::Knife);
         return true;
     case ViewportKey::M:
         shortcut = commandShortcut(ViewportShortcutKind::MergeActive, ViewportShortcutContext::Viewport);
         return true;
     case ViewportKey::P:
-        shortcut = toolShortcut(ViewportTool::Poly);
+        shortcut = toolShortcut(ViewportToolId::Poly);
         return true;
     case ViewportKey::Number1:
         shortcut = selectionShortcut(ViewportSelectionMode::Vertex);
@@ -429,95 +469,17 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
 }
 
 bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result) {
-    const bool modalToolGestureKeyActive =
-            state_.activeTool == ViewportTool::Knife ||
-            state_.activeTool == ViewportTool::Cut ||
-            state_.activeTool == ViewportTool::Mirror ||
-            state_.activeTool == ViewportTool::Poly;
-    switch (shortcut.kind) {
-    case ViewportShortcutKind::ActivateTool:
-        if (!viewportToolHasNativeController(shortcut.tool)) {
-            return false;
-        }
-        result.toolChanged = state_.activeTool != shortcut.tool;
-        state_.activeTool = shortcut.tool;
-        return true;
-    case ViewportShortcutKind::SetSelectionMode:
-        result.selectionModeChanged = state_.selectionMode != shortcut.selectionMode;
-        state_.selectionMode = shortcut.selectionMode;
-        return true;
-    case ViewportShortcutKind::FocusDocument:
-        if (modalToolGestureKeyActive) {
-            return false;
-        }
-        result.focusDocumentRequested = true;
-        result.cameraChanged = true;
-        return true;
-    case ViewportShortcutKind::FocusOrigin:
-        camera.focusOrigin();
-        result.cameraChanged = true;
-        return true;
-    case ViewportShortcutKind::ToggleMaximized:
-        if (modalToolGestureKeyActive) {
-            return false;
-        }
-        state_.maximized = !state_.maximized;
-        return true;
-    case ViewportShortcutKind::SetGridPreset:
-        result.gridPresetChanged = state_.gridPreset != shortcut.gridPreset;
-        state_.gridPreset = shortcut.gridPreset;
-        return true;
-    case ViewportShortcutKind::CancelActiveTool:
-        result.cancelRequested = true;
-        return true;
-    case ViewportShortcutKind::DeleteSelection:
-    case ViewportShortcutKind::SelectAll:
-    case ViewportShortcutKind::InvertSelection:
-    case ViewportShortcutKind::Copy:
-    case ViewportShortcutKind::Paste:
-    case ViewportShortcutKind::Duplicate:
-    case ViewportShortcutKind::Undo:
-    case ViewportShortcutKind::Redo:
-    case ViewportShortcutKind::RepeatLastAction:
-    case ViewportShortcutKind::MergeActive:
-    case ViewportShortcutKind::MergeCenter:
-    case ViewportShortcutKind::MirrorAxis:
-        return true;
-    case ViewportShortcutKind::FlipHorizontal:
-    case ViewportShortcutKind::FlipVertical:
-        return state_.selectionMode == ViewportSelectionMode::Object;
-    case ViewportShortcutKind::ApplyMaterial:
-        return true;
-    case ViewportShortcutKind::None:
-        return false;
-    }
-    return false;
+    return toolRuntime_ != nullptr && toolRuntime_->handleShortcut(shortcut, state_, camera, result);
 }
 
-const char* viewportToolId(ViewportTool tool) {
-    switch (tool) {
-    case ViewportTool::Select:
-        return "select";
-    case ViewportTool::Move:
-        return "move";
-    case ViewportTool::Rotate:
-        return "rotate";
-    case ViewportTool::Scale:
-        return "scale";
-    case ViewportTool::Box:
-        return "box";
-    case ViewportTool::InsertEdgeLoop:
-        return "insert_edge_loop";
-    case ViewportTool::Knife:
-        return "knife";
-    case ViewportTool::Cut:
-        return "cut";
-    case ViewportTool::Poly:
-        return "poly";
-    case ViewportTool::Mirror:
-        return "mirror";
-    }
-    return "unknown";
+ViewportToolResult ViewportInputRouter::handleActiveToolEvent(
+        ViewportToolContext& context,
+        const ViewportToolEvent& event) {
+    return toolRuntime_ != nullptr ? toolRuntime_->handleActiveToolEvent(state_, context, event) : ViewportToolResult{};
+}
+
+const char* viewportToolId(ViewportToolId tool) {
+    return viewportToolCatalogId(tool).data();
 }
 
 const char* viewportSelectionModeId(ViewportSelectionMode mode) {

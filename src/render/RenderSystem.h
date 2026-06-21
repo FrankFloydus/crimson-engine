@@ -1,10 +1,10 @@
 #pragma once
 
 #include "render/Backend.h"
+#include "render/FilamentMaterialLibrary.h"
 #include "render/TextureRegistry.h"
 
 #include <filament/Engine.h>
-#include <filament/Material.h>
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/Skybox.h>
@@ -28,12 +28,12 @@ public:
     filament::Engine& engine() { return *engine_; }
     filament::Renderer& renderer() { return *renderer_; }
     filament::Scene& scene() { return *scene_; }
-    filament::Material& quaderMeshMaterial() { return *quaderMeshMaterial_; }
-    filament::Material& vertexColorOverlayMaterial() { return *vertexColorOverlayMaterial_; }
-    filament::Material& overlayLineMaterial() { return *overlayLineMaterial_; }
-    filament::Material& overlayPointMaterial() { return *overlayPointMaterial_; }
-    filament::Material& imguiMaterial() { return *imguiMaterial_; }
-    filament::Material& groundGridMaterial() { return *groundGridMaterial_; }
+    filament::Material& quaderMeshMaterial() { return materialLibrary_.quaderMesh(); }
+    filament::Material& vertexColorOverlayMaterial() { return materialLibrary_.vertexColorOverlay(); }
+    filament::Material& overlayLineMaterial() { return materialLibrary_.overlayLine(); }
+    filament::Material& overlayPointMaterial() { return materialLibrary_.overlayPoint(); }
+    filament::Material& imguiMaterial() { return materialLibrary_.imgui(); }
+    filament::Material& groundGridMaterial() { return materialLibrary_.groundGrid(); }
     TextureRegistry& textures() { return textureRegistry_; }
 
 private:
@@ -42,12 +42,7 @@ private:
     filament::SwapChain* swapChain_ = nullptr;
     filament::Scene* scene_ = nullptr;
     filament::Skybox* skybox_ = nullptr;
-    filament::Material* quaderMeshMaterial_ = nullptr;
-    filament::Material* vertexColorOverlayMaterial_ = nullptr;
-    filament::Material* overlayLineMaterial_ = nullptr;
-    filament::Material* overlayPointMaterial_ = nullptr;
-    filament::Material* imguiMaterial_ = nullptr;
-    filament::Material* groundGridMaterial_ = nullptr;
+    FilamentMaterialLibrary materialLibrary_;
     TextureRegistry textureRegistry_;
 };
 

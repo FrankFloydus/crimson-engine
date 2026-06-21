@@ -90,6 +90,32 @@ if(QUADER_BUILD_SDK_TESTS AND NOT QUADER_ENABLE_MODELING_SDK)
     message(FATAL_ERROR "QUADER_BUILD_SDK_TESTS requires QUADER_ENABLE_MODELING_SDK=ON.")
 endif()
 
+set(QUADER_MODELING_TOOL_SOURCES
+    src/modeling/tools/ModelingCommandDispatcher.cpp
+    src/modeling/tools/ModelingCommandToolCatalog.cpp
+    src/modeling/tools/commands/AssignMaterialTool.cpp
+    src/modeling/tools/commands/ClearSelectionTool.cpp
+    src/modeling/tools/commands/CopySelectionTool.cpp
+    src/modeling/tools/commands/FlipHorizontalTool.cpp
+    src/modeling/tools/commands/FlipVerticalTool.cpp
+    src/modeling/tools/commands/InvertSelectionTool.cpp
+    src/modeling/tools/commands/MirrorSelectionTool.cpp
+    src/modeling/tools/commands/PasteSelectionTool.cpp
+    src/modeling/tools/commands/RepeatLastActionTool.cpp
+    src/modeling/tools/commands/SelectAllTool.cpp
+)
+
+set(QUADER_VIEWPORT_TOOL_SOURCES
+    src/viewport/tools/Tool.cpp
+    src/viewport/tools/ViewportToolRuntime.cpp
+    src/viewport/tools/base/DragCommitTool.cpp
+    src/viewport/tools/base/DrawnPlaneTool.cpp
+    src/viewport/tools/base/ModalViewportTool.cpp
+    src/viewport/tools/base/PointSequenceTool.cpp
+    src/viewport/tools/base/TwoStageBoxTool.cpp
+    src/viewport/tools/base/ViewportToolCatalog.cpp
+)
+
 set(QUADER_HAS_MODELING_SDK OFF)
 if(QUADER_ENABLE_MODELING_SDK AND EXISTS "${QUADER_MODELING_SDK_DIR}/CMakeLists.txt")
     set(BUILD_TESTING ${QUADER_BUILD_SDK_TESTS} CACHE BOOL "Build SDK tests from the app integration." FORCE)
@@ -112,7 +138,9 @@ endif()
 
 add_library(quader_modeling STATIC
     src/modeling/ModelingActionCatalog.cpp
+    src/modeling/ModelingSessionServices.cpp
     src/modeling/ModelingSessionService.cpp
+    ${QUADER_MODELING_TOOL_SOURCES}
 )
 
 target_include_directories(quader_modeling PUBLIC src)
@@ -140,6 +168,7 @@ add_library(quader_core STATIC
     src/core/UndoRedoManager.cpp
     src/document/DocumentCommandService.cpp
     src/document/ProjectDocument.cpp
+    src/document/ProjectSession.cpp
     src/geometry/UVSphere.cpp
     src/scene/SceneBounds.cpp
     src/scene/SceneDocument.cpp
@@ -150,6 +179,7 @@ add_library(quader_core STATIC
     src/viewport/ViewportInputRouter.cpp
     src/viewport/ViewportLayout.cpp
     src/viewport/ViewportSettings.cpp
+    ${QUADER_VIEWPORT_TOOL_SOURCES}
 )
 
 target_include_directories(quader_core PUBLIC src)
@@ -268,19 +298,53 @@ add_library(quader_runtime STATIC
     src/platform/FatalErrorHandler.cpp
     src/platform/PlatformWindow.cpp
     src/render/FilamentUtils.cpp
+    src/render/FilamentBufferDescriptorFactory.cpp
+    src/render/FilamentMaterialLibrary.cpp
     src/render/ImGuiFilamentRenderer.cpp
+    src/render/LightRenderableCache.cpp
+    src/render/MaterialBindingService.cpp
     src/render/MaterialCompilerService.cpp
+    src/render/MeshRenderableCache.cpp
+    src/render/MeshRenderableFactory.cpp
+    src/render/overlay/OverlayCameraProjector.cpp
+    src/render/overlay/OverlayFaceFillBuilder.cpp
+    src/render/overlay/OverlayLineMeshBuilder.cpp
+    src/render/overlay/OverlayPointMeshBuilder.cpp
+    src/render/overlay/OverlayProxyFactory.cpp
+    src/render/overlay/OverlayRenderableBuilder.cpp
+    src/render/overlay/OverlayRenderableCache.cpp
+    src/render/overlay/ViewportOverlayStyleResolver.cpp
     src/render/RenderSystem.cpp
     src/render/SceneRenderBridge.cpp
+    src/render/SceneRenderSyncService.cpp
+    src/render/TextureBindingService.cpp
     src/render/TextureRegistry.cpp
+    src/render/ToolPreviewRenderableCache.cpp
+    src/render/ViewportGridRenderer.cpp
+    src/render/ViewportOverlayPolicy.cpp
+    src/render/ViewportRenderPassCoordinator.cpp
+    src/render/ViewportRenderTarget.cpp
     src/render/ViewportRenderer.cpp
     src/ui/ConsolePanel.cpp
     src/ui/InspectorPanel.cpp
+    src/ui/MainMenuBar.cpp
+    src/ui/ModalToolOverlayRenderer.cpp
     src/ui/NavigationGizmo.cpp
     src/ui/OutlinerPanel.cpp
+    src/ui/ToolSettingsPanel.cpp
+    src/ui/TransformGizmoController.cpp
     src/ui/UIPanelManager.cpp
     src/ui/UISystem.cpp
     src/ui/UIStyleTokens.cpp
+    src/ui/ViewportContextMenuPresenter.cpp
+    src/ui/ViewportFocusController.cpp
+    src/ui/ViewportHoverController.cpp
+    src/ui/ViewportInputFrameBuilder.cpp
+    src/ui/ViewportPaneController.cpp
+    src/ui/ViewportPaneOverlayCache.cpp
+    src/ui/ViewportSelectionController.cpp
+    src/ui/ViewportShortcutController.cpp
+    src/ui/ViewportSettingsPanel.cpp
     src/ui/ViewportPanel.cpp
 )
 
@@ -376,8 +440,14 @@ if(QUADER_BUILD_TESTS)
     add_executable(quader_tests
         tests/core_tests.cpp
         tests/build_guardrail_tests.cpp
+        tests/oop_architecture_guardrail_tests.cpp
+        tests/oop_source_of_truth_tests.cpp
+        tests/modeling_session_service_split_tests.cpp
+        tests/modeling_tool_catalog_tests.cpp
+        tests/render_extraction_tests.cpp
+        tests/viewport_tool_catalog_tests.cpp
     )
     target_compile_definitions(quader_tests PRIVATE QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
-    target_link_libraries(quader_tests PRIVATE quader_core GTest::gtest GTest::gtest_main)
+    target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest GTest::gtest_main)
     add_test(NAME quader_tests COMMAND quader_tests)
 endif()

@@ -1,0 +1,145 @@
+#include "render/overlay/OverlayRenderableCache.h"
+
+#include "render/RenderLayers.h"
+#include "render/overlay/OverlayCameraProjector.h"
+#include "render/overlay/OverlayRenderableBuilder.h"
+
+#include <utility>
+
+namespace quader {
+
+OverlayRenderableCache::~OverlayRenderableCache() {
+    shutdown();
+}
+
+void OverlayRenderableCache::initialize(OverlayProxyFactory& factory) {
+    factory_ = &factory;
+}
+
+void OverlayRenderableCache::shutdown() {
+    if (!factory_) {
+        return;
+    }
+
+    for (OverlaySlot& slot : slots_) {
+        destroySlot(slot);
+    }
+    factory_ = nullptr;
+}
+
+bool OverlayRenderableCache::setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
+    return setOverlayFrame(0u, kViewportOverlayLayerMask, std::move(frame), camera);
+}
+
+bool OverlayRenderableCache::setOverlayFrame(
+        std::size_t viewportIndex,
+        std::uint8_t layerMask,
+        ViewportOverlayFrame frame,
+        ViewportOverlayCamera camera) {
+    if (viewportIndex >= slots_.size()) {
+        return false;
+    }
+
+    if (layerMask == 0u) {
+        layerMask = kViewportOverlayLayerMask;
+    }
+
+    OverlaySlot& slot = slots_[viewportIndex];
+    const std::uint64_t signature = OverlayRenderableBuilder::frameSignature(frame);
+    camera = OverlayCameraProjector::sanitizedCamera(camera);
+    const std::uint64_t cameraSignature = OverlayRenderableBuilder::cameraSignature(camera);
+    const bool cameraChanged = cameraSignature != slot.cameraSignature;
+    const bool layerChanged = layerMask != slot.layerMask;
+    if (signature == slot.frameSignature && !cameraChanged && !layerChanged) {
+        slot.frame = std::move(frame);
+        return false;
+    }
+
+    slot.frame = std::move(frame);
+    slot.frameSignature = signature;
+    if (cameraChanged || layerChanged) {
+        slot.camera = camera;
+        slot.cameraSignature = cameraSignature;
+        slot.layerMask = layerMask;
+        for (OverlayProxyGroup& group : slot.proxyGroups) {
+            group.signature = 0;
+        }
+    }
+
+    if (factory_ && factory_->initialized()) {
+        rebuildSlot(slot);
+    }
+    return true;
+}
+
+void OverlayRenderableCache::clearSlot(std::size_t viewportIndex) {
+    if (viewportIndex >= slots_.size()) {
+        return;
+    }
+    destroySlot(slots_[viewportIndex]);
+}
+
+OverlayRenderableCacheStats OverlayRenderableCache::stats(std::size_t viewportIndex) const {
+    if (viewportIndex >= slots_.size()) {
+        return {};
+    }
+
+    const OverlaySlot& slot = slots_[viewportIndex];
+    return {
+            .frameSignature = slot.frameSignature,
+            .cameraSignature = slot.cameraSignature,
+            .layerMask = slot.layerMask,
+            .proxyCount = activeProxyCount(viewportIndex),
+    };
+}
+
+std::size_t OverlayRenderableCache::activeProxyCount(std::size_t viewportIndex) const {
+    if (viewportIndex >= slots_.size()) {
+        return 0;
+    }
+
+    std::size_t count = 0;
+    for (const OverlayProxyGroup& group : slots_[viewportIndex].proxyGroups) {
+        count += group.proxies.size();
+    }
+    return count;
+}
+
+void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot) {
+    for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
+        const std::uint64_t layerSignature = OverlayRenderableBuilder::layerSignature(slot.frame, layer);
+        OverlayProxyGroup& group = slot.proxyGroups[static_cast<std::size_t>(layer)];
+        if (group.signature == layerSignature) {
+            continue;
+        }
+
+        destroyGroup(group);
+        group.signature = layerSignature;
+
+        const OverlayLayerBuildPlan plan = OverlayRenderableBuilder::buildLayer(slot.frame, slot.camera, layer);
+        group.proxies = factory_->createLayerProxies(plan, slot.layerMask);
+    }
+}
+
+void OverlayRenderableCache::destroySlot(OverlaySlot& slot) {
+    for (OverlayProxyGroup& group : slot.proxyGroups) {
+        destroyGroup(group);
+    }
+    slot.frame = {};
+    slot.frameSignature = OverlayRenderableBuilder::frameSignature(slot.frame);
+    slot.camera = {};
+    slot.cameraSignature = 0;
+    slot.layerMask = 0;
+}
+
+void OverlayRenderableCache::destroyGroup(OverlayProxyGroup& group) {
+    if (factory_) {
+        for (OverlayRenderableProxy& proxy : group.proxies) {
+            factory_->destroy(proxy);
+        }
+    }
+    group.proxies.clear();
+    group.signature = 0;
+}
+
+} // namespace quader

@@ -1,14 +1,12 @@
 #include "ui/UISystem.h"
 
 #include "core/Logger.h"
+#include "render/FilamentBufferDescriptorFactory.h"
 #include "ui/ConsolePanel.h"
 #include "ui/InspectorPanel.h"
 #include "ui/OutlinerPanel.h"
 #include "ui/UIContext.h"
-#include "viewport/ViewportModelingCommandRouter.h"
 
-#include <backend/PixelBufferDescriptor.h>
-#include <backend/DriverEnums.h>
 #include <filament/Texture.h>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -68,17 +66,6 @@ void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
         return;
     }
     clampDockLeafNodeWidth(window->DockNode, minimumWidth);
-}
-
-filament::backend::PixelBufferDescriptor makePixelBufferDescriptor(const unsigned char* pixels, std::size_t byteCount) {
-    auto* bytes = new std::byte[byteCount];
-    std::memcpy(bytes, pixels, byteCount);
-    return {bytes, byteCount,
-            filament::backend::PixelDataFormat::RGBA,
-            filament::backend::PixelDataType::UBYTE,
-            [](void* buffer, std::size_t, void*) {
-                delete[] static_cast<std::byte*>(buffer);
-            }};
 }
 
 } // namespace
@@ -200,8 +187,10 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
             .panelFocusChanged = &panelFocusChanged,
     };
     panels_.draw(context);
-    drawSettingsPanel();
-    drawToolSettingsPanel(modeling, undoRedo);
+    if (viewportSettingsPanel_.draw(context, settingsPanelOpen_)) {
+        saveViewportSettings();
+    }
+    toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
     std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
     std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
     renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
@@ -270,7 +259,18 @@ void UISystem::drawDockspace(bool& quitRequested, ModelingSessionService& modeli
     ImGui::Begin("Main Dockspace", nullptr, flags);
     ImGui::PopStyleVar(2);
 
-    drawMenuBar(quitRequested, modeling);
+    const MainMenuBarResult menuResult = mainMenuBar_.draw({
+            .quitRequested = quitRequested,
+            .modeling = modeling,
+            .viewportPanel = viewportPanel_,
+            .panels = panels_,
+            .settings = settings_,
+            .viewportSettingsPanelOpen = settingsPanelOpen_,
+            .toolSettingsPanelOpen = toolSettingsPanelOpen_,
+    });
+    if (menuResult.settingsChanged) {
+        saveSettings();
+    }
 
     const ImGuiID dockspaceId = ImGui::GetID("QuaderDockspace");
     const ImVec2 dockspaceSize = ImGui::GetContentRegionAvail();
@@ -288,330 +288,6 @@ void UISystem::drawDockspace(bool& quitRequested, ModelingSessionService& modeli
     ImGui::PopStyleVar();
     enforceSidebarDockMinimums();
 
-    ImGui::End();
-}
-
-void UISystem::drawMenuBar(bool& quitRequested, ModelingSessionService& modeling) {
-    if (!ImGui::BeginMenuBar()) {
-        return;
-    }
-
-    if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Exit")) {
-            quitRequested = true;
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Edit")) {
-        if (ImGui::MenuItem("Settings")) {
-            settingsPanelOpen_ = true;
-        }
-        if (ImGui::MenuItem("Tool Settings")) {
-            toolSettingsPanelOpen_ = true;
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Tools")) {
-        auto toolMenuItem = [&](const char* label, const char* shortcut, ViewportTool tool) {
-            const bool selected = viewportPanel_ != nullptr && viewportPanel_->toolState().activeTool == tool;
-            if (ImGui::MenuItem(label, shortcut, selected, viewportPanel_ != nullptr)) {
-                (void)viewportPanel_->activateToolFromMenu(tool, modeling);
-            }
-        };
-
-        toolMenuItem("Select", "Q", ViewportTool::Select);
-        toolMenuItem("Move", "W", ViewportTool::Move);
-        toolMenuItem("Rotate", "R", ViewportTool::Rotate);
-        toolMenuItem("Scale", "S", ViewportTool::Scale);
-        ImGui::Separator();
-        toolMenuItem("Box", "B", ViewportTool::Box);
-        toolMenuItem("Insert Edge Loop", "Shift+R", ViewportTool::InsertEdgeLoop);
-        toolMenuItem("Knife", "C", ViewportTool::Knife);
-        toolMenuItem("Cut", "Shift+C", ViewportTool::Cut);
-        toolMenuItem("Poly", "P", ViewportTool::Poly);
-        toolMenuItem("Mirror", nullptr, ViewportTool::Mirror);
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Show")) {
-        bool navigationGizmoVisible =
-                viewportPanel_ != nullptr && viewportPanel_->navigationGizmoVisible();
-        if (ImGui::MenuItem("Navigation Gizmo", nullptr, &navigationGizmoVisible, viewportPanel_ != nullptr)) {
-            viewportPanel_->setNavigationGizmoVisible(navigationGizmoVisible);
-            settings_.setNavigationGizmoVisible(navigationGizmoVisible);
-            saveSettings();
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("View")) {
-        if (ImGui::BeginMenu("Toolbars")) {
-            for (const std::unique_ptr<UIPanel>& panel : panels_.panels()) {
-                if (!panel->canToggle()) {
-                    continue;
-                }
-                bool visible = panels_.isVisible(panel->id());
-                if (ImGui::MenuItem(panel->title(), nullptr, &visible)) {
-                    panels_.setVisible(panel->id(), visible);
-                    saveSettings();
-                }
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Layout")) {
-        if (viewportPanel_ != nullptr) {
-            for (const ViewportLayoutOption& option : viewportLayoutOptions()) {
-                const bool selected = viewportPanel_->viewportLayout() == option.id;
-                if (ImGui::MenuItem(option.label.data(), nullptr, selected)) {
-                    viewportPanel_->setViewportLayout(option.id);
-                }
-            }
-        }
-        ImGui::EndMenu();
-    }
-
-    ImGui::EndMenuBar();
-}
-
-void UISystem::drawSettingsPanel() {
-    if (!settingsPanelOpen_) {
-        return;
-    }
-
-    bool changed = false;
-    ImGui::SetNextWindowSize({420.0f, 560.0f}, ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Settings", &settingsPanelOpen_, ImGuiWindowFlags_NoDocking)) {
-        if (ImGui::Button("Reset to Defaults")) {
-            viewportSettings_.resetToDefaults();
-            changed = true;
-        }
-
-        for (const ViewportSettingsSectionDescriptor& section : viewportSettingsSections()) {
-            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None;
-            if (section.defaultExpanded) {
-                flags |= ImGuiTreeNodeFlags_DefaultOpen;
-            }
-            if (!ImGui::CollapsingHeader(section.label.data(), flags)) {
-                continue;
-            }
-
-            for (const ViewportColorSettingDescriptor& descriptor : viewportColorSettings()) {
-                if (descriptor.section != section.id) {
-                    continue;
-                }
-                ViewportSettingColor color = viewportSettings_.color(descriptor.id);
-                float values[4] = {color.r, color.g, color.b, color.a};
-                ImGui::SetNextItemWidth(180.0f);
-                if (ImGui::ColorEdit4(descriptor.label.data(),
-                            values,
-                            ImGuiColorEditFlags_NoInputs |
-                                    ImGuiColorEditFlags_AlphaBar |
-                                    ImGuiColorEditFlags_AlphaPreviewHalf)) {
-                    changed = viewportSettings_.setColor(descriptor.id,
-                                      ViewportSettingColor{values[0], values[1], values[2], values[3]}) ||
-                            changed;
-                }
-            }
-
-            for (const ViewportFloatSettingDescriptor& descriptor : viewportFloatSettings()) {
-                if (descriptor.section != section.id) {
-                    continue;
-                }
-                float value = viewportSettings_.floatValue(descriptor.id);
-                ImGui::SetNextItemWidth(220.0f);
-                if (ImGui::SliderFloat(descriptor.label.data(), &value, descriptor.minimum, descriptor.maximum, "%.3f")) {
-                    changed = viewportSettings_.setFloatValue(descriptor.id, value) || changed;
-                }
-            }
-
-            for (const ViewportBoolSettingDescriptor& descriptor : viewportBoolSettings()) {
-                if (descriptor.section != section.id) {
-                    continue;
-                }
-                bool value = viewportSettings_.boolValue(descriptor.id);
-                if (ImGui::Checkbox(descriptor.label.data(), &value)) {
-                    changed = viewportSettings_.setBoolValue(descriptor.id, value) || changed;
-                }
-            }
-        }
-    }
-    ImGui::End();
-
-    if (changed) {
-        saveViewportSettings();
-    }
-}
-
-void UISystem::drawToolSettingsPanel(ModelingSessionService& modeling, UndoRedoManager& undoRedo) {
-    ModelingToolSettingsTarget target = modeling.toolSettingsTarget();
-    if (!target.active) {
-        toolSettingsPanelOpen_ = false;
-        return;
-    }
-    if (!toolSettingsPanelOpen_) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowViewport(viewport->ID);
-        ImGui::SetNextWindowPos(
-                {viewport->WorkPos.x + 24.0f, viewport->WorkPos.y + 72.0f},
-                ImGuiCond_Always);
-        toolSettingsPanelOpen_ = true;
-    }
-    if (!toolSettingsPanelOpen_) {
-        return;
-    }
-
-    ModelingInteractionSettings settings = modeling.interactionSettings();
-    bool changed = false;
-
-    auto applySettingsUpdate = [&]() {
-        if (!changed) {
-            return;
-        }
-        const ModelingCommandResult result = modeling.setInteractionSettings(settings);
-        if (!result.ok) {
-            LOG_ERROR("Tool settings update failed: {}", result.message.empty() ? "Command failed." : result.message);
-        }
-        changed = false;
-        target = modeling.toolSettingsTarget();
-    };
-
-    ImGui::SetNextWindowSize({340.0f, 220.0f}, ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Tool Settings", &toolSettingsPanelOpen_, ImGuiWindowFlags_NoDocking)) {
-        const std::string title = target.label.empty() ? std::string("Tool Settings") : target.label;
-        ImGui::TextUnformatted(title.c_str());
-        ImGui::Separator();
-
-        switch (target.kind) {
-        case ModelingToolSettingsTargetKind::Cut: {
-            const ModelingToolStatus status = modeling.toolStatus();
-            int cutMode = static_cast<int>(settings.cutMode);
-            ImGui::TextUnformatted("Keep Mode");
-            if (ImGui::RadioButton("Discard Left", cutMode == static_cast<int>(ModelingCutMode::DiscardLeft))) {
-                cutMode = static_cast<int>(ModelingCutMode::DiscardLeft);
-                settings.cutMode = ModelingCutMode::DiscardLeft;
-                changed = true;
-            }
-            if (ImGui::RadioButton("Discard Right", cutMode == static_cast<int>(ModelingCutMode::DiscardRight))) {
-                cutMode = static_cast<int>(ModelingCutMode::DiscardRight);
-                settings.cutMode = ModelingCutMode::DiscardRight;
-                changed = true;
-            }
-            if (ImGui::RadioButton("Keep Both", cutMode == static_cast<int>(ModelingCutMode::KeepBoth))) {
-                cutMode = static_cast<int>(ModelingCutMode::KeepBoth);
-                settings.cutMode = ModelingCutMode::KeepBoth;
-                changed = true;
-            }
-            if (settings.cutMode != static_cast<ModelingCutMode>(cutMode)) {
-                settings.cutMode = static_cast<ModelingCutMode>(cutMode);
-                changed = true;
-            }
-            if (status.cutActive) {
-                ImGui::Text("Preview points: %d", status.cutPointCount);
-            }
-            break;
-        }
-        case ModelingToolSettingsTargetKind::EdgeBevel: {
-            float width = static_cast<float>(settings.edgeBevelWidth);
-            float profile = static_cast<float>(settings.edgeBevelProfile);
-            int segments = settings.edgeBevelSegments;
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::DragFloat("Width", &width, 0.05f, 0.0625f, 16384.0f, "%.3f")) {
-                settings.edgeBevelWidth = width;
-                changed = true;
-            }
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::SliderInt("Segments", &segments, 1, 16)) {
-                settings.edgeBevelSegments = segments;
-                changed = true;
-            }
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::SliderFloat("Profile", &profile, 0.0f, 1.0f, "%.2f")) {
-                settings.edgeBevelProfile = profile;
-                changed = true;
-            }
-            break;
-        }
-        case ModelingToolSettingsTargetKind::Bridge: {
-            int steps = settings.bridgeSteps;
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::SliderInt("Steps", &steps, 1, 64)) {
-                settings.bridgeSteps = steps;
-                changed = true;
-            }
-            break;
-        }
-        case ModelingToolSettingsTargetKind::Thicken: {
-            float thickness = static_cast<float>(settings.thickenThickness);
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::DragFloat("Distance", &thickness, 0.01f, -4.0f, 4.0f, "%.3f")) {
-                settings.thickenThickness = thickness;
-                changed = true;
-            }
-            break;
-        }
-        case ModelingToolSettingsTargetKind::SliceQuad: {
-            int xSlices = settings.sliceQuadXSlices;
-            int ySlices = settings.sliceQuadYSlices;
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::SliderInt("X", &xSlices, 0, 64)) {
-                settings.sliceQuadXSlices = xSlices;
-                changed = true;
-            }
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::SliderInt("Y", &ySlices, 0, 64)) {
-                settings.sliceQuadYSlices = ySlices;
-                changed = true;
-            }
-            break;
-        }
-        case ModelingToolSettingsTargetKind::MergeByDistance: {
-            float tolerance = static_cast<float>(settings.mergeByDistanceTolerance);
-            ImGui::SetNextItemWidth(180.0f);
-            if (ImGui::DragFloat("Tolerance", &tolerance, 0.001f, 0.0f, 128.0f, "%.4f")) {
-                settings.mergeByDistanceTolerance = tolerance;
-                changed = true;
-            }
-            break;
-        }
-        case ModelingToolSettingsTargetKind::None:
-            break;
-        }
-
-        applySettingsUpdate();
-        if (!target.active) {
-            toolSettingsPanelOpen_ = false;
-        }
-
-        if (target.operationPreviewActive) {
-            ImGui::Separator();
-            if (ImGui::Button("Apply")) {
-                const ModelingCommandResult result = executeTrackedModelingCommand(
-                        undoRedo,
-                        modeling,
-                        std::string("Apply ") + title,
-                        [&]() {
-                            return modeling.commitActiveOperationPreview();
-                        });
-                if (!result.ok) {
-                    LOG_ERROR("Tool preview apply failed: {}", result.message.empty() ? "Command failed." : result.message);
-                }
-                toolSettingsPanelOpen_ = result.ok ? false : modeling.toolSettingsTarget().active;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) {
-                const ModelingCommandResult result = modeling.cancelActiveOperationPreview();
-                if (!result.ok) {
-                    LOG_ERROR("Tool preview cancel failed: {}", result.message.empty() ? "Command failed." : result.message);
-                }
-                toolSettingsPanelOpen_ = result.ok ? false : modeling.toolSettingsTarget().active;
-            }
-        }
-    }
     ImGui::End();
 }
 
@@ -711,7 +387,7 @@ void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, co
                 .format(filament::Texture::InternalFormat::RGBA8)
                 .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
                 .build(engine);
-        texture->setImage(engine, 0, makePixelBufferDescriptor(flipped.data(), flipped.size()));
+        texture->setImage(engine, 0, FilamentBufferDescriptorFactory::rgbaPixels(flipped.data(), flipped.size()));
         const ImTextureID id = textures.registerTexture(texture);
         iconTextures_.push_back(texture);
         iconTextureIds_.push_back(id);

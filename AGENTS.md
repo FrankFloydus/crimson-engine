@@ -35,6 +35,23 @@ testable, and future-friendly.
   guesses. Read the Unity plugin and SDK source, mirror it, then document any intentional
   standalone-native divergence.
 
+## NON-NEGOTIABLE RESTORE AND PARITY RULES
+
+- WHEN THE USER TELLS YOU TO RESTORE A PREVIOUS WORKING LOGIC, FUNCTIONING, OR BEHAVIOR, DO NOT
+  REDESIGN IT, DO NOT "IMPROVE" IT, DO NOT REINTERPRET IT, AND DO NOT INVENT A NEW POLICY. Find the
+  previous working code and integrate the exact same logic into the current architecture.
+- I MUST JUST INTEGRATE THE EXACT SAME CODE WITHOUT INVENTING NEW THING.
+- I MUST JUST INTEGRATE THE EXACT SAME CODE WITHOUT INVENTING NEW THING.
+- I MUST JUST INTEGRATE THE EXACT SAME CODE WITHOUT INVENTING NEW THING.
+- Refactors may move that code behind cleaner classes or smaller functions only if the runtime
+  behavior, state transitions, ordering, cache invalidation, and side effects remain identical to
+  the previous working version. If exact behavior cannot be preserved, stop and explain the specific
+  conflict before changing anything.
+- WHEN THE USER ASKS FOR 100% UNITY PARITY, IT MEANS CHECK THE UNITY CODE FIRST AND IMPLEMENT THE
+  CODE AND BEHAVIOR 100% THE SAME, unless the user explicitly specifies a different native-app
+  behavior. Do not substitute guesses, approximations, screenshots, or local preferences for Unity
+  source parity.
+
 ## Architecture Rules
 
 - Treat the Unity plugin at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity` as the source of

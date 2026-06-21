@@ -1,11 +1,10 @@
 #pragma once
 
-#include "assets/AssetRevision.h"
+#include "assets/AssetDocument.h"
 #include "core/Types.h"
 #include "math/Types.h"
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
 namespace quader {
@@ -23,10 +22,7 @@ struct MeshPrimitiveSpan {
     std::uint32_t materialSlot = 0;
 };
 
-struct MeshAsset {
-    AssetId id = InvalidAssetId;
-    MeshAssetRevision revision;
-    std::string name;
+struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     std::vector<MeshVertex> vertices;
     std::vector<std::uint32_t> indices;
     std::vector<MeshPrimitiveSpan> primitives;

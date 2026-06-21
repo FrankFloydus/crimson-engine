@@ -1,11 +1,10 @@
 #pragma once
 
-#include "assets/AssetRevision.h"
+#include "assets/AssetDocument.h"
 #include "core/Types.h"
 #include "math/Types.h"
 
 #include <optional>
-#include <string>
 #include <unordered_map>
 
 namespace quader {
@@ -15,10 +14,7 @@ inline constexpr const char* BaseColor = "baseColorTexture";
 inline constexpr const char* Roughness = "roughnessTexture";
 } // namespace MaterialTextureSlot
 
-struct MaterialDocument {
-    AssetId id = InvalidAssetId;
-    MaterialAssetRevision revision;
-    std::string name;
+struct MaterialDocument final : AssetDocumentBase<MaterialAssetRevision> {
     Vec3 baseColor = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;

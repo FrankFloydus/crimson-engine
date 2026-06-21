@@ -9,7 +9,17 @@
 #include "render/ViewportRenderer.h"
 #include "scene/SceneDocument.h"
 #include "ui/NavigationGizmo.h"
+#include "ui/ModalToolOverlayRenderer.h"
+#include "ui/TransformGizmoController.h"
 #include "ui/UIPanel.h"
+#include "ui/ViewportContextMenuPresenter.h"
+#include "ui/ViewportFocusController.h"
+#include "ui/ViewportHoverController.h"
+#include "ui/ViewportInputFrameBuilder.h"
+#include "ui/ViewportPaneController.h"
+#include "ui/ViewportPaneOverlayCache.h"
+#include "ui/ViewportSelectionController.h"
+#include "ui/ViewportShortcutController.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportLayout.h"
@@ -30,17 +40,6 @@ class RenderSystem;
 
 class ViewportPanel final : public UIPanel {
 public:
-    enum class GizmoAxis {
-        None,
-        X,
-        Y,
-        Z,
-        XY,
-        XZ,
-        YZ,
-        All,
-    };
-
     ViewportPanel();
     ~ViewportPanel() override;
 
@@ -54,7 +53,7 @@ public:
     void prepareViewports(SceneRenderBridge& renderBridge);
     void renderViewports(filament::Renderer& renderer);
     void setViewportLayout(ViewportLayoutId layoutId);
-    bool activateToolFromMenu(ViewportTool tool, ModelingSessionService& modeling);
+    bool activateToolFromMenu(ViewportToolId tool, ModelingSessionService& modeling);
     ViewportLayoutId viewportLayout() const { return layoutId_; }
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
@@ -69,75 +68,6 @@ private:
         Vec2 renderSize = {1.0f, 1.0f};
         bool initialized = false;
         bool visibleThisFrame = false;
-    };
-
-    struct GizmoStartTransform {
-        EntityId entity = InvalidEntityId;
-        TransformComponent transform;
-        Vec3 localPivot = {};
-    };
-
-    struct HoverWorkKey {
-        bool valid = false;
-        ViewportPaneId paneId = ViewportPaneId::Perspective;
-        ViewportTool activeTool = ViewportTool::Select;
-        ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
-        ModelingBoxDragState boxDragState = ModelingBoxDragState::Idle;
-        int gridPreset = 0;
-        Vec2 mouseLocal = {};
-        Vec2 viewportSize = {};
-        Vec3 cameraEye = {};
-        Vec3 cameraForward = {0.0f, 0.0f, -1.0f};
-        Vec3 cameraRight = {1.0f, 0.0f, 0.0f};
-        Vec3 cameraUp = {0.0f, 1.0f, 0.0f};
-        ViewportOverlayProjection cameraProjection = ViewportOverlayProjection::Perspective;
-        float cameraOrthographicSize = 24.0f;
-        float cameraFovDegrees = 60.0f;
-        float cameraNearPlane = 0.05f;
-        float cameraFarPlane = 1000.0f;
-        bool primaryModifier = false;
-        bool shiftModifier = false;
-        bool altModifier = false;
-        bool gizmoConsumed = false;
-        std::uint64_t sceneRevision = 0;
-        std::uint64_t assetRevision = 0;
-        std::uint64_t contentRevision = 0;
-        std::uint64_t selectionRevision = 0;
-
-        static bool vec3Matches(Vec3 left, Vec3 right) {
-            return left.x == right.x && left.y == right.y && left.z == right.z;
-        }
-
-        [[nodiscard]] bool matches(const HoverWorkKey& other) const {
-            return valid &&
-                    other.valid &&
-                    paneId == other.paneId &&
-                    activeTool == other.activeTool &&
-                    selectionMode == other.selectionMode &&
-                    boxDragState == other.boxDragState &&
-                    gridPreset == other.gridPreset &&
-                    mouseLocal.x == other.mouseLocal.x &&
-                    mouseLocal.y == other.mouseLocal.y &&
-                    viewportSize.x == other.viewportSize.x &&
-                    viewportSize.y == other.viewportSize.y &&
-                    vec3Matches(cameraEye, other.cameraEye) &&
-                    vec3Matches(cameraForward, other.cameraForward) &&
-                    vec3Matches(cameraRight, other.cameraRight) &&
-                    vec3Matches(cameraUp, other.cameraUp) &&
-                    cameraProjection == other.cameraProjection &&
-                    cameraOrthographicSize == other.cameraOrthographicSize &&
-                    cameraFovDegrees == other.cameraFovDegrees &&
-                    cameraNearPlane == other.cameraNearPlane &&
-                    cameraFarPlane == other.cameraFarPlane &&
-                    primaryModifier == other.primaryModifier &&
-                    shiftModifier == other.shiftModifier &&
-                    altModifier == other.altModifier &&
-                    gizmoConsumed == other.gizmoConsumed &&
-                    sceneRevision == other.sceneRevision &&
-                    assetRevision == other.assetRevision &&
-                    contentRevision == other.contentRevision &&
-                    selectionRevision == other.selectionRevision;
-        }
     };
 
     void draw(SceneRenderBridge& renderBridge,
@@ -188,27 +118,6 @@ private:
     static ImVec2 paneRectMin(ImVec2 viewportMin, ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
     static ImVec2 paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
 
-    ModelingSelectionSummary selectFromViewport(SceneDocument& document,
-            const AssetRegistry& assets,
-            ModelingSessionService& modeling,
-            const ViewportCameraController& camera,
-            Vec2 localMouse,
-            ViewportModifiers modifiers,
-            int clickCount,
-            bool preserveSelectionOnMiss = false,
-            bool preserveSelectionOnSelectedHit = false);
-    bool drawTransformGizmo(SceneDocument& document,
-            const AssetRegistry& assets,
-            UndoRedoManager& undoRedo,
-            DocumentCommandService& documentCommands,
-            ModelingSessionService& modeling,
-            ViewportCameraController& camera,
-            ViewportPaneId paneId,
-            ImVec2 itemMin,
-            ImVec2 itemSize,
-            bool suppressHoverWork,
-            bool interactive = true);
-
     std::array<Pane, kViewportPaneCount> panes_;
     ViewportSettings fallbackViewportSettings_ = ViewportSettings::defaults();
     const ViewportSettings* viewportSettings_ = nullptr;
@@ -219,19 +128,17 @@ private:
     bool splitHandleDragging_ = false;
     std::vector<ViewportPaneId> activeRenderPanes_;
     ViewportInputRouter inputRouter_;
-    ModelingBoxPreview boxPreview_;
-    bool insertEdgeLoopDragActive_ = false;
-    bool cutDragActive_ = false;
-    bool mirrorDragActive_ = false;
-    bool gizmoDragging_ = false;
-    bool gizmoDragPaneActive_ = false;
-    ViewportPaneId gizmoDragPaneId_ = ViewportPaneId::Perspective;
-    bool modelingTransformDragActive_ = false;
-    bool modelingTransformDragPreviewDriven_ = false;
-    bool sceneOnlyGizmoDrag_ = false;
+    ViewportInputFrameBuilder inputFrameBuilder_;
+    ViewportFocusController focusController_;
+    ViewportContextMenuPresenter contextMenuPresenter_;
+    ViewportShortcutController shortcutController_;
+    ViewportHoverController hoverController_;
+    ViewportPaneController paneController_;
+    ViewportSelectionController selectionController_;
+    TransformGizmoController transformGizmoController_;
+    ModalToolOverlayRenderer modalToolOverlayRenderer_;
+    ViewportPaneOverlayCache selectionOverlayCache_;
     bool paintSelectionActive_ = false;
-    GizmoAxis activeGizmoAxis_ = GizmoAxis::None;
-    Vec2 lastGizmoMouse_ = {};
     Vec2 contextMenuRightPressScreen_ = {};
     Vec2 contextMenuRightDragDelta_ = {};
     bool contextMenuRightPressActive_ = false;
@@ -239,19 +146,6 @@ private:
     Vec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
     bool lastFlyNavigationActive_ = false;
-    HoverWorkKey lastHoverWorkKey_;
-    ViewportOverlayFrame cachedSelectionOverlayFrame_;
-    bool cachedSelectionOverlayFrameValid_ = false;
-    bool cachedSelectionOverlayFrameDirty_ = true;
-    std::uint64_t cachedSelectionOverlayContentRevision_ = 0;
-    std::uint64_t cachedSelectionOverlaySelectionRevision_ = 0;
-    std::uint64_t cachedSelectionOverlaySceneRevision_ = 0;
-    std::uint64_t cachedSelectionOverlayAssetRevision_ = 0;
-    std::uint64_t cachedSelectionOverlayToolSignature_ = 0;
-    ModelingSelectionMode cachedSelectionOverlayMode_ = ModelingSelectionMode::Object;
-    Vec3 gizmoStartWorldPivot_ = {};
-    Vec2 gizmoStartMouse_ = {};
-    std::vector<GizmoStartTransform> gizmoStartTransforms_;
 };
 
 } // namespace quader

@@ -1,11 +1,12 @@
 #include "ui/OutlinerPanel.h"
 
+#include "document/DocumentCommandService.h"
 #include "modeling/ModelingSessionService.h"
+#include "modeling/tools/ModelingCommandToolCatalog.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 #include "ui/UIContext.h"
-#include "ui/UILayout.h"
 #include "ui/UIStyleTokens.h"
 
 #include <imgui.h>
@@ -37,48 +38,38 @@ void syncSelectionToModeling(UIContext& context) {
     const std::vector<EntityId> desiredSelection = context.document.selectedEntities();
     const EntityId activeSelection = context.document.primarySelection();
     (void)context.modeling.setSelectionMode(ModelingSelectionMode::Object);
-    context.document.clearSelection();
-    for (const EntityId entity : desiredSelection) {
-        context.document.setSelected(entity, true);
-    }
-    if (activeSelection != InvalidEntityId) {
-        context.document.setActiveSelection(activeSelection);
-    }
+    (void)context.documentCommands.selectEntities(desiredSelection, activeSelection);
     context.modeling.syncObjectSelectionFromScene();
 }
 
-void selectEntityRange(SceneDocument& document,
+std::vector<EntityId> entityRangeSelection(
         const std::vector<EntityRecord>& records,
         EntityId anchor,
         EntityId clicked) {
-    document.clearSelection();
     if (anchor == InvalidEntityId || anchor == clicked) {
-        document.setSelected(clicked, true);
-        document.setActiveSelection(clicked);
-        return;
+        return {clicked};
     }
 
+    std::vector<EntityId> selection;
     bool selecting = false;
     for (const EntityRecord& record : records) {
         const bool endpoint = record.id == anchor || record.id == clicked;
         if (endpoint && !selecting) {
             selecting = true;
-            document.setSelected(record.id, true);
+            selection.push_back(record.id);
             continue;
         }
 
         if (selecting) {
-            document.setSelected(record.id, true);
+            selection.push_back(record.id);
         }
 
         if (endpoint) {
-            document.setActiveSelection(clicked);
-            return;
+            return selection;
         }
     }
 
-    document.clearSelection();
-    document.setSelected(clicked, true);
+    return {clicked};
 }
 
 std::vector<EntityId> selectedRootEntities(const SceneDocument& document) {
@@ -118,31 +109,9 @@ std::vector<EntityId> selectedHierarchyEntities(const SceneDocument& document) {
     return result;
 }
 
-void selectOnly(SceneDocument& document, const std::vector<EntityId>& entities) {
-    document.clearSelection();
-    EntityId active = InvalidEntityId;
-    for (const EntityId entity : entities) {
-        if (document.exists(entity)) {
-            document.setSelected(entity, true);
-            active = entity;
-        }
-    }
-    if (active != InvalidEntityId) {
-        document.setActiveSelection(active);
-    }
-}
-
-EntityId commonParent(const SceneDocument& document, const std::vector<EntityId>& entities) {
-    if (entities.empty()) {
-        return InvalidEntityId;
-    }
-    const EntityId parent = document.parent(entities.front());
-    for (const EntityId entity : entities) {
-        if (document.parent(entity) != parent) {
-            return InvalidEntityId;
-        }
-    }
-    return parent;
+bool selectOnly(UIContext& context, const std::vector<EntityId>& entities, EntityId active = InvalidEntityId) {
+    DocumentCommandResult result = context.documentCommands.selectEntities(entities, active);
+    return result.ok && result.changed;
 }
 
 void groupSelection(UIContext& context) {
@@ -157,18 +126,11 @@ void groupSelection(UIContext& context) {
         groupTransform.position = boundsCenter(*bounds);
     }
 
-    const EntityId group = document.createEmpty(SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Empty));
-    document.setTransform(group, groupTransform);
-    const EntityId parent = commonParent(document, roots);
-    if (parent != InvalidEntityId) {
-        document.setParent(group, parent, true);
+    EntityId group = InvalidEntityId;
+    DocumentCommandResult result = context.documentCommands.groupSelection({}, groupTransform, &group);
+    if (result.ok && result.changed) {
+        syncSelectionToModeling(context);
     }
-    for (const EntityId child : roots) {
-        document.setParent(child, group, true);
-    }
-
-    selectOnly(document, {group});
-    syncSelectionToModeling(context);
 }
 
 void ungroupEntity(UIContext& context, EntityId group) {
@@ -177,25 +139,19 @@ void ungroupEntity(UIContext& context, EntityId group) {
         return;
     }
 
-    const EntityId parent = document.parent(group);
-    const std::vector<EntityId> children = document.children(group);
-    for (const EntityId child : children) {
-        document.setParent(child, parent, true);
+    if (!containsEntity(document.selectedEntities(), group)) {
+        (void)selectOnly(context, {group}, group);
     }
-    document.destroyEntity(group);
-
-    selectOnly(document, children);
-    syncSelectionToModeling(context);
+    DocumentCommandResult result = context.documentCommands.ungroupSelection();
+    if (result.ok && result.changed) {
+        syncSelectionToModeling(context);
+    }
 }
 
 void ungroupSelection(UIContext& context) {
-    const std::vector<EntityId> roots = selectedRootEntities(context.document);
-    for (const EntityId entity : roots) {
-        if (context.document.exists(entity) &&
-                context.document.kind(entity) == EntityKind::Empty &&
-                context.document.hasChildren(entity)) {
-            ungroupEntity(context, entity);
-        }
+    DocumentCommandResult result = context.documentCommands.ungroupSelection();
+    if (result.ok && result.changed) {
+        syncSelectionToModeling(context);
     }
 }
 
@@ -214,19 +170,23 @@ void deleteSelection(UIContext& context) {
     }
 
     if (!modelingEntities.empty()) {
-        selectOnly(document, modelingEntities);
+        (void)selectOnly(context, modelingEntities);
         syncSelectionToModeling(context);
-        (void)context.modeling.deleteSelection();
+        if (const CommandTool* deleteTool = findModelingCommandTool("delete_selection")) {
+            (void)deleteTool->execute(context.modeling);
+        } else {
+            (void)context.modeling.deleteSelection();
+        }
     }
 
     for (const EntityId root : selectedRootEntities(document)) {
         if (document.exists(root)) {
-            document.destroyEntity(root);
+            (void)context.documentCommands.destroyEntity(root);
         }
     }
     for (const EntityId entity : hierarchyEntities) {
         if (document.exists(entity) && document.modelingObject(entity) == nullptr) {
-            document.destroyEntity(entity);
+            (void)context.documentCommands.destroyEntity(entity);
         }
     }
     context.modeling.syncObjectSelectionFromScene();
@@ -239,10 +199,12 @@ std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::v
 
     const std::vector<EntityId> beforeEntities = context.document.entities();
     std::unordered_set<EntityId> beforeSet(beforeEntities.begin(), beforeEntities.end());
-    selectOnly(context.document, sourceMeshes);
+    (void)selectOnly(context, sourceMeshes);
     syncSelectionToModeling(context);
-    const ModelingCommandResult duplicateResult =
-            context.modeling.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+    const CommandTool* duplicateTool = findModelingCommandTool("duplicate_meshes");
+    const ModelingCommandResult duplicateResult = duplicateTool != nullptr
+            ? duplicateTool->execute(context.modeling)
+            : ModelingCommandResult{.ok = false, .message = "Duplicate command tool is not registered."};
     if (!duplicateResult.ok) {
         return {};
     }
@@ -257,23 +219,23 @@ std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::v
     return duplicates;
 }
 
-void copyCommonEntityState(SceneDocument& document, EntityId source, EntityId clone, bool renameClone = true) {
+void copyCommonEntityState(UIContext& context, EntityId source, EntityId clone, bool renameClone = true) {
+    SceneDocument& document = context.document;
     if (renameClone) {
         const NameComponent* name = document.name(source);
         if (name != nullptr) {
-            document.renameEntity(clone, SceneEntityNaming::nextName(document, name->name));
+            (void)context.documentCommands.renameEntity(clone, SceneEntityNaming::nextName(document, name->name));
         }
     }
     if (const TransformComponent* transform = document.transform(source)) {
-        document.setTransform(clone, *transform);
+        (void)context.documentCommands.applyEntityTransform(clone, *transform);
     }
     if (const VisibilityComponent* visibility = document.visibility(source)) {
-        document.setVisible(clone, visibility->visible);
+        (void)context.documentCommands.setVisible(clone, visibility->visible);
     }
     if (const LockComponent* lock = document.lock(source)) {
-        document.setLocked(clone, lock->locked);
+        (void)context.documentCommands.setLocked(clone, lock->locked);
     }
-    document.setEntityKind(clone, document.kind(source));
 }
 
 void duplicateSelection(UIContext& context) {
@@ -306,18 +268,30 @@ void duplicateSelection(UIContext& context) {
                 return InvalidEntityId;
             }
             clone = mapped->second;
-            copyCommonEntityState(document, source, clone);
+            copyCommonEntityState(context, source, clone);
         } else {
             const NameComponent* name = document.name(source);
             const std::string baseName = name ? name->name : "Entity";
-            clone = document.createEntity(SceneEntityNaming::nextName(document, baseName), document.kind(source));
-            copyCommonEntityState(document, source, clone, false);
+            TransformComponent transform;
+            if (const TransformComponent* sourceTransform = document.transform(source)) {
+                transform = *sourceTransform;
+            }
+            const DocumentCommandResult created = context.documentCommands.createEntity(
+                    SceneEntityNaming::nextName(document, baseName),
+                    document.kind(source),
+                    InvalidEntityId,
+                    transform,
+                    &clone);
+            if (!created.ok || !created.changed) {
+                return InvalidEntityId;
+            }
+            copyCommonEntityState(context, source, clone, false);
         }
 
         for (const EntityId child : document.children(source)) {
             const EntityId childClone = cloneEntity(child);
             if (childClone != InvalidEntityId) {
-                document.setParent(childClone, clone, false);
+                (void)context.documentCommands.reparentEntity(childClone, clone, false);
             }
         }
         return clone;
@@ -327,12 +301,12 @@ void duplicateSelection(UIContext& context) {
     for (const EntityId root : roots) {
         const EntityId clone = cloneEntity(root);
         if (clone != InvalidEntityId) {
-            document.setParent(clone, document.parent(root), false);
+            (void)context.documentCommands.reparentEntity(clone, document.parent(root), false);
             rootClones.push_back(clone);
         }
     }
 
-    selectOnly(document, rootClones);
+    (void)selectOnly(context, rootClones);
     syncSelectionToModeling(context);
 }
 
@@ -351,16 +325,13 @@ ImTextureID iconFor(const UIIconSet& icons, EntityKind kind) {
 
 } // namespace
 
-void OutlinerPanel::draw(UIContext& context) {
+float OutlinerPanel::minimumWidth(const UIContext& context) const {
+    // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
+    return context.style.sidebarMinWidth;
+}
+
+void OutlinerPanel::drawContent(UIContext& context) {
     SceneDocument& document = context.document;
-    setNextWindowMinWidth(context.style.sidebarMinWidth);
-    if (!ImGui::Begin(title(), nullptr, context.style.panelWindowFlags)) {
-        ImGui::End();
-        return;
-    }
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && panelFocusInputActive()) {
-        context.requestPanelFocus(id());
-    }
 
     const std::vector<EntityRecord> records = document.entityRecordsTreeOrder();
     std::unordered_map<EntityId, EntityRecord> recordByEntity;
@@ -384,16 +355,24 @@ void OutlinerPanel::draw(UIContext& context) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{kOutlinerIconTextGap, style.ItemSpacing.y});
 
     auto handleSelection = [&](const EntityRecord& record) {
+        EntityId activeSelection = record.id;
+        std::vector<EntityId> nextSelection;
         if (io.KeyShift) {
-            selectEntityRange(document, records, outlinerAnchor_, record.id);
+            nextSelection = entityRangeSelection(records, outlinerAnchor_, record.id);
         } else if (io.KeyCtrl || io.KeySuper) {
-            document.setSelected(record.id, !containsEntity(selected, record.id));
+            nextSelection = selected;
+            if (containsEntity(nextSelection, record.id)) {
+                nextSelection.erase(std::remove(nextSelection.begin(), nextSelection.end(), record.id), nextSelection.end());
+                activeSelection = document.primarySelection() == record.id ? InvalidEntityId : document.primarySelection();
+            } else {
+                nextSelection.push_back(record.id);
+            }
         } else {
-            document.clearSelection();
-            document.setSelected(record.id, true);
+            nextSelection = {record.id};
         }
         outlinerAnchor_ = record.id;
-        selectionChanged = true;
+        const DocumentCommandResult result = context.documentCommands.selectEntities(nextSelection, activeSelection);
+        selectionChanged = selectionChanged || (result.ok && result.changed);
     };
 
     std::function<void(EntityId)> drawNode = [&](EntityId entity) {
@@ -450,9 +429,8 @@ void OutlinerPanel::draw(UIContext& context) {
 
         if (rowRightClicked) {
             if (!record.selected) {
-                document.clearSelection();
-                document.setSelected(record.id, true);
-                selectionChanged = true;
+                const DocumentCommandResult result = context.documentCommands.selectEntities({record.id}, record.id);
+                selectionChanged = selectionChanged || (result.ok && result.changed);
             }
         }
         if (ImGui::BeginPopup("EntityContext")) {
@@ -525,8 +503,6 @@ void OutlinerPanel::draw(UIContext& context) {
     case PendingOutlinerAction::None:
         break;
     }
-
-    ImGui::End();
 }
 
 } // namespace quader

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "viewport/ViewportInputRouter.h"
+#include "viewport/tools/Tool.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,33 +52,37 @@ inline ViewportHostDefaults viewportHostDefaults() {
 #endif
 }
 
-inline std::string_view viewportToolContractId(ViewportTool tool) {
+inline std::string_view viewportToolContractId(ViewportToolId tool) {
     switch (tool) {
-    case ViewportTool::Select:
+    case ViewportToolId::Select:
         return "select";
-    case ViewportTool::Move:
+    case ViewportToolId::Move:
         return "move";
-    case ViewportTool::Rotate:
+    case ViewportToolId::Extend:
+        return "extend";
+    case ViewportToolId::Extrude:
+        return "extrude";
+    case ViewportToolId::Rotate:
         return "rotate";
-    case ViewportTool::Scale:
+    case ViewportToolId::Scale:
         return "scale";
-    case ViewportTool::Box:
+    case ViewportToolId::Box:
         return "box";
-    case ViewportTool::InsertEdgeLoop:
+    case ViewportToolId::InsertEdgeLoop:
         return "insert_edge_loop";
-    case ViewportTool::Knife:
+    case ViewportToolId::Knife:
         return "knife";
-    case ViewportTool::Cut:
+    case ViewportToolId::Cut:
         return "cut";
-    case ViewportTool::Poly:
+    case ViewportToolId::Poly:
         return "poly";
-    case ViewportTool::Mirror:
+    case ViewportToolId::Mirror:
         return "mirror";
     }
     return {};
 }
 
-inline bool viewportToolHasHostContract(ViewportTool tool) {
+inline bool viewportToolHasHostContract(ViewportToolId tool) {
 #if QUADER_HAS_MODELING_SDK
     const std::string_view id = viewportToolContractId(tool);
     return !id.empty() && quader_host_contract::find_tool_descriptor(id) != nullptr;
@@ -87,30 +92,34 @@ inline bool viewportToolHasHostContract(ViewportTool tool) {
 #endif
 }
 
-inline bool viewportToolHasNativeController(ViewportTool tool) {
+inline bool viewportToolHasNativeController(ViewportToolId tool) {
     switch (tool) {
-    case ViewportTool::Select:
-    case ViewportTool::Move:
-    case ViewportTool::Rotate:
-    case ViewportTool::Scale:
+    case ViewportToolId::Select:
+    case ViewportToolId::Move:
+    case ViewportToolId::Extend:
+    case ViewportToolId::Extrude:
+    case ViewportToolId::Rotate:
+    case ViewportToolId::Scale:
         return true;
-    case ViewportTool::Box:
-    case ViewportTool::InsertEdgeLoop:
-    case ViewportTool::Knife:
-    case ViewportTool::Cut:
-    case ViewportTool::Poly:
+    case ViewportToolId::Box:
+    case ViewportToolId::InsertEdgeLoop:
+    case ViewportToolId::Knife:
+    case ViewportToolId::Cut:
+    case ViewportToolId::Poly:
         return viewportToolHasHostContract(tool);
-    case ViewportTool::Mirror:
+    case ViewportToolId::Mirror:
         return true;
     }
     return false;
 }
 
-inline bool viewportToolAllowsSelectionFallback(ViewportTool tool) {
-    return tool == ViewportTool::Select ||
-            tool == ViewportTool::Move ||
-            tool == ViewportTool::Rotate ||
-            tool == ViewportTool::Scale;
+inline bool viewportToolAllowsSelectionFallback(ViewportToolId tool) {
+    return tool == ViewportToolId::Select ||
+            tool == ViewportToolId::Move ||
+            tool == ViewportToolId::Extend ||
+            tool == ViewportToolId::Extrude ||
+            tool == ViewportToolId::Rotate ||
+            tool == ViewportToolId::Scale;
 }
 
 inline int viewportDefaultGridPreset() {
@@ -233,45 +242,53 @@ inline bool viewportShortcutModifiersMatch(
     return primary == modifiers.primary && alt == modifiers.alt && shift == modifiers.shift;
 }
 
-inline bool viewportToolFromContractId(std::string_view id, ViewportTool& tool) {
+inline bool viewportToolFromContractId(std::string_view id, ViewportToolId& tool) {
     if (id == "select") {
-        tool = ViewportTool::Select;
+        tool = ViewportToolId::Select;
         return true;
     }
     if (id == "move") {
-        tool = ViewportTool::Move;
+        tool = ViewportToolId::Move;
+        return true;
+    }
+    if (id == "extend") {
+        tool = ViewportToolId::Extend;
+        return true;
+    }
+    if (id == "extrude") {
+        tool = ViewportToolId::Extrude;
         return true;
     }
     if (id == "rotate") {
-        tool = ViewportTool::Rotate;
+        tool = ViewportToolId::Rotate;
         return true;
     }
     if (id == "scale") {
-        tool = ViewportTool::Scale;
+        tool = ViewportToolId::Scale;
         return true;
     }
     if (id == "box") {
-        tool = ViewportTool::Box;
+        tool = ViewportToolId::Box;
         return true;
     }
     if (id == "insert_edge_loop" || id == "insert_edge_loop_tool") {
-        tool = ViewportTool::InsertEdgeLoop;
+        tool = ViewportToolId::InsertEdgeLoop;
         return true;
     }
     if (id == "knife" || id == "knife_tool") {
-        tool = ViewportTool::Knife;
+        tool = ViewportToolId::Knife;
         return true;
     }
     if (id == "cut" || id == "cut_tool") {
-        tool = ViewportTool::Cut;
+        tool = ViewportToolId::Cut;
         return true;
     }
     if (id == "poly" || id == "poly_tool") {
-        tool = ViewportTool::Poly;
+        tool = ViewportToolId::Poly;
         return true;
     }
     if (id == "mirror" || id == "mirror_tool") {
-        tool = ViewportTool::Mirror;
+        tool = ViewportToolId::Mirror;
         return true;
     }
     return false;
@@ -399,7 +416,7 @@ inline bool viewportShortcutFromContractTarget(
         return true;
     }
 
-    ViewportTool tool = ViewportTool::Select;
+    ViewportToolId tool = ViewportToolId::Select;
     if (viewportToolFromContractId(targetId, tool)) {
         shortcut.kind = ViewportShortcutKind::ActivateTool;
         shortcut.context = ViewportShortcutContext::Viewport;

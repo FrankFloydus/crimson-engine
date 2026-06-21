@@ -10,10 +10,13 @@
 #include "render/SceneRenderBridge.h"
 #include "render/ViewportRenderer.h"
 #include "scene/SceneDocument.h"
+#include "ui/MainMenuBar.h"
+#include "ui/ToolSettingsPanel.h"
 #include "ui/UIPanelManager.h"
 #include "ui/UIIconSet.h"
 #include "ui/UISettings.h"
 #include "ui/UIStyleTokens.h"
+#include "ui/ViewportSettingsPanel.h"
 #include "ui/ViewportPanel.h"
 #include "viewport/ViewportSettings.h"
 
@@ -55,9 +58,6 @@ public:
 private:
     void registerPanels(RenderSystem& renderSystem);
     void drawDockspace(bool& quitRequested, ModelingSessionService& modeling);
-    void drawMenuBar(bool& quitRequested, ModelingSessionService& modeling);
-    void drawSettingsPanel();
-    void drawToolSettingsPanel(ModelingSessionService& modeling, UndoRedoManager& undoRedo);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
     void enforceSidebarDockMinimums();
     void setViewportCursorCaptured(bool captured);
@@ -71,6 +71,9 @@ private:
     ImGuiFilamentRenderer renderer_;
     UIStyleTokens style_;
     UIPanelManager panels_;
+    MainMenuBar mainMenuBar_;
+    ViewportSettingsPanel viewportSettingsPanel_;
+    ToolSettingsPanel toolSettingsPanel_;
     ViewportPanel* viewportPanel_ = nullptr;
     UIIconSet icons_;
     std::vector<filament::Texture*> iconTextures_;

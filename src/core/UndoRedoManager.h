@@ -1,31 +1,17 @@
 #pragma once
 
-#include <functional>
+#include "core/CommandResult.h"
+#include "core/IUndoableCommand.h"
+
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace quader {
 
-struct UndoRedoResult {
-    bool ok = false;
-    bool changed = false;
-    std::string message;
-};
-
-struct UndoRedoCommand {
-    std::string label;
-    std::function<UndoRedoResult()> undo;
-    std::function<UndoRedoResult()> redo;
-};
-
 class UndoRedoManager {
 public:
-    UndoRedoResult execute(UndoRedoCommand command);
-    UndoRedoResult executeExternal(
-            std::string label,
-            std::function<UndoRedoResult()> apply,
-            std::function<UndoRedoResult()> undo,
-            std::function<UndoRedoResult()> redo);
+    UndoRedoResult execute(std::unique_ptr<IUndoableCommand> command);
 
     UndoRedoResult undo();
     UndoRedoResult redo();
@@ -38,8 +24,8 @@ public:
     void clear();
 
 private:
-    std::vector<UndoRedoCommand> undoStack_;
-    std::vector<UndoRedoCommand> redoStack_;
+    std::vector<std::unique_ptr<IUndoableCommand>> undoStack_;
+    std::vector<std::unique_ptr<IUndoableCommand>> redoStack_;
 };
 
 } // namespace quader

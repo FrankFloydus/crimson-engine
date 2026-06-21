@@ -1,0 +1,36 @@
+#include "document/ProjectSession.h"
+
+#include <utility>
+
+namespace quader {
+
+ProjectSession::ProjectSession() {
+    rebuildServices();
+}
+
+ProjectSession::ProjectSession(ProjectDocument document)
+    : document_(std::move(document)) {
+    rebuildServices();
+}
+
+ProjectSession::~ProjectSession() = default;
+
+void ProjectSession::rebuildServices() {
+    undoRedo_ = std::make_unique<UndoRedoManager>();
+    documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *undoRedo_);
+    modeling_ = std::make_unique<ModelingSessionService>(document_.scene(), document_.assets());
+}
+
+std::unique_ptr<ProjectSession> ProjectSessionService::createSession() const {
+    return std::make_unique<ProjectSession>();
+}
+
+std::unique_ptr<ProjectSession> ProjectSessionService::createSession(ProjectDocumentRecord record) const {
+    return std::make_unique<ProjectSession>(ProjectDocument(std::move(record)));
+}
+
+std::unique_ptr<ProjectSession> ProjectSessionService::openSession(ProjectDocument document) const {
+    return std::make_unique<ProjectSession>(std::move(document));
+}
+
+} // namespace quader

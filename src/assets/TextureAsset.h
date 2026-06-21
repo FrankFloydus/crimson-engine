@@ -1,12 +1,11 @@
 #pragma once
 
-#include "assets/AssetRevision.h"
+#include "assets/AssetDocument.h"
 #include "core/ColorSpace.h"
 #include "core/Types.h"
 
 #include <cstdint>
 #include <filesystem>
-#include <string>
 
 namespace quader {
 
@@ -24,10 +23,7 @@ enum class TextureUsage {
     Mask
 };
 
-struct TextureAsset {
-    AssetId id = InvalidAssetId;
-    TextureAssetRevision revision;
-    std::string name;
+struct TextureAsset final : AssetDocumentBase<TextureAssetRevision> {
     TextureUsage usage = TextureUsage::Unknown;
     TextureColorSpace colorSpace = TextureColorSpace::Srgb;
     std::uint32_t width = 0;

@@ -1,10 +1,9 @@
 #include "render/ImGuiFilamentRenderer.h"
 
 #include "core/Logger.h"
+#include "render/FilamentBufferDescriptorFactory.h"
 
-#include <backend/BufferDescriptor.h>
 #include <backend/DriverEnums.h>
-#include <backend/PixelBufferDescriptor.h>
 #include <filament/RenderableManager.h>
 #include <filament/TextureSampler.h>
 #include <filament/Viewport.h>
@@ -13,8 +12,8 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstring>
 #include <cmath>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -39,27 +38,6 @@ struct UIPrimitive {
     std::uint32_t scissorWidth = 0;
     std::uint32_t scissorHeight = 0;
 };
-
-template <typename T>
-filament::backend::BufferDescriptor makeBufferDescriptor(const std::vector<T>& values) {
-    const std::size_t byteCount = sizeof(T) * values.size();
-    auto* bytes = new std::byte[byteCount];
-    std::memcpy(bytes, values.data(), byteCount);
-    return {bytes, byteCount, [](void* buffer, std::size_t, void*) {
-                delete[] static_cast<std::byte*>(buffer);
-            }};
-}
-
-filament::backend::PixelBufferDescriptor makePixelBufferDescriptor(const unsigned char* pixels, std::size_t byteCount) {
-    auto* bytes = new std::byte[byteCount];
-    std::memcpy(bytes, pixels, byteCount);
-    return {bytes, byteCount,
-            filament::backend::PixelDataFormat::RGBA,
-            filament::backend::PixelDataType::UBYTE,
-            [](void* buffer, std::size_t, void*) {
-                delete[] static_cast<std::byte*>(buffer);
-            }};
-}
 
 } // namespace
 
@@ -286,13 +264,13 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
                     .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(UIVertex, color), sizeof(UIVertex))
                     .normalized(filament::VertexAttribute::COLOR)
                     .build(*engine_);
-        resource.vertexBuffer->setBufferAt(*engine_, 0, makeBufferDescriptor(vertices));
+        resource.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
 
         resource.indexBuffer = filament::IndexBuffer::Builder()
                     .indexCount(static_cast<std::uint32_t>(indices.size()))
                     .bufferType(filament::IndexBuffer::IndexType::UINT)
                     .build(*engine_);
-        resource.indexBuffer->setBuffer(*engine_, makeBufferDescriptor(indices));
+        resource.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(indices));
 
         filament::RenderableManager::Builder builder(primitives.size());
         builder.boundingBox({{static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 0.0f},
@@ -372,7 +350,7 @@ void ImGuiFilamentRenderer::createFontTexture() {
             .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
             .build(*engine_);
 
-    fontTexture_->setImage(*engine_, 0, makePixelBufferDescriptor(pixels.data(), pixels.size()));
+    fontTexture_->setImage(*engine_, 0, FilamentBufferDescriptorFactory::rgbaPixels(pixels.data(), pixels.size()));
     fontTextureId_ = textures_->registerTexture(fontTexture_);
     io.Fonts->SetTexID(fontTextureId_);
     LOG_INFO("ImGui font atlas uploaded as Filament texture {}x{}", width, height);

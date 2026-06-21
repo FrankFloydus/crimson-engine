@@ -5,6 +5,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <utility>
+
 namespace quader {
 
 bool App::initialize(const std::filesystem::path& executablePath, AppOptions options) {
@@ -33,9 +35,6 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     ui_.initialize(window_.sdlWindow(), renderSystem_, executableDir);
     LOG_INFO("UI system initialized");
 
-    undoRedo_ = std::make_unique<UndoRedoManager>();
-    documentCommands_ = std::make_unique<DocumentCommandService>(document_, *undoRedo_);
-    modeling_ = std::make_unique<ModelingSessionService>(document_, assets_);
     createStartupScene();
 
     running_ = true;
@@ -61,17 +60,17 @@ int App::run() {
         ui_.beginFrame();
         bool quitRequested = false;
         ui_.draw(renderBridge_,
-                document_,
-                assets_,
-                *undoRedo_,
-                *documentCommands_,
-                *modeling_,
+                projectSession_.scene(),
+                projectSession_.assets(),
+                projectSession_.undoRedo(),
+                projectSession_.documentCommands(),
+                projectSession_.modeling(),
                 defaultMaterial_,
                 quitRequested);
         if (quitRequested) {
             running_ = false;
         }
-        renderBridge_.sync(document_, assets_);
+        renderBridge_.sync(projectSession_.scene(), projectSession_.assets());
 
         window_.refreshPixelSize();
         ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
@@ -93,27 +92,26 @@ void App::shutdown() {
     ui_.shutdown();
     renderBridge_.shutdown();
     renderSystem_.shutdown();
-    modeling_.reset();
-    documentCommands_.reset();
-    undoRedo_.reset();
     window_.destroy();
 }
 
 void App::createStartupScene() {
-    const AssetId albedoTexture = assets_.addTexture(TextureAsset{
-            .name = "Default Albedo",
-            .usage = TextureUsage::BaseColor,
-            .colorSpace = TextureColorSpace::Srgb,
-            .sourcePath = "materials/default/default_albedo.png",
-    });
-    const AssetId roughnessTexture = assets_.addTexture(TextureAsset{
-            .name = "Default Roughness",
-            .usage = TextureUsage::Roughness,
-            .colorSpace = TextureColorSpace::Linear,
-            .sourcePath = "materials/default/default_roughness.png",
-    });
+    TextureAsset albedo;
+    albedo.name = "Default Albedo";
+    albedo.usage = TextureUsage::BaseColor;
+    albedo.colorSpace = TextureColorSpace::Srgb;
+    albedo.sourcePath = "materials/default/default_albedo.png";
+    const AssetId albedoTexture = projectSession_.assets().addTexture(std::move(albedo));
+
+    TextureAsset roughness;
+    roughness.name = "Default Roughness";
+    roughness.usage = TextureUsage::Roughness;
+    roughness.colorSpace = TextureColorSpace::Linear;
+    roughness.sourcePath = "materials/default/default_roughness.png";
+    const AssetId roughnessTexture = projectSession_.assets().addTexture(std::move(roughness));
+
     MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader", albedoTexture, roughnessTexture);
-    defaultMaterial_ = assets_.addMaterial(std::move(defaultMaterial));
+    defaultMaterial_ = projectSession_.assets().addMaterial(std::move(defaultMaterial));
 }
 
 } // namespace quader

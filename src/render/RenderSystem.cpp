@@ -1,13 +1,9 @@
 #include "render/RenderSystem.h"
 
 #include "core/Logger.h"
-#include "render/MaterialCompilerService.h"
 
-#include <filament/Material.h>
 #include <filament/Renderer.h>
 #include <math/vec4.h>
-
-#include <stdexcept>
 
 namespace quader {
 namespace {
@@ -22,13 +18,6 @@ filament::backend::Backend toFilamentBackend(RendererBackend backend) {
         return filament::backend::Backend::METAL;
     }
     return filament::backend::Backend::VULKAN;
-}
-
-filament::Material* loadMaterial(filament::Engine& engine, const std::filesystem::path& path) {
-    const std::vector<std::byte> package = MaterialCompilerService::loadPackage(path);
-    return filament::Material::Builder()
-            .package(package.data(), package.size())
-            .build(engine);
 }
 
 } // namespace
@@ -60,24 +49,9 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     clear.clearColor = {environment.clearColor.x, environment.clearColor.y, environment.clearColor.z, environment.clearAlpha};
     renderer_->setClearOptions(clear);
 
-    try {
-        LOG_INFO("Loading Quader mesh material");
-        quaderMeshMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "quader_mesh.filamat");
-        LOG_INFO("Loading vertex color overlay material");
-        vertexColorOverlayMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "vertex_color_overlay.filamat");
-        LOG_INFO("Loading overlay line material");
-        overlayLineMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "quader_overlay_line.filamat");
-        LOG_INFO("Loading overlay point material");
-        overlayPointMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "quader_overlay_point.filamat");
-        LOG_INFO("Loading ImGui material");
-        imguiMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "imgui.filamat");
-        LOG_INFO("Loading ground grid material");
-        groundGridMaterial_ = loadMaterial(*engine_, executableDir / "materials" / "ground_grid.filamat");
-    } catch (const std::exception& error) {
-        LOG_ERROR("Material load failed: {}", error.what());
+    if (!materialLibrary_.initialize(*engine_, executableDir)) {
         return false;
     }
-    LOG_INFO("Filament materials loaded");
 
     return true;
 }
@@ -88,31 +62,7 @@ void RenderSystem::shutdown() {
     }
 
     textureRegistry_.clear();
-
-    if (quaderMeshMaterial_) {
-        engine_->destroy(quaderMeshMaterial_);
-        quaderMeshMaterial_ = nullptr;
-    }
-    if (vertexColorOverlayMaterial_) {
-        engine_->destroy(vertexColorOverlayMaterial_);
-        vertexColorOverlayMaterial_ = nullptr;
-    }
-    if (overlayLineMaterial_) {
-        engine_->destroy(overlayLineMaterial_);
-        overlayLineMaterial_ = nullptr;
-    }
-    if (overlayPointMaterial_) {
-        engine_->destroy(overlayPointMaterial_);
-        overlayPointMaterial_ = nullptr;
-    }
-    if (imguiMaterial_) {
-        engine_->destroy(imguiMaterial_);
-        imguiMaterial_ = nullptr;
-    }
-    if (groundGridMaterial_) {
-        engine_->destroy(groundGridMaterial_);
-        groundGridMaterial_ = nullptr;
-    }
+    materialLibrary_.shutdown();
     if (skybox_) {
         scene_->setSkybox(nullptr);
         engine_->destroy(skybox_);

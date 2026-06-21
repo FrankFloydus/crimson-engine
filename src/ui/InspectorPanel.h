@@ -1,14 +1,16 @@
 #pragma once
 
-#include "ui/UIPanel.h"
+#include "ui/UIDockPanel.h"
 
 namespace quader {
 
-class InspectorPanel final : public UIPanel {
+class InspectorPanel final : public UIDockPanel {
 public:
     UIPanelId id() const override { return UIPanelId::Inspector; }
-    const char* title() const override { return uiPanelKey(UIPanelId::Inspector); }
-    void draw(UIContext& context) override;
+
+private:
+    float minimumWidth(const UIContext& context) const override;
+    void drawContent(UIContext& context) override;
 };
 
 } // namespace quader

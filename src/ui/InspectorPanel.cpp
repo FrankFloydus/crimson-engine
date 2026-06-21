@@ -6,7 +6,6 @@
 #include "scene/SceneDocument.h"
 #include "scene/TransformPivot.h"
 #include "ui/UIContext.h"
-#include "ui/UILayout.h"
 #include "ui/UIStyleTokens.h"
 
 #include <imgui.h>
@@ -245,18 +244,15 @@ std::array<bool, 3> mixedScaleAxes(const SceneDocument& document,
 
 } // namespace
 
-void InspectorPanel::draw(UIContext& context) {
+float InspectorPanel::minimumWidth(const UIContext& context) const {
+    // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
+    return context.style.sidebarMinWidth;
+}
+
+void InspectorPanel::drawContent(UIContext& context) {
+    // UIDockPanel routes hover input through context.requestPanelFocus(id()) before content draws.
     SceneDocument& document = context.document;
     ModelingSessionService& modeling = context.modeling;
-
-    setNextWindowMinWidth(context.style.sidebarMinWidth);
-    if (!ImGui::Begin(title(), nullptr, context.style.panelWindowFlags)) {
-        ImGui::End();
-        return;
-    }
-    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && panelFocusInputActive()) {
-        context.requestPanelFocus(id());
-    }
 
     const std::vector<EntityId> selected = document.selectedEntities();
     const ModelingSelectionSummary selection = modeling.selectionSummary();
@@ -270,7 +266,6 @@ void InspectorPanel::draw(UIContext& context) {
         } else {
             ImGui::TextUnformatted("No selection");
         }
-        ImGui::End();
         return;
     }
 
@@ -473,8 +468,6 @@ void InspectorPanel::draw(UIContext& context) {
         ImGui::Text("Meshes: %llu", static_cast<unsigned long long>(meshCount));
         ImGui::Text("Lights: %llu", static_cast<unsigned long long>(lightCount));
     }
-
-    ImGui::End();
 }
 
 } // namespace quader

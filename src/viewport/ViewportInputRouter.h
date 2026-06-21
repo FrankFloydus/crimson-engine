@@ -1,16 +1,24 @@
 #pragma once
 
 #include "math/Types.h"
+#include "modeling/ModelingSessionService.h"
 #include "viewport/ViewportCameraController.h"
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 namespace quader {
 
-enum class ViewportTool {
+struct ViewportToolContext;
+struct ViewportToolEvent;
+struct ViewportToolResult;
+
+enum class ViewportToolId {
     Select,
     Move,
+    Extend,
+    Extrude,
     Rotate,
     Scale,
     Box,
@@ -114,14 +122,14 @@ struct ViewportModifiers {
 struct ViewportShortcut {
     ViewportShortcutKind kind = ViewportShortcutKind::None;
     ViewportShortcutContext context = ViewportShortcutContext::Viewport;
-    ViewportTool tool = ViewportTool::Select;
+    ViewportToolId tool = ViewportToolId::Select;
     ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
     ViewportMirrorAxis mirrorAxis = ViewportMirrorAxis::X;
     int gridPreset = 0;
 };
 
 struct ViewportToolState {
-    ViewportTool activeTool = ViewportTool::Select;
+    ViewportToolId activeTool = ViewportToolId::Select;
     ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
     int gridPreset = 6;
     bool maximized = false;
@@ -171,18 +179,30 @@ struct ViewportInputResult {
 class ViewportInputRouter {
 public:
     ViewportInputRouter();
+    ~ViewportInputRouter();
 
     ViewportInputResult handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera);
     void reset();
-    void setActiveTool(ViewportTool tool);
+    void setActiveTool(ViewportToolId tool);
     void setSelectionMode(ViewportSelectionMode mode);
     void setMaximized(bool maximized);
+    bool activeToolOwnsViewport() const;
+    bool activeToolBlocksViewportFocusShortcuts() const;
+    bool activeToolAllowsSelectionFallback() const;
+    bool hasActiveModalPreview() const;
+    const ModelingBoxPreview& boxPreview() const;
+    void clearModalToolState();
+    void clearModalDragState();
+    ViewportToolResult handleActiveToolEvent(
+            ViewportToolContext& context,
+            const ViewportToolEvent& event);
 
     const ViewportToolState& state() const { return state_; }
     bool navigating() const { return navigationMode_ != ViewportDragMode::None; }
     bool flyNavigating() const { return navigationMode_ == ViewportDragMode::Fly; }
     bool flyCursorCaptureActive() const { return flyCursorCaptureActive_; }
     bool flyHudActive() const { return flyHudActive_; }
+    const class ViewportTool* activeTool() const;
 
     static bool resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut);
 
@@ -194,9 +214,10 @@ private:
     bool navigationUsesRightButton_ = false;
     bool flyCursorCaptureActive_ = false;
     bool flyHudActive_ = false;
+    std::unique_ptr<class ViewportToolRuntime> toolRuntime_;
 };
 
-const char* viewportToolId(ViewportTool tool);
+const char* viewportToolId(ViewportToolId tool);
 const char* viewportSelectionModeId(ViewportSelectionMode mode);
 float viewportGridWorldSizeForPreset(int preset);
 

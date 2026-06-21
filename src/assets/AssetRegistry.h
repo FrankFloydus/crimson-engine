@@ -3,14 +3,17 @@
 #include "assets/MaterialDocument.h"
 #include "assets/MeshAsset.h"
 #include "assets/TextureAsset.h"
+#include "assets/TypedAssetStore.h"
 #include "core/Types.h"
 
 #include <cstdint>
 #include <functional>
-#include <optional>
-#include <unordered_map>
 
 namespace quader {
+
+class MeshAssetStore final : public TypedAssetStore<MeshAsset, MeshAssetRevision> {};
+class MaterialAssetStore final : public TypedAssetStore<MaterialDocument, MaterialAssetRevision> {};
+class TextureAssetStore final : public TypedAssetStore<TextureAsset, TextureAssetRevision> {};
 
 class AssetRegistry {
 public:
@@ -45,12 +48,9 @@ private:
 
     AssetId nextId_ = 1;
     std::uint64_t revision_ = 0;
-    MeshAssetRevision nextMeshRevision_;
-    MaterialAssetRevision nextMaterialRevision_;
-    TextureAssetRevision nextTextureRevision_;
-    std::unordered_map<AssetId, MeshAsset> meshes_;
-    std::unordered_map<AssetId, MaterialDocument> materials_;
-    std::unordered_map<AssetId, TextureAsset> textures_;
+    MeshAssetStore meshes_;
+    MaterialAssetStore materials_;
+    TextureAssetStore textures_;
 };
 
 } // namespace quader
