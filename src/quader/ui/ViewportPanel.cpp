@@ -1047,7 +1047,8 @@ quader_editor_core::TransformGizmoFrameInput makeSdkGizmoInput(
     input.pivot = toSdk(pivot);
     input.camera = makeSdkCamera(camera, itemSize);
     input.grid_size = gridSize;
-    input.gizmo_size_pixels = 68.0 * std::max(gizmoSizeScale, 0.1f);
+    input.gizmo_size_pixels = 68.0;
+    input.gizmo_scale = std::max(gizmoSizeScale, 0.1f);
     input.pick_radius_pixels = 12.0;
     input.ring_segments = 64;
     return input;

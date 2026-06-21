@@ -605,6 +605,44 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     EXPECT_NE(source.find("bool consumed = gizmoDragging_;"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("input.grid_size = gridSize"), std::string::npos);
+    EXPECT_NE(source.find("input.gizmo_size_pixels = 68.0;"), std::string::npos);
+    EXPECT_NE(source.find("input.gizmo_scale = std::max(gizmoSizeScale, 0.1f);"), std::string::npos);
+    EXPECT_NE(source.find("build_transform_gizmo_frame(sdkInput)"), std::string::npos);
+    EXPECT_NE(source.find("const bool precision = io.KeyCtrl || io.KeySuper;"), std::string::npos);
+    EXPECT_EQ(source.find("visualSdkInput"), std::string::npos);
+    EXPECT_EQ(source.find("kGizmoFrameGridFloor"), std::string::npos);
+    EXPECT_EQ(source.find("input.gizmo_size_pixels = 68.0 * std::max(gizmoSizeScale"), std::string::npos);
+}
+
+TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) /
+            "modeling" / "sdk" / "packages" / "editor-core" / "src" / "transform_gizmo.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const double axis_length = pixel_world * screen_size;"), std::string::npos);
+    EXPECT_NE(source.find("const double plane_offset = pixel_world * (screen_size * 0.36);"), std::string::npos);
+    EXPECT_NE(source.find("const double plane_half_size = pixel_world * (8.0 * visual_scale);"), std::string::npos);
+    EXPECT_EQ(source.find("safe_grid"), std::string::npos);
+    EXPECT_EQ(source.find("safe_grid *"), std::string::npos);
+}
+
 TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "ViewportPanel.cpp";
@@ -1301,7 +1339,7 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
 
     EXPECT_NE(source.find("entityRecordsTreeOrder()"), std::string::npos);
     EXPECT_NE(source.find("ImGui::TreeNodeEx"), std::string::npos);
-    EXPECT_NE(source.find("ImGui::Image"), std::string::npos);
+    EXPECT_NE(source.find("drawList->AddImage"), std::string::npos);
     EXPECT_NE(source.find("ImGui::OpenPopupOnItemClick(\"EntityContext\""), std::string::npos);
     EXPECT_NE(source.find("ImGui::BeginPopup(\"EntityContext\")"), std::string::npos);
     EXPECT_NE(source.find("MenuItem(\"Delete\")"), std::string::npos);
@@ -1323,9 +1361,27 @@ TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("ImGuiTreeNodeFlags_Selected"), std::string::npos);
-    EXPECT_NE(source.find("ImGui::TextUnformatted(record.name.c_str())"), std::string::npos);
+    EXPECT_NE(source.find("drawList->AddText(textPos"), std::string::npos);
     EXPECT_EQ(source.find("ImGui::Selectable(record.name.c_str(), record.selected"), std::string::npos);
     EXPECT_EQ(source.find("ImGuiSelectableFlags_AllowOverlap"), std::string::npos);
+}
+
+TEST(OutlinerPanelTests, KeepsRootRowsTightlyInset) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "quader" / "ui" / "OutlinerPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("constexpr float kOutlinerRowLeftPadding = 3.0f"), std::string::npos);
+    EXPECT_NE(source.find("ImGuiStyleVar_IndentSpacing"), std::string::npos);
+    EXPECT_NE(source.find("ImGuiStyleVar_FramePadding"), std::string::npos);
+    EXPECT_NE(source.find("record.hasChildren ? ImGui::GetTreeNodeToLabelSpacing() : kOutlinerRowLeftPadding"), std::string::npos);
+    EXPECT_NE(source.find("drawList->AddImage(icon"), std::string::npos);
+    EXPECT_EQ(source.find("ImGui::SetCursorScreenPos"), std::string::npos);
 }
 
 TEST(UIStyleTokensTests, KeepsDockWindowMenuButtonAvailable) {
@@ -4681,6 +4737,45 @@ TEST(ModelingSessionServiceTests, TransformDragComponentSelectionCommitsOverlayO
 
     ASSERT_TRUE(pointBounds.has_value());
     EXPECT_NEAR(boundsCenter(*pointBounds).x, 2.0f, 0.001f);
+#else
+    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest()).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransformPreview) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Object Drag Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(service.selectionMode(), ModelingSelectionMode::Object);
+
+    ModelingTransformDragPreview begin = service.beginTransformDrag(testXMoveDragBeginRequest());
+    ASSERT_TRUE(begin.ok) << begin.message;
+    EXPECT_TRUE(begin.active);
+    EXPECT_FALSE(begin.previewDriven);
+    EXPECT_TRUE(begin.sceneTransform);
+    EXPECT_TRUE(begin.hasScenePreviewTransform);
+
+    ModelingTransformDragPreview update = service.updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_FALSE(update.previewDriven);
+    EXPECT_TRUE(update.sceneTransform);
+    EXPECT_TRUE(update.hasScenePreviewTransform);
+    EXPECT_NEAR(update.moveDelta.x, 2.0f, 0.001f);
+    EXPECT_NEAR(update.scenePreviewTransform.origin.x, 2.0f, 0.001f);
+
+    ModelingTransformDragPreview commit = service.commitTransformDrag();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    EXPECT_FALSE(commit.previewDriven);
+    const ModelingTransformDragPreview afterCommitUpdate = service.updateTransformDrag(testXMoveDragUpdateRequest(3.0f));
+    EXPECT_TRUE(afterCommitUpdate.ok);
+    EXPECT_FALSE(afterCommitUpdate.active);
 #else
     EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest()).ok);
 #endif

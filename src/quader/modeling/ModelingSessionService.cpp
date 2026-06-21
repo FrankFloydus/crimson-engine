@@ -1599,6 +1599,13 @@ public:
                 session_.selection_mode() != quader_editor_core::SelectionMode::object;
 
         runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
+        {
+            quader_editor_core::TransformDragState drag = runtime_.transform_drag_state();
+            drag.scene_transform_preview_eligible =
+                    !previewDriven &&
+                    operation == quader_editor_core::TransformDragOperation::transform;
+            runtime_.set_transform_drag_state(drag);
+        }
         activeTransformDragPreviewDriven_ = previewDriven;
         activeTransformDragDuplicateSelected_ = request.duplicateSelected;
 

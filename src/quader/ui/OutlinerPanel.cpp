@@ -374,6 +374,14 @@ void OutlinerPanel::draw(UIContext& context) {
     bool selectionChanged = false;
     PendingOutlinerAction pendingAction = PendingOutlinerAction::None;
     EntityId pendingTarget = InvalidEntityId;
+    constexpr float kOutlinerRowLeftPadding = 3.0f;
+    constexpr float kOutlinerTreeIndent = 14.0f;
+    constexpr float kOutlinerIconSize = 16.0f;
+    constexpr float kOutlinerIconTextGap = 4.0f;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, kOutlinerTreeIndent);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{kOutlinerRowLeftPadding, style.FramePadding.y});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{kOutlinerIconTextGap, style.ItemSpacing.y});
 
     auto handleSelection = [&](const EntityRecord& record) {
         if (io.KeyShift) {
@@ -412,6 +420,8 @@ void OutlinerPanel::draw(UIContext& context) {
         }
 
         const bool open = ImGui::TreeNodeEx("##TreeNode", treeFlags);
+        const ImVec2 rowMin = ImGui::GetItemRectMin();
+        const ImVec2 rowMax = ImGui::GetItemRectMax();
         const bool rowLeftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen();
         const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
         ImGui::OpenPopupOnItemClick("EntityContext", ImGuiPopupFlags_MouseButtonRight);
@@ -420,12 +430,23 @@ void OutlinerPanel::draw(UIContext& context) {
         }
 
         const ImTextureID icon = iconFor(context.icons, record.kind);
-        ImGui::SameLine();
+        const float rowHeight = std::max(rowMax.y - rowMin.y, ImGui::GetTextLineHeight());
+        const float contentX = rowMin.x +
+                (record.hasChildren ? ImGui::GetTreeNodeToLabelSpacing() : kOutlinerRowLeftPadding);
+        float textX = contentX;
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
         if (icon != ImTextureID_Invalid) {
-            ImGui::Image(icon, {16.0f, 16.0f});
-            ImGui::SameLine();
+            const ImVec2 iconMin{
+                    contentX,
+                    rowMin.y + std::max((rowHeight - kOutlinerIconSize) * 0.5f, 0.0f)};
+            const ImVec2 iconMax{iconMin.x + kOutlinerIconSize, iconMin.y + kOutlinerIconSize};
+            drawList->AddImage(icon, iconMin, iconMax);
+            textX += kOutlinerIconSize + kOutlinerIconTextGap;
         }
-        ImGui::TextUnformatted(record.name.c_str());
+        const ImVec2 textPos{
+                textX,
+                rowMin.y + std::max((rowHeight - ImGui::GetTextLineHeight()) * 0.5f, 0.0f)};
+        drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), record.name.c_str());
 
         if (rowRightClicked) {
             if (!record.selected) {
@@ -471,6 +492,8 @@ void OutlinerPanel::draw(UIContext& context) {
     for (const EntityId root : document.rootEntities()) {
         drawNode(root);
     }
+
+    ImGui::PopStyleVar(3);
 
     if (selectionChanged) {
         syncSelectionToModeling(context);

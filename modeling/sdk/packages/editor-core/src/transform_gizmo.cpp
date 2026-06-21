@@ -353,10 +353,9 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 	}
 
 	const double pixel_world = viewport_world_units_per_pixel(input.camera, input.pivot);
-	const double safe_grid = std::max(input.grid_size, 0.0001);
-	const double axis_length = std::max(pixel_world * screen_size, safe_grid * 0.5);
-	const double plane_offset = std::max(pixel_world * (screen_size * 0.36), safe_grid * 0.18);
-	const double plane_half_size = std::max(pixel_world * (8.0 * visual_scale), safe_grid * 0.08);
+	const double axis_length = pixel_world * screen_size;
+	const double plane_offset = pixel_world * (screen_size * 0.36);
+	const double plane_half_size = pixel_world * (8.0 * visual_scale);
 	add_gizmo_axis(frame, input.camera, TransformAxis::x, input.pivot, axis_length);
 	add_gizmo_axis(frame, input.camera, TransformAxis::y, input.pivot, axis_length);
 	add_gizmo_axis(frame, input.camera, TransformAxis::z, input.pivot, axis_length);
