@@ -135,6 +135,7 @@ target_link_libraries(quader_modeling_geometry PRIVATE quader_modeling_gte_math)
 
 add_library(quader_modeling_document STATIC
     packages/document/src/quader_poly_document_bridge_surface_helpers.cpp
+    packages/document/src/quader_poly_document_builder.cpp
     packages/document/src/quader_poly_document_face_api.cpp
     packages/document/src/quader_poly_document_hull_plane_helpers.cpp
     packages/document/src/quader_poly_document_knife_helpers.cpp
@@ -417,6 +418,10 @@ if(BUILD_TESTING)
 
     quader_sdk_add_document_test(qdr_document_mesh_uv_tests
         tests/qdr_document_mesh_uv_tests.cpp
+    )
+
+    quader_sdk_add_document_test(qdr_document_builder_tests
+        tests/qdr_document_builder_tests.cpp
     )
 
     if(QUADER_SDK_USE_OPENMESH_TOPOLOGY)

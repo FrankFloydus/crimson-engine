@@ -263,6 +263,16 @@ void SceneDocument::setMaterial(EntityId id, MaterialComponent material) {
     markDirty();
 }
 
+bool SceneDocument::clearMaterial(EntityId id) {
+    const entt::entity entity = requireEntity(id);
+    if (entity == entt::null || !registry_.all_of<MaterialComponent>(entity)) {
+        return false;
+    }
+    registry_.remove<MaterialComponent>(entity);
+    markDirty();
+    return true;
+}
+
 void SceneDocument::setLight(EntityId id, LightComponent light) {
     const entt::entity entity = requireEntity(id);
     if (entity == entt::null) {

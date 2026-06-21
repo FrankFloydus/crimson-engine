@@ -50,6 +50,7 @@ public:
     void setModelingObject(EntityId id, ModelingObjectComponent object);
     void setMesh(EntityId id, MeshComponent mesh);
     void setMaterial(EntityId id, MaterialComponent material);
+    bool clearMaterial(EntityId id);
     void setLight(EntityId id, LightComponent light);
 
     NameComponent* name(EntityId id);

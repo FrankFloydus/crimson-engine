@@ -1116,6 +1116,16 @@ const quader_editor_core::PolygonObject* findObject(
     return it == objects.end() ? nullptr : &(*it);
 }
 
+quader_editor_core::PolygonObject* findObject(
+        quader_editor_core::EditorSession& session,
+        int sdkObjectId) {
+    auto& objects = session.objects();
+    const auto it = std::find_if(objects.begin(), objects.end(), [sdkObjectId](const auto& object) {
+        return object.id == sdkObjectId;
+    });
+    return it == objects.end() ? nullptr : &(*it);
+}
+
 bool sdkSelectionMatches(const quader_poly::Selection& left, const quader_poly::Selection& right) {
     return left.mode == right.mode &&
             left.vertices == right.vertices &&
@@ -3566,6 +3576,315 @@ public:
 #endif
     }
 
+#if QUADER_HAS_MODELING_SDK
+    ModelingCreateBoxResult createMesh(const ModelingCreateMeshRequest& request) {
+        const std::size_t objectCountBefore = session_.objects().size();
+        const quader_editor_core::CommandResult sdkResult =
+                session_.create_object_from_document(request.document, request.name, request.materialSlot);
+        if (!sdkResult.ok || !sdkResult.changed || session_.objects().size() <= objectCountBefore) {
+            return {
+                    .ok = sdkResult.ok,
+                    .changed = sdkResult.changed,
+                    .message = sdkResult.message.empty() ? "SDK did not create a mesh object." : sdkResult.message,
+            };
+        }
+
+        return createSceneObjectFromLatest(request.name.empty() ? "Mesh" : request.name, sdkResult.message);
+    }
+#endif
+
+    ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active) {
+#if QUADER_HAS_MODELING_SDK
+        if (!sceneObjectsSyncedForCurrentSdkContent()) {
+            syncSceneObjectsFromSdk();
+        }
+
+        std::vector<int> objectIds;
+        objectIds.reserve(entities.size());
+        for (const EntityId entity : entities) {
+            const auto object = objectRegistry_.sdkObjectForEntity(entity);
+            if (object.has_value()) {
+                objectIds.push_back(*object);
+            }
+        }
+        if (!entities.empty() && objectIds.empty()) {
+            return {.ok = false, .message = "Selection does not contain modeling objects."};
+        }
+
+        int activeObjectId = -1;
+        if (active != InvalidEntityId) {
+            const auto object = objectRegistry_.sdkObjectForEntity(active);
+            if (object.has_value()) {
+                activeObjectId = *object;
+            }
+        }
+        if (activeObjectId <= 0 && !objectIds.empty()) {
+            activeObjectId = objectIds.back();
+        }
+
+        std::vector<int> currentObjectIds = session_.selected_object_ids();
+        std::sort(currentObjectIds.begin(), currentObjectIds.end());
+        std::vector<int> desiredObjectIds = objectIds;
+        std::sort(desiredObjectIds.begin(), desiredObjectIds.end());
+        if (session_.selection_mode() == quader_editor_core::SelectionMode::object &&
+                currentObjectIds == desiredObjectIds &&
+                session_.active_object_id() == activeObjectId) {
+            syncSceneSelectionFromSdk();
+            return {.ok = true, .changed = false};
+        }
+
+        session_.set_selected_object_ids(objectIds, activeObjectId);
+        syncSceneSelectionFromSdk();
+        invalidateSelectionOverlayCaches();
+        return {.ok = true, .changed = true};
+#else
+        (void)entities;
+        (void)active;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::PolygonObject* object = findObject(session_, request.sdkObjectId);
+        if (object == nullptr) {
+            return {.ok = false, .message = "Selection target mesh was not found."};
+        }
+
+        const quader_editor_core::SelectionMode mode = toSdk(request.mode);
+        quader_poly::Selection selection;
+        if (request.edit != ModelingSelectionEdit::Replace &&
+                session_.selection_mode() == mode &&
+                object->selected) {
+            selection = object->selection;
+        }
+        selection.mode = quader_editor_core::component_selection_mode(mode);
+
+        auto applyVertex = [&](int vertexId) {
+            if (vertexId <= 0) {
+                return;
+            }
+            const auto id = static_cast<quader_poly::ElementId>(vertexId);
+            const auto found = std::find(selection.vertices.begin(), selection.vertices.end(), id);
+            const bool selected = found != selection.vertices.end();
+            if (request.edit == ModelingSelectionEdit::Remove || (request.edit == ModelingSelectionEdit::Toggle && selected)) {
+                if (selected) {
+                    selection.vertices.erase(found);
+                }
+                return;
+            }
+            if (!selected) {
+                selection.vertices.push_back(id);
+            }
+        };
+
+        auto applyEdge = [&](std::pair<int, int> edgeIds) {
+            if (edgeIds.first <= 0 || edgeIds.second <= 0) {
+                return;
+            }
+            const quader_poly::Edge edge = quader_poly::make_edge(
+                    static_cast<quader_poly::ElementId>(edgeIds.first),
+                    static_cast<quader_poly::ElementId>(edgeIds.second));
+            const auto found = std::find(selection.edges.begin(), selection.edges.end(), edge);
+            const bool selected = found != selection.edges.end();
+            if (request.edit == ModelingSelectionEdit::Remove || (request.edit == ModelingSelectionEdit::Toggle && selected)) {
+                if (selected) {
+                    selection.edges.erase(found);
+                }
+                return;
+            }
+            if (!selected) {
+                selection.edges.push_back(edge);
+            }
+        };
+
+        auto applyFace = [&](int faceId) {
+            if (faceId <= 0) {
+                return;
+            }
+            const auto id = static_cast<quader_poly::ElementId>(faceId);
+            const auto found = std::find(selection.faces.begin(), selection.faces.end(), id);
+            const bool selected = found != selection.faces.end();
+            if (request.edit == ModelingSelectionEdit::Remove || (request.edit == ModelingSelectionEdit::Toggle && selected)) {
+                if (selected) {
+                    selection.faces.erase(found);
+                }
+                return;
+            }
+            if (!selected) {
+                selection.faces.push_back(id);
+            }
+        };
+
+        for (const int vertex : request.vertices) {
+            applyVertex(vertex);
+        }
+        for (const std::pair<int, int>& edge : request.edges) {
+            applyEdge(edge);
+        }
+        for (const int face : request.faces) {
+            applyFace(face);
+        }
+
+        selection.has_active = false;
+        if (request.activeKind == ModelingActiveSelectionKind::Vertex && request.activeVertex > 0) {
+            const auto active = static_cast<quader_poly::ElementId>(request.activeVertex);
+            if (std::find(selection.vertices.begin(), selection.vertices.end(), active) != selection.vertices.end()) {
+                selection.has_active = true;
+                selection.active_kind = quader_poly::ElementKind::vertex;
+                selection.active_vertex = active;
+            }
+        } else if (request.activeKind == ModelingActiveSelectionKind::Edge &&
+                request.activeEdge.first > 0 &&
+                request.activeEdge.second > 0) {
+            const quader_poly::Edge active = quader_poly::make_edge(
+                    static_cast<quader_poly::ElementId>(request.activeEdge.first),
+                    static_cast<quader_poly::ElementId>(request.activeEdge.second));
+            if (std::find(selection.edges.begin(), selection.edges.end(), active) != selection.edges.end()) {
+                selection.has_active = true;
+                selection.active_kind = quader_poly::ElementKind::edge;
+                selection.active_edge = active;
+            }
+        } else if (request.activeKind == ModelingActiveSelectionKind::Face && request.activeFace > 0) {
+            const auto active = static_cast<quader_poly::ElementId>(request.activeFace);
+            if (std::find(selection.faces.begin(), selection.faces.end(), active) != selection.faces.end()) {
+                selection.has_active = true;
+                selection.active_kind = quader_poly::ElementKind::face;
+                selection.active_face = active;
+            }
+        }
+
+        const std::uint64_t selectionBefore = session_.state().selection_revision;
+        session_.set_component_selection(request.sdkObjectId, std::move(selection), mode);
+        syncSceneSelectionFromSdk();
+        invalidateSelectionOverlayCaches();
+        return {.ok = true, .changed = session_.state().selection_revision != selectionBefore};
+#else
+        (void)request;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult moveSelection(Vec3 delta) {
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::CommandResult result = session_.translate_selected(toSdk(delta));
+        if (result.ok) {
+            if (result.changed) {
+                syncSceneObjectsFromSdk(true);
+            }
+            syncSceneSelectionFromSdk();
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        (void)delta;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult transformSelection(const ModelingTransform3& transform, Vec3 pivot) {
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::CommandResult result =
+                session_.transform_selected(toSdk(transform), toSdk(pivot));
+        if (result.ok) {
+            if (result.changed) {
+                syncSceneObjectsFromSdk(true);
+            }
+            syncSceneSelectionFromSdk();
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        (void)transform;
+        (void)pivot;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult assignMaterialSlotToSelection(std::uint32_t materialSlot) {
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::CommandResult result = session_.assign_material_to_selection(materialSlot);
+        if (result.ok) {
+            if (result.changed) {
+                syncSceneObjectsFromSdk(true);
+            }
+            syncSceneSelectionFromSdk();
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        (void)materialSlot;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult assignMaterialSlotToFace(int sdkObjectId, int faceId, std::uint32_t materialSlot) {
+#if QUADER_HAS_MODELING_SDK
+        const quader_editor_core::CommandResult result = session_.assign_material_to_face(
+                sdkObjectId,
+                static_cast<quader_poly::ElementId>(faceId),
+                materialSlot);
+        if (result.ok) {
+            if (result.changed) {
+                syncSceneObjectsFromSdk(true);
+            }
+            syncSceneSelectionFromSdk();
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = result.ok, .changed = result.changed, .message = result.message};
+#else
+        (void)sdkObjectId;
+        (void)faceId;
+        (void)materialSlot;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult setSelectionHover(const ModelingDirectHoverRequest& request) {
+#if QUADER_HAS_MODELING_SDK
+        quader_editor_core::SelectionHoverState hover;
+        hover.object_id = request.sdkObjectId;
+        hover.selected_modifier_pressed = request.selectedModifierPressed;
+        hover.candidate_object_id = request.kind == ModelingActiveSelectionKind::Object ? -1 : request.sdkObjectId;
+        switch (request.kind) {
+        case ModelingActiveSelectionKind::Object:
+            hover.kind = quader_editor_core::SelectionHoverKind::object;
+            break;
+        case ModelingActiveSelectionKind::Vertex:
+            hover.kind = quader_editor_core::SelectionHoverKind::vertex;
+            hover.vertex_id = static_cast<quader_poly::ElementId>(request.vertexId);
+            break;
+        case ModelingActiveSelectionKind::Edge:
+            hover.kind = quader_editor_core::SelectionHoverKind::edge;
+            hover.edge = quader_poly::make_edge(
+                    static_cast<quader_poly::ElementId>(request.edge.first),
+                    static_cast<quader_poly::ElementId>(request.edge.second));
+            break;
+        case ModelingActiveSelectionKind::Face:
+            hover.kind = quader_editor_core::SelectionHoverKind::face;
+            hover.face_id = static_cast<quader_poly::ElementId>(request.faceId);
+            break;
+        case ModelingActiveSelectionKind::None:
+        case ModelingActiveSelectionKind::Light:
+            hover = {};
+            break;
+        }
+
+        const bool changed = !SelectionOverlayCache::hoverMatches(runtime_.hover(), hover);
+        runtime_.apply_hover_update(quader_editor_core::SelectionHoverUpdateResult{
+                .changed = changed,
+                .hover = hover,
+        });
+        if (changed) {
+            invalidateSelectionOverlayCaches();
+        }
+        return {.ok = true, .changed = changed};
+#else
+        (void)request;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
 private:
 #if QUADER_HAS_MODELING_SDK
     void invalidateSelectionOverlayCaches() const {
@@ -4264,6 +4583,43 @@ ModelingCreateBoxResult ModelingSessionService::commitBox(std::string name) {
 
 ModelingCommandResult ModelingSessionService::cancelBox() {
     return impl_->cancelBox();
+}
+
+#if QUADER_HAS_MODELING_SDK
+ModelingCreateBoxResult ModelingSessionService::createMesh(const ModelingCreateMeshRequest& request) {
+    return impl_->createMesh(request);
+}
+#endif
+
+ModelingCommandResult ModelingSessionService::setObjectSelection(std::span<const EntityId> entities, EntityId active) {
+    return impl_->setObjectSelection(entities, active);
+}
+
+ModelingCommandResult ModelingSessionService::setComponentSelection(const ModelingComponentSelectionRequest& request) {
+    return impl_->setComponentSelection(request);
+}
+
+ModelingCommandResult ModelingSessionService::moveSelection(Vec3 delta) {
+    return impl_->moveSelection(delta);
+}
+
+ModelingCommandResult ModelingSessionService::transformSelection(const ModelingTransform3& transform, Vec3 pivot) {
+    return impl_->transformSelection(transform, pivot);
+}
+
+ModelingCommandResult ModelingSessionService::assignMaterialSlotToSelection(std::uint32_t materialSlot) {
+    return impl_->assignMaterialSlotToSelection(materialSlot);
+}
+
+ModelingCommandResult ModelingSessionService::assignMaterialSlotToFace(
+        int sdkObjectId,
+        int faceId,
+        std::uint32_t materialSlot) {
+    return impl_->assignMaterialSlotToFace(sdkObjectId, faceId, materialSlot);
+}
+
+ModelingCommandResult ModelingSessionService::setSelectionHover(const ModelingDirectHoverRequest& request) {
+    return impl_->setSelectionHover(request);
 }
 
 } // namespace quader

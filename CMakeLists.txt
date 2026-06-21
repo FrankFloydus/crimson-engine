@@ -170,6 +170,7 @@ add_library(quader_core STATIC
     src/document/DocumentCommandService.cpp
     src/document/ProjectDocument.cpp
     src/document/ProjectSession.cpp
+    src/editor/ModelingCommandExecutionService.cpp
     src/geometry/UVSphere.cpp
     src/scene/SceneBounds.cpp
     src/scene/SceneDocument.cpp
@@ -190,6 +191,27 @@ target_compile_definitions(quader_core
         GLM_ENABLE_EXPERIMENTAL
         QUADER_HAS_MODELING_SDK=$<BOOL:${QUADER_HAS_MODELING_SDK}>)
 target_compile_features(quader_core PUBLIC cxx_std_20)
+
+add_library(quader_api STATIC
+    src/api/QuaderApi.cpp
+    src/api/QuaderApiMutationRunner.cpp
+    src/api/QuaderAssetApi.cpp
+    src/api/QuaderHistoryApi.cpp
+    src/api/QuaderModelingApi.cpp
+    src/api/QuaderObjectHandle.cpp
+    src/api/QuaderQueryApi.cpp
+    src/api/QuaderSceneApi.cpp
+    src/api/QuaderSelectionApi.cpp
+    src/api/QuaderScript.cpp
+)
+
+target_include_directories(quader_api PUBLIC src)
+target_link_libraries(quader_api PUBLIC quader_core)
+target_compile_definitions(quader_api
+    PUBLIC
+        GLM_ENABLE_EXPERIMENTAL
+        QUADER_HAS_MODELING_SDK=$<BOOL:${QUADER_HAS_MODELING_SDK}>)
+target_compile_features(quader_api PUBLIC cxx_std_20)
 
 function(quader_filament_lib out_var lib_name)
     set(${out_var}
@@ -302,6 +324,7 @@ add_library(quader_runtime STATIC
     src/render/FilamentBufferDescriptorFactory.cpp
     src/render/FilamentMaterialLibrary.cpp
     src/render/ImGuiFilamentRenderer.cpp
+    src/api/QuaderRenderApi.cpp
     src/render/LightRenderableCache.cpp
     src/render/MaterialBindingService.cpp
     src/render/MaterialCompilerService.cpp
@@ -356,7 +379,7 @@ target_compile_definitions(quader_runtime
 )
 target_link_libraries(quader_runtime
     PUBLIC
-        quader_core
+        quader_api
         filament_sdk
         SDL3::SDL3
         imgui::imgui
@@ -444,16 +467,25 @@ if(QUADER_BUILD_TESTS)
 
     add_executable(quader_tests
         tests/core_tests.cpp
+        tests/agent_instruction_routing_tests.cpp
         tests/build_guardrail_tests.cpp
         tests/localization_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
-        tests/oop_source_of_truth_tests.cpp
+        tests/programmatic_api_guardrail_tests.cpp
+        tests/programmatic_api_tests.cpp
+        tests/programmatic_behavior_scenario_tests.cpp
         tests/modeling_session_service_split_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
         tests/viewport_tool_catalog_tests.cpp
+        tests/support/BehaviorExpect.cpp
+        tests/support/BehaviorScenario.cpp
+        tests/support/ModelingTestEvents.cpp
     )
-    target_compile_definitions(quader_tests PRIVATE QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(quader_tests
+        PRIVATE
+            QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            QUADER_TEST_ENABLE_PROGRAMMATIC_API=1)
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest GTest::gtest_main)
     add_test(NAME quader_tests COMMAND quader_tests)
 endif()

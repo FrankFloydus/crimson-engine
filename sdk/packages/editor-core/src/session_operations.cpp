@@ -650,6 +650,38 @@ CommandResult EditorSession::create_polygon_from_points(std::span<const quader_p
 	return result;
 }
 
+CommandResult EditorSession::create_object_from_document(
+		quader_poly::Document document,
+		std::string name,
+		std::uint32_t material_id)
+{
+	(void)name;
+	if (document.vertices.empty() || document.faces.empty()) {
+		return error_result("Document mesh must contain vertices and faces.");
+	}
+
+	for (PolygonObject& object : state_.objects) {
+		object.selected = false;
+		object.selection = quader_poly::Selection();
+	}
+	clear_light_selection_state(state_.lights, state_.active_light_id);
+
+	state_.next_object_id = next_polygon_object_id(state_.objects, state_.next_object_id);
+	PolygonObject object;
+	object.id = state_.next_object_id++;
+	object.material_id = static_cast<int>(material_id);
+	object.selected = true;
+	object.document = std::move(document);
+	state_.active_object_id = object.id;
+	state_.selection_mode = SelectionMode::object;
+	state_.objects.push_back(std::move(object));
+
+	const CommandResult result = ok_result(true);
+	note_content_result(result);
+	note_selection_changed();
+	return result;
+}
+
 CommandResult EditorSession::extract_selected_faces()
 {
 	state_.next_object_id = next_polygon_object_id(state_.objects, state_.next_object_id);

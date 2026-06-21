@@ -10,9 +10,14 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#if QUADER_HAS_MODELING_SDK
+#include <quader_poly/document.h>
+#endif
 
 namespace quader {
 
@@ -223,6 +228,43 @@ struct ModelingCreateBoxRequest {
         .max = {1.0f, 1.0f, 1.0f},
     };
     std::string name = "Box";
+};
+
+#if QUADER_HAS_MODELING_SDK
+struct ModelingCreateMeshRequest {
+    quader_poly::Document document;
+    std::string name = "Mesh";
+    std::uint32_t materialSlot = 0;
+};
+#endif
+
+enum class ModelingSelectionEdit {
+    Replace,
+    Add,
+    Remove,
+    Toggle,
+};
+
+struct ModelingComponentSelectionRequest {
+    int sdkObjectId = -1;
+    ModelingSelectionMode mode = ModelingSelectionMode::Vertex;
+    std::vector<int> vertices;
+    std::vector<std::pair<int, int>> edges;
+    std::vector<int> faces;
+    ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
+    ModelingActiveSelectionKind activeKind = ModelingActiveSelectionKind::None;
+    int activeVertex = -1;
+    std::pair<int, int> activeEdge = {-1, -1};
+    int activeFace = -1;
+};
+
+struct ModelingDirectHoverRequest {
+    int sdkObjectId = -1;
+    ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
+    int vertexId = -1;
+    std::pair<int, int> edge = {-1, -1};
+    int faceId = -1;
+    bool selectedModifierPressed = false;
 };
 
 struct ModelingPickSelectRequest {
@@ -536,6 +578,16 @@ public:
     ModelingBoxPreview updateBoxHeight(const ModelingBoxToolEvent& event);
     ModelingCreateBoxResult commitBox(std::string name);
     ModelingCommandResult cancelBox();
+#if QUADER_HAS_MODELING_SDK
+    ModelingCreateBoxResult createMesh(const ModelingCreateMeshRequest& request);
+#endif
+    ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
+    ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request);
+    ModelingCommandResult moveSelection(Vec3 delta);
+    ModelingCommandResult transformSelection(const ModelingTransform3& transform, Vec3 pivot);
+    ModelingCommandResult assignMaterialSlotToSelection(std::uint32_t materialSlot);
+    ModelingCommandResult assignMaterialSlotToFace(int sdkObjectId, int faceId, std::uint32_t materialSlot);
+    ModelingCommandResult setSelectionHover(const ModelingDirectHoverRequest& request);
 
 private:
     class Impl;

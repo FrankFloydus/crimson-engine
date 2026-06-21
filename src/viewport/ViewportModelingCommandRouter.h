@@ -2,14 +2,12 @@
 
 #include "core/UndoRedoManager.h"
 #include "editor/ModelingHistoryCommand.h"
+#include "editor/ModelingCommandExecutionService.h"
 #include "modeling/ModelingSessionService.h"
-#include "modeling/tools/ModelingCommandToolCatalog.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/tools/ViewportToolCatalog.h"
 
-#include <memory>
 #include <optional>
-#include <string>
 #include <utility>
 
 namespace quader {
@@ -30,61 +28,31 @@ inline ModelingTransformTool viewportToolToModelingTransformTool(ViewportTool to
     return viewportToolTransformTool(tool);
 }
 
-inline ModelingCommandResult toModelingCommandResult(CommandResult result) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = std::move(result.message),
-    };
-}
-
-class ViewportCommandToolHistoryCommand final : public ModelingHistoryCommand {
-public:
-    ViewportCommandToolHistoryCommand(ModelingSessionService& modeling, const CommandTool& tool)
-        : ModelingHistoryCommand(modeling, std::string(tool.label()))
-        , tool_(tool) {}
-
-private:
-    ModelingCommandResult executeInitial() override {
-        return tool_.execute(modeling());
-    }
-
-    const CommandTool& tool_;
-};
-
 inline ModelingCommandResult executeTrackedCommandTool(
         UndoRedoManager& undoRedo,
         ModelingSessionService& modeling,
         std::string_view toolId) {
-    const CommandTool* tool = findModelingCommandTool(toolId);
-    if (tool == nullptr) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = "Command tool is not registered.",
-        };
-    }
-
-    if (tool->historyPolicy().mode != ModelingCommandHistoryMode::ModelingUndoRedo) {
-        return tool->execute(modeling);
-    }
-
-    return toModelingCommandResult(
-            undoRedo.execute(std::make_unique<ViewportCommandToolHistoryCommand>(modeling, *tool)));
+    ModelingCommandExecutionService commands;
+    return commands.execute(undoRedo, modeling, toolId);
 }
 
 inline ModelingCommandResult executeCommandTool(
         ModelingSessionService& modeling,
         std::string_view toolId) {
-    const CommandTool* tool = findModelingCommandTool(toolId);
-    if (tool == nullptr) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = "Command tool is not registered.",
-        };
-    }
-    return tool->execute(modeling);
+    ModelingCommandExecutionService commands;
+    return commands.executeUntracked(modeling, toolId);
+}
+
+inline ModelingCommandResult undoViewportModelingCommand(
+        UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling) {
+    return undoModelingCommand(undoRedo, modeling);
+}
+
+inline ModelingCommandResult redoViewportModelingCommand(
+        UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling) {
+    return redoModelingCommand(undoRedo, modeling);
 }
 
 inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
@@ -105,21 +73,9 @@ inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
     case ViewportShortcutKind::Duplicate:
         return executeTrackedCommandTool(undoRedo, modeling, "duplicate_meshes");
     case ViewportShortcutKind::Undo:
-        if (undoRedo.canUndo()) {
-            return toModelingCommandResult(undoRedo.undo());
-        }
-        if (modeling.canUndo()) {
-            return modeling.undo();
-        }
-        return ModelingCommandResult{.ok = false, .message = "No command to undo"};
+        return undoViewportModelingCommand(undoRedo, modeling);
     case ViewportShortcutKind::Redo:
-        if (undoRedo.canRedo()) {
-            return toModelingCommandResult(undoRedo.redo());
-        }
-        if (modeling.canRedo()) {
-            return modeling.redo();
-        }
-        return ModelingCommandResult{.ok = false, .message = "No command to redo"};
+        return redoViewportModelingCommand(undoRedo, modeling);
     case ViewportShortcutKind::RepeatLastAction:
         return executeTrackedCommandTool(undoRedo, modeling, "repeat_last_action");
     case ViewportShortcutKind::MergeActive:

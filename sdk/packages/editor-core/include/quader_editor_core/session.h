@@ -1118,6 +1118,10 @@ public:
 	CommandResult create_box_from_bounds(quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds);
 	CommandResult create_box_from_corners(std::span<const quader_poly::Vec3> corners);
 	CommandResult create_polygon_from_points(std::span<const quader_poly::Vec3> points, quader_poly::Vec3 face_normal);
+	CommandResult create_object_from_document(
+		quader_poly::Document document,
+		std::string name = "Mesh",
+		std::uint32_t material_id = 0);
 	CommandResult extract_selected_faces();
 	CommandResult detach_selected_faces();
 	CommandResult bridge_selected_faces(int steps = 1);

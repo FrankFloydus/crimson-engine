@@ -10,6 +10,7 @@
 #include "document/commands/ReparentEntityCommand.h"
 #include "document/commands/SelectEntitiesCommand.h"
 #include "document/commands/SetLockCommand.h"
+#include "document/commands/SetMaterialCommand.h"
 #include "document/commands/SetVisibilityCommand.h"
 #include "document/commands/UngroupSelectionCommand.h"
 #include "scene/SceneDocument.h"
@@ -280,6 +281,31 @@ DocumentCommandResult DocumentCommandService::setLocks(std::vector<DocumentLockE
     return executeDocumentCommand(
             undoRedo_,
             std::make_unique<BatchDocumentCommand>("Set Lock", std::move(commands)));
+}
+
+DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, AssetId material) {
+    if (material == InvalidAssetId) {
+        return documentCommandInvalidRequestResult("Material asset is invalid");
+    }
+    if (!scene_.exists(entity)) {
+        return documentCommandMissingEntityResult();
+    }
+
+    std::optional<MaterialComponent> before;
+    if (const MaterialComponent* currentMaterial = scene_.material(entity)) {
+        if (currentMaterial->material == material) {
+            return documentCommandUnchangedResult();
+        }
+        before = *currentMaterial;
+    }
+
+    return executeDocumentCommand(
+            undoRedo_,
+            std::make_unique<SetMaterialCommand>(
+                    scene_,
+                    entity,
+                    before,
+                    MaterialComponent{.material = material}));
 }
 
 DocumentCommandResult DocumentCommandService::setTransform(EntityId entity, TransformComponent transform) {
