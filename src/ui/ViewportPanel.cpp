@@ -202,6 +202,30 @@ void appendHierarchySelectionWires(
     }
 }
 
+bool hoverTargetValid(const ModelingHoverTarget& target) {
+    return target.kind != ModelingActiveSelectionKind::None && target.objectId > 0;
+}
+
+bool hoverTargetsMatch(const ModelingHoverTarget& left, const ModelingHoverTarget& right) {
+    if (left.kind != right.kind || left.objectId != right.objectId) {
+        return false;
+    }
+    switch (left.kind) {
+    case ModelingActiveSelectionKind::Object:
+        return true;
+    case ModelingActiveSelectionKind::Vertex:
+        return left.vertexId == right.vertexId;
+    case ModelingActiveSelectionKind::Edge:
+        return (left.edgeA == right.edgeA && left.edgeB == right.edgeB) ||
+                (left.edgeA == right.edgeB && left.edgeB == right.edgeA);
+    case ModelingActiveSelectionKind::Face:
+        return left.faceId == right.faceId;
+    case ModelingActiveSelectionKind::None:
+        break;
+    }
+    return false;
+}
+
 float gridSizeForPreset(int preset) {
     return viewportGridWorldSizeForPreset(preset);
 }
@@ -436,6 +460,7 @@ bool ViewportPanel::activateToolFromMenu(ViewportToolId tool, ModelingSessionSer
     inputRouter_.clearModalToolState();
     paintSelectionActive_ = false;
     selectionHoverClearIssued_ = false;
+    selectionHoverSuppressedTarget_.reset();
     hoverController_.invalidate();
     selectionOverlayCache_.markDirty();
     return true;
@@ -893,6 +918,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
         paintSelectionActive_ = false;
         inputRouter_.clearModalDragState();
+        selectionHoverSuppressedTarget_.reset();
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     }
@@ -900,6 +926,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
         paintSelectionActive_ = false;
         inputRouter_.clearModalDragState();
+        selectionHoverSuppressedTarget_.reset();
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
         const ViewportTool* activeTool = inputRouter_.activeTool();
@@ -957,6 +984,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .exitActiveModalTool = exitTool,
         });
         paintSelectionActive_ = false;
+        selectionHoverSuppressedTarget_.reset();
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     };
@@ -1071,6 +1099,19 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .selectionRevision = hoverSelectionSummary.selectionRevision,
         });
     };
+    auto makeSelectionHoverRequestAt = [&](Vec2 mouseLocal, bool selectedModifierPressed) {
+        const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
+        const ViewportSettings& settings = activeViewportSettings();
+        return ModelingHoverRequest{
+                .ray = {
+                        .origin = worldRay.origin,
+                        .direction = worldRay.direction,
+                },
+                .selectedModifierPressed = selectedModifierPressed,
+                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
+        };
+    };
     auto makeModelingToolEventAt = [&](Vec2 mouseLocal, bool dragging = false) {
         const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
         return ModelingToolRayEvent{
@@ -1101,8 +1142,23 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             selectionOverlayCache_.markDirty();
         }
     };
-    auto preserveSelectionHoverAfterSelection = [&]() {
-        selectionHoverClearIssued_ = false;
+    auto suppressSelectionHoverAfterSelection = [&](Vec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {}) {
+        if (hoverTargetValid(hoveredTargetBeforeSelection)) {
+            selectionHoverSuppressedTarget_ = hoveredTargetBeforeSelection;
+        } else {
+            const ModelingHoverSummary hover =
+                    modeling.previewSelectionHover(makeSelectionHoverRequestAt(mouseLocal, input.modifiers.primary));
+            if (hoverTargetValid(hover.target)) {
+                selectionHoverSuppressedTarget_ = hover.target;
+            } else {
+                selectionHoverSuppressedTarget_.reset();
+            }
+        }
+        const ModelingCommandResult clearHover = modeling.clearSelectionHover();
+        if (clearHover.changed) {
+            selectionOverlayCache_.markDirty();
+        }
+        selectionHoverClearIssued_ = true;
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     };
@@ -1186,6 +1242,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 leftClicked &&
                 !gizmoConsumed &&
                 !result.navigationActive) {
+            const ModelingHoverTarget hoveredBeforeSelection = modeling.selectionHoverSummary().target;
             const ModelingSelectionSummary summary = selectionController_.pickSelection(
                     document,
                     documentCommands,
@@ -1198,7 +1255,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     input.modifiers,
                     leftClickCount);
             paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
-            preserveSelectionHoverAfterSelection();
+            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
         } else if (selectionFallbackActive &&
                 pendingContextMenuClick &&
                 !gizmoConsumed) {
@@ -1240,6 +1297,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 hovered &&
                 !gizmoConsumed &&
                 !suppressHoverWork) {
+            const ModelingHoverTarget hoveredBeforeSelection = modeling.selectionHoverSummary().target;
             const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
             const ViewportSettings& settings = activeViewportSettings();
             const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
@@ -1257,45 +1315,61 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             });
             inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
             paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
-            selectionHoverClearIssued_ = false;
-            hoverController_.invalidate();
-            selectionOverlayCache_.markDirty();
+            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
         }
 
         if (leftReleased) {
             paintSelectionActive_ = false;
         }
 
+        bool selectionHoverSuppressedThisFrame = false;
         if (selectionFallbackActive &&
                 hovered &&
                 !suppressHoverWork &&
-                !gizmoConsumed) {
+                !gizmoConsumed &&
+                selectionHoverSuppressedTarget_.has_value()) {
+            const ModelingHoverSummary hover =
+                    modeling.previewSelectionHover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary));
+            if (hoverTargetValid(hover.target) && hoverTargetsMatch(*selectionHoverSuppressedTarget_, hover.target)) {
+                if (!input.modifiers.primary) {
+                    const ModelingCommandResult clearHover = modeling.clearSelectionHover();
+                    if (clearHover.changed) {
+                        selectionOverlayCache_.markDirty();
+                    }
+                    selectionHoverClearIssued_ = true;
+                    hoverController_.invalidate();
+                    selectionHoverSuppressedThisFrame = true;
+                }
+            } else {
+                selectionHoverSuppressedTarget_.reset();
+                hoverController_.invalidate();
+            }
+        }
+
+        if (selectionFallbackActive &&
+                hovered &&
+                !suppressHoverWork &&
+                !gizmoConsumed &&
+                !selectionHoverSuppressedThisFrame) {
             const ViewportHoverWorkKey hoverWorkKey = makeViewportHoverWorkKey(gizmoConsumed);
             if (hoverController_.claim(hoverWorkKey)) {
-                const ViewportRay worldRay = camera.rayFromViewportPoint(input.mouseLocal);
-                const ViewportSettings& settings = activeViewportSettings();
-                const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover(ModelingHoverRequest{
-                        .ray = {
-                                .origin = worldRay.origin,
-                                .direction = worldRay.direction,
-                        },
-                        .selectedModifierPressed = input.modifiers.primary,
-                        .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-                        .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-                });
+                const ModelingCommandResult hoverUpdate =
+                        modeling.updateSelectionHover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary));
                 if (hoverUpdate.changed) {
                     selectionOverlayCache_.markDirty();
                 }
                 selectionHoverClearIssued_ = false;
             }
         } else if ((!hovered || !selectionFallbackActive) &&
-                !preserveContextMenuHover &&
-                !selectionHoverClearIssued_) {
-            const ModelingCommandResult clearHover = modeling.clearSelectionHover();
-            if (clearHover.changed) {
-                selectionOverlayCache_.markDirty();
+                !preserveContextMenuHover) {
+            selectionHoverSuppressedTarget_.reset();
+            if (!selectionHoverClearIssued_) {
+                const ModelingCommandResult clearHover = modeling.clearSelectionHover();
+                if (clearHover.changed) {
+                    selectionOverlayCache_.markDirty();
+                }
+                selectionHoverClearIssued_ = true;
             }
-            selectionHoverClearIssued_ = true;
             hoverController_.invalidate();
         }
     }

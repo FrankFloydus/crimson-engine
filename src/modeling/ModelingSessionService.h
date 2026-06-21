@@ -245,6 +245,21 @@ struct ModelingHoverRequest {
     double edgeRadius = 0.2;
 };
 
+struct ModelingHoverTarget {
+    ModelingActiveSelectionKind kind = ModelingActiveSelectionKind::None;
+    int objectId = -1;
+    int vertexId = -1;
+    int edgeA = -1;
+    int edgeB = -1;
+    int faceId = -1;
+};
+
+struct ModelingHoverSummary {
+    bool changed = false;
+    ModelingHoverTarget target;
+    bool targetSelected = false;
+};
+
 struct ModelingSelectionSummary {
     ModelingSelectionMode mode = ModelingSelectionMode::Object;
     bool hasSelection = false;
@@ -483,6 +498,8 @@ public:
     ModelingCommandResult cancelTransformDrag();
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request);
+    [[nodiscard]] ModelingHoverSummary selectionHoverSummary() const;
+    [[nodiscard]] ModelingHoverSummary previewSelectionHover(const ModelingHoverRequest& request) const;
     ModelingCommandResult clearSelectionHover();
     ModelingCommandResult activateViewportTool(ModelingViewportTool tool);
     ModelingCommandResult cancelActiveModalTool();

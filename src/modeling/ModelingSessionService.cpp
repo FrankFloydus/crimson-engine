@@ -470,6 +470,48 @@ ModelingActiveSelectionKind fromSdk(quader_editor_core::ActiveSelectionKind kind
     return ModelingActiveSelectionKind::None;
 }
 
+ModelingHoverTarget fromSdk(const quader_editor_core::SelectionHoverState& hover) {
+    ModelingHoverTarget target;
+    target.objectId = hover.object_id;
+    switch (hover.kind) {
+    case quader_editor_core::SelectionHoverKind::object:
+        target.kind = ModelingActiveSelectionKind::Object;
+        break;
+    case quader_editor_core::SelectionHoverKind::vertex:
+        target.kind = ModelingActiveSelectionKind::Vertex;
+        target.vertexId = static_cast<int>(hover.vertex_id);
+        break;
+    case quader_editor_core::SelectionHoverKind::edge:
+        target.kind = ModelingActiveSelectionKind::Edge;
+        target.edgeA = static_cast<int>(hover.edge.a);
+        target.edgeB = static_cast<int>(hover.edge.b);
+        break;
+    case quader_editor_core::SelectionHoverKind::face:
+        target.kind = ModelingActiveSelectionKind::Face;
+        target.faceId = static_cast<int>(hover.face_id);
+        break;
+    case quader_editor_core::SelectionHoverKind::none:
+        target.kind = ModelingActiveSelectionKind::None;
+        target.objectId = -1;
+        break;
+    }
+    return target;
+}
+
+ModelingHoverSummary fromSdkHoverSummary(
+        const quader_editor_core::EditorSession& session,
+        const quader_editor_core::SelectionHoverState& hover,
+        bool changed) {
+    return {
+            .changed = changed,
+            .target = fromSdk(hover),
+            .targetSelected = quader_editor_core::selection_hover_target_matches_selection(
+                    session.objects(),
+                    session.selection_mode(),
+                    hover),
+    };
+}
+
 ViewportOverlayLayer fromSdk(quader_editor_core::SelectionOverlayLayer layer) {
     return static_cast<ViewportOverlayLayer>(static_cast<int>(layer));
 }
@@ -2838,6 +2880,35 @@ public:
 #endif
     }
 
+    [[nodiscard]] ModelingHoverSummary selectionHoverSummary() const {
+#if QUADER_HAS_MODELING_SDK
+        return fromSdkHoverSummary(session_, runtime_.hover(), false);
+#else
+        return {};
+#endif
+    }
+
+    [[nodiscard]] ModelingHoverSummary previewSelectionHover(const ModelingHoverRequest& request) const {
+#if QUADER_HAS_MODELING_SDK
+        const std::vector<quader_editor_core::PolygonObject>& pickingObjects = cachedSceneTransformedObjectsForPicking();
+        const quader_poly::PickOptions pickOptions = pickOptionsFromRequest(request);
+        const quader_editor_core::SelectionHoverUpdateResult hover =
+                quader_editor_core::update_selection_hover(
+                        pickingObjects,
+                        session_.selection_mode(),
+                        runtime_.hover(),
+                        toSdk(request.ray),
+                        request.selectedModifierPressed,
+                        pickOptions,
+                        cachedPickObjectBounds(),
+                        cachedPickFaceGeometry(pickOptions));
+        return fromSdkHoverSummary(session_, hover.hover, hover.changed);
+#else
+        (void)request;
+        return {};
+#endif
+    }
+
     ModelingCommandResult clearSelectionHover() {
 #if QUADER_HAS_MODELING_SDK
         quader_editor_core::EditorRuntimeCommand command;
@@ -4041,6 +4112,14 @@ ModelingSelectionSummary ModelingSessionService::pickSelect(const ModelingPickSe
 
 ModelingCommandResult ModelingSessionService::updateSelectionHover(const ModelingHoverRequest& request) {
     return impl_->updateSelectionHover(request);
+}
+
+ModelingHoverSummary ModelingSessionService::selectionHoverSummary() const {
+    return impl_->selectionHoverSummary();
+}
+
+ModelingHoverSummary ModelingSessionService::previewSelectionHover(const ModelingHoverRequest& request) const {
+    return impl_->previewSelectionHover(request);
 }
 
 ModelingCommandResult ModelingSessionService::clearSelectionHover() {

@@ -1586,25 +1586,30 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("hoverController_.invalidate()"), std::string::npos);
     EXPECT_NE(source.find("hoverController_.claim(hoverWorkKey)"), std::string::npos);
     EXPECT_NE(source.find("result.gridPresetChanged"), std::string::npos);
-    EXPECT_NE(source.find("const ModelingCommandResult hoverUpdate = modeling.updateSelectionHover"), std::string::npos);
+    EXPECT_NE(source.find("modeling.updateSelectionHover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary))"), std::string::npos);
     EXPECT_NE(source.find("if (hoverUpdate.changed)"), std::string::npos);
     EXPECT_NE(source.find("const ModelingCommandResult clearHover = modeling.clearSelectionHover()"), std::string::npos);
     EXPECT_EQ(source.find("hoverController_.remember("), std::string::npos);
     EXPECT_NE(source.find("const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();\n    auto makeViewportHoverWorkKey"), std::string::npos);
     EXPECT_EQ(source.find("auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {\n        const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();"), std::string::npos);
-    EXPECT_NE(source.find("auto preserveSelectionHoverAfterSelection = [&]()"), std::string::npos);
-    EXPECT_NE(source.find("auto preserveSelectionHoverAfterSelection = [&]() {\n        selectionHoverClearIssued_ = false;\n        hoverController_.invalidate();\n        selectionOverlayCache_.markDirty();\n    };"), std::string::npos);
-    EXPECT_EQ(source.find("auto suppressSelectionHoverAfterSelection = [&]()"), std::string::npos);
-    EXPECT_EQ(source.find("suppressSelectionHoverAfterSelection();"), std::string::npos);
-    EXPECT_NE(source.find("paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;\n            preserveSelectionHoverAfterSelection();"), std::string::npos);
-    EXPECT_NE(source.find("paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;\n            selectionHoverClearIssued_ = false;\n            hoverController_.invalidate();\n            selectionOverlayCache_.markDirty();"), std::string::npos);
+    EXPECT_EQ(source.find("auto preserveSelectionHoverAfterSelection = [&]()"), std::string::npos);
+    EXPECT_NE(source.find("auto suppressSelectionHoverAfterSelection = [&](Vec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {})"), std::string::npos);
+    EXPECT_NE(source.find("if (hoverTargetValid(hoveredTargetBeforeSelection)) {\n            selectionHoverSuppressedTarget_ = hoveredTargetBeforeSelection;"), std::string::npos);
+    EXPECT_NE(source.find("modeling.previewSelectionHover(makeSelectionHoverRequestAt(mouseLocal, input.modifiers.primary))"), std::string::npos);
+    EXPECT_NE(source.find("selectionHoverSuppressedTarget_ = hover.target"), std::string::npos);
+    EXPECT_NE(source.find("bool selectionHoverSuppressedThisFrame = false"), std::string::npos);
+    EXPECT_NE(source.find("hoverTargetsMatch(*selectionHoverSuppressedTarget_, hover.target)"), std::string::npos);
+    EXPECT_NE(source.find("if (!input.modifiers.primary) {\n                    const ModelingCommandResult clearHover = modeling.clearSelectionHover();"), std::string::npos);
+    EXPECT_NE(source.find("!selectionHoverSuppressedThisFrame"), std::string::npos);
+    EXPECT_NE(source.find("const ModelingHoverTarget hoveredBeforeSelection = modeling.selectionHoverSummary().target;\n            const ModelingSelectionSummary summary = selectionController_.pickSelection"), std::string::npos);
+    EXPECT_NE(source.find("paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;\n            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCache_.markDirty()"), std::string::npos);
     EXPECT_EQ(source.find("|| suppressHoverWork) &&"), std::string::npos);
 }
 
-TEST(ModelingSessionServiceTests, SelectedHoverOverlayContractDoesNotSuppressNormalHover) {
+TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsUnityRemovePreviewContract) {
     const std::filesystem::path appOverlayPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionServices.cpp";
     const std::filesystem::path sdkOverlayPath =
@@ -1623,11 +1628,15 @@ TEST(ModelingSessionServiceTests, SelectedHoverOverlayContractDoesNotSuppressNor
             std::istreambuf_iterator<char>()};
 
     EXPECT_EQ(appOverlay.find("selectedHoverTarget && !hover.selected_modifier_pressed"), std::string::npos);
-    EXPECT_NE(appOverlay.find("selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover)"), std::string::npos);
-    EXPECT_EQ(appOverlay.find("selection_hover_target_is_selected(session.objects(), session.selection_mode(), hover)"), std::string::npos);
+    EXPECT_EQ(appOverlay.find("selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover)"), std::string::npos);
+    EXPECT_NE(appOverlay.find("selection_hover_target_is_selected(session.objects(), session.selection_mode(), hover)"), std::string::npos);
     EXPECT_EQ(appOverlay.find("if (hoverFrame.hover_target_selected)"), std::string::npos);
+    EXPECT_EQ(sdkOverlay.find("suppress_hover_overlay"), std::string::npos);
     EXPECT_NE(
             sdkOverlay.find("frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target"),
+            std::string::npos);
+    EXPECT_NE(
+            sdkOverlay.find("if (object.id != hover.object_id || hover.kind == SelectionHoverKind::none)"),
             std::string::npos);
 }
 
@@ -6319,7 +6328,7 @@ TEST(ModelingSessionServiceTests, SelectedHoverAndModifierRemovePreviewStayDisti
     EXPECT_FALSE(frame.hoverTargetSelected);
     EXPECT_GT(hoverFaceCount, 0);
     EXPECT_GT(hoverFaceEdgeCount, 0);
-    EXPECT_EQ(selectedFaceEdgeCount, 0);
+    EXPECT_GT(selectedFaceEdgeCount, 0);
     EXPECT_TRUE(normalHoverUsesHoverFaceColor);
     EXPECT_TRUE(normalHoverUsesHoverWireColor);
     EXPECT_EQ(scene.revision(), sceneRevisionBeforeHover);
@@ -6375,7 +6384,7 @@ TEST(ModelingSessionServiceTests, SelectedHoverAndModifierRemovePreviewStayDisti
 #endif
 }
 
-TEST(ModelingSessionServiceTests, SelectionClickPreservesHoverAndCtrlShowsRemovePreviewUntilHoverOut) {
+TEST(ModelingSessionServiceTests, ClearingHoverAfterSelectionLetsSelectionColorWinAndCtrlShowsRemovePreview) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -6404,6 +6413,15 @@ TEST(ModelingSessionServiceTests, SelectionClickPreservesHoverAndCtrlShowsRemove
             .clickCount = 1,
     });
     ASSERT_EQ(picked.selectedFaceCount, 1u);
+    const ModelingHoverSummary pickedHover = service.previewSelectionHover(ModelingHoverRequest{
+            .ray = frontFaceRay,
+            .selectedModifierPressed = false,
+    });
+    EXPECT_EQ(pickedHover.target.kind, ModelingActiveSelectionKind::Face);
+    EXPECT_TRUE(pickedHover.targetSelected);
+
+    const ModelingCommandResult clearAfterPick = service.clearSelectionHover();
+    ASSERT_TRUE(clearAfterPick.ok) << clearAfterPick.message;
 
     const ViewportOverlayFrame afterClickFrame = service.selectionOverlayFrame();
     const bool hoverFaceStillVisible = std::any_of(
@@ -6427,9 +6445,9 @@ TEST(ModelingSessionServiceTests, SelectionClickPreservesHoverAndCtrlShowsRemove
                 return line.layer == ViewportOverlayLayer::SelectedFaceEdge;
             });
     EXPECT_FALSE(afterClickFrame.hoverTargetSelected);
-    EXPECT_TRUE(hoverFaceStillVisible);
-    EXPECT_TRUE(hoverFaceEdgeStillVisible);
-    EXPECT_FALSE(selectedFaceWireVisibleUnderHover);
+    EXPECT_FALSE(hoverFaceStillVisible);
+    EXPECT_FALSE(hoverFaceEdgeStillVisible);
+    EXPECT_TRUE(selectedFaceWireVisibleUnderHover);
 
     const ModelingCommandResult modifierHover = service.updateSelectionHover(ModelingHoverRequest{
             .ray = frontFaceRay,
@@ -6458,7 +6476,6 @@ TEST(ModelingSessionServiceTests, SelectionClickPreservesHoverAndCtrlShowsRemove
 
     const ModelingCommandResult clearHover = service.clearSelectionHover();
     ASSERT_TRUE(clearHover.ok) << clearHover.message;
-    ASSERT_TRUE(clearHover.changed);
 
     const ViewportOverlayFrame afterClearFrame = service.selectionOverlayFrame();
     const bool hoverFaceCleared = std::none_of(
@@ -6475,6 +6492,172 @@ TEST(ModelingSessionServiceTests, SelectionClickPreservesHoverAndCtrlShowsRemove
             });
     EXPECT_TRUE(hoverFaceCleared);
     EXPECT_TRUE(selectedFaceWireAfterClear);
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ClearingHoverAfterEdgeSelectionShowsSelectionBeforeHoverReturns) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Hover Suppressed Edge Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
+
+    const ModelingRay frontRightEdgeRay{
+            .origin = {1.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingCommandResult initialHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontRightEdgeRay,
+            .selectedModifierPressed = false,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_TRUE(initialHover.ok) << initialHover.message;
+    ASSERT_TRUE(initialHover.changed);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = frontRightEdgeRay,
+            .clickCount = 1,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_GT(picked.selectedEdgeCount, 0u);
+    const ModelingCommandResult clearAfterPick = service.clearSelectionHover();
+    ASSERT_TRUE(clearAfterPick.ok) << clearAfterPick.message;
+
+    const auto hasHoverEdge = [](const ViewportOverlayFrame& frame) {
+        return std::any_of(
+                frame.lines.begin(),
+                frame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::HoverEdge &&
+                            line.color == kOverlayHoverWireColor;
+                });
+    };
+    const auto hasSelectedEdge = [](const ViewportOverlayFrame& frame) {
+        return std::any_of(
+                frame.lines.begin(),
+                frame.lines.end(),
+                [](const ViewportOverlayLine& line) {
+                    return line.layer == ViewportOverlayLayer::SelectedEdge;
+                });
+    };
+
+    const ViewportOverlayFrame afterClickFrame = service.selectionOverlayFrame();
+    EXPECT_FALSE(hasHoverEdge(afterClickFrame));
+    EXPECT_TRUE(hasSelectedEdge(afterClickFrame));
+
+    const ModelingCommandResult sameTargetHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontRightEdgeRay,
+            .selectedModifierPressed = false,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_TRUE(sameTargetHover.ok) << sameTargetHover.message;
+    const ViewportOverlayFrame sameTargetFrame = service.selectionOverlayFrame();
+    EXPECT_TRUE(hasHoverEdge(sameTargetFrame));
+    EXPECT_TRUE(hasSelectedEdge(sameTargetFrame));
+
+    const ModelingCommandResult clearHover = service.clearSelectionHover();
+    ASSERT_TRUE(clearHover.ok) << clearHover.message;
+    ASSERT_TRUE(clearHover.changed);
+    const ModelingCommandResult rehover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontRightEdgeRay,
+            .selectedModifierPressed = false,
+            .edgeRadius = 0.4f,
+    });
+    ASSERT_TRUE(rehover.ok) << rehover.message;
+    const ViewportOverlayFrame rehoverFrame = service.selectionOverlayFrame();
+    EXPECT_TRUE(hasHoverEdge(rehoverFrame));
+    EXPECT_TRUE(hasSelectedEdge(rehoverFrame));
+#else
+    EXPECT_FALSE(service.sdkAvailable());
+#endif
+}
+
+TEST(ModelingSessionServiceTests, ClearingHoverAfterVertexSelectionShowsSelectionBeforeHoverReturns) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Hover Suppressed Vertex Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
+
+    const ModelingRay frontCornerRay{
+            .origin = {1.0f, 1.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const ModelingCommandResult initialHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontCornerRay,
+            .selectedModifierPressed = false,
+            .vertexRadius = 0.4f,
+    });
+    ASSERT_TRUE(initialHover.ok) << initialHover.message;
+    ASSERT_TRUE(initialHover.changed);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = frontCornerRay,
+            .clickCount = 1,
+            .vertexRadius = 0.4f,
+    });
+    ASSERT_GT(picked.selectedVertexCount, 0u);
+    const ModelingCommandResult clearAfterPick = service.clearSelectionHover();
+    ASSERT_TRUE(clearAfterPick.ok) << clearAfterPick.message;
+
+    const auto hasHoverVertex = [](const ViewportOverlayFrame& frame) {
+        return std::any_of(
+                frame.points.begin(),
+                frame.points.end(),
+                [](const ViewportOverlayPoint& point) {
+                    return point.layer == ViewportOverlayLayer::HoverVertex &&
+                            point.color == kOverlayHoverVertexColor;
+                });
+    };
+    const auto hasSelectedVertex = [](const ViewportOverlayFrame& frame) {
+        return std::any_of(
+                frame.points.begin(),
+                frame.points.end(),
+                [](const ViewportOverlayPoint& point) {
+                    return point.layer == ViewportOverlayLayer::SelectedVertex;
+                });
+    };
+
+    const ViewportOverlayFrame afterClickFrame = service.selectionOverlayFrame();
+    EXPECT_FALSE(hasHoverVertex(afterClickFrame));
+    EXPECT_TRUE(hasSelectedVertex(afterClickFrame));
+
+    const ModelingCommandResult sameTargetHover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontCornerRay,
+            .selectedModifierPressed = false,
+            .vertexRadius = 0.4f,
+    });
+    ASSERT_TRUE(sameTargetHover.ok) << sameTargetHover.message;
+    const ViewportOverlayFrame sameTargetFrame = service.selectionOverlayFrame();
+    EXPECT_TRUE(hasHoverVertex(sameTargetFrame));
+    EXPECT_TRUE(hasSelectedVertex(sameTargetFrame));
+
+    const ModelingCommandResult clearHover = service.clearSelectionHover();
+    ASSERT_TRUE(clearHover.ok) << clearHover.message;
+    ASSERT_TRUE(clearHover.changed);
+    const ModelingCommandResult rehover = service.updateSelectionHover(ModelingHoverRequest{
+            .ray = frontCornerRay,
+            .selectedModifierPressed = false,
+            .vertexRadius = 0.4f,
+    });
+    ASSERT_TRUE(rehover.ok) << rehover.message;
+    const ViewportOverlayFrame rehoverFrame = service.selectionOverlayFrame();
+    EXPECT_TRUE(hasHoverVertex(rehoverFrame));
+    EXPECT_TRUE(hasSelectedVertex(rehoverFrame));
 #else
     EXPECT_FALSE(service.sdkAvailable());
 #endif
@@ -6528,7 +6711,7 @@ TEST(ModelingSessionServiceTests, SelectedEdgeHoverAndModifierRemovePreviewStayD
                 return line.layer == ViewportOverlayLayer::HoverEdge &&
                         line.color == kOverlayHoverWireColor;
             });
-    EXPECT_FALSE(hasSelectedEdge);
+    EXPECT_TRUE(hasSelectedEdge);
     EXPECT_TRUE(hasNormalHoverEdge);
     EXPECT_EQ(service.selectionSummary().selectedEdgeCount, selectedBeforeHover.selectedEdgeCount);
     EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);

@@ -894,7 +894,7 @@ quader_editor_core::SelectionOverlayFrame ModelingOverlayService::selectionOverl
         frame.points.insert(frame.points.end(), poly.preview_points.begin(), poly.preview_points.end());
     };
     const bool suppressBaseUnderHover =
-            quader_editor_core::selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover);
+            quader_editor_core::selection_hover_target_is_selected(session.objects(), session.selection_mode(), hover);
     if (suppressBaseUnderHover) {
         quader_editor_core::SelectionOverlayFrame frame;
         frame.hover_target_selected = hoverFrame.hover_target_selected;

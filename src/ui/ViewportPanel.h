@@ -28,6 +28,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace filament {
@@ -145,6 +146,7 @@ private:
     NavigationGizmo navigationGizmo_;
     Vec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
+    std::optional<ModelingHoverTarget> selectionHoverSuppressedTarget_;
     bool lastFlyNavigationActive_ = false;
 };
 
