@@ -1228,6 +1228,26 @@ TEST(ViewportPanelTests, ToolActivationPreservesGroupModeSceneSelection) {
             std::string::npos);
 }
 
+TEST(ViewportPanelTests, SelectionModeHotkeysRouteThroughEditorSelectionEvenWhenRouterStateAlreadyMatches) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const bool selectionModeShortcutHandled"), std::string::npos);
+    EXPECT_NE(source.find("result.shortcut.kind == ViewportShortcutKind::SetSelectionMode"), std::string::npos);
+    EXPECT_NE(source.find("uiContext.editor.selection().setMode(viewportSelectionModeToApp(result.shortcut.selectionMode))"),
+            std::string::npos);
+    EXPECT_NE(source.find("inputRouter_.setSelectionMode(appSelectionModeToViewport(uiContext.editor.selection().summary().mode))"),
+            std::string::npos);
+    EXPECT_EQ(source.find("if (result.selectionModeChanged) {\n        const QuaderApiVoidResult command =\n                uiContext.editor.selection().setMode"),
+            std::string::npos);
+}
+
 TEST(ViewportPanelTests, DeletePopupTreatsSelectedSceneGroupsAsObjectTargets) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";

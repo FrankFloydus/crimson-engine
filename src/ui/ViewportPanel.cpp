@@ -1401,12 +1401,16 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     if (result.focusDocumentRequested) {
         focusDocument(document, assets, camera);
     }
-    if (result.selectionModeChanged) {
+    const bool selectionModeShortcutHandled =
+            result.shortcutHandled &&
+            result.shortcut.kind == ViewportShortcutKind::SetSelectionMode;
+    if (selectionModeShortcutHandled) {
         const QuaderApiVoidResult command =
-                uiContext.editor.selection().setMode(viewportSelectionModeToApp(inputRouter_.state().selectionMode));
+                uiContext.editor.selection().setMode(viewportSelectionModeToApp(result.shortcut.selectionMode));
         if (!command.ok) {
             LOG_ERROR("Selection mode change failed: {}", command.message);
         }
+        inputRouter_.setSelectionMode(appSelectionModeToViewport(uiContext.editor.selection().summary().mode));
         paintSelectionActive_ = false;
         inputRouter_.clearModalDragState();
         selectionHoverSuppressedTarget_.reset();
