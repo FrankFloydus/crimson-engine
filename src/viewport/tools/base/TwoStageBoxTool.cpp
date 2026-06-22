@@ -124,17 +124,13 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
     if (!actionConsumed && preview.dragState == ModelingBoxDragState::Footprint && pointer.leftDown) {
         preview = context.modeling.updateBoxFootprint(boxEvent);
         logPreviewFailure("Box footprint update", preview);
-        if (context.invalidateHover) {
-            context.invalidateHover();
-        }
+        invalidate(context);
     }
 
     if (!actionConsumed && preview.dragState == ModelingBoxDragState::Footprint && pointer.leftReleased) {
         preview = context.modeling.beginBoxHeight(boxEvent);
         logPreviewFailure("Box height begin", preview);
-        if (context.invalidateHover) {
-            context.invalidateHover();
-        }
+        invalidate(context);
     }
 
     if (!actionConsumed &&
@@ -145,6 +141,7 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
             (!context.claimHover || context.claimHover(preview.dragState))) {
         preview = context.modeling.updateBoxHeight(boxEvent);
         logPreviewFailure("Box height update", preview);
+        invalidate(context);
     }
 
     return {

@@ -4,6 +4,7 @@
 #include "scene/SceneBounds.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -22,6 +23,8 @@ ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
         return ViewportSelectionMode::Face;
     case ModelingSelectionMode::Object:
         return ViewportSelectionMode::Object;
+    case ModelingSelectionMode::Group:
+        return ViewportSelectionMode::Group;
     }
     return ViewportSelectionMode::Object;
 }
@@ -59,42 +62,21 @@ bool rayIntersectsBounds(Vec3 origin, Vec3 direction, const SceneBounds& bounds,
     return tMax >= 0.0f;
 }
 
-} // namespace
-
-ModelingSelectionSummary ViewportSelectionController::pickSelection(
-        SceneDocument& document,
-        DocumentCommandService& documentCommands,
-        const AssetRegistry& assets,
-        ModelingSessionService& modeling,
-        ViewportInputRouter& inputRouter,
-        const ViewportSettings& settings,
-        const ViewportCameraController& camera,
-        Vec2 localMouse,
-        ViewportModifiers modifiers,
-        int clickCount,
-        bool preserveSelectionOnMiss,
-        bool preserveSelectionOnSelectedHit) const {
-    const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
-    if (modeling.sdkAvailable()) {
-        const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
-                .ray = {
-                        .origin = worldRay.origin,
-                        .direction = worldRay.direction,
-                },
-                .clickCount = clickCount,
-                .controlPressed = modifiers.primary,
-                .shiftPressed = modifiers.shift,
-                .commandPressed = modifiers.primary,
-                .altPressed = modifiers.alt,
-                .preserveSelectionOnMiss = preserveSelectionOnMiss,
-                .preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit,
-                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-        });
-        inputRouter.setSelectionMode(toViewportSelectionMode(summary.mode));
-        return summary;
+EntityId nearestGroupAncestor(const SceneDocument& document, EntityId entity) {
+    EntityId parent = document.parent(entity);
+    while (parent != InvalidEntityId) {
+        if (document.kind(parent) == EntityKind::Empty) {
+            return parent;
+        }
+        parent = document.parent(parent);
     }
+    return InvalidEntityId;
+}
 
+EntityId pickMeshEntityByBounds(
+        const SceneDocument& document,
+        const AssetRegistry& assets,
+        const ViewportRay& worldRay) {
     EntityId bestEntity = InvalidEntityId;
     float bestDistance = std::numeric_limits<float>::max();
 
@@ -143,42 +125,121 @@ ModelingSelectionSummary ViewportSelectionController::pickSelection(
         }
     }
 
-    const bool bestEntitySelected =
-            bestEntity != InvalidEntityId &&
-            document.selection(bestEntity) != nullptr &&
-            document.selection(bestEntity)->selected;
-    const bool preserveSelectedHit = preserveSelectionOnSelectedHit && bestEntitySelected;
+    return bestEntity;
+}
+
+ModelingSelectionSummary applyScenePickSelection(
+        SceneDocument& document,
+        DocumentCommandService& documentCommands,
+        ModelingSessionService& modeling,
+        ViewportInputRouter& inputRouter,
+        EntityId targetEntity,
+        ModelingSelectionMode mode,
+        ViewportModifiers modifiers,
+        bool preserveSelectionOnMiss,
+        bool preserveSelectionOnSelectedHit) {
+    const bool targetSelected =
+            targetEntity != InvalidEntityId &&
+            document.selection(targetEntity) != nullptr &&
+            document.selection(targetEntity)->selected;
+    const bool preserveSelectedHit = preserveSelectionOnSelectedHit && targetSelected;
     const std::vector<EntityId> previousSelected = document.selectedEntities();
     std::vector<EntityId> selected = previousSelected;
     if (!modifiers.primary &&
             !modifiers.shift &&
             !preserveSelectedHit &&
-            (!preserveSelectionOnMiss || bestEntity != InvalidEntityId)) {
+            (!preserveSelectionOnMiss || targetEntity != InvalidEntityId)) {
         selected.clear();
     }
-    if (bestEntity != InvalidEntityId && !preserveSelectedHit) {
-        const auto found = std::find(selected.begin(), selected.end(), bestEntity);
+    if (targetEntity != InvalidEntityId && !preserveSelectedHit) {
+        const auto found = std::find(selected.begin(), selected.end(), targetEntity);
         const bool alreadySelected = found != selected.end();
         if (modifiers.primary && alreadySelected) {
             selected.erase(found);
         } else if (!alreadySelected) {
-            selected.push_back(bestEntity);
+            selected.push_back(targetEntity);
         }
     }
     if (selected != previousSelected) {
         const EntityId active = selected.empty() ? InvalidEntityId :
-                (bestEntity != InvalidEntityId && std::find(selected.begin(), selected.end(), bestEntity) != selected.end()
-                                ? bestEntity
+                (targetEntity != InvalidEntityId && std::find(selected.begin(), selected.end(), targetEntity) != selected.end()
+                                ? targetEntity
                                 : selected.back());
         (void)documentCommands.selectEntities(std::move(selected), active);
     }
-    const bool hasSelection = !document.selectedEntities().empty();
-    return {
-            .mode = ModelingSelectionMode::Object,
-            .hasSelection = hasSelection,
-            .activeKind = hasSelection ? ModelingActiveSelectionKind::Object : ModelingActiveSelectionKind::None,
+    const ModelingSelectionSummary summary = modeling.selectionSummary();
+    inputRouter.setSelectionMode(toViewportSelectionMode(summary.mode == mode ? summary.mode : mode));
+    return summary.mode == mode ? summary : ModelingSelectionSummary{
+            .mode = mode,
+            .hasSelection = !document.selectedEntities().empty(),
+            .activeKind = document.selectedEntities().empty() ? ModelingActiveSelectionKind::None : ModelingActiveSelectionKind::Object,
             .selectedObjectCount = static_cast<std::uint32_t>(document.selectedEntities().size()),
     };
+}
+
+} // namespace
+
+ModelingSelectionSummary ViewportSelectionController::pickSelection(
+        SceneDocument& document,
+        DocumentCommandService& documentCommands,
+        const AssetRegistry& assets,
+        ModelingSessionService& modeling,
+        ViewportInputRouter& inputRouter,
+        const ViewportSettings& settings,
+        const ViewportCameraController& camera,
+        Vec2 localMouse,
+        ViewportModifiers modifiers,
+        int clickCount,
+        bool preserveSelectionOnMiss,
+        bool preserveSelectionOnSelectedHit) const {
+    const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
+    const bool groupMode = modeling.selectionMode() == ModelingSelectionMode::Group;
+    if (groupMode) {
+        const EntityId hitMesh = pickMeshEntityByBounds(document, assets, worldRay);
+        const EntityId targetGroup = nearestGroupAncestor(document, hitMesh);
+        return applyScenePickSelection(
+                document,
+                documentCommands,
+                modeling,
+                inputRouter,
+                targetGroup,
+                ModelingSelectionMode::Group,
+                modifiers,
+                preserveSelectionOnMiss,
+                preserveSelectionOnSelectedHit);
+    }
+    if (modeling.sdkAvailable()) {
+        const ModelingSelectionSummary summary = modeling.pickSelect(ModelingPickSelectRequest{
+                .ray = {
+                        .origin = worldRay.origin,
+                        .direction = worldRay.direction,
+                },
+                .clickCount = clickCount,
+                .controlPressed = modifiers.primary,
+                .shiftPressed = modifiers.shift,
+                .commandPressed = modifiers.primary,
+                .altPressed = modifiers.alt,
+                .preserveSelectionOnMiss = preserveSelectionOnMiss,
+                .preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit,
+                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
+        });
+        inputRouter.setSelectionMode(toViewportSelectionMode(summary.mode));
+        return summary;
+    }
+
+    const EntityId hitMesh = pickMeshEntityByBounds(document, assets, worldRay);
+    const EntityId targetEntity = groupMode ? nearestGroupAncestor(document, hitMesh) : hitMesh;
+    return applyScenePickSelection(
+            document,
+            documentCommands,
+            modeling,
+            inputRouter,
+            targetEntity,
+            groupMode ? ModelingSelectionMode::Group : ModelingSelectionMode::Object,
+            modifiers,
+            preserveSelectionOnMiss,
+            preserveSelectionOnSelectedHit);
 }
 
 } // namespace quader

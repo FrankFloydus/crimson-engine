@@ -440,12 +440,9 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/OFL.txt"
             "$<TARGET_FILE_DIR:quader>/fonts/OFL.txt"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/mesh_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/mesh_icon.png"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/empty_icon.png"
-            "$<TARGET_FILE_DIR:quader>/icons/empty_icon.png"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+            "$<TARGET_FILE_DIR:quader>/icons"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales"
             "$<TARGET_FILE_DIR:quader>/locales"

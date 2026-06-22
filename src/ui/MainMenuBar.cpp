@@ -99,7 +99,11 @@ void ToolsMenu::draw(MainMenuBarContext& context) const {
                 viewportToolAvailable(tool->viewportTool());
         const std::string localizedLabel = toolLabel(context.localization, *tool);
         if (ImGui::MenuItem(localizedLabel.c_str(), shortcut, selected, enabled)) {
-            (void)context.viewportPanel->activateToolFromMenu(tool->viewportTool(), context.modeling);
+            (void)context.viewportPanel->activateToolFromMenu(
+                    tool->viewportTool(),
+                    context.document,
+                    context.documentCommands,
+                    context.modeling);
         }
     }
 

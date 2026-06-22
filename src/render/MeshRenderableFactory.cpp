@@ -127,6 +127,8 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         const MaterialDocument* material,
         const AssetRegistry& assets,
         const Mat4& worldTransform,
+        bool castShadows,
+        bool doubleSided,
         std::uint64_t materialRevision) {
     MeshRenderableProxy proxy;
     proxy.entity = utils::EntityManager::get().create();
@@ -135,6 +137,8 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
     proxy.meshRevision = mesh.revision.value;
     proxy.material = materialId;
     proxy.materialRevision = materialRevision;
+    proxy.castShadows = castShadows;
+    proxy.doubleSided = doubleSided;
 
     std::vector<RenderVertex> vertices;
     vertices.reserve(mesh.vertices.size());
@@ -182,7 +186,8 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         builder.material(primitiveIndex, materialInstance);
     }
     builder.boundingBox(computeBounds(mesh))
-            .castShadows(false)
+            .culling(!doubleSided)
+            .castShadows(castShadows)
             .receiveShadows(false)
             .build(*engine_, proxy.entity);
 

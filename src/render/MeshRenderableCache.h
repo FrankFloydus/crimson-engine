@@ -31,6 +31,8 @@ public:
             AssetId meshId,
             const MeshAsset& mesh,
             AssetId materialId,
+            bool castShadows,
+            bool doubleSided,
             std::uint64_t materialRevision) const;
 
     void syncMesh(EntityId entityId,
@@ -40,6 +42,8 @@ public:
             const MaterialDocument* material,
             const AssetRegistry& assets,
             const Mat4& worldTransform,
+            bool castShadows,
+            bool doubleSided,
             std::uint64_t materialRevision);
     void remove(EntityId entityId);
     void removeExcept(const std::unordered_set<EntityId>& liveMeshEntities);

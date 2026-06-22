@@ -49,10 +49,6 @@
 #include "modeling/tools/context/RadialAlignEdgesTool.h"
 #include "modeling/tools/context/RadialAlignFacesTool.h"
 #include "modeling/tools/context/RadialAlignVerticesTool.h"
-#include "modeling/tools/context/RecalculateInsideFacesTool.h"
-#include "modeling/tools/context/RecalculateInsideMeshTool.h"
-#include "modeling/tools/context/RecalculateOutsideFacesTool.h"
-#include "modeling/tools/context/RecalculateOutsideMeshTool.h"
 #include "modeling/tools/context/ShadeFlatMeshTool.h"
 #include "modeling/tools/context/ShadeSmoothMeshTool.h"
 #include "modeling/tools/preview/CreateOuterHullTool.h"
@@ -179,8 +175,6 @@ std::span<const InstantCommandTool* const> modelingInstantCommandTools() {
 
 std::span<const ContextActionTool* const> modelingContextActionTools() {
     static const InvertMeshTool invertMesh;
-    static const RecalculateOutsideMeshTool recalculateOutsideMesh;
-    static const RecalculateInsideMeshTool recalculateInsideMesh;
     static const ShadeSmoothMeshTool shadeSmoothMesh;
     static const ShadeFlatMeshTool shadeFlatMesh;
     static const CombineMeshTool combineMesh;
@@ -190,16 +184,12 @@ std::span<const ContextActionTool* const> modelingContextActionTools() {
     static const BridgeEdgesTool bridgeEdges;
     static const RadialAlignEdgesTool radialAlignEdges;
     static const InvertFacesTool invertFaces;
-    static const RecalculateOutsideFacesTool recalculateOutsideFaces;
-    static const RecalculateInsideFacesTool recalculateInsideFaces;
     static const BridgeFacesTool bridgeFaces;
     static const RadialAlignFacesTool radialAlignFaces;
     static const ApplyActiveMaterialTool applyActiveMaterial;
 
-    static const std::array<const ContextActionTool*, 17> tools{{
+    static const std::array<const ContextActionTool*, 13> tools{{
             &invertMesh,
-            &recalculateOutsideMesh,
-            &recalculateInsideMesh,
             &shadeSmoothMesh,
             &shadeFlatMesh,
             &combineMesh,
@@ -209,8 +199,6 @@ std::span<const ContextActionTool* const> modelingContextActionTools() {
             &bridgeEdges,
             &radialAlignEdges,
             &invertFaces,
-            &recalculateOutsideFaces,
-            &recalculateInsideFaces,
             &bridgeFaces,
             &radialAlignFaces,
             &applyActiveMaterial,

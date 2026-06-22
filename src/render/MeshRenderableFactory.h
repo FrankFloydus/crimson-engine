@@ -31,6 +31,8 @@ public:
             const MaterialDocument* material,
             const AssetRegistry& assets,
             const Mat4& worldTransform,
+            bool castShadows,
+            bool doubleSided,
             std::uint64_t materialRevision);
     void updateTransform(const MeshRenderableProxy& proxy, const Mat4& worldTransform);
     void destroy(MeshRenderableProxy& proxy);

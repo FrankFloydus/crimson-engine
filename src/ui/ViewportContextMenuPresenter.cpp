@@ -11,6 +11,7 @@
 #include <imgui.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -26,8 +27,24 @@ ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
         return ViewportSelectionMode::Face;
     case ModelingSelectionMode::Object:
         return ViewportSelectionMode::Object;
+    case ModelingSelectionMode::Group:
+        return ViewportSelectionMode::Group;
     }
     return ViewportSelectionMode::Object;
+}
+
+bool isGenericContextAction(std::string_view actionId) {
+    return actionId == "delete_selection" || actionId == "duplicate_meshes";
+}
+
+bool shouldCloseOperationsPopupForMouseClick() {
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) || ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        return true;
+    }
+    if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        return false;
+    }
+    return !ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup);
 }
 
 } // namespace
@@ -42,6 +59,12 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
         return;
     }
 
+    if (shouldCloseOperationsPopupForMouseClick()) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
     const ModelingActionQuery query{
             .surface = ModelingActionSurface::ViewportContextMenu,
             .modalToolOwnsViewport = modalToolOwnsViewport,
@@ -49,7 +72,12 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
             .includeHidden = false,
     };
     const std::vector<ModelingActionItem> actions = modeling.contextActions(query);
+    bool separatedGenericActions = false;
     for (const ModelingActionItem& action : actions) {
+        if (!separatedGenericActions && isGenericContextAction(action.actionId)) {
+            ImGui::Separator();
+            separatedGenericActions = true;
+        }
         const bool enabled = action.visibility == ModelingActionVisibility::Enabled;
         std::string labelKey = "modeling.action.";
         labelKey.append(action.actionId);
@@ -72,6 +100,7 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
                 LOG_ERROR("Operation '{}' failed: {}", action.actionId, result.message.empty() ? "Operation failed." : result.message);
             }
             inputRouter.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+            ImGui::CloseCurrentPopup();
         }
         if (!enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !action.disabledReason.empty()) {
             ImGui::SetTooltip("%s", action.disabledReason.c_str());

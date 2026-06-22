@@ -19,6 +19,8 @@ struct MeshRenderableProxy {
     AssetId material = InvalidAssetId;
     std::uint64_t meshRevision = 0;
     std::uint64_t materialRevision = 0;
+    bool castShadows = false;
+    bool doubleSided = false;
     filament::VertexBuffer* vertexBuffer = nullptr;
     filament::IndexBuffer* indexBuffer = nullptr;
     std::vector<std::uint32_t> materialSlots;

@@ -159,6 +159,46 @@ ViewportView viewportViewForPane(ViewportPaneId paneId) {
     return ViewportView::Perspective;
 }
 
+std::string_view viewportViewStableId(ViewportView view) {
+    switch (view) {
+    case ViewportView::Perspective:
+        return "perspective";
+    case ViewportView::Top:
+        return "top";
+    case ViewportView::Bottom:
+        return "bottom";
+    case ViewportView::Front:
+        return "front";
+    case ViewportView::Back:
+        return "back";
+    case ViewportView::Side:
+        return "right";
+    case ViewportView::Left:
+        return "left";
+    }
+    return "perspective";
+}
+
+std::string_view viewportViewLabel(ViewportView view) {
+    switch (view) {
+    case ViewportView::Perspective:
+        return "Perspective";
+    case ViewportView::Top:
+        return "Top";
+    case ViewportView::Bottom:
+        return "Bottom";
+    case ViewportView::Front:
+        return "Front";
+    case ViewportView::Back:
+        return "Back";
+    case ViewportView::Side:
+        return "Right";
+    case ViewportView::Left:
+        return "Left";
+    }
+    return "Perspective";
+}
+
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId) {
     return viewportLayoutPlacements(layoutId, ViewportLayoutState{});
 }

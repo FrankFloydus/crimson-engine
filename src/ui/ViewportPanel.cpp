@@ -12,6 +12,7 @@
 #include "ui/ViewportContextMenuPolicy.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "viewport/HostViewportContractAdapter.h"
+#include "viewport/ViewportModelingCommandRouter.h"
 #include "viewport/tools/ViewportToolCatalog.h"
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -124,23 +126,92 @@ float distanceSquared(ImVec2 a, ImVec2 b) {
     return dx * dx + dy * dy;
 }
 
-std::uint64_t edgeKey(std::uint32_t a, std::uint32_t b) {
-    if (b < a) {
-        std::swap(a, b);
-    }
-    return (static_cast<std::uint64_t>(a) << 32u) | static_cast<std::uint64_t>(b);
-}
-
 bool entitySelected(const SceneDocument& document, EntityId entity) {
     const SelectionComponent* selection = document.selection(entity);
     return selection != nullptr && selection->selected;
+}
+
+bool componentSelectionMode(ModelingSelectionMode mode) {
+    return mode == ModelingSelectionMode::Vertex ||
+            mode == ModelingSelectionMode::Edge ||
+            mode == ModelingSelectionMode::Face;
+}
+
+struct WireEdgePoint {
+    std::int64_t x = 0;
+    std::int64_t y = 0;
+    std::int64_t z = 0;
+};
+
+struct WireEdgeKey {
+    WireEdgePoint a;
+    WireEdgePoint b;
+
+    bool operator==(const WireEdgeKey& other) const {
+        return a.x == other.a.x && a.y == other.a.y && a.z == other.a.z &&
+                b.x == other.b.x && b.y == other.b.y && b.z == other.b.z;
+    }
+};
+
+struct WireEdgeKeyHash {
+    std::size_t operator()(const WireEdgeKey& key) const {
+        auto mix = [](std::size_t hash, std::int64_t value) {
+            hash ^= static_cast<std::size_t>(value) + 0x9e3779b97f4a7c15ull + (hash << 6u) + (hash >> 2u);
+            return hash;
+        };
+        std::size_t hash = 1469598103934665603ull;
+        hash = mix(hash, key.a.x);
+        hash = mix(hash, key.a.y);
+        hash = mix(hash, key.a.z);
+        hash = mix(hash, key.b.x);
+        hash = mix(hash, key.b.y);
+        return mix(hash, key.b.z);
+    }
+};
+
+struct WireEdgeRecord {
+    Vec3 start = {};
+    Vec3 end = {};
+    Vec3 firstNormal = {};
+    std::uint32_t count = 0;
+    bool coplanarWithFirst = true;
+};
+
+WireEdgePoint quantizedWirePoint(Vec3 value) {
+    constexpr double kScale = 1000000.0;
+    return {
+            static_cast<std::int64_t>(std::llround(static_cast<double>(value.x) * kScale)),
+            static_cast<std::int64_t>(std::llround(static_cast<double>(value.y) * kScale)),
+            static_cast<std::int64_t>(std::llround(static_cast<double>(value.z) * kScale)),
+    };
+}
+
+bool wirePointLess(const WireEdgePoint& left, const WireEdgePoint& right) {
+    if (left.x != right.x) {
+        return left.x < right.x;
+    }
+    if (left.y != right.y) {
+        return left.y < right.y;
+    }
+    return left.z < right.z;
+}
+
+WireEdgeKey wireEdgeKey(Vec3 a, Vec3 b) {
+    WireEdgePoint qa = quantizedWirePoint(a);
+    WireEdgePoint qb = quantizedWirePoint(b);
+    if (wirePointLess(qb, qa)) {
+        std::swap(qa, qb);
+    }
+    return {.a = qa, .b = qb};
 }
 
 void appendMeshSelectionWire(
         ViewportOverlayFrame& frame,
         const SceneDocument& document,
         const AssetRegistry& assets,
-        EntityId entity) {
+        EntityId entity,
+        std::uint32_t color = kOverlaySelectionWireColor,
+        ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire) {
     if (!document.isEffectivelyVisible(entity)) {
         return;
     }
@@ -156,33 +227,60 @@ void appendMeshSelectionWire(
     }
 
     const Mat4 worldFromLocal = document.worldTransformMatrix(entity);
-    std::unordered_set<std::uint64_t> emittedEdges;
-    emittedEdges.reserve(mesh->indices.size());
+    std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
+    edges.reserve(mesh->indices.size());
 
-    auto appendEdge = [&](std::uint32_t a, std::uint32_t b) {
+    auto appendEdge = [&](std::uint32_t a, std::uint32_t b, Vec3 triangleNormal) {
         if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || a == b) {
             return;
         }
-        const std::uint64_t key = edgeKey(a, b);
-        if (!emittedEdges.insert(key).second) {
-            return;
+        const Vec3 start = transformPoint(worldFromLocal, mesh->vertices[a].position);
+        const Vec3 end = transformPoint(worldFromLocal, mesh->vertices[b].position);
+        const WireEdgeKey key = wireEdgeKey(start, end);
+        WireEdgeRecord& record = edges[key];
+        if (record.count == 0u) {
+            record.start = start;
+            record.end = end;
+            record.firstNormal = triangleNormal;
+        } else if (length(record.firstNormal) > 0.000001f && length(triangleNormal) > 0.000001f) {
+            record.coplanarWithFirst =
+                    record.coplanarWithFirst &&
+                    std::abs(dot(normalize(record.firstNormal), normalize(triangleNormal))) > 0.999f;
         }
-        frame.lines.push_back(ViewportOverlayLine{
-                .layer = ViewportOverlayLayer::SourceWire,
-                .start = transformPoint(worldFromLocal, mesh->vertices[a].position),
-                .end = transformPoint(worldFromLocal, mesh->vertices[b].position),
-                .color = kOverlaySelectionWireColor,
-                .widthPixels = 0.0f,
-        });
+        ++record.count;
     };
 
     for (std::size_t index = 0; index + 2u < mesh->indices.size(); index += 3u) {
         const std::uint32_t a = mesh->indices[index];
         const std::uint32_t b = mesh->indices[index + 1u];
         const std::uint32_t c = mesh->indices[index + 2u];
-        appendEdge(a, b);
-        appendEdge(b, c);
-        appendEdge(c, a);
+        if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || c >= mesh->vertices.size()) {
+            continue;
+        }
+        const Vec3 worldA = transformPoint(worldFromLocal, mesh->vertices[a].position);
+        const Vec3 worldB = transformPoint(worldFromLocal, mesh->vertices[b].position);
+        const Vec3 worldC = transformPoint(worldFromLocal, mesh->vertices[c].position);
+        Vec3 normal = cross(worldB - worldA, worldC - worldA);
+        if (length(normal) > 0.000001f) {
+            normal = normalize(normal);
+        }
+        appendEdge(a, b, normal);
+        appendEdge(b, c, normal);
+        appendEdge(c, a, normal);
+    }
+
+    for (const auto& [key, edge] : edges) {
+        (void)key;
+        if (edge.count == 2u && edge.coplanarWithFirst) {
+            continue;
+        }
+        frame.lines.push_back(ViewportOverlayLine{
+                .layer = layer,
+                .start = edge.start,
+                .end = edge.end,
+                .color = color,
+                .widthPixels = 0.0f,
+        });
     }
 }
 
@@ -201,6 +299,94 @@ void appendHierarchySelectionWires(
             appendMeshSelectionWire(frame, document, assets, descendant);
         }
     }
+}
+
+void appendBoundsCage(ViewportOverlayFrame& frame, const SceneBounds& bounds) {
+    const std::array<Vec3, 8> corners{{
+            {bounds.min.x, bounds.min.y, bounds.min.z},
+            {bounds.max.x, bounds.min.y, bounds.min.z},
+            {bounds.max.x, bounds.max.y, bounds.min.z},
+            {bounds.min.x, bounds.max.y, bounds.min.z},
+            {bounds.min.x, bounds.min.y, bounds.max.z},
+            {bounds.max.x, bounds.min.y, bounds.max.z},
+            {bounds.max.x, bounds.max.y, bounds.max.z},
+            {bounds.min.x, bounds.max.y, bounds.max.z},
+    }};
+    constexpr std::array<std::array<int, 2>, 12> edges{{
+            {{0, 1}},
+            {{1, 2}},
+            {{2, 3}},
+            {{3, 0}},
+            {{4, 5}},
+            {{5, 6}},
+            {{6, 7}},
+            {{7, 4}},
+            {{0, 4}},
+            {{1, 5}},
+            {{2, 6}},
+            {{3, 7}},
+    }};
+    for (const auto edge : edges) {
+        frame.lines.push_back(ViewportOverlayLine{
+                .layer = ViewportOverlayLayer::GroupBounds,
+                .start = corners[static_cast<std::size_t>(edge[0])],
+                .end = corners[static_cast<std::size_t>(edge[1])],
+                .color = kOverlayGroupBoundsColor,
+                .widthPixels = 1.5f,
+        });
+    }
+}
+
+void appendGroupSelectionCages(
+        ViewportOverlayFrame& frame,
+        const SceneDocument& document,
+        const AssetRegistry& assets) {
+    for (const EntityId selected : document.selectedEntities()) {
+        if (document.kind(selected) != EntityKind::Empty || !document.hasChildren(selected)) {
+            continue;
+        }
+        if (const std::optional<SceneBounds> bounds = entityHierarchyWorldBounds(document, assets, selected)) {
+            appendBoundsCage(frame, *bounds);
+        }
+    }
+}
+
+void appendSceneWireframeOverlay(
+        ViewportOverlayFrame& frame,
+        const SceneDocument& document,
+        const AssetRegistry& assets) {
+    for (const EntityId entity : document.entities()) {
+        appendMeshSelectionWire(
+                frame,
+                document,
+                assets,
+                entity,
+                rgba8(255, 255, 255),
+                ViewportOverlayLayer::WireframeBase);
+    }
+}
+
+bool wireframeUsesWireOnlyObjectSelection(ModelingSelectionMode mode) {
+    return mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group;
+}
+
+bool wireframeSuppressesTriangleLayer(ViewportOverlayLayer layer) {
+    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
+            layer == ViewportOverlayLayer::SelectedXrayFace ||
+            layer == ViewportOverlayLayer::SelectedFaceMask ||
+            layer == ViewportOverlayLayer::HoverFace;
+}
+
+void stripWireframeObjectFaceFills(ViewportOverlayFrame& frame, ModelingSelectionMode mode) {
+    if (!wireframeUsesWireOnlyObjectSelection(mode)) {
+        return;
+    }
+
+    frame.triangles.erase(
+            std::remove_if(frame.triangles.begin(), frame.triangles.end(), [](const ViewportOverlayTriangle& triangle) {
+                return wireframeSuppressesTriangleLayer(triangle.layer);
+            }),
+            frame.triangles.end());
 }
 
 bool hoverTargetValid(const ModelingHoverTarget& target) {
@@ -229,6 +415,105 @@ bool hoverTargetsMatch(const ModelingHoverTarget& left, const ModelingHoverTarge
 
 float gridSizeForPreset(int preset) {
     return viewportGridWorldSizeForPreset(preset);
+}
+
+std::string viewportViewLocalizationKey(ViewportView view) {
+    std::string key = "viewport.view.";
+    key.append(viewportViewStableId(view));
+    return key;
+}
+
+std::string localizedViewportViewLabel(const LocalizationService& localization, ViewportView view) {
+    return localization.text(viewportViewLocalizationKey(view), std::string(viewportViewLabel(view)));
+}
+
+std::string_view viewportShadingModeStableId(ViewportShadingMode mode) {
+    switch (mode) {
+    case ViewportShadingMode::Wireframe:
+        return "wireframe";
+    case ViewportShadingMode::Shaded:
+        return "shaded";
+    case ViewportShadingMode::Rendered:
+        return "rendered";
+    }
+    return "shaded";
+}
+
+std::string_view viewportShadingModeLabel(ViewportShadingMode mode) {
+    switch (mode) {
+    case ViewportShadingMode::Wireframe:
+        return "Wireframe";
+    case ViewportShadingMode::Shaded:
+        return "Shaded";
+    case ViewportShadingMode::Rendered:
+        return "Rendered";
+    }
+    return "Shaded";
+}
+
+std::string viewportShadingModeLocalizationKey(ViewportShadingMode mode) {
+    std::string key = "viewport.shading.";
+    key.append(viewportShadingModeStableId(mode));
+    return key;
+}
+
+std::string localizedViewportShadingModeLabel(const LocalizationService& localization, ViewportShadingMode mode) {
+    return localization.text(viewportShadingModeLocalizationKey(mode), std::string(viewportShadingModeLabel(mode)));
+}
+
+void applyCameraView(ViewportCameraController& camera, ViewportView view) {
+    switch (view) {
+    case ViewportView::Top:
+        camera.focusOrigin(64.0f);
+        camera.viewAxis(ViewportViewAxis::Y, 1);
+        break;
+    case ViewportView::Bottom:
+        camera.focusOrigin(64.0f);
+        camera.viewAxis(ViewportViewAxis::Y, -1);
+        break;
+    case ViewportView::Front:
+        camera.focusOrigin(64.0f);
+        camera.viewAxis(ViewportViewAxis::Z, -1);
+        break;
+    case ViewportView::Back:
+        camera.focusOrigin(64.0f);
+        camera.viewAxis(ViewportViewAxis::Z, 1);
+        break;
+    case ViewportView::Side:
+        camera.focusOrigin(64.0f);
+        camera.viewAxis(ViewportViewAxis::X, 1);
+        break;
+    case ViewportView::Left:
+        camera.focusOrigin(64.0f);
+        camera.viewAxis(ViewportViewAxis::X, -1);
+        break;
+    case ViewportView::Perspective:
+        camera.unlockOrthographicView();
+        break;
+    }
+}
+
+ViewportView viewportViewForCamera(const ViewportCameraController& camera) {
+    if (camera.state().projection != ViewportProjection::Orthographic) {
+        return ViewportView::Perspective;
+    }
+
+    const ViewportCameraPose pose = camera.pose();
+    const Vec3 forward = normalize(pose.target - pose.eye);
+    const float absX = std::abs(forward.x);
+    const float absY = std::abs(forward.y);
+    const float absZ = std::abs(forward.z);
+    constexpr float kAxisDotThreshold = 0.985f;
+    if (absY >= absX && absY >= absZ && absY >= kAxisDotThreshold) {
+        return forward.y < 0.0f ? ViewportView::Top : ViewportView::Bottom;
+    }
+    if (absZ >= absX && absZ >= absY && absZ >= kAxisDotThreshold) {
+        return forward.z > 0.0f ? ViewportView::Front : ViewportView::Back;
+    }
+    if (absX >= kAxisDotThreshold) {
+        return forward.x < 0.0f ? ViewportView::Side : ViewportView::Left;
+    }
+    return ViewportView::Perspective;
 }
 
 std::optional<ImVec2> projectWorldToViewport(
@@ -334,6 +619,8 @@ ModelingSelectionMode toModelingSelectionMode(ViewportSelectionMode mode) {
         return ModelingSelectionMode::Face;
     case ViewportSelectionMode::Object:
         return ModelingSelectionMode::Object;
+    case ViewportSelectionMode::Group:
+        return ModelingSelectionMode::Group;
     }
     return ModelingSelectionMode::Object;
 }
@@ -348,8 +635,99 @@ ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
         return ViewportSelectionMode::Face;
     case ModelingSelectionMode::Object:
         return ViewportSelectionMode::Object;
+    case ModelingSelectionMode::Group:
+        return ViewportSelectionMode::Group;
     }
     return ViewportSelectionMode::Object;
+}
+
+ModelingCommandResult executeDeletePopupCommand(
+        UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling,
+        ViewportInputRouter& inputRouter,
+        std::string_view toolId) {
+    const ModelingCommandResult result = executeTrackedCommandTool(undoRedo, modeling, toolId);
+    if (!result.ok) {
+        LOG_ERROR("Delete popup operation '{}' failed: {}", toolId, result.message.empty() ? "Operation failed." : result.message);
+    }
+    inputRouter.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+    return result;
+}
+
+bool drawViewportDeletePopup(
+        bool& objectPopupOpen,
+        bool& objectPopupPositionPending,
+        ImVec2& objectPopupPosition,
+        UndoRedoManager& undoRedo,
+        ModelingSessionService& modeling,
+        ViewportInputRouter& inputRouter,
+        LocalizationService& localization) {
+    bool changed = false;
+
+    if (objectPopupOpen) {
+        if (objectPopupPositionPending) {
+            ImGui::SetNextWindowPos(objectPopupPosition, ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+            objectPopupPositionPending = false;
+        }
+        const std::string windowTitle =
+                localization.text("ui.viewport.delete_popup.window_title", "Delete") + "##ViewportDeleteObjectsWindow";
+        bool open = objectPopupOpen;
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoDocking |
+                ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::Begin(windowTitle.c_str(), &open, flags)) {
+            const std::string title = localization.text("ui.viewport.delete_popup.title", "Delete Selected Objects");
+            ImGui::TextUnformatted(title.c_str());
+            const std::string deleteLabel = localization.text("ui.viewport.delete_popup.delete", "Delete");
+            if (ImGui::Button(deleteLabel.c_str())) {
+                const ModelingCommandResult result =
+                        executeDeletePopupCommand(undoRedo, modeling, inputRouter, "delete_selection");
+                changed = result.changed;
+                open = false;
+            }
+            ImGui::SameLine();
+            const std::string cancelLabel = localization.text("ui.viewport.delete_popup.cancel", "Cancel");
+            if (ImGui::Button(cancelLabel.c_str())) {
+                open = false;
+            }
+        }
+        ImGui::End();
+        objectPopupOpen = open;
+    }
+
+    if (ImGui::BeginPopup("ViewportDeleteElementsPopup")) {
+        const ModelingSelectionSummary summary = modeling.selectionSummary();
+        struct PopupAction {
+            const char* labelKey;
+            const char* fallback;
+            const char* toolId;
+            bool enabled;
+        };
+        const PopupAction actions[] = {
+                {"ui.viewport.delete_vertices", "Delete Vertices", "delete_selection",
+                        summary.mode == ModelingSelectionMode::Vertex && summary.selectedVertexCount > 0u},
+                {"ui.viewport.delete_face", "Delete Face", "delete_selection",
+                        summary.mode == ModelingSelectionMode::Face && summary.selectedFaceCount > 0u},
+                {"ui.viewport.delete_edges", "Delete Edges", "delete_selection",
+                        summary.mode == ModelingSelectionMode::Edge && summary.selectedEdgeCount > 0u},
+                {"ui.viewport.dissolve_edges", "Dissolve Edges", "dissolve_edges",
+                        summary.mode == ModelingSelectionMode::Edge && summary.selectedEdgeCount > 0u},
+                {"ui.viewport.dissolve_vertex", "Dissolve Vertex", "dissolve_vertices",
+                        summary.mode == ModelingSelectionMode::Vertex && summary.selectedVertexCount > 0u},
+        };
+        for (const PopupAction& action : actions) {
+            const std::string label = localization.text(action.labelKey, action.fallback);
+            if (ImGui::MenuItem(label.c_str(), nullptr, false, action.enabled)) {
+                const ModelingCommandResult result = executeDeletePopupCommand(undoRedo, modeling, inputRouter, action.toolId);
+                changed = changed || result.changed;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
+    }
+
+    return changed;
 }
 
 ViewportToolId fromModelingViewportTool(ModelingViewportTool tool) {
@@ -395,7 +773,10 @@ void ViewportPanel::shutdown() {
     activeRenderPanes_.clear();
 }
 
-void ViewportPanel::prepareViewports(SceneRenderBridge& renderBridge) {
+void ViewportPanel::prepareViewports(
+        SceneRenderBridge& renderBridge,
+        const SceneDocument& document,
+        const AssetRegistry& assets) {
     const float gridWorldSize = viewportGridWorldSizeForPreset(inputRouter_.state().gridPreset);
     const ViewportSettings& settings = activeViewportSettings();
     for (ViewportPaneId paneId : activeRenderPanes_) {
@@ -405,9 +786,19 @@ void ViewportPanel::prepareViewports(SceneRenderBridge& renderBridge) {
         }
         paneState.renderer.updateCamera(paneState.camera);
         paneState.renderer.updateGroundGrid(paneState.camera, gridWorldSize, settings);
+        paneState.renderer.setSceneVisible(paneState.shading != ViewportShadingMode::Wireframe);
         paneState.renderer.setOverlayVisible(true);
         ViewportOverlayFrame overlayFrame = selectionOverlayCache_.valid() ? selectionOverlayCache_.frame() : ViewportOverlayFrame{};
-        ViewportOverlayStyleResolver::apply(overlayFrame, settings);
+        if (paneState.shading == ViewportShadingMode::Wireframe) {
+            const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
+                    ? selectionOverlayCache_.key().selectionMode
+                    : toModelingSelectionMode(inputRouter_.state().selectionMode);
+            stripWireframeObjectFaceFills(overlayFrame, overlayMode);
+            ViewportOverlayStyleResolver::apply(overlayFrame, settings);
+            appendSceneWireframeOverlay(overlayFrame, document, assets);
+        } else {
+            ViewportOverlayStyleResolver::apply(overlayFrame, settings);
+        }
         renderBridge.setOverlayFrame(
                 viewportPaneIndex(paneId),
                 viewportGridLayerMask(viewportPaneIndex(paneId)),
@@ -440,9 +831,22 @@ void ViewportPanel::setViewportLayout(ViewportLayoutId layoutId) {
     }
 }
 
-bool ViewportPanel::activateToolFromMenu(ViewportToolId tool, ModelingSessionService& modeling) {
+bool ViewportPanel::activateToolFromMenu(
+        ViewportToolId tool,
+        SceneDocument& document,
+        DocumentCommandService& documentCommands,
+        ModelingSessionService& modeling) {
     LOG_INFO("Tools menu requested viewport tool {}", viewportToolId(tool));
     const ViewportTool* toolDefinition = findViewportTool(tool);
+    const bool preserveGroupSelection =
+            inputRouter_.state().selectionMode == ViewportSelectionMode::Group ||
+            modeling.selectionMode() == ModelingSelectionMode::Group;
+    const std::vector<EntityId> selectedBeforeToolActivation = preserveGroupSelection
+            ? document.selectedEntities()
+            : std::vector<EntityId>{};
+    const EntityId activeBeforeToolActivation = preserveGroupSelection
+            ? document.primarySelection()
+            : InvalidEntityId;
     const ModelingCommandResult command = toolDefinition != nullptr ?
             toolDefinition->activate(modeling) :
             ModelingCommandResult{
@@ -457,7 +861,17 @@ bool ViewportPanel::activateToolFromMenu(ViewportToolId tool, ModelingSessionSer
     const ViewportToolId activeTool = fromModelingViewportTool(modeling.toolStatus().activeTool);
     LOG_INFO("Viewport tool activated from menu: requested {}, active {}", viewportToolId(tool), viewportToolId(activeTool));
     inputRouter_.setActiveTool(activeTool);
-    inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+    if (preserveGroupSelection) {
+        const DocumentCommandResult restoreSelection =
+                documentCommands.selectEntities(selectedBeforeToolActivation, activeBeforeToolActivation);
+        if (!restoreSelection.ok) {
+            LOG_ERROR("Group selection restore after menu tool activation failed: {}", restoreSelection.message);
+        }
+        (void)modeling.setSelectionMode(ModelingSelectionMode::Group);
+        inputRouter_.setSelectionMode(ViewportSelectionMode::Group);
+    } else {
+        inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+    }
     inputRouter_.clearModalToolState();
     paintSelectionActive_ = false;
     selectionHoverClearIssued_ = false;
@@ -493,28 +907,109 @@ std::vector<ViewportSplitHandle> ViewportPanel::activeSplitHandles() const {
 }
 
 void ViewportPanel::resetPaneCamera(Pane& paneState) {
-    paneController_.resetCamera(paneState.id, paneState.camera);
+    paneState.view = viewportViewForPane(paneState.id);
+    paneController_.resetCamera(paneState.view, paneState.camera);
 }
 
-void ViewportPanel::drawPaneChrome(
-        const Pane& paneState,
+bool ViewportPanel::drawPaneChrome(
+        Pane& paneState,
         ImVec2 itemMin,
         ImVec2 itemSize,
-        const LocalizationService& localization) const {
+        const LocalizationService& localization) {
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
     const ImU32 dividerColor = IM_COL32(19, 19, 20, 255);
     const ImU32 focusedColor = IM_COL32(46, 46, 48, 242);
     drawList->AddRect(itemMin, itemMax, paneState.id == focusedPaneId_ ? focusedColor : dividerColor, 0.0f, 0, 1.0f);
-    std::string key = "viewport.pane.";
-    key.append(viewportPaneStableId(paneState.id));
-    key.append(".label");
-    const std::string label = localization.text(key, viewportPaneLabel(paneState.id));
-    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
-    const ImVec2 labelMin{itemMin.x + 8.0f, itemMin.y + 7.0f};
-    const ImVec2 labelMax{labelMin.x + textSize.x + 12.0f, labelMin.y + textSize.y + 6.0f};
-    drawList->AddRectFilled(labelMin, labelMax, IM_COL32(16, 18, 21, 176), 3.0f);
-    drawList->AddText({labelMin.x + 6.0f, labelMin.y + 3.0f}, IM_COL32(228, 231, 236, 230), label.c_str());
+
+    paneState.view = viewportViewForCamera(paneState.camera);
+
+    constexpr float kComboHeight = 24.0f;
+    constexpr float kViewComboWidth = 112.0f;
+    constexpr float kShadingComboWidth = 104.0f;
+    constexpr float kComboGap = 6.0f;
+    const float availableWidth = std::max(0.0f, itemSize.x - 16.0f);
+    const bool compact = availableWidth < kViewComboWidth + kShadingComboWidth + kComboGap;
+    const float shadingWidth = compact ? std::min(kShadingComboWidth, availableWidth) : kShadingComboWidth;
+    const float viewWidth = compact
+            ? std::max(0.0f, availableWidth - shadingWidth - kComboGap)
+            : kViewComboWidth;
+    const float comboGap = viewWidth >= 44.0f ? kComboGap : 0.0f;
+    const ImVec2 comboPos{
+            itemMax.x - 8.0f - viewWidth - comboGap - shadingWidth,
+            itemMin.y + 7.0f,
+    };
+    const ImRect chromeRect(comboPos, ImVec2(itemMax.x - 8.0f, comboPos.y + kComboHeight));
+    bool consumesInput = chromeRect.Contains(ImGui::GetMousePos());
+
+    ImGui::SetCursorScreenPos(comboPos);
+    ImGui::PushID(static_cast<int>(viewportPaneIndex(paneState.id)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 3.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(16, 18, 21, 210));
+    if (viewWidth >= 44.0f) {
+        ImGui::SetNextItemWidth(viewWidth);
+        const std::string preview = localizedViewportViewLabel(localization, paneState.view);
+        if (ImGui::BeginCombo("##ViewportView", preview.c_str(), ImGuiComboFlags_HeightSmall)) {
+            consumesInput = true;
+            constexpr std::array<ViewportView, 7> views{{
+                    ViewportView::Perspective,
+                    ViewportView::Top,
+                    ViewportView::Bottom,
+                    ViewportView::Front,
+                    ViewportView::Back,
+                    ViewportView::Side,
+                    ViewportView::Left,
+            }};
+            for (const ViewportView view : views) {
+                const bool selected = paneState.view == view;
+                const std::string label = localizedViewportViewLabel(localization, view);
+                if (ImGui::Selectable(label.c_str(), selected)) {
+                    setPaneView(paneState, view);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine(0.0f, comboGap);
+    }
+    ImGui::SetNextItemWidth(shadingWidth);
+    const std::string shadingPreview = localizedViewportShadingModeLabel(localization, paneState.shading);
+    if (ImGui::BeginCombo("##ViewportShading", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
+        consumesInput = true;
+        constexpr std::array<ViewportShadingMode, 3> modes{{
+                ViewportShadingMode::Wireframe,
+                ViewportShadingMode::Shaded,
+                ViewportShadingMode::Rendered,
+        }};
+        for (const ViewportShadingMode mode : modes) {
+            const bool selected = paneState.shading == mode;
+            const std::string label = localizedViewportShadingModeLabel(localization, mode);
+            if (ImGui::Selectable(label.c_str(), selected)) {
+                paneState.shading = mode;
+            }
+            if (selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+    ImGui::PopID();
+    return consumesInput;
+}
+
+void ViewportPanel::setPaneView(Pane& paneState, ViewportView view) {
+    if (paneState.view == view && viewportViewForCamera(paneState.camera) == view) {
+        return;
+    }
+    paneState.view = view;
+    paneController_.resetCamera(view, paneState.camera);
+    hoverController_.invalidate();
+    selectionOverlayCache_.markDirty();
 }
 
 bool ViewportPanel::handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles) {
@@ -645,7 +1140,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     available.x = std::max(available.x, 1.0f);
     available.y = std::max(available.y, 1.0f);
     const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("ViewportLayoutCanvas", available);
+    ImGui::Dummy(available);
 
     for (Pane& paneState : panes_) {
         paneState.visibleThisFrame = false;
@@ -658,6 +1153,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         ImVec2 itemSize = {};
         bool hovered = false;
         bool focusHovered = false;
+        bool chromeConsumesInput = false;
     };
     std::vector<DrawPane> drawPanes;
     const std::vector<ViewportPanePlacement> placements = activePanePlacements();
@@ -675,6 +1171,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
 
         ImGui::SetCursorScreenPos(itemMin);
         ImGui::PushID(static_cast<int>(viewportPaneIndex(placement.paneId)));
+        ImGui::SetNextItemAllowOverlap();
         ImGui::Image(paneState.renderer.textureId(), itemSize, {0.0f, 1.0f}, {1.0f, 0.0f});
         DrawPane drawPane{
                 .pane = &paneState,
@@ -693,10 +1190,14 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     const bool transformDragLocksInput = transformGizmoController_.dragLocksInput();
     const bool navigationGizmoDragLocksInput = navigationGizmo_.inputLocked();
     for (DrawPane& drawPane : drawPanes) {
+        drawPane.chromeConsumesInput =
+                drawPaneChrome(*drawPane.pane, drawPane.itemMin, drawPane.itemSize, uiContext.localization);
+    }
+    for (DrawPane& drawPane : drawPanes) {
         if (!transformDragLocksInput && !navigationGizmoDragLocksInput) {
-            if (drawPane.focusHovered && !splitConsumed) {
+            if (drawPane.focusHovered && !drawPane.chromeConsumesInput && !splitConsumed) {
                 focusedPaneId_ = drawPane.pane->id;
-            } else if (drawPane.focusHovered && focusController_.inputActive()) {
+            } else if (drawPane.focusHovered && !drawPane.chromeConsumesInput && focusController_.inputActive()) {
                 focusedPaneId_ = drawPane.pane->id;
             }
         }
@@ -704,10 +1205,13 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
             inputPane = &drawPane;
         } else if (navigationGizmoDragLocksInput && drawPane.pane->id == navigationGizmo_.lockedPaneId()) {
             inputPane = &drawPane;
-        } else if (!transformDragLocksInput && !navigationGizmoDragLocksInput && drawPane.hovered && !splitConsumed) {
+        } else if (!transformDragLocksInput &&
+                !navigationGizmoDragLocksInput &&
+                drawPane.hovered &&
+                !drawPane.chromeConsumesInput &&
+                !splitConsumed) {
             inputPane = &drawPane;
         }
-        drawPaneChrome(*drawPane.pane, drawPane.itemMin, drawPane.itemSize, uiContext.localization);
     }
     if (inputPane == nullptr) {
         for (DrawPane& drawPane : drawPanes) {
@@ -735,8 +1239,12 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                 uiContext,
                 inputPane->itemMin,
                 inputPane->itemSize,
-                (inputPane->hovered && !splitConsumed) || inputOwnsActiveGizmoDrag || inputOwnsActiveNavigationGizmoDrag,
-                (inputPane->focusHovered && !splitConsumed) || inputOwnsActiveGizmoDrag || inputOwnsActiveNavigationGizmoDrag);
+                (inputPane->hovered && !inputPane->chromeConsumesInput && !splitConsumed) ||
+                        inputOwnsActiveGizmoDrag ||
+                        inputOwnsActiveNavigationGizmoDrag,
+                (inputPane->focusHovered && !inputPane->chromeConsumesInput && !splitConsumed) ||
+                        inputOwnsActiveGizmoDrag ||
+                        inputOwnsActiveNavigationGizmoDrag);
     }
     for (DrawPane& drawPane : drawPanes) {
         if (&drawPane == inputPane) {
@@ -803,6 +1311,7 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
 
     ViewportOverlayFrame frame = modeling.selectionOverlayFrame();
     appendHierarchySelectionWires(frame, document, assets);
+    appendGroupSelectionCages(frame, document, assets);
     selectionOverlayCache_.update(std::move(frame), key);
 }
 
@@ -934,6 +1443,15 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     }
     if (result.toolChanged) {
         LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
+        const bool preserveGroupSelection =
+                inputRouter_.state().selectionMode == ViewportSelectionMode::Group ||
+                modeling.selectionMode() == ModelingSelectionMode::Group;
+        const std::vector<EntityId> selectedBeforeToolActivation = preserveGroupSelection
+                ? document.selectedEntities()
+                : std::vector<EntityId>{};
+        const EntityId activeBeforeToolActivation = preserveGroupSelection
+                ? document.primarySelection()
+                : InvalidEntityId;
         paintSelectionActive_ = false;
         inputRouter_.clearModalDragState();
         selectionHoverSuppressedTarget_.reset();
@@ -954,7 +1472,17 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 (void)selectTool->activate(modeling);
             }
         } else {
-            inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+            if (preserveGroupSelection) {
+                const DocumentCommandResult restoreSelection =
+                        documentCommands.selectEntities(selectedBeforeToolActivation, activeBeforeToolActivation);
+                if (!restoreSelection.ok) {
+                    LOG_ERROR("Group selection restore after tool activation failed: {}", restoreSelection.message);
+                }
+                (void)modeling.setSelectionMode(ModelingSelectionMode::Group);
+                inputRouter_.setSelectionMode(ViewportSelectionMode::Group);
+            } else {
+                inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+            }
         }
         inputRouter_.clearModalToolState();
     }
@@ -970,6 +1498,19 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
         if (shortcut.markOverlayDirty) {
             selectionOverlayCache_.markDirty();
+        }
+    }
+    if (!operationPreviewShortcutConsumed &&
+            result.shortcutHandled &&
+            result.shortcut.kind == ViewportShortcutKind::DeletePopup) {
+        const ModelingSelectionSummary deleteSummary = modeling.selectionSummary();
+        if (deleteSummary.mode == ModelingSelectionMode::Object ||
+                deleteSummary.mode == ModelingSelectionMode::Group) {
+            deleteObjectsPopupOpen_ = true;
+            deleteObjectsPopupPositionPending_ = true;
+            deleteObjectsPopupPosition_ = ImVec2(itemMin.x + itemSize.x * 0.5f, itemMin.y + itemSize.y * 0.25f);
+        } else {
+            ImGui::OpenPopup("ViewportDeleteElementsPopup");
         }
     }
 
@@ -1244,7 +1785,10 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     .modifiers = input.modifiers,
             },
     });
-    modalToolOverlayRenderer_.drawBoxPreview(ImGui::GetWindowDrawList(), inputRouter_.boxPreview(), camera, itemMin, itemSize);
+    const ModelingBoxPreview& boxPreview = inputRouter_.boxPreview();
+    if (boxPreview.dragState != ModelingBoxDragState::Height) {
+        modalToolOverlayRenderer_.drawBoxPreview(ImGui::GetWindowDrawList(), boxPreview, camera, itemMin, itemSize);
+    }
 
     if (!activeToolFrameResult.handled) {
         const bool selectionFallbackActive = inputRouter_.activeToolAllowsSelectionFallback();
@@ -1264,7 +1808,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     input.mouseLocal,
                     input.modifiers,
                     leftClickCount);
-            paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
+            paintSelectionActive_ = componentSelectionMode(summary.mode);
             suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
         } else if (selectionFallbackActive &&
                 pendingContextMenuClick &&
@@ -1283,7 +1827,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                             1,
                             true,
                             true);
-            paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
+            paintSelectionActive_ = componentSelectionMode(summary.mode);
             selectionHoverClearIssued_ = false;
 
             const ModelingActionQuery query{
@@ -1324,7 +1868,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
             });
             inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
-            paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;
+            paintSelectionActive_ = componentSelectionMode(summary.mode);
             suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
         }
 
@@ -1332,8 +1876,19 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             paintSelectionActive_ = false;
         }
 
+        const bool groupSelectionMode = modeling.selectionMode() == ModelingSelectionMode::Group;
+        if (groupSelectionMode && !selectionHoverClearIssued_) {
+            const ModelingCommandResult clearHover = modeling.clearSelectionHover();
+            if (clearHover.changed) {
+                selectionOverlayCache_.markDirty();
+            }
+            selectionHoverClearIssued_ = true;
+            hoverController_.invalidate();
+        }
+
         bool selectionHoverSuppressedThisFrame = false;
         if (selectionFallbackActive &&
+                !groupSelectionMode &&
                 hovered &&
                 !suppressHoverWork &&
                 !gizmoConsumed &&
@@ -1357,6 +1912,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
 
         if (selectionFallbackActive &&
+                !groupSelectionMode &&
                 hovered &&
                 !suppressHoverWork &&
                 !gizmoConsumed &&
@@ -1395,6 +1951,17 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             camera.flySpeed(),
             uiContext.localization);
     contextMenuPresenter_.drawOperationsPopup(undoRedo, modeling, inputRouter_, uiContext.localization, modalToolOwnsViewport());
+    if (drawViewportDeletePopup(
+                deleteObjectsPopupOpen_,
+                deleteObjectsPopupPositionPending_,
+                deleteObjectsPopupPosition_,
+                undoRedo,
+                modeling,
+                inputRouter_,
+                uiContext.localization)) {
+        hoverController_.invalidate();
+        selectionOverlayCache_.markDirty();
+    }
 }
 
 } // namespace quader

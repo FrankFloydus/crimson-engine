@@ -113,6 +113,13 @@ void ViewportRenderer::setOverlayVisible(bool visible) {
     updateVisibleLayers();
 }
 
+void ViewportRenderer::setSceneVisible(bool visible) {
+    if (!renderPassCoordinator_.setSceneVisible(visible)) {
+        return;
+    }
+    updateVisibleLayers();
+}
+
 void ViewportRenderer::render(filament::Renderer& renderer) {
     renderPassCoordinator_.render(renderer, view_, renderTarget_.renderTarget());
 }

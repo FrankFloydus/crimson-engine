@@ -25,7 +25,7 @@ const qhc::HostActionDescriptor& require_action(std::string_view id)
 TEST_CASE("host contract action catalog links panel actions to descriptor-only operations or tools", "[host-contract]")
 {
 	const std::span<const qhc::HostActionDescriptor> actions = qhc::action_catalog();
-	REQUIRE(actions.size() == 46U);
+	REQUIRE(actions.size() == 42U);
 
 	for (const qhc::HostActionDescriptor& action : actions) {
 		CHECK_FALSE(action.id.empty());
@@ -101,6 +101,10 @@ TEST_CASE("host contract action catalog describes selection requirements", "[hos
 	CHECK(same_text(mirror_tool.tool_id, "mirror"));
 	CHECK(mirror_tool.availability.selection_mode == qhc::HostSelectionMode::object);
 	CHECK(mirror_tool.availability.minimum_selected_objects == 1U);
+
+	const qhc::HostActionDescriptor& invert_mesh = require_action("invert_mesh");
+	CHECK(same_text(invert_mesh.label, "Flip Mesh Normals"));
+	CHECK(same_text(invert_mesh.operation_id, "flip_face_normals"));
 }
 
 TEST_CASE("host contract action ids disambiguate shared labels and shared SDK operations", "[host-contract]")
@@ -119,9 +123,9 @@ TEST_CASE("host contract action ids disambiguate shared labels and shared SDK op
 	CHECK(same_text(radial_edges.operation_id, "radial_align"));
 	CHECK(same_text(radial_faces.operation_id, "radial_align"));
 
-	CHECK(same_text(require_action("recalculate_outside_mesh").operation_id, "recalculate_face_normals"));
-	CHECK(same_text(require_action("recalculate_inside_mesh").operation_id, "recalculate_face_normals"));
-	CHECK(same_text(require_action("recalculate_outside_faces").operation_id, "recalculate_face_normals"));
-	CHECK(same_text(require_action("recalculate_inside_faces").operation_id, "recalculate_face_normals"));
+	CHECK(qhc::find_action_descriptor("recalculate_outside_mesh") == nullptr);
+	CHECK(qhc::find_action_descriptor("recalculate_inside_mesh") == nullptr);
+	CHECK(qhc::find_action_descriptor("recalculate_outside_faces") == nullptr);
+	CHECK(qhc::find_action_descriptor("recalculate_inside_faces") == nullptr);
 	CHECK(same_text(require_action("apply_active_material").operation_id, "assign_material"));
 }

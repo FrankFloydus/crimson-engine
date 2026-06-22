@@ -68,8 +68,28 @@ struct ModelingObjectComponent {
     std::uint32_t materialSlot = 0;
 };
 
+enum class MeshCollisionType {
+    Box,
+    Sphere,
+    Cylinder,
+    ConvexHull,
+    Mesh,
+};
+
+enum class MeshPhysicsBodyType {
+    StaticBody,
+    RigidBody,
+};
+
 struct MeshComponent {
     AssetId mesh = InvalidAssetId;
+    bool editorOnly = false;
+    bool castShadows = true;
+    bool doubleSided = false;
+    bool generateCollisions = true;
+    MeshCollisionType collisionType = MeshCollisionType::Box;
+    bool displayCollision = false;
+    MeshPhysicsBodyType bodyType = MeshPhysicsBodyType::StaticBody;
 };
 
 struct MaterialComponent {

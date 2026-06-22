@@ -347,8 +347,12 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
         shortcut.kind = ViewportShortcutKind::ToggleMaximized;
         return true;
     }
+    if (key == ViewportKey::X && unmodified(modifiers)) {
+        shortcut = commandShortcut(ViewportShortcutKind::DeletePopup, ViewportShortcutContext::Viewport);
+        return true;
+    }
     if (key == ViewportKey::F && unmodified(modifiers)) {
-        shortcut.kind = ViewportShortcutKind::FocusDocument;
+        shortcut = commandShortcut(ViewportShortcutKind::FlipMeshNormals, ViewportShortcutContext::Viewport);
         return true;
     }
 
@@ -433,6 +437,9 @@ bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers mod
     case ViewportKey::Number4:
         shortcut = selectionShortcut(ViewportSelectionMode::Object);
         return true;
+    case ViewportKey::Number5:
+        shortcut = selectionShortcut(ViewportSelectionMode::Group);
+        return true;
     case ViewportKey::F1:
         shortcut = gridShortcut(1);
         return true;
@@ -492,6 +499,8 @@ const char* viewportSelectionModeId(ViewportSelectionMode mode) {
         return "face";
     case ViewportSelectionMode::Object:
         return "object";
+    case ViewportSelectionMode::Group:
+        return "group";
     }
     return "unknown";
 }

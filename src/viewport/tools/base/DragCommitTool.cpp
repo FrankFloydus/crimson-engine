@@ -19,6 +19,8 @@ ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
         return ViewportSelectionMode::Face;
     case ModelingSelectionMode::Object:
         return ViewportSelectionMode::Object;
+    case ModelingSelectionMode::Group:
+        return ViewportSelectionMode::Group;
     }
     return ViewportSelectionMode::Object;
 }

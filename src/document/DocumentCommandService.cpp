@@ -11,6 +11,7 @@
 #include "document/commands/SelectEntitiesCommand.h"
 #include "document/commands/SetLockCommand.h"
 #include "document/commands/SetMaterialCommand.h"
+#include "document/commands/SetMeshComponentCommand.h"
 #include "document/commands/SetVisibilityCommand.h"
 #include "document/commands/UngroupSelectionCommand.h"
 #include "scene/SceneDocument.h"
@@ -306,6 +307,27 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
                     entity,
                     before,
                     MaterialComponent{.material = material}));
+}
+
+DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, MeshComponent mesh) {
+    const MeshComponent* currentMesh = scene_.mesh(entity);
+    if (!currentMesh) {
+        return documentCommandMissingEntityResult();
+    }
+    if (currentMesh->mesh == mesh.mesh &&
+            currentMesh->editorOnly == mesh.editorOnly &&
+            currentMesh->castShadows == mesh.castShadows &&
+            currentMesh->doubleSided == mesh.doubleSided &&
+            currentMesh->generateCollisions == mesh.generateCollisions &&
+            currentMesh->collisionType == mesh.collisionType &&
+            currentMesh->displayCollision == mesh.displayCollision &&
+            currentMesh->bodyType == mesh.bodyType) {
+        return documentCommandUnchangedResult();
+    }
+
+    return executeDocumentCommand(
+            undoRedo_,
+            std::make_unique<SetMeshComponentCommand>(scene_, entity, *currentMesh, mesh));
 }
 
 DocumentCommandResult DocumentCommandService::setTransform(EntityId entity, TransformComponent transform) {

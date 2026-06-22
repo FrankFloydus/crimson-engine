@@ -10,6 +10,7 @@ namespace quader {
 class ViewportPaneController {
 public:
     void resetCamera(ViewportPaneId paneId, ViewportCameraController& camera) const;
+    void resetCamera(ViewportView view, ViewportCameraController& camera) const;
 
     [[nodiscard]] static ImVec2 paneRectMin(
             ImVec2 viewportMin,

@@ -14,6 +14,7 @@
 #if QUADER_HAS_MODELING_SDK
 #include <quader_editor_core/tool/tool_transform_math.h>
 #include <quader_editor_core/tool/transform_gizmo.h>
+#include <quader_editor_core/tool_constants.h>
 #endif
 
 namespace quader {
@@ -47,6 +48,12 @@ float distanceSquared(ImVec2 a, ImVec2 b) {
 bool entitySelected(const SceneDocument& document, EntityId entity) {
     const SelectionComponent* selection = document.selection(entity);
     return selection != nullptr && selection->selected;
+}
+
+bool isComponentSelectionMode(ModelingSelectionMode mode) {
+    return mode == ModelingSelectionMode::Vertex ||
+            mode == ModelingSelectionMode::Edge ||
+            mode == ModelingSelectionMode::Face;
 }
 
 bool hasSelectedAncestor(const SceneDocument& document, EntityId entity) {
@@ -104,6 +111,90 @@ void applyDocumentWorldRotationDeltaAroundPivot(
             transform.rotationEuler,
             parentLocalVectorForWorldVector(document, entity, worldRotationDeltaRadians));
     pinDocumentLocalPivotToWorldPoint(document, entity, transform, localPivot, worldPivot);
+}
+
+void includeBounds(std::optional<SceneBounds>& result, const SceneBounds& bounds) {
+    if (!result) {
+        result = bounds;
+        return;
+    }
+    includePoint(*result, bounds.min);
+    includePoint(*result, bounds.max);
+}
+
+std::optional<SceneBounds> selectedTransformWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
+    std::optional<SceneBounds> result;
+    for (const EntityId entity : document.selectedEntities()) {
+        const std::optional<SceneBounds> bounds = document.hasChildren(entity)
+                ? entityHierarchyWorldBounds(document, assets, entity)
+                : entityWorldBounds(document, assets, entity);
+        if (bounds) {
+            includeBounds(result, *bounds);
+        }
+    }
+    return result;
+}
+
+bool handleIncludesAxis(TransformAxisHandle activeAxis, TransformAxisHandle axis) {
+    if (activeAxis == TransformAxisHandle::None || activeAxis == axis) {
+        return true;
+    }
+    if (activeAxis == TransformAxisHandle::XY) {
+        return axis == TransformAxisHandle::X || axis == TransformAxisHandle::Y;
+    }
+    if (activeAxis == TransformAxisHandle::XZ) {
+        return axis == TransformAxisHandle::X || axis == TransformAxisHandle::Z;
+    }
+    if (activeAxis == TransformAxisHandle::YZ) {
+        return axis == TransformAxisHandle::Y || axis == TransformAxisHandle::Z;
+    }
+    return activeAxis == TransformAxisHandle::All;
+}
+
+float snapWorldValue(float value, double gridSize) {
+    const double grid = std::max(gridSize, 0.000001);
+    return static_cast<float>(std::round(static_cast<double>(value) / grid) * grid);
+}
+
+Vec3 snapWorldDeltaForHandle(Vec3 delta, TransformAxisHandle activeAxis, double gridSize, bool snapEnabled) {
+    if (!snapEnabled) {
+        return delta;
+    }
+    if (handleIncludesAxis(activeAxis, TransformAxisHandle::X)) {
+        delta.x = snapWorldValue(delta.x, gridSize);
+    }
+    if (handleIncludesAxis(activeAxis, TransformAxisHandle::Y)) {
+        delta.y = snapWorldValue(delta.y, gridSize);
+    }
+    if (handleIncludesAxis(activeAxis, TransformAxisHandle::Z)) {
+        delta.z = snapWorldValue(delta.z, gridSize);
+    }
+    return delta;
+}
+
+float snapRotationRadians(float radians, bool snapEnabled) {
+    if (!snapEnabled) {
+        return radians;
+    }
+    constexpr double kRotateSnapDegrees = 15.0;
+    const double degrees = static_cast<double>(radians) * 180.0 / static_cast<double>(kPi);
+    const double snappedDegrees = std::round(degrees / kRotateSnapDegrees) * kRotateSnapDegrees;
+    return static_cast<float>(snappedDegrees * static_cast<double>(kPi) / 180.0);
+}
+
+Vec3 axisScaleForHandle(TransformAxisHandle activeAxis, double factor) {
+    const float value = static_cast<float>(factor);
+    Vec3 scale{1.0f, 1.0f, 1.0f};
+    if (handleIncludesAxis(activeAxis, TransformAxisHandle::X)) {
+        scale.x = value;
+    }
+    if (handleIncludesAxis(activeAxis, TransformAxisHandle::Y)) {
+        scale.y = value;
+    }
+    if (handleIncludesAxis(activeAxis, TransformAxisHandle::Z)) {
+        scale.z = value;
+    }
+    return scale;
 }
 
 std::optional<ImVec2> projectWorldToViewport(
@@ -602,6 +693,45 @@ void drawUnityStyleGizmo(
 
 #endif
 
+double sceneScalePixelsPerFactor() {
+#if QUADER_HAS_MODELING_SDK
+    return quader_editor_core::scale_pixels_per_factor;
+#else
+    return 96.0;
+#endif
+}
+
+double snappedSceneScaleFactor(
+        TransformAxisHandle activeAxis,
+        double factor,
+        const std::optional<SceneBounds>& bounds,
+        Vec3 pivot,
+        bool snapEnabled,
+        double gridSize) {
+#if QUADER_HAS_MODELING_SDK
+    quader_editor_core::ToolBounds3 sdkBounds;
+    if (bounds) {
+        sdkBounds.has_bounds = true;
+        sdkBounds.min = toSdk(bounds->min);
+        sdkBounds.max = toSdk(bounds->max);
+    }
+    return quader_editor_core::snapped_scale_factor(
+            toSdkAxis(activeAxis),
+            factor,
+            sdkBounds,
+            toSdk(pivot),
+            snapEnabled,
+            gridSize);
+#else
+    (void)activeAxis;
+    (void)bounds;
+    (void)pivot;
+    (void)snapEnabled;
+    (void)gridSize;
+    return factor;
+#endif
+}
+
 } // namespace
 
 bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
@@ -666,11 +796,13 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         return false;
     }
 
-    if (interactive) {
+    const ModelingSelectionMode activeSelectionMode = modeling.selectionMode();
+    if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {
         modeling.syncObjectSelectionFromScene();
     }
-    const bool componentSelectionMode = modeling.selectionMode() != ModelingSelectionMode::Object;
-    const std::optional<SceneBounds> selectionBounds = selectedWorldBounds(document, request.assets);
+    const bool componentSelectionMode = isComponentSelectionMode(activeSelectionMode);
+    const bool groupSelectionMode = activeSelectionMode == ModelingSelectionMode::Group;
+    const std::optional<SceneBounds> selectionBounds = selectedTransformWorldBounds(document, request.assets);
     const std::optional<Vec3> sdkSelectionCenter = modeling.selectionCenter();
     const Vec3 selectedWorldPosition = transformPoint(document.worldTransformMatrix(selected), Vec3{});
     const bool usePrimaryEntityPivot =
@@ -705,6 +837,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             mouse.x <= itemMin.x + itemSize.x && mouse.y <= itemMin.y + itemSize.y;
     const double activeGridSize =
             std::max(static_cast<double>(viewportGridWorldSizeForPreset(inputRouter.state().gridPreset)), 0.0001);
+    const double vertexSnapRadius =
+            static_cast<double>(request.viewportSettings.floatValue(ViewportFloatSettingId::PickVertexRadius));
     bool selectedHasModelingObjectTransform = false;
     bool selectedHasSceneOnlyTransform = false;
     bool selectedHasHierarchyTransform = false;
@@ -878,7 +1012,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                         },
                         .camera = ViewportCameraAdapter::modelingCamera(camera, {itemSize.x, itemSize.y}),
                         .gridSize = activeGridSize,
-                        .vertexSnapRadius = 0.3,
+                        .vertexSnapRadius = vertexSnapRadius,
                         .duplicateSelected = duplicateSelected,
                 });
                 if (!beginPreview.ok) {
@@ -901,6 +1035,13 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 sceneOnlyDrag_ = false;
                 activeAxis_ = TransformAxisHandle::None;
                 return consumed;
+            }
+            if (sceneOnlyDrag_ && groupSelectionMode && io.KeyShift) {
+                const ModelingCommandResult duplicate =
+                        modeling.duplicateSelectedHierarchyForGroupDrag(request.documentCommands);
+                if (!duplicate.ok) {
+                    LOG_ERROR("Group shift-drag duplicate failed: {}", duplicate.message);
+                }
             }
             dragging_ = true;
             dragPaneActive_ = true;
@@ -1009,7 +1150,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 },
                 .camera = ViewportCameraAdapter::modelingCamera(camera, {itemSize.x, itemSize.y}),
                 .gridSize = activeGridSize,
-                .vertexSnapRadius = 0.3,
+                .vertexSnapRadius = vertexSnapRadius,
                 .precision = precision,
         });
         if (!preview.ok) {
@@ -1062,6 +1203,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
 #endif
     {
         const Vec2 delta = currentMouse - startMouse_;
+        const bool precision = io.KeyCtrl || io.KeySuper;
+        const bool snapEnabled = !precision;
         lastMouse_ = currentMouse;
 
         const float worldPerPixel =
@@ -1131,11 +1274,13 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             if (tool == ViewportToolId::Move) {
                 Vec3 worldMoveDelta = {};
                 applyAxis(worldMoveDelta.x, worldMoveDelta.y, worldMoveDelta.z, screenAxisDelta(activeAxis_) * worldPerPixel);
+                worldMoveDelta = snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, activeGridSize, snapEnabled);
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, worldMoveDelta);
             } else if (tool == ViewportToolId::Rotate) {
                 const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
+                const float angleRadians = snapRotationRadians(screenDelta * 0.01f, snapEnabled);
                 Vec3 worldRotationDelta = {};
-                applyAxis(worldRotationDelta.x, worldRotationDelta.y, worldRotationDelta.z, screenDelta * 0.01f);
+                applyAxis(worldRotationDelta.x, worldRotationDelta.y, worldRotationDelta.z, angleRadians);
                 applyDocumentWorldRotationDeltaAroundPivot(
                         document,
                         start.entity,
@@ -1144,7 +1289,20 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                         start.localPivot,
                         startWorldPivot_);
             } else if (tool == ViewportToolId::Scale) {
-                applyAxis(next.scale.x, next.scale.y, next.scale.z, screenAxisDelta(activeAxis_) * 0.01f);
+                const double rawFactor = std::max(
+                        0.01,
+                        1.0 + static_cast<double>(screenAxisDelta(activeAxis_)) / sceneScalePixelsPerFactor());
+                const double factor = snappedSceneScaleFactor(
+                        activeAxis_,
+                        rawFactor,
+                        selectionBounds,
+                        startWorldPivot_,
+                        snapEnabled,
+                        activeGridSize);
+                const Vec3 scaleFactor = axisScaleForHandle(activeAxis_, factor);
+                next.scale.x = start.transform.scale.x * scaleFactor.x;
+                next.scale.y = start.transform.scale.y * scaleFactor.y;
+                next.scale.z = start.transform.scale.z * scaleFactor.z;
                 next.scale.x = std::max(next.scale.x, 0.001f);
                 next.scale.y = std::max(next.scale.y, 0.001f);
                 next.scale.z = std::max(next.scale.z, 0.001f);

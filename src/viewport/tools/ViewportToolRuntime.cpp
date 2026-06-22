@@ -194,6 +194,8 @@ bool ViewportToolRuntime::handleShortcut(
     case ViewportShortcutKind::CancelActiveTool:
         result.cancelRequested = true;
         return true;
+    case ViewportShortcutKind::DeletePopup:
+        return !activeToolBlocksViewportFocusShortcuts();
     case ViewportShortcutKind::DeleteSelection:
     case ViewportShortcutKind::SelectAll:
     case ViewportShortcutKind::InvertSelection:
@@ -207,6 +209,11 @@ bool ViewportToolRuntime::handleShortcut(
     case ViewportShortcutKind::MergeCenter:
     case ViewportShortcutKind::MirrorAxis:
         return true;
+    case ViewportShortcutKind::FlipMeshNormals:
+        if (activeToolBlocksViewportFocusShortcuts()) {
+            return false;
+        }
+        return state.selectionMode == ViewportSelectionMode::Object;
     case ViewportShortcutKind::FlipHorizontal:
     case ViewportShortcutKind::FlipVertical:
         return state.selectionMode == ViewportSelectionMode::Object;

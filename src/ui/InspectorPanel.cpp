@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <optional>
@@ -25,9 +26,10 @@ namespace {
 
 constexpr float RadToDeg = 57.29577951308232f;
 constexpr float DegToRad = 0.017453292519943295f;
-constexpr float kTransformLabelColumnWidth = 66.0f;
+constexpr float kInspectorLabelColumnWidth = 96.0f;
+constexpr float kTransformLabelColumnWidth = 74.0f;
 constexpr float kAxisTextColumnWidth = 12.0f;
-constexpr float kMinAxisInputWidth = 34.0f;
+constexpr float kMinAxisInputWidth = 58.0f;
 
 void copyNameToBuffer(const NameComponent* name, std::array<char, 128>& buffer) {
     buffer.fill('\0');
@@ -67,6 +69,8 @@ const char* selectionModeKey(ModelingSelectionMode mode) {
         return "selection.mode.face";
     case ModelingSelectionMode::Object:
         return "selection.mode.object";
+    case ModelingSelectionMode::Group:
+        return "selection.mode.group";
     }
     return "selection.mode.object";
 }
@@ -81,8 +85,16 @@ const char* selectionModeFallback(ModelingSelectionMode mode) {
         return "Face";
     case ModelingSelectionMode::Object:
         return "Object";
+    case ModelingSelectionMode::Group:
+        return "Group";
     }
     return "Object";
+}
+
+bool componentSelectionMode(ModelingSelectionMode mode) {
+    return mode == ModelingSelectionMode::Vertex ||
+            mode == ModelingSelectionMode::Edge ||
+            mode == ModelingSelectionMode::Face;
 }
 
 const char* activeSelectionKindKey(ModelingActiveSelectionKind kind) {
@@ -191,6 +203,98 @@ bool axisDragFloat3(const char* stableId,
         ImGui::EndTable();
     }
     ImGui::PopID();
+    return changed;
+}
+
+bool beginLabeledControlTable(const char* stableId) {
+    ImGui::PushID(stableId);
+    return ImGui::BeginTable("##InspectorLabeledControl", 2,
+            ImGuiTableFlags_SizingFixedFit |
+                    ImGuiTableFlags_NoSavedSettings |
+                    ImGuiTableFlags_NoPadOuterX);
+}
+
+void setupLabeledControlColumns() {
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, kInspectorLabelColumnWidth);
+    ImGui::TableSetupColumn(
+            "Value",
+            ImGuiTableColumnFlags_WidthFixed,
+            std::max(ImGui::GetContentRegionAvail().x - kInspectorLabelColumnWidth, kMinAxisInputWidth));
+    ImGui::TableNextRow();
+}
+
+void endLabeledControlTable() {
+    ImGui::EndTable();
+    ImGui::PopID();
+}
+
+bool inputTextWithLeftLabel(const char* stableId, const char* label, char* buffer, std::size_t bufferSize, ImGuiInputTextFlags flags) {
+    bool changed = false;
+    if (beginLabeledControlTable(stableId)) {
+        setupLabeledControlColumns();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        changed = ImGui::InputText("##value", buffer, bufferSize, flags);
+        endLabeledControlTable();
+    } else {
+        ImGui::PopID();
+    }
+    return changed;
+}
+
+bool checkboxWithLeftLabel(const char* stableId, const char* label, bool* value) {
+    bool changed = false;
+    if (beginLabeledControlTable(stableId)) {
+        setupLabeledControlColumns();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        changed = ImGui::Checkbox("##value", value);
+        endLabeledControlTable();
+    } else {
+        ImGui::PopID();
+    }
+    return changed;
+}
+
+template <typename Enum>
+bool comboWithLeftLabel(const char* stableId,
+        const char* label,
+        Enum* value,
+        const std::vector<std::pair<Enum, std::string>>& options) {
+    bool changed = false;
+    if (beginLabeledControlTable(stableId)) {
+        setupLabeledControlColumns();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        const auto selected = std::find_if(options.begin(), options.end(), [&](const auto& option) {
+            return option.first == *value;
+        });
+        const char* preview = selected == options.end() ? "" : selected->second.c_str();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##value", preview)) {
+            for (const auto& [optionValue, optionLabel] : options) {
+                const bool isSelected = optionValue == *value;
+                if (ImGui::Selectable(optionLabel.c_str(), isSelected)) {
+                    *value = optionValue;
+                    changed = true;
+                }
+                if (isSelected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        endLabeledControlTable();
+    } else {
+        ImGui::PopID();
+    }
     return changed;
 }
 
@@ -321,14 +425,7 @@ void InspectorPanel::drawContent(UIContext& context) {
     if (primary == InvalidEntityId) {
         primary = selected.front();
     }
-    const std::string selectedCount = localization.format(
-            "ui.inspector.selected_count",
-            "{count} selected",
-            {{"count", std::to_string(selected.size())}});
-    ImGui::TextUnformatted(selectedCount.c_str());
-    const std::string mode = localization.text(selectionModeKey(selection.mode), selectionModeFallback(selection.mode));
-    ImGui::Text("%s: %s", modePrefix.c_str(), mode.c_str());
-    if (selection.mode != ModelingSelectionMode::Object) {
+    if (componentSelectionMode(selection.mode)) {
         const std::string active = localization.text(activeSelectionKindKey(selection.activeKind), activeSelectionKindFallback(selection.activeKind));
         ImGui::Text("%s: %s", activePrefix.c_str(), active.c_str());
         if (selection.selectedVertexCount > 0u) {
@@ -345,8 +442,8 @@ void InspectorPanel::drawContent(UIContext& context) {
     if (selected.size() == 1u) {
         std::array<char, 128> nameBuffer;
         copyNameToBuffer(document.name(primary), nameBuffer);
-        const std::string nameLabel = localization.imguiLabel("ui.inspector.name", "ui.inspector.name", "Name");
-        if (ImGui::InputText(nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
+        const std::string nameLabel = localization.text("ui.inspector.name", "Name");
+        if (inputTextWithLeftLabel("name", nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
             (void)context.documentCommands.renameEntity(primary, nameBuffer.data());
         }
@@ -354,9 +451,9 @@ void InspectorPanel::drawContent(UIContext& context) {
 
     const BoolAggregate visibilityAggregate = aggregateVisibility(document, selected);
     if (visibilityAggregate.hasValue) {
-        bool visible = visibilityAggregate.allTrue;
-        const std::string visibleLabel = localization.imguiLabel("ui.inspector.visible", "ui.inspector.visible", "Visible");
-        if (ImGui::Checkbox(visibleLabel.c_str(), &visible)) {
+        bool hidden = !visibilityAggregate.allTrue;
+        const std::string hiddenLabel = localization.text("ui.inspector.hidden", "Hidden");
+        if (checkboxWithLeftLabel("hidden", hiddenLabel.c_str(), &hidden)) {
             std::vector<DocumentVisibilityEdit> edits;
             edits.reserve(selected.size());
             for (const EntityId id : selected) {
@@ -364,7 +461,7 @@ void InspectorPanel::drawContent(UIContext& context) {
                     edits.push_back(DocumentVisibilityEdit{
                             .entity = id,
                             .before = current->visible,
-                            .after = visible,
+                            .after = !hidden,
                     });
                 }
             }
@@ -379,8 +476,8 @@ void InspectorPanel::drawContent(UIContext& context) {
     const BoolAggregate lockAggregate = aggregateLock(document, selected);
     if (lockAggregate.hasValue) {
         bool locked = lockAggregate.allTrue;
-        const std::string lockedLabel = localization.imguiLabel("ui.inspector.locked", "ui.inspector.locked", "Locked");
-        if (ImGui::Checkbox(lockedLabel.c_str(), &locked)) {
+        const std::string lockedLabel = localization.text("ui.inspector.locked", "Locked");
+        if (checkboxWithLeftLabel("locked", lockedLabel.c_str(), &locked)) {
             std::vector<DocumentLockEdit> edits;
             edits.reserve(selected.size());
             for (const EntityId id : selected) {
@@ -410,7 +507,7 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
 
         const std::string transformLabel = localization.text("ui.inspector.transform", "Transform");
-        ImGui::SeparatorText(transformLabel.c_str());
+        if (ImGui::CollapsingHeader(transformLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
         if (selected.size() > 1u) {
             const std::string spatialEntities = localization.format(
                     "ui.inspector.spatial_entities",
@@ -519,6 +616,85 @@ void InspectorPanel::drawContent(UIContext& context) {
                 pinLocalPivotToWorldPoint(next, localPivot, worldPivot);
             });
         }
+        }
+    }
+
+    if (selected.size() == 1u) {
+        if (const MeshComponent* currentMesh = document.mesh(primary)) {
+            MeshComponent mesh = *currentMesh;
+            auto applyMeshComponent = [&](MeshComponent next) {
+                (void)context.documentCommands.setMeshComponent(primary, next);
+            };
+
+            const std::string exportLabel = localization.text("ui.inspector.export", "Export");
+            if (ImGui::CollapsingHeader(exportLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                bool editorOnly = mesh.editorOnly;
+                const std::string editorOnlyLabel = localization.text("ui.inspector.editor_only", "Editor Only");
+                if (checkboxWithLeftLabel("editor_only", editorOnlyLabel.c_str(), &editorOnly)) {
+                    mesh.editorOnly = editorOnly;
+                    applyMeshComponent(mesh);
+                }
+            }
+
+            const std::string lightingLabel = localization.text("ui.inspector.lighting", "Lighting");
+            if (ImGui::CollapsingHeader(lightingLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                bool castShadows = mesh.castShadows;
+                const std::string castShadowsLabel = localization.text("ui.inspector.cast_shadows", "Cast Shadows");
+                if (checkboxWithLeftLabel("cast_shadows", castShadowsLabel.c_str(), &castShadows)) {
+                    mesh.castShadows = castShadows;
+                    applyMeshComponent(mesh);
+                }
+
+                bool doubleSided = mesh.doubleSided;
+                const std::string doubleSidedLabel = localization.text("ui.inspector.double_sided", "Double sided");
+                if (checkboxWithLeftLabel("double_sided", doubleSidedLabel.c_str(), &doubleSided)) {
+                    mesh.doubleSided = doubleSided;
+                    applyMeshComponent(mesh);
+                }
+            }
+
+            const std::string physicsLabel = localization.text("ui.inspector.physics", "Physics");
+            if (ImGui::CollapsingHeader(physicsLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                bool generateCollisions = mesh.generateCollisions;
+                const std::string generateCollisionsLabel = localization.text("ui.inspector.generate_collisions", "Generate Collisions");
+                if (checkboxWithLeftLabel("generate_collisions", generateCollisionsLabel.c_str(), &generateCollisions)) {
+                    mesh.generateCollisions = generateCollisions;
+                    applyMeshComponent(mesh);
+                }
+
+                MeshCollisionType collisionType = mesh.collisionType;
+                const std::string collisionTypeLabel = localization.text("ui.inspector.collision_type", "Collision Type");
+                const std::vector<std::pair<MeshCollisionType, std::string>> collisionOptions{
+                        {MeshCollisionType::Box, localization.text("ui.inspector.collision_type.box", "Box")},
+                        {MeshCollisionType::Sphere, localization.text("ui.inspector.collision_type.sphere", "Sphere")},
+                        {MeshCollisionType::Cylinder, localization.text("ui.inspector.collision_type.cylinder", "Cylinder")},
+                        {MeshCollisionType::ConvexHull, localization.text("ui.inspector.collision_type.convex_hull", "Convex Hull")},
+                        {MeshCollisionType::Mesh, localization.text("ui.inspector.collision_type.mesh", "Mesh")},
+                };
+                if (comboWithLeftLabel("collision_type", collisionTypeLabel.c_str(), &collisionType, collisionOptions)) {
+                    mesh.collisionType = collisionType;
+                    applyMeshComponent(mesh);
+                }
+
+                bool displayCollision = mesh.displayCollision;
+                const std::string displayCollisionLabel = localization.text("ui.inspector.display_collision", "Display Collision");
+                if (checkboxWithLeftLabel("display_collision", displayCollisionLabel.c_str(), &displayCollision)) {
+                    mesh.displayCollision = displayCollision;
+                    applyMeshComponent(mesh);
+                }
+
+                MeshPhysicsBodyType bodyType = mesh.bodyType;
+                const std::string bodyTypeLabel = localization.text("ui.inspector.body_type", "Body type");
+                const std::vector<std::pair<MeshPhysicsBodyType, std::string>> bodyOptions{
+                        {MeshPhysicsBodyType::StaticBody, localization.text("ui.inspector.body_type.static_body", "Static Body")},
+                        {MeshPhysicsBodyType::RigidBody, localization.text("ui.inspector.body_type.rigid_body", "Rigid Body")},
+                };
+                if (comboWithLeftLabel("body_type", bodyTypeLabel.c_str(), &bodyType, bodyOptions)) {
+                    mesh.bodyType = bodyType;
+                    applyMeshComponent(mesh);
+                }
+            }
+        }
     }
 
     if (selected.size() > 1u) {
@@ -530,11 +706,12 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
 
         const std::string componentsLabel = localization.text("ui.inspector.components", "Components");
-        ImGui::SeparatorText(componentsLabel.c_str());
-        const std::string meshesLabel = localization.text("ui.inspector.meshes", "Meshes");
-        const std::string lightsLabel = localization.text("ui.inspector.lights", "Lights");
-        ImGui::Text("%s: %llu", meshesLabel.c_str(), static_cast<unsigned long long>(meshCount));
-        ImGui::Text("%s: %llu", lightsLabel.c_str(), static_cast<unsigned long long>(lightCount));
+        if (ImGui::CollapsingHeader(componentsLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            const std::string meshesLabel = localization.text("ui.inspector.meshes", "Meshes");
+            const std::string lightsLabel = localization.text("ui.inspector.lights", "Lights");
+            ImGui::Text("%s: %llu", meshesLabel.c_str(), static_cast<unsigned long long>(meshCount));
+            ImGui::Text("%s: %llu", lightsLabel.c_str(), static_cast<unsigned long long>(lightCount));
+        }
     }
 }
 

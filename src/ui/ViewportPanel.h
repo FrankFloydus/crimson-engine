@@ -40,6 +40,12 @@ namespace quader {
 class RenderSystem;
 class LocalizationService;
 
+enum class ViewportShadingMode {
+    Wireframe,
+    Shaded,
+    Rendered,
+};
+
 class ViewportPanel final : public UIPanel {
 public:
     ViewportPanel();
@@ -52,10 +58,14 @@ public:
 
     void initialize(RenderSystem& renderSystem);
     void shutdown();
-    void prepareViewports(SceneRenderBridge& renderBridge);
+    void prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets);
     void renderViewports(filament::Renderer& renderer);
     void setViewportLayout(ViewportLayoutId layoutId);
-    bool activateToolFromMenu(ViewportToolId tool, ModelingSessionService& modeling);
+    bool activateToolFromMenu(
+            ViewportToolId tool,
+            SceneDocument& document,
+            DocumentCommandService& documentCommands,
+            ModelingSessionService& modeling);
     ViewportLayoutId viewportLayout() const { return layoutId_; }
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
@@ -65,6 +75,8 @@ public:
 private:
     struct Pane {
         ViewportPaneId id = ViewportPaneId::Perspective;
+        ViewportView view = ViewportView::Perspective;
+        ViewportShadingMode shading = ViewportShadingMode::Shaded;
         ViewportCameraController camera;
         ViewportRenderer renderer;
         Vec2 renderSize = {1.0f, 1.0f};
@@ -114,7 +126,8 @@ private:
     std::vector<ViewportPanePlacement> activePanePlacements() const;
     std::vector<ViewportSplitHandle> activeSplitHandles() const;
     void resetPaneCamera(Pane& pane);
-    void drawPaneChrome(const Pane& pane, ImVec2 itemMin, ImVec2 itemSize, const LocalizationService& localization) const;
+    bool drawPaneChrome(Pane& pane, ImVec2 itemMin, ImVec2 itemSize, const LocalizationService& localization);
+    void setPaneView(Pane& pane, ViewportView view);
     bool handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles);
     const ViewportSettings& activeViewportSettings() const;
     static ImVec2 paneRectMin(ImVec2 viewportMin, ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
@@ -148,6 +161,9 @@ private:
     Vec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
     std::optional<ModelingHoverTarget> selectionHoverSuppressedTarget_;
+    bool deleteObjectsPopupOpen_ = false;
+    bool deleteObjectsPopupPositionPending_ = false;
+    ImVec2 deleteObjectsPopupPosition_ = {};
     bool lastFlyNavigationActive_ = false;
 };
 

@@ -83,15 +83,13 @@ TEST_CASE("host contract operation panel items resolve to visible actions for th
 		}
 	}
 
-	CHECK(item_count == 40U);
+	CHECK(item_count == 36U);
 }
 
 TEST_CASE("host contract operation panel preserves Unity panel ordering", "[host-contract]")
 {
-	check_action_order(require_panel("object_operations"), std::array<std::string_view, 7> {{
+	check_action_order(require_panel("object_operations"), std::array<std::string_view, 5> {{
 		"invert_mesh",
-		"recalculate_outside_mesh",
-		"recalculate_inside_mesh",
 		"shade_smooth_mesh",
 		"shade_flat_mesh",
 		"combine_mesh",
@@ -125,12 +123,10 @@ TEST_CASE("host contract operation panel preserves Unity panel ordering", "[host
 		"radial_align_edges",
 	}});
 
-	check_action_order(require_panel("face_operations"), std::array<std::string_view, 12> {{
+	check_action_order(require_panel("face_operations"), std::array<std::string_view, 10> {{
 		"bridge_faces",
 		"interpolated_bridge_faces",
 		"invert_faces",
-		"recalculate_outside_faces",
-		"recalculate_inside_faces",
 		"combine_faces",
 		"collapse_faces",
 		"radial_align_faces",

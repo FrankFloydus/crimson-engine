@@ -54,7 +54,7 @@ std::string shortcut_stroke_key(const qhc::HostShortcutDescriptor& shortcut)
 TEST_CASE("host contract selection mode catalog exposes stable host ids", "[host-contract]")
 {
 	const std::span<const qhc::HostSelectionModeDescriptor> modes = qhc::selection_mode_catalog();
-	REQUIRE(modes.size() == 4U);
+	REQUIRE(modes.size() == 5U);
 
 	const qhc::HostSelectionModeDescriptor *vertex = qhc::find_selection_mode_descriptor("vertex");
 	REQUIRE(vertex != nullptr);
@@ -72,12 +72,17 @@ TEST_CASE("host contract selection mode catalog exposes stable host ids", "[host
 	const qhc::HostSelectionModeDescriptor *object = qhc::find_selection_mode_descriptor("object");
 	REQUIRE(object != nullptr);
 	CHECK(object->mode == qhc::HostSelectionMode::object);
+
+	const qhc::HostSelectionModeDescriptor *group = qhc::find_selection_mode_descriptor("group");
+	REQUIRE(group != nullptr);
+	CHECK(group->mode == qhc::HostSelectionMode::group);
+	CHECK(same_text(group->label, "Group"));
 }
 
 TEST_CASE("host contract shortcut targets resolve to descriptor-only catalogs", "[host-contract]")
 {
 	const std::span<const qhc::HostShortcutDescriptor> shortcuts = qhc::shortcut_catalog();
-	REQUIRE(shortcuts.size() == 42U);
+	REQUIRE(shortcuts.size() == 44U);
 
 	for (const qhc::HostShortcutDescriptor& shortcut : shortcuts) {
 		CHECK_FALSE(shortcut.id.empty());
@@ -183,6 +188,14 @@ TEST_CASE("host contract shortcut catalog preserves editor and viewport key mean
 	CHECK(merge_center.shift);
 	CHECK(same_text(merge_center.target_id, "merge_vertices_at_center"));
 	CHECK(merge_center.alternate);
+
+	const qhc::HostShortcutDescriptor& flip_mesh_normals = require_shortcut("flip_mesh_normals");
+	CHECK(flip_mesh_normals.context == qhc::HostShortcutContext::viewport);
+	CHECK(same_text(flip_mesh_normals.key, "F"));
+	CHECK_FALSE(flip_mesh_normals.primary_modifier);
+	CHECK_FALSE(flip_mesh_normals.shift);
+	CHECK(flip_mesh_normals.target_kind == qhc::HostShortcutTargetKind::action);
+	CHECK(same_text(flip_mesh_normals.target_id, "invert_mesh"));
 }
 
 TEST_CASE("host contract shortcut catalog keeps overloaded R shortcuts unambiguous", "[host-contract]")
@@ -252,4 +265,9 @@ TEST_CASE("host contract shortcut catalog includes viewport selection mode keys"
 	CHECK(same_text(require_shortcut("object_selection").target_id, "object"));
 	CHECK(same_text(require_shortcut("object_selection_keypad").key, "Keypad4"));
 	CHECK(same_text(require_shortcut("object_selection_keypad").target_id, "object"));
+
+	CHECK(same_text(require_shortcut("group_selection").key, "5"));
+	CHECK(same_text(require_shortcut("group_selection").target_id, "group"));
+	CHECK(same_text(require_shortcut("group_selection_keypad").key, "Keypad5"));
+	CHECK(same_text(require_shortcut("group_selection_keypad").target_id, "group"));
 }

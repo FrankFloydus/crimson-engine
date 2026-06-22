@@ -102,6 +102,8 @@ quader_host_contract::HostSelectionMode toHostMode(ModelingSelectionMode mode) {
         return quader_host_contract::HostSelectionMode::face;
     case ModelingSelectionMode::Object:
         return quader_host_contract::HostSelectionMode::object;
+    case ModelingSelectionMode::Group:
+        return quader_host_contract::HostSelectionMode::object;
     }
     return quader_host_contract::HostSelectionMode::object;
 }
@@ -167,6 +169,8 @@ std::string selectionModeId(quader_host_contract::HostSelectionMode mode) {
         return "face";
     case quader_host_contract::HostSelectionMode::object:
         return "object";
+    case quader_host_contract::HostSelectionMode::group:
+        return "group";
     }
     return {};
 }
@@ -269,10 +273,10 @@ ModelingActionSet ModelingActionCatalog::actionSetFor(
         panel.selectionModeId = selectionModeId(toHostMode(summary.mode));
         panel.visibility = ModelingActionVisibility::Enabled;
 
-        appendEditActions(panel.actions, summary, query);
         if (const quader_host_contract::HostOperationPanelDescriptor* hostPanel = panelForMode(summary.mode)) {
             appendHostPanelActions(panel.actions, *hostPanel, summary, query);
         }
+        appendEditActions(panel.actions, summary, query);
         if (!panel.actions.empty()) {
             result.panels.push_back(std::move(panel));
         }

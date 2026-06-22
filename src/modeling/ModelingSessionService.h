@@ -22,6 +22,7 @@
 namespace quader {
 
 class AssetRegistry;
+class DocumentCommandService;
 class SceneDocument;
 
 enum class ModelingCommandId {
@@ -153,6 +154,7 @@ enum class ModelingSelectionMode {
     Edge,
     Face,
     Object,
+    Group,
 };
 
 enum class ModelingActiveSelectionKind {
@@ -501,6 +503,7 @@ public:
 
     void syncObjectSelectionFromScene();
     void syncSceneSelectionFromSdk();
+    ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands);
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode);
     ModelingCommandResult selectAll();
     ModelingCommandResult invertSelection();

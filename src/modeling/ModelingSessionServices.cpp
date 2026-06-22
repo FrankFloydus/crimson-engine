@@ -873,14 +873,6 @@ quader_editor_core::SelectionOverlayFrame ModelingOverlayService::selectionOverl
                     session.selection_mode(),
                     hover,
                     {});
-    const auto appendTransformDragSnapPoints = [&](quader_editor_core::SelectionOverlayFrame& frame) {
-        if (!runtime.transform_drag_active()) {
-            return;
-        }
-        std::vector<quader_editor_core::SelectionOverlayPoint> snapPoints =
-                quader_editor_core::transform_drag_snap_overlay_points(runtime.transform_drag_state());
-        frame.points.insert(frame.points.end(), snapPoints.begin(), snapPoints.end());
-    };
     const auto appendRuntimeToolOverlay = [&](quader_editor_core::SelectionOverlayFrame& frame) {
         const quader_editor_core::InsertEdgeLoopToolState& insertLoop = runtime.insert_edge_loop_state();
         frame.lines.insert(frame.lines.end(), insertLoop.preview_lines.begin(), insertLoop.preview_lines.end());
@@ -900,14 +892,12 @@ quader_editor_core::SelectionOverlayFrame ModelingOverlayService::selectionOverl
         frame.hover_target_selected = hoverFrame.hover_target_selected;
         appendSelectedHoverFilteredBaseFrame(frame, base, hoverFrame, suppressBaseUnderHover);
         appendOverlayFrame(frame, hoverFrame);
-        appendTransformDragSnapPoints(frame);
         appendRuntimeToolOverlay(frame);
         return frame;
     }
 
     quader_editor_core::SelectionOverlayFrame frame = base;
     appendOverlayFrame(frame, hoverFrame);
-    appendTransformDragSnapPoints(frame);
     appendRuntimeToolOverlay(frame);
     return frame;
 }

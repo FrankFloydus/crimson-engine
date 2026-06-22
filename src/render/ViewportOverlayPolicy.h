@@ -29,6 +29,7 @@ struct ViewportOverlayLayerPolicy {
 inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kViewportOverlayDrawOrder{{
         ViewportOverlayLayer::SelectedVisibleFace,
         ViewportOverlayLayer::SelectedFaceMask,
+        ViewportOverlayLayer::WireframeBase,
         ViewportOverlayLayer::SourceWire,
         ViewportOverlayLayer::SelectedXrayFace,
         ViewportOverlayLayer::HoverFace,
@@ -36,6 +37,7 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
         ViewportOverlayLayer::DiagnosticEdge,
         ViewportOverlayLayer::SelectedFaceEdge,
         ViewportOverlayLayer::SelectedEdge,
+        ViewportOverlayLayer::GroupBounds,
         ViewportOverlayLayer::HoverFaceEdge,
         ViewportOverlayLayer::HoverEdge,
         ViewportOverlayLayer::UnselectedVertex,
@@ -55,6 +57,7 @@ inline constexpr std::uint32_t kOverlaySelectionWireColor = 0xff1fd3ffU;
 inline constexpr std::uint32_t kOverlaySourceWireColor = 0xebffe05cU;
 inline constexpr std::uint32_t kOverlayOpenEdgeColor = 0xff00ffffU;
 inline constexpr std::uint32_t kOverlayDiagnosticEdgeColor = 0xff0000ffU;
+inline constexpr std::uint32_t kOverlayGroupBoundsColor = rgba8(255, 230, 0, 255);
 inline constexpr std::uint32_t kOverlayHoverFaceColor = 0x161fff66U;
 inline constexpr std::uint32_t kOverlayHoverWireColor = 0xff00ff51U;
 inline constexpr std::uint32_t kOverlayRemoveFaceColor = 0x52ff6b1fU;

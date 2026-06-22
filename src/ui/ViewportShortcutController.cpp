@@ -89,6 +89,8 @@ std::optional<ModelingCommandResult> executeViewportModelingShortcut(
         return executeCommandTool(modeling, "merge_vertices_to_center");
     case ViewportShortcutKind::MirrorAxis:
         return executeCommandTool(modeling, modelingMirrorSelectionToolId(viewportMirrorAxisToModeling(shortcut.mirrorAxis)));
+    case ViewportShortcutKind::FlipMeshNormals:
+        return executeCommandTool(modeling, "invert_mesh");
     case ViewportShortcutKind::FlipHorizontal:
         return executeCommandTool(modeling, "flip_horizontal");
     case ViewportShortcutKind::FlipVertical:
@@ -103,6 +105,7 @@ std::optional<ModelingCommandResult> executeViewportModelingShortcut(
     case ViewportShortcutKind::ToggleMaximized:
     case ViewportShortcutKind::SetGridPreset:
     case ViewportShortcutKind::CancelActiveTool:
+    case ViewportShortcutKind::DeletePopup:
         return std::nullopt;
     }
     return std::nullopt;

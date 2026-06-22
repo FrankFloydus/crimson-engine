@@ -198,6 +198,8 @@ inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
         return text == "3" || text == "Keypad3";
     case ViewportKey::Number4:
         return text == "4" || text == "Keypad4";
+    case ViewportKey::Number5:
+        return text == "5" || text == "Keypad5";
     case ViewportKey::Home:
         return text == "Home";
     case ViewportKey::F:
@@ -311,6 +313,10 @@ inline bool viewportSelectionModeFromContractId(std::string_view id, ViewportSel
         mode = ViewportSelectionMode::Object;
         return true;
     }
+    if (id == "group") {
+        mode = ViewportSelectionMode::Group;
+        return true;
+    }
     return false;
 }
 
@@ -374,6 +380,11 @@ inline bool viewportShortcutFromContractTarget(
     }
     if (targetId == "apply_active_material") {
         shortcut.kind = ViewportShortcutKind::ApplyMaterial;
+        shortcut.context = ViewportShortcutContext::Viewport;
+        return true;
+    }
+    if (targetId == "invert_mesh") {
+        shortcut.kind = ViewportShortcutKind::FlipMeshNormals;
         shortcut.context = ViewportShortcutContext::Viewport;
         return true;
     }

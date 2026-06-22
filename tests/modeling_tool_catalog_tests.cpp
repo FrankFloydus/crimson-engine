@@ -144,8 +144,6 @@ TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
 
     constexpr std::array expectedActions{
             ExpectedAction{"invert_mesh", "flip_face_normals", CommandToolKind::ContextAction},
-            ExpectedAction{"recalculate_outside_mesh", "recalculate_face_normals", CommandToolKind::ContextAction},
-            ExpectedAction{"recalculate_inside_mesh", "recalculate_face_normals", CommandToolKind::ContextAction},
             ExpectedAction{"shade_smooth_mesh", "shade_faces_smooth", CommandToolKind::ContextAction},
             ExpectedAction{"shade_flat_mesh", "shade_faces_flat", CommandToolKind::ContextAction},
             ExpectedAction{"combine_mesh", "combine_meshes", CommandToolKind::ContextAction},
@@ -174,8 +172,6 @@ TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
             ExpectedAction{"bridge_faces", "bridge", CommandToolKind::ContextAction},
             ExpectedAction{"interpolated_bridge_faces", "bridge", CommandToolKind::Preview, ModelingActionPreviewKind::Bridge},
             ExpectedAction{"invert_faces", "flip_face_normals", CommandToolKind::ContextAction},
-            ExpectedAction{"recalculate_outside_faces", "recalculate_face_normals", CommandToolKind::ContextAction},
-            ExpectedAction{"recalculate_inside_faces", "recalculate_face_normals", CommandToolKind::ContextAction},
             ExpectedAction{"combine_faces", "combine_faces"},
             ExpectedAction{"collapse_faces", "collapse_faces"},
             ExpectedAction{"radial_align_faces", "radial_align", CommandToolKind::ContextAction},

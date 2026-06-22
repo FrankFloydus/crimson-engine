@@ -20,6 +20,7 @@ class ViewportPaneOverlayCache {
 public:
     [[nodiscard]] bool valid() const { return valid_; }
     [[nodiscard]] const ViewportOverlayFrame& frame() const { return frame_; }
+    [[nodiscard]] const ViewportPaneOverlayCacheKey& key() const { return key_; }
     [[nodiscard]] bool needsRefresh(const ViewportPaneOverlayCacheKey& key) const;
 
     void markDirty();

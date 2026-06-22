@@ -94,6 +94,30 @@ std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, cons
     return SceneBounds{.min = worldPosition, .max = worldPosition};
 }
 
+std::optional<SceneBounds> entityHierarchyWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity) {
+    if (!document.exists(entity) || !document.isEffectivelyVisible(entity)) {
+        return std::nullopt;
+    }
+
+    std::optional<SceneBounds> result;
+    for (const EntityId descendant : document.descendants(entity, true)) {
+        if (descendant != entity && !document.isEffectivelyVisible(descendant)) {
+            continue;
+        }
+        if (const MeshComponent* mesh = document.mesh(descendant)) {
+            (void)mesh;
+            if (const std::optional<SceneBounds> bounds = entityWorldBounds(document, assets, descendant)) {
+                includeBounds(result, *bounds);
+            }
+        }
+    }
+
+    if (!result) {
+        return entityWorldBounds(document, assets, entity);
+    }
+    return result;
+}
+
 std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
     std::optional<SceneBounds> result;
     for (const EntityId entity : document.entities()) {

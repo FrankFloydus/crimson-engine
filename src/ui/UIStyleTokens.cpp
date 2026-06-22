@@ -21,6 +21,7 @@ void applyUIStyle(const UIStyleTokens& tokens) {
     style.WindowBorderSize = 1.0f;
     style.FrameBorderSize = 0.0f;
     style.WindowMenuButtonPosition = ImGuiDir_Left;
+
 }
 
 void loadUIDefaultFont(const std::filesystem::path& executableDir, const UIStyleTokens& tokens) {

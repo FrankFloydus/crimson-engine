@@ -28,6 +28,7 @@ bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
 bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SelectedFaceEdge ||
             layer == ViewportOverlayLayer::SelectedEdge ||
+            layer == ViewportOverlayLayer::GroupBounds ||
             layer == ViewportOverlayLayer::DiagnosticEdge ||
             layer == ViewportOverlayLayer::ToolPlaneLine ||
             layer == ViewportOverlayLayer::ToolPreviewLine ||
@@ -106,6 +107,8 @@ float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWid
         return nativeWidthPixels;
     }
     switch (layer) {
+    case ViewportOverlayLayer::WireframeBase:
+        return 1.0f;
     case ViewportOverlayLayer::SourceWire:
         return 1.5f;
     case ViewportOverlayLayer::SelectedFaceEdge:
@@ -117,6 +120,8 @@ float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWid
         return 1.0f;
     case ViewportOverlayLayer::DiagnosticEdge:
         return 4.0f;
+    case ViewportOverlayLayer::GroupBounds:
+        return 1.5f;
     case ViewportOverlayLayer::ToolPlaneLine:
         return 1.0f;
     case ViewportOverlayLayer::ToolPreviewLine:
@@ -183,6 +188,8 @@ bool viewportOverlayIsNativeSelectionWireColor(std::uint32_t color) {
 
 std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer layer, std::uint32_t originalRgba) {
     switch (layer) {
+    case ViewportOverlayLayer::WireframeBase:
+        return originalRgba;
     case ViewportOverlayLayer::SelectedVisibleFace:
     case ViewportOverlayLayer::SelectedXrayFace:
     case ViewportOverlayLayer::SelectedFaceMask:
@@ -196,6 +203,8 @@ std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer layer, std::uint32_t 
         return kOverlayOpenEdgeColor;
     case ViewportOverlayLayer::DiagnosticEdge:
         return kOverlayDiagnosticEdgeColor;
+    case ViewportOverlayLayer::GroupBounds:
+        return kOverlayGroupBoundsColor;
     case ViewportOverlayLayer::HoverFace:
         return viewportOverlayIsNativeRemoveColor(originalRgba) ? kOverlayRemoveFaceColor : kOverlayHoverFaceColor;
     case ViewportOverlayLayer::HoverFaceEdge:

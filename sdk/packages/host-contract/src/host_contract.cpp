@@ -174,12 +174,8 @@ HostActionDescriptor tool_action(
 
 std::span<const HostActionDescriptor> action_descriptors()
 {
-	static const std::array<HostActionDescriptor, 46> descriptors {{
-		operation_action("invert_mesh", "Invert Mesh", "flip_face_normals",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
-		operation_action("recalculate_outside_mesh", "Recalculate Outside", "recalculate_face_normals",
-			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
-		operation_action("recalculate_inside_mesh", "Recalculate Inside", "recalculate_face_normals",
+	static const std::array<HostActionDescriptor, 42> descriptors {{
+		operation_action("invert_mesh", "Flip Mesh Normals", "flip_face_normals",
 			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
 		operation_action("shade_smooth_mesh", "Shade Smooth", "shade_faces_smooth",
 			action_availability(HostSelectionMode::object, 0, 0, HostActiveSelectionKind::none, false, 0, 0, 1)),
@@ -251,10 +247,6 @@ std::span<const HostActionDescriptor> action_descriptors()
 			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 2), HostPreviewKind::bridge),
 		operation_action("invert_faces", "Invert Face", "flip_face_normals",
 			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
-		operation_action("recalculate_outside_faces", "Recalculate Outside", "recalculate_face_normals",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
-		operation_action("recalculate_inside_faces", "Recalculate Inside", "recalculate_face_normals",
-			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, false, 0, 1)),
 		operation_action("combine_faces", "Combine Faces", "combine_faces",
 			action_availability(HostSelectionMode::face, 0, 0, HostActiveSelectionKind::none, true, 0, 2)),
 		operation_action("collapse_faces", "Collapse Faces", "collapse_faces",
@@ -275,10 +267,8 @@ std::span<const HostActionDescriptor> action_descriptors()
 
 std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
 {
-	static constexpr std::array<std::string_view, 7> object_actions {{
+	static constexpr std::array<std::string_view, 5> object_actions {{
 		"invert_mesh",
-		"recalculate_outside_mesh",
-		"recalculate_inside_mesh",
 		"shade_smooth_mesh",
 		"shade_flat_mesh",
 		"combine_mesh",
@@ -309,12 +299,10 @@ std::span<const HostOperationPanelDescriptor> operation_panel_descriptors()
 		"fill_hole",
 		"radial_align_edges",
 	}};
-	static constexpr std::array<std::string_view, 12> face_actions {{
+	static constexpr std::array<std::string_view, 10> face_actions {{
 		"bridge_faces",
 		"interpolated_bridge_faces",
 		"invert_faces",
-		"recalculate_outside_faces",
-		"recalculate_inside_faces",
 		"combine_faces",
 		"collapse_faces",
 		"radial_align_faces",
@@ -581,7 +569,7 @@ HostShortcutDescriptor shortcut(
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-	static const std::array<HostShortcutDescriptor, 42> descriptors {{
+	static const std::array<HostShortcutDescriptor, 44> descriptors {{
 		shortcut("undo", HostShortcutContext::global, "Z", true, false, false,
 			HostShortcutTargetKind::editor_action, "undo"),
 		shortcut("redo_shift_z", HostShortcutContext::global, "Z", true, false, true,
@@ -643,8 +631,8 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
 			HostShortcutTargetKind::action, "knife_tool"),
 		shortcut("poly_tool", HostShortcutContext::viewport, "P", false, false, false,
 			HostShortcutTargetKind::action, "poly_tool"),
-		shortcut("focus_all_f", HostShortcutContext::viewport, "F", false, false, false,
-			HostShortcutTargetKind::viewport_action, "focus_all"),
+		shortcut("flip_mesh_normals", HostShortcutContext::viewport, "F", false, false, false,
+			HostShortcutTargetKind::action, "invert_mesh"),
 		shortcut("move_tool", HostShortcutContext::viewport, "W", false, false, false,
 			HostShortcutTargetKind::tool, "move"),
 		shortcut("rotate_tool", HostShortcutContext::viewport, "R", false, false, false,
@@ -667,6 +655,10 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
 			HostShortcutTargetKind::selection_mode, "object"),
 		shortcut("object_selection_keypad", HostShortcutContext::viewport, "Keypad4", false, false, false,
 			HostShortcutTargetKind::selection_mode, "object"),
+		shortcut("group_selection", HostShortcutContext::viewport, "5", false, false, false,
+			HostShortcutTargetKind::selection_mode, "group"),
+		shortcut("group_selection_keypad", HostShortcutContext::viewport, "Keypad5", false, false, false,
+			HostShortcutTargetKind::selection_mode, "group"),
 	}};
 	return descriptors;
 }
@@ -1591,11 +1583,12 @@ const HostToolDescriptor *find_tool_descriptor(std::string_view tool_id)
 
 std::span<const HostSelectionModeDescriptor> selection_mode_catalog()
 {
-	static const std::array<HostSelectionModeDescriptor, 4> descriptors {{
+	static const std::array<HostSelectionModeDescriptor, 5> descriptors {{
 		{ HostSelectionMode::vertex, "vertex", "Vertex" },
 		{ HostSelectionMode::edge, "edge", "Edge" },
 		{ HostSelectionMode::face, "face", "Face" },
 		{ HostSelectionMode::object, "object", "Object" },
+		{ HostSelectionMode::group, "group", "Group" },
 	}};
 	return descriptors;
 }

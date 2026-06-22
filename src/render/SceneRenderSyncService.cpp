@@ -82,7 +82,14 @@ bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& do
         const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
         const MaterialDocument* material = materialComponent ? assets.material(materialComponent->material) : nullptr;
         const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, material);
-        if (meshCache_->needsRebuild(entityId, meshComponent->mesh, *mesh, materialId, materialRevision)) {
+        if (meshCache_->needsRebuild(
+                    entityId,
+                    meshComponent->mesh,
+                    *mesh,
+                    materialId,
+                    meshComponent->castShadows,
+                    meshComponent->doubleSided,
+                    materialRevision)) {
             return true;
         }
     }
@@ -118,6 +125,8 @@ void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetR
                         material,
                         assets,
                         worldTransform,
+                        meshComponent->castShadows,
+                        meshComponent->doubleSided,
                         materialRevision);
             }
         }

@@ -39,9 +39,15 @@ bool containsEntity(const std::vector<EntityId>& ids, EntityId id) {
 void syncSelectionToModeling(UIContext& context) {
     const std::vector<EntityId> desiredSelection = context.document.selectedEntities();
     const EntityId activeSelection = context.document.primarySelection();
-    (void)context.modeling.setSelectionMode(ModelingSelectionMode::Object);
+    const ModelingSelectionMode previousMode = context.modeling.selectionMode();
+    if (previousMode != ModelingSelectionMode::Group) {
+        (void)context.modeling.setSelectionMode(ModelingSelectionMode::Object);
+    }
     (void)context.documentCommands.selectEntities(desiredSelection, activeSelection);
     context.modeling.syncObjectSelectionFromScene();
+    if (previousMode == ModelingSelectionMode::Group) {
+        (void)context.modeling.setSelectionMode(ModelingSelectionMode::Group);
+    }
 }
 
 std::vector<EntityId> entityRangeSelection(
@@ -325,6 +331,55 @@ ImTextureID iconFor(const UIIconSet& icons, EntityKind kind) {
     return ImTextureID_Invalid;
 }
 
+void drawOutlinerText(
+        ImDrawList* drawList,
+        ImVec2 position,
+        ImU32 color,
+        const std::string& text,
+        bool italic,
+        const ImVec4& clipRect) {
+    const int vertexStart = drawList->VtxBuffer.Size;
+    drawList->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            position,
+            color,
+            text.c_str(),
+            text.c_str() + text.size(),
+            0.0f,
+            &clipRect);
+    if (!italic) {
+        return;
+    }
+
+    const float baseline = position.y + ImGui::GetTextLineHeight();
+    for (int index = vertexStart; index < drawList->VtxBuffer.Size; ++index) {
+        ImDrawVert& vertex = drawList->VtxBuffer[index];
+        vertex.pos.x += (baseline - vertex.pos.y) * 0.16f;
+    }
+}
+
+void drawHierarchyGuides(
+        ImDrawList* drawList,
+        ImVec2 rowMin,
+        ImVec2 rowMax,
+        float contentX,
+        int depth,
+        float indent,
+        ImU32 color) {
+    if (depth <= 0) {
+        return;
+    }
+
+    const float rowCenterY = (rowMin.y + rowMax.y) * 0.5f;
+    for (int level = 0; level < depth; ++level) {
+        const float lineX = rowMin.x - static_cast<float>(depth - level) * indent + indent * 0.5f;
+        drawList->AddLine({lineX, rowMin.y}, {lineX, rowMax.y}, color, 1.0f);
+    }
+    const float branchX = rowMin.x - indent * 0.5f;
+    drawList->AddLine({branchX, rowCenterY}, {contentX - 3.0f, rowCenterY}, color, 1.0f);
+}
+
 } // namespace
 
 float OutlinerPanel::minimumWidth(const UIContext& context) const {
@@ -350,6 +405,7 @@ void OutlinerPanel::drawContent(UIContext& context) {
     constexpr float kOutlinerRowLeftPadding = 3.0f;
     constexpr float kOutlinerTreeIndent = 14.0f;
     constexpr float kOutlinerIconSize = 16.0f;
+    constexpr float kOutlinerStatusIconSize = 14.0f;
     constexpr float kOutlinerIconTextGap = 4.0f;
     const ImGuiStyle& style = ImGui::GetStyle();
     ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, kOutlinerTreeIndent);
@@ -385,7 +441,8 @@ void OutlinerPanel::drawContent(UIContext& context) {
         const EntityRecord& record = recordIt->second;
         ImGui::PushID(static_cast<int>(record.id));
 
-        if (!record.effectivelyVisible) {
+        const bool subdued = !record.effectivelyVisible || record.effectivelyLocked;
+        if (subdued) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         }
 
@@ -412,10 +469,11 @@ void OutlinerPanel::drawContent(UIContext& context) {
 
         const ImTextureID icon = iconFor(context.icons, record.kind);
         const float rowHeight = std::max(rowMax.y - rowMin.y, ImGui::GetTextLineHeight());
-        const float contentX = rowMin.x +
-                (record.hasChildren ? ImGui::GetTreeNodeToLabelSpacing() : kOutlinerRowLeftPadding);
+        const float contentX = rowMin.x + ImGui::GetTreeNodeToLabelSpacing();
         float textX = contentX;
         ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImU32 guideColor = ImGui::GetColorU32(ImGuiCol_Border, 0.75f);
+        drawHierarchyGuides(drawList, rowMin, rowMax, contentX, record.depth, kOutlinerTreeIndent, guideColor);
         if (icon != ImTextureID_Invalid) {
             const ImVec2 iconMin{
                     contentX,
@@ -427,7 +485,38 @@ void OutlinerPanel::drawContent(UIContext& context) {
         const ImVec2 textPos{
                 textX,
                 rowMin.y + std::max((rowHeight - ImGui::GetTextLineHeight()) * 0.5f, 0.0f)};
-        drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), record.name.c_str());
+        float statusRight = rowMax.x - kOutlinerRowLeftPadding;
+        auto drawStatusIcon = [&](ImTextureID statusIcon) {
+            if (statusIcon == ImTextureID_Invalid) {
+                return;
+            }
+            const ImVec2 iconMax{
+                    statusRight,
+                    rowMin.y + std::max((rowHeight + kOutlinerStatusIconSize) * 0.5f, kOutlinerStatusIconSize)};
+            const ImVec2 iconMin{
+                    iconMax.x - kOutlinerStatusIconSize,
+                    iconMax.y - kOutlinerStatusIconSize};
+            drawList->AddImage(statusIcon, iconMin, iconMax);
+            statusRight = iconMin.x - kOutlinerIconTextGap;
+        };
+        if (!record.effectivelyVisible) {
+            drawStatusIcon(context.icons.hide);
+        }
+        if (record.effectivelyLocked) {
+            drawStatusIcon(context.icons.lock);
+        }
+        const ImVec4 textClip{
+                textX,
+                rowMin.y,
+                std::max(textX, statusRight - kOutlinerIconTextGap),
+                rowMax.y};
+        drawOutlinerText(
+                drawList,
+                textPos,
+                ImGui::GetColorU32(ImGuiCol_Text),
+                record.name,
+                subdued,
+                textClip);
 
         if (rowRightClicked) {
             if (!record.selected) {
@@ -460,7 +549,7 @@ void OutlinerPanel::drawContent(UIContext& context) {
             ImGui::EndPopup();
         }
 
-        if (!record.effectivelyVisible) {
+        if (subdued) {
             ImGui::PopStyleColor();
         }
 

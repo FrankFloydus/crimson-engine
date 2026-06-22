@@ -17,6 +17,7 @@ std::optional<SceneBounds> localMeshBounds(const MeshAsset& mesh);
 void includePoint(SceneBounds& bounds, Vec3 point);
 Vec3 boundsCenter(const SceneBounds& bounds);
 std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
+std::optional<SceneBounds> entityHierarchyWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
 std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
 std::optional<SceneBounds> selectedWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
 

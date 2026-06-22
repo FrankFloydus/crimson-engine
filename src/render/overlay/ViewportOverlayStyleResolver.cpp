@@ -76,10 +76,6 @@ void ViewportOverlayStyleResolver::apply(ViewportOverlayFrame& frame, const View
                     : settingColor(settings, ViewportColorSettingId::HoverVertex);
             point.sizePixels = vertexSize + settings.floatValue(ViewportFloatSettingId::HoverVertexGrowth);
             break;
-        case ViewportOverlayLayer::SnapTargetVertex:
-            point.color = settingColor(settings, ViewportColorSettingId::HoverVertex);
-            point.sizePixels = vertexSize + settings.floatValue(ViewportFloatSettingId::HoverVertexGrowth);
-            break;
         default:
             break;
         }

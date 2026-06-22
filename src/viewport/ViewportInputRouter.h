@@ -34,6 +34,7 @@ enum class ViewportSelectionMode {
     Edge,
     Face,
     Object,
+    Group,
 };
 
 enum class ViewportMirrorAxis {
@@ -64,6 +65,7 @@ enum class ViewportKey {
     Number2,
     Number3,
     Number4,
+    Number5,
     Home,
     F,
     Space,
@@ -96,6 +98,7 @@ enum class ViewportShortcutKind {
     ToggleMaximized,
     SetGridPreset,
     CancelActiveTool,
+    DeletePopup,
     DeleteSelection,
     SelectAll,
     InvertSelection,
@@ -108,6 +111,7 @@ enum class ViewportShortcutKind {
     MergeActive,
     MergeCenter,
     MirrorAxis,
+    FlipMeshNormals,
     FlipHorizontal,
     FlipVertical,
     ApplyMaterial,

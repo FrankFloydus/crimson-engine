@@ -4,6 +4,7 @@
 #include "editor/ModelingHistoryCommand.h"
 #include "editor/ModelingCommandExecutionService.h"
 #include "modeling/ModelingSessionService.h"
+#include "modeling/tools/ModelingCommandToolCatalog.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/tools/ViewportToolCatalog.h"
 
@@ -87,6 +88,8 @@ inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
                 undoRedo,
                 modeling,
                 modelingMirrorSelectionToolId(viewportMirrorAxisToModeling(shortcut.mirrorAxis)));
+    case ViewportShortcutKind::FlipMeshNormals:
+        return executeTrackedCommandTool(undoRedo, modeling, "invert_mesh");
     case ViewportShortcutKind::FlipHorizontal:
         return executeTrackedCommandTool(undoRedo, modeling, "flip_horizontal");
     case ViewportShortcutKind::FlipVertical:
@@ -101,6 +104,7 @@ inline std::optional<ModelingCommandResult> executeViewportModelingShortcut(
     case ViewportShortcutKind::ToggleMaximized:
     case ViewportShortcutKind::SetGridPreset:
     case ViewportShortcutKind::CancelActiveTool:
+    case ViewportShortcutKind::DeletePopup:
         return std::nullopt;
     }
     return std::nullopt;

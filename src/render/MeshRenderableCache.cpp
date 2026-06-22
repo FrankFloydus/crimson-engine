@@ -32,12 +32,16 @@ bool MeshRenderableCache::needsRebuild(EntityId entityId,
         AssetId meshId,
         const MeshAsset& mesh,
         AssetId materialId,
+        bool castShadows,
+        bool doubleSided,
         std::uint64_t materialRevision) const {
     const auto existing = meshProxies_.find(entityId);
     return existing == meshProxies_.end() ||
             existing->second.mesh != meshId ||
             existing->second.meshRevision != mesh.revision.value ||
             existing->second.material != materialId ||
+            existing->second.castShadows != castShadows ||
+            existing->second.doubleSided != doubleSided ||
             existing->second.materialRevision != materialRevision;
 }
 
@@ -48,12 +52,14 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
         const MaterialDocument* material,
         const AssetRegistry& assets,
         const Mat4& worldTransform,
+        bool castShadows,
+        bool doubleSided,
         std::uint64_t materialRevision) {
     if (!factory_) {
         return;
     }
 
-    if (needsRebuild(entityId, meshId, mesh, materialId, materialRevision)) {
+    if (needsRebuild(entityId, meshId, mesh, materialId, castShadows, doubleSided, materialRevision)) {
         remove(entityId);
         MeshRenderableProxy proxy = factory_->create(
                 entityId,
@@ -63,6 +69,8 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
                 material,
                 assets,
                 worldTransform,
+                castShadows,
+                doubleSided,
                 materialRevision);
         meshProxies_.emplace(entityId, std::move(proxy));
         return;

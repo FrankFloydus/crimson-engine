@@ -539,6 +539,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
     const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
             ViewportOverlayLayer::SelectedVisibleFace,
             ViewportOverlayLayer::SelectedFaceMask,
+            ViewportOverlayLayer::WireframeBase,
             ViewportOverlayLayer::SourceWire,
             ViewportOverlayLayer::SelectedXrayFace,
             ViewportOverlayLayer::HoverFace,
@@ -546,6 +547,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
             ViewportOverlayLayer::DiagnosticEdge,
             ViewportOverlayLayer::SelectedFaceEdge,
             ViewportOverlayLayer::SelectedEdge,
+            ViewportOverlayLayer::GroupBounds,
             ViewportOverlayLayer::HoverFaceEdge,
             ViewportOverlayLayer::HoverEdge,
             ViewportOverlayLayer::UnselectedVertex,
@@ -567,6 +569,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
 }
 
 TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
+    EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::WireframeBase, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::OpenEdge, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::HoverFaceEdge, ViewportOverlayGeometryKind::Lines));
@@ -576,6 +579,8 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SelectedFaceEdge, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SelectedEdge, ViewportOverlayGeometryKind::Lines),
+            ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::GroupBounds, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::DiagnosticEdge, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
@@ -605,18 +610,22 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
 TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedVisibleFace, rgba8(255, 255, 255)), kOverlaySelectionFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedFaceEdge, rgba8(255, 255, 255)), kOverlaySelectionWireColor);
+    EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::WireframeBase, rgba8(255, 255, 255)), rgba8(255, 255, 255));
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SourceWire, kOverlaySelectedVertexColor), kOverlaySelectionWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SourceWire, rgba8(255, 255, 255)), kOverlaySourceWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverFace, kOverlayRemoveWireColor), kOverlayRemoveFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::HoverEdge, kOverlayRemoveFaceColor), kOverlayRemoveWireColor);
+    EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::GroupBounds, rgba8(255, 255, 255)), kOverlayGroupBoundsColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolPlane, rgba8(255, 255, 255)), kOverlayToolPlaneColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolPlaneLine, rgba8(255, 255, 255)), kOverlayToolPlaneLineColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::ToolHandle, rgba8(255, 255, 255)), kOverlayToolHandleColor);
 
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::WireframeBase, 0.0f), 1.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SourceWire, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SelectedEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::OpenEdge, 2.0f), 2.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::GroupBounds, 0.0f), 1.5f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::ToolPlaneLine, 1.0f), 1.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::ToolHandle, 2.0f), 2.0f);
     EXPECT_FLOAT_EQ(viewportOverlayPointSizePixels(ViewportOverlayLayer::UnselectedVertex, 8.0f), 8.0f);
@@ -648,12 +657,17 @@ TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToSdkOverlayFrame) {
     frame.lines.push_back({.layer = ViewportOverlayLayer::SourceWire, .color = kOverlaySelectionWireColor});
     frame.lines.push_back({.layer = ViewportOverlayLayer::HoverEdge, .color = kOverlayRemoveWireColor});
     frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge, .color = rgba8(255, 255, 255)});
-    frame.points.push_back({.layer = ViewportOverlayLayer::SnapTargetVertex});
+    frame.lines.push_back({.layer = ViewportOverlayLayer::GroupBounds, .color = kOverlayGroupBoundsColor});
+    frame.points.push_back({
+            .layer = ViewportOverlayLayer::SnapTargetVertex,
+            .color = rgba8(255, 0, 0),
+            .sizePixels = 14.0f,
+    });
 
     ViewportOverlayStyleResolver::apply(frame, settings);
 
     ASSERT_EQ(frame.triangles.size(), 1u);
-    ASSERT_EQ(frame.lines.size(), 4u);
+    ASSERT_EQ(frame.lines.size(), 5u);
     ASSERT_EQ(frame.points.size(), 1u);
     EXPECT_EQ(frame.triangles[0].color, rgba8(255, 0, 255));
     EXPECT_EQ(frame.lines[0].color, rgba8(255, 0, 0));
@@ -664,8 +678,10 @@ TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToSdkOverlayFrame) {
     EXPECT_FLOAT_EQ(frame.lines[2].widthPixels, 4.0f);
     EXPECT_EQ(frame.lines[3].color, rgba8(0, 255, 0));
     EXPECT_FLOAT_EQ(frame.lines[3].widthPixels, 3.0f);
-    EXPECT_EQ(frame.points[0].color, rgba8(255, 255, 0));
-    EXPECT_FLOAT_EQ(frame.points[0].sizePixels, 10.0f);
+    EXPECT_EQ(frame.lines[4].color, kOverlayGroupBoundsColor);
+    EXPECT_FLOAT_EQ(frame.lines[4].widthPixels, 1.0f);
+    EXPECT_EQ(frame.points[0].color, rgba8(255, 0, 0));
+    EXPECT_FLOAT_EQ(frame.points[0].sizePixels, 14.0f);
 }
 
 TEST(ViewportCameraAdapterTests, BuildsOverlayAndModelingCamerasFromSharedBasis) {
@@ -938,6 +954,71 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, WireframeObjectSelectionUsesWhiteBaseAndShadedOverlayWires) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("stripWireframeObjectFaceFills(overlayFrame, overlayMode)"), std::string::npos);
+    EXPECT_NE(source.find("wireframeUsesWireOnlyObjectSelection"), std::string::npos);
+    EXPECT_NE(source.find("rgba8(255, 255, 255)"), std::string::npos);
+    EXPECT_NE(source.find("ViewportOverlayLayer::WireframeBase"), std::string::npos);
+    EXPECT_NE(source.find("ViewportOverlayLayer::SelectedVisibleFace"), std::string::npos);
+    EXPECT_NE(source.find("ViewportOverlayLayer::HoverFace"), std::string::npos);
+    EXPECT_EQ(source.find("selectedWire ? kOverlaySelectionWireColor : kOverlaySourceWireColor"), std::string::npos);
+    EXPECT_NE(source.find("appendMeshSelectionWire(\n                frame,\n                document,\n                assets,\n                entity"),
+            std::string::npos);
+    EXPECT_NE(source.find("ViewportOverlayStyleResolver::apply(overlayFrame, settings);\n            appendSceneWireframeOverlay"),
+            std::string::npos);
+}
+
+TEST(ViewportPanelTests, GroupSelectionCageUsesDedicatedYellowLayerOutsideGroupMode) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find(".layer = ViewportOverlayLayer::GroupBounds"), std::string::npos);
+    EXPECT_NE(source.find(".color = kOverlayGroupBoundsColor"), std::string::npos);
+    EXPECT_NE(source.find("appendGroupSelectionCages(frame, document, assets);\n    selectionOverlayCache_.update"),
+            std::string::npos);
+    EXPECT_EQ(source.find("if (overlaySummary.mode == ModelingSelectionMode::Group) {\n        appendGroupSelectionCages"),
+            std::string::npos);
+}
+
+TEST(ViewportPanelTests, ToolActivationPreservesGroupModeSceneSelection) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("const bool preserveGroupSelection"), std::string::npos);
+    EXPECT_NE(source.find("selectedBeforeToolActivation"), std::string::npos);
+    EXPECT_NE(source.find("activeBeforeToolActivation"), std::string::npos);
+    EXPECT_NE(source.find("documentCommands.selectEntities(selectedBeforeToolActivation, activeBeforeToolActivation)"),
+            std::string::npos);
+    EXPECT_NE(source.find("modeling.setSelectionMode(ModelingSelectionMode::Group)"), std::string::npos);
+    EXPECT_NE(source.find("inputRouter_.setSelectionMode(ViewportSelectionMode::Group)"), std::string::npos);
+    EXPECT_NE(source.find("bool ViewportPanel::activateToolFromMenu(\n        ViewportToolId tool,\n        SceneDocument& document,\n        DocumentCommandService& documentCommands"),
+            std::string::npos);
+    EXPECT_NE(source.find("Group selection restore after menu tool activation failed"), std::string::npos);
+    EXPECT_EQ(source.find("inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));\n    inputRouter_.clearModalToolState();"),
+            std::string::npos);
+}
+
 TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
@@ -1021,6 +1102,29 @@ TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
     EXPECT_EQ(source.find("input.gizmo_size_pixels = 68.0 * std::max(gizmoSizeScale"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("selectedTransformWorldBounds(document, request.assets)"), std::string::npos);
+    EXPECT_NE(source.find("entityHierarchyWorldBounds(document, assets, entity)"), std::string::npos);
+    EXPECT_NE(source.find("snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, activeGridSize, snapEnabled)"),
+            std::string::npos);
+    EXPECT_NE(source.find("snapRotationRadians(screenDelta * 0.01f, snapEnabled)"), std::string::npos);
+    EXPECT_NE(source.find("quader_editor_core::scale_pixels_per_factor"), std::string::npos);
+    EXPECT_NE(source.find("quader_editor_core::snapped_scale_factor"), std::string::npos);
+    EXPECT_NE(source.find("selectionBounds,\n                        startWorldPivot_,\n                        snapEnabled,\n                        activeGridSize"),
+            std::string::npos);
+    EXPECT_EQ(source.find("applyAxis(next.scale.x, next.scale.y, next.scale.z, screenAxisDelta(activeAxis_) * 0.01f)"),
+            std::string::npos);
+}
+
 TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) /
@@ -1063,7 +1167,8 @@ TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("if (drawPane.focusHovered && !splitConsumed)"), std::string::npos);
+    EXPECT_NE(source.find("if (drawPane.focusHovered && !drawPane.chromeConsumesInput && !splitConsumed)"),
+            std::string::npos);
     EXPECT_NE(source.find("focusedPaneId_ = drawPane.pane->id"), std::string::npos);
 }
 
@@ -1217,6 +1322,10 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(presenter.find("ImGui::MenuItem(label.c_str(), nullptr, false, enabled)"), std::string::npos);
     EXPECT_NE(presenter.find("findModelingCommandTool(action.actionId)"), std::string::npos);
     EXPECT_NE(presenter.find("executeTrackedCommandTool(undoRedo, modeling, commandTool->id())"), std::string::npos);
+    EXPECT_NE(presenter.find("shouldCloseOperationsPopupForMouseClick()"), std::string::npos);
+    EXPECT_NE(presenter.find("isGenericContextAction(action.actionId)"), std::string::npos);
+    EXPECT_NE(presenter.find("ImGui::Separator()"), std::string::npos);
+    EXPECT_NE(presenter.find("ImGui::CloseCurrentPopup()"), std::string::npos);
     EXPECT_EQ(presenter.find("modeling.executeContextAction(action.actionId)"), std::string::npos);
     EXPECT_EQ(presenter.find("action.operationId == \"bridge\""), std::string::npos);
     EXPECT_EQ(presenter.find("uiContext.requestToolSettingsPanel()"), std::string::npos);
@@ -1232,6 +1341,10 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_EQ(source.find("selectFromViewport"), std::string::npos);
     EXPECT_NE(selectionController.find(".preserveSelectionOnMiss = preserveSelectionOnMiss"), std::string::npos);
     EXPECT_NE(selectionController.find(".preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit"), std::string::npos);
+    EXPECT_NE(selectionController.find("if (groupMode)"), std::string::npos);
+    EXPECT_NE(selectionController.find("const EntityId hitMesh = pickMeshEntityByBounds(document, assets, worldRay)"), std::string::npos);
+    EXPECT_NE(selectionController.find("const EntityId targetGroup = nearestGroupAncestor(document, hitMesh)"), std::string::npos);
+    EXPECT_EQ(selectionController.find("modeling.previewSelectionHover"), std::string::npos);
     EXPECT_NE(source.find("preserveContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("shouldPreserveViewportContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("flyCursorCaptureScreen_"), std::string::npos);
@@ -1587,7 +1700,8 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("transformGizmoController_.draw({"), std::string::npos);
     EXPECT_NE(source.find(".suppressHoverWork = suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find(".suppressHoverWork = true"), std::string::npos);
-    EXPECT_NE(transformGizmoSource.find("if (interactive) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
+    EXPECT_EQ(transformGizmoSource.find("if (interactive) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
     EXPECT_NE(transformGizmoSource.find("mouseInsideViewport && !request.suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find("hoverController_.invalidate()"), std::string::npos);
     EXPECT_NE(source.find("hoverController_.claim(hoverWorkKey)"), std::string::npos);
@@ -1608,7 +1722,7 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("if (!input.modifiers.primary) {\n                    const ModelingCommandResult clearHover = modeling.clearSelectionHover();"), std::string::npos);
     EXPECT_NE(source.find("!selectionHoverSuppressedThisFrame"), std::string::npos);
     EXPECT_NE(source.find("const ModelingHoverTarget hoveredBeforeSelection = modeling.selectionHoverSummary().target;\n            const ModelingSelectionSummary summary = selectionController_.pickSelection"), std::string::npos);
-    EXPECT_NE(source.find("paintSelectionActive_ = summary.mode != ModelingSelectionMode::Object;\n            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);"), std::string::npos);
+    EXPECT_NE(source.find("paintSelectionActive_ = componentSelectionMode(summary.mode);\n            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCache_.markDirty()"), std::string::npos);
@@ -1903,13 +2017,16 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(rendererSource.find("renderPassCoordinator_.render(renderer, view_, renderTarget_.renderTarget())"), std::string::npos);
     EXPECT_NE(coordinatorSource.find("view->setVisibleLayers(kViewportAllLayerMask, visibleLayerMask())"), std::string::npos);
 
-    const std::size_t prepareViewports = appSource.find("ui_.prepareViewports(renderBridge_)");
+    const std::size_t prepareViewports =
+            appSource.find("ui_.prepareViewports(renderBridge_, projectSession_.scene(), projectSession_.assets())");
     const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
     ASSERT_NE(prepareViewports, std::string::npos);
     ASSERT_NE(beginFrame, std::string::npos);
     EXPECT_LT(prepareViewports, beginFrame);
 
-    EXPECT_NE(viewportPanelSource.find("void ViewportPanel::prepareViewports(SceneRenderBridge& renderBridge)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("void ViewportPanel::prepareViewports("), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("const SceneDocument& document"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("const AssetRegistry& assets"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("viewportGridLayerMask(viewportPaneIndex(paneId))"), std::string::npos);
@@ -2053,6 +2170,12 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
     EXPECT_NE(source.find("context.style.sidebarMinWidth"), std::string::npos);
     EXPECT_NE(source.find("ImGuiTableFlags_SizingFixedFit"), std::string::npos);
     EXPECT_NE(source.find("ImGuiTableFlags_NoSavedSettings"), std::string::npos);
+    EXPECT_NE(source.find("inputTextWithLeftLabel(\"name\""), std::string::npos);
+    EXPECT_NE(source.find("ImGui::CollapsingHeader(transformLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)"), std::string::npos);
+    EXPECT_NE(source.find("context.documentCommands.setMeshComponent"), std::string::npos);
+    EXPECT_NE(source.find("ui.inspector.double_sided"), std::string::npos);
+    EXPECT_NE(source.find("ui.inspector.hidden"), std::string::npos);
+    EXPECT_NE(source.find(".after = !hidden"), std::string::npos);
     EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, delta"), std::string::npos);
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + delta"), std::string::npos);
 }
@@ -2070,6 +2193,15 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
     EXPECT_NE(source.find("entityRecordsTreeOrder()"), std::string::npos);
     EXPECT_NE(source.find("ImGui::TreeNodeEx"), std::string::npos);
     EXPECT_NE(source.find("drawList->AddImage"), std::string::npos);
+    EXPECT_NE(source.find("drawHierarchyGuides"), std::string::npos);
+    EXPECT_NE(source.find("context.icons.lock"), std::string::npos);
+    EXPECT_NE(source.find("context.icons.hide"), std::string::npos);
+    EXPECT_NE(source.find("drawOutlinerText"), std::string::npos);
+    EXPECT_NE(source.find("EntityId activeSelection = record.id"), std::string::npos);
+    EXPECT_NE(source.find("previousMode == ModelingSelectionMode::Group"), std::string::npos);
+    EXPECT_NE(source.find("context.modeling.setSelectionMode(ModelingSelectionMode::Group)"), std::string::npos);
+    EXPECT_EQ(source.find("selectionTargetForMode"), std::string::npos);
+    EXPECT_EQ(source.find("nearestGroupAncestor(context.document"), std::string::npos);
     EXPECT_NE(source.find("ImGui::OpenPopupOnItemClick(\"EntityContext\""), std::string::npos);
     EXPECT_NE(source.find("ImGui::BeginPopup(\"EntityContext\")"), std::string::npos);
     EXPECT_NE(source.find("ui.outliner.delete"), std::string::npos);
@@ -2130,7 +2262,7 @@ TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("ImGuiTreeNodeFlags_Selected"), std::string::npos);
-    EXPECT_NE(source.find("drawList->AddText(textPos"), std::string::npos);
+    EXPECT_NE(source.find("drawOutlinerText("), std::string::npos);
     EXPECT_EQ(source.find("ImGui::Selectable(record.name.c_str(), record.selected"), std::string::npos);
     EXPECT_EQ(source.find("ImGuiSelectableFlags_AllowOverlap"), std::string::npos);
 }
@@ -2148,7 +2280,7 @@ TEST(OutlinerPanelTests, KeepsRootRowsTightlyInset) {
     EXPECT_NE(source.find("constexpr float kOutlinerRowLeftPadding = 3.0f"), std::string::npos);
     EXPECT_NE(source.find("ImGuiStyleVar_IndentSpacing"), std::string::npos);
     EXPECT_NE(source.find("ImGuiStyleVar_FramePadding"), std::string::npos);
-    EXPECT_NE(source.find("record.hasChildren ? ImGui::GetTreeNodeToLabelSpacing() : kOutlinerRowLeftPadding"), std::string::npos);
+    EXPECT_NE(source.find("rowMin.x + ImGui::GetTreeNodeToLabelSpacing()"), std::string::npos);
     EXPECT_NE(source.find("drawList->AddImage(icon"), std::string::npos);
     EXPECT_EQ(source.find("ImGui::SetCursorScreenPos"), std::string::npos);
 }
@@ -2211,7 +2343,7 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
     const std::string styleSource{
             std::istreambuf_iterator<char>(styleFile),
             std::istreambuf_iterator<char>()};
-    EXPECT_NE(styleSource.find("sidebarMinWidth = 270.0f"), std::string::npos);
+    EXPECT_NE(styleSource.find("sidebarMinWidth = 340.0f"), std::string::npos);
 
     std::ifstream dockPanelFile(uiPath / "UIDockPanel.h");
     ASSERT_TRUE(dockPanelFile.is_open());
@@ -2236,6 +2368,8 @@ TEST(UISystemTests, SidebarsUseMinimumWidthAndFlyNavigationCapturesCursor) {
             std::istreambuf_iterator<char>()};
     EXPECT_NE(uiSystemSource.find("viewportSettingsPanel_.draw(context, settingsPanelOpen_)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("toolSettingsPanel_.draw(context, toolSettingsPanelOpen_)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("icons_.lock = load(\"lock_icon.png\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("icons_.hide = load(\"hide_icon.png\")"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
@@ -2398,6 +2532,7 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     EXPECT_NE(uiSystemSource.find("toolSettingsPanel_.draw(context, toolSettingsPanelOpen_)"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("context.modeling.toolSettingsTarget()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("modeling.toolPreviewMeshes()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("previewMesh.material != InvalidAssetId ? previewMesh.material : defaultMaterial"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets)"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("switch (target.kind)"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("context.modeling.setInteractionSettings(settings)"), std::string::npos);
@@ -2449,7 +2584,8 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
     EXPECT_NE(mainMenuBarSource.find("toolLabel(context.localization, *tool)"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("viewport.tool."), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("viewportToolCatalog()"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("activateToolFromMenu(tool->viewportTool(), context.modeling)"), std::string::npos);
+    EXPECT_NE(mainMenuBarSource.find("activateToolFromMenu(\n                    tool->viewportTool(),\n                    context.document,\n                    context.documentCommands,\n                    context.modeling"),
+            std::string::npos);
 
     const std::filesystem::path toolCatalogPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "ViewportToolCatalog.cpp";
@@ -3452,7 +3588,7 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
     const ViewportModifiers primary{.primary = true};
     const ViewportModifiers primaryShift{.primary = true, .shift = true};
     const ViewportModifiers shift{.shift = true};
-    const std::array<ShortcutCase, 19> shortcuts{{
+    const std::array<ShortcutCase, 21> shortcuts{{
             {"Ctrl+A select all", ViewportKey::A, primary, ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global},
             {"Ctrl+I invert selection", ViewportKey::I, primary, ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global},
             {"Delete delete selection", ViewportKey::Delete, {}, ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global},
@@ -3466,9 +3602,11 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
             {"Ctrl+R repeat", ViewportKey::R, primary, ViewportShortcutKind::RepeatLastAction, ViewportShortcutContext::Global},
             {"M merge active", ViewportKey::M, {}, ViewportShortcutKind::MergeActive, ViewportShortcutContext::Viewport},
             {"Shift+M merge center", ViewportKey::M, shift, ViewportShortcutKind::MergeCenter, ViewportShortcutContext::Viewport},
+            {"X delete popup", ViewportKey::X, {}, ViewportShortcutKind::DeletePopup, ViewportShortcutContext::Viewport},
             {"Shift+X mirror X", ViewportKey::X, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::X, true},
             {"Shift+Y mirror Y", ViewportKey::Y, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::Y, true},
             {"Shift+Z mirror Z", ViewportKey::Z, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::Z, true},
+            {"F flip mesh normals", ViewportKey::F, {}, ViewportShortcutKind::FlipMeshNormals, ViewportShortcutContext::Viewport},
             {"Shift+H flip horizontal", ViewportKey::H, shift, ViewportShortcutKind::FlipHorizontal, ViewportShortcutContext::Viewport},
             {"Shift+V flip vertical", ViewportKey::V, shift, ViewportShortcutKind::FlipVertical, ViewportShortcutContext::Viewport},
             {"Shift+T apply material", ViewportKey::T, shift, ViewportShortcutKind::ApplyMaterial, ViewportShortcutContext::Viewport},
@@ -3505,8 +3643,15 @@ TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
     input.modifiers.shift = true;
 
     router.setSelectionMode(ViewportSelectionMode::Face);
-    input.pressedKeys = {ViewportKey::H};
+    input.modifiers.shift = false;
+    input.pressedKeys = {ViewportKey::F};
     ViewportInputResult result = router.handleFrame(input, camera);
+    EXPECT_FALSE(result.shortcutHandled);
+    EXPECT_FALSE(result.consumed);
+
+    input.modifiers.shift = true;
+    input.pressedKeys = {ViewportKey::H};
+    result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.consumed);
 
@@ -3517,6 +3662,13 @@ TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
     EXPECT_FALSE(result.consumed);
 
     router.setSelectionMode(ViewportSelectionMode::Object);
+    input.modifiers.shift = false;
+    input.pressedKeys = {ViewportKey::F};
+    result = router.handleFrame(input, camera);
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FlipMeshNormals);
+
+    input.modifiers.shift = true;
     input.pressedKeys = {ViewportKey::H};
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
@@ -3661,13 +3813,6 @@ TEST(ViewportInputRouterTests, FocusShortcutsMatchUnityViewportContract) {
     input.pressedKeys = {ViewportKey::Home};
 
     auto result = router.handleFrame(input, camera);
-    EXPECT_TRUE(result.shortcutHandled);
-    EXPECT_TRUE(result.focusDocumentRequested);
-    EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FocusDocument);
-
-    camera.scroll(1.0f);
-    input.pressedKeys = {ViewportKey::F};
-    result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_TRUE(result.focusDocumentRequested);
     EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FocusDocument);
@@ -5100,7 +5245,7 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeObjectPanelAndExecuteHostA
 
     const ModelingActionItem* invert = findActionItem(*objectPanel, "invert_mesh");
     ASSERT_NE(invert, nullptr);
-    EXPECT_EQ(invert->label, "Invert Mesh");
+    EXPECT_EQ(invert->label, "Flip Mesh Normals");
     EXPECT_EQ(invert->operationId, "flip_face_normals");
     EXPECT_EQ(invert->visibility, ModelingActionVisibility::Enabled);
 
@@ -7693,6 +7838,43 @@ TEST(ModelingSessionServiceTests, SelectionModeSwitchPreservesSceneOnlySelection
     scene.setSelected(empty, true);
     EXPECT_FALSE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
     EXPECT_EQ(scene.primarySelection(), empty);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, GroupSelectionSurvivesTransformToolActivation) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Grouped Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    const EntityId group = scene.createEmpty("Group");
+    ASSERT_TRUE(scene.setParent(box.object.entity, group, true));
+    scene.clearSelection();
+    scene.setSelected(group, true);
+    scene.setActiveSelection(group);
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Group).ok);
+
+    ASSERT_TRUE(service.activateViewportTool(ModelingViewportTool::Move).ok);
+    EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Group);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.primarySelection(), group);
+    EXPECT_EQ(scene.selectedEntities().front(), group);
+
+    ASSERT_TRUE(service.activateViewportTool(ModelingViewportTool::Rotate).ok);
+    EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Group);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    EXPECT_EQ(scene.primarySelection(), group);
+#else
+    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Move).ok);
 #endif
 }
 

@@ -1,15 +1,18 @@
 #include "modeling/ModelingSessionService.h"
 
 #include "assets/AssetRegistry.h"
+#include "document/DocumentCommandService.h"
 #include "modeling/ModelingSessionServices.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
+#include "scene/SceneEntityNaming.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -25,6 +28,7 @@
 #include <quader_editor_core/repeat_last_action.h>
 #include <quader_editor_core/runtime_command.h>
 #include <quader_editor_core/session.h>
+#include <quader_editor_core/tool/box_tool.h>
 #include <quader_editor_core/tool/cut_tool.h>
 #include <quader_editor_core/tool/mirror_tool.h>
 #include <quader_editor_core/tool/move_tool.h>
@@ -172,8 +176,7 @@ ModelingCutMode fromSdk(quader_editor_core::CutMode mode) {
 
 quader_editor_core::EditorOperationSettings settingsForOperation(
         quader_editor_core::EditorOperationId operation,
-        const ModelingInteractionSettings& interactionSettings,
-        std::string_view actionId = {}) {
+        const ModelingInteractionSettings& interactionSettings) {
     switch (operation) {
     case quader_editor_core::EditorOperationId::bridge:
         return quader_editor_core::BridgeOperationSettings{.steps = interactionSettings.bridgeSteps};
@@ -203,7 +206,7 @@ quader_editor_core::EditorOperationSettings settingsForOperation(
         return quader_editor_core::DuplicateMeshesOperationSettings{};
     case quader_editor_core::EditorOperationId::recalculate_face_normals: {
         quader_editor_core::RecalculateFaceNormalsOperationSettings settings;
-        settings.outside = actionId != "recalculate_inside_mesh" && actionId != "recalculate_inside_faces";
+        settings.outside = true;
         return settings;
     }
     case quader_editor_core::EditorOperationId::assign_material:
@@ -334,6 +337,7 @@ quader_editor_core::SelectionMode toSdk(ModelingSelectionMode mode) {
     case ModelingSelectionMode::Face:
         return quader_editor_core::SelectionMode::face;
     case ModelingSelectionMode::Object:
+    case ModelingSelectionMode::Group:
         return quader_editor_core::SelectionMode::object;
     }
     return quader_editor_core::SelectionMode::object;
@@ -601,6 +605,21 @@ ViewportOverlayFrame fromSdk(
         });
     }
     return result;
+}
+
+void appendWorldSpaceSdkOverlayPoints(
+        ViewportOverlayFrame& frame,
+        const std::vector<quader_editor_core::SelectionOverlayPoint>& points) {
+    frame.points.reserve(frame.points.size() + points.size());
+    for (const quader_editor_core::SelectionOverlayPoint& point : points) {
+        const ViewportOverlayLayer layer = fromSdk(point.layer);
+        frame.points.push_back(ViewportOverlayPoint{
+                .layer = layer,
+                .position = fromSdk(point.position),
+                .color = viewportOverlayColorFor(layer, point.color_abgr),
+                .sizePixels = point.size_pixels,
+        });
+    }
 }
 
 struct DrawnPlanePreviewFrame {
@@ -1106,6 +1125,35 @@ MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
     return toMeshAsset(object.document);
 }
 
+std::optional<MeshAsset> boxPreviewMeshFromDescriptor(const quader_editor_core::BoxPreviewDescriptor& preview) {
+    if (!preview.ok ||
+            preview.drag_state != quader_editor_core::BoxDragState::height ||
+            preview.bounds.empty) {
+        return std::nullopt;
+    }
+
+    const std::vector<quader_poly::Vec3> corners = quader_editor_core::box_preview_corners(preview);
+    if (corners.size() != 8U) {
+        return std::nullopt;
+    }
+
+    std::vector<quader_editor_core::PolygonObject> objects;
+    int activeObjectId = -1;
+    quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
+    const quader_editor_core::CommandResult result =
+            quader_editor_core::create_box_from_corners(objects, 1, corners, activeObjectId, selectionMode);
+    if (!result.ok || objects.empty()) {
+        return std::nullopt;
+    }
+
+    MeshAsset mesh = toMeshAsset(objects.front());
+    mesh.name = "Box Preview";
+    if (mesh.vertices.empty() || mesh.indices.empty()) {
+        return std::nullopt;
+    }
+    return mesh;
+}
+
 const quader_editor_core::PolygonObject* findObject(
         const quader_editor_core::EditorSession& session,
         int sdkObjectId) {
@@ -1478,6 +1526,9 @@ public:
 
     [[nodiscard]] ModelingSelectionMode selectionMode() const {
 #if QUADER_HAS_MODELING_SDK
+        if (appSelectionMode_ == ModelingSelectionMode::Group) {
+            return ModelingSelectionMode::Group;
+        }
         return fromSdk(session_.selection_mode());
 #else
         return ModelingSelectionMode::Object;
@@ -1486,6 +1537,18 @@ public:
 
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const {
 #if QUADER_HAS_MODELING_SDK
+        if (appSelectionMode_ == ModelingSelectionMode::Group) {
+            const std::vector<EntityId> selected = scene_.selectedEntities();
+            const bool hasSelection = !selected.empty();
+            return ModelingSelectionSummary{
+                    .mode = ModelingSelectionMode::Group,
+                    .hasSelection = hasSelection,
+                    .activeKind = hasSelection ? ModelingActiveSelectionKind::Object : ModelingActiveSelectionKind::None,
+                    .selectedObjectCount = static_cast<std::uint32_t>(selected.size()),
+                    .contentRevision = session_.state().content_revision,
+                    .selectionRevision = scene_.revision(),
+            };
+        }
         const quader_editor_core::ActiveSelection active = session_.active_selection();
         const std::vector<int> selectedObjects = session_.selected_object_ids();
         std::uint32_t selectedVertexCount = 0;
@@ -1542,6 +1605,10 @@ public:
         ViewportOverlayFrame frame = fromSdk(overlayService_.selectionOverlayCurrentFrame(session_, runtime_, hover),
                 objectRegistry_.entitiesByObject(),
                 scene_);
+        if (runtime_.transform_drag_active()) {
+            appendWorldSpaceSdkOverlayPoints(frame,
+                    quader_editor_core::transform_drag_snap_overlay_points(runtime_.transform_drag_state()));
+        }
         const quader_editor_core::CutToolState& cut = runtime_.cut_state();
         if (quader_editor_core::cut_is_active(cut)) {
             const std::vector<quader_poly::Vec3> cutPoints =
@@ -1611,6 +1678,15 @@ public:
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const {
 #if QUADER_HAS_MODELING_SDK
         std::vector<ModelingToolPreviewMesh> previewMeshes;
+        if (const std::optional<MeshAsset> boxPreview =
+                        boxPreviewMeshFromDescriptor(runtime_.box_preview_descriptor(true))) {
+            previewMeshes.push_back(ModelingToolPreviewMesh{
+                    .sourceEntity = InvalidEntityId,
+                    .material = InvalidAssetId,
+                    .mesh = *boxPreview,
+            });
+        }
+
         const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
         if (!quader_editor_core::mirror_is_active(mirror) ||
                 !quader_editor_core::mirror_can_preview(mirror) ||
@@ -1622,7 +1698,7 @@ public:
                 sceneTransformedObjectsForPicking();
         const std::vector<quader_poly::Document> documents =
                 runtime_.mirror_preview_documents(previewObjects);
-        previewMeshes.reserve(documents.size());
+        previewMeshes.reserve(previewMeshes.size() + documents.size());
         std::size_t documentIndex = 0;
         for (const int objectId : mirror.target_object_ids) {
             if (documentIndex >= documents.size()) {
@@ -1788,8 +1864,205 @@ public:
 #endif
     }
 
+    void restoreSceneSelection(const std::vector<EntityId>& selected, EntityId active) {
+        std::unordered_set<EntityId> desired;
+        desired.reserve(selected.size());
+        for (const EntityId entity : selected) {
+            if (scene_.exists(entity)) {
+                desired.insert(entity);
+            }
+        }
+
+        for (const EntityId entity : scene_.selectedEntities()) {
+            if (!desired.contains(entity)) {
+                scene_.setSelected(entity, false);
+            }
+        }
+        for (const EntityId entity : selected) {
+            if (scene_.exists(entity)) {
+                scene_.setSelected(entity, true);
+            }
+        }
+
+        if (active != InvalidEntityId && desired.contains(active)) {
+            scene_.setActiveSelection(active);
+            return;
+        }
+        for (const EntityId entity : selected) {
+            if (scene_.exists(entity)) {
+                scene_.setActiveSelection(entity);
+                return;
+            }
+        }
+    }
+
+    ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
+        const std::vector<EntityId> selected = scene_.selectedEntities();
+        std::unordered_set<EntityId> selectedSet(selected.begin(), selected.end());
+        std::vector<EntityId> roots;
+        for (const EntityId entity : scene_.entityTreeOrder()) {
+            if (!selectedSet.contains(entity)) {
+                continue;
+            }
+            bool ancestorSelected = false;
+            EntityId parent = scene_.parent(entity);
+            while (parent != InvalidEntityId) {
+                if (selectedSet.contains(parent)) {
+                    ancestorSelected = true;
+                    break;
+                }
+                parent = scene_.parent(parent);
+            }
+            if (!ancestorSelected) {
+                roots.push_back(entity);
+            }
+        }
+        if (roots.empty()) {
+            return {.ok = false, .changed = false, .message = "Select a group to duplicate."};
+        }
+
+        std::vector<EntityId> sourceMeshes;
+        for (const EntityId root : roots) {
+            for (const EntityId entity : scene_.descendants(root, true)) {
+                if (scene_.modelingObject(entity) != nullptr) {
+                    sourceMeshes.push_back(entity);
+                }
+            }
+        }
+
+        std::vector<EntityId> duplicateMeshes;
+        auto restoreGroupSelection = [&]() {
+            (void)documentCommands.selectEntities(roots, roots.front());
+            (void)setSelectionMode(ModelingSelectionMode::Group);
+        };
+        if (!sourceMeshes.empty()) {
+            const std::vector<EntityId> beforeEntities = scene_.entities();
+            std::unordered_set<EntityId> beforeSet(beforeEntities.begin(), beforeEntities.end());
+            (void)documentCommands.selectEntities(sourceMeshes);
+            const ModelingCommandResult objectMode = setSelectionMode(ModelingSelectionMode::Object);
+            if (!objectMode.ok) {
+                restoreGroupSelection();
+                return objectMode;
+            }
+            syncObjectSelectionFromScene();
+            const ModelingCommandResult duplicate = executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+            if (!duplicate.ok) {
+                restoreGroupSelection();
+                return duplicate;
+            }
+
+            for (const EntityId entity : scene_.entities()) {
+                if (!beforeSet.contains(entity) && scene_.modelingObject(entity) != nullptr) {
+                    duplicateMeshes.push_back(entity);
+                }
+            }
+            std::sort(duplicateMeshes.begin(), duplicateMeshes.end());
+            if (duplicateMeshes.size() != sourceMeshes.size()) {
+                restoreGroupSelection();
+                return {
+                        .ok = false,
+                        .changed = duplicate.changed,
+                        .message = "Group duplicate did not create matching mesh clones.",
+                };
+            }
+        }
+
+        std::unordered_map<EntityId, EntityId> cloneBySource;
+        for (std::size_t index = 0; index < sourceMeshes.size() && index < duplicateMeshes.size(); ++index) {
+            cloneBySource[sourceMeshes[index]] = duplicateMeshes[index];
+        }
+
+        auto copyCommonEntityState = [&](EntityId source, EntityId clone, bool renameClone = true) {
+            if (renameClone) {
+                if (const NameComponent* name = scene_.name(source)) {
+                    (void)documentCommands.renameEntity(clone, SceneEntityNaming::nextName(scene_, name->name));
+                }
+            }
+            if (const TransformComponent* sourceTransform = scene_.transform(source)) {
+                (void)documentCommands.applyEntityTransform(clone, *sourceTransform);
+            }
+            if (const VisibilityComponent* visibility = scene_.visibility(source)) {
+                (void)documentCommands.setVisible(clone, visibility->visible);
+            }
+            if (const LockComponent* lock = scene_.lock(source)) {
+                (void)documentCommands.setLocked(clone, lock->locked);
+            }
+        };
+
+        std::function<EntityId(EntityId)> cloneEntity = [&](EntityId source) -> EntityId {
+            EntityId clone = InvalidEntityId;
+            if (scene_.modelingObject(source) != nullptr) {
+                const auto mapped = cloneBySource.find(source);
+                if (mapped == cloneBySource.end()) {
+                    return InvalidEntityId;
+                }
+                clone = mapped->second;
+                copyCommonEntityState(source, clone);
+            } else {
+                const NameComponent* name = scene_.name(source);
+                const std::string baseName = name ? name->name : "Entity";
+                TransformComponent transform;
+                if (const TransformComponent* sourceTransform = scene_.transform(source)) {
+                    transform = *sourceTransform;
+                }
+                const DocumentCommandResult created = documentCommands.createEntity(
+                        SceneEntityNaming::nextName(scene_, baseName),
+                        scene_.kind(source),
+                        InvalidEntityId,
+                        transform,
+                        &clone);
+                if (!created.ok || !created.changed) {
+                    return InvalidEntityId;
+                }
+                copyCommonEntityState(source, clone, false);
+            }
+
+            for (const EntityId child : scene_.children(source)) {
+                const EntityId childClone = cloneEntity(child);
+                if (childClone != InvalidEntityId) {
+                    (void)documentCommands.reparentEntity(childClone, clone, false);
+                }
+            }
+            return clone;
+        };
+
+        std::vector<EntityId> rootClones;
+        for (const EntityId root : roots) {
+            const EntityId clone = cloneEntity(root);
+            if (clone != InvalidEntityId) {
+                (void)documentCommands.reparentEntity(clone, scene_.parent(root), false);
+                rootClones.push_back(clone);
+            }
+        }
+
+        if (rootClones.empty()) {
+            restoreGroupSelection();
+            return {.ok = false, .changed = false, .message = "Group duplicate failed."};
+        }
+
+        (void)documentCommands.selectEntities(rootClones, rootClones.front());
+        (void)setSelectionMode(ModelingSelectionMode::Group);
+        return {.ok = true, .changed = true, .message = "Group duplicated."};
+    }
+
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode) {
 #if QUADER_HAS_MODELING_SDK
+        if (mode == ModelingSelectionMode::Group) {
+            const bool changed = appSelectionMode_ != ModelingSelectionMode::Group ||
+                    session_.selection_mode() != quader_editor_core::SelectionMode::object;
+            appSelectionMode_ = ModelingSelectionMode::Group;
+            if (session_.selection_mode() != quader_editor_core::SelectionMode::object) {
+                session_.set_selection_mode(quader_editor_core::SelectionMode::object);
+                invalidateSelectionOverlayCaches();
+            }
+            return {
+                    .ok = true,
+                    .changed = changed,
+                    .message = changed ? "Selection mode set to Group." : "Selection mode already Group.",
+            };
+        }
+
+        appSelectionMode_ = mode;
         std::vector<EntityId> sceneOnlySelection;
         sceneOnlySelection.reserve(scene_.selectedEntities().size());
         for (const EntityId entity : scene_.selectedEntities()) {
@@ -2221,10 +2494,7 @@ public:
         ModelingCommandResult result = executeSdkOperationCommand(
                 operation.operation_id(),
                 quader_editor_core::EditorOperationCommandPhase::begin_preview,
-                settingsForOperation(
-                        operation.operation_id(),
-                        interactionSettingsService_.settings(),
-                        action.actionId));
+                settingsForOperation(operation.operation_id(), interactionSettingsService_.settings()));
         if (result.ok) {
             toolSettingsService_.setPreviewMetadata(
                     action.actionId,
@@ -2248,10 +2518,7 @@ public:
         return executeSdkOperationCommand(
                 *operation,
                 quader_editor_core::EditorOperationCommandPhase::update_preview,
-                settingsForOperation(
-                        *operation,
-                        interactionSettingsService_.settings(),
-                        toolSettingsService_.activePreviewActionId()));
+                settingsForOperation(*operation, interactionSettingsService_.settings()));
     }
 
     ModelingCommandResult finishActiveOperationPreview(bool commit) {
@@ -2267,10 +2534,7 @@ public:
                 *operation,
                 commit ? quader_editor_core::EditorOperationCommandPhase::commit_preview :
                          quader_editor_core::EditorOperationCommandPhase::cancel_preview,
-                settingsForOperation(
-                        *operation,
-                        interactionSettingsService_.settings(),
-                        toolSettingsService_.activePreviewActionId()));
+                settingsForOperation(*operation, interactionSettingsService_.settings()));
     }
 #endif
 
@@ -2319,10 +2583,7 @@ public:
 
         return executeSdkOperation(
                 operation->operation_id(),
-                settingsForOperation(
-                        operation->operation_id(),
-                        interactionSettingsService_.settings(),
-                        found->actionId));
+                settingsForOperation(operation->operation_id(), interactionSettingsService_.settings()));
 #else
         (void)actionId;
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
@@ -2967,12 +3228,33 @@ public:
         command.command_id = quader_editor_core::EditorRuntimeCommandId::set_active_tool;
         command.settings = settings;
 
-        return executeRuntimeCommand(command, false);
+        const bool preserveGroupSelection = appSelectionMode_ == ModelingSelectionMode::Group;
+        const std::vector<EntityId> selectedBefore = preserveGroupSelection ? scene_.selectedEntities() : std::vector<EntityId>{};
+        const EntityId activeBefore = preserveGroupSelection ? scene_.primarySelection() : InvalidEntityId;
+
+        ModelingCommandResult result = executeRuntimeCommand(command, false);
+        if (preserveGroupSelection) {
+            restoreSceneSelection(selectedBefore, activeBefore);
+            appSelectionMode_ = ModelingSelectionMode::Group;
+            invalidateSelectionOverlayCaches();
+        }
+        return result;
     }
 #endif
 
     ModelingCommandResult activateViewportTool(ModelingViewportTool tool) {
 #if QUADER_HAS_MODELING_SDK
+        const bool preserveGroupSelection = appSelectionMode_ == ModelingSelectionMode::Group;
+        const std::vector<EntityId> selectedBefore = preserveGroupSelection ? scene_.selectedEntities() : std::vector<EntityId>{};
+        const EntityId activeBefore = preserveGroupSelection ? scene_.primarySelection() : InvalidEntityId;
+        const auto finish = [&](ModelingCommandResult result) {
+            if (preserveGroupSelection) {
+                restoreSceneSelection(selectedBefore, activeBefore);
+                appSelectionMode_ = ModelingSelectionMode::Group;
+                invalidateSelectionOverlayCaches();
+            }
+            return result;
+        };
         if (tool == ModelingViewportTool::Cut || tool == ModelingViewportTool::Mirror) {
             promoteDrawnPlaneToolObjectSelection();
         }
@@ -2988,14 +3270,14 @@ public:
                     activated.message = modeResult.message;
                 }
             }
-            return activated;
+            return finish(activated);
         }
         if (tool == ModelingViewportTool::Mirror) {
-            return executeRuntimeCommand(
+            return finish(executeRuntimeCommand(
                     noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::activate_mirror),
-                    false);
+                    false));
         }
-        return setActiveRuntimeTool(toSdk(tool));
+        return finish(setActiveRuntimeTool(toSdk(tool)));
 #else
         (void)tool;
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
@@ -4199,6 +4481,7 @@ private:
     ModalToolRuntime modalToolRuntime_;
     ModelingClipboardService clipboardService_;
     ModelingHistoryBridge historyBridge_;
+    ModelingSelectionMode appSelectionMode_ = ModelingSelectionMode::Object;
 
 #if QUADER_HAS_MODELING_SDK
     quader_editor_core::EditorSession session_;
@@ -4275,6 +4558,10 @@ void ModelingSessionService::syncObjectSelectionFromScene() {
 
 void ModelingSessionService::syncSceneSelectionFromSdk() {
     impl_->syncSceneSelectionFromSdk();
+}
+
+ModelingCommandResult ModelingSessionService::duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
+    return impl_->duplicateSelectedHierarchyForGroupDrag(documentCommands);
 }
 
 ModelingCommandResult ModelingSessionService::setSelectionMode(ModelingSelectionMode mode) {

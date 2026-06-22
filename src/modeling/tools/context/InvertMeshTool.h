@@ -10,7 +10,7 @@ public:
         return {
                 .id = "invert_mesh",
                 .operationId = "flip_face_normals",
-                .label = "Invert Mesh",
+                .label = "Flip Mesh Normals",
                 .kind = CommandToolKind::ContextAction,
                 .previewKind = ModelingActionPreviewKind::None,
                 .rebuildsMeshOnSuccess = true,

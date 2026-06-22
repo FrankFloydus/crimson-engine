@@ -42,6 +42,7 @@ public:
     DocumentCommandResult setLocked(EntityId entity, bool locked);
     DocumentCommandResult setLocks(std::vector<DocumentLockEdit> edits);
     DocumentCommandResult setMaterial(EntityId entity, AssetId material);
+    DocumentCommandResult setMeshComponent(EntityId entity, MeshComponent mesh);
     DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult setTransforms(std::vector<DocumentTransformEdit> edits);
 

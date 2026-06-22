@@ -41,6 +41,7 @@ enum class HostSelectionMode {
 	edge,
 	face,
 	object,
+	group,
 };
 
 enum class HostActiveSelectionKind {

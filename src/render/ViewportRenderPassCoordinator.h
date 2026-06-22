@@ -23,6 +23,8 @@ public:
 
     bool setOverlayVisible(bool visible);
 
+    bool setSceneVisible(bool visible);
+
     std::uint8_t visibleLayerMask() const;
 
     void applyVisibleLayers(filament::View* view) const;
@@ -31,6 +33,7 @@ public:
 private:
     bool groundGridVisible_ = true;
     bool overlayVisible_ = false;
+    bool sceneVisible_ = true;
     ViewportSettingColor backgroundColor_ = {0.0f, 0.0f, 0.0f, 1.0f};
     std::uint8_t gridLayerMask_ = 0x04u;
 };

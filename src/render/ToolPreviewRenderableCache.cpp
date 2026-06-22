@@ -67,6 +67,8 @@ bool ToolPreviewRenderableCache::setMeshes(const std::vector<ToolPreviewMesh>& m
                 material,
                 assets,
                 previewMesh.transform,
+                false,
+                true,
                 materialBinding_->materialRevision(assets, material)));
     }
     return true;

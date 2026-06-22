@@ -3,8 +3,12 @@
 namespace quader {
 
 void ViewportPaneController::resetCamera(ViewportPaneId paneId, ViewportCameraController& camera) const {
+    resetCamera(viewportViewForPane(paneId), camera);
+}
+
+void ViewportPaneController::resetCamera(ViewportView view, ViewportCameraController& camera) const {
     camera = ViewportCameraController{};
-    switch (viewportViewForPane(paneId)) {
+    switch (view) {
     case ViewportView::Top:
         camera.focusOrigin(64.0f);
         camera.viewAxis(ViewportViewAxis::Y, 1);

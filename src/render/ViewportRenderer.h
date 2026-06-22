@@ -38,6 +38,7 @@ public:
             const ViewportSettings& settings,
             bool visible = true);
     void setOverlayVisible(bool visible);
+    void setSceneVisible(bool visible);
     void render(filament::Renderer& renderer);
 
     ImTextureID textureId() const { return renderTarget_.textureId(); }

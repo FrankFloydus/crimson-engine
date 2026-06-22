@@ -6,11 +6,15 @@ namespace quader {
 
 class LocalizationService;
 class ModelingSessionService;
+class DocumentCommandService;
+class SceneDocument;
 class UIPanelManager;
 class ViewportPanel;
 
 struct MainMenuBarContext {
     bool& quitRequested;
+    SceneDocument& document;
+    DocumentCommandService& documentCommands;
     ModelingSessionService& modeling;
     ViewportPanel* viewportPanel = nullptr;
     UIPanelManager& panels;

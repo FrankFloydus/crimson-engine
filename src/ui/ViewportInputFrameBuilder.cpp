@@ -77,6 +77,7 @@ ViewportInputFrame ViewportInputFrameBuilder::build(const ViewportInputFrameBuil
     addPressedKeyPair(input, ImGuiKey_2, ImGuiKey_Keypad2, ViewportKey::Number2);
     addPressedKeyPair(input, ImGuiKey_3, ImGuiKey_Keypad3, ViewportKey::Number3);
     addPressedKeyPair(input, ImGuiKey_4, ImGuiKey_Keypad4, ViewportKey::Number4);
+    addPressedKeyPair(input, ImGuiKey_5, ImGuiKey_Keypad5, ViewportKey::Number5);
     addPressedKey(input, ImGuiKey_Home, ViewportKey::Home);
     addPressedKey(input, ImGuiKey_F, ViewportKey::F);
     addPressedKey(input, ImGuiKey_Space, ViewportKey::Space);

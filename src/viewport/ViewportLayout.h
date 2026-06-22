@@ -108,6 +108,8 @@ std::string_view viewportLayoutLabel(ViewportLayoutId layoutId);
 std::string_view viewportPaneStableId(ViewportPaneId paneId);
 std::string_view viewportPaneLabel(ViewportPaneId paneId);
 ViewportView viewportViewForPane(ViewportPaneId paneId);
+std::string_view viewportViewStableId(ViewportView view);
+std::string_view viewportViewLabel(ViewportView view);
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId);
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId, const ViewportLayoutState& state);
 std::vector<ViewportSplitHandle> viewportLayoutSplitHandles(ViewportLayoutId layoutId, const ViewportLayoutState& state);

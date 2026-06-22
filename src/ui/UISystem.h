@@ -51,14 +51,18 @@ public:
             AssetId defaultMaterial,
             bool& quitRequested);
     void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
-    void prepareViewports(SceneRenderBridge& renderBridge);
+    void prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets);
     void renderViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
     const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }
 
 private:
     void registerPanels(RenderSystem& renderSystem);
-    void drawDockspace(bool& quitRequested, ModelingSessionService& modeling);
+    void drawDockspace(
+            bool& quitRequested,
+            SceneDocument& document,
+            DocumentCommandService& documentCommands,
+            ModelingSessionService& modeling);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
     void enforceSidebarDockMinimums();
     void setViewportCursorCaptured(bool captured);

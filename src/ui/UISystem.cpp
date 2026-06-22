@@ -164,7 +164,7 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
         ModelingSessionService& modeling,
         AssetId defaultMaterial,
         bool& quitRequested) {
-    drawDockspace(quitRequested, modeling);
+    drawDockspace(quitRequested, document, documentCommands, modeling);
 
     bool viewportCursorCaptureRequested = false;
     Vec2 viewportCursorCapturePoint = {};
@@ -206,9 +206,10 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
     std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
     renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
     for (ModelingToolPreviewMesh& previewMesh : modelingPreviewMeshes) {
+        const AssetId material = previewMesh.material != InvalidAssetId ? previewMesh.material : defaultMaterial;
         renderPreviewMeshes.push_back(SceneRenderBridge::PreviewMesh{
                 .sourceEntity = previewMesh.sourceEntity,
-                .material = previewMesh.material,
+                .material = material,
                 .mesh = std::move(previewMesh.mesh),
                 .transform = {},
         });
@@ -226,9 +227,9 @@ void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t f
     renderer_.prepare(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
 }
 
-void UISystem::prepareViewports(SceneRenderBridge& renderBridge) {
+void UISystem::prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets) {
     if (viewportPanel_ != nullptr) {
-        viewportPanel_->prepareViewports(renderBridge);
+        viewportPanel_->prepareViewports(renderBridge, document, assets);
     }
 }
 
@@ -254,7 +255,11 @@ void UISystem::registerPanels(RenderSystem& renderSystem) {
     panels_.add(std::make_unique<ConsolePanel>());
 }
 
-void UISystem::drawDockspace(bool& quitRequested, ModelingSessionService& modeling) {
+void UISystem::drawDockspace(
+        bool& quitRequested,
+        SceneDocument& document,
+        DocumentCommandService& documentCommands,
+        ModelingSessionService& modeling) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -272,6 +277,8 @@ void UISystem::drawDockspace(bool& quitRequested, ModelingSessionService& modeli
 
     const MainMenuBarResult menuResult = mainMenuBar_.draw({
             .quitRequested = quitRequested,
+            .document = document,
+            .documentCommands = documentCommands,
             .modeling = modeling,
             .viewportPanel = viewportPanel_,
             .panels = panels_,
@@ -408,6 +415,8 @@ void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, co
 
     icons_.mesh = load("mesh_icon.png");
     icons_.empty = load("empty_icon.png");
+    icons_.lock = load("lock_icon.png");
+    icons_.hide = load("hide_icon.png");
 }
 
 void UISystem::destroyIcons() {

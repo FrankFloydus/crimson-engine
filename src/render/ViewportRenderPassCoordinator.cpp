@@ -32,8 +32,16 @@ bool ViewportRenderPassCoordinator::setOverlayVisible(bool visible) {
     return true;
 }
 
+bool ViewportRenderPassCoordinator::setSceneVisible(bool visible) {
+    if (sceneVisible_ == visible) {
+        return false;
+    }
+    sceneVisible_ = visible;
+    return true;
+}
+
 std::uint8_t ViewportRenderPassCoordinator::visibleLayerMask() const {
-    std::uint8_t visibleLayers = kViewportSceneLayerMask;
+    std::uint8_t visibleLayers = sceneVisible_ ? kViewportSceneLayerMask : 0u;
     if (groundGridVisible_ || overlayVisible_) {
         visibleLayers |= gridLayerMask_;
     }
