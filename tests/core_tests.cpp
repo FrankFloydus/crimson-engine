@@ -88,10 +88,10 @@ struct EditorSelectionTestHarness {
             SceneDocument& scene,
             AssetRegistry& assets,
             ModelingSessionService& modeling)
-        : documentCommands(scene, undoRedo)
+        : documentCommands(scene, history)
         , selection(scene, documentCommands, assets, modeling) {}
 
-    UndoRedoManager undoRedo;
+    EditorHistoryService history;
     DocumentCommandService documentCommands;
     EditorSelectionService selection;
 };
@@ -1638,9 +1638,9 @@ TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
     const std::filesystem::path headerPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     const std::filesystem::path toolStatePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "Tool.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "tools" / "ViewportTool.h";
     const std::filesystem::path dragToolPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "base" / "DragCommitTool.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "tools" / "base" / "DragCommitTool.cpp";
     std::ifstream headerFile(headerPath);
     std::ifstream toolStateFile(toolStatePath);
     std::ifstream dragToolFile(dragToolPath);
@@ -1685,7 +1685,7 @@ TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     const std::filesystem::path drawnPlaneToolPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "base" / "DrawnPlaneTool.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "tools" / "base" / "DrawnPlaneTool.cpp";
     std::ifstream sourceFile(sourcePath);
     std::ifstream drawnPlaneToolFile(drawnPlaneToolPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
@@ -2898,7 +2898,7 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
             std::string::npos);
 
     const std::filesystem::path toolCatalogPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "base" / "ViewportToolCatalog.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "tools" / "base" / "ViewportToolCatalog.cpp";
     std::ifstream toolCatalogFile(toolCatalogPath);
     ASSERT_TRUE(toolCatalogFile.is_open()) << toolCatalogPath.string();
 
@@ -4865,6 +4865,43 @@ TEST(ProjectDocumentTests, MirrorsEverySceneEntityIntoStableEditorObjectRecords)
     EXPECT_TRUE(report.ok()) << (report.issues.empty() ? std::string{} : report.issues.front().message);
 }
 
+TEST(ProjectDocumentTests, SceneEntitiesReserveStableObjectIdsFromProjectDocumentAuthority) {
+    ProjectDocument document(ProjectDocumentRecord{
+            .id = 20,
+            .name = "Identity Authority Project",
+    });
+
+    const EntityId first = document.scene().createEntity("First", EntityKind::Mesh);
+    ASSERT_NE(first, InvalidEntityId);
+    EXPECT_EQ(document.scene().editorObjectId(first), 1u);
+
+    const EditorObjectId detached = document.createObjectRecord(ProjectObjectRecord{
+            .authoredName = "Detached Object Record",
+    });
+    EXPECT_EQ(detached, 2u);
+
+    const EntityId second = document.scene().createEntity("Second", EntityKind::Mesh);
+    ASSERT_NE(second, InvalidEntityId);
+    EXPECT_EQ(document.scene().editorObjectId(second), 3u);
+
+    const EntityId imported = document.scene().createEntityWithId(50u, "Imported", EntityKind::Mesh, 99u);
+    ASSERT_NE(imported, InvalidEntityId);
+    EXPECT_EQ(document.scene().editorObjectId(imported), 99u);
+
+    const EditorObjectId afterImported = document.createObjectRecord(ProjectObjectRecord{
+            .authoredName = "After Imported",
+    });
+    EXPECT_EQ(afterImported, 100u);
+
+    ProjectDocument moved(std::move(document));
+    const EntityId afterMove = moved.scene().createEntity("After Move", EntityKind::Mesh);
+    ASSERT_NE(afterMove, InvalidEntityId);
+    EXPECT_EQ(moved.scene().editorObjectId(afterMove), 101u);
+
+    const ProjectDocumentIdentityReport report = moved.validateObjectIdentityInvariants();
+    EXPECT_TRUE(report.ok()) << (report.issues.empty() ? std::string{} : report.issues.front().message);
+}
+
 TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWiredTogether) {
     ProjectSessionService service;
     std::unique_ptr<ProjectSession> session = service.createSession(ProjectDocumentRecord{
@@ -4891,8 +4928,8 @@ TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWir
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(entity, InvalidEntityId);
     EXPECT_TRUE(session->scene().exists(entity));
-    EXPECT_TRUE(session->undoRedo().canUndo());
-    ASSERT_TRUE(session->undoRedo().undo().ok);
+    EXPECT_TRUE(session->history().canUndo());
+    ASSERT_TRUE(session->history().undo().ok);
     EXPECT_FALSE(session->scene().exists(entity));
 
     ProjectDocument existing(ProjectDocumentRecord{
@@ -4960,27 +4997,27 @@ TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectur
 TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
-    UndoRedoManager undoRedo;
-    DocumentCommandService commands(scene, undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
 
     DocumentCommandResult result = commands.renameEntity(entity, "Brush_1");
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush_1");
-    EXPECT_TRUE(undoRedo.canUndo());
-    EXPECT_FALSE(undoRedo.canRedo());
-    ASSERT_NE(undoRedo.undoLabel(), nullptr);
-    EXPECT_EQ(*undoRedo.undoLabel(), "Rename Entity");
+    EXPECT_TRUE(history.canUndo());
+    EXPECT_FALSE(history.canRedo());
+    ASSERT_NE(history.undoLabel(), nullptr);
+    EXPECT_EQ(*history.undoLabel(), "Rename Entity");
 
-    result = undoRedo.undo();
+    result = history.undo();
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush");
-    EXPECT_FALSE(undoRedo.canUndo());
-    EXPECT_TRUE(undoRedo.canRedo());
+    EXPECT_FALSE(history.canUndo());
+    EXPECT_TRUE(history.canRedo());
 
-    result = undoRedo.redo();
+    result = history.redo();
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush_1");
@@ -4990,7 +5027,7 @@ TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
     ASSERT_TRUE(commands.setTransform(entity, transform).ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 3.0f);
-    EXPECT_TRUE(undoRedo.undo().ok);
+    EXPECT_TRUE(history.undo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
 }
@@ -4998,9 +5035,8 @@ TEST(DocumentCommandServiceTests, RecordsUndoRedoForNativeSceneEdits) {
 TEST(EditorCommandServiceTests, ExecutesCommandsThroughSharedUndoStack) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
-    UndoRedoManager undoRedo;
-    DocumentCommandService documentCommands(scene, undoRedo);
-    EditorHistoryService history(undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService documentCommands(scene, history);
     EditorCommandService editorCommands(history, documentCommands);
 
     CommandResult result = editorCommands.execute(
@@ -5023,8 +5059,7 @@ TEST(EditorCommandServiceTests, ExecutesCommandsThroughSharedUndoStack) {
 }
 
 TEST(EditorHistoryServiceTests, TransactionsRecordAlreadyExecutedCommandsAsOneUndoItem) {
-    UndoRedoManager undoRedo;
-    EditorHistoryService history(undoRedo);
+    EditorHistoryService history;
     int first = 0;
     int second = 0;
 
@@ -5138,10 +5173,10 @@ TEST(DocumentCommandTests, BatchDocumentCommandRollsBackFailedRedoAndUndo) {
     EXPECT_FALSE(undoRedo.canRedo());
 }
 
-TEST(DocumentCommandTests, SceneTransformPreviewTransactionCommitsAndCancelsThroughUndoRedo) {
+TEST(DocumentCommandTests, SceneTransformPreviewTransactionCommitsAndCancelsThroughEditorHistory) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
-    UndoRedoManager undoRedo;
+    EditorHistoryService history;
 
     TransformComponent previewTransform = *scene.transform(entity);
     previewTransform.position = {2.0f, 0.0f, 0.0f};
@@ -5163,18 +5198,18 @@ TEST(DocumentCommandTests, SceneTransformPreviewTransactionCommitsAndCancelsThro
     previewTransform.position = {4.0f, 0.0f, 0.0f};
     SceneTransformPreviewTransaction transaction(scene, {entity}, "Move Preview");
     ASSERT_TRUE(transaction.previewTransform(entity, previewTransform).ok);
-    DocumentCommandResult result = transaction.commit(undoRedo);
+    DocumentCommandResult result = transaction.commit(history);
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
-    ASSERT_NE(undoRedo.undoLabel(), nullptr);
-    EXPECT_EQ(*undoRedo.undoLabel(), "Move Preview");
+    ASSERT_NE(history.undoLabel(), nullptr);
+    EXPECT_EQ(*history.undoLabel(), "Move Preview");
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
-    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_TRUE(history.redo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
 }
@@ -5370,8 +5405,8 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     const EntityId first = scene.createEntity("First");
     const EntityId second = scene.createEntity("Second");
     const EntityId locked = scene.createEntity("Locked");
-    UndoRedoManager undoRedo;
-    DocumentCommandService commands(scene, undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
 
     DocumentCommandResult result = commands.setVisibility({
             {.entity = first, .before = true, .after = false},
@@ -5384,10 +5419,10 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     EXPECT_FALSE(scene.visibility(first)->visible);
     EXPECT_FALSE(scene.visibility(second)->visible);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_TRUE(scene.visibility(first)->visible);
     EXPECT_TRUE(scene.visibility(second)->visible);
-    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_TRUE(history.redo().ok);
     EXPECT_FALSE(scene.visibility(first)->visible);
     EXPECT_FALSE(scene.visibility(second)->visible);
 
@@ -5403,7 +5438,7 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 1.0f);
     EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 2.0f);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
     EXPECT_FLOAT_EQ(scene.transform(second)->position.y, 0.0f);
 
@@ -5420,14 +5455,14 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     EXPECT_FALSE(result.changed);
     EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 0.0f);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_FALSE(scene.lock(locked)->locked);
 }
 
 TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleCommands) {
     SceneDocument scene;
-    UndoRedoManager undoRedo;
-    DocumentCommandService commands(scene, undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
 
     EntityId first = InvalidEntityId;
     EntityId second = InvalidEntityId;
@@ -5444,9 +5479,9 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.transform(first), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 5.0f);
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 0.0f);
-    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_TRUE(history.redo().ok);
 
     result = commands.selectEntities({first, second}, second);
     ASSERT_TRUE(result.ok) << result.message;
@@ -5463,14 +5498,14 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     EXPECT_EQ(scene.parent(second), group);
     EXPECT_EQ(scene.primarySelection(), group);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_FALSE(scene.exists(group));
     EXPECT_EQ(scene.parent(first), InvalidEntityId);
     EXPECT_EQ(scene.parent(second), InvalidEntityId);
     EXPECT_EQ(scene.selectedEntities().size(), 2u);
     EXPECT_EQ(scene.primarySelection(), second);
 
-    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_TRUE(history.redo().ok);
     const EntityId regrouped = scene.primarySelection();
     ASSERT_TRUE(scene.exists(regrouped));
     EXPECT_EQ(scene.parent(first), regrouped);
@@ -5483,7 +5518,7 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     EXPECT_EQ(scene.parent(second), InvalidEntityId);
     EXPECT_EQ(scene.selectedEntities().size(), 2u);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     const EntityId restoredGroup = scene.primarySelection();
     ASSERT_TRUE(scene.exists(restoredGroup));
     EXPECT_EQ(scene.parent(first), restoredGroup);
@@ -5492,7 +5527,7 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     result = commands.reparentEntity(first, InvalidEntityId, true);
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_EQ(scene.parent(first), InvalidEntityId);
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_EQ(scene.parent(first), restoredGroup);
 
     EntityId duplicate = InvalidEntityId;
@@ -5501,13 +5536,13 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     ASSERT_TRUE(scene.exists(duplicate));
     EXPECT_EQ(scene.parent(duplicate), restoredGroup);
     EXPECT_EQ(scene.primarySelection(), duplicate);
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_FALSE(scene.exists(duplicate));
 
     result = commands.destroyEntity(second);
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_FALSE(scene.exists(second));
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_TRUE(scene.exists(scene.primarySelection()));
 }
 
@@ -5548,55 +5583,55 @@ TEST(DocumentCommandServiceTests, GroupsAreSceneOwnedEditorObjectsNotModelingObj
     EXPECT_TRUE(report.ok()) << (report.issues.empty() ? std::string{} : report.issues.front().message);
 }
 
-TEST(UndoRedoManagerTests, NoopCommandsDoNotClearRedoButNewCommandsDo) {
+TEST(EditorHistoryServiceTests, NoopCommandsDoNotClearRedoButNewCommandsDo) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
-    UndoRedoManager undoRedo;
-    DocumentCommandService commands(scene, undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
 
     ASSERT_TRUE(commands.renameEntity(entity, "Brush_1").ok);
-    ASSERT_TRUE(undoRedo.undo().ok);
-    EXPECT_TRUE(undoRedo.canRedo());
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_TRUE(history.canRedo());
 
     DocumentCommandResult result = commands.renameEntity(entity, "Brush");
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_FALSE(result.changed);
-    EXPECT_TRUE(undoRedo.canRedo());
+    EXPECT_TRUE(history.canRedo());
 
     result = commands.setVisible(entity, true);
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_FALSE(result.changed);
-    EXPECT_TRUE(undoRedo.canRedo());
+    EXPECT_TRUE(history.canRedo());
 
     result = commands.renameEntity(entity, "Brush_2");
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
-    EXPECT_FALSE(undoRedo.canRedo());
+    EXPECT_FALSE(history.canRedo());
 }
 
-TEST(UndoRedoManagerTests, ExternalCommandsShareUndoOrderWithDocumentCommands) {
+TEST(EditorHistoryServiceTests, ExternalCommandsShareUndoOrderWithDocumentCommands) {
     SceneDocument scene;
     const EntityId entity = scene.createEntity("Brush");
-    UndoRedoManager undoRedo;
-    DocumentCommandService commands(scene, undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
     int externalValue = 0;
 
-    UndoRedoResult result = undoRedo.execute(
+    CommandResult result = history.execute(
             std::make_unique<TestValueCommand>("External Edit", externalValue, 0, 1));
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_TRUE(commands.renameEntity(entity, "Brush_1").ok);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_EQ(scene.name(entity)->name, "Brush");
     EXPECT_EQ(externalValue, 1);
 
-    ASSERT_TRUE(undoRedo.undo().ok);
+    ASSERT_TRUE(history.undo().ok);
     EXPECT_EQ(externalValue, 0);
 
-    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_TRUE(history.redo().ok);
     EXPECT_EQ(externalValue, 1);
 
-    ASSERT_TRUE(undoRedo.redo().ok);
+    ASSERT_TRUE(history.redo().ok);
     EXPECT_EQ(scene.name(entity)->name, "Brush_1");
 }
 
@@ -8264,8 +8299,8 @@ TEST(ModelingSessionServiceTests, GroupSelectionSurvivesTransformToolActivation)
 TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutRootMeshStrays) {
     SceneDocument scene;
     AssetRegistry assets;
-    UndoRedoManager undoRedo;
-    DocumentCommandService commands(scene, undoRedo);
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
     ModelingSessionService service(scene, assets);
 
     const ModelingCreateBoxResult left = service.createBoxFromBounds({

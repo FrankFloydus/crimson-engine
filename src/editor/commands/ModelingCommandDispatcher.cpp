@@ -21,16 +21,20 @@ ModelingCommandHistoryPolicy ModelingCommandDispatcher::historyPolicy(std::strin
 
 ModelingCommandAvailability ModelingCommandDispatcher::availability(
         std::string_view toolId,
-        ModelingSessionService& modeling) const {
+        ModelingSessionService& modeling,
+        EditorSelectionService* selection) const {
     const CommandTool* tool = find(toolId);
     if (tool == nullptr) {
         return ModelingCommandAvailability::unavailable("Command tool is not registered.");
     }
-    const ModelingCommandExecutionContext context{.modeling = modeling};
+    const ModelingCommandExecutionContext context{.modeling = modeling, .selection = selection};
     return tool->availability(context);
 }
 
-ModelingCommandResult ModelingCommandDispatcher::execute(std::string_view toolId, ModelingSessionService& modeling) const {
+ModelingCommandResult ModelingCommandDispatcher::execute(
+        std::string_view toolId,
+        ModelingSessionService& modeling,
+        EditorSelectionService* selection) const {
     const CommandTool* tool = find(toolId);
     if (tool == nullptr) {
         return {
@@ -39,11 +43,14 @@ ModelingCommandResult ModelingCommandDispatcher::execute(std::string_view toolId
                 .message = "Command tool is not registered.",
         };
     }
-    return execute(*tool, modeling);
+    return execute(*tool, modeling, selection);
 }
 
-ModelingCommandResult ModelingCommandDispatcher::execute(const CommandTool& tool, ModelingSessionService& modeling) const {
-    ModelingCommandExecutionContext context{.modeling = modeling};
+ModelingCommandResult ModelingCommandDispatcher::execute(
+        const CommandTool& tool,
+        ModelingSessionService& modeling,
+        EditorSelectionService* selection) const {
+    ModelingCommandExecutionContext context{.modeling = modeling, .selection = selection};
     const ModelingCommandAvailability available = tool.availability(context);
     if (!available.enabled) {
         return {

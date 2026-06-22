@@ -9,9 +9,20 @@
 #include "editor/modeling/services/ModelingActionCatalog.h"
 #include "editor/modeling/ModelingTypes.h"
 
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
+
+/**
+ * Reports whether a context-menu action is executable and carries the resolved catalog item or failure reason.
+ */
+struct ModelingContextActionResolution {
+    bool ok = false;
+    ModelingActionItem action;
+    std::string message;
+};
 
 /**
  * Coordinates Modeling Context Action Service responsibilities for the modeling application service layer.
@@ -26,6 +37,10 @@ public:
     [[nodiscard]] std::vector<ModelingActionItem> actions(
             const ModelingSelectionSummary& summary,
             ModelingActionQuery query,
+            bool modalToolOwnsViewport) const;
+    [[nodiscard]] ModelingContextActionResolution resolveExecutableAction(
+            const ModelingSelectionSummary& summary,
+            std::string_view actionId,
             bool modalToolOwnsViewport) const;
 };
 

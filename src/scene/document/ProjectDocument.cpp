@@ -11,8 +11,14 @@
 
 namespace quader {
 
+ProjectDocument::ProjectDocument() {
+    bindSceneObjectIdentityAllocator();
+}
+
 ProjectDocument::ProjectDocument(ProjectDocumentRecord record)
-    : record_(std::move(record)) {}
+    : record_(std::move(record)) {
+    bindSceneObjectIdentityAllocator();
+}
 
 void ProjectDocument::rename(std::string name) {
     if (record_.name == name) {
@@ -248,6 +254,19 @@ void ProjectDocument::markDirty() {
     ++revision_;
 }
 
+void ProjectDocument::bindSceneObjectIdentityAllocator() {
+    scene_.setEditorObjectIdAllocator([nextObjectId = nextObjectId_](EditorObjectId requested) {
+        if (!nextObjectId) {
+            return InvalidEditorObjectId;
+        }
+        if (requested != InvalidEditorObjectId) {
+            *nextObjectId = std::max(*nextObjectId, requested + 1u);
+            return requested;
+        }
+        return (*nextObjectId)++;
+    });
+}
+
 void ProjectDocument::syncObjectRecordsWithScene() const {
     for (auto it = objects_.begin(); it != objects_.end();) {
         const EntityId entity = it->second.sceneEntity;
@@ -346,15 +365,19 @@ void ProjectDocument::indexRecord(ProjectObjectRecord& record) const {
 }
 
 EditorObjectId ProjectDocument::allocateObjectId(EditorObjectId requested) {
+    if (!nextObjectId_) {
+        nextObjectId_ = std::make_shared<EditorObjectId>(1);
+        bindSceneObjectIdentityAllocator();
+    }
     if (requested != InvalidEditorObjectId) {
-        nextObjectId_ = std::max(nextObjectId_, requested + 1u);
+        *nextObjectId_ = std::max(*nextObjectId_, requested + 1u);
         return requested;
     }
-    while (objects_.contains(nextObjectId_) ||
-            scene_.entityForEditorObjectId(nextObjectId_) != InvalidEntityId) {
-        ++nextObjectId_;
+    while (objects_.contains(*nextObjectId_) ||
+            scene_.entityForEditorObjectId(*nextObjectId_) != InvalidEntityId) {
+        ++(*nextObjectId_);
     }
-    return nextObjectId_++;
+    return (*nextObjectId_)++;
 }
 
 } // namespace quader

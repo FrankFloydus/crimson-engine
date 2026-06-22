@@ -12,6 +12,7 @@
 #include <entt/entt.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -45,6 +46,10 @@ struct EntityRecord {
  */
 class SceneDocument {
 public:
+    using EditorObjectIdAllocator = std::function<EditorObjectId(EditorObjectId requested)>;
+
+    void setEditorObjectIdAllocator(EditorObjectIdAllocator allocator);
+
     EntityId createEntity(
             std::string name,
             EntityKind kind = EntityKind::Generic,
@@ -142,6 +147,7 @@ private:
     EditorObjectId nextEditorObjectId_ = 1;
     EntityId activeSelection_ = InvalidEntityId;
     std::uint64_t revision_ = 0;
+    EditorObjectIdAllocator editorObjectIdAllocator_;
     entt::registry registry_;
     std::unordered_map<EntityId, entt::entity> entities_;
     std::unordered_map<std::uint32_t, EntityId> idsByEntity_;

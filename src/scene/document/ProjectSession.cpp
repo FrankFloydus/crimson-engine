@@ -25,8 +25,8 @@ ProjectSession::ProjectSession(ProjectDocument document)
 ProjectSession::~ProjectSession() = default;
 
 void ProjectSession::rebuildServices() {
-    undoRedo_ = std::make_unique<UndoRedoManager>();
-    documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *undoRedo_);
+    history_ = std::make_unique<EditorHistoryService>();
+    documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *history_);
     modeling_ = std::make_unique<ModelingSessionService>(document_.scene(), document_.assets());
     selection_ = std::make_unique<EditorSelectionService>(
             document_.scene(),

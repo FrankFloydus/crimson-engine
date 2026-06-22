@@ -2597,13 +2597,11 @@ public:
     }
 
     ModelingCommandResult copySelection() {
-        return executeRuntimeNoSettings(clipboardService_.copyCommand(), false);
+        return executeRuntimeCommand(clipboardService_.makeCopyCommand(), false);
     }
 
     ModelingCommandResult pasteSelection() {
-        quader_editor_core::EditorRuntimeCommand command;
-        command.command_id = clipboardService_.pasteCommand();
-        command.settings = quader_editor_core::PasteCopiedMeshesRuntimeCommandSettings {};
+        const quader_editor_core::EditorRuntimeCommand command = clipboardService_.makePasteCommand();
         const std::uint64_t contentBefore = session_.state().content_revision;
         const quader_editor_core::EditorRuntimeCommandResult result =
                 quader_editor_core::execute_runtime_command(session_, runtime_, command);
@@ -2766,37 +2764,12 @@ public:
     }
 
     [[nodiscard]] ModelingToolSettingsTarget toolSettingsTarget() const {
-        ModelingToolSettingsTarget target;
-        const quader_editor_core::PreviewTransactionStatus preview = session_.preview_transaction_status();
-        const ModelingToolSettingsTargetKind previewKind = preview.active ?
-                toolSettingsTargetKindForPreview(preview.kind) :
-                ModelingToolSettingsTargetKind::None;
-        if (previewKind != ModelingToolSettingsTargetKind::None) {
-            target.kind = previewKind;
-            target.active = true;
-            target.operationPreviewActive = true;
-            std::string fallbackOperationId;
-            if (const std::optional<quader_editor_core::EditorOperationId> operation =
-                        operationForPreviewKind(preview.kind)) {
-                if (const quader_editor_core::EditorOperation* schema =
-                            quader_editor_core::editor_operation_for_id(*operation)) {
-                    fallbackOperationId = std::string(schema->id());
-                }
-            }
-            return toolSettingsService_.operationPreviewTarget(
-                    previewKind,
-                    fallbackToolSettingsLabel(previewKind),
-                    fallbackOperationId);
+        const ModelingToolSettingsTarget previewTarget =
+                toolSettingsService_.activePreviewTarget(session_.preview_transaction_status());
+        if (previewTarget.active) {
+            return previewTarget;
         }
-
-        const quader_editor_core::EditorRuntimeStatus runtimeStatus = runtime_.status();
-        if (runtimeStatus.cut_active) {
-            target.kind = ModelingToolSettingsTargetKind::Cut;
-            target.active = true;
-            target.label = fallbackToolSettingsLabel(ModelingToolSettingsTargetKind::Cut);
-            return target;
-        }
-        return target;
+        return toolSettingsService_.activeRuntimeToolTarget(runtime_.status());
     }
 
     [[nodiscard]] ModelingInteractionSettings interactionSettings() const {
@@ -2939,45 +2912,26 @@ public:
     }
 
     ModelingCommandResult executeContextAction(std::string_view actionId) {
-        if (modalToolOwnsViewport()) {
-            return {.ok = false, .message = "Viewport is owned by an active modal tool."};
+        const ModelingContextActionResolution action =
+                contextActionService_.resolveExecutableAction(selectionSummary(), actionId, modalToolOwnsViewport());
+        if (!action.ok) {
+            return {.ok = false, .message = action.message};
         }
-
-        const ModelingSelectionSummary summary = selectionSummary();
-        ModelingActionQuery query;
-        query.surface = ModelingActionSurface::ViewportContextMenu;
-        query.modalToolOwnsViewport = false;
-        query.includeDisabled = true;
-        query.includeHidden = false;
-
-        const std::vector<ModelingActionItem> actions = ModelingActionCatalog::actionsFor(summary, query);
-        const auto found = std::find_if(actions.begin(), actions.end(), [&](const ModelingActionItem& action) {
-            return action.actionId == actionId;
-        });
-        if (found == actions.end()) {
-            return {.ok = false, .message = "Action is not available in the current mode."};
-        }
-        if (found->visibility != ModelingActionVisibility::Enabled) {
-            return {
-                    .ok = false,
-                    .message = found->disabledReason.empty() ? "Action is disabled for the current selection." : found->disabledReason,
-            };
-        }
-        if (found->actionId == "delete_selection") {
+        if (action.action.actionId == "delete_selection") {
             return deleteSelection();
         }
-        if (found->kind != ModelingActionKind::Operation || found->operationId.empty()) {
+        if (action.action.kind != ModelingActionKind::Operation || action.action.operationId.empty()) {
             return {.ok = false, .message = "Action is not an executable modeling operation."};
         }
 
         const quader_editor_core::EditorOperation* operation =
-                quader_editor_core::editor_operation_for_id(found->operationId);
+                quader_editor_core::editor_operation_for_id(action.action.operationId);
         if (operation == nullptr) {
             return {.ok = false, .message = "Action references an unknown modeling operation."};
         }
 
-        if (found->previewKind != ModelingActionPreviewKind::None) {
-            return beginOperationPreview(*found, *operation);
+        if (action.action.previewKind != ModelingActionPreviewKind::None) {
+            return beginOperationPreview(action.action, *operation);
         }
 
         return executeRuntimeOperation(

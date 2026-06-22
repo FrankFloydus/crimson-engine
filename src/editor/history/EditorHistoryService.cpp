@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/history/EditorHistoryService.h"
 
+#include "core/UndoRedoManager.h"
+
 #include <utility>
 
 namespace quader {
@@ -179,43 +181,49 @@ CommandResult EditorTransaction::cancel() {
     return changed ? commandChangedResult() : commandUnchangedResult();
 }
 
-EditorHistoryService::EditorHistoryService(UndoRedoManager& undoRedo)
-    : undoRedo_(undoRedo) {}
+EditorHistoryService::EditorHistoryService()
+    : undoRedo_(std::make_unique<UndoRedoManager>()) {}
+
+EditorHistoryService::~EditorHistoryService() = default;
+
+EditorHistoryService::EditorHistoryService(EditorHistoryService&&) noexcept = default;
+
+EditorHistoryService& EditorHistoryService::operator=(EditorHistoryService&&) noexcept = default;
 
 CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> command) {
-    return undoRedo_.execute(std::move(command));
+    return undoRedo_->execute(std::move(command));
 }
 
 CommandResult EditorHistoryService::recordExecuted(std::unique_ptr<IUndoableCommand> command) {
-    return undoRedo_.recordExecuted(std::move(command));
+    return undoRedo_->recordExecuted(std::move(command));
 }
 
 CommandResult EditorHistoryService::undo() {
-    return undoRedo_.undo();
+    return undoRedo_->undo();
 }
 
 CommandResult EditorHistoryService::redo() {
-    return undoRedo_.redo();
+    return undoRedo_->redo();
 }
 
 bool EditorHistoryService::canUndo() const {
-    return undoRedo_.canUndo();
+    return undoRedo_->canUndo();
 }
 
 bool EditorHistoryService::canRedo() const {
-    return undoRedo_.canRedo();
+    return undoRedo_->canRedo();
 }
 
 const std::string* EditorHistoryService::undoLabel() const {
-    return undoRedo_.undoLabel();
+    return undoRedo_->undoLabel();
 }
 
 const std::string* EditorHistoryService::redoLabel() const {
-    return undoRedo_.redoLabel();
+    return undoRedo_->redoLabel();
 }
 
 void EditorHistoryService::clear() {
-    undoRedo_.clear();
+    undoRedo_->clear();
 }
 
 EditorTransaction EditorHistoryService::beginTransaction(std::string label) {

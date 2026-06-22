@@ -1051,18 +1051,15 @@ Planned split:
 - commit produces one `EditorTransaction`,
 - Shift duplicate group drag becomes `DuplicateSelectionCommand` plus transform transaction.
 
-### `src/viewport/modes/**`
+### `src/editor/tools/**`
 
-Current role:
+Final role:
 
-- some tools call modeling directly and pass `UndoRedoManager`.
-
-Planned replacement:
-
+- editor-owned viewport tool contracts, catalog rows, and state machines,
 - tools emit typed command/tool requests,
-- preview tools can own temporary state,
-- committed tool result goes through `EditorHistoryService`,
-- `ToolContext` should not contain raw `UndoRedoManager` or mutation-heavy modeling facade.
+- preview tools own temporary interaction state only,
+- committed tool results go through `EditorHistoryService`,
+- `ViewportToolContext` does not contain raw `UndoRedoManager`.
 
 ## Command Routing Plan
 

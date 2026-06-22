@@ -25,18 +25,21 @@ class DispatchedModelingToolHistoryCommand final : public ModelingMementoCommand
 public:
     DispatchedModelingToolHistoryCommand(
             ModelingSessionService& modeling,
+            EditorSelectionService& selection,
             const ModelingCommandDispatcher& dispatcher,
             std::string toolId,
             std::string label)
         : ModelingMementoCommand(modeling, std::move(label))
+        , selection_(selection)
         , dispatcher_(dispatcher)
         , toolId_(std::move(toolId)) {}
 
 private:
     ModelingCommandResult executeInitial() override {
-        return dispatcher_.execute(toolId_, modeling());
+        return dispatcher_.execute(toolId_, modeling(), &selection_);
     }
 
+    EditorSelectionService& selection_;
     const ModelingCommandDispatcher& dispatcher_;
     std::string toolId_;
 };
@@ -88,6 +91,7 @@ std::string commandLabel(const CommandTool* tool, std::string_view toolId) {
 ModelingCommandResult ModelingCommandExecutionService::execute(
         EditorHistoryService& history,
         ModelingSessionService& modeling,
+        EditorSelectionService& selection,
         std::string_view toolId) {
     const CommandTool* tool = dispatcher_.find(toolId);
     if (tool == nullptr) {
@@ -98,7 +102,7 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
         return fromCommandResult(history.execute(modeling.createDeleteSelectionCommand()));
     }
 
-    const ModelingCommandAvailability available = dispatcher_.availability(toolId, modeling);
+    const ModelingCommandAvailability available = dispatcher_.availability(toolId, modeling, &selection);
     if (!available.enabled) {
         return {
                 .ok = false,
@@ -107,11 +111,12 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
     }
 
     if (tool->historyPolicy().mode != ModelingCommandHistoryMode::ModelingUndoRedo) {
-        return dispatcher_.execute(*tool, modeling);
+        return dispatcher_.execute(*tool, modeling, &selection);
     }
 
     return fromCommandResult(history.execute(std::make_unique<DispatchedModelingToolHistoryCommand>(
             modeling,
+            selection,
             dispatcher_,
             std::string(toolId),
             commandLabel(tool, toolId))));
@@ -119,14 +124,17 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
 
 ModelingCommandResult ModelingCommandExecutionService::executeUntracked(
         ModelingSessionService& modeling,
-        std::string_view toolId) {
-    return dispatcher_.execute(toolId, modeling);
+        std::string_view toolId,
+        EditorSelectionService* selection) {
+    return dispatcher_.execute(toolId, modeling, selection);
 }
 
-ModelingCommandResult ModelingCommandExecutionService::executeAction(
+ModelingCommandResult ModelingCommandExecutionService::beginPreview(
         EditorHistoryService& history,
         ModelingSessionService& modeling,
+        EditorSelectionService& selection,
         std::string_view actionId) {
+    (void)selection;
     if (actionId == "delete_selection" && shouldUseSceneAwareDelete(modeling)) {
         return fromCommandResult(history.execute(modeling.createDeleteSelectionCommand()));
     }
@@ -151,7 +159,7 @@ ModelingCommandResult ModelingCommandExecutionService::executeAction(
             found->label.empty() ? std::string(actionId) : found->label)));
 }
 
-ModelingCommandResult ModelingCommandExecutionService::executeActionUntracked(
+ModelingCommandResult ModelingCommandExecutionService::beginPreviewUntracked(
         ModelingSessionService& modeling,
         std::string_view actionId) {
     return modeling.executeContextAction(actionId);
@@ -173,8 +181,9 @@ ModelingCommandResult ModelingCommandExecutionService::cancelPreview(ModelingSes
 
 ModelingCommandAvailability ModelingCommandExecutionService::availability(
         ModelingSessionService& modeling,
-        std::string_view toolId) const {
-    return dispatcher_.availability(toolId, modeling);
+        std::string_view toolId,
+        EditorSelectionService* selection) const {
+    return dispatcher_.availability(toolId, modeling, selection);
 }
 
 ModelingCommandHistoryPolicy ModelingCommandExecutionService::historyPolicy(std::string_view toolId) const {

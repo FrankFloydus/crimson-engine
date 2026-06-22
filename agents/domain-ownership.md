@@ -14,7 +14,7 @@ Use these boundaries when deciding where behavior belongs.
 
 Former SDK geometry, polygon, editor-core, host-contract, and QDR IO code is now native-app code.
 Keep it under app-owned modules such as `src/mesh/geometry`, `src/mesh/polygon`,
-`src/editor/modeling`, `src/editor/interactions`, `src/editor/commands`, `src/editor/metadata`,
+`src/editor/modeling`, `src/editor/interactions`, `src/editor/tools`, `src/editor/commands`, `src/editor/metadata`,
 `src/editor/selection`, `src/editor/history`, `src/editor/projection`, `src/viewport`, and
 `src/io/qdr`; do not recreate a separate SDK product boundary.
 
@@ -53,8 +53,9 @@ User-triggered modeling operations belong in `src/editor/commands/**` and execut
 `EditorCommandService`.
 
 Pure polygon and geometry algorithms belong under `src/mesh/**`. Editor-facing mesh workflow state
-belongs under `src/editor/modeling/**`, and interactive viewport state machines belong under
-`src/editor/interactions/**`. `ModelingSessionService` may exist only as a thin adapter over those
+belongs under `src/editor/modeling/**`, viewport tool state machines belong under
+`src/editor/tools/**`, and former SDK interaction math belongs under `src/editor/interactions/**`.
+`ModelingSessionService` may exist only as a thin adapter over those
 owners; it must not own public history, command semantics, bidirectional selection sync, or scene
 identity.
 

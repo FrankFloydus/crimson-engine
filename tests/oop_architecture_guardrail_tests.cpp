@@ -211,7 +211,7 @@ TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
 TEST(OopArchitectureGuardrailTests, ToolCatalogHeadersAreDeclarationsOnly) {
     for (const std::filesystem::path& file : {
                  sourceRoot() / "src/editor/commands/ModelingCommandToolCatalog.h",
-                 sourceRoot() / "src/viewport/modes/ViewportToolCatalog.h",
+                 sourceRoot() / "src/editor/tools/ViewportToolCatalog.h",
          }) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);

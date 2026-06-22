@@ -6,14 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/ModelingSessionServices.h"
 
-#include "assets/AssetRegistry.h"
-#include "editor/projection/MeshProjectionService.h"
-#include "editor/projection/ModelingSceneReconcileService.h"
+#include "editor/modeling/services/ModelingOperationSettings.h"
 #include "editor/projection/PickingCacheProjection.h"
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -322,65 +321,6 @@ bool SceneModelingSyncService::sceneObjectsSyncedForCurrentModelingContent(
         }
     }
     return true;
-}
-
-bool ModelingMeshSyncService::shouldForceRefresh(bool previewActive, bool previewFinished) {
-    return previewActive || previewFinished;
-}
-
-std::optional<MeshAsset> ModelingMeshSyncService::compileObjectMesh(
-        const quader_editor_core::PolygonObject& object) const {
-    return MeshProjectionService::compileObjectMesh(object);
-}
-
-void ModelingMeshSyncService::syncSceneObjectsFromModeling(
-        const quader_editor_core::EditorSession& session,
-        SceneDocument& scene,
-        AssetRegistry& assets,
-        SceneModelingSyncService& sceneSync,
-        bool force) const {
-    if (!force && sceneSync.sceneObjectsSyncedForCurrentModelingContent(session, scene)) {
-        return;
-    }
-    ModelingSceneReconcileService::reconcileModelingObjectSceneNodes(session, scene, sceneSync);
-    MeshProjectionService::projectModelingMeshesToScene(session, scene, assets, sceneSync, force);
-}
-
-ModelingCreateBoxResult ModelingMeshSyncService::createSceneObjectFromLatest(
-        const quader_editor_core::EditorSession& session,
-        SceneDocument& scene,
-        AssetRegistry& assets,
-        SceneModelingSyncService& sceneSync,
-        const std::string& name,
-        const std::string& message) const {
-    const quader_editor_core::PolygonObject& object = session.objects().back();
-    MeshAsset mesh = MeshProjectionService::compileObjectMesh(object);
-    mesh.name = name;
-    const AssetId meshId = assets.addMesh(std::move(mesh));
-
-    const EntityId entity = scene.createEntity(name);
-    scene.setModelingObject(entity, ModelingObjectComponent{
-            .objectId = object.id,
-            .materialSlot = static_cast<std::uint32_t>(object.material_id),
-    });
-    scene.setMesh(entity, MeshComponent{.mesh = meshId});
-    scene.clearSelection();
-    scene.setSelected(entity, true);
-
-    sceneSync.objectMap().bind(object.id, entity);
-    sceneSync.markSceneObjectsSynced(session.state().content_revision);
-
-    return {
-            .ok = true,
-            .changed = true,
-            .message = message,
-            .object = {
-                    .modelingObjectId = object.id,
-                    .entity = entity,
-                    .mesh = meshId,
-                    .name = name,
-            },
-    };
 }
 
 bool ModelingOverlayService::hasModalOverlay(const ModelingToolStatus& status) {
@@ -810,6 +750,19 @@ quader_editor_core::EditorRuntimeCommandId ModelingClipboardService::pasteComman
     return quader_editor_core::EditorRuntimeCommandId::paste_copied_meshes;
 }
 
+quader_editor_core::EditorRuntimeCommand ModelingClipboardService::makeCopyCommand() {
+    quader_editor_core::EditorRuntimeCommand command;
+    command.command_id = copyCommand();
+    return command;
+}
+
+quader_editor_core::EditorRuntimeCommand ModelingClipboardService::makePasteCommand() {
+    quader_editor_core::EditorRuntimeCommand command;
+    command.command_id = pasteCommand();
+    command.settings = quader_editor_core::PasteCopiedMeshesRuntimeCommandSettings {};
+    return command;
+}
+
 quader_editor_core::EditorRuntimeCommandId ModelingHistoryBridge::undoCommand() {
     return quader_editor_core::EditorRuntimeCommandId::undo;
 }
@@ -975,6 +928,42 @@ ModelingToolSettingsTarget ModelingToolSettingsService::operationPreviewTarget(
     return target;
 }
 
+ModelingToolSettingsTarget ModelingToolSettingsService::activePreviewTarget(
+        const quader_editor_core::PreviewTransactionStatus& preview) const {
+    ModelingToolSettingsTarget target;
+    const ModelingToolSettingsTargetKind previewKind = preview.active ?
+            toolSettingsTargetKindForPreview(preview.kind) :
+            ModelingToolSettingsTargetKind::None;
+    if (previewKind == ModelingToolSettingsTargetKind::None) {
+        return target;
+    }
+
+    std::string fallbackOperationId;
+    if (const std::optional<quader_editor_core::EditorOperationId> operation =
+                operationForPreviewKind(preview.kind)) {
+        if (const quader_editor_core::EditorOperation* schema =
+                    quader_editor_core::editor_operation_for_id(*operation)) {
+            fallbackOperationId = std::string(schema->id());
+        }
+    }
+    return operationPreviewTarget(
+            previewKind,
+            fallbackToolSettingsLabel(previewKind),
+            fallbackOperationId);
+}
+
+ModelingToolSettingsTarget ModelingToolSettingsService::activeRuntimeToolTarget(
+        const quader_editor_core::EditorRuntimeStatus& runtimeStatus) const {
+    ModelingToolSettingsTarget target;
+    if (runtimeStatus.cut_active) {
+        target.kind = ModelingToolSettingsTargetKind::Cut;
+        target.active = true;
+        target.label = fallbackToolSettingsLabel(ModelingToolSettingsTargetKind::Cut);
+        return target;
+    }
+    return target;
+}
+
 ModelingActionQuery ModelingContextActionService::effectiveActionQuery(
         ModelingActionQuery query,
         bool modalToolOwnsViewport) const {
@@ -994,6 +983,45 @@ std::vector<ModelingActionItem> ModelingContextActionService::actions(
         ModelingActionQuery query,
         bool modalToolOwnsViewport) const {
     return ModelingActionCatalog::actionsFor(summary, effectiveActionQuery(query, modalToolOwnsViewport));
+}
+
+ModelingContextActionResolution ModelingContextActionService::resolveExecutableAction(
+        const ModelingSelectionSummary& summary,
+        std::string_view actionId,
+        bool modalToolOwnsViewport) const {
+    ModelingContextActionResolution resolution;
+    if (modalToolOwnsViewport) {
+        resolution.message = "Viewport is owned by an active modal tool.";
+        return resolution;
+    }
+
+    ModelingActionQuery query;
+    query.surface = ModelingActionSurface::ViewportContextMenu;
+    query.modalToolOwnsViewport = false;
+    query.includeDisabled = true;
+    query.includeHidden = false;
+
+    const std::vector<ModelingActionItem> availableActions = ModelingActionCatalog::actionsFor(summary, query);
+    const auto found = std::find_if(
+            availableActions.begin(),
+            availableActions.end(),
+            [&](const ModelingActionItem& action) {
+                return action.actionId == actionId;
+            });
+    if (found == availableActions.end()) {
+        resolution.message = "Action is not available in the current mode.";
+        return resolution;
+    }
+    if (found->visibility != ModelingActionVisibility::Enabled) {
+        resolution.message = found->disabledReason.empty()
+                ? "Action is disabled for the current selection."
+                : found->disabledReason;
+        return resolution;
+    }
+
+    resolution.ok = true;
+    resolution.action = *found;
+    return resolution;
 }
 
 } // namespace quader

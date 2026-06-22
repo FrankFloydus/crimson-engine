@@ -22,7 +22,7 @@
 #include "ui/ViewportPaneController.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "viewport/HostViewportContractAdapter.h"
-#include "viewport/modes/ViewportToolCatalog.h"
+#include "editor/tools/ViewportToolCatalog.h"
 
 #include <algorithm>
 #include <array>

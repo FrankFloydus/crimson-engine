@@ -13,7 +13,7 @@
 #include "scene/SceneBounds.h"
 #include "scene/TransformPivot.h"
 #include "viewport/ViewportCameraAdapter.h"
-#include "viewport/modes/ViewportToolCatalog.h"
+#include "editor/tools/ViewportToolCatalog.h"
 
 #include <algorithm>
 #include <array>

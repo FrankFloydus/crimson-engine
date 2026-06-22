@@ -16,12 +16,14 @@
 namespace quader {
 
 class ModelingSessionService;
+class EditorSelectionService;
 
 /**
  * Stores the Modeling Command Execution Context data contract used by the editor command and action routing layer.
  */
 struct ModelingCommandExecutionContext {
     ModelingSessionService& modeling;
+    EditorSelectionService* selection = nullptr;
 };
 
 /**

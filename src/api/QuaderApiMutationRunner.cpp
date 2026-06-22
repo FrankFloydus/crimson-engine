@@ -74,6 +74,12 @@ QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(CommandResult re
     return statusFrom(std::move(result), QuaderMutationKind::Document, label);
 }
 
+QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(
+        std::unique_ptr<IUndoableCommand> command,
+        std::string_view label) {
+    return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Document, label);
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::runDocumentResult(DocumentCommandResult result, std::string_view label) {
     return statusFrom(std::move(result), QuaderMutationKind::Document, label);
 }
@@ -92,14 +98,14 @@ QuaderApiVoidResult QuaderApiMutationRunner::runModelingCommand(
 
 QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingTool(std::string_view toolId) {
     return statusFrom(
-            modelingCommands_.execute(history_, session_.modeling(), toolId),
+            modelingCommands_.execute(history_, session_.modeling(), session_.selection(), toolId),
             QuaderMutationKind::Modeling,
             toolId);
 }
 
-QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingAction(std::string_view actionId) {
+QuaderApiVoidResult QuaderApiMutationRunner::beginTrackedModelingPreview(std::string_view actionId) {
     return statusFrom(
-            modelingCommands_.executeAction(history_, session_.modeling(), actionId),
+            modelingCommands_.beginPreview(history_, session_.modeling(), session_.selection(), actionId),
             QuaderMutationKind::Modeling,
             actionId);
 }

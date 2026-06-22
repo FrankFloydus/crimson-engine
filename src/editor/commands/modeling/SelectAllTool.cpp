@@ -7,10 +7,14 @@
 #include "editor/commands/modeling/SelectAllTool.h"
 
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/selection/EditorSelectionService.h"
 
 namespace quader {
 
 ModelingCommandResult SelectAllTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+    if (context.selection != nullptr) {
+        return context.selection->selectAll();
+    }
     return context.modeling.selectAll();
 }
 

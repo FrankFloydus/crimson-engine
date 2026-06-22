@@ -16,9 +16,10 @@ source, not a separate package boundary.
 - `src/mesh/polygon`: app-owned polygon document model, topology operations, mesh compilation, generated UV0, explicit loop UV mutation, and picking helpers.
 - `src/editor/modeling`: app-owned editor mesh workflow policy over polygon documents, including active targets, hover identity, pick planning, rectangle selection, preview state, repeat-last state, runtime operation execution, and overlay-presentation policy.
 - `src/editor/modeling/operations`: modeling runtime operations such as bridge, thicken, slice quad, edge bevel, material assignment, duplicate, and selection edits.
-- `src/editor/interactions`: low-level modeling tool state/math and tool runtime helpers.
+- `src/editor/interactions`: low-level modeling interaction math and native runtime helpers.
+- `src/editor/tools`: editor-owned viewport tool contracts, catalogs, and state machines.
 - `src/mesh/geometry`: reusable geometry predicates and projection math with private implementation backends.
-- `src/io/qdr`: QDR document/session DTO conversion and serialization helpers.
+- `src/io/qdr`: QDR project document persistence plus session-runtime compatibility DTO conversion. Project writes include material texture-slot assets, reject dangling texture references, and validate temporary files before atomic replacement.
 - `src/editor/metadata`: descriptor-only host metadata for tools, operations, shortcuts, gestures, overlays, materials, preferences, UI placement, and interaction targets.
 Shared default material texture sources live under `resources/modeling_assets`. Material behavior and
 generated UV0 policy stay native/app-owned.

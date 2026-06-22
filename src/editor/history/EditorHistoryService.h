@@ -8,7 +8,6 @@
 
 #include "core/CommandResult.h"
 #include "core/IUndoableCommand.h"
-#include "core/UndoRedoManager.h"
 
 #include <memory>
 #include <string>
@@ -17,6 +16,7 @@
 namespace quader {
 
 class EditorHistoryService;
+class UndoRedoManager;
 
 /**
  * Owns Editor Transaction behavior within the editor coordination layer.
@@ -49,7 +49,13 @@ private:
  */
 class EditorHistoryService final {
 public:
-    explicit EditorHistoryService(UndoRedoManager& undoRedo);
+    EditorHistoryService();
+    ~EditorHistoryService();
+
+    EditorHistoryService(const EditorHistoryService&) = delete;
+    EditorHistoryService& operator=(const EditorHistoryService&) = delete;
+    EditorHistoryService(EditorHistoryService&&) noexcept;
+    EditorHistoryService& operator=(EditorHistoryService&&) noexcept;
 
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
     CommandResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
@@ -64,8 +70,6 @@ public:
     void clear();
 
     [[nodiscard]] EditorTransaction beginTransaction(std::string label);
-    [[nodiscard]] UndoRedoManager& undoRedo() { return undoRedo_; }
-    [[nodiscard]] const UndoRedoManager& undoRedo() const { return undoRedo_; }
 
 private:
     friend class EditorTransaction;
@@ -74,7 +78,7 @@ private:
             std::string label,
             std::vector<std::unique_ptr<IUndoableCommand>> commands);
 
-    UndoRedoManager& undoRedo_;
+    std::unique_ptr<UndoRedoManager> undoRedo_;
 };
 
 } // namespace quader

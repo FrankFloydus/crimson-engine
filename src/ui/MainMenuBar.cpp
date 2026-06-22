@@ -11,7 +11,7 @@
 #include "ui/UIPanelManager.h"
 #include "ui/ViewportPanel.h"
 #include "viewport/ViewportLayout.h"
-#include "viewport/modes/ViewportToolCatalog.h"
+#include "editor/tools/ViewportToolCatalog.h"
 
 #include <imgui.h>
 

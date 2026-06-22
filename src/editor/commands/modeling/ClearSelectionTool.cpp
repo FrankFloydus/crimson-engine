@@ -7,10 +7,14 @@
 #include "editor/commands/modeling/ClearSelectionTool.h"
 
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/selection/EditorSelectionService.h"
 
 namespace quader {
 
 ModelingCommandResult ClearSelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+    if (context.selection != nullptr) {
+        return context.selection->clear();
+    }
     return context.modeling.clearSelection();
 }
 

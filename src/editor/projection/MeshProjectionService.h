@@ -8,28 +8,16 @@
 
 #include "assets/MeshAsset.h"
 
-#include <optional>
-
 #include <editor/modeling/runtime/session.h>
 
 namespace quader {
 
-class AssetRegistry;
-class SceneDocument;
-class SceneModelingSyncService;
-
 /**
- * Projects runtime polygon mesh data onto already-reconciled editor scene nodes.
+ * Builds derived mesh snapshots from runtime polygon mesh data.
  */
 class MeshProjectionService final {
 public:
     [[nodiscard]] static MeshAsset compileObjectMesh(const quader_editor_core::PolygonObject& object);
-    static void projectModelingMeshesToScene(
-            const quader_editor_core::EditorSession& session,
-            SceneDocument& scene,
-            AssetRegistry& assets,
-            SceneModelingSyncService& sceneSync,
-            bool force = false);
 };
 
 } // namespace quader

@@ -11,6 +11,7 @@
 #include "scene/SceneDocument.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -62,8 +63,12 @@ struct ProjectDocumentIdentityReport {
  */
 class ProjectDocument {
 public:
-    ProjectDocument() = default;
+    ProjectDocument();
     explicit ProjectDocument(ProjectDocumentRecord record);
+    ProjectDocument(const ProjectDocument&) = delete;
+    ProjectDocument& operator=(const ProjectDocument&) = delete;
+    ProjectDocument(ProjectDocument&&) noexcept = default;
+    ProjectDocument& operator=(ProjectDocument&&) noexcept = default;
 
     std::uint64_t id() const { return record_.id; }
     const std::string& name() const { return record_.name; }
@@ -90,6 +95,7 @@ public:
 
 private:
     void markDirty();
+    void bindSceneObjectIdentityAllocator();
     void syncObjectRecordsWithScene() const;
     bool canAssignObjectId(EditorObjectId objectId, EntityId entity) const;
     ProjectObjectRecord recordForSceneEntity(EntityId entity, EditorObjectId objectId) const;
@@ -97,7 +103,7 @@ private:
     EditorObjectId allocateObjectId(EditorObjectId requested);
 
     ProjectDocumentRecord record_;
-    EditorObjectId nextObjectId_ = 1;
+    std::shared_ptr<EditorObjectId> nextObjectId_ = std::make_shared<EditorObjectId>(1);
     std::uint64_t revision_ = 0;
     SceneDocument scene_;
     AssetRegistry assets_;

@@ -26,17 +26,22 @@ The root schema is versioned with `format: "quader.qdr"`, `version: 1`, and a
 canonical `document` payload. Readers still accept the old v1 `session` payload
 key as a migration alias, but writers must not emit it.
 
-The legacy `<io/qdr/qdr.h>` API remains as a modeling-runtime compatibility
-adapter for callers that still save or load `SessionState`. It converts through
-`QdrDocument` and must not add canonical schema fields or serialize live editor
-runtime state such as dirty flags, undo history, redo history, active tools, or
-preview/transient data.
+Project-document persistence emits texture assets referenced by material
+`textureSlots` in `assets.textures`. Readers reject material texture slots that
+point at missing or invalid texture asset ids, and atomic project writes validate
+the temporary file by reading it back before replacing the target.
+
+The legacy `<io/qdr/QdrRuntimeIoCompat.h>` API remains as a modeling-runtime
+compatibility adapter for callers that still save or load `SessionState`. It
+converts through `QdrDocument` and must not add canonical schema fields or
+serialize live editor runtime state such as dirty flags, undo history, redo
+history, active tools, or preview/transient data.
 
 Real fixture-backed golden, migration, and malformed-file coverage lives in
 `tests/modeling_domain/qdr_io_document_tests.cpp` with fixtures under
 `tests/modeling_domain/fixtures/io`.
 Compatibility coverage for the session-state adapter lives in
-`tests/modeling_domain/qdr_io_session_tests.cpp` and is registered as the
+`tests/modeling_domain/qdr_runtime_io_compat_tests.cpp` and is registered as the
 `qdr_runtime_io_compat_tests` CTest target. Live editor runtime fields remain
 excluded from the durable schema.
 

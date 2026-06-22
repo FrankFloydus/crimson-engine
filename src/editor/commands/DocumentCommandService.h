@@ -6,10 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/UndoRedoManager.h"
 #include "core/Types.h"
 #include "editor/commands/document/DocumentCommandEdits.h"
 #include "editor/commands/document/DocumentCommandResult.h"
+#include "editor/history/EditorHistoryService.h"
 #include "scene/Components.h"
 
 #include <string>
@@ -24,7 +24,7 @@ class SceneDocument;
  */
 class DocumentCommandService {
 public:
-    DocumentCommandService(SceneDocument& scene, UndoRedoManager& undoRedo);
+    DocumentCommandService(SceneDocument& scene, EditorHistoryService& history);
 
     DocumentCommandResult createEntity(
             std::string name,
@@ -57,7 +57,7 @@ public:
 
 private:
     SceneDocument& scene_;
-    UndoRedoManager& undoRedo_;
+    EditorHistoryService& history_;
 };
 
 } // namespace quader

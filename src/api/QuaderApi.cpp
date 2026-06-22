@@ -20,7 +20,7 @@ class QuaderApi::Impl final {
 public:
     explicit Impl(ProjectSession& session)
         : session(session)
-        , history(session.undoRedo())
+        , history(session.history())
         , editorCommands(history, session.documentCommands())
         , mutations(session, history, editorCommands, modelingCommands)
         , scene(session, mutations)
@@ -31,7 +31,7 @@ public:
         , query(session, history) {}
 
     ProjectSession& session;
-    EditorHistoryService history;
+    EditorHistoryService& history;
     EditorCommandService editorCommands;
     ModelingCommandExecutionService modelingCommands;
     QuaderApiMutationRunner mutations;

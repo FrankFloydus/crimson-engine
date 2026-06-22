@@ -110,7 +110,7 @@ QuaderApiVoidResult QuaderModelingApi::executeTool(std::string_view toolId) {
 }
 
 QuaderApiVoidResult QuaderModelingApi::beginPreview(std::string_view actionId) {
-    return mutations_.runTrackedModelingAction(actionId);
+    return mutations_.beginTrackedModelingPreview(actionId);
 }
 
 QuaderApiVoidResult QuaderModelingApi::updatePreview(const QuaderPreviewSettings& settings) {

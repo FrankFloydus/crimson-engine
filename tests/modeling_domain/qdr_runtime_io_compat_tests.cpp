@@ -7,7 +7,7 @@
 #include "test_support.h"
 
 #include <editor/modeling/runtime/session.h>
-#include <io/qdr/qdr.h>
+#include <io/qdr/QdrRuntimeIoCompat.h>
 #include <mesh/polygon/document.h>
 
 #include <chrono>

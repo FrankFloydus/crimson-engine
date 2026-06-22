@@ -209,7 +209,7 @@ TEST(EditorApiTests, SelectionApiDelegatesTypedTargetsToEditorSelectionService) 
     EXPECT_EQ(state.target.face, 1);
 
     ASSERT_TRUE(editor.selection().setMode(quader::ModelingSelectionMode::Object).ok());
-    ASSERT_TRUE(editor.scene().select({first.value().entity, second.value().entity}, second.value().entity).ok());
+    ASSERT_TRUE(editor.selection().selectObjects({first.value().entity, second.value().entity}, second.value().entity).ok());
     const quader::QuaderApiResult<quader::QuaderEntityRef> group = editor.scene().groupSelection("Selection Group");
     ASSERT_TRUE(group.ok()) << group.errorMessage();
     ASSERT_TRUE(editor.selection().setMode(quader::ModelingSelectionMode::Group).ok());

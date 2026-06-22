@@ -10,7 +10,7 @@
 #include <editor/modeling/runtime/session.h>
 #include <editor/interactions/interaction_api.h>
 #include <editor/metadata/host_contract.h>
-#include <io/qdr/qdr.h>
+#include <io/qdr/QdrRuntimeIoCompat.h>
 #include <mesh/polygon/document.h>
 
 #include <algorithm>

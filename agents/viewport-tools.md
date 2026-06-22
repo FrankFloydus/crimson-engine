@@ -24,7 +24,7 @@ file except through prior written authorization from Francesco Di Blasi.
 
 ## Rules
 
-- Put concrete viewport tools under `src/viewport/modes/interactive`.
+- Put concrete viewport tools under `src/editor/tools/interactive`.
 - Descriptor-only wrappers may remain header-only.
 - If a tool overrides event handling or owns a state machine, put that behavior in a `.cpp`.
 - Register viewport tools in the viewport catalog implementation, not inline in headers.

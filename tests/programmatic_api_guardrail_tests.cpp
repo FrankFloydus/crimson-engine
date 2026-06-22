@@ -99,7 +99,7 @@ std::vector<std::string> linesContaining(const std::string& source, const std::v
 }
 
 bool allowedSceneDocumentMutation(std::string_view relative, std::string_view line) {
-    if (relative != "src/viewport/modes/base/TwoStageBoxTool.cpp") {
+    if (relative != "src/editor/tools/base/TwoStageBoxTool.cpp") {
         return false;
     }
 
@@ -200,6 +200,36 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiAndBehaviorDslDoNotExposeModelingAc
             EXPECT_EQ(source.find("QuaderScript& executeAction"), std::string::npos) << relative;
             EXPECT_EQ(source.find("BehaviorWhen& executeAction"), std::string::npos) << relative;
         }
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, CommandLayerDoesNotExposeGenericModelingActionExecutionRoute) {
+    for (const std::filesystem::path& file : {
+                 sourceRoot() / "src/api/QuaderApiMutationRunner.h",
+                 sourceRoot() / "src/api/QuaderApiMutationRunner.cpp",
+                 sourceRoot() / "src/editor/commands/ModelingCommandExecutionService.h",
+                 sourceRoot() / "src/editor/commands/ModelingCommandExecutionService.cpp",
+         }) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+
+        EXPECT_EQ(source.find("runTrackedModelingAction"), std::string::npos) << relative;
+        EXPECT_EQ(source.find("executeAction("), std::string::npos) << relative;
+        EXPECT_EQ(source.find("executeActionUntracked("), std::string::npos) << relative;
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, SelectionCommandToolsPreferEditorSelectionService) {
+    const std::unordered_map<std::string, std::string_view> expectedRoutes{
+            {"src/editor/commands/modeling/ClearSelectionTool.cpp", "context.selection->clear()"},
+            {"src/editor/commands/modeling/SelectAllTool.cpp", "context.selection->selectAll()"},
+            {"src/editor/commands/modeling/InvertSelectionTool.cpp", "context.selection->invert()"},
+    };
+
+    for (const auto& [relative, expectedRoute] : expectedRoutes) {
+        const std::string source = readFile(sourceRoot() / relative);
+        EXPECT_NE(source.find("context.selection != nullptr"), std::string::npos) << relative;
+        EXPECT_NE(source.find(expectedRoute), std::string::npos) << relative;
     }
 }
 
@@ -437,6 +467,32 @@ TEST(ProgrammaticApiGuardrailTests, PublicHistoryDoesNotFallbackToModelingHistor
             }
         }
     }
+}
+
+TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManager) {
+    const std::vector<std::filesystem::path> editorHistoryClients = {
+            sourceRoot() / "src/api/QuaderApi.cpp",
+            sourceRoot() / "src/api/QuaderSceneApi.cpp",
+            sourceRoot() / "src/scene/document/ProjectSession.h",
+            sourceRoot() / "src/scene/document/ProjectSession.cpp",
+            sourceRoot() / "src/editor/commands/DocumentCommandService.h",
+            sourceRoot() / "src/editor/commands/DocumentCommandService.cpp",
+            sourceRoot() / "src/editor/history/SceneTransformPreviewTransaction.h",
+    };
+    for (const std::filesystem::path& file : editorHistoryClients) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+        EXPECT_EQ(source.find("UndoRedoManager"), std::string::npos) << relative;
+        EXPECT_EQ(source.find("core/UndoRedoManager.h"), std::string::npos) << relative;
+        EXPECT_EQ(source.find("undoRedo()"), std::string::npos) << relative;
+    }
+
+    const std::string historyHeader = readFile(sourceRoot() / "src/editor/history/EditorHistoryService.h");
+    EXPECT_EQ(historyHeader.find("core/UndoRedoManager.h"), std::string::npos);
+    EXPECT_EQ(historyHeader.find("undoRedo()"), std::string::npos);
+
+    const std::string historySource = readFile(sourceRoot() / "src/editor/history/EditorHistoryService.cpp");
+    EXPECT_NE(historySource.find("core/UndoRedoManager.h"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ProgrammaticBehaviorTestsUseApiOrScenarioDsl) {

@@ -17,6 +17,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <variant>
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -131,6 +132,22 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
             "thicken");
     EXPECT_EQ(fallback.label, "Thicken");
     EXPECT_EQ(fallback.operationId, "thicken");
+    quader_editor_core::PreviewTransactionStatus preview;
+    preview.active = true;
+    preview.kind = quader_editor_core::PreviewTransactionKind::edge_bevel;
+    const ModelingToolSettingsTarget previewTarget = toolSettings.activePreviewTarget(preview);
+    EXPECT_TRUE(previewTarget.active);
+    EXPECT_TRUE(previewTarget.operationPreviewActive);
+    EXPECT_EQ(previewTarget.kind, ModelingToolSettingsTargetKind::EdgeBevel);
+    EXPECT_EQ(previewTarget.operationId, "edge_bevel");
+    EXPECT_EQ(previewTarget.label, "Bevel Edges");
+    quader_editor_core::EditorRuntimeStatus runtimeStatus;
+    runtimeStatus.cut_active = true;
+    const ModelingToolSettingsTarget runtimeTarget = toolSettings.activeRuntimeToolTarget(runtimeStatus);
+    EXPECT_TRUE(runtimeTarget.active);
+    EXPECT_FALSE(runtimeTarget.operationPreviewActive);
+    EXPECT_EQ(runtimeTarget.kind, ModelingToolSettingsTargetKind::Cut);
+    EXPECT_EQ(runtimeTarget.label, "Cut");
 
     ModelingInteractionSettingsService interactionSettings;
     EXPECT_EQ(interactionSettings.settings().cutMode, ModelingCutMode::KeepBoth);
@@ -157,6 +174,13 @@ TEST(ModelingSessionServiceSplitTests, PolicyServicesExposeDirectBehavior) {
     EXPECT_TRUE(ModelingMeshSyncService::shouldForceRefresh(true, false));
     EXPECT_TRUE(ModelingMeshSyncService::shouldForceRefresh(false, true));
     EXPECT_FALSE(ModelingMeshSyncService::shouldForceRefresh(false, false));
+    const quader_editor_core::EditorRuntimeCommand copy = ModelingClipboardService::makeCopyCommand();
+    EXPECT_EQ(copy.command_id, ModelingClipboardService::copyCommand());
+    EXPECT_TRUE(std::holds_alternative<std::monostate>(copy.settings));
+    const quader_editor_core::EditorRuntimeCommand paste = ModelingClipboardService::makePasteCommand();
+    EXPECT_EQ(paste.command_id, ModelingClipboardService::pasteCommand());
+    EXPECT_TRUE(std::holds_alternative<quader_editor_core::PasteCopiedMeshesRuntimeCommandSettings>(
+            paste.settings));
     EXPECT_TRUE(TransformPreviewService::isTransform(ModelingTransformOperation::Transform));
     EXPECT_FALSE(TransformPreviewService::isTransform(ModelingTransformOperation::Extrude));
     EXPECT_FALSE(ModelingCommandExecutor::runtimeUnavailable().ok);
@@ -179,6 +203,23 @@ TEST(ModelingSessionServiceSplitTests, ContextActionServiceAppliesModalQueryStat
     const ModelingActionSet actionSet = service.actionSet(summary, {}, false);
     EXPECT_EQ(actionSet.surface, ModelingActionSurface::OperationsPanel);
     EXPECT_EQ(actionSet.surfaceId, "operations_top_bar");
+
+    const ModelingContextActionResolution modalResult =
+            service.resolveExecutableAction(summary, "delete_selection", true);
+    EXPECT_FALSE(modalResult.ok);
+    EXPECT_EQ(modalResult.message, "Viewport is owned by an active modal tool.");
+
+    ModelingSelectionSummary emptySummary;
+    emptySummary.mode = ModelingSelectionMode::Object;
+    const ModelingContextActionResolution disabledResult =
+            service.resolveExecutableAction(emptySummary, "delete_selection", false);
+    EXPECT_FALSE(disabledResult.ok);
+    EXPECT_EQ(disabledResult.message, "Select something to delete.");
+
+    const ModelingContextActionResolution enabledResult =
+            service.resolveExecutableAction(summary, "delete_selection", false);
+    EXPECT_TRUE(enabledResult.ok);
+    EXPECT_EQ(enabledResult.action.actionId, "delete_selection");
 }
 
 TEST(ModelingSessionServiceSplitTests, FacadeDelegatesToSplitServicesThroughPublicApi) {

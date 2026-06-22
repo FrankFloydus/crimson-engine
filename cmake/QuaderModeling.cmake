@@ -238,7 +238,7 @@ target_link_libraries(quader_qdr_document_io
         quader_modeling_profile)
 
 add_library(quader_qdr_runtime_io STATIC
-    src/io/qdr/qdr.cpp)
+    src/io/qdr/QdrRuntimeIoCompat.cpp)
 target_compile_features(quader_qdr_runtime_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_runtime_io
     PUBLIC

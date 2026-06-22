@@ -7,24 +7,24 @@
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneDocument.h"
-#include "viewport/modes/ViewportToolCatalog.h"
-#include "viewport/modes/ViewportToolRuntime.h"
-#include "viewport/modes/base/DrawnPlaneTool.h"
-#include "viewport/modes/base/DragCommitTool.h"
-#include "viewport/modes/base/PointSequenceTool.h"
-#include "viewport/modes/base/TwoStageBoxTool.h"
-#include "viewport/modes/interactive/BoxTool.h"
-#include "viewport/modes/interactive/CutTool.h"
-#include "viewport/modes/interactive/ExtendTool.h"
-#include "viewport/modes/interactive/ExtrudeTool.h"
-#include "viewport/modes/interactive/InsertEdgeLoopTool.h"
-#include "viewport/modes/interactive/KnifeTool.h"
-#include "viewport/modes/interactive/MirrorTool.h"
-#include "viewport/modes/interactive/MoveTool.h"
-#include "viewport/modes/interactive/PolyTool.h"
-#include "viewport/modes/interactive/RotateTool.h"
-#include "viewport/modes/interactive/ScaleTool.h"
-#include "viewport/modes/interactive/SelectTool.h"
+#include "editor/tools/ViewportToolCatalog.h"
+#include "editor/tools/ViewportToolRuntime.h"
+#include "editor/tools/base/DrawnPlaneTool.h"
+#include "editor/tools/base/DragCommitTool.h"
+#include "editor/tools/base/PointSequenceTool.h"
+#include "editor/tools/base/TwoStageBoxTool.h"
+#include "editor/tools/interactive/BoxTool.h"
+#include "editor/tools/interactive/CutTool.h"
+#include "editor/tools/interactive/ExtendTool.h"
+#include "editor/tools/interactive/ExtrudeTool.h"
+#include "editor/tools/interactive/InsertEdgeLoopTool.h"
+#include "editor/tools/interactive/KnifeTool.h"
+#include "editor/tools/interactive/MirrorTool.h"
+#include "editor/tools/interactive/MoveTool.h"
+#include "editor/tools/interactive/PolyTool.h"
+#include "editor/tools/interactive/RotateTool.h"
+#include "editor/tools/interactive/ScaleTool.h"
+#include "editor/tools/interactive/SelectTool.h"
 
 #include <gtest/gtest.h>
 
@@ -195,10 +195,18 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
 
 TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {
     const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
-    const std::string toolHeader = readSourceFile(root / "src" / "viewport" / "modes" / "Tool.h");
-    const std::string catalogHeader = readSourceFile(root / "src" / "viewport" / "modes" / "ViewportToolCatalog.h");
+    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
+    const std::string catalogHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportToolCatalog.h");
     EXPECT_EQ(toolHeader.find("ViewportToolBase"), std::string::npos);
     EXPECT_EQ(catalogHeader.find("ViewportToolBase"), std::string::npos);
+}
+
+TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
+    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "ViewportToolRuntime.h"));
+    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "ViewportToolRuntime.cpp"));
+    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "base" / "ViewportToolCatalog.cpp"));
+    EXPECT_FALSE(std::filesystem::exists(root / "src" / "viewport" / "modes"));
 }
 
 TEST(ViewportToolGuardrailTests, ViewportPanelHasNoDirectModalToolBranches) {

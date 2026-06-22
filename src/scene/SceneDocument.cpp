@@ -52,6 +52,10 @@ void removeChild(std::vector<EntityId>& children, EntityId child) {
 
 } // namespace
 
+void SceneDocument::setEditorObjectIdAllocator(EditorObjectIdAllocator allocator) {
+    editorObjectIdAllocator_ = std::move(allocator);
+}
+
 EntityId SceneDocument::createEntity(std::string name, EntityKind kind, EditorObjectId editorObjectId) {
     const EntityId id = nextId_++;
     const EditorObjectId objectId = allocateEditorObjectId(editorObjectId);
@@ -171,6 +175,12 @@ bool SceneDocument::setEditorObjectId(EntityId id, EditorObjectId editorObjectId
     EditorObjectIdentityComponent* identity = registry_.try_get<EditorObjectIdentityComponent>(entity);
     if (identity != nullptr && identity->id == editorObjectId) {
         return true;
+    }
+    if (editorObjectIdAllocator_) {
+        const EditorObjectId reserved = editorObjectIdAllocator_(editorObjectId);
+        if (reserved != editorObjectId) {
+            return false;
+        }
     }
     if (identity != nullptr && identity->id != InvalidEditorObjectId) {
         entityByEditorObjectId_.erase(identity->id);
@@ -700,8 +710,25 @@ EditorObjectId SceneDocument::allocateEditorObjectId(EditorObjectId requested) {
         if (entityByEditorObjectId_.contains(requested)) {
             return InvalidEditorObjectId;
         }
+        if (editorObjectIdAllocator_) {
+            const EditorObjectId allocated = editorObjectIdAllocator_(requested);
+            if (allocated != requested) {
+                return InvalidEditorObjectId;
+            }
+        }
         nextEditorObjectId_ = std::max(nextEditorObjectId_, requested + 1u);
         return requested;
+    }
+    if (editorObjectIdAllocator_) {
+        const std::size_t guard = entityByEditorObjectId_.size() + 2u;
+        for (std::size_t attempt = 0; attempt < guard; ++attempt) {
+            const EditorObjectId allocated = editorObjectIdAllocator_(InvalidEditorObjectId);
+            if (allocated != InvalidEditorObjectId && !entityByEditorObjectId_.contains(allocated)) {
+                nextEditorObjectId_ = std::max(nextEditorObjectId_, allocated + 1u);
+                return allocated;
+            }
+        }
+        return InvalidEditorObjectId;
     }
     while (entityByEditorObjectId_.contains(nextEditorObjectId_)) {
         ++nextEditorObjectId_;

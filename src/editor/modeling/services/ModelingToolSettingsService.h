@@ -11,6 +11,9 @@
 #include <string>
 #include <string_view>
 
+#include <editor/modeling/runtime/editor_runtime.h>
+#include <editor/modeling/runtime/session.h>
+
 namespace quader {
 
 /**
@@ -29,6 +32,10 @@ public:
             ModelingToolSettingsTargetKind kind,
             std::string_view fallbackLabel,
             std::string_view fallbackOperationId) const;
+    [[nodiscard]] ModelingToolSettingsTarget activePreviewTarget(
+            const quader_editor_core::PreviewTransactionStatus& preview) const;
+    [[nodiscard]] ModelingToolSettingsTarget activeRuntimeToolTarget(
+            const quader_editor_core::EditorRuntimeStatus& runtimeStatus) const;
 
 private:
     std::string activePreviewActionId_;

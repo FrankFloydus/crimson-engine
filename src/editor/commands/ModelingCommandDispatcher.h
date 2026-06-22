@@ -12,6 +12,8 @@
 
 namespace quader {
 
+class EditorSelectionService;
+
 /**
  * Owns Modeling Command Dispatcher behavior within the editor command and action routing layer.
  */
@@ -21,10 +23,17 @@ public:
     [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy(std::string_view toolId) const;
     [[nodiscard]] ModelingCommandAvailability availability(
             std::string_view toolId,
-            ModelingSessionService& modeling) const;
+            ModelingSessionService& modeling,
+            EditorSelectionService* selection = nullptr) const;
 
-    ModelingCommandResult execute(std::string_view toolId, ModelingSessionService& modeling) const;
-    ModelingCommandResult execute(const CommandTool& tool, ModelingSessionService& modeling) const;
+    ModelingCommandResult execute(
+            std::string_view toolId,
+            ModelingSessionService& modeling,
+            EditorSelectionService* selection = nullptr) const;
+    ModelingCommandResult execute(
+            const CommandTool& tool,
+            ModelingSessionService& modeling,
+            EditorSelectionService* selection = nullptr) const;
 };
 
 } // namespace quader

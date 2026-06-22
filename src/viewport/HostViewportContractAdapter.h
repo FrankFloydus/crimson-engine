@@ -7,7 +7,7 @@
 #pragma once
 
 #include "viewport/ViewportInputRouter.h"
-#include "viewport/modes/Tool.h"
+#include "editor/tools/ViewportTool.h"
 
 #include <algorithm>
 #include <cmath>

@@ -117,8 +117,8 @@ struct QdrWriteResult {
 };
 
 // Stable DTO persistence API. Compatibility helpers that convert to editor-core
-// SessionState live in qdr.h so pure IO callers do not depend on editor runtime
-// headers.
+// SessionState live in QdrRuntimeIoCompat.h so pure IO callers do not depend on
+// editor runtime headers.
 [[nodiscard]] bool is_supported_document_version(int version);
 [[nodiscard]] std::string serialize_document(const QdrDocument& document);
 [[nodiscard]] QdrReadResult deserialize_document(std::string_view text);

@@ -137,6 +137,47 @@ MeshPhysicsBodyType parsePhysicsBodyType(const std::string& value) {
     return MeshPhysicsBodyType::StaticBody;
 }
 
+TextureUsage parseTextureUsage(const std::string& value) {
+    if (value == "baseColor") {
+        return TextureUsage::BaseColor;
+    }
+    if (value == "normal") {
+        return TextureUsage::Normal;
+    }
+    if (value == "roughness") {
+        return TextureUsage::Roughness;
+    }
+    if (value == "metallic") {
+        return TextureUsage::Metallic;
+    }
+    if (value == "curvature") {
+        return TextureUsage::Curvature;
+    }
+    if (value == "thickness") {
+        return TextureUsage::Thickness;
+    }
+    if (value == "ambientOcclusion") {
+        return TextureUsage::AmbientOcclusion;
+    }
+    if (value == "position") {
+        return TextureUsage::Position;
+    }
+    if (value == "id") {
+        return TextureUsage::Id;
+    }
+    if (value == "mask") {
+        return TextureUsage::Mask;
+    }
+    return TextureUsage::Unknown;
+}
+
+TextureColorSpace parseTextureColorSpace(const std::string& value) {
+    if (value == "linear") {
+        return TextureColorSpace::Linear;
+    }
+    return TextureColorSpace::Srgb;
+}
+
 Vec3 fromRuntime(quader_poly::Vec3 value) {
     return {value.x, value.y, value.z};
 }
@@ -257,6 +298,18 @@ MeshAsset meshFromJson(const json& value) {
     return mesh;
 }
 
+TextureAsset textureFromJson(const json& value) {
+    TextureAsset texture;
+    texture.name = value.value("name", std::string("Texture"));
+    texture.usage = parseTextureUsage(value.value("usage", std::string("unknown")));
+    texture.colorSpace = parseTextureColorSpace(value.value("colorSpace", std::string("srgb")));
+    texture.width = value.value("width", 0u);
+    texture.height = value.value("height", 0u);
+    texture.sourcePath = std::filesystem::path(value.value("sourcePath", std::string{}));
+    texture.generated = value.value("generated", false);
+    return texture;
+}
+
 MaterialDocument materialFromJson(const json& value) {
     MaterialDocument material;
     material.name = value.value("name", std::string("Material"));
@@ -315,6 +368,15 @@ ProjectObjectRecord objectRecordFromJson(const json& value) {
     };
 }
 
+void validateMaterialTextureReferences(const std::set<AssetId>& textureAssetIds, const MaterialDocument& material) {
+    for (const auto& [slot, textureId] : material.textureSlots) {
+        (void)slot;
+        if (textureId == InvalidAssetId || !textureAssetIds.contains(textureId)) {
+            throw std::runtime_error("QDR project document material references a missing texture asset.");
+        }
+    }
+}
+
 void validateEntityAssetReferences(const ProjectDocument& document) {
     for (const EntityId entity : document.scene().entities()) {
         if (const MeshComponent* mesh = document.scene().mesh(entity);
@@ -356,9 +418,22 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         const AssetId id = meshJson.value("id", InvalidAssetId);
         document.assets().addMesh(id, meshFromJson(meshJson));
     }
+    std::set<AssetId> textureAssetIds;
+    for (const json& textureJson : assetsJson.value("textures", json::array())) {
+        const AssetId id = textureJson.value("id", InvalidAssetId);
+        if (id == InvalidAssetId) {
+            throw std::runtime_error("QDR project document contains an invalid texture asset id.");
+        }
+        if (!textureAssetIds.insert(id).second) {
+            throw std::runtime_error("QDR project document contains duplicate texture asset ids.");
+        }
+        document.assets().addTexture(id, textureFromJson(textureJson));
+    }
     for (const json& materialJson : assetsJson.value("materials", json::array())) {
         const AssetId id = materialJson.value("id", InvalidAssetId);
-        document.assets().addMaterial(id, materialFromJson(materialJson));
+        MaterialDocument material = materialFromJson(materialJson);
+        validateMaterialTextureReferences(textureAssetIds, material);
+        document.assets().addMaterial(id, std::move(material));
     }
 
     std::vector<std::pair<EntityId, EntityId>> parentLinks;

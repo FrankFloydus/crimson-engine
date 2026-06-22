@@ -155,7 +155,7 @@ std::vector<EntityId> selectedEntities(const QuaderEditorApi& editor) {
 }
 
 void selectObjects(QuaderEditorApi& editor, std::initializer_list<EntityId> entities, EntityId active) {
-    const QuaderApiVoidResult selected = editor.scene().select(entities, active);
+    const QuaderApiVoidResult selected = editor.selection().selectObjects(entities, active);
     ASSERT_TRUE(selected.ok()) << selected.errorMessage();
 }
 
@@ -171,7 +171,7 @@ EntityId groupSelection(
 }
 
 void selectGroupForCommandDelete(QuaderEditorApi& editor, EntityId group) {
-    const QuaderApiVoidResult selected = editor.scene().select(group);
+    const QuaderApiVoidResult selected = editor.selection().selectObject(group);
     ASSERT_TRUE(selected.ok()) << selected.errorMessage();
     const QuaderApiVoidResult mode = editor.modeling().setSelectionMode(ModelingSelectionMode::Group);
     ASSERT_TRUE(mode.ok()) << mode.errorMessage();
@@ -483,7 +483,7 @@ TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
     selectObjects(h.editor, {child.entity, sibling.entity}, child.entity);
     const EntityId group = groupSelection(h.editor, "Object Mode Group");
     ASSERT_TRUE(h.editor.modeling().setSelectionMode(ModelingSelectionMode::Object).ok());
-    ASSERT_TRUE(h.editor.scene().select(group).ok());
+    ASSERT_TRUE(h.editor.selection().selectObject(group).ok());
     ASSERT_EQ(h.editor.modeling().selectionSummary().mode, ModelingSelectionMode::Object);
 
     const QuaderApiVoidResult deleted = h.editor.commands().execute(QuaderCommand::ModelingDeleteSelection);
@@ -504,7 +504,7 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupDeleteUsesSceneRoots
     const EntityId group = groupSelection(h.editor, "Component Mode Group");
 
     ASSERT_TRUE(h.editor.modeling().setSelectionMode(ModelingSelectionMode::Face).ok());
-    ASSERT_TRUE(h.editor.scene().select(group).ok());
+    ASSERT_TRUE(h.editor.selection().selectObject(group).ok());
     ASSERT_EQ(h.editor.modeling().selectionSummary().mode, ModelingSelectionMode::Face);
 
     const QuaderApiVoidResult deleted = h.editor.commands().execute(QuaderCommand::ModelingDeleteSelection);
@@ -530,7 +530,7 @@ TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleModelingObjectDoesNotDe
     ASSERT_EQ(h.editor.modeling().selectionSummary().mode, ModelingSelectionMode::Object);
 
     std::vector<EntityId> emptySelection;
-    ASSERT_TRUE(h.editor.scene().select(std::span<const EntityId>(emptySelection.data(), emptySelection.size())).ok());
+    ASSERT_TRUE(h.editor.selection().selectObjects(std::span<const EntityId>(emptySelection.data(), emptySelection.size())).ok());
     ASSERT_TRUE(selectedEntities(h.editor).empty());
 
     const QuaderApiVoidResult deleted = h.editor.commands().execute(QuaderCommand::ModelingDeleteSelection);

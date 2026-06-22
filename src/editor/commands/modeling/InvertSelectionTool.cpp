@@ -7,10 +7,14 @@
 #include "editor/commands/modeling/InvertSelectionTool.h"
 
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/selection/EditorSelectionService.h"
 
 namespace quader {
 
 ModelingCommandResult InvertSelectionTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+    if (context.selection != nullptr) {
+        return context.selection->invert();
+    }
     return context.modeling.invertSelection();
 }
 

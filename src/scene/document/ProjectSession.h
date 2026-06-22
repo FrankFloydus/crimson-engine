@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/UndoRedoManager.h"
 #include "editor/commands/DocumentCommandService.h"
+#include "editor/history/EditorHistoryService.h"
 #include "scene/document/ProjectDocument.h"
 
 #include <memory>
@@ -40,8 +40,8 @@ public:
     AssetRegistry& assets() { return document_.assets(); }
     const AssetRegistry& assets() const { return document_.assets(); }
 
-    UndoRedoManager& undoRedo() { return *undoRedo_; }
-    const UndoRedoManager& undoRedo() const { return *undoRedo_; }
+    EditorHistoryService& history() { return *history_; }
+    const EditorHistoryService& history() const { return *history_; }
 
     DocumentCommandService& documentCommands() { return *documentCommands_; }
     ModelingSessionService& modeling() { return *modeling_; }
@@ -53,7 +53,7 @@ private:
     void rebuildServices();
 
     ProjectDocument document_;
-    std::unique_ptr<UndoRedoManager> undoRedo_;
+    std::unique_ptr<EditorHistoryService> history_;
     std::unique_ptr<DocumentCommandService> documentCommands_;
     std::unique_ptr<ModelingSessionService> modeling_;
     std::unique_ptr<EditorSelectionService> selection_;

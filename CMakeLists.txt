@@ -97,26 +97,26 @@ set(QUADER_MODELING_TOOL_SOURCES
     src/editor/commands/modeling/SelectAllTool.cpp
 )
 
-set(QUADER_VIEWPORT_TOOL_SOURCES
-    src/viewport/modes/Tool.cpp
-    src/viewport/modes/ViewportToolRuntime.cpp
-    src/viewport/modes/base/DragCommitTool.cpp
-    src/viewport/modes/base/DrawnPlaneTool.cpp
-    src/viewport/modes/base/ModalViewportTool.cpp
-    src/viewport/modes/base/PointSequenceTool.cpp
-    src/viewport/modes/base/TwoStageBoxTool.cpp
-    src/viewport/modes/base/ViewportToolCatalog.cpp
+set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
+    src/editor/tools/ViewportTool.cpp
+    src/editor/tools/ViewportToolRuntime.cpp
+    src/editor/tools/base/DragCommitTool.cpp
+    src/editor/tools/base/DrawnPlaneTool.cpp
+    src/editor/tools/base/ModalViewportTool.cpp
+    src/editor/tools/base/PointSequenceTool.cpp
+    src/editor/tools/base/TwoStageBoxTool.cpp
+    src/editor/tools/base/ViewportToolCatalog.cpp
 )
 
 include(cmake/QuaderModeling.cmake)
 
 add_library(quader_modeling STATIC
     src/editor/projection/MeshProjectionService.cpp
-    src/editor/projection/ModelingSceneReconcileService.cpp
     src/editor/projection/PickingCacheProjection.cpp
     src/editor/projection/SelectionOverlayProjection.cpp
     src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp
     src/editor/modeling/services/ModelingActionCatalog.cpp
+    src/editor/modeling/services/ModelingMeshSyncService.cpp
     src/editor/modeling/services/ModelingOperationSettings.cpp
     src/editor/modeling/services/ModelingSessionServices.cpp
     src/editor/modeling/services/ModelingSessionService.cpp
@@ -162,7 +162,7 @@ add_library(quader_core STATIC
     src/viewport/ViewportLayout.cpp
     src/viewport/ViewportSettings.cpp
     src/viewport/ViewportWorkspaceService.cpp
-    ${QUADER_VIEWPORT_TOOL_SOURCES}
+    ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
 )
 
 target_include_directories(quader_core

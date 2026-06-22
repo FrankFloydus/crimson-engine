@@ -7,8 +7,8 @@
 #include "viewport/ViewportInputRouter.h"
 
 #include "viewport/HostViewportContractAdapter.h"
-#include "viewport/modes/ViewportToolCatalog.h"
-#include "viewport/modes/ViewportToolRuntime.h"
+#include "editor/tools/ViewportToolCatalog.h"
+#include "editor/tools/ViewportToolRuntime.h"
 
 #include <algorithm>
 #include <cmath>

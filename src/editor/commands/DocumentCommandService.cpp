@@ -30,9 +30,9 @@ namespace quader {
 namespace {
 
 DocumentCommandResult executeDocumentCommand(
-        UndoRedoManager& undoRedo,
+        EditorHistoryService& history,
         std::unique_ptr<IUndoableCommand> command) {
-    return undoRedo.execute(std::move(command));
+    return history.execute(std::move(command));
 }
 
 std::vector<DocumentTransformEdit> normalizedTransformEdits(
@@ -91,9 +91,9 @@ std::vector<DocumentLockEdit> normalizedLockEdits(
 
 } // namespace
 
-DocumentCommandService::DocumentCommandService(SceneDocument& scene, UndoRedoManager& undoRedo)
+DocumentCommandService::DocumentCommandService(SceneDocument& scene, EditorHistoryService& history)
     : scene_(scene)
-    , undoRedo_(undoRedo) {}
+    , history_(history) {}
 
 DocumentCommandResult DocumentCommandService::createEntity(
         std::string name,
@@ -112,7 +112,7 @@ DocumentCommandResult DocumentCommandService::createEntity(
             parent,
             transform);
     CreateEntityCommand* createdCommand = command.get();
-    DocumentCommandResult result = executeDocumentCommand(undoRedo_, std::move(command));
+    DocumentCommandResult result = executeDocumentCommand(history_, std::move(command));
     if (result.ok && result.changed && createdEntity != nullptr) {
         *createdEntity = createdCommand->entity();
     }
@@ -124,7 +124,7 @@ DocumentCommandResult DocumentCommandService::destroyEntity(EntityId entity) {
         return documentCommandMissingEntityResult();
     }
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<DestroyEntityCommand>(scene_, entity));
 }
 
@@ -142,7 +142,7 @@ DocumentCommandResult DocumentCommandService::reparentEntity(
         return documentCommandUnchangedResult();
     }
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<ReparentEntityCommand>(scene_, entity, parent, preserveWorldTransform));
 }
 
@@ -159,7 +159,7 @@ DocumentCommandResult DocumentCommandService::groupSelection(
             std::move(groupName),
             groupTransform);
     GroupSelectionCommand* groupCommand = command.get();
-    DocumentCommandResult result = executeDocumentCommand(undoRedo_, std::move(command));
+    DocumentCommandResult result = executeDocumentCommand(history_, std::move(command));
     if (result.ok && result.changed && groupEntity != nullptr) {
         *groupEntity = groupCommand->groupEntity();
     }
@@ -168,7 +168,7 @@ DocumentCommandResult DocumentCommandService::groupSelection(
 
 DocumentCommandResult DocumentCommandService::ungroupSelection() {
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<UngroupSelectionCommand>(scene_));
 }
 
@@ -182,7 +182,7 @@ DocumentCommandResult DocumentCommandService::duplicateEntity(EntityId entity, E
 
     auto command = std::make_unique<DuplicateEntityCommand>(scene_, entity);
     DuplicateEntityCommand* duplicateCommand = command.get();
-    DocumentCommandResult result = executeDocumentCommand(undoRedo_, std::move(command));
+    DocumentCommandResult result = executeDocumentCommand(history_, std::move(command));
     if (result.ok && result.changed && duplicateEntity != nullptr) {
         *duplicateEntity = duplicateCommand->duplicateEntity();
     }
@@ -191,7 +191,7 @@ DocumentCommandResult DocumentCommandService::duplicateEntity(EntityId entity, E
 
 DocumentCommandResult DocumentCommandService::selectEntities(std::vector<EntityId> entities, EntityId active) {
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<SelectEntitiesCommand>(scene_, std::move(entities), active));
 }
 
@@ -205,7 +205,7 @@ DocumentCommandResult DocumentCommandService::applyEntityTransform(EntityId enti
     }
 
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<ApplyEntityTransformCommand>(scene_, entity, *currentTransform, transform));
 }
 
@@ -220,7 +220,7 @@ DocumentCommandResult DocumentCommandService::renameEntity(EntityId entity, std:
 
     const std::string before = currentName->name;
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<RenameEntityCommand>(scene_, entity, before, std::move(name)));
 }
 
@@ -253,7 +253,7 @@ DocumentCommandResult DocumentCommandService::setVisibility(std::vector<Document
     }
 
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<BatchDocumentCommand>("Set Visibility", std::move(commands)));
 }
 
@@ -286,7 +286,7 @@ DocumentCommandResult DocumentCommandService::setLocks(std::vector<DocumentLockE
     }
 
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<BatchDocumentCommand>("Set Lock", std::move(commands)));
 }
 
@@ -307,7 +307,7 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
     }
 
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<SetMaterialCommand>(
                     scene_,
                     entity,
@@ -332,7 +332,7 @@ DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, 
     }
 
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<SetMeshComponentCommand>(scene_, entity, *currentMesh, mesh));
 }
 
@@ -370,7 +370,7 @@ DocumentCommandResult DocumentCommandService::setTransforms(std::vector<Document
     }
 
     return executeDocumentCommand(
-            undoRedo_,
+            history_,
             std::make_unique<BatchDocumentCommand>("Set Transform", std::move(commands)));
 }
 

@@ -6,12 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/UndoRedoManager.h"
 #include "core/Types.h"
 #include "editor/commands/document/ApplyEntityTransformCommand.h"
 #include "editor/commands/document/BatchDocumentCommand.h"
 #include "editor/commands/document/DocumentCommandEdits.h"
 #include "editor/commands/document/DocumentCommandResult.h"
+#include "editor/history/EditorHistoryService.h"
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
@@ -125,7 +125,7 @@ public:
         return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
     }
 
-    DocumentCommandResult commit(UndoRedoManager& undoRedo) {
+    DocumentCommandResult commit(EditorHistoryService& history) {
         if (!active_) {
             return documentCommandInvalidRequestResult("Transform preview is not active");
         }
@@ -158,7 +158,7 @@ public:
                     label_));
         }
 
-        return undoRedo.execute(std::make_unique<BatchDocumentCommand>(label_, std::move(commands)));
+        return history.execute(std::make_unique<BatchDocumentCommand>(label_, std::move(commands)));
     }
 
 private:

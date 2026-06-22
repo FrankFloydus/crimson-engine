@@ -8,7 +8,7 @@
 
 #include "scene/document/ProjectSession.h"
 #include "editor/modeling/services/ModelingSessionService.h"
-#include "viewport/modes/ViewportToolCatalog.h"
+#include "editor/tools/ViewportToolCatalog.h"
 
 #include <string>
 #include <utility>

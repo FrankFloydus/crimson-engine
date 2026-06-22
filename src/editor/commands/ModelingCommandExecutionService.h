@@ -15,6 +15,8 @@
 
 namespace quader {
 
+class EditorSelectionService;
+
 /**
  * Coordinates Modeling Command Execution Service responsibilities for the editor coordination layer.
  */
@@ -23,18 +25,21 @@ public:
     ModelingCommandResult execute(
             EditorHistoryService& history,
             ModelingSessionService& modeling,
+            EditorSelectionService& selection,
             std::string_view toolId);
 
     ModelingCommandResult executeUntracked(
             ModelingSessionService& modeling,
-            std::string_view toolId);
+            std::string_view toolId,
+            EditorSelectionService* selection = nullptr);
 
-    ModelingCommandResult executeAction(
+    ModelingCommandResult beginPreview(
             EditorHistoryService& history,
             ModelingSessionService& modeling,
+            EditorSelectionService& selection,
             std::string_view actionId);
 
-    ModelingCommandResult executeActionUntracked(
+    ModelingCommandResult beginPreviewUntracked(
             ModelingSessionService& modeling,
             std::string_view actionId);
 
@@ -47,7 +52,8 @@ public:
 
     [[nodiscard]] ModelingCommandAvailability availability(
             ModelingSessionService& modeling,
-            std::string_view toolId) const;
+            std::string_view toolId,
+            EditorSelectionService* selection = nullptr) const;
 
     [[nodiscard]] ModelingCommandHistoryPolicy historyPolicy(std::string_view toolId) const;
 

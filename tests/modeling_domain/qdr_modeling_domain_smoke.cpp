@@ -7,7 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <editor/modeling/runtime/session.h>
-#include <io/qdr/qdr.h>
+#include <io/qdr/QdrRuntimeIoCompat.h>
 #include <mesh/polygon/document.h>
 
 #include <string>

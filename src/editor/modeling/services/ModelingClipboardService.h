@@ -17,6 +17,8 @@ class ModelingClipboardService {
 public:
     [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId copyCommand();
     [[nodiscard]] static quader_editor_core::EditorRuntimeCommandId pasteCommand();
+    [[nodiscard]] static quader_editor_core::EditorRuntimeCommand makeCopyCommand();
+    [[nodiscard]] static quader_editor_core::EditorRuntimeCommand makePasteCommand();
 };
 
 } // namespace quader

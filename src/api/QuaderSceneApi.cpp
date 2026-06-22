@@ -360,7 +360,7 @@ QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
     }
 
     return mutations_.runDocumentCommand(
-            session_.undoRedo().execute(std::make_unique<BatchDocumentCommand>(batch.label_, std::move(commands))),
+            std::make_unique<BatchDocumentCommand>(batch.label_, std::move(commands)),
             batch.label_);
 }
 
