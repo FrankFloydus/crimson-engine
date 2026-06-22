@@ -884,7 +884,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     }
 
     const ModelingSelectionMode activeSelectionMode = modeling.selectionMode();
-    if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {
+    if (interactive && activeSelectionMode == ModelingSelectionMode::Object) {
         const std::vector<EntityId> selectedEntities = document.selectedEntities();
         const ModelingCommandResult selectionResult = request.selection.setObjectSelection(
                 std::span<const EntityId>(selectedEntities.data(), selectedEntities.size()),

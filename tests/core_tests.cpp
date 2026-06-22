@@ -1972,7 +1972,8 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("transformGizmoController_.draw({"), std::string::npos);
     EXPECT_NE(source.find(".suppressHoverWork = suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find(".suppressHoverWork = true"), std::string::npos);
-    EXPECT_NE(transformGizmoSource.find("if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {\n        const std::vector<EntityId> selectedEntities = document.selectedEntities();"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("if (interactive && activeSelectionMode == ModelingSelectionMode::Object) {\n        const std::vector<EntityId> selectedEntities = document.selectedEntities();"), std::string::npos);
+    EXPECT_EQ(transformGizmoSource.find("if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {\n        const std::vector<EntityId> selectedEntities = document.selectedEntities();"), std::string::npos);
     EXPECT_NE(transformGizmoSource.find("request.selection.setObjectSelection("), std::string::npos);
     EXPECT_EQ(transformGizmoSource.find("syncObjectsFromScene()"), std::string::npos);
     EXPECT_NE(transformGizmoSource.find("mouseInsideViewport && !request.suppressHoverWork"), std::string::npos);
@@ -7829,6 +7830,81 @@ TEST(ModelingSessionServiceTests, TransformDragComponentSelectionCommitsOverlayO
 
     ASSERT_TRUE(pointBounds.has_value());
     EXPECT_NEAR(boundsCenter(*pointBounds).x, 2.0f, 0.001f);
+}
+
+TEST(ModelingSessionServiceTests, FaceTransformDragKeepsComponentSelectionAndMovesOnlyFaceGeometry) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Face Drag Regression Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {
+                    .origin = {0.0f, 0.0f, 5.0f},
+                    .direction = {0.0f, 0.0f, -1.0f},
+            },
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.mode, ModelingSelectionMode::Face);
+    ASSERT_EQ(picked.activeKind, ModelingActiveSelectionKind::Face);
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+    ASSERT_EQ(scene.primarySelection(), box.object.entity);
+
+    const std::optional<MeshAsset> beforeMesh = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(beforeMesh.has_value());
+    const std::optional<SceneBounds> beforeBounds = localMeshBounds(*beforeMesh);
+    ASSERT_TRUE(beforeBounds.has_value());
+    EXPECT_NEAR(beforeBounds->min.x, -1.0f, 0.001f);
+    EXPECT_NEAR(beforeBounds->max.x, 1.0f, 0.001f);
+
+    const std::optional<Vec3> selectionCenter = service.selectionCenter();
+    ASSERT_TRUE(selectionCenter.has_value());
+    ModelingTransformDragPreview begin = service.beginTransformDrag(testXMoveDragBeginRequest(*selectionCenter));
+    ASSERT_TRUE(begin.ok) << begin.message;
+    EXPECT_TRUE(begin.active);
+    EXPECT_TRUE(begin.previewDriven);
+
+    ModelingTransformDragPreview update = service.updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_TRUE(update.previewDriven);
+    EXPECT_NEAR(update.moveDelta.x, 2.0f, 0.001f);
+
+    ModelingTransformDragPreview commit = service.commitTransformDrag();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    EXPECT_TRUE(commit.previewDriven);
+    EXPECT_TRUE(commit.changed);
+
+    const ModelingSelectionSummary afterSelection = service.selectionSummary();
+    EXPECT_EQ(afterSelection.mode, ModelingSelectionMode::Face);
+    EXPECT_EQ(afterSelection.activeKind, ModelingActiveSelectionKind::Face);
+    EXPECT_EQ(afterSelection.selectedFaceCount, 1u);
+    EXPECT_EQ(scene.primarySelection(), box.object.entity);
+
+    const std::optional<MeshAsset> afterMesh = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(afterMesh.has_value());
+    const std::optional<SceneBounds> afterBounds = localMeshBounds(*afterMesh);
+    ASSERT_TRUE(afterBounds.has_value());
+    EXPECT_NEAR(afterBounds->min.x, -1.0f, 0.001f);
+    EXPECT_NEAR(afterBounds->max.x, 3.0f, 0.001f);
+    EXPECT_NEAR(afterBounds->min.y, -1.0f, 0.001f);
+    EXPECT_NEAR(afterBounds->max.y, 1.0f, 0.001f);
+    EXPECT_NEAR(afterBounds->min.z, -1.0f, 0.001f);
+    EXPECT_NEAR(afterBounds->max.z, 1.0f, 0.001f);
+
+    const MeshComponent* sceneMesh = scene.mesh(box.object.entity);
+    ASSERT_NE(sceneMesh, nullptr);
+    const MeshAsset* storedMesh = assets.mesh(sceneMesh->mesh);
+    ASSERT_NE(storedMesh, nullptr);
+    const std::optional<SceneBounds> storedBounds = localMeshBounds(*storedMesh);
+    ASSERT_TRUE(storedBounds.has_value());
+    EXPECT_NEAR(storedBounds->min.x, -1.0f, 0.001f);
+    EXPECT_NEAR(storedBounds->max.x, 3.0f, 0.001f);
 }
 
 TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransformPreview) {
