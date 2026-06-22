@@ -159,9 +159,13 @@ QuaderApiVoidResult QuaderSelectionApi::invert() {
 }
 
 QuaderApiResult<ModelingSelectionSummary> QuaderSelectionApi::pickSelect(const ModelingPickSelectRequest& request) {
+    const ModelingSelectionSummary before = session_.modeling().selectionSummary();
     const ModelingSelectionSummary picked = session_.modeling().pickSelect(request);
+    const ModelingSelectionSummary after = session_.modeling().selectionSummary();
+    const bool changed = before.contentRevision != after.contentRevision ||
+            before.selectionRevision != after.selectionRevision;
     QuaderApiVoidResult status = mutations_.runModelingResult(
-            ModelingCommandResult{.ok = true, .changed = true},
+            ModelingCommandResult{.ok = true, .changed = changed},
             "Pick Select");
     return selectionResultFromStatus(std::move(status), picked);
 }

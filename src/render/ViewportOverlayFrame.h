@@ -3,6 +3,7 @@
 #include "math/Types.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -35,6 +36,60 @@ enum class ViewportOverlayLayer {
 
 inline constexpr std::size_t kViewportOverlayLayerCount = 23u;
 
+enum class ViewportOverlayStyleRole {
+    LayerDefault,
+    ExplicitColor,
+    SelectionFace,
+    SelectionWire,
+    SelectedSourceWire,
+    SourceWire,
+    OpenEdge,
+    DiagnosticEdge,
+    HoverFace,
+    HoverWire,
+    RemoveSelectionFace,
+    RemoveSelectionWire,
+    Vertex,
+    SelectedVertex,
+    HoverVertex,
+    RemoveSelectionVertex,
+    SnapTargetVertex,
+    GroupBounds,
+    WireframeBase,
+    ToolPlaneFill,
+    ToolPlaneLine,
+    ToolHandle,
+    ToolPreviewFill,
+    ToolPreviewLine,
+    ToolPreviewSeam,
+    CutPreviewKeepFill,
+    CutPreviewKeepBothDiscardFill,
+    CutPreviewDiscardFill,
+    CutPreviewKeepBothOutline,
+    CutPreviewDiscardOutline,
+    CutPreviewSeam,
+};
+
+enum class ViewportOverlaySource {
+    Unknown,
+    Selection,
+    Hover,
+    SceneWireframe,
+    HierarchySelection,
+    GroupBounds,
+    Tool,
+    Diagnostic,
+    External,
+};
+
+struct ViewportOverlayElementRef {
+    int objectId = -1;
+    int vertexId = -1;
+    int edgeA = -1;
+    int edgeB = -1;
+    int faceId = -1;
+};
+
 constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a = 255u) {
     return static_cast<std::uint32_t>(r) |
             (static_cast<std::uint32_t>(g) << 8u) |
@@ -48,6 +103,9 @@ struct ViewportOverlayLine {
     Vec3 end;
     std::uint32_t color = rgba8(255, 255, 255);
     float widthPixels = 1.0f;
+    ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
+    ViewportOverlaySource source = ViewportOverlaySource::Unknown;
+    ViewportOverlayElementRef element;
 };
 
 struct ViewportOverlayTriangle {
@@ -56,6 +114,9 @@ struct ViewportOverlayTriangle {
     Vec3 b;
     Vec3 c;
     std::uint32_t color = rgba8(255, 255, 255, 64);
+    ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
+    ViewportOverlaySource source = ViewportOverlaySource::Unknown;
+    ViewportOverlayElementRef element;
 };
 
 struct ViewportOverlayPoint {
@@ -63,6 +124,10 @@ struct ViewportOverlayPoint {
     Vec3 position;
     std::uint32_t color = rgba8(255, 255, 255);
     float sizePixels = 8.0f;
+    ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
+    ViewportOverlaySource source = ViewportOverlaySource::Unknown;
+    ViewportOverlayElementRef element;
+    std::optional<float> outlineGrowthPixels;
 };
 
 enum class ViewportOverlayProjection {

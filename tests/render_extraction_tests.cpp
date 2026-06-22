@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -70,6 +71,26 @@ TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
     }
 }
 
+TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirection) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, -0.5f, -1.0f},
+            .end = {0.5f, 0.5f, -1.0f},
+            .color = rgba8(255, 128, 64, 255),
+            .widthPixels = 2.0f,
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineMesh& mesh = plan.lineBatches.front().mesh;
+    ASSERT_EQ(mesh.vertices.size(), 4u);
+    EXPECT_GT(std::fabs(mesh.vertices[0].position.x - mesh.vertices[3].position.x), 0.0001f);
+    EXPECT_GT(std::fabs(mesh.vertices[0].position.y - mesh.vertices[3].position.y), 0.0001f);
+}
+
 TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
     ViewportOverlayFrame frame;
     frame.triangles.push_back({
@@ -102,13 +123,14 @@ TEST(OverlayPointMeshBuilderTests, BuildsOutlineAndFillPointPasses) {
             .position = {0.0f, 0.0f, -1.0f},
             .color = rgba8(255, 211, 31, 255),
             .sizePixels = 6.0f,
+            .outlineGrowthPixels = 3.0f,
     });
 
     const OverlayLayerBuildPlan plan =
             OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SelectedVertex);
 
     ASSERT_EQ(plan.pointBatches.size(), 2u);
-    EXPECT_FLOAT_EQ(plan.pointBatches[0].sizePixels, 7.0f);
+    EXPECT_FLOAT_EQ(plan.pointBatches[0].sizePixels, 9.0f);
     EXPECT_EQ(plan.pointBatches[0].mesh.vertices[0].color, rgba8SrgbToLinear(kOverlayVertexOutlineColor));
     EXPECT_FLOAT_EQ(plan.pointBatches[1].sizePixels, 6.0f);
     EXPECT_EQ(plan.pointBatches[1].mesh.vertices[0].color, rgba8SrgbToLinear(rgba8(255, 211, 31, 255)));

@@ -39,6 +39,10 @@ std::uint64_t OverlayRenderableBuilder::frameSignature(const ViewportOverlayFram
         hash = hashCombine(hash, static_cast<std::uint32_t>(point.layer));
         hash = hashCombine(hash, point.color);
         hash = hashFloat(hash, point.sizePixels);
+        hash = hashCombine(hash, point.outlineGrowthPixels.has_value() ? 1u : 0u);
+        if (point.outlineGrowthPixels.has_value()) {
+            hash = hashFloat(hash, *point.outlineGrowthPixels);
+        }
         hash = hashVec3(hash, point.position);
     }
     return hash;
@@ -88,6 +92,10 @@ std::uint64_t OverlayRenderableBuilder::layerSignature(const ViewportOverlayFram
         hash = hashCombine(hash, static_cast<std::uint32_t>(point.layer));
         hash = hashCombine(hash, point.color);
         hash = hashFloat(hash, point.sizePixels);
+        hash = hashCombine(hash, point.outlineGrowthPixels.has_value() ? 1u : 0u);
+        if (point.outlineGrowthPixels.has_value()) {
+            hash = hashFloat(hash, *point.outlineGrowthPixels);
+        }
         hash = hashVec3(hash, point.position);
     }
     return hash;
@@ -249,7 +257,13 @@ void OverlayRenderableBuilder::appendPointPass(
         ViewportOverlayLayer layer,
         std::uint16_t& blendOrder,
         bool outline) {
-    if (outline && !viewportOverlayPointHasOutline(layer)) {
+    const auto outlineGrowthFor = [layer](const ViewportOverlayPoint* point) {
+        return point->outlineGrowthPixels.value_or(viewportOverlayPointOutlineGrowthPixels(layer));
+    };
+    const bool anyOutline = std::any_of(points.begin(), points.end(), [&](const ViewportOverlayPoint* point) {
+        return outlineGrowthFor(point) > 0.0f || viewportOverlayPointIsOutlineOnly(layer);
+    });
+    if (outline && !anyOutline) {
         return;
     }
     if (!outline && viewportOverlayPointIsOutlineOnly(layer)) {
@@ -261,7 +275,7 @@ void OverlayRenderableBuilder::appendPointPass(
         const float baseSize = viewportOverlayPointSizePixels(layer, point->sizePixels);
         const bool outlineUsesNativeColor = layer == ViewportOverlayLayer::SnapTargetVertex;
         const float sizePixels = outline && !outlineUsesNativeColor
-                ? baseSize + viewportOverlayPointOutlineGrowthPixels(layer)
+                ? baseSize + outlineGrowthFor(point)
                 : baseSize;
         if (std::find(pointSizes.begin(), pointSizes.end(), sizePixels) == pointSizes.end()) {
             pointSizes.push_back(sizePixels);
@@ -276,7 +290,7 @@ void OverlayRenderableBuilder::appendPointPass(
             const float baseSize = viewportOverlayPointSizePixels(layer, point->sizePixels);
             const bool outlineUsesNativeColor = layer == ViewportOverlayLayer::SnapTargetVertex;
             const float pointSize = outline && !outlineUsesNativeColor
-                    ? baseSize + viewportOverlayPointOutlineGrowthPixels(layer)
+                    ? baseSize + outlineGrowthFor(point)
                     : baseSize;
             if (pointSize == sizePixels) {
                 batchPoints.push_back(point);

@@ -533,6 +533,11 @@ TEST(OverlayMaterialTests, LineAndPointMaterialsMirrorUnityScreenSpaceOverlayExp
     EXPECT_EQ(pointSource.find("name : nearPlane"), std::string::npos);
     EXPECT_NE(pointSource.find("variable_pointUv.xy"), std::string::npos);
     EXPECT_NE(pointSource.find("materialParams.innerRadius"), std::string::npos);
+    const std::size_t outerCircleDiscard = pointSource.find("if (distanceFromCenter > 0.5)");
+    const std::size_t innerRadiusGuard = pointSource.find("if (materialParams.innerRadius > 0.0)");
+    ASSERT_NE(outerCircleDiscard, std::string::npos);
+    ASSERT_NE(innerRadiusGuard, std::string::npos);
+    EXPECT_LT(outerCircleDiscard, innerRadiusGuard);
 }
 
 TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
@@ -646,42 +651,125 @@ TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToSdkOverlayFrame) {
     ASSERT_TRUE(settings.setColor(ViewportColorSettingId::RemoveSelectionFace, {1.0f, 0.0f, 1.0f, 1.0f}));
     ASSERT_TRUE(settings.setColor(ViewportColorSettingId::HoverVertex, {1.0f, 1.0f, 0.0f, 1.0f}));
     ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::SourceWireLineSize, 2.0f));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::SelectionFaceWireLineSize, 5.0f));
     ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::SelectionEdgeLineSize, 3.0f));
     ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::HoverWireLineSize, 4.0f));
     ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::VertexSize, 8.0f));
     ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::HoverVertexGrowth, 2.0f));
+    ASSERT_TRUE(settings.setFloatValue(ViewportFloatSettingId::VertexOutlineSize, 3.0f));
 
     ViewportOverlayFrame frame;
-    frame.triangles.push_back({.layer = ViewportOverlayLayer::HoverFace, .color = kOverlayRemoveFaceColor});
-    frame.lines.push_back({.layer = ViewportOverlayLayer::SourceWire, .color = rgba8(255, 255, 255)});
-    frame.lines.push_back({.layer = ViewportOverlayLayer::SourceWire, .color = kOverlaySelectionWireColor});
-    frame.lines.push_back({.layer = ViewportOverlayLayer::HoverEdge, .color = kOverlayRemoveWireColor});
-    frame.lines.push_back({.layer = ViewportOverlayLayer::SelectedEdge, .color = rgba8(255, 255, 255)});
-    frame.lines.push_back({.layer = ViewportOverlayLayer::GroupBounds, .color = kOverlayGroupBoundsColor});
-    frame.points.push_back({
-            .layer = ViewportOverlayLayer::SnapTargetVertex,
-            .color = rgba8(255, 0, 0),
-            .sizePixels = 14.0f,
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::HoverFace,
+            .color = rgba8(255, 255, 255),
+            .styleRole = ViewportOverlayStyleRole::RemoveSelectionFace,
     });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .color = kOverlaySelectionWireColor,
+            .styleRole = ViewportOverlayStyleRole::SourceWire,
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .color = rgba8(255, 255, 255),
+            .styleRole = ViewportOverlayStyleRole::SelectedSourceWire,
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::HoverEdge,
+            .color = rgba8(255, 255, 255),
+            .styleRole = ViewportOverlayStyleRole::RemoveSelectionWire,
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SelectedEdge,
+            .color = rgba8(255, 255, 255),
+            .styleRole = ViewportOverlayStyleRole::SelectionWire,
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::GroupBounds,
+            .color = rgba8(255, 255, 255),
+            .widthPixels = 1.5f,
+            .styleRole = ViewportOverlayStyleRole::GroupBounds,
+    });
+    frame.points.push_back({
+            .layer = ViewportOverlayLayer::HoverVertex,
+            .color = rgba8(255, 255, 255),
+            .sizePixels = 6.0f,
+            .styleRole = ViewportOverlayStyleRole::HoverVertex,
+    });
+    frame.points.push_back({.layer = ViewportOverlayLayer::SnapTargetVertex, .color = rgba8(255, 0, 0), .sizePixels = 14.0f});
 
     ViewportOverlayStyleResolver::apply(frame, settings);
 
     ASSERT_EQ(frame.triangles.size(), 1u);
     ASSERT_EQ(frame.lines.size(), 5u);
-    ASSERT_EQ(frame.points.size(), 1u);
+    ASSERT_EQ(frame.points.size(), 2u);
     EXPECT_EQ(frame.triangles[0].color, rgba8(255, 0, 255));
     EXPECT_EQ(frame.lines[0].color, rgba8(255, 0, 0));
     EXPECT_FLOAT_EQ(frame.lines[0].widthPixels, 2.0f);
     EXPECT_EQ(frame.lines[1].color, rgba8(0, 255, 0));
-    EXPECT_FLOAT_EQ(frame.lines[1].widthPixels, 2.0f);
+    EXPECT_FLOAT_EQ(frame.lines[1].widthPixels, 5.0f);
     EXPECT_EQ(frame.lines[2].color, rgba8(0, 0, 255));
     EXPECT_FLOAT_EQ(frame.lines[2].widthPixels, 4.0f);
     EXPECT_EQ(frame.lines[3].color, rgba8(0, 255, 0));
     EXPECT_FLOAT_EQ(frame.lines[3].widthPixels, 3.0f);
     EXPECT_EQ(frame.lines[4].color, kOverlayGroupBoundsColor);
-    EXPECT_FLOAT_EQ(frame.lines[4].widthPixels, 1.0f);
-    EXPECT_EQ(frame.points[0].color, rgba8(255, 0, 0));
-    EXPECT_FLOAT_EQ(frame.points[0].sizePixels, 14.0f);
+    EXPECT_FLOAT_EQ(frame.lines[4].widthPixels, 1.5f);
+    EXPECT_EQ(frame.points[0].color, rgba8(255, 255, 0));
+    EXPECT_FLOAT_EQ(frame.points[0].sizePixels, 10.0f);
+    ASSERT_TRUE(frame.points[0].outlineGrowthPixels.has_value());
+    EXPECT_FLOAT_EQ(*frame.points[0].outlineGrowthPixels, 3.0f);
+    EXPECT_EQ(frame.points[1].color, rgba8(255, 0, 0));
+    EXPECT_FLOAT_EQ(frame.points[1].sizePixels, 14.0f);
+    ASSERT_TRUE(frame.points[1].outlineGrowthPixels.has_value());
+    EXPECT_FLOAT_EQ(*frame.points[1].outlineGrowthPixels, 3.0f);
+}
+
+TEST(ViewportOverlayStyleResolverTests, SupportsSelectionModeScopedOverrides) {
+    ViewportSettings settings = ViewportSettings::defaults();
+    ASSERT_TRUE(settings.setColor(ViewportColorSettingId::SourceWire, {1.0f, 0.0f, 0.0f, 1.0f}));
+
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .color = rgba8(255, 255, 255),
+            .styleRole = ViewportOverlayStyleRole::SourceWire,
+    });
+
+    ViewportOverlayStyleResolver::apply(
+            frame,
+            settings,
+            ViewportOverlayStyleContext{
+                    .selectionMode = ViewportOverlaySelectionContext::Edge,
+                    .overrides = {
+                            {.role = ViewportOverlayStyleRole::SourceWire,
+                                    .selectionMode = ViewportOverlaySelectionContext::Face,
+                                    .color = rgba8(128, 0, 255)},
+                            {.role = ViewportOverlayStyleRole::SourceWire,
+                                    .selectionMode = ViewportOverlaySelectionContext::Edge,
+                                    .color = rgba8(255, 0, 128)},
+                    },
+            });
+
+    ASSERT_EQ(frame.lines.size(), 1u);
+    EXPECT_EQ(frame.lines[0].color, rgba8(255, 0, 128));
+}
+
+TEST(ModelingSessionServiceOverlayTests, MapsSdkOverlayLayersExplicitly) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionService.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_EQ(source.find("static_cast<ViewportOverlayLayer>(static_cast<int>(layer))"), std::string::npos);
+    EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::source_wire:"), std::string::npos);
+    EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:"), std::string::npos);
+    EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:"), std::string::npos);
+    EXPECT_NE(source.find("sdkLineStyleRole"), std::string::npos);
+    EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"), std::string::npos);
 }
 
 TEST(ViewportCameraAdapterTests, BuildsOverlayAndModelingCamerasFromSharedBasis) {
@@ -973,7 +1061,9 @@ TEST(ViewportPanelTests, WireframeObjectSelectionUsesWhiteBaseAndShadedOverlayWi
     EXPECT_EQ(source.find("selectedWire ? kOverlaySelectionWireColor : kOverlaySourceWireColor"), std::string::npos);
     EXPECT_NE(source.find("appendMeshSelectionWire(\n                frame,\n                document,\n                assets,\n                entity"),
             std::string::npos);
-    EXPECT_NE(source.find("ViewportOverlayStyleResolver::apply(overlayFrame, settings);\n            appendSceneWireframeOverlay"),
+    EXPECT_NE(source.find("appendSceneWireframeOverlay(overlayFrame, document, assets);\n        }\n        ViewportOverlayStyleResolver::apply("),
+            std::string::npos);
+    EXPECT_EQ(source.find("ViewportOverlayStyleResolver::apply(overlayFrame, settings);\n            appendSceneWireframeOverlay"),
             std::string::npos);
 }
 

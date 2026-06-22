@@ -137,6 +137,22 @@ bool componentSelectionMode(ModelingSelectionMode mode) {
             mode == ModelingSelectionMode::Face;
 }
 
+ViewportOverlaySelectionContext overlaySelectionContext(ModelingSelectionMode mode) {
+    switch (mode) {
+    case ModelingSelectionMode::Vertex:
+        return ViewportOverlaySelectionContext::Vertex;
+    case ModelingSelectionMode::Edge:
+        return ViewportOverlaySelectionContext::Edge;
+    case ModelingSelectionMode::Face:
+        return ViewportOverlaySelectionContext::Face;
+    case ModelingSelectionMode::Group:
+        return ViewportOverlaySelectionContext::Group;
+    case ModelingSelectionMode::Object:
+        return ViewportOverlaySelectionContext::Object;
+    }
+    return ViewportOverlaySelectionContext::Any;
+}
+
 struct WireEdgePoint {
     std::int64_t x = 0;
     std::int64_t y = 0;
@@ -211,7 +227,9 @@ void appendMeshSelectionWire(
         const AssetRegistry& assets,
         EntityId entity,
         std::uint32_t color = kOverlaySelectionWireColor,
-        ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire) {
+        ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire,
+        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::SelectedSourceWire,
+        ViewportOverlaySource source = ViewportOverlaySource::Selection) {
     if (!document.isEffectivelyVisible(entity)) {
         return;
     }
@@ -280,6 +298,8 @@ void appendMeshSelectionWire(
                 .end = edge.end,
                 .color = color,
                 .widthPixels = 0.0f,
+                .styleRole = styleRole,
+                .source = source,
         });
     }
 }
@@ -296,7 +316,15 @@ void appendHierarchySelectionWires(
             if (entitySelected(document, descendant)) {
                 continue;
             }
-            appendMeshSelectionWire(frame, document, assets, descendant);
+            appendMeshSelectionWire(
+                    frame,
+                    document,
+                    assets,
+                    descendant,
+                    kOverlaySelectionWireColor,
+                    ViewportOverlayLayer::SourceWire,
+                    ViewportOverlayStyleRole::SelectedSourceWire,
+                    ViewportOverlaySource::HierarchySelection);
         }
     }
 }
@@ -333,6 +361,8 @@ void appendBoundsCage(ViewportOverlayFrame& frame, const SceneBounds& bounds) {
                 .end = corners[static_cast<std::size_t>(edge[1])],
                 .color = kOverlayGroupBoundsColor,
                 .widthPixels = 1.5f,
+                .styleRole = ViewportOverlayStyleRole::GroupBounds,
+                .source = ViewportOverlaySource::GroupBounds,
         });
     }
 }
@@ -362,7 +392,9 @@ void appendSceneWireframeOverlay(
                 assets,
                 entity,
                 rgba8(255, 255, 255),
-                ViewportOverlayLayer::WireframeBase);
+                ViewportOverlayLayer::WireframeBase,
+                ViewportOverlayStyleRole::WireframeBase,
+                ViewportOverlaySource::SceneWireframe);
     }
 }
 
@@ -789,16 +821,17 @@ void ViewportPanel::prepareViewports(
         paneState.renderer.setSceneVisible(paneState.shading != ViewportShadingMode::Wireframe);
         paneState.renderer.setOverlayVisible(true);
         ViewportOverlayFrame overlayFrame = selectionOverlayCache_.valid() ? selectionOverlayCache_.frame() : ViewportOverlayFrame{};
+        const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
+                ? selectionOverlayCache_.key().selectionMode
+                : toModelingSelectionMode(inputRouter_.state().selectionMode);
         if (paneState.shading == ViewportShadingMode::Wireframe) {
-            const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
-                    ? selectionOverlayCache_.key().selectionMode
-                    : toModelingSelectionMode(inputRouter_.state().selectionMode);
             stripWireframeObjectFaceFills(overlayFrame, overlayMode);
-            ViewportOverlayStyleResolver::apply(overlayFrame, settings);
             appendSceneWireframeOverlay(overlayFrame, document, assets);
-        } else {
-            ViewportOverlayStyleResolver::apply(overlayFrame, settings);
         }
+        ViewportOverlayStyleResolver::apply(
+                overlayFrame,
+                settings,
+                ViewportOverlayStyleContext{.selectionMode = overlaySelectionContext(overlayMode)});
         renderBridge.setOverlayFrame(
                 viewportPaneIndex(paneId),
                 viewportGridLayerMask(viewportPaneIndex(paneId)),

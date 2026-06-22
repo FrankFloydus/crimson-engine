@@ -32,12 +32,12 @@ fragment {
         prepareMaterial(material);
 
         vec4 color = getColor();
+        float2 centered = variable_pointUv.xy - 0.5;
+        float distanceFromCenter = length(centered);
+        if (distanceFromCenter > 0.5) {
+            discard;
+        }
         if (materialParams.innerRadius > 0.0) {
-            float2 centered = variable_pointUv.xy - 0.5;
-            float distanceFromCenter = length(centered);
-            if (distanceFromCenter > 0.5) {
-                discard;
-            }
             float innerRadius = saturate(materialParams.innerRadius) * 0.5;
             if (distanceFromCenter < innerRadius) {
                 discard;

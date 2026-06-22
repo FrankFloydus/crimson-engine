@@ -43,12 +43,13 @@ bool OverlayLineMeshBuilder::appendLineQuad(
     }
 
     Vec2 pixelDirection = projectedB.pixel - projectedA.pixel;
-    if ((pixelDirection.x * pixelDirection.x + pixelDirection.y * pixelDirection.y) <= 0.000001f) {
+    const float pixelLength = std::sqrt(pixelDirection.x * pixelDirection.x + pixelDirection.y * pixelDirection.y);
+    if (pixelLength > 0.000001f) {
+        pixelDirection = {pixelDirection.x / pixelLength, pixelDirection.y / pixelLength};
+    } else {
         pixelDirection = {1.0f, 0.0f};
     }
-    const Vec2 pixelNormal = std::abs(pixelDirection.x) > std::abs(pixelDirection.y)
-            ? Vec2{0.0f, 1.0f}
-            : Vec2{1.0f, 0.0f};
+    const Vec2 pixelNormal{-pixelDirection.y, pixelDirection.x};
     const float sideDistance = (std::max(widthPixels, 1.0f) + kOverlayLineFeatherPixels) * 0.5f;
     const std::uint32_t linearColor = rgba8SrgbToLinear(line.color);
     const std::uint32_t offset = static_cast<std::uint32_t>(mesh.vertices.size());

@@ -517,7 +517,155 @@ ModelingHoverSummary fromSdkHoverSummary(
 }
 
 ViewportOverlayLayer fromSdk(quader_editor_core::SelectionOverlayLayer layer) {
-    return static_cast<ViewportOverlayLayer>(static_cast<int>(layer));
+    switch (layer) {
+    case quader_editor_core::SelectionOverlayLayer::selected_visible_face:
+        return ViewportOverlayLayer::SelectedVisibleFace;
+    case quader_editor_core::SelectionOverlayLayer::selected_face_edge:
+        return ViewportOverlayLayer::SelectedFaceEdge;
+    case quader_editor_core::SelectionOverlayLayer::unselected_vertex:
+        return ViewportOverlayLayer::UnselectedVertex;
+    case quader_editor_core::SelectionOverlayLayer::selected_vertex:
+        return ViewportOverlayLayer::SelectedVertex;
+    case quader_editor_core::SelectionOverlayLayer::hover_face:
+        return ViewportOverlayLayer::HoverFace;
+    case quader_editor_core::SelectionOverlayLayer::hover_face_edge:
+        return ViewportOverlayLayer::HoverFaceEdge;
+    case quader_editor_core::SelectionOverlayLayer::hover_edge:
+        return ViewportOverlayLayer::HoverEdge;
+    case quader_editor_core::SelectionOverlayLayer::hover_vertex:
+        return ViewportOverlayLayer::HoverVertex;
+    case quader_editor_core::SelectionOverlayLayer::selected_edge:
+        return ViewportOverlayLayer::SelectedEdge;
+    case quader_editor_core::SelectionOverlayLayer::selected_xray_face:
+        return ViewportOverlayLayer::SelectedXrayFace;
+    case quader_editor_core::SelectionOverlayLayer::selected_face_mask:
+        return ViewportOverlayLayer::SelectedFaceMask;
+    case quader_editor_core::SelectionOverlayLayer::source_wire:
+        return ViewportOverlayLayer::SourceWire;
+    case quader_editor_core::SelectionOverlayLayer::open_edge:
+        return ViewportOverlayLayer::OpenEdge;
+    case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:
+        return ViewportOverlayLayer::SnapTargetVertex;
+    case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:
+        return ViewportOverlayLayer::DiagnosticEdge;
+    }
+    return ViewportOverlayLayer::SourceWire;
+}
+
+ViewportOverlayStyleRole sdkTriangleStyleRole(
+        quader_editor_core::SelectionOverlayLayer layer,
+        std::uint32_t colorAbgr) {
+    switch (layer) {
+    case quader_editor_core::SelectionOverlayLayer::selected_visible_face:
+    case quader_editor_core::SelectionOverlayLayer::selected_xray_face:
+    case quader_editor_core::SelectionOverlayLayer::selected_face_mask:
+        return ViewportOverlayStyleRole::SelectionFace;
+    case quader_editor_core::SelectionOverlayLayer::hover_face:
+        return viewportOverlayIsNativeRemoveColor(colorAbgr)
+                ? ViewportOverlayStyleRole::RemoveSelectionFace
+                : ViewportOverlayStyleRole::HoverFace;
+    default:
+        return ViewportOverlayStyleRole::ExplicitColor;
+    }
+}
+
+ViewportOverlayStyleRole sdkLineStyleRole(
+        quader_editor_core::SelectionOverlayLayer layer,
+        std::uint32_t colorAbgr) {
+    switch (layer) {
+    case quader_editor_core::SelectionOverlayLayer::source_wire:
+        return viewportOverlayIsNativeSelectionWireColor(colorAbgr)
+                ? ViewportOverlayStyleRole::SelectedSourceWire
+                : ViewportOverlayStyleRole::SourceWire;
+    case quader_editor_core::SelectionOverlayLayer::selected_face_edge:
+    case quader_editor_core::SelectionOverlayLayer::selected_edge:
+        return ViewportOverlayStyleRole::SelectionWire;
+    case quader_editor_core::SelectionOverlayLayer::hover_face_edge:
+    case quader_editor_core::SelectionOverlayLayer::hover_edge:
+        return viewportOverlayIsNativeRemoveColor(colorAbgr)
+                ? ViewportOverlayStyleRole::RemoveSelectionWire
+                : ViewportOverlayStyleRole::HoverWire;
+    case quader_editor_core::SelectionOverlayLayer::open_edge:
+        return ViewportOverlayStyleRole::OpenEdge;
+    case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:
+        return ViewportOverlayStyleRole::DiagnosticEdge;
+    default:
+        return ViewportOverlayStyleRole::ExplicitColor;
+    }
+}
+
+ViewportOverlayStyleRole sdkPointStyleRole(
+        quader_editor_core::SelectionOverlayLayer layer,
+        std::uint32_t colorAbgr) {
+    switch (layer) {
+    case quader_editor_core::SelectionOverlayLayer::unselected_vertex:
+        return ViewportOverlayStyleRole::Vertex;
+    case quader_editor_core::SelectionOverlayLayer::selected_vertex:
+        return ViewportOverlayStyleRole::SelectedVertex;
+    case quader_editor_core::SelectionOverlayLayer::hover_vertex:
+        return viewportOverlayIsNativeRemoveColor(colorAbgr)
+                ? ViewportOverlayStyleRole::RemoveSelectionVertex
+                : ViewportOverlayStyleRole::HoverVertex;
+    case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:
+        return ViewportOverlayStyleRole::SnapTargetVertex;
+    default:
+        return ViewportOverlayStyleRole::ExplicitColor;
+    }
+}
+
+ViewportOverlaySource overlaySourceForRole(ViewportOverlayStyleRole role) {
+    switch (role) {
+    case ViewportOverlayStyleRole::HoverFace:
+    case ViewportOverlayStyleRole::HoverWire:
+    case ViewportOverlayStyleRole::HoverVertex:
+    case ViewportOverlayStyleRole::RemoveSelectionFace:
+    case ViewportOverlayStyleRole::RemoveSelectionWire:
+    case ViewportOverlayStyleRole::RemoveSelectionVertex:
+        return ViewportOverlaySource::Hover;
+    case ViewportOverlayStyleRole::OpenEdge:
+    case ViewportOverlayStyleRole::DiagnosticEdge:
+        return ViewportOverlaySource::Diagnostic;
+    case ViewportOverlayStyleRole::ToolPlaneFill:
+    case ViewportOverlayStyleRole::ToolPlaneLine:
+    case ViewportOverlayStyleRole::ToolHandle:
+    case ViewportOverlayStyleRole::ToolPreviewFill:
+    case ViewportOverlayStyleRole::ToolPreviewLine:
+    case ViewportOverlayStyleRole::ToolPreviewSeam:
+    case ViewportOverlayStyleRole::CutPreviewKeepFill:
+    case ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill:
+    case ViewportOverlayStyleRole::CutPreviewDiscardFill:
+    case ViewportOverlayStyleRole::CutPreviewKeepBothOutline:
+    case ViewportOverlayStyleRole::CutPreviewDiscardOutline:
+    case ViewportOverlayStyleRole::CutPreviewSeam:
+        return ViewportOverlaySource::Tool;
+    case ViewportOverlayStyleRole::LayerDefault:
+    case ViewportOverlayStyleRole::ExplicitColor:
+    case ViewportOverlayStyleRole::SelectionFace:
+    case ViewportOverlayStyleRole::SelectionWire:
+    case ViewportOverlayStyleRole::SelectedSourceWire:
+    case ViewportOverlayStyleRole::SourceWire:
+    case ViewportOverlayStyleRole::Vertex:
+    case ViewportOverlayStyleRole::SelectedVertex:
+    case ViewportOverlayStyleRole::SnapTargetVertex:
+    case ViewportOverlayStyleRole::GroupBounds:
+    case ViewportOverlayStyleRole::WireframeBase:
+        return ViewportOverlaySource::Selection;
+    }
+    return ViewportOverlaySource::Unknown;
+}
+
+ViewportOverlayElementRef sdkElementRef(
+        int objectId,
+        quader_poly::ElementId vertexId,
+        quader_poly::Edge edge,
+        quader_poly::ElementId faceId) {
+    return {
+            .objectId = objectId,
+            .vertexId = static_cast<int>(vertexId),
+            .edgeA = static_cast<int>(edge.a),
+            .edgeB = static_cast<int>(edge.b),
+            .faceId = static_cast<int>(faceId),
+    };
 }
 
 ModelingBoxDragState fromSdk(quader_editor_core::BoxDragState state) {
@@ -573,35 +721,54 @@ ViewportOverlayFrame fromSdk(
         if (!objectEffectivelyVisible(triangle.object_id, entityByObject, scene)) {
             continue;
         }
+        const ViewportOverlayLayer layer = fromSdk(triangle.layer);
+        const ViewportOverlayStyleRole role = sdkTriangleStyleRole(triangle.layer, triangle.color_abgr);
         result.triangles.push_back(ViewportOverlayTriangle{
-                .layer = fromSdk(triangle.layer),
+                .layer = layer,
                 .a = transformObjectPoint(triangle.object_id, fromSdk(triangle.a), entityByObject, scene),
                 .b = transformObjectPoint(triangle.object_id, fromSdk(triangle.b), entityByObject, scene),
                 .c = transformObjectPoint(triangle.object_id, fromSdk(triangle.c), entityByObject, scene),
-                .color = viewportOverlayColorFor(fromSdk(triangle.layer), triangle.color_abgr),
+                .color = viewportOverlayColorFor(layer, triangle.color_abgr),
+                .styleRole = role,
+                .source = overlaySourceForRole(role),
+                .element = sdkElementRef(triangle.object_id, quader_poly::invalid_element_id, {}, triangle.face_id),
         });
     }
     for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
         if (!objectEffectivelyVisible(line.object_id, entityByObject, scene)) {
             continue;
         }
+        const ViewportOverlayLayer layer = fromSdk(line.layer);
+        const ViewportOverlayStyleRole role = sdkLineStyleRole(line.layer, line.color_abgr);
         result.lines.push_back(ViewportOverlayLine{
-                .layer = fromSdk(line.layer),
+                .layer = layer,
                 .start = transformObjectPoint(line.object_id, fromSdk(line.start), entityByObject, scene),
                 .end = transformObjectPoint(line.object_id, fromSdk(line.end), entityByObject, scene),
-                .color = viewportOverlayColorFor(fromSdk(line.layer), line.color_abgr),
+                .color = viewportOverlayColorFor(layer, line.color_abgr),
                 .widthPixels = line.width_pixels,
+                .styleRole = role,
+                .source = overlaySourceForRole(role),
+                .element = sdkElementRef(
+                        line.object_id,
+                        quader_poly::invalid_element_id,
+                        line.edge,
+                        line.face_id),
         });
     }
     for (const quader_editor_core::SelectionOverlayPoint& point : frame.points) {
         if (!objectEffectivelyVisible(point.object_id, entityByObject, scene)) {
             continue;
         }
+        const ViewportOverlayLayer layer = fromSdk(point.layer);
+        const ViewportOverlayStyleRole role = sdkPointStyleRole(point.layer, point.color_abgr);
         result.points.push_back(ViewportOverlayPoint{
-                .layer = fromSdk(point.layer),
+                .layer = layer,
                 .position = transformObjectPoint(point.object_id, fromSdk(point.position), entityByObject, scene),
-                .color = viewportOverlayColorFor(fromSdk(point.layer), point.color_abgr),
+                .color = viewportOverlayColorFor(layer, point.color_abgr),
                 .sizePixels = point.size_pixels,
+                .styleRole = role,
+                .source = overlaySourceForRole(role),
+                .element = sdkElementRef(point.object_id, point.vertex_id, {}, quader_poly::invalid_element_id),
         });
     }
     return result;
@@ -613,11 +780,15 @@ void appendWorldSpaceSdkOverlayPoints(
     frame.points.reserve(frame.points.size() + points.size());
     for (const quader_editor_core::SelectionOverlayPoint& point : points) {
         const ViewportOverlayLayer layer = fromSdk(point.layer);
+        const ViewportOverlayStyleRole role = sdkPointStyleRole(point.layer, point.color_abgr);
         frame.points.push_back(ViewportOverlayPoint{
                 .layer = layer,
                 .position = fromSdk(point.position),
                 .color = viewportOverlayColorFor(layer, point.color_abgr),
                 .sizePixels = point.size_pixels,
+                .styleRole = role,
+                .source = overlaySourceForRole(role),
+                .element = sdkElementRef(point.object_id, point.vertex_id, {}, quader_poly::invalid_element_id),
         });
     }
 }
@@ -690,6 +861,8 @@ void appendDrawnPlaneToolOverlay(
                 .position = points[index],
                 .color = kOverlayToolHandleColor,
                 .sizePixels = 8.0f,
+                .styleRole = ViewportOverlayStyleRole::ToolHandle,
+                .source = ViewportOverlaySource::Tool,
         });
     }
 
@@ -703,6 +876,8 @@ void appendDrawnPlaneToolOverlay(
             .end = points[1],
             .color = kOverlayToolHandleColor,
             .widthPixels = 2.0f,
+            .styleRole = ViewportOverlayStyleRole::ToolHandle,
+            .source = ViewportOverlaySource::Tool,
     });
 
     DrawnPlanePreviewFrame planeFrame;
@@ -724,6 +899,8 @@ void appendDrawnPlaneToolOverlay(
             .b = corners[1],
             .c = corners[2],
             .color = kOverlayToolPlaneColor,
+            .styleRole = ViewportOverlayStyleRole::ToolPlaneFill,
+            .source = ViewportOverlaySource::Tool,
     });
     frame.triangles.push_back({
             .layer = ViewportOverlayLayer::ToolPlane,
@@ -731,6 +908,8 @@ void appendDrawnPlaneToolOverlay(
             .b = corners[2],
             .c = corners[3],
             .color = kOverlayToolPlaneColor,
+            .styleRole = ViewportOverlayStyleRole::ToolPlaneFill,
+            .source = ViewportOverlaySource::Tool,
     });
     for (std::size_t index = 0; index < corners.size(); ++index) {
         frame.lines.push_back({
@@ -739,6 +918,8 @@ void appendDrawnPlaneToolOverlay(
                 .end = corners[(index + 1U) % corners.size()],
                 .color = kOverlayToolPlaneLineColor,
                 .widthPixels = 1.0f,
+                .styleRole = ViewportOverlayStyleRole::ToolPlaneLine,
+                .source = ViewportOverlaySource::Tool,
         });
     }
 }
@@ -815,7 +996,8 @@ PreviewTriangleMesh previewMeshFromDocuments(const std::vector<quader_poly::Docu
 void appendPreviewMeshFill(
         ViewportOverlayFrame& frame,
         const PreviewTriangleMesh& mesh,
-        std::uint32_t color) {
+        std::uint32_t color,
+        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewFill) {
     if (mesh.empty()) {
         return;
     }
@@ -833,6 +1015,8 @@ void appendPreviewMeshFill(
                 .b = mesh.vertices[ib],
                 .c = mesh.vertices[ic],
                 .color = color,
+                .styleRole = styleRole,
+                .source = ViewportOverlaySource::Tool,
         });
     }
 }
@@ -1028,7 +1212,8 @@ void appendPreviewLine(
         Vec3 start,
         Vec3 end,
         std::uint32_t color,
-        float widthPixels) {
+        float widthPixels,
+        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewLine) {
     if (length(start - end) <= 0.000001f) {
         return;
     }
@@ -1038,6 +1223,8 @@ void appendPreviewLine(
             .end = end,
             .color = color,
             .widthPixels = widthPixels,
+            .styleRole = styleRole,
+            .source = ViewportOverlaySource::Tool,
     });
 }
 
@@ -1057,7 +1244,10 @@ void appendCutPreviewResultLines(
                     edge.a,
                     edge.b,
                     outlineColor,
-                    1.15f);
+                    1.15f,
+                    outlineColor == kOverlayCutPreviewKeepBothOutlineColor
+                            ? ViewportOverlayStyleRole::CutPreviewKeepBothOutline
+                            : ViewportOverlayStyleRole::CutPreviewDiscardOutline);
         }
         if (edge.seam()) {
             appendPreviewLine(frame,
@@ -1065,7 +1255,8 @@ void appendCutPreviewResultLines(
                     edge.a,
                     edge.b,
                     kOverlayCutPreviewSeamColor,
-                    2.25f);
+                    2.25f,
+                    ViewportOverlayStyleRole::CutPreviewSeam);
         }
     }
 }
@@ -1624,10 +1815,19 @@ public:
                         quader_editor_core::CutPreviewMeshSide::discard));
 
                 if (cut.mode == quader_editor_core::CutMode::keep_both) {
-                    appendPreviewMeshFill(frame, keepMesh, kOverlayCutPreviewKeepFillColor);
-                    appendPreviewMeshFill(frame, discardMesh, kOverlayCutPreviewKeepBothDiscardFillColor);
+                    appendPreviewMeshFill(frame,
+                            keepMesh,
+                            kOverlayCutPreviewKeepFillColor,
+                            ViewportOverlayStyleRole::CutPreviewKeepFill);
+                    appendPreviewMeshFill(frame,
+                            discardMesh,
+                            kOverlayCutPreviewKeepBothDiscardFillColor,
+                            ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill);
                 } else {
-                    appendPreviewMeshFill(frame, discardMesh, kOverlayCutPreviewDiscardFillColor);
+                    appendPreviewMeshFill(frame,
+                            discardMesh,
+                            kOverlayCutPreviewDiscardFillColor,
+                            ViewportOverlayStyleRole::CutPreviewDiscardFill);
                 }
 
                 const PreviewTriangleMesh& lineSource = !discardMesh.empty() ? discardMesh : keepMesh;
