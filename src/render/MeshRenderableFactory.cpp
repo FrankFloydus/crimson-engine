@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "render/MeshRenderableFactory.h"
 
 #include "render/FilamentBufferDescriptorFactory.h"
@@ -24,6 +30,9 @@ using AttributeType = filament::backend::ElementType;
 
 constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 
+/**
+ * Represents a Render Vertex value used by the render extraction and Filament resource layer.
+ */
 struct RenderVertex {
     filament::math::float3 position;
     filament::math::float4 tangentFrame;

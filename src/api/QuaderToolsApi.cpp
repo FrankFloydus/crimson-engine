@@ -1,7 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderToolsApi.h"
 
 #include "document/ProjectSession.h"
-#include "viewport/tools/ViewportToolCatalog.h"
+#include "modeling/services/ModelingSessionService.h"
+#include "viewport/modes/ViewportToolCatalog.h"
 
 #include <string>
 #include <utility>
@@ -96,8 +103,8 @@ QuaderApiVoidResult QuaderToolsApi::statusFrom(ModelingCommandResult result, std
                     .projectRevision = session_.document().revision(),
                     .sceneRevision = session_.scene().revision(),
                     .assetRevision = session_.assets().revision(),
-                    .sdkContentRevision = summary.contentRevision,
-                    .sdkSelectionRevision = summary.selectionRevision,
+                    .modelingContentRevision = summary.contentRevision,
+                    .modelingSelectionRevision = summary.selectionRevision,
             },
     };
 }

@@ -1,19 +1,26 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "viewport/ViewportInputRouter.h"
-#include "viewport/tools/Tool.h"
+#include "viewport/modes/Tool.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <string_view>
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_host_contract/host_contract.h>
-#endif
+#include <editor/metadata/host_contract.h>
 
 namespace quader {
 
+/**
+ * Represents a Viewport Host Defaults value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportHostDefaults {
     double mapUnitsPerWorldUnit = 32.0;
     double defaultGridMapUnits = 32.0;
@@ -26,15 +33,10 @@ struct ViewportHostDefaults {
 };
 
 inline bool viewportHostContractAvailable() {
-#if QUADER_HAS_MODELING_SDK
     return true;
-#else
-    return false;
-#endif
 }
 
 inline ViewportHostDefaults viewportHostDefaults() {
-#if QUADER_HAS_MODELING_SDK
     const quader_host_contract::HostViewportDefaultsDescriptor defaults =
             quader_host_contract::viewport_defaults();
     return {
@@ -47,9 +49,6 @@ inline ViewportHostDefaults viewportHostDefaults() {
             .flyLookRadiansPerPixel = defaults.fly_look_radians_per_pixel,
             .selectionBoxDragThresholdPixels = defaults.selection_box_drag_threshold_pixels,
     };
-#else
-    return {};
-#endif
 }
 
 inline std::string_view viewportToolContractId(ViewportToolId tool) {
@@ -83,13 +82,8 @@ inline std::string_view viewportToolContractId(ViewportToolId tool) {
 }
 
 inline bool viewportToolHasHostContract(ViewportToolId tool) {
-#if QUADER_HAS_MODELING_SDK
     const std::string_view id = viewportToolContractId(tool);
     return !id.empty() && quader_host_contract::find_tool_descriptor(id) != nullptr;
-#else
-    (void)tool;
-    return false;
-#endif
 }
 
 inline bool viewportToolHasNativeController(ViewportToolId tool) {
@@ -123,7 +117,6 @@ inline bool viewportToolAllowsSelectionFallback(ViewportToolId tool) {
 }
 
 inline int viewportDefaultGridPreset() {
-#if QUADER_HAS_MODELING_SDK
     const auto presets = quader_host_contract::grid_preset_catalog();
     for (std::size_t index = 0; index < presets.size(); ++index) {
         if (presets[index].default_preset) {
@@ -137,18 +130,15 @@ inline int viewportDefaultGridPreset() {
             return static_cast<int>(index + 1U);
         }
     }
-#endif
     return 6;
 }
 
 inline float viewportGridWorldSizeFromContract(int preset) {
-#if QUADER_HAS_MODELING_SDK
     const auto presets = quader_host_contract::grid_preset_catalog();
     if (!presets.empty()) {
         const int clampedPreset = std::clamp(preset, 1, static_cast<int>(presets.size()));
         return static_cast<float>(presets[static_cast<std::size_t>(clampedPreset - 1)].world_units);
     }
-#endif
     const int clampedPreset = std::clamp(preset, 1, 10);
     const float mapUnits = std::pow(2.0f, static_cast<float>(clampedPreset - 1));
     return mapUnits / 32.0f;
@@ -450,7 +440,6 @@ inline bool resolveViewportShortcutFromHostContract(
         ViewportKey key,
         ViewportModifiers modifiers,
         ViewportShortcut& shortcut) {
-#if QUADER_HAS_MODELING_SDK
     if (!modifiers.primary && !modifiers.alt && !modifiers.shift) {
         const auto presets = quader_host_contract::grid_preset_catalog();
         for (std::size_t index = 0; index < presets.size(); ++index) {
@@ -480,11 +469,6 @@ inline bool resolveViewportShortcutFromHostContract(
             return true;
         }
     }
-#else
-    (void)key;
-    (void)modifiers;
-    (void)shortcut;
-#endif
     return false;
 }
 

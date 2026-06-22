@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetRegistry.h"
@@ -11,16 +17,19 @@
 
 namespace quader {
 
-using ProjectObjectId = std::uint64_t;
-inline constexpr ProjectObjectId InvalidProjectObjectId = 0;
-
+/**
+ * Stores the Project Document Record data contract used by the editor document ownership layer.
+ */
 struct ProjectDocumentRecord {
     std::uint64_t id = 0;
     std::string name = "Untitled Project";
 };
 
+/**
+ * Stores the Project Object Record data contract used by the editor document ownership layer.
+ */
 struct ProjectObjectRecord {
-    ProjectObjectId id = InvalidProjectObjectId;
+    EditorObjectId id = InvalidEditorObjectId;
     EntityId sceneEntity = InvalidEntityId;
     AssetId mesh = InvalidAssetId;
     AssetId material = InvalidAssetId;
@@ -30,6 +39,27 @@ struct ProjectObjectRecord {
     std::uint32_t materialSlot = 0;
 };
 
+/**
+ * Stores the Project Document Identity Issue data contract used by the editor document ownership layer.
+ */
+struct ProjectDocumentIdentityIssue {
+    EntityId entity = InvalidEntityId;
+    EditorObjectId objectId = InvalidEditorObjectId;
+    std::string message;
+};
+
+/**
+ * Stores the Project Document Identity Report data contract used by the editor document ownership layer.
+ */
+struct ProjectDocumentIdentityReport {
+    std::vector<ProjectDocumentIdentityIssue> issues;
+
+    [[nodiscard]] bool ok() const { return issues.empty(); }
+};
+
+/**
+ * Owns Project Document behavior within the editor document ownership layer.
+ */
 class ProjectDocument {
 public:
     ProjectDocument() = default;
@@ -45,30 +75,34 @@ public:
     AssetRegistry& assets() { return assets_; }
     const AssetRegistry& assets() const { return assets_; }
 
-    ProjectObjectId createObjectRecord(ProjectObjectRecord record);
-    ProjectObjectId upsertObjectRecord(ProjectObjectRecord record);
-    const ProjectObjectRecord* objectRecord(ProjectObjectId objectId) const;
-    ProjectObjectRecord* objectRecord(ProjectObjectId objectId);
-    ProjectObjectId objectIdForEntity(EntityId entity) const;
-    EntityId entityForObjectId(ProjectObjectId objectId) const;
-    void forgetObjectRecord(ProjectObjectId objectId);
+    EditorObjectId createObjectRecord(ProjectObjectRecord record);
+    EditorObjectId upsertObjectRecord(ProjectObjectRecord record);
+    const ProjectObjectRecord* objectRecord(EditorObjectId objectId) const;
+    ProjectObjectRecord* objectRecord(EditorObjectId objectId);
+    EditorObjectId objectIdForEntity(EntityId entity) const;
+    EntityId entityForObjectId(EditorObjectId objectId) const;
+    void forgetObjectRecord(EditorObjectId objectId);
     void forgetEntity(EntityId entity);
     std::vector<ProjectObjectRecord> objectRecords() const;
+    ProjectDocumentIdentityReport validateObjectIdentityInvariants() const;
 
     std::uint64_t revision() const;
 
 private:
     void markDirty();
-    void indexRecord(ProjectObjectRecord& record);
-    ProjectObjectId allocateObjectId(ProjectObjectId requested);
+    void syncObjectRecordsWithScene() const;
+    bool canAssignObjectId(EditorObjectId objectId, EntityId entity) const;
+    ProjectObjectRecord recordForSceneEntity(EntityId entity, EditorObjectId objectId) const;
+    void indexRecord(ProjectObjectRecord& record) const;
+    EditorObjectId allocateObjectId(EditorObjectId requested);
 
     ProjectDocumentRecord record_;
-    ProjectObjectId nextObjectId_ = 1;
+    EditorObjectId nextObjectId_ = 1;
     std::uint64_t revision_ = 0;
     SceneDocument scene_;
     AssetRegistry assets_;
-    std::unordered_map<ProjectObjectId, ProjectObjectRecord> objects_;
-    std::unordered_map<EntityId, ProjectObjectId> objectByEntity_;
+    mutable std::unordered_map<EditorObjectId, ProjectObjectRecord> objects_;
+    mutable std::unordered_map<EntityId, EditorObjectId> objectByEntity_;
 };
 
 } // namespace quader

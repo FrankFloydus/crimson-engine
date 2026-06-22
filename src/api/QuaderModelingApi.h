@@ -1,12 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiTypes.h"
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_poly/document.h>
-#endif
-
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +19,9 @@ namespace quader {
 class ProjectSession;
 class QuaderApiMutationRunner;
 
+/**
+ * Exposes Quader Modeling API operations through the public Quader API surface.
+ */
 class QuaderModelingApi final {
 public:
     QuaderModelingApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
@@ -23,15 +29,12 @@ public:
     QuaderApiResult<QuaderModelingObjectRef> createBox(const QuaderCreateBoxArgs& args);
     QuaderApiResult<QuaderModelingObjectRef> createBox(ModelingBounds bounds, std::string name = "Box");
 
-#if QUADER_HAS_MODELING_SDK
     QuaderApiResult<QuaderModelingObjectRef> createMesh(
-            quader_poly::Document document,
+            QuaderPolygonDocument document,
             QuaderCreateMeshArgs args = {});
-#endif
 
     QuaderApiVoidResult setSelectionMode(ModelingSelectionMode mode);
     QuaderApiVoidResult executeTool(std::string_view toolId);
-    QuaderApiVoidResult executeAction(std::string_view actionId);
 
     QuaderApiVoidResult beginPreview(std::string_view actionId);
     QuaderApiVoidResult updatePreview(const QuaderPreviewSettings& settings);
@@ -50,6 +53,7 @@ public:
     QuaderApiVoidResult rotateSelection(Vec3 eulerRadians, Vec3 pivot = {});
     QuaderApiVoidResult scaleSelection(Vec3 scale, Vec3 pivot = {});
     QuaderApiVoidResult transformSelection(const ModelingTransform3& transform, Vec3 pivot = {});
+    QuaderApiVoidResult duplicateSelectedHierarchyForGroupDrag();
 
     QuaderApiVoidResult applyActiveMaterial(std::uint32_t materialSlot = 0);
     QuaderApiVoidResult assignMaterialSlotToSelection(std::uint32_t materialSlot);

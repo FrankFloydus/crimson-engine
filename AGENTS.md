@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Quader Agent Guide
 
 This file is intentionally thin. It routes agents to the detailed instructions under `agents/`.
@@ -10,7 +18,7 @@ Read this file first, then read the domain files that match the task before edit
   native-app requirement explicitly asks for it.
 - `QuaderEditorApi` is the default whole-editor API for new user/editor intent in the native app.
   Use `QuaderApi` for document/modeling-only code that does not need runtime editor domains.
-- Low-level systems remain the owner layers for SDK, document, asset, render, UI, and platform
+- Low-level systems remain the owner layers for absorbed modeling, document, asset, render, UI, and platform
   mechanics.
 
 Always read:
@@ -39,7 +47,7 @@ For parity/restoration work, also read:
 - UI, panels, menus, localization, dock layout:
   read `agents/ui-localization.md`; if the task mutates editor state, also read
   `agents/public-api-and-scripting.md`.
-- Modeling tools, SDK-backed operations, component selection, transform previews:
+- Modeling tools, Polygon-backed operations, component selection, transform previews:
   read `agents/sdk-unity-parity.md`, `agents/modeling-tools.md`,
   `agents/public-api-and-scripting.md`.
 - Viewport tools, camera, navigation, shortcuts, gizmos, modal tool input:
@@ -85,12 +93,6 @@ asks. Work with existing edits when they affect the task, and ignore unrelated e
 cmake --preset vs2026
 cmake --build --preset vs2026-debug
 ctest --preset vs2026-debug
-```
-
-For SDK tests:
-
-```powershell
-ctest --preset vs2026-sdk-tests-debug --output-on-failure
 ```
 
 More build/test/smoke details live in `agents/testing-build.md`.

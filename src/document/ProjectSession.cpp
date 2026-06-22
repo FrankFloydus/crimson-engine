@@ -1,4 +1,13 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "document/ProjectSession.h"
+
+#include "editor/selection/EditorSelectionService.h"
+#include "modeling/services/ModelingSessionService.h"
 
 #include <utility>
 
@@ -19,6 +28,11 @@ void ProjectSession::rebuildServices() {
     undoRedo_ = std::make_unique<UndoRedoManager>();
     documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *undoRedo_);
     modeling_ = std::make_unique<ModelingSessionService>(document_.scene(), document_.assets());
+    selection_ = std::make_unique<EditorSelectionService>(
+            document_.scene(),
+            *documentCommands_,
+            document_.assets(),
+            *modeling_);
 }
 
 std::unique_ptr<ProjectSession> ProjectSessionService::createSession() const {

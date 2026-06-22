@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "viewport/ViewportCameraController.h"
@@ -14,18 +20,27 @@ inline constexpr float kViewportGridPlaneOffset = -0.002f;
 inline constexpr float kViewportGridMinOrthographicSize = 0.01f;
 inline constexpr float kViewportGridOrthographicMargin = 1.25f;
 
+/**
+ * Enumerates ViewportGridPlane values used by the viewport layer.
+ */
 enum class ViewportGridPlane {
     XZ,
     YZ,
     XY,
 };
 
+/**
+ * Enumerates ViewportGridRotation values used by the viewport layer.
+ */
 enum class ViewportGridRotation {
     Identity,
     NegativeHalfPiAroundZ,
     PositiveHalfPiAroundX,
 };
 
+/**
+ * Represents a Viewport Grid Axes value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportGridAxes {
     Vec3 uAxis = {1.0f, 0.0f, 0.0f};
     Vec3 vAxis = {0.0f, 0.0f, -1.0f};
@@ -33,6 +48,9 @@ struct ViewportGridAxes {
     ViewportColorSettingId vColor = ViewportColorSettingId::GridZAxis;
 };
 
+/**
+ * Represents a Viewport Grid Placement value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportGridPlacement {
     ViewportGridPlane plane = ViewportGridPlane::XZ;
     Vec3 origin = {};
@@ -41,6 +59,9 @@ struct ViewportGridPlacement {
     ViewportGridAxes axes = {};
 };
 
+/**
+ * Owns Viewport Grid Placement Policy behavior within the viewport input, layout, and camera layer.
+ */
 class ViewportGridPlacementPolicy {
 public:
     static ViewportGridPlacement placement(

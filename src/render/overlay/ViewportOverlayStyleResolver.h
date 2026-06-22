@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "render/ViewportOverlayFrame.h"
@@ -9,6 +15,9 @@
 
 namespace quader {
 
+/**
+ * Enumerates ViewportOverlaySelectionContext values used by the render layer.
+ */
 enum class ViewportOverlaySelectionContext {
     Any,
     Object,
@@ -18,6 +27,9 @@ enum class ViewportOverlaySelectionContext {
     Face,
 };
 
+/**
+ * Represents a Viewport Overlay Style Override value used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayStyleOverride {
     ViewportOverlayStyleRole role = ViewportOverlayStyleRole::LayerDefault;
     ViewportOverlaySelectionContext selectionMode = ViewportOverlaySelectionContext::Any;
@@ -27,11 +39,17 @@ struct ViewportOverlayStyleOverride {
     std::optional<float> outlineGrowthPixels;
 };
 
+/**
+ * Stores the Viewport Overlay Style Context data contract used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayStyleContext {
     ViewportOverlaySelectionContext selectionMode = ViewportOverlaySelectionContext::Any;
     std::vector<ViewportOverlayStyleOverride> overrides;
 };
 
+/**
+ * Owns Viewport Overlay Style Resolver behavior within the render extraction and Filament resource layer.
+ */
 class ViewportOverlayStyleResolver {
 public:
     static ViewportOverlayFrame resolve(

@@ -1,8 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "BehaviorExpect.h"
 
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
 
 #include "assets/AssetRegistry.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 
 #include <gtest/gtest.h>
@@ -142,7 +149,7 @@ SelectionExpect& SelectionExpect::faceCount(std::uint32_t count) {
 }
 
 SelectionExpect& SelectionExpect::activeAlias(std::string_view alias) {
-    EXPECT_EQ(scenario_.snapshot().selection.activeObjectId, scenario_.sdkObject(alias));
+    EXPECT_EQ(scenario_.snapshot().selection.activeObjectId, scenario_.modelingObject(alias));
     return *this;
 }
 
@@ -280,15 +287,12 @@ ToolStatusExpect& ToolStatusExpect::polyActive(bool expected) {
 }
 
 UndoRedoExpect& UndoRedoExpect::canUndo(bool expected) {
-    EXPECT_EQ(scenario_.session().undoRedo().canUndo() || scenario_.session().modeling().canUndo(), expected);
+    EXPECT_EQ(scenario_.api().history().canUndo(), expected);
     return *this;
 }
 
 UndoRedoExpect& UndoRedoExpect::canRedo(bool expected) {
-    EXPECT_EQ(
-            scenario_.session().undoRedo().canRedo() ||
-                    (!scenario_.session().undoRedo().canUndo() && scenario_.session().modeling().canRedo()),
-            expected);
+    EXPECT_EQ(scenario_.api().history().canRedo(), expected);
     return *this;
 }
 

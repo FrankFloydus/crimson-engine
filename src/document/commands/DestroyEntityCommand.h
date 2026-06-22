@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "document/commands/DocumentCommandSceneHelpers.h"
@@ -8,6 +14,9 @@
 
 namespace quader {
 
+/**
+ * Applies Destroy Entity Command behavior as a command in the editor document command layer.
+ */
 class DestroyEntityCommand final : public SceneCommand {
 public:
     DestroyEntityCommand(SceneDocument& scene, EntityId entity)
@@ -26,6 +35,9 @@ public:
                 ? snapshot_->originalParent
                 : InvalidEntityId;
         entity_ = documentCommandRestoreEntitySnapshotTree(scene(), *snapshot_, parent, remappedEntities);
+        if (entity_ == InvalidEntityId || !scene().exists(entity_)) {
+            return documentCommandMissingEntityResult();
+        }
         documentCommandApplySelection(scene(), documentCommandRemapSelection(beforeSelection_, remappedEntities));
         return documentCommandChangedResult();
     }

@@ -1,8 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/ViewportShortcutController.h"
 
+#include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "modeling/tools/ModelingCommandToolCatalog.h"
+#include "editor/actions/ModelingCommandToolCatalog.h"
 
 #include <optional>
 #include <string>
@@ -28,23 +35,23 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
         const ViewportShortcut& shortcut) {
     switch (shortcut.kind) {
     case ViewportShortcutKind::DeleteSelection:
-        return editor.commands().execute("modeling.delete_selection");
+        return editor.commands().execute(QuaderCommand::DeleteSelection);
     case ViewportShortcutKind::SelectAll:
-        return editor.commands().execute("selection.select_all");
+        return editor.commands().execute(QuaderCommand::EditSelectAll);
     case ViewportShortcutKind::InvertSelection:
-        return editor.commands().execute("selection.invert");
+        return editor.commands().execute(QuaderCommand::EditInvertSelection);
     case ViewportShortcutKind::Copy:
-        return editor.commands().execute("modeling.copy_selection");
+        return editor.commands().execute(QuaderCommand::CopySelection);
     case ViewportShortcutKind::Paste:
-        return editor.commands().execute("modeling.paste_selection");
+        return editor.commands().execute(QuaderCommand::PasteSelection);
     case ViewportShortcutKind::Duplicate:
-        return editor.commands().execute("modeling.duplicate_meshes");
+        return editor.commands().execute(QuaderCommand::DuplicateSelection);
     case ViewportShortcutKind::Undo:
-        return editor.commands().execute("history.undo");
+        return editor.commands().execute(QuaderCommand::EditUndo);
     case ViewportShortcutKind::Redo:
-        return editor.commands().execute("history.redo");
+        return editor.commands().execute(QuaderCommand::EditRedo);
     case ViewportShortcutKind::RepeatLastAction:
-        return editor.commands().execute("history.repeat_last_action");
+        return editor.commands().execute(QuaderCommand::EditRepeatLastAction);
     case ViewportShortcutKind::MergeActive:
         return editor.commands().execute("modeling.merge_vertices_to_active");
     case ViewportShortcutKind::MergeCenter:
@@ -62,7 +69,7 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
     case ViewportShortcutKind::FlipVertical:
         return editor.commands().execute("modeling.flip_vertical");
     case ViewportShortcutKind::ApplyMaterial:
-        return editor.commands().execute("modeling.assign_material");
+        return editor.commands().execute(QuaderCommand::ApplyMaterial);
     case ViewportShortcutKind::None:
     case ViewportShortcutKind::ActivateTool:
     case ViewportShortcutKind::SetSelectionMode:
@@ -85,6 +92,7 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
         ViewportInputRouter& inputRouter,
         QuaderEditorApi& editor,
         ModelingSessionService& modeling) const {
+    (void)modeling;
     if (!inputResult.shortcutHandled || !toolSettingsTarget.operationPreviewActive) {
         return {};
     }
@@ -123,6 +131,7 @@ ViewportShortcutControllerResult ViewportShortcutController::handleModelingShort
         const ViewportInputResult& inputResult,
         QuaderEditorApi& editor,
         ModelingSessionService& modeling) const {
+    (void)modeling;
     if (!inputResult.shortcutHandled) {
         return {};
     }

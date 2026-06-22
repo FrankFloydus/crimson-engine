@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "document/commands/DocumentCommandSceneHelpers.h"
@@ -6,10 +12,14 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
 
+/**
+ * Applies Duplicate Entity Command behavior as a command in the editor document command layer.
+ */
 class DuplicateEntityCommand final : public SceneCommand {
 public:
     DuplicateEntityCommand(SceneDocument& scene, EntityId source, bool selectDuplicate = true)
@@ -38,19 +48,35 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (source_ == InvalidEntityId || !scene().exists(source_)) {
-            return documentCommandMissingEntityResult();
-        }
-
         beforeSelection_ = documentCommandCaptureSelection(scene());
-        const std::optional<DocumentEntitySnapshot> snapshot =
-                documentCommandCaptureEntitySnapshot(scene(), source_);
-        if (!snapshot.has_value()) {
-            return documentCommandMissingEntityResult();
-        }
-
         duplicateRoots_.clear();
-        const EntityId duplicate = duplicateSnapshot(*snapshot, scene().parent(source_));
+        EntityId duplicate = InvalidEntityId;
+        if (duplicateSnapshot_.has_value()) {
+            std::unordered_map<EntityId, EntityId> remappedEntities;
+            const EntityId parent = duplicateSnapshot_->originalParent != InvalidEntityId &&
+                            scene().exists(duplicateSnapshot_->originalParent)
+                    ? duplicateSnapshot_->originalParent
+                    : InvalidEntityId;
+            duplicate = documentCommandRestoreEntitySnapshotTree(
+                    scene(),
+                    *duplicateSnapshot_,
+                    parent,
+                    remappedEntities,
+                    false);
+        } else {
+            if (source_ == InvalidEntityId || !scene().exists(source_)) {
+                return documentCommandMissingEntityResult();
+            }
+            const std::optional<DocumentEntitySnapshot> snapshot =
+                    documentCommandCaptureEntitySnapshot(scene(), source_);
+            if (!snapshot.has_value()) {
+                return documentCommandMissingEntityResult();
+            }
+            duplicate = duplicateSnapshot(*snapshot, scene().parent(source_));
+            if (duplicate != InvalidEntityId) {
+                duplicateSnapshot_ = documentCommandCaptureEntitySnapshot(scene(), duplicate);
+            }
+        }
         if (duplicate == InvalidEntityId) {
             return documentCommandMissingEntityResult();
         }
@@ -78,6 +104,7 @@ private:
     EntityId source_ = InvalidEntityId;
     bool selectDuplicate_ = true;
     std::vector<EntityId> duplicateRoots_;
+    std::optional<DocumentEntitySnapshot> duplicateSnapshot_;
     DocumentSelectionState beforeSelection_;
 };
 

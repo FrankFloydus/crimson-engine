@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiResult.h"
@@ -14,6 +20,9 @@ class ProjectSession;
 class QuaderApiMutationRunner;
 class QuaderSceneApi;
 
+/**
+ * Owns Quader Scene Batch behavior within the public Quader API surface.
+ */
 class QuaderSceneBatch final {
 public:
     QuaderSceneBatch(QuaderSceneApi& scene, std::string label);
@@ -28,6 +37,9 @@ public:
 private:
     friend class QuaderSceneApi;
 
+    /**
+     * Enumerates OperationKind values used by the api layer.
+     */
     enum class OperationKind {
         Rename,
         Reparent,
@@ -36,6 +48,9 @@ private:
         SetLocked,
     };
 
+    /**
+     * Implements the Operation modeling operation data used by the public Quader API surface.
+     */
     struct Operation {
         OperationKind kind = OperationKind::Rename;
         EntityId entity = InvalidEntityId;
@@ -52,6 +67,9 @@ private:
     bool committed_ = false;
 };
 
+/**
+ * Exposes Quader Scene API operations through the public Quader API surface.
+ */
 class QuaderSceneApi final {
 public:
     QuaderSceneApi(ProjectSession& session, QuaderApiMutationRunner& mutations);

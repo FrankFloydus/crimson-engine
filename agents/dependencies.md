@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Dependencies
 
 - Use CMake and vcpkg manifest mode.
@@ -5,6 +13,9 @@
 - Use the Filament SDK path provided by `FILAMENT_SDK_ROOT`.
 - Default Filament SDK path:
   `C:\Users\Drako\Desktop\quader-windows\_SOURCES\filament-v1.71.6-windows`.
+- Keep dependency version notes and license evidence under `thirdparty/`, especially
+  `thirdparty/THIRD_PARTY_MANIFEST.md` and `thirdparty/licenses/`. Do not add a separate SDK
+  license-evidence tree.
 
 ## License Rules
 

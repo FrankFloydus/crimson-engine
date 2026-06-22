@@ -1,14 +1,26 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderEditorApiTypes.h"
 
 namespace quader {
 
+/**
+ * Exposes Quader Console API operations through the public Quader API surface.
+ */
 class QuaderConsoleApi final {
 public:
     QuaderApiVoidResult append(std::string message);
 };
 
+/**
+ * Exposes Quader UI API operations through the public Quader API surface.
+ */
 class QuaderUIApi final {
 public:
     QuaderUIApi();

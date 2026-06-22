@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "render/ViewportOverlayFrame.h"
@@ -9,23 +15,35 @@
 
 namespace quader {
 
+/**
+ * Enumerates OverlayDepthFunc values used by the render layer.
+ */
 enum class OverlayDepthFunc {
     Always,
     Equal,
     GreaterOrEqual,
 };
 
+/**
+ * Enumerates OverlayCullingMode values used by the render layer.
+ */
 enum class OverlayCullingMode {
     None,
     Back,
 };
 
+/**
+ * Enumerates OverlayTransparencyMode values used by the render layer.
+ */
 enum class OverlayTransparencyMode {
     Default,
     TwoPassesOneSide,
     TwoPassesTwoSides,
 };
 
+/**
+ * Stores the Overlay Render State data contract used by the render extraction and Filament resource layer.
+ */
 struct OverlayRenderState {
     bool depthWrite = false;
     bool colorWrite = true;
@@ -38,11 +56,17 @@ struct OverlayRenderState {
     std::uint16_t blendOrder = 0;
 };
 
+/**
+ * Represents an Overlay Face Fill Batch value used by the render extraction and Filament resource layer.
+ */
 struct OverlayFaceFillBatch {
     OverlayFaceFillMesh mesh;
     OverlayRenderState state;
 };
 
+/**
+ * Represents an Overlay Line Batch value used by the render extraction and Filament resource layer.
+ */
 struct OverlayLineBatch {
     OverlayLineMesh mesh;
     OverlayRenderState state;
@@ -50,6 +74,9 @@ struct OverlayLineBatch {
     float depthBias = 0.0f;
 };
 
+/**
+ * Represents an Overlay Point Batch value used by the render extraction and Filament resource layer.
+ */
 struct OverlayPointBatch {
     OverlayPointMesh mesh;
     OverlayRenderState state;
@@ -58,12 +85,18 @@ struct OverlayPointBatch {
     float depthBias = 0.0f;
 };
 
+/**
+ * Represents an Overlay Layer Build Plan value used by the render extraction and Filament resource layer.
+ */
 struct OverlayLayerBuildPlan {
     std::vector<OverlayFaceFillBatch> faceFillBatches;
     std::vector<OverlayLineBatch> lineBatches;
     std::vector<OverlayPointBatch> pointBatches;
 };
 
+/**
+ * Builds Overlay Renderable Builder data for the render extraction and Filament resource layer.
+ */
 class OverlayRenderableBuilder {
 public:
     static std::uint64_t frameSignature(const ViewportOverlayFrame& frame);
@@ -83,6 +116,9 @@ public:
             ViewportOverlayLayer layer);
 
 private:
+    /**
+     * Stores the Line Batch Key data contract used by the render extraction and Filament resource layer.
+     */
     struct LineBatchKey {
         std::uint32_t color = 0;
         float widthPixels = 0.0f;

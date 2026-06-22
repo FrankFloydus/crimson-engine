@@ -1,9 +1,18 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -32,34 +41,282 @@ void expectMissing(const std::string& source, const std::string& needle) {
     EXPECT_EQ(source.find(needle), std::string::npos) << needle;
 }
 
+bool pathStartsWith(const std::string& path, const std::string& prefix) {
+    return path.size() >= prefix.size() && path.substr(0, prefix.size()) == prefix;
+}
+
+bool isCommentCapableProjectFile(const std::filesystem::path& relativePath) {
+    const std::string path = relativePath.generic_string();
+    if (pathStartsWith(path, "thirdparty/") || pathStartsWith(path, "vcpkg_installed/")) {
+        return false;
+    }
+
+    const std::string name = relativePath.filename().string();
+    const std::string extension = relativePath.extension().string();
+    const std::vector<std::string> commentCapableExtensions = {
+            ".c",
+            ".cc",
+            ".cpp",
+            ".cxx",
+            ".h",
+            ".hh",
+            ".hpp",
+            ".hxx",
+            ".cmake",
+            ".ps1",
+            ".md",
+            ".txt",
+            ".lang",
+            ".yml",
+            ".yaml",
+    };
+    const std::vector<std::string> commentCapableNames = {
+            ".clang-format",
+            ".editorconfig",
+            ".gitattributes",
+            ".gitignore",
+            "CMakeLists.txt",
+    };
+
+    return std::find(commentCapableExtensions.begin(), commentCapableExtensions.end(), extension) !=
+                    commentCapableExtensions.end() ||
+            std::find(commentCapableNames.begin(), commentCapableNames.end(), name) != commentCapableNames.end();
+}
+
+std::vector<std::filesystem::path> projectOwnedCommentCapableFiles() {
+    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::vector<std::filesystem::path> roots = {
+            ".gitignore",
+            "AGENTS.md",
+            "CMakeLists.txt",
+            "app-refactor.md",
+            "programmatic-api-plan.md",
+            "agents",
+            "benchmarks",
+            "cmake",
+            "docs",
+            "examples",
+            "resources/locales",
+            "src",
+            "tests",
+            "tools",
+    };
+
+    std::vector<std::filesystem::path> files;
+    for (const std::filesystem::path& relativeRoot : roots) {
+        const std::filesystem::path path = root / relativeRoot;
+        if (!std::filesystem::exists(path)) {
+            continue;
+        }
+        if (std::filesystem::is_regular_file(path)) {
+            if (isCommentCapableProjectFile(relativeRoot)) {
+                files.push_back(relativeRoot);
+            }
+            continue;
+        }
+
+        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(path)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            const std::filesystem::path relative = std::filesystem::relative(entry.path(), root);
+            if (isCommentCapableProjectFile(relative)) {
+                files.push_back(relative);
+            }
+        }
+    }
+
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+std::vector<std::filesystem::path> guardrailSourceFiles() {
+    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::vector<std::filesystem::path> roots = {
+            "src",
+            "tests",
+            "cmake",
+            "tools",
+            "CMakeLists.txt",
+            "CMakePresets.json",
+    };
+    const std::vector<std::string> extensions = {
+            ".c",
+            ".cc",
+            ".cpp",
+            ".h",
+            ".hpp",
+            ".cmake",
+            ".txt",
+            ".json",
+            ".ps1",
+    };
+
+    std::vector<std::filesystem::path> files;
+    for (const std::filesystem::path& relativeRoot : roots) {
+        const std::filesystem::path path = root / relativeRoot;
+        if (!std::filesystem::exists(path)) {
+            continue;
+        }
+        if (std::filesystem::is_regular_file(path)) {
+            files.push_back(relativeRoot);
+            continue;
+        }
+
+        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(path)) {
+            if (!entry.is_regular_file()) {
+                continue;
+            }
+
+            const std::string extension = entry.path().extension().string();
+            if (std::find(extensions.begin(), extensions.end(), extension) == extensions.end()) {
+                continue;
+            }
+
+            files.push_back(std::filesystem::relative(entry.path(), root));
+        }
+    }
+
+    return files;
+}
+
 } // namespace
 
-TEST(BuildGuardrailTests, CopiedSdkTestsAreExplicitAndOfflineByDefault) {
+TEST(BuildGuardrailTests, ProjectOwnedCommentCapableFilesCarryProprietaryBanner) {
+    for (const std::filesystem::path& relativePath : projectOwnedCommentCapableFiles()) {
+        const std::string source = readSourceFile(relativePath);
+        EXPECT_NE(source.find("Copyright (c) 2026 Francesco Di Blasi"), std::string::npos)
+                << relativePath.generic_string();
+        EXPECT_NE(source.find("protected proprietary source code"), std::string::npos)
+                << relativePath.generic_string();
+        EXPECT_NE(source.find("No permission is granted to use, copy, modify, distribute, or sublicense"), std::string::npos)
+                << relativePath.generic_string();
+    }
+}
+
+TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
-    const std::string sdkCMake = readSourceFile("sdk/CMakeLists.txt");
-    const std::string catch2CMake = readSourceFile("sdk/cmake/QuaderCatch2.cmake");
+    const std::string absorbedCMake = readSourceFile("cmake/QuaderModeling.cmake");
+    const std::string buildFiles = rootCMake + "\n" + absorbedCMake;
     const std::string presets = readSourceFile("CMakePresets.json");
 
-    expectContains(rootCMake, "option(QUADER_BUILD_SDK_TESTS");
-    expectContains(rootCMake, "set(BUILD_TESTING ${QUADER_BUILD_SDK_TESTS}");
-    expectContains(rootCMake, "QUADER_BUILD_SDK_TESTS requires QUADER_ENABLE_MODELING_SDK=ON");
-    expectContains(rootCMake, "add_custom_target(quader_sdk_tests DEPENDS ${_QUADER_SDK_TEST_TARGETS})");
-    expectContains(rootCMake, "set(QUADER_SDK_ALLOW_EXTERNAL_OPENMESH_FETCH OFF");
-    expectContains(rootCMake, "set(QUADER_SDK_ALLOW_EXTERNAL_CATCH2_FETCH OFF");
+    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(QUADER_SOURCE_DIR) / "sdk"));
 
-    expectContains(sdkCMake, "option(QUADER_SDK_ALLOW_EXTERNAL_OPENMESH_FETCH");
-    expectContains(sdkCMake, "OFF)");
-    expectContains(catch2CMake, "elseif(QUADER_SDK_ALLOW_EXTERNAL_CATCH2_FETCH)");
-    expectContains(catch2CMake, "set_property(GLOBAL APPEND PROPERTY QUADER_SDK_TEST_TARGETS");
+    expectMissing(buildFiles, "QUADER_BUILD_SDK_TESTS");
+    expectMissing(buildFiles, "QUADER_ENABLE_MODELING_SDK");
+    expectMissing(buildFiles, "QUADER_MODELING_SDK_DIR");
+    expectMissing(buildFiles, "QUADER_HAS_MODELING_SDK");
+    expectMissing(buildFiles, "add_subdirectory(\"${QUADER_MODELING_SDK_DIR}\"");
+    expectMissing(buildFiles, "quader_sdk_tests");
+    expectMissing(buildFiles, "quader_io_qdr");
+    expectMissing(buildFiles, "quader_modeling_editor_core");
+    expectMissing(buildFiles, "quader_modeling_editor_contract");
+    expectMissing(buildFiles, "quader_add_host_contract_domain_test");
+    expectMissing(buildFiles, "quader_add_modeling_domain_catch2_test(qdr_custom_engine_modeling_session_smoke_tests");
+    expectMissing(buildFiles, "quader_add_qdr_runtime_domain_test(qdr_io_session_tests");
+    expectMissing(buildFiles, "quader_add_modeling_runtime_domain_test(qdr_editor_core_");
+    expectMissing(buildFiles, "qdr_editor_core_*.cpp");
+    expectMissing(buildFiles, "qdr_host_contract_");
+    expectMissing(buildFiles, "tests/modeling_domain/host_contract");
+    expectMissing(buildFiles, "qdr_custom_engine_modeling_session_smoke_tests.cpp");
+    expectMissing(buildFiles, "qdr_io_session_tests.cpp");
 
-    expectContains(presets, "\"vs2026-sdk-tests\"");
-    expectContains(presets, "\"QUADER_BUILD_SDK_TESTS\": \"ON\"");
-    expectContains(presets, "\"QUADER_SDK_ALLOW_EXTERNAL_OPENMESH_FETCH\": \"OFF\"");
-    expectContains(presets, "\"QUADER_SDK_ALLOW_EXTERNAL_CATCH2_FETCH\": \"OFF\"");
-    expectContains(presets, "\"jobs\": 1");
-    expectContains(presets, "\"quader_sdk_tests\"");
-    expectContains(presets, "\"name\": \"^qdr_\"");
-    expectContains(presets, "\"timeout\": 30");
+    expectMissing(presets, "vs2026-sdk-tests");
+    expectMissing(presets, "QUADER_BUILD_SDK_TESTS");
+    expectMissing(presets, "quader_sdk_tests");
+
+    expectContains(buildFiles, "src/modeling/polygon");
+    expectContains(buildFiles, "src/modeling/runtime");
+    expectContains(buildFiles, "src/modeling/operations");
+    expectContains(buildFiles, "src/modeling/interactions");
+    expectContains(buildFiles, "src/modeling/services");
+    expectContains(buildFiles, "src/editor/actions");
+    expectContains(buildFiles, "src/editor/metadata");
+    expectContains(buildFiles, "src/io/qdr");
+    expectContains(buildFiles, "quader_qdr_document_io");
+    expectContains(buildFiles, "quader_qdr_runtime_io");
+    expectContains(buildFiles, "qdr_custom_engine_modeling_runtime_smoke_tests");
+    expectContains(buildFiles, "qdr_runtime_io_compat_tests");
+    expectContains(buildFiles, "qdr_modeling_runtime_measurement_tests");
+    expectContains(buildFiles, "tests/modeling_domain/qdr_modeling_runtime_measurement_tests.cpp");
+    expectContains(buildFiles, "tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp");
+    expectContains(buildFiles, "qdr_editor_metadata_operation_catalog_tests");
+    expectMissing(buildFiles, "src/modeling/workspace");
+    expectMissing(buildFiles, "src/modeling/tool/");
+    expectMissing(buildFiles, "src/modeling/tools/");
+    expectMissing(buildFiles, "src/editor/tools/host_contract");
+    expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH");
+    expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_CATCH2_FETCH");
+}
+
+TEST(BuildGuardrailTests, MigratedModelingDomainTestFilesUseNativeNames) {
+    const std::vector<std::string> forbiddenPathFragments = {
+            "tests/modeling_domain/host_contract/",
+            "qdr_editor_core_",
+            "qdr_host_contract_",
+            "qdr_custom_engine_modeling_session_smoke_tests",
+            "qdr_io_session_tests",
+            "src/modeling/workspace/",
+            "src/modeling/tools/",
+            "src/viewport/tools/",
+    };
+
+    for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
+        const std::string path = relativePath.generic_string();
+        for (const std::string& fragment : forbiddenPathFragments) {
+            EXPECT_EQ(path.find(fragment), std::string::npos)
+                    << path << " contains stale absorbed-SDK path fragment " << fragment;
+        }
+    }
+}
+
+TEST(BuildGuardrailTests, SourceBuildAndTestsDoNotUseOldSdkIncludeOrPackagePaths) {
+    const std::vector<std::string> oldIncludeRoots = {
+            "quader_editor_core",
+            "quader_poly",
+            "quader_io",
+            "quader_host_contract",
+    };
+    std::vector<std::string> forbidden;
+    for (const std::string& root : oldIncludeRoots) {
+        forbidden.push_back(std::string("#include <") + root + "/");
+        forbidden.push_back(std::string("#include \"") + root + "/");
+    }
+    forbidden.push_back(std::string("sdk/") + "packages/");
+    forbidden.push_back(std::string("sdk\\") + "packages\\");
+
+    for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
+        const std::string source = readSourceFile(relativePath);
+        for (const std::string& needle : forbidden) {
+            EXPECT_EQ(source.find(needle), std::string::npos)
+                    << relativePath.generic_string() << " contains " << needle;
+        }
+    }
+}
+
+TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
+    const std::vector<std::filesystem::path> docs = {
+            "programmatic-api-plan.md",
+            "docs/absorbed_modeling/README.md",
+            "src/editor/metadata/README.md",
+            "src/io/qdr/README.md",
+    };
+    const std::vector<std::string> forbidden = {
+            std::string("sdk/") + "packages/",
+            "SDK checkout",
+            "from the SDK side",
+            "links `qdr_host_contract`, `qdr_editor_core`, and `qdr_io`",
+            "through CMake `add_subdirectory`",
+    };
+
+    for (const std::filesystem::path& doc : docs) {
+        const std::string source = readSourceFile(doc);
+        for (const std::string& needle : forbidden) {
+            EXPECT_EQ(source.find(needle), std::string::npos)
+                    << doc.generic_string() << " contains " << needle;
+        }
+    }
 }
 
 TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
@@ -68,8 +325,8 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
 
     expectContains(rootCMake, "ENV{FILAMENT_SDK_ROOT}");
     expectContains(rootCMake, "../_SOURCES/filament-v1.71.6-windows");
-    expectContains(rootCMake, "ENV{QUADER_SDK_OPENMESH_SOURCE_DIR}");
-    expectContains(rootCMake, "ENV{QUADER_SDK_CATCH2_SOURCE_DIR}");
+    expectContains(rootCMake, "ENV{QUADER_OPENMESH_SOURCE_DIR}");
+    expectContains(rootCMake, "ENV{QUADER_CATCH2_SOURCE_DIR}");
     expectContains(rootCMake, "ENV{USERPROFILE}");
 
     expectContains(presets, "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake");
@@ -177,8 +434,8 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
     expectContains(platformSource, "SDL_WINDOW_BORDERLESS");
 }
 
-TEST(DependencyLicenseGuardrailTests, SdkThirdPartyManifestHasLicenseEvidence) {
-    const std::string manifest = readSourceFile("sdk/thirdparty/THIRD_PARTY_MANIFEST.md");
+TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
+    const std::string manifest = readSourceFile("thirdparty/THIRD_PARTY_MANIFEST.md");
 
     expectContains(manifest, "OpenMesh");
     expectContains(manifest, "licenses/openmesh-BSD-3-Clause.txt");
@@ -191,9 +448,9 @@ TEST(DependencyLicenseGuardrailTests, SdkThirdPartyManifestHasLicenseEvidence) {
     expectContains(manifest, "Geometric Tools Engine Mathematics");
     expectContains(manifest, "licenses/geometrictools-BSL-1.0.txt");
 
-    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
-    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/catch2-BSL-1.0.txt").empty());
-    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/earcut-hpp-ISC.txt").empty());
-    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/nlohmann-json-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("sdk/thirdparty/licenses/geometrictools-BSL-1.0.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/catch2-BSL-1.0.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/earcut-hpp-ISC.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/nlohmann-json-MIT.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/geometrictools-BSL-1.0.txt").empty());
 }

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "document/commands/DocumentCommandSceneHelpers.h"
@@ -10,6 +16,9 @@
 
 namespace quader {
 
+/**
+ * Applies Group Selection Command behavior as a command in the editor document command layer.
+ */
 class GroupSelectionCommand final : public SceneCommand {
 public:
     GroupSelectionCommand(
@@ -36,7 +45,6 @@ public:
         if (!scene().destroyEntity(group_)) {
             return documentCommandMissingEntityResult();
         }
-        group_ = InvalidEntityId;
         documentCommandApplySelection(scene(), beforeSelection_);
         return documentCommandChangedResult();
     }
@@ -57,11 +65,14 @@ public:
         const std::string name = groupName_.empty()
                 ? SceneEntityNaming::nextNameForKind(scene(), SceneEntityKind::Empty)
                 : groupName_;
-        group_ = scene().createEmpty(name);
+        group_ = scene().createEntityWithId(group_, name, EntityKind::Empty, groupObjectId_);
+        if (group_ == InvalidEntityId) {
+            return documentCommandInvalidRequestResult("Group entity cannot be created");
+        }
+        groupObjectId_ = scene().editorObjectId(group_);
         scene().setTransform(group_, groupTransform_);
         if (commonParent != InvalidEntityId && !scene().setParent(group_, commonParent, true)) {
             scene().destroyEntity(group_);
-            group_ = InvalidEntityId;
             return documentCommandInvalidRequestResult("Group entity cannot be reparented");
         }
         for (const EntityId root : roots_) {
@@ -81,6 +92,7 @@ private:
     std::vector<DocumentEntityPlacement> rootPlacements_;
     DocumentSelectionState beforeSelection_;
     EntityId group_ = InvalidEntityId;
+    EditorObjectId groupObjectId_ = InvalidEditorObjectId;
 };
 
 } // namespace quader

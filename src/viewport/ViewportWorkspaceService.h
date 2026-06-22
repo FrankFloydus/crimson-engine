@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "math/Types.h"
@@ -9,12 +15,18 @@
 
 namespace quader {
 
+/**
+ * Enumerates ViewportShadingMode values used by the viewport layer.
+ */
 enum class ViewportShadingMode {
     Wireframe,
     Shaded,
     Rendered,
 };
 
+/**
+ * Stores the Viewport Workspace Pane State data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportWorkspacePaneState {
     ViewportPaneId id = ViewportPaneId::Perspective;
     ViewportView view = ViewportView::Perspective;
@@ -24,6 +36,9 @@ struct ViewportWorkspacePaneState {
     bool visibleThisFrame = false;
 };
 
+/**
+ * Coordinates Viewport Workspace Service responsibilities for the viewport input, layout, and camera layer.
+ */
 class ViewportWorkspaceService final {
 public:
     ViewportWorkspaceService();

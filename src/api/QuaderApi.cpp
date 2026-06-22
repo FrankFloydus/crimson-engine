@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
@@ -7,20 +13,25 @@
 
 namespace quader {
 
+/**
+ * Owns Impl behavior within the public Quader API surface.
+ */
 class QuaderApi::Impl final {
 public:
     explicit Impl(ProjectSession& session)
         : session(session)
-        , editorCommands(session.undoRedo(), session.documentCommands(), &session.modeling())
-        , mutations(session, editorCommands, modelingCommands)
+        , history(session.undoRedo())
+        , editorCommands(history, session.documentCommands())
+        , mutations(session, history, editorCommands, modelingCommands)
         , scene(session, mutations)
         , modeling(session, mutations)
         , selection(session, mutations)
         , assets(session, mutations)
-        , history(session, mutations)
-        , query(session) {}
+        , historyApi(history, mutations)
+        , query(session, history) {}
 
     ProjectSession& session;
+    EditorHistoryService history;
     EditorCommandService editorCommands;
     ModelingCommandExecutionService modelingCommands;
     QuaderApiMutationRunner mutations;
@@ -28,7 +39,7 @@ public:
     QuaderModelingApi modeling;
     QuaderSelectionApi selection;
     QuaderAssetApi assets;
-    QuaderHistoryApi history;
+    QuaderHistoryApi historyApi;
     QuaderQueryApi query;
 };
 
@@ -73,11 +84,11 @@ const QuaderAssetApi& QuaderApi::assets() const {
 }
 
 QuaderHistoryApi& QuaderApi::history() {
-    return impl_->history;
+    return impl_->historyApi;
 }
 
 const QuaderHistoryApi& QuaderApi::history() const {
-    return impl_->history;
+    return impl_->historyApi;
 }
 
 QuaderQueryApi& QuaderApi::query() {

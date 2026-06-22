@@ -1,8 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
 #include "math/Types.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
 #include "scene/Components.h"
 
@@ -23,11 +29,17 @@
 
 namespace quader::test {
 
+/**
+ * Represents a Behavior Bounds value used by the behavior test DSL.
+ */
 struct BehaviorBounds {
     Vec3 min = {};
     Vec3 max = {};
 };
 
+/**
+ * Stores the Entity Snapshot data contract used by the behavior test DSL.
+ */
 struct EntitySnapshot {
     EntityId id = InvalidEntityId;
     std::string alias;
@@ -35,9 +47,12 @@ struct EntitySnapshot {
     TransformComponent transform;
     bool selected = false;
     AssetId mesh = InvalidAssetId;
-    ModelingObjectId sdkObjectId = InvalidModelingObjectId;
+    ModelingObjectId modelingObjectId = InvalidModelingObjectId;
 };
 
+/**
+ * Stores the Mesh Snapshot data contract used by the behavior test DSL.
+ */
 struct MeshSnapshot {
     AssetId mesh = InvalidAssetId;
     std::size_t vertexCount = 0;
@@ -45,6 +60,9 @@ struct MeshSnapshot {
     BehaviorBounds bounds;
 };
 
+/**
+ * Represents a Viewport Overlay Stats value used by the behavior test DSL.
+ */
 struct ViewportOverlayStats {
     std::size_t triangleCount = 0;
     std::size_t lineCount = 0;
@@ -54,6 +72,9 @@ struct ViewportOverlayStats {
     std::unordered_map<ViewportOverlayLayer, std::size_t> trianglesByLayer;
 };
 
+/**
+ * Stores the Behavior Snapshot data contract used by the behavior test DSL.
+ */
 struct BehaviorSnapshot {
     std::string label;
     ModelingSelectionSummary selection;

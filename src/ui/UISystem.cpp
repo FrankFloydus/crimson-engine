@@ -1,7 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/UISystem.h"
 
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "render/FilamentBufferDescriptorFactory.h"
 #include "ui/ConsolePanel.h"
 #include "ui/InspectorPanel.h"
@@ -189,9 +196,8 @@ void UISystem::draw(QuaderEditorApi& editor,
         SceneRenderBridge& renderBridge,
         SceneDocument& document,
         AssetRegistry& assets,
-        UndoRedoManager& undoRedo,
-        DocumentCommandService& documentCommands,
         ModelingSessionService& modeling,
+        EditorSelectionService& selection,
         AssetId defaultMaterial,
         bool& quitRequested) {
     editor.ui().setRuntimeHooks(QuaderUIRuntimeHooks{
@@ -254,7 +260,7 @@ void UISystem::draw(QuaderEditorApi& editor,
                 return runtimeStatus(before != visible);
             },
     });
-    drawDockspace(editor, quitRequested, document, documentCommands, modeling);
+    drawDockspace(editor, quitRequested, document, modeling);
 
     bool viewportCursorCaptureRequested = false;
     Vec2 viewportCursorCapturePoint = {};
@@ -266,9 +272,8 @@ void UISystem::draw(QuaderEditorApi& editor,
             .renderBridge = renderBridge,
             .document = document,
             .assets = assets,
-            .undoRedo = undoRedo,
-            .documentCommands = documentCommands,
             .modeling = modeling,
+            .selection = selection,
             .defaultMaterial = defaultMaterial,
             .quitRequested = quitRequested,
             .style = style_,
@@ -354,7 +359,6 @@ void UISystem::drawDockspace(
         QuaderEditorApi& editor,
         bool& quitRequested,
         SceneDocument& document,
-        DocumentCommandService& documentCommands,
         ModelingSessionService& modeling) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -375,7 +379,6 @@ void UISystem::drawDockspace(
             .quitRequested = quitRequested,
             .editor = editor,
             .document = document,
-            .documentCommands = documentCommands,
             .modeling = modeling,
             .viewportPanel = viewportPanel_,
             .panels = panels_,

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "BehaviorSnapshot.h"
@@ -7,7 +13,7 @@
 #include "document/ProjectSession.h"
 #include "scene/Components.h"
 
-#include <quader_poly/document.h>
+#include <modeling/polygon/document.h>
 
 #include <string>
 #include <string_view>
@@ -30,6 +36,9 @@ class SnapshotExpect;
 class ToolStatusExpect;
 class UndoRedoExpect;
 
+/**
+ * Owns Behavior Scenario behavior within the behavior test DSL.
+ */
 class BehaviorScenario final {
 public:
     static BehaviorScenario newProject();
@@ -50,7 +59,7 @@ public:
 
     [[nodiscard]] EntityId entity(std::string_view alias) const;
     [[nodiscard]] QuaderModelingObjectRef object(std::string_view alias) const;
-    [[nodiscard]] ModelingObjectId sdkObject(std::string_view alias) const;
+    [[nodiscard]] ModelingObjectId modelingObject(std::string_view alias) const;
     [[nodiscard]] BehaviorSnapshot snapshot(std::string label = {}) const;
     void remember(std::string_view alias, QuaderModelingObjectRef object);
 
@@ -81,13 +90,16 @@ private:
     ModelingTransformDragPreview lastDrag_;
 };
 
+/**
+ * Owns Behavior Given behavior within the behavior test DSL.
+ */
 class BehaviorGiven final {
 public:
     explicit BehaviorGiven(BehaviorScenario& scenario) : scenario_(scenario) {}
 
     BehaviorGiven& unitBox(std::string_view alias, std::string name = "Box");
     BehaviorGiven& box(std::string_view alias, ModelingBounds bounds, std::string name = "Box");
-    BehaviorGiven& mesh(std::string_view alias, quader_poly::Document document, std::string name = "Mesh");
+    BehaviorGiven& mesh(std::string_view alias, QuaderPolygonDocument document, std::string name = "Mesh");
     BehaviorGiven& selected(std::string_view alias);
     BehaviorGiven& selectionMode(ModelingSelectionMode mode);
     BehaviorGiven& vertexSelected(std::string_view alias, int vertex);
@@ -101,6 +113,9 @@ private:
     BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Behavior When behavior within the behavior test DSL.
+ */
 class BehaviorWhen final {
 public:
     explicit BehaviorWhen(BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -123,7 +138,6 @@ public:
     BehaviorWhen& cancelDrag();
 
     BehaviorWhen& executeTool(std::string_view toolId);
-    BehaviorWhen& executeAction(std::string_view actionId);
     BehaviorWhen& assignMaterialSlot(std::uint32_t materialSlot);
     BehaviorWhen& undo();
     BehaviorWhen& redo();
@@ -136,6 +150,9 @@ private:
     BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Behavior Then behavior within the behavior test DSL.
+ */
 class BehaviorThen final {
 public:
     explicit BehaviorThen(const BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -155,6 +172,9 @@ private:
 
 #else
 
+/**
+ * Owns Behavior Scenario behavior within the behavior test DSL.
+ */
 class BehaviorScenario final {
 public:
     static BehaviorScenario newProject() { return {}; }

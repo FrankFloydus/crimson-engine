@@ -1,11 +1,28 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "assets/AssetRegistry.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
 
 AssetId AssetRegistry::addMesh(MeshAsset mesh) {
     const AssetId id = nextId_++;
+    meshes_.add(id, std::move(mesh));
+    markDirty();
+    return id;
+}
+
+AssetId AssetRegistry::addMesh(AssetId id, MeshAsset mesh) {
+    if (id == InvalidAssetId) {
+        return addMesh(std::move(mesh));
+    }
+    nextId_ = std::max(nextId_, id + 1u);
     meshes_.add(id, std::move(mesh));
     markDirty();
     return id;
@@ -18,8 +35,28 @@ AssetId AssetRegistry::addMaterial(MaterialDocument material) {
     return id;
 }
 
+AssetId AssetRegistry::addMaterial(AssetId id, MaterialDocument material) {
+    if (id == InvalidAssetId) {
+        return addMaterial(std::move(material));
+    }
+    nextId_ = std::max(nextId_, id + 1u);
+    materials_.add(id, std::move(material));
+    markDirty();
+    return id;
+}
+
 AssetId AssetRegistry::addTexture(TextureAsset texture) {
     const AssetId id = nextId_++;
+    textures_.add(id, std::move(texture));
+    markDirty();
+    return id;
+}
+
+AssetId AssetRegistry::addTexture(AssetId id, TextureAsset texture) {
+    if (id == InvalidAssetId) {
+        return addTexture(std::move(texture));
+    }
+    nextId_ = std::max(nextId_, id + 1u);
     textures_.add(id, std::move(texture));
     markDirty();
     return id;

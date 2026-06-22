@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
@@ -9,24 +15,25 @@
 namespace quader {
 
 class AssetRegistry;
-class DocumentCommandService;
+class EditorSelectionService;
 class LocalizationService;
 class ModelingSessionService;
 class QuaderEditorApi;
 class SceneDocument;
 class SceneRenderBridge;
-class UndoRedoManager;
 class UISettings;
 struct UIStyleTokens;
 
+/**
+ * Stores the UI Context data contract used by the ImGui editor presentation layer.
+ */
 struct UIContext {
     QuaderEditorApi& editor;
     SceneRenderBridge& renderBridge;
     SceneDocument& document;
     AssetRegistry& assets;
-    UndoRedoManager& undoRedo;
-    DocumentCommandService& documentCommands;
     ModelingSessionService& modeling;
+    EditorSelectionService& selection;
     AssetId defaultMaterial = InvalidAssetId;
     bool& quitRequested;
     const UIStyleTokens& style;

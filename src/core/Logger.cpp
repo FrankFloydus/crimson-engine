@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "core/Logger.h"
 
 #include <spdlog/sinks/base_sink.h>
@@ -13,6 +19,9 @@
 namespace quader {
 namespace {
 
+/**
+ * Owns Memory Sink behavior within the shared core service layer.
+ */
 class MemorySink final : public spdlog::sinks::base_sink<std::mutex> {
 public:
     explicit MemorySink(std::size_t maxEntries) : maxEntries_(std::max<std::size_t>(1, maxEntries)) {}

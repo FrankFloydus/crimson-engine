@@ -1,11 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetRegistry.h"
 #include "core/LocalizationService.h"
-#include "core/UndoRedoManager.h"
 #include "core/Types.h"
-#include "document/DocumentCommandService.h"
-#include "modeling/ModelingSessionService.h"
 #include "render/ImGuiFilamentRenderer.h"
 #include "render/RenderSystem.h"
 #include "render/SceneRenderBridge.h"
@@ -32,8 +35,13 @@
 namespace quader {
 
 class QuaderEditorApi;
+class EditorSelectionService;
+class ModelingSessionService;
 class TextureRegistry;
 
+/**
+ * Owns UI System behavior within the ImGui editor presentation layer.
+ */
 class UISystem {
 public:
     ~UISystem();
@@ -47,9 +55,8 @@ public:
             SceneRenderBridge& renderBridge,
             SceneDocument& document,
             AssetRegistry& assets,
-            UndoRedoManager& undoRedo,
-            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
+            EditorSelectionService& selection,
             AssetId defaultMaterial,
             bool& quitRequested);
     void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
@@ -68,7 +75,6 @@ private:
             QuaderEditorApi& editor,
             bool& quitRequested,
             SceneDocument& document,
-            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
     void enforceSidebarDockMinimums();

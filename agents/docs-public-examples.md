@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Docs And Public Examples
 
 Public-facing docs and examples should begin from the public API, not internal owners.
@@ -19,7 +27,7 @@ Public examples should prefer the polished API surface:
   and other `QuaderCommand::*` constants;
 - `QuaderObjectHandle` for object workflows;
 - `QuaderSceneBatch` for grouped scene edits;
-- `editor.viewports()` / `editor.mainViewport()` for workspace-backed viewport intent.
+- `editor.viewports()` / `editor.mainViewport()` for viewport layout, camera, and pane intent.
 
 Avoid starting public examples with:
 

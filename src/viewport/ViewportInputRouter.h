@@ -1,7 +1,13 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "math/Types.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "viewport/ViewportCameraController.h"
 
 #include <cstddef>
@@ -14,6 +20,9 @@ struct ViewportToolContext;
 struct ViewportToolEvent;
 struct ViewportToolResult;
 
+/**
+ * Enumerates ViewportToolId values used by the viewport layer.
+ */
 enum class ViewportToolId {
     Select,
     Move,
@@ -29,6 +38,9 @@ enum class ViewportToolId {
     Mirror,
 };
 
+/**
+ * Enumerates ViewportSelectionMode values used by the viewport layer.
+ */
 enum class ViewportSelectionMode {
     Vertex,
     Edge,
@@ -37,12 +49,18 @@ enum class ViewportSelectionMode {
     Group,
 };
 
+/**
+ * Enumerates ViewportMirrorAxis values used by the viewport layer.
+ */
 enum class ViewportMirrorAxis {
     X,
     Y,
     Z,
 };
 
+/**
+ * Enumerates ViewportKey values used by the viewport layer.
+ */
 enum class ViewportKey {
     A,
     Q,
@@ -84,11 +102,17 @@ enum class ViewportKey {
     Backspace,
 };
 
+/**
+ * Enumerates ViewportShortcutContext values used by the viewport layer.
+ */
 enum class ViewportShortcutContext {
     Global,
     Viewport,
 };
 
+/**
+ * Enumerates ViewportShortcutKind values used by the viewport layer.
+ */
 enum class ViewportShortcutKind {
     None,
     ActivateTool,
@@ -117,12 +141,18 @@ enum class ViewportShortcutKind {
     ApplyMaterial,
 };
 
+/**
+ * Represents a Viewport Modifiers value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportModifiers {
     bool primary = false;
     bool shift = false;
     bool alt = false;
 };
 
+/**
+ * Represents a Viewport Shortcut value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportShortcut {
     ViewportShortcutKind kind = ViewportShortcutKind::None;
     ViewportShortcutContext context = ViewportShortcutContext::Viewport;
@@ -132,6 +162,9 @@ struct ViewportShortcut {
     int gridPreset = 0;
 };
 
+/**
+ * Stores the Viewport Tool State data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportToolState {
     ViewportToolId activeTool = ViewportToolId::Select;
     ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
@@ -139,6 +172,9 @@ struct ViewportToolState {
     bool maximized = false;
 };
 
+/**
+ * Stores the Viewport Input Frame data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportInputFrame {
     bool viewportHovered = false;
     bool viewportFocused = false;
@@ -160,6 +196,9 @@ struct ViewportInputFrame {
     std::vector<ViewportKey> pressedKeys;
 };
 
+/**
+ * Stores the Viewport Input Result data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportInputResult {
     bool consumed = false;
     bool cameraChanged = false;
@@ -180,6 +219,9 @@ struct ViewportInputResult {
     ViewportShortcut shortcut = {};
 };
 
+/**
+ * Owns Viewport Input Router behavior within the viewport input, layout, and camera layer.
+ */
 class ViewportInputRouter {
 public:
     ViewportInputRouter();

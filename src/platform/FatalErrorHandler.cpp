@@ -1,18 +1,28 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "platform/FatalErrorHandler.h"
 
 #include "core/Logger.h"
 
 #include <atomic>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <csignal>
+#include <ctime>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <system_error>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -30,9 +40,41 @@ namespace {
 std::filesystem::path gLogPath;
 std::atomic_bool gHandlingFatalError{false};
 
+/**
+ * Describes the crash artifacts written by the fatal error boundary.
+ */
+struct CrashArtifacts {
+    std::filesystem::path reportPath;
+    std::filesystem::path dumpPath;
+    std::string dumpStatus;
+};
+
+#if defined(_WIN32)
+using FatalExceptionPointers = EXCEPTION_POINTERS;
+#else
+using FatalExceptionPointers = void;
+#endif
+
 #if defined(_WIN32)
 std::mutex gSymbolMutex;
 bool gSymbolsInitialized = false;
+
+std::uint32_t currentProcessId() {
+    return static_cast<std::uint32_t>(GetCurrentProcessId());
+}
+
+std::uint32_t currentThreadId() {
+    return static_cast<std::uint32_t>(GetCurrentThreadId());
+}
+#else
+std::uint32_t currentProcessId() {
+    return 0;
+}
+
+std::uint32_t currentThreadId() {
+    return 0;
+}
+#endif
 
 std::wstring widen(const std::string& value) {
     if (value.empty()) {
@@ -47,7 +89,83 @@ std::wstring widen(const std::string& value) {
     return wide;
 }
 
-void showFatalMessageBox(FatalErrorInfo info, const std::string& detail) {
+std::string timestampForCrashFile() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+#if defined(_WIN32)
+    localtime_s(&localTime, &time);
+#else
+    localTime = *std::localtime(&time);
+#endif
+
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y%m%d-%H%M%S");
+    return stream.str();
+}
+
+std::string timestampForCrashReport() {
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+#if defined(_WIN32)
+    localtime_s(&localTime, &time);
+#else
+    localTime = *std::localtime(&time);
+#endif
+
+    std::ostringstream stream;
+    stream << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S");
+    return stream.str();
+}
+
+std::filesystem::path crashReportDirectory() {
+    std::filesystem::path base = gLogPath.empty() ? std::filesystem::current_path() : gLogPath.parent_path();
+    if (base.empty()) {
+        base = std::filesystem::current_path();
+    }
+
+    std::filesystem::path directory = base / "crash-reports";
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    if (!error) {
+        return directory;
+    }
+    return base;
+}
+
+std::filesystem::path crashArtifactPath(const char* extension) {
+    std::ostringstream filename;
+    filename << "quader-fatal-" << timestampForCrashFile() << "-p" << currentProcessId() << "-t" << currentThreadId()
+             << extension;
+    return crashReportDirectory() / filename.str();
+}
+
+void appendTextFile(const std::filesystem::path& path, const std::string& text) {
+    if (path.empty()) {
+        return;
+    }
+
+    std::ofstream file(path, std::ios::out | std::ios::app | std::ios::binary);
+    if (file.is_open()) {
+        file << text;
+        file.flush();
+    }
+}
+
+void writeTextFile(const std::filesystem::path& path, const std::string& text) {
+    if (path.empty()) {
+        return;
+    }
+
+    std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
+    if (file.is_open()) {
+        file << text;
+        file.flush();
+    }
+}
+
+void showFatalMessageBox(FatalErrorInfo info, const std::string& detail, const CrashArtifacts& artifacts) {
     std::string message =
             "Quader hit a fatal internal error and must close.\n\n"
             "Error code:\n" +
@@ -56,7 +174,11 @@ void showFatalMessageBox(FatalErrorInfo info, const std::string& detail) {
             info.quickMessage +
             "\n\nDetails:\n" +
             detail +
-            "\n\nA stack trace was written to this log file. Please include it with your report:\n" +
+            "\n\nCrash report:\n" +
+            artifacts.reportPath.string() +
+            "\n\nMinidump:\n" +
+            (artifacts.dumpPath.empty() ? artifacts.dumpStatus : artifacts.dumpPath.string()) +
+            "\n\nLog file:\n" +
             gLogPath.string();
     MessageBoxW(nullptr,
             widen(message).c_str(),
@@ -67,6 +189,28 @@ void showFatalMessageBox(FatalErrorInfo info, const std::string& detail) {
 std::string hexValue(std::uintptr_t value) {
     std::ostringstream stream;
     stream << "0x" << std::uppercase << std::hex << value;
+    return stream.str();
+}
+
+#if defined(_WIN32)
+std::string moduleDescriptionForAddress(std::uintptr_t address) {
+    HMODULE module = nullptr;
+    if (GetModuleHandleExA(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(address),
+                &module) == FALSE ||
+            module == nullptr) {
+        return {};
+    }
+
+    std::array<char, MAX_PATH> path{};
+    const DWORD length = GetModuleFileNameA(module, path.data(), static_cast<DWORD>(path.size()));
+    const std::filesystem::path modulePath =
+            length > 0u ? std::filesystem::path(std::string(path.data(), length)) : std::filesystem::path("<module>");
+    const auto base = reinterpret_cast<std::uintptr_t>(module);
+
+    std::ostringstream stream;
+    stream << "module=" << modulePath.filename().string() << " rva=" << hexValue(address - base);
     return stream.str();
 }
 
@@ -82,6 +226,9 @@ void initializeSymbolsLocked() {
 std::string describeAddressLocked(std::uintptr_t address) {
     std::ostringstream stream;
     stream << hexValue(address);
+    if (std::string module = moduleDescriptionForAddress(address); !module.empty()) {
+        stream << " [" << module << "]";
+    }
 
     initializeSymbolsLocked();
     if (!gSymbolsInitialized) {
@@ -134,7 +281,87 @@ std::string captureCurrentStackTrace(std::uint32_t skipFrames = 0) {
     return stream.str();
 }
 
-std::string captureExceptionStackTrace(EXCEPTION_POINTERS* exceptionInfo) {
+std::string describeExceptionRecord(FatalExceptionPointers* exceptionInfo) {
+    if (exceptionInfo == nullptr || exceptionInfo->ExceptionRecord == nullptr) {
+        return "Exception record: unavailable.";
+    }
+
+    const EXCEPTION_RECORD* record = exceptionInfo->ExceptionRecord;
+    std::ostringstream stream;
+    stream << "Exception record:\n";
+    stream << "  Code: " << hexValue(static_cast<std::uintptr_t>(record->ExceptionCode)) << "\n";
+    stream << "  Flags: " << hexValue(static_cast<std::uintptr_t>(record->ExceptionFlags)) << "\n";
+    stream << "  Address: ";
+    {
+        std::lock_guard<std::mutex> lock(gSymbolMutex);
+        stream << describeAddressLocked(reinterpret_cast<std::uintptr_t>(record->ExceptionAddress));
+    }
+    if (record->NumberParameters > 0u) {
+        stream << "\n  Parameters:";
+        for (DWORD index = 0; index < record->NumberParameters; ++index) {
+            stream << "\n    [" << index << "] " << hexValue(static_cast<std::uintptr_t>(record->ExceptionInformation[index]));
+        }
+    }
+    return stream.str();
+}
+
+std::string windowsErrorStatus(const char* action, DWORD error) {
+    std::ostringstream stream;
+    stream << action << " failed with Win32 error " << error << " (" << hexValue(static_cast<std::uintptr_t>(error))
+           << ").";
+    return stream.str();
+}
+
+std::string writeMiniDump(const std::filesystem::path& dumpPath, FatalExceptionPointers* exceptionInfo) {
+    if (dumpPath.empty()) {
+        return "Minidump skipped: no dump path.";
+    }
+
+    HANDLE file = CreateFileW(dumpPath.wstring().c_str(),
+            GENERIC_WRITE,
+            0,
+            nullptr,
+            CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        return windowsErrorStatus("CreateFileW for minidump", GetLastError());
+    }
+
+    MINIDUMP_EXCEPTION_INFORMATION exceptionParameters{};
+    MINIDUMP_EXCEPTION_INFORMATION* exceptionParameterPtr = nullptr;
+    if (exceptionInfo != nullptr) {
+        exceptionParameters.ThreadId = GetCurrentThreadId();
+        exceptionParameters.ExceptionPointers = exceptionInfo;
+        exceptionParameters.ClientPointers = FALSE;
+        exceptionParameterPtr = &exceptionParameters;
+    }
+
+    const auto dumpType = static_cast<MINIDUMP_TYPE>(
+            MiniDumpNormal |
+            MiniDumpWithHandleData |
+            MiniDumpWithUnloadedModules |
+            MiniDumpWithProcessThreadData |
+            MiniDumpWithThreadInfo |
+            MiniDumpWithFullMemoryInfo |
+            MiniDumpWithIndirectlyReferencedMemory);
+
+    const BOOL wroteDump = MiniDumpWriteDump(GetCurrentProcess(),
+            GetCurrentProcessId(),
+            file,
+            dumpType,
+            exceptionParameterPtr,
+            nullptr,
+            nullptr);
+    const DWORD error = wroteDump == TRUE ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(file);
+    if (wroteDump != TRUE) {
+        return windowsErrorStatus("MiniDumpWriteDump", error);
+    }
+    return "Minidump written.";
+}
+
+std::string captureExceptionStackTrace(FatalExceptionPointers* exceptionInfo) {
     if (exceptionInfo == nullptr || exceptionInfo->ContextRecord == nullptr) {
         return captureCurrentStackTrace();
     }
@@ -196,33 +423,86 @@ std::string captureExceptionStackTrace(EXCEPTION_POINTERS* exceptionInfo) {
     return stream.str();
 }
 #else
-void showFatalMessageBox(FatalErrorInfo, const std::string&) {}
+void showFatalMessageBox(FatalErrorInfo, const std::string&, const CrashArtifacts&) {}
 std::string captureCurrentStackTrace(std::uint32_t = 0) {
     return "Stack trace unavailable on this platform.";
 }
+
+std::string captureExceptionStackTrace(FatalExceptionPointers*) {
+    return captureCurrentStackTrace();
+}
+
+std::string describeExceptionRecord(FatalExceptionPointers*) {
+    return "Exception record: unavailable on this platform.";
+}
+
+std::string writeMiniDump(const std::filesystem::path&, FatalExceptionPointers*) {
+    return "Minidump unavailable on this platform.";
+}
 #endif
+
+CrashArtifacts writeCrashArtifacts(
+        FatalErrorInfo info,
+        const std::string& detail,
+        const std::string& stackTrace,
+        FatalExceptionPointers* exceptionInfo) {
+    CrashArtifacts artifacts;
+    artifacts.reportPath = crashArtifactPath(".txt");
+#if defined(_WIN32)
+    artifacts.dumpPath = crashArtifactPath(".dmp");
+    artifacts.dumpStatus = writeMiniDump(artifacts.dumpPath, exceptionInfo);
+#else
+    artifacts.dumpStatus = writeMiniDump({}, exceptionInfo);
+#endif
+
+    std::ostringstream report;
+    report << "Quader fatal error report\n";
+    report << "Generated: " << timestampForCrashReport() << "\n";
+    report << "Process id: " << currentProcessId() << "\n";
+    report << "Thread id: " << currentThreadId() << "\n";
+    report << "Error code: " << info.code << "\n";
+    report << "Quick message: " << info.quickMessage << "\n";
+    report << "Detail: " << detail << "\n";
+    report << "Log file: " << gLogPath.string() << "\n";
+    report << "Report file: " << artifacts.reportPath.string() << "\n";
+    report << "Dump file: " << (artifacts.dumpPath.empty() ? std::string{"<none>"} : artifacts.dumpPath.string())
+           << "\n";
+    report << "Dump status: " << artifacts.dumpStatus << "\n\n";
+    report << describeExceptionRecord(exceptionInfo) << "\n\n";
+    report << stackTrace << "\n";
+
+    const std::string text = report.str();
+    writeTextFile(artifacts.reportPath, text);
+    appendTextFile(gLogPath, "\n" + text);
+    return artifacts;
+}
 
 [[noreturn]] void handleFatalError(
         FatalErrorCode code,
         const std::string& detail,
         int exitCode,
-        std::string stackTrace = {}) {
+        std::string stackTrace = {},
+        FatalExceptionPointers* exceptionInfo = nullptr) {
     const FatalErrorInfo info = fatalErrorInfo(code);
     const bool alreadyHandling = gHandlingFatalError.exchange(true);
     if (!alreadyHandling) {
         if (stackTrace.empty()) {
             stackTrace = captureCurrentStackTrace(1u);
         }
-        LOG_CRITICAL("Fatal error {}: {}\nDetail: {}\nLog file: {}\n{}",
+        const CrashArtifacts artifacts = writeCrashArtifacts(info, detail, stackTrace, exceptionInfo);
+        LOG_CRITICAL("Fatal error {}: {}\nDetail: {}\nLog file: {}\nCrash report: {}\nMinidump: {}\nDump status: {}\n{}",
                 info.code,
                 info.quickMessage,
                 detail,
                 gLogPath.string(),
+                artifacts.reportPath.string(),
+                artifacts.dumpPath.string(),
+                artifacts.dumpStatus,
                 stackTrace);
         if (auto logger = Logger::instance()) {
             logger->flush();
         }
-        showFatalMessageBox(info, detail);
+        showFatalMessageBox(info, detail, artifacts);
     }
     std::_Exit(exitCode);
 }
@@ -264,7 +544,12 @@ LONG WINAPI windowsUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
         reason += " Address: ";
         reason += hexValue(reinterpret_cast<std::uintptr_t>(record->ExceptionAddress));
     }
-    handleFatalError(FatalErrorCode::WindowsUnhandledException, reason, 1, captureExceptionStackTrace(exceptionInfo));
+    handleFatalError(
+            FatalErrorCode::WindowsUnhandledException,
+            reason,
+            1,
+            captureExceptionStackTrace(exceptionInfo),
+            exceptionInfo);
 }
 #endif
 

@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Project Identity
 
 - This repository is the native standalone Windows Quader app.
@@ -8,9 +16,13 @@
   source of truth for modeling viewport parity.
 - The original Unity package lives at
   `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\package\com.qvertexworks.quader`.
-- The original SDK lives at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\sdk`.
-- This app keeps a copied SDK under `sdk`; preserve the SDK boundary and adapt native-app behavior
-  around it instead of rewriting SDK semantics in UI or renderer code.
+- The original Unity SDK lives at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\sdk` and is a
+  parity reference only.
+- `app-refactor.md` is the accepted native-app architecture direction as of 2026-06-22.
+- This app owns former SDK code in app modules. Do not preserve the old top-level copied SDK boundary,
+  modeling SDK directory override, or compile-time SDK presence macro as native-app authority.
+- Preserve behavior while moving code, but make editor document, command, selection, history, and
+  projection ownership app-native instead of split across an SDK facade.
 
 ## Restore Rule
 

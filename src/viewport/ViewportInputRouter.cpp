@@ -1,8 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "viewport/ViewportInputRouter.h"
 
 #include "viewport/HostViewportContractAdapter.h"
-#include "viewport/tools/ViewportToolCatalog.h"
-#include "viewport/tools/ViewportToolRuntime.h"
+#include "viewport/modes/ViewportToolCatalog.h"
+#include "viewport/modes/ViewportToolRuntime.h"
 
 #include <algorithm>
 #include <cmath>

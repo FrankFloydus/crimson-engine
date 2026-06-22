@@ -1,6 +1,13 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -53,6 +60,29 @@ bool containsAny(const std::string& source, const std::vector<std::string_view>&
     });
 }
 
+bool startsWith(std::string_view value, std::string_view prefix) {
+    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+std::string cmakeSourceTruth() {
+    std::string source = readFile(sourceRoot() / "CMakeLists.txt");
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "cmake", ".cmake")) {
+        source.append("\n");
+        source.append(readFile(file));
+    }
+    return source;
+}
+
+bool coveredByAllowedCMakeGlob(std::string_view relative, const std::string& cmake) {
+    if (startsWith(relative, "src/modeling/polygon/operations/")) {
+        return cmake.find("src/modeling/polygon/operations/*.cpp") != std::string::npos;
+    }
+    if (startsWith(relative, "src/modeling/polygon/")) {
+        return cmake.find("src/modeling/polygon/*.cpp") != std::string::npos;
+    }
+    return false;
+}
+
 bool looksConstructorOnlyCpp(const std::string& source) {
     const std::regex constructorOnly(
             R"(^\s*#include\s+\"[^\"]+\"\s*(?:namespace\s+\w+\s*\{\s*){0,2}\w+::\w+\([^)]*\)\s*:)",
@@ -63,7 +93,84 @@ bool looksConstructorOnlyCpp(const std::string& source) {
     return std::regex_search(source, constructorOnly) && std::distance(begin, end) <= 1;
 }
 
+std::vector<std::string> lines(const std::string& source) {
+    std::vector<std::string> result;
+    std::string line;
+    for (const char ch : source) {
+        if (ch == '\n') {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            result.push_back(line);
+            line.clear();
+        } else {
+            line.push_back(ch);
+        }
+    }
+    if (!line.empty()) {
+        result.push_back(line);
+    }
+    return result;
+}
+
+std::string trim(std::string value) {
+    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    });
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+        return std::isspace(ch) != 0;
+    }).base();
+    if (first >= last) {
+        return {};
+    }
+    return {first, last};
+}
+
+bool hasNearbyDeclarationDoc(const std::vector<std::string>& fileLines, std::size_t declarationLine) {
+    if (declarationLine == 0) {
+        return false;
+    }
+
+    std::size_t cursor = declarationLine;
+    while (cursor > 0) {
+        --cursor;
+        const std::string previous = trim(fileLines[cursor]);
+        if (previous.empty()) {
+            continue;
+        }
+        return previous == "*/" ||
+                previous.rfind("///", 0) == 0 ||
+                previous.rfind("//!", 0) == 0 ||
+                previous.find("@brief") != std::string::npos;
+    }
+
+    return false;
+}
+
 } // namespace
+
+TEST(OopArchitectureGuardrailTests, TypeDeclarationsHaveMeaningfulDocumentation) {
+    const std::regex declaration(R"(^\s*(class|struct|enum(?:\s+class)?)\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
+
+    for (const std::filesystem::path& root : {sourceRoot() / "src", sourceRoot() / "tests", sourceRoot() / "benchmarks"}) {
+        for (const std::string_view extension : {std::string_view{".h"}, std::string_view{".hpp"}, std::string_view{".cpp"}}) {
+            for (const std::filesystem::path& file : filesWithExtension(root, extension)) {
+                const std::string source = readFile(file);
+                const std::vector<std::string> fileLines = lines(source);
+                const std::string relative = normalizedRelative(file);
+
+                for (std::size_t index = 0; index < fileLines.size(); ++index) {
+                    const std::string& line = fileLines[index];
+                    if (!std::regex_search(line, declaration) || line.find(';') != std::string::npos) {
+                        continue;
+                    }
+
+                    EXPECT_TRUE(hasNearbyDeclarationDoc(fileLines, index)) << relative << ":" << (index + 1) << ": " << line;
+                }
+            }
+        }
+    }
+}
 
 TEST(OopArchitectureGuardrailTests, SourceCppFilesAreNotEmptyOrConstructorOnly) {
     for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src", ".cpp")) {
@@ -76,16 +183,16 @@ TEST(OopArchitectureGuardrailTests, SourceCppFilesAreNotEmptyOrConstructorOnly) 
 }
 
 TEST(OopArchitectureGuardrailTests, EverySourceCppIsPartOfCMakeSourceTruth) {
-    const std::string cmake = readFile(sourceRoot() / "CMakeLists.txt");
+    const std::string cmake = cmakeSourceTruth();
 
     for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src", ".cpp")) {
         const std::string relative = normalizedRelative(file);
-        EXPECT_NE(cmake.find(relative), std::string::npos) << relative;
+        EXPECT_TRUE(cmake.find(relative) != std::string::npos || coveredByAllowedCMakeGlob(relative, cmake)) << relative;
     }
 }
 
 TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/modeling/tools", ".h")) {
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/editor/actions", ".h")) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
         if (relative.find("Tool.h") == std::string::npos ||
@@ -103,14 +210,29 @@ TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
 
 TEST(OopArchitectureGuardrailTests, ToolCatalogHeadersAreDeclarationsOnly) {
     for (const std::filesystem::path& file : {
-                 sourceRoot() / "src/modeling/tools/ModelingCommandToolCatalog.h",
-                 sourceRoot() / "src/viewport/tools/ViewportToolCatalog.h",
+                 sourceRoot() / "src/editor/actions/ModelingCommandToolCatalog.h",
+                 sourceRoot() / "src/viewport/modes/ViewportToolCatalog.h",
          }) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
         EXPECT_EQ(source.find("static const"), std::string::npos) << relative;
         EXPECT_EQ(source.find("inline std::span"), std::string::npos) << relative;
         EXPECT_EQ(source.find("std::array"), std::string::npos) << relative;
+    }
+}
+
+TEST(OopArchitectureGuardrailTests, ModelingInternalDomainHeadersAvoidFacadeDependency) {
+    for (const std::filesystem::path& root : {
+                 sourceRoot() / "src/modeling/runtime",
+                 sourceRoot() / "src/modeling/picking",
+                 sourceRoot() / "src/modeling/preview",
+                 sourceRoot() / "src/editor/actions/runtime",
+         }) {
+        for (const std::filesystem::path& file : filesWithExtension(root, ".h")) {
+            const std::string source = readFile(file);
+            const std::string relative = normalizedRelative(file);
+            EXPECT_EQ(source.find("modeling/services/ModelingSessionService.h"), std::string::npos) << relative;
+        }
     }
 }
 

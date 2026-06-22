@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/LocalizationService.h"
@@ -12,6 +18,9 @@
 
 namespace quader {
 
+/**
+ * Owns UI Dock Panel behavior within the ImGui editor presentation layer.
+ */
 class UIDockPanel : public UIPanel {
 public:
     const char* title() const override { return uiPanelKey(id()); }

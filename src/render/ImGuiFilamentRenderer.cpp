@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "render/ImGuiFilamentRenderer.h"
 
 #include "core/Logger.h"
@@ -22,12 +28,18 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
+/**
+ * Represents an UI Vertex value used by the render extraction and Filament resource layer.
+ */
 struct UIVertex {
     filament::math::float3 position;
     filament::math::float2 uv;
     std::uint32_t color;
 };
 
+/**
+ * Represents an UI Primitive value used by the render extraction and Filament resource layer.
+ */
 struct UIPrimitive {
     std::uint32_t indexOffset = 0;
     std::uint32_t indexCount = 0;

@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Quader Whole-Editor Public API And Lua Scripting Plan
 
 Status: architecture plan for the next global editor API refactor.
@@ -32,7 +40,7 @@ Already implemented:
 - `quader_api` static library for non-render public API code.
 - Runtime-only render adapter in `quader_runtime`.
 - `ModelingCommandExecutionService` as shared command routing policy.
-- SDK-side `quader_poly::DocumentBuilder`.
+- absorbed polygon-domain document builder.
 - `tests/support/BehaviorScenario` and programmatic API guardrails.
 
 Missing whole-editor domains:
@@ -66,7 +74,7 @@ QuaderEditorApi
             |
             v
 Owner services: ProjectSession, DocumentCommandService, ModelingSessionService,
-Viewport state services, UIPanelManager, UISettings, SceneRenderBridge, SDK/editor-core
+Viewport state services, UIPanelManager, UISettings, SceneRenderBridge, absorbed modeling runtime
 ```
 
 `QuaderApi` remains the app-facing root for document/modeling state. `QuaderEditorApi` becomes the
@@ -87,7 +95,7 @@ Add a capability to the public API when it is one or more of these:
 
 Keep code low-level when it owns one or more of these:
 
-- document, SDK, asset, render, or platform invariants;
+- document, modeling, asset, render, or platform invariants;
 - per-frame hot loops, mouse-move picking, draw submission, caches, or GPU resources;
 - storage/revision internals;
 - Unity parity mechanics;
@@ -109,7 +117,7 @@ What retires over time is casual app-facing use of low-level systems:
   `api.modeling()` can express the same intent.
 - Tests should prefer `QuaderApi` or `BehaviorScenario` unless they are testing an owner class.
 - Scripts must never receive raw access to `SceneDocument`, `ModelingSessionService`,
-  `AssetRegistry`, SDK `EditorSession`, Filament, ImGui, or SDL objects.
+  `AssetRegistry`, absorbed runtime `EditorSession`, Filament, ImGui, or SDL objects.
 
 Approved low-level owner areas:
 
@@ -120,8 +128,10 @@ Approved low-level owner areas:
 - `src/viewport/**` for input/tool/runtime mechanics
 - `src/ui/**` for presentation and routing only
 - `src/render/**`
-- `sdk/packages/document/**`
-- `sdk/packages/editor-core/**`
+- `src/modeling/polygon/**`
+- `src/modeling/runtime/**`
+- `src/modeling/operations/**`
+- `src/modeling/interactions/**`
 
 ## Final API Domain Map
 
@@ -167,7 +177,8 @@ editor.object(box).move({2, 0, 0});
 editor.modeling().executeTool("delete_selection");
 ```
 
-Delegates to `ModelingCommandExecutionService`, `ModelingSessionService`, and SDK/editor-core.
+Delegates to `ModelingCommandExecutionService`, `ModelingSessionService`, and the absorbed
+modeling runtime.
 
 ### `editor.selection()`
 
@@ -522,8 +533,8 @@ end)
 
 Add/update tests to enforce:
 
-- public API headers do not expose `SceneDocument`, `AssetRegistry`, SDK `EditorSession`, Filament,
-  ImGui, SDL, or EnTT internals;
+- public API headers do not expose `SceneDocument`, `AssetRegistry`, absorbed runtime
+  `EditorSession`, Filament, ImGui, SDL, or EnTT internals;
 - Lua bindings include only `src/api`, `src/scripting`, and approved value types;
 - public docs/examples start from `QuaderEditorApi`, `QuaderApi`, or Lua `quader`;
 - new UI/app/viewport files do not add direct document/modeling mutations when public API exists;

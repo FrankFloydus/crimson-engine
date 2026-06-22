@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetRevision.h"
@@ -12,11 +18,14 @@
 namespace quader {
 
 template <typename Document, typename Revision>
+/**
+ * Owns Typed Asset Store behavior within the asset document and registry layer.
+ */
 class TypedAssetStore {
 public:
     AssetId add(AssetId id, Document document) {
         stamp(id, document);
-        documents_.emplace(id, std::move(document));
+        documents_[id] = std::move(document);
         return id;
     }
 

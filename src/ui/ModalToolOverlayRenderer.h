@@ -1,6 +1,12 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "viewport/ViewportCameraController.h"
 
 #include <imgui.h>
@@ -9,6 +15,9 @@ namespace quader {
 
 class LocalizationService;
 
+/**
+ * Owns Modal Tool Overlay Renderer behavior within the ImGui editor presentation layer.
+ */
 class ModalToolOverlayRenderer {
 public:
     void drawBoxPreview(

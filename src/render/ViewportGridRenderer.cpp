@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "render/ViewportGridRenderer.h"
 
 #include "core/ColorSpace.h"
@@ -27,6 +33,9 @@ constexpr float kGroundGridFadeEnd = 1536.0f;
 constexpr float kParentGridWorldSize = 2.0f;
 constexpr float kHalfPi = 1.57079632679f;
 
+/**
+ * Represents a Ground Grid Vertex value used by the render extraction and Filament resource layer.
+ */
 struct GroundGridVertex {
     filament::math::float3 position;
 };

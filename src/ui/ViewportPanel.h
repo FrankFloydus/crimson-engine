@@ -1,10 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetRegistry.h"
 #include "core/Types.h"
-#include "core/UndoRedoManager.h"
-#include "document/DocumentCommandService.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "render/SceneRenderBridge.h"
 #include "render/ViewportRenderer.h"
 #include "scene/SceneDocument.h"
@@ -40,8 +44,13 @@ namespace quader {
 class RenderSystem;
 class LocalizationService;
 class QuaderEditorApi;
+class EditorSelectionService;
+class ModelingSessionService;
 enum class QuaderShadingMode;
 
+/**
+ * Owns Viewport Panel behavior within the ImGui editor presentation layer.
+ */
 class ViewportPanel final : public UIPanel {
 public:
     ViewportPanel();
@@ -71,7 +80,6 @@ public:
             ViewportToolId tool,
             QuaderEditorApi& editor,
             SceneDocument& document,
-            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling);
     ViewportLayoutId viewportLayout() const;
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
@@ -80,6 +88,9 @@ public:
     void setNavigationGizmoVisible(bool visible) { navigationGizmo_.setVisible(visible); }
 
 private:
+    /**
+     * Represents a Pane value used by the ImGui editor presentation layer.
+     */
     struct Pane {
         ViewportPaneId id = ViewportPaneId::Perspective;
         ViewportRenderer renderer;
@@ -89,8 +100,6 @@ private:
     void draw(SceneRenderBridge& renderBridge,
             SceneDocument& document,
             AssetRegistry& assets,
-            UndoRedoManager& undoRedo,
-            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
             AssetId defaultMaterial,
             Vec2 capturedMouseDelta,
@@ -100,8 +109,6 @@ private:
     void drawPaneContents(Pane& pane,
             SceneDocument& document,
             AssetRegistry& assets,
-            UndoRedoManager& undoRedo,
-            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
             AssetId defaultMaterial,
             Vec2 capturedMouseDelta,
@@ -115,9 +122,9 @@ private:
     void drawPaneDecorations(Pane& pane,
             SceneDocument& document,
             const AssetRegistry& assets,
-            UndoRedoManager& undoRedo,
-            DocumentCommandService& documentCommands,
             ModelingSessionService& modeling,
+            EditorSelectionService& selection,
+            QuaderEditorApi& editor,
             ImVec2 itemMin,
             ImVec2 itemSize);
     void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
@@ -165,6 +172,7 @@ private:
     bool deleteObjectsPopupPositionPending_ = false;
     ImVec2 deleteObjectsPopupPosition_ = {};
     bool lastFlyNavigationActive_ = false;
+    bool shutdownComplete_ = false;
 };
 
 } // namespace quader

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "math/Types.h"
@@ -9,6 +15,9 @@
 
 namespace quader {
 
+/**
+ * Enumerates ViewportLayoutId values used by the viewport layer.
+ */
 enum class ViewportLayoutId {
     Single,
     TwoHorizontal,
@@ -20,6 +29,9 @@ enum class ViewportLayoutId {
     FourQuad,
 };
 
+/**
+ * Enumerates ViewportPaneId values used by the viewport layer.
+ */
 enum class ViewportPaneId {
     Perspective,
     Top,
@@ -27,6 +39,9 @@ enum class ViewportPaneId {
     Side,
 };
 
+/**
+ * Enumerates ViewportView values used by the viewport layer.
+ */
 enum class ViewportView {
     Perspective,
     Top,
@@ -37,6 +52,9 @@ enum class ViewportView {
     Left,
 };
 
+/**
+ * Represents a Viewport Normalized Rect value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportNormalizedRect {
     float x = 0.0f;
     float y = 0.0f;
@@ -44,16 +62,25 @@ struct ViewportNormalizedRect {
     float height = 1.0f;
 };
 
+/**
+ * Represents a Viewport Layout Option value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportLayoutOption {
     ViewportLayoutId id = ViewportLayoutId::Single;
     std::string_view label;
 };
 
+/**
+ * Represents a Viewport Pane Placement value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportPanePlacement {
     ViewportPaneId paneId = ViewportPaneId::Perspective;
     ViewportNormalizedRect normalizedRect;
 };
 
+/**
+ * Enumerates ViewportSplitHandleId values used by the viewport layer.
+ */
 enum class ViewportSplitHandleId {
     TwoHorizontal,
     TwoVertical,
@@ -63,11 +90,17 @@ enum class ViewportSplitHandleId {
     FourHorizontal,
 };
 
+/**
+ * Enumerates ViewportSplitHandleAxis values used by the viewport layer.
+ */
 enum class ViewportSplitHandleAxis {
     Vertical,
     Horizontal,
 };
 
+/**
+ * Represents a Viewport Split Handle value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportSplitHandle {
     ViewportSplitHandleId id = ViewportSplitHandleId::TwoHorizontal;
     ViewportSplitHandleAxis axis = ViewportSplitHandleAxis::Vertical;
@@ -76,6 +109,9 @@ struct ViewportSplitHandle {
     float end = 1.0f;
 };
 
+/**
+ * Owns Viewport Layout State behavior within the viewport input, layout, and camera layer.
+ */
 class ViewportLayoutState {
 public:
     static constexpr float MinSplit = 0.15f;

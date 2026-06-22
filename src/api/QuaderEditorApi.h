@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApi.h"
@@ -17,6 +23,9 @@ namespace quader {
 
 class ProjectSession;
 
+/**
+ * Exposes Quader Editor API operations through the public Quader API surface.
+ */
 class QuaderEditorApi final {
 public:
     explicit QuaderEditorApi(ProjectSession& session);

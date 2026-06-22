@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "BehaviorScenario.h"
@@ -10,6 +16,9 @@
 
 namespace quader::test {
 
+/**
+ * Owns Command Expect behavior within the behavior test DSL.
+ */
 class CommandExpect final {
 public:
     explicit CommandExpect(const QuaderApiStatus& status) : status_(status) {}
@@ -24,6 +33,9 @@ private:
     const QuaderApiStatus& status_;
 };
 
+/**
+ * Owns Scene Expect behavior within the behavior test DSL.
+ */
 class SceneExpect final {
 public:
     explicit SceneExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -38,6 +50,9 @@ private:
     const BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Selection Expect behavior within the behavior test DSL.
+ */
 class SelectionExpect final {
 public:
     explicit SelectionExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -57,6 +72,9 @@ private:
     const BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Mesh Expect behavior within the behavior test DSL.
+ */
 class MeshExpect final {
 public:
     MeshExpect(const BehaviorScenario& scenario, std::string_view alias);
@@ -70,6 +88,9 @@ private:
     std::optional<MeshSnapshot> mesh_;
 };
 
+/**
+ * Owns Overlay Expect behavior within the behavior test DSL.
+ */
 class OverlayExpect final {
 public:
     explicit OverlayExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -86,6 +107,9 @@ private:
     const BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Tool Status Expect behavior within the behavior test DSL.
+ */
 class ToolStatusExpect final {
 public:
     explicit ToolStatusExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -100,6 +124,9 @@ private:
     const BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Undo Redo Expect behavior within the behavior test DSL.
+ */
 class UndoRedoExpect final {
 public:
     explicit UndoRedoExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
@@ -111,6 +138,9 @@ private:
     const BehaviorScenario& scenario_;
 };
 
+/**
+ * Owns Snapshot Expect behavior within the behavior test DSL.
+ */
 class SnapshotExpect final {
 public:
     explicit SnapshotExpect(const BehaviorSnapshot& snapshot) : snapshot_(snapshot) {}

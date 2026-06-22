@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiResult.h"
@@ -12,6 +18,9 @@ namespace quader {
 class ProjectSession;
 class QuaderApiMutationRunner;
 
+/**
+ * Exposes Quader Selection API operations through the public Quader API surface.
+ */
 class QuaderSelectionApi final {
 public:
     QuaderSelectionApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
@@ -52,6 +61,7 @@ public:
     QuaderApiVoidResult clear();
     QuaderApiVoidResult selectAll();
     QuaderApiVoidResult invert();
+    QuaderApiVoidResult setMode(ModelingSelectionMode mode);
 
     QuaderApiResult<ModelingSelectionSummary> pickSelect(const ModelingPickSelectRequest& request);
     QuaderApiResult<ModelingHoverSummary> hover(const ModelingHoverRequest& request);
@@ -62,6 +72,7 @@ public:
 
     [[nodiscard]] ModelingSelectionSummary summary() const;
     [[nodiscard]] ModelingHoverSummary hoverSummary() const;
+    [[nodiscard]] ModelingHoverSummary previewHover(const ModelingHoverRequest& request) const;
 
 private:
     [[nodiscard]] std::vector<EntityId> editedEntitySelection(

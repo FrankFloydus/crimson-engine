@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "document/commands/DocumentCommandSceneHelpers.h"
@@ -10,6 +16,9 @@
 
 namespace quader {
 
+/**
+ * Applies Ungroup Selection Command behavior as a command in the editor document command layer.
+ */
 class UngroupSelectionCommand final : public SceneCommand {
 public:
     explicit UngroupSelectionCommand(SceneDocument& scene)
@@ -32,7 +41,11 @@ public:
                     group.snapshot,
                     parent,
                     group.snapshot.name,
+                    true,
                     true);
+            if (restoredGroup == InvalidEntityId) {
+                return documentCommandMissingEntityResult();
+            }
             remappedEntities[group.snapshot.originalId] = restoredGroup;
             for (const DocumentEntityPlacement& child : group.children) {
                 if (!scene().exists(child.entity)) {
@@ -102,6 +115,9 @@ public:
     }
 
 private:
+    /**
+     * Represents an Ungrouped Entity value used by the editor document command layer.
+     */
     struct UngroupedEntity {
         DocumentEntitySnapshot snapshot;
         EntityId parent = InvalidEntityId;

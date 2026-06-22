@@ -1,9 +1,18 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 namespace quader {
 
 class UIContext;
 
+/**
+ * Enumerates UIPanelId values used by the ui layer.
+ */
 enum class UIPanelId {
     Viewport,
     Outliner,
@@ -39,6 +48,9 @@ inline const char* uiPanelLocalizationKey(UIPanelId id) {
     return "ui.panel.unknown";
 }
 
+/**
+ * Owns UI Panel behavior within the ImGui editor presentation layer.
+ */
 class UIPanel {
 public:
     virtual ~UIPanel() = default;

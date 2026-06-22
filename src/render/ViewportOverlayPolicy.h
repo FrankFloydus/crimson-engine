@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "render/ViewportOverlayFrame.h"
@@ -7,17 +13,26 @@
 
 namespace quader {
 
+/**
+ * Enumerates ViewportOverlayGeometryKind values used by the render layer.
+ */
 enum class ViewportOverlayGeometryKind {
     Triangles,
     Lines,
     Points,
 };
 
+/**
+ * Enumerates ViewportOverlayDepthMode values used by the render layer.
+ */
 enum class ViewportOverlayDepthMode {
     DepthTested,
     DrawOnTop,
 };
 
+/**
+ * Stores the Viewport Overlay Layer Policy data contract used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayLayerPolicy {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
     int drawOrder = 0;

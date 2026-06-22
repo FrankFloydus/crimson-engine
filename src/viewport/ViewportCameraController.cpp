@@ -1,11 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "viewport/ViewportCameraController.h"
 
 #include "viewport/HostViewportContractAdapter.h"
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_editor_core/tool/viewport_navigation.h>
-#include <quader_editor_core/tool/viewport_projection.h>
-#endif
+#include <modeling/interactions/viewport_navigation.h>
+#include <modeling/interactions/viewport_projection.h>
 
 #include <cmath>
 #include <numbers>
@@ -40,6 +44,9 @@ Vec3 fallbackUpForForward(Vec3 forward) {
     return {0.0f, 1.0f, 0.0f};
 }
 
+/**
+ * Represents a Camera Basis value used by the viewport input, layout, and camera layer.
+ */
 struct CameraBasis {
     Vec3 forward;
     Vec3 up;
@@ -77,21 +84,20 @@ void syncAnglesForForward(ViewportCameraState& state, Vec3 forward) {
     state.yawRadians = std::atan2(forward.x, -forward.z);
 }
 
-#if QUADER_HAS_MODELING_SDK
 
-quader_poly::Vec2 toSdk(Vec2 value) {
+quader_poly::Vec2 toRuntime(Vec2 value) {
     return {value.x, value.y};
 }
 
-quader_poly::Vec3 toSdk(Vec3 value) {
+quader_poly::Vec3 toRuntime(Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
-Vec3 fromSdk(quader_poly::Vec3 value) {
+Vec3 fromRuntime(quader_poly::Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_editor_core::ViewAxis toSdk(ViewportViewAxis axis) {
+quader_editor_core::ViewAxis toRuntime(ViewportViewAxis axis) {
     switch (axis) {
     case ViewportViewAxis::X:
         return quader_editor_core::ViewAxis::x;
@@ -103,7 +109,7 @@ quader_editor_core::ViewAxis toSdk(ViewportViewAxis axis) {
     return quader_editor_core::ViewAxis::z;
 }
 
-quader_poly::Transform3 makeSdkTransform(const ViewportCameraPose& pose) {
+quader_poly::Transform3 makeRuntimeTransform(const ViewportCameraPose& pose) {
     Vec3 forward = normalize(pose.target - pose.eye);
     if (length(forward) <= 0.000001f) {
         forward = {0.0f, 0.0f, -1.0f};
@@ -120,21 +126,21 @@ quader_poly::Transform3 makeSdkTransform(const ViewportCameraPose& pose) {
     }
 
     return {
-            .x_axis = toSdk(right),
-            .y_axis = toSdk(up),
-            .z_axis = toSdk(forward * -1.0f),
-            .origin = toSdk(pose.eye),
+            .x_axis = toRuntime(right),
+            .y_axis = toRuntime(up),
+            .z_axis = toRuntime(forward * -1.0f),
+            .origin = toRuntime(pose.eye),
     };
 }
 
-ViewportCameraPose poseFromSdkTransform(const quader_poly::Transform3& transform, float distance) {
-    const Vec3 origin = fromSdk(transform.origin);
-    Vec3 forward = normalize(fromSdk(transform.z_axis) * -1.0f);
+ViewportCameraPose poseFromRuntimeTransform(const quader_poly::Transform3& transform, float distance) {
+    const Vec3 origin = fromRuntime(transform.origin);
+    Vec3 forward = normalize(fromRuntime(transform.z_axis) * -1.0f);
     if (length(forward) <= 0.000001f) {
         forward = {0.0f, 0.0f, -1.0f};
     }
 
-    Vec3 up = normalize(fromSdk(transform.y_axis));
+    Vec3 up = normalize(fromRuntime(transform.y_axis));
     if (length(up) <= 0.000001f) {
         up = {0.0f, 1.0f, 0.0f};
     }
@@ -146,7 +152,7 @@ ViewportCameraPose poseFromSdkTransform(const quader_poly::Transform3& transform
     };
 }
 
-quader_editor_core::ViewportCameraState makeSdkCamera(
+quader_editor_core::ViewportCameraState makeRuntimeCamera(
         const ViewportCameraPose& pose,
         const ViewportCameraState& state,
         float viewportWidth,
@@ -155,7 +161,7 @@ quader_editor_core::ViewportCameraState makeSdkCamera(
     camera.projection = state.projection == ViewportProjection::Orthographic
             ? quader_editor_core::CameraProjection::orthographic
             : quader_editor_core::CameraProjection::perspective;
-    camera.transform = makeSdkTransform(pose);
+    camera.transform = makeRuntimeTransform(pose);
     camera.viewport_size = {std::max(viewportWidth, 1.0f), std::max(viewportHeight, 1.0f)};
     camera.orthographic_size = std::max(0.0001f, state.orthographicSize);
     camera.fov_degrees = state.fovDegrees;
@@ -170,7 +176,7 @@ float distanceAlongForwardToPivot(Vec3 origin, Vec3 forward, Vec3 pivot) {
     return std::max(kMinCameraDistance, length(pivot - origin));
 }
 
-void applySdkTransform(ViewportCameraState& state,
+void applyRuntimeTransform(ViewportCameraState& state,
         Vec3& pivot,
         Vec3& cameraForward,
         Vec3& cameraUp,
@@ -180,14 +186,14 @@ void applySdkTransform(ViewportCameraState& state,
         return;
     }
 
-    const Vec3 origin = fromSdk(result.camera_transform.origin);
-    Vec3 forward = normalize(fromSdk(result.camera_transform.z_axis) * -1.0f);
+    const Vec3 origin = fromRuntime(result.camera_transform.origin);
+    Vec3 forward = normalize(fromRuntime(result.camera_transform.z_axis) * -1.0f);
     if (length(forward) <= 0.000001f) {
         forward = forwardFromAngles(state.yawRadians, state.pitchRadians);
     }
-    const CameraBasis basis = makeCameraBasis(forward, fromSdk(result.camera_transform.y_axis), cameraForward);
+    const CameraBasis basis = makeCameraBasis(forward, fromRuntime(result.camera_transform.y_axis), cameraForward);
 
-    pivot = fromSdk(result.pivot);
+    pivot = fromRuntime(result.pivot);
     const float viewDistance = std::max(kMinCameraDistance,
             preservedViewDistance.value_or(distanceAlongForwardToPivot(origin, basis.forward, pivot)));
     const float clampedViewDistance = clamp(viewDistance, kMinCameraDistance, 500.0f);
@@ -202,7 +208,6 @@ void applySdkTransform(ViewportCameraState& state,
     syncAnglesForForward(state, cameraForward);
 }
 
-#endif
 
 Vec3 fallbackForwardForAxis(ViewportViewAxis axis, int sign) {
     const float value = sign < 0 ? 1.0f : -1.0f;
@@ -264,23 +269,22 @@ void ViewportCameraController::updateDragDelta(Vec2 delta) {
             clearOrbitSnapSource();
             return;
         }
-#if QUADER_HAS_MODELING_SDK
         quader_editor_core::ViewportOrbitInput input;
         const bool snapToOrthographic = dragMode_ == ViewportDragMode::OrbitSnap;
         if (!snapToOrthographic) {
             clearOrbitSnapSource();
         }
         input.camera_transform = snapToOrthographic && hasOrbitSnapSource_
-                ? makeSdkTransform(orbitSnapSourcePose_)
-                : makeSdkTransform(pose());
-        input.pivot = toSdk(pivot_);
-        input.screen_delta = toSdk(delta);
+                ? makeRuntimeTransform(orbitSnapSourcePose_)
+                : makeRuntimeTransform(pose());
+        input.pivot = toRuntime(pivot_);
+        input.screen_delta = toRuntime(delta);
         input.sensitivity = defaults.orbitRadiansPerPixel;
         input.snap_to_orthogonal = snapToOrthographic;
         const quader_editor_core::ViewportNavigationResult orbitResult = quader_editor_core::viewport_orbit(input);
-        applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, orbitResult);
+        applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, orbitResult);
         if (snapToOrthographic && orbitResult.ok) {
-            orbitSnapSourcePose_ = poseFromSdkTransform(orbitResult.unsnapped_camera_transform, state_.distance);
+            orbitSnapSourcePose_ = poseFromRuntimeTransform(orbitResult.unsnapped_camera_transform, state_.distance);
             hasOrbitSnapSource_ = true;
         } else {
             clearOrbitSnapSource();
@@ -290,60 +294,32 @@ void ViewportCameraController::updateDragDelta(Vec2 delta) {
             state_.orthographicSize = static_cast<float>(
                     quader_editor_core::viewport_orthographic_size_for_perspective(
                             orbitResult.camera_transform,
-                            toSdk(pivot_),
+                            toRuntime(pivot_),
                             state_.fovDegrees));
             orthographicViewLocked_ = false;
         } else {
             state_.projection = ViewportProjection::Perspective;
             orthographicViewLocked_ = false;
         }
-#else
-        state_.yawRadians += delta.x * static_cast<float>(defaults.orbitRadiansPerPixel);
-        state_.pitchRadians -= delta.y * static_cast<float>(defaults.orbitRadiansPerPixel);
-        const float limit = std::numbers::pi_v<float> * 0.49f;
-        state_.pitchRadians = clamp(state_.pitchRadians, -limit, limit);
-        syncBasisFromAngles();
-        state_.projection = ViewportProjection::Perspective;
-        orthographicViewLocked_ = false;
-        clearOrbitSnapSource();
-#endif
     } else if (dragMode_ == ViewportDragMode::Pan) {
-#if QUADER_HAS_MODELING_SDK
         quader_editor_core::ViewportPanInput input;
-        input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
-        input.pivot = toSdk(pivot_);
-        input.screen_delta = toSdk(delta);
-        applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_pan(input));
-#else
-        const float verticalSpan = 2.0f * state_.distance * std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
-        const float worldPerPixel = std::max(0.0001f, verticalSpan) / viewportHeight_;
-        const Vec3 pan = right() * (-delta.x * worldPerPixel) + up() * (delta.y * worldPerPixel);
-        state_.target = state_.target + pan;
-        pivot_ = pivot_ + pan;
-#endif
+        input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
+        input.pivot = toRuntime(pivot_);
+        input.screen_delta = toRuntime(delta);
+        applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_pan(input));
     } else if (dragMode_ == ViewportDragMode::Fly) {
         const ViewportHostDefaults defaults = viewportHostDefaults();
-#if QUADER_HAS_MODELING_SDK
         quader_editor_core::ViewportFlyLookInput input;
-        input.camera_transform = makeSdkTransform(pose());
-        input.pivot = toSdk(pivot_);
-        input.screen_delta = toSdk(delta);
+        input.camera_transform = makeRuntimeTransform(pose());
+        input.pivot = toRuntime(pivot_);
+        input.screen_delta = toRuntime(delta);
         input.sensitivity = defaults.flyLookRadiansPerPixel;
-        applySdkTransform(state_,
+        applyRuntimeTransform(state_,
                 pivot_,
                 cameraForward_,
                 cameraUp_,
                 quader_editor_core::viewport_fly_look(input),
                 state_.distance);
-#else
-        const Vec3 eye = pose().eye;
-        state_.yawRadians -= delta.x * static_cast<float>(defaults.flyLookRadiansPerPixel);
-        state_.pitchRadians -= delta.y * static_cast<float>(defaults.flyLookRadiansPerPixel);
-        const float limit = std::numbers::pi_v<float> * 0.49f;
-        state_.pitchRadians = clamp(state_.pitchRadians, -limit, limit);
-        syncBasisFromAngles();
-        state_.target = eye + forward() * state_.distance;
-#endif
         state_.projection = ViewportProjection::Perspective;
         orthographicViewLocked_ = false;
         clearOrbitSnapSource();
@@ -356,15 +332,11 @@ void ViewportCameraController::endDrag() {
 }
 
 void ViewportCameraController::scroll(float wheelDelta) {
-#if QUADER_HAS_MODELING_SDK
     quader_editor_core::ViewportZoomInput input;
-    input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    input.pivot = toSdk(pivot_);
+    input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
+    input.pivot = toRuntime(pivot_);
     input.steps = wheelDelta;
-    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom(input));
-#else
-    state_.distance = zoomedDistance(wheelDelta);
-#endif
+    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom(input));
 }
 
 void ViewportCameraController::scrollToCursor(float wheelDelta, Vec2 localMouse) {
@@ -372,31 +344,15 @@ void ViewportCameraController::scrollToCursor(float wheelDelta, Vec2 localMouse)
         return;
     }
 
-#if QUADER_HAS_MODELING_SDK
     const ViewportRay ray = rayFromViewportPoint(localMouse);
     quader_editor_core::ViewportZoomToCursorInput input;
-    input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    input.pivot = toSdk(pivot_);
-    input.ray_origin = toSdk(ray.origin);
-    input.ray_direction = toSdk(ray.direction);
+    input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
+    input.pivot = toRuntime(pivot_);
+    input.ray_origin = toRuntime(ray.origin);
+    input.ray_direction = toRuntime(ray.direction);
     input.has_cursor_target = false;
     input.steps = wheelDelta;
-    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom_to_cursor(input));
-#else
-    const float oldDistance = std::max(0.0001f, state_.distance);
-    const float newDistance = zoomedDistance(wheelDelta);
-    const float aspect = viewportWidth_ / viewportHeight_;
-    const float halfHeight = oldDistance * std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
-    const float halfWidth = halfHeight * aspect;
-    const float ndcX = clamp((localMouse.x / viewportWidth_) * 2.0f - 1.0f, -1.0f, 1.0f);
-    const float ndcY = clamp(1.0f - (localMouse.y / viewportHeight_) * 2.0f, -1.0f, 1.0f);
-    const Vec3 cursorOffset = right() * (ndcX * halfWidth) + up() * (ndcY * halfHeight);
-    const float distanceRatio = newDistance / oldDistance;
-
-    state_.target = state_.target + cursorOffset * (1.0f - distanceRatio);
-    pivot_ = state_.target;
-    state_.distance = newDistance;
-#endif
+    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom_to_cursor(input));
 }
 
 void ViewportCameraController::focusOrigin(float distance) {
@@ -411,43 +367,22 @@ void ViewportCameraController::focusOrigin(float distance) {
 
 void ViewportCameraController::focusBounds(Vec3 minBounds, Vec3 maxBounds, float margin) {
     clearOrbitSnapSource();
-#if QUADER_HAS_MODELING_SDK
     quader_editor_core::ViewportFrameBoundsInput input;
-    input.camera = makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    input.min_bounds = toSdk(minBounds);
-    input.max_bounds = toSdk(maxBounds);
+    input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
+    input.min_bounds = toRuntime(minBounds);
+    input.max_bounds = toRuntime(maxBounds);
     input.margin = margin;
-    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_frame_bounds(input));
-#else
-    const Vec3 center = (minBounds + maxBounds) * 0.5f;
-    const Vec3 diagonal = maxBounds - minBounds;
-    const float radius = std::max(length(diagonal) * 0.5f, 0.1f);
-    const float safeMargin = std::max(margin, 1.0f);
-    const float distance = radius * safeMargin / std::max(std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f), 0.0001f);
-
-    state_.target = center;
-    pivot_ = center;
-    state_.distance = clamp(distance, kMinCameraDistance, 500.0f);
-#endif
+    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_frame_bounds(input));
 }
 
 void ViewportCameraController::viewAxis(ViewportViewAxis axis, int sign, ViewportAxisLock lock) {
     clearOrbitSnapSource();
-#if QUADER_HAS_MODELING_SDK
     const quader_editor_core::ViewportCameraState camera =
-            makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    applySdkTransform(state_, pivot_, cameraForward_, cameraUp_,
-            quader_editor_core::viewport_view_axis(camera, toSdk(pivot_), toSdk(axis), sign));
+            makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
+    applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_,
+            quader_editor_core::viewport_view_axis(camera, toRuntime(pivot_), toRuntime(axis), sign));
     state_.projection = ViewportProjection::Orthographic;
     orthographicViewLocked_ = lock == ViewportAxisLock::Locked;
-#else
-    setViewDirection(fallbackForwardForAxis(axis, sign));
-    const float visibleHeight = 2.0f * std::max(kMinCameraDistance, state_.distance) *
-            std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
-    state_.orthographicSize = std::max(0.0001f, visibleHeight);
-    state_.projection = ViewportProjection::Orthographic;
-    orthographicViewLocked_ = lock == ViewportAxisLock::Locked;
-#endif
 }
 
 void ViewportCameraController::unlockOrthographicView() {
@@ -480,27 +415,17 @@ void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds) 
         return;
     }
 
-#if QUADER_HAS_MODELING_SDK
     quader_editor_core::ViewportFlyMoveInput input;
-    input.camera_transform = makeSdkTransform(pose());
-    input.pivot = toSdk(pivot_);
-    input.local_direction = toSdk(localDirection);
+    input.camera_transform = makeRuntimeTransform(pose());
+    input.pivot = toRuntime(pivot_);
+    input.local_direction = toRuntime(localDirection);
     input.distance = distance;
-    applySdkTransform(state_,
+    applyRuntimeTransform(state_,
             pivot_,
             cameraForward_,
             cameraUp_,
             quader_editor_core::viewport_fly_move(input),
             state_.distance);
-#else
-    const Vec3 worldDirection = normalize(
-            right() * localDirection.x +
-            up() * localDirection.y +
-            forward() * localDirection.z);
-    const Vec3 move = worldDirection * distance;
-    state_.target = state_.target + move;
-    pivot_ = pivot_ + move;
-#endif
 }
 
 void ViewportCameraController::adjustFlySpeed(float wheelSteps) {
@@ -525,45 +450,20 @@ ViewportCameraPose ViewportCameraController::pose() const {
 }
 
 ViewportRay ViewportCameraController::rayFromViewportPoint(Vec2 localMouse) const {
-#if QUADER_HAS_MODELING_SDK
     const quader_poly::Ray ray = quader_editor_core::ray_from_viewport_screen_point(
-            makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_),
-            toSdk(localMouse));
+            makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_),
+            toRuntime(localMouse));
     return {
-            .origin = fromSdk(ray.origin),
-            .direction = normalize(fromSdk(ray.direction)),
+            .origin = fromRuntime(ray.origin),
+            .direction = normalize(fromRuntime(ray.direction)),
     };
-#else
-    const ViewportCameraPose cameraPose = pose();
-    const Vec3 fwd = normalize(cameraPose.target - cameraPose.eye);
-    const Vec3 r = normalize(cross(fwd, cameraPose.up));
-    const Vec3 u = normalize(cross(r, fwd));
-    const float aspect = viewportWidth_ / viewportHeight_;
-    const float ndcX = clamp((localMouse.x / viewportWidth_) * 2.0f - 1.0f, -1.0f, 1.0f);
-    const float ndcY = clamp(1.0f - (localMouse.y / viewportHeight_) * 2.0f, -1.0f, 1.0f);
-    if (state_.projection == ViewportProjection::Orthographic) {
-        const float halfHeight = std::max(0.0001f, state_.orthographicSize * 0.5f);
-        return {
-                .origin = cameraPose.eye + r * (ndcX * halfHeight * aspect) + u * (ndcY * halfHeight),
-                .direction = fwd,
-        };
-    }
-
-    const float tanHalfFov = std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
-    const Vec3 direction = normalize(fwd + r * (ndcX * tanHalfFov * aspect) + u * (ndcY * tanHalfFov));
-    return {
-            .origin = cameraPose.eye,
-            .direction = direction,
-    };
-#endif
 }
 
 ViewportScreenPoint ViewportCameraController::projectWorldPoint(Vec3 worldPoint) const {
-#if QUADER_HAS_MODELING_SDK
     const quader_editor_core::ViewportCameraState camera =
-            makeSdkCamera(pose(), state_, viewportWidth_, viewportHeight_);
+            makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
     quader_poly::Vec2 screen{};
-    const bool projected = quader_editor_core::project_viewport_point(camera, toSdk(worldPoint), screen);
+    const bool projected = quader_editor_core::project_viewport_point(camera, toRuntime(worldPoint), screen);
     const ViewportCameraPose cameraPose = pose();
     const Vec3 fwd = normalize(cameraPose.target - cameraPose.eye);
     const float depth = dot(worldPoint - cameraPose.eye, fwd);
@@ -572,40 +472,6 @@ ViewportScreenPoint ViewportCameraController::projectWorldPoint(Vec3 worldPoint)
             .depth = depth,
             .visible = projected && depth > state_.nearPlane && depth < state_.farPlane,
     };
-#else
-    const ViewportCameraPose cameraPose = pose();
-    const Vec3 fwd = normalize(cameraPose.target - cameraPose.eye);
-    const Vec3 r = normalize(cross(fwd, cameraPose.up));
-    const Vec3 u = normalize(cross(r, fwd));
-    const Vec3 relative = worldPoint - cameraPose.eye;
-    const float depth = dot(relative, fwd);
-
-    if (state_.projection != ViewportProjection::Orthographic &&
-            (depth <= state_.nearPlane || depth >= state_.farPlane)) {
-        return {.depth = depth, .visible = false};
-    }
-
-    const float halfHeight = state_.projection == ViewportProjection::Orthographic
-            ? std::max(0.0001f, state_.orthographicSize * 0.5f)
-            : depth * std::tan(verticalFovRadians(state_.fovDegrees) * 0.5f);
-    const float halfWidth = halfHeight * (viewportWidth_ / viewportHeight_);
-    if (halfHeight <= 0.000001f || halfWidth <= 0.000001f) {
-        return {.depth = depth, .visible = false};
-    }
-
-    const float ndcX = dot(relative, r) / halfWidth;
-    const float ndcY = dot(relative, u) / halfHeight;
-    const Vec2 position{
-            (ndcX * 0.5f + 0.5f) * viewportWidth_,
-            (0.5f - ndcY * 0.5f) * viewportHeight_,
-    };
-
-    return {
-            .position = position,
-            .depth = depth,
-            .visible = std::abs(ndcX) <= 1.0f && std::abs(ndcY) <= 1.0f,
-    };
-#endif
 }
 
 float ViewportCameraController::zoomedDistance(float wheelDelta) const {

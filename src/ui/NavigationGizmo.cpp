@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/NavigationGizmo.h"
 
 #include <algorithm>
@@ -9,14 +15,11 @@
 
 #include <imgui_internal.h>
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_editor_core/tool/viewport_navigation.h>
-#endif
+#include <modeling/interactions/viewport_navigation.h>
 
 namespace quader {
 namespace {
 
-#if QUADER_HAS_MODELING_SDK
 
 std::uint8_t alphaByte(float alpha) {
     return static_cast<std::uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
@@ -47,31 +50,30 @@ ViewportViewAxis toViewportViewAxis(quader_editor_core::ViewAxis axis) {
     return ViewportViewAxis::Z;
 }
 
-quader_poly::Vec3 toSdk(Vec3 value) {
+quader_poly::Vec3 toRuntime(Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_editor_core::ViewportCameraState makeSdkCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
+quader_editor_core::ViewportCameraState makeRuntimeCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
     const ViewportCameraPose pose = camera.pose();
     const Vec3 forward = normalize(pose.target - pose.eye);
     const Vec3 right = normalize(cross(forward, pose.up));
     const Vec3 up = normalize(pose.up);
 
-    quader_editor_core::ViewportCameraState sdkCamera;
-    sdkCamera.projection = camera.state().projection == ViewportProjection::Orthographic
+    quader_editor_core::ViewportCameraState runtimeCamera;
+    runtimeCamera.projection = camera.state().projection == ViewportProjection::Orthographic
             ? quader_editor_core::CameraProjection::orthographic
             : quader_editor_core::CameraProjection::perspective;
-    sdkCamera.transform.origin = toSdk(pose.eye);
-    sdkCamera.transform.x_axis = toSdk(right);
-    sdkCamera.transform.y_axis = toSdk(up);
-    sdkCamera.transform.z_axis = toSdk(forward * -1.0f);
-    sdkCamera.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-    sdkCamera.orthographic_size = std::max(camera.state().orthographicSize, 0.0001f);
-    sdkCamera.fov_degrees = camera.state().fovDegrees;
-    return sdkCamera;
+    runtimeCamera.transform.origin = toRuntime(pose.eye);
+    runtimeCamera.transform.x_axis = toRuntime(right);
+    runtimeCamera.transform.y_axis = toRuntime(up);
+    runtimeCamera.transform.z_axis = toRuntime(forward * -1.0f);
+    runtimeCamera.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
+    runtimeCamera.orthographic_size = std::max(camera.state().orthographicSize, 0.0001f);
+    runtimeCamera.fov_degrees = camera.state().fovDegrees;
+    return runtimeCamera;
 }
 
-#endif
 
 } // namespace
 
@@ -97,9 +99,8 @@ bool NavigationGizmo::draw(ViewportCameraController& camera,
         return false;
     }
 
-#if QUADER_HAS_MODELING_SDK
     quader_editor_core::ViewCubePrimitiveInput input;
-    input.camera_transform = makeSdkCamera(camera, itemSize).transform;
+    input.camera_transform = makeRuntimeCamera(camera, itemSize).transform;
     input.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
     input.widget_size = 70.0;
     input.margin = {46.0f, 46.0f};
@@ -276,17 +277,6 @@ bool NavigationGizmo::draw(ViewportCameraController& camera,
     requestCapture();
     ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     return true;
-#else
-    (void)camera;
-    (void)paneId;
-    (void)itemMin;
-    (void)itemSize;
-    (void)capturedMouseDelta;
-    (void)viewportCursorCaptureRequested;
-    (void)viewportCursorCapturePoint;
-    (void)interactive;
-    return false;
-#endif
 }
 
 } // namespace quader

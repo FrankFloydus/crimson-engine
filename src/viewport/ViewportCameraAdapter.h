@@ -1,6 +1,12 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
 #include "viewport/ViewportCameraController.h"
 
@@ -8,6 +14,9 @@
 
 namespace quader {
 
+/**
+ * Represents a Viewport Camera Basis value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportCameraBasis {
     Vec3 eye = {};
     Vec3 forward = {0.0f, 0.0f, -1.0f};
@@ -15,6 +24,9 @@ struct ViewportCameraBasis {
     Vec3 up = {0.0f, 1.0f, 0.0f};
 };
 
+/**
+ * Adapts Viewport Camera Adapter data between Quader layers for the viewport input, layout, and camera layer.
+ */
 class ViewportCameraAdapter {
 public:
     static ViewportCameraBasis basis(const ViewportCameraController& camera) {

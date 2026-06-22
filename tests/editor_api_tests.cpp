@@ -1,9 +1,34 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
 #include "document/ProjectSession.h"
+#include "editor/selection/EditorSelectionService.h"
+#include "modeling/services/ModelingSessionService.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
+#include <string_view>
+
+namespace {
+
+std::optional<quader::QuaderEntitySnapshot> entityNamed(
+        const quader::QuaderEditorApi& editor,
+        std::string_view name) {
+    for (const quader::QuaderEntitySnapshot& snapshot : editor.query().entities()) {
+        if (snapshot.name == name) {
+            return snapshot;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
 
 TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     quader::ProjectSession session;
@@ -14,15 +39,19 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
 
     const std::vector<quader::QuaderCommandDescriptor> commands = editor.commands().available();
     EXPECT_NE(std::find_if(commands.begin(), commands.end(), [](const quader::QuaderCommandDescriptor& command) {
-                  return command.id == "history.undo";
+                  return command.id == "edit.undo";
               }),
             commands.end());
-    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::HistoryUndo), "Ctrl+Z");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
+    EXPECT_EQ(editor.commands().shortcutFor("history.undo"), "Ctrl+Z");
+    EXPECT_EQ(editor.commands().shortcutFor("modeling.action.delete_selection"), "");
     EXPECT_FALSE(editor.commands().execute("__missing_command__").ok());
     EXPECT_FALSE(editor.commands().execute("__missing_command__"));
     EXPECT_EQ(editor.commands().execute("__missing_command__").errorMessage(), "Unknown command id.");
+    EXPECT_EQ(
+            editor.commands().execute("modeling.action.__missing_action__").errorMessage(),
+            "Unknown command id.");
 
-#if QUADER_HAS_MODELING_SDK
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
     args.name = "Editor API Box";
@@ -36,7 +65,35 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
     EXPECT_TRUE(undo.ok()) << undo.errorMessage();
     EXPECT_TRUE(undo.changed());
-#endif
+}
+
+TEST(EditorApiTests, LegacyModelingActionCommandIdsRouteThroughCommandRegistry) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::QuaderCreateBoxArgs args;
+    args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
+    args.name = "Legacy Action Box";
+
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created = editor.modeling().createBox(args);
+    ASSERT_TRUE(created.ok()) << created.errorMessage();
+    ASSERT_TRUE(editor.selection().selectObject(created.value()).ok());
+
+    const quader::QuaderApiVoidResult duplicate =
+            editor.commands().execute("modeling.action.duplicate_meshes");
+    ASSERT_TRUE(duplicate.ok()) << duplicate.errorMessage();
+    EXPECT_TRUE(duplicate.changed());
+    EXPECT_EQ(editor.query().entities().size(), 2u);
+
+    const quader::QuaderApiVoidResult undo = editor.commands().execute("history.undo");
+    ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+    EXPECT_EQ(editor.query().entities().size(), 1u);
+
+    const quader::QuaderApiVoidResult deleteSelection =
+            editor.commands().execute("modeling.action.delete_selection");
+    ASSERT_TRUE(deleteSelection.ok()) << deleteSelection.errorMessage();
+    EXPECT_TRUE(deleteSelection.changed());
+    EXPECT_TRUE(editor.query().entities().empty());
 }
 
 TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
@@ -65,7 +122,6 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(session);
 
-#if QUADER_HAS_MODELING_SDK
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
             editor.modeling().createBox(
                     quader::ModelingBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
@@ -84,12 +140,15 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     const quader::QuaderApiResult<quader::QuaderEntityRef> duplicate = box.duplicate();
     ASSERT_TRUE(duplicate.ok()) << duplicate.errorMessage();
     EXPECT_NE(duplicate.value().id, quader::InvalidEntityId);
-#endif
 
     quader::QuaderCreateEntityArgs firstArgs;
     firstArgs.name = "First";
     const quader::QuaderApiResult<quader::QuaderEntityRef> first = editor.scene().createEntity(firstArgs);
     ASSERT_TRUE(first.ok()) << first.errorMessage();
+    EXPECT_NE(first.value().editorObjectId, quader::InvalidEditorObjectId);
+    const std::optional<quader::QuaderEntitySnapshot> firstSnapshot = editor.query().entity(first.value().id);
+    ASSERT_TRUE(firstSnapshot.has_value());
+    EXPECT_EQ(firstSnapshot->editorObjectId, first.value().editorObjectId);
 
     quader::QuaderCreateEntityArgs secondArgs;
     secondArgs.name = "Second";
@@ -120,4 +179,101 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     EXPECT_EQ(session.scene().name(first.value().id)->name, "First");
     EXPECT_TRUE(session.scene().visibility(second.value().id)->visible);
     EXPECT_FALSE(session.scene().lock(second.value().id)->locked);
+}
+
+TEST(EditorApiTests, SelectionApiDelegatesTypedTargetsToEditorSelectionService) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> first =
+            editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Selection First");
+    ASSERT_TRUE(first.ok()) << first.errorMessage();
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+            editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Selection Second");
+    ASSERT_TRUE(second.ok()) << second.errorMessage();
+
+    ASSERT_TRUE(editor.selection().selectObject(first.value()).ok());
+    quader::EditorSelectionState state = session.selection().state();
+    EXPECT_EQ(state.target.kind, quader::EditorSelectionTargetKind::Object);
+    EXPECT_EQ(state.target.entity, first.value().entity);
+    EXPECT_EQ(state.target.modelingObjectId, first.value().modelingObjectId);
+
+    ASSERT_TRUE(editor.selection().selectFace(first.value(), 1).ok());
+    state = session.selection().state();
+    EXPECT_EQ(state.target.kind, quader::EditorSelectionTargetKind::Face);
+    EXPECT_EQ(state.target.entity, first.value().entity);
+    EXPECT_EQ(state.target.face, 1);
+
+    ASSERT_TRUE(editor.selection().setMode(quader::ModelingSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.scene().select({first.value().entity, second.value().entity}, second.value().entity).ok());
+    const quader::QuaderApiResult<quader::QuaderEntityRef> group = editor.scene().groupSelection("Selection Group");
+    ASSERT_TRUE(group.ok()) << group.errorMessage();
+    ASSERT_TRUE(editor.selection().setMode(quader::ModelingSelectionMode::Group).ok());
+    state = session.selection().state();
+    EXPECT_EQ(state.target.kind, quader::EditorSelectionTargetKind::Group);
+    EXPECT_EQ(state.target.entity, group.value().id);
+    EXPECT_EQ(state.mode, quader::ModelingSelectionMode::Group);
+}
+
+TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPublicHistory) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::QuaderCreateBoxArgs args;
+    args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
+    args.name = "Chronology Box";
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created = editor.modeling().createBox(args);
+    ASSERT_TRUE(created.ok()) << created.errorMessage();
+
+    const quader::QuaderApiVoidResult renamed =
+            editor.scene().rename(created.value().entity, "Chronology Box Renamed");
+    ASSERT_TRUE(renamed.ok()) << renamed.errorMessage();
+    EXPECT_TRUE(entityNamed(editor, "Chronology Box Renamed").has_value());
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(entityNamed(editor, "Chronology Box").has_value());
+    EXPECT_FALSE(entityNamed(editor, "Chronology Box Renamed").has_value());
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(entityNamed(editor, "Chronology Box").has_value());
+    EXPECT_FALSE(entityNamed(editor, "Chronology Box Renamed").has_value());
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(entityNamed(editor, "Chronology Box").has_value());
+    EXPECT_FALSE(entityNamed(editor, "Chronology Box Renamed").has_value());
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(entityNamed(editor, "Chronology Box Renamed").has_value());
+    EXPECT_FALSE(entityNamed(editor, "Chronology Box").has_value());
+}
+
+TEST(EditorApiTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    const auto hidden = session.modeling().createBoxFromBounds({
+            .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+            .name = "Hidden Modeling Box",
+    });
+    ASSERT_TRUE(hidden.ok) << hidden.message;
+    ASSERT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
+
+    EXPECT_FALSE(editor.history().canUndo());
+    EXPECT_FALSE(editor.history().canRedo());
+
+    const quader::QuaderApiVoidResult directUndo = editor.history().undo();
+    EXPECT_FALSE(directUndo.ok());
+    EXPECT_FALSE(directUndo.changed());
+    EXPECT_EQ(directUndo.errorMessage(), "No command to undo");
+    EXPECT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
+
+    const quader::QuaderApiVoidResult commandUndo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    EXPECT_FALSE(commandUndo.ok());
+    EXPECT_FALSE(commandUndo.changed());
+    EXPECT_EQ(commandUndo.errorMessage(), "Command is disabled.");
+    EXPECT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
 }

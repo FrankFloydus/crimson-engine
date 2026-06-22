@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/MaterialDocument.h"
@@ -11,15 +17,30 @@
 
 namespace quader {
 
+/**
+ * Owns Mesh Asset Store behavior within the asset document and registry layer.
+ */
 class MeshAssetStore final : public TypedAssetStore<MeshAsset, MeshAssetRevision> {};
+/**
+ * Owns Material Asset Store behavior within the asset document and registry layer.
+ */
 class MaterialAssetStore final : public TypedAssetStore<MaterialDocument, MaterialAssetRevision> {};
+/**
+ * Owns Texture Asset Store behavior within the asset document and registry layer.
+ */
 class TextureAssetStore final : public TypedAssetStore<TextureAsset, TextureAssetRevision> {};
 
+/**
+ * Owns Asset Registry lookup and registration for the asset document and registry layer.
+ */
 class AssetRegistry {
 public:
     AssetId addMesh(MeshAsset mesh);
+    AssetId addMesh(AssetId id, MeshAsset mesh);
     AssetId addMaterial(MaterialDocument material);
+    AssetId addMaterial(AssetId id, MaterialDocument material);
     AssetId addTexture(TextureAsset texture);
+    AssetId addTexture(AssetId id, TextureAsset texture);
     bool replaceMesh(AssetId id, MeshAsset mesh);
     bool replaceMaterial(AssetId id, MaterialDocument material);
     bool replaceTexture(AssetId id, TextureAsset texture);

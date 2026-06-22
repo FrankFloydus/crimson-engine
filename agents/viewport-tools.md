@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Viewport Tools
 
 `Tool` and `ViewportTool` are the base viewport contracts. New viewport tools communicate through
@@ -16,7 +24,7 @@
 
 ## Rules
 
-- Put concrete viewport tools under `src/viewport/tools/interactive`.
+- Put concrete viewport tools under `src/viewport/modes/interactive`.
 - Descriptor-only wrappers may remain header-only.
 - If a tool overrides event handling or owns a state machine, put that behavior in a `.cpp`.
 - Register viewport tools in the viewport catalog implementation, not inline in headers.

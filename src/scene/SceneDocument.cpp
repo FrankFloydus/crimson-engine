@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
@@ -46,10 +52,15 @@ void removeChild(std::vector<EntityId>& children, EntityId child) {
 
 } // namespace
 
-EntityId SceneDocument::createEntity(std::string name, EntityKind kind) {
+EntityId SceneDocument::createEntity(std::string name, EntityKind kind, EditorObjectId editorObjectId) {
     const EntityId id = nextId_++;
+    const EditorObjectId objectId = allocateEditorObjectId(editorObjectId);
+    if (objectId == InvalidEditorObjectId) {
+        return InvalidEntityId;
+    }
     const entt::entity entity = registry_.create();
     registry_.emplace<EntityIdentityComponent>(entity, EntityIdentityComponent{.id = id});
+    registry_.emplace<EditorObjectIdentityComponent>(entity, EditorObjectIdentityComponent{.id = objectId});
     registry_.emplace<NameComponent>(entity, NameComponent{.name = std::move(name)});
     registry_.emplace<TransformComponent>(entity, TransformComponent{});
     registry_.emplace<EntityKindComponent>(entity, EntityKindComponent{.kind = kind});
@@ -59,12 +70,46 @@ EntityId SceneDocument::createEntity(std::string name, EntityKind kind) {
     registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
     entities_.emplace(id, entity);
     idsByEntity_.emplace(entityKey(entity), id);
+    entityByEditorObjectId_.emplace(objectId, id);
     markDirty();
     return id;
 }
 
-EntityId SceneDocument::createEmpty(std::string name) {
-    return createEntity(std::move(name), EntityKind::Empty);
+EntityId SceneDocument::createEntityWithId(
+        EntityId id,
+        std::string name,
+        EntityKind kind,
+        EditorObjectId editorObjectId) {
+    if (id == InvalidEntityId) {
+        return createEntity(std::move(name), kind, editorObjectId);
+    }
+    if (exists(id)) {
+        return InvalidEntityId;
+    }
+    nextId_ = std::max(nextId_, id + 1u);
+    const EditorObjectId objectId = allocateEditorObjectId(editorObjectId);
+    if (objectId == InvalidEditorObjectId) {
+        return InvalidEntityId;
+    }
+    const entt::entity entity = registry_.create();
+    registry_.emplace<EntityIdentityComponent>(entity, EntityIdentityComponent{.id = id});
+    registry_.emplace<EditorObjectIdentityComponent>(entity, EditorObjectIdentityComponent{.id = objectId});
+    registry_.emplace<NameComponent>(entity, NameComponent{.name = std::move(name)});
+    registry_.emplace<TransformComponent>(entity, TransformComponent{});
+    registry_.emplace<EntityKindComponent>(entity, EntityKindComponent{.kind = kind});
+    registry_.emplace<HierarchyComponent>(entity, HierarchyComponent{});
+    registry_.emplace<VisibilityComponent>(entity, VisibilityComponent{});
+    registry_.emplace<LockComponent>(entity, LockComponent{});
+    registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
+    entities_.emplace(id, entity);
+    idsByEntity_.emplace(entityKey(entity), id);
+    entityByEditorObjectId_.emplace(objectId, id);
+    markDirty();
+    return id;
+}
+
+EntityId SceneDocument::createEmpty(std::string name, EditorObjectId editorObjectId) {
+    return createEntity(std::move(name), EntityKind::Empty, editorObjectId);
 }
 
 bool SceneDocument::destroyEntity(EntityId id) {
@@ -83,6 +128,9 @@ bool SceneDocument::destroyEntity(EntityId id) {
             if (HierarchyComponent* parentHierarchy = hierarchy(component->parent)) {
                 removeChild(parentHierarchy->children, entityId);
             }
+        }
+        if (const EditorObjectIdentityComponent* identity = editorObjectIdentity(entityId)) {
+            entityByEditorObjectId_.erase(identity->id);
         }
         registry_.destroy(entity);
         entities_.erase(entityId);
@@ -105,6 +153,37 @@ bool SceneDocument::renameEntity(EntityId id, std::string name) {
         return true;
     }
     return false;
+}
+
+bool SceneDocument::setEditorObjectId(EntityId id, EditorObjectId editorObjectId) {
+    if (editorObjectId == InvalidEditorObjectId) {
+        return false;
+    }
+    const entt::entity entity = requireEntity(id);
+    if (entity == entt::null) {
+        return false;
+    }
+    if (const auto existing = entityByEditorObjectId_.find(editorObjectId);
+            existing != entityByEditorObjectId_.end() && existing->second != id) {
+        return false;
+    }
+
+    EditorObjectIdentityComponent* identity = registry_.try_get<EditorObjectIdentityComponent>(entity);
+    if (identity != nullptr && identity->id == editorObjectId) {
+        return true;
+    }
+    if (identity != nullptr && identity->id != InvalidEditorObjectId) {
+        entityByEditorObjectId_.erase(identity->id);
+        identity->id = editorObjectId;
+    } else {
+        registry_.emplace_or_replace<EditorObjectIdentityComponent>(
+                entity,
+                EditorObjectIdentityComponent{.id = editorObjectId});
+    }
+    entityByEditorObjectId_[editorObjectId] = id;
+    nextEditorObjectId_ = std::max(nextEditorObjectId_, editorObjectId + 1u);
+    markDirty();
+    return true;
 }
 
 bool SceneDocument::setEntityKind(EntityId id, EntityKind kind) {
@@ -288,6 +367,11 @@ NameComponent* SceneDocument::name(EntityId id) {
     return entity == entt::null ? nullptr : registry_.try_get<NameComponent>(entity);
 }
 
+EditorObjectIdentityComponent* SceneDocument::editorObjectIdentity(EntityId id) {
+    const entt::entity entity = requireEntity(id);
+    return entity == entt::null ? nullptr : registry_.try_get<EditorObjectIdentityComponent>(entity);
+}
+
 TransformComponent* SceneDocument::transform(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<TransformComponent>(entity);
@@ -341,6 +425,11 @@ LightComponent* SceneDocument::light(EntityId id) {
 const NameComponent* SceneDocument::name(EntityId id) const {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<NameComponent>(entity);
+}
+
+const EditorObjectIdentityComponent* SceneDocument::editorObjectIdentity(EntityId id) const {
+    const entt::entity entity = requireEntity(id);
+    return entity == entt::null ? nullptr : registry_.try_get<EditorObjectIdentityComponent>(entity);
 }
 
 const TransformComponent* SceneDocument::transform(EntityId id) const {
@@ -496,6 +585,19 @@ EntityId SceneDocument::parent(EntityId id) const {
     return InvalidEntityId;
 }
 
+EditorObjectId SceneDocument::editorObjectId(EntityId id) const {
+    const EditorObjectIdentityComponent* identity = editorObjectIdentity(id);
+    return identity == nullptr ? InvalidEditorObjectId : identity->id;
+}
+
+EntityId SceneDocument::entityForEditorObjectId(EditorObjectId editorObjectId) const {
+    const auto existing = entityByEditorObjectId_.find(editorObjectId);
+    if (existing == entityByEditorObjectId_.end() || !exists(existing->second)) {
+        return InvalidEntityId;
+    }
+    return existing->second;
+}
+
 bool SceneDocument::hasChildren(EntityId id) const {
     if (const HierarchyComponent* component = hierarchy(id)) {
         return !component->children.empty();
@@ -593,6 +695,20 @@ void SceneDocument::markDirty() {
     ++revision_;
 }
 
+EditorObjectId SceneDocument::allocateEditorObjectId(EditorObjectId requested) {
+    if (requested != InvalidEditorObjectId) {
+        if (entityByEditorObjectId_.contains(requested)) {
+            return InvalidEditorObjectId;
+        }
+        nextEditorObjectId_ = std::max(nextEditorObjectId_, requested + 1u);
+        return requested;
+    }
+    while (entityByEditorObjectId_.contains(nextEditorObjectId_)) {
+        ++nextEditorObjectId_;
+    }
+    return nextEditorObjectId_++;
+}
+
 entt::entity SceneDocument::requireEntity(EntityId id) const {
     const auto it = entities_.find(id);
     if (it == entities_.end() || it->second == entt::null || !registry_.valid(it->second)) {
@@ -619,6 +735,7 @@ EntityId SceneDocument::firstSelectedEntity() const {
 EntityRecord SceneDocument::makeEntityRecord(EntityId id, int depth, EntityId active) const {
     EntityRecord record;
     record.id = id;
+    record.editorObjectId = editorObjectId(id);
     record.kind = kind(id);
     record.parent = parent(id);
     record.depth = depth;

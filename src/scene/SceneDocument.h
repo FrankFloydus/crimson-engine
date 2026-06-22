@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
@@ -12,8 +18,12 @@
 
 namespace quader {
 
+/**
+ * Stores the Entity Record data contract used by the scene graph document layer.
+ */
 struct EntityRecord {
     EntityId id = InvalidEntityId;
+    EditorObjectId editorObjectId = InvalidEditorObjectId;
     std::string name;
     EntityKind kind = EntityKind::Generic;
     EntityId parent = InvalidEntityId;
@@ -30,14 +40,26 @@ struct EntityRecord {
     bool hasModelingObject = false;
 };
 
+/**
+ * Owns Scene Document behavior within the scene graph document layer.
+ */
 class SceneDocument {
 public:
-    EntityId createEntity(std::string name, EntityKind kind = EntityKind::Generic);
-    EntityId createEmpty(std::string name);
+    EntityId createEntity(
+            std::string name,
+            EntityKind kind = EntityKind::Generic,
+            EditorObjectId editorObjectId = InvalidEditorObjectId);
+    EntityId createEntityWithId(
+            EntityId id,
+            std::string name,
+            EntityKind kind = EntityKind::Generic,
+            EditorObjectId editorObjectId = InvalidEditorObjectId);
+    EntityId createEmpty(std::string name, EditorObjectId editorObjectId = InvalidEditorObjectId);
     bool destroyEntity(EntityId id);
     bool exists(EntityId id) const;
 
     bool renameEntity(EntityId id, std::string name);
+    bool setEditorObjectId(EntityId id, EditorObjectId editorObjectId);
     bool setEntityKind(EntityId id, EntityKind kind);
     bool setVisible(EntityId id, bool visible);
     bool setLocked(EntityId id, bool locked);
@@ -54,6 +76,7 @@ public:
     void setLight(EntityId id, LightComponent light);
 
     NameComponent* name(EntityId id);
+    EditorObjectIdentityComponent* editorObjectIdentity(EntityId id);
     TransformComponent* transform(EntityId id);
     EntityKindComponent* entityKind(EntityId id);
     HierarchyComponent* hierarchy(EntityId id);
@@ -66,6 +89,7 @@ public:
     LightComponent* light(EntityId id);
 
     const NameComponent* name(EntityId id) const;
+    const EditorObjectIdentityComponent* editorObjectIdentity(EntityId id) const;
     const TransformComponent* transform(EntityId id) const;
     const EntityKindComponent* entityKind(EntityId id) const;
     const HierarchyComponent* hierarchy(EntityId id) const;
@@ -87,6 +111,8 @@ public:
     std::vector<EntityId> selectedEntities() const;
     EntityId primarySelection() const;
     EntityId parent(EntityId id) const;
+    EditorObjectId editorObjectId(EntityId id) const;
+    EntityId entityForEditorObjectId(EditorObjectId editorObjectId) const;
     bool hasChildren(EntityId id) const;
     bool isDescendantOf(EntityId entity, EntityId possibleAncestor) const;
     EntityKind kind(EntityId id) const;
@@ -104,6 +130,7 @@ public:
 
 private:
     void markDirty();
+    EditorObjectId allocateEditorObjectId(EditorObjectId requested);
     entt::entity requireEntity(EntityId id) const;
     bool isSelected(EntityId id) const;
     EntityId firstSelectedEntity() const;
@@ -112,11 +139,13 @@ private:
     void appendEntityRecords(EntityId id, int depth, EntityId active, std::vector<EntityRecord>& records) const;
 
     EntityId nextId_ = 1;
+    EditorObjectId nextEditorObjectId_ = 1;
     EntityId activeSelection_ = InvalidEntityId;
     std::uint64_t revision_ = 0;
     entt::registry registry_;
     std::unordered_map<EntityId, entt::entity> entities_;
     std::unordered_map<std::uint32_t, EntityId> idsByEntity_;
+    std::unordered_map<EditorObjectId, EntityId> entityByEditorObjectId_;
 };
 
 } // namespace quader

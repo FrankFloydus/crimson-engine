@@ -1,9 +1,16 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "BehaviorScenario.h"
 
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
 
 #include "BehaviorExpect.h"
 #include "assets/AssetRegistry.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 
 #include <gtest/gtest.h>
@@ -82,8 +89,8 @@ QuaderModelingObjectRef BehaviorScenario::object(std::string_view alias) const {
     return found->second;
 }
 
-ModelingObjectId BehaviorScenario::sdkObject(std::string_view alias) const {
-    return object(alias).sdkObjectId;
+ModelingObjectId BehaviorScenario::modelingObject(std::string_view alias) const {
+    return object(alias).modelingObjectId;
 }
 
 BehaviorSnapshot BehaviorScenario::snapshot(std::string label) const {
@@ -98,7 +105,7 @@ BehaviorSnapshot BehaviorScenario::snapshot(std::string label) const {
         entity.id = object.entity;
         entity.alias = alias;
         entity.mesh = object.mesh;
-        entity.sdkObjectId = object.sdkObjectId;
+        entity.modelingObjectId = object.modelingObjectId;
         if (const NameComponent* name = session_.scene().name(object.entity)) {
             entity.name = name->name;
         }
@@ -187,8 +194,9 @@ void BehaviorScenario::rememberSelectedCopyAlias() {
 QuaderModelingObjectRef BehaviorScenario::objectForEntity(EntityId entity) const {
     QuaderModelingObjectRef result;
     result.entity = entity;
+    result.editorObjectId = session_.scene().editorObjectId(entity);
     if (const ModelingObjectComponent* modeling = session_.scene().modelingObject(entity)) {
-        result.sdkObjectId = modeling->objectId;
+        result.modelingObjectId = modeling->objectId;
     }
     if (const MeshComponent* mesh = session_.scene().mesh(entity)) {
         result.mesh = mesh->mesh;
@@ -217,8 +225,7 @@ BehaviorGiven& BehaviorGiven::box(std::string_view alias, ModelingBounds bounds,
     return *this;
 }
 
-BehaviorGiven& BehaviorGiven::mesh(std::string_view alias, quader_poly::Document document, std::string name) {
-#if QUADER_HAS_MODELING_SDK
+BehaviorGiven& BehaviorGiven::mesh(std::string_view alias, QuaderPolygonDocument document, std::string name) {
     QuaderCreateMeshArgs args;
     args.name = std::move(name);
     const QuaderApiResult<QuaderModelingObjectRef> result = scenario_.api().modeling().createMesh(std::move(document), args);
@@ -228,12 +235,6 @@ BehaviorGiven& BehaviorGiven::mesh(std::string_view alias, quader_poly::Document
     } else {
         ADD_FAILURE() << result.message;
     }
-#else
-    (void)alias;
-    (void)document;
-    (void)name;
-    scenario_.recordStatus(failedStatus("Modeling SDK is not available in this build."));
-#endif
     return *this;
 }
 
@@ -247,7 +248,7 @@ BehaviorGiven& BehaviorGiven::selected(std::string_view alias) {
 }
 
 BehaviorGiven& BehaviorGiven::selectionMode(ModelingSelectionMode mode) {
-    const QuaderApiStatus status = scenario_.api().modeling().setSelectionMode(mode);
+    const QuaderApiStatus status = scenario_.api().selection().setMode(mode);
     scenario_.recordStatus(status);
     if (!status.ok) {
         ADD_FAILURE() << status.message;
@@ -390,12 +391,6 @@ BehaviorWhen& BehaviorWhen::cancelDrag() {
 
 BehaviorWhen& BehaviorWhen::executeTool(std::string_view toolId) {
     const QuaderApiStatus status = scenario_.api().modeling().executeTool(toolId);
-    scenario_.recordStatus(status);
-    return *this;
-}
-
-BehaviorWhen& BehaviorWhen::executeAction(std::string_view actionId) {
-    const QuaderApiStatus status = scenario_.api().modeling().executeAction(actionId);
     scenario_.recordStatus(status);
     return *this;
 }

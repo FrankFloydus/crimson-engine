@@ -1,12 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiSnapshot.h"
 #include "api/QuaderApiTypes.h"
-
-#if QUADER_HAS_MODELING_SDK
-#include <quader_poly/document.h>
-#endif
 
 #include <functional>
 #include <string>
@@ -17,11 +19,17 @@ namespace quader {
 
 class QuaderApi;
 
+/**
+ * Stores the Quader Script Step Result data contract used by the public Quader API surface.
+ */
 struct QuaderScriptStepResult {
     std::string label;
     QuaderApiStatus status;
 };
 
+/**
+ * Stores the Quader Script Result data contract used by the public Quader API surface.
+ */
 struct QuaderScriptResult {
     bool ok = true;
     std::vector<QuaderScriptStepResult> steps;
@@ -29,15 +37,16 @@ struct QuaderScriptResult {
     QuaderApiSnapshot finalSnapshot;
 };
 
+/**
+ * Owns Quader Script behavior within the public Quader API surface.
+ */
 class QuaderScript final {
 public:
     QuaderScript(QuaderApi& api, std::string label = {});
 
     QuaderScript& createBox(std::string alias, ModelingBounds bounds, std::string name = "Box");
 
-#if QUADER_HAS_MODELING_SDK
-    QuaderScript& createMesh(std::string alias, quader_poly::Document document, QuaderCreateMeshArgs args = {});
-#endif
+    QuaderScript& createMesh(std::string alias, QuaderPolygonDocument document, QuaderCreateMeshArgs args = {});
 
     QuaderScript& select(std::string alias);
     QuaderScript& selectVertex(std::string alias, QuaderElementId vertex);
@@ -50,7 +59,6 @@ public:
     QuaderScript& rotateSelection(Vec3 eulerRadians, Vec3 pivot = {});
     QuaderScript& scaleSelection(Vec3 scale, Vec3 pivot = {});
     QuaderScript& executeTool(std::string toolId);
-    QuaderScript& executeAction(std::string actionId);
     QuaderScript& assignMaterialSlot(std::uint32_t materialSlot);
     QuaderScript& undo();
     QuaderScript& redo();
@@ -60,6 +68,9 @@ public:
 private:
     using StepFunction = std::function<QuaderApiStatus(QuaderScriptResult&)>;
 
+    /**
+     * Represents a Step value used by the public Quader API surface.
+     */
     struct Step {
         std::string label;
         StepFunction execute;

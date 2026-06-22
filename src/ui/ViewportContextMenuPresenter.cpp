@@ -1,14 +1,20 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/ViewportContextMenuPresenter.h"
 
+#include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "core/Logger.h"
-#include "modeling/ModelingActionCatalog.h"
-#include "modeling/ModelingSessionService.h"
-#include "modeling/SelectionModeAdapter.h"
-#include "modeling/tools/ModelingCommandToolCatalog.h"
+#include "modeling/services/ModelingActionCatalog.h"
+#include "modeling/services/ModelingSessionService.h"
+#include "modeling/services/SelectionModeAdapter.h"
+#include "editor/actions/ModelingCommandToolCatalog.h"
 #include "viewport/ViewportInputRouter.h"
-#include "viewport/ViewportModelingCommandRouter.h"
 
 #include <imgui.h>
 
@@ -21,6 +27,19 @@ namespace {
 
 bool isGenericContextAction(std::string_view actionId) {
     return actionId == "delete_selection" || actionId == "duplicate_meshes";
+}
+
+std::string contextMenuCommandId(std::string_view actionId) {
+    if (actionId == "delete_selection") {
+        return std::string(QuaderCommand::DeleteSelection.string());
+    }
+    if (actionId == "duplicate_meshes") {
+        return std::string(QuaderCommand::DuplicateSelection.string());
+    }
+
+    std::string commandId = "modeling.action.";
+    commandId.append(actionId);
+    return commandId;
 }
 
 bool shouldCloseOperationsPopupForMouseClick() {
@@ -72,11 +91,12 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
         stableId.append(action.actionId);
         const std::string label = localization.imguiLabel(labelKey, stableId, action.label);
         if (ImGui::MenuItem(label.c_str(), nullptr, false, enabled)) {
-            const QuaderApiVoidResult result = editor.modeling().executeAction(action.actionId);
+            const std::string commandId = contextMenuCommandId(action.actionId);
+            const QuaderApiVoidResult result = editor.commands().execute(commandId);
             if (!result.ok) {
                 LOG_ERROR("Operation '{}' failed: {}", action.actionId, result.message.empty() ? "Operation failed." : result.message);
             }
-            inputRouter.setSelectionMode(appSelectionModeToViewport(modeling.selectionSummary().mode));
+            inputRouter.setSelectionMode(appSelectionModeToViewport(editor.selection().summary().mode));
             ImGui::CloseCurrentPopup();
         }
         if (!enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !action.disabledReason.empty()) {

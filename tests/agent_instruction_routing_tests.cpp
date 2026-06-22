@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -106,5 +112,24 @@ TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
         const std::string source = readFile(file);
         EXPECT_FALSE(contains(source, "oop-refactor.md")) << file.generic_string();
         EXPECT_FALSE(contains(source, "Progress Ledger")) << file.generic_string();
+    }
+}
+
+TEST(AgentInstructionRoutingTests, AppRefactorSupersedesCopiedSdkBoundary) {
+    const std::string projectIdentity = readFile("agents/project-identity.md");
+    const std::string domainOwnership = readFile("agents/domain-ownership.md");
+    const std::string unityParity = readFile("agents/sdk-unity-parity.md");
+    const std::string testingBuild = readFile("agents/testing-build.md");
+
+    EXPECT_TRUE(contains(projectIdentity, "app-refactor.md"));
+    EXPECT_TRUE(contains(projectIdentity, "Do not preserve the old top-level copied SDK boundary"));
+    EXPECT_TRUE(contains(projectIdentity, "compile-time SDK presence macro"));
+    EXPECT_TRUE(contains(domainOwnership, "Former SDK geometry, polygon, editor-core"));
+    EXPECT_TRUE(contains(unityParity, "The top-level copied SDK boundary is retired"));
+
+    for (const std::string& source : {projectIdentity, domainOwnership, unityParity, testingBuild}) {
+        EXPECT_FALSE(contains(source, "preserve the SDK boundary"));
+        EXPECT_FALSE(contains(source, "copied SDK tests"));
+        EXPECT_FALSE(contains(source, "vs2026-sdk-tests"));
     }
 }

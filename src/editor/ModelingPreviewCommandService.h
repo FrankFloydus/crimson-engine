@@ -1,8 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/CommandResult.h"
-#include "core/UndoRedoManager.h"
-#include "editor/ModelingHistoryCommand.h"
+#include "editor/EditorHistoryService.h"
+#include "editor/ModelingMementoCommand.h"
 
 #include <memory>
 #include <string>
@@ -18,10 +24,13 @@ inline ModelingCommandResult modelingCommandResultFromCommandResult(CommandResul
     };
 }
 
-class ModelingPreviewCommitCommand final : public ModelingHistoryCommand {
+/**
+ * Applies Modeling Preview Commit Command behavior as a command in the editor coordination layer.
+ */
+class ModelingPreviewCommitCommand final : public ModelingMementoCommand {
 public:
     ModelingPreviewCommitCommand(ModelingSessionService& modeling, std::string label)
-        : ModelingHistoryCommand(modeling, std::move(label)) {}
+        : ModelingMementoCommand(modeling, std::move(label)) {}
 
 private:
     ModelingCommandResult executeInitial() override {
@@ -29,11 +38,14 @@ private:
     }
 };
 
+/**
+ * Coordinates Modeling Preview Command Service responsibilities for the editor coordination layer.
+ */
 class ModelingPreviewCommandService final {
 public:
-    static ModelingCommandResult commit(UndoRedoManager& undoRedo, ModelingSessionService& modeling, std::string label) {
+    static ModelingCommandResult commit(EditorHistoryService& history, ModelingSessionService& modeling, std::string label) {
         return modelingCommandResultFromCommandResult(
-                undoRedo.execute(std::make_unique<ModelingPreviewCommitCommand>(modeling, std::move(label))));
+                history.execute(std::make_unique<ModelingPreviewCommitCommand>(modeling, std::move(label))));
     }
 
     static ModelingCommandResult cancel(ModelingSessionService& modeling) {

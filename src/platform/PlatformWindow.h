@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include <SDL3/SDL.h>
@@ -7,10 +13,16 @@
 
 namespace quader {
 
+/**
+ * Stores the Platform Window Options data contract used by the platform integration layer.
+ */
 struct PlatformWindowOptions {
     bool borderless = false;
 };
 
+/**
+ * Owns Platform Window behavior within the platform integration layer.
+ */
 class PlatformWindow {
 public:
     PlatformWindow() = default;

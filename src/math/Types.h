@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include <algorithm>
@@ -11,6 +17,9 @@
 
 namespace quader {
 
+/**
+ * Represents a Vec2 value used by the Quader native app.
+ */
 struct Vec2 {
     float x = 0.0f;
     float y = 0.0f;
@@ -20,6 +29,9 @@ struct Vec2 {
     explicit Vec2(glm::vec2 value) : x(value.x), y(value.y) {}
 };
 
+/**
+ * Represents a Vec3 value used by the Quader native app.
+ */
 struct Vec3 {
     float x = 0.0f;
     float y = 0.0f;
@@ -30,6 +42,9 @@ struct Vec3 {
     explicit Vec3(glm::vec3 value) : x(value.x), y(value.y), z(value.z) {}
 };
 
+/**
+ * Represents a Quat value used by the Quader native app.
+ */
 struct Quat {
     float x = 0.0f;
     float y = 0.0f;
@@ -42,6 +57,9 @@ struct Quat {
     explicit Quat(glm::quat value) : x(value.x), y(value.y), z(value.z), w(value.w) {}
 };
 
+/**
+ * Represents a Mat4 value used by the Quader native app.
+ */
 struct Mat4 {
     std::array<float, 16> values = {
             1.0f, 0.0f, 0.0f, 0.0f,
@@ -57,6 +75,9 @@ struct Mat4 {
     }
 };
 
+/**
+ * Represents a Transform value used by the Quader native app.
+ */
 struct Transform {
     Vec3 position = {};
     Quat rotation = {};

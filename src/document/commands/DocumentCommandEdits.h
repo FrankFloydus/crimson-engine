@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
@@ -5,18 +11,27 @@
 
 namespace quader {
 
+/**
+ * Represents a Document Transform Edit value used by the editor document command layer.
+ */
 struct DocumentTransformEdit {
     EntityId entity = InvalidEntityId;
     TransformComponent before;
     TransformComponent after;
 };
 
+/**
+ * Represents a Document Visibility Edit value used by the editor document command layer.
+ */
 struct DocumentVisibilityEdit {
     EntityId entity = InvalidEntityId;
     bool before = true;
     bool after = true;
 };
 
+/**
+ * Represents a Document Lock Edit value used by the editor document command layer.
+ */
 struct DocumentLockEdit {
     EntityId entity = InvalidEntityId;
     bool before = false;

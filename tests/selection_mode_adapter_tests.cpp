@@ -1,6 +1,12 @@
-#include "modeling/SelectionModeAdapter.h"
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#include "modeling/services/SelectionModeAdapter.h"
 
-#include "modeling/ModelingActionCatalog.h"
+#include "modeling/services/ModelingActionCatalog.h"
 
 #include <gtest/gtest.h>
 
@@ -21,18 +27,17 @@ TEST(SelectionModeAdapterTests, AppViewportMappingPreservesGroupMode) {
     EXPECT_EQ(viewportSelectionModeToApp(ViewportSelectionMode::Group), ModelingSelectionMode::Group);
 }
 
-#if QUADER_HAS_MODELING_SDK
-TEST(SelectionModeAdapterTests, AppSdkMappingCollapsesGroupToObjectMode) {
-    EXPECT_EQ(appSelectionModeToSdk(ModelingSelectionMode::Vertex), quader_editor_core::SelectionMode::vertex);
-    EXPECT_EQ(appSelectionModeToSdk(ModelingSelectionMode::Edge), quader_editor_core::SelectionMode::edge);
-    EXPECT_EQ(appSelectionModeToSdk(ModelingSelectionMode::Face), quader_editor_core::SelectionMode::face);
-    EXPECT_EQ(appSelectionModeToSdk(ModelingSelectionMode::Object), quader_editor_core::SelectionMode::object);
-    EXPECT_EQ(appSelectionModeToSdk(ModelingSelectionMode::Group), quader_editor_core::SelectionMode::object);
+TEST(SelectionModeAdapterTests, AppRuntimeMappingCollapsesGroupToObjectMode) {
+    EXPECT_EQ(appSelectionModeToRuntime(ModelingSelectionMode::Vertex), quader_editor_core::SelectionMode::vertex);
+    EXPECT_EQ(appSelectionModeToRuntime(ModelingSelectionMode::Edge), quader_editor_core::SelectionMode::edge);
+    EXPECT_EQ(appSelectionModeToRuntime(ModelingSelectionMode::Face), quader_editor_core::SelectionMode::face);
+    EXPECT_EQ(appSelectionModeToRuntime(ModelingSelectionMode::Object), quader_editor_core::SelectionMode::object);
+    EXPECT_EQ(appSelectionModeToRuntime(ModelingSelectionMode::Group), quader_editor_core::SelectionMode::object);
 
-    EXPECT_EQ(sdkSelectionModeToApp(quader_editor_core::SelectionMode::vertex), ModelingSelectionMode::Vertex);
-    EXPECT_EQ(sdkSelectionModeToApp(quader_editor_core::SelectionMode::edge), ModelingSelectionMode::Edge);
-    EXPECT_EQ(sdkSelectionModeToApp(quader_editor_core::SelectionMode::face), ModelingSelectionMode::Face);
-    EXPECT_EQ(sdkSelectionModeToApp(quader_editor_core::SelectionMode::object), ModelingSelectionMode::Object);
+    EXPECT_EQ(runtimeSelectionModeToApp(quader_editor_core::SelectionMode::vertex), ModelingSelectionMode::Vertex);
+    EXPECT_EQ(runtimeSelectionModeToApp(quader_editor_core::SelectionMode::edge), ModelingSelectionMode::Edge);
+    EXPECT_EQ(runtimeSelectionModeToApp(quader_editor_core::SelectionMode::face), ModelingSelectionMode::Face);
+    EXPECT_EQ(runtimeSelectionModeToApp(quader_editor_core::SelectionMode::object), ModelingSelectionMode::Object);
 }
 
 TEST(SelectionModeAdapterTests, AppHostContractMappingKeepsGroupDistinct) {
@@ -67,7 +72,6 @@ TEST(SelectionModeAdapterTests, ActionCatalogUsesGroupHostModeWithoutObjectPanel
             });
     EXPECT_TRUE(operationPanels.panels.empty());
 }
-#endif
 
 } // namespace
 } // namespace quader

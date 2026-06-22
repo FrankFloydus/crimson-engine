@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiTypes.h"
@@ -11,8 +17,12 @@
 
 namespace quader {
 
+/**
+ * Stores the Quader Entity Snapshot data contract used by the public Quader API surface.
+ */
 struct QuaderEntitySnapshot {
     EntityId id = InvalidEntityId;
+    EditorObjectId editorObjectId = InvalidEditorObjectId;
     std::string name;
     EntityKind kind = EntityKind::Generic;
     EntityId parent = InvalidEntityId;
@@ -27,9 +37,12 @@ struct QuaderEntitySnapshot {
     bool hasModelingObject = false;
     AssetId mesh = InvalidAssetId;
     AssetId material = InvalidAssetId;
-    ModelingObjectId sdkObjectId = InvalidModelingObjectId;
+    ModelingObjectId modelingObjectId = InvalidModelingObjectId;
 };
 
+/**
+ * Stores the Quader Mesh Snapshot data contract used by the public Quader API surface.
+ */
 struct QuaderMeshSnapshot {
     AssetId mesh = InvalidAssetId;
     MeshAssetRevision revision;
@@ -41,6 +54,9 @@ struct QuaderMeshSnapshot {
     QuaderBounds bounds;
 };
 
+/**
+ * Stores the Quader Asset Snapshot data contract used by the public Quader API surface.
+ */
 struct QuaderAssetSnapshot {
     std::size_t meshCount = 0;
     std::size_t materialCount = 0;
@@ -48,6 +64,9 @@ struct QuaderAssetSnapshot {
     std::uint64_t revision = 0;
 };
 
+/**
+ * Stores the Quader History Snapshot data contract used by the public Quader API surface.
+ */
 struct QuaderHistorySnapshot {
     bool canUndo = false;
     bool canRedo = false;
@@ -55,6 +74,9 @@ struct QuaderHistorySnapshot {
     std::string redoLabel;
 };
 
+/**
+ * Stores the Quader API Snapshot data contract used by the public Quader API surface.
+ */
 struct QuaderApiSnapshot {
     QuaderRevisionStamp revisions;
     std::vector<QuaderEntitySnapshot> entities;

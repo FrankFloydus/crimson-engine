@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetRegistry.h"
@@ -17,6 +23,9 @@
 
 namespace quader {
 
+/**
+ * Coordinates Texture Binding Service responsibilities for the render extraction and Filament resource layer.
+ */
 class TextureBindingService {
 public:
     ~TextureBindingService();
@@ -42,6 +51,9 @@ public:
             filament::Texture* fallback);
 
 private:
+    /**
+     * Stores the Texture Cache Key data contract used by the render extraction and Filament resource layer.
+     */
     struct TextureCacheKey {
         AssetId id = InvalidAssetId;
         std::uint64_t revision = 0;
@@ -52,6 +64,9 @@ private:
         }
     };
 
+    /**
+     * Represents a Texture Cache Key Hash value used by the render extraction and Filament resource layer.
+     */
     struct TextureCacheKeyHash {
         std::size_t operator()(const TextureCacheKey& key) const {
             const auto colorSpace = static_cast<std::size_t>(key.colorSpace);

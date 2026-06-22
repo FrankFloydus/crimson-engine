@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include <spdlog/common.h>
@@ -12,6 +18,9 @@
 
 namespace quader {
 
+/**
+ * Represents a Log Entry value used by the shared core service layer.
+ */
 struct LogEntry {
     spdlog::level::level_enum level = spdlog::level::info;
     std::string loggerName;
@@ -20,6 +29,9 @@ struct LogEntry {
     int line = 0;
 };
 
+/**
+ * Represents a Logger Config value used by the shared core service layer.
+ */
 struct LoggerConfig {
     std::string name = "Quader";
     std::string filePath = "quader.log";
@@ -27,6 +39,9 @@ struct LoggerConfig {
     spdlog::level::level_enum level = spdlog::level::trace;
 };
 
+/**
+ * Owns Logger behavior within the shared core service layer.
+ */
 class Logger {
 public:
     static void initialize(LoggerConfig config = {});

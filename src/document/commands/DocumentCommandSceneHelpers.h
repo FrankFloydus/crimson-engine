@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
@@ -15,13 +21,20 @@
 
 namespace quader {
 
+/**
+ * Stores the Document Selection State data contract used by the editor document command layer.
+ */
 struct DocumentSelectionState {
     std::vector<EntityId> selected;
     EntityId active = InvalidEntityId;
 };
 
+/**
+ * Stores the Document Entity Snapshot data contract used by the editor document command layer.
+ */
 struct DocumentEntitySnapshot {
     EntityId originalId = InvalidEntityId;
+    EditorObjectId editorObjectId = InvalidEditorObjectId;
     EntityId originalParent = InvalidEntityId;
     std::string name;
     EntityKind kind = EntityKind::Generic;
@@ -36,6 +49,9 @@ struct DocumentEntitySnapshot {
     std::vector<DocumentEntitySnapshot> children;
 };
 
+/**
+ * Represents a Document Entity Placement value used by the editor document command layer.
+ */
 struct DocumentEntityPlacement {
     EntityId entity = InvalidEntityId;
     EntityId parent = InvalidEntityId;
@@ -134,6 +150,7 @@ inline std::optional<DocumentEntitySnapshot> documentCommandCaptureEntitySnapsho
 
     DocumentEntitySnapshot snapshot;
     snapshot.originalId = entity;
+    snapshot.editorObjectId = scene.editorObjectId(entity);
     snapshot.originalParent = scene.parent(entity);
     snapshot.kind = scene.kind(entity);
     if (const NameComponent* component = scene.name(entity)) {
@@ -203,8 +220,18 @@ inline EntityId documentCommandCreateEntityFromSnapshot(
         const DocumentEntitySnapshot& snapshot,
         EntityId parent,
         std::string name,
-        bool includeModelingObject) {
-    EntityId entity = scene.createEntity(name.empty() ? snapshot.name : std::move(name), snapshot.kind);
+        bool includeModelingObject,
+        bool preserveIdentity = false) {
+    EntityId entity = preserveIdentity
+            ? scene.createEntityWithId(
+                    snapshot.originalId,
+                    name.empty() ? snapshot.name : std::move(name),
+                    snapshot.kind,
+                    snapshot.editorObjectId)
+            : scene.createEntity(name.empty() ? snapshot.name : std::move(name), snapshot.kind);
+    if (entity == InvalidEntityId) {
+        return InvalidEntityId;
+    }
     if (parent != InvalidEntityId && scene.exists(parent)) {
         scene.setParent(entity, parent, false);
     }
@@ -219,10 +246,22 @@ inline EntityId documentCommandRestoreEntitySnapshotTree(
         std::unordered_map<EntityId, EntityId>& remappedEntities,
         bool includeModelingObject = true) {
     const EntityId restored =
-            documentCommandCreateEntityFromSnapshot(scene, snapshot, parent, snapshot.name, includeModelingObject);
+            documentCommandCreateEntityFromSnapshot(
+                    scene,
+                    snapshot,
+                    parent,
+                    snapshot.name,
+                    includeModelingObject,
+                    true);
+    if (restored == InvalidEntityId) {
+        return InvalidEntityId;
+    }
     remappedEntities[snapshot.originalId] = restored;
     for (const DocumentEntitySnapshot& child : snapshot.children) {
-        documentCommandRestoreEntitySnapshotTree(scene, child, restored, remappedEntities, includeModelingObject);
+        if (documentCommandRestoreEntitySnapshotTree(scene, child, restored, remappedEntities, includeModelingObject) ==
+                InvalidEntityId) {
+            return InvalidEntityId;
+        }
     }
     return restored;
 }

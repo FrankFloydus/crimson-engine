@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "app/App.h"
 #include "core/Logger.h"
 #include "platform/FatalErrorHandler.h"
@@ -29,6 +35,9 @@ std::filesystem::path executablePath(int argc, char** argv) {
     return std::filesystem::current_path() / "quader.exe";
 }
 
+/**
+ * Stores the Command Line Options data contract used by the Quader native app.
+ */
 struct CommandLineOptions {
     bool borderlessWindow = false;
 };
@@ -62,6 +71,7 @@ int main(int argc, char** argv) {
         if (!app->initialize(exe, {.borderlessWindow = commandLine.borderlessWindow})) {
             LOG_CRITICAL("Application initialization failed");
             app->shutdown();
+            app.reset();
             quader::Logger::shutdown();
             return 1;
         }
@@ -69,6 +79,7 @@ int main(int argc, char** argv) {
         const int result = app->run();
         app->shutdown();
         LOG_INFO("Quader shutdown complete");
+        app.reset();
         quader::Logger::shutdown();
         return result;
     } catch (const std::exception& error) {

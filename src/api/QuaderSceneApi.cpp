@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderSceneApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
@@ -8,6 +14,8 @@
 #include "document/commands/SetLockCommand.h"
 #include "document/commands/SetVisibilityCommand.h"
 #include "document/ProjectSession.h"
+#include "editor/selection/EditorSelectionService.h"
+#include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 
 #include <memory>
@@ -19,6 +27,29 @@ namespace {
 
 std::string batchLabelOrDefault(std::string label) {
     return label.empty() ? "Scene Batch" : std::move(label);
+}
+
+bool isDefaultTransform(const TransformComponent& transform) {
+    return transform.position.x == 0.0f &&
+            transform.position.y == 0.0f &&
+            transform.position.z == 0.0f &&
+            transform.rotationEuler.x == 0.0f &&
+            transform.rotationEuler.y == 0.0f &&
+            transform.rotationEuler.z == 0.0f &&
+            transform.scale.x == 1.0f &&
+            transform.scale.y == 1.0f &&
+            transform.scale.z == 1.0f;
+}
+
+TransformComponent groupTransformOrSelectedBoundsCenter(ProjectSession& session, TransformComponent transform) {
+    if (!isDefaultTransform(transform)) {
+        return transform;
+    }
+
+    if (const std::optional<SceneBounds> bounds = selectedWorldBounds(session.scene(), session.assets())) {
+        transform.position = boundsCenter(*bounds);
+    }
+    return transform;
 }
 
 } // namespace
@@ -168,7 +199,7 @@ QuaderApiVoidResult QuaderSceneApi::setMeshComponent(EntityId entity, MeshCompon
 
 QuaderApiVoidResult QuaderSceneApi::select(std::span<const EntityId> entities, EntityId active) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().selectEntities(std::vector<EntityId>(entities.begin(), entities.end()), active),
+            session_.selection().setSceneSelection(entities, active),
             "Select Entities");
 }
 
@@ -192,7 +223,10 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::duplicate(EntityId entity) {
     result.mutationKind = status.mutationKind;
     result.revisions = status.revisions;
     if (result.ok && result.changed) {
-        result.value = QuaderEntityRef{.id = duplicateEntity};
+        result.value = QuaderEntityRef{
+                .id = duplicateEntity,
+                .editorObjectId = session_.scene().editorObjectId(duplicateEntity),
+        };
     }
     return result;
 }
@@ -201,7 +235,7 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string grou
     EntityId groupEntity = InvalidEntityId;
     DocumentCommandResult command = session_.documentCommands().groupSelection(
             std::move(groupName),
-            transform,
+            groupTransformOrSelectedBoundsCenter(session_, transform),
             &groupEntity);
 
     QuaderApiResult<QuaderEntityRef> result;
@@ -212,7 +246,10 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string grou
     result.mutationKind = status.mutationKind;
     result.revisions = status.revisions;
     if (result.ok && result.changed) {
-        result.value = QuaderEntityRef{.id = groupEntity};
+        result.value = QuaderEntityRef{
+                .id = groupEntity,
+                .editorObjectId = session_.scene().editorObjectId(groupEntity),
+        };
     }
     return result;
 }

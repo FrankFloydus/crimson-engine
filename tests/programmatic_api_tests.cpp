@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "support/BehaviorScenario.h"
 
 #include <gtest/gtest.h>
@@ -18,16 +24,16 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     ASSERT_TRUE(created.ok) << created.message;
     EXPECT_TRUE(created.changed);
     EXPECT_NE(created.value.entity, quader::InvalidEntityId);
-    EXPECT_NE(created.value.sdkObjectId, quader::InvalidModelingObjectId);
+    EXPECT_NE(created.value.modelingObjectId, quader::InvalidModelingObjectId);
     EXPECT_NE(created.value.mesh, quader::InvalidAssetId);
 
-    const quader::ModelingSelectionSummary selection = session.modeling().selectionSummary();
+    const quader::ModelingSelectionSummary selection = api.selection().summary();
     EXPECT_EQ(session.scene().entities().size(), 1u);
-    EXPECT_EQ(session.modeling().objects().size(), 1u);
+    EXPECT_EQ(api.modeling().objects().size(), 1u);
     EXPECT_EQ(session.assets().meshCount(), 1u);
     EXPECT_TRUE(selection.hasSelection);
     EXPECT_EQ(selection.selectedObjectCount, 1u);
-    EXPECT_EQ(selection.activeObjectId, created.value.sdkObjectId);
+    EXPECT_EQ(selection.activeObjectId, created.value.modelingObjectId);
 #endif
 }
 

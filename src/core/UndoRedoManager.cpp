@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "core/UndoRedoManager.h"
 
 #include <utility>
@@ -41,6 +47,20 @@ UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> comman
     undoStack_.push_back(std::move(command));
     redoStack_.clear();
     return result;
+}
+
+UndoRedoResult UndoRedoManager::recordExecuted(std::unique_ptr<IUndoableCommand> command) {
+    if (!command) {
+        return {
+                .ok = false,
+                .changed = false,
+                .message = "Command is missing",
+        };
+    }
+
+    undoStack_.push_back(std::move(command));
+    redoStack_.clear();
+    return commandChangedResult();
 }
 
 UndoRedoResult UndoRedoManager::undo() {

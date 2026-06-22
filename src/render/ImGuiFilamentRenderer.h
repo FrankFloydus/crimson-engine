@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "render/TextureRegistry.h"
@@ -21,6 +27,9 @@
 
 namespace quader {
 
+/**
+ * Owns Im Gui Filament Renderer behavior within the render extraction and Filament resource layer.
+ */
 class ImGuiFilamentRenderer {
 public:
     ~ImGuiFilamentRenderer();
@@ -32,6 +41,9 @@ public:
     void render(filament::Renderer& renderer);
 
 private:
+    /**
+     * Represents a Draw Resource value used by the render extraction and Filament resource layer.
+     */
     struct DrawResource {
         utils::Entity entity;
         filament::VertexBuffer* vertexBuffer = nullptr;

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderScript.h"
 
 #include "api/QuaderApi.h"
@@ -42,9 +48,8 @@ QuaderScript& QuaderScript::createBox(std::string alias, ModelingBounds bounds, 
     });
 }
 
-#if QUADER_HAS_MODELING_SDK
-QuaderScript& QuaderScript::createMesh(std::string alias, quader_poly::Document document, QuaderCreateMeshArgs args) {
-    auto storedDocument = std::make_shared<std::optional<quader_poly::Document>>(std::move(document));
+QuaderScript& QuaderScript::createMesh(std::string alias, QuaderPolygonDocument document, QuaderCreateMeshArgs args) {
+    auto storedDocument = std::make_shared<std::optional<QuaderPolygonDocument>>(std::move(document));
     const std::string stepLabel = "createMesh(" + alias + ")";
     return addStep(stepLabel,
             [this, alias = std::move(alias), storedDocument, args = std::move(args)](
@@ -67,7 +72,6 @@ QuaderScript& QuaderScript::createMesh(std::string alias, quader_poly::Document 
                 return statusFromResult(created);
             });
 }
-#endif
 
 QuaderScript& QuaderScript::select(std::string alias) {
     const std::string stepLabel = "select(" + alias + ")";
@@ -124,7 +128,7 @@ QuaderScript& QuaderScript::clearSelection() {
 
 QuaderScript& QuaderScript::setSelectionMode(ModelingSelectionMode mode) {
     return addStep("setSelectionMode", [this, mode](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().setSelectionMode(mode));
+        return statusFromResult(api_.selection().setMode(mode));
     });
 }
 
@@ -149,12 +153,6 @@ QuaderScript& QuaderScript::scaleSelection(Vec3 scale, Vec3 pivot) {
 QuaderScript& QuaderScript::executeTool(std::string toolId) {
     return addStep("executeTool(" + toolId + ")", [this, toolId = std::move(toolId)](QuaderScriptResult&) {
         return statusFromResult(api_.modeling().executeTool(toolId));
-    });
-}
-
-QuaderScript& QuaderScript::executeAction(std::string actionId) {
-    return addStep("executeAction(" + actionId + ")", [this, actionId = std::move(actionId)](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().executeAction(actionId));
     });
 }
 

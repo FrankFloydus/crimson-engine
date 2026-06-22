@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiTypes.h"
@@ -7,6 +13,9 @@
 
 namespace quader {
 
+/**
+ * Represents a Quader API Flag value used by the public Quader API surface.
+ */
 struct QuaderApiFlag {
     bool state = false;
 
@@ -25,6 +34,9 @@ struct QuaderApiFlag {
     }
 };
 
+/**
+ * Represents a Quader API Status value used by the public Quader API surface.
+ */
 struct QuaderApiStatus {
     QuaderApiFlag ok = false;
     QuaderApiFlag changed = false;
@@ -39,6 +51,9 @@ struct QuaderApiStatus {
 };
 
 template <typename T>
+/**
+ * Stores the Quader API Result Value data contract used by the public Quader API surface.
+ */
 struct QuaderApiResultValue : T {
     constexpr QuaderApiResultValue() = default;
     QuaderApiResultValue(const T& value)
@@ -62,6 +77,9 @@ struct QuaderApiResultValue : T {
 };
 
 template <typename T>
+/**
+ * Stores the Quader API Result data contract used by the public Quader API surface.
+ */
 struct QuaderApiResult : QuaderApiStatus {
     QuaderApiResultValue<T> value {};
 };

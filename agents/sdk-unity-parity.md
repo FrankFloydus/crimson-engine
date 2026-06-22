@@ -1,19 +1,27 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # SDK And Unity Parity
 
 Treat the Unity plugin at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity` as the source of truth
 for Quader modeling behavior, viewport visuals, grid behavior, gizmo visuals, keybinds, overlays,
 selection, and tool interaction.
 
-Do not invent native-app behavior when parity is unclear. Inspect the Unity plugin and copied SDK
-first, then implement matching behavior.
+Do not invent native-app behavior when parity is unclear. Inspect the Unity plugin and original
+Unity SDK first, then implement matching behavior in native-app-owned modules.
 
-Important SDK/editor-core files:
+Former SDK/editor-core reference files after absorption:
 
-- `sdk/packages/editor-core/src/session_selection_overlay.cpp`
-- `sdk/packages/editor-core/src/selection_policy.cpp`
-- `sdk/packages/editor-core/src/session_picking.cpp`
-- `sdk/packages/editor-core/src/overlay_visibility.cpp`
-- `sdk/packages/editor-core/include/quader_editor_core/session.h`
+- `src/modeling/runtime/session_selection_overlay.cpp`
+- `src/modeling/runtime/selection_policy.cpp`
+- `src/modeling/runtime/session_picking.cpp`
+- `src/modeling/runtime/overlay_visibility.cpp`
+- `src/modeling/runtime/session.h`
 
 Important Unity presentation files:
 
@@ -37,7 +45,8 @@ Important Unity presentation files:
 - Native transform component inputs and viewport gizmo transforms should both behave in global/world
   space unless a future product requirement explicitly introduces local-space editing.
 
-## SDK Copy
+## Native-App Ownership
 
-If SDK files are changed in this copied SDK, mirror accepted changes into the active Unity SDK
-source of truth at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\sdk`.
+The top-level copied SDK boundary is retired for this native app. Treat absorbed former SDK files as
+app-owned implementation and note any cross-repo parity follow-up instead of reintroducing
+copied-SDK build semantics.

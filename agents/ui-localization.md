@@ -1,3 +1,11 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # UI And Localization
 
 Use `UI` casing for UI infrastructure types:
@@ -50,5 +58,5 @@ fallback/debug text.
 - Do not create placeholder startup scene content unless a product requirement explicitly asks.
 - For scene names, use `SceneEntityNaming`.
 - Mesh names start as `Mesh`, then `Mesh_1`, `Mesh_2`, etc.
-- Do not show `SDK Object X`, `Mesh_0`, or `Mesh 0` names.
+- Do not show `Runtime Object X`, `Mesh_0`, or `Mesh 0` names.
 - Do not append text suffixes like `[Mesh]` or `[Light]` in the outliner.

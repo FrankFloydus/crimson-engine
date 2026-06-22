@@ -1,11 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetRegistry.h"
 #include "core/Types.h"
-#include "core/UndoRedoManager.h"
-#include "document/DocumentCommandService.h"
 #include "document/SceneTransformPreviewTransaction.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "scene/SceneDocument.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
@@ -17,13 +21,18 @@
 #include <optional>
 #include <vector>
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_editor_core/tool/rotate_tool.h>
-#include <quader_editor_core/tool/tool_identity.h>
-#endif
+#include <modeling/interactions/rotate_tool.h>
+#include <modeling/interactions/tool_identity.h>
 
 namespace quader {
 
+class EditorSelectionService;
+class ModelingSessionService;
+class QuaderEditorApi;
+
+/**
+ * Enumerates TransformAxisHandle values used by the ui layer.
+ */
 enum class TransformAxisHandle {
     None,
     X,
@@ -35,12 +44,15 @@ enum class TransformAxisHandle {
     All,
 };
 
+/**
+ * Stores the Transform Gizmo Frame Request data contract used by the ImGui editor presentation layer.
+ */
 struct TransformGizmoFrameRequest {
     SceneDocument& document;
     const AssetRegistry& assets;
-    UndoRedoManager& undoRedo;
-    DocumentCommandService& documentCommands;
+    QuaderEditorApi* editor = nullptr;
     ModelingSessionService& modeling;
+    EditorSelectionService& selection;
     ViewportInputRouter& inputRouter;
     const ViewportSettings& viewportSettings;
     ViewportCameraController& camera;
@@ -51,6 +63,9 @@ struct TransformGizmoFrameRequest {
     bool interactive = true;
 };
 
+/**
+ * Coordinates Transform Gizmo Controller state transitions for the ImGui editor presentation layer.
+ */
 class TransformGizmoController {
 public:
     [[nodiscard]] bool draw(const TransformGizmoFrameRequest& request);
@@ -62,11 +77,12 @@ public:
     [[nodiscard]] bool supportsViewportTool(ViewportToolId tool) const;
     [[nodiscard]] bool suppressesHover(bool navigationGizmoConsumed, bool transformGizmoConsumed) const;
 
-#if QUADER_HAS_MODELING_SDK
-    [[nodiscard]] quader_editor_core::ViewportInteractionTool sdkToolFor(ViewportToolId tool) const;
-#endif
+    [[nodiscard]] quader_editor_core::ViewportInteractionTool runtimeToolFor(ViewportToolId tool) const;
 
 private:
+    /**
+     * Represents a Start Transform value used by the ImGui editor presentation layer.
+     */
     struct StartTransform {
         EntityId entity = InvalidEntityId;
         TransformComponent transform;
@@ -82,9 +98,7 @@ private:
     bool modelingDragActive_ = false;
     bool modelingDragPreviewDriven_ = false;
     bool sceneOnlyDrag_ = false;
-#if QUADER_HAS_MODELING_SDK
     std::optional<quader_editor_core::RotateToolState> sceneOnlyRotateState_;
-#endif
     std::optional<SceneTransformPreviewTransaction> sceneTransformPreview_;
     TransformAxisHandle activeAxis_ = TransformAxisHandle::None;
     Vec2 lastMouse_ = {};

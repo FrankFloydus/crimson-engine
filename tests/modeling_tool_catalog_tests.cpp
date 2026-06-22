@@ -1,22 +1,22 @@
-#include "modeling/tools/ModelingCommandToolCatalog.h"
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+#include "editor/actions/ModelingCommandToolCatalog.h"
 
-#include "modeling/tools/ActivateViewportToolActionTool.h"
-#include "modeling/tools/CustomInstantCommandTool.h"
-#include "modeling/tools/ModelingCommandDispatcher.h"
-#include "modeling/tools/RuntimeCommandTool.h"
-#include "modeling/tools/SdkContextOperationTool.h"
-#include "modeling/tools/SdkInstantOperationTool.h"
-#include "modeling/tools/SdkPreviewOperationTool.h"
-#include "modeling/tools/commands/AssignMaterialTool.h"
-#include "modeling/tools/commands/BridgeOperationTool.h"
-#include "modeling/tools/commands/DeleteSelectionTool.h"
-#include "modeling/tools/commands/FlipHorizontalTool.h"
-#include "modeling/tools/commands/MirrorSelectionTool.h"
-#include "modeling/tools/commands/SelectAllTool.h"
-#include "modeling/tools/context/BridgeEdgesTool.h"
-#include "modeling/tools/preview/EdgeBevelTool.h"
-#include "modeling/tools/preview/InterpolatedBridgeEdgesTool.h"
-#include "modeling/tools/preview/ThickenTool.h"
+#include "editor/actions/ActivateViewportToolActionTool.h"
+#include "editor/actions/CustomInstantCommandTool.h"
+#include "editor/actions/ModelingCommandDispatcher.h"
+#include "editor/actions/RuntimeCommandTool.h"
+#include "editor/actions/ContextOperationCommandTool.h"
+#include "editor/actions/InstantOperationCommandTool.h"
+#include "editor/actions/PreviewOperationCommandTool.h"
+#include "editor/actions/commands/AssignMaterialTool.h"
+#include "editor/actions/commands/FlipHorizontalTool.h"
+#include "editor/actions/commands/MirrorSelectionTool.h"
+#include "editor/actions/commands/SelectAllTool.h"
 
 #include <gtest/gtest.h>
 
@@ -30,7 +30,7 @@
 namespace quader {
 namespace {
 
-TEST(ModelingToolCatalogTests, ContainsEverySdkInstantOperationTool) {
+TEST(ModelingToolCatalogTests, ContainsEveryInstantOperationCommandTool) {
     constexpr std::array expectedOperations{
             ModelingInstantOperationId::DeleteSelection,
             ModelingInstantOperationId::DuplicateMeshes,
@@ -62,7 +62,7 @@ TEST(ModelingToolCatalogTests, ContainsEverySdkInstantOperationTool) {
             ModelingInstantOperationId::SoftenEdgeNormals,
     };
 
-    const std::span<const InstantCommandTool* const> tools = modelingSdkInstantOperationTools();
+    const std::span<const InstantCommandTool* const> tools = modelingInstantOperationCommandTools();
     ASSERT_EQ(tools.size(), expectedOperations.size());
 
     for (const ModelingInstantOperationId operation : expectedOperations) {
@@ -83,25 +83,17 @@ TEST(ModelingToolCatalogTests, CommandFamiliesExposeTheApprovedHierarchy) {
     static_assert(std::is_base_of_v<CommandTool, InstantCommandTool>);
     static_assert(std::is_base_of_v<CommandTool, ContextActionTool>);
     static_assert(std::is_base_of_v<CommandTool, PreviewCommandTool>);
-    static_assert(std::is_base_of_v<InstantCommandTool, SdkInstantOperationTool>);
+    static_assert(std::is_base_of_v<InstantCommandTool, InstantOperationCommandTool>);
     static_assert(std::is_base_of_v<InstantCommandTool, RuntimeCommandTool>);
     static_assert(std::is_base_of_v<InstantCommandTool, CustomInstantCommandTool>);
-    static_assert(std::is_base_of_v<ContextActionTool, SdkContextOperationTool>);
+    static_assert(std::is_base_of_v<ContextActionTool, ContextOperationCommandTool>);
     static_assert(std::is_base_of_v<ContextActionTool, ActivateViewportToolActionTool>);
-    static_assert(std::is_base_of_v<PreviewCommandTool, SdkPreviewOperationTool>);
+    static_assert(std::is_base_of_v<PreviewCommandTool, PreviewOperationCommandTool>);
 
-    static_assert(std::is_base_of_v<SdkInstantOperationTool, DeleteSelectionTool>);
-    static_assert(std::is_base_of_v<SdkInstantOperationTool, BridgeOperationTool>);
     static_assert(std::is_base_of_v<CustomInstantCommandTool, SelectAllTool>);
     static_assert(std::is_base_of_v<CustomInstantCommandTool, AssignMaterialTool>);
     static_assert(std::is_base_of_v<RuntimeCommandTool, MirrorSelectionTool>);
     static_assert(std::is_base_of_v<RuntimeCommandTool, FlipHorizontalTool>);
-    static_assert(std::is_base_of_v<SdkContextOperationTool, BridgeEdgesTool>);
-    static_assert(std::is_base_of_v<SdkPreviewOperationTool, EdgeBevelTool>);
-    static_assert(std::is_base_of_v<SdkPreviewOperationTool, ThickenTool>);
-    static_assert(std::is_base_of_v<SdkPreviewOperationTool, InterpolatedBridgeEdgesTool>);
-    static_assert(std::is_final_v<EdgeBevelTool>);
-    static_assert(std::is_final_v<ThickenTool>);
 }
 
 TEST(ModelingToolCatalogTests, RegisteredToolsExposeConsistentDescriptorsAndPolicies) {
@@ -135,6 +127,9 @@ TEST(ModelingToolCatalogTests, RegisteredToolsExposeConsistentDescriptorsAndPoli
 }
 
 TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
+    /**
+     * Represents an Expected Action value used by the automated test suite.
+     */
     struct ExpectedAction {
         std::string_view actionId;
         std::string_view operationId;

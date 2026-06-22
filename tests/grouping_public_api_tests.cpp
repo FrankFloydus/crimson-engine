@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "assets/MaterialDocument.h"
@@ -19,6 +25,9 @@ using namespace quader;
 
 constexpr float kEpsilon = 0.001f;
 
+/**
+ * Represents a Public API Grouping Harness value used by the automated test suite.
+ */
 struct PublicApiGroupingHarness {
     ProjectSession session;
     QuaderEditorApi editor;
@@ -178,9 +187,6 @@ void expectMaterial(const QuaderEditorApi& editor, EntityId entityId, AssetId ma
 } // namespace
 
 TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestoresHierarchy) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef left = createBox(h.editor, "Left", {-3.0f, 0.0f, 0.0f});
@@ -213,13 +219,9 @@ TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestor
     EXPECT_EQ(entity(h.editor, right.entity)->parent, regrouped->id);
     EXPECT_TRUE(regrouped->selected);
     EXPECT_TRUE(regrouped->active);
-#endif
 }
 
 TEST(GroupingPublicApiTests, GroupSelectionUsesSelectedRootsOnlyWhenParentAndChildAreSelected) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef child = createBox(h.editor, "Child", {1.0f, 0.0f, 0.0f});
@@ -234,13 +236,9 @@ TEST(GroupingPublicApiTests, GroupSelectionUsesSelectedRootsOnlyWhenParentAndChi
     EXPECT_EQ(entity(h.editor, child.entity)->parent, existingGroup);
     EXPECT_EQ(entity(h.editor, sibling.entity)->parent, existingGroup);
     EXPECT_EQ(childrenOf(h.editor, outer).size(), 1u);
-#endif
 }
 
 TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacement) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef first = createBox(h.editor, "First", {-2.0f, 0.0f, 0.0f});
@@ -273,13 +271,9 @@ TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacem
     EXPECT_FALSE(entityNamed(h.editor, "Ungroup Me").has_value());
     EXPECT_EQ(entity(h.editor, first.entity)->parent, InvalidEntityId);
     EXPECT_EQ(entity(h.editor, second.entity)->parent, InvalidEntityId);
-#endif
 }
 
 TEST(GroupingPublicApiTests, SceneDestroyGroupUndoRedoRestoresMaterialsTexturesAndTransforms) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef red = createBox(h.editor, "Red", {-4.0f, 1.0f, 0.0f});
@@ -319,13 +313,9 @@ TEST(GroupingPublicApiTests, SceneDestroyGroupUndoRedoRestoresMaterialsTexturesA
     EXPECT_FALSE(entityNamed(h.editor, "Textured Group").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Red").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Blue").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, SceneDestroyNestedGroupUndoRedoRestoresNestedHierarchy) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef left = createBox(h.editor, "Nested Left", {-2.0f, 0.0f, 0.0f});
@@ -357,13 +347,9 @@ TEST(GroupingPublicApiTests, SceneDestroyNestedGroupUndoRedoRestoresNestedHierar
     EXPECT_FALSE(entityNamed(h.editor, "Nested Left").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Nested Right").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Nested Top").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, SceneDestroyGroupedChildUndoKeepsChildInsideParentGroup) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef child = createBox(h.editor, "Child Mesh", {-1.0f, 0.0f, 0.0f});
@@ -382,13 +368,9 @@ TEST(GroupingPublicApiTests, SceneDestroyGroupedChildUndoKeepsChildInsideParentG
     EXPECT_EQ(restoredChild->parent, group);
     expectMaterial(h.editor, restoredChild->id, material);
     expectVecNear(worldPosition(h.editor, restoredChild->id), {-1.0f, 0.0f, 0.0f});
-#endif
 }
 
-TEST(GroupingPublicApiTests, ModelingDeleteCommandDeletesSelectedGroupInsteadOfStaleSdkObject) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
+TEST(GroupingPublicApiTests, ModelingDeleteCommandDeletesSelectedGroupInsteadOfStaleModelingObject) {
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef groupedA = createBox(h.editor, "Grouped A", {-1.0f, 0.0f, 0.0f});
@@ -407,13 +389,9 @@ TEST(GroupingPublicApiTests, ModelingDeleteCommandDeletesSelectedGroupInsteadOfS
     EXPECT_FALSE(entityNamed(h.editor, "Grouped A").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Grouped B").has_value());
     EXPECT_TRUE(entityNamed(h.editor, "Do Not Delete").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef left = createBox(h.editor, "Shortcut Left", {-1.0f, 0.0f, 0.0f});
@@ -459,13 +437,9 @@ TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
     ASSERT_TRUE(h.editor.commands().execute(QuaderCommand::HistoryRedo).ok());
     EXPECT_FALSE(entityNamed(h.editor, "Shortcut Group").has_value());
     EXPECT_TRUE(entityNamed(h.editor, "Shortcut Decoy").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, ContextDeleteActionDeletesSelectedGroup) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef first = createBox(h.editor, "Action First", {-2.0f, 0.0f, 0.0f});
@@ -477,7 +451,7 @@ TEST(GroupingPublicApiTests, ContextDeleteActionDeletesSelectedGroup) {
     const EntityId group = groupSelection(h.editor, "Action Group");
     selectGroupForCommandDelete(h.editor, group);
 
-    const QuaderApiVoidResult deleted = h.editor.modeling().executeAction("delete_selection");
+    const QuaderApiVoidResult deleted = h.editor.commands().execute(QuaderCommand::DeleteSelection);
     ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
     EXPECT_TRUE(deleted.changed());
     EXPECT_FALSE(entityNamed(h.editor, "Action Group").has_value());
@@ -496,13 +470,9 @@ TEST(GroupingPublicApiTests, ContextDeleteActionDeletesSelectedGroup) {
     EXPECT_EQ(restoredSecond->parent, restoredGroup->id);
     expectMaterial(h.editor, restoredFirst->id, material);
     expectMaterial(h.editor, restoredSecond->id, material);
-#endif
 }
 
 TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef child = createBox(h.editor, "Object Mode Child", {-1.0f, 0.0f, 0.0f});
@@ -523,13 +493,9 @@ TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
     EXPECT_FALSE(entityNamed(h.editor, "Object Mode Child").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Object Mode Sibling").has_value());
     EXPECT_TRUE(entityNamed(h.editor, "Object Mode Decoy").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupDeleteUsesSceneRoots) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef child = createBox(h.editor, "Component Mode Child", {-1.0f, 0.0f, 0.0f});
@@ -554,13 +520,9 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupDeleteUsesSceneRoots
     EXPECT_EQ(restoredGroup->name, "Component Mode Group");
     EXPECT_EQ(entityNamed(h.editor, "Component Mode Child")->parent, restoredGroup->id);
     EXPECT_EQ(entityNamed(h.editor, "Component Mode Sibling")->parent, restoredGroup->id);
-#endif
 }
 
-TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleSdkObjectDoesNotDeleteFallbackObject) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
+TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleModelingObjectDoesNotDeleteFallbackObject) {
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef decoy = createBox(h.editor, "Stale Delete Decoy", {4.0f, 0.0f, 0.0f});
@@ -575,13 +537,9 @@ TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleSdkObjectDoesNotDeleteF
     EXPECT_FALSE(deleted.ok());
     EXPECT_FALSE(deleted.changed());
     EXPECT_TRUE(entityNamed(h.editor, "Stale Delete Decoy").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, ModelingDeleteCommandUndoRedoRestoresSelectedGroupSubtree) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef first = createBox(h.editor, "Command First", {-3.0f, 0.0f, 0.0f});
@@ -615,13 +573,9 @@ TEST(GroupingPublicApiTests, ModelingDeleteCommandUndoRedoRestoresSelectedGroupS
     EXPECT_FALSE(entityNamed(h.editor, "Command Group").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Command First").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Command Second").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, ModelingDeleteGroupedChildUndoKeepsChildGroupedAndTextured) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef target = createBox(h.editor, "Delete Child", {-2.0f, 0.0f, 0.0f});
@@ -643,13 +597,9 @@ TEST(GroupingPublicApiTests, ModelingDeleteGroupedChildUndoKeepsChildGroupedAndT
     EXPECT_EQ(restoredChild->parent, group);
     expectMaterial(h.editor, restoredChild->id, material);
     expectVecNear(worldPosition(h.editor, restoredChild->id), {-2.0f, 0.0f, 0.0f});
-#endif
 }
 
 TEST(GroupingPublicApiTests, RestoredGroupCanBeDeletedAgainWithModelingCommand) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef first = createBox(h.editor, "Again First", {-1.5f, 0.0f, 0.0f});
@@ -668,13 +618,9 @@ TEST(GroupingPublicApiTests, RestoredGroupCanBeDeletedAgainWithModelingCommand) 
     EXPECT_FALSE(entityNamed(h.editor, "Again Group").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Again First").has_value());
     EXPECT_FALSE(entityNamed(h.editor, "Again Second").has_value());
-#endif
 }
 
-TEST(GroupingPublicApiTests, SceneAwareDeleteRedoClearedByDocumentEditDoesNotReplaySdkRedo) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
+TEST(GroupingPublicApiTests, SceneAwareDeleteRedoClearedByDocumentEditDoesNotReplayRuntimeRedo) {
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef first = createBox(h.editor, "Redo Guard First", {-1.0f, 0.0f, 0.0f});
@@ -699,13 +645,9 @@ TEST(GroupingPublicApiTests, SceneAwareDeleteRedoClearedByDocumentEditDoesNotRep
     EXPECT_TRUE(entityNamed(h.editor, "Redo Guard Edited").has_value());
     EXPECT_TRUE(entityNamed(h.editor, "Redo Guard First").has_value());
     EXPECT_TRUE(entityNamed(h.editor, "Redo Guard Second").has_value());
-#endif
 }
 
 TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvivesChildren) {
-#if !QUADER_HAS_MODELING_SDK
-    GTEST_SKIP() << "Grouping behavior tests require the modeling SDK.";
-#else
     PublicApiGroupingHarness h;
 
     const QuaderModelingObjectRef first = createBox(h.editor, "Batch First", {-1.0f, 0.0f, 0.0f});
@@ -739,5 +681,4 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
     EXPECT_FALSE(entity(h.editor, group)->visible);
     EXPECT_TRUE(entity(h.editor, group)->locked);
     expectVecNear(entity(h.editor, group)->transform.position, {2.0f, 3.0f, 0.0f});
-#endif
 }

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
@@ -14,10 +20,16 @@ namespace quader {
 
 class QuaderEditorApi;
 
+/**
+ * Stores the App Options data contract used by the native application shell.
+ */
 struct AppOptions {
     bool borderlessWindow = false;
 };
 
+/**
+ * Owns App behavior within the native application shell.
+ */
 class App {
 public:
     App();
@@ -38,6 +50,7 @@ private:
     std::unique_ptr<QuaderEditorApi> editor_;
     AssetId defaultMaterial_ = InvalidAssetId;
     bool running_ = false;
+    bool shutdownComplete_ = false;
 };
 
 } // namespace quader

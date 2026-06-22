@@ -1,7 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderApiMutationRunner.h"
 
 #include "document/ProjectSession.h"
-#include "editor/ModelingHistoryCommand.h"
+#include "editor/ModelingMementoCommand.h"
+#include "modeling/services/ModelingSessionService.h"
 
 #include <memory>
 
@@ -19,9 +26,11 @@ QuaderMutationKind changedMutationKind(bool ok, bool changed, QuaderMutationKind
 
 QuaderApiMutationRunner::QuaderApiMutationRunner(
         ProjectSession& session,
+        EditorHistoryService& history,
         EditorCommandService& editorCommands,
         ModelingCommandExecutionService& modelingCommands)
     : session_(session)
+    , history_(history)
     , editorCommands_(editorCommands)
     , modelingCommands_(modelingCommands) {}
 
@@ -31,17 +40,9 @@ QuaderRevisionStamp QuaderApiMutationRunner::currentRevisions() const {
             .projectRevision = session_.document().revision(),
             .sceneRevision = session_.scene().revision(),
             .assetRevision = session_.assets().revision(),
-            .sdkContentRevision = modeling.contentRevision,
-            .sdkSelectionRevision = modeling.selectionRevision,
+            .modelingContentRevision = modeling.contentRevision,
+            .modelingSelectionRevision = modeling.selectionRevision,
     };
-}
-
-bool QuaderApiMutationRunner::canUndo() const {
-    return editorCommands_.canUndo();
-}
-
-bool QuaderApiMutationRunner::canRedo() const {
-    return editorCommands_.canRedo();
 }
 
 QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const QuaderCreateEntityArgs& args) {
@@ -61,7 +62,10 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const Qua
     result.mutationKind = status.mutationKind;
     result.revisions = status.revisions;
     if (result.ok && result.changed) {
-        result.value = QuaderEntityRef{.id = createdEntity};
+        result.value = QuaderEntityRef{
+                .id = createdEntity,
+                .editorObjectId = session_.scene().editorObjectId(createdEntity),
+        };
     }
     return result;
 }
@@ -80,23 +84,29 @@ QuaderApiVoidResult QuaderApiMutationRunner::runModelingResult(
     return statusFrom(std::move(result), QuaderMutationKind::Modeling, label);
 }
 
+QuaderApiVoidResult QuaderApiMutationRunner::runModelingCommand(
+        std::unique_ptr<ModelingMementoCommand> command,
+        std::string_view label) {
+    return statusFrom(editorCommands_.executeModeling(std::move(command)), QuaderMutationKind::Modeling, label);
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingTool(std::string_view toolId) {
     return statusFrom(
-            modelingCommands_.execute(session_.undoRedo(), session_.modeling(), toolId),
+            modelingCommands_.execute(history_, session_.modeling(), toolId),
             QuaderMutationKind::Modeling,
             toolId);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingAction(std::string_view actionId) {
     return statusFrom(
-            modelingCommands_.executeAction(session_.undoRedo(), session_.modeling(), actionId),
+            modelingCommands_.executeAction(history_, session_.modeling(), actionId),
             QuaderMutationKind::Modeling,
             actionId);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::commitModelingPreview(std::string label) {
     return statusFrom(
-            modelingCommands_.commitPreview(session_.undoRedo(), session_.modeling(), std::move(label)),
+            modelingCommands_.commitPreview(history_, session_.modeling(), std::move(label)),
             QuaderMutationKind::Modeling,
             "Commit Operation Preview");
 }

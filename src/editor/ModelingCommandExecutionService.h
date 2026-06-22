@@ -1,7 +1,13 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "core/UndoRedoManager.h"
-#include "modeling/tools/ModelingCommandDispatcher.h"
+#include "editor/EditorHistoryService.h"
+#include "editor/actions/ModelingCommandDispatcher.h"
 
 #include <string>
 #include <string_view>
@@ -9,10 +15,13 @@
 
 namespace quader {
 
+/**
+ * Coordinates Modeling Command Execution Service responsibilities for the editor coordination layer.
+ */
 class ModelingCommandExecutionService final {
 public:
     ModelingCommandResult execute(
-            UndoRedoManager& undoRedo,
+            EditorHistoryService& history,
             ModelingSessionService& modeling,
             std::string_view toolId);
 
@@ -21,7 +30,7 @@ public:
             std::string_view toolId);
 
     ModelingCommandResult executeAction(
-            UndoRedoManager& undoRedo,
+            EditorHistoryService& history,
             ModelingSessionService& modeling,
             std::string_view actionId);
 
@@ -30,7 +39,7 @@ public:
             std::string_view actionId);
 
     ModelingCommandResult commitPreview(
-            UndoRedoManager& undoRedo,
+            EditorHistoryService& history,
             ModelingSessionService& modeling,
             std::string label);
 
@@ -45,19 +54,5 @@ public:
 private:
     ModelingCommandDispatcher dispatcher_;
 };
-
-[[nodiscard]] ModelingCommandResult executeModelingCommandTool(
-        UndoRedoManager& undoRedo,
-        ModelingSessionService& modeling,
-        std::string_view toolId);
-[[nodiscard]] ModelingCommandResult executeModelingCommandToolWithoutHistory(
-        ModelingSessionService& modeling,
-        std::string_view toolId);
-[[nodiscard]] ModelingCommandResult undoModelingCommand(
-        UndoRedoManager& undoRedo,
-        ModelingSessionService& modeling);
-[[nodiscard]] ModelingCommandResult redoModelingCommand(
-        UndoRedoManager& undoRedo,
-        ModelingSessionService& modeling);
 
 } // namespace quader

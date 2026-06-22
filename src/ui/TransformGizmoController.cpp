@@ -1,29 +1,75 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/TransformGizmoController.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
+#include "editor/selection/EditorSelectionService.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 #include "scene/TransformPivot.h"
 #include "viewport/ViewportCameraAdapter.h"
-#include "viewport/tools/ViewportToolCatalog.h"
+#include "viewport/modes/ViewportToolCatalog.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <optional>
+#include <span>
+#include <vector>
 
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_editor_core/tool/tool_transform_math.h>
-#include <quader_editor_core/tool/transform_gizmo.h>
-#include <quader_editor_core/tool_constants.h>
-#endif
+#include <modeling/interactions/tool_transform_math.h>
+#include <modeling/interactions/transform_gizmo.h>
+#include <modeling/runtime/tool_constants.h>
 
 namespace quader {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
+
+QuaderApiVoidResult commitSceneTransformPreviewThroughApi(
+        QuaderEditorApi& editor,
+        SceneTransformPreviewTransaction& transaction) {
+    std::vector<DocumentTransformEdit> changedEdits;
+    changedEdits.reserve(transaction.edits().size());
+    for (const DocumentTransformEdit& edit : transaction.edits()) {
+        if (!documentCommandSameTransform(edit.before, edit.after)) {
+            changedEdits.push_back(edit);
+        }
+    }
+
+    const DocumentCommandResult reset = transaction.cancel();
+    if (!reset.ok) {
+        return {
+                .ok = false,
+                .changed = false,
+                .message = reset.message,
+                .mutationKind = QuaderMutationKind::None,
+        };
+    }
+    if (changedEdits.empty()) {
+        return {
+                .ok = true,
+                .changed = false,
+                .message = "Transform Selection",
+                .mutationKind = QuaderMutationKind::None,
+                .revisions = editor.revisions(),
+        };
+    }
+
+    QuaderSceneBatch batch = editor.scene().batch("Transform Selection");
+    for (const DocumentTransformEdit& edit : changedEdits) {
+        batch.setTransform(edit.entity, edit.after);
+    }
+    return batch.commit();
+}
 
 float distanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
     const ImVec2 ab{b.x - a.x, b.y - a.y};
@@ -277,25 +323,24 @@ std::optional<ImVec2> projectWorldToViewport(
     };
 }
 
-#if QUADER_HAS_MODELING_SDK
 
-quader_poly::Vec3 toSdk(Vec3 value) {
+quader_poly::Vec3 toRuntime(Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_poly::Vec2 toSdk(Vec2 value) {
+quader_poly::Vec2 toRuntime(Vec2 value) {
     return {value.x, value.y};
 }
 
-Vec3 fromSdk(quader_poly::Vec3 value) {
+Vec3 fromRuntime(quader_poly::Vec3 value) {
     return {value.x, value.y, value.z};
 }
 
-Vec2 fromSdk(quader_poly::Vec2 value) {
+Vec2 fromRuntime(quader_poly::Vec2 value) {
     return {value.x, value.y};
 }
 
-quader_editor_core::TransformAxis toSdkAxis(TransformAxisHandle axis) {
+quader_editor_core::TransformAxis toRuntimeAxis(TransformAxisHandle axis) {
     switch (axis) {
     case TransformAxisHandle::X:
         return quader_editor_core::TransformAxis::x;
@@ -339,7 +384,7 @@ ModelingTransformAxis toModelingTransformAxis(TransformAxisHandle axis) {
     return ModelingTransformAxis::None;
 }
 
-TransformAxisHandle fromSdkAxis(quader_editor_core::TransformAxis axis) {
+TransformAxisHandle fromRuntimeAxis(quader_editor_core::TransformAxis axis) {
     switch (axis) {
     case quader_editor_core::TransformAxis::x:
         return TransformAxisHandle::X;
@@ -379,24 +424,24 @@ ImU32 axisImColor(quader_editor_core::TransformAxis axis, float alpha = 1.0f) {
     }
 }
 
-quader_editor_core::ViewportCameraState makeSdkCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
+quader_editor_core::ViewportCameraState makeRuntimeCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
     const ViewportCameraBasis cameraBasis = ViewportCameraAdapter::basis(camera);
 
-    quader_editor_core::ViewportCameraState sdkCamera;
-    sdkCamera.projection = camera.state().projection == ViewportProjection::Orthographic
+    quader_editor_core::ViewportCameraState runtimeCamera;
+    runtimeCamera.projection = camera.state().projection == ViewportProjection::Orthographic
             ? quader_editor_core::CameraProjection::orthographic
             : quader_editor_core::CameraProjection::perspective;
-    sdkCamera.transform.origin = toSdk(cameraBasis.eye);
-    sdkCamera.transform.x_axis = toSdk(cameraBasis.right);
-    sdkCamera.transform.y_axis = toSdk(cameraBasis.up);
-    sdkCamera.transform.z_axis = toSdk(cameraBasis.forward * -1.0f);
-    sdkCamera.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-    sdkCamera.orthographic_size = std::max(camera.state().orthographicSize, 0.0001f);
-    sdkCamera.fov_degrees = camera.state().fovDegrees;
-    return sdkCamera;
+    runtimeCamera.transform.origin = toRuntime(cameraBasis.eye);
+    runtimeCamera.transform.x_axis = toRuntime(cameraBasis.right);
+    runtimeCamera.transform.y_axis = toRuntime(cameraBasis.up);
+    runtimeCamera.transform.z_axis = toRuntime(cameraBasis.forward * -1.0f);
+    runtimeCamera.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
+    runtimeCamera.orthographic_size = std::max(camera.state().orthographicSize, 0.0001f);
+    runtimeCamera.fov_degrees = camera.state().fovDegrees;
+    return runtimeCamera;
 }
 
-quader_editor_core::TransformGizmoFrameInput makeSdkGizmoInput(
+quader_editor_core::TransformGizmoFrameInput makeRuntimeGizmoInput(
         const ViewportCameraController& camera,
         Vec3 pivot,
         quader_editor_core::ViewportInteractionTool tool,
@@ -407,12 +452,12 @@ quader_editor_core::TransformGizmoFrameInput makeSdkGizmoInput(
         ImVec2 itemSize) {
     quader_editor_core::TransformGizmoFrameInput input;
     input.tool = tool;
-    input.active_axis = toSdkAxis(activeAxis);
-    input.hover_axis = toSdkAxis(hoverAxis);
+    input.active_axis = toRuntimeAxis(activeAxis);
+    input.hover_axis = toRuntimeAxis(hoverAxis);
     input.has_selection = true;
     input.has_pivot = true;
-    input.pivot = toSdk(pivot);
-    input.camera = makeSdkCamera(camera, itemSize);
+    input.pivot = toRuntime(pivot);
+    input.camera = makeRuntimeCamera(camera, itemSize);
     input.grid_size = gridSize;
     input.gizmo_size_pixels = 68.0;
     input.gizmo_scale = std::max(gizmoSizeScale, 0.1f);
@@ -535,8 +580,8 @@ bool drawProjectedConeHandle(
     constexpr int coneSegments = 14;
     constexpr float circleTau = kPi * 2.0f;
 
-    const Vec3 rawStart = fromSdk(start);
-    const Vec3 rawTip = fromSdk(tip);
+    const Vec3 rawStart = fromRuntime(start);
+    const Vec3 rawTip = fromRuntime(tip);
     Vec3 axis = rawTip - rawStart;
     const float axisLength = length(axis);
     if (axisLength <= 0.000001f) {
@@ -600,7 +645,7 @@ void drawProjectedCubeHandle(
         return;
     }
 
-    const Vec3 rawCenter = fromSdk(center);
+    const Vec3 rawCenter = fromRuntime(center);
     const float half = worldSize * 0.5f;
     const std::array<Vec3, 8> corners = {{
             rawCenter + Vec3{-half, -half, -half},
@@ -717,7 +762,7 @@ void drawUnityStyleGizmo(
         if (frame.info.tool == quader_editor_core::ViewportInteractionTool::scale) {
             const float worldSize = std::max(
                     0.0001f,
-                    length(fromSdk(axis.world_tip) - fromSdk(axis.world_start)) *
+                    length(fromRuntime(axis.world_tip) - fromRuntime(axis.world_start)) *
                             (scaleHandleSize / 68.0f) * sizeScale);
             drawProjectedCubeHandle(drawList, camera, itemMin, itemSize, axis.world_tip, worldSize, color, false);
         } else {
@@ -737,7 +782,7 @@ void drawUnityStyleGizmo(
         }
         const float worldSize = std::max(
                 0.0001f,
-                length(fromSdk(frame.axes[0].world_tip) - fromSdk(frame.axes[0].world_start)) *
+                length(fromRuntime(frame.axes[0].world_tip) - fromRuntime(frame.axes[0].world_start)) *
                         (scaleCenterSize / 68.0f) * sizeScale);
         drawProjectedCubeHandle(
                 drawList,
@@ -753,14 +798,9 @@ void drawUnityStyleGizmo(
     }
 }
 
-#endif
 
 double sceneScalePixelsPerFactor() {
-#if QUADER_HAS_MODELING_SDK
     return quader_editor_core::scale_pixels_per_factor;
-#else
-    return 96.0;
-#endif
 }
 
 double snappedSceneScaleFactor(
@@ -770,28 +810,19 @@ double snappedSceneScaleFactor(
         Vec3 pivot,
         bool snapEnabled,
         double gridSize) {
-#if QUADER_HAS_MODELING_SDK
-    quader_editor_core::ToolBounds3 sdkBounds;
+    quader_editor_core::ToolBounds3 runtimeBounds;
     if (bounds) {
-        sdkBounds.has_bounds = true;
-        sdkBounds.min = toSdk(bounds->min);
-        sdkBounds.max = toSdk(bounds->max);
+        runtimeBounds.has_bounds = true;
+        runtimeBounds.min = toRuntime(bounds->min);
+        runtimeBounds.max = toRuntime(bounds->max);
     }
     return quader_editor_core::snapped_scale_factor(
-            toSdkAxis(activeAxis),
+            toRuntimeAxis(activeAxis),
             factor,
-            sdkBounds,
-            toSdk(pivot),
+            runtimeBounds,
+            toRuntime(pivot),
             snapEnabled,
             gridSize);
-#else
-    (void)activeAxis;
-    (void)bounds;
-    (void)pivot;
-    (void)snapEnabled;
-    (void)gridSize;
-    return factor;
-#endif
 }
 
 } // namespace
@@ -810,14 +841,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         if (!interactive) {
             return false;
         }
-#if QUADER_HAS_MODELING_SDK
         if (modelingDragActive_) {
             const ModelingCommandResult cancel = modeling.cancelTransformDrag();
             if (!cancel.ok) {
                 LOG_ERROR("Transform drag cancel failed: {}", cancel.message);
             }
         }
-#endif
         resetDragState();
         return false;
     }
@@ -827,14 +856,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         if (!interactive) {
             return false;
         }
-#if QUADER_HAS_MODELING_SDK
         if (modelingDragActive_) {
             const ModelingCommandResult cancel = modeling.cancelTransformDrag();
             if (!cancel.ok) {
                 LOG_ERROR("Transform drag cancel failed: {}", cancel.message);
             }
         }
-#endif
         resetDragState();
         return false;
     }
@@ -845,14 +872,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             return false;
         }
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-#if QUADER_HAS_MODELING_SDK
             if (modelingDragActive_) {
                 const ModelingCommandResult cancel = modeling.cancelTransformDrag();
                 if (!cancel.ok) {
                     LOG_ERROR("Transform drag cancel failed: {}", cancel.message);
                 }
             }
-#endif
             resetDragState();
         }
         return false;
@@ -860,33 +885,37 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
 
     const ModelingSelectionMode activeSelectionMode = modeling.selectionMode();
     if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {
-        modeling.syncObjectSelectionFromScene();
+        const std::vector<EntityId> selectedEntities = document.selectedEntities();
+        const ModelingCommandResult selectionResult = request.selection.setObjectSelection(
+                std::span<const EntityId>(selectedEntities.data(), selectedEntities.size()),
+                selected);
+        if (!selectionResult.ok) {
+            LOG_ERROR("Transform gizmo selection projection failed: {}", selectionResult.message);
+        }
     }
     const bool componentSelectionMode = isComponentSelectionMode(activeSelectionMode);
     const bool groupSelectionMode = activeSelectionMode == ModelingSelectionMode::Group;
     const std::optional<SceneBounds> selectionBounds = selectedTransformWorldBounds(document, request.assets);
-    const std::optional<Vec3> sdkSelectionCenter = modeling.selectionCenter();
+    const std::optional<Vec3> runtimeSelectionCenter = modeling.selectionCenter();
     const Vec3 selectedWorldPosition = transformPoint(document.worldTransformMatrix(selected), Vec3{});
     const bool usePrimaryEntityPivot =
             !componentSelectionMode &&
             (document.modelingObject(selected) == nullptr || document.hasChildren(selected));
     const Vec3 pivot =
-            (componentSelectionMode && sdkSelectionCenter) ? *sdkSelectionCenter :
+            (componentSelectionMode && runtimeSelectionCenter) ? *runtimeSelectionCenter :
             usePrimaryEntityPivot ? selectedWorldPosition :
-            (selectionBounds ? boundsCenter(*selectionBounds) : sdkSelectionCenter.value_or(selectedWorldPosition));
+            (selectionBounds ? boundsCenter(*selectionBounds) : runtimeSelectionCenter.value_or(selectedWorldPosition));
     const ViewportScreenPoint projectedPivot = camera.projectWorldPoint(pivot);
     if (!projectedPivot.visible) {
         if (!interactive) {
             return false;
         }
-#if QUADER_HAS_MODELING_SDK
         if (modelingDragActive_) {
             const ModelingCommandResult cancel = modeling.cancelTransformDrag();
             if (!cancel.ok) {
                 LOG_ERROR("Transform drag cancel failed: {}", cancel.message);
             }
         }
-#endif
         resetDragState();
         return false;
     }
@@ -925,20 +954,18 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             (componentSelectionMode || !selectedHasHierarchyTransform || objectDuplicateRequested);
 
     const float sizeScale = request.viewportSettings.floatValue(ViewportFloatSettingId::GizmoSize);
-#if QUADER_HAS_MODELING_SDK
-    const quader_editor_core::ViewportInteractionTool sdkTool = sdkToolFor(tool);
-    quader_editor_core::TransformGizmoFrameInput sdkInput =
-            makeSdkGizmoInput(camera, pivot, sdkTool, activeAxis_, TransformAxisHandle::None, activeGridSize, sizeScale, itemSize);
+    const quader_editor_core::ViewportInteractionTool runtimeTool = runtimeToolFor(tool);
+    quader_editor_core::TransformGizmoFrameInput runtimeInput =
+            makeRuntimeGizmoInput(camera, pivot, runtimeTool, activeAxis_, TransformAxisHandle::None, activeGridSize, sizeScale, itemSize);
     if (interactive && !dragging_ && mouseInsideViewport && !request.suppressHoverWork) {
         const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         const quader_editor_core::TransformGizmoPickHit hoverHit =
-                quader_editor_core::pick_transform_gizmo(sdkInput, toSdk(localMouse));
-        sdkInput.hover_axis = hoverHit.hit ? hoverHit.axis : quader_editor_core::TransformAxis::none;
+                quader_editor_core::pick_transform_gizmo(runtimeInput, toRuntime(localMouse));
+        runtimeInput.hover_axis = hoverHit.hit ? hoverHit.axis : quader_editor_core::TransformAxis::none;
     }
-    const quader_editor_core::TransformGizmoFrame sdkFrame =
-            quader_editor_core::build_transform_gizmo_frame(sdkInput);
-    drawUnityStyleGizmo(sdkFrame, camera, itemMin, itemSize);
-#endif
+    const quader_editor_core::TransformGizmoFrame runtimeFrame =
+            quader_editor_core::build_transform_gizmo_frame(runtimeInput);
+    drawUnityStyleGizmo(runtimeFrame, camera, itemMin, itemSize);
 
     const ViewportCameraPose pose = camera.pose();
     const float cameraDistance = std::max(length(pose.eye - pivot), 0.1f);
@@ -965,25 +992,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     }
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-#if !QUADER_HAS_MODELING_SDK
-    if (tool == ViewportToolId::Rotate) {
-        const float radius = std::clamp(std::min(itemSize.x, itemSize.y) * 0.075f, 34.0f, 92.0f);
-        drawList->AddCircle(origin, radius, axisColors[0], 64, 2.0f);
-        drawList->AddCircle(origin, radius * 0.78f, axisColors[1], 64, 2.0f);
-        drawList->AddCircle(origin, radius * 0.56f, axisColors[2], 64, 2.0f);
-    } else {
-        for (std::size_t index = 0; index < axisEnds.size(); ++index) {
-            if (!axisEnds[index]) {
-                continue;
-            }
-            drawList->AddLine(origin, *axisEnds[index], axisColors[index], 3.0f);
-            drawList->AddCircleFilled(*axisEnds[index], 5.5f, axisColors[index]);
-        }
-    }
-#else
     (void)drawList;
     (void)axisColors;
-#endif
 
     if (!interactive) {
         return false;
@@ -1015,17 +1025,13 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
 
     bool consumed = dragging_;
     if (!dragging_ && mouseInsideViewport && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-#if QUADER_HAS_MODELING_SDK
-        quader_editor_core::TransformGizmoPickHit sdkHit;
+        quader_editor_core::TransformGizmoPickHit runtimeHit;
         const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
-        sdkHit = quader_editor_core::pick_transform_gizmo(sdkInput, toSdk(localMouse));
-        activeAxis_ = sdkHit.hit ? fromSdkAxis(sdkHit.axis) : TransformAxisHandle::None;
+        runtimeHit = quader_editor_core::pick_transform_gizmo(runtimeInput, toRuntime(localMouse));
+        activeAxis_ = runtimeHit.hit ? fromRuntimeAxis(runtimeHit.axis) : TransformAxisHandle::None;
         if (activeAxis_ == TransformAxisHandle::None && !useModelingTransformDrag) {
             activeAxis_ = fallbackHit();
         }
-#else
-        activeAxis_ = fallbackHit();
-#endif
 
         if (activeAxis_ != TransformAxisHandle::None) {
             bool hasEditableTransform = false;
@@ -1046,13 +1052,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             }
 
             bool dragReady = true;
-#if QUADER_HAS_MODELING_SDK
             if (useModelingTransformDrag) {
                 dragReady = false;
                 sceneOnlyRotateState_.reset();
 
-                const quader_poly::Vec2 sdkScreenPivot = toSdk(projectedPivot.position);
-                const quader_poly::Vec2 sdkScreenTip = sdkHit.hit ? sdkHit.screen_tip : sdkScreenPivot;
+                const quader_poly::Vec2 runtimeScreenPivot = toRuntime(projectedPivot.position);
+                const quader_poly::Vec2 runtimeScreenTip = runtimeHit.hit ? runtimeHit.screen_tip : runtimeScreenPivot;
                 const ViewportRay startRay = camera.rayFromViewportPoint(localMouse);
                 const bool duplicateSelected = !componentSelectionMode && io.KeyShift;
                 const bool topologyModifier = componentSelectionMode && io.KeyShift;
@@ -1067,9 +1072,9 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                         .pivot = pivot,
                         .screenPosition = localMouse,
                         .screenPivot = projectedPivot.position,
-                        .screenTip = fromSdk(sdkScreenTip),
-                        .hasWorldDirection = sdkHit.hit,
-                        .worldDirection = fromSdk(sdkHit.world_direction),
+                        .screenTip = fromRuntime(runtimeScreenTip),
+                        .hasWorldDirection = runtimeHit.hit,
+                        .worldDirection = fromRuntime(runtimeHit.world_direction),
                         .ray = {
                                 .origin = startRay.origin,
                                 .direction = startRay.direction,
@@ -1092,20 +1097,20 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 sceneOnlyDrag_ = true;
                 sceneOnlyRotateState_.reset();
                 if (tool == ViewportToolId::Rotate) {
-                    const quader_editor_core::ViewportCameraState sdkCamera = makeSdkCamera(camera, itemSize);
+                    const quader_editor_core::ViewportCameraState runtimeCamera = makeRuntimeCamera(camera, itemSize);
                     const quader_editor_core::RotateBeginResult rotateBegin =
                             quader_editor_core::begin_rotate_drag({
-                                    .axis = toSdkAxis(activeAxis_),
-                                    .pivot = toSdk(pivot),
-                                    .screen_position = toSdk(localMouse),
+                                    .axis = toRuntimeAxis(activeAxis_),
+                                    .pivot = toRuntime(pivot),
+                                    .screen_position = toRuntime(localMouse),
                                     .has_screen_pivot = true,
-                                    .screen_pivot = toSdk(projectedPivot.position),
+                                    .screen_pivot = toRuntime(projectedPivot.position),
                                     .has_world_direction = true,
-                                    .world_direction = toSdk(worldAxisForHandle(activeAxis_)),
+                                    .world_direction = toRuntime(worldAxisForHandle(activeAxis_)),
                                     .has_world_pivot = true,
-                                    .world_pivot = toSdk(pivot),
+                                    .world_pivot = toRuntime(pivot),
                                     .has_camera = true,
-                                    .camera_transform = sdkCamera.transform,
+                                    .camera_transform = runtimeCamera.transform,
                             });
                     if (rotateBegin.ok) {
                         sceneOnlyRotateState_ = rotateBegin.state;
@@ -1114,7 +1119,6 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                     }
                 }
             }
-#endif
 
             if (!dragReady) {
                 modelingDragActive_ = false;
@@ -1124,10 +1128,14 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 return consumed;
             }
             if (sceneOnlyDrag_ && groupSelectionMode && io.KeyShift) {
-                const ModelingCommandResult duplicate =
-                        modeling.duplicateSelectedHierarchyForGroupDrag(request.documentCommands);
-                if (!duplicate.ok) {
-                    LOG_ERROR("Group shift-drag duplicate failed: {}", duplicate.message);
+                if (request.editor == nullptr) {
+                    LOG_ERROR("Group shift-drag duplicate failed: editor API is unavailable.");
+                } else {
+                    const QuaderApiVoidResult duplicate =
+                            request.editor->modeling().duplicateSelectedHierarchyForGroupDrag();
+                    if (!duplicate.ok) {
+                        LOG_ERROR("Group shift-drag duplicate failed: {}", duplicate.message);
+                    }
                 }
             }
             dragging_ = true;
@@ -1154,22 +1162,16 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 }
             }
             if (startTransforms_.empty()) {
-#if QUADER_HAS_MODELING_SDK
                 if (modelingDragActive_) {
                     const ModelingCommandResult cancel = modeling.cancelTransformDrag();
                     if (!cancel.ok) {
                         LOG_ERROR("Transform drag cancel failed: {}", cancel.message);
                     }
                 }
-#endif
                 resetDragState();
                 return consumed;
             }
-#if QUADER_HAS_MODELING_SDK
             const bool needsSceneTransformPreview = sceneOnlyDrag_ || !modelingDragPreviewDriven_;
-#else
-            const bool needsSceneTransformPreview = true;
-#endif
             if (needsSceneTransformPreview) {
                 std::vector<EntityId> previewEntities;
                 previewEntities.reserve(startTransforms_.size());
@@ -1185,9 +1187,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         const bool wasDragging = dragging_;
         bool modelingPreviewHandled = false;
-#if QUADER_HAS_MODELING_SDK
         if (wasDragging && !sceneOnlyDrag_) {
-            (void)request.undoRedo;
             const ModelingTransformDragPreview committedPreview = modeling.commitTransformDrag();
             if (!committedPreview.ok) {
                 LOG_ERROR("Transform drag commit failed: {}", committedPreview.message);
@@ -1196,11 +1196,15 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             modelingDragActive_ = false;
             modelingDragPreviewDriven_ = false;
         }
-#endif
         if (wasDragging && !modelingPreviewHandled && sceneTransformPreview_) {
-            const DocumentCommandResult recorded = sceneTransformPreview_->commit(request.undoRedo);
-            if (!recorded.ok) {
-                LOG_ERROR("Transform command record failed: {}", recorded.message);
+            if (request.editor == nullptr) {
+                LOG_ERROR("Transform command record failed: editor API is unavailable.");
+            } else {
+                const QuaderApiVoidResult recorded =
+                        commitSceneTransformPreviewThroughApi(*request.editor, *sceneTransformPreview_);
+                if (!recorded.ok) {
+                    LOG_ERROR("Transform command record failed: {}", recorded.message);
+                }
             }
         }
         resetDragState();
@@ -1231,7 +1235,6 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         return positiveEulerRadians(start.transform.rotationEuler);
     };
 
-#if QUADER_HAS_MODELING_SDK
     if (!sceneOnlyDrag_) {
         const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         const ViewportRay dragRay = camera.rayFromViewportPoint(localMouse);
@@ -1288,7 +1291,6 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             previewDocumentTransform(start, next);
         }
     } else
-#endif
     {
         const Vec2 delta = currentMouse - startMouse_;
         const bool precision = io.KeyCtrl || io.KeySuper;
@@ -1366,13 +1368,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, worldMoveDelta);
             } else if (tool == ViewportToolId::Rotate) {
                 float angleRadians = 0.0f;
-#if QUADER_HAS_MODELING_SDK
                 if (sceneOnlyRotateState_) {
                     const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
                     const quader_editor_core::RotatePreviewResult rotatePreview =
                             quader_editor_core::preview_rotate_from_screen_position(
                                     *sceneOnlyRotateState_,
-                                    toSdk(localMouse),
+                                    toRuntime(localMouse),
                                     snapEnabled ? 15.0 : 0.0);
                     if (rotatePreview.ok) {
                         angleRadians = static_cast<float>(rotatePreview.preview_angle_degrees * kPi / 180.0);
@@ -1380,7 +1381,6 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                         LOG_ERROR("Scene transform rotate preview failed: {}", rotatePreview.message);
                     }
                 } else
-#endif
                 {
                     const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
                     angleRadians = snapRotationRadians(screenDelta * 0.01f, snapEnabled);
@@ -1426,7 +1426,6 @@ bool TransformGizmoController::cancelActiveDrag(SceneDocument& document, Modelin
         return false;
     }
 
-#if QUADER_HAS_MODELING_SDK
     const bool previewDrivenCancel = modelingDragPreviewDriven_;
     if (modelingDragActive_) {
         const ModelingCommandResult cancel = modeling.cancelTransformDrag();
@@ -1435,7 +1434,6 @@ bool TransformGizmoController::cancelActiveDrag(SceneDocument& document, Modelin
         }
     }
     if (!previewDrivenCancel)
-#endif
     {
         if (sceneTransformPreview_) {
             const DocumentCommandResult cancel = sceneTransformPreview_->cancel();
@@ -1457,8 +1455,7 @@ bool TransformGizmoController::suppressesHover(bool navigationGizmoConsumed, boo
     return navigationGizmoConsumed || transformGizmoConsumed;
 }
 
-#if QUADER_HAS_MODELING_SDK
-quader_editor_core::ViewportInteractionTool TransformGizmoController::sdkToolFor(ViewportToolId tool) const {
+quader_editor_core::ViewportInteractionTool TransformGizmoController::runtimeToolFor(ViewportToolId tool) const {
     switch (tool) {
     case ViewportToolId::Move:
         return quader_editor_core::ViewportInteractionTool::move;
@@ -1481,7 +1478,6 @@ quader_editor_core::ViewportInteractionTool TransformGizmoController::sdkToolFor
     }
     return quader_editor_core::ViewportInteractionTool::select;
 }
-#endif
 
 void TransformGizmoController::resetDragState() {
     dragging_ = false;
@@ -1489,9 +1485,7 @@ void TransformGizmoController::resetDragState() {
     modelingDragActive_ = false;
     modelingDragPreviewDriven_ = false;
     sceneOnlyDrag_ = false;
-#if QUADER_HAS_MODELING_SDK
     sceneOnlyRotateState_.reset();
-#endif
     sceneTransformPreview_.reset();
     activeAxis_ = TransformAxisHandle::None;
     startTransforms_.clear();

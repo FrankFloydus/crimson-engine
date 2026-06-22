@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/UndoRedoManager.h"
@@ -16,6 +22,9 @@
 
 namespace quader {
 
+/**
+ * Owns Scene Transform Preview Transaction behavior within the editor document ownership layer.
+ */
 class SceneTransformPreviewTransaction final {
 public:
     SceneTransformPreviewTransaction(

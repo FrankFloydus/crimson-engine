@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "app/App.h"
 
 #include "api/QuaderEditorApi.h"
@@ -11,9 +17,13 @@
 namespace quader {
 
 App::App() = default;
-App::~App() = default;
+App::~App() {
+    shutdown();
+}
 
 bool App::initialize(const std::filesystem::path& executablePath, AppOptions options) {
+    shutdownComplete_ = false;
+    running_ = false;
     const std::filesystem::path executableDir = executablePath.parent_path();
 
     if (!window_.create("Quader", 1600, 960, {.borderless = options.borderlessWindow})) {
@@ -22,6 +32,7 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
 
     if (!renderSystem_.initialize(window_.nativeWindowHandle(), executableDir, RenderConfig{.backend = RendererBackend::Vulkan})) {
         LOG_ERROR("Renderer initialization failed");
+        shutdown();
         return false;
     }
 
@@ -61,6 +72,9 @@ int App::run() {
                 window_.refreshPixelSize();
             }
         }
+        if (!running_) {
+            break;
+        }
 
         ui_.beginFrame();
         bool quitRequested = false;
@@ -68,9 +82,8 @@ int App::run() {
                 renderBridge_,
                 projectSession_.scene(),
                 projectSession_.assets(),
-                projectSession_.undoRedo(),
-                projectSession_.documentCommands(),
                 projectSession_.modeling(),
+                projectSession_.selection(),
                 defaultMaterial_,
                 quitRequested);
         if (quitRequested) {
@@ -95,6 +108,12 @@ int App::run() {
 }
 
 void App::shutdown() {
+    if (shutdownComplete_) {
+        return;
+    }
+
+    shutdownComplete_ = true;
+    running_ = false;
     ui_.shutdown();
     editor_.reset();
     renderBridge_.shutdown();

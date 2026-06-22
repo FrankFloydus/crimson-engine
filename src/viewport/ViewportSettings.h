@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include <array>
@@ -7,6 +13,9 @@
 
 namespace quader {
 
+/**
+ * Represents a Viewport Setting Color value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportSettingColor {
     float r = 0.0f;
     float g = 0.0f;
@@ -14,6 +23,9 @@ struct ViewportSettingColor {
     float a = 1.0f;
 };
 
+/**
+ * Enumerates ViewportSettingsSectionId values used by the viewport layer.
+ */
 enum class ViewportSettingsSectionId {
     Scene,
     Grid,
@@ -26,6 +38,9 @@ enum class ViewportSettingsSectionId {
     Count,
 };
 
+/**
+ * Enumerates ViewportColorSettingId values used by the viewport layer.
+ */
 enum class ViewportColorSettingId {
     Background,
     GridMinor,
@@ -51,6 +66,9 @@ enum class ViewportColorSettingId {
     Count,
 };
 
+/**
+ * Enumerates ViewportFloatSettingId values used by the viewport layer.
+ */
 enum class ViewportFloatSettingId {
     GridMinorLineSize,
     GridMajorLineSize,
@@ -73,6 +91,9 @@ enum class ViewportFloatSettingId {
     Count,
 };
 
+/**
+ * Enumerates ViewportBoolSettingId values used by the viewport layer.
+ */
 enum class ViewportBoolSettingId {
     Count,
 };
@@ -86,12 +107,18 @@ inline constexpr std::size_t kViewportFloatSettingCount =
 inline constexpr std::size_t kViewportBoolSettingCount =
         static_cast<std::size_t>(ViewportBoolSettingId::Count);
 
+/**
+ * Stores the Viewport Settings Section Descriptor data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportSettingsSectionDescriptor {
     ViewportSettingsSectionId id = ViewportSettingsSectionId::Scene;
     std::string_view label;
     bool defaultExpanded = false;
 };
 
+/**
+ * Stores the Viewport Color Setting Descriptor data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportColorSettingDescriptor {
     ViewportColorSettingId id = ViewportColorSettingId::Background;
     ViewportSettingsSectionId section = ViewportSettingsSectionId::Scene;
@@ -100,6 +127,9 @@ struct ViewportColorSettingDescriptor {
     ViewportSettingColor defaultValue;
 };
 
+/**
+ * Stores the Viewport Float Setting Descriptor data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportFloatSettingDescriptor {
     ViewportFloatSettingId id = ViewportFloatSettingId::GridMinorLineSize;
     ViewportSettingsSectionId section = ViewportSettingsSectionId::Grid;
@@ -110,6 +140,9 @@ struct ViewportFloatSettingDescriptor {
     float defaultValue = 0.0f;
 };
 
+/**
+ * Stores the Viewport Bool Setting Descriptor data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportBoolSettingDescriptor {
     ViewportBoolSettingId id = ViewportBoolSettingId::Count;
     ViewportSettingsSectionId section = ViewportSettingsSectionId::Scene;
@@ -123,6 +156,9 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount>& vi
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount>& viewportFloatSettings();
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount>& viewportBoolSettings();
 
+/**
+ * Owns Viewport Settings behavior within the viewport input, layout, and camera layer.
+ */
 class ViewportSettings {
 public:
     static ViewportSettings defaults();

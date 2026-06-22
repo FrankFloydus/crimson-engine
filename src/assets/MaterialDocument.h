@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "assets/AssetDocument.h"
@@ -14,6 +20,9 @@ inline constexpr const char* BaseColor = "baseColorTexture";
 inline constexpr const char* Roughness = "roughnessTexture";
 } // namespace MaterialTextureSlot
 
+/**
+ * Represents a Material Document value used by the asset document and registry layer.
+ */
 struct MaterialDocument final : AssetDocumentBase<MaterialAssetRevision> {
     Vec3 baseColor = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/MainMenuBar.h"
 
 #include "api/QuaderEditorApi.h"
@@ -5,7 +11,7 @@
 #include "ui/UIPanelManager.h"
 #include "ui/ViewportPanel.h"
 #include "viewport/ViewportLayout.h"
-#include "viewport/tools/ViewportToolCatalog.h"
+#include "viewport/modes/ViewportToolCatalog.h"
 
 #include <imgui.h>
 
@@ -104,7 +110,6 @@ void ToolsMenu::draw(MainMenuBarContext& context) const {
                     tool->viewportTool(),
                     context.editor,
                     context.document,
-                    context.documentCommands,
                     context.modeling);
         }
     }

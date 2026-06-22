@@ -1,9 +1,18 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include <string_view>
 
 namespace quader {
 
+/**
+ * Represents a Quader Command ID value used by the public Quader API surface.
+ */
 struct QuaderCommandId {
     std::string_view id;
 
@@ -17,23 +26,37 @@ struct QuaderCommandId {
 
 namespace QuaderCommand {
 
-inline constexpr QuaderCommandId HistoryUndo{"history.undo"};
-inline constexpr QuaderCommandId HistoryRedo{"history.redo"};
-inline constexpr QuaderCommandId HistoryRepeatLastAction{"history.repeat_last_action"};
+inline constexpr QuaderCommandId EditUndo{"edit.undo"};
+inline constexpr QuaderCommandId EditRedo{"edit.redo"};
+inline constexpr QuaderCommandId EditRepeatLastAction{"edit.repeat_last_action"};
+inline constexpr QuaderCommandId EditClearSelection{"edit.clear_selection"};
+inline constexpr QuaderCommandId EditSelectAll{"edit.select_all"};
+inline constexpr QuaderCommandId EditInvertSelection{"edit.invert_selection"};
+inline constexpr QuaderCommandId DeleteSelection{"edit.delete"};
+inline constexpr QuaderCommandId CopySelection{"edit.copy"};
+inline constexpr QuaderCommandId PasteSelection{"edit.paste"};
+inline constexpr QuaderCommandId DuplicateSelection{"edit.duplicate"};
+inline constexpr QuaderCommandId GroupSelection{"edit.group"};
+inline constexpr QuaderCommandId UngroupSelection{"edit.ungroup"};
+inline constexpr QuaderCommandId ApplyMaterial{"edit.apply_material"};
 
-inline constexpr QuaderCommandId SelectionClear{"selection.clear"};
-inline constexpr QuaderCommandId SelectionSelectAll{"selection.select_all"};
-inline constexpr QuaderCommandId SelectionInvert{"selection.invert"};
+inline constexpr QuaderCommandId HistoryUndo{"edit.undo"};
+inline constexpr QuaderCommandId HistoryRedo{"edit.redo"};
+inline constexpr QuaderCommandId HistoryRepeatLastAction{"edit.repeat_last_action"};
+
+inline constexpr QuaderCommandId SelectionClear{"edit.clear_selection"};
+inline constexpr QuaderCommandId SelectionSelectAll{"edit.select_all"};
+inline constexpr QuaderCommandId SelectionInvert{"edit.invert_selection"};
 
 inline constexpr QuaderCommandId ViewportFrameSelection{"viewport.frame_selection"};
 inline constexpr QuaderCommandId ViewportFocusOrigin{"viewport.focus_origin"};
 
-inline constexpr QuaderCommandId ModelingDeleteSelection{"modeling.delete_selection"};
-inline constexpr QuaderCommandId ModelingDuplicateMeshes{"modeling.duplicate_meshes"};
+inline constexpr QuaderCommandId ModelingDeleteSelection{"edit.delete"};
+inline constexpr QuaderCommandId ModelingDuplicateMeshes{"edit.duplicate"};
 inline constexpr QuaderCommandId ModelingDissolveEdges{"modeling.dissolve_edges"};
 inline constexpr QuaderCommandId ModelingDissolveVertices{"modeling.dissolve_vertices"};
 inline constexpr QuaderCommandId ModelingCombineMeshes{"modeling.combine_meshes"};
-inline constexpr QuaderCommandId ModelingApplyActiveMaterial{"modeling.apply_active_material"};
+inline constexpr QuaderCommandId ModelingApplyActiveMaterial{"edit.apply_material"};
 
 inline constexpr QuaderCommandId ToolsActivateSelect{"tools.activate.select"};
 inline constexpr QuaderCommandId ToolsActivateMove{"tools.activate.move"};

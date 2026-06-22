@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "math/Types.h"
@@ -8,6 +14,9 @@
 
 namespace quader {
 
+/**
+ * Enumerates ViewportOverlayLayer values used by the render layer.
+ */
 enum class ViewportOverlayLayer {
     SelectedVisibleFace = 0,
     SelectedFaceEdge = 1,
@@ -36,6 +45,9 @@ enum class ViewportOverlayLayer {
 
 inline constexpr std::size_t kViewportOverlayLayerCount = 23u;
 
+/**
+ * Enumerates ViewportOverlayStyleRole values used by the render layer.
+ */
 enum class ViewportOverlayStyleRole {
     LayerDefault,
     ExplicitColor,
@@ -70,6 +82,9 @@ enum class ViewportOverlayStyleRole {
     CutPreviewSeam,
 };
 
+/**
+ * Enumerates ViewportOverlaySource values used by the render layer.
+ */
 enum class ViewportOverlaySource {
     Unknown,
     Selection,
@@ -82,6 +97,9 @@ enum class ViewportOverlaySource {
     External,
 };
 
+/**
+ * Represents a Viewport Overlay Element Ref value used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayElementRef {
     int objectId = -1;
     int vertexId = -1;
@@ -97,6 +115,9 @@ constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, st
             (static_cast<std::uint32_t>(a) << 24u);
 }
 
+/**
+ * Represents a Viewport Overlay Line value used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayLine {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
     Vec3 start;
@@ -108,6 +129,9 @@ struct ViewportOverlayLine {
     ViewportOverlayElementRef element;
 };
 
+/**
+ * Represents a Viewport Overlay Triangle value used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayTriangle {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SelectedVisibleFace;
     Vec3 a;
@@ -119,6 +143,9 @@ struct ViewportOverlayTriangle {
     ViewportOverlayElementRef element;
 };
 
+/**
+ * Represents a Viewport Overlay Point value used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayPoint {
     ViewportOverlayLayer layer = ViewportOverlayLayer::UnselectedVertex;
     Vec3 position;
@@ -130,11 +157,17 @@ struct ViewportOverlayPoint {
     std::optional<float> outlineGrowthPixels;
 };
 
+/**
+ * Enumerates ViewportOverlayProjection values used by the render layer.
+ */
 enum class ViewportOverlayProjection {
     Perspective,
     Orthographic,
 };
 
+/**
+ * Represents a Viewport Overlay Camera value used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayCamera {
     Vec3 eye;
     Vec3 forward = {0.0f, 0.0f, -1.0f};
@@ -148,6 +181,9 @@ struct ViewportOverlayCamera {
     float farPlane = 1000.0f;
 };
 
+/**
+ * Stores the Viewport Overlay Frame data contract used by the render extraction and Filament resource layer.
+ */
 struct ViewportOverlayFrame {
     std::vector<ViewportOverlayLine> lines;
     std::vector<ViewportOverlayTriangle> triangles;

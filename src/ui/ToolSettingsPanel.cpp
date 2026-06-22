@@ -1,10 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/ToolSettingsPanel.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "core/Logger.h"
-#include "core/UndoRedoManager.h"
-#include "editor/ModelingPreviewCommandService.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/services/ModelingSessionService.h"
 
 #include <imgui.h>
 
@@ -236,8 +241,7 @@ void ToolSettingsPanel::drawContent(UIContext& context, bool& open) {
                     "history.apply_operation",
                     "Apply {operation}",
                     {{"operation", title}});
-            const ModelingCommandResult result =
-                    ModelingPreviewCommandService::commit(context.undoRedo, context.modeling, historyLabel);
+            const QuaderApiVoidResult result = context.editor.modeling().commitPreview(historyLabel);
             if (!result.ok) {
                 LOG_ERROR("Tool preview apply failed: {}", result.message.empty() ? "Command failed." : result.message);
             }
@@ -246,7 +250,7 @@ void ToolSettingsPanel::drawContent(UIContext& context, bool& open) {
         ImGui::SameLine();
         const std::string cancelLabel = context.localization.imguiLabel("ui.action.cancel", "ui.action.cancel", "Cancel");
         if (ImGui::Button(cancelLabel.c_str())) {
-            const ModelingCommandResult result = ModelingPreviewCommandService::cancel(context.modeling);
+            const QuaderApiVoidResult result = context.editor.modeling().cancelPreview();
             if (!result.ok) {
                 LOG_ERROR("Tool preview cancel failed: {}", result.message.empty() ? "Command failed." : result.message);
             }

@@ -1,7 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderQueryApi.h"
 
 #include "document/ProjectSession.h"
-#include "modeling/ModelingSessionService.h"
+#include "editor/EditorHistoryService.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 
 #include <optional>
@@ -21,8 +28,9 @@ QuaderBounds apiBounds(const SceneBounds& bounds) {
 QuaderModelingObjectRef objectRefForEntity(const ProjectSession& session, EntityId entity) {
     QuaderModelingObjectRef ref;
     ref.entity = entity;
+    ref.editorObjectId = session.scene().editorObjectId(entity);
     if (const ModelingObjectComponent* object = session.scene().modelingObject(entity)) {
-        ref.sdkObjectId = object->objectId;
+        ref.modelingObjectId = object->objectId;
     }
     if (const MeshComponent* mesh = session.scene().mesh(entity)) {
         ref.mesh = mesh->mesh;
@@ -37,6 +45,7 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
     const SceneDocument& scene = session.scene();
     QuaderEntitySnapshot snapshot;
     snapshot.id = entity;
+    snapshot.editorObjectId = scene.editorObjectId(entity);
     snapshot.kind = scene.kind(entity);
     snapshot.parent = scene.parent(entity);
     snapshot.active = scene.primarySelection() == entity;
@@ -67,7 +76,7 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
     }
     if (const ModelingObjectComponent* object = scene.modelingObject(entity)) {
         snapshot.hasModelingObject = true;
-        snapshot.sdkObjectId = object->objectId;
+        snapshot.modelingObjectId = object->objectId;
     }
     return snapshot;
 }
@@ -89,8 +98,9 @@ QuaderMeshSnapshot meshSnapshotFor(AssetId id, const MeshAsset& mesh) {
 
 } // namespace
 
-QuaderQueryApi::QuaderQueryApi(ProjectSession& session)
-    : session_(session) {}
+QuaderQueryApi::QuaderQueryApi(ProjectSession& session, EditorHistoryService& history)
+    : session_(session)
+    , history_(history) {}
 
 std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
     std::vector<QuaderEntitySnapshot> result;
@@ -136,14 +146,14 @@ std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForEntity(E
         return std::nullopt;
     }
     QuaderModelingObjectRef ref = objectRefForEntity(session_, entity);
-    if (ref.sdkObjectId == InvalidModelingObjectId) {
+    if (ref.modelingObjectId == InvalidModelingObjectId) {
         return std::nullopt;
     }
     return ref;
 }
 
-std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForSdkId(ModelingObjectId sdkObjectId) const {
-    const std::optional<EntityId> entity = session_.modeling().entityForSdkObject(sdkObjectId);
+std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForId(ModelingObjectId modelingObjectId) const {
+    const std::optional<EntityId> entity = session_.modeling().entityForModelingObject(modelingObjectId);
     if (!entity.has_value()) {
         return std::nullopt;
     }
@@ -151,10 +161,10 @@ std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForSdkId(Mo
 }
 
 std::optional<MeshAsset> QuaderQueryApi::compiledObjectMesh(QuaderModelingObjectRef object) const {
-    if (object.sdkObjectId == InvalidModelingObjectId) {
+    if (object.modelingObjectId == InvalidModelingObjectId) {
         return std::nullopt;
     }
-    return session_.modeling().compileObjectMesh(object.sdkObjectId);
+    return session_.modeling().compileObjectMesh(object.modelingObjectId);
 }
 
 std::optional<Vec3> QuaderQueryApi::selectionCenter() const {
@@ -180,13 +190,12 @@ QuaderAssetSnapshot QuaderQueryApi::assets() const {
 
 QuaderHistorySnapshot QuaderQueryApi::history() const {
     QuaderHistorySnapshot result;
-    result.canUndo = session_.undoRedo().canUndo() || session_.modeling().canUndo();
-    result.canRedo = session_.undoRedo().canRedo() ||
-            (!session_.undoRedo().canUndo() && session_.modeling().canRedo());
-    if (const std::string* label = session_.undoRedo().undoLabel()) {
+    result.canUndo = history_.canUndo();
+    result.canRedo = history_.canRedo();
+    if (const std::string* label = history_.undoLabel()) {
         result.undoLabel = *label;
     }
-    if (const std::string* label = session_.undoRedo().redoLabel()) {
+    if (const std::string* label = history_.redoLabel()) {
         result.redoLabel = *label;
     }
     return result;
@@ -202,8 +211,8 @@ QuaderRevisionStamp QuaderQueryApi::revisions() const {
             .projectRevision = session_.document().revision(),
             .sceneRevision = session_.scene().revision(),
             .assetRevision = session_.assets().revision(),
-            .sdkContentRevision = summary.contentRevision,
-            .sdkSelectionRevision = summary.selectionRevision,
+            .modelingContentRevision = summary.contentRevision,
+            .modelingSelectionRevision = summary.selectionRevision,
     };
 }
 

@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
@@ -13,6 +19,9 @@
 
 namespace quader {
 
+/**
+ * Caches Light Renderable Cache derived state for the render extraction and Filament resource layer.
+ */
 class LightRenderableCache {
 public:
     ~LightRenderableCache();
@@ -29,6 +38,9 @@ public:
     void removeExcept(const std::unordered_set<EntityId>& liveLightEntities);
 
 private:
+    /**
+     * Represents a Light Proxy value used by the render extraction and Filament resource layer.
+     */
     struct LightProxy {
         utils::Entity entity;
         EntityId sourceEntity = InvalidEntityId;

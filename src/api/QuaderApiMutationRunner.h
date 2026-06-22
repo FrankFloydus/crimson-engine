@@ -1,11 +1,19 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderApiResult.h"
 #include "core/CommandResult.h"
 #include "document/commands/DocumentCommandResult.h"
 #include "editor/EditorCommandService.h"
+#include "editor/EditorHistoryService.h"
 #include "editor/ModelingCommandExecutionService.h"
 
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -13,21 +21,26 @@ namespace quader {
 
 class ProjectSession;
 
+/**
+ * Owns Quader API Mutation Runner behavior within the public Quader API surface.
+ */
 class QuaderApiMutationRunner final {
 public:
     QuaderApiMutationRunner(
             ProjectSession& session,
+            EditorHistoryService& history,
             EditorCommandService& editorCommands,
             ModelingCommandExecutionService& modelingCommands);
 
     [[nodiscard]] QuaderRevisionStamp currentRevisions() const;
-    [[nodiscard]] bool canUndo() const;
-    [[nodiscard]] bool canRedo() const;
 
     QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
     QuaderApiVoidResult runDocumentCommand(CommandResult result, std::string_view label);
     QuaderApiVoidResult runDocumentResult(DocumentCommandResult result, std::string_view label);
     QuaderApiVoidResult runModelingResult(ModelingCommandResult result, std::string_view label);
+    QuaderApiVoidResult runModelingCommand(
+            std::unique_ptr<ModelingMementoCommand> command,
+            std::string_view label);
     QuaderApiVoidResult runTrackedModelingTool(std::string_view toolId);
     QuaderApiVoidResult runTrackedModelingAction(std::string_view actionId);
     QuaderApiVoidResult commitModelingPreview(std::string label);
@@ -49,6 +62,7 @@ private:
             std::string_view fallbackMessage = {}) const;
 
     ProjectSession& session_;
+    EditorHistoryService& history_;
     EditorCommandService& editorCommands_;
     ModelingCommandExecutionService& modelingCommands_;
 };

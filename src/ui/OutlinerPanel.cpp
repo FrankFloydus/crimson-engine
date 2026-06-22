@@ -1,9 +1,13 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/OutlinerPanel.h"
 
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
-#include "modeling/ModelingSessionService.h"
-#include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 #include "ui/UIContext.h"
@@ -12,7 +16,6 @@
 #include <imgui.h>
 
 #include <algorithm>
-#include <array>
 #include <functional>
 #include <optional>
 #include <span>
@@ -24,6 +27,9 @@
 namespace quader {
 namespace {
 
+/**
+ * Enumerates PendingOutlinerAction values used by the ui layer.
+ */
 enum class PendingOutlinerAction {
     None,
     Delete,
@@ -35,20 +41,6 @@ enum class PendingOutlinerAction {
 
 bool containsEntity(const std::vector<EntityId>& ids, EntityId id) {
     return std::find(ids.begin(), ids.end(), id) != ids.end();
-}
-
-void syncSelectionToModeling(UIContext& context) {
-    const std::vector<EntityId> desiredSelection = context.document.selectedEntities();
-    const EntityId activeSelection = context.document.primarySelection();
-    const ModelingSelectionMode previousMode = context.modeling.selectionMode();
-    if (previousMode != ModelingSelectionMode::Group) {
-        (void)context.editor.modeling().setSelectionMode(ModelingSelectionMode::Object);
-    }
-    (void)context.editor.scene().select(std::span<const EntityId>(desiredSelection.data(), desiredSelection.size()), activeSelection);
-    context.modeling.syncObjectSelectionFromScene();
-    if (previousMode == ModelingSelectionMode::Group) {
-        (void)context.editor.modeling().setSelectionMode(ModelingSelectionMode::Group);
-    }
 }
 
 std::vector<EntityId> entityRangeSelection(
@@ -119,8 +111,15 @@ std::vector<EntityId> selectedHierarchyEntities(const SceneDocument& document) {
 }
 
 bool selectOnly(UIContext& context, const std::vector<EntityId>& entities, EntityId active = InvalidEntityId) {
-    QuaderApiVoidResult result = context.editor.scene().select(std::span<const EntityId>(entities.data(), entities.size()), active);
+    QuaderApiVoidResult result = context.editor.selection().selectObjects(
+            std::span<const EntityId>(entities.data(), entities.size()),
+            active);
     return result.ok && result.changed;
+}
+
+bool selectCurrentSceneSelection(UIContext& context) {
+    const std::vector<EntityId> selected = context.document.selectedEntities();
+    return selectOnly(context, selected, context.document.primarySelection());
 }
 
 void groupSelection(UIContext& context) {
@@ -130,14 +129,9 @@ void groupSelection(UIContext& context) {
         return;
     }
 
-    TransformComponent groupTransform;
-    if (const std::optional<SceneBounds> bounds = selectedWorldBounds(document, context.assets)) {
-        groupTransform.position = boundsCenter(*bounds);
-    }
-
-    const QuaderApiResult<QuaderEntityRef> result = context.editor.scene().groupSelection({}, groupTransform);
+    const QuaderApiVoidResult result = context.editor.commands().execute(QuaderCommand::GroupSelection);
     if (result.ok && result.changed) {
-        syncSelectionToModeling(context);
+        (void)selectCurrentSceneSelection(context);
     }
 }
 
@@ -150,16 +144,16 @@ void ungroupEntity(UIContext& context, EntityId group) {
     if (!containsEntity(document.selectedEntities(), group)) {
         (void)selectOnly(context, {group}, group);
     }
-    QuaderApiVoidResult result = context.editor.scene().ungroupSelection();
+    QuaderApiVoidResult result = context.editor.commands().execute(QuaderCommand::UngroupSelection);
     if (result.ok && result.changed) {
-        syncSelectionToModeling(context);
+        (void)selectCurrentSceneSelection(context);
     }
 }
 
 void ungroupSelection(UIContext& context) {
-    QuaderApiVoidResult result = context.editor.scene().ungroupSelection();
+    QuaderApiVoidResult result = context.editor.commands().execute(QuaderCommand::UngroupSelection);
     if (result.ok && result.changed) {
-        syncSelectionToModeling(context);
+        (void)selectCurrentSceneSelection(context);
     }
 }
 
@@ -170,11 +164,11 @@ void deleteSelection(UIContext& context) {
         return;
     }
 
-    const ModelingSelectionMode previousMode = context.modeling.selectionMode();
+    const ModelingSelectionMode previousMode = context.editor.selection().summary().mode;
     if (previousMode != ModelingSelectionMode::Object && previousMode != ModelingSelectionMode::Group) {
-        (void)context.editor.modeling().setSelectionMode(ModelingSelectionMode::Object);
+        (void)context.editor.selection().setMode(ModelingSelectionMode::Object);
     }
-    (void)context.editor.commands().execute("modeling.delete_selection");
+    (void)context.editor.commands().execute(QuaderCommand::DeleteSelection);
 }
 
 std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::vector<EntityId>& sourceMeshes) {
@@ -185,8 +179,7 @@ std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::v
     const std::vector<EntityId> beforeEntities = context.document.entities();
     std::unordered_set<EntityId> beforeSet(beforeEntities.begin(), beforeEntities.end());
     (void)selectOnly(context, sourceMeshes);
-    syncSelectionToModeling(context);
-    const QuaderApiVoidResult duplicateResult = context.editor.commands().execute("modeling.duplicate_meshes");
+    const QuaderApiVoidResult duplicateResult = context.editor.commands().execute(QuaderCommand::DuplicateSelection);
     if (!duplicateResult.ok) {
         return {};
     }
@@ -290,7 +283,6 @@ void duplicateSelection(UIContext& context) {
     }
 
     (void)selectOnly(context, rootClones);
-    syncSelectionToModeling(context);
 }
 
 ImTextureID iconFor(const UIIconSet& icons, EntityKind kind) {
@@ -374,7 +366,6 @@ void OutlinerPanel::drawContent(UIContext& context) {
 
     const std::vector<EntityId> selected = document.selectedEntities();
     const ImGuiIO& io = ImGui::GetIO();
-    bool selectionChanged = false;
     PendingOutlinerAction pendingAction = PendingOutlinerAction::None;
     EntityId pendingTarget = InvalidEntityId;
     constexpr float kOutlinerRowLeftPadding = 3.0f;
@@ -404,9 +395,7 @@ void OutlinerPanel::drawContent(UIContext& context) {
             nextSelection = {record.id};
         }
         outlinerAnchor_ = record.id;
-        const QuaderApiVoidResult result =
-                context.editor.scene().select(std::span<const EntityId>(nextSelection.data(), nextSelection.size()), activeSelection);
-        selectionChanged = selectionChanged || (result.ok && result.changed);
+        (void)selectOnly(context, nextSelection, activeSelection);
     };
 
     std::function<void(EntityId)> drawNode = [&](EntityId entity) {
@@ -496,10 +485,7 @@ void OutlinerPanel::drawContent(UIContext& context) {
 
         if (rowRightClicked) {
             if (!record.selected) {
-                const std::array<EntityId, 1> selection{record.id};
-                const QuaderApiVoidResult result =
-                        context.editor.scene().select(std::span<const EntityId>(selection.data(), selection.size()), record.id);
-                selectionChanged = selectionChanged || (result.ok && result.changed);
+                (void)selectOnly(context, {record.id}, record.id);
             }
         }
         if (ImGui::BeginPopup("EntityContext")) {
@@ -545,10 +531,6 @@ void OutlinerPanel::drawContent(UIContext& context) {
     }
 
     ImGui::PopStyleVar(3);
-
-    if (selectionChanged) {
-        syncSelectionToModeling(context);
-    }
 
     if (!io.WantTextInput &&
             ImGui::IsKeyPressed(ImGuiKey_G, false) &&

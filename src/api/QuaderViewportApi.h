@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "api/QuaderEditorApiTypes.h"
@@ -8,6 +14,9 @@ namespace quader {
 class QuaderCameraHandle;
 class QuaderViewportHandle;
 
+/**
+ * Exposes Quader Viewport API operations through the public Quader API surface.
+ */
 class QuaderViewportApi final {
 public:
     explicit QuaderViewportApi(ViewportWorkspaceService& workspace);
@@ -44,6 +53,9 @@ private:
     QuaderViewportRuntimeHooks hooks_;
 };
 
+/**
+ * Owns Quader Camera Handle behavior within the public Quader API surface.
+ */
 class QuaderCameraHandle final {
 public:
     QuaderCameraHandle(QuaderViewportApi& viewports, ViewportPaneId pane);
@@ -56,6 +68,9 @@ private:
     ViewportPaneId pane_;
 };
 
+/**
+ * Owns Quader Viewport Handle behavior within the public Quader API surface.
+ */
 class QuaderViewportHandle final {
 public:
     QuaderViewportHandle(QuaderViewportApi& viewports, ViewportPaneId pane);

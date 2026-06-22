@@ -1,3 +1,9 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "assets/AssetRegistry.h"
 #include "assets/BakeService.h"
 #include "assets/MaterialDocument.h"
@@ -20,9 +26,11 @@
 #include "document/ProjectDocument.h"
 #include "document/ProjectSession.h"
 #include "editor/EditorCommandService.h"
-#include "editor/ModelingHistoryCommand.h"
+#include "editor/EditorHistoryService.h"
+#include "editor/ModelingMementoCommand.h"
+#include "editor/selection/EditorSelectionService.h"
 #include "geometry/UVSphere.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "render/overlay/ViewportOverlayStyleResolver.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
@@ -42,15 +50,14 @@
 
 #include <gtest/gtest.h>
 
-#if QUADER_HAS_MODELING_SDK
-#include <quader_editor_core/tool/viewport_navigation.h>
-#endif
+#include <modeling/interactions/viewport_navigation.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <type_traits>
@@ -65,9 +72,46 @@ using namespace quader;
 #define QUADER_SOURCE_DIR "."
 #endif
 
-static_assert(std::is_base_of_v<IUndoableCommand, ModelingHistoryCommand>);
-static_assert(std::is_base_of_v<ModelingHistoryCommand, DuplicateMeshesHistoryCommand>);
+std::string readSourceFile(const std::filesystem::path& relativePath) {
+    const std::filesystem::path path = std::filesystem::path(QUADER_SOURCE_DIR) / relativePath;
+    std::ifstream sourceFile(path);
+    EXPECT_TRUE(sourceFile.is_open()) << path.string();
+    return {
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+}
 
+/**
+ * Carries EditorSelectionTestHarness state used by the test layer.
+ */
+struct EditorSelectionTestHarness {
+    explicit EditorSelectionTestHarness(
+            SceneDocument& scene,
+            AssetRegistry& assets,
+            ModelingSessionService& modeling)
+        : documentCommands(scene, undoRedo)
+        , selection(scene, documentCommands, assets, modeling) {}
+
+    UndoRedoManager undoRedo;
+    DocumentCommandService documentCommands;
+    EditorSelectionService selection;
+};
+
+DocumentCommandResult selectThroughEditor(
+        EditorSelectionService& selection,
+        std::initializer_list<EntityId> entities,
+        EntityId active = InvalidEntityId) {
+    std::vector<EntityId> selected(entities);
+    const EntityId resolvedActive = active != InvalidEntityId || selected.empty() ? active : selected.back();
+    return selection.setSceneSelection(std::span<const EntityId>(selected.data(), selected.size()), resolvedActive);
+}
+
+static_assert(std::is_base_of_v<IUndoableCommand, ModelingMementoCommand>);
+static_assert(std::is_base_of_v<ModelingMementoCommand, DuplicateMeshesHistoryCommand>);
+
+/**
+ * Applies Test Value Command behavior as a command in the automated test suite.
+ */
 class TestValueCommand final : public IUndoableCommand {
 public:
     TestValueCommand(
@@ -253,7 +297,12 @@ TEST(FatalErrorHandlerTests, MainInstallsReportableFatalErrorBoundary) {
     EXPECT_NE(handlerSource.find("Quader Fatal Error"), std::string::npos);
     EXPECT_NE(handlerSource.find("Error code:"), std::string::npos);
     EXPECT_NE(handlerSource.find("Quick message:"), std::string::npos);
-    EXPECT_NE(handlerSource.find("A stack trace was written to this log file"), std::string::npos);
+    EXPECT_NE(handlerSource.find("Crash report:"), std::string::npos);
+    EXPECT_NE(handlerSource.find("crash-reports"), std::string::npos);
+    EXPECT_NE(handlerSource.find("MiniDumpWriteDump"), std::string::npos);
+    EXPECT_NE(handlerSource.find("writeCrashArtifacts"), std::string::npos);
+    EXPECT_NE(handlerSource.find("appendTextFile(gLogPath"), std::string::npos);
+    EXPECT_NE(handlerSource.find("moduleDescriptionForAddress"), std::string::npos);
     EXPECT_NE(handlerSource.find("Stack trace (most recent call first):"), std::string::npos);
     EXPECT_NE(handlerSource.find("CaptureStackBackTrace"), std::string::npos);
     EXPECT_NE(handlerSource.find("StackWalk64"), std::string::npos);
@@ -612,7 +661,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
     EXPECT_FALSE(viewportOverlayLayerIsSuppressedByTransientHover(ViewportOverlayLayer::SourceWire));
 }
 
-TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
+TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndRuntimePointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedVisibleFace, rgba8(255, 255, 255)), kOverlaySelectionFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedFaceEdge, rgba8(255, 255, 255)), kOverlaySelectionWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::WireframeBase, rgba8(255, 255, 255)), rgba8(255, 255, 255));
@@ -643,7 +692,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndSdkPointSizes) {
     EXPECT_FLOAT_EQ(viewportOverlayPointInnerRadius(ViewportOverlayLayer::SnapTargetVertex), 0.62f);
 }
 
-TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToSdkOverlayFrame) {
+TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToRuntimeOverlayFrame) {
     ViewportSettings settings = ViewportSettings::defaults();
     ASSERT_TRUE(settings.setColor(ViewportColorSettingId::SourceWire, {1.0f, 0.0f, 0.0f, 1.0f}));
     ASSERT_TRUE(settings.setColor(ViewportColorSettingId::SelectionWire, {0.0f, 1.0f, 0.0f, 1.0f}));
@@ -794,9 +843,9 @@ TEST(ViewportOverlayStyleResolverTests, PrioritizesDiagnosticsThenExternalOverri
     EXPECT_FLOAT_EQ(frame.lines[0].widthPixels, 2.0f);
 }
 
-TEST(ModelingSessionServiceOverlayTests, MapsSdkOverlayLayersExplicitly) {
+TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionService.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionService.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -808,7 +857,7 @@ TEST(ModelingSessionServiceOverlayTests, MapsSdkOverlayLayersExplicitly) {
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::source_wire:"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:"), std::string::npos);
-    EXPECT_NE(source.find("sdkLineStyleRole"), std::string::npos);
+    EXPECT_NE(source.find("runtimeLineStyleRole"), std::string::npos);
     EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"), std::string::npos);
 }
 
@@ -1082,6 +1131,21 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
 }
 
+TEST(ViewportPanelTests, ShutdownIsIdempotentAndClearsBorrowedWorkspace) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("if (shutdownComplete_)"), std::string::npos);
+    EXPECT_NE(source.find("shutdownComplete_ = true;"), std::string::npos);
+    EXPECT_NE(source.find("workspace_->clearPaneVisibility();\n        workspace_ = nullptr;"), std::string::npos);
+}
+
 TEST(ViewportPanelTests, WireframeObjectSelectionUsesWhiteBaseAndShadedOverlayWires) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
@@ -1138,11 +1202,14 @@ TEST(ViewportPanelTests, ToolActivationPreservesGroupModeSceneSelection) {
     EXPECT_NE(source.find("const bool preserveGroupSelection"), std::string::npos);
     EXPECT_NE(source.find("selectedBeforeToolActivation"), std::string::npos);
     EXPECT_NE(source.find("activeBeforeToolActivation"), std::string::npos);
-    EXPECT_NE(source.find("documentCommands.selectEntities(selectedBeforeToolActivation, activeBeforeToolActivation)"),
-            std::string::npos);
-    EXPECT_NE(source.find("modeling.setSelectionMode(ModelingSelectionMode::Group)"), std::string::npos);
+    EXPECT_NE(source.find("editor.selection().selectObjects(\n                        std::span<const EntityId>(selectedBeforeToolActivation.data()"), std::string::npos);
+    EXPECT_NE(source.find("uiContext.editor.selection().selectObjects(\n                                std::span<const EntityId>(selectedBeforeToolActivation.data()"), std::string::npos);
+    EXPECT_EQ(source.find("editor.scene().select(std::span<const EntityId>(selectedBeforeToolActivation.data()"), std::string::npos);
+    EXPECT_EQ(source.find("uiContext.editor.scene().select(\n                                std::span<const EntityId>(selectedBeforeToolActivation.data()"), std::string::npos);
+    EXPECT_NE(source.find("activeBeforeToolActivation)"), std::string::npos);
+    EXPECT_NE(source.find("editor.selection().setMode(ModelingSelectionMode::Group)"), std::string::npos);
     EXPECT_NE(source.find("inputRouter_.setSelectionMode(ViewportSelectionMode::Group)"), std::string::npos);
-    EXPECT_NE(source.find("bool ViewportPanel::activateToolFromMenu(\n        ViewportToolId tool,\n        QuaderEditorApi& editor,\n        SceneDocument& document,\n        DocumentCommandService& documentCommands"),
+    EXPECT_NE(source.find("bool ViewportPanel::activateToolFromMenu(\n        ViewportToolId tool,\n        QuaderEditorApi& editor,\n        SceneDocument& document,\n        ModelingSessionService& modeling"),
             std::string::npos);
     EXPECT_NE(source.find("Group selection restore after menu tool activation failed"), std::string::npos);
     EXPECT_EQ(source.find("inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));\n    inputRouter_.clearModalToolState();"),
@@ -1230,7 +1297,7 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     EXPECT_NE(transformGizmoSource.find("bool consumed = dragging_;"), std::string::npos);
 }
 
-TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
+TEST(ViewportPanelTests, GizmoSizeUsesRuntimeScaleWithoutReplacingActiveGrid) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -1243,9 +1310,9 @@ TEST(ViewportPanelTests, GizmoSizeUsesSdkScaleWithoutReplacingActiveGrid) {
     EXPECT_NE(source.find("input.grid_size = gridSize"), std::string::npos);
     EXPECT_NE(source.find("input.gizmo_size_pixels = 68.0;"), std::string::npos);
     EXPECT_NE(source.find("input.gizmo_scale = std::max(gizmoSizeScale, 0.1f);"), std::string::npos);
-    EXPECT_NE(source.find("build_transform_gizmo_frame(sdkInput)"), std::string::npos);
+    EXPECT_NE(source.find("build_transform_gizmo_frame(runtimeInput)"), std::string::npos);
     EXPECT_NE(source.find("const bool precision = io.KeyCtrl || io.KeySuper;"), std::string::npos);
-    EXPECT_EQ(source.find("visualSdkInput"), std::string::npos);
+    EXPECT_EQ(source.find("visualRuntimeInput"), std::string::npos);
     EXPECT_EQ(source.find("kGizmoFrameGridFloor"), std::string::npos);
     EXPECT_EQ(source.find("input.gizmo_size_pixels = 68.0 * std::max(gizmoSizeScale"), std::string::npos);
 }
@@ -1278,7 +1345,7 @@ TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
 TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) /
-            "sdk" / "packages" / "editor-core" / "src" / "transform_gizmo.cpp";
+            "src" / "modeling" / "runtime" / "transform_gizmo.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1478,7 +1545,11 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(presenter.find("labelKey.append(action.actionId)"), std::string::npos);
     EXPECT_NE(presenter.find("localization.imguiLabel(labelKey, stableId, action.label)"), std::string::npos);
     EXPECT_NE(presenter.find("ImGui::MenuItem(label.c_str(), nullptr, false, enabled)"), std::string::npos);
-    EXPECT_NE(presenter.find("editor.modeling().executeAction(action.actionId)"), std::string::npos);
+    EXPECT_NE(presenter.find("std::string contextMenuCommandId(std::string_view actionId)"), std::string::npos);
+    EXPECT_NE(presenter.find("return std::string(QuaderCommand::DeleteSelection.string())"), std::string::npos);
+    EXPECT_NE(presenter.find("return std::string(QuaderCommand::DuplicateSelection.string())"), std::string::npos);
+    EXPECT_NE(presenter.find("const std::string commandId = contextMenuCommandId(action.actionId)"), std::string::npos);
+    EXPECT_NE(presenter.find("editor.commands().execute(commandId)"), std::string::npos);
     EXPECT_NE(presenter.find("shouldCloseOperationsPopupForMouseClick()"), std::string::npos);
     EXPECT_NE(presenter.find("isGenericContextAction(action.actionId)"), std::string::npos);
     EXPECT_NE(presenter.find("ImGui::Separator()"), std::string::npos);
@@ -1490,7 +1561,7 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(presenter.find("action.disabledReason"), std::string::npos);
     EXPECT_NE(source.find("modalToolOwnsViewport()"), std::string::npos);
     EXPECT_NE(source.find(".modalToolOwnsViewport = modalToolOwnsViewport()"), std::string::npos);
-    EXPECT_NE(source.find("modeling.pickSelect(ModelingPickSelectRequest"), std::string::npos);
+    EXPECT_NE(selectionController.find("editor.selection().pickSelect(ModelingPickSelectRequest"), std::string::npos);
     EXPECT_NE(source.find("pendingContextMenuRequest.targetHit = summary.hasSelection"), std::string::npos);
     EXPECT_NE(source.find(".accumulatedDragDelta = contextMenuRightDragDelta_"), std::string::npos);
     EXPECT_NE(source.find("pendingContextMenuClick"), std::string::npos);
@@ -1499,9 +1570,9 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_EQ(source.find("selectFromViewport"), std::string::npos);
     EXPECT_NE(selectionController.find(".preserveSelectionOnMiss = preserveSelectionOnMiss"), std::string::npos);
     EXPECT_NE(selectionController.find(".preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit"), std::string::npos);
-    EXPECT_NE(selectionController.find("if (groupMode)"), std::string::npos);
-    EXPECT_NE(selectionController.find("const EntityId hitMesh = pickMeshEntityByBounds(document, assets, worldRay)"), std::string::npos);
-    EXPECT_NE(selectionController.find("const EntityId targetGroup = nearestGroupAncestor(document, hitMesh)"), std::string::npos);
+    EXPECT_EQ(selectionController.find("if (groupMode)"), std::string::npos);
+    EXPECT_EQ(selectionController.find("const EntityId hitMesh = pickMeshEntityByBounds(document, assets, worldRay)"), std::string::npos);
+    EXPECT_EQ(selectionController.find("const EntityId targetGroup = nearestGroupAncestor(document, hitMesh)"), std::string::npos);
     EXPECT_EQ(selectionController.find("modeling.previewSelectionHover"), std::string::npos);
     EXPECT_NE(source.find("preserveContextMenuHover"), std::string::npos);
     EXPECT_NE(source.find("shouldPreserveViewportContextMenuHover"), std::string::npos);
@@ -1555,9 +1626,9 @@ TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
     const std::filesystem::path headerPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.h";
     const std::filesystem::path toolStatePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "Tool.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "Tool.h";
     const std::filesystem::path dragToolPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "DragCommitTool.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "base" / "DragCommitTool.cpp";
     std::ifstream headerFile(headerPath);
     std::ifstream toolStateFile(toolStatePath);
     std::ifstream dragToolFile(dragToolPath);
@@ -1602,7 +1673,7 @@ TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     const std::filesystem::path drawnPlaneToolPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "DrawnPlaneTool.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "base" / "DrawnPlaneTool.cpp";
     std::ifstream sourceFile(sourcePath);
     std::ifstream drawnPlaneToolFile(drawnPlaneToolPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
@@ -1707,8 +1778,8 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftTopologyOperationAtDragBeg
     EXPECT_NE(source.find(".operation = operation"), std::string::npos);
     EXPECT_NE(source.find("modeling.beginTransformDrag({"), std::string::npos);
     EXPECT_NE(source.find("modeling.updateTransformDrag({"), std::string::npos);
-    EXPECT_EQ(source.find("sdkTransformPreviewExtrude_"), std::string::npos);
-    EXPECT_EQ(source.find("sdkTransformPreviewInset_"), std::string::npos);
+    EXPECT_EQ(source.find("runtimeTransformPreviewExtrude_"), std::string::npos);
+    EXPECT_EQ(source.find("runtimeTransformPreviewInset_"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBegin) {
@@ -1741,7 +1812,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
     EXPECT_LT(updatePreview, localFallback);
     EXPECT_EQ(source.find("modeling.beginTransformPreview(duplicateSelected)"), std::string::npos);
     EXPECT_EQ(source.find("modeling.recordRepeatableTransform"), std::string::npos);
-    EXPECT_EQ(source.find("sdkTransformPreviewDuplicateSelected_"), std::string::npos);
+    EXPECT_EQ(source.find("runtimeTransformPreviewDuplicateSelected_"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
@@ -1869,28 +1940,29 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("transformGizmoController_.draw({"), std::string::npos);
     EXPECT_NE(source.find(".suppressHoverWork = suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find(".suppressHoverWork = true"), std::string::npos);
-    EXPECT_NE(transformGizmoSource.find("if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
-    EXPECT_EQ(transformGizmoSource.find("if (interactive) {\n        modeling.syncObjectSelectionFromScene();\n    }"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("if (interactive && activeSelectionMode != ModelingSelectionMode::Group) {\n        const std::vector<EntityId> selectedEntities = document.selectedEntities();"), std::string::npos);
+    EXPECT_NE(transformGizmoSource.find("request.selection.setObjectSelection("), std::string::npos);
+    EXPECT_EQ(transformGizmoSource.find("syncObjectsFromScene()"), std::string::npos);
     EXPECT_NE(transformGizmoSource.find("mouseInsideViewport && !request.suppressHoverWork"), std::string::npos);
     EXPECT_NE(source.find("hoverController_.invalidate()"), std::string::npos);
     EXPECT_NE(source.find("hoverController_.claim(hoverWorkKey)"), std::string::npos);
     EXPECT_NE(source.find("result.gridPresetChanged"), std::string::npos);
-    EXPECT_NE(source.find("modeling.updateSelectionHover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary))"), std::string::npos);
+    EXPECT_NE(source.find("uiContext.editor.selection().hover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary))"), std::string::npos);
     EXPECT_NE(source.find("if (hoverUpdate.changed)"), std::string::npos);
-    EXPECT_NE(source.find("const ModelingCommandResult clearHover = modeling.clearSelectionHover()"), std::string::npos);
+    EXPECT_NE(source.find("const QuaderApiVoidResult clearHover = uiContext.editor.selection().clearHover()"), std::string::npos);
     EXPECT_EQ(source.find("hoverController_.remember("), std::string::npos);
-    EXPECT_NE(source.find("const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();\n    auto makeViewportHoverWorkKey"), std::string::npos);
-    EXPECT_EQ(source.find("auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {\n        const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();"), std::string::npos);
+    EXPECT_NE(source.find("const ModelingSelectionSummary hoverSelectionSummary = uiContext.editor.selection().summary();\n    auto makeViewportHoverWorkKey"), std::string::npos);
+    EXPECT_EQ(source.find("auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {\n        const ModelingSelectionSummary hoverSelectionSummary = uiContext.editor.selection().summary();"), std::string::npos);
     EXPECT_EQ(source.find("auto preserveSelectionHoverAfterSelection = [&]()"), std::string::npos);
     EXPECT_NE(source.find("auto suppressSelectionHoverAfterSelection = [&](Vec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {})"), std::string::npos);
     EXPECT_NE(source.find("if (hoverTargetValid(hoveredTargetBeforeSelection)) {\n            selectionHoverSuppressedTarget_ = hoveredTargetBeforeSelection;"), std::string::npos);
-    EXPECT_NE(source.find("modeling.previewSelectionHover(makeSelectionHoverRequestAt(mouseLocal, input.modifiers.primary))"), std::string::npos);
+    EXPECT_NE(source.find("uiContext.editor.selection().previewHover(makeSelectionHoverRequestAt(mouseLocal, input.modifiers.primary))"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverSuppressedTarget_ = hover.target"), std::string::npos);
     EXPECT_NE(source.find("bool selectionHoverSuppressedThisFrame = false"), std::string::npos);
     EXPECT_NE(source.find("hoverTargetsMatch(*selectionHoverSuppressedTarget_, hover.target)"), std::string::npos);
-    EXPECT_NE(source.find("if (!input.modifiers.primary) {\n                    const ModelingCommandResult clearHover = modeling.clearSelectionHover();"), std::string::npos);
+    EXPECT_NE(source.find("if (!input.modifiers.primary) {\n                    const QuaderApiVoidResult clearHover = uiContext.editor.selection().clearHover();"), std::string::npos);
     EXPECT_NE(source.find("!selectionHoverSuppressedThisFrame"), std::string::npos);
-    EXPECT_NE(source.find("const ModelingHoverTarget hoveredBeforeSelection = modeling.selectionHoverSummary().target;\n            const ModelingSelectionSummary summary = selectionController_.pickSelection"), std::string::npos);
+    EXPECT_NE(source.find("const ModelingHoverTarget hoveredBeforeSelection = uiContext.editor.selection().hoverSummary().target;\n            const ModelingSelectionSummary summary = selectionController_.pickSelection"), std::string::npos);
     EXPECT_NE(source.find("paintSelectionActive_ = componentSelectionMode(summary.mode);\n            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);"), std::string::npos);
     EXPECT_NE(source.find("!suppressHoverWork &&\n                !gizmoConsumed"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverClearIssued_"), std::string::npos);
@@ -1900,32 +1972,32 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
 
 TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsUnityRemovePreviewContract) {
     const std::filesystem::path appOverlayPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionServices.cpp";
-    const std::filesystem::path sdkOverlayPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "sdk" / "packages" / "editor-core" / "src" /
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionServices.cpp";
+    const std::filesystem::path runtimeOverlayPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "runtime" /
             "session_selection_overlay.cpp";
     std::ifstream appOverlayFile(appOverlayPath);
-    std::ifstream sdkOverlayFile(sdkOverlayPath);
+    std::ifstream runtimeOverlayFile(runtimeOverlayPath);
     ASSERT_TRUE(appOverlayFile.is_open()) << appOverlayPath.string();
-    ASSERT_TRUE(sdkOverlayFile.is_open()) << sdkOverlayPath.string();
+    ASSERT_TRUE(runtimeOverlayFile.is_open()) << runtimeOverlayPath.string();
 
     const std::string appOverlay{
             std::istreambuf_iterator<char>(appOverlayFile),
             std::istreambuf_iterator<char>()};
-    const std::string sdkOverlay{
-            std::istreambuf_iterator<char>(sdkOverlayFile),
+    const std::string runtimeOverlay{
+            std::istreambuf_iterator<char>(runtimeOverlayFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_EQ(appOverlay.find("selectedHoverTarget && !hover.selected_modifier_pressed"), std::string::npos);
     EXPECT_EQ(appOverlay.find("selection_hover_target_matches_selection(session.objects(), session.selection_mode(), hover)"), std::string::npos);
     EXPECT_NE(appOverlay.find("selection_hover_target_is_selected(session.objects(), session.selection_mode(), hover)"), std::string::npos);
     EXPECT_EQ(appOverlay.find("if (hoverFrame.hover_target_selected)"), std::string::npos);
-    EXPECT_EQ(sdkOverlay.find("suppress_hover_overlay"), std::string::npos);
+    EXPECT_EQ(runtimeOverlay.find("suppress_hover_overlay"), std::string::npos);
     EXPECT_NE(
-            sdkOverlay.find("frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target"),
+            runtimeOverlay.find("frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target"),
             std::string::npos);
     EXPECT_NE(
-            sdkOverlay.find("if (object.id != hover.object_id || hover.kind == SelectionHoverKind::none)"),
+            runtimeOverlay.find("if (object.id != hover.object_id || hover.kind == SelectionHoverKind::none)"),
             std::string::npos);
 }
 
@@ -2019,13 +2091,13 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
 
 TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionService.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionService.cpp";
     const std::filesystem::path splitSourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "ModelingSessionServices.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionServices.cpp";
     const std::filesystem::path overlayHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "session" / "ModelingOverlayService.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingOverlayService.h";
     const std::filesystem::path selectionHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "session" / "ModelingSelectionService.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSelectionService.h";
     std::ifstream sourceFile(sourcePath);
     std::ifstream splitSourceFile(splitSourcePath);
     std::ifstream overlayHeaderFile(overlayHeaderPath);
@@ -2056,7 +2128,7 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(source.find("runtime_.cut_state()"), std::string::npos);
     EXPECT_NE(source.find("runtime_.mirror_state()"), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.frame()"), std::string::npos);
-    EXPECT_NE(source.find("ViewportOverlayFrame frame = fromSdk(overlayService_.selectionOverlayCurrentFrame(session_, runtime_, hover)"), std::string::npos);
+    EXPECT_NE(source.find("SelectionOverlayProjection::projectSelectionOverlayFrame("), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.store("), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayBaseFrame(session)"), std::string::npos);
     EXPECT_NE(overlayHeader.find("overlayBaseCache_"), std::string::npos);
@@ -2064,11 +2136,18 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(splitSource.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
     EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
-    EXPECT_NE(selectionHeader.find("faceGeometryEntries"), std::string::npos);
-    EXPECT_NE(splitSource.find("objectPickFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
-    EXPECT_NE(splitSource.find("pickOptions.vertex_radius"), std::string::npos);
-    EXPECT_NE(splitSource.find("pickOptions.edge_radius"), std::string::npos);
-    EXPECT_NE(splitSource.find("pickOptions.has_hidden_material_slot"), std::string::npos);
+    EXPECT_NE(splitSource.find("pickingCache_.faceGeometryEntries"), std::string::npos);
+    EXPECT_NE(splitSource.find("PickingCacheProjection::objectFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
+    const std::filesystem::path pickingProjectionPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "projection" / "PickingCacheProjection.cpp";
+    std::ifstream pickingProjectionFile(pickingProjectionPath);
+    ASSERT_TRUE(pickingProjectionFile.is_open()) << pickingProjectionPath.string();
+    const std::string pickingProjection{
+            std::istreambuf_iterator<char>(pickingProjectionFile),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(pickingProjection.find("pickOptions.vertex_radius"), std::string::npos);
+    EXPECT_NE(pickingProjection.find("pickOptions.edge_radius"), std::string::npos);
+    EXPECT_NE(pickingProjection.find("pickOptions.has_hidden_material_slot"), std::string::npos);
     EXPECT_EQ(splitSource.find("(void)pickOptions;"), std::string::npos);
 }
 
@@ -2387,8 +2466,10 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
     EXPECT_NE(source.find("context.icons.hide"), std::string::npos);
     EXPECT_NE(source.find("drawOutlinerText"), std::string::npos);
     EXPECT_NE(source.find("EntityId activeSelection = record.id"), std::string::npos);
-    EXPECT_NE(source.find("previousMode == ModelingSelectionMode::Group"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.modeling().setSelectionMode(ModelingSelectionMode::Group)"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.selection().selectObjects"), std::string::npos);
+    EXPECT_EQ(source.find("syncSelectionToModeling"), std::string::npos);
+    EXPECT_EQ(source.find("previousMode == ModelingSelectionMode::Group"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.selection().setMode(ModelingSelectionMode::Group)"), std::string::npos);
     EXPECT_EQ(source.find("selectionTargetForMode"), std::string::npos);
     EXPECT_EQ(source.find("nearestGroupAncestor(context.document"), std::string::npos);
     EXPECT_NE(source.find("ImGui::OpenPopupOnItemClick(\"EntityContext\""), std::string::npos);
@@ -2402,8 +2483,10 @@ TEST(OutlinerPanelTests, UsesTreeIconsContextMenuAndGroupingShortcuts) {
     EXPECT_NE(source.find("ImGui::MenuItem(groupLabel.c_str())"), std::string::npos);
     EXPECT_NE(source.find("ImGui::MenuItem(ungroupLabel.c_str()"), std::string::npos);
     EXPECT_NE(source.find("ImGuiKey_G"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().groupSelection"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().ungroupSelection"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::GroupSelection)"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::UngroupSelection)"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().groupSelection"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().ungroupSelection"), std::string::npos);
 }
 
 TEST(OutlinerPanelTests, RoutesDocumentMutationsThroughPublicApi) {
@@ -2416,12 +2499,15 @@ TEST(OutlinerPanelTests, RoutesDocumentMutationsThroughPublicApi) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("context.editor.scene().select"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.selection().selectObjects"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().select"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().createEntity"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.commands().execute(\"modeling.delete_selection\")"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::DeleteSelection)"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::GroupSelection)"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::UngroupSelection)"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().reparent"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().groupSelection"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().ungroupSelection"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().groupSelection"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().ungroupSelection"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().rename"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().setTransform"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().setVisible"), std::string::npos);
@@ -2456,7 +2542,7 @@ TEST(OutlinerPanelTests, DeleteSelectionUsesUnifiedDeleteCommandWithoutSplitHier
     ASSERT_NE(end, std::string::npos);
     const std::string body = source.substr(start, end - start);
 
-    EXPECT_NE(body.find("context.editor.commands().execute(\"modeling.delete_selection\")"), std::string::npos);
+    EXPECT_NE(body.find("context.editor.commands().execute(QuaderCommand::DeleteSelection)"), std::string::npos);
     EXPECT_EQ(body.find("selectedHierarchyEntities"), std::string::npos);
     EXPECT_EQ(body.find("context.editor.scene().destroy"), std::string::npos);
     EXPECT_EQ(body.find("selectOnly(context, modelingEntities"), std::string::npos);
@@ -2756,8 +2842,8 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(discardLeft.c_str()"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(discardRight.c_str()"), std::string::npos);
     EXPECT_NE(toolSettingsPanelSource.find("ImGui::RadioButton(keepBoth.c_str()"), std::string::npos);
-    EXPECT_NE(toolSettingsPanelSource.find("ModelingPreviewCommandService::commit"), std::string::npos);
-    EXPECT_NE(toolSettingsPanelSource.find("ModelingPreviewCommandService::cancel"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("context.editor.modeling().commitPreview(historyLabel)"), std::string::npos);
+    EXPECT_NE(toolSettingsPanelSource.find("context.editor.modeling().cancelPreview()"), std::string::npos);
     EXPECT_NE(modelingPreviewCommandServiceSource.find("commitActiveOperationPreview()"), std::string::npos);
     EXPECT_NE(modelingPreviewCommandServiceSource.find("cancelActiveOperationPreview()"), std::string::npos);
     EXPECT_EQ(toolSettingsPanelSource.find("No active tool settings."), std::string::npos);
@@ -2796,11 +2882,11 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
     EXPECT_NE(mainMenuBarSource.find("toolLabel(context.localization, *tool)"), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("viewport.tool."), std::string::npos);
     EXPECT_NE(mainMenuBarSource.find("viewportToolCatalog()"), std::string::npos);
-    EXPECT_NE(mainMenuBarSource.find("activateToolFromMenu(\n                    tool->viewportTool(),\n                    context.editor,\n                    context.document,\n                    context.documentCommands,\n                    context.modeling"),
+    EXPECT_NE(mainMenuBarSource.find("activateToolFromMenu(\n                    tool->viewportTool(),\n                    context.editor,\n                    context.document,\n                    context.modeling"),
             std::string::npos);
 
     const std::filesystem::path toolCatalogPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "tools" / "base" / "ViewportToolCatalog.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "viewport" / "modes" / "base" / "ViewportToolCatalog.cpp";
     std::ifstream toolCatalogFile(toolCatalogPath);
     ASSERT_TRUE(toolCatalogFile.is_open()) << toolCatalogPath.string();
 
@@ -2826,7 +2912,7 @@ TEST(UISystemTests, TopMenuExposesViewportToolsMenu) {
     EXPECT_NE(viewportPanelSource.find("uiContext.editor.tools().activate(inputRouter_.state().activeTool)"), std::string::npos);
 }
 
-TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
+TEST(AppStartupTests, DoesNotCreateDefaultModelingMesh) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "app" / "App.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -2837,7 +2923,7 @@ TEST(AppStartupTests, DoesNotCreateDefaultSdkMesh) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_EQ(source.find("createBoxFromBounds({"), std::string::npos);
-    EXPECT_EQ(source.find("Startup scene created SDK box"), std::string::npos);
+    EXPECT_EQ(source.find("Startup scene created modeling box"), std::string::npos);
     EXPECT_EQ(source.find("startup box"), std::string::npos);
     EXPECT_EQ(source.find("Fake Directional Light"), std::string::npos);
     EXPECT_EQ(source.find("document_.setLight"), std::string::npos);
@@ -3509,7 +3595,7 @@ TEST(ViewportCameraTests, SetViewDirectionKeepsTargetDistanceAndSnapsAxis) {
     EXPECT_NEAR(forward.z, 0.0f, 0.001f);
 }
 
-TEST(ViewportCameraTests, ViewAxisUsesSdkNavigationPolicy) {
+TEST(ViewportCameraTests, ViewAxisUsesRuntimeNavigationPolicy) {
     ViewportCameraController camera;
     camera.focusBounds({10.0f, -2.0f, -4.0f}, {14.0f, 2.0f, 4.0f});
 
@@ -3549,7 +3635,6 @@ TEST(ViewportCameraTests, ViewCubeAxisSnapDoesNotLockOrbit) {
 }
 
 TEST(ViewportCameraTests, ViewCubePrimitivesExposeVisibleAxisEdges) {
-#if QUADER_HAS_MODELING_SDK
     quader_editor_core::ViewCubePrimitiveInput input;
     input.viewport_size = {200.0f, 200.0f};
     input.widget_size = 70.0;
@@ -3591,9 +3676,6 @@ TEST(ViewportCameraTests, ViewCubePrimitivesExposeVisibleAxisEdges) {
         EXPECT_FLOAT_EQ(edge.local_start.y, -1.0f);
         EXPECT_FLOAT_EQ(edge.local_start.z, 1.0f);
     }
-#else
-    GTEST_SKIP() << "Modeling SDK disabled";
-#endif
 }
 
 TEST(ViewportCameraTests, OrthographicAxisViewBuildsParallelPickingRays) {
@@ -3642,8 +3724,7 @@ TEST(ViewportCameraTests, SetViewDirectionClampsVerticalViewWithoutDegenerateBas
     EXPECT_GT(length(pose.up), 0.99f);
 }
 
-TEST(ViewportCameraTests, OrbitSnapUsesSdkOrthogonalSnap) {
-#if QUADER_HAS_MODELING_SDK
+TEST(ViewportCameraTests, OrbitSnapUsesRuntimeOrthogonalSnap) {
     ViewportCameraController camera;
     camera.focusOrigin(8.0f);
     camera.setViewDirection({0.02f, 0.0f, -1.0f});
@@ -3665,9 +3746,6 @@ TEST(ViewportCameraTests, OrbitSnapUsesSdkOrthogonalSnap) {
     camera.updateDrag({118.0f, 100.0f});
     camera.endDrag();
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
-#else
-    GTEST_SKIP() << "SDK navigation is disabled.";
-#endif
 }
 
 TEST(ViewportCameraTests, FlyLookKeepsEyeFixedAndFlyMoveAdvancesCamera) {
@@ -3726,7 +3804,6 @@ TEST(ViewportCameraTests, FlyLookDoesNotSnapToTopOrBottomView) {
 }
 
 TEST(ViewportCameraTests, PlainMiddleOrbitNearOrthogonalAxisDoesNotSnapToOrthographic) {
-#if QUADER_HAS_MODELING_SDK
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
     camera.focusOrigin(8.0f);
@@ -3742,9 +3819,6 @@ TEST(ViewportCameraTests, PlainMiddleOrbitNearOrthogonalAxisDoesNotSnapToOrthogr
     EXPECT_FALSE(camera.orthographicViewLocked());
     EXPECT_GT(std::abs(forward.x), 0.001f);
     EXPECT_NEAR(forward.y, 0.0f, 0.001f);
-#else
-    GTEST_SKIP() << "SDK navigation is disabled.";
-#endif
 }
 
 TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
@@ -3808,6 +3882,9 @@ TEST(ViewportInputRouterTests, ModalToolHotkeysActivateNativeControllers) {
 }
 
 TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
+    /**
+     * Stores the Shortcut Case data contract used by the automated test suite.
+     */
     struct ShortcutCase {
         const char* label;
         ViewportKey key;
@@ -4124,7 +4201,6 @@ TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
 }
 
 TEST(ViewportInputRouterTests, MiddleOrbitSamplesAltDuringDragForOrthographicSnap) {
-#if QUADER_HAS_MODELING_SDK
     ViewportInputRouter router;
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
@@ -4159,13 +4235,9 @@ TEST(ViewportInputRouterTests, MiddleOrbitSamplesAltDuringDragForOrthographicSna
 
     EXPECT_TRUE(result.cameraChanged);
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
-#else
-    GTEST_SKIP() << "SDK navigation is disabled.";
-#endif
 }
 
 TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
-#if QUADER_HAS_MODELING_SDK
     ViewportInputRouter router;
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
@@ -4206,13 +4278,9 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
     EXPECT_TRUE(router.navigating());
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
     EXPECT_FALSE(camera.orthographicViewLocked());
-#else
-    GTEST_SKIP() << "SDK navigation is disabled.";
-#endif
 }
 
 TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicViewLikeUnity) {
-#if QUADER_HAS_MODELING_SDK
     ViewportInputRouter router;
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
@@ -4254,9 +4322,6 @@ TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicViewLikeUni
     EXPECT_FALSE(result.flyNavigationActive);
     EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
     EXPECT_FALSE(camera.orthographicViewLocked());
-#else
-    GTEST_SKIP() << "SDK navigation is disabled.";
-#endif
 }
 
 TEST(ViewportInputRouterTests, LockedOrthographicViewConsumesMiddleOrbitWithoutMovingCamera) {
@@ -4452,7 +4517,6 @@ TEST(ViewportInputRouterTests, RightMouseFlyNavigationIgnoresPressFrameMouseDelt
 }
 
 TEST(ViewportInputRouterTests, RightMouseFlyLookNearOrthogonalAxisStaysPerspective) {
-#if QUADER_HAS_MODELING_SDK
     ViewportInputRouter router;
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
@@ -4486,9 +4550,6 @@ TEST(ViewportInputRouterTests, RightMouseFlyLookNearOrthogonalAxisStaysPerspecti
     EXPECT_FALSE(camera.orthographicViewLocked());
     EXPECT_NEAR(length(after.eye - before.eye), 0.0f, 0.001f);
     EXPECT_GT(std::abs(afterForward.x), 0.001f);
-#else
-    GTEST_SKIP() << "SDK navigation is disabled.";
-#endif
 }
 
 TEST(ViewportInputRouterTests, FlyWheelAdjustsNavigationSpeedInsteadOfZooming) {
@@ -4712,13 +4773,13 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
     const EntityId entity = document.scene().createEntity("Authored Mesh");
     document.scene().setMesh(entity, MeshComponent{.mesh = mesh});
 
-    const ProjectObjectId object = document.createObjectRecord(ProjectObjectRecord{
+    const EditorObjectId object = document.createObjectRecord(ProjectObjectRecord{
         .sceneEntity = entity,
         .mesh = mesh,
         .authoredName = "Authored Mesh",
     });
 
-    ASSERT_NE(object, InvalidProjectObjectId);
+    ASSERT_NE(object, InvalidEditorObjectId);
     EXPECT_EQ(document.id(), 17u);
     EXPECT_EQ(document.name(), "Authored Project");
     EXPECT_EQ(document.revision(), 1u);
@@ -4737,16 +4798,74 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
         .mesh = mesh,
         .authoredName = "Imported Stable Record",
     }), 42u);
+    EXPECT_EQ(document.objectIdForEntity(entity), 42u);
     EXPECT_EQ(document.createObjectRecord(ProjectObjectRecord{}), 43u);
     const std::vector<ProjectObjectRecord> records = document.objectRecords();
-    ASSERT_EQ(records.size(), 3u);
-    EXPECT_EQ(records[0].id, object);
-    EXPECT_EQ(records[1].id, 42u);
-    EXPECT_EQ(records[2].id, 43u);
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].id, 42u);
+    EXPECT_EQ(records[1].id, 43u);
 
     document.rename("Renamed Project");
     EXPECT_EQ(document.name(), "Renamed Project");
     EXPECT_EQ(document.revision(), 4u);
+}
+
+TEST(ProjectDocumentTests, RejectsEditorObjectIdCollisionsBetweenSceneEntities) {
+    ProjectDocument document(ProjectDocumentRecord{
+            .id = 19,
+            .name = "Identity Collision Project",
+    });
+
+    const EntityId first = document.scene().createEntity("First", EntityKind::Mesh);
+    const EntityId second = document.scene().createEntity("Second", EntityKind::Mesh);
+    const EditorObjectId firstObject = document.scene().editorObjectId(first);
+    const EditorObjectId secondObject = document.scene().editorObjectId(second);
+    ASSERT_NE(firstObject, InvalidEditorObjectId);
+    ASSERT_NE(secondObject, InvalidEditorObjectId);
+    ASSERT_NE(firstObject, secondObject);
+
+    EXPECT_EQ(document.upsertObjectRecord(ProjectObjectRecord{
+            .id = firstObject,
+            .sceneEntity = second,
+            .authoredName = "Bad Collision",
+    }), InvalidEditorObjectId);
+    EXPECT_EQ(document.scene().editorObjectId(first), firstObject);
+    EXPECT_EQ(document.scene().editorObjectId(second), secondObject);
+    EXPECT_EQ(document.entityForObjectId(firstObject), first);
+    EXPECT_EQ(document.entityForObjectId(secondObject), second);
+
+    const ProjectDocumentIdentityReport report = document.validateObjectIdentityInvariants();
+    EXPECT_TRUE(report.ok()) << (report.issues.empty() ? std::string{} : report.issues.front().message);
+}
+
+TEST(ProjectDocumentTests, MirrorsEverySceneEntityIntoStableEditorObjectRecords) {
+    ProjectDocument document(ProjectDocumentRecord{
+            .id = 18,
+            .name = "Identity Project",
+    });
+
+    const EntityId mesh = document.scene().createEntity("Mesh", EntityKind::Mesh);
+    const EntityId group = document.scene().createEmpty("Group");
+    ASSERT_TRUE(document.scene().setParent(mesh, group, false));
+
+    const EditorObjectId meshObject = document.scene().editorObjectId(mesh);
+    const EditorObjectId groupObject = document.scene().editorObjectId(group);
+    ASSERT_NE(meshObject, InvalidEditorObjectId);
+    ASSERT_NE(groupObject, InvalidEditorObjectId);
+    EXPECT_NE(meshObject, groupObject);
+
+    const std::vector<ProjectObjectRecord> records = document.objectRecords();
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(document.objectIdForEntity(mesh), meshObject);
+    EXPECT_EQ(document.objectIdForEntity(group), groupObject);
+    EXPECT_EQ(document.entityForObjectId(meshObject), mesh);
+    EXPECT_EQ(document.entityForObjectId(groupObject), group);
+    ASSERT_NE(document.objectRecord(meshObject), nullptr);
+    ASSERT_NE(document.objectRecord(groupObject), nullptr);
+    EXPECT_EQ(document.objectRecord(groupObject)->modelingObject, InvalidModelingObjectId);
+
+    const ProjectDocumentIdentityReport report = document.validateObjectIdentityInvariants();
+    EXPECT_TRUE(report.ok()) << (report.issues.empty() ? std::string{} : report.issues.front().message);
 }
 
 TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWiredTogether) {
@@ -4784,7 +4903,7 @@ TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWir
             .name = "Opened Session",
     });
     const EntityId authoredEntity = existing.scene().createEntity("Authored Mesh");
-    const ProjectObjectId object = existing.createObjectRecord(ProjectObjectRecord{
+    const EditorObjectId object = existing.createObjectRecord(ProjectObjectRecord{
             .sceneEntity = authoredEntity,
             .authoredName = "Authored Mesh",
     });
@@ -4884,7 +5003,8 @@ TEST(EditorCommandServiceTests, ExecutesCommandsThroughSharedUndoStack) {
     const EntityId entity = scene.createEntity("Brush");
     UndoRedoManager undoRedo;
     DocumentCommandService documentCommands(scene, undoRedo);
-    EditorCommandService editorCommands(undoRedo, documentCommands);
+    EditorHistoryService history(undoRedo);
+    EditorCommandService editorCommands(history, documentCommands);
 
     CommandResult result = editorCommands.execute(
             std::make_unique<RenameEntityCommand>(scene, entity, "Brush", "Brush_1"));
@@ -4903,6 +5023,31 @@ TEST(EditorCommandServiceTests, ExecutesCommandsThroughSharedUndoStack) {
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.name(entity), nullptr);
     EXPECT_EQ(scene.name(entity)->name, "Brush_1");
+}
+
+TEST(EditorHistoryServiceTests, TransactionsRecordAlreadyExecutedCommandsAsOneUndoItem) {
+    UndoRedoManager undoRedo;
+    EditorHistoryService history(undoRedo);
+    int first = 0;
+    int second = 0;
+
+    EditorTransaction transaction = history.beginTransaction("Two Edits");
+    ASSERT_TRUE(transaction.execute(std::make_unique<TestValueCommand>("First", first, 0, 1)).ok);
+    ASSERT_TRUE(transaction.execute(std::make_unique<TestValueCommand>("Second", second, 0, 2)).ok);
+    CommandResult result = transaction.commit();
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(history.canUndo());
+    ASSERT_NE(history.undoLabel(), nullptr);
+    EXPECT_EQ(*history.undoLabel(), "Two Edits");
+
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(first, 0);
+    EXPECT_EQ(second, 0);
+    EXPECT_TRUE(history.canRedo());
+
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_EQ(first, 1);
+    EXPECT_EQ(second, 2);
 }
 
 TEST(DocumentCommandTests, TypedCommandsExecuteDirectlyThroughUndoRedoManager) {
@@ -5159,6 +5304,70 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
     EXPECT_FALSE(scene.exists(restored));
 }
 
+TEST(DocumentCommandTests, DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem) {
+    SceneDocument scene;
+    UndoRedoManager undoRedo;
+
+    const EntityId source = scene.createEntity("Source", EntityKind::Mesh);
+    const EntityId leaf = scene.createEntity("Leaf");
+    ASSERT_TRUE(scene.setParent(leaf, source, false));
+    const EditorObjectId sourceObject = scene.editorObjectId(source);
+    const EditorObjectId leafObject = scene.editorObjectId(leaf);
+
+    auto duplicate = std::make_unique<DuplicateEntityCommand>(scene, source);
+    DuplicateEntityCommand* duplicateCommand = duplicate.get();
+    UndoRedoResult result = undoRedo.execute(std::move(duplicate));
+    ASSERT_TRUE(result.ok) << result.message;
+
+    const EntityId duplicateRoot = duplicateCommand->duplicateEntity();
+    ASSERT_TRUE(scene.exists(duplicateRoot));
+    ASSERT_EQ(scene.children(duplicateRoot).size(), 1u);
+    const EntityId duplicateLeaf = scene.children(duplicateRoot).front();
+    const EditorObjectId duplicateObject = scene.editorObjectId(duplicateRoot);
+    const EditorObjectId duplicateLeafObject = scene.editorObjectId(duplicateLeaf);
+    EXPECT_NE(duplicateObject, InvalidEditorObjectId);
+    EXPECT_NE(duplicateLeafObject, InvalidEditorObjectId);
+    EXPECT_NE(duplicateObject, sourceObject);
+    EXPECT_NE(duplicateLeafObject, leafObject);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FALSE(scene.exists(duplicateRoot));
+    ASSERT_TRUE(undoRedo.redo().ok);
+
+    const EntityId redoneRoot = duplicateCommand->duplicateEntity();
+    ASSERT_TRUE(scene.exists(redoneRoot));
+    ASSERT_EQ(scene.children(redoneRoot).size(), 1u);
+    const EntityId redoneLeaf = scene.children(redoneRoot).front();
+    EXPECT_EQ(scene.editorObjectId(redoneRoot), duplicateObject);
+    EXPECT_EQ(scene.editorObjectId(redoneLeaf), duplicateLeafObject);
+}
+
+TEST(DocumentCommandTests, DestroyUndoRestoresEditorObjectIdsForSubtrees) {
+    SceneDocument scene;
+    UndoRedoManager undoRedo;
+
+    const EntityId source = scene.createEntity("Source", EntityKind::Mesh);
+    const EntityId leaf = scene.createEntity("Leaf");
+    ASSERT_TRUE(scene.setParent(leaf, source, false));
+    const EditorObjectId sourceObject = scene.editorObjectId(source);
+    const EditorObjectId leafObject = scene.editorObjectId(leaf);
+
+    auto destroy = std::make_unique<DestroyEntityCommand>(scene, source);
+    DestroyEntityCommand* destroyCommand = destroy.get();
+    UndoRedoResult result = undoRedo.execute(std::move(destroy));
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(scene.exists(source));
+    EXPECT_FALSE(scene.exists(leaf));
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    const EntityId restoredRoot = destroyCommand->entity();
+    ASSERT_TRUE(scene.exists(restoredRoot));
+    ASSERT_EQ(scene.children(restoredRoot).size(), 1u);
+    const EntityId restoredLeaf = scene.children(restoredRoot).front();
+    EXPECT_EQ(scene.editorObjectId(restoredRoot), sourceObject);
+    EXPECT_EQ(scene.editorObjectId(restoredLeaf), leafObject);
+}
+
 TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
     SceneDocument scene;
     const EntityId first = scene.createEntity("First");
@@ -5303,6 +5512,43 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     EXPECT_FALSE(scene.exists(second));
     ASSERT_TRUE(undoRedo.undo().ok);
     EXPECT_TRUE(scene.exists(scene.primarySelection()));
+}
+
+TEST(DocumentCommandServiceTests, GroupsAreSceneOwnedEditorObjectsNotModelingObjects) {
+    ProjectSession session;
+
+    EntityId first = InvalidEntityId;
+    EntityId second = InvalidEntityId;
+    ASSERT_TRUE(session.documentCommands().createEntity(
+            "First",
+            EntityKind::Mesh,
+            InvalidEntityId,
+            {},
+            &first).ok);
+    ASSERT_TRUE(session.documentCommands().createEntity(
+            "Second",
+            EntityKind::Mesh,
+            InvalidEntityId,
+            {},
+            &second).ok);
+    ASSERT_TRUE(session.documentCommands().selectEntities({first, second}, second).ok);
+
+    EntityId group = InvalidEntityId;
+    const DocumentCommandResult grouped = session.documentCommands().groupSelection("Group", {}, &group);
+    ASSERT_TRUE(grouped.ok) << grouped.message;
+    ASSERT_TRUE(session.scene().exists(group));
+    EXPECT_EQ(session.scene().kind(group), EntityKind::Empty);
+    EXPECT_EQ(session.scene().modelingObject(group), nullptr);
+
+    const EditorObjectId groupObject = session.scene().editorObjectId(group);
+    ASSERT_NE(groupObject, InvalidEditorObjectId);
+    const ProjectObjectRecord* record = session.document().objectRecord(groupObject);
+    ASSERT_NE(record, nullptr);
+    EXPECT_EQ(record->sceneEntity, group);
+    EXPECT_EQ(record->modelingObject, InvalidModelingObjectId);
+
+    const ProjectDocumentIdentityReport report = session.document().validateObjectIdentityInvariants();
+    EXPECT_TRUE(report.ok()) << (report.issues.empty() ? std::string{} : report.issues.front().message);
 }
 
 TEST(UndoRedoManagerTests, NoopCommandsDoNotClearRedoButNewCommandsDo) {
@@ -5453,7 +5699,6 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeObjectPanelAndExecuteHostA
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Action Box",
@@ -5493,11 +5738,6 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeObjectPanelAndExecuteHostA
 
     const ModelingCommandResult executed = service.executeContextAction("invert_mesh");
     EXPECT_TRUE(executed.ok) << executed.message;
-#else
-    EXPECT_TRUE(service.contextActionSet().panels.empty());
-    EXPECT_TRUE(service.contextActions().empty());
-    EXPECT_FALSE(service.executeContextAction("invert_mesh").ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ContextActionsExposeEdgePanelAndDisableInsufficientCounts) {
@@ -5505,7 +5745,6 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeEdgePanelAndDisableInsuffi
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Edge Action Box",
@@ -5553,9 +5792,6 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeEdgePanelAndDisableInsuffi
     const ModelingActionPanel* hiddenObjectPanel = findActionPanel(allPanels, "object_operations");
     ASSERT_NE(hiddenObjectPanel, nullptr);
     EXPECT_EQ(hiddenObjectPanel->visibility, ModelingActionVisibility::Hidden);
-#else
-    EXPECT_TRUE(service.contextActionSet().panels.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndLiveUpdate) {
@@ -5563,7 +5799,6 @@ TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndL
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Bevel Preview Box",
@@ -5583,7 +5818,7 @@ TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndL
     EXPECT_EQ(target.operationId, "edge_bevel");
     EXPECT_EQ(target.label, "Bevel Edges");
 
-    const std::optional<MeshAsset> previewBefore = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> previewBefore = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(previewBefore.has_value());
     auto meshPositionFingerprint = [](const MeshAsset& mesh) {
         double value = 0.0;
@@ -5604,17 +5839,13 @@ TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndL
     EXPECT_TRUE(update.ok) << update.message;
     EXPECT_TRUE(update.changed);
 
-    const std::optional<MeshAsset> previewAfter = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> previewAfter = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(previewAfter.has_value());
     EXPECT_NE(meshPositionFingerprint(*previewAfter), meshPositionFingerprint(*previewBefore));
 
     const ModelingCommandResult cancel = service.cancelActiveOperationPreview();
     EXPECT_TRUE(cancel.ok) << cancel.message;
     EXPECT_FALSE(service.toolSettingsTarget().active);
-#else
-    EXPECT_FALSE(service.toolSettingsTarget().active);
-    EXPECT_FALSE(service.cancelActiveOperationPreview().ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisabledForOneFace) {
@@ -5622,7 +5853,6 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisa
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Face Action Box",
@@ -5666,9 +5896,6 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisa
 
     const ModelingCommandResult executed = service.executeContextAction("invert_faces");
     EXPECT_TRUE(executed.ok) << executed.message;
-#else
-    EXPECT_TRUE(service.contextActionSet().panels.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsContextMenu) {
@@ -5676,7 +5903,6 @@ TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsCon
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "RMB Face Context Box",
@@ -5746,9 +5972,6 @@ TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsCon
             .clickCount = 1,
     });
     EXPECT_FALSE(missedWithoutPreservingSelection.hasSelection);
-#else
-    GTEST_SKIP() << "SDK selection is disabled.";
-#endif
 }
 
 TEST(ModelingSessionServiceTests, RmbObjectPickOnSelectedMultiSelectionPreservesSelection) {
@@ -5756,7 +5979,6 @@ TEST(ModelingSessionServiceTests, RmbObjectPickOnSelectedMultiSelectionPreserves
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult left = service.createBoxFromBounds({
             .bounds = {.min = {-4.0f, -1.0f, -1.0f}, .max = {-2.0f, 1.0f, 1.0f}},
             .name = "Left RMB Context Box",
@@ -5799,9 +6021,6 @@ TEST(ModelingSessionServiceTests, RmbObjectPickOnSelectedMultiSelectionPreserves
             .preserveSelectionOnSelectedHit = true,
     });
     EXPECT_EQ(summary.selectedObjectCount, 2u);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ContextActionsHideWhileBoxOrModalOwnsViewport) {
@@ -5818,7 +6037,6 @@ TEST(ModelingSessionServiceTests, ContextActionsHideWhileBoxOrModalOwnsViewport)
     EXPECT_TRUE(service.contextActionSet(explicitModalQuery).panels.empty());
     EXPECT_TRUE(service.contextActions(explicitModalQuery).empty());
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Modal Action Box",
@@ -5834,13 +6052,9 @@ TEST(ModelingSessionServiceTests, ContextActionsHideWhileBoxOrModalOwnsViewport)
     const ModelingCommandResult cancel = service.cancelBox();
     ASSERT_TRUE(cancel.ok) << cancel.message;
     EXPECT_FALSE(service.contextActions(contextQuery).empty());
-#else
-    EXPECT_TRUE(service.contextActionSet().panels.empty());
-    EXPECT_TRUE(service.contextActions(contextQuery).empty());
-#endif
 }
 
-TEST(ModelingSessionServiceTests, CreatesBoxThroughSdkWhenAvailable) {
+TEST(ModelingSessionServiceTests, CreatesBoxThroughRuntimeWhenAvailable) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -5853,14 +6067,13 @@ TEST(ModelingSessionServiceTests, CreatesBoxThroughSdkWhenAvailable) {
         .name = "Test Box",
     });
 
-#if QUADER_HAS_MODELING_SDK
     ASSERT_TRUE(result.ok) << result.message;
     EXPECT_TRUE(result.changed);
-    EXPECT_GT(result.object.sdkObjectId, 0);
+    EXPECT_GT(result.object.modelingObjectId, 0);
     EXPECT_NE(result.object.entity, InvalidEntityId);
     EXPECT_NE(result.object.mesh, InvalidAssetId);
-    EXPECT_EQ(service.entityForSdkObject(result.object.sdkObjectId), result.object.entity);
-    EXPECT_EQ(service.sdkObjectForEntity(result.object.entity), result.object.sdkObjectId);
+    EXPECT_EQ(service.entityForModelingObject(result.object.modelingObjectId), result.object.entity);
+    EXPECT_EQ(service.modelingObjectForEntity(result.object.entity), result.object.modelingObjectId);
 
     const MeshAsset* storedMesh = assets.mesh(result.object.mesh);
     ASSERT_NE(storedMesh, nullptr);
@@ -5877,15 +6090,7 @@ TEST(ModelingSessionServiceTests, CreatesBoxThroughSdkWhenAvailable) {
     ASSERT_NE(scene.mesh(result.object.entity), nullptr);
     EXPECT_EQ(scene.mesh(result.object.entity)->mesh, result.object.mesh);
     ASSERT_NE(scene.modelingObject(result.object.entity), nullptr);
-    EXPECT_EQ(scene.modelingObject(result.object.entity)->objectId, result.object.sdkObjectId);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-    EXPECT_FALSE(result.ok);
-    EXPECT_FALSE(result.changed);
-    EXPECT_FALSE(result.message.empty());
-    EXPECT_EQ(assets.meshCount(), 0u);
-    EXPECT_TRUE(scene.entities().empty());
-#endif
+    EXPECT_EQ(scene.modelingObject(result.object.entity)->objectId, result.object.modelingObjectId);
 }
 
 TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
@@ -5893,13 +6098,12 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Edge Loop Source",
     });
     ASSERT_TRUE(box.ok) << box.message;
-    const std::optional<MeshAsset> before = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> before = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(before.has_value());
 
     ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop);
@@ -5919,13 +6123,10 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
     EXPECT_FALSE(service.toolStatus().insertEdgeLoopDragging);
     EXPECT_FALSE(service.toolStatus().insertEdgeLoopHasPreview);
 
-    const std::optional<MeshAsset> after = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> after = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(after.has_value());
     EXPECT_GT(after->vertices.size(), before->vertices.size());
     EXPECT_GT(after->indices.size(), before->indices.size());
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, InsertEdgeLoopCommitSurvivesReleaseFrameHover) {
@@ -5933,14 +6134,13 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopCommitSurvivesReleaseFrameHover)
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Release Hover Edge Loop Source",
     });
     ASSERT_TRUE(box.ok) << box.message;
 
-    std::optional<MeshAsset> before = service.compileObjectMesh(box.object.sdkObjectId);
+    std::optional<MeshAsset> before = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(before.has_value());
 
     ModelingCommandResult command = service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop);
@@ -5957,12 +6157,9 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopCommitSurvivesReleaseFrameHover)
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
 
-    std::optional<MeshAsset> after = service.compileObjectMesh(box.object.sdkObjectId);
+    std::optional<MeshAsset> after = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(after.has_value());
     EXPECT_GT(after->vertices.size(), before->vertices.size());
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
@@ -5970,7 +6167,6 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Near Edge Loop Source",
@@ -5990,9 +6186,6 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
     command = service.commitInsertEdgeLoopDrag();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::InsertEdgeLoop).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, CutAndMirrorEmitUnityDrawnPlaneOverlay) {
@@ -6000,7 +6193,6 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitUnityDrawnPlaneOverlay) {
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Plane Overlay Source",
@@ -6156,9 +6348,6 @@ TEST(ModelingSessionServiceTests, CutAndMirrorEmitUnityDrawnPlaneOverlay) {
 
     expectDrawnPlaneOverlay(ModelingViewportTool::Cut);
     expectDrawnPlaneOverlay(ModelingViewportTool::Mirror);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Cut).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, CutToolDragEndAndFinalizeSplitMesh) {
@@ -6166,7 +6355,6 @@ TEST(ModelingSessionServiceTests, CutToolDragEndAndFinalizeSplitMesh) {
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Cut Source",
@@ -6217,9 +6405,6 @@ TEST(ModelingSessionServiceTests, CutToolDragEndAndFinalizeSplitMesh) {
     EXPECT_FALSE(service.toolStatus().cutActive);
     EXPECT_FALSE(service.toolSettingsTarget().active);
     EXPECT_GT(scene.entities().size(), 1u);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Cut).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, CutToolActivationPromotesSelectedSceneMeshToObjectMode) {
@@ -6227,7 +6412,6 @@ TEST(ModelingSessionServiceTests, CutToolActivationPromotesSelectedSceneMeshToOb
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Cut Activation Source",
@@ -6248,17 +6432,13 @@ TEST(ModelingSessionServiceTests, CutToolActivationPromotesSelectedSceneMeshToOb
     EXPECT_TRUE(service.toolStatus().cutActive);
     EXPECT_TRUE(service.toolSettingsTarget().active);
     EXPECT_EQ(service.toolSettingsTarget().kind, ModelingToolSettingsTargetKind::Cut);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Cut).ok);
-#endif
 }
 
-TEST(ModelingSessionServiceTests, CutAndMirrorActivationPromotesSdkSelectionWhenSceneSelectionIsStale) {
+TEST(ModelingSessionServiceTests, CutAndMirrorActivationPromotesRuntimeSelectionWhenSceneSelectionIsStale) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Drawn Plane Activation Source",
@@ -6284,9 +6464,6 @@ TEST(ModelingSessionServiceTests, CutAndMirrorActivationPromotesSdkSelectionWhen
     EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
     EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Cut);
     EXPECT_TRUE(service.toolStatus().cutActive);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Mirror).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, MirrorToolDrawnPlaneFinalizeDuplicatesSelection) {
@@ -6294,7 +6471,6 @@ TEST(ModelingSessionServiceTests, MirrorToolDrawnPlaneFinalizeDuplicatesSelectio
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}},
         .name = "Mirror Source",
@@ -6344,9 +6520,6 @@ TEST(ModelingSessionServiceTests, MirrorToolDrawnPlaneFinalizeDuplicatesSelectio
     EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Select);
     EXPECT_FALSE(service.toolStatus().mirrorActive);
     EXPECT_EQ(scene.entities().size(), 2u);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Mirror).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, MirrorToolActivationPromotesSelectedSceneMeshToObjectMode) {
@@ -6354,7 +6527,6 @@ TEST(ModelingSessionServiceTests, MirrorToolActivationPromotesSelectedSceneMeshT
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}},
         .name = "Mirror Activation Source",
@@ -6373,17 +6545,14 @@ TEST(ModelingSessionServiceTests, MirrorToolActivationPromotesSelectedSceneMeshT
     EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
     EXPECT_EQ(service.toolStatus().activeTool, ModelingViewportTool::Mirror);
     EXPECT_TRUE(service.toolStatus().mirrorActive);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Mirror).ok);
-#endif
 }
 
-TEST(ModelingSessionServiceTests, SyncsSceneSelectionToSdkSelectionCenter) {
+TEST(ModelingSessionServiceTests, EditorSelectionProjectsSceneSelectionToRuntimeSelectionCenter) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult first = service.createBoxFromBounds({
         .bounds = {
             .min = {-2.0f, -1.0f, -3.0f},
@@ -6402,41 +6571,33 @@ TEST(ModelingSessionServiceTests, SyncsSceneSelectionToSdkSelectionCenter) {
     });
     ASSERT_TRUE(second.ok) << second.message;
 
-    scene.clearSelection();
-    scene.setSelected(first.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {first.object.entity}).ok);
     std::optional<Vec3> center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_FLOAT_EQ(center->x, 0.0f);
     EXPECT_FLOAT_EQ(center->y, 0.0f);
     EXPECT_FLOAT_EQ(center->z, 0.0f);
     const std::uint64_t firstSelectionRevision = service.selectionSummary().selectionRevision;
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {first.object.entity}).ok);
     EXPECT_EQ(service.selectionSummary().selectionRevision, firstSelectionRevision);
 
-    scene.clearSelection();
-    scene.setSelected(second.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {second.object.entity}).ok);
     center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_FLOAT_EQ(center->x, 11.0f);
     EXPECT_FLOAT_EQ(center->y, 4.0f);
     EXPECT_FLOAT_EQ(center->z, -1.0f);
     const std::uint64_t secondSelectionRevision = service.selectionSummary().selectionRevision;
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {second.object.entity}).ok);
     EXPECT_EQ(service.selectionSummary().selectionRevision, secondSelectionRevision);
-#else
-    service.syncObjectSelectionFromScene();
-    EXPECT_FALSE(service.selectionCenter().has_value());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SelectionCommandsStaySynchronizedWithScene) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult first = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "First Box",
@@ -6461,17 +6622,12 @@ TEST(ModelingSessionServiceTests, SelectionCommandsStaySynchronizedWithScene) {
     ASSERT_TRUE(invertAll.ok) << invertAll.message;
     EXPECT_TRUE(scene.selectedEntities().empty());
 
-    scene.setSelected(first.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {first.object.entity}).ok);
     const ModelingCommandResult invertOne = service.invertSelection();
     ASSERT_TRUE(invertOne.ok) << invertOne.message;
     EXPECT_EQ(service.selectionSummary().selectedObjectCount, 1u);
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.selectedEntities().front(), second.object.entity);
-#else
-    EXPECT_FALSE(service.selectAll().ok);
-    EXPECT_FALSE(service.invertSelection().ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ElementSelectionCommandsWorkAcrossDifferentMeshes) {
@@ -6479,7 +6635,6 @@ TEST(ModelingSessionServiceTests, ElementSelectionCommandsWorkAcrossDifferentMes
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult first = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "First Component Box",
@@ -6527,17 +6682,14 @@ TEST(ModelingSessionServiceTests, ElementSelectionCommandsWorkAcrossDifferentMes
     summary = service.selectionSummary();
     EXPECT_EQ(summary.selectedFaceCount, 0u);
     EXPECT_TRUE(scene.selectedEntities().empty());
-#else
-    EXPECT_FALSE(service.selectAll().ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransforms) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Moved Box",
@@ -6547,9 +6699,7 @@ TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransform
     TransformComponent moved;
     moved.position = {7.0f, 2.0f, -3.0f};
     scene.setTransform(box.object.entity, moved);
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
     const std::optional<Vec3> center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
@@ -6573,9 +6723,6 @@ TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransform
     EXPECT_NEAR(overlayCenter.x, 7.0f, 0.001f);
     EXPECT_NEAR(overlayCenter.y, 2.0f, 0.001f);
     EXPECT_NEAR(overlayCenter.z, -3.0f, 0.001f);
-#else
-    EXPECT_FALSE(service.selectionCenter().has_value());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMeshes) {
@@ -6583,7 +6730,6 @@ TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMesh
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult left = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Left Local Box",
@@ -6638,10 +6784,7 @@ TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMesh
     ASSERT_EQ(picked.selectedObjectCount, 1u);
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.selectedEntities().front(), right.object.entity);
-    EXPECT_EQ(picked.activeObjectId, right.object.sdkObjectId);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
+    EXPECT_EQ(picked.activeObjectId, right.object.modelingObjectId);
 }
 
 TEST(ModelingSessionServiceTests, VertexHoverCandidatePointsRespectSceneTransforms) {
@@ -6649,7 +6792,6 @@ TEST(ModelingSessionServiceTests, VertexHoverCandidatePointsRespectSceneTransfor
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Hover Candidate Box",
@@ -6686,9 +6828,6 @@ TEST(ModelingSessionServiceTests, VertexHoverCandidatePointsRespectSceneTransfor
 
     ASSERT_TRUE(pointBounds.has_value());
     EXPECT_NEAR(boundsCenter(*pointBounds).x, 4.0f, 0.001f);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SelectedHoverAndModifierRemovePreviewStayDistinct) {
@@ -6696,7 +6835,6 @@ TEST(ModelingSessionServiceTests, SelectedHoverAndModifierRemovePreviewStayDisti
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Selected Hover Box",
@@ -6801,9 +6939,6 @@ TEST(ModelingSessionServiceTests, SelectedHoverAndModifierRemovePreviewStayDisti
     EXPECT_EQ(service.selectionSummary().selectedFaceCount, selectedBeforeHover.selectedFaceCount);
     EXPECT_EQ(service.selectionSummary().contentRevision, selectedBeforeHover.contentRevision);
     EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ClearingHoverAfterSelectionLetsSelectionColorWinAndCtrlShowsRemovePreview) {
@@ -6811,7 +6946,6 @@ TEST(ModelingSessionServiceTests, ClearingHoverAfterSelectionLetsSelectionColorW
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Hover Preserved Selection Box",
@@ -6914,9 +7048,6 @@ TEST(ModelingSessionServiceTests, ClearingHoverAfterSelectionLetsSelectionColorW
             });
     EXPECT_TRUE(hoverFaceCleared);
     EXPECT_TRUE(selectedFaceWireAfterClear);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ClearingHoverAfterEdgeSelectionShowsSelectionBeforeHoverReturns) {
@@ -6924,7 +7055,6 @@ TEST(ModelingSessionServiceTests, ClearingHoverAfterEdgeSelectionShowsSelectionB
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Hover Suppressed Edge Box",
@@ -6997,9 +7127,6 @@ TEST(ModelingSessionServiceTests, ClearingHoverAfterEdgeSelectionShowsSelectionB
     const ViewportOverlayFrame rehoverFrame = service.selectionOverlayFrame();
     EXPECT_TRUE(hasHoverEdge(rehoverFrame));
     EXPECT_TRUE(hasSelectedEdge(rehoverFrame));
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ClearingHoverAfterVertexSelectionShowsSelectionBeforeHoverReturns) {
@@ -7007,7 +7134,6 @@ TEST(ModelingSessionServiceTests, ClearingHoverAfterVertexSelectionShowsSelectio
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Hover Suppressed Vertex Box",
@@ -7080,9 +7206,6 @@ TEST(ModelingSessionServiceTests, ClearingHoverAfterVertexSelectionShowsSelectio
     const ViewportOverlayFrame rehoverFrame = service.selectionOverlayFrame();
     EXPECT_TRUE(hasHoverVertex(rehoverFrame));
     EXPECT_TRUE(hasSelectedVertex(rehoverFrame));
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SelectedEdgeHoverAndModifierRemovePreviewStayDistinct) {
@@ -7090,7 +7213,6 @@ TEST(ModelingSessionServiceTests, SelectedEdgeHoverAndModifierRemovePreviewStayD
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Selected Edge Remove Hover Box",
@@ -7157,9 +7279,6 @@ TEST(ModelingSessionServiceTests, SelectedEdgeHoverAndModifierRemovePreviewStayD
     EXPECT_TRUE(hasRemoveHoverEdge);
     EXPECT_EQ(service.selectionSummary().selectedEdgeCount, selectedBeforeHover.selectedEdgeCount);
     EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SelectedVertexHoverAndModifierRemovePreviewStayDistinct) {
@@ -7167,7 +7286,6 @@ TEST(ModelingSessionServiceTests, SelectedVertexHoverAndModifierRemovePreviewSta
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Selected Vertex Remove Hover Box",
@@ -7230,9 +7348,6 @@ TEST(ModelingSessionServiceTests, SelectedVertexHoverAndModifierRemovePreviewSta
     EXPECT_TRUE(hasRemoveHoverHandle);
     EXPECT_EQ(service.selectionSummary().selectedVertexCount, selectedBeforeHover.selectedVertexCount);
     EXPECT_EQ(service.selectionSummary().selectionRevision, selectedBeforeHover.selectionRevision);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelection) {
@@ -7240,7 +7355,6 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Source Box",
@@ -7279,7 +7393,7 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     EXPECT_NE(duplicateEntity, box.object.entity);
     ASSERT_NE(scene.name(duplicateEntity), nullptr);
     EXPECT_EQ(scene.name(duplicateEntity)->name, "Mesh");
-    EXPECT_EQ(scene.name(duplicateEntity)->name.find("SDK Object"), std::string::npos);
+    EXPECT_EQ(scene.name(duplicateEntity)->name.find("Runtime Object"), std::string::npos);
     const MeshComponent* duplicateMesh = scene.mesh(duplicateEntity);
     ASSERT_NE(duplicateMesh, nullptr);
     EXPECT_TRUE(duplicateMesh->doubleSided);
@@ -7303,18 +7417,14 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     EXPECT_EQ(scene.entities().size(), 1u);
     EXPECT_EQ(service.objects().size(), 1u);
     EXPECT_TRUE(scene.selectedEntities().empty());
-#else
-    EXPECT_TRUE(service.instantOperations().empty());
-    EXPECT_FALSE(service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes).ok);
-#endif
 }
 
-TEST(ModelingSessionServiceTests, RepeatedSelectionSyncDoesNotDirtySceneOrResyncMeshes) {
+TEST(ModelingSessionServiceTests, RepeatedObjectSelectionProjectionDoesNotDirtySceneOrResyncMeshes) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -7323,21 +7433,20 @@ TEST(ModelingSessionServiceTests, RepeatedSelectionSyncDoesNotDirtySceneOrResync
         .name = "Selection Sync Box",
     });
     ASSERT_TRUE(box.ok) << box.message;
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
-    service.syncSceneSelectionFromSdk();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
+    ASSERT_TRUE(editorSelection.selection.setObjectSelection(
+            std::span<const EntityId>(&box.object.entity, 1),
+            box.object.entity).ok);
 
     const std::uint64_t sceneRevision = scene.revision();
     const ModelingSelectionSummary summary = service.selectionSummary();
-    service.syncSceneSelectionFromSdk();
+    ASSERT_TRUE(editorSelection.selection.setObjectSelection(
+            std::span<const EntityId>(&box.object.entity, 1),
+            box.object.entity).ok);
 
     EXPECT_EQ(scene.revision(), sceneRevision);
     EXPECT_EQ(service.selectionSummary().contentRevision, summary.contentRevision);
     EXPECT_EQ(service.selectionSummary().selectionRevision, summary.selectionRevision);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
@@ -7345,7 +7454,6 @@ TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Zero Delta Preview Box",
@@ -7379,9 +7487,6 @@ TEST(ModelingSessionServiceTests, TransformPreviewZeroDeltaRestoresSceneMesh) {
     EXPECT_EQ(restoredMesh->indices.size(), sourceIndexCount);
 
     ASSERT_TRUE(service.cancelTransformPreview().ok);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(false).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ComponentTransformPreviewRefreshesSelectionOverlayEveryUpdate) {
@@ -7389,7 +7494,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformPreviewRefreshesSelectionOve
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Preview Overlay Box",
@@ -7437,9 +7541,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformPreviewRefreshesSelectionOve
     EXPECT_NEAR(boundsCenter(*secondBounds).x, 3.0f, 0.001f);
 
     ASSERT_TRUE(service.cancelTransformPreview().ok);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(false).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesVertexHandlesEveryUpdate) {
@@ -7447,7 +7548,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesVertexHandlesEve
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Preview Vertex Overlay Box",
@@ -7488,9 +7588,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesVertexHandlesEve
     EXPECT_NEAR(boundsCenter(*secondBounds).x, 3.0f, 0.001f);
 
     ASSERT_TRUE(service.cancelTransformPreview().ok);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(false).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesEdgeHandlesEveryUpdate) {
@@ -7498,7 +7595,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesEdgeHandlesEvery
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Preview Edge Overlay Box",
@@ -7541,9 +7637,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformPreviewMovesEdgeHandlesEvery
     EXPECT_NEAR(boundsCenter(*secondBounds).x, 3.0f, 0.001f);
 
     ASSERT_TRUE(service.cancelTransformPreview().ok);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(false).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ComponentTransformCommitKeepsHoverHandlesOnCommittedGeometry) {
@@ -7551,7 +7644,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformCommitKeepsHoverHandlesOnCom
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Commit Hover Overlay Box",
@@ -7589,9 +7681,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformCommitKeepsHoverHandlesOnCom
 
     ASSERT_TRUE(pointBounds.has_value());
     EXPECT_NEAR(boundsCenter(*pointBounds).x, 2.0f, 0.001f);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(false).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ComponentTransformCancelRestoresMeshAndOverlayTogether) {
@@ -7599,7 +7688,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformCancelRestoresMeshAndOverlay
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Cancel Overlay Box",
@@ -7635,9 +7723,6 @@ TEST(ModelingSessionServiceTests, ComponentTransformCancelRestoresMeshAndOverlay
 
     ASSERT_TRUE(pointBounds.has_value());
     EXPECT_NEAR(boundsCenter(*pointBounds).x, 0.0f, 0.001f);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(false).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformDragComponentSelectionCommitsOverlayOnCommittedGeometry) {
@@ -7645,7 +7730,6 @@ TEST(ModelingSessionServiceTests, TransformDragComponentSelectionCommitsOverlayO
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Drag Commit Overlay Box",
@@ -7693,9 +7777,6 @@ TEST(ModelingSessionServiceTests, TransformDragComponentSelectionCommitsOverlayO
 
     ASSERT_TRUE(pointBounds.has_value());
     EXPECT_NEAR(boundsCenter(*pointBounds).x, 2.0f, 0.001f);
-#else
-    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest()).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransformPreview) {
@@ -7703,7 +7784,6 @@ TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransform
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Object Drag Box",
@@ -7732,9 +7812,6 @@ TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransform
     const ModelingTransformDragPreview afterCommitUpdate = service.updateTransformDrag(testXMoveDragUpdateRequest(3.0f));
     EXPECT_TRUE(afterCommitUpdate.ok);
     EXPECT_FALSE(afterCommitUpdate.active);
-#else
-    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest()).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateUsesScenePreviewForRotatedObject) {
@@ -7742,7 +7819,6 @@ TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateUsesScenePreviewFor
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Rotated Shift Duplicate Source",
@@ -7784,17 +7860,14 @@ TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateUsesScenePreviewFor
     const ModelingCommandResult cancel = service.cancelTransformDrag();
     ASSERT_TRUE(cancel.ok) << cancel.message;
     EXPECT_EQ(scene.entities().size(), 1u);
-#else
-    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true)).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateKeepsGroupedMeshInsideParent) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult first = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Grouped Shift Source",
@@ -7809,11 +7882,8 @@ TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateKeepsGroupedMeshIns
     const EntityId group = scene.createEmpty("Parent Group");
     ASSERT_TRUE(scene.setParent(first.object.entity, group, true));
     ASSERT_TRUE(scene.setParent(second.object.entity, group, true));
-    scene.clearSelection();
-    scene.setSelected(first.object.entity, true);
-    scene.setActiveSelection(first.object.entity);
     ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {first.object.entity}, first.object.entity).ok);
 
     ModelingTransformDragPreview begin =
             service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true));
@@ -7834,9 +7904,6 @@ TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateKeepsGroupedMeshIns
     ASSERT_TRUE(cancel.ok) << cancel.message;
     EXPECT_EQ(scene.entities().size(), 3u);
     EXPECT_EQ(scene.children(group).size(), 2u);
-#else
-    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true)).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformDragComponentCancelRestoresMeshOverlayAndRuntime) {
@@ -7844,7 +7911,6 @@ TEST(ModelingSessionServiceTests, TransformDragComponentCancelRestoresMeshOverla
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Drag Cancel Overlay Box",
@@ -7888,9 +7954,6 @@ TEST(ModelingSessionServiceTests, TransformDragComponentCancelRestoresMeshOverla
     ModelingTransformDragPreview afterCancelUpdate = service.updateTransformDrag(testXMoveDragUpdateRequest(3.0f));
     EXPECT_TRUE(afterCancelUpdate.ok);
     EXPECT_FALSE(afterCancelUpdate.active);
-#else
-    EXPECT_FALSE(service.cancelTransformDrag().ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMeshAndKeepsDuplicateSelectable) {
@@ -7898,7 +7961,6 @@ TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMes
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Shift Duplicate Source",
@@ -7927,9 +7989,9 @@ TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMes
     expectVec3Near(scene.transform(duplicateEntity)->rotationEuler, sourceTransform.rotationEuler);
     ASSERT_NE(scene.mesh(duplicateEntity), nullptr);
     EXPECT_TRUE(scene.mesh(duplicateEntity)->doubleSided);
-    const std::optional<int> duplicateSdkObjectId = service.sdkObjectForEntity(duplicateEntity);
-    ASSERT_TRUE(duplicateSdkObjectId.has_value());
-    EXPECT_NE(*duplicateSdkObjectId, box.object.sdkObjectId);
+    const std::optional<int> duplicateModelingObjectId = service.modelingObjectForEntity(duplicateEntity);
+    ASSERT_TRUE(duplicateModelingObjectId.has_value());
+    EXPECT_NE(*duplicateModelingObjectId, box.object.modelingObjectId);
 
     const ModelingCommandResult firstMove = service.updateTransformTranslatePreview({1.0f, 0.0f, 0.0f});
     ASSERT_TRUE(firstMove.ok) << firstMove.message;
@@ -7969,12 +8031,9 @@ TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMes
             .clickCount = 1,
     });
     EXPECT_EQ(picked.selectedObjectCount, 1u);
-    EXPECT_EQ(picked.activeObjectId, *duplicateSdkObjectId);
+    EXPECT_EQ(picked.activeObjectId, *duplicateModelingObjectId);
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
-    EXPECT_EQ(service.sdkObjectForEntity(scene.selectedEntities().front()), duplicateSdkObjectId);
-#else
-    EXPECT_FALSE(service.beginTransformPreview(true).ok);
-#endif
+    EXPECT_EQ(service.modelingObjectForEntity(scene.selectedEntities().front()), duplicateModelingObjectId);
 }
 
 TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory) {
@@ -7982,18 +8041,12 @@ TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory)
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
-    EXPECT_FALSE(service.canUndo());
-    EXPECT_FALSE(service.canRedo());
-
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Shortcut Source",
     });
     ASSERT_TRUE(box.ok) << box.message;
     EXPECT_EQ(scene.entities().size(), 1u);
-    EXPECT_TRUE(service.canUndo());
-    EXPECT_FALSE(service.canRedo());
 
     ModelingCommandResult command = service.executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
     ASSERT_TRUE(command.ok) << command.message;
@@ -8008,22 +8061,22 @@ TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory)
     command = service.copySelection();
     ASSERT_TRUE(command.ok) << command.message;
 
+    const ModelingSessionMemento beforePaste = service.captureHistoryMemento();
     command = service.pasteSelection();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
     EXPECT_EQ(scene.entities().size(), 4u);
+    const ModelingSessionMemento afterPaste = service.captureHistoryMemento();
 
-    command = service.undo();
+    command = service.restoreHistoryMemento(beforePaste);
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
     EXPECT_EQ(scene.entities().size(), 3u);
-    EXPECT_TRUE(service.canRedo());
 
-    command = service.redo();
+    command = service.restoreHistoryMemento(afterPaste);
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
     EXPECT_EQ(scene.entities().size(), 4u);
-    EXPECT_FALSE(service.canRedo());
 
     command = service.mirrorSelection(ModelingMirrorAxis::X);
     ASSERT_TRUE(command.ok) << command.message;
@@ -8039,18 +8092,6 @@ TEST(ModelingSessionServiceTests, ShortcutCommandWrappersRefreshSceneAndHistory)
     command = service.applyActiveMaterial(7u);
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
-#else
-    EXPECT_FALSE(service.canUndo());
-    EXPECT_FALSE(service.canRedo());
-    EXPECT_FALSE(service.copySelection().ok);
-    EXPECT_FALSE(service.pasteSelection().ok);
-    EXPECT_FALSE(service.undo().ok);
-    EXPECT_FALSE(service.redo().ok);
-    EXPECT_FALSE(service.repeatLastAction().ok);
-    EXPECT_FALSE(service.mirrorSelection(ModelingMirrorAxis::X).ok);
-    EXPECT_FALSE(service.flipSelection(ModelingFlipOrientation::Horizontal).ok);
-    EXPECT_FALSE(service.applyActiveMaterial(7u).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedTransformPreview) {
@@ -8058,7 +8099,6 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedTransformPrevie
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Repeat Move Source",
@@ -8090,9 +8130,6 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedTransformPrevie
     center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_NEAR(center->x, 4.0f, 0.001f);
-#else
-    EXPECT_FALSE(service.recordRepeatableTransform({.active = true}).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview) {
@@ -8100,7 +8137,6 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview)
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
         .name = "Repeat Extrude Source",
@@ -8116,7 +8152,7 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview)
     });
     ASSERT_EQ(picked.selectedFaceCount, 1u);
 
-    const std::optional<MeshAsset> before = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> before = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(before.has_value());
 
     ASSERT_TRUE(service.beginTransformPreview(false).ok);
@@ -8134,7 +8170,7 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview)
     });
     ASSERT_TRUE(command.ok) << command.message;
 
-    const std::optional<MeshAsset> afterFirst = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> afterFirst = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(afterFirst.has_value());
     ASSERT_GT(afterFirst->indices.size(), before->indices.size());
 
@@ -8142,20 +8178,17 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedExtrudePreview)
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
 
-    const std::optional<MeshAsset> afterRepeat = service.compileObjectMesh(box.object.sdkObjectId);
+    const std::optional<MeshAsset> afterRepeat = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(afterRepeat.has_value());
     EXPECT_GT(afterRepeat->indices.size(), afterFirst->indices.size());
-#else
-    EXPECT_FALSE(service.recordRepeatableTransform({.active = true}).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SceneObjectSyncDoesNotResetComponentSelectionMode) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8168,16 +8201,10 @@ TEST(ModelingSessionServiceTests, SceneObjectSyncDoesNotResetComponentSelectionM
     ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Vertex).ok);
     EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Vertex);
 
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
     EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Vertex);
     EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Vertex);
-#else
-    service.syncObjectSelectionFromScene();
-    EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Object);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SelectionModeSwitchPreservesSceneOnlySelection) {
@@ -8185,7 +8212,6 @@ TEST(ModelingSessionServiceTests, SelectionModeSwitchPreservesSceneOnlySelection
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8203,12 +8229,6 @@ TEST(ModelingSessionServiceTests, SelectionModeSwitchPreservesSceneOnlySelection
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.selectedEntities().front(), empty);
     EXPECT_EQ(scene.primarySelection(), empty);
-#else
-    const EntityId empty = scene.createEmpty("Empty");
-    scene.setSelected(empty, true);
-    EXPECT_FALSE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
-    EXPECT_EQ(scene.primarySelection(), empty);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, GroupSelectionSurvivesTransformToolActivation) {
@@ -8216,7 +8236,6 @@ TEST(ModelingSessionServiceTests, GroupSelectionSurvivesTransformToolActivation)
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8243,9 +8262,6 @@ TEST(ModelingSessionServiceTests, GroupSelectionSurvivesTransformToolActivation)
     EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Group);
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.primarySelection(), group);
-#else
-    EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Move).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutRootMeshStrays) {
@@ -8255,7 +8271,6 @@ TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutR
     DocumentCommandService commands(scene, undoRedo);
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult left = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8324,9 +8339,6 @@ TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutR
         }
     }
     EXPECT_EQ(rootModelingMeshes, 0u);
-#else
-    EXPECT_FALSE(service.duplicateSelectedHierarchyForGroupDrag(commands).ok);
-#endif
 }
 
 TEST(ModelingSessionServiceTests, VertexSelectionModeExposesUnityOverlayPoints) {
@@ -8334,7 +8346,6 @@ TEST(ModelingSessionServiceTests, VertexSelectionModeExposesUnityOverlayPoints) 
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8355,17 +8366,14 @@ TEST(ModelingSessionServiceTests, VertexSelectionModeExposesUnityOverlayPoints) 
     ASSERT_NE(vertexPoint, frame.points.end());
     EXPECT_EQ(vertexPoint->color, rgba8(107, 230, 255, 255));
     EXPECT_GT(vertexPoint->sizePixels, 0.0f);
-#else
-    EXPECT_TRUE(service.selectionOverlayFrame().points.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToVertexModeShowsHandlesImmediately) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8374,9 +8382,7 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToVertexModeShowsHandle
         .name = "Mode Switch Overlay Box",
     });
     ASSERT_TRUE(box.ok) << box.message;
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
     const ViewportOverlayFrame objectFrame = service.selectionOverlayFrame();
     ASSERT_FALSE(objectFrame.lines.empty());
@@ -8392,17 +8398,14 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToVertexModeShowsHandle
     });
     ASSERT_NE(vertexPoint, vertexFrame.points.end());
     EXPECT_GT(vertexPoint->sizePixels, 0.0f);
-#else
-    EXPECT_TRUE(service.selectionOverlayFrame().points.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToEdgeModeShowsHandlesImmediately) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8411,9 +8414,7 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToEdgeModeShowsHandlesI
         .name = "Edge Mode Switch Overlay Box",
     });
     ASSERT_TRUE(box.ok) << box.message;
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
     ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Edge).ok);
     const ModelingSelectionSummary edgeSummary = service.selectionSummary();
@@ -8427,17 +8428,14 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToEdgeModeShowsHandlesI
     });
     ASSERT_NE(edgeLine, edgeFrame.lines.end());
     EXPECT_GT(edgeLine->widthPixels, 0.0f);
-#else
-    EXPECT_TRUE(service.selectionOverlayFrame().lines.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToFaceModeShowsHandlesImmediately) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8446,9 +8444,7 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToFaceModeShowsHandlesI
         .name = "Face Mode Switch Overlay Box",
     });
     ASSERT_TRUE(box.ok) << box.message;
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
     ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
     const ModelingSelectionSummary faceSummary = service.selectionSummary();
@@ -8463,17 +8459,14 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToFaceModeShowsHandlesI
                         line.layer == ViewportOverlayLayer::SelectedEdge;
             });
     EXPECT_TRUE(visiblePrimitive);
-#else
-    EXPECT_TRUE(service.selectionOverlayFrame().triangles.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, ObjectSelectionOverlayUsesUnitySelectionColors) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
+    EditorSelectionTestHarness editorSelection(scene, assets, service);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8482,9 +8475,7 @@ TEST(ModelingSessionServiceTests, ObjectSelectionOverlayUsesUnitySelectionColors
         .name = "Object Overlay Box",
     });
     ASSERT_TRUE(box.ok) << box.message;
-    scene.clearSelection();
-    scene.setSelected(box.object.entity, true);
-    service.syncObjectSelectionFromScene();
+    ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
     const ViewportOverlayFrame frame = service.selectionOverlayFrame();
     ASSERT_FALSE(frame.triangles.empty());
@@ -8509,9 +8500,6 @@ TEST(ModelingSessionServiceTests, ObjectSelectionOverlayUsesUnitySelectionColors
     });
     ASSERT_NE(wire, frame.lines.end());
     EXPECT_EQ(wire->color, rgba8(255, 211, 31, 255));
-#else
-    EXPECT_TRUE(service.selectionOverlayFrame().triangles.empty());
-#endif
 }
 
 TEST(ModelingSessionServiceTests, FacePickKeepsSceneEntitySelectedForInspectorAndGizmo) {
@@ -8519,7 +8507,6 @@ TEST(ModelingSessionServiceTests, FacePickKeepsSceneEntitySelectedForInspectorAn
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingCreateBoxResult box = service.createBoxFromBounds({
         .bounds = {
             .min = {-1.0f, -1.0f, -1.0f},
@@ -8545,17 +8532,13 @@ TEST(ModelingSessionServiceTests, FacePickKeepsSceneEntitySelectedForInspectorAn
     EXPECT_EQ(scene.primarySelection(), box.object.entity);
     ASSERT_NE(scene.selection(box.object.entity), nullptr);
     EXPECT_TRUE(scene.selection(box.object.entity)->selected);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-#endif
 }
 
-TEST(ModelingSessionServiceTests, SupportsSdkBoxPreviewLifecycle) {
+TEST(ModelingSessionServiceTests, SupportsRuntimeBoxPreviewLifecycle) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
 
-#if QUADER_HAS_MODELING_SDK
     const ModelingBoxToolEvent start{
             .screenPosition = {400.0f, 300.0f},
             .ray = {
@@ -8617,15 +8600,9 @@ TEST(ModelingSessionServiceTests, SupportsSdkBoxPreviewLifecycle) {
     EXPECT_NE(commit.object.entity, InvalidEntityId);
     EXPECT_EQ(scene.primarySelection(), commit.object.entity);
     EXPECT_EQ(assets.meshCount(), 1u);
-#else
-    EXPECT_FALSE(service.sdkAvailable());
-    EXPECT_FALSE(service.updateBoxHover({}).ok);
-    EXPECT_FALSE(service.beginBoxFootprint({}).ok);
-    EXPECT_FALSE(service.commitBox("Preview Box").ok);
-#endif
 }
 
-TEST(MaterialDocumentTests, DefaultQuaderMaterialUsesSdkTextureSlots) {
+TEST(MaterialDocumentTests, DefaultQuaderMaterialUsesDefaultMaterialTextureSlots) {
     const MaterialDocument material = makeDefaultQuaderMaterial("Default", 41, 42);
     EXPECT_TRUE(material.nodeGraphReserved);
     EXPECT_FLOAT_EQ(material.baseColor.x, 1.0f);

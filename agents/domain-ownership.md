@@ -1,14 +1,26 @@
+<!--
+////////////////////////////////////////////////////////////////////////////////
+Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+This file is part of Quader and is protected proprietary source code.
+No permission is granted to use, copy, modify, distribute, or sublicense this
+file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+-->
 # Domain Ownership
 
 Use these boundaries when deciding where behavior belongs.
 
-## SDK And Editor-Core
+## Former SDK Code And Editor Domains
 
-Portable modeling, selection, picking, overlay payloads, box creation, navigation, and gizmo
-semantics belong in SDK/editor-core first when they should be portable across Quader hosts.
+Former SDK geometry, polygon, editor-core, host-contract, and QDR IO code is now native-app code.
+Keep it under app-owned modules such as `src/geometry`, `src/modeling/polygon`,
+`src/modeling`, `src/editor/actions`, `src/editor/metadata`, `src/editor/selection`, `src/editor/history`,
+`src/editor/projection`, `src/viewport`, and `src/io/qdr`; do not recreate a separate SDK product
+boundary.
 
-The native app should call SDK behavior through app services instead of duplicating SDK semantics in
-UI, render, or viewport code.
+Portable behavior still matters, but the native app should implement it behind app services instead
+of routing user/editor intent through a separate SDK authority. UI, render, and viewport code should
+call public/editor services rather than duplicating polygon semantics.
 
 ## Scene, Project, And Assets
 
@@ -36,12 +48,13 @@ Scene-only transform previews belong in `SceneTransformPreviewTransaction`.
 
 ## Modeling
 
-User-triggered modeling operations belong in `src/modeling/tools/**` and execute through
+User-triggered modeling operations belong in `src/editor/actions/**` and execute through
 `ModelingCommandDispatcher`, `ModelingPreviewCommandService`, `ModelingCommandExecutionService`, or
 `EditorCommandService`.
 
-Modeling session state and SDK synchronization belong in focused services under `src/modeling/**`.
-Keep `ModelingSessionService` as a facade over owners, not as a dumping ground.
+Modeling session state belongs in focused services under `src/modeling/**`. `ModelingSessionService`
+may exist only as a thin adapter over those owners; it must not own public history, command
+semantics, bidirectional selection sync, or scene identity.
 
 ## Viewport
 

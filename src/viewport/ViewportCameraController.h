@@ -1,9 +1,18 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "math/Types.h"
 
 namespace quader {
 
+/**
+ * Enumerates ViewportDragMode values used by the viewport layer.
+ */
 enum class ViewportDragMode {
     None,
     Orbit,
@@ -12,22 +21,34 @@ enum class ViewportDragMode {
     Fly
 };
 
+/**
+ * Enumerates ViewportViewAxis values used by the viewport layer.
+ */
 enum class ViewportViewAxis {
     X,
     Y,
     Z,
 };
 
+/**
+ * Enumerates ViewportAxisLock values used by the viewport layer.
+ */
 enum class ViewportAxisLock {
     Locked,
     Unlocked,
 };
 
+/**
+ * Enumerates ViewportProjection values used by the viewport layer.
+ */
 enum class ViewportProjection {
     Perspective,
     Orthographic,
 };
 
+/**
+ * Stores the Viewport Camera State data contract used by the viewport input, layout, and camera layer.
+ */
 struct ViewportCameraState {
     Vec3 target = {};
     float yawRadians = -0.6435011f;
@@ -40,23 +61,35 @@ struct ViewportCameraState {
     float farPlane = 1000.0f;
 };
 
+/**
+ * Represents a Viewport Camera Pose value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportCameraPose {
     Vec3 eye;
     Vec3 target;
     Vec3 up;
 };
 
+/**
+ * Represents a Viewport Ray value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportRay {
     Vec3 origin;
     Vec3 direction;
 };
 
+/**
+ * Represents a Viewport Screen Point value used by the viewport input, layout, and camera layer.
+ */
 struct ViewportScreenPoint {
     Vec2 position;
     float depth = 0.0f;
     bool visible = false;
 };
 
+/**
+ * Coordinates Viewport Camera Controller state transitions for the viewport input, layout, and camera layer.
+ */
 class ViewportCameraController {
 public:
     ViewportCameraController();

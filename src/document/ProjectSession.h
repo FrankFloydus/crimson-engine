@@ -1,14 +1,25 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/UndoRedoManager.h"
 #include "document/DocumentCommandService.h"
 #include "document/ProjectDocument.h"
-#include "modeling/ModelingSessionService.h"
 
 #include <memory>
 
 namespace quader {
 
+class EditorSelectionService;
+class ModelingSessionService;
+
+/**
+ * Owns Project Session behavior within the editor document ownership layer.
+ */
 class ProjectSession {
 public:
     ProjectSession();
@@ -35,6 +46,8 @@ public:
     DocumentCommandService& documentCommands() { return *documentCommands_; }
     ModelingSessionService& modeling() { return *modeling_; }
     const ModelingSessionService& modeling() const { return *modeling_; }
+    EditorSelectionService& selection() { return *selection_; }
+    const EditorSelectionService& selection() const { return *selection_; }
 
 private:
     void rebuildServices();
@@ -43,8 +56,12 @@ private:
     std::unique_ptr<UndoRedoManager> undoRedo_;
     std::unique_ptr<DocumentCommandService> documentCommands_;
     std::unique_ptr<ModelingSessionService> modeling_;
+    std::unique_ptr<EditorSelectionService> selection_;
 };
 
+/**
+ * Coordinates Project Session Service responsibilities for the editor document ownership layer.
+ */
 class ProjectSessionService final {
 public:
     std::unique_ptr<ProjectSession> createSession() const;

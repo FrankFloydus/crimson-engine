@@ -1,9 +1,15 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "ui/InspectorPanel.h"
 
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "document/commands/DocumentCommandEdits.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 #include "scene/TransformPivot.h"
@@ -300,12 +306,18 @@ bool comboWithLeftLabel(const char* stableId,
     return changed;
 }
 
+/**
+ * Represents a Selected Transform Pivot value used by the ImGui editor presentation layer.
+ */
 struct SelectedTransformPivot {
     EntityId entity = InvalidEntityId;
     TransformComponent transform;
     Vec3 localPivot = {};
 };
 
+/**
+ * Represents a Bool Aggregate value used by the ImGui editor presentation layer.
+ */
 struct BoolAggregate {
     bool hasValue = false;
     bool allTrue = true;

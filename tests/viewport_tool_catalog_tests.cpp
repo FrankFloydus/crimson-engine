@@ -1,23 +1,30 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "assets/AssetRegistry.h"
+#include "modeling/services/ModelingSessionService.h"
 #include "scene/SceneDocument.h"
-#include "viewport/tools/ViewportToolCatalog.h"
-#include "viewport/tools/ViewportToolRuntime.h"
-#include "viewport/tools/base/DrawnPlaneTool.h"
-#include "viewport/tools/base/DragCommitTool.h"
-#include "viewport/tools/base/PointSequenceTool.h"
-#include "viewport/tools/base/TwoStageBoxTool.h"
-#include "viewport/tools/interactive/BoxTool.h"
-#include "viewport/tools/interactive/CutTool.h"
-#include "viewport/tools/interactive/ExtendTool.h"
-#include "viewport/tools/interactive/ExtrudeTool.h"
-#include "viewport/tools/interactive/InsertEdgeLoopTool.h"
-#include "viewport/tools/interactive/KnifeTool.h"
-#include "viewport/tools/interactive/MirrorTool.h"
-#include "viewport/tools/interactive/MoveTool.h"
-#include "viewport/tools/interactive/PolyTool.h"
-#include "viewport/tools/interactive/RotateTool.h"
-#include "viewport/tools/interactive/ScaleTool.h"
-#include "viewport/tools/interactive/SelectTool.h"
+#include "viewport/modes/ViewportToolCatalog.h"
+#include "viewport/modes/ViewportToolRuntime.h"
+#include "viewport/modes/base/DrawnPlaneTool.h"
+#include "viewport/modes/base/DragCommitTool.h"
+#include "viewport/modes/base/PointSequenceTool.h"
+#include "viewport/modes/base/TwoStageBoxTool.h"
+#include "viewport/modes/interactive/BoxTool.h"
+#include "viewport/modes/interactive/CutTool.h"
+#include "viewport/modes/interactive/ExtendTool.h"
+#include "viewport/modes/interactive/ExtrudeTool.h"
+#include "viewport/modes/interactive/InsertEdgeLoopTool.h"
+#include "viewport/modes/interactive/KnifeTool.h"
+#include "viewport/modes/interactive/MirrorTool.h"
+#include "viewport/modes/interactive/MoveTool.h"
+#include "viewport/modes/interactive/PolyTool.h"
+#include "viewport/modes/interactive/RotateTool.h"
+#include "viewport/modes/interactive/ScaleTool.h"
+#include "viewport/modes/interactive/SelectTool.h"
 
 #include <gtest/gtest.h>
 
@@ -188,8 +195,8 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
 
 TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {
     const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
-    const std::string toolHeader = readSourceFile(root / "src" / "viewport" / "tools" / "Tool.h");
-    const std::string catalogHeader = readSourceFile(root / "src" / "viewport" / "tools" / "ViewportToolCatalog.h");
+    const std::string toolHeader = readSourceFile(root / "src" / "viewport" / "modes" / "Tool.h");
+    const std::string catalogHeader = readSourceFile(root / "src" / "viewport" / "modes" / "ViewportToolCatalog.h");
     EXPECT_EQ(toolHeader.find("ViewportToolBase"), std::string::npos);
     EXPECT_EQ(catalogHeader.find("ViewportToolBase"), std::string::npos);
 }

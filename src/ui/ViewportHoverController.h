@@ -1,7 +1,13 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
 #include "core/Types.h"
-#include "modeling/ModelingSessionService.h"
+#include "modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
@@ -11,6 +17,9 @@
 
 namespace quader {
 
+/**
+ * Stores the Viewport Hover Work Key data contract used by the ImGui editor presentation layer.
+ */
 struct ViewportHoverWorkKey {
     bool valid = false;
     ViewportPaneId paneId = ViewportPaneId::Perspective;
@@ -43,6 +52,9 @@ struct ViewportHoverWorkKey {
     [[nodiscard]] bool matches(const ViewportHoverWorkKey& other) const;
 };
 
+/**
+ * Stores the Viewport Hover Work Request data contract used by the ImGui editor presentation layer.
+ */
 struct ViewportHoverWorkRequest {
     ViewportPaneId paneId = ViewportPaneId::Perspective;
     ViewportToolId activeTool = ViewportToolId::Select;
@@ -61,6 +73,9 @@ struct ViewportHoverWorkRequest {
     std::uint64_t selectionRevision = 0;
 };
 
+/**
+ * Coordinates Viewport Hover Controller state transitions for the ImGui editor presentation layer.
+ */
 class ViewportHoverController {
 public:
     [[nodiscard]] ViewportHoverWorkKey makeKey(

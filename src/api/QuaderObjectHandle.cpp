@@ -1,7 +1,14 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderObjectHandle.h"
 
 #include "api/QuaderApi.h"
 #include "document/ProjectSession.h"
+#include "modeling/services/ModelingSessionService.h"
 
 #include <utility>
 
@@ -16,11 +23,11 @@ QuaderModelingObjectRef QuaderObjectHandle::ref() const {
 }
 
 bool QuaderObjectHandle::valid() const {
-    if (api_ == nullptr || ref_.entity == InvalidEntityId || ref_.sdkObjectId == InvalidModelingObjectId) {
+    if (api_ == nullptr || ref_.entity == InvalidEntityId || ref_.modelingObjectId == InvalidModelingObjectId) {
         return false;
     }
     const ModelingObjectComponent* object = api_->session().scene().modelingObject(ref_.entity);
-    return object != nullptr && object->objectId == ref_.sdkObjectId;
+    return object != nullptr && object->objectId == ref_.modelingObjectId;
 }
 
 std::optional<QuaderEntitySnapshot> QuaderObjectHandle::entity() const {
@@ -34,7 +41,7 @@ std::optional<MeshAsset> QuaderObjectHandle::compiledMesh() const {
     if (api_ == nullptr) {
         return std::nullopt;
     }
-    return api_->session().modeling().compileObjectMesh(ref_.sdkObjectId);
+    return api_->session().modeling().compileObjectMesh(ref_.modelingObjectId);
 }
 
 QuaderApiVoidResult QuaderObjectHandle::select() {
