@@ -48,6 +48,12 @@ struct DragBeginOptions {
     ModelingTransformAxis axis = ModelingTransformAxis::X;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     Vec3 pivot = {};
+    bool useSelectionCenter = true;
+    Vec2 screenPosition = {0.0f, 0.0f};
+    Vec2 screenPivot = {0.0f, 0.0f};
+    Vec2 screenTip = {10.0f, 0.0f};
+    bool hasWorldDirection = true;
+    Vec3 worldDirection = {1.0f, 0.0f, 0.0f};
     bool duplicateSelected = false;
 };
 
@@ -57,6 +63,9 @@ struct DragBeginOptions {
 [[nodiscard]] ModelingHoverRequest hoverAt(Vec3 origin, HoverOptions options = {});
 [[nodiscard]] ModelingToolRayEvent edgeLoopEvent(Vec3 origin = {1.0f, 0.0f, 5.0f});
 [[nodiscard]] ModelingToolRayEvent drawnPlaneEvent(float x, bool dragging = false);
+[[nodiscard]] ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options = {});
+[[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(Vec2 screenPosition);
+[[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(float screenX);
 [[nodiscard]] ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options = {});
 [[nodiscard]] ModelingTransformDragUpdateRequest xMoveDragUpdate(float screenX);
 

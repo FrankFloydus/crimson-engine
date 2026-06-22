@@ -34,6 +34,29 @@ QuaderApiResult<QuaderModelingObjectRef> resultFromCreate(
     return result;
 }
 
+QuaderApiResult<ModelingTransformDragPreview> resultFromTransformDragPreview(
+        const ProjectSession& session,
+        ModelingTransformDragPreview preview) {
+    QuaderApiResult<ModelingTransformDragPreview> result;
+    result.ok = preview.ok;
+    result.changed = preview.changed;
+    result.message = preview.message;
+    result.mutationKind =
+            preview.changed ? QuaderMutationKind::Modeling :
+            preview.active ? QuaderMutationKind::Runtime :
+            QuaderMutationKind::None;
+    const ModelingSelectionSummary summary = session.modeling().selectionSummary();
+    result.revisions = {
+            .projectRevision = session.document().revision(),
+            .sceneRevision = session.scene().revision(),
+            .assetRevision = session.assets().revision(),
+            .modelingContentRevision = summary.contentRevision,
+            .modelingSelectionRevision = summary.selectionRevision,
+    };
+    result.value = std::move(preview);
+    return result;
+}
+
 ModelingTransform3 rotationTransform(Vec3 eulerRadians) {
     const glm::mat3 rotation = glm::mat3_cast(toGlm(quatFromEulerRadians(eulerRadians)));
     return {
@@ -167,6 +190,32 @@ QuaderApiVoidResult QuaderModelingApi::cancelTransformPreview() {
     return mutations_.runModelingResult(
             session_.modeling().cancelTransformPreview(),
             "Cancel Transform Preview");
+}
+
+QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::beginTransformDrag(
+        const ModelingTransformDragBeginRequest& request) {
+    return resultFromTransformDragPreview(
+            session_,
+            session_.modeling().beginTransformDrag(request));
+}
+
+QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::updateTransformDrag(
+        const ModelingTransformDragUpdateRequest& request) {
+    return resultFromTransformDragPreview(
+            session_,
+            session_.modeling().updateTransformDrag(request));
+}
+
+QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::commitTransformDrag() {
+    return resultFromTransformDragPreview(
+            session_,
+            session_.modeling().commitTransformDrag());
+}
+
+QuaderApiVoidResult QuaderModelingApi::cancelTransformDrag() {
+    return mutations_.runModelingResult(
+            session_.modeling().cancelTransformDrag(),
+            "Cancel Transform Drag");
 }
 
 QuaderApiVoidResult QuaderModelingApi::moveSelection(Vec3 delta) {

@@ -132,6 +132,9 @@ public:
     BehaviorWhen& commitTransformPreview();
     BehaviorWhen& cancelTransformPreview();
 
+    BehaviorWhen& beginTransformDrag(DragBeginOptions options = {});
+    BehaviorWhen& updateTransformDrag(Vec2 screenPosition);
+    BehaviorWhen& updateTransformDrag(float screenX);
     BehaviorWhen& beginXMoveDrag(DragBeginOptions options = {});
     BehaviorWhen& updateXMoveDrag(float screenX);
     BehaviorWhen& commitDrag();

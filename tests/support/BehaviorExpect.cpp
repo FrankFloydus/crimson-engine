@@ -52,6 +52,16 @@ std::optional<MeshSnapshot> findMeshSnapshot(const BehaviorSnapshot& snapshot, A
     return *found;
 }
 
+std::optional<EntitySnapshot> findEntitySnapshot(const BehaviorSnapshot& snapshot, std::string_view alias) {
+    const auto found = std::find_if(snapshot.entities.begin(), snapshot.entities.end(), [&](const EntitySnapshot& value) {
+        return value.alias == alias;
+    });
+    if (found == snapshot.entities.end()) {
+        return std::nullopt;
+    }
+    return *found;
+}
+
 void includePoint(BehaviorBounds& bounds, Vec3 point) {
     bounds.min.x = std::min(bounds.min.x, point.x);
     bounds.min.y = std::min(bounds.min.y, point.y);
@@ -158,6 +168,15 @@ SelectionExpect& SelectionExpect::activeVertex(int vertex) {
     return *this;
 }
 
+SelectionExpect& SelectionExpect::activeEdge(int a, int b) {
+    const ModelingSelectionSummary selection = scenario_.snapshot().selection;
+    const bool sameOrder = selection.activeEdgeA == a && selection.activeEdgeB == b;
+    const bool reversed = selection.activeEdgeA == b && selection.activeEdgeB == a;
+    EXPECT_TRUE(sameOrder || reversed)
+            << "active edge was (" << selection.activeEdgeA << ", " << selection.activeEdgeB << ")";
+    return *this;
+}
+
 SelectionExpect& SelectionExpect::activeFace(int face) {
     EXPECT_EQ(scenario_.snapshot().selection.activeFaceId, face);
     return *this;
@@ -179,7 +198,10 @@ SelectionExpect& SelectionExpect::revisionSameAs(const ModelingSelectionSummary&
 
 MeshExpect::MeshExpect(const BehaviorScenario& scenario, std::string_view alias) {
     const BehaviorSnapshot snapshot = scenario.snapshot();
-    mesh_ = findMeshSnapshot(snapshot, scenario.object(alias).mesh);
+    const std::optional<EntitySnapshot> entity = findEntitySnapshot(snapshot, alias);
+    if (entity.has_value()) {
+        mesh_ = findMeshSnapshot(snapshot, entity->mesh);
+    }
     EXPECT_TRUE(mesh_.has_value()) << "Missing mesh snapshot for alias " << alias;
 }
 
@@ -200,6 +222,39 @@ MeshExpect& MeshExpect::indexCount(std::size_t count) {
 MeshExpect& MeshExpect::verticesGreaterThan(const MeshSnapshot& before) {
     if (mesh_.has_value()) {
         EXPECT_GT(mesh_->vertexCount, before.vertexCount);
+    }
+    return *this;
+}
+
+MeshExpect& MeshExpect::verticesDifferFrom(const MeshSnapshot& before, float epsilon) {
+    if (mesh_.has_value()) {
+        EXPECT_EQ(mesh_->positions.size(), before.positions.size());
+        if (mesh_->positions.size() != before.positions.size()) {
+            return *this;
+        }
+        bool differs = false;
+        for (std::size_t index = 0; index < mesh_->positions.size(); ++index) {
+            const Vec3 delta = mesh_->positions[index] - before.positions[index];
+            if (std::abs(delta.x) > epsilon || std::abs(delta.y) > epsilon || std::abs(delta.z) > epsilon) {
+                differs = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(differs);
+    }
+    return *this;
+}
+
+MeshExpect& MeshExpect::boundsMinNear(Vec3 expected, float epsilon) {
+    if (mesh_.has_value()) {
+        expectVec3Near(mesh_->bounds.min, expected, epsilon);
+    }
+    return *this;
+}
+
+MeshExpect& MeshExpect::boundsMaxNear(Vec3 expected, float epsilon) {
+    if (mesh_.has_value()) {
+        expectVec3Near(mesh_->bounds.max, expected, epsilon);
     }
     return *this;
 }
@@ -257,6 +312,73 @@ OverlayExpect& OverlayExpect::pointBoundsCenterNear(ViewportOverlayLayer layer, 
     EXPECT_TRUE(bounds.has_value());
     if (bounds.has_value()) {
         expectVec3Near(center(*bounds), expected, epsilon);
+    }
+    return *this;
+}
+
+OverlayExpect& OverlayExpect::lineBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon) {
+    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    bool found = false;
+    for (const ViewportOverlayLine& line : frame.lines) {
+        if (line.layer != layer) {
+            continue;
+        }
+        found = true;
+        for (const Vec3 point : {line.start, line.end}) {
+            EXPECT_GE(point.x, bounds.min.x - epsilon);
+            EXPECT_GE(point.y, bounds.min.y - epsilon);
+            EXPECT_GE(point.z, bounds.min.z - epsilon);
+            EXPECT_LE(point.x, bounds.max.x + epsilon);
+            EXPECT_LE(point.y, bounds.max.y + epsilon);
+            EXPECT_LE(point.z, bounds.max.z + epsilon);
+        }
+    }
+    EXPECT_TRUE(found);
+    return *this;
+}
+
+OverlayExpect& OverlayExpect::triangleBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon) {
+    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    bool found = false;
+    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
+        if (triangle.layer != layer) {
+            continue;
+        }
+        found = true;
+        for (const Vec3 point : {triangle.a, triangle.b, triangle.c}) {
+            EXPECT_GE(point.x, bounds.min.x - epsilon);
+            EXPECT_GE(point.y, bounds.min.y - epsilon);
+            EXPECT_GE(point.z, bounds.min.z - epsilon);
+            EXPECT_LE(point.x, bounds.max.x + epsilon);
+            EXPECT_LE(point.y, bounds.max.y + epsilon);
+            EXPECT_LE(point.z, bounds.max.z + epsilon);
+        }
+    }
+    EXPECT_TRUE(found);
+    return *this;
+}
+
+OverlayExpect& OverlayExpect::finiteCoordinates(float maxAbsCoordinate) {
+    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    auto expectFinite = [&](Vec3 point) {
+        EXPECT_TRUE(std::isfinite(point.x));
+        EXPECT_TRUE(std::isfinite(point.y));
+        EXPECT_TRUE(std::isfinite(point.z));
+        EXPECT_LE(std::abs(point.x), maxAbsCoordinate);
+        EXPECT_LE(std::abs(point.y), maxAbsCoordinate);
+        EXPECT_LE(std::abs(point.z), maxAbsCoordinate);
+    };
+    for (const ViewportOverlayLine& line : frame.lines) {
+        expectFinite(line.start);
+        expectFinite(line.end);
+    }
+    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
+        expectFinite(triangle.a);
+        expectFinite(triangle.b);
+        expectFinite(triangle.c);
+    }
+    for (const ViewportOverlayPoint& point : frame.points) {
+        expectFinite(point.position);
     }
     return *this;
 }

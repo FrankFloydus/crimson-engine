@@ -96,3 +96,21 @@ ctest --preset vs2026-debug
 ```
 
 More build/test/smoke details live in `agents/testing-build.md`.
+
+## Synthetic Behavior Tests
+
+When a change would normally need manual verification of editor behavior, first try to turn that
+workflow into a fast, headless synthetic behavior test. Use the public API or
+`tests/support/BehaviorScenario` to express real user/editor intent, then inspect document,
+selection, mesh, history, overlay, or viewport state. Examples include creating a box, entering
+face/edge/vertex mode, picking by ray, dragging a transform gizmo through
+`beginTransformDrag`/`updateTransformDrag`/`commitTransformDrag`, and asserting the compiled mesh
+bounds/topology and selection summary.
+
+Keep manual smoke checks for real GPU/window/driver behavior only: Vulkan swapchain creation,
+dockspace/window appearance, actual material rendering, and pixel output until a render readback
+harness exists. Do not leave "open the app and click it" as the only coverage for selection,
+commands, modeling operations, transform previews, tool lifecycles, overlays, or history when
+those states can be inspected programmatically. Do not add save/load or QDR roundtrip behavior
+tests until the editor save/load surface exists; once it does, cover it with the same synthetic
+state-inspection style instead of manual verification.

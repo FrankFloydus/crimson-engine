@@ -49,6 +49,11 @@ public:
     QuaderApiVoidResult commitTransformPreview(std::string label = {});
     QuaderApiVoidResult cancelTransformPreview();
 
+    QuaderApiResult<ModelingTransformDragPreview> beginTransformDrag(const ModelingTransformDragBeginRequest& request);
+    QuaderApiResult<ModelingTransformDragPreview> updateTransformDrag(const ModelingTransformDragUpdateRequest& request);
+    QuaderApiResult<ModelingTransformDragPreview> commitTransformDrag();
+    QuaderApiVoidResult cancelTransformDrag();
+
     QuaderApiVoidResult moveSelection(Vec3 delta);
     QuaderApiVoidResult rotateSelection(Vec3 eulerRadians, Vec3 pivot = {});
     QuaderApiVoidResult scaleSelection(Vec3 scale, Vec3 pivot = {});

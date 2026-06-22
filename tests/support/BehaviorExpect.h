@@ -64,6 +64,7 @@ public:
     SelectionExpect& faceCount(std::uint32_t count);
     SelectionExpect& activeAlias(std::string_view alias);
     SelectionExpect& activeVertex(int vertex);
+    SelectionExpect& activeEdge(int a, int b);
     SelectionExpect& activeFace(int face);
     SelectionExpect& revisionChangedFrom(const ModelingSelectionSummary& before);
     SelectionExpect& revisionSameAs(const ModelingSelectionSummary& before);
@@ -82,6 +83,9 @@ public:
     MeshExpect& vertexCount(std::size_t count);
     MeshExpect& indexCount(std::size_t count);
     MeshExpect& verticesGreaterThan(const MeshSnapshot& before);
+    MeshExpect& verticesDifferFrom(const MeshSnapshot& before, float epsilon = 0.001f);
+    MeshExpect& boundsMinNear(Vec3 expected, float epsilon = 0.001f);
+    MeshExpect& boundsMaxNear(Vec3 expected, float epsilon = 0.001f);
     MeshExpect& boundsCenterNear(Vec3 expected, float epsilon = 0.001f);
 
 private:
@@ -102,6 +106,9 @@ public:
     OverlayExpect& hasTriangle(ViewportOverlayLayer layer);
     OverlayExpect& triangleCount(ViewportOverlayLayer layer, std::size_t count);
     OverlayExpect& pointBoundsCenterNear(ViewportOverlayLayer layer, Vec3 expected, float epsilon = 0.001f);
+    OverlayExpect& lineBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon = 0.001f);
+    OverlayExpect& triangleBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon = 0.001f);
+    OverlayExpect& finiteCoordinates(float maxAbsCoordinate = 1000.0f);
 
 private:
     const BehaviorScenario& scenario_;

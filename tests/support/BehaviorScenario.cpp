@@ -125,6 +125,10 @@ BehaviorSnapshot BehaviorScenario::snapshot(std::string label) const {
             meshSnapshot.mesh = entity.mesh;
             meshSnapshot.vertexCount = mesh->vertices.size();
             meshSnapshot.indexCount = mesh->indices.size();
+            meshSnapshot.positions.reserve(mesh->vertices.size());
+            for (const MeshVertex& vertex : mesh->vertices) {
+                meshSnapshot.positions.push_back(vertex.position);
+            }
             if (const std::optional<SceneBounds> bounds = localMeshBounds(*mesh)) {
                 meshSnapshot.bounds = toBehaviorBounds(*bounds);
             }
@@ -294,16 +298,20 @@ BehaviorGiven& BehaviorGiven::allComponentsSelected(ModelingSelectionMode mode) 
 }
 
 BehaviorGiven& BehaviorGiven::transform(std::string_view alias, TransformComponent transform) {
-    (void)alias;
-    (void)transform;
-    scenario_.recordStatus(failedStatus("Scene transform mutation is not wired through QuaderApi in this checkout."));
+    const QuaderApiStatus status = scenario_.api().scene().setTransform(scenario_.entity(alias), transform);
+    scenario_.recordStatus(status);
+    if (!status.ok) {
+        ADD_FAILURE() << status.message;
+    }
     return *this;
 }
 
 BehaviorGiven& BehaviorGiven::material(std::string_view alias, AssetId material) {
-    (void)alias;
-    (void)material;
-    scenario_.recordStatus(failedStatus("Material assignment is not wired through QuaderApi in this checkout."));
+    const QuaderApiStatus status = scenario_.api().assets().assignMaterialToObject(scenario_.object(alias), material);
+    scenario_.recordStatus(status);
+    if (!status.ok) {
+        ADD_FAILURE() << status.message;
+    }
     return *this;
 }
 
@@ -369,23 +377,56 @@ BehaviorWhen& BehaviorWhen::cancelTransformPreview() {
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::beginXMoveDrag(DragBeginOptions) {
-    scenario_.recordStatus(failedStatus("Transform drag is not part of the current QuaderApi surface."));
+BehaviorWhen& BehaviorWhen::beginTransformDrag(DragBeginOptions options) {
+    if (options.useSelectionCenter) {
+        if (const std::optional<Vec3> center = scenario_.api().query().selectionCenter()) {
+            options.pivot = *center;
+        }
+    }
+    const QuaderApiResult<ModelingTransformDragPreview> result =
+            scenario_.api().modeling().beginTransformDrag(transformDragBegin(options));
+    scenario_.recordDrag(result.value);
+    if (!result.ok) {
+        ADD_FAILURE() << result.message;
+    }
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::updateXMoveDrag(float) {
-    scenario_.recordStatus(failedStatus("Transform drag is not part of the current QuaderApi surface."));
+BehaviorWhen& BehaviorWhen::updateTransformDrag(Vec2 screenPosition) {
+    const QuaderApiResult<ModelingTransformDragPreview> result =
+            scenario_.api().modeling().updateTransformDrag(transformDragUpdate(screenPosition));
+    scenario_.recordDrag(result.value);
+    if (!result.ok) {
+        ADD_FAILURE() << result.message;
+    }
     return *this;
+}
+
+BehaviorWhen& BehaviorWhen::updateTransformDrag(float screenX) {
+    return updateTransformDrag(Vec2{screenX, 0.0f});
+}
+
+BehaviorWhen& BehaviorWhen::beginXMoveDrag(DragBeginOptions options) {
+    return beginTransformDrag(options);
+}
+
+BehaviorWhen& BehaviorWhen::updateXMoveDrag(float screenX) {
+    return updateTransformDrag(screenX);
 }
 
 BehaviorWhen& BehaviorWhen::commitDrag() {
-    scenario_.recordStatus(failedStatus("Transform drag is not part of the current QuaderApi surface."));
+    const QuaderApiResult<ModelingTransformDragPreview> result =
+            scenario_.api().modeling().commitTransformDrag();
+    scenario_.recordDrag(result.value);
+    if (!result.ok) {
+        ADD_FAILURE() << result.message;
+    }
     return *this;
 }
 
 BehaviorWhen& BehaviorWhen::cancelDrag() {
-    scenario_.recordStatus(failedStatus("Transform drag is not part of the current QuaderApi surface."));
+    const QuaderApiStatus status = scenario_.api().modeling().cancelTransformDrag();
+    scenario_.recordStatus(status);
     return *this;
 }
 

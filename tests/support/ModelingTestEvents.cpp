@@ -76,17 +76,17 @@ ModelingToolRayEvent drawnPlaneEvent(float x, bool dragging) {
     };
 }
 
-ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options) {
+ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options) {
     return {
             .tool = options.tool,
             .operation = options.operation,
             .axis = options.axis,
             .pivot = options.pivot,
-            .screenPosition = {0.0f, 0.0f},
-            .screenPivot = {0.0f, 0.0f},
-            .screenTip = {10.0f, 0.0f},
-            .hasWorldDirection = true,
-            .worldDirection = {1.0f, 0.0f, 0.0f},
+            .screenPosition = options.screenPosition,
+            .screenPivot = options.screenPivot,
+            .screenTip = options.screenTip,
+            .hasWorldDirection = options.hasWorldDirection,
+            .worldDirection = options.worldDirection,
             .ray = forwardRay(),
             .camera = orthographicCamera(),
             .gridSize = 1.0,
@@ -95,15 +95,27 @@ ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options) {
     };
 }
 
-ModelingTransformDragUpdateRequest xMoveDragUpdate(float screenX) {
+ModelingTransformDragUpdateRequest transformDragUpdate(Vec2 screenPosition) {
     return {
-            .screenPosition = {screenX, 0.0f},
+            .screenPosition = screenPosition,
             .ray = forwardRay(),
             .camera = orthographicCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
             .precision = false,
     };
+}
+
+ModelingTransformDragUpdateRequest transformDragUpdate(float screenX) {
+    return transformDragUpdate(Vec2{screenX, 0.0f});
+}
+
+ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options) {
+    return transformDragBegin(options);
+}
+
+ModelingTransformDragUpdateRequest xMoveDragUpdate(float screenX) {
+    return transformDragUpdate(screenX);
 }
 
 } // namespace quader::test

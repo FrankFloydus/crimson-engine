@@ -58,6 +58,7 @@ struct MeshSnapshot {
     std::size_t vertexCount = 0;
     std::size_t indexCount = 0;
     BehaviorBounds bounds;
+    std::vector<Vec3> positions;
 };
 
 /**

@@ -6,14 +6,18 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
 #include "scene/document/ProjectSession.h"
+#include "editor/commands/ModelingCommandToolCatalog.h"
 #include "editor/selection/EditorSelectionService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/tools/ViewportToolCatalog.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace {
 
@@ -26,6 +30,71 @@ std::optional<quader::QuaderEntitySnapshot> entityNamed(
         }
     }
     return std::nullopt;
+}
+
+std::unordered_set<std::string> availableCommandIds(const quader::QuaderEditorApi& editor) {
+    std::unordered_set<std::string> result;
+    for (const quader::QuaderCommandDescriptor& command : editor.commands().available()) {
+        result.insert(command.id);
+    }
+    return result;
+}
+
+std::string commandIdForContextAction(const quader::ModelingActionItem& action) {
+    if (action.actionId == "delete_selection") {
+        return std::string(quader::QuaderCommand::DeleteSelection.string());
+    }
+    if (action.actionId == "duplicate_meshes") {
+        return std::string(quader::QuaderCommand::DuplicateSelection.string());
+    }
+    if (action.kind == quader::ModelingActionKind::Tool) {
+        return "tools.activate." + action.toolId;
+    }
+    return "modeling.action." + action.actionId;
+}
+
+/// Owns an isolated editor session for command routing tests that need fresh
+/// history, selection, and scene state per assertion path.
+struct CommandTestHarness {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor;
+
+    CommandTestHarness()
+        : session()
+        , editor(session) {}
+};
+
+quader::QuaderModelingObjectRef createSelectedBox(quader::QuaderEditorApi& editor, std::string name = "Command Box") {
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
+            editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    std::move(name));
+    EXPECT_TRUE(created.ok()) << created.errorMessage();
+    EXPECT_TRUE(editor.selection().selectObject(created.value()).ok());
+    return created.value();
+}
+
+void setupSelectionForMode(
+        quader::QuaderEditorApi& editor,
+        quader::ModelingSelectionMode mode) {
+    const quader::QuaderModelingObjectRef object = createSelectedBox(editor);
+    ASSERT_TRUE(editor.selection().setMode(mode).ok());
+    if (mode == quader::ModelingSelectionMode::Object) {
+        return;
+    }
+    ASSERT_TRUE(editor.selection().selectAll().ok());
+    if (mode == quader::ModelingSelectionMode::Face) {
+        ASSERT_TRUE(editor.selection().selectFace(object, 0).ok());
+    } else if (mode == quader::ModelingSelectionMode::Edge) {
+        ASSERT_TRUE(editor.selection().selectAll().ok());
+    } else if (mode == quader::ModelingSelectionMode::Vertex) {
+        ASSERT_TRUE(editor.selection().selectAll().ok());
+    }
+}
+
+bool knownNonSuccessCommandMessage(std::string_view message) {
+    return message != "Unknown command id." &&
+            message != "Command tool is not registered.";
 }
 
 } // namespace
@@ -94,6 +163,235 @@ TEST(EditorApiTests, LegacyModelingActionCommandIdsRouteThroughCommandRegistry) 
     ASSERT_TRUE(deleteSelection.ok()) << deleteSelection.errorMessage();
     EXPECT_TRUE(deleteSelection.changed());
     EXPECT_TRUE(editor.query().entities().empty());
+}
+
+TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    const std::unordered_set<std::string> ids = availableCommandIds(editor);
+
+    for (std::string_view neutral : {
+                 quader::QuaderCommand::EditUndo.string(),
+                 quader::QuaderCommand::EditRedo.string(),
+                 quader::QuaderCommand::EditRepeatLastAction.string(),
+                 quader::QuaderCommand::EditClearSelection.string(),
+                 quader::QuaderCommand::EditSelectAll.string(),
+                 quader::QuaderCommand::EditInvertSelection.string(),
+                 quader::QuaderCommand::DeleteSelection.string(),
+                 quader::QuaderCommand::CopySelection.string(),
+                 quader::QuaderCommand::PasteSelection.string(),
+                 quader::QuaderCommand::DuplicateSelection.string(),
+                 quader::QuaderCommand::GroupSelection.string(),
+                 quader::QuaderCommand::UngroupSelection.string(),
+                 quader::QuaderCommand::ApplyMaterial.string(),
+                 quader::QuaderCommand::ViewportFrameSelection.string(),
+                 quader::QuaderCommand::ViewportFocusOrigin.string(),
+         }) {
+        EXPECT_TRUE(ids.contains(std::string(neutral))) << neutral;
+    }
+
+    const std::unordered_set<std::string_view> neutralModelingTools{
+            "delete_selection",
+            "copy_selection",
+            "paste_selection",
+            "duplicate_meshes",
+            "repeat_last_action",
+            "assign_material",
+            "apply_active_material",
+    };
+    for (const quader::CommandTool* tool : quader::modelingCommandTools()) {
+        ASSERT_NE(tool, nullptr);
+        const std::string legacy = "modeling.action." + std::string(tool->id());
+        EXPECT_NE(editor.commands().execute(legacy).errorMessage(), "Unknown command id.") << legacy;
+        if (!neutralModelingTools.contains(tool->id())) {
+            const std::string command = "modeling." + std::string(tool->id());
+            EXPECT_TRUE(ids.contains(command)) << command;
+            EXPECT_NE(editor.commands().execute(command).errorMessage(), "Unknown command id.") << command;
+        }
+    }
+
+    for (const quader::ViewportTool* tool : quader::viewportToolCatalog()) {
+        ASSERT_NE(tool, nullptr);
+        const std::string command = "tools.activate." + std::string(tool->id());
+        EXPECT_TRUE(ids.contains(command)) << command;
+        EXPECT_NE(editor.commands().execute(command).errorMessage(), "Unknown command id.") << command;
+    }
+}
+
+TEST(EditorApiTests, EnabledContextMenuOperationsExecuteThroughCommandRegistry) {
+    int routedActionCount = 0;
+    int successfulActionCount = 0;
+    for (const quader::ModelingSelectionMode mode : {
+                 quader::ModelingSelectionMode::Object,
+                 quader::ModelingSelectionMode::Vertex,
+                 quader::ModelingSelectionMode::Edge,
+                 quader::ModelingSelectionMode::Face,
+         }) {
+        CommandTestHarness listHarness;
+        setupSelectionForMode(listHarness.editor, mode);
+        const std::vector<quader::ModelingActionItem> actions =
+                listHarness.editor.modeling().availableActions({
+                        .surface = quader::ModelingActionSurface::ViewportContextMenu,
+                        .includeDisabled = false,
+                        .includeHidden = false,
+                });
+
+        for (const quader::ModelingActionItem& action : actions) {
+            SCOPED_TRACE(action.actionId);
+            CommandTestHarness executeHarness;
+            setupSelectionForMode(executeHarness.editor, mode);
+            const std::string commandId = commandIdForContextAction(action);
+            const quader::QuaderApiVoidResult result = executeHarness.editor.commands().execute(commandId);
+            ++routedActionCount;
+            EXPECT_TRUE(result.ok() || knownNonSuccessCommandMessage(result.errorMessage()))
+                    << commandId << ": " << result.errorMessage();
+            if (!result.ok()) {
+                continue;
+            }
+            ++successfulActionCount;
+            EXPECT_TRUE(result.changed() || executeHarness.editor.query().history().canUndo ||
+                    executeHarness.editor.query().toolStatus().cutActive ||
+                    executeHarness.editor.query().toolStatus().mirrorActive)
+                    << commandId;
+        }
+    }
+    EXPECT_GT(routedActionCount, 0);
+    EXPECT_GT(successfulActionCount, 0);
+}
+
+TEST(EditorApiTests, DeleteCommandAliasesRemoveSameObjectAndExposeSameUndoLabel) {
+    for (const std::string_view commandId : {
+                 quader::QuaderCommand::DeleteSelection.string(),
+                 std::string_view{"modeling.delete_selection"},
+                 std::string_view{"modeling.action.delete_selection"},
+         }) {
+        CommandTestHarness harness;
+        const quader::QuaderModelingObjectRef first = createSelectedBox(harness.editor, "Delete Alias First");
+        const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+                harness.editor.modeling().createBox(
+                        quader::ModelingBounds{.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+                        "Delete Alias Second");
+        ASSERT_TRUE(second.ok()) << second.errorMessage();
+        ASSERT_TRUE(harness.editor.selection().selectObject(first).ok());
+
+        const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(commandId);
+        ASSERT_TRUE(deleted.ok()) << commandId << ": " << deleted.errorMessage();
+        EXPECT_TRUE(deleted.changed());
+        EXPECT_FALSE(harness.editor.query().entity(first.entity).has_value());
+        EXPECT_TRUE(harness.editor.query().entity(second.value().entity).has_value());
+        EXPECT_EQ(harness.editor.query().history().undoLabel, "Delete Selection");
+
+        const quader::QuaderApiVoidResult undo = harness.editor.history().undo();
+        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+        EXPECT_TRUE(harness.editor.query().entity(first.entity).has_value());
+        EXPECT_TRUE(harness.editor.query().entity(second.value().entity).has_value());
+    }
+}
+
+TEST(EditorApiTests, RightClickPickOnUnselectedObjectChangesSelectionBeforeContextDelete) {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef left = createSelectedBox(harness.editor, "Context Left");
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+            harness.editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+                    "Context Right");
+    ASSERT_TRUE(right.ok()) << right.errorMessage();
+    ASSERT_TRUE(harness.editor.selection().selectObject(left).ok());
+
+    quader::ModelingPickSelectRequest rightClickPick;
+    rightClickPick.ray = {
+            .origin = {5.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    rightClickPick.preserveSelectionOnMiss = true;
+    rightClickPick.preserveSelectionOnSelectedHit = true;
+    const quader::QuaderApiResult<quader::ModelingSelectionSummary> picked =
+            harness.editor.selection().pickSelect(rightClickPick);
+    ASSERT_TRUE(picked.ok()) << picked.errorMessage();
+    EXPECT_EQ(picked.value().activeObjectId, right.value().modelingObjectId);
+
+    const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(quader::QuaderCommand::DeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
+    EXPECT_TRUE(harness.editor.query().entity(left.entity).has_value());
+    EXPECT_FALSE(harness.editor.query().entity(right.value().entity).has_value());
+}
+
+TEST(EditorApiTests, RightClickPickOnUnselectedFaceChangesComponentSelectionBeforeContextDelete) {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef left = createSelectedBox(harness.editor, "Context Face Left");
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+            harness.editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+                    "Context Face Right");
+    ASSERT_TRUE(right.ok()) << right.errorMessage();
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::ModelingSelectionMode::Face).ok());
+    ASSERT_TRUE(harness.editor.selection().selectFace(left, 0).ok());
+    const std::optional<quader::MeshAsset> rightBefore = harness.editor.query().compiledObjectMesh(right.value());
+    ASSERT_TRUE(rightBefore.has_value());
+
+    quader::ModelingPickSelectRequest rightClickPick;
+    rightClickPick.ray = {
+            .origin = {5.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    rightClickPick.preserveSelectionOnMiss = true;
+    rightClickPick.preserveSelectionOnSelectedHit = true;
+    const quader::QuaderApiResult<quader::ModelingSelectionSummary> picked =
+            harness.editor.selection().pickSelect(rightClickPick);
+    ASSERT_TRUE(picked.ok()) << picked.errorMessage();
+    EXPECT_EQ(picked.value().mode, quader::ModelingSelectionMode::Face);
+    EXPECT_EQ(picked.value().activeObjectId, right.value().modelingObjectId);
+    EXPECT_EQ(picked.value().selectedFaceCount, 1u);
+
+    const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(quader::QuaderCommand::DeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
+    EXPECT_TRUE(harness.editor.query().entity(left.entity).has_value());
+    EXPECT_TRUE(harness.editor.query().entity(right.value().entity).has_value());
+    const std::optional<quader::MeshAsset> rightAfter = harness.editor.query().compiledObjectMesh(right.value());
+    ASSERT_TRUE(rightAfter.has_value());
+    EXPECT_LT(rightAfter->indices.size(), rightBefore->indices.size());
+}
+
+TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef left = createSelectedBox(harness.editor, "Context Group Left");
+    const quader::QuaderApiResult<quader::QuaderEntityRef> leftGroup =
+            harness.editor.scene().groupSelection("Context Group A");
+    ASSERT_TRUE(leftGroup.ok()) << leftGroup.errorMessage();
+
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+            harness.editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+                    "Context Group Right");
+    ASSERT_TRUE(right.ok()) << right.errorMessage();
+    ASSERT_TRUE(harness.editor.selection().selectObject(right.value()).ok());
+    const quader::QuaderApiResult<quader::QuaderEntityRef> rightGroup =
+            harness.editor.scene().groupSelection("Context Group B");
+    ASSERT_TRUE(rightGroup.ok()) << rightGroup.errorMessage();
+
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::ModelingSelectionMode::Group).ok());
+    ASSERT_TRUE(harness.editor.selection().selectObject(leftGroup.value().id).ok());
+
+    quader::ModelingPickSelectRequest rightClickPick;
+    rightClickPick.ray = {
+            .origin = {5.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    rightClickPick.preserveSelectionOnMiss = true;
+    rightClickPick.preserveSelectionOnSelectedHit = true;
+    const quader::QuaderApiResult<quader::ModelingSelectionSummary> picked =
+            harness.editor.selection().pickSelect(rightClickPick);
+    ASSERT_TRUE(picked.ok()) << picked.errorMessage();
+    const quader::EditorSelectionState pickedState = harness.session.selection().state();
+    EXPECT_EQ(pickedState.target.kind, quader::EditorSelectionTargetKind::Group);
+    EXPECT_EQ(pickedState.target.entity, rightGroup.value().id);
+
+    const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(quader::QuaderCommand::DeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
+    EXPECT_TRUE(harness.editor.query().entity(leftGroup.value().id).has_value());
+    EXPECT_TRUE(harness.editor.query().entity(left.entity).has_value());
+    EXPECT_FALSE(harness.editor.query().entity(rightGroup.value().id).has_value());
+    EXPECT_FALSE(harness.editor.query().entity(right.value().entity).has_value());
 }
 
 TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
@@ -249,6 +547,75 @@ TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPu
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_TRUE(entityNamed(editor, "Chronology Box Renamed").has_value());
     EXPECT_FALSE(entityNamed(editor, "Chronology Box").has_value());
+}
+
+TEST(EditorApiTests, AppCommandAliasesAndDirectOperationsShareChronologicalUndoStack) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    const quader::QuaderModelingObjectRef original = createSelectedBox(editor, "Chronology Command Box");
+
+    const quader::QuaderApiVoidResult duplicated = editor.commands().execute("modeling.action.duplicate_meshes");
+    ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
+    ASSERT_EQ(editor.query().entities().size(), 2u);
+    EXPECT_EQ(editor.query().history().undoLabel, "Duplicate Meshes");
+
+    quader::TransformComponent moved;
+    moved.position = {3.0f, 0.0f, 0.0f};
+    const quader::QuaderApiVoidResult transformed = editor.scene().setTransform(original.entity, moved);
+    ASSERT_TRUE(transformed.ok()) << transformed.errorMessage();
+    ASSERT_NE(session.scene().transform(original.entity), nullptr);
+    EXPECT_NEAR(session.scene().transform(original.entity)->position.x, 3.0f, 0.001f);
+    EXPECT_EQ(editor.query().history().undoLabel, "Set Transform");
+
+    const std::vector<quader::EntityId> selectedBeforeDelete = session.scene().selectedEntities();
+    ASSERT_FALSE(selectedBeforeDelete.empty());
+    const quader::QuaderApiVoidResult deleted = editor.commands().execute(quader::QuaderCommand::DeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
+    EXPECT_EQ(editor.query().history().undoLabel, "Delete Selection");
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(editor.query().entities().size(), 2u);
+    EXPECT_EQ(editor.query().history().redoLabel, "Delete Selection");
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_NE(session.scene().transform(original.entity), nullptr);
+    EXPECT_NEAR(session.scene().transform(original.entity)->position.x, 0.0f, 0.001f);
+    EXPECT_EQ(editor.query().history().redoLabel, "Set Transform");
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_EQ(editor.query().entities().size(), 1u);
+    EXPECT_EQ(editor.query().history().redoLabel, "Duplicate Meshes");
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_EQ(editor.query().entities().size(), 2u);
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_NE(session.scene().transform(original.entity), nullptr);
+    EXPECT_NEAR(session.scene().transform(original.entity)->position.x, 3.0f, 0.001f);
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_LT(editor.query().entities().size(), 2u);
+}
+
+TEST(EditorApiTests, PublicNoopOperationsPreserveRedoUntilChangedAppCommand) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Redo Noop Box");
+    const quader::QuaderApiVoidResult renamed = editor.scene().rename(box.entity, "Redo Noop Renamed");
+    ASSERT_TRUE(renamed.ok()) << renamed.errorMessage();
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(editor.history().canRedo());
+
+    const quader::QuaderApiVoidResult noOpRename = editor.scene().rename(box.entity, "Redo Noop Box");
+    ASSERT_TRUE(noOpRename.ok()) << noOpRename.errorMessage();
+    EXPECT_FALSE(noOpRename.changed());
+    EXPECT_TRUE(editor.history().canRedo());
+    EXPECT_EQ(editor.query().history().redoLabel, "Rename Entity");
+
+    const quader::QuaderApiVoidResult duplicate = editor.commands().execute(quader::QuaderCommand::DuplicateSelection);
+    ASSERT_TRUE(duplicate.ok()) << duplicate.errorMessage();
+    EXPECT_TRUE(duplicate.changed());
+    EXPECT_FALSE(editor.history().canRedo());
 }
 
 TEST(EditorApiTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
