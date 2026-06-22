@@ -41,7 +41,7 @@ public:
         if (undoRedo_.canRedo()) {
             return undoRedo_.redo();
         }
-        if (modeling_ != nullptr && modeling_->canRedo()) {
+        if (!undoRedo_.canUndo() && modeling_ != nullptr && modeling_->canRedo()) {
             return modelingHistoryCommandResult(modeling_->redo());
         }
         return commandInvalidResult("No command to redo");
@@ -52,7 +52,8 @@ public:
     }
 
     [[nodiscard]] bool canRedo() const {
-        return undoRedo_.canRedo() || (modeling_ != nullptr && modeling_->canRedo());
+        return undoRedo_.canRedo() ||
+                (!undoRedo_.canUndo() && modeling_ != nullptr && modeling_->canRedo());
     }
 
     [[nodiscard]] UndoRedoManager& undoRedo() { return undoRedo_; }

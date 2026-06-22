@@ -335,6 +335,15 @@ bool wireframeUsesWireOnlyObjectSelection(ModelingSelectionMode mode) {
     return mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group;
 }
 
+bool hasSelectedSceneGroupRoot(const SceneDocument& document) {
+    for (const EntityId selected : document.selectedEntities()) {
+        if (document.kind(selected) == EntityKind::Empty && document.hasChildren(selected)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool wireframeSuppressesTriangleLayer(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::SelectedVisibleFace ||
             layer == ViewportOverlayLayer::SelectedXrayFace ||
@@ -1443,7 +1452,8 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             result.shortcut.kind == ViewportShortcutKind::DeletePopup) {
         const ModelingSelectionSummary deleteSummary = modeling.selectionSummary();
         if (deleteSummary.mode == ModelingSelectionMode::Object ||
-                deleteSummary.mode == ModelingSelectionMode::Group) {
+                deleteSummary.mode == ModelingSelectionMode::Group ||
+                hasSelectedSceneGroupRoot(document)) {
             deleteObjectsPopupOpen_ = true;
             deleteObjectsPopupPositionPending_ = true;
             deleteObjectsPopupPosition_ = ImVec2(itemMin.x + itemSize.x * 0.5f, itemMin.y + itemSize.y * 0.25f);

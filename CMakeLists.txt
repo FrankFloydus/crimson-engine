@@ -481,6 +481,7 @@ if(QUADER_BUILD_TESTS)
         tests/editor_api_tests.cpp
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp
+        tests/grouping_public_api_tests.cpp
         tests/modeling_session_service_split_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp

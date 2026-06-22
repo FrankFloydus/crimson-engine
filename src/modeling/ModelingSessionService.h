@@ -23,6 +23,7 @@ namespace quader {
 
 class AssetRegistry;
 class DocumentCommandService;
+class IUndoableCommand;
 class SceneDocument;
 
 enum class ModelingCommandId {
@@ -509,6 +510,8 @@ public:
     ModelingCommandResult selectAll();
     ModelingCommandResult invertSelection();
     ModelingCommandResult clearSelection();
+    std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand();
+    [[nodiscard]] bool hasSelectedSceneGroupRoot() const;
     ModelingCommandResult deleteSelection();
     ModelingCommandResult copySelection();
     ModelingCommandResult pasteSelection();

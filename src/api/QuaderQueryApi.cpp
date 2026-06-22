@@ -181,7 +181,8 @@ QuaderAssetSnapshot QuaderQueryApi::assets() const {
 QuaderHistorySnapshot QuaderQueryApi::history() const {
     QuaderHistorySnapshot result;
     result.canUndo = session_.undoRedo().canUndo() || session_.modeling().canUndo();
-    result.canRedo = session_.undoRedo().canRedo() || session_.modeling().canRedo();
+    result.canRedo = session_.undoRedo().canRedo() ||
+            (!session_.undoRedo().canUndo() && session_.modeling().canRedo());
     if (const std::string* label = session_.undoRedo().undoLabel()) {
         result.undoLabel = *label;
     }

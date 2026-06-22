@@ -285,7 +285,10 @@ UndoRedoExpect& UndoRedoExpect::canUndo(bool expected) {
 }
 
 UndoRedoExpect& UndoRedoExpect::canRedo(bool expected) {
-    EXPECT_EQ(scenario_.session().undoRedo().canRedo() || scenario_.session().modeling().canRedo(), expected);
+    EXPECT_EQ(
+            scenario_.session().undoRedo().canRedo() ||
+                    (!scenario_.session().undoRedo().canUndo() && scenario_.session().modeling().canRedo()),
+            expected);
     return *this;
 }
 

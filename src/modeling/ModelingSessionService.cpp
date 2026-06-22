@@ -1,7 +1,9 @@
 #include "modeling/ModelingSessionService.h"
 
 #include "assets/AssetRegistry.h"
+#include "core/IUndoableCommand.h"
 #include "document/DocumentCommandService.h"
+#include "document/commands/DocumentCommandSceneHelpers.h"
 #include "modeling/ModelingSessionServices.h"
 #include "modeling/SelectionModeAdapter.h"
 #include "render/ViewportOverlayPolicy.h"
@@ -2412,11 +2414,18 @@ public:
 #if QUADER_HAS_MODELING_SDK
         if (mode == ModelingSelectionMode::Group) {
             const quader_editor_core::SelectionMode sdkMode = appSelectionModeToSdk(mode);
+            const std::vector<int> selectedObjectIds = session_.selected_object_ids();
+            const bool hadSdkObjectSelection = !selectedObjectIds.empty() || session_.active_object_id() > 0;
             const bool changed = appSelectionMode_ != ModelingSelectionMode::Group ||
-                    session_.selection_mode() != sdkMode;
+                    session_.selection_mode() != sdkMode ||
+                    hadSdkObjectSelection;
             appSelectionMode_ = ModelingSelectionMode::Group;
             if (session_.selection_mode() != sdkMode) {
                 session_.set_selection_mode(sdkMode);
+                invalidateSelectionOverlayCaches();
+            }
+            if (hadSdkObjectSelection) {
+                session_.set_selected_object_ids({}, -1);
                 invalidateSelectionOverlayCaches();
             }
             return {
@@ -2503,6 +2512,237 @@ public:
 #else
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
+    }
+
+    struct SceneAwareDeleteState {
+        std::vector<DocumentEntitySnapshot> roots;
+        DocumentSelectionState beforeSelection;
+        ModelingSelectionMode beforeMode = ModelingSelectionMode::Object;
+        std::vector<int> sdkObjectIds;
+        std::vector<EntityId> currentRoots;
+        bool captured = false;
+        bool sdkDeleteExecuted = false;
+    };
+
+    [[nodiscard]] std::vector<EntityId> selectedSceneDeleteRoots() const {
+        return documentCommandSelectedRootEntities(scene_);
+    }
+
+    [[nodiscard]] bool hasSelectedSceneGroupRoot() const {
+        for (const EntityId root : selectedSceneDeleteRoots()) {
+            if (scene_.kind(root) == EntityKind::Empty && scene_.hasChildren(root)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void appendModelingObjectIds(
+            const DocumentEntitySnapshot& snapshot,
+            std::vector<int>& objectIds) const {
+        if (snapshot.modelingObject.has_value() &&
+                snapshot.modelingObject->objectId != InvalidModelingObjectId) {
+            objectIds.push_back(snapshot.modelingObject->objectId);
+        }
+        for (const DocumentEntitySnapshot& child : snapshot.children) {
+            appendModelingObjectIds(child, objectIds);
+        }
+    }
+
+    [[nodiscard]] std::vector<int> snapshotModelingObjectIds(
+            const std::vector<DocumentEntitySnapshot>& snapshots) const {
+        std::vector<int> objectIds;
+        for (const DocumentEntitySnapshot& snapshot : snapshots) {
+            appendModelingObjectIds(snapshot, objectIds);
+        }
+        std::sort(objectIds.begin(), objectIds.end());
+        objectIds.erase(std::unique(objectIds.begin(), objectIds.end()), objectIds.end());
+        return objectIds;
+    }
+
+    [[nodiscard]] EntityId entityForSnapshotModelingObject(const DocumentEntitySnapshot& snapshot) const {
+        if (!snapshot.modelingObject.has_value()) {
+            return InvalidEntityId;
+        }
+        const ModelingObjectId objectId = snapshot.modelingObject->objectId;
+        for (const EntityId entity : scene_.entities()) {
+            const ModelingObjectComponent* modelingObject = scene_.modelingObject(entity);
+            if (modelingObject != nullptr && modelingObject->objectId == objectId) {
+                return entity;
+            }
+        }
+        return InvalidEntityId;
+    }
+
+    EntityId restoreSceneDeleteSnapshot(
+            const DocumentEntitySnapshot& snapshot,
+            EntityId parent,
+            std::unordered_map<EntityId, EntityId>& remappedEntities) {
+        EntityId restored = entityForSnapshotModelingObject(snapshot);
+        if (restored == InvalidEntityId || !scene_.exists(restored)) {
+            restored = documentCommandCreateEntityFromSnapshot(
+                    scene_,
+                    snapshot,
+                    InvalidEntityId,
+                    snapshot.name,
+                    true);
+        } else {
+            (void)scene_.renameEntity(restored, snapshot.name);
+            documentCommandApplyEntitySnapshotComponents(scene_, restored, snapshot, true);
+        }
+
+        if (restored == InvalidEntityId || !scene_.exists(restored)) {
+            return InvalidEntityId;
+        }
+        if (!scene_.setParent(restored, parent, false)) {
+            return InvalidEntityId;
+        }
+        scene_.setTransform(restored, snapshot.transform);
+        remappedEntities[snapshot.originalId] = restored;
+
+        for (const DocumentEntitySnapshot& child : snapshot.children) {
+            if (restoreSceneDeleteSnapshot(child, restored, remappedEntities) == InvalidEntityId) {
+                return InvalidEntityId;
+            }
+        }
+        return restored;
+    }
+
+    ModelingCommandResult captureSceneAwareDeleteState(SceneAwareDeleteState& state) {
+        state = {};
+        state.beforeMode = appSelectionMode_;
+        state.beforeSelection = documentCommandCaptureSelection(scene_);
+
+        const std::vector<EntityId> roots = selectedSceneDeleteRoots();
+        if (roots.empty()) {
+            return {.ok = false, .changed = false, .message = "Selection is empty."};
+        }
+
+        state.roots.reserve(roots.size());
+        for (const EntityId root : roots) {
+            std::optional<DocumentEntitySnapshot> snapshot =
+                    documentCommandCaptureEntitySnapshot(scene_, root);
+            if (!snapshot.has_value()) {
+                return {.ok = false, .changed = false, .message = "Selected entity is missing."};
+            }
+            state.roots.push_back(std::move(*snapshot));
+            state.currentRoots.push_back(root);
+        }
+        state.sdkObjectIds = snapshotModelingObjectIds(state.roots);
+        state.captured = true;
+        return {.ok = true, .changed = !state.roots.empty()};
+    }
+
+    ModelingCommandResult executeSceneAwareDeleteSdkObjects(SceneAwareDeleteState& state) {
+#if QUADER_HAS_MODELING_SDK
+        if (state.sdkObjectIds.empty()) {
+            return {.ok = true, .changed = false};
+        }
+        session_.set_selection_mode(quader_editor_core::SelectionMode::object);
+        session_.set_selected_object_ids(state.sdkObjectIds, state.sdkObjectIds.front());
+        ModelingCommandResult result =
+                executeRuntimeCommand(noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::delete_selection), true);
+        if (result.ok && result.changed) {
+            state.sdkDeleteExecuted = true;
+        }
+        return result;
+#else
+        (void)state;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult destroySceneAwareDeleteRoots(SceneAwareDeleteState& state) {
+        bool changed = false;
+        for (const EntityId root : state.currentRoots) {
+            if (scene_.exists(root)) {
+                changed = scene_.destroyEntity(root) || changed;
+            }
+        }
+        state.currentRoots.clear();
+        invalidateSelectionOverlayCaches();
+        return {.ok = true, .changed = changed};
+    }
+
+    ModelingCommandResult redoSceneAwareDelete(SceneAwareDeleteState& state, bool initialRedo) {
+        if (initialRedo) {
+            ModelingCommandResult captured = captureSceneAwareDeleteState(state);
+            if (!captured.ok || !captured.changed) {
+                return captured;
+            }
+            ModelingCommandResult sdkDelete = executeSceneAwareDeleteSdkObjects(state);
+            if (!sdkDelete.ok) {
+                return sdkDelete;
+            }
+            ModelingCommandResult sceneDelete = destroySceneAwareDeleteRoots(state);
+            return {
+                    .ok = true,
+                    .changed = sdkDelete.changed || sceneDelete.changed,
+                    .message = "Delete Selection",
+            };
+        }
+
+#if QUADER_HAS_MODELING_SDK
+        ModelingCommandResult sdkRedo{.ok = true, .changed = false};
+        if (state.sdkDeleteExecuted) {
+            sdkRedo = redo();
+            if (!sdkRedo.ok) {
+                return sdkRedo;
+            }
+        }
+        ModelingCommandResult sceneDelete = destroySceneAwareDeleteRoots(state);
+        return {
+                .ok = true,
+                .changed = sdkRedo.changed || sceneDelete.changed,
+                .message = "Delete Selection",
+        };
+#else
+        (void)state;
+        return {.ok = false, .message = "Modeling SDK is not available in this build."};
+#endif
+    }
+
+    ModelingCommandResult undoSceneAwareDelete(SceneAwareDeleteState& state) {
+        if (!state.captured) {
+            return {.ok = false, .changed = false, .message = "Delete selection was not captured."};
+        }
+
+#if QUADER_HAS_MODELING_SDK
+        if (state.sdkDeleteExecuted) {
+            ModelingCommandResult sdkUndo = undo();
+            if (!sdkUndo.ok) {
+                return sdkUndo;
+            }
+        }
+#endif
+
+        std::unordered_map<EntityId, EntityId> remappedEntities;
+        std::vector<EntityId> restoredRoots;
+        restoredRoots.reserve(state.roots.size());
+        for (const DocumentEntitySnapshot& snapshot : state.roots) {
+            const EntityId parent = snapshot.originalParent != InvalidEntityId && scene_.exists(snapshot.originalParent)
+                    ? snapshot.originalParent
+                    : InvalidEntityId;
+            const EntityId restored = restoreSceneDeleteSnapshot(snapshot, parent, remappedEntities);
+            if (restored == InvalidEntityId) {
+                return {.ok = false, .changed = false, .message = "Deleted hierarchy could not be restored."};
+            }
+            restoredRoots.push_back(restored);
+        }
+
+        state.currentRoots = restoredRoots;
+        appSelectionMode_ = state.beforeMode;
+        documentCommandApplySelection(scene_, documentCommandRemapSelection(state.beforeSelection, remappedEntities));
+        if (state.beforeMode == ModelingSelectionMode::Object) {
+            syncObjectSelectionFromScene(true);
+        } else if (state.beforeMode == ModelingSelectionMode::Group) {
+#if QUADER_HAS_MODELING_SDK
+            session_.set_selection_mode(quader_editor_core::SelectionMode::object);
+            session_.set_selected_object_ids({}, -1);
+#endif
+        }
+        invalidateSelectionOverlayCaches();
+        return {.ok = true, .changed = true, .message = "Delete Selection"};
     }
 
     ModelingCommandResult copySelection() {
@@ -4560,6 +4800,53 @@ public:
 #endif
     }
 
+    class SceneAwareDeleteSelectionCommand final : public IUndoableCommand {
+    public:
+        explicit SceneAwareDeleteSelectionCommand(Impl& owner)
+            : owner_(owner) {}
+
+        [[nodiscard]] const std::string& label() const override {
+            return label_;
+        }
+
+        CommandResult undo() override {
+            if (!executed_) {
+                return {
+                        .ok = false,
+                        .changed = false,
+                        .message = "Delete Selection has not been executed.",
+                };
+            }
+            return toCommandResult(owner_.undoSceneAwareDelete(state_));
+        }
+
+        CommandResult redo() override {
+            ModelingCommandResult result = owner_.redoSceneAwareDelete(state_, !executed_);
+            if (result.ok && result.changed) {
+                executed_ = true;
+            }
+            return toCommandResult(std::move(result));
+        }
+
+    private:
+        static CommandResult toCommandResult(ModelingCommandResult result) {
+            return {
+                    .ok = result.ok,
+                    .changed = result.changed,
+                    .message = std::move(result.message),
+            };
+        }
+
+        Impl& owner_;
+        SceneAwareDeleteState state_;
+        bool executed_ = false;
+        std::string label_ = "Delete Selection";
+    };
+
+    std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand() {
+        return std::make_unique<SceneAwareDeleteSelectionCommand>(*this);
+    }
+
 private:
 #if QUADER_HAS_MODELING_SDK
     void invalidateSelectionOverlayCaches() const {
@@ -4975,6 +5262,14 @@ ModelingCommandResult ModelingSessionService::invertSelection() {
 
 ModelingCommandResult ModelingSessionService::clearSelection() {
     return impl_->clearSelection();
+}
+
+std::unique_ptr<IUndoableCommand> ModelingSessionService::createDeleteSelectionCommand() {
+    return impl_->createDeleteSelectionCommand();
+}
+
+bool ModelingSessionService::hasSelectedSceneGroupRoot() const {
+    return impl_->hasSelectedSceneGroupRoot();
 }
 
 ModelingCommandResult ModelingSessionService::deleteSelection() {

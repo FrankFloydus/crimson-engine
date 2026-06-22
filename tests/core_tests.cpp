@@ -1149,6 +1149,23 @@ TEST(ViewportPanelTests, ToolActivationPreservesGroupModeSceneSelection) {
             std::string::npos);
 }
 
+TEST(ViewportPanelTests, DeletePopupTreatsSelectedSceneGroupsAsObjectTargets) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(source.find("bool hasSelectedSceneGroupRoot(const SceneDocument& document)"), std::string::npos);
+    EXPECT_NE(source.find("document.kind(selected) == EntityKind::Empty && document.hasChildren(selected)"),
+            std::string::npos);
+    EXPECT_NE(source.find("deleteSummary.mode == ModelingSelectionMode::Group ||\n                hasSelectedSceneGroupRoot(document)"),
+            std::string::npos);
+}
+
 TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
@@ -2401,7 +2418,7 @@ TEST(OutlinerPanelTests, RoutesDocumentMutationsThroughPublicApi) {
 
     EXPECT_NE(source.find("context.editor.scene().select"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().createEntity"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().destroy"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.commands().execute(\"modeling.delete_selection\")"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().reparent"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().groupSelection"), std::string::npos);
     EXPECT_NE(source.find("context.editor.scene().ungroupSelection"), std::string::npos);
@@ -2421,6 +2438,29 @@ TEST(OutlinerPanelTests, RoutesDocumentMutationsThroughPublicApi) {
     EXPECT_EQ(source.find("document.setEntityKind("), std::string::npos);
     EXPECT_EQ(source.find("context.document.clearSelection("), std::string::npos);
     EXPECT_EQ(source.find("context.document.setSelected("), std::string::npos);
+}
+
+TEST(OutlinerPanelTests, DeleteSelectionUsesUnifiedDeleteCommandWithoutSplitHierarchyDelete) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "OutlinerPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    const std::size_t start = source.find("void deleteSelection(UIContext& context)");
+    ASSERT_NE(start, std::string::npos);
+    const std::size_t end = source.find("std::vector<EntityId> duplicateModelingEntities", start);
+    ASSERT_NE(end, std::string::npos);
+    const std::string body = source.substr(start, end - start);
+
+    EXPECT_NE(body.find("context.editor.commands().execute(\"modeling.delete_selection\")"), std::string::npos);
+    EXPECT_EQ(body.find("selectedHierarchyEntities"), std::string::npos);
+    EXPECT_EQ(body.find("context.editor.scene().destroy"), std::string::npos);
+    EXPECT_EQ(body.find("selectOnly(context, modelingEntities"), std::string::npos);
+    EXPECT_EQ(body.find("context.modeling.syncObjectSelectionFromScene()"), std::string::npos);
 }
 
 TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {

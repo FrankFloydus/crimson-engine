@@ -165,35 +165,16 @@ void ungroupSelection(UIContext& context) {
 
 void deleteSelection(UIContext& context) {
     SceneDocument& document = context.document;
-    const std::vector<EntityId> hierarchyEntities = selectedHierarchyEntities(document);
-    if (hierarchyEntities.empty()) {
+    const std::vector<EntityId> roots = selectedRootEntities(document);
+    if (roots.empty()) {
         return;
     }
 
-    std::vector<EntityId> modelingEntities;
-    for (const EntityId entity : hierarchyEntities) {
-        if (document.modelingObject(entity) != nullptr) {
-            modelingEntities.push_back(entity);
-        }
+    const ModelingSelectionMode previousMode = context.modeling.selectionMode();
+    if (previousMode != ModelingSelectionMode::Object && previousMode != ModelingSelectionMode::Group) {
+        (void)context.editor.modeling().setSelectionMode(ModelingSelectionMode::Object);
     }
-
-    if (!modelingEntities.empty()) {
-        (void)selectOnly(context, modelingEntities);
-        syncSelectionToModeling(context);
-        (void)context.editor.commands().execute("modeling.delete_selection");
-    }
-
-    for (const EntityId root : selectedRootEntities(document)) {
-        if (document.exists(root)) {
-            (void)context.editor.scene().destroy(root);
-        }
-    }
-    for (const EntityId entity : hierarchyEntities) {
-        if (document.exists(entity) && document.modelingObject(entity) == nullptr) {
-            (void)context.editor.scene().destroy(entity);
-        }
-    }
-    context.modeling.syncObjectSelectionFromScene();
+    (void)context.editor.commands().execute("modeling.delete_selection");
 }
 
 std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::vector<EntityId>& sourceMeshes) {

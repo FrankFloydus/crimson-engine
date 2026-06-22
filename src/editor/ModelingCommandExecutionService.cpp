@@ -57,6 +57,13 @@ ModelingCommandResult fromCommandResult(CommandResult result) {
     };
 }
 
+bool shouldUseSceneAwareDelete(ModelingSessionService& modeling) {
+    const ModelingSelectionSummary summary = modeling.selectionSummary();
+    return summary.mode == ModelingSelectionMode::Object ||
+            summary.mode == ModelingSelectionMode::Group ||
+            modeling.hasSelectedSceneGroupRoot();
+}
+
 std::string commandLabel(const CommandTool* tool, std::string_view toolId) {
     if (tool == nullptr || tool->label().empty()) {
         return std::string(toolId);
@@ -73,6 +80,10 @@ ModelingCommandResult ModelingCommandExecutionService::execute(
     const CommandTool* tool = dispatcher_.find(toolId);
     if (tool == nullptr) {
         return {.ok = false, .message = "Command tool is not registered."};
+    }
+
+    if (tool->id() == "delete_selection" && shouldUseSceneAwareDelete(modeling)) {
+        return fromCommandResult(undoRedo.execute(modeling.createDeleteSelectionCommand()));
     }
 
     const ModelingCommandAvailability available = dispatcher_.availability(toolId, modeling);
@@ -104,6 +115,10 @@ ModelingCommandResult ModelingCommandExecutionService::executeAction(
         UndoRedoManager& undoRedo,
         ModelingSessionService& modeling,
         std::string_view actionId) {
+    if (actionId == "delete_selection" && shouldUseSceneAwareDelete(modeling)) {
+        return fromCommandResult(undoRedo.execute(modeling.createDeleteSelectionCommand()));
+    }
+
     const std::vector<ModelingActionItem> actions = modeling.contextActions(ModelingActionQuery{
             .surface = ModelingActionSurface::ViewportContextMenu,
             .includeDisabled = true,
@@ -187,7 +202,7 @@ ModelingCommandResult redoModelingCommand(
     if (undoRedo.canRedo()) {
         return fromCommandResult(undoRedo.redo());
     }
-    if (modeling.canRedo()) {
+    if (!undoRedo.canUndo() && modeling.canRedo()) {
         return modeling.redo();
     }
     return {.ok = false, .changed = false, .message = "No command to redo"};
