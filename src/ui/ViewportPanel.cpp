@@ -1,7 +1,9 @@
 #include "ui/ViewportPanel.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "core/Logger.h"
+#include "modeling/SelectionModeAdapter.h"
 #include "render/overlay/ViewportOverlayStyleResolver.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
@@ -19,7 +21,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <optional>
 #include <string>
@@ -33,75 +34,6 @@
 
 namespace quader {
 namespace {
-
-constexpr std::uint64_t kViewportPanelHashOffset = 1469598103934665603ull;
-constexpr std::uint64_t kViewportPanelHashPrime = 1099511628211ull;
-
-std::uint64_t mixViewportPanelHash(std::uint64_t hash, std::uint64_t value) {
-    hash ^= value;
-    hash *= kViewportPanelHashPrime;
-    return hash;
-}
-
-std::uint64_t mixViewportPanelHash(std::uint64_t hash, bool value) {
-    return mixViewportPanelHash(hash, value ? 1ull : 0ull);
-}
-
-std::uint64_t mixViewportPanelHash(std::uint64_t hash, float value) {
-    return mixViewportPanelHash(hash, static_cast<std::uint64_t>(std::hash<float>{}(value)));
-}
-
-std::uint64_t mixViewportPanelHash(std::uint64_t hash, double value) {
-    return mixViewportPanelHash(hash, static_cast<std::uint64_t>(std::hash<double>{}(value)));
-}
-
-std::uint64_t mixViewportPanelHash(std::uint64_t hash, Vec3 value) {
-    hash = mixViewportPanelHash(hash, value.x);
-    hash = mixViewportPanelHash(hash, value.y);
-    return mixViewportPanelHash(hash, value.z);
-}
-
-template <typename Enum>
-std::uint64_t mixViewportPanelEnum(std::uint64_t hash, Enum value) {
-    return mixViewportPanelHash(hash, static_cast<std::uint64_t>(value));
-}
-
-std::uint64_t toolOverlaySignature(ModelingSessionService& modeling) {
-    const ModelingToolStatus status = modeling.toolStatus();
-    const ModelingInteractionSettings settings = modeling.interactionSettings();
-    std::uint64_t hash = mixViewportPanelEnum(kViewportPanelHashOffset, status.activeTool);
-    hash = mixViewportPanelEnum(hash, settings.cutMode);
-    hash = mixViewportPanelHash(hash, status.cutActive);
-    hash = mixViewportPanelHash(hash, status.cutCanPreview);
-    hash = mixViewportPanelHash(hash, status.cutPreviewValid);
-    hash = mixViewportPanelHash(hash, status.cutDragging);
-    hash = mixViewportPanelHash(hash, status.cutDraggingNewPoint);
-    hash = mixViewportPanelHash(hash, status.cutDraggingLine);
-    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.cutDraggingPointIndex));
-    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.cutPointCount));
-    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.cutCapturedPointCount));
-    hash = mixViewportPanelHash(hash, status.cutHasLine);
-    for (const Vec3 point : status.cutPoints) {
-        hash = mixViewportPanelHash(hash, point);
-    }
-    hash = mixViewportPanelHash(hash, status.mirrorActive);
-    hash = mixViewportPanelHash(hash, status.mirrorCanPreview);
-    hash = mixViewportPanelHash(hash, status.mirrorPreviewValid);
-    hash = mixViewportPanelHash(hash, status.mirrorDragging);
-    hash = mixViewportPanelHash(hash, status.mirrorDraggingNewPoint);
-    hash = mixViewportPanelHash(hash, status.mirrorDraggingLine);
-    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.mirrorDraggingPointIndex));
-    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.mirrorPointCount));
-    hash = mixViewportPanelHash(hash, static_cast<std::uint64_t>(status.mirrorCapturedPointCount));
-    hash = mixViewportPanelHash(hash, status.mirrorHasLine);
-    for (const Vec3 point : status.mirrorPoints) {
-        hash = mixViewportPanelHash(hash, point);
-    }
-    return hash;
-}
-
-
-ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode);
 
 float distanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
     const ImVec2 ab{b.x - a.x, b.y - a.y};
@@ -641,48 +573,18 @@ void focusDocument(SceneDocument& document, const AssetRegistry& assets, Viewpor
     }
 }
 
-ModelingSelectionMode toModelingSelectionMode(ViewportSelectionMode mode) {
-    switch (mode) {
-    case ViewportSelectionMode::Vertex:
-        return ModelingSelectionMode::Vertex;
-    case ViewportSelectionMode::Edge:
-        return ModelingSelectionMode::Edge;
-    case ViewportSelectionMode::Face:
-        return ModelingSelectionMode::Face;
-    case ViewportSelectionMode::Object:
-        return ModelingSelectionMode::Object;
-    case ViewportSelectionMode::Group:
-        return ModelingSelectionMode::Group;
-    }
-    return ModelingSelectionMode::Object;
-}
-
-ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return ViewportSelectionMode::Vertex;
-    case ModelingSelectionMode::Edge:
-        return ViewportSelectionMode::Edge;
-    case ModelingSelectionMode::Face:
-        return ViewportSelectionMode::Face;
-    case ModelingSelectionMode::Object:
-        return ViewportSelectionMode::Object;
-    case ModelingSelectionMode::Group:
-        return ViewportSelectionMode::Group;
-    }
-    return ViewportSelectionMode::Object;
-}
-
-ModelingCommandResult executeDeletePopupCommand(
-        UndoRedoManager& undoRedo,
+QuaderApiVoidResult executeDeletePopupCommand(
+        QuaderEditorApi& editor,
         ModelingSessionService& modeling,
         ViewportInputRouter& inputRouter,
         std::string_view toolId) {
-    const ModelingCommandResult result = executeTrackedCommandTool(undoRedo, modeling, toolId);
+    std::string command = "modeling.";
+    command.append(toolId);
+    const QuaderApiVoidResult result = editor.commands().execute(command);
     if (!result.ok) {
         LOG_ERROR("Delete popup operation '{}' failed: {}", toolId, result.message.empty() ? "Operation failed." : result.message);
     }
-    inputRouter.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+    inputRouter.setSelectionMode(appSelectionModeToViewport(modeling.selectionSummary().mode));
     return result;
 }
 
@@ -690,7 +592,7 @@ bool drawViewportDeletePopup(
         bool& objectPopupOpen,
         bool& objectPopupPositionPending,
         ImVec2& objectPopupPosition,
-        UndoRedoManager& undoRedo,
+        QuaderEditorApi& editor,
         ModelingSessionService& modeling,
         ViewportInputRouter& inputRouter,
         LocalizationService& localization) {
@@ -713,8 +615,8 @@ bool drawViewportDeletePopup(
             ImGui::TextUnformatted(title.c_str());
             const std::string deleteLabel = localization.text("ui.viewport.delete_popup.delete", "Delete");
             if (ImGui::Button(deleteLabel.c_str())) {
-                const ModelingCommandResult result =
-                        executeDeletePopupCommand(undoRedo, modeling, inputRouter, "delete_selection");
+                const QuaderApiVoidResult result =
+                        executeDeletePopupCommand(editor, modeling, inputRouter, "delete_selection");
                 changed = result.changed;
                 open = false;
             }
@@ -751,7 +653,7 @@ bool drawViewportDeletePopup(
         for (const PopupAction& action : actions) {
             const std::string label = localization.text(action.labelKey, action.fallback);
             if (ImGui::MenuItem(label.c_str(), nullptr, false, action.enabled)) {
-                const ModelingCommandResult result = executeDeletePopupCommand(undoRedo, modeling, inputRouter, action.toolId);
+                const QuaderApiVoidResult result = executeDeletePopupCommand(editor, modeling, inputRouter, action.toolId);
                 changed = changed || result.changed;
                 ImGui::CloseCurrentPopup();
             }
@@ -764,6 +666,31 @@ bool drawViewportDeletePopup(
 
 ViewportToolId fromModelingViewportTool(ModelingViewportTool tool) {
     return viewportToolForModeling(tool);
+}
+
+QuaderShadingMode toQuaderShadingMode(ViewportShadingMode mode) {
+    switch (mode) {
+    case ViewportShadingMode::Wireframe:
+        return QuaderShadingMode::Wireframe;
+    case ViewportShadingMode::Shaded:
+        return QuaderShadingMode::Solid;
+    case ViewportShadingMode::Rendered:
+        return QuaderShadingMode::Material;
+    }
+    return QuaderShadingMode::Solid;
+}
+
+ViewportShadingMode toViewportShadingMode(QuaderShadingMode mode) {
+    switch (mode) {
+    case QuaderShadingMode::Wireframe:
+        return ViewportShadingMode::Wireframe;
+    case QuaderShadingMode::Material:
+        return ViewportShadingMode::Rendered;
+    case QuaderShadingMode::Solid:
+    case QuaderShadingMode::XRay:
+        return ViewportShadingMode::Shaded;
+    }
+    return ViewportShadingMode::Shaded;
 }
 
 } // namespace
@@ -823,7 +750,7 @@ void ViewportPanel::prepareViewports(
         ViewportOverlayFrame overlayFrame = selectionOverlayCache_.valid() ? selectionOverlayCache_.frame() : ViewportOverlayFrame{};
         const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
                 ? selectionOverlayCache_.key().selectionMode
-                : toModelingSelectionMode(inputRouter_.state().selectionMode);
+                : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
         if (paneState.shading == ViewportShadingMode::Wireframe) {
             stripWireframeObjectFaceFills(overlayFrame, overlayMode);
             appendSceneWireframeOverlay(overlayFrame, document, assets);
@@ -864,8 +791,31 @@ void ViewportPanel::setViewportLayout(ViewportLayoutId layoutId) {
     }
 }
 
+QuaderShadingMode ViewportPanel::paneShadingMode(ViewportPaneId paneId) const {
+    return toQuaderShadingMode(pane(paneId).shading);
+}
+
+void ViewportPanel::setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode) {
+    Pane& paneState = pane(paneId);
+    const ViewportShadingMode next = toViewportShadingMode(mode);
+    if (paneState.shading == next) {
+        return;
+    }
+    paneState.shading = next;
+    selectionOverlayCache_.markDirty();
+}
+
+ViewportView ViewportPanel::paneView(ViewportPaneId paneId) const {
+    return pane(paneId).view;
+}
+
+void ViewportPanel::setPaneView(ViewportPaneId paneId, ViewportView view) {
+    setPaneView(pane(paneId), view);
+}
+
 bool ViewportPanel::activateToolFromMenu(
         ViewportToolId tool,
+        QuaderEditorApi& editor,
         SceneDocument& document,
         DocumentCommandService& documentCommands,
         ModelingSessionService& modeling) {
@@ -880,9 +830,9 @@ bool ViewportPanel::activateToolFromMenu(
     const EntityId activeBeforeToolActivation = preserveGroupSelection
             ? document.primarySelection()
             : InvalidEntityId;
-    const ModelingCommandResult command = toolDefinition != nullptr ?
-            toolDefinition->activate(modeling) :
-            ModelingCommandResult{
+    const QuaderApiVoidResult command = toolDefinition != nullptr ?
+            editor.tools().activate(tool) :
+            QuaderApiVoidResult{
                     .ok = false,
                     .changed = false,
                     .message = "Unknown viewport tool.",
@@ -903,7 +853,7 @@ bool ViewportPanel::activateToolFromMenu(
         (void)modeling.setSelectionMode(ModelingSelectionMode::Group);
         inputRouter_.setSelectionMode(ViewportSelectionMode::Group);
     } else {
-        inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+        inputRouter_.setSelectionMode(appSelectionModeToViewport(modeling.selectionSummary().mode));
     }
     inputRouter_.clearModalToolState();
     paintSelectionActive_ = false;
@@ -1335,7 +1285,7 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
             .selectionRevision = overlaySummary.selectionRevision,
             .sceneRevision = document.revision(),
             .assetRevision = assets.revision(),
-            .toolSignature = toolOverlaySignature(modeling),
+            .overlaySignature = modeling.selectionOverlaySignature(),
             .selectionMode = overlaySummary.mode,
     };
     if (!selectionOverlayCache_.needsRefresh(key)) {
@@ -1385,7 +1335,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     const ModelingToolSettingsTarget toolSettingsTarget = modeling.toolSettingsTarget();
     const ViewportShortcutControllerResult operationPreviewShortcut =
-            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, inputRouter_, undoRedo, modeling);
+            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, inputRouter_, uiContext.editor, modeling);
     const bool operationPreviewShortcutConsumed = operationPreviewShortcut.consumed;
     if (operationPreviewShortcut.invalidateHover) {
         hoverController_.invalidate();
@@ -1464,7 +1414,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     }
     if (result.selectionModeChanged) {
         const ModelingCommandResult command =
-                modeling.setSelectionMode(toModelingSelectionMode(inputRouter_.state().selectionMode));
+                modeling.setSelectionMode(viewportSelectionModeToApp(inputRouter_.state().selectionMode));
         if (!command.ok) {
             LOG_ERROR("Selection mode change failed: {}", command.message);
         }
@@ -1491,9 +1441,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
         const ViewportTool* activeTool = inputRouter_.activeTool();
-        const ModelingCommandResult command = activeTool != nullptr ?
-                activeTool->activate(modeling) :
-                ModelingCommandResult{
+        const QuaderApiVoidResult command = activeTool != nullptr ?
+                uiContext.editor.tools().activate(inputRouter_.state().activeTool) :
+                QuaderApiVoidResult{
                         .ok = false,
                         .changed = false,
                         .message = "No active viewport tool.",
@@ -1501,9 +1451,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         if (!command.ok) {
             LOG_ERROR("Viewport tool activation failed: {}", command.message);
             inputRouter_.setActiveTool(ViewportToolId::Select);
-            if (const ViewportTool* selectTool = inputRouter_.activeTool()) {
-                (void)selectTool->activate(modeling);
-            }
+            (void)uiContext.editor.tools().activate(ViewportToolId::Select);
         } else {
             if (preserveGroupSelection) {
                 const DocumentCommandResult restoreSelection =
@@ -1514,7 +1462,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 (void)modeling.setSelectionMode(ModelingSelectionMode::Group);
                 inputRouter_.setSelectionMode(ViewportSelectionMode::Group);
             } else {
-                inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+                inputRouter_.setSelectionMode(appSelectionModeToViewport(modeling.selectionSummary().mode));
             }
         }
         inputRouter_.clearModalToolState();
@@ -1522,9 +1470,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
 
     if (!operationPreviewShortcutConsumed) {
         const ViewportShortcutControllerResult shortcut =
-                shortcutController_.handleModelingShortcut(result, undoRedo, modeling);
+                shortcutController_.handleModelingShortcut(result, uiContext.editor, modeling);
         if (shortcut.commandExecuted) {
-            inputRouter_.setSelectionMode(toViewportSelectionMode(modeling.selectionSummary().mode));
+            inputRouter_.setSelectionMode(appSelectionModeToViewport(modeling.selectionSummary().mode));
         }
         if (shortcut.invalidateHover) {
             hoverController_.invalidate();
@@ -1667,6 +1615,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
 
     const ModelingSelectionSummary hoverSelectionSummary = modeling.selectionSummary();
     auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {
+        const ViewportSettings& settings = activeViewportSettings();
         return hoverController_.makeKey(camera, ViewportHoverWorkRequest{
                 .paneId = paneState.id,
                 .activeTool = inputRouter_.state().activeTool,
@@ -1677,6 +1626,8 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .viewportSize = input.viewportSize,
                 .modifiers = input.modifiers,
                 .gizmoConsumed = consumedByGizmo,
+                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
                 .sceneRevision = document.revision(),
                 .assetRevision = assets.revision(),
                 .contentRevision = hoverSelectionSummary.contentRevision,
@@ -1900,7 +1851,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                     .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
                     .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
             });
-            inputRouter_.setSelectionMode(toViewportSelectionMode(summary.mode));
+            inputRouter_.setSelectionMode(appSelectionModeToViewport(summary.mode));
             paintSelectionActive_ = componentSelectionMode(summary.mode);
             suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
         }
@@ -1983,12 +1934,12 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             result.flyHudActive,
             camera.flySpeed(),
             uiContext.localization);
-    contextMenuPresenter_.drawOperationsPopup(undoRedo, modeling, inputRouter_, uiContext.localization, modalToolOwnsViewport());
+    contextMenuPresenter_.drawOperationsPopup(uiContext.editor, modeling, inputRouter_, uiContext.localization, modalToolOwnsViewport());
     if (drawViewportDeletePopup(
                 deleteObjectsPopupOpen_,
                 deleteObjectsPopupPositionPending_,
                 deleteObjectsPopupPosition_,
-                undoRedo,
+                uiContext.editor,
                 modeling,
                 inputRouter_,
                 uiContext.localization)) {

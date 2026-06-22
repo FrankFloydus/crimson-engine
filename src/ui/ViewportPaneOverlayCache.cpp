@@ -11,7 +11,7 @@ bool ViewportPaneOverlayCache::needsRefresh(const ViewportPaneOverlayCacheKey& k
             key_.selectionRevision != key.selectionRevision ||
             key_.sceneRevision != key.sceneRevision ||
             key_.assetRevision != key.assetRevision ||
-            key_.toolSignature != key.toolSignature ||
+            key_.overlaySignature != key.overlaySignature ||
             key_.selectionMode != key.selectionMode;
 }
 

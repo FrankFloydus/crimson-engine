@@ -1,5 +1,6 @@
 #include "ui/MainMenuBar.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "ui/UIPanelManager.h"
 #include "ui/ViewportPanel.h"
@@ -101,6 +102,7 @@ void ToolsMenu::draw(MainMenuBarContext& context) const {
         if (ImGui::MenuItem(localizedLabel.c_str(), shortcut, selected, enabled)) {
             (void)context.viewportPanel->activateToolFromMenu(
                     tool->viewportTool(),
+                    context.editor,
                     context.document,
                     context.documentCommands,
                     context.modeling);
@@ -121,8 +123,7 @@ void ShowMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) cons
     const std::string gizmoLabel =
             context.localization.imguiLabel("ui.menu.show.navigation_gizmo", "ui.menu.show.navigation_gizmo", "Navigation Gizmo");
     if (ImGui::MenuItem(gizmoLabel.c_str(), nullptr, &navigationGizmoVisible, context.viewportPanel != nullptr)) {
-        context.viewportPanel->setNavigationGizmoVisible(navigationGizmoVisible);
-        context.settings.setNavigationGizmoVisible(navigationGizmoVisible);
+        (void)context.editor.preferences().setNavigationGizmoVisible(navigationGizmoVisible);
         result.settingsChanged = true;
     }
 
@@ -144,7 +145,11 @@ void ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) cons
             bool visible = context.panels.isVisible(panel->id());
             const std::string localizedLabel = panelMenuLabel(context.localization, *panel);
             if (ImGui::MenuItem(localizedLabel.c_str(), nullptr, &visible)) {
-                context.panels.setVisible(panel->id(), visible);
+                if (visible) {
+                    (void)context.editor.ui().showPanel(uiPanelKey(panel->id()));
+                } else {
+                    (void)context.editor.ui().hidePanel(uiPanelKey(panel->id()));
+                }
                 result.settingsChanged = true;
             }
         }
@@ -165,7 +170,7 @@ void LayoutMenu::draw(MainMenuBarContext& context) const {
             const bool selected = context.viewportPanel->viewportLayout() == option.id;
             const std::string localizedLabel = layoutLabel(context.localization, option);
             if (ImGui::MenuItem(localizedLabel.c_str(), nullptr, selected)) {
-                context.viewportPanel->setViewportLayout(option.id);
+                (void)context.editor.viewports().setLayout(option.id);
             }
         }
     }

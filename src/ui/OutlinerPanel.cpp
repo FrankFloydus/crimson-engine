@@ -1,9 +1,8 @@
 #include "ui/OutlinerPanel.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
-#include "document/DocumentCommandService.h"
 #include "modeling/ModelingSessionService.h"
-#include "modeling/tools/ModelingCommandToolCatalog.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
@@ -13,8 +12,10 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -41,12 +42,12 @@ void syncSelectionToModeling(UIContext& context) {
     const EntityId activeSelection = context.document.primarySelection();
     const ModelingSelectionMode previousMode = context.modeling.selectionMode();
     if (previousMode != ModelingSelectionMode::Group) {
-        (void)context.modeling.setSelectionMode(ModelingSelectionMode::Object);
+        (void)context.editor.modeling().setSelectionMode(ModelingSelectionMode::Object);
     }
-    (void)context.documentCommands.selectEntities(desiredSelection, activeSelection);
+    (void)context.editor.scene().select(std::span<const EntityId>(desiredSelection.data(), desiredSelection.size()), activeSelection);
     context.modeling.syncObjectSelectionFromScene();
     if (previousMode == ModelingSelectionMode::Group) {
-        (void)context.modeling.setSelectionMode(ModelingSelectionMode::Group);
+        (void)context.editor.modeling().setSelectionMode(ModelingSelectionMode::Group);
     }
 }
 
@@ -118,7 +119,7 @@ std::vector<EntityId> selectedHierarchyEntities(const SceneDocument& document) {
 }
 
 bool selectOnly(UIContext& context, const std::vector<EntityId>& entities, EntityId active = InvalidEntityId) {
-    DocumentCommandResult result = context.documentCommands.selectEntities(entities, active);
+    QuaderApiVoidResult result = context.editor.scene().select(std::span<const EntityId>(entities.data(), entities.size()), active);
     return result.ok && result.changed;
 }
 
@@ -134,8 +135,7 @@ void groupSelection(UIContext& context) {
         groupTransform.position = boundsCenter(*bounds);
     }
 
-    EntityId group = InvalidEntityId;
-    DocumentCommandResult result = context.documentCommands.groupSelection({}, groupTransform, &group);
+    const QuaderApiResult<QuaderEntityRef> result = context.editor.scene().groupSelection({}, groupTransform);
     if (result.ok && result.changed) {
         syncSelectionToModeling(context);
     }
@@ -150,14 +150,14 @@ void ungroupEntity(UIContext& context, EntityId group) {
     if (!containsEntity(document.selectedEntities(), group)) {
         (void)selectOnly(context, {group}, group);
     }
-    DocumentCommandResult result = context.documentCommands.ungroupSelection();
+    QuaderApiVoidResult result = context.editor.scene().ungroupSelection();
     if (result.ok && result.changed) {
         syncSelectionToModeling(context);
     }
 }
 
 void ungroupSelection(UIContext& context) {
-    DocumentCommandResult result = context.documentCommands.ungroupSelection();
+    QuaderApiVoidResult result = context.editor.scene().ungroupSelection();
     if (result.ok && result.changed) {
         syncSelectionToModeling(context);
     }
@@ -180,21 +180,17 @@ void deleteSelection(UIContext& context) {
     if (!modelingEntities.empty()) {
         (void)selectOnly(context, modelingEntities);
         syncSelectionToModeling(context);
-        if (const CommandTool* deleteTool = findModelingCommandTool("delete_selection")) {
-            (void)deleteTool->execute(context.modeling);
-        } else {
-            (void)context.modeling.deleteSelection();
-        }
+        (void)context.editor.commands().execute("modeling.delete_selection");
     }
 
     for (const EntityId root : selectedRootEntities(document)) {
         if (document.exists(root)) {
-            (void)context.documentCommands.destroyEntity(root);
+            (void)context.editor.scene().destroy(root);
         }
     }
     for (const EntityId entity : hierarchyEntities) {
         if (document.exists(entity) && document.modelingObject(entity) == nullptr) {
-            (void)context.documentCommands.destroyEntity(entity);
+            (void)context.editor.scene().destroy(entity);
         }
     }
     context.modeling.syncObjectSelectionFromScene();
@@ -209,10 +205,7 @@ std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::v
     std::unordered_set<EntityId> beforeSet(beforeEntities.begin(), beforeEntities.end());
     (void)selectOnly(context, sourceMeshes);
     syncSelectionToModeling(context);
-    const CommandTool* duplicateTool = findModelingCommandTool("duplicate_meshes");
-    const ModelingCommandResult duplicateResult = duplicateTool != nullptr
-            ? duplicateTool->execute(context.modeling)
-            : ModelingCommandResult{.ok = false, .message = "Duplicate command tool is not registered."};
+    const QuaderApiVoidResult duplicateResult = context.editor.commands().execute("modeling.duplicate_meshes");
     if (!duplicateResult.ok) {
         return {};
     }
@@ -232,17 +225,17 @@ void copyCommonEntityState(UIContext& context, EntityId source, EntityId clone, 
     if (renameClone) {
         const NameComponent* name = document.name(source);
         if (name != nullptr) {
-            (void)context.documentCommands.renameEntity(clone, SceneEntityNaming::nextName(document, name->name));
+            (void)context.editor.scene().rename(clone, SceneEntityNaming::nextName(document, name->name));
         }
     }
     if (const TransformComponent* transform = document.transform(source)) {
-        (void)context.documentCommands.applyEntityTransform(clone, *transform);
+        (void)context.editor.scene().setTransform(clone, *transform);
     }
     if (const VisibilityComponent* visibility = document.visibility(source)) {
-        (void)context.documentCommands.setVisible(clone, visibility->visible);
+        (void)context.editor.scene().setVisible(clone, visibility->visible);
     }
     if (const LockComponent* lock = document.lock(source)) {
-        (void)context.documentCommands.setLocked(clone, lock->locked);
+        (void)context.editor.scene().setLocked(clone, lock->locked);
     }
 }
 
@@ -284,22 +277,23 @@ void duplicateSelection(UIContext& context) {
             if (const TransformComponent* sourceTransform = document.transform(source)) {
                 transform = *sourceTransform;
             }
-            const DocumentCommandResult created = context.documentCommands.createEntity(
-                    SceneEntityNaming::nextName(document, baseName),
-                    document.kind(source),
-                    InvalidEntityId,
-                    transform,
-                    &clone);
+            const QuaderApiResult<QuaderEntityRef> created = context.editor.scene().createEntity(QuaderCreateEntityArgs{
+                    .name = SceneEntityNaming::nextName(document, baseName),
+                    .kind = document.kind(source),
+                    .parent = InvalidEntityId,
+                    .transform = transform,
+            });
             if (!created.ok || !created.changed) {
                 return InvalidEntityId;
             }
+            clone = created.value.id;
             copyCommonEntityState(context, source, clone, false);
         }
 
         for (const EntityId child : document.children(source)) {
             const EntityId childClone = cloneEntity(child);
             if (childClone != InvalidEntityId) {
-                (void)context.documentCommands.reparentEntity(childClone, clone, false);
+                (void)context.editor.scene().reparent(childClone, clone, false);
             }
         }
         return clone;
@@ -309,7 +303,7 @@ void duplicateSelection(UIContext& context) {
     for (const EntityId root : roots) {
         const EntityId clone = cloneEntity(root);
         if (clone != InvalidEntityId) {
-            (void)context.documentCommands.reparentEntity(clone, document.parent(root), false);
+            (void)context.editor.scene().reparent(clone, document.parent(root), false);
             rootClones.push_back(clone);
         }
     }
@@ -429,7 +423,8 @@ void OutlinerPanel::drawContent(UIContext& context) {
             nextSelection = {record.id};
         }
         outlinerAnchor_ = record.id;
-        const DocumentCommandResult result = context.documentCommands.selectEntities(nextSelection, activeSelection);
+        const QuaderApiVoidResult result =
+                context.editor.scene().select(std::span<const EntityId>(nextSelection.data(), nextSelection.size()), activeSelection);
         selectionChanged = selectionChanged || (result.ok && result.changed);
     };
 
@@ -520,7 +515,9 @@ void OutlinerPanel::drawContent(UIContext& context) {
 
         if (rowRightClicked) {
             if (!record.selected) {
-                const DocumentCommandResult result = context.documentCommands.selectEntities({record.id}, record.id);
+                const std::array<EntityId, 1> selection{record.id};
+                const QuaderApiVoidResult result =
+                        context.editor.scene().select(std::span<const EntityId>(selection.data(), selection.size()), record.id);
                 selectionChanged = selectionChanged || (result.ok && result.changed);
             }
         }

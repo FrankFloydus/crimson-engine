@@ -65,15 +65,13 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
         context.modalState->insertEdgeLoopDragActive = false;
         context.modalState->cutDragActive = false;
         context.modalState->mirrorDragActive = false;
-        if (event.exitActiveModalTool && context.setActiveTool) {
-            context.setActiveTool(ViewportToolId::Move);
-        }
         invalidate(context);
         return {
                 .handled = true,
                 .consumed = true,
                 .modalStateChanged = true,
                 .activeToolChanged = event.exitActiveModalTool,
+                .syncActiveToolFromModeling = event.exitActiveModalTool,
         };
     }
 
@@ -90,6 +88,7 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
     const ViewportPointerToolEvent& pointer = event.pointer;
     const ModelingBoxToolEvent boxEvent = context.makeBoxEvent();
     bool actionConsumed = false;
+    bool activeToolSyncRequested = false;
 
     if (pointer.hovered &&
             !pointer.leftDown &&
@@ -108,9 +107,7 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
                     context.setSelectionMode(ViewportSelectionMode::Object);
                 }
                 (void)context.modeling.setSelectionMode(ModelingSelectionMode::Object);
-                if (context.setActiveTool) {
-                    context.setActiveTool(ViewportToolId::Move);
-                }
+                activeToolSyncRequested = true;
             }
             preview = {};
         } else {
@@ -148,6 +145,8 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
             .handled = true,
             .consumed = actionConsumed,
             .modalStateChanged = true,
+            .activeToolChanged = activeToolSyncRequested,
+            .syncActiveToolFromModeling = activeToolSyncRequested,
     };
 }
 

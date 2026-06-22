@@ -12,6 +12,7 @@ class AssetRegistry;
 class DocumentCommandService;
 class LocalizationService;
 class ModelingSessionService;
+class QuaderEditorApi;
 class SceneDocument;
 class SceneRenderBridge;
 class UndoRedoManager;
@@ -19,6 +20,7 @@ class UISettings;
 struct UIStyleTokens;
 
 struct UIContext {
+    QuaderEditorApi& editor;
     SceneRenderBridge& renderBridge;
     SceneDocument& document;
     AssetRegistry& assets;

@@ -1,7 +1,8 @@
 #include "ui/InspectorPanel.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
-#include "document/DocumentCommandService.h"
+#include "document/commands/DocumentCommandEdits.h"
 #include "modeling/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <cstdio>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -445,7 +447,7 @@ void InspectorPanel::drawContent(UIContext& context) {
         const std::string nameLabel = localization.text("ui.inspector.name", "Name");
         if (inputTextWithLeftLabel("name", nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
                     ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
-            (void)context.documentCommands.renameEntity(primary, nameBuffer.data());
+            (void)context.editor.scene().rename(primary, nameBuffer.data());
         }
     }
 
@@ -465,7 +467,7 @@ void InspectorPanel::drawContent(UIContext& context) {
                     });
                 }
             }
-            (void)context.documentCommands.setVisibility(std::move(edits));
+            (void)context.editor.scene().setVisibility(std::span<const DocumentVisibilityEdit>(edits.data(), edits.size()));
         }
         if (visibilityAggregate.mixed()) {
             ImGui::SameLine();
@@ -489,7 +491,7 @@ void InspectorPanel::drawContent(UIContext& context) {
                     });
                 }
             }
-            (void)context.documentCommands.setLocks(std::move(edits));
+            (void)context.editor.scene().setLocks(std::span<const DocumentLockEdit>(edits.data(), edits.size()));
         }
         if (lockAggregate.mixed()) {
             ImGui::SameLine();
@@ -534,7 +536,7 @@ void InspectorPanel::drawContent(UIContext& context) {
                     });
                 }
             }
-            (void)context.documentCommands.setTransforms(std::move(edits));
+            (void)context.editor.scene().setTransforms(std::span<const DocumentTransformEdit>(edits.data(), edits.size()));
             transform = document.transform(primary);
         };
 
@@ -569,7 +571,7 @@ void InspectorPanel::drawContent(UIContext& context) {
                         .after = next,
                 });
             }
-            (void)context.documentCommands.setTransforms(std::move(edits));
+            (void)context.editor.scene().setTransforms(std::span<const DocumentTransformEdit>(edits.data(), edits.size()));
             transform = document.transform(primary);
         };
 
@@ -623,7 +625,7 @@ void InspectorPanel::drawContent(UIContext& context) {
         if (const MeshComponent* currentMesh = document.mesh(primary)) {
             MeshComponent mesh = *currentMesh;
             auto applyMeshComponent = [&](MeshComponent next) {
-                (void)context.documentCommands.setMeshComponent(primary, next);
+                (void)context.editor.scene().setMeshComponent(primary, next);
             };
 
             const std::string exportLabel = localization.text("ui.inspector.export", "Export");

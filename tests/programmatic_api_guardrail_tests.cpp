@@ -53,6 +53,16 @@ std::vector<std::filesystem::path> sourceFilesUnder(const std::filesystem::path&
     return files;
 }
 
+std::vector<std::filesystem::path> publicDocAndExampleFilesUnder(const std::filesystem::path& root) {
+    std::vector<std::filesystem::path> files = sourceFilesUnder(root);
+    for (const std::string_view extension : {std::string_view{".md"}, std::string_view{".lua"}}) {
+        std::vector<std::filesystem::path> withExtension = filesWithExtension(root, extension);
+        files.insert(files.end(), withExtension.begin(), withExtension.end());
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
 std::string normalizedRelative(const std::filesystem::path& path) {
     return std::filesystem::relative(path, sourceRoot()).generic_string();
 }
@@ -341,7 +351,7 @@ TEST(ProgrammaticApiGuardrailTests, ProgrammaticBehaviorTestsUseApiOrScenarioDsl
 
 TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders) {
     for (const std::filesystem::path& root : {sourceRoot() / "docs", sourceRoot() / "examples"}) {
-        for (const std::filesystem::path& file : sourceFilesUnder(root)) {
+        for (const std::filesystem::path& file : publicDocAndExampleFilesUnder(root)) {
             const std::string source = readFile(file);
             const std::string relative = normalizedRelative(file);
 
@@ -354,4 +364,15 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalO
                     << relative;
         }
     }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicExamplesStartFromEditorApiOrScriptSurface) {
+    const std::string createBox = readFile(sourceRoot() / "examples/create_box.cpp");
+    const std::string workflow = readFile(sourceRoot() / "examples/script_modeling_workflow.cpp");
+    const std::string luaReadme = readFile(sourceRoot() / "examples/lua/README.md");
+
+    EXPECT_NE(createBox.find("QuaderEditorApi"), std::string::npos);
+    EXPECT_NE(workflow.find("QuaderEditorApi"), std::string::npos);
+    EXPECT_NE(luaReadme.find("public `quader` scripting object"), std::string::npos);
+    EXPECT_NE(luaReadme.find("does not ship a Lua runtime"), std::string::npos);
 }

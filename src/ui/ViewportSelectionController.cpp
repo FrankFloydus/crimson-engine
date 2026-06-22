@@ -1,6 +1,7 @@
 #include "ui/ViewportSelectionController.h"
 
 #include "assets/MeshAsset.h"
+#include "modeling/SelectionModeAdapter.h"
 #include "scene/SceneBounds.h"
 
 #include <algorithm>
@@ -12,22 +13,6 @@
 
 namespace quader {
 namespace {
-
-ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return ViewportSelectionMode::Vertex;
-    case ModelingSelectionMode::Edge:
-        return ViewportSelectionMode::Edge;
-    case ModelingSelectionMode::Face:
-        return ViewportSelectionMode::Face;
-    case ModelingSelectionMode::Object:
-        return ViewportSelectionMode::Object;
-    case ModelingSelectionMode::Group:
-        return ViewportSelectionMode::Group;
-    }
-    return ViewportSelectionMode::Object;
-}
 
 bool rayIntersectsBounds(Vec3 origin, Vec3 direction, const SceneBounds& bounds, float& outDistance) {
     float tMin = 0.0f;
@@ -168,7 +153,7 @@ ModelingSelectionSummary applyScenePickSelection(
         (void)documentCommands.selectEntities(std::move(selected), active);
     }
     const ModelingSelectionSummary summary = modeling.selectionSummary();
-    inputRouter.setSelectionMode(toViewportSelectionMode(summary.mode == mode ? summary.mode : mode));
+    inputRouter.setSelectionMode(appSelectionModeToViewport(summary.mode == mode ? summary.mode : mode));
     return summary.mode == mode ? summary : ModelingSelectionSummary{
             .mode = mode,
             .hasSelection = !document.selectedEntities().empty(),
@@ -224,7 +209,7 @@ ModelingSelectionSummary ViewportSelectionController::pickSelection(
                 .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
                 .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
         });
-        inputRouter.setSelectionMode(toViewportSelectionMode(summary.mode));
+        inputRouter.setSelectionMode(appSelectionModeToViewport(summary.mode));
         return summary;
     }
 

@@ -1,6 +1,7 @@
 #include "modeling/ModelingActionCatalog.h"
 
 #include "modeling/ModelingSessionService.h"
+#include "modeling/SelectionModeAdapter.h"
 
 #include <algorithm>
 #include <sstream>
@@ -92,22 +93,6 @@ void appendEditActions(
 
 #if QUADER_HAS_MODELING_SDK
 
-quader_host_contract::HostSelectionMode toHostMode(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return quader_host_contract::HostSelectionMode::vertex;
-    case ModelingSelectionMode::Edge:
-        return quader_host_contract::HostSelectionMode::edge;
-    case ModelingSelectionMode::Face:
-        return quader_host_contract::HostSelectionMode::face;
-    case ModelingSelectionMode::Object:
-        return quader_host_contract::HostSelectionMode::object;
-    case ModelingSelectionMode::Group:
-        return quader_host_contract::HostSelectionMode::object;
-    }
-    return quader_host_contract::HostSelectionMode::object;
-}
-
 quader_host_contract::HostActiveSelectionKind toHostActiveKind(ModelingActiveSelectionKind kind) {
     switch (kind) {
     case ModelingActiveSelectionKind::Object:
@@ -150,7 +135,7 @@ ModelingActionPreviewKind fromHostPreview(quader_host_contract::HostPreviewKind 
 }
 
 const quader_host_contract::HostOperationPanelDescriptor* panelForMode(ModelingSelectionMode mode) {
-    const quader_host_contract::HostSelectionMode hostMode = toHostMode(mode);
+    const quader_host_contract::HostSelectionMode hostMode = appSelectionModeToHostContract(mode);
     for (const quader_host_contract::HostOperationPanelDescriptor& panel : quader_host_contract::operation_panel_catalog()) {
         if (panel.selection_mode == hostMode) {
             return &panel;
@@ -179,7 +164,7 @@ ModelingActionVisibility evaluateAvailability(
         const ModelingSelectionSummary& summary,
         const quader_host_contract::HostActionAvailabilityDescriptor& availability,
         std::string& disabledReason) {
-    if (availability.selection_mode != toHostMode(summary.mode)) {
+    if (availability.selection_mode != appSelectionModeToHostContract(summary.mode)) {
         return ModelingActionVisibility::Hidden;
     }
     if (summary.selectedVertexCount < availability.minimum_selected_vertices) {
@@ -270,7 +255,7 @@ ModelingActionSet ModelingActionCatalog::actionSetFor(
         ModelingActionPanel panel;
         panel.panelId = "viewport_context_menu";
         panel.label = "Context Actions";
-        panel.selectionModeId = selectionModeId(toHostMode(summary.mode));
+        panel.selectionModeId = selectionModeId(appSelectionModeToHostContract(summary.mode));
         panel.visibility = ModelingActionVisibility::Enabled;
 
         if (const quader_host_contract::HostOperationPanelDescriptor* hostPanel = panelForMode(summary.mode)) {
@@ -283,7 +268,7 @@ ModelingActionSet ModelingActionCatalog::actionSetFor(
         return result;
     }
 
-    const quader_host_contract::HostSelectionMode activeMode = toHostMode(summary.mode);
+    const quader_host_contract::HostSelectionMode activeMode = appSelectionModeToHostContract(summary.mode);
     for (const quader_host_contract::HostOperationPanelDescriptor& hostPanel :
             quader_host_contract::operation_panel_catalog()) {
         const bool activePanel = hostPanel.selection_mode == activeMode;

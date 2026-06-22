@@ -105,6 +105,35 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
     EXPECT_FALSE(readSourceFile("resources/locales/it-IT.lang").empty());
 }
 
+TEST(BuildGuardrailTests, EditorAggregateStaysInRuntimeTarget) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+
+    const std::size_t apiTarget = rootCMake.find("add_library(quader_api STATIC");
+    const std::size_t runtimeTarget = rootCMake.find("add_library(quader_runtime STATIC");
+    const std::size_t editorApiSource = rootCMake.find("src/api/QuaderEditorApi.cpp");
+    const std::size_t renderApiSource = rootCMake.find("src/api/QuaderRenderApi.cpp");
+
+    ASSERT_NE(apiTarget, std::string::npos);
+    ASSERT_NE(runtimeTarget, std::string::npos);
+    ASSERT_NE(editorApiSource, std::string::npos);
+    ASSERT_NE(renderApiSource, std::string::npos);
+    EXPECT_GT(editorApiSource, runtimeTarget);
+    EXPECT_LT(editorApiSource, renderApiSource);
+    EXPECT_GT(editorApiSource, apiTarget);
+}
+
+TEST(DependencyLicenseGuardrailTests, LuaDependenciesRequireExplicitDecision) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string manifest = readSourceFile("vcpkg.json");
+
+    for (const std::string& needle : {"find_package(Lua", "find_package(sol2", "lua::", "Lua::", "sol2::"}) {
+        EXPECT_EQ(rootCMake.find(needle), std::string::npos) << needle;
+    }
+    for (const std::string& needle : {"\"lua\"", "\"lua54\"", "\"luajit\"", "\"sol2\""}) {
+        EXPECT_EQ(manifest.find(needle), std::string::npos) << needle;
+    }
+}
+
 TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
     const std::string mainSource = readSourceFile("src/main.cpp");
     const std::string appHeader = readSourceFile("src/app/App.h");

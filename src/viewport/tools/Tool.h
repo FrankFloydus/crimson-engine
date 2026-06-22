@@ -71,6 +71,7 @@ struct ViewportToolResult {
     bool consumed = false;
     bool modalStateChanged = false;
     bool activeToolChanged = false;
+    bool syncActiveToolFromModeling = false;
     bool selectionModeChanged = false;
 };
 

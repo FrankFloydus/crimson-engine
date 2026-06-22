@@ -496,6 +496,7 @@ public:
     [[nodiscard]] std::optional<Vec3> selectionCenter() const;
     [[nodiscard]] ModelingSelectionMode selectionMode() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
+    [[nodiscard]] std::uint64_t selectionOverlaySignature() const;
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const;
     [[nodiscard]] bool canUndo() const;

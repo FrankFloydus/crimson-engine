@@ -1,6 +1,7 @@
 #include "viewport/tools/base/DrawnPlaneTool.h"
 
 #include "core/Logger.h"
+#include "modeling/SelectionModeAdapter.h"
 
 namespace quader {
 namespace {
@@ -11,28 +12,9 @@ void handleResult(ViewportToolContext& context, std::string_view label, const Mo
     }
 }
 
-ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return ViewportSelectionMode::Vertex;
-    case ModelingSelectionMode::Edge:
-        return ViewportSelectionMode::Edge;
-    case ModelingSelectionMode::Face:
-        return ViewportSelectionMode::Face;
-    case ModelingSelectionMode::Object:
-        return ViewportSelectionMode::Object;
-    case ModelingSelectionMode::Group:
-        return ViewportSelectionMode::Group;
-    }
-    return ViewportSelectionMode::Object;
-}
-
 void finishDrawnPlaneTool(ViewportToolContext& context) {
-    if (context.setActiveTool) {
-        context.setActiveTool(ViewportToolId::Select);
-    }
     if (context.setSelectionMode) {
-        context.setSelectionMode(toViewportSelectionMode(context.modeling.selectionSummary().mode));
+        context.setSelectionMode(appSelectionModeToViewport(context.modeling.selectionSummary().mode));
     }
 }
 
@@ -93,6 +75,7 @@ ViewportToolResult DrawnPlaneTool::handleEvent(
         if (pointer.modeCyclePressed) {
             handleResult(context, "Cut mode", context.modeling.cycleCutMode());
         }
+        bool committed = false;
         if (pointer.finalizePressed) {
             const ModelingToolStatus status = context.modeling.toolStatus();
             if (status.cutDragging) {
@@ -104,13 +87,15 @@ ViewportToolResult DrawnPlaneTool::handleEvent(
                 handleResult(context, "Cut commit", command);
                 if (command.ok) {
                     finishDrawnPlaneTool(context);
+                    committed = true;
                 }
             }
         }
         return {
                 .handled = true,
                 .modalStateChanged = true,
-                .activeToolChanged = pointer.finalizePressed,
+                .activeToolChanged = committed,
+                .syncActiveToolFromModeling = committed,
         };
     }
 
@@ -156,6 +141,7 @@ ViewportToolResult DrawnPlaneTool::handleEvent(
             handleResult(context, "Mirror drag end", command);
             context.modalState->mirrorDragActive = false;
         }
+        bool committed = false;
         if (pointer.finalizePressed) {
             const ModelingToolStatus status = context.modeling.toolStatus();
             if (status.mirrorDragging) {
@@ -167,13 +153,15 @@ ViewportToolResult DrawnPlaneTool::handleEvent(
                 handleResult(context, "Mirror commit", command);
                 if (command.ok) {
                     finishDrawnPlaneTool(context);
+                    committed = true;
                 }
             }
         }
         return {
                 .handled = true,
                 .modalStateChanged = true,
-                .activeToolChanged = pointer.finalizePressed,
+                .activeToolChanged = committed,
+                .syncActiveToolFromModeling = committed,
         };
     }
 

@@ -189,6 +189,7 @@ public:
     void reset();
     void setActiveTool(ViewportToolId tool);
     void setSelectionMode(ViewportSelectionMode mode);
+    void setGridPreset(int preset);
     void setMaximized(bool maximized);
     bool activeToolOwnsViewport() const;
     bool activeToolBlocksViewportFocusShortcuts() const;

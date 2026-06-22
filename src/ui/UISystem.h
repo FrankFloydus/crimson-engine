@@ -31,6 +31,7 @@
 
 namespace quader {
 
+class QuaderEditorApi;
 class TextureRegistry;
 
 class UISystem {
@@ -42,7 +43,8 @@ public:
 
     bool processEvent(const SDL_Event& event);
     void beginFrame();
-    void draw(SceneRenderBridge& renderBridge,
+    void draw(QuaderEditorApi& editor,
+            SceneRenderBridge& renderBridge,
             SceneDocument& document,
             AssetRegistry& assets,
             UndoRedoManager& undoRedo,
@@ -59,6 +61,7 @@ public:
 private:
     void registerPanels(RenderSystem& renderSystem);
     void drawDockspace(
+            QuaderEditorApi& editor,
             bool& quitRequested,
             SceneDocument& document,
             DocumentCommandService& documentCommands,

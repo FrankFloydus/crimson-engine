@@ -242,6 +242,10 @@ void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
     state_.selectionMode = mode;
 }
 
+void ViewportInputRouter::setGridPreset(int preset) {
+    state_.gridPreset = preset;
+}
+
 void ViewportInputRouter::setMaximized(bool maximized) {
     state_.maximized = maximized;
 }

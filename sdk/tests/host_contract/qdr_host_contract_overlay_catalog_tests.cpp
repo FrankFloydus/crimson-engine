@@ -3,6 +3,7 @@
 #include <quader_editor_core/session.h>
 #include <quader_host_contract/host_contract.h>
 
+#include <array>
 #include <string_view>
 
 namespace qhc = quader_host_contract;
@@ -13,6 +14,27 @@ namespace {
 bool same_text(std::string_view left, std::string_view right)
 {
 	return left == right;
+}
+
+std::size_t layer_id_count(std::span<const std::string_view> ids, std::string_view id)
+{
+	std::size_t count = 0;
+	for (const std::string_view candidate : ids) {
+		if (candidate == id) {
+			++count;
+		}
+	}
+	return count;
+}
+
+bool catalog_contains_layer_id(std::span<const qhc::HostOverlayLayerDescriptor> layers, std::string_view id)
+{
+	for (const qhc::HostOverlayLayerDescriptor& layer : layers) {
+		if (layer.id == id) {
+			return true;
+		}
+	}
+	return false;
 }
 
 const qhc::HostOverlayLayerDescriptor& require_layer(qec::SelectionOverlayLayer layer)
@@ -95,4 +117,46 @@ TEST_CASE("host contract overlay layer catalog states render-depth semantics", "
 	const qhc::HostOverlayLayerDescriptor& hover_face = require_layer(qec::SelectionOverlayLayer::hover_face);
 	CHECK(hover_face.triangles);
 	CHECK(hover_face.depth_tested_by_default);
+}
+
+TEST_CASE("host contract overlay presentation exposes the Unity layer draw order", "[host-contract]")
+{
+	const std::span<const std::string_view> ids = qhc::overlay_presentation().draw_order_layer_ids;
+	static constexpr std::array<std::string_view, 15> expected {{
+		"selected_visible_face",
+		"selected_face_mask",
+		"source_wire",
+		"selected_xray_face",
+		"hover_face",
+		"open_edge",
+		"diagnostic_edge",
+		"selected_face_edge",
+		"selected_edge",
+		"hover_face_edge",
+		"hover_edge",
+		"unselected_vertex",
+		"selected_vertex",
+		"hover_vertex",
+		"snap_target_vertex",
+	}};
+
+	REQUIRE(ids.size() == expected.size());
+	for (std::size_t index = 0; index < expected.size(); ++index) {
+		CHECK(ids[index] == expected[index]);
+	}
+}
+
+TEST_CASE("host contract overlay draw order covers each catalog layer exactly once", "[host-contract]")
+{
+	const std::span<const qhc::HostOverlayLayerDescriptor> layers = qhc::overlay_layer_catalog();
+	const std::span<const std::string_view> ids = qhc::overlay_presentation().draw_order_layer_ids;
+
+	REQUIRE(ids.size() == layers.size());
+	for (const qhc::HostOverlayLayerDescriptor& layer : layers) {
+		CHECK(layer.stable_index >= 0);
+		CHECK(layer_id_count(ids, layer.id) == 1U);
+	}
+	for (const std::string_view id : ids) {
+		CHECK(catalog_contains_layer_id(layers, id));
+	}
 }

@@ -36,6 +36,8 @@ bool ViewportHoverWorkKey::matches(const ViewportHoverWorkKey& other) const {
             shiftModifier == other.shiftModifier &&
             altModifier == other.altModifier &&
             gizmoConsumed == other.gizmoConsumed &&
+            vertexRadius == other.vertexRadius &&
+            edgeRadius == other.edgeRadius &&
             sceneRevision == other.sceneRevision &&
             assetRevision == other.assetRevision &&
             contentRevision == other.contentRevision &&
@@ -68,6 +70,8 @@ ViewportHoverWorkKey ViewportHoverController::makeKey(
             .shiftModifier = request.modifiers.shift,
             .altModifier = request.modifiers.alt,
             .gizmoConsumed = request.gizmoConsumed,
+            .vertexRadius = request.vertexRadius,
+            .edgeRadius = request.edgeRadius,
             .sceneRevision = request.sceneRevision,
             .assetRevision = request.assetRevision,
             .contentRevision = request.contentRevision,

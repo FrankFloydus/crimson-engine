@@ -12,7 +12,7 @@ struct ViewportPaneOverlayCacheKey {
     std::uint64_t selectionRevision = 0;
     std::uint64_t sceneRevision = 0;
     std::uint64_t assetRevision = 0;
-    std::uint64_t toolSignature = 0;
+    std::uint64_t overlaySignature = 0;
     ModelingSelectionMode selectionMode = ModelingSelectionMode::Object;
 };
 

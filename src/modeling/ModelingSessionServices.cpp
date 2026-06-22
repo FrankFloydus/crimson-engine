@@ -78,6 +78,10 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, std::uint32_t value) {
     return mixPickGeometryHash(hash, static_cast<std::uint64_t>(value));
 }
 
+std::uint64_t mixPickGeometryHash(std::uint64_t hash, bool value) {
+    return mixPickGeometryHash(hash, value ? 1ull : 0ull);
+}
+
 std::uint64_t mixPickGeometryHash(std::uint64_t hash, float value) {
     std::uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
@@ -94,8 +98,12 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader_poly::Vec3 value) {
 std::uint64_t objectPickFaceGeometrySignature(
         const quader_editor_core::PolygonObject& object,
         quader_poly::PickOptions pickOptions = {}) {
-    (void)pickOptions;
     std::uint64_t hash = mixPickGeometryHash(kPickGeometryHashSeed, object.id);
+    hash = mixPickGeometryHash(hash, static_cast<int>(pickOptions.mode));
+    hash = mixPickGeometryHash(hash, pickOptions.vertex_radius);
+    hash = mixPickGeometryHash(hash, pickOptions.edge_radius);
+    hash = mixPickGeometryHash(hash, pickOptions.has_hidden_material_slot);
+    hash = mixPickGeometryHash(hash, pickOptions.hidden_material_slot);
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.faces.size()));
     for (const quader_poly::Vertex& vertex : object.document.vertices) {
@@ -720,14 +728,14 @@ bool SelectionOverlayCache::matches(
         std::uint64_t selectionRevision,
         std::uint64_t sceneRevision,
         quader_editor_core::SelectionMode selectionMode,
-        std::uint64_t toolSignature,
+        std::uint64_t overlaySignature,
         const quader_editor_core::SelectionHoverState& hover) const {
     return valid_ &&
             contentRevision_ == contentRevision &&
             selectionRevision_ == selectionRevision &&
             sceneRevision_ == sceneRevision &&
             selectionMode_ == selectionMode &&
-            toolSignature_ == toolSignature &&
+            overlaySignature_ == overlaySignature &&
             hoverMatches(hover_, hover);
 }
 
@@ -741,14 +749,14 @@ void SelectionOverlayCache::store(
         std::uint64_t selectionRevision,
         std::uint64_t sceneRevision,
         quader_editor_core::SelectionMode selectionMode,
-        std::uint64_t toolSignature,
+        std::uint64_t overlaySignature,
         const quader_editor_core::SelectionHoverState& hover) const {
     frame_ = std::move(frame);
     contentRevision_ = contentRevision;
     selectionRevision_ = selectionRevision;
     sceneRevision_ = sceneRevision;
     selectionMode_ = selectionMode;
-    toolSignature_ = toolSignature;
+    overlaySignature_ = overlaySignature;
     hover_ = hover;
     valid_ = true;
 }
@@ -770,14 +778,14 @@ bool ModelingOverlayService::selectionFrameMatches(
         std::uint64_t selectionRevision,
         std::uint64_t sceneRevision,
         quader_editor_core::SelectionMode selectionMode,
-        std::uint64_t toolSignature,
+        std::uint64_t overlaySignature,
         const quader_editor_core::SelectionHoverState& hover) const {
     return selectionOverlayCache_.matches(
             contentRevision,
             selectionRevision,
             sceneRevision,
             selectionMode,
-            toolSignature,
+            overlaySignature,
             hover);
 }
 
@@ -791,7 +799,7 @@ void ModelingOverlayService::storeSelectionFrame(
         std::uint64_t selectionRevision,
         std::uint64_t sceneRevision,
         quader_editor_core::SelectionMode selectionMode,
-        std::uint64_t toolSignature,
+        std::uint64_t overlaySignature,
         const quader_editor_core::SelectionHoverState& hover) const {
     selectionOverlayCache_.store(
             std::move(frame),
@@ -799,7 +807,7 @@ void ModelingOverlayService::storeSelectionFrame(
             selectionRevision,
             sceneRevision,
             selectionMode,
-            toolSignature,
+            overlaySignature,
             hover);
 }
 

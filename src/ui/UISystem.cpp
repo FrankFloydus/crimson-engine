@@ -1,5 +1,6 @@
 #include "ui/UISystem.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
 #include "render/FilamentBufferDescriptorFactory.h"
 #include "ui/ConsolePanel.h"
@@ -20,6 +21,7 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -66,6 +68,33 @@ void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
         return;
     }
     clampDockLeafNodeWidth(window->DockNode, minimumWidth);
+}
+
+std::optional<UIPanelId> panelIdFromName(std::string_view name) {
+    for (const UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
+        if (name == uiPanelKey(id)) {
+            return id;
+        }
+    }
+    return std::nullopt;
+}
+
+QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) {
+    return {
+            .ok = true,
+            .changed = changed,
+            .message = std::move(message),
+            .mutationKind = changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
+    };
+}
+
+QuaderApiVoidResult runtimeFailure(std::string message) {
+    return {
+            .ok = false,
+            .changed = false,
+            .message = std::move(message),
+            .mutationKind = QuaderMutationKind::None,
+    };
 }
 
 } // namespace
@@ -156,7 +185,8 @@ void UISystem::beginFrame() {
     ImGui::NewFrame();
 }
 
-void UISystem::draw(SceneRenderBridge& renderBridge,
+void UISystem::draw(QuaderEditorApi& editor,
+        SceneRenderBridge& renderBridge,
         SceneDocument& document,
         AssetRegistry& assets,
         UndoRedoManager& undoRedo,
@@ -164,7 +194,114 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
         ModelingSessionService& modeling,
         AssetId defaultMaterial,
         bool& quitRequested) {
-    drawDockspace(quitRequested, document, documentCommands, modeling);
+    editor.ui().setRuntimeHooks(QuaderUIRuntimeHooks{
+            .isPanelVisible = [this](std::string_view panel) {
+                const std::optional<UIPanelId> id = panelIdFromName(panel);
+                return id.has_value() && panels_.isVisible(*id);
+            },
+            .setPanelVisible = [this](std::string_view panel, bool visible) {
+                const std::optional<UIPanelId> id = panelIdFromName(panel);
+                if (!id.has_value()) {
+                    return runtimeFailure("Unknown UI panel.");
+                }
+                const bool before = panels_.isVisible(*id);
+                panels_.setVisible(*id, visible);
+                if (before != visible) {
+                    saveSettings();
+                }
+                return runtimeStatus(before != visible);
+            },
+            .focusPanel = [this](std::string_view panel) {
+                const std::optional<UIPanelId> id = panelIdFromName(panel);
+                if (!id.has_value()) {
+                    return runtimeFailure("Unknown UI panel.");
+                }
+                focusedPanel_ = *id;
+                return runtimeStatus(true);
+            },
+    });
+    editor.preferences().setRuntimeHooks(QuaderPreferencesRuntimeHooks{
+            .locale = [this]() {
+                return settings_.locale();
+            },
+            .setLocale = [this](std::string locale) {
+                if (!localization_.selectLocale(locale)) {
+                    return runtimeFailure("Unknown locale.");
+                }
+                const bool changed = settings_.locale() != localization_.currentLocale();
+                settings_.setLocale(localization_.currentLocale());
+                if (changed) {
+                    saveSettings();
+                }
+                return runtimeStatus(changed);
+            },
+            .save = [this]() {
+                saveSettings();
+                saveViewportSettings();
+                return runtimeStatus(false, "Preferences saved.");
+            },
+            .navigationGizmoVisible = [this]() {
+                return viewportPanel_ != nullptr && viewportPanel_->navigationGizmoVisible();
+            },
+            .setNavigationGizmoVisible = [this](bool visible) {
+                if (viewportPanel_ == nullptr) {
+                    return runtimeFailure("Viewport panel is not available.");
+                }
+                const bool before = viewportPanel_->navigationGizmoVisible();
+                viewportPanel_->setNavigationGizmoVisible(visible);
+                settings_.setNavigationGizmoVisible(visible);
+                saveSettings();
+                return runtimeStatus(before != visible);
+            },
+    });
+    editor.viewports().setRuntimeHooks(QuaderViewportRuntimeHooks{
+            .layout = [this]() {
+                return viewportPanel_ != nullptr ? viewportPanel_->viewportLayout() : ViewportLayoutId::Single;
+            },
+            .setLayout = [this](ViewportLayoutId layout) {
+                if (viewportPanel_ == nullptr) {
+                    return runtimeFailure("Viewport panel is not available.");
+                }
+                const bool changed = viewportPanel_->viewportLayout() != layout;
+                viewportPanel_->setViewportLayout(layout);
+                return runtimeStatus(changed);
+            },
+            .gridPreset = [this]() {
+                return viewportPanel_ != nullptr ? viewportPanel_->gridPreset() : 0;
+            },
+            .setGridPreset = [this](int preset) {
+                if (viewportPanel_ == nullptr) {
+                    return runtimeFailure("Viewport panel is not available.");
+                }
+                const bool changed = viewportPanel_->gridPreset() != preset;
+                viewportPanel_->setGridPreset(preset);
+                return runtimeStatus(changed);
+            },
+            .shadingMode = [this](ViewportPaneId pane) {
+                return viewportPanel_ != nullptr ? viewportPanel_->paneShadingMode(pane) : QuaderShadingMode::Solid;
+            },
+            .setShadingMode = [this](ViewportPaneId pane, QuaderShadingMode mode) {
+                if (viewportPanel_ == nullptr) {
+                    return runtimeFailure("Viewport panel is not available.");
+                }
+                const bool changed = viewportPanel_->paneShadingMode(pane) != mode;
+                viewportPanel_->setPaneShadingMode(pane, mode);
+                return runtimeStatus(changed);
+            },
+            .view = [this](ViewportPaneId pane) {
+                return viewportPanel_ != nullptr ? viewportPanel_->paneView(pane) : viewportViewForPane(pane);
+            },
+            .setView = [this](ViewportPaneId pane, ViewportView view) {
+                if (viewportPanel_ == nullptr) {
+                    return runtimeFailure("Viewport panel is not available.");
+                }
+                const bool changed = viewportPanel_->paneView(pane) != view;
+                viewportPanel_->setPaneView(pane, view);
+                return runtimeStatus(changed);
+            },
+    });
+
+    drawDockspace(editor, quitRequested, document, documentCommands, modeling);
 
     bool viewportCursorCaptureRequested = false;
     Vec2 viewportCursorCapturePoint = {};
@@ -172,6 +309,7 @@ void UISystem::draw(SceneRenderBridge& renderBridge,
     bool panelFocusChanged = false;
     bool settingsChanged = false;
     UIContext context{
+            .editor = editor,
             .renderBridge = renderBridge,
             .document = document,
             .assets = assets,
@@ -256,6 +394,7 @@ void UISystem::registerPanels(RenderSystem& renderSystem) {
 }
 
 void UISystem::drawDockspace(
+        QuaderEditorApi& editor,
         bool& quitRequested,
         SceneDocument& document,
         DocumentCommandService& documentCommands,
@@ -277,6 +416,7 @@ void UISystem::drawDockspace(
 
     const MainMenuBarResult menuResult = mainMenuBar_.draw({
             .quitRequested = quitRequested,
+            .editor = editor,
             .document = document,
             .documentCommands = documentCommands,
             .modeling = modeling,

@@ -179,8 +179,11 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
 
     EXPECT_TRUE(result.handled);
     EXPECT_TRUE(result.consumed);
-    EXPECT_TRUE(changedTool);
-    EXPECT_EQ(state.activeTool, ViewportToolId::Move);
+    EXPECT_TRUE(result.syncActiveToolFromModeling);
+    EXPECT_FALSE(changedTool);
+    EXPECT_EQ(state.activeTool, ViewportToolId::Select);
+    ASSERT_NE(runtime.activeTool(), nullptr);
+    EXPECT_EQ(runtime.activeTool()->viewportTool(), ViewportToolId::Select);
 }
 
 TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {

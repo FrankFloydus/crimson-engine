@@ -28,9 +28,6 @@ ViewportToolResult ModalViewportTool::cancelActiveModalTool(
         context.modalState->cutDragActive = false;
         context.modalState->mirrorDragActive = false;
     }
-    if (exitTool && context.setActiveTool) {
-        context.setActiveTool(ViewportToolId::Move);
-    }
     if (context.invalidateHover) {
         context.invalidateHover();
     }
@@ -42,6 +39,7 @@ ViewportToolResult ModalViewportTool::cancelActiveModalTool(
             .consumed = true,
             .modalStateChanged = true,
             .activeToolChanged = exitTool,
+            .syncActiveToolFromModeling = exitTool,
     };
 }
 

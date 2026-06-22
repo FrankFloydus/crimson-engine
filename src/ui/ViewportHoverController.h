@@ -33,6 +33,8 @@ struct ViewportHoverWorkKey {
     bool shiftModifier = false;
     bool altModifier = false;
     bool gizmoConsumed = false;
+    double vertexRadius = 0.3;
+    double edgeRadius = 0.2;
     std::uint64_t sceneRevision = 0;
     std::uint64_t assetRevision = 0;
     std::uint64_t contentRevision = 0;
@@ -51,6 +53,8 @@ struct ViewportHoverWorkRequest {
     Vec2 viewportSize = {};
     ViewportModifiers modifiers = {};
     bool gizmoConsumed = false;
+    double vertexRadius = 0.3;
+    double edgeRadius = 0.2;
     std::uint64_t sceneRevision = 0;
     std::uint64_t assetRevision = 0;
     std::uint64_t contentRevision = 0;

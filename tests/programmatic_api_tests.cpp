@@ -43,6 +43,68 @@ TEST(ProgrammaticApiTests, InvalidToolIdReturnsFailedUnchangedStatus) {
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.changed);
     EXPECT_FALSE(result.message.empty());
+    EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
+#endif
+}
+
+TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
+#if !QUADER_TEST_HAS_PROGRAMMATIC_API
+    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
+#else
+    quader::ProjectSession session;
+    quader::QuaderApi api(session);
+
+    quader::QuaderCreateEntityArgs args;
+    args.name = "Document Entity";
+
+    const quader::QuaderApiResult<quader::QuaderEntityRef> created = api.scene().createEntity(args);
+    ASSERT_TRUE(created.ok) << created.message;
+    ASSERT_TRUE(created.changed);
+    EXPECT_EQ(created.mutationKind, quader::QuaderMutationKind::Document);
+
+    const quader::QuaderApiVoidResult unchanged = api.scene().rename(created.value.id, args.name);
+    EXPECT_TRUE(unchanged.ok) << unchanged.message;
+    EXPECT_FALSE(unchanged.changed);
+    EXPECT_EQ(unchanged.mutationKind, quader::QuaderMutationKind::None);
+
+    const quader::QuaderApiVoidResult failed = api.scene().rename(quader::InvalidEntityId, "Missing");
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(failed.mutationKind, quader::QuaderMutationKind::None);
+#endif
+}
+
+TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
+#if !QUADER_TEST_HAS_PROGRAMMATIC_API
+    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
+#else
+    quader::ProjectSession session;
+    quader::QuaderApi api(session);
+
+    const quader::QuaderApiVoidResult unchanged = api.modeling().updatePreview({});
+    EXPECT_TRUE(unchanged.ok) << unchanged.message;
+    EXPECT_FALSE(unchanged.changed);
+    EXPECT_EQ(unchanged.mutationKind, quader::QuaderMutationKind::None);
+
+    const quader::QuaderApiVoidResult failed = api.modeling().executeTool("__missing_tool__");
+    EXPECT_FALSE(failed.ok);
+    EXPECT_FALSE(failed.changed);
+    EXPECT_EQ(failed.mutationKind, quader::QuaderMutationKind::None);
+#endif
+}
+
+TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
+#if !QUADER_TEST_HAS_PROGRAMMATIC_API
+    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
+#else
+    quader::ProjectSession session;
+    quader::QuaderApi api(session);
+
+    const quader::QuaderApiVoidResult result = api.history().undo();
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
 #endif
 }
 

@@ -1,0 +1,50 @@
+#include "api/QuaderPreferencesApi.h"
+
+#include <utility>
+
+namespace quader {
+
+QuaderPreferencesApi::QuaderPreferencesApi() = default;
+
+void QuaderPreferencesApi::setRuntimeHooks(QuaderPreferencesRuntimeHooks hooks) {
+    hooks_ = std::move(hooks);
+}
+
+std::string QuaderPreferencesApi::locale() const {
+    return hooks_.locale ? hooks_.locale() : std::string{};
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::setLocale(std::string locale) {
+    return hooks_.setLocale ? hooks_.setLocale(std::move(locale)) : unavailable("Preferences runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::setShortcut(std::string_view commandId, std::string shortcut) {
+    (void)commandId;
+    (void)shortcut;
+    return unavailable("Shortcut persistence is not implemented until the keybind service exists.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::setNavigationGizmoVisible(bool visible) {
+    return hooks_.setNavigationGizmoVisible ?
+            hooks_.setNavigationGizmoVisible(visible) :
+            unavailable("Preferences runtime is not attached.");
+}
+
+bool QuaderPreferencesApi::navigationGizmoVisible() const {
+    return hooks_.navigationGizmoVisible ? hooks_.navigationGizmoVisible() : false;
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::save() {
+    return hooks_.save ? hooks_.save() : unavailable("Preferences runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::unavailable(std::string message) const {
+    return {
+            .ok = false,
+            .changed = false,
+            .message = std::move(message),
+            .mutationKind = QuaderMutationKind::None,
+    };
+}
+
+} // namespace quader

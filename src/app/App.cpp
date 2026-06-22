@@ -1,5 +1,6 @@
 #include "app/App.h"
 
+#include "api/QuaderEditorApi.h"
 #include "assets/MaterialDocument.h"
 #include "core/Logger.h"
 
@@ -8,6 +9,9 @@
 #include <utility>
 
 namespace quader {
+
+App::App() = default;
+App::~App() = default;
 
 bool App::initialize(const std::filesystem::path& executablePath, AppOptions options) {
     const std::filesystem::path executableDir = executablePath.parent_path();
@@ -36,6 +40,7 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     LOG_INFO("UI system initialized");
 
     createStartupScene();
+    editor_ = std::make_unique<QuaderEditorApi>(projectSession_);
 
     running_ = true;
     return true;
@@ -59,7 +64,8 @@ int App::run() {
 
         ui_.beginFrame();
         bool quitRequested = false;
-        ui_.draw(renderBridge_,
+        ui_.draw(*editor_,
+                renderBridge_,
                 projectSession_.scene(),
                 projectSession_.assets(),
                 projectSession_.undoRedo(),
@@ -70,7 +76,7 @@ int App::run() {
         if (quitRequested) {
             running_ = false;
         }
-        renderBridge_.sync(projectSession_.scene(), projectSession_.assets());
+        (void)editor_->render().syncScene(renderBridge_);
 
         window_.refreshPixelSize();
         ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
@@ -90,6 +96,7 @@ int App::run() {
 
 void App::shutdown() {
     ui_.shutdown();
+    editor_.reset();
     renderBridge_.shutdown();
     renderSystem_.shutdown();
     window_.destroy();

@@ -25,10 +25,11 @@ public:
     QuaderApiVoidResult setVisibility(std::span<const DocumentVisibilityEdit> edits);
     QuaderApiVoidResult setLocked(EntityId entity, bool locked);
     QuaderApiVoidResult setLocks(std::span<const DocumentLockEdit> edits);
+    QuaderApiVoidResult setMeshComponent(EntityId entity, MeshComponent mesh);
     QuaderApiVoidResult select(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
 
     QuaderApiResult<QuaderEntityRef> duplicate(EntityId entity);
-    QuaderApiResult<QuaderEntityRef> groupSelection(std::string groupName = {});
+    QuaderApiResult<QuaderEntityRef> groupSelection(std::string groupName = {}, TransformComponent transform = {});
     QuaderApiVoidResult ungroupSelection();
 
 private:

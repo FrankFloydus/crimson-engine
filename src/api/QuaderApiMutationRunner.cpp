@@ -9,6 +9,13 @@
 #include <utility>
 
 namespace quader {
+namespace {
+
+QuaderMutationKind changedMutationKind(bool ok, bool changed, QuaderMutationKind kind) {
+    return ok && changed ? kind : QuaderMutationKind::None;
+}
+
+} // namespace
 
 QuaderApiMutationRunner::QuaderApiMutationRunner(
         ProjectSession& session,
@@ -144,7 +151,7 @@ QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
             .ok = result.ok,
             .changed = result.changed,
             .message = result.message.empty() ? std::string(fallbackMessage) : std::move(result.message),
-            .mutationKind = kind,
+            .mutationKind = changedMutationKind(result.ok, result.changed, kind),
             .revisions = currentRevisions(),
     };
 }
@@ -157,7 +164,7 @@ QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
             .ok = result.ok,
             .changed = result.changed,
             .message = result.message.empty() ? std::string(fallbackMessage) : std::move(result.message),
-            .mutationKind = kind,
+            .mutationKind = changedMutationKind(result.ok, result.changed, kind),
             .revisions = currentRevisions(),
     };
 }

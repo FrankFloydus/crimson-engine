@@ -5,7 +5,7 @@
 
 namespace quader {
 
-class UndoRedoManager;
+class QuaderEditorApi;
 
 struct ViewportShortcutControllerResult {
     bool consumed = false;
@@ -20,12 +20,12 @@ public:
             const ViewportInputResult& inputResult,
             const ModelingToolSettingsTarget& toolSettingsTarget,
             ViewportInputRouter& inputRouter,
-            UndoRedoManager& undoRedo,
+            QuaderEditorApi& editor,
             ModelingSessionService& modeling) const;
 
     [[nodiscard]] ViewportShortcutControllerResult handleModelingShortcut(
             const ViewportInputResult& inputResult,
-            UndoRedoManager& undoRedo,
+            QuaderEditorApi& editor,
             ModelingSessionService& modeling) const;
 };
 

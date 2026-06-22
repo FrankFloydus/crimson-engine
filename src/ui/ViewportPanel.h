@@ -39,6 +39,8 @@ namespace quader {
 
 class RenderSystem;
 class LocalizationService;
+class QuaderEditorApi;
+enum class QuaderShadingMode;
 
 enum class ViewportShadingMode {
     Wireframe,
@@ -61,8 +63,15 @@ public:
     void prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets);
     void renderViewports(filament::Renderer& renderer);
     void setViewportLayout(ViewportLayoutId layoutId);
+    int gridPreset() const { return inputRouter_.state().gridPreset; }
+    void setGridPreset(int preset) { inputRouter_.setGridPreset(preset); }
+    QuaderShadingMode paneShadingMode(ViewportPaneId paneId) const;
+    void setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode);
+    ViewportView paneView(ViewportPaneId paneId) const;
+    void setPaneView(ViewportPaneId paneId, ViewportView view);
     bool activateToolFromMenu(
             ViewportToolId tool,
+            QuaderEditorApi& editor,
             SceneDocument& document,
             DocumentCommandService& documentCommands,
             ModelingSessionService& modeling);

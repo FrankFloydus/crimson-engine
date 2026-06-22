@@ -1,8 +1,7 @@
 #include "ui/ViewportShortcutController.h"
 
+#include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "core/UndoRedoManager.h"
-#include "editor/ModelingPreviewCommandService.h"
 #include "modeling/tools/ModelingCommandToolCatalog.h"
 
 #include <optional>
@@ -24,79 +23,46 @@ ModelingMirrorAxis viewportMirrorAxisToModeling(ViewportMirrorAxis axis) {
     return ModelingMirrorAxis::X;
 }
 
-ModelingCommandResult executeCommandTool(
-        ModelingSessionService& modeling,
-        std::string_view toolId) {
-    const CommandTool* tool = findModelingCommandTool(toolId);
-    if (tool == nullptr) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = "Command tool is not registered.",
-        };
-    }
-    return tool->execute(modeling);
-}
-
-std::optional<ModelingCommandResult> executeViewportModelingShortcut(
-        UndoRedoManager& undoRedo,
-        ModelingSessionService& modeling,
+std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
+        QuaderEditorApi& editor,
         const ViewportShortcut& shortcut) {
     switch (shortcut.kind) {
     case ViewportShortcutKind::DeleteSelection:
-        return executeCommandTool(modeling, "delete_selection");
+        return editor.commands().execute("modeling.delete_selection");
     case ViewportShortcutKind::SelectAll:
-        return executeCommandTool(modeling, "select_all");
+        return editor.commands().execute("selection.select_all");
     case ViewportShortcutKind::InvertSelection:
-        return executeCommandTool(modeling, "invert_selection");
+        return editor.commands().execute("selection.invert");
     case ViewportShortcutKind::Copy:
-        return executeCommandTool(modeling, "copy_selection");
+        return editor.commands().execute("modeling.copy_selection");
     case ViewportShortcutKind::Paste:
-        return executeCommandTool(modeling, "paste_selection");
+        return editor.commands().execute("modeling.paste_selection");
     case ViewportShortcutKind::Duplicate:
-        return executeCommandTool(modeling, "duplicate_meshes");
+        return editor.commands().execute("modeling.duplicate_meshes");
     case ViewportShortcutKind::Undo:
-        if (undoRedo.canUndo()) {
-            const UndoRedoResult result = undoRedo.undo();
-            return ModelingCommandResult{
-                    .ok = result.ok,
-                    .changed = result.changed,
-                    .message = result.message,
-            };
-        }
-        if (modeling.canUndo()) {
-            return modeling.undo();
-        }
-        return ModelingCommandResult{.ok = false, .message = "No command to undo"};
+        return editor.commands().execute("history.undo");
     case ViewportShortcutKind::Redo:
-        if (undoRedo.canRedo()) {
-            const UndoRedoResult result = undoRedo.redo();
-            return ModelingCommandResult{
-                    .ok = result.ok,
-                    .changed = result.changed,
-                    .message = result.message,
-            };
-        }
-        if (modeling.canRedo()) {
-            return modeling.redo();
-        }
-        return ModelingCommandResult{.ok = false, .message = "No command to redo"};
+        return editor.commands().execute("history.redo");
     case ViewportShortcutKind::RepeatLastAction:
-        return executeCommandTool(modeling, "repeat_last_action");
+        return editor.commands().execute("history.repeat_last_action");
     case ViewportShortcutKind::MergeActive:
-        return executeCommandTool(modeling, "merge_vertices_to_active");
+        return editor.commands().execute("modeling.merge_vertices_to_active");
     case ViewportShortcutKind::MergeCenter:
-        return executeCommandTool(modeling, "merge_vertices_to_center");
+        return editor.commands().execute("modeling.merge_vertices_to_center");
     case ViewportShortcutKind::MirrorAxis:
-        return executeCommandTool(modeling, modelingMirrorSelectionToolId(viewportMirrorAxisToModeling(shortcut.mirrorAxis)));
+        {
+            std::string command = "modeling.";
+            command.append(modelingMirrorSelectionToolId(viewportMirrorAxisToModeling(shortcut.mirrorAxis)));
+            return editor.commands().execute(command);
+        }
     case ViewportShortcutKind::FlipMeshNormals:
-        return executeCommandTool(modeling, "invert_mesh");
+        return editor.commands().execute("modeling.invert_mesh");
     case ViewportShortcutKind::FlipHorizontal:
-        return executeCommandTool(modeling, "flip_horizontal");
+        return editor.commands().execute("modeling.flip_horizontal");
     case ViewportShortcutKind::FlipVertical:
-        return executeCommandTool(modeling, "flip_vertical");
+        return editor.commands().execute("modeling.flip_vertical");
     case ViewportShortcutKind::ApplyMaterial:
-        return executeCommandTool(modeling, "assign_material");
+        return editor.commands().execute("modeling.assign_material");
     case ViewportShortcutKind::None:
     case ViewportShortcutKind::ActivateTool:
     case ViewportShortcutKind::SetSelectionMode:
@@ -117,7 +83,7 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
         const ViewportInputResult& inputResult,
         const ModelingToolSettingsTarget& toolSettingsTarget,
         ViewportInputRouter& inputRouter,
-        UndoRedoManager& undoRedo,
+        QuaderEditorApi& editor,
         ModelingSessionService& modeling) const {
     if (!inputResult.shortcutHandled || !toolSettingsTarget.operationPreviewActive) {
         return {};
@@ -125,7 +91,7 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
 
     if (inputResult.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
         inputRouter.setMaximized(!inputRouter.state().maximized);
-        const ModelingCommandResult command = ModelingPreviewCommandService::commit(undoRedo, modeling, "Apply Tool Preview");
+        const QuaderApiVoidResult command = editor.modeling().commitPreview("Apply Tool Preview");
         if (!command.ok) {
             LOG_ERROR("Tool preview apply failed: {}", command.message.empty() ? "Command failed." : command.message);
         }
@@ -138,7 +104,7 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
     }
 
     if (inputResult.shortcut.kind == ViewportShortcutKind::CancelActiveTool) {
-        const ModelingCommandResult command = ModelingPreviewCommandService::cancel(modeling);
+        const QuaderApiVoidResult command = editor.modeling().cancelPreview();
         if (!command.ok) {
             LOG_ERROR("Tool preview cancel failed: {}", command.message.empty() ? "Command failed." : command.message);
         }
@@ -155,14 +121,14 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
 
 ViewportShortcutControllerResult ViewportShortcutController::handleModelingShortcut(
         const ViewportInputResult& inputResult,
-        UndoRedoManager& undoRedo,
+        QuaderEditorApi& editor,
         ModelingSessionService& modeling) const {
     if (!inputResult.shortcutHandled) {
         return {};
     }
 
-    const std::optional<ModelingCommandResult> command =
-            executeViewportModelingShortcut(undoRedo, modeling, inputResult.shortcut);
+    const std::optional<QuaderApiVoidResult> command =
+            executeViewportModelingShortcut(editor, inputResult.shortcut);
     if (!command) {
         return {};
     }

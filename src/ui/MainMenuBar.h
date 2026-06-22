@@ -7,12 +7,14 @@ namespace quader {
 class LocalizationService;
 class ModelingSessionService;
 class DocumentCommandService;
+class QuaderEditorApi;
 class SceneDocument;
 class UIPanelManager;
 class ViewportPanel;
 
 struct MainMenuBarContext {
     bool& quitRequested;
+    QuaderEditorApi& editor;
     SceneDocument& document;
     DocumentCommandService& documentCommands;
     ModelingSessionService& modeling;

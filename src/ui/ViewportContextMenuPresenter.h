@@ -4,13 +4,13 @@ namespace quader {
 
 class LocalizationService;
 class ModelingSessionService;
-class UndoRedoManager;
+class QuaderEditorApi;
 class ViewportInputRouter;
 
 class ViewportContextMenuPresenter {
 public:
     void drawOperationsPopup(
-            UndoRedoManager& undoRedo,
+            QuaderEditorApi& editor,
             ModelingSessionService& modeling,
             ViewportInputRouter& inputRouter,
             LocalizationService& localization,

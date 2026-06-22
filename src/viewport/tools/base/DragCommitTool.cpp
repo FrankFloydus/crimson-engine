@@ -1,5 +1,7 @@
 #include "viewport/tools/base/DragCommitTool.h"
 
+#include "modeling/SelectionModeAdapter.h"
+
 namespace quader {
 namespace {
 
@@ -7,22 +9,6 @@ void handleResult(ViewportToolContext& context, std::string_view label, const Mo
     if (context.handleToolCommandResult) {
         context.handleToolCommandResult(label, command);
     }
-}
-
-ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return ViewportSelectionMode::Vertex;
-    case ModelingSelectionMode::Edge:
-        return ViewportSelectionMode::Edge;
-    case ModelingSelectionMode::Face:
-        return ViewportSelectionMode::Face;
-    case ModelingSelectionMode::Object:
-        return ViewportSelectionMode::Object;
-    case ModelingSelectionMode::Group:
-        return ViewportSelectionMode::Group;
-    }
-    return ViewportSelectionMode::Object;
 }
 
 } // namespace
@@ -70,7 +56,7 @@ ViewportToolResult DragCommitTool::handleEvent(
         handleResult(context, "Insert edge loop commit", command);
         context.modalState->insertEdgeLoopDragActive = false;
         if (context.setSelectionMode) {
-            context.setSelectionMode(toViewportSelectionMode(context.modeling.selectionSummary().mode));
+            context.setSelectionMode(appSelectionModeToViewport(context.modeling.selectionSummary().mode));
         }
     }
 

@@ -71,6 +71,12 @@ QuaderApiVoidResult QuaderSceneApi::setLocks(std::span<const DocumentLockEdit> e
             "Set Lock");
 }
 
+QuaderApiVoidResult QuaderSceneApi::setMeshComponent(EntityId entity, MeshComponent mesh) {
+    return mutations_.runDocumentResult(
+            session_.documentCommands().setMeshComponent(entity, std::move(mesh)),
+            "Set Mesh Component");
+}
+
 QuaderApiVoidResult QuaderSceneApi::select(std::span<const EntityId> entities, EntityId active) {
     return mutations_.runDocumentResult(
             session_.documentCommands().selectEntities(std::vector<EntityId>(entities.begin(), entities.end()), active),
@@ -94,11 +100,11 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::duplicate(EntityId entity) {
     return result;
 }
 
-QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string groupName) {
+QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string groupName, TransformComponent transform) {
     EntityId groupEntity = InvalidEntityId;
     DocumentCommandResult command = session_.documentCommands().groupSelection(
             std::move(groupName),
-            TransformComponent{},
+            transform,
             &groupEntity);
 
     QuaderApiResult<QuaderEntityRef> result;

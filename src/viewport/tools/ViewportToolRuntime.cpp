@@ -236,7 +236,15 @@ ViewportToolResult ViewportToolRuntime::handleActiveToolEvent(
         return {};
     }
     context.modalState = &modalState_;
-    return activeTool_->handleEvent(context, event);
+    ViewportToolResult result = activeTool_->handleEvent(context, event);
+    if (result.syncActiveToolFromModeling) {
+        const ViewportToolId nextTool = viewportToolForModeling(context.modeling.toolStatus().activeTool);
+        const bool changed = state.activeTool != nextTool;
+        if (setActiveTool(state, nextTool)) {
+            result.activeToolChanged = result.activeToolChanged || changed;
+        }
+    }
+    return result;
 }
 
 ModelingCommandResult ViewportToolRuntime::activateActiveTool(ModelingSessionService& modeling) const {

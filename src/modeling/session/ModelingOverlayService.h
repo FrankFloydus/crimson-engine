@@ -24,7 +24,7 @@ public:
             std::uint64_t selectionRevision,
             std::uint64_t sceneRevision,
             quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t toolSignature,
+            std::uint64_t overlaySignature,
             const quader_editor_core::SelectionHoverState& hover) const;
     [[nodiscard]] const ViewportOverlayFrame& frame() const;
     void store(
@@ -33,7 +33,7 @@ public:
             std::uint64_t selectionRevision,
             std::uint64_t sceneRevision,
             quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t toolSignature,
+            std::uint64_t overlaySignature,
             const quader_editor_core::SelectionHoverState& hover) const;
     [[nodiscard]] static bool hoverMatches(
             const quader_editor_core::SelectionHoverState& left,
@@ -48,7 +48,7 @@ private:
     mutable std::uint64_t sceneRevision_ = 0;
     mutable quader_editor_core::SelectionMode selectionMode_ =
             quader_editor_core::SelectionMode::object;
-    mutable std::uint64_t toolSignature_ = 0;
+    mutable std::uint64_t overlaySignature_ = 0;
     mutable quader_editor_core::SelectionHoverState hover_;
     mutable ViewportOverlayFrame frame_;
 #endif
@@ -65,7 +65,7 @@ public:
             std::uint64_t selectionRevision,
             std::uint64_t sceneRevision,
             quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t toolSignature,
+            std::uint64_t overlaySignature,
             const quader_editor_core::SelectionHoverState& hover) const;
     [[nodiscard]] const ViewportOverlayFrame& selectionFrame() const;
     void storeSelectionFrame(
@@ -74,7 +74,7 @@ public:
             std::uint64_t selectionRevision,
             std::uint64_t sceneRevision,
             quader_editor_core::SelectionMode selectionMode,
-            std::uint64_t toolSignature,
+            std::uint64_t overlaySignature,
             const quader_editor_core::SelectionHoverState& hover) const;
     [[nodiscard]] const quader_editor_core::SelectionOverlayFrame& selectionOverlayBaseFrame(
             const quader_editor_core::EditorSession& session) const;

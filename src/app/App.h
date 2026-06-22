@@ -8,8 +8,11 @@
 #include "ui/UISystem.h"
 
 #include <filesystem>
+#include <memory>
 
 namespace quader {
+
+class QuaderEditorApi;
 
 struct AppOptions {
     bool borderlessWindow = false;
@@ -17,6 +20,9 @@ struct AppOptions {
 
 class App {
 public:
+    App();
+    ~App();
+
     bool initialize(const std::filesystem::path& executablePath, AppOptions options = {});
     int run();
     void shutdown();
@@ -29,6 +35,7 @@ private:
     SceneRenderBridge renderBridge_;
     UISystem ui_;
     ProjectSession projectSession_;
+    std::unique_ptr<QuaderEditorApi> editor_;
     AssetId defaultMaterial_ = InvalidAssetId;
     bool running_ = false;
 };

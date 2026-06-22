@@ -3,6 +3,7 @@
 #include "assets/AssetRegistry.h"
 #include "document/DocumentCommandService.h"
 #include "modeling/ModelingSessionServices.h"
+#include "modeling/SelectionModeAdapter.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -312,35 +313,6 @@ ModelingTransform3 fromSdk(quader_poly::Transform3 value) {
             .zAxis = fromSdk(value.z_axis),
             .origin = fromSdk(value.origin),
     };
-}
-
-ModelingSelectionMode fromSdk(quader_editor_core::SelectionMode mode) {
-    switch (mode) {
-    case quader_editor_core::SelectionMode::vertex:
-        return ModelingSelectionMode::Vertex;
-    case quader_editor_core::SelectionMode::edge:
-        return ModelingSelectionMode::Edge;
-    case quader_editor_core::SelectionMode::face:
-        return ModelingSelectionMode::Face;
-    case quader_editor_core::SelectionMode::object:
-        return ModelingSelectionMode::Object;
-    }
-    return ModelingSelectionMode::Object;
-}
-
-quader_editor_core::SelectionMode toSdk(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return quader_editor_core::SelectionMode::vertex;
-    case ModelingSelectionMode::Edge:
-        return quader_editor_core::SelectionMode::edge;
-    case ModelingSelectionMode::Face:
-        return quader_editor_core::SelectionMode::face;
-    case ModelingSelectionMode::Object:
-    case ModelingSelectionMode::Group:
-        return quader_editor_core::SelectionMode::object;
-    }
-    return quader_editor_core::SelectionMode::object;
 }
 
 quader_editor_core::TransformAxis toSdk(ModelingMirrorAxis axis) {
@@ -1392,6 +1364,10 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, std::uint32_t value) {
     return mixPickGeometryHash(hash, static_cast<std::uint64_t>(value));
 }
 
+std::uint64_t mixPickGeometryHash(std::uint64_t hash, bool value) {
+    return mixPickGeometryHash(hash, value ? 1ull : 0ull);
+}
+
 std::uint64_t mixPickGeometryHash(std::uint64_t hash, float value) {
     std::uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
@@ -1408,8 +1384,12 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader_poly::Vec3 value) {
 std::uint64_t objectPickFaceGeometrySignature(
         const quader_editor_core::PolygonObject& object,
         quader_poly::PickOptions pickOptions = {}) {
-    (void)pickOptions;
     std::uint64_t hash = mixPickGeometryHash(kPickGeometryHashSeed, object.id);
+    hash = mixPickGeometryHash(hash, static_cast<int>(pickOptions.mode));
+    hash = mixPickGeometryHash(hash, pickOptions.vertex_radius);
+    hash = mixPickGeometryHash(hash, pickOptions.edge_radius);
+    hash = mixPickGeometryHash(hash, pickOptions.has_hidden_material_slot);
+    hash = mixPickGeometryHash(hash, pickOptions.hidden_material_slot);
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.faces.size()));
     for (const quader_poly::Vertex& vertex : object.document.vertices) {
@@ -1720,7 +1700,7 @@ public:
         if (appSelectionMode_ == ModelingSelectionMode::Group) {
             return ModelingSelectionMode::Group;
         }
-        return fromSdk(session_.selection_mode());
+        return sdkSelectionModeToApp(session_.selection_mode());
 #else
         return ModelingSelectionMode::Object;
 #endif
@@ -1755,7 +1735,7 @@ public:
         }
 
         return ModelingSelectionSummary{
-                .mode = fromSdk(session_.selection_mode()),
+                .mode = sdkSelectionModeToApp(session_.selection_mode()),
                 .hasSelection = session_.has_selection(),
                 .activeKind = fromSdk(active.kind),
                 .activeObjectId = active.object_id,
@@ -1775,6 +1755,51 @@ public:
 #endif
     }
 
+    [[nodiscard]] std::uint64_t selectionOverlaySignature() const {
+#if QUADER_HAS_MODELING_SDK
+        std::uint64_t hash = selectionOverlayToolSignature();
+
+        const quader_editor_core::SelectionHoverState& hover = runtime_.hover();
+        mixToolStateHash(hash, hover.object_id);
+        mixToolStateHash(hash, static_cast<int>(hover.kind));
+        mixToolStateHash(hash, static_cast<int>(hover.vertex_id));
+        mixToolStateHash(hash, static_cast<int>(hover.edge.a));
+        mixToolStateHash(hash, static_cast<int>(hover.edge.b));
+        mixToolStateHash(hash, static_cast<int>(hover.face_id));
+        mixToolStateHash(hash, hover.selected_modifier_pressed);
+        mixToolStateHash(hash, hover.candidate_object_id);
+
+        const quader_editor_core::TransformDragState& drag = runtime_.transform_drag_state();
+        mixToolStateHash(hash, drag.active);
+        mixToolStateHash(hash, static_cast<int>(drag.tool));
+        mixToolStateHash(hash, static_cast<int>(drag.operation));
+        mixToolStateHash(hash, static_cast<int>(drag.axis));
+        mixToolStateHash(hash, drag.pivot);
+        mixToolStateHash(hash, drag.scene_transform_preview_eligible);
+        mixToolStateHash(hash, static_cast<int>(drag.snap_target.kind));
+        mixToolStateHash(hash, drag.snap_target.object_id);
+        mixToolStateHash(hash, static_cast<int>(drag.snap_target.vertex_id));
+        mixToolStateHash(hash, drag.snap_target.position);
+        if (drag.active) {
+            const std::vector<quader_editor_core::SelectionOverlayPoint> snapPoints =
+                    quader_editor_core::transform_drag_snap_overlay_points(drag);
+            mixToolStateHash(hash, static_cast<int>(snapPoints.size()));
+            for (const quader_editor_core::SelectionOverlayPoint& point : snapPoints) {
+                mixToolStateHash(hash, static_cast<int>(point.layer));
+                mixToolStateHash(hash, point.position);
+                mixToolStateHash(hash, static_cast<std::uint64_t>(point.color_abgr));
+                mixToolStateHash(hash, static_cast<double>(point.size_pixels));
+                mixToolStateHash(hash, point.object_id);
+                mixToolStateHash(hash, static_cast<int>(point.vertex_id));
+            }
+        }
+
+        return hash;
+#else
+        return 0;
+#endif
+    }
+
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const {
 #if QUADER_HAS_MODELING_SDK
         const quader_editor_core::SelectionHoverState& hover = runtime_.hover();
@@ -1782,13 +1807,13 @@ public:
         const std::uint64_t selectionRevision = session_.state().selection_revision;
         const std::uint64_t sceneRevision = scene_.revision();
         const quader_editor_core::SelectionMode selectionMode = session_.selection_mode();
-        const std::uint64_t toolSignature = selectionOverlayToolSignature();
+        const std::uint64_t overlaySignature = selectionOverlaySignature();
         if (overlayService_.selectionFrameMatches(
                     contentRevision,
                     selectionRevision,
                     sceneRevision,
                     selectionMode,
-                    toolSignature,
+                    overlaySignature,
                     hover)) {
             return overlayService_.selectionFrame();
         }
@@ -1867,7 +1892,7 @@ public:
                 selectionRevision,
                 sceneRevision,
                 selectionMode,
-                toolSignature,
+                overlaySignature,
                 hover);
         return overlayService_.selectionFrame();
 #else
@@ -2248,11 +2273,12 @@ public:
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode) {
 #if QUADER_HAS_MODELING_SDK
         if (mode == ModelingSelectionMode::Group) {
+            const quader_editor_core::SelectionMode sdkMode = appSelectionModeToSdk(mode);
             const bool changed = appSelectionMode_ != ModelingSelectionMode::Group ||
-                    session_.selection_mode() != quader_editor_core::SelectionMode::object;
+                    session_.selection_mode() != sdkMode;
             appSelectionMode_ = ModelingSelectionMode::Group;
-            if (session_.selection_mode() != quader_editor_core::SelectionMode::object) {
-                session_.set_selection_mode(quader_editor_core::SelectionMode::object);
+            if (session_.selection_mode() != sdkMode) {
+                session_.set_selection_mode(sdkMode);
                 invalidateSelectionOverlayCaches();
             }
             return {
@@ -2277,7 +2303,7 @@ public:
         }
 
         quader_editor_core::SetSelectionModeRuntimeCommandSettings settings;
-        settings.selection_mode = static_cast<int>(toSdk(mode));
+        settings.selection_mode = static_cast<int>(appSelectionModeToSdk(mode));
 
         quader_editor_core::EditorRuntimeCommand command;
         command.command_id = quader_editor_core::EditorRuntimeCommandId::set_selection_mode;
@@ -4133,7 +4159,7 @@ public:
             return {.ok = false, .message = "Selection target mesh was not found."};
         }
 
-        const quader_editor_core::SelectionMode mode = toSdk(request.mode);
+        const quader_editor_core::SelectionMode mode = appSelectionModeToSdk(request.mode);
         quader_poly::Selection selection;
         if (request.edit != ModelingSelectionEdit::Replace &&
                 session_.selection_mode() == mode &&
@@ -4734,6 +4760,10 @@ ModelingSelectionMode ModelingSessionService::selectionMode() const {
 
 ModelingSelectionSummary ModelingSessionService::selectionSummary() const {
     return impl_->selectionSummary();
+}
+
+std::uint64_t ModelingSessionService::selectionOverlaySignature() const {
+    return impl_->selectionOverlaySignature();
 }
 
 ViewportOverlayFrame ModelingSessionService::selectionOverlayFrame() const {

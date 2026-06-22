@@ -891,6 +891,44 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
 	return descriptors;
 }
 
+constexpr int checked_overlay_layer_index(quader_editor_core::SelectionOverlayLayer layer)
+{
+	using Layer = quader_editor_core::SelectionOverlayLayer;
+	switch (layer) {
+	case Layer::selected_visible_face:
+		return 0;
+	case Layer::selected_face_edge:
+		return 1;
+	case Layer::unselected_vertex:
+		return 2;
+	case Layer::selected_vertex:
+		return 3;
+	case Layer::hover_face:
+		return 4;
+	case Layer::hover_face_edge:
+		return 5;
+	case Layer::hover_edge:
+		return 6;
+	case Layer::hover_vertex:
+		return 7;
+	case Layer::selected_edge:
+		return 8;
+	case Layer::selected_xray_face:
+		return 9;
+	case Layer::selected_face_mask:
+		return 10;
+	case Layer::source_wire:
+		return 11;
+	case Layer::open_edge:
+		return 12;
+	case Layer::snap_target_vertex:
+		return 13;
+	case Layer::diagnostic_edge:
+		return 14;
+	}
+	return -1;
+}
+
 HostOverlayLayerDescriptor overlay_layer(
 		quader_editor_core::SelectionOverlayLayer layer,
 		std::string_view id,
@@ -902,7 +940,7 @@ HostOverlayLayerDescriptor overlay_layer(
 		bool point_draws_on_top = false)
 {
 	return {
-		static_cast<int>(layer),
+		checked_overlay_layer_index(layer),
 		id,
 		label,
 		triangles,
@@ -1277,17 +1315,18 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 
 std::span<const std::string_view> overlay_draw_order_layer_ids()
 {
-	static constexpr std::array<std::string_view, 14> ids {{
+	static constexpr std::array<std::string_view, 15> ids {{
 		"selected_visible_face",
 		"selected_face_mask",
 		"source_wire",
 		"selected_xray_face",
+		"hover_face",
+		"open_edge",
+		"diagnostic_edge",
 		"selected_face_edge",
 		"selected_edge",
-		"hover_face",
 		"hover_face_edge",
 		"hover_edge",
-		"open_edge",
 		"unselected_vertex",
 		"selected_vertex",
 		"hover_vertex",

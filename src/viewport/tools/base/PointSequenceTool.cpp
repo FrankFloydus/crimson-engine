@@ -1,5 +1,7 @@
 #include "viewport/tools/base/PointSequenceTool.h"
 
+#include "modeling/SelectionModeAdapter.h"
+
 namespace quader {
 namespace {
 
@@ -9,28 +11,9 @@ void handleResult(ViewportToolContext& context, std::string_view label, const Mo
     }
 }
 
-ViewportSelectionMode toViewportSelectionMode(ModelingSelectionMode mode) {
-    switch (mode) {
-    case ModelingSelectionMode::Vertex:
-        return ViewportSelectionMode::Vertex;
-    case ModelingSelectionMode::Edge:
-        return ViewportSelectionMode::Edge;
-    case ModelingSelectionMode::Face:
-        return ViewportSelectionMode::Face;
-    case ModelingSelectionMode::Object:
-        return ViewportSelectionMode::Object;
-    case ModelingSelectionMode::Group:
-        return ViewportSelectionMode::Group;
-    }
-    return ViewportSelectionMode::Object;
-}
-
-void finishPointSequenceTool(ViewportToolContext& context, ViewportToolId nextTool) {
-    if (context.setActiveTool) {
-        context.setActiveTool(nextTool);
-    }
+void finishPointSequenceTool(ViewportToolContext& context) {
     if (context.setSelectionMode) {
-        context.setSelectionMode(toViewportSelectionMode(context.modeling.selectionSummary().mode));
+        context.setSelectionMode(appSelectionModeToViewport(context.modeling.selectionSummary().mode));
     }
 }
 
@@ -67,12 +50,16 @@ ViewportToolResult PointSequenceTool::handleEvent(
             const ModelingCommandResult command = context.modeling.commitKnifeTool();
             handleResult(context, "Knife commit", command);
             if (command.ok) {
-                finishPointSequenceTool(context, ViewportToolId::Move);
+                finishPointSequenceTool(context);
             }
+            return {
+                    .handled = true,
+                    .activeToolChanged = command.ok,
+                    .syncActiveToolFromModeling = command.ok,
+            };
         }
         return {
                 .handled = true,
-                .activeToolChanged = pointer.finalizePressed,
         };
     case ModelingViewportTool::Poly:
         if (pointer.canInteract &&
@@ -90,12 +77,16 @@ ViewportToolResult PointSequenceTool::handleEvent(
             const ModelingCommandResult command = context.modeling.commitPolyTool();
             handleResult(context, "Poly commit", command);
             if (command.ok) {
-                finishPointSequenceTool(context, ViewportToolId::Move);
+                finishPointSequenceTool(context);
             }
+            return {
+                    .handled = true,
+                    .activeToolChanged = command.ok,
+                    .syncActiveToolFromModeling = command.ok,
+            };
         }
         return {
                 .handled = true,
-                .activeToolChanged = pointer.finalizePressed,
         };
     case ModelingViewportTool::Select:
     case ModelingViewportTool::Move:

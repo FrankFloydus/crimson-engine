@@ -407,12 +407,12 @@ BehaviorWhen& BehaviorWhen::assignMaterialSlot(std::uint32_t materialSlot) {
 }
 
 BehaviorWhen& BehaviorWhen::undo() {
-    scenario_.recordStatus(failedStatus("History mutation is not wired through QuaderApi in this checkout."));
+    scenario_.recordStatus(scenario_.api().history().undo());
     return *this;
 }
 
 BehaviorWhen& BehaviorWhen::redo() {
-    scenario_.recordStatus(failedStatus("History mutation is not wired through QuaderApi in this checkout."));
+    scenario_.recordStatus(scenario_.api().history().redo());
     return *this;
 }
 

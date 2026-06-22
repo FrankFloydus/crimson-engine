@@ -196,13 +196,20 @@ add_library(quader_api STATIC
     src/api/QuaderApi.cpp
     src/api/QuaderApiMutationRunner.cpp
     src/api/QuaderAssetApi.cpp
+    src/api/QuaderCommandsApi.cpp
+    src/api/QuaderEventsApi.cpp
     src/api/QuaderHistoryApi.cpp
     src/api/QuaderModelingApi.cpp
     src/api/QuaderObjectHandle.cpp
+    src/api/QuaderPreferencesApi.cpp
+    src/api/QuaderProjectApi.cpp
     src/api/QuaderQueryApi.cpp
     src/api/QuaderSceneApi.cpp
     src/api/QuaderSelectionApi.cpp
     src/api/QuaderScript.cpp
+    src/api/QuaderToolsApi.cpp
+    src/api/QuaderUIApi.cpp
+    src/api/QuaderViewportApi.cpp
 )
 
 target_include_directories(quader_api PUBLIC src)
@@ -324,6 +331,7 @@ add_library(quader_runtime STATIC
     src/render/FilamentBufferDescriptorFactory.cpp
     src/render/FilamentMaterialLibrary.cpp
     src/render/ImGuiFilamentRenderer.cpp
+    src/api/QuaderEditorApi.cpp
     src/api/QuaderRenderApi.cpp
     src/render/LightRenderableCache.cpp
     src/render/MaterialBindingService.cpp
@@ -469,11 +477,13 @@ if(QUADER_BUILD_TESTS)
         tests/localization_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
         tests/programmatic_api_guardrail_tests.cpp
+        tests/editor_api_tests.cpp
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp
         tests/modeling_session_service_split_tests.cpp
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
+        tests/selection_mode_adapter_tests.cpp
         tests/viewport_tool_catalog_tests.cpp
         tests/support/BehaviorExpect.cpp
         tests/support/BehaviorScenario.cpp

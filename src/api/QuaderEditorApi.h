@@ -1,0 +1,74 @@
+#pragma once
+
+#include "api/QuaderApi.h"
+#include "api/QuaderCommandsApi.h"
+#include "api/QuaderEventsApi.h"
+#include "api/QuaderObjectHandle.h"
+#include "api/QuaderPreferencesApi.h"
+#include "api/QuaderProjectApi.h"
+#include "api/QuaderRenderApi.h"
+#include "api/QuaderToolsApi.h"
+#include "api/QuaderUIApi.h"
+#include "api/QuaderViewportApi.h"
+
+#include <memory>
+
+namespace quader {
+
+class ProjectSession;
+
+class QuaderEditorApi final {
+public:
+    explicit QuaderEditorApi(ProjectSession& session);
+    ~QuaderEditorApi();
+
+    QuaderEditorApi(const QuaderEditorApi&) = delete;
+    QuaderEditorApi& operator=(const QuaderEditorApi&) = delete;
+    QuaderEditorApi(QuaderEditorApi&&) noexcept;
+    QuaderEditorApi& operator=(QuaderEditorApi&&) noexcept;
+
+    [[nodiscard]] QuaderApi& api();
+    [[nodiscard]] const QuaderApi& api() const;
+
+    [[nodiscard]] QuaderProjectApi& project();
+    [[nodiscard]] const QuaderProjectApi& project() const;
+    [[nodiscard]] QuaderSceneApi& scene();
+    [[nodiscard]] const QuaderSceneApi& scene() const;
+    [[nodiscard]] QuaderModelingApi& modeling();
+    [[nodiscard]] const QuaderModelingApi& modeling() const;
+    [[nodiscard]] QuaderSelectionApi& selection();
+    [[nodiscard]] const QuaderSelectionApi& selection() const;
+    [[nodiscard]] QuaderAssetApi& assets();
+    [[nodiscard]] const QuaderAssetApi& assets() const;
+    [[nodiscard]] QuaderHistoryApi& history();
+    [[nodiscard]] const QuaderHistoryApi& history() const;
+    [[nodiscard]] QuaderQueryApi& query();
+    [[nodiscard]] const QuaderQueryApi& query() const;
+    [[nodiscard]] QuaderViewportApi& viewports();
+    [[nodiscard]] const QuaderViewportApi& viewports() const;
+    [[nodiscard]] QuaderToolsApi& tools();
+    [[nodiscard]] const QuaderToolsApi& tools() const;
+    [[nodiscard]] QuaderCommandsApi& commands();
+    [[nodiscard]] const QuaderCommandsApi& commands() const;
+    [[nodiscard]] QuaderPreferencesApi& preferences();
+    [[nodiscard]] const QuaderPreferencesApi& preferences() const;
+    [[nodiscard]] QuaderUIApi& ui();
+    [[nodiscard]] const QuaderUIApi& ui() const;
+    [[nodiscard]] QuaderEventsApi& events();
+    [[nodiscard]] const QuaderEventsApi& events() const;
+    [[nodiscard]] QuaderRenderApi& render();
+    [[nodiscard]] const QuaderRenderApi& render() const;
+
+    [[nodiscard]] QuaderViewportHandle mainViewport();
+    [[nodiscard]] QuaderViewportHandle viewport(ViewportPaneId pane);
+    [[nodiscard]] QuaderObjectHandle object(QuaderModelingObjectRef ref);
+    [[nodiscard]] QuaderScript script(std::string label = {});
+    [[nodiscard]] QuaderApiSnapshot snapshot() const;
+    [[nodiscard]] QuaderRevisionStamp revisions() const;
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace quader
