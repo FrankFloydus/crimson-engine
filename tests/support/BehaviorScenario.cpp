@@ -10,7 +10,7 @@
 
 #include "BehaviorExpect.h"
 #include "assets/AssetRegistry.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 
 #include <gtest/gtest.h>

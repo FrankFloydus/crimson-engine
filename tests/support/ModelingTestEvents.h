@@ -7,7 +7,7 @@
 #pragma once
 
 #include "math/Types.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 
 namespace quader::test {
 

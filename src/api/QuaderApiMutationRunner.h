@@ -8,10 +8,10 @@
 
 #include "api/QuaderApiResult.h"
 #include "core/CommandResult.h"
-#include "document/commands/DocumentCommandResult.h"
-#include "editor/EditorCommandService.h"
-#include "editor/EditorHistoryService.h"
-#include "editor/ModelingCommandExecutionService.h"
+#include "editor/commands/document/DocumentCommandResult.h"
+#include "editor/commands/EditorCommandService.h"
+#include "editor/history/EditorHistoryService.h"
+#include "editor/commands/ModelingCommandExecutionService.h"
 
 #include <memory>
 #include <string>

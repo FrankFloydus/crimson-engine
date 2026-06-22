@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/PickingCacheProjection.h"
 
-#include "modeling/runtime/ModelingObjectRuntimeMap.h"
+#include "editor/modeling/runtime/ModelingObjectRuntimeMap.h"
 #include "scene/SceneDocument.h"
 
 #include <algorithm>

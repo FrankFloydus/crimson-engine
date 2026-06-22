@@ -10,10 +10,10 @@
 #include "ModelingTestEvents.h"
 
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 #include "scene/Components.h"
 
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <string>
 #include <string_view>

@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderToolsApi.h"
 
-#include "document/ProjectSession.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "scene/document/ProjectSession.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "viewport/modes/ViewportToolCatalog.h"
 
 #include <string>

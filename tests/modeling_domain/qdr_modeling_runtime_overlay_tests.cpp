@@ -6,9 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.h"
 
-#include <modeling/runtime/session.h>
-#include <modeling/interactions/interaction_api.h>
-#include <modeling/polygon/document.h>
+#include <editor/modeling/runtime/session.h>
+#include <editor/interactions/interaction_api.h>
+#include <mesh/polygon/document.h>
 
 #include <algorithm>
 #include <array>

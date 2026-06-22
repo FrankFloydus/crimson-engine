@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "document/ProjectDocument.h"
+#include "scene/document/ProjectDocument.h"
 
 #include <filesystem>
 #include <string>

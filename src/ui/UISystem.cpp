@@ -8,7 +8,7 @@
 
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "render/FilamentBufferDescriptorFactory.h"
 #include "ui/ConsolePanel.h"
 #include "ui/InspectorPanel.h"

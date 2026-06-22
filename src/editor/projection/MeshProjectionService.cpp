@@ -7,14 +7,14 @@
 #include "editor/projection/MeshProjectionService.h"
 
 #include "assets/AssetRegistry.h"
-#include "modeling/services/SceneModelingSyncService.h"
+#include "editor/modeling/services/SceneModelingSyncService.h"
 #include "scene/SceneDocument.h"
 
 #include <memory>
 #include <string>
 #include <utility>
 
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 namespace quader {
 namespace {

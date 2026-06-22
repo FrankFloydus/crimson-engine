@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <modeling/polygon/poly_operation_registry.h>
+#include <mesh/polygon/poly_operation_registry.h>
 
 #include <catch2/catch_test_macros.hpp>
 

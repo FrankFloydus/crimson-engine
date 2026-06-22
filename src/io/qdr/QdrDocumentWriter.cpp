@@ -9,7 +9,7 @@
 #include "io/qdr/QdrFormat.h"
 
 #include <nlohmann/json.hpp>
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <chrono>
 #include <filesystem>

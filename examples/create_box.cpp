@@ -5,7 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 
 int main() {
     quader::ProjectSession session;

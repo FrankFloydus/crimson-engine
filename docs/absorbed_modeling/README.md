@@ -13,11 +13,11 @@ source, not a separate package boundary.
 
 ## App Modules
 
-- `src/modeling/polygon`: app-owned polygon document model, topology operations, mesh compilation, generated UV0, explicit loop UV mutation, and picking helpers.
-- `src/modeling`: app-owned modeling session/runtime policy over polygon documents, including active targets, hover identity, pick planning, rectangle selection, modal drag routing, viewport navigation math, view-cube policy, transform gizmo policy, and overlay-presentation policy.
-- `src/modeling/operations`: modeling runtime operations such as bridge, thicken, slice quad, edge bevel, material assignment, duplicate, and selection edits.
-- `src/modeling/interactions`: low-level modeling tool state/math and tool runtime helpers.
-- `src/geometry`: reusable geometry predicates and projection math with private implementation backends.
+- `src/mesh/polygon`: app-owned polygon document model, topology operations, mesh compilation, generated UV0, explicit loop UV mutation, and picking helpers.
+- `src/editor/modeling`: app-owned editor mesh workflow policy over polygon documents, including active targets, hover identity, pick planning, rectangle selection, preview state, repeat-last state, runtime operation execution, and overlay-presentation policy.
+- `src/editor/modeling/operations`: modeling runtime operations such as bridge, thicken, slice quad, edge bevel, material assignment, duplicate, and selection edits.
+- `src/editor/interactions`: low-level modeling tool state/math and tool runtime helpers.
+- `src/mesh/geometry`: reusable geometry predicates and projection math with private implementation backends.
 - `src/io/qdr`: QDR document/session DTO conversion and serialization helpers.
 - `src/editor/metadata`: descriptor-only host metadata for tools, operations, shortcuts, gestures, overlays, materials, preferences, UI placement, and interaction targets.
 Shared default material texture sources live under `resources/modeling_assets`. Material behavior and

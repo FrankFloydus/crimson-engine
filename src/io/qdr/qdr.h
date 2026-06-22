@@ -8,7 +8,7 @@
 
 #include <io/qdr/qdr_document.h>
 
-#include <modeling/runtime/session.h>
+#include <editor/modeling/runtime/session.h>
 
 #include <filesystem>
 #include <string>

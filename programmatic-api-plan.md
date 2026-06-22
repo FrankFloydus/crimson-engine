@@ -128,10 +128,10 @@ Approved low-level owner areas:
 - `src/viewport/**` for input/tool/runtime mechanics
 - `src/ui/**` for presentation and routing only
 - `src/render/**`
-- `src/modeling/polygon/**`
-- `src/modeling/runtime/**`
-- `src/modeling/operations/**`
-- `src/modeling/interactions/**`
+- `src/mesh/polygon/**`
+- `src/editor/modeling/runtime/**`
+- `src/editor/modeling/operations/**`
+- `src/editor/interactions/**`
 
 ## Final API Domain Map
 

@@ -7,8 +7,8 @@
 #include "api/QuaderObjectHandle.h"
 
 #include "api/QuaderApi.h"
-#include "document/ProjectSession.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "scene/document/ProjectSession.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 #include <utility>
 

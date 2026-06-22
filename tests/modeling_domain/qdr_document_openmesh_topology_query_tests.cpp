@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <modeling/polygon/internal/quader_poly_document_openmesh_helpers.h>
-#include <modeling/polygon/internal/quader_poly_document_topology_backend.h>
+#include <mesh/polygon/internal/quader_poly_document_openmesh_helpers.h>
+#include <mesh/polygon/internal/quader_poly_document_topology_backend.h>
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <algorithm>
 #include <array>

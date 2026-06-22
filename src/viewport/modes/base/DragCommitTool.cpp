@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/modes/base/DragCommitTool.h"
 
-#include "modeling/services/ModelingSessionService.h"
-#include "modeling/services/SelectionModeAdapter.h"
+#include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/SelectionModeAdapter.h"
 
 namespace quader {
 namespace {

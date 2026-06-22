@@ -7,7 +7,7 @@
 #include "api/QuaderSelectionApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 #include "editor/selection/EditorSelectionService.h"
 
 #include <algorithm>

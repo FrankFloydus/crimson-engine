@@ -11,12 +11,12 @@
 #include <cmath>
 #include <string>
 
-#include <modeling/runtime/editor_runtime.h>
-#include <modeling/interactions/knife_tool.h>
-#include <modeling/interactions/tool_snapping.h>
-#include <modeling/runtime/tool_registry.h>
-#include <modeling/interactions/interaction_api.h>
-#include <modeling/polygon/document.h>
+#include <editor/modeling/runtime/editor_runtime.h>
+#include <editor/interactions/knife_tool.h>
+#include <editor/interactions/tool_snapping.h>
+#include <editor/modeling/runtime/tool_registry.h>
+#include <editor/interactions/interaction_api.h>
+#include <mesh/polygon/document.h>
 
 TEST_CASE("knife tool exposes stable registry contract and reset ownership", "[editor-core][tool][knife]")
 {

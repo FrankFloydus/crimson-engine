@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportSettings.h"

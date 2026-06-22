@@ -10,10 +10,10 @@
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "core/Logger.h"
-#include "modeling/services/ModelingActionCatalog.h"
-#include "modeling/services/ModelingSessionService.h"
-#include "modeling/services/SelectionModeAdapter.h"
-#include "editor/actions/ModelingCommandToolCatalog.h"
+#include "editor/modeling/services/ModelingActionCatalog.h"
+#include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/SelectionModeAdapter.h"
+#include "editor/commands/ModelingCommandToolCatalog.h"
 #include "viewport/ViewportInputRouter.h"
 
 #include <imgui.h>

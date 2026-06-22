@@ -8,7 +8,7 @@
 
 #include "core/Types.h"
 #include "math/Types.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
 #include "scene/Components.h"
 

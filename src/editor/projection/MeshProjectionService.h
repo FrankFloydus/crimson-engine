@@ -10,7 +10,7 @@
 
 #include <optional>
 
-#include <modeling/runtime/session.h>
+#include <editor/modeling/runtime/session.h>
 
 namespace quader {
 

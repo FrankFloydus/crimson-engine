@@ -7,7 +7,7 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
-#include "document/commands/DocumentCommandEdits.h"
+#include "editor/commands/document/DocumentCommandEdits.h"
 
 #include <initializer_list>
 #include <span>

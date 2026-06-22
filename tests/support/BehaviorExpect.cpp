@@ -9,7 +9,7 @@
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
 
 #include "assets/AssetRegistry.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 
 #include <gtest/gtest.h>

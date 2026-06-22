@@ -25,7 +25,7 @@
 #include <vector>
 
 #include <io/qdr/qdr_document.h>
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 namespace quader {
 namespace {

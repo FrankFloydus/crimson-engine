@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
 
 #include <cstdint>

@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor_operation_test_helpers.h"
 
-#include <modeling/runtime/editor_runtime.h>
+#include <editor/modeling/runtime/editor_runtime.h>
 
 #include <vector>
 

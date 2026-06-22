@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/operations/operation_registry.h>
+#include <editor/modeling/operations/operation_registry.h>
 #include <editor/metadata/host_contract.h>
 
 #include <string_view>

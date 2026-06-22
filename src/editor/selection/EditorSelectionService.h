@@ -8,8 +8,8 @@
 
 #include "core/CommandResult.h"
 #include "core/Types.h"
-#include "document/commands/DocumentCommandResult.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/commands/document/DocumentCommandResult.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "scene/Components.h"
 
 #include <span>

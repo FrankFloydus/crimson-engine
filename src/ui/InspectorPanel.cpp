@@ -8,8 +8,8 @@
 
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
-#include "document/commands/DocumentCommandEdits.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/commands/document/DocumentCommandEdits.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 #include "scene/TransformPivot.h"

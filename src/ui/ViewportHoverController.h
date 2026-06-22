@@ -7,7 +7,7 @@
 #pragma once
 
 #include "core/Types.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"

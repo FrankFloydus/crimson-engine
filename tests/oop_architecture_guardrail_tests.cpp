@@ -74,11 +74,11 @@ std::string cmakeSourceTruth() {
 }
 
 bool coveredByAllowedCMakeGlob(std::string_view relative, const std::string& cmake) {
-    if (startsWith(relative, "src/modeling/polygon/operations/")) {
-        return cmake.find("src/modeling/polygon/operations/*.cpp") != std::string::npos;
+    if (startsWith(relative, "src/mesh/polygon/operations/")) {
+        return cmake.find("src/mesh/polygon/operations/*.cpp") != std::string::npos;
     }
-    if (startsWith(relative, "src/modeling/polygon/")) {
-        return cmake.find("src/modeling/polygon/*.cpp") != std::string::npos;
+    if (startsWith(relative, "src/mesh/polygon/")) {
+        return cmake.find("src/mesh/polygon/*.cpp") != std::string::npos;
     }
     return false;
 }
@@ -192,7 +192,7 @@ TEST(OopArchitectureGuardrailTests, EverySourceCppIsPartOfCMakeSourceTruth) {
 }
 
 TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/editor/actions", ".h")) {
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/editor/commands/modeling", ".h")) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
         if (relative.find("Tool.h") == std::string::npos ||
@@ -210,7 +210,7 @@ TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
 
 TEST(OopArchitectureGuardrailTests, ToolCatalogHeadersAreDeclarationsOnly) {
     for (const std::filesystem::path& file : {
-                 sourceRoot() / "src/editor/actions/ModelingCommandToolCatalog.h",
+                 sourceRoot() / "src/editor/commands/ModelingCommandToolCatalog.h",
                  sourceRoot() / "src/viewport/modes/ViewportToolCatalog.h",
          }) {
         const std::string source = readFile(file);
@@ -223,15 +223,15 @@ TEST(OopArchitectureGuardrailTests, ToolCatalogHeadersAreDeclarationsOnly) {
 
 TEST(OopArchitectureGuardrailTests, ModelingInternalDomainHeadersAvoidFacadeDependency) {
     for (const std::filesystem::path& root : {
-                 sourceRoot() / "src/modeling/runtime",
-                 sourceRoot() / "src/modeling/picking",
-                 sourceRoot() / "src/modeling/preview",
-                 sourceRoot() / "src/editor/actions/runtime",
+                 sourceRoot() / "src/editor/modeling/runtime",
+                 sourceRoot() / "src/editor/modeling/picking",
+                 sourceRoot() / "src/editor/modeling/preview",
+                 sourceRoot() / "src/editor/modeling/runtime_state",
          }) {
         for (const std::filesystem::path& file : filesWithExtension(root, ".h")) {
             const std::string source = readFile(file);
             const std::string relative = normalizedRelative(file);
-            EXPECT_EQ(source.find("modeling/services/ModelingSessionService.h"), std::string::npos) << relative;
+            EXPECT_EQ(source.find("editor/modeling/services/ModelingSessionService.h"), std::string::npos) << relative;
         }
     }
 }

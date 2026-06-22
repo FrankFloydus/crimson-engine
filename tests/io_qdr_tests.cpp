@@ -5,12 +5,12 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/MaterialDocument.h"
-#include "document/ProjectDocument.h"
+#include "scene/document/ProjectDocument.h"
 #include "io/qdr/QdrDocumentReader.h"
 #include "io/qdr/QdrDocumentWriter.h"
 
 #include <gtest/gtest.h>
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <filesystem>
 #include <fstream>
@@ -271,7 +271,7 @@ TEST(ProjectionOwnershipGuardrailTests, ModelingRoutesDerivedSurfacesThroughProj
     EXPECT_NE(cmake.find("src/editor/projection/SelectionOverlayProjection.cpp"), std::string::npos);
 
     const std::string services =
-            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionServices.cpp");
+            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionServices.cpp");
     EXPECT_NE(services.find("ModelingSceneReconcileService::reconcileModelingObjectSceneNodes"), std::string::npos);
     EXPECT_NE(services.find("MeshProjectionService::projectModelingMeshesToScene"), std::string::npos);
     EXPECT_NE(services.find("PickingCacheProjection::sceneTransformedObjectsForPicking"), std::string::npos);
@@ -284,7 +284,7 @@ TEST(ProjectionOwnershipGuardrailTests, ModelingRoutesDerivedSurfacesThroughProj
     EXPECT_EQ(meshProjection.find("scene.destroyEntity"), std::string::npos);
 
     const std::string facade =
-            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionService.cpp");
+            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionService.cpp");
     EXPECT_NE(facade.find("SelectionOverlayProjection::projectSelectionOverlayFrame"), std::string::npos);
 }
 

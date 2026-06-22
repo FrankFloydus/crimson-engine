@@ -4,8 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <modeling/operations/operation_registry.h>
-#include <modeling/runtime/tool_operation_contracts.h>
+#include <editor/modeling/operations/operation_registry.h>
+#include <editor/modeling/runtime/tool_operation_contracts.h>
 
 #include <catch2/catch_test_macros.hpp>
 

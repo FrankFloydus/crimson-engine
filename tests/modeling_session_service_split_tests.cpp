@@ -5,9 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/AssetRegistry.h"
-#include "modeling/services/ModelingSessionService.h"
-#include "modeling/services/ModelingSessionServices.h"
-#include "modeling/services/ModelingOperationSettings.h"
+#include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionServices.h"
+#include "editor/modeling/services/ModelingOperationSettings.h"
 #include "scene/SceneDocument.h"
 
 #include <gtest/gtest.h>
@@ -94,12 +94,12 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapKeepsDestroyedSceneIdenti
 
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
-    const std::string services = readSourceFile("src/modeling/services/ModelingSessionServices.cpp");
-    const std::string serviceAggregate = readSourceFile("src/modeling/services/ModelingSessionServices.h");
+    const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
+    const std::string serviceAggregate = readSourceFile("src/editor/modeling/services/ModelingSessionServices.h");
 
-    EXPECT_NE(cmake.find("src/modeling/runtime/ModelingObjectRuntimeMap.cpp"), std::string::npos);
-    EXPECT_NE(serviceAggregate.find("modeling/runtime/ModelingObjectRuntimeMap.h"), std::string::npos);
-    EXPECT_EQ(cmake.find("src/modeling/services/ModelingObjectRegistry"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp"), std::string::npos);
+    EXPECT_NE(serviceAggregate.find("editor/modeling/runtime/ModelingObjectRuntimeMap.h"), std::string::npos);
+    EXPECT_EQ(cmake.find("src/editor/modeling/services/ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(serviceAggregate.find("ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(services.find("ModelingObjectRuntimeMap::"), std::string::npos);
 }

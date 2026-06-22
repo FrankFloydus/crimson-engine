@@ -4,19 +4,19 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/actions/ModelingCommandToolCatalog.h"
+#include "editor/commands/ModelingCommandToolCatalog.h"
 
-#include "editor/actions/ActivateViewportToolActionTool.h"
-#include "editor/actions/CustomInstantCommandTool.h"
-#include "editor/actions/ModelingCommandDispatcher.h"
-#include "editor/actions/RuntimeCommandTool.h"
-#include "editor/actions/ContextOperationCommandTool.h"
-#include "editor/actions/InstantOperationCommandTool.h"
-#include "editor/actions/PreviewOperationCommandTool.h"
-#include "editor/actions/commands/AssignMaterialTool.h"
-#include "editor/actions/commands/FlipHorizontalTool.h"
-#include "editor/actions/commands/MirrorSelectionTool.h"
-#include "editor/actions/commands/SelectAllTool.h"
+#include "editor/commands/ActivateViewportToolActionTool.h"
+#include "editor/commands/CustomInstantCommandTool.h"
+#include "editor/commands/ModelingCommandDispatcher.h"
+#include "editor/commands/RuntimeCommandTool.h"
+#include "editor/commands/ContextOperationCommandTool.h"
+#include "editor/commands/InstantOperationCommandTool.h"
+#include "editor/commands/PreviewOperationCommandTool.h"
+#include "editor/commands/modeling/AssignMaterialTool.h"
+#include "editor/commands/modeling/FlipHorizontalTool.h"
+#include "editor/commands/modeling/MirrorSelectionTool.h"
+#include "editor/commands/modeling/SelectAllTool.h"
 
 #include <gtest/gtest.h>
 

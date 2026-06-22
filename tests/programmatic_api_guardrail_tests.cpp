@@ -125,7 +125,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals)
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
 
-        EXPECT_EQ(source.find("modeling/runtime/session.h"), std::string::npos) << relative;
+        EXPECT_EQ(source.find("editor/modeling/runtime/session.h"), std::string::npos) << relative;
         EXPECT_FALSE(containsAny(source, {
                              "<filament/",
                              "\"filament/",
@@ -160,7 +160,7 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOw
 }
 
 TEST(ProgrammaticApiGuardrailTests, ModelingSessionServiceDoesNotExposeSelectionSyncAuthority) {
-    const std::string header = readFile(sourceRoot() / "src/modeling/services/ModelingSessionService.h");
+    const std::string header = readFile(sourceRoot() / "src/editor/modeling/services/ModelingSessionService.h");
     EXPECT_EQ(header.find("syncObjectSelectionFromScene("), std::string::npos);
     EXPECT_EQ(header.find("syncSceneSelectionFromModeling("), std::string::npos);
     const std::string editorSelectionHeader =
@@ -357,7 +357,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotExposeRawHistoryOrDocum
             "UndoRedoManager",
             "DocumentCommandService",
             "core/UndoRedoManager.h",
-            "document/DocumentCommandService.h",
+            "editor/commands/DocumentCommandService.h",
             "undoRedo",
             "documentCommands",
     };
@@ -487,10 +487,10 @@ TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalO
             const std::string relative = normalizedRelative(file);
 
             EXPECT_FALSE(containsAny(source, {
-                                 "modeling/services/ModelingSessionService.h",
+                                 "editor/modeling/services/ModelingSessionService.h",
                                  "scene/SceneDocument.h",
                                  "assets/AssetRegistry.h",
-                                 "document/DocumentCommandService.h",
+                                 "editor/commands/DocumentCommandService.h",
                          }))
                     << relative;
         }

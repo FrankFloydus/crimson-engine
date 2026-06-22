@@ -6,9 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/interactions/cut_tool.h>
-#include <modeling/runtime/editor_runtime.h>
-#include <modeling/interactions/interaction_api.h>
+#include <editor/interactions/cut_tool.h>
+#include <editor/modeling/runtime/editor_runtime.h>
+#include <editor/interactions/interaction_api.h>
 
 #include <vector>
 

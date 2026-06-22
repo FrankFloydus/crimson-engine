@@ -5,7 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/AssetRegistry.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneDocument.h"
 #include "viewport/modes/ViewportToolCatalog.h"
 #include "viewport/modes/ViewportToolRuntime.h"

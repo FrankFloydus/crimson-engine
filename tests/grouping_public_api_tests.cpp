@@ -8,7 +8,7 @@
 #include "api/QuaderEditorApi.h"
 #include "assets/MaterialDocument.h"
 #include "assets/TextureAsset.h"
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 #include "ui/ViewportShortcutController.h"
 
 #include <gtest/gtest.h>

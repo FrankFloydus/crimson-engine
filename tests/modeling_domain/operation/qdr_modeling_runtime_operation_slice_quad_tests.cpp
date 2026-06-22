@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor_operation_test_helpers.h"
 
-#include <modeling/operations/operation_schema.h>
+#include <editor/modeling/operations/operation_schema.h>
 
 TEST_CASE("slice quad operation schema owns integer slice ranges", "[operation][slice_quad]")
 {

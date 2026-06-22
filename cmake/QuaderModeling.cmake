@@ -122,7 +122,7 @@ target_include_directories(quader_modeling_gte_math
         "${QUADER_APP_THIRDPARTY_DIR}/geometrictools/gte-8.2-e095b84018766274f1546a7baa12c257fd18f7d8/GTE")
 
 add_library(quader_geometry STATIC
-    src/geometry/geometry.cpp)
+    src/mesh/geometry/geometry.cpp)
 
 target_compile_features(quader_geometry PUBLIC cxx_std_20)
 target_include_directories(quader_geometry
@@ -133,8 +133,8 @@ target_include_directories(quader_geometry
 target_link_libraries(quader_geometry PRIVATE quader_modeling_gte_math)
 
 file(GLOB QUADER_POLYGON_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/modeling/polygon/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/modeling/polygon/operations/*.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon/operations/*.cpp")
 
 add_library(quader_modeling_polygon STATIC ${QUADER_POLYGON_SOURCES})
 target_compile_features(quader_modeling_polygon PUBLIC cxx_std_20)
@@ -142,7 +142,7 @@ target_include_directories(quader_modeling_polygon
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/modeling/polygon"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
         "${QUADER_APP_THIRDPARTY_DIR}")
 if(QUADER_USE_OPENMESH_TOPOLOGY)
     target_compile_definitions(quader_modeling_polygon PRIVATE QUADER_POLY_USE_OPENMESH=1)
@@ -151,56 +151,56 @@ endif()
 target_link_libraries(quader_modeling_polygon PRIVATE quader_geometry quader_modeling_profile)
 
 set(QUADER_MODELING_RUNTIME_SOURCES
-    src/modeling/runtime/measurement_policy.cpp
-    src/modeling/runtime/overlay_visibility.cpp
-    src/modeling/runtime/repeat_last_action.cpp
-    src/modeling/runtime/selection_policy.cpp
-    src/modeling/runtime/session.cpp
-    src/modeling/runtime/session_bookkeeping.cpp
-    src/modeling/runtime/session_face_operations.cpp
-    src/modeling/runtime/session_history.cpp
-    src/modeling/runtime/session_lifecycle.cpp
-    src/modeling/runtime/session_lighting.cpp
-    src/modeling/runtime/session_operations.cpp
-    src/modeling/runtime/session_picking.cpp
-    src/modeling/runtime/session_preview_transactions.cpp
-    src/modeling/runtime/session_selection_overlay.cpp
-    src/modeling/runtime/session_transform_bounds.cpp
-    src/modeling/runtime/transform_gizmo.cpp
-    src/modeling/runtime/viewport_navigation.cpp
-    src/modeling/operations/assign_material_operation.cpp
-    src/modeling/operations/bevel_vertices_operation.cpp
-    src/modeling/operations/bridge_operation.cpp
-    src/modeling/operations/duplicate_meshes_operation.cpp
-    src/modeling/operations/edge_bevel_operation.cpp
-    src/modeling/operations/editor_operation.cpp
-    src/modeling/operations/merge_by_distance_operation.cpp
-    src/modeling/operations/operation_command.cpp
-    src/modeling/operations/operation_registry.cpp
-    src/modeling/operations/selection_operations.cpp
-    src/modeling/operations/slice_quad_operation.cpp
-    src/modeling/operations/thicken_operation.cpp
-    src/modeling/interactions/box_tool.cpp
-    src/modeling/interactions/cut_tool.cpp
-    src/modeling/interactions/drawn_plane_tool.cpp
-    src/modeling/interactions/extend_tool.cpp
-    src/modeling/interactions/extrude_tool.cpp
-    src/modeling/interactions/insert_edge_loop_tool.cpp
-    src/modeling/interactions/knife_tool.cpp
-    src/modeling/interactions/mirror_tool.cpp
-    src/modeling/interactions/move_tool.cpp
-    src/modeling/interactions/poly_tool.cpp
-    src/modeling/interactions/rotate_tool.cpp
-    src/modeling/interactions/runtime_command.cpp
-    src/modeling/interactions/scale_tool.cpp
-    src/modeling/interactions/select_tool.cpp
-    src/modeling/interactions/session_tool_runtime.cpp
-    src/modeling/interactions/tool_drag_math.cpp
-    src/modeling/interactions/tool_identifiers.cpp
-    src/modeling/interactions/tool_registry.cpp
-    src/modeling/interactions/tool_snapping.cpp
-    src/modeling/interactions/tool_transform_math.cpp
-    src/modeling/interactions/tool_viewport_projection.cpp)
+    src/editor/modeling/runtime/measurement_policy.cpp
+    src/editor/modeling/runtime/overlay_visibility.cpp
+    src/editor/modeling/runtime/repeat_last_action.cpp
+    src/editor/modeling/runtime/selection_policy.cpp
+    src/editor/modeling/runtime/session.cpp
+    src/editor/modeling/runtime/session_bookkeeping.cpp
+    src/editor/modeling/runtime/session_face_operations.cpp
+    src/editor/modeling/runtime/session_history.cpp
+    src/editor/modeling/runtime/session_lifecycle.cpp
+    src/editor/modeling/runtime/session_lighting.cpp
+    src/editor/modeling/runtime/session_operations.cpp
+    src/editor/modeling/runtime/session_picking.cpp
+    src/editor/modeling/runtime/session_preview_transactions.cpp
+    src/editor/modeling/runtime/session_selection_overlay.cpp
+    src/editor/modeling/runtime/session_transform_bounds.cpp
+    src/editor/modeling/runtime/transform_gizmo.cpp
+    src/editor/modeling/runtime/viewport_navigation.cpp
+    src/editor/modeling/operations/assign_material_operation.cpp
+    src/editor/modeling/operations/bevel_vertices_operation.cpp
+    src/editor/modeling/operations/bridge_operation.cpp
+    src/editor/modeling/operations/duplicate_meshes_operation.cpp
+    src/editor/modeling/operations/edge_bevel_operation.cpp
+    src/editor/modeling/operations/editor_operation.cpp
+    src/editor/modeling/operations/merge_by_distance_operation.cpp
+    src/editor/modeling/operations/operation_command.cpp
+    src/editor/modeling/operations/operation_registry.cpp
+    src/editor/modeling/operations/selection_operations.cpp
+    src/editor/modeling/operations/slice_quad_operation.cpp
+    src/editor/modeling/operations/thicken_operation.cpp
+    src/editor/interactions/box_tool.cpp
+    src/editor/interactions/cut_tool.cpp
+    src/editor/interactions/drawn_plane_tool.cpp
+    src/editor/interactions/extend_tool.cpp
+    src/editor/interactions/extrude_tool.cpp
+    src/editor/interactions/insert_edge_loop_tool.cpp
+    src/editor/interactions/knife_tool.cpp
+    src/editor/interactions/mirror_tool.cpp
+    src/editor/interactions/move_tool.cpp
+    src/editor/interactions/poly_tool.cpp
+    src/editor/interactions/rotate_tool.cpp
+    src/editor/interactions/runtime_command.cpp
+    src/editor/interactions/scale_tool.cpp
+    src/editor/interactions/select_tool.cpp
+    src/editor/interactions/session_tool_runtime.cpp
+    src/editor/interactions/tool_drag_math.cpp
+    src/editor/interactions/tool_identifiers.cpp
+    src/editor/interactions/tool_registry.cpp
+    src/editor/interactions/tool_snapping.cpp
+    src/editor/interactions/tool_transform_math.cpp
+    src/editor/interactions/tool_viewport_projection.cpp)
 
 add_library(quader_modeling_runtime STATIC ${QUADER_MODELING_RUNTIME_SOURCES})
 target_compile_features(quader_modeling_runtime PUBLIC cxx_std_20)
@@ -322,7 +322,7 @@ endfunction()
 
 function(quader_add_polygon_domain_test target)
     quader_add_modeling_domain_catch2_test(${target} ${ARGN})
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/modeling/polygon")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon")
     target_link_libraries(${target} PRIVATE quader_modeling_polygon)
 endfunction()
 
@@ -330,8 +330,8 @@ function(quader_add_modeling_runtime_domain_test target)
     quader_add_modeling_domain_catch2_test(${target} ${ARGN})
     target_include_directories(${target}
         PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/modeling/polygon"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/modeling")
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/modeling")
     target_link_libraries(${target} PRIVATE quader_modeling_polygon quader_modeling_runtime)
 endfunction()
 

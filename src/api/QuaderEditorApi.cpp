@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
 
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 
 namespace quader {
 

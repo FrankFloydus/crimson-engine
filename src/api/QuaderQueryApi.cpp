@@ -6,9 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderQueryApi.h"
 
-#include "document/ProjectSession.h"
-#include "editor/EditorHistoryService.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "scene/document/ProjectSession.h"
+#include "editor/history/EditorHistoryService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 
 #include <optional>

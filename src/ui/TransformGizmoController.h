@@ -8,8 +8,8 @@
 
 #include "assets/AssetRegistry.h"
 #include "core/Types.h"
-#include "document/SceneTransformPreviewTransaction.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/history/SceneTransformPreviewTransaction.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "scene/SceneDocument.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
@@ -21,8 +21,8 @@
 #include <optional>
 #include <vector>
 
-#include <modeling/interactions/rotate_tool.h>
-#include <modeling/interactions/tool_identity.h>
+#include <editor/interactions/rotate_tool.h>
+#include <editor/interactions/tool_identity.h>
 
 namespace quader {
 

@@ -8,7 +8,7 @@
 
 #include <catch2/catch_approx.hpp>
 
-#include <modeling/runtime/runtime_command.h>
+#include <editor/modeling/runtime/runtime_command.h>
 
 #include <algorithm>
 #include <cstdint>

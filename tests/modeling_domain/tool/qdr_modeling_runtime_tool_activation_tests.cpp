@@ -6,11 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/runtime/editor_runtime.h>
-#include <modeling/runtime/session.h>
-#include <modeling/runtime/tool_runtime_policy.h>
-#include <modeling/interactions/interaction_api.h>
-#include <modeling/polygon/document.h>
+#include <editor/modeling/runtime/editor_runtime.h>
+#include <editor/modeling/runtime/session.h>
+#include <editor/modeling/runtime/tool_runtime_policy.h>
+#include <editor/interactions/interaction_api.h>
+#include <mesh/polygon/document.h>
 
 #include <string>
 

@@ -7,7 +7,7 @@
 #include "api/QuaderAssetApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 
 #include <functional>
 #include <utility>

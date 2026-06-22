@@ -7,7 +7,7 @@
 #include "viewport/modes/base/TwoStageBoxTool.h"
 
 #include "core/Logger.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 #include <utility>
 

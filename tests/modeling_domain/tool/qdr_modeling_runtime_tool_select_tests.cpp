@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/runtime/session.h>
-#include <modeling/interactions/interaction_api.h>
+#include <editor/modeling/runtime/session.h>
+#include <editor/interactions/interaction_api.h>
 
 #include <algorithm>
 

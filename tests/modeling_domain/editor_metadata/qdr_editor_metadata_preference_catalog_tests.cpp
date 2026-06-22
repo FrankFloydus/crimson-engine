@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/operations/operation_schema.h>
-#include <modeling/interactions/cut_tool.h>
+#include <editor/modeling/operations/operation_schema.h>
+#include <editor/interactions/cut_tool.h>
 #include <editor/metadata/host_contract.h>
 
 #include <cmath>

@@ -7,8 +7,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/operations/operation_command.h>
-#include <modeling/runtime/repeat_last_action.h>
+#include <editor/modeling/operations/operation_command.h>
+#include <editor/modeling/runtime/repeat_last_action.h>
 
 #include <array>
 #include <utility>

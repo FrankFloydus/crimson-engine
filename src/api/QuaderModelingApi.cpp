@@ -7,10 +7,10 @@
 #include "api/QuaderModelingApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
-#include "document/ProjectSession.h"
-#include "editor/ModelingMementoCommand.h"
+#include "scene/document/ProjectSession.h"
+#include "editor/history/ModelingMementoCommand.h"
 #include "editor/selection/EditorSelectionService.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>

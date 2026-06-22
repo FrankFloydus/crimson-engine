@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/modes/ViewportToolRuntime.h"
 
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "viewport/HostViewportContractAdapter.h"
 #include "viewport/modes/ViewportToolCatalog.h"
 

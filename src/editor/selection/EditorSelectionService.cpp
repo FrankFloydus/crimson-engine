@@ -8,8 +8,8 @@
 
 #include "assets/AssetRegistry.h"
 #include "assets/MeshAsset.h"
-#include "document/DocumentCommandService.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/commands/DocumentCommandService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 

@@ -13,10 +13,10 @@ Use these boundaries when deciding where behavior belongs.
 ## Former SDK Code And Editor Domains
 
 Former SDK geometry, polygon, editor-core, host-contract, and QDR IO code is now native-app code.
-Keep it under app-owned modules such as `src/geometry`, `src/modeling/polygon`,
-`src/modeling`, `src/editor/actions`, `src/editor/metadata`, `src/editor/selection`, `src/editor/history`,
-`src/editor/projection`, `src/viewport`, and `src/io/qdr`; do not recreate a separate SDK product
-boundary.
+Keep it under app-owned modules such as `src/mesh/geometry`, `src/mesh/polygon`,
+`src/editor/modeling`, `src/editor/interactions`, `src/editor/commands`, `src/editor/metadata`,
+`src/editor/selection`, `src/editor/history`, `src/editor/projection`, `src/viewport`, and
+`src/io/qdr`; do not recreate a separate SDK product boundary.
 
 Portable behavior still matters, but the native app should implement it behind app services instead
 of routing user/editor intent through a separate SDK authority. UI, render, and viewport code should
@@ -38,7 +38,7 @@ when a command/service owner exists.
 
 ## Document Commands
 
-User-triggered document mutations belong in `src/document/commands/**` as `IUndoableCommand`
+User-triggered document mutations belong in `src/editor/commands/document/**` as `IUndoableCommand`
 implementations and are routed by `DocumentCommandService` or `EditorCommandService`.
 
 Public scene intent should route through `QuaderSceneApi`. Prefer `QuaderSceneBatch` when a UI,
@@ -48,13 +48,15 @@ Scene-only transform previews belong in `SceneTransformPreviewTransaction`.
 
 ## Modeling
 
-User-triggered modeling operations belong in `src/editor/actions/**` and execute through
+User-triggered modeling operations belong in `src/editor/commands/**` and execute through
 `ModelingCommandDispatcher`, `ModelingPreviewCommandService`, `ModelingCommandExecutionService`, or
 `EditorCommandService`.
 
-Modeling session state belongs in focused services under `src/modeling/**`. `ModelingSessionService`
-may exist only as a thin adapter over those owners; it must not own public history, command
-semantics, bidirectional selection sync, or scene identity.
+Pure polygon and geometry algorithms belong under `src/mesh/**`. Editor-facing mesh workflow state
+belongs under `src/editor/modeling/**`, and interactive viewport state machines belong under
+`src/editor/interactions/**`. `ModelingSessionService` may exist only as a thin adapter over those
+owners; it must not own public history, command semantics, bidirectional selection sync, or scene
+identity.
 
 ## Viewport
 

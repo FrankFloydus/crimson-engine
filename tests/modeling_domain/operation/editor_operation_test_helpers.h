@@ -8,7 +8,7 @@
 
 #include "operation_test_helpers.h"
 
-#include <modeling/runtime/session.h>
+#include <editor/modeling/runtime/session.h>
 
 namespace qdr_test {
 

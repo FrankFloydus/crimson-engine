@@ -5,9 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 #include "editor/selection/EditorSelectionService.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 #include <gtest/gtest.h>
 

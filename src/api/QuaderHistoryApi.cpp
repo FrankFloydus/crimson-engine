@@ -7,7 +7,7 @@
 #include "api/QuaderHistoryApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
-#include "editor/EditorHistoryService.h"
+#include "editor/history/EditorHistoryService.h"
 
 #include <string>
 #include <string_view>

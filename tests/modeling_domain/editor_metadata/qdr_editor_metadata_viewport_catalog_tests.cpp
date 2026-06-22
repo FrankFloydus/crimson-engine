@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/runtime/tool_constants.h>
+#include <editor/modeling/runtime/tool_constants.h>
 #include <editor/metadata/host_contract.h>
 
 #include <string_view>

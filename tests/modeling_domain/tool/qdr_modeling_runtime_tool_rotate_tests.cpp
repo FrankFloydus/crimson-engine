@@ -7,7 +7,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/interactions/interaction_api.h>
+#include <editor/interactions/interaction_api.h>
 
 TEST_CASE("rotate drag snaps screen angle and builds pivoted transform", "[editor-core][tool][rotate]")
 {

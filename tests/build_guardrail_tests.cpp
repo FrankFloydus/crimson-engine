@@ -226,14 +226,18 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     expectMissing(presets, "QUADER_BUILD_SDK_TESTS");
     expectMissing(presets, "quader_sdk_tests");
 
-    expectContains(buildFiles, "src/modeling/polygon");
-    expectContains(buildFiles, "src/modeling/runtime");
-    expectContains(buildFiles, "src/modeling/operations");
-    expectContains(buildFiles, "src/modeling/interactions");
-    expectContains(buildFiles, "src/modeling/services");
-    expectContains(buildFiles, "src/editor/actions");
+    expectContains(buildFiles, "src/mesh/polygon");
+    expectContains(buildFiles, "src/mesh/geometry");
+    expectContains(buildFiles, "src/scene/document");
+    expectContains(buildFiles, "src/editor/modeling/runtime");
+    expectContains(buildFiles, "src/editor/modeling/operations");
+    expectContains(buildFiles, "src/editor/interactions");
+    expectContains(buildFiles, "src/editor/modeling/services");
+    expectContains(buildFiles, "src/editor/commands");
+    expectContains(buildFiles, "src/editor/history");
     expectContains(buildFiles, "src/editor/metadata");
     expectContains(buildFiles, "src/io/qdr");
+    expectContains(buildFiles, "resources/modeling_assets/materials/default");
     expectContains(buildFiles, "quader_qdr_document_io");
     expectContains(buildFiles, "quader_qdr_runtime_io");
     expectContains(buildFiles, "qdr_custom_engine_modeling_runtime_smoke_tests");
@@ -242,12 +246,20 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     expectContains(buildFiles, "tests/modeling_domain/qdr_modeling_runtime_measurement_tests.cpp");
     expectContains(buildFiles, "tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp");
     expectContains(buildFiles, "qdr_editor_metadata_operation_catalog_tests");
+    expectMissing(buildFiles, "src/modeling");
     expectMissing(buildFiles, "src/modeling/workspace");
     expectMissing(buildFiles, "src/modeling/tool/");
     expectMissing(buildFiles, "src/modeling/tools/");
+    expectMissing(buildFiles, "src/document");
+    expectMissing(buildFiles, "src/editor/actions");
+    expectMissing(buildFiles, "src/editor/mesh");
+    expectMissing(buildFiles, "src/geometry");
+    expectMissing(buildFiles, "resources/modeling/default_materials");
     expectMissing(buildFiles, "src/editor/tools/host_contract");
     expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH");
     expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_CATCH2_FETCH");
+
+    EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "commands" / "document"));
 }
 
 TEST(BuildGuardrailTests, MigratedModelingDomainTestFilesUseNativeNames) {
@@ -257,8 +269,14 @@ TEST(BuildGuardrailTests, MigratedModelingDomainTestFilesUseNativeNames) {
             "qdr_host_contract_",
             "qdr_custom_engine_modeling_session_smoke_tests",
             "qdr_io_session_tests",
+            "src/modeling/",
             "src/modeling/workspace/",
             "src/modeling/tools/",
+            "src/document/",
+            "src/editor/actions/",
+            "src/editor/mesh/",
+            "src/geometry/",
+            "resources/modeling/default_materials/",
             "src/viewport/tools/",
     };
 

@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/modes/Tool.h"
 
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 namespace quader {
 namespace {

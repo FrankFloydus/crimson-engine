@@ -5,7 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <algorithm>
 #include <array>

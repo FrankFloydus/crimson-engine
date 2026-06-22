@@ -9,7 +9,7 @@
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneDocument.h"
 
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 namespace quader {
 namespace {

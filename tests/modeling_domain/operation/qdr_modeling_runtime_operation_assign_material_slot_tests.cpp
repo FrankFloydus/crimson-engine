@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor_operation_test_helpers.h"
 
-#include <modeling/operations/operation_command.h>
+#include <editor/modeling/operations/operation_command.h>
 
 #include <algorithm>
 

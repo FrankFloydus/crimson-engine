@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.h"
 
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <cmath>
 #include <cstddef>

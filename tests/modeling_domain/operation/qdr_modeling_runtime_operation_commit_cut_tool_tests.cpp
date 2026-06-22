@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor_operation_test_helpers.h"
 
-#include <modeling/interactions/interaction_api.h>
+#include <editor/interactions/interaction_api.h>
 
 TEST_CASE("commit cut tool applies plane clipping through editor history", "[operation][commit_cut_tool]")
 {

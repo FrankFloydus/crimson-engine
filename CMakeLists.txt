@@ -83,18 +83,18 @@ if(QUADER_BUILD_TESTS)
 endif()
 
 set(QUADER_MODELING_TOOL_SOURCES
-    src/editor/actions/ModelingCommandDispatcher.cpp
-    src/editor/actions/ModelingCommandToolCatalog.cpp
-    src/editor/actions/commands/AssignMaterialTool.cpp
-    src/editor/actions/commands/ClearSelectionTool.cpp
-    src/editor/actions/commands/CopySelectionTool.cpp
-    src/editor/actions/commands/FlipHorizontalTool.cpp
-    src/editor/actions/commands/FlipVerticalTool.cpp
-    src/editor/actions/commands/InvertSelectionTool.cpp
-    src/editor/actions/commands/MirrorSelectionTool.cpp
-    src/editor/actions/commands/PasteSelectionTool.cpp
-    src/editor/actions/commands/RepeatLastActionTool.cpp
-    src/editor/actions/commands/SelectAllTool.cpp
+    src/editor/commands/ModelingCommandDispatcher.cpp
+    src/editor/commands/ModelingCommandToolCatalog.cpp
+    src/editor/commands/modeling/AssignMaterialTool.cpp
+    src/editor/commands/modeling/ClearSelectionTool.cpp
+    src/editor/commands/modeling/CopySelectionTool.cpp
+    src/editor/commands/modeling/FlipHorizontalTool.cpp
+    src/editor/commands/modeling/FlipVerticalTool.cpp
+    src/editor/commands/modeling/InvertSelectionTool.cpp
+    src/editor/commands/modeling/MirrorSelectionTool.cpp
+    src/editor/commands/modeling/PasteSelectionTool.cpp
+    src/editor/commands/modeling/RepeatLastActionTool.cpp
+    src/editor/commands/modeling/SelectAllTool.cpp
 )
 
 set(QUADER_VIEWPORT_TOOL_SOURCES
@@ -115,11 +115,11 @@ add_library(quader_modeling STATIC
     src/editor/projection/ModelingSceneReconcileService.cpp
     src/editor/projection/PickingCacheProjection.cpp
     src/editor/projection/SelectionOverlayProjection.cpp
-    src/modeling/runtime/ModelingObjectRuntimeMap.cpp
-    src/modeling/services/ModelingActionCatalog.cpp
-    src/modeling/services/ModelingOperationSettings.cpp
-    src/modeling/services/ModelingSessionServices.cpp
-    src/modeling/services/ModelingSessionService.cpp
+    src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp
+    src/editor/modeling/services/ModelingActionCatalog.cpp
+    src/editor/modeling/services/ModelingOperationSettings.cpp
+    src/editor/modeling/services/ModelingSessionServices.cpp
+    src/editor/modeling/services/ModelingSessionService.cpp
     ${QUADER_MODELING_TOOL_SOURCES}
 )
 
@@ -144,13 +144,12 @@ add_library(quader_core STATIC
     src/core/LocalizationService.cpp
     src/core/Logger.cpp
     src/core/UndoRedoManager.cpp
-    src/document/DocumentCommandService.cpp
-    src/document/ProjectDocument.cpp
-    src/document/ProjectSession.cpp
-    src/editor/EditorHistoryService.cpp
-    src/editor/ModelingCommandExecutionService.cpp
+    src/editor/commands/DocumentCommandService.cpp
+    src/scene/document/ProjectDocument.cpp
+    src/scene/document/ProjectSession.cpp
+    src/editor/history/EditorHistoryService.cpp
+    src/editor/commands/ModelingCommandExecutionService.cpp
     src/editor/selection/EditorSelectionService.cpp
-    src/geometry/UVSphere.cpp
     src/io/qdr/QdrDocumentReader.cpp
     src/io/qdr/QdrDocumentWriter.cpp
     src/scene/SceneBounds.cpp
@@ -193,7 +192,7 @@ add_library(quader_api STATIC
     src/api/QuaderToolsApi.cpp
     src/api/QuaderUIApi.cpp
     src/api/QuaderViewportApi.cpp
-    src/editor/EditorCommandRegistry.cpp
+    src/editor/commands/EditorCommandRegistry.cpp
 )
 
 target_include_directories(quader_api PUBLIC src)
@@ -291,7 +290,7 @@ function(quader_compile_material target_name input_file output_name)
     set("${target_name}_OUTPUT" "${output_file}" PARENT_SCOPE)
 endfunction()
 
-set(QUADER_DEFAULT_MATERIAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/modeling/default_materials")
+set(QUADER_DEFAULT_MATERIAL_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/modeling_assets/materials/default")
 set(QUADER_DEFAULT_ALBEDO_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_albedo.png")
 set(QUADER_DEFAULT_ROUGHNESS_TEXTURE "${QUADER_DEFAULT_MATERIAL_SOURCE_DIR}/default_roughness.png")
 quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned default material albedo texture")

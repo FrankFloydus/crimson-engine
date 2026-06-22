@@ -8,7 +8,7 @@
 
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "modeling/services/SelectionModeAdapter.h"
+#include "editor/modeling/services/SelectionModeAdapter.h"
 
 namespace quader {
 

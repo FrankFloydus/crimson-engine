@@ -9,28 +9,27 @@
 #include "assets/MaterialDocument.h"
 #include "core/Logger.h"
 #include "core/UndoRedoManager.h"
-#include "document/DocumentCommandService.h"
-#include "document/SceneTransformPreviewTransaction.h"
-#include "document/commands/ApplyEntityTransformCommand.h"
-#include "document/commands/BatchDocumentCommand.h"
-#include "document/commands/CreateEntityCommand.h"
-#include "document/commands/DestroyEntityCommand.h"
-#include "document/commands/DuplicateEntityCommand.h"
-#include "document/commands/GroupSelectionCommand.h"
-#include "document/commands/RenameEntityCommand.h"
-#include "document/commands/ReparentEntityCommand.h"
-#include "document/commands/SelectEntitiesCommand.h"
-#include "document/commands/SetLockCommand.h"
-#include "document/commands/SetVisibilityCommand.h"
-#include "document/commands/UngroupSelectionCommand.h"
-#include "document/ProjectDocument.h"
-#include "document/ProjectSession.h"
-#include "editor/EditorCommandService.h"
-#include "editor/EditorHistoryService.h"
-#include "editor/ModelingMementoCommand.h"
+#include "editor/commands/DocumentCommandService.h"
+#include "editor/history/SceneTransformPreviewTransaction.h"
+#include "editor/commands/document/ApplyEntityTransformCommand.h"
+#include "editor/commands/document/BatchDocumentCommand.h"
+#include "editor/commands/document/CreateEntityCommand.h"
+#include "editor/commands/document/DestroyEntityCommand.h"
+#include "editor/commands/document/DuplicateEntityCommand.h"
+#include "editor/commands/document/GroupSelectionCommand.h"
+#include "editor/commands/document/RenameEntityCommand.h"
+#include "editor/commands/document/ReparentEntityCommand.h"
+#include "editor/commands/document/SelectEntitiesCommand.h"
+#include "editor/commands/document/SetLockCommand.h"
+#include "editor/commands/document/SetVisibilityCommand.h"
+#include "editor/commands/document/UngroupSelectionCommand.h"
+#include "scene/document/ProjectDocument.h"
+#include "scene/document/ProjectSession.h"
+#include "editor/commands/EditorCommandService.h"
+#include "editor/history/EditorHistoryService.h"
+#include "editor/history/ModelingMementoCommand.h"
 #include "editor/selection/EditorSelectionService.h"
-#include "geometry/UVSphere.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "render/overlay/ViewportOverlayStyleResolver.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
@@ -50,7 +49,7 @@
 
 #include <gtest/gtest.h>
 
-#include <modeling/interactions/viewport_navigation.h>
+#include <editor/interactions/viewport_navigation.h>
 
 #include <algorithm>
 #include <array>
@@ -845,7 +844,7 @@ TEST(ViewportOverlayStyleResolverTests, PrioritizesDiagnosticsThenExternalOverri
 
 TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionService.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionService.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1131,6 +1130,19 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
 }
 
+MeshAsset makeTestTriangleMesh(std::string name = "Test Mesh") {
+    MeshAsset mesh;
+    mesh.name = std::move(name);
+    mesh.vertices = {
+            MeshVertex{.position = {-0.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}},
+            MeshVertex{.position = {0.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 0.0f}},
+            MeshVertex{.position = {0.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.5f, 1.0f}},
+    };
+    mesh.indices = {0u, 1u, 2u};
+    mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 0u}};
+    return mesh;
+}
+
 TEST(ViewportPanelTests, ShutdownIsIdempotentAndClearsBorrowedWorkspace) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
@@ -1345,7 +1357,7 @@ TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
 TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) /
-            "src" / "modeling" / "runtime" / "transform_gizmo.cpp";
+            "src" / "editor" / "modeling" / "runtime" / "transform_gizmo.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -1972,9 +1984,9 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
 
 TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsUnityRemovePreviewContract) {
     const std::filesystem::path appOverlayPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionServices.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionServices.cpp";
     const std::filesystem::path runtimeOverlayPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "runtime" /
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "runtime" /
             "session_selection_overlay.cpp";
     std::ifstream appOverlayFile(appOverlayPath);
     std::ifstream runtimeOverlayFile(runtimeOverlayPath);
@@ -2091,13 +2103,13 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
 
 TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionService.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionService.cpp";
     const std::filesystem::path splitSourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSessionServices.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionServices.cpp";
     const std::filesystem::path overlayHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingOverlayService.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingOverlayService.h";
     const std::filesystem::path selectionHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "modeling" / "services" / "ModelingSelectionService.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSelectionService.h";
     std::ifstream sourceFile(sourcePath);
     std::ifstream splitSourceFile(splitSourcePath);
     std::ifstream overlayHeaderFile(overlayHeaderPath);
@@ -2786,7 +2798,7 @@ TEST(UISystemTests, TopMenuExposesLiveViewportSettingsPanel) {
     const std::filesystem::path toolSettingsPanelPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ToolSettingsPanel.cpp";
     const std::filesystem::path modelingPreviewCommandServicePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "ModelingPreviewCommandService.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "history" / "ModelingPreviewCommandService.h";
     const std::filesystem::path viewportSettingsPanelPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportSettingsPanel.cpp";
     std::ifstream mainMenuBarFile(mainMenuBarPath);
@@ -3288,19 +3300,6 @@ TEST(MathTypesTests, ComposeTransformRoundTripsPoints) {
     EXPECT_NEAR(localPoint.x, 1.0f, 0.001f);
     EXPECT_NEAR(localPoint.y, 1.0f, 0.001f);
     EXPECT_NEAR(localPoint.z, 1.0f, 0.001f);
-}
-
-TEST(UVSphereTests, GeneratesExpectedTopology) {
-    const MeshAsset sphere = generateUVSphere({.segments = 8, .rings = 4, .radius = 2.0f});
-
-    EXPECT_EQ(sphere.vertices.size(), 45u);
-    EXPECT_EQ(sphere.indices.size(), 192u);
-    EXPECT_NEAR(length(sphere.vertices[0].position), 2.0f, 0.001f);
-    EXPECT_TRUE(sphere.hasStableCpuTopology);
-    ASSERT_EQ(sphere.primitives.size(), 1u);
-    EXPECT_EQ(sphere.primitives.front().indexOffset, 0u);
-    EXPECT_EQ(sphere.primitives.front().indexCount, sphere.indices.size());
-    EXPECT_EQ(sphere.primitives.front().materialSlot, 0u);
 }
 
 namespace {
@@ -4639,7 +4638,7 @@ TEST(ViewportInputRouterTests, ShiftRightMouseDoesNotStartFlyNavigation) {
 
 TEST(AssetRegistryTests, StoresMaterialMeshAndTextureMetadata) {
     AssetRegistry registry;
-    const AssetId mesh = registry.addMesh(generateUVSphere());
+    const AssetId mesh = registry.addMesh(makeTestTriangleMesh());
     const AssetId material = registry.addMaterial(makeDefaultQuaderMaterial());
     TextureAsset textureAsset;
     textureAsset.name = "Curvature";
@@ -4659,8 +4658,7 @@ TEST(AssetRegistryTests, StoresMaterialMeshAndTextureMetadata) {
 
 TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
     AssetRegistry registry;
-    MeshAsset meshAsset = generateUVSphere();
-    meshAsset.name = "Source";
+    MeshAsset meshAsset = makeTestTriangleMesh("Source");
     const AssetId mesh = registry.addMesh(std::move(meshAsset));
     const AssetId material = registry.addMaterial(makeDefaultQuaderMaterial());
     TextureAsset textureAsset;
@@ -4676,7 +4674,7 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
     EXPECT_EQ(registry.textureRevision(texture).value, 1u);
     EXPECT_EQ(registry.revision(), 3u);
 
-    MeshAsset replacement = generateUVSphere();
+    MeshAsset replacement = makeTestTriangleMesh();
     replacement.id = 999;
     replacement.revision = MeshAssetRevision{99};
     replacement.name = "Replacement";
@@ -4767,8 +4765,7 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
         .name = "Authored Project",
     });
 
-    MeshAsset meshAsset = generateUVSphere();
-    meshAsset.name = "Authored Mesh";
+    MeshAsset meshAsset = makeTestTriangleMesh("Authored Mesh");
     const AssetId mesh = document.assets().addMesh(std::move(meshAsset));
     const EntityId entity = document.scene().createEntity("Authored Mesh");
     document.scene().setMesh(entity, MeshComponent{.mesh = mesh});
@@ -4923,7 +4920,7 @@ TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectur
     const std::filesystem::path registryPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "assets" / "AssetRegistry.h";
     const std::filesystem::path projectSessionPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "document" / "ProjectSession.h";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "scene" / "document" / "ProjectSession.h";
 
     std::ifstream assetDocumentFile(assetDocumentPath);
     std::ifstream typedStoreFile(typedStorePath);

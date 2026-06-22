@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/ModelingSceneReconcileService.h"
 
-#include "modeling/runtime/ModelingObjectRuntimeMap.h"
-#include "modeling/services/SceneModelingSyncService.h"
+#include "editor/modeling/runtime/ModelingObjectRuntimeMap.h"
+#include "editor/modeling/services/SceneModelingSyncService.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 

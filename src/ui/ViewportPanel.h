@@ -8,7 +8,7 @@
 
 #include "assets/AssetRegistry.h"
 #include "core/Types.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "render/SceneRenderBridge.h"
 #include "render/ViewportRenderer.h"
 #include "scene/SceneDocument.h"

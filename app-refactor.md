@@ -196,7 +196,7 @@ The old SDK polygon document and operations are still valuable. They should beco
 
 Planned outcome:
 
-- polygon topology, mesh compilation, UVs, materials slots, component selection, and modeling operations live under `src/modeling/polygon` or `src/modeling/core`,
+- polygon topology, mesh compilation, UVs, materials slots, component selection, and modeling operations live under `src/mesh/polygon` or `src/modeling/core`,
 - they do not own scene hierarchy,
 - they do not own public history,
 - they do not create or destroy scene entities directly,
@@ -432,8 +432,8 @@ The exact names can change during implementation, but the ownership lines should
 Move to:
 
 - `src/core` for generic app primitives,
-- `src/geometry` for math/geometric primitives,
-- `src/modeling/polygon` only for topology-specific primitives.
+- `src/mesh/geometry` for math/geometric primitives,
+- `src/mesh/polygon` only for topology-specific primitives.
 
 Rules:
 
@@ -445,7 +445,7 @@ Rules:
 
 Move to:
 
-- `src/geometry`
+- `src/mesh/geometry`
 
 Planned names:
 
@@ -469,7 +469,7 @@ Rules:
 
 Move to:
 
-- `src/modeling/polygon`
+- `src/mesh/polygon`
 
 Planned names:
 
@@ -498,8 +498,8 @@ Split across several app modules:
 - polygon session/object operation code -> `src/modeling`,
 - selection policy -> `src/editor/selection` plus `src/modeling` for component internals,
 - session history -> `src/editor/history` only if converted to app transaction snapshots; otherwise delete or keep as test-only transition code,
-- transform preview -> `src/editor/actions` or `src/modeling`,
-- transform gizmo math -> `src/viewport` or `src/editor/actions`,
+- transform preview -> `src/editor/commands` or `src/modeling`,
+- transform gizmo math -> `src/viewport` or `src/editor/commands`,
 - viewport navigation math -> `src/viewport`,
 - overlay policy -> `src/editor/projection`.
 
@@ -516,7 +516,7 @@ Move to:
 
 - `src/editor/commands`
 - `src/api`
-- `src/editor/actions`
+- `src/editor/commands`
 
 Planned owners:
 
@@ -855,7 +855,7 @@ Planned split:
 - `src/modeling/ModelingTransformPreview.*`
 - `src/editor/projection/MeshProjectionService.*`
 - `src/editor/selection/EditorSelectionService.*`
-- `src/editor/actions/TransformInteractionService.*`
+- `src/editor/commands/TransformInteractionService.*`
 - `src/editor/commands/DeleteSelectionCommand.*`
 - `src/editor/commands/DuplicateSelectionCommand.*`
 
@@ -876,7 +876,7 @@ Methods to make private or remove:
 - public `canRedo`
 - direct mutation helpers that bypass app history.
 
-### `src/editor/EditorCommandService.h`
+### `src/editor/commands/EditorCommandService.h`
 
 Current role:
 
@@ -1470,7 +1470,7 @@ Shift duplicate should:
 
 ### Mechanical Migration
 
-1. Create new `src/modeling/polygon`, `src/modeling`, `src/geometry`, `src/io/qdr`, and `src/editor/*` directories.
+1. Create new `src/mesh/polygon`, `src/modeling`, `src/mesh/geometry`, `src/io/qdr`, and `src/editor/*` directories.
 2. Move former SDK sources into these directories.
 3. Update includes mechanically.
 4. Keep temporary namespace aliases if necessary for staged compilation.

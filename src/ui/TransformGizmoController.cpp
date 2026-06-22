@@ -9,7 +9,7 @@
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
 #include "editor/selection/EditorSelectionService.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
 #include "scene/TransformPivot.h"
 #include "viewport/ViewportCameraAdapter.h"
@@ -25,9 +25,9 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 
-#include <modeling/interactions/tool_transform_math.h>
-#include <modeling/interactions/transform_gizmo.h>
-#include <modeling/runtime/tool_constants.h>
+#include <editor/interactions/tool_transform_math.h>
+#include <editor/interactions/transform_gizmo.h>
+#include <editor/modeling/runtime/tool_constants.h>
 
 namespace quader {
 namespace {

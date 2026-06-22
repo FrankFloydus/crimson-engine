@@ -6,8 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/interactions/tool_identity.h>
-#include <modeling/runtime/tool_registry.h>
+#include <editor/interactions/tool_identity.h>
+#include <editor/modeling/runtime/tool_registry.h>
 #include <editor/metadata/host_contract.h>
 
 #include <string_view>

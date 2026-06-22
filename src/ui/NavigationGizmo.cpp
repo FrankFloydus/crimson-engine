@@ -15,7 +15,7 @@
 
 #include <imgui_internal.h>
 
-#include <modeling/interactions/viewport_navigation.h>
+#include <editor/interactions/viewport_navigation.h>
 
 namespace quader {
 namespace {

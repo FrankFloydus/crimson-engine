@@ -8,8 +8,8 @@
 
 #include "api/QuaderApiMutationRunner.h"
 #include "api/QuaderObjectHandle.h"
-#include "document/ProjectSession.h"
-#include "editor/EditorCommandService.h"
+#include "scene/document/ProjectSession.h"
+#include "editor/commands/EditorCommandService.h"
 
 namespace quader {
 

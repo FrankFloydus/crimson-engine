@@ -7,7 +7,7 @@
 #pragma once
 
 #include "assets/AssetRegistry.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "scene/SceneDocument.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportSettings.h"

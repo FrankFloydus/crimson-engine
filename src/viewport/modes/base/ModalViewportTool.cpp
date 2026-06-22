@@ -7,7 +7,7 @@
 #include "viewport/modes/base/ModalViewportTool.h"
 
 #include "core/Logger.h"
-#include "modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 namespace quader {
 

@@ -15,7 +15,7 @@ policy, history policy, and execution path through that contract.
 
 - Polygon-backed instant operations use catalog-owned `InstantOperationCommandTool` rows in
   `ModelingCommandToolCatalog.cpp`; only commands with custom behavior get a file under
-  `src/editor/actions/commands`.
+  `src/editor/commands/modeling`.
 - Native service-backed instant commands use `CustomInstantCommandTool` or a narrower existing base.
 - Polygon context actions use catalog-owned `ContextActionTool` rows.
 - Preview/modal operation commands use catalog-owned `PreviewOperationCommandTool` rows unless they

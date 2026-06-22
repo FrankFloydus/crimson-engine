@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "test_support.h"
 
-#include <geometry/geometry.h>
+#include <mesh/geometry/geometry.h>
 
 #include <array>
 #include <cmath>

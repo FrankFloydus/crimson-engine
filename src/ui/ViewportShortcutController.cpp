@@ -9,7 +9,7 @@
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "editor/actions/ModelingCommandToolCatalog.h"
+#include "editor/commands/ModelingCommandToolCatalog.h"
 
 #include <optional>
 #include <string>

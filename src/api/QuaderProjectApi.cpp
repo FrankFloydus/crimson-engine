@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderProjectApi.h"
 
-#include "document/ProjectSession.h"
+#include "scene/document/ProjectSession.h"
 
 #include <utility>
 

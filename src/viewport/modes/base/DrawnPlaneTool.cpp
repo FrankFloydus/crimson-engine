@@ -7,8 +7,8 @@
 #include "viewport/modes/base/DrawnPlaneTool.h"
 
 #include "core/Logger.h"
-#include "modeling/services/ModelingSessionService.h"
-#include "modeling/services/SelectionModeAdapter.h"
+#include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/SelectionModeAdapter.h"
 
 namespace quader {
 namespace {

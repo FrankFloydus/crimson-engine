@@ -8,11 +8,11 @@
 
 #include "core/Types.h"
 #include "math/Types.h"
-#include "modeling/services/ModelingActionCatalog.h"
-#include "modeling/ModelingTypes.h"
+#include "editor/modeling/services/ModelingActionCatalog.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "scene/Components.h"
 
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <cstdint>
 #include <string>

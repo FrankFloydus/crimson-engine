@@ -7,8 +7,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/runtime/editor_runtime.h>
-#include <modeling/interactions/interaction_api.h>
+#include <editor/modeling/runtime/editor_runtime.h>
+#include <editor/interactions/interaction_api.h>
 
 TEST_CASE("viewport grid point placement can snap or preserve raw positions", "[editor-core][tool][poly]")
 {

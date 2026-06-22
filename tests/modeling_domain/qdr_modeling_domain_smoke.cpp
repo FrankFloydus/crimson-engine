@@ -6,9 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <catch2/catch_test_macros.hpp>
 
-#include <modeling/runtime/session.h>
+#include <editor/modeling/runtime/session.h>
 #include <io/qdr/qdr.h>
-#include <modeling/polygon/document.h>
+#include <mesh/polygon/document.h>
 
 #include <string>
 

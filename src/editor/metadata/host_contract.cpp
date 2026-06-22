@@ -6,13 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/metadata/host_contract.h>
 
-#include <modeling/operations/operation_registry.h>
-#include <modeling/operations/operation_schema.h>
-#include <modeling/runtime/session.h>
-#include <modeling/interactions/cut_tool.h>
-#include <modeling/interactions/tool_identity.h>
-#include <modeling/runtime/tool_constants.h>
-#include <modeling/runtime/tool_registry.h>
+#include <editor/modeling/operations/operation_registry.h>
+#include <editor/modeling/operations/operation_schema.h>
+#include <editor/modeling/runtime/session.h>
+#include <editor/interactions/cut_tool.h>
+#include <editor/interactions/tool_identity.h>
+#include <editor/modeling/runtime/tool_constants.h>
+#include <editor/modeling/runtime/tool_registry.h>
 
 #include <array>
 #include <vector>

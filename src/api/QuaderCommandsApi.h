@@ -8,7 +8,7 @@
 
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApiTypes.h"
-#include "editor/EditorCommandRegistry.h"
+#include "editor/commands/EditorCommandRegistry.h"
 
 #include <functional>
 #include <string>

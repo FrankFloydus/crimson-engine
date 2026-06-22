@@ -17,11 +17,11 @@ Unity SDK first, then implement matching behavior in native-app-owned modules.
 
 Former SDK/editor-core reference files after absorption:
 
-- `src/modeling/runtime/session_selection_overlay.cpp`
-- `src/modeling/runtime/selection_policy.cpp`
-- `src/modeling/runtime/session_picking.cpp`
-- `src/modeling/runtime/overlay_visibility.cpp`
-- `src/modeling/runtime/session.h`
+- `src/editor/modeling/runtime/session_selection_overlay.cpp`
+- `src/editor/modeling/runtime/selection_policy.cpp`
+- `src/editor/modeling/runtime/session_picking.cpp`
+- `src/editor/modeling/runtime/overlay_visibility.cpp`
+- `src/editor/modeling/runtime/session.h`
 
 Important Unity presentation files:
 

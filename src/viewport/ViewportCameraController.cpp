@@ -8,8 +8,8 @@
 
 #include "viewport/HostViewportContractAdapter.h"
 
-#include <modeling/interactions/viewport_navigation.h>
-#include <modeling/interactions/viewport_projection.h>
+#include <editor/interactions/viewport_navigation.h>
+#include <editor/interactions/viewport_projection.h>
 
 #include <cmath>
 #include <numbers>
