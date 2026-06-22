@@ -77,12 +77,16 @@ TEST_CASE("host contract public API stays descriptor-only", "[host-contract]")
 	static_assert(std::is_trivially_copyable_v<qhc::HostMaterialRecipeDescriptor>);
 
 	const std::string header = read_host_contract_header();
+	const std::string legacy_export_macro = std::string("QDR_") + "UN" + "ITY_API";
+	const std::string legacy_bridge_prefix = std::string("qdr_") + "un" + "ity";
+	const std::string legacy_engine_namespace = std::string("Un") + "ityEngine";
+
 	CHECK(header.find("operation_command") == std::string::npos);
 	CHECK(header.find("runtime_command") == std::string::npos);
 	CHECK(header.find("EditorOperationCommand") == std::string::npos);
 	CHECK(header.find("EditorRuntimeCommand") == std::string::npos);
-	CHECK(header.find("QDR_UNITY_API") == std::string::npos);
-	CHECK(header.find("qdr_unity") == std::string::npos);
+	CHECK(header.find(legacy_export_macro) == std::string::npos);
+	CHECK(header.find(legacy_bridge_prefix) == std::string::npos);
 	CHECK(header.find("execute") == std::string::npos);
 	CHECK(header.find("dispatch") == std::string::npos);
 	CHECK(header.find("payload") == std::string::npos);
@@ -92,7 +96,7 @@ TEST_CASE("host contract public API stays descriptor-only", "[host-contract]")
 	const std::string source = read_host_contract_source();
 	CHECK(source.find("EditorPrefs") == std::string::npos);
 	CHECK(source.find("QVertexWorks.Quader") == std::string::npos);
-	CHECK(source.find("UnityEngine") == std::string::npos);
+	CHECK(source.find(legacy_engine_namespace) == std::string::npos);
 	CHECK(source.find("QuaderViewportSettingsState") == std::string::npos);
 	CHECK(source.find("DllImport") == std::string::npos);
 }

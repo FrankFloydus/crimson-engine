@@ -41,7 +41,6 @@ std::vector<std::string_view> requiredInstructionFiles() {
             "agents/public-api-and-scripting.md",
             "agents/domain-ownership.md",
             "agents/oop-architecture.md",
-            "agents/sdk-unity-parity.md",
             "agents/modeling-tools.md",
             "agents/viewport-tools.md",
             "agents/rendering-overlays.md",
@@ -97,7 +96,6 @@ TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
             "agents/public-api-and-scripting.md",
             "agents/domain-ownership.md",
             "agents/oop-architecture.md",
-            "agents/sdk-unity-parity.md",
             "agents/modeling-tools.md",
             "agents/viewport-tools.md",
             "agents/rendering-overlays.md",
@@ -118,18 +116,52 @@ TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
 TEST(AgentInstructionRoutingTests, AppRefactorSupersedesCopiedSdkBoundary) {
     const std::string projectIdentity = readFile("agents/project-identity.md");
     const std::string domainOwnership = readFile("agents/domain-ownership.md");
-    const std::string unityParity = readFile("agents/sdk-unity-parity.md");
     const std::string testingBuild = readFile("agents/testing-build.md");
 
     EXPECT_TRUE(contains(projectIdentity, "app-refactor.md"));
     EXPECT_TRUE(contains(projectIdentity, "Do not preserve the old top-level copied SDK boundary"));
     EXPECT_TRUE(contains(projectIdentity, "compile-time SDK presence macro"));
     EXPECT_TRUE(contains(domainOwnership, "Former SDK geometry, polygon, editor-core"));
-    EXPECT_TRUE(contains(unityParity, "The top-level copied SDK boundary is retired"));
 
-    for (const std::string& source : {projectIdentity, domainOwnership, unityParity, testingBuild}) {
+    for (const std::string& source : {projectIdentity, domainOwnership, testingBuild}) {
         EXPECT_FALSE(contains(source, "preserve the SDK boundary"));
         EXPECT_FALSE(contains(source, "copied SDK tests"));
         EXPECT_FALSE(contains(source, "vs2026-sdk-tests"));
+    }
+}
+
+TEST(AgentInstructionRoutingTests, AgentInstructionsStayNative) {
+    const std::vector<std::filesystem::path> files = {
+            "AGENTS.md",
+            "agents/README.md",
+            "agents/project-identity.md",
+            "agents/public-api-and-scripting.md",
+            "agents/domain-ownership.md",
+            "agents/oop-architecture.md",
+            "agents/modeling-tools.md",
+            "agents/viewport-tools.md",
+            "agents/rendering-overlays.md",
+            "agents/ui-localization.md",
+            "agents/testing-build.md",
+            "agents/dependencies.md",
+            "agents/docs-public-examples.md",
+            "programmatic-api-plan.md",
+    };
+
+    const std::string retiredInstructionName = std::string("sdk-") + "un" + "ity-" + "par" + "ity.md";
+    const std::string retiredInstruction = std::string("agents/") + retiredInstructionName;
+    const std::string retiredCheckout = std::string("quader-") + "un" + "ity";
+    const std::string retiredBehaviorLabel = std::string("Un") + "ity " + "par" + "ity";
+    const std::string retiredPluginLabel = std::string("Un") + "ity " + "plugin";
+
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / retiredInstruction));
+
+    for (const std::filesystem::path& file : files) {
+        const std::string source = readFile(file);
+        EXPECT_FALSE(contains(source, retiredInstructionName)) << file.generic_string();
+        EXPECT_FALSE(contains(source, retiredInstruction)) << file.generic_string();
+        EXPECT_FALSE(contains(source, retiredCheckout)) << file.generic_string();
+        EXPECT_FALSE(contains(source, retiredBehaviorLabel)) << file.generic_string();
+        EXPECT_FALSE(contains(source, retiredPluginLabel)) << file.generic_string();
     }
 }

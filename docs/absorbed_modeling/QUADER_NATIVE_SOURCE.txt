@@ -4,10 +4,9 @@
 # No permission is granted to use, copy, modify, distribute, or sublicense this
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
-Copied from the committed Unity SDK submodule for the native Quader app.
+Absorbed modeling source snapshot for the native Quader app.
 
-Source repository: C:/Users/Drako/Desktop/_QUADER_DEV/quader-unity/sdk
 Source commit: f6b0626a2b420e57c7291bcf94a9a09b9e4444ce
 Copy method: git archive HEAD
 
-Dirty working tree changes in the Unity SDK source were intentionally excluded.
+External working tree changes at the time of copy were intentionally excluded.

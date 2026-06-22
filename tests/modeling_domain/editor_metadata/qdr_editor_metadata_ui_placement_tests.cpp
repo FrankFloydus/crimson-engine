@@ -203,7 +203,7 @@ TEST_CASE("host contract main menu placement preserves editor shell groups", "[h
 	CHECK_FALSE(settings.separator_before);
 }
 
-TEST_CASE("host contract toolbar placement mirrors current Unity chrome order", "[host-contract]")
+TEST_CASE("host contract toolbar placement mirrors current editor chrome order", "[host-contract]")
 {
 	check_toolbar_order("viewport_tool_toolbar", std::array<std::string_view, 7> {{
 		"move",

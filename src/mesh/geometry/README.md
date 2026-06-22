@@ -32,15 +32,13 @@ Third-party geometry backends must stay private to this package. Public headers 
   degenerate triangles, and mismatched broad-phase spans are permanent boundary
   cases for package tests.
 - Migration candidates found during the Slice 1 audit:
-  - `package/com.qvertexworks.quader/Editor/Viewport/CutPreviewResultLineBuilder.cs`
-    owns mesh-plane cut-preview line extraction in Unity presentation code.
-    It should move behind an SDK/native geometry contract if the behavior
-    becomes portable tool or overlay policy rather than render-only preview
-    mesh shaping.
-  - `package/com.qvertexworks.quader/Editor/Viewport/CutPreviewPlaneFrame.cs`
-    owns cut-preview plane frame construction in Unity presentation code.
-    Keep it render-only, or promote the reusable plane-frame math into
-    `qdr_geometry` before another engine needs to match it.
+  - cut-preview result line builders own mesh-plane cut-preview line extraction
+    in presentation code. Move that behavior behind a native geometry contract
+    if it becomes portable tool or overlay policy rather than render-only
+    preview mesh shaping.
+  - cut-preview plane frame builders own cut-preview plane frame construction
+    in presentation code. Keep it render-only, or promote the reusable
+    plane-frame math into `qdr_geometry` before another host needs to match it.
   - Adapter-local conversion helpers in `src/mesh/polygon` and
     `src/editor/modeling` are acceptable as thin type boundaries, but
     reusable predicates, spatial broad-phase, or projection math should be

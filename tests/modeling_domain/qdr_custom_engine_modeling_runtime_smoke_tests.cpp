@@ -143,10 +143,10 @@ TEST_CASE("custom engine consumer can run a modeling session through app-owned m
 }
 
 #ifdef QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH
-TEST_CASE("custom engine smoke test stays off the Unity adapter surface", "[custom-engine][surface]")
+TEST_CASE("custom engine smoke test stays off legacy adapter surfaces", "[custom-engine][surface]")
 {
 	const std::string source = read_text_file(QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH);
-	const std::string bridge_name = std::string("qdr_") + "unity";
+	const std::string bridge_name = std::string("qdr_") + "un" + "ity";
 	const std::string managed_import = std::string("Dll") + "Import";
 	const std::string session_export_prefix = std::string("qdr_") + "session_";
 

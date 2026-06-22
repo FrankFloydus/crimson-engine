@@ -24,10 +24,10 @@ adapters so OpenGL and Metal can be added later.
 
 ## Overlay Rules
 
-- `src/render/ViewportOverlayPolicy.h` is the app mirror of Unity overlay presentation policy.
+- `src/render/ViewportOverlayPolicy.h` is the native app overlay presentation policy.
 - Keep layer draw order, colors, alpha, widths, point sizes, and depth/draw-on-top decisions
   centralized there.
-- Do not scatter Unity color constants through unrelated files.
+- Do not scatter overlay color constants through unrelated files.
 - `SceneRenderBridge` renders face/fill triangle overlays and GPU screen-space wire/vertex overlays.
 - Do not reintroduce raw Filament `LINES`/`POINTS`, ImGui wire fallbacks, or unfeathered
   triangle-strip shortcuts for selection overlays.
@@ -36,17 +36,17 @@ adapters so OpenGL and Metal can be added later.
   - `resources/materials/quader_overlay_line.mat`
   - `resources/materials/quader_overlay_point.mat`
 - Filament device-domain overlay vertices must be normalized device coordinates with `w = 1`.
-- Apply Unity-style overlay depth bias in view space before projection.
+- Apply overlay depth bias in view space before projection.
 - Lines must be clipped against the near plane before pixel expansion.
 - Device-domain overlay renderables must disable renderable culling.
 - Filament uses reversed depth. For depth-tested overlay passes, use `DepthFunc::GE`.
 
-## Unity Overlay Contract
+## Overlay Contract
 
 - Depth-tested: `SourceWire`, `OpenEdge`, `HoverFaceEdge`, `HoverEdge`.
 - Draw-on-top: `SelectedFaceEdge`, `SelectedEdge`, `DiagnosticEdge`, selected/hover/snap vertices.
-- Face fills use Unity depth-stamped two-pass behavior.
-- Unity layer order is:
+- Face fills use depth-stamped two-pass behavior.
+- Native layer order is:
   `SelectedVisibleFace`, `SelectedFaceMask`, `SourceWire`, `SelectedXrayFace`, `HoverFace`,
   `OpenEdge`, `DiagnosticEdge`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
   `UnselectedVertex`, `SelectedVertex`, `HoverVertex`, `SnapTargetVertex`.

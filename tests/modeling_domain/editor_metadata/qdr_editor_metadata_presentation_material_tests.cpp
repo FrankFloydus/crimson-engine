@@ -183,7 +183,7 @@ TEST_CASE("host contract default material recipe is semantic and engine-neutral"
 	CHECK(close_to(require_scalar(*recipe, qhc::HostMaterialScalarKind::ambient_occlusion_remap_max).value, 1.0));
 }
 
-TEST_CASE("host contract material metadata avoids Unity shader and property names", "[host-contract]")
+TEST_CASE("host contract material metadata avoids engine-specific shader and property names", "[host-contract]")
 {
 	const std::string source = read_host_contract_source();
 	CHECK(source.find("Universal Render Pipeline") == std::string::npos);

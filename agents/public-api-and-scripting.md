@@ -54,7 +54,7 @@ Keep code in owner services when it owns:
 - document, SDK, asset, render, or platform invariants;
 - per-frame hot loops, mouse-move picking, draw submission, caches, or GPU resources;
 - storage/revision internals;
-- Unity parity mechanics;
+- private modeling, viewport, and render mechanics;
 - private state transitions that must remain behind service/command owners.
 
 If a new UI/test/script needs behavior that the public API does not expose yet, add the missing

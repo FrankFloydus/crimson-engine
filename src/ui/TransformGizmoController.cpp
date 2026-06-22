@@ -710,7 +710,7 @@ void drawProjectedCubeHandle(
     }
 }
 
-void drawUnityStyleGizmo(
+void drawQuaderGizmo(
         const quader_editor_core::TransformGizmoFrame& frame,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
@@ -965,7 +965,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     }
     const quader_editor_core::TransformGizmoFrame runtimeFrame =
             quader_editor_core::build_transform_gizmo_frame(runtimeInput);
-    drawUnityStyleGizmo(runtimeFrame, camera, itemMin, itemSize);
+    drawQuaderGizmo(runtimeFrame, camera, itemMin, itemSize);
 
     const ViewportCameraPose pose = camera.pose();
     const float cameraDistance = std::max(length(pose.eye - pivot), 0.1f);

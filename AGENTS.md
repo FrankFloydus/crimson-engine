@@ -14,8 +14,6 @@ Read this file first, then read the domain files that match the task before edit
 ## Project Identity
 
 - This repository is the native standalone Windows Quader app.
-- It is not the Unity plugin and should not preserve old plugin/DLL protection behavior unless a
-  native-app requirement explicitly asks for it.
 - `QuaderEditorApi` is the default whole-editor API for new user/editor intent in the native app.
   Use `QuaderApi` for document/modeling-only code that does not need runtime editor domains.
 - Low-level systems remain the owner layers for absorbed modeling, document, asset, render, UI, and platform
@@ -28,16 +26,12 @@ Always read:
 - `agents/domain-ownership.md`
 - `agents/testing-build.md`
 
-## Restore And Parity Rule
+## Restore Rule
 
-When the user asks to restore previous working behavior or asks for 100% Unity parity, do not
-redesign, reinterpret, or replace the behavior. Find the source behavior and integrate the same
-logic into the current architecture while preserving ordering, state transitions, side effects,
-cache invalidation, and error handling.
-
-For parity/restoration work, also read:
-
-- `agents/sdk-unity-parity.md`
+When the user asks to restore previous working behavior, do not redesign, reinterpret, or replace
+the behavior. Find the current app behavior, tests, or project history that defines it and integrate
+the same logic into the current architecture while preserving ordering, state transitions, side
+effects, cache invalidation, and error handling.
 
 ## Domain Routing
 
@@ -48,18 +42,17 @@ For parity/restoration work, also read:
   read `agents/ui-localization.md`; if the task mutates editor state, also read
   `agents/public-api-and-scripting.md`.
 - Modeling tools, Polygon-backed operations, component selection, transform previews:
-  read `agents/sdk-unity-parity.md`, `agents/modeling-tools.md`,
-  `agents/public-api-and-scripting.md`.
+  read `agents/modeling-tools.md`, `agents/public-api-and-scripting.md`.
 - Viewport tools, camera, navigation, shortcuts, gizmos, modal tool input:
-  read `agents/viewport-tools.md`, `agents/sdk-unity-parity.md`.
+  read `agents/viewport-tools.md`.
 - Rendering, overlays, Filament resources, materials, viewport draw behavior:
-  read `agents/rendering-overlays.md`, `agents/sdk-unity-parity.md`.
+  read `agents/rendering-overlays.md`.
 - OOP refactors, class boundaries, ownership, command/service extraction:
   read `agents/oop-architecture.md`, `agents/domain-ownership.md`.
 - Tests, guardrails, build failures, smoke checks:
   read `agents/testing-build.md` plus the relevant domain file.
 - Dependencies, licenses, SDK/third-party changes:
-  read `agents/dependencies.md`, and for SDK behavior also read `agents/sdk-unity-parity.md`.
+  read `agents/dependencies.md`.
 
 ## Public API Rule
 

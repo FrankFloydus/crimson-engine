@@ -20,7 +20,6 @@ over loading every instruction file.
 - `domain-ownership.md`: where behavior belongs across document, modeling, UI, viewport, render,
   SDK, and assets.
 - `oop-architecture.md`: class/interface/service/command refactor rules.
-- `sdk-unity-parity.md`: Unity parity, SDK boundaries, transform/selection behavior.
 - `modeling-tools.md`: modeling command tool ownership and catalog rules.
 - `viewport-tools.md`: viewport tool contracts and interaction ownership.
 - `rendering-overlays.md`: Filament, overlay, depth, wire/point/face-fill rules.

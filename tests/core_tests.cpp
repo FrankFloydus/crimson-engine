@@ -424,7 +424,7 @@ TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
     EXPECT_NE(uiSettingsSource.find("NavigationGizmo="), std::string::npos);
 }
 
-TEST(ViewportSettingsTests, DefaultsMirrorUnityViewportSettingsState) {
+TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     const ViewportSettings settings = ViewportSettings::defaults();
 
     ASSERT_EQ(viewportSettingsSections().size(), 8u);
@@ -448,7 +448,7 @@ TEST(ViewportSettingsTests, DefaultsMirrorUnityViewportSettingsState) {
     EXPECT_TRUE(viewportBoolSettings().empty());
 }
 
-TEST(ViewportSettingsTests, SavesLoadsAndClampsUnityPreferenceKeys) {
+TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "quader_viewport_settings_round_trip.ini";
     std::filesystem::remove(path);
@@ -476,7 +476,7 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsUnityPreferenceKeys) {
     std::filesystem::remove(path);
 }
 
-TEST(GroundGridMaterialTests, UsesUnityStyleUserWorldAnchoring) {
+TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
     const std::filesystem::path materialPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "ground_grid.mat";
     std::ifstream materialFile(materialPath);
@@ -514,7 +514,7 @@ TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
     EXPECT_EQ(source.find("color,"), std::string::npos);
 }
 
-TEST(QuaderMeshMaterialTests, MatchesUnitySceneUnlitTextureTransformTimesColor) {
+TEST(QuaderMeshMaterialTests, UsesUnlitTextureTransformTimesColor) {
     const std::filesystem::path materialPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "quader_mesh.mat";
     std::ifstream materialFile(materialPath);
@@ -549,7 +549,7 @@ TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {
     EXPECT_NE(source.find("vec4(vertexColor.rgb * vertexColor.a, vertexColor.a)"), std::string::npos);
 }
 
-TEST(OverlayMaterialTests, LineAndPointMaterialsMirrorUnityScreenSpaceOverlayExpansion) {
+TEST(OverlayMaterialTests, LineAndPointMaterialsUseScreenSpaceOverlayExpansion) {
     const std::filesystem::path lineMaterialPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "quader_overlay_line.mat";
     std::ifstream lineMaterialFile(lineMaterialPath);
@@ -588,7 +588,7 @@ TEST(OverlayMaterialTests, LineAndPointMaterialsMirrorUnityScreenSpaceOverlayExp
     EXPECT_LT(innerRadiusGuard, outerCircleDiscard);
 }
 
-TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
+TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
     const std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> expected{{
             ViewportOverlayLayer::SelectedVisibleFace,
             ViewportOverlayLayer::SelectedFaceMask,
@@ -621,7 +621,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityLayerDrawOrder) {
     }
 }
 
-TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
+TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::WireframeBase, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::OpenEdge, ViewportOverlayGeometryKind::Lines));
@@ -660,7 +660,7 @@ TEST(ViewportOverlayPolicyTests, MatchesUnityDepthAndHoverSuppressionContract) {
     EXPECT_FALSE(viewportOverlayLayerIsSuppressedByTransientHover(ViewportOverlayLayer::SourceWire));
 }
 
-TEST(ViewportOverlayPolicyTests, MatchesUnityColorsAndRuntimePointSizes) {
+TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedVisibleFace, rgba8(255, 255, 255)), kOverlaySelectionFaceColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::SelectedFaceEdge, rgba8(255, 255, 255)), kOverlaySelectionWireColor);
     EXPECT_EQ(viewportOverlayColorFor(ViewportOverlayLayer::WireframeBase, rgba8(255, 255, 255)), rgba8(255, 255, 255));
@@ -919,7 +919,7 @@ TEST(ViewportGridPlacementPolicyTests, ResolvesPerspectiveAndOrthographicPlanesW
     expectVec3Near(front.axes.vAxis, {0.0f, 1.0f, 0.0f});
 }
 
-TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
+TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
     const std::filesystem::path bridgePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
     const std::filesystem::path builderPath =
@@ -969,7 +969,7 @@ TEST(SceneRenderBridgeTests, UsesUnityDepthStampedFaceFillForOverlayTriangles) {
     EXPECT_NE(toolPreviewCacheSource.find("void ToolPreviewRenderableCache::clear()"), std::string::npos);
 }
 
-TEST(SceneRenderBridgeTests, UsesUnityStyleQuadMaterialsForSelectionLineAndPointOverlay) {
+TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
     const std::filesystem::path proxyFactoryPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "OverlayProxyFactory.cpp";
     const std::filesystem::path lineBuilderPath =
@@ -1926,7 +1926,7 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     EXPECT_NE(source.find("transformPoint(document.worldTransformMatrix(selected), Vec3{})"), std::string::npos);
 }
 
-TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesUnityBoxPreviewOutline) {
+TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesBoxPreviewOutline) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     const std::filesystem::path overlayRendererPath =
@@ -2003,7 +2003,7 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_EQ(source.find("|| suppressHoverWork) &&"), std::string::npos);
 }
 
-TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsUnityRemovePreviewContract) {
+TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsRemovePreviewContract) {
     const std::filesystem::path appOverlayPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionServices.cpp";
     const std::filesystem::path runtimeOverlayPath =
@@ -3366,7 +3366,7 @@ ViewportLayoutState makeDistinctViewportLayoutState() {
 
 } // namespace
 
-TEST(ViewportLayoutTests, OptionLabelsMatchUnityViewportLayoutModel) {
+TEST(ViewportLayoutTests, OptionLabelsMatchViewportLayoutModel) {
     const auto& options = viewportLayoutOptions();
 
     ASSERT_EQ(options.size(), 8u);
@@ -3390,7 +3390,7 @@ TEST(ViewportLayoutTests, OptionLabelsMatchUnityViewportLayoutModel) {
     EXPECT_EQ(viewportLayoutLabel(ViewportLayoutId::ThreePrimaryTop), "Three-View Primary Top");
 }
 
-TEST(ViewportLayoutTests, BuildPlacementsMatchUnityNormalizedRects) {
+TEST(ViewportLayoutTests, BuildPlacementsMatchNormalizedRects) {
     const ViewportLayoutState state = makeDistinctViewportLayoutState();
 
     std::vector<ViewportPanePlacement> placements = viewportLayoutPlacements(ViewportLayoutId::Single, state);
@@ -3439,7 +3439,7 @@ TEST(ViewportLayoutTests, BuildPlacementsMatchUnityNormalizedRects) {
     expectViewportPlacement(placements[3], ViewportPaneId::Side, 0.30f, 0.70f, 0.70f, 0.30f);
 }
 
-TEST(ViewportLayoutTests, BuildSplitHandlesMatchUnityAxesAndSpans) {
+TEST(ViewportLayoutTests, BuildSplitHandlesMatchAxesAndSpans) {
     const ViewportLayoutState state = makeDistinctViewportLayoutState();
 
     EXPECT_TRUE(viewportLayoutSplitHandles(ViewportLayoutId::Single, state).empty());
@@ -3478,7 +3478,7 @@ TEST(ViewportLayoutTests, BuildSplitHandlesMatchUnityAxesAndSpans) {
     expectViewportSplitHandle(handles[1], ViewportSplitHandleId::FourHorizontal, ViewportSplitHandleAxis::Horizontal, 0.70f, 0.0f, 1.0f);
 }
 
-TEST(ViewportLayoutTests, SplitStateDefaultsAndClampsLikeUnity) {
+TEST(ViewportLayoutTests, SplitStateDefaultsAndClamps) {
     ViewportLayoutState state;
 
     EXPECT_FLOAT_EQ(state.twoHorizontalSplit(), 0.5f);
@@ -3521,7 +3521,7 @@ TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
     EXPECT_LT(camera.state().distance, initialDistance);
 }
 
-TEST(ViewportCameraTests, DefaultPerspectiveMatchesUnityViewportContract) {
+TEST(ViewportCameraTests, DefaultPerspectiveMatchesViewportContract) {
     ViewportCameraController camera;
     const ViewportCameraPose pose = camera.pose();
 
@@ -3715,7 +3715,7 @@ TEST(ViewportCameraTests, OrthographicAxisViewBuildsParallelPickingRays) {
     EXPECT_NE(centerRay.origin.y, cornerRay.origin.y);
 }
 
-TEST(ViewportCameraTests, FocusOriginResetsOrthographicSizeLikeUnity) {
+TEST(ViewportCameraTests, FocusOriginResetsOrthographicSize) {
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
     camera.viewAxis(ViewportViewAxis::Y, 1);
@@ -3901,7 +3901,7 @@ TEST(ViewportInputRouterTests, ModalToolHotkeysActivateNativeControllers) {
     EXPECT_EQ(router.state().activeTool, ViewportTool::Poly);
 }
 
-TEST(ViewportInputRouterTests, OperationShortcutsMatchUnityViewportContract) {
+TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
     /**
      * Stores the Shortcut Case data contract used by the automated test suite.
      */
@@ -4005,7 +4005,7 @@ TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
     EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FlipHorizontal);
 }
 
-TEST(ViewportInputRouterTests, SelectionModeHotkeysMatchUnityViewportShortcuts) {
+TEST(ViewportInputRouterTests, SelectionModeHotkeysMatchViewportShortcuts) {
     ViewportInputRouter router;
     ViewportCameraController camera;
     ViewportInputFrame input;
@@ -4029,7 +4029,7 @@ TEST(ViewportInputRouterTests, SelectionModeHotkeysMatchUnityViewportShortcuts) 
     EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Object);
 }
 
-TEST(ViewportInputRouterTests, GridPresetWorldSizesMatchUnityMapUnitContract) {
+TEST(ViewportInputRouterTests, GridPresetWorldSizesMatchMapUnitContract) {
     ViewportInputRouter router;
     EXPECT_EQ(router.state().gridPreset, viewportDefaultGridPreset());
     EXPECT_EQ(viewportDefaultGridPreset(), 6);
@@ -4134,7 +4134,7 @@ TEST(ViewportInputRouterTests, ExternalSelectionModeSyncUpdatesToolState) {
     EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Face);
 }
 
-TEST(ViewportInputRouterTests, FocusShortcutsMatchUnityViewportContract) {
+TEST(ViewportInputRouterTests, FocusShortcutsMatchViewportContract) {
     ViewportInputRouter router;
     ViewportCameraController camera;
     ViewportInputFrame input;
@@ -4300,7 +4300,7 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
     EXPECT_FALSE(camera.orthographicViewLocked());
 }
 
-TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicViewLikeUnity) {
+TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicView) {
     ViewportInputRouter router;
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
@@ -6241,7 +6241,7 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
     EXPECT_TRUE(command.changed);
 }
 
-TEST(ModelingSessionServiceTests, CutAndMirrorEmitUnityDrawnPlaneOverlay) {
+TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -8469,7 +8469,7 @@ TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutR
     EXPECT_EQ(rootModelingMeshes, 0u);
 }
 
-TEST(ModelingSessionServiceTests, VertexSelectionModeExposesUnityOverlayPoints) {
+TEST(ModelingSessionServiceTests, VertexSelectionModeExposesOverlayPoints) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -8589,7 +8589,7 @@ TEST(ModelingSessionServiceTests, SwitchingSelectedObjectToFaceModeShowsHandlesI
     EXPECT_TRUE(visiblePrimitive);
 }
 
-TEST(ModelingSessionServiceTests, ObjectSelectionOverlayUsesUnitySelectionColors) {
+TEST(ModelingSessionServiceTests, ObjectSelectionOverlayUsesSelectionColors) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);

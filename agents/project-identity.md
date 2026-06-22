@@ -9,20 +9,11 @@ file except through prior written authorization from Francesco Di Blasi.
 # Project Identity
 
 - This repository is the native standalone Windows Quader app.
-- It is not the Unity plugin.
-- It should not keep old plugin/DLL protection behavior unless a native-app requirement explicitly
-  asks for it.
-- The Unity plugin checkout at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity` is the active
-  source of truth for modeling viewport parity.
-- The original Unity package lives at
-  `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\package\com.qvertexworks.quader`.
-- The original Unity SDK lives at `C:\Users\Drako\Desktop\_QUADER_DEV\quader-unity\sdk` and is a
-  parity reference only.
 - `app-refactor.md` is the accepted native-app architecture direction as of 2026-06-22.
 - This app owns former SDK code in app modules. Do not preserve the old top-level copied SDK boundary,
   modeling SDK directory override, or compile-time SDK presence macro as native-app authority.
-- Preserve behavior while moving code, but make editor document, command, selection, history, and
-  projection ownership app-native instead of split across an SDK facade.
+- Preserve established native behavior while moving code, but keep editor document, command,
+  selection, history, and projection ownership app-native instead of split across an SDK facade.
 
 ## Restore Rule
 

@@ -10,9 +10,9 @@ file except through prior written authorization from Francesco Di Blasi.
 
 Descriptor-only schema for Quader-facing editor metadata.
 
-This app-owned module helps Unity, Godot, and custom engine adapters discover
-Quader-facing metadata without reading a specific adapter implementation. It
-describes host intent; it does not execute modeling commands.
+This app-owned module helps host integrations discover Quader-facing metadata
+without reading a specific adapter implementation. It describes host intent; it
+does not execute modeling commands.
 
 Owns:
 
@@ -76,19 +76,17 @@ Current public entry points:
 - `tool_group_catalog()`
 - `panel_catalog()`
 
-Custom engines should consume app-owned modeling domain and host-contract descriptors. They
-should not consume `qdr_unity.dll` as a modeling SDK. The Unity DLL remains a
-protected workflow-shaped adapter for the Unity editor package.
+Custom hosts should consume app-owned modeling domain and host-contract descriptors instead of
+workflow-shaped editor adapters.
 
 Preference descriptors are metadata only. They expose labels, value kinds,
 defaults, ranges, groups, and operation/overlay links so hosts can build their
-own settings UI and persistence without importing Unity editor state.
+own settings UI and persistence without importing editor-specific state.
 
 Overlay presentation and material descriptors are also metadata only. They
 describe semantic layer ordering, blocking-preview color overrides, render
 biases, default texture assets, generated texture recipes, and default material
-values without exposing Unity shader names, Unity property names, or engine
-resource handles.
+values without exposing engine-specific shader names, property names, or resource handles.
 
 Texture asset paths are relative to the native app resource tree. Engine packages
 may copy or import those assets into engine-specific package/resource locations,
@@ -113,4 +111,4 @@ modeling-session sample.
 proof from the absorbed modeling-domain side: it links app-owned editor metadata,
 modeling runtime, and QDR runtime IO targets directly, creates a session,
 executes a modeling operation, compiles meshes, builds overlay/gizmo/measurement
-frames, and roundtrips QDR without using the Unity adapter.
+frames, and roundtrips QDR without using workflow-shaped editor adapters.

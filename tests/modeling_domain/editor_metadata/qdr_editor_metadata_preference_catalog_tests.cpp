@@ -79,7 +79,7 @@ void check_float_preference(
 
 } // namespace
 
-TEST_CASE("host contract preference catalog exposes Unity viewport setting defaults as engine-neutral descriptors", "[host-contract]")
+TEST_CASE("host contract preference catalog exposes viewport setting defaults as engine-neutral descriptors", "[host-contract]")
 {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
 	REQUIRE(preferences.size() == 47U);

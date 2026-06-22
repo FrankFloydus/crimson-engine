@@ -92,7 +92,7 @@ TEST_CASE("host contract operation panel items resolve to visible actions for th
 	CHECK(item_count == 36U);
 }
 
-TEST_CASE("host contract operation panel preserves Unity panel ordering", "[host-contract]")
+TEST_CASE("host contract operation panel preserves native panel ordering", "[host-contract]")
 {
 	check_action_order(require_panel("object_operations"), std::array<std::string_view, 5> {{
 		"invert_mesh",

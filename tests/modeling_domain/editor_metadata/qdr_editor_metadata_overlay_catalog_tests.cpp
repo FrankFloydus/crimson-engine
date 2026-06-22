@@ -125,7 +125,7 @@ TEST_CASE("host contract overlay layer catalog states render-depth semantics", "
 	CHECK(hover_face.depth_tested_by_default);
 }
 
-TEST_CASE("host contract overlay presentation exposes the Unity layer draw order", "[host-contract]")
+TEST_CASE("host contract overlay presentation exposes the native layer draw order", "[host-contract]")
 {
 	const std::span<const std::string_view> ids = qhc::overlay_presentation().draw_order_layer_ids;
 	static constexpr std::array<std::string_view, 15> expected {{
