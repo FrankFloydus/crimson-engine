@@ -18,6 +18,7 @@
 #include <vector>
 
 #if QUADER_HAS_MODELING_SDK
+#include <quader_editor_core/tool/rotate_tool.h>
 #include <quader_editor_core/tool/tool_identity.h>
 #endif
 
@@ -70,6 +71,7 @@ private:
         EntityId entity = InvalidEntityId;
         TransformComponent transform;
         Vec3 localPivot = {};
+        Mat4 worldTransform;
     };
 
     void resetDragState();
@@ -80,6 +82,9 @@ private:
     bool modelingDragActive_ = false;
     bool modelingDragPreviewDriven_ = false;
     bool sceneOnlyDrag_ = false;
+#if QUADER_HAS_MODELING_SDK
+    std::optional<quader_editor_core::RotateToolState> sceneOnlyRotateState_;
+#endif
     std::optional<SceneTransformPreviewTransaction> sceneTransformPreview_;
     TransformAxisHandle activeAxis_ = TransformAxisHandle::None;
     Vec2 lastMouse_ = {};

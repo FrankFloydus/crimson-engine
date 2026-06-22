@@ -53,6 +53,7 @@ public:
 			start_vector = { 1.0F, 0.0F };
 		}
 		state.start_angle = std::atan2(start_vector.y, start_vector.x);
+		state.last_angle = state.start_angle;
 		state.drag_view_sign = 1.0;
 		if (input.has_camera) {
 			quader_poly::Vec3 world_axis = input.has_world_direction ? input.world_direction : rotation_axis_vector(input.axis);
@@ -78,11 +79,14 @@ public:
 		}
 		const quader_poly::Vec2 current_vector = vec2_sub(screen_position, state.screen_pivot);
 		if (vec2_is_tiny(current_vector)) {
-			return preview_rotate_from_angle_degrees(state, state.preview_angle_degrees, snap_degrees);
+			return preview_rotate_from_angle_degrees(state, state.accumulated_angle_degrees, snap_degrees);
 		}
-		double angle_degrees = -wrap_radians(std::atan2(current_vector.y, current_vector.x) - state.start_angle) * state.drag_view_sign;
-		angle_degrees = angle_degrees * 180.0 / std::acos(-1.0);
-		return preview_rotate_from_angle_degrees(state, angle_degrees, snap_degrees);
+		const double current_angle = std::atan2(current_vector.y, current_vector.x);
+		const double delta_degrees =
+			-wrap_radians(current_angle - state.last_angle) * state.drag_view_sign * 180.0 / std::acos(-1.0);
+		state.last_angle = current_angle;
+		state.accumulated_angle_degrees += delta_degrees;
+		return preview_rotate_from_angle_degrees(state, state.accumulated_angle_degrees, snap_degrees);
 	}
 
 	[[nodiscard]] RotatePreviewResult preview_rotate_from_angle_degrees(
@@ -93,6 +97,7 @@ public:
 		if (!state.active) {
 			return { false, "Rotate tool is not active.", {}, {}, {}, {} };
 		}
+		state.accumulated_angle_degrees = angle_degrees;
 		if (snap_degrees > 0.0) {
 			angle_degrees = std::round(angle_degrees / snap_degrees) * snap_degrees;
 		}

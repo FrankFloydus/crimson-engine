@@ -252,22 +252,10 @@ public:
 			double axis_distance,
 			bool has_axis_distance,
 			bool grid_enabled);
-	[[nodiscard]] BoxToolStateResult begin_box_height(
-			quader_poly::Vec2 screen_position,
-			double axis_distance,
-			bool has_axis_distance,
-			const ViewportCameraState& camera,
-			bool grid_enabled);
 	[[nodiscard]] BoxToolStateResult update_box_height_preview(
 			double axis_distance,
 			bool has_axis_distance,
 			quader_poly::Vec2 screen_position,
-			bool grid_enabled);
-	[[nodiscard]] BoxToolStateResult update_box_height_preview(
-			double axis_distance,
-			bool has_axis_distance,
-			quader_poly::Vec2 screen_position,
-			const ViewportCameraState& camera,
 			bool grid_enabled);
 	[[nodiscard]] BoxPreviewDescriptor box_preview_descriptor(bool grid_enabled) const;
 	void clear_preview_presentation_state();

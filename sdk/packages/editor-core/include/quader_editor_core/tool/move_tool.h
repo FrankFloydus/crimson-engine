@@ -60,7 +60,15 @@ double move_axis_distance(const MoveToolState& state, const quader_poly::Ray& ra
 MovePreviewResult preview_move_from_distance(MoveToolState& state, double distance, bool precision, bool grid_enabled, double grid_size);
 MovePreviewResult preview_move_from_drag_pixels(MoveToolState& state, double pixels, bool precision, bool grid_enabled, double grid_size);
 MovePreviewResult preview_move_to_axis_snap_target(MoveToolState& state, quader_poly::Vec3 target_position);
-MovePreviewResult preview_move_from_viewport(MoveToolState& state, quader_poly::Vec2 screen_position, quader_poly::Ray ray, const ViewportCameraState& camera, bool precision, bool grid_enabled, double grid_size);
+MovePreviewResult preview_move_from_viewport(
+	MoveToolState& state,
+	quader_poly::Vec2 screen_position,
+	quader_poly::Ray ray,
+	const ViewportCameraState& camera,
+	bool precision,
+	bool grid_enabled,
+	double grid_size,
+	bool snap_center_to_grid = false);
 void reset_move(MoveToolState& state);
 
 } // namespace quader_editor_core

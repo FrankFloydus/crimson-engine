@@ -57,7 +57,10 @@ std::uint64_t MaterialBindingService::materialRevision(const AssetRegistry& asse
     return hash;
 }
 
-filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(const AssetRegistry& assets, const MaterialDocument* material) const {
+filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(
+        const AssetRegistry& assets,
+        const MaterialDocument* material,
+        bool doubleSided) const {
     if (!meshMaterial_ || !textureBinding_) {
         return nullptr;
     }
@@ -69,7 +72,9 @@ filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(c
     sampler.setAnisotropy(kMeshTextureAnisotropy);
 
     filament::MaterialInstance* materialInstance = meshMaterial_->createInstance();
-    materialInstance->setCullingMode(filament::MaterialInstance::CullingMode::BACK);
+    materialInstance->setCullingMode(doubleSided
+                    ? filament::MaterialInstance::CullingMode::NONE
+                    : filament::MaterialInstance::CullingMode::BACK);
     materialInstance->setParameter(MaterialTextureSlot::BaseColor,
             textureBinding_->resolveTexture(assets, material, MaterialTextureSlot::BaseColor, textureBinding_->fallbackAlbedoTexture()),
             sampler);

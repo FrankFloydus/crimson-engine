@@ -104,6 +104,7 @@ std::uint64_t objectPickFaceGeometrySignature(
     hash = mixPickGeometryHash(hash, pickOptions.edge_radius);
     hash = mixPickGeometryHash(hash, pickOptions.has_hidden_material_slot);
     hash = mixPickGeometryHash(hash, pickOptions.hidden_material_slot);
+    hash = mixPickGeometryHash(hash, pickOptions.pick_backfaces);
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.faces.size()));
     for (const quader_poly::Vertex& vertex : object.document.vertices) {
@@ -639,7 +640,9 @@ void ModelingMeshSyncService::syncSceneObjectsFromSdk(
         }
         const MeshComponent* currentMesh = scene.mesh(entity);
         if (currentMesh == nullptr || currentMesh->mesh != meshId || meshContentsReplaced) {
-            scene.setMesh(entity, MeshComponent{.mesh = meshId});
+            MeshComponent nextMesh = currentMesh != nullptr ? *currentMesh : MeshComponent{};
+            nextMesh.mesh = meshId;
+            scene.setMesh(entity, nextMesh);
         }
     }
 

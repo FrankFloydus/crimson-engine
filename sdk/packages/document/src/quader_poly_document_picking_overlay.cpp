@@ -50,14 +50,19 @@ quader_geometry::Aabb3<float> triangle_pick_bounds(const PickFaceTriangle& trian
     };
 }
 
-std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle> triangles, const Ray& ray)
+bool face_is_pickable_from_ray(Vec3 normal, const Ray& ray, const PickOptions& options)
+{
+    return options.pick_backfaces || dot(normal, ray.direction) < -epsilon;
+}
+
+std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle> triangles, const Ray& ray, const PickOptions& options = {})
 {
     QDR_PROFILE_SCOPE("qdr_document.nearest_cached_face_ray_hit");
     std::optional<FaceRayHit> nearest;
     const quader_geometry::Ray3<float> geometry_pick_ray = geometry_ray(ray);
     const float picking_epsilon = std::nextafter(epsilon, 0.0F);
     for (const PickFaceTriangle& triangle : triangles) {
-        if (dot(triangle.normal, ray.direction) >= -epsilon) {
+        if (!face_is_pickable_from_ray(triangle.normal, ray, options)) {
             continue;
         }
 
@@ -139,7 +144,7 @@ std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const R
         }
 
         const Vec3 normal = face_normal(document, face);
-        if (dot(normal, ray.direction) >= -epsilon) {
+        if (!face_is_pickable_from_ray(normal, ray, options)) {
             continue;
         }
 
@@ -231,7 +236,7 @@ std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document,
     return result;
 }
 
-PickResult pick_face_geometry(std::span<const PickFaceTriangle> triangles, const Ray& local_ray)
+PickResult pick_face_geometry(std::span<const PickFaceTriangle> triangles, const Ray& local_ray, const PickOptions& options)
 {
     QDR_PROFILE_SCOPE("qdr_document.pick_face_geometry");
     const Ray ray {
@@ -242,7 +247,7 @@ PickResult pick_face_geometry(std::span<const PickFaceTriangle> triangles, const
         return {};
     }
 
-    const std::optional<FaceRayHit> hit = nearest_face_ray_hit(triangles, ray);
+    const std::optional<FaceRayHit> hit = nearest_face_ray_hit(triangles, ray, options);
     if (!hit.has_value()) {
         return {};
     }
@@ -343,9 +348,10 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
         }
 
         const Vec3 normal = face_normal(document, face);
-        if (dot(normal, ray.direction) >= -epsilon) {
+        if (!face_is_pickable_from_ray(normal, ray, options)) {
             continue;
         }
+
         const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
         for (const Triangle& triangle : triangles) {
             const Vertex* a = find_vertex(document, face.vertices[triangle.a]);

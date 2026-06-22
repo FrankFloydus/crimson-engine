@@ -29,6 +29,23 @@ quader_editor_core::PolygonObject cube_object(int id, quader_poly::Vec3 offset =
 	return object;
 }
 
+quader_editor_core::PolygonObject open_top_cube_object(int id)
+{
+	quader_editor_core::PolygonObject object = cube_object(id);
+	quader_poly::Document& document = object.document;
+	document.faces.erase(
+		std::remove_if(
+			document.faces.begin(),
+			document.faces.end(),
+			[&document](const quader_poly::Face& face) {
+				return quader_poly::dot(
+					quader_poly::face_normal(document, face),
+					{ 0.0F, 1.0F, 0.0F }) > 0.5F;
+			}),
+		document.faces.end());
+	return object;
+}
+
 quader_poly::Ray front_center_ray()
 {
 	return { { 0.0F, 0.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } };
@@ -304,6 +321,44 @@ void hover_can_use_precomputed_face_geometry()
 		"cached face geometry should be used instead of retriangulating the document on hover");
 }
 
+void open_mesh_hover_picks_visible_back_sides()
+{
+	const std::vector<quader_editor_core::PolygonObject> objects { open_top_cube_object(7) };
+	const std::vector<quader_editor_core::PickObjectBounds> bounds { pick_bounds_for_object(objects[0]) };
+	quader_poly::PickOptions options;
+	options.mode = quader_poly::SelectionMode::face;
+	options.pick_backfaces = true;
+	const quader_poly::Ray inside_to_side_ray { { 0.0F, 0.0F, 0.0F }, { 1.0F, 0.0F, 0.0F } };
+
+	const std::optional<quader_editor_core::PickHitRecord> uncached_hit =
+		quader_editor_core::pick_nearest(objects, { inside_to_side_ray, options });
+	require_test(uncached_hit.has_value() && uncached_hit->kind == quader_poly::ElementKind::face,
+		"uncached face picking should hit a visible back side in an open mesh");
+
+	std::vector<quader_editor_core::PickObjectFaceGeometry> geometry =
+		quader_editor_core::build_pick_face_geometry(objects, options);
+	const std::optional<quader_editor_core::PickHitRecord> cached_hit =
+		quader_editor_core::pick_nearest(objects, { inside_to_side_ray, options }, bounds, geometry);
+	require_test(cached_hit.has_value() && cached_hit->face_id == uncached_hit->face_id,
+		"cached face picking should also hit the visible back side");
+
+	const quader_editor_core::SelectionHoverUpdateResult hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::face,
+			{},
+			inside_to_side_ray,
+			false,
+			options,
+			bounds,
+			geometry);
+	require_test(hover.changed &&
+			hover.hover.object_id == 7 &&
+			hover.hover.kind == quader_editor_core::SelectionHoverKind::face &&
+			hover.hover.face_id == cached_hit->face_id,
+		"face hover should produce hover wires for a visible back side in an open mesh");
+}
+
 void session_pick_selects_faces_through_shared_picking()
 {
 	std::vector<quader_editor_core::PolygonObject> objects { cube_object(7) };
@@ -556,6 +611,7 @@ TEST_CASE("qdr_editor_core_picking_tests", "[editor-core-picking]")
 	component_hover_preserves_candidate_on_miss();
 	hover_can_use_precomputed_object_bounds();
 	hover_can_use_precomputed_face_geometry();
+	open_mesh_hover_picks_visible_back_sides();
 	session_pick_selects_faces_through_shared_picking();
 	hidden_material_slot_filter_rebuilds_cached_face_geometry();
 	hidden_material_slot_filter_limits_all_face_selection();

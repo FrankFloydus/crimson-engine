@@ -304,8 +304,7 @@ inline quader_poly::Vec3 duplicate_meshes_offset_from_settings(DuplicateMeshesOp
 			std::isfinite(settings.explicit_offset.value.z)) {
 		return settings.explicit_offset.value;
 	}
-	const float offset = static_cast<float>(command_grid_world_size_or_default(settings.focused_grid));
-	return { offset, 0.0F, 0.0F };
+	return {};
 }
 
 inline quader_poly::BevelProfileType sanitize_edge_bevel_profile_type(int profile_type)

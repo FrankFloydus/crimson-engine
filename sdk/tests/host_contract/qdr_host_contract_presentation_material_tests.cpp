@@ -87,10 +87,10 @@ TEST_CASE("host contract describes viewport overlay presentation policy", "[host
 	CHECK(span_contains(presentation.blocking_preview_override_layer_ids, "source_wire"));
 	CHECK(span_contains(presentation.blocking_preview_override_layer_ids, "open_edge"));
 
-	REQUIRE(presentation.draw_order_layer_ids.size() == 14U);
+	REQUIRE(presentation.draw_order_layer_ids.size() == 15U);
 	CHECK(same_text(presentation.draw_order_layer_ids.front(), "selected_visible_face"));
 	CHECK(same_text(presentation.draw_order_layer_ids[2], "source_wire"));
-	CHECK(same_text(presentation.draw_order_layer_ids[12], "hover_vertex"));
+	CHECK(same_text(presentation.draw_order_layer_ids[13], "hover_vertex"));
 	CHECK(same_text(presentation.draw_order_layer_ids.back(), "snap_target_vertex"));
 
 	REQUIRE(presentation.transient_hover_mask_writer_layer_ids.size() == 4U);

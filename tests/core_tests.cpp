@@ -1245,9 +1245,11 @@ TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
 
     EXPECT_NE(source.find("selectedTransformWorldBounds(document, request.assets)"), std::string::npos);
     EXPECT_NE(source.find("entityHierarchyWorldBounds(document, assets, entity)"), std::string::npos);
-    EXPECT_NE(source.find("snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, activeGridSize, snapEnabled)"),
+    EXPECT_NE(source.find("snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, startWorldPivot_, activeGridSize, snapEnabled)"),
             std::string::npos);
-    EXPECT_NE(source.find("snapRotationRadians(screenDelta * 0.01f, snapEnabled)"), std::string::npos);
+    EXPECT_NE(source.find("sceneOnlyRotateState_"), std::string::npos);
+    EXPECT_NE(source.find("quader_editor_core::preview_rotate_from_screen_position"), std::string::npos);
+    EXPECT_NE(source.find("snapEnabled ? 15.0 : 0.0"), std::string::npos);
     EXPECT_NE(source.find("quader_editor_core::scale_pixels_per_factor"), std::string::npos);
     EXPECT_NE(source.find("quader_editor_core::snapped_scale_factor"), std::string::npos);
     EXPECT_NE(source.find("selectionBounds,\n                        startWorldPivot_,\n                        snapEnabled,\n                        activeGridSize"),
@@ -1740,7 +1742,8 @@ TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
     EXPECT_NE(source.find("modeling.commitTransformDrag()"), std::string::npos);
     EXPECT_EQ(source.find("quader_editor_core::begin_move_drag"), std::string::npos);
     EXPECT_EQ(source.find("quader_editor_core::preview_move_from_viewport"), std::string::npos);
-    EXPECT_EQ(source.find("quader_editor_core::preview_rotate_from_screen_position"), std::string::npos);
+    EXPECT_NE(source.find("quader_editor_core::preview_rotate_from_screen_position"), std::string::npos);
+    EXPECT_NE(source.find("*sceneOnlyRotateState_"), std::string::npos);
     EXPECT_EQ(source.find("quader_editor_core::preview_scale_from_screen_position"), std::string::npos);
 }
 
@@ -1754,9 +1757,16 @@ TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("applyDocumentWorldRotationDeltaAroundPivot("), std::string::npos);
-    EXPECT_NE(source.find("previewRotationDelta"), std::string::npos);
-    EXPECT_NE(source.find("worldRotationDelta"), std::string::npos);
+    EXPECT_NE(source.find("localTransformAfterWorldQuaternionRotation("), std::string::npos);
+    EXPECT_NE(source.find("delta * startWorldRotation"), std::string::npos);
+    EXPECT_NE(source.find("glm::inverse(parentWorldRotation) * nextWorldRotation"), std::string::npos);
+    EXPECT_NE(source.find("positiveEulerRadians(equivalentEulerRadiansClosestTo("), std::string::npos);
+    EXPECT_NE(source.find("rotationEulerReference(start)"), std::string::npos);
+    EXPECT_NE(source.find("start.worldTransform"), std::string::npos);
+    EXPECT_EQ(source.find("worldRotationAroundPivotMatrix("), std::string::npos);
+    EXPECT_EQ(source.find("localTransformAfterWorldDelta("), std::string::npos);
+    EXPECT_EQ(source.find("applyDocumentWorldRotationDeltaAroundPivot("), std::string::npos);
+    EXPECT_EQ(source.find("previewRotationDelta"), std::string::npos);
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + previewRotationDelta"), std::string::npos);
 }
 
@@ -1771,6 +1781,7 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(header.find("bool sceneOnlyDrag_"), std::string::npos);
+    EXPECT_NE(header.find("std::optional<quader_editor_core::RotateToolState> sceneOnlyRotateState_"), std::string::npos);
 
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
@@ -1783,11 +1794,13 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
 
     EXPECT_NE(source.find("selectedHasSceneOnlyTransform"), std::string::npos);
     EXPECT_NE(source.find("selectedHasHierarchyTransform"), std::string::npos);
-    EXPECT_NE(source.find("componentSelectionMode || !selectedHasHierarchyTransform"), std::string::npos);
+    EXPECT_NE(source.find("const bool objectDuplicateRequested = !componentSelectionMode && io.KeyShift"), std::string::npos);
+    EXPECT_NE(source.find("componentSelectionMode || !selectedHasHierarchyTransform || objectDuplicateRequested"), std::string::npos);
     EXPECT_NE(source.find("activeAxis_ = fallbackHit()"), std::string::npos);
     EXPECT_NE(source.find("parentLocalVectorForWorldVector(document, start.entity"), std::string::npos);
     EXPECT_NE(source.find("documentLocalPivotForWorldPoint(document, entity, pivot)"), std::string::npos);
     EXPECT_NE(source.find("sceneOnlyDrag_ = true"), std::string::npos);
+    EXPECT_NE(source.find("quader_editor_core::begin_rotate_drag({"), std::string::npos);
     EXPECT_NE(source.find("if (wasDragging && !sceneOnlyDrag_)"), std::string::npos);
     EXPECT_NE(source.find("if (!sceneOnlyDrag_)"), std::string::npos);
     EXPECT_NE(source.find("transformPoint(document.worldTransformMatrix(selected), Vec3{})"), std::string::npos);
@@ -1904,16 +1917,23 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "TextureBindingService.cpp";
     const std::filesystem::path materialSourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "MaterialBindingService.cpp";
+    const std::filesystem::path factorySourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "MeshRenderableFactory.cpp";
     std::ifstream textureSourceFile(textureSourcePath);
     std::ifstream materialSourceFile(materialSourcePath);
+    std::ifstream factorySourceFile(factorySourcePath);
     ASSERT_TRUE(textureSourceFile.is_open()) << textureSourcePath.string();
     ASSERT_TRUE(materialSourceFile.is_open()) << materialSourcePath.string();
+    ASSERT_TRUE(factorySourceFile.is_open()) << factorySourcePath.string();
 
     const std::string textureSource{
             std::istreambuf_iterator<char>(textureSourceFile),
             std::istreambuf_iterator<char>()};
     const std::string materialSource{
             std::istreambuf_iterator<char>(materialSourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string factorySource{
+            std::istreambuf_iterator<char>(factorySourceFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb)"), std::string::npos);
@@ -1923,7 +1943,12 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     EXPECT_NE(textureSource.find("mipLevelCount(width, height)"), std::string::npos);
     EXPECT_NE(textureSource.find("Texture::Usage::GEN_MIPMAPPABLE"), std::string::npos);
     EXPECT_NE(textureSource.find("generateMipmaps(*engine_)"), std::string::npos);
-    EXPECT_NE(materialSource.find("setCullingMode(filament::MaterialInstance::CullingMode::BACK)"), std::string::npos);
+    EXPECT_NE(materialSource.find("setCullingMode(doubleSided"), std::string::npos);
+    EXPECT_NE(materialSource.find("filament::MaterialInstance::CullingMode::NONE"), std::string::npos);
+    EXPECT_NE(materialSource.find(": filament::MaterialInstance::CullingMode::BACK"), std::string::npos);
+    EXPECT_EQ(materialSource.find("setCullingMode(filament::MaterialInstance::CullingMode::BACK);"), std::string::npos);
+    EXPECT_NE(factorySource.find("createMeshMaterialInstance(assets, material, doubleSided)"), std::string::npos);
+    EXPECT_EQ(factorySource.find(".culling(!doubleSided)"), std::string::npos);
     EXPECT_NE(textureSource.find("TextureCacheKey cacheKey"), std::string::npos);
     EXPECT_NE(textureSource.find(".colorSpace = texture->colorSpace"), std::string::npos);
     EXPECT_EQ(textureSource.find("bool srgb"), std::string::npos);
@@ -2321,6 +2346,8 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
     EXPECT_NE(source.find("ui.inspector.double_sided"), std::string::npos);
     EXPECT_NE(source.find("ui.inspector.hidden"), std::string::npos);
     EXPECT_NE(source.find(".after = !hidden"), std::string::npos);
+    EXPECT_NE(source.find("const Vec3 displayedRotation = positiveEulerRadians(transform->rotationEuler)"), std::string::npos);
+    EXPECT_NE(source.find("const Vec3 previous = displayedRotation"), std::string::npos);
     EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, delta"), std::string::npos);
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + delta"), std::string::npos);
 }
@@ -2796,6 +2823,7 @@ TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
     EXPECT_EQ(scene.name(sphere)->name, "Box");
     ASSERT_NE(scene.mesh(sphere), nullptr);
     EXPECT_EQ(scene.mesh(sphere)->mesh, 11u);
+    EXPECT_TRUE(scene.mesh(sphere)->doubleSided);
     ASSERT_NE(scene.modelingObject(sphere), nullptr);
     EXPECT_EQ(scene.modelingObject(sphere)->objectId, 42);
     EXPECT_EQ(scene.modelingObject(sphere)->materialSlot, 3u);
@@ -3093,6 +3121,26 @@ TEST(TransformPivotTests, AppliesRotationDeltaInGlobalSpace) {
     const Vec3 worldSpaceY = transformVector(actualWorldRotation, {0.0f, 1.0f, 0.0f});
     const Vec3 localSpaceY = transformVector(composeTransform(locallyAdded.spatialTransform()), {0.0f, 1.0f, 0.0f});
     EXPECT_GT(length(worldSpaceY - localSpaceY), 0.1f);
+}
+
+TEST(TransformPivotTests, KeepsEquivalentEulerAnglesNearReferenceValues) {
+    constexpr float Pi = 3.14159265358979323846f;
+    const Vec3 reference{};
+    const Vec3 decomposedEquivalent{Pi, Pi / 3.0f, Pi};
+
+    const Vec3 stable = equivalentEulerRadiansClosestTo(decomposedEquivalent, reference);
+    EXPECT_NEAR(stable.x, 0.0f, 0.001f);
+    EXPECT_NEAR(stable.y, 2.0f * Pi / 3.0f, 0.001f);
+    EXPECT_NEAR(stable.z, 0.0f, 0.001f);
+}
+
+TEST(TransformPivotTests, NormalizesEulerDisplayAnglesToPositiveTurn) {
+    constexpr float Pi = 3.14159265358979323846f;
+    const Vec3 normalized = positiveEulerRadians({0.0f, -Pi / 12.0f, Pi * 2.0f});
+
+    EXPECT_NEAR(normalized.x, 0.0f, 0.001f);
+    EXPECT_NEAR(normalized.y, Pi * 23.0f / 12.0f, 0.001f);
+    EXPECT_NEAR(normalized.z, 0.0f, 0.001f);
 }
 
 TEST(MathTypesTests, ComposeTransformRoundTripsPoints) {
@@ -7160,6 +7208,17 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     ASSERT_TRUE(box.ok) << box.message;
     const AssetId defaultMaterial = assets.addMaterial(makeDefaultQuaderMaterial());
     scene.setMaterial(box.object.entity, MaterialComponent{.material = defaultMaterial});
+    TransformComponent sourceTransform;
+    sourceTransform.position = {2.0f, 0.0f, -3.0f};
+    sourceTransform.rotationEuler = {0.25f, 0.75f, 0.0f};
+    scene.setTransform(box.object.entity, sourceTransform);
+    const MeshComponent* sourceMeshComponent = scene.mesh(box.object.entity);
+    ASSERT_NE(sourceMeshComponent, nullptr);
+    MeshComponent sourceMeshSettings = *sourceMeshComponent;
+    sourceMeshSettings.doubleSided = true;
+    scene.setMesh(box.object.entity, sourceMeshSettings);
+    const MeshAsset* sourceMeshAsset = assets.mesh(sourceMeshSettings.mesh);
+    ASSERT_NE(sourceMeshAsset, nullptr);
     EXPECT_EQ(scene.entities().size(), 1u);
 
     const std::vector<ModelingInstantOperationDescriptor> objectOps = service.instantOperations();
@@ -7183,9 +7242,17 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     EXPECT_EQ(scene.name(duplicateEntity)->name.find("SDK Object"), std::string::npos);
     const MeshComponent* duplicateMesh = scene.mesh(duplicateEntity);
     ASSERT_NE(duplicateMesh, nullptr);
+    EXPECT_TRUE(duplicateMesh->doubleSided);
     const MeshAsset* duplicateMeshAsset = assets.mesh(duplicateMesh->mesh);
     ASSERT_NE(duplicateMeshAsset, nullptr);
     EXPECT_EQ(duplicateMeshAsset->name, "Mesh");
+    ASSERT_NE(scene.transform(duplicateEntity), nullptr);
+    expectVec3Near(scene.transform(duplicateEntity)->position, sourceTransform.position);
+    expectVec3Near(scene.transform(duplicateEntity)->rotationEuler, sourceTransform.rotationEuler);
+    ASSERT_EQ(duplicateMeshAsset->vertices.size(), sourceMeshAsset->vertices.size());
+    for (std::size_t index = 0; index < sourceMeshAsset->vertices.size(); ++index) {
+        expectVec3Near(duplicateMeshAsset->vertices[index].position, sourceMeshAsset->vertices[index].position);
+    }
     const MaterialComponent* duplicateMaterial = scene.material(duplicateEntity);
     ASSERT_NE(duplicateMaterial, nullptr);
     EXPECT_EQ(duplicateMaterial->material, defaultMaterial);
@@ -7630,6 +7697,108 @@ TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransform
 #endif
 }
 
+TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateUsesScenePreviewForRotatedObject) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Rotated Shift Duplicate Source",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    TransformComponent sourceTransform;
+    sourceTransform.rotationEuler = {0.0f, 0.5f, 0.25f};
+    scene.setTransform(box.object.entity, sourceTransform);
+    const MeshComponent* sourceMesh = scene.mesh(box.object.entity);
+    ASSERT_NE(sourceMesh, nullptr);
+    MeshComponent sourceMeshSettings = *sourceMesh;
+    sourceMeshSettings.doubleSided = true;
+    scene.setMesh(box.object.entity, sourceMeshSettings);
+
+    ModelingTransformDragPreview begin =
+            service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true));
+    ASSERT_TRUE(begin.ok) << begin.message;
+    EXPECT_TRUE(begin.active);
+    EXPECT_FALSE(begin.previewDriven);
+    EXPECT_TRUE(begin.sceneTransform);
+    EXPECT_TRUE(begin.hasScenePreviewTransform);
+    ASSERT_EQ(scene.entities().size(), 2u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    const EntityId duplicateEntity = scene.selectedEntities().front();
+    EXPECT_NE(duplicateEntity, box.object.entity);
+    ASSERT_NE(scene.transform(duplicateEntity), nullptr);
+    expectVec3Near(scene.transform(duplicateEntity)->rotationEuler, sourceTransform.rotationEuler);
+    ASSERT_NE(scene.mesh(duplicateEntity), nullptr);
+    EXPECT_TRUE(scene.mesh(duplicateEntity)->doubleSided);
+
+    ModelingTransformDragPreview update = service.updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_FALSE(update.previewDriven);
+    EXPECT_TRUE(update.sceneTransform);
+    EXPECT_TRUE(update.hasScenePreviewTransform);
+    EXPECT_NEAR(update.moveDelta.x, 2.0f, 0.001f);
+    EXPECT_NEAR(update.scenePreviewTransform.origin.x, 2.0f, 0.001f);
+
+    const ModelingCommandResult cancel = service.cancelTransformDrag();
+    ASSERT_TRUE(cancel.ok) << cancel.message;
+    EXPECT_EQ(scene.entities().size(), 1u);
+#else
+    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true)).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateKeepsGroupedMeshInsideParent) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult first = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Grouped Shift Source",
+    });
+    ASSERT_TRUE(first.ok) << first.message;
+    const ModelingCreateBoxResult second = service.createBoxFromBounds({
+        .bounds = {.min = {2.0f, -1.0f, -1.0f}, .max = {4.0f, 1.0f, 1.0f}},
+        .name = "Grouped Sibling",
+    });
+    ASSERT_TRUE(second.ok) << second.message;
+
+    const EntityId group = scene.createEmpty("Parent Group");
+    ASSERT_TRUE(scene.setParent(first.object.entity, group, true));
+    ASSERT_TRUE(scene.setParent(second.object.entity, group, true));
+    scene.clearSelection();
+    scene.setSelected(first.object.entity, true);
+    scene.setActiveSelection(first.object.entity);
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Object).ok);
+    service.syncObjectSelectionFromScene();
+
+    ModelingTransformDragPreview begin =
+            service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true));
+    ASSERT_TRUE(begin.ok) << begin.message;
+    EXPECT_TRUE(begin.active);
+    EXPECT_FALSE(begin.previewDriven);
+    EXPECT_TRUE(begin.sceneTransform);
+    ASSERT_EQ(scene.entities().size(), 4u);
+    ASSERT_EQ(service.objects().size(), 3u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    const EntityId duplicateEntity = scene.selectedEntities().front();
+    EXPECT_NE(duplicateEntity, first.object.entity);
+    EXPECT_NE(duplicateEntity, second.object.entity);
+    EXPECT_EQ(scene.parent(duplicateEntity), group);
+    EXPECT_EQ(scene.children(group).size(), 3u);
+
+    const ModelingCommandResult cancel = service.cancelTransformDrag();
+    ASSERT_TRUE(cancel.ok) << cancel.message;
+    EXPECT_EQ(scene.entities().size(), 3u);
+    EXPECT_EQ(scene.children(group).size(), 2u);
+#else
+    EXPECT_FALSE(service.beginTransformDrag(testXMoveDragBeginRequest({}, ModelingTransformOperation::Transform, true)).ok);
+#endif
+}
+
 TEST(ModelingSessionServiceTests, TransformDragComponentCancelRestoresMeshOverlayAndRuntime) {
     SceneDocument scene;
     AssetRegistry assets;
@@ -7695,6 +7864,13 @@ TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMes
         .name = "Shift Duplicate Source",
     });
     ASSERT_TRUE(box.ok) << box.message;
+    TransformComponent sourceTransform;
+    scene.setTransform(box.object.entity, sourceTransform);
+    const MeshComponent* sourceMesh = scene.mesh(box.object.entity);
+    ASSERT_NE(sourceMesh, nullptr);
+    MeshComponent sourceMeshSettings = *sourceMesh;
+    sourceMeshSettings.doubleSided = true;
+    scene.setMesh(box.object.entity, sourceMeshSettings);
     ASSERT_EQ(scene.entities().size(), 1u);
 
     const ModelingCommandResult begin = service.beginTransformPreview(true);
@@ -7706,6 +7882,11 @@ TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMes
 
     const EntityId duplicateEntity = scene.selectedEntities().front();
     EXPECT_NE(duplicateEntity, box.object.entity);
+    ASSERT_NE(scene.transform(duplicateEntity), nullptr);
+    expectVec3Near(scene.transform(duplicateEntity)->position, sourceTransform.position);
+    expectVec3Near(scene.transform(duplicateEntity)->rotationEuler, sourceTransform.rotationEuler);
+    ASSERT_NE(scene.mesh(duplicateEntity), nullptr);
+    EXPECT_TRUE(scene.mesh(duplicateEntity)->doubleSided);
     const std::optional<int> duplicateSdkObjectId = service.sdkObjectForEntity(duplicateEntity);
     ASSERT_TRUE(duplicateSdkObjectId.has_value());
     EXPECT_NE(*duplicateSdkObjectId, box.object.sdkObjectId);
@@ -7725,6 +7906,10 @@ TEST(ModelingSessionServiceTests, TransformPreviewDuplicateTranslateRefreshesMes
     selectedBounds = selectedWorldBounds(scene, assets);
     ASSERT_TRUE(selectedBounds.has_value());
     EXPECT_NEAR(boundsCenter(*selectedBounds).x, 3.0f, 0.001f);
+    ASSERT_NE(scene.transform(duplicateEntity), nullptr);
+    expectVec3Near(scene.transform(duplicateEntity)->rotationEuler, sourceTransform.rotationEuler);
+    ASSERT_NE(scene.mesh(duplicateEntity), nullptr);
+    EXPECT_TRUE(scene.mesh(duplicateEntity)->doubleSided);
 
     const ModelingCommandResult commit = service.commitTransformPreview();
     ASSERT_TRUE(commit.ok) << commit.message;
@@ -8020,6 +8205,87 @@ TEST(ModelingSessionServiceTests, GroupSelectionSurvivesTransformToolActivation)
     EXPECT_EQ(scene.primarySelection(), group);
 #else
     EXPECT_FALSE(service.activateViewportTool(ModelingViewportTool::Move).ok);
+#endif
+}
+
+TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutRootMeshStrays) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    UndoRedoManager undoRedo;
+    DocumentCommandService commands(scene, undoRedo);
+    ModelingSessionService service(scene, assets);
+
+#if QUADER_HAS_MODELING_SDK
+    const ModelingCreateBoxResult left = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-1.0f, -1.0f, -1.0f},
+            .max = {1.0f, 1.0f, 1.0f},
+        },
+        .name = "Left Grouped Box",
+    });
+    ASSERT_TRUE(left.ok) << left.message;
+    const ModelingCreateBoxResult right = service.createBoxFromBounds({
+        .bounds = {
+            .min = {-0.5f, -0.5f, -0.5f},
+            .max = {0.5f, 0.5f, 0.5f},
+        },
+        .name = "Right Grouped Box",
+    });
+    ASSERT_TRUE(right.ok) << right.message;
+
+    TransformComponent leftTransform;
+    leftTransform.position = {4.0f, 0.0f, 0.0f};
+    leftTransform.rotationEuler = {0.0f, 0.5f, 0.0f};
+    scene.setTransform(left.object.entity, leftTransform);
+    TransformComponent rightTransform;
+    rightTransform.position = {6.0f, 0.0f, 2.0f};
+    rightTransform.rotationEuler = {0.25f, 0.0f, 0.5f};
+    scene.setTransform(right.object.entity, rightTransform);
+
+    ASSERT_TRUE(commands.selectEntities({left.object.entity, right.object.entity}, left.object.entity).ok);
+    EntityId group = InvalidEntityId;
+    ASSERT_TRUE(commands.groupSelection("Box Pair", {}, &group).ok);
+    ASSERT_NE(group, InvalidEntityId);
+    ASSERT_EQ(scene.parent(left.object.entity), group);
+    ASSERT_EQ(scene.parent(right.object.entity), group);
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Group).ok);
+
+    const TransformComponent sourceLeftTransform = *scene.transform(left.object.entity);
+    const TransformComponent sourceRightTransform = *scene.transform(right.object.entity);
+    const ModelingCommandResult duplicate = service.duplicateSelectedHierarchyForGroupDrag(commands);
+    ASSERT_TRUE(duplicate.ok) << duplicate.message;
+    ASSERT_TRUE(duplicate.changed);
+    EXPECT_EQ(service.selectionMode(), ModelingSelectionMode::Group);
+    ASSERT_EQ(scene.entities().size(), 6u);
+    ASSERT_EQ(service.objects().size(), 4u);
+    ASSERT_EQ(scene.selectedEntities().size(), 1u);
+    const EntityId duplicateGroup = scene.selectedEntities().front();
+    ASSERT_NE(duplicateGroup, group);
+    EXPECT_EQ(scene.parent(duplicateGroup), InvalidEntityId);
+    EXPECT_EQ(scene.modelingObject(duplicateGroup), nullptr);
+
+    const std::vector<EntityId> duplicateChildren = scene.children(duplicateGroup);
+    ASSERT_EQ(duplicateChildren.size(), 2u);
+    ASSERT_NE(scene.modelingObject(duplicateChildren[0]), nullptr);
+    ASSERT_NE(scene.modelingObject(duplicateChildren[1]), nullptr);
+    EXPECT_EQ(scene.parent(duplicateChildren[0]), duplicateGroup);
+    EXPECT_EQ(scene.parent(duplicateChildren[1]), duplicateGroup);
+    ASSERT_NE(scene.transform(duplicateChildren[0]), nullptr);
+    ASSERT_NE(scene.transform(duplicateChildren[1]), nullptr);
+    expectVec3Near(scene.transform(duplicateChildren[0])->position, sourceLeftTransform.position);
+    expectVec3Near(scene.transform(duplicateChildren[0])->rotationEuler, sourceLeftTransform.rotationEuler);
+    expectVec3Near(scene.transform(duplicateChildren[1])->position, sourceRightTransform.position);
+    expectVec3Near(scene.transform(duplicateChildren[1])->rotationEuler, sourceRightTransform.rotationEuler);
+
+    std::size_t rootModelingMeshes = 0;
+    for (const EntityId entity : scene.entities()) {
+        if (scene.modelingObject(entity) != nullptr && scene.parent(entity) == InvalidEntityId) {
+            ++rootModelingMeshes;
+        }
+    }
+    EXPECT_EQ(rootModelingMeshes, 0u);
+#else
+    EXPECT_FALSE(service.duplicateSelectedHierarchyForGroupDrag(commands).ok);
 #endif
 }
 

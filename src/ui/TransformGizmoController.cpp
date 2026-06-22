@@ -11,6 +11,9 @@
 #include <cmath>
 #include <optional>
 
+#include <glm/gtx/matrix_decompose.hpp>
+#include <glm/gtx/quaternion.hpp>
+
 #if QUADER_HAS_MODELING_SDK
 #include <quader_editor_core/tool/tool_transform_math.h>
 #include <quader_editor_core/tool/transform_gizmo.h>
@@ -87,6 +90,78 @@ Vec3 documentLocalPivotForWorldPoint(const SceneDocument& document, EntityId ent
     return transformPoint(inverse(document.worldTransformMatrix(entity)), worldPivot);
 }
 
+Vec3 worldAxisForHandle(TransformAxisHandle axis) {
+    switch (axis) {
+    case TransformAxisHandle::X:
+        return {1.0f, 0.0f, 0.0f};
+    case TransformAxisHandle::Y:
+        return {0.0f, 1.0f, 0.0f};
+    case TransformAxisHandle::Z:
+        return {0.0f, 0.0f, 1.0f};
+    case TransformAxisHandle::XY:
+    case TransformAxisHandle::XZ:
+    case TransformAxisHandle::YZ:
+    case TransformAxisHandle::All:
+    case TransformAxisHandle::None:
+        return {};
+    }
+    return {};
+}
+
+glm::quat normalizedRotationQuaternion(Vec3 eulerRadians) {
+    return glm::normalize(toGlm(quatFromEulerRadians(eulerRadians)));
+}
+
+glm::quat worldRotationQuaternion(const SceneDocument& document, EntityId entity) {
+    const TransformComponent* transform = document.transform(entity);
+    const glm::quat local = transform == nullptr
+            ? glm::quat{1.0f, 0.0f, 0.0f, 0.0f}
+            : normalizedRotationQuaternion(transform->rotationEuler);
+    const EntityId parent = document.parent(entity);
+    if (parent == InvalidEntityId) {
+        return local;
+    }
+    return glm::normalize(worldRotationQuaternion(document, parent) * local);
+}
+
+TransformComponent localTransformAfterWorldQuaternionRotation(
+        const SceneDocument& document,
+        EntityId entity,
+        const TransformComponent& startTransform,
+        const Mat4& startWorld,
+        Vec3 worldAxis,
+        float angleRadians,
+        Vec3 worldPivot,
+        Vec3 eulerReference) {
+    const Vec3 normalizedAxis = normalize(worldAxis);
+    if (length(normalizedAxis) <= 0.000001f || std::abs(angleRadians) <= 0.000001f) {
+        return startTransform;
+    }
+
+    const glm::quat delta = glm::normalize(glm::angleAxis(angleRadians, toGlm(normalizedAxis)));
+    const Vec3 startWorldOrigin = transformPoint(startWorld, {});
+    const Vec3 nextWorldOrigin =
+            worldPivot + fromGlm(delta * toGlm(startWorldOrigin - worldPivot));
+
+    const EntityId parent = document.parent(entity);
+    const glm::quat parentWorldRotation = parent == InvalidEntityId
+            ? glm::quat{1.0f, 0.0f, 0.0f, 0.0f}
+            : worldRotationQuaternion(document, parent);
+    const glm::quat startLocalRotation = normalizedRotationQuaternion(startTransform.rotationEuler);
+    const glm::quat startWorldRotation = parent == InvalidEntityId
+            ? startLocalRotation
+            : glm::normalize(parentWorldRotation * startLocalRotation);
+    const glm::quat nextWorldRotation = glm::normalize(delta * startWorldRotation);
+    const glm::quat nextLocalRotation = glm::normalize(glm::inverse(parentWorldRotation) * nextWorldRotation);
+
+    TransformComponent next = startTransform;
+    next.position = parentLocalPointForWorldPoint(document, entity, nextWorldOrigin);
+    next.rotationEuler = positiveEulerRadians(equivalentEulerRadiansClosestTo(
+            fromGlm(glm::eulerAngles(nextLocalRotation)),
+            eulerReference));
+    return next;
+}
+
 void pinDocumentLocalPivotToWorldPoint(
         const SceneDocument& document,
         EntityId entity,
@@ -98,19 +173,6 @@ void pinDocumentLocalPivotToWorldPoint(
     transform.position =
             parentLocalPointForWorldPoint(document, entity, worldPivot) -
             transformPoint(composeTransform(spatial), localPivot);
-}
-
-void applyDocumentWorldRotationDeltaAroundPivot(
-        const SceneDocument& document,
-        EntityId entity,
-        TransformComponent& transform,
-        Vec3 worldRotationDeltaRadians,
-        Vec3 localPivot,
-        Vec3 worldPivot) {
-    transform.rotationEuler = eulerRadiansAfterWorldRotationDelta(
-            transform.rotationEuler,
-            parentLocalVectorForWorldVector(document, entity, worldRotationDeltaRadians));
-    pinDocumentLocalPivotToWorldPoint(document, entity, transform, localPivot, worldPivot);
 }
 
 void includeBounds(std::optional<SceneBounds>& result, const SceneBounds& bounds) {
@@ -156,18 +218,18 @@ float snapWorldValue(float value, double gridSize) {
     return static_cast<float>(std::round(static_cast<double>(value) / grid) * grid);
 }
 
-Vec3 snapWorldDeltaForHandle(Vec3 delta, TransformAxisHandle activeAxis, double gridSize, bool snapEnabled) {
+Vec3 snapWorldDeltaForHandle(Vec3 delta, TransformAxisHandle activeAxis, Vec3 startPivot, double gridSize, bool snapEnabled) {
     if (!snapEnabled) {
         return delta;
     }
     if (handleIncludesAxis(activeAxis, TransformAxisHandle::X)) {
-        delta.x = snapWorldValue(delta.x, gridSize);
+        delta.x = snapWorldValue(startPivot.x + delta.x, gridSize) - startPivot.x;
     }
     if (handleIncludesAxis(activeAxis, TransformAxisHandle::Y)) {
-        delta.y = snapWorldValue(delta.y, gridSize);
+        delta.y = snapWorldValue(startPivot.y + delta.y, gridSize) - startPivot.y;
     }
     if (handleIncludesAxis(activeAxis, TransformAxisHandle::Z)) {
-        delta.z = snapWorldValue(delta.z, gridSize);
+        delta.z = snapWorldValue(startPivot.z + delta.z, gridSize) - startPivot.z;
     }
     return delta;
 }
@@ -856,10 +918,11 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 document.parent(entity) != InvalidEntityId ||
                 document.hasChildren(entity);
     }
+    const bool objectDuplicateRequested = !componentSelectionMode && io.KeyShift;
     const bool useModelingTransformDrag =
             selectedHasModelingObjectTransform &&
             !selectedHasSceneOnlyTransform &&
-            (componentSelectionMode || !selectedHasHierarchyTransform);
+            (componentSelectionMode || !selectedHasHierarchyTransform || objectDuplicateRequested);
 
     const float sizeScale = request.viewportSettings.floatValue(ViewportFloatSettingId::GizmoSize);
 #if QUADER_HAS_MODELING_SDK
@@ -986,6 +1049,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
 #if QUADER_HAS_MODELING_SDK
             if (useModelingTransformDrag) {
                 dragReady = false;
+                sceneOnlyRotateState_.reset();
 
                 const quader_poly::Vec2 sdkScreenPivot = toSdk(projectedPivot.position);
                 const quader_poly::Vec2 sdkScreenTip = sdkHit.hit ? sdkHit.screen_tip : sdkScreenPivot;
@@ -1026,6 +1090,29 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 modelingDragActive_ = false;
                 modelingDragPreviewDriven_ = false;
                 sceneOnlyDrag_ = true;
+                sceneOnlyRotateState_.reset();
+                if (tool == ViewportToolId::Rotate) {
+                    const quader_editor_core::ViewportCameraState sdkCamera = makeSdkCamera(camera, itemSize);
+                    const quader_editor_core::RotateBeginResult rotateBegin =
+                            quader_editor_core::begin_rotate_drag({
+                                    .axis = toSdkAxis(activeAxis_),
+                                    .pivot = toSdk(pivot),
+                                    .screen_position = toSdk(localMouse),
+                                    .has_screen_pivot = true,
+                                    .screen_pivot = toSdk(projectedPivot.position),
+                                    .has_world_direction = true,
+                                    .world_direction = toSdk(worldAxisForHandle(activeAxis_)),
+                                    .has_world_pivot = true,
+                                    .world_pivot = toSdk(pivot),
+                                    .has_camera = true,
+                                    .camera_transform = sdkCamera.transform,
+                            });
+                    if (rotateBegin.ok) {
+                        sceneOnlyRotateState_ = rotateBegin.state;
+                    } else {
+                        LOG_ERROR("Scene transform rotate begin failed: {}", rotateBegin.message);
+                    }
+                }
             }
 #endif
 
@@ -1062,6 +1149,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                             .entity = entity,
                             .transform = *selectedTransform,
                             .localPivot = documentLocalPivotForWorldPoint(document, entity, pivot),
+                            .worldTransform = document.worldTransformMatrix(entity),
                     });
                 }
             }
@@ -1136,6 +1224,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             LOG_ERROR("Transform preview update failed: {}", preview.message);
         }
     };
+    auto rotationEulerReference = [&](const StartTransform& start) {
+        if (const TransformComponent* current = document.transform(start.entity)) {
+            return positiveEulerRadians(current->rotationEuler);
+        }
+        return positiveEulerRadians(start.transform.rotationEuler);
+    };
 
 #if QUADER_HAS_MODELING_SDK
     if (!sceneOnlyDrag_) {
@@ -1168,15 +1262,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         }
 
         Vec3 previewMoveDelta = preview.moveDelta;
-        Vec3 previewRotationDelta = {};
         const float angleRadians = static_cast<float>(preview.rotateAngleDegrees * kPi / 180.0);
-        if (activeAxis_ == TransformAxisHandle::X) {
-            previewRotationDelta.x = angleRadians;
-        } else if (activeAxis_ == TransformAxisHandle::Y) {
-            previewRotationDelta.y = angleRadians;
-        } else if (activeAxis_ == TransformAxisHandle::Z) {
-            previewRotationDelta.z = angleRadians;
-        }
         Vec3 previewScaleFactor = preview.scale;
 
         for (const StartTransform& start : startTransforms_) {
@@ -1184,13 +1270,15 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             if (tool == ViewportToolId::Move) {
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, previewMoveDelta);
             } else if (tool == ViewportToolId::Rotate) {
-                applyDocumentWorldRotationDeltaAroundPivot(
+                next = localTransformAfterWorldQuaternionRotation(
                         document,
                         start.entity,
-                        next,
-                        previewRotationDelta,
-                        start.localPivot,
-                        startWorldPivot_);
+                        start.transform,
+                        start.worldTransform,
+                        worldAxisForHandle(activeAxis_),
+                        angleRadians,
+                        startWorldPivot_,
+                        rotationEulerReference(start));
             } else if (tool == ViewportToolId::Scale) {
                 next.scale.x = std::max(start.transform.scale.x * previewScaleFactor.x, 0.001f);
                 next.scale.y = std::max(start.transform.scale.y * previewScaleFactor.y, 0.001f);
@@ -1274,20 +1362,38 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             if (tool == ViewportToolId::Move) {
                 Vec3 worldMoveDelta = {};
                 applyAxis(worldMoveDelta.x, worldMoveDelta.y, worldMoveDelta.z, screenAxisDelta(activeAxis_) * worldPerPixel);
-                worldMoveDelta = snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, activeGridSize, snapEnabled);
+                worldMoveDelta = snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, startWorldPivot_, activeGridSize, snapEnabled);
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, worldMoveDelta);
             } else if (tool == ViewportToolId::Rotate) {
-                const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
-                const float angleRadians = snapRotationRadians(screenDelta * 0.01f, snapEnabled);
-                Vec3 worldRotationDelta = {};
-                applyAxis(worldRotationDelta.x, worldRotationDelta.y, worldRotationDelta.z, angleRadians);
-                applyDocumentWorldRotationDeltaAroundPivot(
+                float angleRadians = 0.0f;
+#if QUADER_HAS_MODELING_SDK
+                if (sceneOnlyRotateState_) {
+                    const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+                    const quader_editor_core::RotatePreviewResult rotatePreview =
+                            quader_editor_core::preview_rotate_from_screen_position(
+                                    *sceneOnlyRotateState_,
+                                    toSdk(localMouse),
+                                    snapEnabled ? 15.0 : 0.0);
+                    if (rotatePreview.ok) {
+                        angleRadians = static_cast<float>(rotatePreview.preview_angle_degrees * kPi / 180.0);
+                    } else {
+                        LOG_ERROR("Scene transform rotate preview failed: {}", rotatePreview.message);
+                    }
+                } else
+#endif
+                {
+                    const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
+                    angleRadians = snapRotationRadians(screenDelta * 0.01f, snapEnabled);
+                }
+                next = localTransformAfterWorldQuaternionRotation(
                         document,
                         start.entity,
-                        next,
-                        worldRotationDelta,
-                        start.localPivot,
-                        startWorldPivot_);
+                        start.transform,
+                        start.worldTransform,
+                        worldAxisForHandle(activeAxis_),
+                        angleRadians,
+                        startWorldPivot_,
+                        rotationEulerReference(start));
             } else if (tool == ViewportToolId::Scale) {
                 const double rawFactor = std::max(
                         0.01,
@@ -1383,6 +1489,9 @@ void TransformGizmoController::resetDragState() {
     modelingDragActive_ = false;
     modelingDragPreviewDriven_ = false;
     sceneOnlyDrag_ = false;
+#if QUADER_HAS_MODELING_SDK
+    sceneOnlyRotateState_.reset();
+#endif
     sceneTransformPreview_.reset();
     activeAxis_ = TransformAxisHandle::None;
     startTransforms_.clear();

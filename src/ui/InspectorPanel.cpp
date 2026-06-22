@@ -592,15 +592,16 @@ void InspectorPanel::drawContent(UIContext& context) {
             });
         }
 
+        const Vec3 displayedRotation = positiveEulerRadians(transform->rotationEuler);
         float rotation[3] = {
-                transform->rotationEuler.x * RadToDeg,
-                transform->rotationEuler.y * RadToDeg,
-                transform->rotationEuler.z * RadToDeg,
+                displayedRotation.x * RadToDeg,
+                displayedRotation.y * RadToDeg,
+                displayedRotation.z * RadToDeg,
         };
         const std::array<bool, 3> rotationMixed = mixedRotationAxes(document, selected, *transform);
         const std::string rotationLabel = localization.text("ui.inspector.rotation", "Rotation");
         if (axisDragFloat3("rotation", rotationLabel.c_str(), rotation, rotationMixed, mixedLabel.c_str(), context.style, 0.5f)) {
-            const Vec3 previous = transform->rotationEuler;
+            const Vec3 previous = displayedRotation;
             const Vec3 nextRotation{rotation[0] * DegToRad, rotation[1] * DegToRad, rotation[2] * DegToRad};
             const Vec3 delta = nextRotation - previous;
             applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {

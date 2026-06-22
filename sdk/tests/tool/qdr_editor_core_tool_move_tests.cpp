@@ -91,6 +91,27 @@ TEST_CASE("move drag begins with local and screen axis state", "[editor-core][to
 	CHECK(preview.preview_delta.y == Catch::Approx(0.0F));
 }
 
+TEST_CASE("object move drag snaps selection center to grid intersections", "[editor-core][tool][move]")
+{
+	quader_editor_core::MoveToolState state =
+		begin_axis_move(quader_editor_core::TransformAxis::x, { 0.25F, 0.0F, 0.0F });
+
+	const quader_editor_core::MovePreviewResult preview =
+		quader_editor_core::preview_move_from_viewport(
+			state,
+			{ 164.0F, 100.0F },
+			{},
+			front_camera(),
+			false,
+			true,
+			1.0,
+			true);
+
+	REQUIRE(preview.ok);
+	CHECK(preview.preview_delta.x == Catch::Approx(0.75F));
+	CHECK(state.center_world.x + preview.preview_delta.x == Catch::Approx(1.0F));
+}
+
 TEST_CASE("move drag snaps preview delta to hovered vertex target", "[editor-core][tool][move][snap]")
 {
 	quader_editor_core::MoveToolState state =

@@ -52,7 +52,7 @@ TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][
 		REQUIRE(session.objects().size() == 1U);
 	}
 
-	SECTION("operation settings use the focused grid offset")
+	SECTION("operation settings duplicate in place when only focused grid is provided")
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const int source_id = session.objects().front().id;
@@ -70,7 +70,7 @@ TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][
 		REQUIRE(copy != nullptr);
 		REQUIRE_FALSE(source->document.vertices.empty());
 		REQUIRE_FALSE(copy->document.vertices.empty());
-		CHECK(copy->document.vertices.front().position.x - source->document.vertices.front().position.x == Catch::Approx(2.5F));
+		CHECK(copy->document.vertices.front().position.x - source->document.vertices.front().position.x == Catch::Approx(0.0F));
 		CHECK(copy->document.vertices.front().position.y - source->document.vertices.front().position.y == Catch::Approx(0.0F));
 		CHECK(copy->document.vertices.front().position.z - source->document.vertices.front().position.z == Catch::Approx(0.0F));
 	}
@@ -99,7 +99,7 @@ TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][
 		CHECK(copy->document.vertices.front().position.z - source->document.vertices.front().position.z == Catch::Approx(3.0F));
 	}
 
-	SECTION("operation settings fall back to editor-core default for missing grid")
+	SECTION("operation settings duplicate in place by default")
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const int source_id = session.objects().front().id;
@@ -116,7 +116,8 @@ TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][
 		REQUIRE(copy != nullptr);
 		REQUIRE_FALSE(source->document.vertices.empty());
 		REQUIRE_FALSE(copy->document.vertices.empty());
-		CHECK(copy->document.vertices.front().position.x - source->document.vertices.front().position.x == Catch::Approx(
-			static_cast<float>(quader_editor_core::default_command_grid_world_size)));
+		CHECK(copy->document.vertices.front().position.x - source->document.vertices.front().position.x == Catch::Approx(0.0F));
+		CHECK(copy->document.vertices.front().position.y - source->document.vertices.front().position.y == Catch::Approx(0.0F));
+		CHECK(copy->document.vertices.front().position.z - source->document.vertices.front().position.z == Catch::Approx(0.0F));
 	}
 }

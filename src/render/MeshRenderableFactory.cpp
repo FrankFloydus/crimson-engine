@@ -174,7 +174,7 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
     filament::RenderableManager::Builder builder(primitiveSpans.size());
     for (std::size_t primitiveIndex = 0; primitiveIndex < primitiveSpans.size(); ++primitiveIndex) {
         const MeshPrimitiveSpan& primitive = primitiveSpans[primitiveIndex];
-        filament::MaterialInstance* materialInstance = materialBinding_->createMeshMaterialInstance(assets, material);
+        filament::MaterialInstance* materialInstance = materialBinding_->createMeshMaterialInstance(assets, material, doubleSided);
         proxy.materialSlots.push_back(primitive.materialSlot);
         proxy.materialInstances.push_back(materialInstance);
         builder.geometry(primitiveIndex,
@@ -186,7 +186,6 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         builder.material(primitiveIndex, materialInstance);
     }
     builder.boundingBox(computeBounds(mesh))
-            .culling(!doubleSided)
             .castShadows(castShadows)
             .receiveShadows(false)
             .build(*engine_, proxy.entity);

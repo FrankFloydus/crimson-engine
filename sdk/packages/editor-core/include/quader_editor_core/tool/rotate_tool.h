@@ -15,7 +15,9 @@ struct RotateToolState {
 	quader_poly::Vec3 pivot;
 	quader_poly::Vec2 screen_pivot;
 	double start_angle = 0.0;
+	double last_angle = 0.0;
 	double drag_view_sign = 1.0;
+	double accumulated_angle_degrees = 0.0;
 	double preview_angle_degrees = 0.0;
 };
 

@@ -78,6 +78,26 @@ quader_poly::Vec3 plane_drag_delta(TransformAxis axis, quader_poly::Vec3 raw_del
 	return delta;
 }
 
+quader_poly::Vec3 snap_center_drag_delta(TransformAxis axis, quader_poly::Vec3 center_world, quader_poly::Vec3 raw_delta, double grid_size)
+{
+	quader_poly::Vec3 delta;
+	if (axis == TransformAxis::x || axis == TransformAxis::xy || axis == TransformAxis::xz) {
+		delta.x = static_cast<float>(snap_world_value(static_cast<double>(center_world.x + raw_delta.x), grid_size) - center_world.x);
+	}
+	if (axis == TransformAxis::y || axis == TransformAxis::xy || axis == TransformAxis::yz) {
+		delta.y = static_cast<float>(snap_world_value(static_cast<double>(center_world.y + raw_delta.y), grid_size) - center_world.y);
+	}
+	if (axis == TransformAxis::z || axis == TransformAxis::xz || axis == TransformAxis::yz) {
+		delta.z = static_cast<float>(snap_world_value(static_cast<double>(center_world.z + raw_delta.z), grid_size) - center_world.z);
+	}
+	if (axis == TransformAxis::all) {
+		delta.x = static_cast<float>(snap_world_value(static_cast<double>(center_world.x + raw_delta.x), grid_size) - center_world.x);
+		delta.y = static_cast<float>(snap_world_value(static_cast<double>(center_world.y + raw_delta.y), grid_size) - center_world.y);
+		delta.z = static_cast<float>(snap_world_value(static_cast<double>(center_world.z + raw_delta.z), grid_size) - center_world.z);
+	}
+	return delta;
+}
+
 bool edge_uses_vertex(quader_poly::Edge edge, quader_poly::ElementId vertex_id)
 {
 	return edge.a == vertex_id || edge.b == vertex_id;
@@ -314,7 +334,8 @@ public:
 			const ViewportCameraState& camera,
 			bool precision,
 			bool grid_enabled,
-			double grid_size) const
+			double grid_size,
+			bool snap_center_to_grid) const
 	{
 		if (!state.active) {
 			return { false, "Move tool is not active.", {}, {}, {} };
@@ -326,17 +347,24 @@ public:
 			const DragPointResult current_plane_point =
 				drag_point_on_plane(ray, state.center_world, transform_plane_normal(state.axis));
 			if (current_plane_point.ok) {
-				delta = plane_drag_delta(state.axis, current_plane_point.point - state.plane_start_point, grid_size, grid_enabled);
+				const quader_poly::Vec3 raw_delta = current_plane_point.point - state.plane_start_point;
+				delta = snap_center_to_grid && grid_enabled
+					? snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size)
+					: plane_drag_delta(state.axis, raw_delta, grid_size, grid_enabled);
 				distance = quader_poly::length(delta);
 			}
 		} else {
 			const quader_poly::Vec2 screen_delta = vec2_sub(screen_position, state.start_screen);
 			const double pixel_delta = vec2_dot(screen_delta, state.screen_axis);
-			distance = maybe_snap_world_value(
-					pixel_delta * viewport_world_units_per_pixel(camera, state.center_world),
-					grid_size,
-					grid_enabled);
-			delta = vec3_scale(state.local_axis, distance);
+			const double raw_distance = pixel_delta * viewport_world_units_per_pixel(camera, state.center_world);
+			if (snap_center_to_grid && grid_enabled) {
+				const quader_poly::Vec3 raw_delta = vec3_scale(state.world_axis, raw_distance);
+				delta = snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size);
+				distance = axis_coordinate(state.center_world + delta, state.axis) - axis_coordinate(state.center_world, state.axis);
+			} else {
+				distance = maybe_snap_world_value(raw_distance, grid_size, grid_enabled);
+				delta = vec3_scale(state.local_axis, distance);
+			}
 		}
 
 		if (precision && !transform_axis_is_plane(state.axis)) {
@@ -406,7 +434,8 @@ public:
 					input.camera,
 					input.precision,
 					!input.precision,
-					input.grid_size);
+					input.grid_size,
+					state.scene_transform_preview_eligible && state.operation == TransformDragOperation::transform);
 			}
 			if (!preview.ok) {
 				return { false, false, preview.message.empty() ? "Move preview failed." : preview.message };
@@ -520,7 +549,8 @@ MovePreviewResult preview_move_from_viewport(
 		const ViewportCameraState& camera,
 		bool precision,
 		bool grid_enabled,
-		double grid_size)
+		double grid_size,
+		bool snap_center_to_grid)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.preview_move_from_viewport");
 	return move_tool_impl().preview_move_from_viewport(
@@ -530,7 +560,8 @@ MovePreviewResult preview_move_from_viewport(
 			camera,
 			precision,
 			grid_enabled,
-			grid_size);
+			grid_size,
+			snap_center_to_grid);
 }
 
 void reset_move(MoveToolState& state)

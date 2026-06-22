@@ -22,7 +22,10 @@ public:
     }
 
     std::uint64_t materialRevision(const AssetRegistry& assets, const MaterialDocument* material) const;
-    filament::MaterialInstance* createMeshMaterialInstance(const AssetRegistry& assets, const MaterialDocument* material) const;
+    filament::MaterialInstance* createMeshMaterialInstance(
+            const AssetRegistry& assets,
+            const MaterialDocument* material,
+            bool doubleSided) const;
 
 private:
     filament::Material* meshMaterial_ = nullptr;

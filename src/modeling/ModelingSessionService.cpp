@@ -2121,6 +2121,108 @@ public:
         }
     }
 
+    struct DuplicateSceneState {
+        EntityId source = InvalidEntityId;
+        EntityId parent = InvalidEntityId;
+        TransformComponent transform;
+        VisibilityComponent visibility;
+        LockComponent lock;
+        std::optional<MeshComponent> mesh;
+        std::optional<MaterialComponent> material;
+    };
+
+#if QUADER_HAS_MODELING_SDK
+    [[nodiscard]] std::vector<DuplicateSceneState> captureSelectedDuplicateSceneState() const {
+        std::vector<int> selectedObjectIds = session_.selected_object_ids();
+        std::unordered_set<int> selectedObjectSet(selectedObjectIds.begin(), selectedObjectIds.end());
+        std::vector<DuplicateSceneState> states;
+        states.reserve(selectedObjectIds.size());
+
+        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+            if (!selectedObjectSet.contains(object.id)) {
+                continue;
+            }
+            const std::optional<EntityId> entity = objectRegistry_.entityForSdkObject(object.id);
+            if (!entity.has_value() || !scene_.exists(*entity)) {
+                continue;
+            }
+            const TransformComponent* transform = scene_.transform(*entity);
+            if (transform == nullptr) {
+                continue;
+            }
+            DuplicateSceneState state;
+            state.source = *entity;
+            state.parent = scene_.parent(*entity);
+            state.transform = *transform;
+            if (const VisibilityComponent* visibility = scene_.visibility(*entity)) {
+                state.visibility = *visibility;
+            }
+            if (const LockComponent* lock = scene_.lock(*entity)) {
+                state.lock = *lock;
+            }
+            if (const MeshComponent* mesh = scene_.mesh(*entity)) {
+                state.mesh = *mesh;
+            }
+            if (const MaterialComponent* material = scene_.material(*entity)) {
+                state.material = *material;
+            }
+            states.push_back(state);
+        }
+        return states;
+    }
+
+    void applySceneStateToSelectedDuplicates(const std::vector<DuplicateSceneState>& sourceStates) {
+        if (sourceStates.empty()) {
+            return;
+        }
+
+        const std::vector<int> selectedDuplicateObjectIds = session_.selected_object_ids();
+        if (selectedDuplicateObjectIds.size() != sourceStates.size()) {
+            return;
+        }
+        const std::unordered_set<int> duplicateObjectSet(
+                selectedDuplicateObjectIds.begin(),
+                selectedDuplicateObjectIds.end());
+        std::vector<int> duplicateObjectIds;
+        duplicateObjectIds.reserve(selectedDuplicateObjectIds.size());
+        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+            if (duplicateObjectSet.contains(object.id)) {
+                duplicateObjectIds.push_back(object.id);
+            }
+        }
+        if (duplicateObjectIds.size() != sourceStates.size()) {
+            return;
+        }
+
+        for (std::size_t index = 0; index < sourceStates.size(); ++index) {
+            const std::optional<EntityId> duplicate = objectRegistry_.entityForSdkObject(duplicateObjectIds[index]);
+            if (!duplicate.has_value() || !scene_.exists(*duplicate)) {
+                continue;
+            }
+
+            const DuplicateSceneState& source = sourceStates[index];
+            scene_.setTransform(*duplicate, source.transform);
+            if (source.parent != InvalidEntityId && scene_.exists(source.parent)) {
+                (void)scene_.setParent(*duplicate, source.parent, false);
+            }
+            scene_.setVisible(*duplicate, source.visibility.visible);
+            scene_.setLocked(*duplicate, source.lock.locked);
+            if (source.mesh.has_value()) {
+                if (const MeshComponent* duplicateMesh = scene_.mesh(*duplicate)) {
+                    MeshComponent nextMesh = *source.mesh;
+                    nextMesh.mesh = duplicateMesh->mesh;
+                    scene_.setMesh(*duplicate, nextMesh);
+                }
+            }
+            if (source.material.has_value()) {
+                scene_.setMaterial(*duplicate, *source.material);
+            } else {
+                scene_.clearMaterial(*duplicate);
+            }
+        }
+    }
+#endif
+
     ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
         const std::vector<EntityId> selected = scene_.selectedEntities();
         std::unordered_set<EntityId> selectedSet(selected.begin(), selected.end());
@@ -2146,14 +2248,32 @@ public:
             return {.ok = false, .changed = false, .message = "Select a group to duplicate."};
         }
 
-        std::vector<EntityId> sourceMeshes;
+        std::vector<EntityId> sourceMeshTreeOrder;
         for (const EntityId root : roots) {
             for (const EntityId entity : scene_.descendants(root, true)) {
                 if (scene_.modelingObject(entity) != nullptr) {
-                    sourceMeshes.push_back(entity);
+                    sourceMeshTreeOrder.push_back(entity);
                 }
             }
         }
+
+        std::vector<EntityId> sourceMeshes = sourceMeshTreeOrder;
+#if QUADER_HAS_MODELING_SDK
+        if (!sourceMeshTreeOrder.empty()) {
+            if (!sceneObjectsSyncedForCurrentSdkContent()) {
+                syncSceneObjectsFromSdk();
+            }
+            const std::unordered_set<EntityId> sourceMeshSet(sourceMeshTreeOrder.begin(), sourceMeshTreeOrder.end());
+            sourceMeshes.clear();
+            sourceMeshes.reserve(sourceMeshTreeOrder.size());
+            for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+                const std::optional<EntityId> entity = objectRegistry_.entityForSdkObject(object.id);
+                if (entity.has_value() && sourceMeshSet.contains(*entity)) {
+                    sourceMeshes.push_back(*entity);
+                }
+            }
+        }
+#endif
 
         std::vector<EntityId> duplicateMeshes;
         auto restoreGroupSelection = [&]() {
@@ -2161,27 +2281,45 @@ public:
             (void)setSelectionMode(ModelingSelectionMode::Group);
         };
         if (!sourceMeshes.empty()) {
+#if !QUADER_HAS_MODELING_SDK
             const std::vector<EntityId> beforeEntities = scene_.entities();
             std::unordered_set<EntityId> beforeSet(beforeEntities.begin(), beforeEntities.end());
-            (void)documentCommands.selectEntities(sourceMeshes);
+#endif
             const ModelingCommandResult objectMode = setSelectionMode(ModelingSelectionMode::Object);
             if (!objectMode.ok) {
                 restoreGroupSelection();
                 return objectMode;
             }
+            (void)documentCommands.selectEntities(sourceMeshes, sourceMeshes.front());
             syncObjectSelectionFromScene();
-            const ModelingCommandResult duplicate = executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes);
+            const ModelingCommandResult duplicate = executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes, false);
             if (!duplicate.ok) {
                 restoreGroupSelection();
                 return duplicate;
             }
 
+#if QUADER_HAS_MODELING_SDK
+            const std::vector<int> selectedDuplicateObjectIds = session_.selected_object_ids();
+            const std::unordered_set<int> duplicateObjectSet(
+                    selectedDuplicateObjectIds.begin(),
+                    selectedDuplicateObjectIds.end());
+            duplicateMeshes.reserve(selectedDuplicateObjectIds.size());
+            for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+                if (!duplicateObjectSet.contains(object.id)) {
+                    continue;
+                }
+                const std::optional<EntityId> entity = objectRegistry_.entityForSdkObject(object.id);
+                if (entity.has_value()) {
+                    duplicateMeshes.push_back(*entity);
+                }
+            }
+#else
             for (const EntityId entity : scene_.entities()) {
                 if (!beforeSet.contains(entity) && scene_.modelingObject(entity) != nullptr) {
                     duplicateMeshes.push_back(entity);
                 }
             }
-            std::sort(duplicateMeshes.begin(), duplicateMeshes.end());
+#endif
             if (duplicateMeshes.size() != sourceMeshes.size()) {
                 restoreGroupSelection();
                 return {
@@ -2886,11 +3024,18 @@ public:
     }
 #endif
 
-    ModelingCommandResult executeInstantOperation(ModelingInstantOperationId operation) {
+    ModelingCommandResult executeInstantOperation(
+            ModelingInstantOperationId operation,
+            bool preserveDuplicateSceneState = true) {
 #if QUADER_HAS_MODELING_SDK
         if (operation == ModelingInstantOperationId::DeleteSelection) {
             return deleteSelection();
         }
+
+        const std::vector<DuplicateSceneState> duplicateSceneState =
+                operation == ModelingInstantOperationId::DuplicateMeshes && preserveDuplicateSceneState
+                ? captureSelectedDuplicateSceneState()
+                : std::vector<DuplicateSceneState>{};
 
         const std::optional<SdkOperationExecutor::OperationCommand> command =
                 sdkOperationExecutor_.operationForInstantCommand(
@@ -2900,15 +3045,22 @@ public:
             return {.ok = false, .message = "Instant operation is not mapped to an SDK operation."};
         }
 
-        return executeSdkOperation(command->operation, command->settings);
+        ModelingCommandResult result = executeSdkOperation(command->operation, command->settings);
+        if (result.ok && result.changed && operation == ModelingInstantOperationId::DuplicateMeshes) {
+            applySceneStateToSelectedDuplicates(duplicateSceneState);
+        }
+        return result;
 #else
         (void)operation;
+        (void)preserveDuplicateSceneState;
         return {.ok = false, .message = "Modeling SDK is not available in this build."};
 #endif
     }
 
     ModelingCommandResult beginTransformPreview(bool duplicateSelected) {
 #if QUADER_HAS_MODELING_SDK
+        const std::vector<DuplicateSceneState> duplicateSceneState =
+                duplicateSelected ? captureSelectedDuplicateSceneState() : std::vector<DuplicateSceneState>{};
         const quader_editor_core::CommandResult result = session_.begin_transform_preview(duplicateSelected);
         if (result.ok) {
             invalidateSelectionOverlayCaches();
@@ -2916,6 +3068,9 @@ public:
         if (result.changed) {
             syncSceneObjectsFromSdk(true);
             syncSceneSelectionFromSdk();
+            if (duplicateSelected) {
+                applySceneStateToSelectedDuplicates(duplicateSceneState);
+            }
         }
         return {
                 .ok = result.ok,
@@ -3047,21 +3202,29 @@ public:
                         session_.selection_mode());
         const quader_editor_core::TransformAxis axis = toSdk(request.axis);
         const quader_poly::Vec3 pivot = toSdk(request.pivot);
+        const bool duplicateSceneTransformPreview =
+                request.duplicateSelected &&
+                session_.selection_mode() == quader_editor_core::SelectionMode::object &&
+                operation == quader_editor_core::TransformDragOperation::transform;
         const bool previewDriven =
-                request.duplicateSelected ||
-                session_.selection_mode() != quader_editor_core::SelectionMode::object;
+                !duplicateSceneTransformPreview &&
+                (request.duplicateSelected ||
+                session_.selection_mode() != quader_editor_core::SelectionMode::object);
+        const bool needsSdkPreviewTransaction = previewDriven || request.duplicateSelected;
 
         runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
         {
             quader_editor_core::TransformDragState drag = runtime_.transform_drag_state();
             drag.scene_transform_preview_eligible =
-                    !previewDriven &&
+                    (duplicateSceneTransformPreview || !previewDriven) &&
                     operation == quader_editor_core::TransformDragOperation::transform;
             runtime_.set_transform_drag_state(drag);
         }
         transformDragController_.setPreviewDriven(previewDriven, request.duplicateSelected);
 
-        if (previewDriven) {
+        if (needsSdkPreviewTransaction) {
+            const std::vector<DuplicateSceneState> duplicateSceneState =
+                    request.duplicateSelected ? captureSelectedDuplicateSceneState() : std::vector<DuplicateSceneState>{};
             const quader_editor_core::CommandResult beginPreview =
                     session_.begin_transform_preview(request.duplicateSelected);
             if (!beginPreview.ok) {
@@ -3077,6 +3240,9 @@ public:
             if (beginPreview.changed) {
                 syncSceneObjectsFromSdk(true);
                 syncSceneSelectionFromSdk();
+                if (request.duplicateSelected) {
+                    applySceneStateToSelectedDuplicates(duplicateSceneState);
+                }
             }
         }
 
@@ -3184,10 +3350,11 @@ public:
     ModelingTransformDragPreview commitTransformDrag() {
 #if QUADER_HAS_MODELING_SDK
         const bool previewDriven = transformDragController_.previewDriven();
+        const bool finishPreviewTransaction = previewDriven || transformDragController_.duplicateSelected();
         const quader_editor_core::TransformDragState repeatDrag = runtime_.transform_drag_state();
         bool changed = false;
 
-        if (previewDriven) {
+        if (finishPreviewTransaction) {
             const quader_editor_core::PreviewTransactionFinishResult finish =
                     session_.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
             if (finish.before.active) {
@@ -3207,7 +3374,7 @@ public:
                 };
             }
             changed = finish.before.changed;
-            if (changed && repeatDrag.active) {
+            if (previewDriven && changed && repeatDrag.active) {
                 historyBridge_.recordTransform(
                         session_,
                         repeatDrag,

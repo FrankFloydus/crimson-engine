@@ -195,7 +195,7 @@ quader_poly::PickResult pick_object_element(
 	if (options.mode == quader_poly::SelectionMode::face) {
 		if (const PickObjectFaceGeometry* cached_geometry =
 					cached_face_geometry_for_object(face_geometry, object_index, object)) {
-			return quader_poly::pick_face_geometry(cached_geometry->triangles, ray);
+			return quader_poly::pick_face_geometry(cached_geometry->triangles, ray, options);
 		}
 	}
 	return quader_poly::pick_element(object.document, ray, options);
@@ -535,6 +535,7 @@ quader_poly::PickOptions selection_pick_options_from_radii(double vertex_radius,
 	quader_poly::PickOptions options;
 	options.vertex_radius = static_cast<float>(normalize_pick_radius(vertex_radius, default_vertex_pick_radius));
 	options.edge_radius = static_cast<float>(normalize_pick_radius(edge_radius, default_edge_pick_radius));
+	options.pick_backfaces = true;
 	return options;
 }
 
@@ -1018,6 +1019,7 @@ SelectionHoverUpdateResult update_selection_hover(
 		std::span<const PickObjectFaceGeometry> face_geometry)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_selection_hover");
+	pick_options.pick_backfaces = true;
 	SelectionHoverState next;
 	next.candidate_object_id = mode == SelectionMode::object ? -1 : current_hover.candidate_object_id;
 
@@ -1124,6 +1126,7 @@ bool pick_select(
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool add_selection_value = operation == SelectionEditOperation::add;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
+	pick_options.pick_backfaces = true;
 	if (objects.empty()) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
@@ -1225,6 +1228,7 @@ bool pick_select_face(
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool add_selection_value = operation == SelectionEditOperation::add;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
+	pick_options.pick_backfaces = true;
 	if (objects.empty()) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
@@ -1284,6 +1288,7 @@ bool pick_select_all_faces(
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
+	pick_options.pick_backfaces = true;
 	if (objects.empty()) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
@@ -1351,6 +1356,7 @@ bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& m
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
+	pick_options.pick_backfaces = true;
 	if (objects.empty()) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
@@ -1425,6 +1431,7 @@ bool pick_select_all_vertices(std::vector<PolygonObject>& objects, SelectionMode
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
+	pick_options.pick_backfaces = true;
 	if (objects.empty()) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);

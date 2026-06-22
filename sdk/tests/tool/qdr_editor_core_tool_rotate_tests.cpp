@@ -26,6 +26,32 @@ TEST_CASE("rotate drag snaps screen angle and builds pivoted transform", "[edito
 	CHECK(preview.pivoted_transform.origin.x != Catch::Approx(0.0F));
 }
 
+TEST_CASE("rotate drag accumulates circular motion beyond half turns", "[editor-core][tool][rotate]")
+{
+	quader_editor_core::RotateBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::z;
+	input.screen_position = { 120.0F, 100.0F };
+	input.has_screen_pivot = true;
+	input.screen_pivot = { 100.0F, 100.0F };
+
+	const quader_editor_core::RotateBeginResult begin = quader_editor_core::begin_rotate_drag(input);
+	REQUIRE(begin.ok);
+	quader_editor_core::RotateToolState state = begin.state;
+
+	quader_editor_core::RotatePreviewResult preview =
+		quader_editor_core::preview_rotate_from_screen_position(state, { 100.0F, 80.0F }, 0.0);
+	REQUIRE(preview.ok);
+	CHECK(preview.preview_angle_degrees == Catch::Approx(90.0));
+
+	preview = quader_editor_core::preview_rotate_from_screen_position(state, { 80.0F, 100.0F }, 0.0);
+	REQUIRE(preview.ok);
+	CHECK(preview.preview_angle_degrees == Catch::Approx(180.0));
+
+	preview = quader_editor_core::preview_rotate_from_screen_position(state, { 100.0F, 120.0F }, 0.0);
+	REQUIRE(preview.ok);
+	CHECK(preview.preview_angle_degrees == Catch::Approx(270.0));
+}
+
 TEST_CASE("modal rotate planner clears tiny duplicate previews", "[editor-core][tool][rotate]")
 {
 	quader_editor_core::ModalTransformBeginPlan begin =

@@ -14,10 +14,66 @@ inline void pinLocalPivotToWorldPoint(TransformComponent& transform, Vec3 localP
     transform.position = worldPivot - transformPoint(composeTransform(spatial), localPivot);
 }
 
+inline float radiansNearReference(float radians, float reference) {
+    constexpr float TwoPi = 6.28318530717958647692f;
+    if (!std::isfinite(radians) || !std::isfinite(reference)) {
+        return radians;
+    }
+    return radians + TwoPi * std::round((reference - radians) / TwoPi);
+}
+
+inline float positiveRadians(float radians) {
+    constexpr float TwoPi = 6.28318530717958647692f;
+    if (!std::isfinite(radians)) {
+        return radians;
+    }
+    float value = std::fmod(radians, TwoPi);
+    if (value < 0.0f) {
+        value += TwoPi;
+    }
+    if (std::abs(value) <= 0.00001f || std::abs(value - TwoPi) <= 0.00001f) {
+        return 0.0f;
+    }
+    return value;
+}
+
+inline Vec3 positiveEulerRadians(Vec3 eulerRadians) {
+    return {
+            positiveRadians(eulerRadians.x),
+            positiveRadians(eulerRadians.y),
+            positiveRadians(eulerRadians.z),
+    };
+}
+
+inline Vec3 equivalentEulerRadiansClosestTo(Vec3 eulerRadians, Vec3 referenceEulerRadians) {
+    constexpr float Pi = 3.14159265358979323846f;
+    const auto normalizeCandidate = [&](Vec3 candidate) {
+        return Vec3{
+                radiansNearReference(candidate.x, referenceEulerRadians.x),
+                radiansNearReference(candidate.y, referenceEulerRadians.y),
+                radiansNearReference(candidate.z, referenceEulerRadians.z),
+        };
+    };
+    const auto score = [&](Vec3 candidate) {
+        const Vec3 delta = candidate - referenceEulerRadians;
+        return dot(delta, delta);
+    };
+
+    const Vec3 primary = normalizeCandidate(eulerRadians);
+    const Vec3 alternate = normalizeCandidate({
+            eulerRadians.x + Pi,
+            Pi - eulerRadians.y,
+            eulerRadians.z + Pi,
+    });
+    return score(alternate) < score(primary) ? alternate : primary;
+}
+
 inline Vec3 eulerRadiansAfterWorldRotationDelta(Vec3 currentEulerRadians, Vec3 worldRotationDeltaRadians) {
     const glm::quat delta = glm::quat(toGlm(worldRotationDeltaRadians));
     const glm::quat current = toGlm(quatFromEulerRadians(currentEulerRadians));
-    return fromGlm(glm::eulerAngles(glm::normalize(delta * current)));
+    return equivalentEulerRadiansClosestTo(
+            fromGlm(glm::eulerAngles(glm::normalize(delta * current))),
+            currentEulerRadians);
 }
 
 inline void applyWorldRotationDeltaAroundPivot(
