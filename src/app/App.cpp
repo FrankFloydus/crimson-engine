@@ -80,7 +80,7 @@ int App::run() {
 
         window_.refreshPixelSize();
         ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
-        ui_.prepareViewports(renderBridge_, projectSession_.scene(), projectSession_.assets());
+        ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
 
         if (renderSystem_.beginFrame()) {
             ui_.renderViewports(renderSystem_);

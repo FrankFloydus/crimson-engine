@@ -22,7 +22,11 @@ public:
 
     QuaderApiVoidResult select();
     QuaderApiVoidResult rename(std::string name);
+    QuaderApiVoidResult destroy();
+    QuaderApiResult<QuaderEntityRef> duplicate();
     QuaderApiVoidResult setTransform(TransformComponent transform);
+    QuaderApiVoidResult setVisible(bool visible);
+    QuaderApiVoidResult setLocked(bool locked);
     QuaderApiVoidResult move(Vec3 delta);
     QuaderApiVoidResult rotateEuler(Vec3 eulerRadians, Vec3 pivot = {});
     QuaderApiVoidResult scale(Vec3 scale, Vec3 pivot = {});

@@ -16,5 +16,11 @@ int main() {
             .moveSelection({2.0f, 0.0f, 0.0f})
             .run();
 
-    return result.ok ? 0 : 1;
+    if (!result.ok) {
+        return 1;
+    }
+
+    editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    editor.commands().execute(quader::QuaderCommand::HistoryRedo);
+    return 0;
 }

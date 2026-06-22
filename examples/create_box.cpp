@@ -11,10 +11,13 @@ int main() {
 
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
             editor.modeling().createBox(args);
-    if (!box.ok) {
+    if (!box.ok()) {
         return 1;
     }
 
-    editor.object(box.value).select();
+    editor.object(box.value())
+            .rename("Selected Example Box")
+            .select();
+    editor.mainViewport().setShadingMode(quader::QuaderShadingMode::Wireframe);
     return 0;
 }

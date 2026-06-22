@@ -29,6 +29,9 @@ when a command/service owner exists.
 User-triggered document mutations belong in `src/document/commands/**` as `IUndoableCommand`
 implementations and are routed by `DocumentCommandService` or `EditorCommandService`.
 
+Public scene intent should route through `QuaderSceneApi`. Prefer `QuaderSceneBatch` when a UI,
+test, or automation workflow needs several scene edits to land as one undoable operation.
+
 Scene-only transform previews belong in `SceneTransformPreviewTransaction`.
 
 ## Modeling
@@ -45,14 +48,20 @@ Keep `ModelingSessionService` as a facade over owners, not as a dumping ground.
 Viewport pointer, modal, transform, camera, and drawing interactions belong in `src/viewport/**` and
 viewport controllers/services. `ViewportPanel` builds context and delegates.
 
-Future public viewport API should delegate to a viewport state/workspace service rather than
-directly mutating `ViewportPanel`.
+Viewport layout, focused pane, pane view, pane shading, grid preset, pane render size/visibility,
+and camera controllers belong in `ViewportWorkspaceService`. `QuaderViewportApi` delegates core
+viewport state to that service. `ViewportPanel` may own ImGui presentation and renderer lifetimes,
+but it must not become the long-lived owner of viewport workspace state.
 
 ## UI
 
 UI panels and controllers own presentation and routing only. If they express editor intent, prefer
 public API calls. If they perform per-frame hover, drawing, or input assembly, use the narrowest
 runtime owner.
+
+For command-shaped UI intent, prefer `editor.commands().execute(QuaderCommand::...)` in C++.
+Use raw string command IDs only where the command palette, future scripting layer, serialized data,
+or dynamic catalog lookup requires strings.
 
 ## Render
 

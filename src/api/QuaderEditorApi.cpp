@@ -9,12 +9,14 @@ public:
     explicit Impl(ProjectSession& session)
         : api(session)
         , project(session)
+        , viewports(viewportWorkspace)
         , tools(session)
         , commands(api, viewports, tools)
         , render(session, api.query()) {}
 
     QuaderApi api;
     QuaderProjectApi project;
+    ViewportWorkspaceService viewportWorkspace;
     QuaderViewportApi viewports;
     QuaderToolsApi tools;
     QuaderCommandsApi commands;

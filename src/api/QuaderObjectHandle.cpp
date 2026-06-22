@@ -45,8 +45,24 @@ QuaderApiVoidResult QuaderObjectHandle::rename(std::string name) {
     return api_->scene().rename(ref_.entity, std::move(name));
 }
 
+QuaderApiVoidResult QuaderObjectHandle::destroy() {
+    return api_->scene().destroy(ref_.entity);
+}
+
+QuaderApiResult<QuaderEntityRef> QuaderObjectHandle::duplicate() {
+    return api_->scene().duplicate(ref_.entity);
+}
+
 QuaderApiVoidResult QuaderObjectHandle::setTransform(TransformComponent transform) {
     return api_->scene().setTransform(ref_.entity, transform);
+}
+
+QuaderApiVoidResult QuaderObjectHandle::setVisible(bool visible) {
+    return api_->scene().setVisible(ref_.entity, visible);
+}
+
+QuaderApiVoidResult QuaderObjectHandle::setLocked(bool locked) {
+    return api_->scene().setLocked(ref_.entity, locked);
 }
 
 QuaderApiVoidResult QuaderObjectHandle::move(Vec3 delta) {

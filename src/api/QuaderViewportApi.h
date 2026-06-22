@@ -1,6 +1,7 @@
 #pragma once
 
 #include "api/QuaderEditorApiTypes.h"
+#include "viewport/ViewportWorkspaceService.h"
 
 namespace quader {
 
@@ -9,9 +10,11 @@ class QuaderViewportHandle;
 
 class QuaderViewportApi final {
 public:
-    QuaderViewportApi();
+    explicit QuaderViewportApi(ViewportWorkspaceService& workspace);
 
     void setRuntimeHooks(QuaderViewportRuntimeHooks hooks);
+    [[nodiscard]] ViewportWorkspaceService& workspace();
+    [[nodiscard]] const ViewportWorkspaceService& workspace() const;
 
     [[nodiscard]] ViewportLayoutId layout() const;
     QuaderApiVoidResult setLayout(ViewportLayoutId layout);
@@ -35,7 +38,9 @@ public:
 
 private:
     [[nodiscard]] QuaderApiVoidResult unavailable(std::string message) const;
+    [[nodiscard]] QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) const;
 
+    ViewportWorkspaceService& workspace_;
     QuaderViewportRuntimeHooks hooks_;
 };
 

@@ -12,9 +12,11 @@ auto created = editor.modeling().createBox({
         .name = "API Box",
 });
 
-if (created.ok) {
-    editor.object(created.value).select();
-    editor.commands().execute("history.undo");
+if (created.ok()) {
+    editor.object(created.value())
+            .rename("Renamed API Box")
+            .select();
+    editor.commands().execute(quader::QuaderCommand::HistoryUndo);
 }
 ```
 
@@ -25,7 +27,23 @@ Use public API domains for editor intent:
   `editor.history()`, and `editor.query()` for document/modeling work.
 - `editor.commands()` for stable command IDs shared by menus, shortcuts, tests, and future scripts.
 - `editor.viewports()`, `editor.tools()`, `editor.preferences()`, and `editor.ui()` for runtime
-  editor state where the app has attached runtime hooks.
+  editor state. Viewport layout, pane view, pane shading, grid preset, focused pane, and camera state
+  are backed by the viewport workspace service rather than UI callbacks.
+
+Common ergonomic patterns:
+
+```cpp
+editor.scene().select(entity);
+editor.selection().selectObject(object.entity);
+editor.commands().execute(quader::QuaderCommand::ModelingDuplicateMeshes);
+editor.mainViewport().setShadingMode(quader::QuaderShadingMode::Wireframe);
+
+editor.scene().batch("Arrange blockout")
+        .rename(entity, "North Wall")
+        .setTransform(entity, moved)
+        .setVisible(helper, false)
+        .commit();
+```
 
 Low-level document, SDK, render, UI, and platform services remain owner layers. Public examples
 should not start from those internals.

@@ -254,53 +254,6 @@ void UISystem::draw(QuaderEditorApi& editor,
                 return runtimeStatus(before != visible);
             },
     });
-    editor.viewports().setRuntimeHooks(QuaderViewportRuntimeHooks{
-            .layout = [this]() {
-                return viewportPanel_ != nullptr ? viewportPanel_->viewportLayout() : ViewportLayoutId::Single;
-            },
-            .setLayout = [this](ViewportLayoutId layout) {
-                if (viewportPanel_ == nullptr) {
-                    return runtimeFailure("Viewport panel is not available.");
-                }
-                const bool changed = viewportPanel_->viewportLayout() != layout;
-                viewportPanel_->setViewportLayout(layout);
-                return runtimeStatus(changed);
-            },
-            .gridPreset = [this]() {
-                return viewportPanel_ != nullptr ? viewportPanel_->gridPreset() : 0;
-            },
-            .setGridPreset = [this](int preset) {
-                if (viewportPanel_ == nullptr) {
-                    return runtimeFailure("Viewport panel is not available.");
-                }
-                const bool changed = viewportPanel_->gridPreset() != preset;
-                viewportPanel_->setGridPreset(preset);
-                return runtimeStatus(changed);
-            },
-            .shadingMode = [this](ViewportPaneId pane) {
-                return viewportPanel_ != nullptr ? viewportPanel_->paneShadingMode(pane) : QuaderShadingMode::Solid;
-            },
-            .setShadingMode = [this](ViewportPaneId pane, QuaderShadingMode mode) {
-                if (viewportPanel_ == nullptr) {
-                    return runtimeFailure("Viewport panel is not available.");
-                }
-                const bool changed = viewportPanel_->paneShadingMode(pane) != mode;
-                viewportPanel_->setPaneShadingMode(pane, mode);
-                return runtimeStatus(changed);
-            },
-            .view = [this](ViewportPaneId pane) {
-                return viewportPanel_ != nullptr ? viewportPanel_->paneView(pane) : viewportViewForPane(pane);
-            },
-            .setView = [this](ViewportPaneId pane, ViewportView view) {
-                if (viewportPanel_ == nullptr) {
-                    return runtimeFailure("Viewport panel is not available.");
-                }
-                const bool changed = viewportPanel_->paneView(pane) != view;
-                viewportPanel_->setPaneView(pane, view);
-                return runtimeStatus(changed);
-            },
-    });
-
     drawDockspace(editor, quitRequested, document, documentCommands, modeling);
 
     bool viewportCursorCaptureRequested = false;
@@ -365,9 +318,13 @@ void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t f
     renderer_.prepare(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
 }
 
-void UISystem::prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets) {
+void UISystem::prepareViewports(
+        QuaderEditorApi& editor,
+        SceneRenderBridge& renderBridge,
+        const SceneDocument& document,
+        const AssetRegistry& assets) {
     if (viewportPanel_ != nullptr) {
-        viewportPanel_->prepareViewports(renderBridge, document, assets);
+        viewportPanel_->prepareViewports(editor.viewports().workspace(), renderBridge, document, assets);
     }
 }
 

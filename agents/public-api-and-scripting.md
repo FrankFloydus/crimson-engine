@@ -1,7 +1,8 @@
 # Public API And Scripting
 
-`QuaderApi` is the official app-facing front door for editor/user intent. Future whole-editor work
-should grow toward `QuaderEditorApi`, with Lua scripting bound only to public API surfaces.
+`QuaderEditorApi` is the official app-facing front door for whole-editor user intent in the native
+app. Use `QuaderApi` for document/modeling-only automation, tests, and examples that do not need
+runtime editor domains. Lua scripting, when implemented, must bind only to public API surfaces.
 
 Read `programmatic-api-plan.md` for the current global plan.
 
@@ -20,12 +21,23 @@ Add a capability to the public API when it is:
 Examples:
 
 ```cpp
-api.modeling().createBox(...);
-api.selection().selectFace(...);
-api.history().undo();
-api.assets().addMaterial(...);
-editor.viewports().main().setShadingMode(QuaderShadingMode::Wireframe);
+editor.modeling().createBox(...);
+editor.object(object).rename("Wall").select();
+editor.selection().selectFace(object, face);
+editor.scene().batch("Arrange").setTransform(entity, moved).commit();
+editor.commands().execute(QuaderCommand::HistoryUndo);
+editor.mainViewport().setShadingMode(QuaderShadingMode::Wireframe);
 ```
+
+Prefer these public API ergonomics for C++ callers:
+
+- `QuaderCommand::*` typed command IDs instead of raw string literals.
+- `QuaderObjectHandle` for fluent object actions such as `rename`, `select`, `setVisible`,
+  `setLocked`, `duplicate`, `destroy`, and material assignment.
+- `QuaderSceneBatch` for grouped scene edits that should commit as one undoable operation.
+- Convenience selection overloads before manually assembling `std::span` or component requests.
+- `QuaderApiResult` helpers such as `ok()`, `changed()`, `value()`, and `errorMessage()` in public
+  examples. Legacy field access can remain in older internal code.
 
 ## Keep Low-Level When
 
@@ -88,5 +100,6 @@ end)
 
 - Public headers under `src/api` must avoid backend/internal owner headers.
 - `src/api` must not call raw SDK execution shortcuts outside approved execution services.
-- Public examples must start from `QuaderApi`, future `QuaderEditorApi`, or Lua `quader`.
+- Public examples must start from `QuaderEditorApi`, `QuaderApi`, `QuaderObjectHandle`,
+  `QuaderScript`, or future Lua `quader`.
 - Lua binding code may bind only public API types and approved value structs.

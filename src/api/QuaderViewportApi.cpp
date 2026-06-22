@@ -3,43 +3,80 @@
 #include <utility>
 
 namespace quader {
+namespace {
 
-QuaderViewportApi::QuaderViewportApi() = default;
+ViewportShadingMode toViewportShadingMode(QuaderShadingMode mode) {
+    switch (mode) {
+    case QuaderShadingMode::Wireframe:
+        return ViewportShadingMode::Wireframe;
+    case QuaderShadingMode::Material:
+        return ViewportShadingMode::Rendered;
+    case QuaderShadingMode::Solid:
+    case QuaderShadingMode::XRay:
+        return ViewportShadingMode::Shaded;
+    }
+    return ViewportShadingMode::Shaded;
+}
+
+QuaderShadingMode toQuaderShadingMode(ViewportShadingMode mode) {
+    switch (mode) {
+    case ViewportShadingMode::Wireframe:
+        return QuaderShadingMode::Wireframe;
+    case ViewportShadingMode::Rendered:
+        return QuaderShadingMode::Material;
+    case ViewportShadingMode::Shaded:
+        return QuaderShadingMode::Solid;
+    }
+    return QuaderShadingMode::Solid;
+}
+
+} // namespace
+
+QuaderViewportApi::QuaderViewportApi(ViewportWorkspaceService& workspace)
+    : workspace_(workspace) {}
 
 void QuaderViewportApi::setRuntimeHooks(QuaderViewportRuntimeHooks hooks) {
     hooks_ = std::move(hooks);
 }
 
+ViewportWorkspaceService& QuaderViewportApi::workspace() {
+    return workspace_;
+}
+
+const ViewportWorkspaceService& QuaderViewportApi::workspace() const {
+    return workspace_;
+}
+
 ViewportLayoutId QuaderViewportApi::layout() const {
-    return hooks_.layout ? hooks_.layout() : ViewportLayoutId::Single;
+    return workspace_.layout();
 }
 
 QuaderApiVoidResult QuaderViewportApi::setLayout(ViewportLayoutId layout) {
-    return hooks_.setLayout ? hooks_.setLayout(layout) : unavailable("Viewport layout runtime is not attached.");
+    return runtimeStatus(workspace_.setLayout(layout));
 }
 
 int QuaderViewportApi::gridPreset() const {
-    return hooks_.gridPreset ? hooks_.gridPreset() : 0;
+    return workspace_.gridPreset();
 }
 
 QuaderApiVoidResult QuaderViewportApi::setGridPreset(int preset) {
-    return hooks_.setGridPreset ? hooks_.setGridPreset(preset) : unavailable("Viewport grid runtime is not attached.");
+    return runtimeStatus(workspace_.setGridPreset(preset));
 }
 
 QuaderShadingMode QuaderViewportApi::shadingMode(ViewportPaneId pane) const {
-    return hooks_.shadingMode ? hooks_.shadingMode(pane) : QuaderShadingMode::Solid;
+    return toQuaderShadingMode(workspace_.shadingMode(pane));
 }
 
 QuaderApiVoidResult QuaderViewportApi::setShadingMode(ViewportPaneId pane, QuaderShadingMode mode) {
-    return hooks_.setShadingMode ? hooks_.setShadingMode(pane, mode) : unavailable("Viewport shading runtime is not attached.");
+    return runtimeStatus(workspace_.setShadingMode(pane, toViewportShadingMode(mode)));
 }
 
 ViewportView QuaderViewportApi::view(ViewportPaneId pane) const {
-    return hooks_.view ? hooks_.view(pane) : viewportViewForPane(pane);
+    return workspace_.view(pane);
 }
 
 QuaderApiVoidResult QuaderViewportApi::setView(ViewportPaneId pane, ViewportView view) {
-    return hooks_.setView ? hooks_.setView(pane, view) : unavailable("Viewport camera runtime is not attached.");
+    return runtimeStatus(workspace_.setView(pane, view));
 }
 
 QuaderApiVoidResult QuaderViewportApi::frameSelection(ViewportPaneId pane) {
@@ -47,7 +84,10 @@ QuaderApiVoidResult QuaderViewportApi::frameSelection(ViewportPaneId pane) {
 }
 
 QuaderApiVoidResult QuaderViewportApi::focusOrigin(ViewportPaneId pane) {
-    return hooks_.focusOrigin ? hooks_.focusOrigin(pane) : unavailable("Viewport camera runtime is not attached.");
+    if (hooks_.focusOrigin) {
+        return hooks_.focusOrigin(pane);
+    }
+    return runtimeStatus(workspace_.focusOrigin(pane));
 }
 
 QuaderApiVoidResult QuaderViewportApi::captureScreenshot(const std::filesystem::path& path, ViewportPaneId pane) {
@@ -68,6 +108,15 @@ QuaderApiVoidResult QuaderViewportApi::unavailable(std::string message) const {
             .changed = false,
             .message = std::move(message),
             .mutationKind = QuaderMutationKind::None,
+    };
+}
+
+QuaderApiVoidResult QuaderViewportApi::runtimeStatus(bool changed, std::string message) const {
+    return {
+            .ok = true,
+            .changed = changed,
+            .message = std::move(message),
+            .mutationKind = changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
     };
 }
 

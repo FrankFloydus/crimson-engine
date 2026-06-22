@@ -8,7 +8,8 @@ Read this file first, then read the domain files that match the task before edit
 - This repository is the native standalone Windows Quader app.
 - It is not the Unity plugin and should not preserve old plugin/DLL protection behavior unless a
   native-app requirement explicitly asks for it.
-- `QuaderApi` is now the default app-facing API for new user/editor intent.
+- `QuaderEditorApi` is the default whole-editor API for new user/editor intent in the native app.
+  Use `QuaderApi` for document/modeling-only code that does not need runtime editor domains.
 - Low-level systems remain the owner layers for SDK, document, asset, render, UI, and platform
   mechanics.
 
@@ -57,11 +58,17 @@ For parity/restoration work, also read:
 Use the public API when code expresses user/editor intent:
 
 ```cpp
-api.modeling().createBox(...);
-api.selection().selectFace(...);
-api.history().undo();
-api.assets().addMaterial(...);
+editor.modeling().createBox(...);
+editor.object(object).rename("Wall").select();
+editor.scene().batch("Arrange").setTransform(entity, moved).commit();
+editor.commands().execute(QuaderCommand::HistoryUndo);
+editor.mainViewport().setShadingMode(QuaderShadingMode::Wireframe);
 ```
+
+Prefer typed command IDs from `QuaderCommand` in C++ call sites. Stable string command IDs remain
+the script/command-palette representation. Prefer `QuaderObjectHandle` and `QuaderSceneBatch` for
+fluent object workflows and grouped scene edits. `QuaderApiResult`/`QuaderApiVoidResult` support
+callable helpers such as `ok()`, `changed()`, `value()`, and `errorMessage()`.
 
 Keep code low-level only when it owns invariants, hot-path mechanics, render resources, SDK
 semantics, storage, or platform state. If a UI/test/script needs a missing capability, add the

@@ -12,6 +12,7 @@
 #include "render/RenderSystem.h"
 #include "ui/UIContext.h"
 #include "ui/ViewportContextMenuPolicy.h"
+#include "ui/ViewportPaneController.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "viewport/HostViewportContractAdapter.h"
 #include "viewport/ViewportModelingCommandRouter.h"
@@ -425,61 +426,6 @@ std::string localizedViewportShadingModeLabel(const LocalizationService& localiz
     return localization.text(viewportShadingModeLocalizationKey(mode), std::string(viewportShadingModeLabel(mode)));
 }
 
-void applyCameraView(ViewportCameraController& camera, ViewportView view) {
-    switch (view) {
-    case ViewportView::Top:
-        camera.focusOrigin(64.0f);
-        camera.viewAxis(ViewportViewAxis::Y, 1);
-        break;
-    case ViewportView::Bottom:
-        camera.focusOrigin(64.0f);
-        camera.viewAxis(ViewportViewAxis::Y, -1);
-        break;
-    case ViewportView::Front:
-        camera.focusOrigin(64.0f);
-        camera.viewAxis(ViewportViewAxis::Z, -1);
-        break;
-    case ViewportView::Back:
-        camera.focusOrigin(64.0f);
-        camera.viewAxis(ViewportViewAxis::Z, 1);
-        break;
-    case ViewportView::Side:
-        camera.focusOrigin(64.0f);
-        camera.viewAxis(ViewportViewAxis::X, 1);
-        break;
-    case ViewportView::Left:
-        camera.focusOrigin(64.0f);
-        camera.viewAxis(ViewportViewAxis::X, -1);
-        break;
-    case ViewportView::Perspective:
-        camera.unlockOrthographicView();
-        break;
-    }
-}
-
-ViewportView viewportViewForCamera(const ViewportCameraController& camera) {
-    if (camera.state().projection != ViewportProjection::Orthographic) {
-        return ViewportView::Perspective;
-    }
-
-    const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
-    const float absX = std::abs(forward.x);
-    const float absY = std::abs(forward.y);
-    const float absZ = std::abs(forward.z);
-    constexpr float kAxisDotThreshold = 0.985f;
-    if (absY >= absX && absY >= absZ && absY >= kAxisDotThreshold) {
-        return forward.y < 0.0f ? ViewportView::Top : ViewportView::Bottom;
-    }
-    if (absZ >= absX && absZ >= absY && absZ >= kAxisDotThreshold) {
-        return forward.z > 0.0f ? ViewportView::Front : ViewportView::Back;
-    }
-    if (absX >= kAxisDotThreshold) {
-        return forward.x < 0.0f ? ViewportView::Side : ViewportView::Left;
-    }
-    return ViewportView::Perspective;
-}
-
 std::optional<ImVec2> projectWorldToViewport(
         Vec3 world,
         const ViewportCameraController& camera,
@@ -700,9 +646,6 @@ ViewportPanel::ViewportPanel() {
     panes_[viewportPaneIndex(ViewportPaneId::Top)].id = ViewportPaneId::Top;
     panes_[viewportPaneIndex(ViewportPaneId::Front)].id = ViewportPaneId::Front;
     panes_[viewportPaneIndex(ViewportPaneId::Side)].id = ViewportPaneId::Side;
-    for (Pane& paneState : panes_) {
-        resetPaneCamera(paneState);
-    }
 }
 
 ViewportPanel::~ViewportPanel() {
@@ -727,31 +670,36 @@ void ViewportPanel::shutdown() {
     for (Pane& paneState : panes_) {
         paneState.renderer.shutdown();
         paneState.initialized = false;
-        paneState.visibleThisFrame = false;
+    }
+    if (workspace_ != nullptr) {
+        workspace_->clearPaneVisibility();
     }
     activeRenderPanes_.clear();
 }
 
 void ViewportPanel::prepareViewports(
+        ViewportWorkspaceService& workspace,
         SceneRenderBridge& renderBridge,
         const SceneDocument& document,
         const AssetRegistry& assets) {
-    const float gridWorldSize = viewportGridWorldSizeForPreset(inputRouter_.state().gridPreset);
+    workspace_ = &workspace;
+    const float gridWorldSize = viewportGridWorldSizeForPreset(workspace.gridPreset());
     const ViewportSettings& settings = activeViewportSettings();
     for (ViewportPaneId paneId : activeRenderPanes_) {
         Pane& paneState = pane(paneId);
-        if (!paneState.initialized || !paneState.visibleThisFrame) {
+        ViewportWorkspacePaneState& paneWorkspace = workspace.pane(paneId);
+        if (!paneState.initialized || !paneWorkspace.visibleThisFrame) {
             continue;
         }
-        paneState.renderer.updateCamera(paneState.camera);
-        paneState.renderer.updateGroundGrid(paneState.camera, gridWorldSize, settings);
-        paneState.renderer.setSceneVisible(paneState.shading != ViewportShadingMode::Wireframe);
+        paneState.renderer.updateCamera(paneWorkspace.camera);
+        paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings);
+        paneState.renderer.setSceneVisible(paneWorkspace.shading != ViewportShadingMode::Wireframe);
         paneState.renderer.setOverlayVisible(true);
         ViewportOverlayFrame overlayFrame = selectionOverlayCache_.valid() ? selectionOverlayCache_.frame() : ViewportOverlayFrame{};
         const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
                 ? selectionOverlayCache_.key().selectionMode
                 : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
-        if (paneState.shading == ViewportShadingMode::Wireframe) {
+        if (paneWorkspace.shading == ViewportShadingMode::Wireframe) {
             stripWireframeObjectFaceFills(overlayFrame, overlayMode);
             appendSceneWireframeOverlay(overlayFrame, document, assets);
         }
@@ -763,14 +711,14 @@ void ViewportPanel::prepareViewports(
                 viewportPaneIndex(paneId),
                 viewportGridLayerMask(viewportPaneIndex(paneId)),
                 std::move(overlayFrame),
-                ViewportCameraAdapter::overlayCamera(paneState.camera, paneState.renderSize));
+                ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize));
     }
 }
 
 void ViewportPanel::renderViewports(filament::Renderer& renderer) {
     for (ViewportPaneId paneId : activeRenderPanes_) {
         Pane& paneState = pane(paneId);
-        if (!paneState.initialized || !paneState.visibleThisFrame) {
+        if (!paneState.initialized || workspace_ == nullptr || !workspace_->paneVisible(paneId)) {
             continue;
         }
         paneState.renderer.render(renderer);
@@ -778,35 +726,36 @@ void ViewportPanel::renderViewports(filament::Renderer& renderer) {
 }
 
 void ViewportPanel::setViewportLayout(ViewportLayoutId layoutId) {
-    if (layoutId_ == layoutId) {
-        return;
-    }
-    layoutId_ = layoutId;
+    workspace().setLayout(layoutId);
     inputRouter_.setMaximized(false);
-    const std::vector<ViewportPanePlacement> placements = activePanePlacements();
-    if (std::none_of(placements.begin(), placements.end(), [&](const ViewportPanePlacement& placement) {
-                return placement.paneId == focusedPaneId_;
-            })) {
-        focusedPaneId_ = ViewportPaneId::Perspective;
-    }
+}
+
+ViewportLayoutId ViewportPanel::viewportLayout() const {
+    return workspace().layout();
+}
+
+int ViewportPanel::gridPreset() const {
+    return workspace().gridPreset();
+}
+
+void ViewportPanel::setGridPreset(int preset) {
+    workspace().setGridPreset(preset);
+    inputRouter_.setGridPreset(preset);
 }
 
 QuaderShadingMode ViewportPanel::paneShadingMode(ViewportPaneId paneId) const {
-    return toQuaderShadingMode(pane(paneId).shading);
+    return toQuaderShadingMode(workspace().shadingMode(paneId));
 }
 
 void ViewportPanel::setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode) {
-    Pane& paneState = pane(paneId);
     const ViewportShadingMode next = toViewportShadingMode(mode);
-    if (paneState.shading == next) {
-        return;
+    if (workspace().setShadingMode(paneId, next)) {
+        selectionOverlayCache_.markDirty();
     }
-    paneState.shading = next;
-    selectionOverlayCache_.markDirty();
 }
 
 ViewportView ViewportPanel::paneView(ViewportPaneId paneId) const {
-    return pane(paneId).view;
+    return workspace().view(paneId);
 }
 
 void ViewportPanel::setPaneView(ViewportPaneId paneId, ViewportView view) {
@@ -873,25 +822,11 @@ const ViewportPanel::Pane& ViewportPanel::pane(ViewportPaneId paneId) const {
 }
 
 std::vector<ViewportPanePlacement> ViewportPanel::activePanePlacements() const {
-    if (inputRouter_.state().maximized) {
-        return {{
-                .paneId = focusedPaneId_,
-                .normalizedRect = {},
-        }};
-    }
-    return viewportLayoutPlacements(layoutId_, layoutState_);
+    return workspace().activePanePlacements(inputRouter_.state().maximized);
 }
 
 std::vector<ViewportSplitHandle> ViewportPanel::activeSplitHandles() const {
-    if (inputRouter_.state().maximized) {
-        return {};
-    }
-    return viewportLayoutSplitHandles(layoutId_, layoutState_);
-}
-
-void ViewportPanel::resetPaneCamera(Pane& paneState) {
-    paneState.view = viewportViewForPane(paneState.id);
-    paneController_.resetCamera(paneState.view, paneState.camera);
+    return workspace().activeSplitHandles(inputRouter_.state().maximized);
 }
 
 bool ViewportPanel::drawPaneChrome(
@@ -899,13 +834,20 @@ bool ViewportPanel::drawPaneChrome(
         ImVec2 itemMin,
         ImVec2 itemSize,
         const LocalizationService& localization) {
+    ViewportWorkspaceService& viewportWorkspace = workspace();
+    ViewportWorkspacePaneState& paneWorkspace = viewportWorkspace.pane(paneState.id);
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
     const ImU32 dividerColor = IM_COL32(19, 19, 20, 255);
     const ImU32 focusedColor = IM_COL32(46, 46, 48, 242);
-    drawList->AddRect(itemMin, itemMax, paneState.id == focusedPaneId_ ? focusedColor : dividerColor, 0.0f, 0, 1.0f);
+    drawList->AddRect(itemMin,
+            itemMax,
+            paneState.id == viewportWorkspace.focusedPane() ? focusedColor : dividerColor,
+            0.0f,
+            0,
+            1.0f);
 
-    paneState.view = viewportViewForCamera(paneState.camera);
+    viewportWorkspace.syncViewFromCamera(paneState.id);
 
     constexpr float kComboHeight = 24.0f;
     constexpr float kViewComboWidth = 112.0f;
@@ -932,7 +874,7 @@ bool ViewportPanel::drawPaneChrome(
     ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(16, 18, 21, 210));
     if (viewWidth >= 44.0f) {
         ImGui::SetNextItemWidth(viewWidth);
-        const std::string preview = localizedViewportViewLabel(localization, paneState.view);
+        const std::string preview = localizedViewportViewLabel(localization, paneWorkspace.view);
         if (ImGui::BeginCombo("##ViewportView", preview.c_str(), ImGuiComboFlags_HeightSmall)) {
             consumesInput = true;
             constexpr std::array<ViewportView, 7> views{{
@@ -945,7 +887,7 @@ bool ViewportPanel::drawPaneChrome(
                     ViewportView::Left,
             }};
             for (const ViewportView view : views) {
-                const bool selected = paneState.view == view;
+                const bool selected = paneWorkspace.view == view;
                 const std::string label = localizedViewportViewLabel(localization, view);
                 if (ImGui::Selectable(label.c_str(), selected)) {
                     setPaneView(paneState, view);
@@ -959,7 +901,7 @@ bool ViewportPanel::drawPaneChrome(
         ImGui::SameLine(0.0f, comboGap);
     }
     ImGui::SetNextItemWidth(shadingWidth);
-    const std::string shadingPreview = localizedViewportShadingModeLabel(localization, paneState.shading);
+    const std::string shadingPreview = localizedViewportShadingModeLabel(localization, paneWorkspace.shading);
     if (ImGui::BeginCombo("##ViewportShading", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
         consumesInput = true;
         constexpr std::array<ViewportShadingMode, 3> modes{{
@@ -968,10 +910,12 @@ bool ViewportPanel::drawPaneChrome(
                 ViewportShadingMode::Rendered,
         }};
         for (const ViewportShadingMode mode : modes) {
-            const bool selected = paneState.shading == mode;
+            const bool selected = paneWorkspace.shading == mode;
             const std::string label = localizedViewportShadingModeLabel(localization, mode);
             if (ImGui::Selectable(label.c_str(), selected)) {
-                paneState.shading = mode;
+                if (viewportWorkspace.setShadingMode(paneState.id, mode)) {
+                    selectionOverlayCache_.markDirty();
+                }
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();
@@ -986,11 +930,9 @@ bool ViewportPanel::drawPaneChrome(
 }
 
 void ViewportPanel::setPaneView(Pane& paneState, ViewportView view) {
-    if (paneState.view == view && viewportViewForCamera(paneState.camera) == view) {
+    if (!workspace().setView(paneState.id, view)) {
         return;
     }
-    paneState.view = view;
-    paneController_.resetCamera(view, paneState.camera);
     hoverController_.invalidate();
     selectionOverlayCache_.markDirty();
 }
@@ -1037,7 +979,7 @@ bool ViewportPanel::handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, co
         const float normalizedPosition = activeSplitHandle_.axis == ViewportSplitHandleAxis::Vertical
                 ? std::clamp((mouse.x - viewportMin.x) / std::max(viewportSize.x, 1.0f), 0.0f, 1.0f)
                 : std::clamp((mouse.y - viewportMin.y) / std::max(viewportSize.y, 1.0f), 0.0f, 1.0f);
-        layoutState_.setHandlePosition(activeSplitHandle_.id, normalizedPosition);
+        workspace().setSplitHandlePosition(activeSplitHandle_.id, normalizedPosition);
         consumed = true;
     }
     if (splitHandleDragging_ && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
@@ -1102,18 +1044,19 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
             nullptr,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
+    ViewportWorkspaceService& viewportWorkspace = uiContext.editor.viewports().workspace();
+    workspace_ = &viewportWorkspace;
+    inputRouter_.setGridPreset(viewportWorkspace.gridPreset());
     if (!visible) {
         for (Pane& paneState : panes_) {
             renderBridge.setOverlayFrame(
                     viewportPaneIndex(paneState.id),
                     viewportGridLayerMask(viewportPaneIndex(paneState.id)),
                     {},
-                    ViewportCameraAdapter::overlayCamera(paneState.camera, {1.0f, 1.0f}));
+                    ViewportCameraAdapter::overlayCamera(viewportWorkspace.camera(paneState.id), {1.0f, 1.0f}));
         }
         lastFlyNavigationActive_ = false;
-        for (Pane& paneState : panes_) {
-            paneState.visibleThisFrame = false;
-        }
+        viewportWorkspace.clearPaneVisibility();
         activeRenderPanes_.clear();
         ImGui::End();
         return;
@@ -1125,9 +1068,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     const ImVec2 canvasMin = ImGui::GetCursorScreenPos();
     ImGui::Dummy(available);
 
-    for (Pane& paneState : panes_) {
-        paneState.visibleThisFrame = false;
-    }
+    viewportWorkspace.clearPaneVisibility();
     activeRenderPanes_.clear();
 
     struct DrawPane {
@@ -1145,11 +1086,12 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         Pane& paneState = pane(placement.paneId);
         const ImVec2 itemMin = paneRectMin(canvasMin, available, placement.normalizedRect);
         const ImVec2 itemSize = paneRectSize(available, placement.normalizedRect);
-        paneState.renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
-        paneState.visibleThisFrame = true;
+        const Vec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
+        viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize);
+        viewportWorkspace.setPaneVisible(placement.paneId, true);
         paneState.renderer.resize(
-                static_cast<std::uint32_t>(paneState.renderSize.x),
-                static_cast<std::uint32_t>(paneState.renderSize.y));
+                static_cast<std::uint32_t>(renderSize.x),
+                static_cast<std::uint32_t>(renderSize.y));
         activeRenderPanes_.push_back(placement.paneId);
 
         ImGui::SetCursorScreenPos(itemMin);
@@ -1179,9 +1121,9 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     for (DrawPane& drawPane : drawPanes) {
         if (!transformDragLocksInput && !navigationGizmoDragLocksInput) {
             if (drawPane.focusHovered && !drawPane.chromeConsumesInput && !splitConsumed) {
-                focusedPaneId_ = drawPane.pane->id;
+                viewportWorkspace.focusPane(drawPane.pane->id);
             } else if (drawPane.focusHovered && !drawPane.chromeConsumesInput && focusController_.inputActive()) {
-                focusedPaneId_ = drawPane.pane->id;
+                viewportWorkspace.focusPane(drawPane.pane->id);
             }
         }
         if (transformDragLocksInput && drawPane.pane->id == transformGizmoController_.dragPaneId()) {
@@ -1198,7 +1140,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     }
     if (inputPane == nullptr) {
         for (DrawPane& drawPane : drawPanes) {
-            if (drawPane.pane->id == focusedPaneId_) {
+            if (drawPane.pane->id == viewportWorkspace.focusedPane()) {
                 inputPane = &drawPane;
                 break;
             }
@@ -1257,7 +1199,8 @@ void ViewportPanel::drawPaneDecorations(
         ModelingSessionService& modeling,
         ImVec2 itemMin,
         ImVec2 itemSize) {
-    navigationGizmo_.draw(paneState.camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false);
+    ViewportCameraController& camera = workspace().camera(paneState.id);
+    navigationGizmo_.draw(camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false);
     (void)transformGizmoController_.draw({
             .document = document,
             .assets = assets,
@@ -1266,7 +1209,7 @@ void ViewportPanel::drawPaneDecorations(
             .modeling = modeling,
             .inputRouter = inputRouter_,
             .viewportSettings = activeViewportSettings(),
-            .camera = paneState.camera,
+            .camera = camera,
             .paneId = paneState.id,
             .itemMin = itemMin,
             .itemSize = itemSize,
@@ -1298,6 +1241,16 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
     selectionOverlayCache_.update(std::move(frame), key);
 }
 
+ViewportWorkspaceService& ViewportPanel::workspace() {
+    static ViewportWorkspaceService fallbackWorkspace;
+    return workspace_ != nullptr ? *workspace_ : fallbackWorkspace;
+}
+
+const ViewportWorkspaceService& ViewportPanel::workspace() const {
+    static ViewportWorkspaceService fallbackWorkspace;
+    return workspace_ != nullptr ? *workspace_ : fallbackWorkspace;
+}
+
 void ViewportPanel::drawPaneContents(Pane& paneState,
         SceneDocument& document,
         AssetRegistry& assets,
@@ -1313,7 +1266,8 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         ImVec2 itemSize,
         bool hovered,
         bool focusHovered) {
-    ViewportCameraController& camera = paneState.camera;
+    ViewportWorkspaceService& viewportWorkspace = workspace();
+    ViewportCameraController& camera = viewportWorkspace.camera(paneState.id);
     const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
     const ViewportFocusState focusState = focusController_.resolve(focusHovered, uiContext, UIPanelId::Viewport);
     auto modalToolOwnsViewport = [&]() {
@@ -1347,7 +1301,10 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             result.shortcutHandled &&
             !operationPreviewShortcutConsumed &&
             result.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
-        focusedPaneId_ = paneState.id;
+        viewportWorkspace.focusPane(paneState.id);
+    }
+    if (result.gridPresetChanged) {
+        viewportWorkspace.setGridPreset(inputRouter_.state().gridPreset);
     }
     if (input.rightPressed && hovered && !input.modifiers.primary && !input.modifiers.shift && !input.modifiers.alt) {
         flyCursorCaptureScreen_ = input.mouseScreen;

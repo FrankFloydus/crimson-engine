@@ -1,5 +1,6 @@
 #pragma once
 
+#include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApiTypes.h"
 
 namespace quader {
@@ -13,8 +14,10 @@ public:
     QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools);
 
     QuaderApiVoidResult execute(std::string_view commandId);
+    QuaderApiVoidResult execute(QuaderCommandId commandId);
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
+    [[nodiscard]] std::string shortcutFor(QuaderCommandId commandId) const;
 
 private:
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;

@@ -181,6 +181,7 @@ add_library(quader_core STATIC
     src/viewport/ViewportInputRouter.cpp
     src/viewport/ViewportLayout.cpp
     src/viewport/ViewportSettings.cpp
+    src/viewport/ViewportWorkspaceService.cpp
     ${QUADER_VIEWPORT_TOOL_SOURCES}
 )
 

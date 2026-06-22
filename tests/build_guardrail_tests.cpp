@@ -122,6 +122,34 @@ TEST(BuildGuardrailTests, EditorAggregateStaysInRuntimeTarget) {
     EXPECT_GT(editorApiSource, apiTarget);
 }
 
+TEST(BuildGuardrailTests, ViewportWorkspaceServiceStaysCoreAndRuntimeFree) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string header = readSourceFile("src/viewport/ViewportWorkspaceService.h");
+    const std::string source = readSourceFile("src/viewport/ViewportWorkspaceService.cpp");
+
+    const std::size_t coreTarget = rootCMake.find("add_library(quader_core STATIC");
+    const std::size_t apiTarget = rootCMake.find("add_library(quader_api STATIC");
+    const std::size_t workspaceSource = rootCMake.find("src/viewport/ViewportWorkspaceService.cpp");
+
+    ASSERT_NE(coreTarget, std::string::npos);
+    ASSERT_NE(apiTarget, std::string::npos);
+    ASSERT_NE(workspaceSource, std::string::npos);
+    EXPECT_GT(workspaceSource, coreTarget);
+    EXPECT_LT(workspaceSource, apiTarget);
+
+    for (const std::string& forbidden : {
+                 "imgui",
+                 "SDL",
+                 "filament",
+                 "SceneDocument",
+                 "AssetRegistry",
+                 "SceneRenderBridge",
+         }) {
+        EXPECT_EQ(header.find(forbidden), std::string::npos) << forbidden;
+        EXPECT_EQ(source.find(forbidden), std::string::npos) << forbidden;
+    }
+}
+
 TEST(DependencyLicenseGuardrailTests, LuaDependenciesRequireExplicitDecision) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string manifest = readSourceFile("vcpkg.json");

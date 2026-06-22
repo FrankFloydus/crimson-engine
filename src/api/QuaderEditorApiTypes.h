@@ -44,14 +44,6 @@ struct QuaderNotification {
 };
 
 struct QuaderViewportRuntimeHooks {
-    std::function<ViewportLayoutId()> layout;
-    std::function<QuaderApiVoidResult(ViewportLayoutId)> setLayout;
-    std::function<int()> gridPreset;
-    std::function<QuaderApiVoidResult(int)> setGridPreset;
-    std::function<QuaderShadingMode(ViewportPaneId)> shadingMode;
-    std::function<QuaderApiVoidResult(ViewportPaneId, QuaderShadingMode)> setShadingMode;
-    std::function<ViewportView(ViewportPaneId)> view;
-    std::function<QuaderApiVoidResult(ViewportPaneId, ViewportView)> setView;
     std::function<QuaderApiVoidResult(ViewportPaneId)> frameSelection;
     std::function<QuaderApiVoidResult(ViewportPaneId)> focusOrigin;
     std::function<QuaderApiVoidResult(ViewportPaneId, const std::filesystem::path&)> captureScreenshot;

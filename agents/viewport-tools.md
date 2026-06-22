@@ -24,3 +24,10 @@
   changes.
 - `ViewportPanel` builds context and delegates; it does not own modal tool implementation,
   selection-picking policy, transform-gizmo behavior, or box/cut/knife/mirror state machines.
+- `ViewportWorkspaceService` owns viewport workspace state: layout, focused pane, pane view,
+  pane shading, grid preset, render size/visibility bookkeeping, and pane camera controllers.
+  `ViewportPanel` should consume that service for UI/render orchestration instead of introducing
+  new long-lived layout, camera, shading, or grid fields.
+- `QuaderViewportApi` should expose user/editor viewport intent through the workspace service.
+  Runtime hooks are for host/render actions that cannot be represented as core viewport state,
+  such as future screenshot/readback integrations.

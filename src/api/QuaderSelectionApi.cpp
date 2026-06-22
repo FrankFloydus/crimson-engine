@@ -53,9 +53,49 @@ QuaderApiVoidResult QuaderSelectionApi::selectObjects(std::span<const EntityId> 
             "Select Objects");
 }
 
+QuaderApiVoidResult QuaderSelectionApi::selectObjects(std::initializer_list<EntityId> entities, EntityId active) {
+    return selectObjects(std::span<const EntityId>(entities.begin(), entities.size()), active);
+}
+
+QuaderApiVoidResult QuaderSelectionApi::selectObject(EntityId entity, QuaderSelectionEdit edit) {
+    std::vector<EntityId> entities = editedEntitySelection(entity, edit);
+    const EntityId active = entities.empty() ? InvalidEntityId : entity;
+    return selectObjects(entities, active);
+}
+
 QuaderApiVoidResult QuaderSelectionApi::selectObject(QuaderModelingObjectRef object, QuaderSelectionEdit edit) {
     std::vector<EntityId> entities = editedObjectSelection(object, edit);
     const EntityId active = entities.empty() ? InvalidEntityId : object.entity;
+    return selectObjects(entities, active);
+}
+
+QuaderApiVoidResult QuaderSelectionApi::selectObjects(
+        std::initializer_list<QuaderModelingObjectRef> objects,
+        QuaderSelectionEdit edit) {
+    if (edit == QuaderSelectionEdit::Replace) {
+        std::vector<EntityId> entities;
+        entities.reserve(objects.size());
+        EntityId active = InvalidEntityId;
+        for (const QuaderModelingObjectRef& object : objects) {
+            appendUnique(entities, object.entity);
+            active = object.entity;
+        }
+        return selectObjects(entities, active);
+    }
+
+    std::vector<EntityId> entities = session_.scene().selectedEntities();
+    EntityId active = entities.empty() ? InvalidEntityId : entities.back();
+    for (const QuaderModelingObjectRef& object : objects) {
+        const auto found = std::find(entities.begin(), entities.end(), object.entity);
+        const bool selected = found != entities.end();
+        if (edit == QuaderSelectionEdit::Add || (edit == QuaderSelectionEdit::Toggle && !selected)) {
+            appendUnique(entities, object.entity);
+            active = object.entity;
+        } else if ((edit == QuaderSelectionEdit::Remove || edit == QuaderSelectionEdit::Toggle) && selected) {
+            entities.erase(found);
+            active = entities.empty() ? InvalidEntityId : entities.back();
+        }
+    }
     return selectObjects(entities, active);
 }
 
@@ -146,6 +186,40 @@ QuaderApiVoidResult QuaderSelectionApi::selectFace(
     });
 }
 
+QuaderApiVoidResult QuaderSelectionApi::selectVertices(
+        QuaderModelingObjectRef object,
+        std::initializer_list<QuaderElementId> vertices,
+        QuaderSelectionEdit edit) {
+    return selectComponents(QuaderComponentSelectionArgs{
+            .object = object,
+            .kind = QuaderComponentKind::Vertex,
+            .vertices = std::vector<QuaderElementId>(vertices.begin(), vertices.end()),
+            .active = vertices.size() == 0u ? QuaderComponentRef{} : QuaderComponentRef{
+                    .object = object,
+                    .kind = QuaderComponentKind::Vertex,
+                    .vertex = *(vertices.end() - 1),
+            },
+            .edit = edit,
+    });
+}
+
+QuaderApiVoidResult QuaderSelectionApi::selectFaces(
+        QuaderModelingObjectRef object,
+        std::initializer_list<QuaderElementId> faces,
+        QuaderSelectionEdit edit) {
+    return selectComponents(QuaderComponentSelectionArgs{
+            .object = object,
+            .kind = QuaderComponentKind::Face,
+            .faces = std::vector<QuaderElementId>(faces.begin(), faces.end()),
+            .active = faces.size() == 0u ? QuaderComponentRef{} : QuaderComponentRef{
+                    .object = object,
+                    .kind = QuaderComponentKind::Face,
+                    .face = *(faces.end() - 1),
+            },
+            .edit = edit,
+    });
+}
+
 QuaderApiVoidResult QuaderSelectionApi::clear() {
     return mutations_.runModelingResult(session_.modeling().clearSelection(), "Clear Selection");
 }
@@ -220,25 +294,29 @@ ModelingHoverSummary QuaderSelectionApi::hoverSummary() const {
     return session_.modeling().selectionHoverSummary();
 }
 
-std::vector<EntityId> QuaderSelectionApi::editedObjectSelection(
-        QuaderModelingObjectRef object,
-        QuaderSelectionEdit edit) const {
+std::vector<EntityId> QuaderSelectionApi::editedEntitySelection(EntityId entity, QuaderSelectionEdit edit) const {
     std::vector<EntityId> entities = session_.scene().selectedEntities();
-    const auto found = std::find(entities.begin(), entities.end(), object.entity);
+    const auto found = std::find(entities.begin(), entities.end(), entity);
     const bool selected = found != entities.end();
     if (edit == QuaderSelectionEdit::Replace) {
         entities.clear();
-        appendUnique(entities, object.entity);
+        appendUnique(entities, entity);
         return entities;
     }
     if (edit == QuaderSelectionEdit::Add || (edit == QuaderSelectionEdit::Toggle && !selected)) {
-        appendUnique(entities, object.entity);
+        appendUnique(entities, entity);
         return entities;
     }
     if ((edit == QuaderSelectionEdit::Remove || edit == QuaderSelectionEdit::Toggle) && selected) {
         entities.erase(found);
     }
     return entities;
+}
+
+std::vector<EntityId> QuaderSelectionApi::editedObjectSelection(
+        QuaderModelingObjectRef object,
+        QuaderSelectionEdit edit) const {
+    return editedEntitySelection(object.entity, edit);
 }
 
 ModelingSelectionEdit QuaderSelectionApi::toModelingEdit(QuaderSelectionEdit edit) {

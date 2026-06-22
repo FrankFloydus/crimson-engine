@@ -16,13 +16,13 @@
 #include "ui/ViewportFocusController.h"
 #include "ui/ViewportHoverController.h"
 #include "ui/ViewportInputFrameBuilder.h"
-#include "ui/ViewportPaneController.h"
 #include "ui/ViewportPaneOverlayCache.h"
 #include "ui/ViewportSelectionController.h"
 #include "ui/ViewportShortcutController.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportLayout.h"
+#include "viewport/ViewportWorkspaceService.h"
 
 #include <imgui.h>
 
@@ -42,12 +42,6 @@ class LocalizationService;
 class QuaderEditorApi;
 enum class QuaderShadingMode;
 
-enum class ViewportShadingMode {
-    Wireframe,
-    Shaded,
-    Rendered,
-};
-
 class ViewportPanel final : public UIPanel {
 public:
     ViewportPanel();
@@ -60,11 +54,15 @@ public:
 
     void initialize(RenderSystem& renderSystem);
     void shutdown();
-    void prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets);
+    void prepareViewports(
+            ViewportWorkspaceService& workspace,
+            SceneRenderBridge& renderBridge,
+            const SceneDocument& document,
+            const AssetRegistry& assets);
     void renderViewports(filament::Renderer& renderer);
     void setViewportLayout(ViewportLayoutId layoutId);
-    int gridPreset() const { return inputRouter_.state().gridPreset; }
-    void setGridPreset(int preset) { inputRouter_.setGridPreset(preset); }
+    int gridPreset() const;
+    void setGridPreset(int preset);
     QuaderShadingMode paneShadingMode(ViewportPaneId paneId) const;
     void setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode);
     ViewportView paneView(ViewportPaneId paneId) const;
@@ -75,7 +73,7 @@ public:
             SceneDocument& document,
             DocumentCommandService& documentCommands,
             ModelingSessionService& modeling);
-    ViewportLayoutId viewportLayout() const { return layoutId_; }
+    ViewportLayoutId viewportLayout() const;
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
     bool navigationGizmoVisible() const { return navigationGizmo_.visible(); }
@@ -84,13 +82,8 @@ public:
 private:
     struct Pane {
         ViewportPaneId id = ViewportPaneId::Perspective;
-        ViewportView view = ViewportView::Perspective;
-        ViewportShadingMode shading = ViewportShadingMode::Shaded;
-        ViewportCameraController camera;
         ViewportRenderer renderer;
-        Vec2 renderSize = {1.0f, 1.0f};
         bool initialized = false;
-        bool visibleThisFrame = false;
     };
 
     void draw(SceneRenderBridge& renderBridge,
@@ -130,11 +123,12 @@ private:
     void refreshCachedSelectionOverlayFrame(const SceneDocument& document,
             const AssetRegistry& assets,
             ModelingSessionService& modeling);
+    ViewportWorkspaceService& workspace();
+    const ViewportWorkspaceService& workspace() const;
     Pane& pane(ViewportPaneId paneId);
     const Pane& pane(ViewportPaneId paneId) const;
     std::vector<ViewportPanePlacement> activePanePlacements() const;
     std::vector<ViewportSplitHandle> activeSplitHandles() const;
-    void resetPaneCamera(Pane& pane);
     bool drawPaneChrome(Pane& pane, ImVec2 itemMin, ImVec2 itemSize, const LocalizationService& localization);
     void setPaneView(Pane& pane, ViewportView view);
     bool handleSplitInput(ImVec2 viewportMin, ImVec2 viewportSize, const std::vector<ViewportSplitHandle>& handles);
@@ -143,11 +137,9 @@ private:
     static ImVec2 paneRectSize(ImVec2 viewportSize, ViewportNormalizedRect normalizedRect);
 
     std::array<Pane, kViewportPaneCount> panes_;
+    ViewportWorkspaceService* workspace_ = nullptr;
     ViewportSettings fallbackViewportSettings_ = ViewportSettings::defaults();
     const ViewportSettings* viewportSettings_ = nullptr;
-    ViewportLayoutState layoutState_;
-    ViewportLayoutId layoutId_ = ViewportLayoutId::Single;
-    ViewportPaneId focusedPaneId_ = ViewportPaneId::Perspective;
     ViewportSplitHandle activeSplitHandle_;
     bool splitHandleDragging_ = false;
     std::vector<ViewportPaneId> activeRenderPanes_;
@@ -157,7 +149,6 @@ private:
     ViewportContextMenuPresenter contextMenuPresenter_;
     ViewportShortcutController shortcutController_;
     ViewportHoverController hoverController_;
-    ViewportPaneController paneController_;
     ViewportSelectionController selectionController_;
     TransformGizmoController transformGizmoController_;
     ModalToolOverlayRenderer modalToolOverlayRenderer_;

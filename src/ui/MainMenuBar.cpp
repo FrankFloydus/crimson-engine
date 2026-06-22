@@ -165,13 +165,11 @@ void LayoutMenu::draw(MainMenuBarContext& context) const {
         return;
     }
 
-    if (context.viewportPanel != nullptr) {
-        for (const ViewportLayoutOption& option : viewportLayoutOptions()) {
-            const bool selected = context.viewportPanel->viewportLayout() == option.id;
-            const std::string localizedLabel = layoutLabel(context.localization, option);
-            if (ImGui::MenuItem(localizedLabel.c_str(), nullptr, selected)) {
-                (void)context.editor.viewports().setLayout(option.id);
-            }
+    for (const ViewportLayoutOption& option : viewportLayoutOptions()) {
+        const bool selected = context.editor.viewports().layout() == option.id;
+        const std::string localizedLabel = layoutLabel(context.localization, option);
+        if (ImGui::MenuItem(localizedLabel.c_str(), nullptr, selected)) {
+            (void)context.editor.viewports().setLayout(option.id);
         }
     }
 

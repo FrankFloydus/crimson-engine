@@ -1071,7 +1071,7 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
     EXPECT_NE(source.find(".assetRevision = assets.revision()"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCache_.needsRefresh(key)"), std::string::npos);
     EXPECT_NE(source.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
-    EXPECT_NE(source.find("ViewportCameraAdapter::overlayCamera(paneState.camera, paneState.renderSize)"), std::string::npos);
+    EXPECT_NE(source.find("ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize)"), std::string::npos);
     EXPECT_EQ(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, ViewportCameraAdapter::overlayCamera(camera, itemSize));"), std::string::npos);
     EXPECT_EQ(source.find("drawSelectionOverlay2d"), std::string::npos);
     EXPECT_EQ(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
@@ -1174,7 +1174,8 @@ TEST(ViewportPanelTests, DrawsPassiveDecorationsForNonInputPanes) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("void ViewportPanel::drawPaneDecorations("), std::string::npos);
-    EXPECT_NE(source.find("navigationGizmo_.draw(paneState.camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false)"), std::string::npos);
+    EXPECT_NE(source.find("ViewportCameraController& camera = workspace().camera(paneState.id)"), std::string::npos);
+    EXPECT_NE(source.find("navigationGizmo_.draw(camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false)"), std::string::npos);
     EXPECT_NE(source.find("const bool navigationGizmoConsumed = navigationGizmo_.draw("), std::string::npos);
     EXPECT_EQ(source.find("drawViewCube("), std::string::npos);
     EXPECT_EQ(source.find("navigationGizmoVisible_"), std::string::npos);
@@ -1284,7 +1285,7 @@ TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("result.shortcut.kind == ViewportShortcutKind::ToggleMaximized"), std::string::npos);
-    EXPECT_NE(source.find("focusedPaneId_ = paneState.id"), std::string::npos);
+    EXPECT_NE(source.find("viewportWorkspace.focusPane(paneState.id)"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
@@ -1299,7 +1300,7 @@ TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
 
     EXPECT_NE(source.find("if (drawPane.focusHovered && !drawPane.chromeConsumesInput && !splitConsumed)"),
             std::string::npos);
-    EXPECT_NE(source.find("focusedPaneId_ = drawPane.pane->id"), std::string::npos);
+    EXPECT_NE(source.find("viewportWorkspace.focusPane(drawPane.pane->id)"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, GizmoDragKeepsInputBoundToOwnerPane) {
@@ -2161,13 +2162,14 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(coordinatorSource.find("view->setVisibleLayers(kViewportAllLayerMask, visibleLayerMask())"), std::string::npos);
 
     const std::size_t prepareViewports =
-            appSource.find("ui_.prepareViewports(renderBridge_, projectSession_.scene(), projectSession_.assets())");
+            appSource.find("ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets())");
     const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
     ASSERT_NE(prepareViewports, std::string::npos);
     ASSERT_NE(beginFrame, std::string::npos);
     EXPECT_LT(prepareViewports, beginFrame);
 
     EXPECT_NE(viewportPanelSource.find("void ViewportPanel::prepareViewports("), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportWorkspaceService& workspace"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("const SceneDocument& document"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("const AssetRegistry& assets"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);

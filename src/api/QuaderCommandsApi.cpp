@@ -36,6 +36,10 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewport
     , viewports_(viewports)
     , tools_(tools) {}
 
+QuaderApiVoidResult QuaderCommandsApi::execute(QuaderCommandId commandId) {
+    return execute(commandId.string());
+}
+
 QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
     if (commandId == "history.undo") {
         return api_.history().undo();
@@ -129,6 +133,10 @@ std::string QuaderCommandsApi::shortcutFor(std::string_view commandId) const {
         return "Ctrl+I";
     }
     return {};
+}
+
+std::string QuaderCommandsApi::shortcutFor(QuaderCommandId commandId) const {
+    return shortcutFor(commandId.string());
 }
 
 QuaderApiVoidResult QuaderCommandsApi::failure(std::string message) const {

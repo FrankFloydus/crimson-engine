@@ -53,7 +53,11 @@ public:
             AssetId defaultMaterial,
             bool& quitRequested);
     void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
-    void prepareViewports(SceneRenderBridge& renderBridge, const SceneDocument& document, const AssetRegistry& assets);
+    void prepareViewports(
+            QuaderEditorApi& editor,
+            SceneRenderBridge& renderBridge,
+            const SceneDocument& document,
+            const AssetRegistry& assets);
     void renderViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
     const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }

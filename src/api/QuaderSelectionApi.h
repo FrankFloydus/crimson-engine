@@ -3,6 +3,7 @@
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiTypes.h"
 
+#include <initializer_list>
 #include <span>
 #include <vector>
 
@@ -16,8 +17,15 @@ public:
     QuaderSelectionApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
 
     QuaderApiVoidResult selectObjects(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
+    QuaderApiVoidResult selectObjects(std::initializer_list<EntityId> entities, EntityId active = InvalidEntityId);
+    QuaderApiVoidResult selectObject(
+            EntityId entity,
+            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
     QuaderApiVoidResult selectObject(
             QuaderModelingObjectRef object,
+            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult selectObjects(
+            std::initializer_list<QuaderModelingObjectRef> objects,
             QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
     QuaderApiVoidResult selectComponents(const QuaderComponentSelectionArgs& args);
     QuaderApiVoidResult selectVertex(
@@ -32,6 +40,14 @@ public:
     QuaderApiVoidResult selectFace(
             QuaderModelingObjectRef object,
             QuaderElementId face,
+            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult selectVertices(
+            QuaderModelingObjectRef object,
+            std::initializer_list<QuaderElementId> vertices,
+            QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
+    QuaderApiVoidResult selectFaces(
+            QuaderModelingObjectRef object,
+            std::initializer_list<QuaderElementId> faces,
             QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
     QuaderApiVoidResult clear();
     QuaderApiVoidResult selectAll();
@@ -48,6 +64,9 @@ public:
     [[nodiscard]] ModelingHoverSummary hoverSummary() const;
 
 private:
+    [[nodiscard]] std::vector<EntityId> editedEntitySelection(
+            EntityId entity,
+            QuaderSelectionEdit edit) const;
     [[nodiscard]] std::vector<EntityId> editedObjectSelection(
             QuaderModelingObjectRef object,
             QuaderSelectionEdit edit) const;
