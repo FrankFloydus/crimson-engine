@@ -26,7 +26,7 @@ TEST_CASE("apply history command records only successful content changes", "[ope
 	SECTION("failed history commands restore their before state and do not push undo")
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
-		const quader_poly::Vec3 position_before = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 position_before = session.objects().front().document.vertices.front().position;
 
 		const quader_editor_core::CommandResult command =
 			session.apply_history_command([](quader_editor_core::EditorSession& editor) {

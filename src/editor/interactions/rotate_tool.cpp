@@ -57,7 +57,7 @@ public:
 		state.pivot = input.pivot;
 		state.screen_pivot = input.has_screen_pivot ? input.screen_pivot : input.screen_position;
 
-		quader_poly::Vec2 start_vector = vec2_sub(input.screen_position, state.screen_pivot);
+		quader::QVec2 start_vector = vec2_sub(input.screen_position, state.screen_pivot);
 		if (vec2_is_tiny(start_vector)) {
 			start_vector = { 1.0F, 0.0F };
 		}
@@ -65,12 +65,12 @@ public:
 		state.last_angle = state.start_angle;
 		state.drag_view_sign = 1.0;
 		if (input.has_camera) {
-			quader_poly::Vec3 world_axis = input.has_world_direction ? input.world_direction : rotation_axis_vector(input.axis);
+			quader::QVec3 world_axis = input.has_world_direction ? input.world_direction : rotation_axis_vector(input.axis);
 			if (vec3_is_tiny(world_axis)) {
 				world_axis = rotation_axis_vector(input.axis);
 			}
-			const quader_poly::Vec3 world_pivot = input.has_world_pivot ? input.world_pivot : input.pivot;
-			const quader_poly::Vec3 to_camera = input.camera_transform.origin - world_pivot;
+			const quader::QVec3 world_pivot = input.has_world_pivot ? input.world_pivot : input.pivot;
+			const quader::QVec3 to_camera = input.camera_transform.origin - world_pivot;
 			if (!vec3_is_tiny(world_axis) && !vec3_is_tiny(to_camera)) {
 				state.drag_view_sign = vec3_dot(normalized_axis(world_axis), normalized_axis(to_camera)) >= 0.0 ? 1.0 : -1.0;
 			}
@@ -80,13 +80,13 @@ public:
 
 	[[nodiscard]] RotatePreviewResult preview_rotate_from_screen_position(
 			RotateToolState& state,
-			quader_poly::Vec2 screen_position,
+			quader::QVec2 screen_position,
 			double snap_degrees) const
 	{
 		if (!state.active) {
 			return { false, "Rotate tool is not active.", {}, {}, {}, {} };
 		}
-		const quader_poly::Vec2 current_vector = vec2_sub(screen_position, state.screen_pivot);
+		const quader::QVec2 current_vector = vec2_sub(screen_position, state.screen_pivot);
 		if (vec2_is_tiny(current_vector)) {
 			return preview_rotate_from_angle_degrees(state, state.accumulated_angle_degrees, snap_degrees);
 		}
@@ -139,7 +139,7 @@ RotateBeginResult begin_rotate_drag(const RotateBeginInput& input)
 	return rotate_tool_impl().begin_rotate_drag(input);
 }
 
-RotatePreviewResult preview_rotate_from_screen_position(RotateToolState& state, quader_poly::Vec2 screen_position, double snap_degrees)
+RotatePreviewResult preview_rotate_from_screen_position(RotateToolState& state, quader::QVec2 screen_position, double snap_degrees)
 {
 	return rotate_tool_impl().preview_rotate_from_screen_position(state, screen_position, snap_degrees);
 }

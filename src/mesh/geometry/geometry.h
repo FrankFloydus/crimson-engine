@@ -19,9 +19,9 @@
 namespace quader_geometry {
 
 /**
- * Enumerates Axis values used by the geometry layer.
+ * Enumerates QAxis values used by the geometry layer.
  */
-enum class Axis {
+enum class QAxis {
 	x,
 	y,
 	z,
@@ -31,21 +31,21 @@ template<typename T>
 /**
  * Represents a Basic Vec2 value used by the geometry predicate and projection layer.
  */
-struct BasicVec2 {
+struct QBasicVec2 {
 	static_assert(std::is_floating_point_v<T>);
 
 	T x = T(0);
 	T y = T(0);
 
-	constexpr BasicVec2() = default;
-	constexpr BasicVec2(T x_value, T y_value)
+	constexpr QBasicVec2() = default;
+	constexpr QBasicVec2(T x_value, T y_value)
 		: x(x_value)
 		, y(y_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr BasicVec2(const BasicVec2<U>& value)
+	explicit constexpr QBasicVec2(const QBasicVec2<U>& value)
 		: x(static_cast<T>(value.x))
 		, y(static_cast<T>(value.y))
 	{
@@ -56,7 +56,7 @@ struct BasicVec2 {
 			value.x;
 			value.y;
 		}
-	explicit constexpr BasicVec2(const U& value)
+	explicit constexpr QBasicVec2(const U& value)
 		: x(static_cast<T>(value.x))
 		, y(static_cast<T>(value.y))
 	{
@@ -67,15 +67,15 @@ template<typename T>
 /**
  * Represents a Basic Vec3 value used by the geometry predicate and projection layer.
  */
-struct BasicVec3 {
+struct QBasicVec3 {
 	static_assert(std::is_floating_point_v<T>);
 
 	T x = T(0);
 	T y = T(0);
 	T z = T(0);
 
-	constexpr BasicVec3() = default;
-	constexpr BasicVec3(T x_value, T y_value, T z_value)
+	constexpr QBasicVec3() = default;
+	constexpr QBasicVec3(T x_value, T y_value, T z_value)
 		: x(x_value)
 		, y(y_value)
 		, z(z_value)
@@ -83,7 +83,7 @@ struct BasicVec3 {
 	}
 
 	template<typename U>
-	explicit constexpr BasicVec3(const BasicVec3<U>& value)
+	explicit constexpr QBasicVec3(const QBasicVec3<U>& value)
 		: x(static_cast<T>(value.x))
 		, y(static_cast<T>(value.y))
 		, z(static_cast<T>(value.z))
@@ -96,7 +96,7 @@ struct BasicVec3 {
 			value.y;
 			value.z;
 		}
-	explicit constexpr BasicVec3(const U& value)
+	explicit constexpr QBasicVec3(const U& value)
 		: x(static_cast<T>(value.x))
 		, y(static_cast<T>(value.y))
 		, z(static_cast<T>(value.z))
@@ -104,31 +104,29 @@ struct BasicVec3 {
 	}
 };
 
-using Vec2 = BasicVec2<float>;
-using Vec3 = BasicVec3<float>;
-using Vec2f = BasicVec2<float>;
-using Vec3f = BasicVec3<float>;
-using Vec2d = BasicVec2<double>;
-using Vec3d = BasicVec3<double>;
-using TriangleIndices = std::array<std::uint32_t, 3>;
+using QVec2f = QBasicVec2<float>;
+using QVec3f = QBasicVec3<float>;
+using QVec2d = QBasicVec2<double>;
+using QVec3d = QBasicVec3<double>;
+using QTriangleIndices = std::array<std::uint32_t, 3>;
 
 template<typename T>
 /**
- * Represents a Ray3 value used by the geometry predicate and projection layer.
+ * Represents a QRay3 value used by the geometry predicate and projection layer.
  */
-struct Ray3 {
-	BasicVec3<T> origin;
-	BasicVec3<T> direction { T(0), T(0), T(1) };
+struct QRay3 {
+	QBasicVec3<T> origin;
+	QBasicVec3<T> direction { T(0), T(0), T(1) };
 
-	constexpr Ray3() = default;
-	constexpr Ray3(BasicVec3<T> origin_value, BasicVec3<T> direction_value)
+	constexpr QRay3() = default;
+	constexpr QRay3(QBasicVec3<T> origin_value, QBasicVec3<T> direction_value)
 		: origin(origin_value)
 		, direction(direction_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr Ray3(const Ray3<U>& value)
+	explicit constexpr QRay3(const QRay3<U>& value)
 		: origin(value.origin)
 		, direction(value.direction)
 	{
@@ -137,44 +135,44 @@ struct Ray3 {
 
 template<typename T>
 /**
- * Represents a Line3 value used by the geometry predicate and projection layer.
+ * Represents a QLine3 value used by the geometry predicate and projection layer.
  */
-struct Line3 {
-	BasicVec3<T> origin;
-	BasicVec3<T> direction { T(0), T(0), T(1) };
+struct QLine3 {
+	QBasicVec3<T> origin;
+	QBasicVec3<T> direction { T(0), T(0), T(1) };
 
-	constexpr Line3() = default;
-	constexpr Line3(BasicVec3<T> origin_value, BasicVec3<T> direction_value)
+	constexpr QLine3() = default;
+	constexpr QLine3(QBasicVec3<T> origin_value, QBasicVec3<T> direction_value)
 		: origin(origin_value)
 		, direction(direction_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr Line3(const Line3<U>& value)
-		: origin(static_cast<BasicVec3<T>>(value.origin))
-		, direction(static_cast<BasicVec3<T>>(value.direction))
+	explicit constexpr QLine3(const QLine3<U>& value)
+		: origin(static_cast<QBasicVec3<T>>(value.origin))
+		, direction(static_cast<QBasicVec3<T>>(value.direction))
 	{
 	}
 };
 
 template<typename T>
 /**
- * Represents a Plane3 value used by the geometry predicate and projection layer.
+ * Represents a QPlane3 value used by the geometry predicate and projection layer.
  */
-struct Plane3 {
-	BasicVec3<T> normal { T(0), T(1), T(0) };
+struct QPlane3 {
+	QBasicVec3<T> normal { T(0), T(1), T(0) };
 	T d = T(0);
 
-	constexpr Plane3() = default;
-	constexpr Plane3(BasicVec3<T> normal_value, T d_value)
+	constexpr QPlane3() = default;
+	constexpr QPlane3(QBasicVec3<T> normal_value, T d_value)
 		: normal(normal_value)
 		, d(d_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr Plane3(const Plane3<U>& value)
+	explicit constexpr QPlane3(const QPlane3<U>& value)
 		: normal(value.normal)
 		, d(static_cast<T>(value.d))
 	{
@@ -183,21 +181,21 @@ struct Plane3 {
 
 template<typename T>
 /**
- * Represents a Segment3 value used by the geometry predicate and projection layer.
+ * Represents a QSegment3 value used by the geometry predicate and projection layer.
  */
-struct Segment3 {
-	BasicVec3<T> a;
-	BasicVec3<T> b;
+struct QSegment3 {
+	QBasicVec3<T> a;
+	QBasicVec3<T> b;
 
-	constexpr Segment3() = default;
-	constexpr Segment3(BasicVec3<T> a_value, BasicVec3<T> b_value)
+	constexpr QSegment3() = default;
+	constexpr QSegment3(QBasicVec3<T> a_value, QBasicVec3<T> b_value)
 		: a(a_value)
 		, b(b_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr Segment3(const Segment3<U>& value)
+	explicit constexpr QSegment3(const QSegment3<U>& value)
 		: a(value.a)
 		, b(value.b)
 	{
@@ -206,15 +204,15 @@ struct Segment3 {
 
 template<typename T>
 /**
- * Represents a Triangle3 value used by the geometry predicate and projection layer.
+ * Represents a QTriangle3 value used by the geometry predicate and projection layer.
  */
-struct Triangle3 {
-	BasicVec3<T> a;
-	BasicVec3<T> b;
-	BasicVec3<T> c;
+struct QTriangle3 {
+	QBasicVec3<T> a;
+	QBasicVec3<T> b;
+	QBasicVec3<T> c;
 
-	constexpr Triangle3() = default;
-	constexpr Triangle3(BasicVec3<T> a_value, BasicVec3<T> b_value, BasicVec3<T> c_value)
+	constexpr QTriangle3() = default;
+	constexpr QTriangle3(QBasicVec3<T> a_value, QBasicVec3<T> b_value, QBasicVec3<T> c_value)
 		: a(a_value)
 		, b(b_value)
 		, c(c_value)
@@ -222,7 +220,7 @@ struct Triangle3 {
 	}
 
 	template<typename U>
-	explicit constexpr Triangle3(const Triangle3<U>& value)
+	explicit constexpr QTriangle3(const QTriangle3<U>& value)
 		: a(value.a)
 		, b(value.b)
 		, c(value.c)
@@ -232,21 +230,21 @@ struct Triangle3 {
 
 template<typename T>
 /**
- * Represents an Aabb3 value used by the geometry predicate and projection layer.
+ * Represents an QAabb3 value used by the geometry predicate and projection layer.
  */
-struct Aabb3 {
-	BasicVec3<T> min;
-	BasicVec3<T> max;
+struct QAabb3 {
+	QBasicVec3<T> min;
+	QBasicVec3<T> max;
 
-	constexpr Aabb3() = default;
-	constexpr Aabb3(BasicVec3<T> min_value, BasicVec3<T> max_value)
+	constexpr QAabb3() = default;
+	constexpr QAabb3(QBasicVec3<T> min_value, QBasicVec3<T> max_value)
 		: min(min_value)
 		, max(max_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr Aabb3(const Aabb3<U>& value)
+	explicit constexpr QAabb3(const QAabb3<U>& value)
 		: min(value.min)
 		, max(value.max)
 	{
@@ -255,54 +253,54 @@ struct Aabb3 {
 
 template<typename T>
 /**
- * Represents a Rect2 value used by the geometry predicate and projection layer.
+ * Represents a QRect2 value used by the geometry predicate and projection layer.
  */
-struct Rect2 {
-	BasicVec2<T> min;
-	BasicVec2<T> max;
+struct QRect2 {
+	QBasicVec2<T> min;
+	QBasicVec2<T> max;
 
-	constexpr Rect2() = default;
-	constexpr Rect2(BasicVec2<T> min_value, BasicVec2<T> max_value)
+	constexpr QRect2() = default;
+	constexpr QRect2(QBasicVec2<T> min_value, QBasicVec2<T> max_value)
 		: min(min_value)
 		, max(max_value)
 	{
 	}
 
 	template<typename U>
-	explicit constexpr Rect2(const Rect2<U>& value)
+	explicit constexpr QRect2(const QRect2<U>& value)
 		: min(value.min)
 		, max(value.max)
 	{
 	}
 };
 
-using Aabb3f = Aabb3<float>;
-using Aabb3d = Aabb3<double>;
-using Rect2f = Rect2<float>;
-using Rect2d = Rect2<double>;
+using QAabb3f = QAabb3<float>;
+using QAabb3d = QAabb3<double>;
+using QRect2f = QRect2<float>;
+using QRect2d = QRect2<double>;
 
 /**
- * Enumerates PlaneSide values used by the geometry layer.
+ * Enumerates QPlaneSide values used by the geometry layer.
  */
-enum class PlaneSide {
+enum class QPlaneSide {
 	negative,
 	on,
 	positive,
 };
 
 /**
- * Enumerates PlaneIntersectionType values used by the geometry layer.
+ * Enumerates QPlaneIntersectionType values used by the geometry layer.
  */
-enum class PlaneIntersectionType {
+enum class QPlaneIntersectionType {
 	none,
 	point,
 	coplanar,
 };
 
 /**
- * Enumerates SegmentIntersectionKind2 values used by the geometry layer.
+ * Enumerates QSegmentIntersectionKind2 values used by the geometry layer.
  */
-enum class SegmentIntersectionKind2 {
+enum class QSegmentIntersectionKind2 {
 	none,
 	point,
 	overlap,
@@ -312,127 +310,127 @@ template<typename T>
 /**
  * Represents a Plane Basis3 value used by the geometry predicate and projection layer.
  */
-struct PlaneBasis3 {
+struct QPlaneBasis3 {
 	bool valid = false;
-	BasicVec3<T> origin;
-	BasicVec3<T> normal;
-	BasicVec3<T> u;
-	BasicVec3<T> v;
+	QBasicVec3<T> origin;
+	QBasicVec3<T> normal;
+	QBasicVec3<T> u;
+	QBasicVec3<T> v;
 };
 
 template<typename T>
 /**
  * Represents a Plane Coordinates3 value used by the geometry predicate and projection layer.
  */
-struct PlaneCoordinates3 {
+struct QPlaneCoordinates3 {
 	bool valid = false;
 	T u = T(0);
 	T v = T(0);
 	T signed_distance = T(0);
-	BasicVec3<T> projected_point;
+	QBasicVec3<T> projected_point;
 };
 
 template<typename T>
 /**
  * Represents a Ray Plane Hit value used by the geometry predicate and projection layer.
  */
-struct RayPlaneHit {
+struct QRayPlaneHit {
 	bool hit = false;
 	T distance = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Line Plane Hit value used by the geometry predicate and projection layer.
  */
-struct LinePlaneHit {
-	PlaneIntersectionType type = PlaneIntersectionType::none;
+struct QLinePlaneHit {
+	QPlaneIntersectionType type = QPlaneIntersectionType::none;
 	T parameter = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Segment Plane Hit value used by the geometry predicate and projection layer.
  */
-struct SegmentPlaneHit {
-	PlaneIntersectionType type = PlaneIntersectionType::none;
+struct QSegmentPlaneHit {
+	QPlaneIntersectionType type = QPlaneIntersectionType::none;
 	T segment_factor = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Three Plane Intersection value used by the geometry predicate and projection layer.
  */
-struct ThreePlaneIntersection {
+struct QThreePlaneIntersection {
 	bool hit = false;
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Segment Intersection2 value used by the geometry predicate and projection layer.
  */
-struct SegmentIntersection2 {
+struct QSegmentIntersection2 {
 	bool hit = false;
 	T first_factor = T(0);
 	T second_factor = T(0);
-	BasicVec2<T> point;
+	QBasicVec2<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Classified Segment Intersection2 value used by the geometry predicate and projection layer.
  */
-struct ClassifiedSegmentIntersection2 {
+struct QClassifiedSegmentIntersection2 {
 	bool hit = false;
-	SegmentIntersectionKind2 kind = SegmentIntersectionKind2::none;
+	QSegmentIntersectionKind2 kind = QSegmentIntersectionKind2::none;
 	std::uint8_t point_count = 0;
 	std::array<T, 2> first_factors {};
 	std::array<T, 2> second_factors {};
-	std::array<BasicVec2<T>, 2> points {};
+	std::array<QBasicVec2<T>, 2> points {};
 };
 
 template<typename T>
 /**
- * Stores the Dominant Axis Unproject Result data contract used by the geometry predicate and projection layer.
+ * Stores the Dominant QAxis Unproject Result data contract used by the geometry predicate and projection layer.
  */
-struct DominantAxisUnprojectResult {
+struct QDominantAxisUnprojectResult {
 	bool valid = false;
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Ray Triangle Hit value used by the geometry predicate and projection layer.
  */
-struct RayTriangleHit {
+struct QRayTriangleHit {
 	bool hit = false;
 	T distance = T(0);
 	T u = T(0);
 	T v = T(0);
 	T w = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Represents a Ray Aabb Hit value used by the geometry predicate and projection layer.
  */
-struct RayAabbHit {
+struct QRayAabbHit {
 	bool hit = false;
 	T min_distance = T(0);
 	T max_distance = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Stores the Ray Bounded Triangle Query Options data contract used by the geometry predicate and projection layer.
  */
-struct RayBoundedTriangleQueryOptions {
+struct QRayBoundedTriangleQueryOptions {
 	T min_distance = T(0);
 	T max_distance = std::numeric_limits<T>::infinity();
 	T epsilon = T(0.000001);
@@ -442,11 +440,11 @@ template<typename T>
 /**
  * Represents a Ray Bounded Triangle Hit value used by the geometry predicate and projection layer.
  */
-struct RayBoundedTriangleHit {
+struct QRayBoundedTriangleHit {
 	bool hit = false;
 	std::size_t triangle_index = std::numeric_limits<std::size_t>::max();
-	RayAabbHit<T> bounds_hit;
-	RayTriangleHit<T> triangle_hit;
+	QRayAabbHit<T> bounds_hit;
+	QRayTriangleHit<T> triangle_hit;
 };
 
 template<typename T>
@@ -464,10 +462,10 @@ template<typename T>
 /**
  * Represents a Closest Ray Point value used by the geometry predicate and projection layer.
  */
-struct ClosestRayPoint {
+struct QClosestRayPoint {
 	bool valid = false;
 	T ray_distance = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 	T distance_squared = T(0);
 };
 
@@ -475,10 +473,10 @@ template<typename T>
 /**
  * Represents a Closest Segment Point2 value used by the geometry predicate and projection layer.
  */
-struct ClosestSegmentPoint2 {
+struct QClosestSegmentPoint2 {
 	bool valid = false;
 	T segment_factor = T(0);
-	BasicVec2<T> point;
+	QBasicVec2<T> point;
 	T distance_squared = T(0);
 };
 
@@ -486,10 +484,10 @@ template<typename T>
 /**
  * Represents a Closest Segment Point3 value used by the geometry predicate and projection layer.
  */
-struct ClosestSegmentPoint3 {
+struct QClosestSegmentPoint3 {
 	bool valid = false;
 	T segment_factor = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 	T distance_squared = T(0);
 };
 
@@ -497,12 +495,12 @@ template<typename T>
 /**
  * Represents a Segment Ray Closest Points value used by the geometry predicate and projection layer.
  */
-struct SegmentRayClosestPoints {
+struct QSegmentRayClosestPoints {
 	bool valid = false;
 	T segment_factor = T(0);
 	T ray_distance = T(0);
-	BasicVec3<T> segment_point;
-	BasicVec3<T> ray_point;
+	QBasicVec3<T> segment_point;
+	QBasicVec3<T> ray_point;
 	T distance_squared = T(0);
 };
 
@@ -510,14 +508,14 @@ template<typename T>
 /**
  * Represents a Segment Segment Closest Points value used by the geometry predicate and projection layer.
  */
-struct SegmentSegmentClosestPoints {
+struct QSegmentSegmentClosestPoints {
 	bool valid = false;
 	bool intersects = false;
 	T first_factor = T(0);
 	T second_factor = T(0);
-	BasicVec3<T> first_point;
-	BasicVec3<T> second_point;
-	BasicVec3<T> midpoint;
+	QBasicVec3<T> first_point;
+	QBasicVec3<T> second_point;
+	QBasicVec3<T> midpoint;
 	T distance_squared = T(0);
 };
 
@@ -525,17 +523,17 @@ template<typename T>
 /**
  * Represents a Segment Factor Closest Point3 value used by the geometry predicate and projection layer.
  */
-struct SegmentFactorClosestPoint3 {
+struct QSegmentFactorClosestPoint3 {
 	bool valid = false;
 	T segment_factor = T(0);
-	BasicVec3<T> point;
+	QBasicVec3<T> point;
 };
 
 template<typename T>
 /**
  * Stores the Segment Segment Factor Options data contract used by the geometry predicate and projection layer.
  */
-struct SegmentSegmentFactorOptions {
+struct QSegmentSegmentFactorOptions {
 	T length_squared_epsilon = T(0.000000000001);
 	T closest_epsilon = T(0.000001);
 	T parameter_epsilon = T(0.000001);
@@ -547,123 +545,123 @@ template<typename T>
 /**
  * Represents a Line Line Closest Points value used by the geometry predicate and projection layer.
  */
-struct LineLineClosestPoints {
+struct QLineLineClosestPoints {
 	bool valid = false;
 	bool intersects = false;
 	T first_parameter = T(0);
 	T second_parameter = T(0);
-	BasicVec3<T> first_point;
-	BasicVec3<T> second_point;
-	BasicVec3<T> midpoint;
+	QBasicVec3<T> first_point;
+	QBasicVec3<T> second_point;
+	QBasicVec3<T> midpoint;
 	T distance_squared = T(0);
 };
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> operator+(BasicVec2<T> left, BasicVec2<T> right)
+[[nodiscard]] constexpr QBasicVec2<T> operator+(QBasicVec2<T> left, QBasicVec2<T> right)
 {
 	return { left.x + right.x, left.y + right.y };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> operator-(BasicVec2<T> left, BasicVec2<T> right)
+[[nodiscard]] constexpr QBasicVec2<T> operator-(QBasicVec2<T> left, QBasicVec2<T> right)
 {
 	return { left.x - right.x, left.y - right.y };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> operator-(BasicVec2<T> value)
+[[nodiscard]] constexpr QBasicVec2<T> operator-(QBasicVec2<T> value)
 {
 	return { -value.x, -value.y };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> operator*(BasicVec2<T> value, T scalar)
+[[nodiscard]] constexpr QBasicVec2<T> operator*(QBasicVec2<T> value, T scalar)
 {
 	return { value.x * scalar, value.y * scalar };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> operator/(BasicVec2<T> value, T scalar)
+[[nodiscard]] constexpr QBasicVec2<T> operator/(QBasicVec2<T> value, T scalar)
 {
 	return { value.x / scalar, value.y / scalar };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> operator+(BasicVec3<T> left, BasicVec3<T> right)
+[[nodiscard]] constexpr QBasicVec3<T> operator+(QBasicVec3<T> left, QBasicVec3<T> right)
 {
 	return { left.x + right.x, left.y + right.y, left.z + right.z };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> operator-(BasicVec3<T> left, BasicVec3<T> right)
+[[nodiscard]] constexpr QBasicVec3<T> operator-(QBasicVec3<T> left, QBasicVec3<T> right)
 {
 	return { left.x - right.x, left.y - right.y, left.z - right.z };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> operator-(BasicVec3<T> value)
+[[nodiscard]] constexpr QBasicVec3<T> operator-(QBasicVec3<T> value)
 {
 	return { -value.x, -value.y, -value.z };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> operator*(BasicVec3<T> value, T scalar)
+[[nodiscard]] constexpr QBasicVec3<T> operator*(QBasicVec3<T> value, T scalar)
 {
 	return { value.x * scalar, value.y * scalar, value.z * scalar };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> operator/(BasicVec3<T> value, T scalar)
+[[nodiscard]] constexpr QBasicVec3<T> operator/(QBasicVec3<T> value, T scalar)
 {
 	return { value.x / scalar, value.y / scalar, value.z / scalar };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> component_min(BasicVec2<T> left, BasicVec2<T> right)
+[[nodiscard]] constexpr QBasicVec2<T> component_min(QBasicVec2<T> left, QBasicVec2<T> right)
 {
 	return { std::min(left.x, right.x), std::min(left.y, right.y) };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> component_min(BasicVec3<T> left, BasicVec3<T> right)
+[[nodiscard]] constexpr QBasicVec3<T> component_min(QBasicVec3<T> left, QBasicVec3<T> right)
 {
 	return { std::min(left.x, right.x), std::min(left.y, right.y), std::min(left.z, right.z) };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> component_max(BasicVec2<T> left, BasicVec2<T> right)
+[[nodiscard]] constexpr QBasicVec2<T> component_max(QBasicVec2<T> left, QBasicVec2<T> right)
 {
 	return { std::max(left.x, right.x), std::max(left.y, right.y) };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> component_max(BasicVec3<T> left, BasicVec3<T> right)
+[[nodiscard]] constexpr QBasicVec3<T> component_max(QBasicVec3<T> left, QBasicVec3<T> right)
 {
 	return { std::max(left.x, right.x), std::max(left.y, right.y), std::max(left.z, right.z) };
 }
 
 template<typename T>
-[[nodiscard]] constexpr Aabb3<T> empty_aabb3()
+[[nodiscard]] constexpr QAabb3<T> empty_aabb3()
 {
 	const T infinity = std::numeric_limits<T>::infinity();
 	return { { infinity, infinity, infinity }, { -infinity, -infinity, -infinity } };
 }
 
 template<typename T>
-[[nodiscard]] constexpr bool aabb_is_valid(const Aabb3<T>& aabb)
+[[nodiscard]] constexpr bool aabb_is_valid(const QAabb3<T>& aabb)
 {
 	return aabb.min.x <= aabb.max.x && aabb.min.y <= aabb.max.y && aabb.min.z <= aabb.max.z;
 }
 
 template<typename T>
-constexpr void aabb_include(Aabb3<T>& aabb, BasicVec3<T> point)
+constexpr void aabb_include(QAabb3<T>& aabb, QBasicVec3<T> point)
 {
 	aabb.min = component_min(aabb.min, point);
 	aabb.max = component_max(aabb.max, point);
 }
 
 template<typename T>
-constexpr void aabb_include(Aabb3<T>& aabb, const Aabb3<T>& included)
+constexpr void aabb_include(QAabb3<T>& aabb, const QAabb3<T>& included)
 {
 	if (!aabb_is_valid(included)) {
 		return;
@@ -673,53 +671,53 @@ constexpr void aabb_include(Aabb3<T>& aabb, const Aabb3<T>& included)
 }
 
 template<typename T>
-[[nodiscard]] constexpr Aabb3<T> aabb_including(Aabb3<T> aabb, BasicVec3<T> point)
+[[nodiscard]] constexpr QAabb3<T> aabb_including(QAabb3<T> aabb, QBasicVec3<T> point)
 {
 	aabb_include(aabb, point);
 	return aabb;
 }
 
 template<typename T>
-[[nodiscard]] constexpr Aabb3<T> aabb_including(Aabb3<T> aabb, const Aabb3<T>& included)
+[[nodiscard]] constexpr QAabb3<T> aabb_including(QAabb3<T> aabb, const QAabb3<T>& included)
 {
 	aabb_include(aabb, included);
 	return aabb;
 }
 
 template<typename T>
-[[nodiscard]] constexpr Aabb3<T> aabb_expanded(const Aabb3<T>& aabb, T amount)
+[[nodiscard]] constexpr QAabb3<T> aabb_expanded(const QAabb3<T>& aabb, T amount)
 {
 	if (!aabb_is_valid(aabb)) {
 		return aabb;
 	}
-	const BasicVec3<T> delta { amount, amount, amount };
+	const QBasicVec3<T> delta { amount, amount, amount };
 	return { aabb.min - delta, aabb.max + delta };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> aabb_size(const Aabb3<T>& aabb)
+[[nodiscard]] constexpr QBasicVec3<T> aabb_size(const QAabb3<T>& aabb)
 {
-	return aabb_is_valid(aabb) ? aabb.max - aabb.min : BasicVec3<T> {};
+	return aabb_is_valid(aabb) ? aabb.max - aabb.min : QBasicVec3<T> {};
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> aabb_center(const Aabb3<T>& aabb)
+[[nodiscard]] constexpr QBasicVec3<T> aabb_center(const QAabb3<T>& aabb)
 {
-	return aabb_is_valid(aabb) ? (aabb.min + aabb.max) * T(0.5) : BasicVec3<T> {};
+	return aabb_is_valid(aabb) ? (aabb.min + aabb.max) * T(0.5) : QBasicVec3<T> {};
 }
 
 template<typename T>
-[[nodiscard]] Aabb3<T> aabb_from_points(std::span<const BasicVec3<T>> points)
+[[nodiscard]] QAabb3<T> aabb_from_points(std::span<const QBasicVec3<T>> points)
 {
-	Aabb3<T> bounds = empty_aabb3<T>();
-	for (const BasicVec3<T> point : points) {
+	QAabb3<T> bounds = empty_aabb3<T>();
+	for (const QBasicVec3<T> point : points) {
 		aabb_include(bounds, point);
 	}
 	return bounds;
 }
 
 template<typename T>
-[[nodiscard]] constexpr bool aabb_contains_point(const Aabb3<T>& aabb, BasicVec3<T> point)
+[[nodiscard]] constexpr bool aabb_contains_point(const QAabb3<T>& aabb, QBasicVec3<T> point)
 {
 	return aabb_is_valid(aabb) &&
 		point.x >= aabb.min.x && point.x <= aabb.max.x &&
@@ -728,7 +726,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] constexpr bool aabb_overlaps(const Aabb3<T>& left, const Aabb3<T>& right)
+[[nodiscard]] constexpr bool aabb_overlaps(const QAabb3<T>& left, const QAabb3<T>& right)
 {
 	return aabb_is_valid(left) && aabb_is_valid(right) &&
 		left.min.x <= right.max.x && left.max.x >= right.min.x &&
@@ -737,7 +735,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> aabb_closest_point(const Aabb3<T>& aabb, BasicVec3<T> point)
+[[nodiscard]] constexpr QBasicVec3<T> aabb_closest_point(const QAabb3<T>& aabb, QBasicVec3<T> point)
 {
 	if (!aabb_is_valid(aabb)) {
 		return {};
@@ -750,7 +748,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] constexpr T aabb_distance_squared_to_point(const Aabb3<T>& aabb, BasicVec3<T> point)
+[[nodiscard]] constexpr T aabb_distance_squared_to_point(const QAabb3<T>& aabb, QBasicVec3<T> point)
 {
 	if (!aabb_is_valid(aabb)) {
 		return std::numeric_limits<T>::infinity();
@@ -759,43 +757,43 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] Axis aabb_longest_axis(const Aabb3<T>& aabb)
+[[nodiscard]] QAxis aabb_longest_axis(const QAabb3<T>& aabb)
 {
-	const BasicVec3<T> size = aabb_size(aabb);
+	const QBasicVec3<T> size = aabb_size(aabb);
 	const T ax = std::abs(size.x);
 	const T ay = std::abs(size.y);
 	const T az = std::abs(size.z);
 	if (ax >= ay && ax >= az) {
-		return Axis::x;
+		return QAxis::x;
 	}
 	if (ay >= az) {
-		return Axis::y;
+		return QAxis::y;
 	}
-	return Axis::z;
+	return QAxis::z;
 }
 
 template<typename T>
-[[nodiscard]] constexpr Rect2<T> empty_rect2()
+[[nodiscard]] constexpr QRect2<T> empty_rect2()
 {
 	const T infinity = std::numeric_limits<T>::infinity();
 	return { { infinity, infinity }, { -infinity, -infinity } };
 }
 
 template<typename T>
-[[nodiscard]] constexpr bool rect_is_valid(const Rect2<T>& rect)
+[[nodiscard]] constexpr bool rect_is_valid(const QRect2<T>& rect)
 {
 	return rect.min.x <= rect.max.x && rect.min.y <= rect.max.y;
 }
 
 template<typename T>
-constexpr void rect_include(Rect2<T>& rect, BasicVec2<T> point)
+constexpr void rect_include(QRect2<T>& rect, QBasicVec2<T> point)
 {
 	rect.min = component_min(rect.min, point);
 	rect.max = component_max(rect.max, point);
 }
 
 template<typename T>
-constexpr void rect_include(Rect2<T>& rect, const Rect2<T>& included)
+constexpr void rect_include(QRect2<T>& rect, const QRect2<T>& included)
 {
 	if (!rect_is_valid(included)) {
 		return;
@@ -805,43 +803,43 @@ constexpr void rect_include(Rect2<T>& rect, const Rect2<T>& included)
 }
 
 template<typename T>
-[[nodiscard]] constexpr Rect2<T> rect_including(Rect2<T> rect, BasicVec2<T> point)
+[[nodiscard]] constexpr QRect2<T> rect_including(QRect2<T> rect, QBasicVec2<T> point)
 {
 	rect_include(rect, point);
 	return rect;
 }
 
 template<typename T>
-[[nodiscard]] constexpr Rect2<T> rect_including(Rect2<T> rect, const Rect2<T>& included)
+[[nodiscard]] constexpr QRect2<T> rect_including(QRect2<T> rect, const QRect2<T>& included)
 {
 	rect_include(rect, included);
 	return rect;
 }
 
 template<typename T>
-[[nodiscard]] constexpr Rect2<T> rect_expanded(const Rect2<T>& rect, T amount)
+[[nodiscard]] constexpr QRect2<T> rect_expanded(const QRect2<T>& rect, T amount)
 {
 	if (!rect_is_valid(rect)) {
 		return rect;
 	}
-	const BasicVec2<T> delta { amount, amount };
+	const QBasicVec2<T> delta { amount, amount };
 	return { rect.min - delta, rect.max + delta };
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> rect_size(const Rect2<T>& rect)
+[[nodiscard]] constexpr QBasicVec2<T> rect_size(const QRect2<T>& rect)
 {
-	return rect_is_valid(rect) ? rect.max - rect.min : BasicVec2<T> {};
+	return rect_is_valid(rect) ? rect.max - rect.min : QBasicVec2<T> {};
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec2<T> rect_center(const Rect2<T>& rect)
+[[nodiscard]] constexpr QBasicVec2<T> rect_center(const QRect2<T>& rect)
 {
-	return rect_is_valid(rect) ? (rect.min + rect.max) * T(0.5) : BasicVec2<T> {};
+	return rect_is_valid(rect) ? (rect.min + rect.max) * T(0.5) : QBasicVec2<T> {};
 }
 
 template<typename T>
-[[nodiscard]] constexpr bool rect_contains_point(const Rect2<T>& rect, BasicVec2<T> point)
+[[nodiscard]] constexpr bool rect_contains_point(const QRect2<T>& rect, QBasicVec2<T> point)
 {
 	return rect_is_valid(rect) &&
 		point.x >= rect.min.x && point.x <= rect.max.x &&
@@ -849,7 +847,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] constexpr bool rect_overlaps(const Rect2<T>& left, const Rect2<T>& right)
+[[nodiscard]] constexpr bool rect_overlaps(const QRect2<T>& left, const QRect2<T>& right)
 {
 	return rect_is_valid(left) && rect_is_valid(right) &&
 		left.min.x <= right.max.x && left.max.x >= right.min.x &&
@@ -857,19 +855,19 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] constexpr T dot(BasicVec2<T> left, BasicVec2<T> right)
+[[nodiscard]] constexpr T dot(QBasicVec2<T> left, QBasicVec2<T> right)
 {
 	return left.x * right.x + left.y * right.y;
 }
 
 template<typename T>
-[[nodiscard]] constexpr T dot(BasicVec3<T> left, BasicVec3<T> right)
+[[nodiscard]] constexpr T dot(QBasicVec3<T> left, QBasicVec3<T> right)
 {
 	return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
 template<typename T>
-[[nodiscard]] constexpr BasicVec3<T> cross(BasicVec3<T> left, BasicVec3<T> right)
+[[nodiscard]] constexpr QBasicVec3<T> cross(QBasicVec3<T> left, QBasicVec3<T> right)
 {
 	return {
 		left.y * right.z - left.z * right.y,
@@ -879,31 +877,31 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] constexpr T length_squared(BasicVec2<T> value)
+[[nodiscard]] constexpr T length_squared(QBasicVec2<T> value)
 {
 	return dot(value, value);
 }
 
 template<typename T>
-[[nodiscard]] constexpr T length_squared(BasicVec3<T> value)
+[[nodiscard]] constexpr T length_squared(QBasicVec3<T> value)
 {
 	return dot(value, value);
 }
 
 template<typename T>
-[[nodiscard]] T length(BasicVec2<T> value)
+[[nodiscard]] T length(QBasicVec2<T> value)
 {
 	return std::sqrt(length_squared(value));
 }
 
 template<typename T>
-[[nodiscard]] T length(BasicVec3<T> value)
+[[nodiscard]] T length(QBasicVec3<T> value)
 {
 	return std::sqrt(length_squared(value));
 }
 
 template<typename T>
-[[nodiscard]] BasicVec2<T> normalize_or_zero(BasicVec2<T> value, T epsilon = std::numeric_limits<T>::epsilon())
+[[nodiscard]] QBasicVec2<T> normalize_or_zero(QBasicVec2<T> value, T epsilon = std::numeric_limits<T>::epsilon())
 {
 	const T squared = length_squared(value);
 	if (squared <= epsilon * epsilon) {
@@ -913,7 +911,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] BasicVec3<T> normalize_or_zero(BasicVec3<T> value, T epsilon = std::numeric_limits<T>::epsilon())
+[[nodiscard]] QBasicVec3<T> normalize_or_zero(QBasicVec3<T> value, T epsilon = std::numeric_limits<T>::epsilon())
 {
 	const T squared = length_squared(value);
 	if (squared <= epsilon * epsilon) {
@@ -923,14 +921,14 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] Plane3<T> plane_from_point_normal(BasicVec3<T> point, BasicVec3<T> normal, T epsilon = std::numeric_limits<T>::epsilon())
+[[nodiscard]] QPlane3<T> plane_from_point_normal(QBasicVec3<T> point, QBasicVec3<T> normal, T epsilon = std::numeric_limits<T>::epsilon())
 {
-	const BasicVec3<T> normalized = normalize_or_zero(normal, epsilon);
+	const QBasicVec3<T> normalized = normalize_or_zero(normal, epsilon);
 	return { normalized, dot(normalized, point) };
 }
 
 template<typename T>
-[[nodiscard]] Plane3<T> normalize_plane(const Plane3<T>& plane, T epsilon = std::numeric_limits<T>::epsilon())
+[[nodiscard]] QPlane3<T> normalize_plane(const QPlane3<T>& plane, T epsilon = std::numeric_limits<T>::epsilon())
 {
 	const T squared = length_squared(plane.normal);
 	if (squared <= epsilon * epsilon) {
@@ -941,54 +939,54 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] T signed_distance_to_plane(BasicVec3<T> point, const Plane3<T>& plane)
+[[nodiscard]] T signed_distance_to_plane(QBasicVec3<T> point, const QPlane3<T>& plane)
 {
 	return dot(plane.normal, point) - plane.d;
 }
 
 template<typename T>
-[[nodiscard]] PlaneSide plane_side(BasicVec3<T> point, const Plane3<T>& plane, T epsilon = T(0.000001))
+[[nodiscard]] QPlaneSide plane_side(QBasicVec3<T> point, const QPlane3<T>& plane, T epsilon = T(0.000001))
 {
 	const T distance = signed_distance_to_plane(point, plane);
 	if (distance > epsilon) {
-		return PlaneSide::positive;
+		return QPlaneSide::positive;
 	}
 	if (distance < -epsilon) {
-		return PlaneSide::negative;
+		return QPlaneSide::negative;
 	}
-	return PlaneSide::on;
+	return QPlaneSide::on;
 }
 
 template<typename T>
-[[nodiscard]] bool planes_nearly_equal(const Plane3<T>& left, const Plane3<T>& right, T epsilon = T(0.000001))
+[[nodiscard]] bool planes_nearly_equal(const QPlane3<T>& left, const QPlane3<T>& right, T epsilon = T(0.000001))
 {
-	const Plane3<T> normalized_left = normalize_plane(left, epsilon);
-	const Plane3<T> normalized_right = normalize_plane(right, epsilon);
+	const QPlane3<T> normalized_left = normalize_plane(left, epsilon);
+	const QPlane3<T> normalized_right = normalize_plane(right, epsilon);
 	return length_squared(normalized_left.normal - normalized_right.normal) <= epsilon * epsilon &&
 		std::abs(normalized_left.d - normalized_right.d) <= epsilon;
 }
 
 template<typename T>
-[[nodiscard]] BasicVec3<T> project_point_to_plane(BasicVec3<T> point, const Plane3<T>& plane)
+[[nodiscard]] QBasicVec3<T> project_point_to_plane(QBasicVec3<T> point, const QPlane3<T>& plane)
 {
 	return point - plane.normal * signed_distance_to_plane(point, plane);
 }
 
 template<typename T>
-[[nodiscard]] PlaneBasis3<T> make_plane_basis(
-	BasicVec3<T> origin, BasicVec3<T> normal, BasicVec3<T> preferred_u = {}, T epsilon = T(0.000001))
+[[nodiscard]] QPlaneBasis3<T> make_plane_basis(
+	QBasicVec3<T> origin, QBasicVec3<T> normal, QBasicVec3<T> preferred_u = {}, T epsilon = T(0.000001))
 {
-	const BasicVec3<T> normalized_normal = normalize_or_zero(normal, epsilon);
+	const QBasicVec3<T> normalized_normal = normalize_or_zero(normal, epsilon);
 	if (length_squared(normalized_normal) <= epsilon * epsilon) {
 		return {};
 	}
 
-	BasicVec3<T> candidate_u = preferred_u - normalized_normal * dot(preferred_u, normalized_normal);
+	QBasicVec3<T> candidate_u = preferred_u - normalized_normal * dot(preferred_u, normalized_normal);
 	if (length_squared(candidate_u) <= epsilon * epsilon) {
 		const T ax = std::abs(normalized_normal.x);
 		const T ay = std::abs(normalized_normal.y);
 		const T az = std::abs(normalized_normal.z);
-		BasicVec3<T> reference { T(1), T(0), T(0) };
+		QBasicVec3<T> reference { T(1), T(0), T(0) };
 		if (ay <= ax && ay <= az) {
 			reference = { T(0), T(1), T(0) };
 		} else if (az <= ax && az <= ay) {
@@ -997,11 +995,11 @@ template<typename T>
 		candidate_u = reference - normalized_normal * dot(reference, normalized_normal);
 	}
 
-	const BasicVec3<T> u = normalize_or_zero(candidate_u, epsilon);
+	const QBasicVec3<T> u = normalize_or_zero(candidate_u, epsilon);
 	if (length_squared(u) <= epsilon * epsilon) {
 		return {};
 	}
-	const BasicVec3<T> v = normalize_or_zero(cross(normalized_normal, u), epsilon);
+	const QBasicVec3<T> v = normalize_or_zero(cross(normalized_normal, u), epsilon);
 	if (length_squared(v) <= epsilon * epsilon) {
 		return {};
 	}
@@ -1009,9 +1007,9 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] PlaneBasis3<T> make_plane_basis(const Plane3<T>& plane, BasicVec3<T> preferred_u = {}, T epsilon = T(0.000001))
+[[nodiscard]] QPlaneBasis3<T> make_plane_basis(const QPlane3<T>& plane, QBasicVec3<T> preferred_u = {}, T epsilon = T(0.000001))
 {
-	const Plane3<T> normalized = normalize_plane(plane, epsilon);
+	const QPlane3<T> normalized = normalize_plane(plane, epsilon);
 	if (length_squared(normalized.normal) <= epsilon * epsilon) {
 		return {};
 	}
@@ -1019,12 +1017,12 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] PlaneCoordinates3<T> plane_coordinates(BasicVec3<T> point, const PlaneBasis3<T>& basis)
+[[nodiscard]] QPlaneCoordinates3<T> plane_coordinates(QBasicVec3<T> point, const QPlaneBasis3<T>& basis)
 {
 	if (!basis.valid) {
 		return {};
 	}
-	const BasicVec3<T> delta = point - basis.origin;
+	const QBasicVec3<T> delta = point - basis.origin;
 	const T signed_distance = dot(delta, basis.normal);
 	return {
 		true,
@@ -1036,55 +1034,55 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] BasicVec3<T> plane_point_from_coordinates(const PlaneBasis3<T>& basis, T u, T v)
+[[nodiscard]] QBasicVec3<T> plane_point_from_coordinates(const QPlaneBasis3<T>& basis, T u, T v)
 {
 	return basis.origin + basis.u * u + basis.v * v;
 }
 
 template<typename T>
-[[nodiscard]] Axis dominant_axis(BasicVec3<T> normal)
+[[nodiscard]] QAxis dominant_axis(QBasicVec3<T> normal)
 {
 	const T ax = std::abs(normal.x);
 	const T ay = std::abs(normal.y);
 	const T az = std::abs(normal.z);
 	if (ax >= ay && ax >= az) {
-		return Axis::x;
+		return QAxis::x;
 	}
 	if (ay >= az) {
-		return Axis::y;
+		return QAxis::y;
 	}
-	return Axis::z;
+	return QAxis::z;
 }
 
 template<typename T>
-[[nodiscard]] BasicVec2<T> project_dominant_axis(BasicVec3<T> point, Axis dropped_axis)
+[[nodiscard]] QBasicVec2<T> project_dominant_axis(QBasicVec3<T> point, QAxis dropped_axis)
 {
-	if (dropped_axis == Axis::x) {
+	if (dropped_axis == QAxis::x) {
 		return { point.y, point.z };
 	}
-	if (dropped_axis == Axis::y) {
+	if (dropped_axis == QAxis::y) {
 		return { point.x, point.z };
 	}
 	return { point.x, point.y };
 }
 
 template<typename T>
-[[nodiscard]] BasicVec2<T> project_dominant_axis(BasicVec3<T> point, BasicVec3<T> normal)
+[[nodiscard]] QBasicVec2<T> project_dominant_axis(QBasicVec3<T> point, QBasicVec3<T> normal)
 {
 	return project_dominant_axis(point, dominant_axis(normal));
 }
 
 template<typename T>
-[[nodiscard]] DominantAxisUnprojectResult<T> unproject_dominant_axis_point_to_plane(
-	BasicVec2<T> point, const Plane3<T>& plane, Axis dropped_axis, T epsilon = T(0.000001))
+[[nodiscard]] QDominantAxisUnprojectResult<T> unproject_dominant_axis_point_to_plane(
+	QBasicVec2<T> point, const QPlane3<T>& plane, QAxis dropped_axis, T epsilon = T(0.000001))
 {
-	if (dropped_axis == Axis::x) {
+	if (dropped_axis == QAxis::x) {
 		if (std::abs(plane.normal.x) <= epsilon) {
 			return {};
 		}
 		return { true, { (plane.d - plane.normal.y * point.x - plane.normal.z * point.y) / plane.normal.x, point.x, point.y } };
 	}
-	if (dropped_axis == Axis::y) {
+	if (dropped_axis == QAxis::y) {
 		if (std::abs(plane.normal.y) <= epsilon) {
 			return {};
 		}
@@ -1097,67 +1095,67 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] ClosestSegmentPoint2<T> closest_point_on_segment(BasicVec2<T> point, BasicVec2<T> segment_a, BasicVec2<T> segment_b,
+[[nodiscard]] QClosestSegmentPoint2<T> closest_point_on_segment(QBasicVec2<T> point, QBasicVec2<T> segment_a, QBasicVec2<T> segment_b,
 	T epsilon = T(0.000001))
 {
-	const BasicVec2<T> segment_direction = segment_b - segment_a;
+	const QBasicVec2<T> segment_direction = segment_b - segment_a;
 	const T segment_length_squared = length_squared(segment_direction);
 	if (segment_length_squared <= epsilon * epsilon) {
 		return { true, T(0), segment_a, length_squared(point - segment_a) };
 	}
 
 	const T segment_factor = std::clamp(dot(point - segment_a, segment_direction) / segment_length_squared, T(0), T(1));
-	const BasicVec2<T> closest = segment_a + segment_direction * segment_factor;
+	const QBasicVec2<T> closest = segment_a + segment_direction * segment_factor;
 	return { true, segment_factor, closest, length_squared(point - closest) };
 }
 
 template<typename T>
-[[nodiscard]] T point_segment_distance_squared(BasicVec2<T> point, BasicVec2<T> segment_a, BasicVec2<T> segment_b, T epsilon = T(0.000001))
+[[nodiscard]] T point_segment_distance_squared(QBasicVec2<T> point, QBasicVec2<T> segment_a, QBasicVec2<T> segment_b, T epsilon = T(0.000001))
 {
-	const ClosestSegmentPoint2<T> closest = closest_point_on_segment(point, segment_a, segment_b, epsilon);
+	const QClosestSegmentPoint2<T> closest = closest_point_on_segment(point, segment_a, segment_b, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<T>::infinity();
 }
 
-[[nodiscard]] ClosestSegmentPoint2<double> closest_point_on_segment(Vec2d point, Vec2d segment_a, Vec2d segment_b,
+[[nodiscard]] QClosestSegmentPoint2<double> closest_point_on_segment(QVec2d point, QVec2d segment_a, QVec2d segment_b,
 	double epsilon = 0.000001);
-[[nodiscard]] double point_segment_distance_squared(Vec2d point, Vec2d segment_a, Vec2d segment_b, double epsilon = 0.000001);
+[[nodiscard]] double point_segment_distance_squared(QVec2d point, QVec2d segment_a, QVec2d segment_b, double epsilon = 0.000001);
 
-[[nodiscard]] ClosestSegmentPoint3<double> closest_point_on_segment(Vec3d point, const Segment3<double>& segment,
+[[nodiscard]] QClosestSegmentPoint3<double> closest_point_on_segment(QVec3d point, const QSegment3<double>& segment,
 	double epsilon = 0.000001);
-[[nodiscard]] double point_segment_distance_squared(Vec3d point, const Segment3<double>& segment, double epsilon = 0.000001);
+[[nodiscard]] double point_segment_distance_squared(QVec3d point, const QSegment3<double>& segment, double epsilon = 0.000001);
 
 template<typename T>
-[[nodiscard]] ClosestSegmentPoint3<T> closest_point_on_segment(BasicVec3<T> point, const Segment3<T>& segment,
+[[nodiscard]] QClosestSegmentPoint3<T> closest_point_on_segment(QBasicVec3<T> point, const QSegment3<T>& segment,
 	T epsilon = T(0.000001))
 {
-	const BasicVec3<T> segment_direction = segment.b - segment.a;
+	const QBasicVec3<T> segment_direction = segment.b - segment.a;
 	const T segment_length_squared = length_squared(segment_direction);
 	if (segment_length_squared <= epsilon * epsilon) {
 		return { true, T(0), segment.a, length_squared(point - segment.a) };
 	}
 
 	const T segment_factor = std::clamp(dot(point - segment.a, segment_direction) / segment_length_squared, T(0), T(1));
-	const BasicVec3<T> closest = segment.a + segment_direction * segment_factor;
+	const QBasicVec3<T> closest = segment.a + segment_direction * segment_factor;
 	return { true, segment_factor, closest, length_squared(point - closest) };
 }
 
 template<typename T>
-[[nodiscard]] T point_segment_distance_squared(BasicVec3<T> point, const Segment3<T>& segment, T epsilon = T(0.000001))
+[[nodiscard]] T point_segment_distance_squared(QBasicVec3<T> point, const QSegment3<T>& segment, T epsilon = T(0.000001))
 {
-	const ClosestSegmentPoint3<T> closest = closest_point_on_segment(point, segment, epsilon);
+	const QClosestSegmentPoint3<T> closest = closest_point_on_segment(point, segment, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<T>::infinity();
 }
 
 namespace detail {
 
 template<typename T>
-[[nodiscard]] constexpr T cross_2d(BasicVec2<T> left, BasicVec2<T> right)
+[[nodiscard]] constexpr T cross_2d(QBasicVec2<T> left, QBasicVec2<T> right)
 {
 	return left.x * right.y - left.y * right.x;
 }
 
 template<typename T>
-[[nodiscard]] constexpr T signed_area_twice_2d(BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c)
+[[nodiscard]] constexpr T signed_area_twice_2d(QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c)
 {
 	return ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x));
 }
@@ -1169,9 +1167,9 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] T segment_factor_2d(BasicVec2<T> point, BasicVec2<T> segment_a, BasicVec2<T> segment_b, T epsilon)
+[[nodiscard]] T segment_factor_2d(QBasicVec2<T> point, QBasicVec2<T> segment_a, QBasicVec2<T> segment_b, T epsilon)
 {
-	const BasicVec2<T> segment_direction = segment_b - segment_a;
+	const QBasicVec2<T> segment_direction = segment_b - segment_a;
 	const T segment_length_squared = length_squared(segment_direction);
 	if (segment_length_squared <= epsilon * epsilon) {
 		return T(0);
@@ -1180,7 +1178,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] bool point_on_segment_2d_local(BasicVec2<T> point, BasicVec2<T> segment_a, BasicVec2<T> segment_b, T epsilon)
+[[nodiscard]] bool point_on_segment_2d_local(QBasicVec2<T> point, QBasicVec2<T> segment_a, QBasicVec2<T> segment_b, T epsilon)
 {
 	if (std::abs(signed_area_twice_2d(segment_a, segment_b, point)) > epsilon) {
 		return false;
@@ -1192,12 +1190,12 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] ClassifiedSegmentIntersection2<T> make_segment_intersection_point_2d(
-	T first_factor, T second_factor, BasicVec2<T> point)
+[[nodiscard]] QClassifiedSegmentIntersection2<T> make_segment_intersection_point_2d(
+	T first_factor, T second_factor, QBasicVec2<T> point)
 {
-	ClassifiedSegmentIntersection2<T> result;
+	QClassifiedSegmentIntersection2<T> result;
 	result.hit = true;
-	result.kind = SegmentIntersectionKind2::point;
+	result.kind = QSegmentIntersectionKind2::point;
 	result.point_count = 1;
 	result.first_factors[0] = clamped_unit_factor(first_factor);
 	result.first_factors[1] = result.first_factors[0];
@@ -1209,11 +1207,11 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] ClassifiedSegmentIntersection2<T> classify_segments_2d_local(
-	BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c, BasicVec2<T> d, T epsilon)
+[[nodiscard]] QClassifiedSegmentIntersection2<T> classify_segments_2d_local(
+	QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c, QBasicVec2<T> d, T epsilon)
 {
-	const BasicVec2<T> first_direction = b - a;
-	const BasicVec2<T> second_direction = d - c;
+	const QBasicVec2<T> first_direction = b - a;
+	const QBasicVec2<T> second_direction = d - c;
 	const T first_length_squared = length_squared(first_direction);
 	const T second_length_squared = length_squared(second_direction);
 	const bool first_degenerate = first_length_squared <= epsilon * epsilon;
@@ -1241,7 +1239,7 @@ template<typename T>
 	}
 
 	const T denominator = cross_2d(first_direction, second_direction);
-	const BasicVec2<T> delta = c - a;
+	const QBasicVec2<T> delta = c - a;
 	if (std::abs(denominator) > epsilon) {
 		const T first_factor = cross_2d(delta, second_direction) / denominator;
 		const T second_factor = cross_2d(delta, first_direction) / denominator;
@@ -1274,13 +1272,13 @@ template<typename T>
 
 	if (std::abs(overlap_start - overlap_end) <= epsilon) {
 		const T first_factor = clamped_unit_factor((overlap_start + overlap_end) * T(0.5));
-		const BasicVec2<T> point = a + first_direction * first_factor;
+		const QBasicVec2<T> point = a + first_direction * first_factor;
 		return make_segment_intersection_point_2d<T>(first_factor, segment_factor_2d(point, c, d, epsilon), point);
 	}
 
-	ClassifiedSegmentIntersection2<T> result;
+	QClassifiedSegmentIntersection2<T> result;
 	result.hit = true;
-	result.kind = SegmentIntersectionKind2::overlap;
+	result.kind = QSegmentIntersectionKind2::overlap;
 	result.point_count = 2;
 	result.first_factors[0] = clamped_unit_factor(overlap_start);
 	result.first_factors[1] = clamped_unit_factor(overlap_end);
@@ -1294,19 +1292,19 @@ template<typename T>
 } // namespace detail
 
 template<typename T>
-[[nodiscard]] constexpr T triangle_signed_area(BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c)
+[[nodiscard]] constexpr T triangle_signed_area(QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c)
 {
 	return detail::signed_area_twice_2d(a, b, c) * T(0.5);
 }
 
 template<typename T>
-[[nodiscard]] T triangle_area_abs(BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c)
+[[nodiscard]] T triangle_area_abs(QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c)
 {
 	return std::abs(triangle_signed_area(a, b, c));
 }
 
 template<typename T>
-[[nodiscard]] bool point_on_segment_2d(BasicVec2<T> point, BasicVec2<T> segment_a, BasicVec2<T> segment_b, T epsilon = T(0.000001))
+[[nodiscard]] bool point_on_segment_2d(QBasicVec2<T> point, QBasicVec2<T> segment_a, QBasicVec2<T> segment_b, T epsilon = T(0.000001))
 {
 	if (std::abs(detail::signed_area_twice_2d(segment_a, segment_b, point)) > epsilon) {
 		return false;
@@ -1318,7 +1316,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] bool segments_intersect_2d(BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c, BasicVec2<T> d, T epsilon = T(0.000001))
+[[nodiscard]] bool segments_intersect_2d(QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c, QBasicVec2<T> d, T epsilon = T(0.000001))
 {
 	const T ab_c = detail::signed_area_twice_2d(a, b, c);
 	const T ab_d = detail::signed_area_twice_2d(a, b, d);
@@ -1336,28 +1334,28 @@ template<typename T>
 		point_on_segment_2d(b, c, d, epsilon);
 }
 
-[[nodiscard]] ClassifiedSegmentIntersection2<double> intersect_segments_2d(
-	Vec2d a, Vec2d b, Vec2d c, Vec2d d, double epsilon = 0.000001);
+[[nodiscard]] QClassifiedSegmentIntersection2<double> intersect_segments_2d(
+	QVec2d a, QVec2d b, QVec2d c, QVec2d d, double epsilon = 0.000001);
 
 template<typename T>
-[[nodiscard]] ClassifiedSegmentIntersection2<T> intersect_segments_2d(
-	BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c, BasicVec2<T> d, T epsilon = T(0.000001))
+[[nodiscard]] QClassifiedSegmentIntersection2<T> intersect_segments_2d(
+	QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c, QBasicVec2<T> d, T epsilon = T(0.000001))
 {
 	return detail::classify_segments_2d_local(a, b, c, d, epsilon);
 }
 
 template<typename T>
-[[nodiscard]] SegmentIntersection2<T> proper_segment_intersection_2d(
-	BasicVec2<T> a, BasicVec2<T> b, BasicVec2<T> c, BasicVec2<T> d, T epsilon = T(0.000001))
+[[nodiscard]] QSegmentIntersection2<T> proper_segment_intersection_2d(
+	QBasicVec2<T> a, QBasicVec2<T> b, QBasicVec2<T> c, QBasicVec2<T> d, T epsilon = T(0.000001))
 {
-	const BasicVec2<T> first_direction = b - a;
-	const BasicVec2<T> second_direction = d - c;
+	const QBasicVec2<T> first_direction = b - a;
+	const QBasicVec2<T> second_direction = d - c;
 	const T denominator = detail::cross_2d(first_direction, second_direction);
 	if (std::abs(denominator) <= epsilon) {
 		return {};
 	}
 
-	const BasicVec2<T> delta = c - a;
+	const QBasicVec2<T> delta = c - a;
 	const T first_factor = detail::cross_2d(delta, second_direction) / denominator;
 	const T second_factor = detail::cross_2d(delta, first_direction) / denominator;
 	if (first_factor <= epsilon || first_factor >= T(1) - epsilon ||
@@ -1369,7 +1367,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] bool point_in_or_on_polygon_2d(BasicVec2<T> point, std::span<const BasicVec2<T>> polygon, T epsilon = T(0.000001))
+[[nodiscard]] bool point_in_or_on_polygon_2d(QBasicVec2<T> point, std::span<const QBasicVec2<T>> polygon, T epsilon = T(0.000001))
 {
 	if (polygon.size() < 3U) {
 		return false;
@@ -1377,8 +1375,8 @@ template<typename T>
 
 	bool inside = false;
 	for (std::size_t index = 0, previous = polygon.size() - 1U; index < polygon.size(); previous = index++) {
-		const BasicVec2<T> a = polygon[previous];
-		const BasicVec2<T> b = polygon[index];
+		const QBasicVec2<T> a = polygon[previous];
+		const QBasicVec2<T> b = polygon[index];
 		if (point_on_segment_2d(point, a, b, epsilon)) {
 			return true;
 		}
@@ -1392,50 +1390,50 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] T polygon_signed_area(std::span<const BasicVec2<T>> points)
+[[nodiscard]] T polygon_signed_area(std::span<const QBasicVec2<T>> points)
 {
 	if (points.size() < 3) {
 		return T(0);
 	}
 	T area = T(0);
 	for (std::size_t index = 0; index < points.size(); ++index) {
-		const BasicVec2<T> current = points[index];
-		const BasicVec2<T> next = points[(index + 1U) % points.size()];
+		const QBasicVec2<T> current = points[index];
+		const QBasicVec2<T> next = points[(index + 1U) % points.size()];
 		area += current.x * next.y - next.x * current.y;
 	}
 	return area * T(0.5);
 }
 
-[[nodiscard]] std::vector<TriangleIndices> triangulate_projected_polygon(
-	std::span<const Vec2d> points,
+[[nodiscard]] std::vector<QTriangleIndices> triangulate_projected_polygon(
+	std::span<const QVec2d> points,
 	double epsilon = 0.000001,
 	double coverage_tolerance_ratio = 0.001);
 
 template<typename T>
-[[nodiscard]] std::vector<TriangleIndices> triangulate_projected_polygon(
-	std::span<const BasicVec2<T>> points,
+[[nodiscard]] std::vector<QTriangleIndices> triangulate_projected_polygon(
+	std::span<const QBasicVec2<T>> points,
 	double epsilon = 0.000001,
 	double coverage_tolerance_ratio = 0.001)
 {
-	std::vector<Vec2d> double_points;
+	std::vector<QVec2d> double_points;
 	double_points.reserve(points.size());
-	for (const BasicVec2<T> point : points) {
-		double_points.push_back(Vec2d { static_cast<double>(point.x), static_cast<double>(point.y) });
+	for (const QBasicVec2<T> point : points) {
+		double_points.push_back(QVec2d { static_cast<double>(point.x), static_cast<double>(point.y) });
 	}
-	return triangulate_projected_polygon(std::span<const Vec2d>(double_points), epsilon, coverage_tolerance_ratio);
+	return triangulate_projected_polygon(std::span<const QVec2d>(double_points), epsilon, coverage_tolerance_ratio);
 }
 
 template<typename T>
-[[nodiscard]] ThreePlaneIntersection<T> intersect_three_planes(
-	const Plane3<T>& first, const Plane3<T>& second, const Plane3<T>& third, T epsilon = T(0.000001))
+[[nodiscard]] QThreePlaneIntersection<T> intersect_three_planes(
+	const QPlane3<T>& first, const QPlane3<T>& second, const QPlane3<T>& third, T epsilon = T(0.000001))
 {
-	const BasicVec3<T> second_cross_third = cross(second.normal, third.normal);
+	const QBasicVec3<T> second_cross_third = cross(second.normal, third.normal);
 	const T denominator = dot(first.normal, second_cross_third);
 	if (std::abs(denominator) <= epsilon) {
 		return {};
 	}
 
-	const BasicVec3<T> point =
+	const QBasicVec3<T> point =
 		(second_cross_third * first.d +
 			cross(third.normal, first.normal) * second.d +
 			cross(first.normal, second.normal) * third.d) /
@@ -1444,7 +1442,7 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] RayPlaneHit<T> intersect_ray_plane(const Ray3<T>& ray, const Plane3<T>& plane, T epsilon = T(0.000001))
+[[nodiscard]] QRayPlaneHit<T> intersect_ray_plane(const QRay3<T>& ray, const QPlane3<T>& plane, T epsilon = T(0.000001))
 {
 	const T denominator = dot(plane.normal, ray.direction);
 	if (std::abs(denominator) <= epsilon) {
@@ -1459,13 +1457,13 @@ template<typename T>
 	return { true, distance, ray.origin + ray.direction * distance };
 }
 
-[[nodiscard]] RayPlaneHit<float> intersect_ray_plane(
-	const Ray3<float>& ray, const Plane3<float>& plane, float epsilon = 0.000001F);
+[[nodiscard]] QRayPlaneHit<float> intersect_ray_plane(
+	const QRay3<float>& ray, const QPlane3<float>& plane, float epsilon = 0.000001F);
 
 template<typename T>
-[[nodiscard]] LinePlaneHit<T> intersect_line_plane(const Line3<T>& line, const Plane3<T>& plane, T epsilon = T(0.000001))
+[[nodiscard]] QLinePlaneHit<T> intersect_line_plane(const QLine3<T>& line, const QPlane3<T>& plane, T epsilon = T(0.000001))
 {
-	const Plane3<T> normalized_plane = normalize_plane(plane, epsilon);
+	const QPlane3<T> normalized_plane = normalize_plane(plane, epsilon);
 	if (length_squared(normalized_plane.normal) <= epsilon * epsilon ||
 			length_squared(line.direction) <= epsilon * epsilon) {
 		return {};
@@ -1475,20 +1473,20 @@ template<typename T>
 	const T origin_distance = signed_distance_to_plane(line.origin, normalized_plane);
 	if (std::abs(denominator) <= epsilon) {
 		return {
-			std::abs(origin_distance) <= epsilon ? PlaneIntersectionType::coplanar : PlaneIntersectionType::none,
+			std::abs(origin_distance) <= epsilon ? QPlaneIntersectionType::coplanar : QPlaneIntersectionType::none,
 			T(0),
 			line.origin,
 		};
 	}
 
 	const T parameter = -origin_distance / denominator;
-	return { PlaneIntersectionType::point, parameter, line.origin + line.direction * parameter };
+	return { QPlaneIntersectionType::point, parameter, line.origin + line.direction * parameter };
 }
 
 template<typename T>
-[[nodiscard]] SegmentPlaneHit<T> intersect_segment_plane(const Segment3<T>& segment, const Plane3<T>& plane, T epsilon = T(0.000001))
+[[nodiscard]] QSegmentPlaneHit<T> intersect_segment_plane(const QSegment3<T>& segment, const QPlane3<T>& plane, T epsilon = T(0.000001))
 {
-	const Plane3<T> normalized_plane = normalize_plane(plane, epsilon);
+	const QPlane3<T> normalized_plane = normalize_plane(plane, epsilon);
 	if (length_squared(normalized_plane.normal) <= epsilon * epsilon) {
 		return {};
 	}
@@ -1497,18 +1495,18 @@ template<typename T>
 	const T second_distance = signed_distance_to_plane(segment.b, normalized_plane);
 	const bool first_on_plane = std::abs(first_distance) <= epsilon;
 	const bool second_on_plane = std::abs(second_distance) <= epsilon;
-	const BasicVec3<T> segment_direction = segment.b - segment.a;
+	const QBasicVec3<T> segment_direction = segment.b - segment.a;
 	if (length_squared(segment_direction) <= epsilon * epsilon) {
-		return first_on_plane ? SegmentPlaneHit<T> { PlaneIntersectionType::point, T(0), segment.a } : SegmentPlaneHit<T> {};
+		return first_on_plane ? QSegmentPlaneHit<T> { QPlaneIntersectionType::point, T(0), segment.a } : QSegmentPlaneHit<T> {};
 	}
 	if (first_on_plane && second_on_plane) {
-		return { PlaneIntersectionType::coplanar, T(0), segment.a };
+		return { QPlaneIntersectionType::coplanar, T(0), segment.a };
 	}
 	if (first_on_plane) {
-		return { PlaneIntersectionType::point, T(0), segment.a };
+		return { QPlaneIntersectionType::point, T(0), segment.a };
 	}
 	if (second_on_plane) {
-		return { PlaneIntersectionType::point, T(1), segment.b };
+		return { QPlaneIntersectionType::point, T(1), segment.b };
 	}
 	if ((first_distance > T(0) && second_distance > T(0)) ||
 			(first_distance < T(0) && second_distance < T(0))) {
@@ -1516,31 +1514,31 @@ template<typename T>
 	}
 
 	const T segment_factor = first_distance / (first_distance - second_distance);
-	return { PlaneIntersectionType::point, segment_factor, segment.a + segment_direction * segment_factor };
+	return { QPlaneIntersectionType::point, segment_factor, segment.a + segment_direction * segment_factor };
 }
 
 template<typename T>
-[[nodiscard]] BasicVec3<T> triangle_area_vector(const Triangle3<T>& triangle)
+[[nodiscard]] QBasicVec3<T> triangle_area_vector(const QTriangle3<T>& triangle)
 {
 	return cross(triangle.b - triangle.a, triangle.c - triangle.a) * T(0.5);
 }
 
 template<typename T>
-[[nodiscard]] T triangle_area(const Triangle3<T>& triangle)
+[[nodiscard]] T triangle_area(const QTriangle3<T>& triangle)
 {
 	return length(triangle_area_vector(triangle));
 }
 
 template<typename T>
-[[nodiscard]] BasicVec3<T> triangle_unit_normal(const Triangle3<T>& triangle, T epsilon = T(0.000001))
+[[nodiscard]] QBasicVec3<T> triangle_unit_normal(const QTriangle3<T>& triangle, T epsilon = T(0.000001))
 {
 	return normalize_or_zero(cross(triangle.b - triangle.a, triangle.c - triangle.a), epsilon);
 }
 
 template<typename T>
-[[nodiscard]] Aabb3<T> triangle_aabb(const Triangle3<T>& triangle)
+[[nodiscard]] QAabb3<T> triangle_aabb(const QTriangle3<T>& triangle)
 {
-	Aabb3<T> bounds = empty_aabb3<T>();
+	QAabb3<T> bounds = empty_aabb3<T>();
 	aabb_include(bounds, triangle.a);
 	aabb_include(bounds, triangle.b);
 	aabb_include(bounds, triangle.c);
@@ -1548,11 +1546,11 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] Barycentric3<T> barycentric_coordinates(BasicVec3<T> point, const Triangle3<T>& triangle, T epsilon = T(0.000001))
+[[nodiscard]] Barycentric3<T> barycentric_coordinates(QBasicVec3<T> point, const QTriangle3<T>& triangle, T epsilon = T(0.000001))
 {
-	const BasicVec3<T> v0 = triangle.b - triangle.a;
-	const BasicVec3<T> v1 = triangle.c - triangle.a;
-	const BasicVec3<T> v2 = point - triangle.a;
+	const QBasicVec3<T> v0 = triangle.b - triangle.a;
+	const QBasicVec3<T> v1 = triangle.c - triangle.a;
+	const QBasicVec3<T> v2 = point - triangle.a;
 	const T d00 = dot(v0, v0);
 	const T d01 = dot(v0, v1);
 	const T d11 = dot(v1, v1);
@@ -1571,13 +1569,13 @@ template<typename T>
 
 template<typename T>
 [[nodiscard]] bool point_in_triangle(
-	BasicVec3<T> point, const Triangle3<T>& triangle, T barycentric_epsilon = T(0.000001), T plane_epsilon = T(0.000001))
+	QBasicVec3<T> point, const QTriangle3<T>& triangle, T barycentric_epsilon = T(0.000001), T plane_epsilon = T(0.000001))
 {
-	const BasicVec3<T> normal = triangle_unit_normal(triangle, plane_epsilon);
+	const QBasicVec3<T> normal = triangle_unit_normal(triangle, plane_epsilon);
 	if (length_squared(normal) <= plane_epsilon * plane_epsilon) {
 		return false;
 	}
-	const Plane3<T> plane = plane_from_point_normal(triangle.a, normal, plane_epsilon);
+	const QPlane3<T> plane = plane_from_point_normal(triangle.a, normal, plane_epsilon);
 	if (std::abs(signed_distance_to_plane(point, plane)) > plane_epsilon) {
 		return false;
 	}
@@ -1593,24 +1591,24 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] RayTriangleHit<T> intersect_ray_triangle(const Ray3<T>& ray, const Triangle3<T>& triangle, T epsilon = T(0.000001))
+[[nodiscard]] QRayTriangleHit<T> intersect_ray_triangle(const QRay3<T>& ray, const QTriangle3<T>& triangle, T epsilon = T(0.000001))
 {
-	const BasicVec3<T> edge1 = triangle.b - triangle.a;
-	const BasicVec3<T> edge2 = triangle.c - triangle.a;
-	const BasicVec3<T> pvec = cross(ray.direction, edge2);
+	const QBasicVec3<T> edge1 = triangle.b - triangle.a;
+	const QBasicVec3<T> edge2 = triangle.c - triangle.a;
+	const QBasicVec3<T> pvec = cross(ray.direction, edge2);
 	const T determinant = dot(edge1, pvec);
 	if (std::abs(determinant) <= epsilon) {
 		return {};
 	}
 
 	const T inverse_determinant = T(1) / determinant;
-	const BasicVec3<T> tvec = ray.origin - triangle.a;
+	const QBasicVec3<T> tvec = ray.origin - triangle.a;
 	const T u = dot(tvec, pvec) * inverse_determinant;
 	if (u < T(0) || u > T(1)) {
 		return {};
 	}
 
-	const BasicVec3<T> qvec = cross(tvec, edge1);
+	const QBasicVec3<T> qvec = cross(tvec, edge1);
 	const T v = dot(ray.direction, qvec) * inverse_determinant;
 	if (v < T(0) || u + v > T(1)) {
 		return {};
@@ -1624,13 +1622,13 @@ template<typename T>
 	return { true, distance, u, v, T(1) - u - v, ray.origin + ray.direction * distance };
 }
 
-[[nodiscard]] RayTriangleHit<double> intersect_ray_triangle(const Ray3<double>& ray, const Triangle3<double>& triangle,
+[[nodiscard]] QRayTriangleHit<double> intersect_ray_triangle(const QRay3<double>& ray, const QTriangle3<double>& triangle,
 	double epsilon = 0.000001);
-[[nodiscard]] RayAabbHit<double> intersect_ray_aabb(const Ray3<double>& ray, const Aabb3<double>& aabb,
+[[nodiscard]] QRayAabbHit<double> intersect_ray_aabb(const QRay3<double>& ray, const QAabb3<double>& aabb,
 	double epsilon = 0.000001);
 
 template<typename T>
-[[nodiscard]] RayAabbHit<T> intersect_ray_aabb(const Ray3<T>& ray, const Aabb3<T>& aabb, T epsilon = T(0.000001))
+[[nodiscard]] QRayAabbHit<T> intersect_ray_aabb(const QRay3<T>& ray, const QAabb3<T>& aabb, T epsilon = T(0.000001))
 {
 	if (!aabb_is_valid(aabb)) {
 		return {};
@@ -1663,24 +1661,24 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] RayBoundedTriangleHit<T> intersect_ray_bounded_triangle(
-	const Ray3<T>& ray,
-	const Triangle3<T>& triangle,
-	const Aabb3<T>& bounds,
-	RayBoundedTriangleQueryOptions<T> options = {})
+[[nodiscard]] QRayBoundedTriangleHit<T> intersect_ray_bounded_triangle(
+	const QRay3<T>& ray,
+	const QTriangle3<T>& triangle,
+	const QAabb3<T>& bounds,
+	QRayBoundedTriangleQueryOptions<T> options = {})
 {
 	if (options.max_distance < options.min_distance) {
 		return {};
 	}
 
-	const RayAabbHit<T> bounds_hit = intersect_ray_aabb(ray, bounds, options.epsilon);
+	const QRayAabbHit<T> bounds_hit = intersect_ray_aabb(ray, bounds, options.epsilon);
 	if (!bounds_hit.hit ||
 			bounds_hit.min_distance > options.max_distance ||
 			bounds_hit.max_distance < options.min_distance) {
 		return {};
 	}
 
-	const RayTriangleHit<T> triangle_hit = intersect_ray_triangle(ray, triangle, options.epsilon);
+	const QRayTriangleHit<T> triangle_hit = intersect_ray_triangle(ray, triangle, options.epsilon);
 	if (!triangle_hit.hit ||
 			triangle_hit.distance < options.min_distance ||
 			triangle_hit.distance > options.max_distance) {
@@ -1691,23 +1689,23 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] RayBoundedTriangleHit<T> intersect_ray_bounded_triangles(
-	const Ray3<T>& ray,
-	std::span<const Triangle3<T>> triangles,
-	std::span<const Aabb3<T>> bounds,
-	RayBoundedTriangleQueryOptions<T> options = {})
+[[nodiscard]] QRayBoundedTriangleHit<T> intersect_ray_bounded_triangles(
+	const QRay3<T>& ray,
+	std::span<const QTriangle3<T>> triangles,
+	std::span<const QAabb3<T>> bounds,
+	QRayBoundedTriangleQueryOptions<T> options = {})
 {
 	if (triangles.size() != bounds.size()) {
 		return {};
 	}
 
-	RayBoundedTriangleHit<T> best;
+	QRayBoundedTriangleHit<T> best;
 	for (std::size_t index = 0; index < triangles.size(); ++index) {
-		RayBoundedTriangleQueryOptions<T> candidate_options = options;
+		QRayBoundedTriangleQueryOptions<T> candidate_options = options;
 		if (best.hit) {
 			candidate_options.max_distance = std::min(candidate_options.max_distance, best.triangle_hit.distance);
 		}
-		RayBoundedTriangleHit<T> candidate =
+		QRayBoundedTriangleHit<T> candidate =
 			intersect_ray_bounded_triangle(ray, triangles[index], bounds[index], candidate_options);
 		if (!candidate.hit) {
 			continue;
@@ -1720,11 +1718,11 @@ template<typename T>
 	return best;
 }
 
-[[nodiscard]] ClosestRayPoint<double> closest_point_on_ray(Vec3d point, const Ray3<double>& ray, double epsilon = 0.000001);
-[[nodiscard]] double point_ray_distance_squared(Vec3d point, const Ray3<double>& ray, double epsilon = 0.000001);
+[[nodiscard]] QClosestRayPoint<double> closest_point_on_ray(QVec3d point, const QRay3<double>& ray, double epsilon = 0.000001);
+[[nodiscard]] double point_ray_distance_squared(QVec3d point, const QRay3<double>& ray, double epsilon = 0.000001);
 
 template<typename T>
-[[nodiscard]] ClosestRayPoint<T> closest_point_on_ray(BasicVec3<T> point, const Ray3<T>& ray, T epsilon = T(0.000001))
+[[nodiscard]] QClosestRayPoint<T> closest_point_on_ray(QBasicVec3<T> point, const QRay3<T>& ray, T epsilon = T(0.000001))
 {
 	const T direction_length_squared = length_squared(ray.direction);
 	if (direction_length_squared <= epsilon * epsilon) {
@@ -1732,30 +1730,30 @@ template<typename T>
 	}
 
 	const T distance = std::max(T(0), dot(point - ray.origin, ray.direction) / direction_length_squared);
-	const BasicVec3<T> closest = ray.origin + ray.direction * distance;
+	const QBasicVec3<T> closest = ray.origin + ray.direction * distance;
 	return { true, distance, closest, length_squared(point - closest) };
 }
 
 template<typename T>
-[[nodiscard]] T point_ray_distance_squared(BasicVec3<T> point, const Ray3<T>& ray, T epsilon = T(0.000001))
+[[nodiscard]] T point_ray_distance_squared(QBasicVec3<T> point, const QRay3<T>& ray, T epsilon = T(0.000001))
 {
-	const ClosestRayPoint<T> closest = closest_point_on_ray(point, ray, epsilon);
+	const QClosestRayPoint<T> closest = closest_point_on_ray(point, ray, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<T>::infinity();
 }
 
-[[nodiscard]] SegmentRayClosestPoints<double> closest_points_segment_ray(const Segment3<double>& segment, const Ray3<double>& ray,
+[[nodiscard]] QSegmentRayClosestPoints<double> closest_points_segment_ray(const QSegment3<double>& segment, const QRay3<double>& ray,
 	double epsilon = 0.000001);
-[[nodiscard]] double segment_ray_distance_squared(const Segment3<double>& segment, const Ray3<double>& ray, double epsilon = 0.000001);
+[[nodiscard]] double segment_ray_distance_squared(const QSegment3<double>& segment, const QRay3<double>& ray, double epsilon = 0.000001);
 
-[[nodiscard]] SegmentSegmentClosestPoints<double> closest_points_segment_segment(
-	const Segment3<double>& first, const Segment3<double>& second, double epsilon = 0.000001);
+[[nodiscard]] QSegmentSegmentClosestPoints<double> closest_points_segment_segment(
+	const QSegment3<double>& first, const QSegment3<double>& second, double epsilon = 0.000001);
 [[nodiscard]] double segment_segment_distance_squared(
-	const Segment3<double>& first, const Segment3<double>& second, double epsilon = 0.000001);
+	const QSegment3<double>& first, const QSegment3<double>& second, double epsilon = 0.000001);
 
 template<typename T>
-[[nodiscard]] SegmentRayClosestPoints<T> closest_points_segment_ray(const Segment3<T>& segment, const Ray3<T>& ray, T epsilon = T(0.000001))
+[[nodiscard]] QSegmentRayClosestPoints<T> closest_points_segment_ray(const QSegment3<T>& segment, const QRay3<T>& ray, T epsilon = T(0.000001))
 {
-	const BasicVec3<T> segment_direction = segment.b - segment.a;
+	const QBasicVec3<T> segment_direction = segment.b - segment.a;
 	const T segment_length_squared = length_squared(segment_direction);
 	const T ray_length_squared = length_squared(ray.direction);
 	if (ray_length_squared <= epsilon * epsilon) {
@@ -1763,7 +1761,7 @@ template<typename T>
 	}
 
 	const auto candidate_for = [&](T segment_factor, T ray_distance) {
-		SegmentRayClosestPoints<T> candidate;
+		QSegmentRayClosestPoints<T> candidate;
 		candidate.valid = true;
 		candidate.segment_factor = std::clamp(segment_factor, T(0), T(1));
 		candidate.ray_distance = std::max(T(0), ray_distance);
@@ -1773,8 +1771,8 @@ template<typename T>
 		return candidate;
 	};
 
-	SegmentRayClosestPoints<T> best = candidate_for(T(0), dot(segment.a - ray.origin, ray.direction) / ray_length_squared);
-	const auto keep_best = [&](SegmentRayClosestPoints<T> candidate) {
+	QSegmentRayClosestPoints<T> best = candidate_for(T(0), dot(segment.a - ray.origin, ray.direction) / ray_length_squared);
+	const auto keep_best = [&](QSegmentRayClosestPoints<T> candidate) {
 		if (candidate.distance_squared < best.distance_squared) {
 			best = candidate;
 		}
@@ -1788,7 +1786,7 @@ template<typename T>
 
 	keep_best(candidate_for(dot(ray.origin - segment.a, segment_direction) / segment_length_squared, T(0)));
 
-	const BasicVec3<T> w0 = segment.a - ray.origin;
+	const QBasicVec3<T> w0 = segment.a - ray.origin;
 	const T a = segment_length_squared;
 	const T b = dot(segment_direction, ray.direction);
 	const T c = ray_length_squared;
@@ -1807,23 +1805,23 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] T segment_ray_distance_squared(const Segment3<T>& segment, const Ray3<T>& ray, T epsilon = T(0.000001))
+[[nodiscard]] T segment_ray_distance_squared(const QSegment3<T>& segment, const QRay3<T>& ray, T epsilon = T(0.000001))
 {
-	const SegmentRayClosestPoints<T> closest = closest_points_segment_ray(segment, ray, epsilon);
+	const QSegmentRayClosestPoints<T> closest = closest_points_segment_ray(segment, ray, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<T>::infinity();
 }
 
 template<typename T>
-[[nodiscard]] SegmentSegmentClosestPoints<T> closest_points_segment_segment(
-	const Segment3<T>& first, const Segment3<T>& second, T epsilon = T(0.000001))
+[[nodiscard]] QSegmentSegmentClosestPoints<T> closest_points_segment_segment(
+	const QSegment3<T>& first, const QSegment3<T>& second, T epsilon = T(0.000001))
 {
-	const BasicVec3<T> first_direction = first.b - first.a;
-	const BasicVec3<T> second_direction = second.b - second.a;
+	const QBasicVec3<T> first_direction = first.b - first.a;
+	const QBasicVec3<T> second_direction = second.b - second.a;
 	const T first_length_squared = length_squared(first_direction);
 	const T second_length_squared = length_squared(second_direction);
 
 	const auto candidate_for = [&](T first_factor, T second_factor) {
-		SegmentSegmentClosestPoints<T> candidate;
+		QSegmentSegmentClosestPoints<T> candidate;
 		candidate.valid = true;
 		candidate.first_factor = std::clamp(first_factor, T(0), T(1));
 		candidate.second_factor = std::clamp(second_factor, T(0), T(1));
@@ -1839,16 +1837,16 @@ template<typename T>
 		return candidate_for(T(0), T(0));
 	}
 	if (first_length_squared <= epsilon * epsilon) {
-		const ClosestSegmentPoint3<T> closest = closest_point_on_segment(first.a, second, epsilon);
-		return closest.valid ? candidate_for(T(0), closest.segment_factor) : SegmentSegmentClosestPoints<T> {};
+		const QClosestSegmentPoint3<T> closest = closest_point_on_segment(first.a, second, epsilon);
+		return closest.valid ? candidate_for(T(0), closest.segment_factor) : QSegmentSegmentClosestPoints<T> {};
 	}
 	if (second_length_squared <= epsilon * epsilon) {
-		const ClosestSegmentPoint3<T> closest = closest_point_on_segment(second.a, first, epsilon);
-		return closest.valid ? candidate_for(closest.segment_factor, T(0)) : SegmentSegmentClosestPoints<T> {};
+		const QClosestSegmentPoint3<T> closest = closest_point_on_segment(second.a, first, epsilon);
+		return closest.valid ? candidate_for(closest.segment_factor, T(0)) : QSegmentSegmentClosestPoints<T> {};
 	}
 
-	SegmentSegmentClosestPoints<T> best = candidate_for(T(0), closest_point_on_segment(first.a, second, epsilon).segment_factor);
-	const auto keep_best = [&](SegmentSegmentClosestPoints<T> candidate) {
+	QSegmentSegmentClosestPoints<T> best = candidate_for(T(0), closest_point_on_segment(first.a, second, epsilon).segment_factor);
+	const auto keep_best = [&](QSegmentSegmentClosestPoints<T> candidate) {
 		if (!best.valid || candidate.distance_squared < best.distance_squared) {
 			best = candidate;
 		}
@@ -1858,7 +1856,7 @@ template<typename T>
 	keep_best(candidate_for(closest_point_on_segment(second.a, first, epsilon).segment_factor, T(0)));
 	keep_best(candidate_for(closest_point_on_segment(second.b, first, epsilon).segment_factor, T(1)));
 
-	const BasicVec3<T> delta = first.a - second.a;
+	const QBasicVec3<T> delta = first.a - second.a;
 	const T direction_dot = dot(first_direction, second_direction);
 	const T first_delta_dot = dot(first_direction, delta);
 	const T second_delta_dot = dot(second_direction, delta);
@@ -1875,18 +1873,18 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] T segment_segment_distance_squared(const Segment3<T>& first, const Segment3<T>& second, T epsilon = T(0.000001))
+[[nodiscard]] T segment_segment_distance_squared(const QSegment3<T>& first, const QSegment3<T>& second, T epsilon = T(0.000001))
 {
-	const SegmentSegmentClosestPoints<T> closest = closest_points_segment_segment(first, second, epsilon);
+	const QSegmentSegmentClosestPoints<T> closest = closest_points_segment_segment(first, second, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<T>::infinity();
 }
 
-[[nodiscard]] LineLineClosestPoints<double> closest_points_line_line(const Line3<double>& first, const Line3<double>& second,
+[[nodiscard]] QLineLineClosestPoints<double> closest_points_line_line(const QLine3<double>& first, const QLine3<double>& second,
 	double epsilon = 0.000001);
-[[nodiscard]] double line_line_distance_squared(const Line3<double>& first, const Line3<double>& second, double epsilon = 0.000001);
+[[nodiscard]] double line_line_distance_squared(const QLine3<double>& first, const QLine3<double>& second, double epsilon = 0.000001);
 
 template<typename T>
-[[nodiscard]] LineLineClosestPoints<T> closest_points_line_line(const Line3<T>& first, const Line3<T>& second, T epsilon = T(0.000001))
+[[nodiscard]] QLineLineClosestPoints<T> closest_points_line_line(const QLine3<T>& first, const QLine3<T>& second, T epsilon = T(0.000001))
 {
 	const T first_length_squared = length_squared(first.direction);
 	const T second_length_squared = length_squared(second.direction);
@@ -1894,7 +1892,7 @@ template<typename T>
 		return {};
 	}
 
-	const BasicVec3<T> delta = first.origin - second.origin;
+	const QBasicVec3<T> delta = first.origin - second.origin;
 	const T direction_dot = dot(first.direction, second.direction);
 	const T first_delta_dot = dot(first.direction, delta);
 	const T second_delta_dot = dot(second.direction, delta);
@@ -1907,8 +1905,8 @@ template<typename T>
 		second_parameter = (first_length_squared * second_delta_dot - direction_dot * first_delta_dot) / denominator;
 	}
 
-	const BasicVec3<T> first_point = first.origin + first.direction * first_parameter;
-	const BasicVec3<T> second_point = second.origin + second.direction * second_parameter;
+	const QBasicVec3<T> first_point = first.origin + first.direction * first_parameter;
+	const QBasicVec3<T> second_point = second.origin + second.direction * second_parameter;
 	const T distance_squared = length_squared(first_point - second_point);
 	return {
 		true,
@@ -1923,25 +1921,25 @@ template<typename T>
 }
 
 template<typename T>
-[[nodiscard]] T line_line_distance_squared(const Line3<T>& first, const Line3<T>& second, T epsilon = T(0.000001))
+[[nodiscard]] T line_line_distance_squared(const QLine3<T>& first, const QLine3<T>& second, T epsilon = T(0.000001))
 {
-	const LineLineClosestPoints<T> closest = closest_points_line_line(first, second, epsilon);
+	const QLineLineClosestPoints<T> closest = closest_points_line_line(first, second, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<T>::infinity();
 }
 
 template<typename T>
-[[nodiscard]] SegmentFactorClosestPoint3<T> closest_factor_on_segment_to_segment(
-	const Segment3<T>& target, const Segment3<T>& segment, SegmentSegmentFactorOptions<T> options = {})
+[[nodiscard]] QSegmentFactorClosestPoint3<T> closest_factor_on_segment_to_segment(
+	const QSegment3<T>& target, const QSegment3<T>& segment, QSegmentSegmentFactorOptions<T> options = {})
 {
-	const BasicVec3<T> target_direction = target.b - target.a;
-	const BasicVec3<T> segment_direction = segment.b - segment.a;
+	const QBasicVec3<T> target_direction = target.b - target.a;
+	const QBasicVec3<T> segment_direction = segment.b - segment.a;
 	const T target_length_squared = length_squared(target_direction);
 	const T segment_length_squared = length_squared(segment_direction);
 	const T min_factor = std::min(options.min_factor, options.max_factor);
 	const T max_factor = std::max(options.min_factor, options.max_factor);
 
 	const auto result_for = [&](T factor) {
-		SegmentFactorClosestPoint3<T> result;
+		QSegmentFactorClosestPoint3<T> result;
 		result.valid = true;
 		result.segment_factor = std::clamp(factor, min_factor, max_factor);
 		result.point = target.a + target_direction * result.segment_factor;
@@ -1957,22 +1955,22 @@ template<typename T>
 
 	const T denominator = length_squared(cross(target_direction, segment_direction));
 	if (denominator <= options.length_squared_epsilon) {
-		const BasicVec3<T> midpoint = (segment.a + segment.b) * T(0.5);
+		const QBasicVec3<T> midpoint = (segment.a + segment.b) * T(0.5);
 		return result_for(dot(midpoint - target.a, target_direction) / target_length_squared);
 	}
 
-	const SegmentSegmentClosestPoints<T> finite_closest = closest_points_segment_segment(target, segment, options.closest_epsilon);
+	const QSegmentSegmentClosestPoints<T> finite_closest = closest_points_segment_segment(target, segment, options.closest_epsilon);
 	if (finite_closest.valid &&
 			finite_closest.second_factor > options.parameter_epsilon &&
 			finite_closest.second_factor < T(1) - options.parameter_epsilon) {
 		return result_for(finite_closest.first_factor);
 	}
 
-	const LineLineClosestPoints<T> closest = closest_points_line_line(
-		Line3<T> { target.a, target_direction },
-		Line3<T> { segment.a, segment_direction },
+	const QLineLineClosestPoints<T> closest = closest_points_line_line(
+		QLine3<T> { target.a, target_direction },
+		QLine3<T> { segment.a, segment_direction },
 		options.closest_epsilon);
-	return closest.valid ? result_for(closest.first_parameter) : SegmentFactorClosestPoint3<T> {};
+	return closest.valid ? result_for(closest.first_parameter) : QSegmentFactorClosestPoint3<T> {};
 }
 
 } // namespace quader_geometry

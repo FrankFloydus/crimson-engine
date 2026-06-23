@@ -105,7 +105,7 @@ TEST_CASE("custom engine consumer can run a modeling session through app-owned m
 	CHECK_FALSE(overlay.triangles.empty());
 	CHECK_FALSE(overlay.lines.empty());
 
-	const std::optional<quader_poly::Vec3> pivot = session.selection_center();
+	const std::optional<quader::QVec3> pivot = session.selection_center();
 	REQUIRE(pivot.has_value());
 
 	qec::TransformGizmoFrameInput gizmo_input;

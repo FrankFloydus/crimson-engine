@@ -63,9 +63,9 @@ struct ViewportPointerToolEvent {
     bool gizmoConsumed = false;
     bool navigationActive = false;
     bool textInputActive = false;
-    Vec2 mouseLocal = {};
-    Vec2 leftClickLocal = {};
-    Vec2 viewportSize = {};
+    QVec2 mouseLocal = {};
+    QVec2 leftClickLocal = {};
+    QVec2 viewportSize = {};
     ViewportModifiers modifiers = {};
 };
 
@@ -117,9 +117,9 @@ struct ViewportBoxToolContext {
  * Stores the Point Tool Context data contract used by point/ray viewport tool interactions.
  */
 struct ViewportPointToolContext {
-    std::function<ModelingToolRayEvent(Vec2, bool)> makeEventAt;
-    std::function<std::optional<int>(const std::array<Vec3, 3>&, int)> hitDrawnPlaneCapturedPoint;
-    std::function<bool(const std::array<Vec3, 3>&, int, bool)> hitDrawnPlaneLine;
+    std::function<ModelingToolRayEvent(QVec2, bool)> makeEventAt;
+    std::function<std::optional<int>(const std::array<QVec3, 3>&, int)> hitDrawnPlaneCapturedPoint;
+    std::function<bool(const std::array<QVec3, 3>&, int, bool)> hitDrawnPlaneLine;
 };
 
 /**

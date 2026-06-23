@@ -138,7 +138,7 @@ TEST_CASE("edge loop selection survives conversion from a picked face", "[operat
 	REQUIRE(selection.edges.size() == 4U);
 	CHECK(selection_contains(selection, make_edge(fixture.bottom_left, fixture.bottom_right)));
 
-	const std::optional<Vec3> center = selection_center(fixture.document, selection);
+	const std::optional<quader::QVec3> center = selection_center(fixture.document, selection);
 	REQUIRE(center.has_value());
 	CHECK(center->x == Catch::Approx(0.0F));
 	CHECK(center->y == Catch::Approx(0.0F));

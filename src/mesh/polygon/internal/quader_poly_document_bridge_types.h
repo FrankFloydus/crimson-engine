@@ -47,7 +47,7 @@ struct ConnectEdgePairPath {
 struct OpenBridgeEdgeInfo {
     Edge edge;
     std::pair<ElementId, ElementId> oriented_face_edge;
-    Vec3 face_normal;
+    quader::QVec3 face_normal;
     std::uint32_t material_slot = 0;
 };
 
@@ -78,7 +78,7 @@ struct FaceIslandBoundary {
     std::vector<ElementId> face_ids;
     std::vector<Edge> edges;
     std::vector<ElementId> vertices;
-    Vec3 normal;
+    quader::QVec3 normal;
     std::uint32_t material_slot = 0;
     bool has_material_slot = false;
     bool all_open = false;

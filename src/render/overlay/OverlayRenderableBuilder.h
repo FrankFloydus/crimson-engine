@@ -126,7 +126,7 @@ private:
 
     static std::uint64_t hashCombine(std::uint64_t hash, std::uint64_t value);
     static std::uint64_t hashFloat(std::uint64_t hash, float value);
-    static std::uint64_t hashVec3(std::uint64_t hash, Vec3 value);
+    static std::uint64_t hashVec3(std::uint64_t hash, QVec3 value);
 
     static std::vector<const ViewportOverlayLine*> linesForLayer(
             const ViewportOverlayFrame& frame,

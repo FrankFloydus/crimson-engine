@@ -87,7 +87,7 @@ filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(
     materialInstance->setParameter(MaterialTextureSlot::Roughness,
             textureBinding_->resolveTexture(assets, material, MaterialTextureSlot::Roughness, textureBinding_->fallbackRoughnessTexture()),
             sampler);
-    const Vec3 baseColor = material ? material->baseColor : Vec3{1.0f, 1.0f, 1.0f};
+    const QVec3 baseColor = material ? material->baseColor : QVec3{1.0f, 1.0f, 1.0f};
     materialInstance->setParameter("baseColorFactor", filament::math::float4{baseColor.x, baseColor.y, baseColor.z, 1.0f});
     materialInstance->setParameter("metallicFactor", material ? material->metallic : 0.0f);
     materialInstance->setParameter("roughnessFactor", material ? material->roughness : 1.0f);

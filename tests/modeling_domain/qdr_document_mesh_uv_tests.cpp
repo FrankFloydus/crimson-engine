@@ -68,10 +68,10 @@ void generated_uvs_and_translation_shift_share_document_helper_boundary()
 
     ensure_face_uvs(document);
     require_test(document.faces.front().uvs.size() == document.faces.front().vertices.size(), "ensure_face_uvs should generate loop UVs");
-    const std::vector<Vec2> before = document.faces.front().uvs;
+    const std::vector<quader::QVec2> before = document.faces.front().uvs;
 
     shift_face_uvs_for_translation(document, { 2.0F, 0.0F, 0.0F });
-    const std::vector<Vec2>& after = document.faces.front().uvs;
+    const std::vector<quader::QVec2>& after = document.faces.front().uvs;
     require_test(after.size() == before.size(), "translation shift should preserve loop UV count");
     for (std::size_t index = 0; index < after.size(); ++index) {
         require_test(nearly_equal(after[index].x - before[index].x, 1.0F), "two world units on +X should shift generated U by one tile");

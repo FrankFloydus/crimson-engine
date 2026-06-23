@@ -25,9 +25,9 @@ ViewportOverlayCamera OverlayCameraProjector::sanitizedCamera(ViewportOverlayCam
     }
     camera.right = normalize(camera.right);
     if (length(camera.right) <= 0.000001f || std::abs(dot(camera.right, camera.forward)) > 0.999f) {
-        const Vec3 reference = std::abs(camera.forward.y) < 0.999f
-                ? Vec3{0.0f, 1.0f, 0.0f}
-                : Vec3{1.0f, 0.0f, 0.0f};
+        const QVec3 reference = std::abs(camera.forward.y) < 0.999f
+                ? QVec3{0.0f, 1.0f, 0.0f}
+                : QVec3{1.0f, 0.0f, 0.0f};
         camera.right = normalize(cross(camera.forward, reference));
     }
     camera.up = normalize(cross(camera.right, camera.forward));
@@ -43,8 +43,8 @@ ViewportOverlayCamera OverlayCameraProjector::sanitizedCamera(ViewportOverlayCam
     return camera;
 }
 
-OverlayViewPoint OverlayCameraProjector::viewPointFor(Vec3 world) const {
-    const Vec3 relative = world - camera_.eye;
+OverlayViewPoint OverlayCameraProjector::viewPointFor(QVec3 world) const {
+    const QVec3 relative = world - camera_.eye;
     const float depth = dot(relative, camera_.forward);
     return {
             .x = dot(relative, camera_.right),
@@ -64,8 +64,8 @@ float OverlayCameraProjector::nearPlaneDistance(const OverlayViewPoint& point) c
 }
 
 std::optional<OverlayClippedLine> OverlayCameraProjector::clipLineToNearPlane(
-        Vec3 start,
-        Vec3 end,
+        QVec3 start,
+        QVec3 end,
         float depthBias) const {
     OverlayViewPoint a = viewPointFor(start);
     OverlayViewPoint b = viewPointFor(end);
@@ -122,7 +122,7 @@ OverlayProjectedPoint OverlayCameraProjector::project(OverlayViewPoint point) co
         };
     }
 
-    const Vec2 ndc{projected.device.x, projected.device.y};
+    const QVec2 ndc{projected.device.x, projected.device.y};
     projected.pixel = {
             (ndc.x * 0.5f + 0.5f) * camera_.viewportSize.x,
             (ndc.y * 0.5f + 0.5f) * camera_.viewportSize.y,
@@ -131,7 +131,7 @@ OverlayProjectedPoint OverlayCameraProjector::project(OverlayViewPoint point) co
     return projected;
 }
 
-OverlayFloat4 OverlayCameraProjector::withPixelOffset(OverlayFloat4 device, Vec2 pixelOffset) const {
+OverlayFloat4 OverlayCameraProjector::withPixelOffset(OverlayFloat4 device, QVec2 pixelOffset) const {
     device.x += pixelOffset.x * 2.0f / camera_.viewportSize.x;
     device.y += pixelOffset.y * 2.0f / camera_.viewportSize.y;
     return device;

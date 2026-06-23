@@ -24,7 +24,7 @@ inline constexpr const char* Roughness = "roughnessTexture";
  * Represents a Material Document value used by the asset document and registry layer.
  */
 struct MaterialDocument final : AssetDocumentBase<MaterialAssetRevision> {
-    Vec3 baseColor = {1.0f, 1.0f, 1.0f};
+    QVec3 baseColor = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
     std::unordered_map<std::string, AssetId> textureSlots;

@@ -28,9 +28,9 @@ public:
             ViewportPaneId paneId,
             ImVec2 itemMin,
             ImVec2 itemSize,
-            Vec2 capturedMouseDelta,
+            QVec2 capturedMouseDelta,
             bool* viewportCursorCaptureRequested,
-            Vec2* viewportCursorCapturePoint,
+            QVec2* viewportCursorCapturePoint,
             bool interactive = true);
 
 private:
@@ -42,8 +42,8 @@ private:
     bool pressedFace_ = false;
     ViewportViewAxis pressedAxis_ = ViewportViewAxis::Z;
     int pressedSign_ = 1;
-    Vec2 accumulatedDrag_ = {};
-    Vec2 cursorCaptureScreen_ = {};
+    QVec2 accumulatedDrag_ = {};
+    QVec2 cursorCaptureScreen_ = {};
 };
 
 } // namespace quader

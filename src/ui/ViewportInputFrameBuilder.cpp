@@ -40,7 +40,7 @@ ViewportInputFrame ViewportInputFrameBuilder::build(const ViewportInputFrameBuil
     input.mouseWheel = (request.hovered || request.routeActiveNavigationInput) ? io.MouseWheel : 0.0f;
     input.deltaSeconds = std::max(io.DeltaTime, 0.0f);
     input.mouseScreen = {io.MousePos.x, io.MousePos.y};
-    input.mouseDelta = request.useCapturedMouseDelta ? request.capturedMouseDelta : Vec2{io.MouseDelta.x, io.MouseDelta.y};
+    input.mouseDelta = request.useCapturedMouseDelta ? request.capturedMouseDelta : QVec2{io.MouseDelta.x, io.MouseDelta.y};
     input.mouseLocal = {io.MousePos.x - request.itemMin.x, io.MousePos.y - request.itemMin.y};
     input.viewportSize = {request.itemSize.x, request.itemSize.y};
     input.modifiers = {

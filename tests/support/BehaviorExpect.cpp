@@ -21,11 +21,11 @@
 namespace quader::test {
 namespace {
 
-Vec3 center(const BehaviorBounds& bounds) {
+QVec3 center(const BehaviorBounds& bounds) {
     return (bounds.min + bounds.max) * 0.5f;
 }
 
-void expectVec3Near(Vec3 actual, Vec3 expected, float epsilon) {
+void expectVec3Near(QVec3 actual, QVec3 expected, float epsilon) {
     EXPECT_NEAR(actual.x, expected.x, epsilon);
     EXPECT_NEAR(actual.y, expected.y, epsilon);
     EXPECT_NEAR(actual.z, expected.z, epsilon);
@@ -62,7 +62,7 @@ std::optional<EntitySnapshot> findEntitySnapshot(const BehaviorSnapshot& snapsho
     return *found;
 }
 
-void includePoint(BehaviorBounds& bounds, Vec3 point) {
+void includePoint(BehaviorBounds& bounds, QVec3 point) {
     bounds.min.x = std::min(bounds.min.x, point.x);
     bounds.min.y = std::min(bounds.min.y, point.y);
     bounds.min.z = std::min(bounds.min.z, point.z);
@@ -115,7 +115,7 @@ SceneExpect& SceneExpect::selectedAliasIs(std::string_view alias) {
     return *this;
 }
 
-SceneExpect& SceneExpect::selectedBoundsCenterNear(Vec3 expected, float epsilon) {
+SceneExpect& SceneExpect::selectedBoundsCenterNear(QVec3 expected, float epsilon) {
     const BehaviorSnapshot current = scenario_.snapshot();
     EXPECT_TRUE(current.selectedBounds.has_value());
     if (current.selectedBounds.has_value()) {
@@ -234,7 +234,7 @@ MeshExpect& MeshExpect::verticesDifferFrom(const MeshSnapshot& before, float eps
         }
         bool differs = false;
         for (std::size_t index = 0; index < mesh_->positions.size(); ++index) {
-            const Vec3 delta = mesh_->positions[index] - before.positions[index];
+            const QVec3 delta = mesh_->positions[index] - before.positions[index];
             if (std::abs(delta.x) > epsilon || std::abs(delta.y) > epsilon || std::abs(delta.z) > epsilon) {
                 differs = true;
                 break;
@@ -245,21 +245,21 @@ MeshExpect& MeshExpect::verticesDifferFrom(const MeshSnapshot& before, float eps
     return *this;
 }
 
-MeshExpect& MeshExpect::boundsMinNear(Vec3 expected, float epsilon) {
+MeshExpect& MeshExpect::boundsMinNear(QVec3 expected, float epsilon) {
     if (mesh_.has_value()) {
         expectVec3Near(mesh_->bounds.min, expected, epsilon);
     }
     return *this;
 }
 
-MeshExpect& MeshExpect::boundsMaxNear(Vec3 expected, float epsilon) {
+MeshExpect& MeshExpect::boundsMaxNear(QVec3 expected, float epsilon) {
     if (mesh_.has_value()) {
         expectVec3Near(mesh_->bounds.max, expected, epsilon);
     }
     return *this;
 }
 
-MeshExpect& MeshExpect::boundsCenterNear(Vec3 expected, float epsilon) {
+MeshExpect& MeshExpect::boundsCenterNear(QVec3 expected, float epsilon) {
     if (mesh_.has_value()) {
         expectVec3Near(center(mesh_->bounds), expected, epsilon);
     }
@@ -296,7 +296,7 @@ OverlayExpect& OverlayExpect::triangleCount(ViewportOverlayLayer layer, std::siz
     return *this;
 }
 
-OverlayExpect& OverlayExpect::pointBoundsCenterNear(ViewportOverlayLayer layer, Vec3 expected, float epsilon) {
+OverlayExpect& OverlayExpect::pointBoundsCenterNear(ViewportOverlayLayer layer, QVec3 expected, float epsilon) {
     const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
     std::optional<BehaviorBounds> bounds;
     for (const ViewportOverlayPoint& point : frame.points) {
@@ -324,7 +324,7 @@ OverlayExpect& OverlayExpect::lineBoundsWithin(ViewportOverlayLayer layer, Quade
             continue;
         }
         found = true;
-        for (const Vec3 point : {line.start, line.end}) {
+        for (const QVec3 point : {line.start, line.end}) {
             EXPECT_GE(point.x, bounds.min.x - epsilon);
             EXPECT_GE(point.y, bounds.min.y - epsilon);
             EXPECT_GE(point.z, bounds.min.z - epsilon);
@@ -345,7 +345,7 @@ OverlayExpect& OverlayExpect::triangleBoundsWithin(ViewportOverlayLayer layer, Q
             continue;
         }
         found = true;
-        for (const Vec3 point : {triangle.a, triangle.b, triangle.c}) {
+        for (const QVec3 point : {triangle.a, triangle.b, triangle.c}) {
             EXPECT_GE(point.x, bounds.min.x - epsilon);
             EXPECT_GE(point.y, bounds.min.y - epsilon);
             EXPECT_GE(point.z, bounds.min.z - epsilon);
@@ -360,7 +360,7 @@ OverlayExpect& OverlayExpect::triangleBoundsWithin(ViewportOverlayLayer layer, Q
 
 OverlayExpect& OverlayExpect::finiteCoordinates(float maxAbsCoordinate) {
     const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
-    auto expectFinite = [&](Vec3 point) {
+    auto expectFinite = [&](QVec3 point) {
         EXPECT_TRUE(std::isfinite(point.x));
         EXPECT_TRUE(std::isfinite(point.y));
         EXPECT_TRUE(std::isfinite(point.z));
@@ -418,7 +418,7 @@ UndoRedoExpect& UndoRedoExpect::canRedo(bool expected) {
     return *this;
 }
 
-SnapshotExpect& SnapshotExpect::selectedBoundsCenterNear(Vec3 expected, float epsilon) {
+SnapshotExpect& SnapshotExpect::selectedBoundsCenterNear(QVec3 expected, float epsilon) {
     EXPECT_TRUE(snapshot_.selectedBounds.has_value()) << snapshot_.label;
     if (snapshot_.selectedBounds.has_value()) {
         expectVec3Near(center(*snapshot_.selectedBounds), expected, epsilon);

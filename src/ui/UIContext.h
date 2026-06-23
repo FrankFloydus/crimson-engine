@@ -41,9 +41,9 @@ struct UIContext {
     LocalizationService& localization;
     UISettings& settings;
     ViewportSettings& viewportSettings;
-    Vec2 viewportRelativeMouseDelta = {};
+    QVec2 viewportRelativeMouseDelta = {};
     bool* viewportCursorCaptureRequested = nullptr;
-    Vec2* viewportCursorCapturePoint = nullptr;
+    QVec2* viewportCursorCapturePoint = nullptr;
     UIPanelId focusedPanel = UIPanelId::Viewport;
     UIPanelId previousFocusedPanel = UIPanelId::Viewport;
     UIPanelId* focusedPanelStorage = nullptr;

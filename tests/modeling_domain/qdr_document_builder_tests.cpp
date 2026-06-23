@@ -21,7 +21,7 @@ namespace {
 
 using namespace quader_poly;
 
-bool vec_nearly_equal(Vec3 left, Vec3 right, float epsilon = 0.0001F)
+bool vec_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
 {
     return std::abs(left.x - right.x) <= epsilon &&
         std::abs(left.y - right.y) <= epsilon &&
@@ -32,8 +32,8 @@ bool vec_nearly_equal(Vec3 left, Vec3 right, float epsilon = 0.0001F)
  * Represents a Bounds value used by the automated test suite.
  */
 struct Bounds {
-    Vec3 min;
-    Vec3 max;
+    quader::QVec3 min;
+    quader::QVec3 max;
 };
 
 Bounds document_bounds(const Document& document)
@@ -85,7 +85,7 @@ TEST_CASE("document builder creates vertices, quads, and material slots", "[docu
 TEST_CASE("document builder creates faces from vertex arrays and indices", "[document-builder]")
 {
     DocumentBuilder builder;
-    const std::array<Vec3, 4> positions {{
+    const std::array<quader::QVec3, 4> positions {{
         { 0.0F, 0.0F, 0.0F },
         { 1.0F, 0.0F, 0.0F },
         { 1.0F, 1.0F, 0.0F },
@@ -134,7 +134,7 @@ TEST_CASE("document builder appends cubes from bounds", "[document-builder]")
 
 TEST_CASE("document builder creates oriented boxes from corners", "[document-builder]")
 {
-    const std::array<Vec3, 8> corners {{
+    const std::array<quader::QVec3, 8> corners {{
         { 2.0F, -2.0F, -1.0F },
         { 2.0F, 2.0F, -1.0F },
         { 2.0F, 2.0F, 1.0F },
@@ -164,7 +164,7 @@ TEST_CASE("document builder creates oriented boxes from corners", "[document-bui
             all_left = all_left && vertex->position.x == Catch::Approx(2.0F);
             all_right = all_right && vertex->position.x == Catch::Approx(4.0F);
         }
-        const Vec3 normal = face_normal(document, face);
+        const quader::QVec3 normal = face_normal(document, face);
         if (all_left) {
             found_left = true;
             CHECK(normal.x == Catch::Approx(-1.0F));

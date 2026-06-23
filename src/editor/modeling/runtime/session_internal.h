@@ -30,13 +30,13 @@ int object_index_by_id(const std::vector<PolygonObject>& objects, int object_id)
 Bounds3 document_bounds(const PolygonObject& object);
 void align_component_selection_to_mode(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 bool clear_light_selection_state(std::vector<LightEntity>& lights, int& active_light_id);
-std::optional<quader_poly::Vec3> selected_light_center(const std::vector<LightEntity>& lights);
+std::optional<quader::QVec3> selected_light_center(const std::vector<LightEntity>& lights);
 Bounds3 light_bounds(const std::vector<LightEntity>& lights);
 Bounds3 selected_light_bounds(const std::vector<LightEntity>& lights);
-CommandResult translate_selected_lights(std::vector<LightEntity>& lights, quader_poly::Vec3 delta);
+CommandResult translate_selected_lights(std::vector<LightEntity>& lights, quader::QVec3 delta);
 CommandResult transform_selected_lights(
 	std::vector<LightEntity>& lights,
 	const quader_poly::Transform3& transform,
-	quader_poly::Vec3 pivot);
+	quader::QVec3 pivot);
 
 } // namespace quader_editor_core

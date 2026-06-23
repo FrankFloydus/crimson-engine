@@ -73,7 +73,7 @@ TEST_CASE("mirror tool uses two snapped world-grid points", "[editor-core][tool]
 	REQUIRE(state.target_object_ids.size() == 1U);
 	CHECK(state.target_object_ids[0] == 5);
 	CHECK(quader_editor_core::mirror_can_preview(state));
-	const std::vector<quader_poly::Vec3> plane_points = quader_editor_core::mirror_plane_points(state);
+	const std::vector<quader::QVec3> plane_points = quader_editor_core::mirror_plane_points(state);
 	REQUIRE(plane_points.size() == 3U);
 	CHECK(plane_points[2].y > plane_points[0].y);
 }

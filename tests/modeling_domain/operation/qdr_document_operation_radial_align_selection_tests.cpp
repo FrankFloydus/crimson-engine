@@ -20,7 +20,7 @@ TEST_CASE("radial align selection moves an uneven vertex ring onto a shared radi
 	const OperationResult result = radial_align_selection(document, selection);
 
 	REQUIRE(result.changed);
-	const Vec3 center = qdr_test::document_vertex_centroid(document);
+	const quader::QVec3 center = qdr_test::document_vertex_centroid(document);
 	std::optional<float> radius;
 	for (ElementId vertex_id : selection.vertices) {
 		const Vertex* vertex = find_vertex(document, vertex_id);

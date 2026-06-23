@@ -21,9 +21,9 @@ namespace quader_poly::document_internal {
 struct EdgeBevelSide {
     ElementId face_id = invalid_element_id;
     std::uint32_t material_slot = 0;
-    Vec3 normal;
+    quader::QVec3 normal;
     std::map<ElementId, ElementId> endpoint_vertices;
-    std::map<ElementId, Vec3> endpoint_positions;
+    std::map<ElementId, quader::QVec3> endpoint_positions;
 };
 
 /**
@@ -42,7 +42,7 @@ struct EdgeBevelBuild {
 struct EdgeBevelCornerArc {
     Edge edge;
     std::vector<ElementId> vertices;
-    Vec3 profile_middle;
+    quader::QVec3 profile_middle;
     bool has_profile_middle = false;
     bool use_global_profile = true;
     float profile = 0.5F;
@@ -56,15 +56,15 @@ struct EdgeBevelFaceVertexOffset {
     ElementId source_vertex_id = invalid_element_id;
     ElementId offset_vertex_id = invalid_element_id;
     ElementId source_face_id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
  * Represents an Edge Bevel Offset Line value used by the polygon document and mesh editing core.
  */
 struct EdgeBevelOffsetLine {
-    Vec3 point;
-    Vec3 direction;
+    quader::QVec3 point;
+    quader::QVec3 direction;
 };
 
 /**
@@ -109,12 +109,12 @@ struct EdgeBevelVMeshKey {
  * Represents an Edge Bevel V Mesh Profile value used by the polygon document and mesh editing core.
  */
 struct EdgeBevelVMeshProfile {
-    Vec3 source;
-    Vec3 start;
-    Vec3 end;
-    Vec3 plane_co;
-    Vec3 plane_normal;
-    Vec3 projection_direction;
+    quader::QVec3 source;
+    quader::QVec3 start;
+    quader::QVec3 end;
+    quader::QVec3 plane_co;
+    quader::QVec3 plane_normal;
+    quader::QVec3 projection_direction;
     bool use_global_profile = true;
     float profile = 0.5F;
     BevelProfileType profile_type = BevelProfileType::offset;
@@ -125,7 +125,7 @@ struct EdgeBevelVMeshProfile {
  * Represents an Edge Bevel V Mesh Slot value used by the polygon document and mesh editing core.
  */
 struct EdgeBevelVMeshSlot {
-    Vec3 position;
+    quader::QVec3 position;
     ElementId vertex_id = invalid_element_id;
 };
 

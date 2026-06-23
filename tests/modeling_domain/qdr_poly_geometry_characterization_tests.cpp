@@ -25,14 +25,14 @@ bool nearly_equal(float left, float right, float epsilon = 0.0001F)
     return std::abs(left - right) <= epsilon;
 }
 
-bool vec3_nearly_equal(Vec3 left, Vec3 right, float epsilon = 0.0001F)
+bool vec3_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
 {
     return nearly_equal(left.x, right.x, epsilon) && nearly_equal(left.y, right.y, epsilon) && nearly_equal(left.z, right.z, epsilon);
 }
 
-Vec3 face_centroid_for_test(const Document& document, const Face& face)
+quader::QVec3 face_centroid_for_test(const Document& document, const Face& face)
 {
-    Vec3 centroid;
+    quader::QVec3 centroid;
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
         require_test(vertex != nullptr, "test face centroid should resolve every face vertex");
@@ -41,9 +41,9 @@ Vec3 face_centroid_for_test(const Document& document, const Face& face)
     return face.vertices.empty() ? centroid : centroid / static_cast<float>(face.vertices.size());
 }
 
-Vec3 document_centroid_for_test(const Document& document)
+quader::QVec3 document_centroid_for_test(const Document& document)
 {
-    Vec3 centroid;
+    quader::QVec3 centroid;
     for (const Vertex& vertex : document.vertices) {
         centroid += vertex.position;
     }
@@ -307,7 +307,7 @@ void characterizes_convex_hull_rebuild_and_normal_recalculation()
     const Vertex* merge_a = find_vertex(cube, merge_edge.a);
     const Vertex* merge_b = find_vertex(cube, merge_edge.b);
     require_test(merge_a != nullptr && merge_b != nullptr, "hull rebuild test should resolve the merge edge");
-    const Vec3 expected_center = (merge_a->position + merge_b->position) / 2.0F;
+    const quader::QVec3 expected_center = (merge_a->position + merge_b->position) / 2.0F;
 
     const OperationResult merge_result = merge_selected_vertices_to_center(cube, merge_selection);
     require_test(merge_result.changed, "center vertex merge should rebuild a convex cube hull");
@@ -323,9 +323,9 @@ void characterizes_convex_hull_rebuild_and_normal_recalculation()
 
     Face& face = cube.faces.front();
     const ElementId face_id = face.id;
-    const Vec3 center = document_centroid_for_test(cube);
+    const quader::QVec3 center = document_centroid_for_test(cube);
     std::ranges::reverse(face.vertices);
-    const Vec3 inverted_normal = face_normal(cube, face);
+    const quader::QVec3 inverted_normal = face_normal(cube, face);
     require_test(dot(inverted_normal, face_centroid_for_test(cube, face) - center) < 0.0F,
         "normal recalculation test should start with an inward face");
 

@@ -41,7 +41,7 @@ struct PublicApiGroupingHarness {
 QuaderModelingObjectRef createBox(
         QuaderEditorApi& editor,
         std::string name,
-        Vec3 position = {}) {
+        QVec3 position = {}) {
     QuaderCreateBoxArgs args;
     args.bounds = {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}};
     args.name = std::move(name);
@@ -56,7 +56,7 @@ QuaderModelingObjectRef createBox(
     return created.value();
 }
 
-AssetId createTexturedMaterial(QuaderEditorApi& editor, std::string name, Vec3 color) {
+AssetId createTexturedMaterial(QuaderEditorApi& editor, std::string name, QVec3 color) {
     TextureAsset baseColor;
     baseColor.name = name + " Base";
     baseColor.usage = TextureUsage::BaseColor;
@@ -84,7 +84,7 @@ AssetId createTexturedMaterial(QuaderEditorApi& editor, std::string name, Vec3 c
     return created.value().id;
 }
 
-void expectVecNear(Vec3 actual, Vec3 expected) {
+void expectVecNear(QVec3 actual, QVec3 expected) {
     EXPECT_NEAR(actual.x, expected.x, kEpsilon);
     EXPECT_NEAR(actual.y, expected.y, kEpsilon);
     EXPECT_NEAR(actual.z, expected.z, kEpsilon);
@@ -125,8 +125,8 @@ std::optional<QuaderEntitySnapshot> activeSelection(const QuaderEditorApi& edito
     return std::nullopt;
 }
 
-Vec3 worldPosition(const QuaderEditorApi& editor, EntityId entityId) {
-    Vec3 position;
+QVec3 worldPosition(const QuaderEditorApi& editor, EntityId entityId) {
+    QVec3 position;
     EntityId current = entityId;
     int guard = 0;
     while (current != InvalidEntityId && guard++ < 64) {

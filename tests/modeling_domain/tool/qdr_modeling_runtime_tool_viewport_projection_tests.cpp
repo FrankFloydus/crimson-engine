@@ -31,7 +31,7 @@ quader_editor_core::ViewportCameraState front_camera()
 TEST_CASE("viewport projection and ray construction round trip screen center", "[editor-core][tool][projection]")
 {
 	const quader_editor_core::ViewportCameraState camera = front_camera();
-	quader_poly::Vec2 screen;
+	quader::QVec2 screen;
 	REQUIRE(quader_editor_core::project_viewport_point(camera, { 0.0F, 0.0F, 0.0F }, screen));
 	CHECK(screen.x == Catch::Approx(400.0F).margin(0.001F));
 	CHECK(screen.y == Catch::Approx(300.0F).margin(0.001F));
@@ -48,8 +48,8 @@ TEST_CASE("viewport projection and ray construction round trip screen center", "
 TEST_CASE("perspective viewport projection preserves off-center ray round trip", "[editor-core][tool][projection]")
 {
 	const quader_editor_core::ViewportCameraState camera = front_camera();
-	const quader_poly::Vec3 point { 2.0F, 1.0F, 0.0F };
-	quader_poly::Vec2 screen;
+	const quader::QVec3 point { 2.0F, 1.0F, 0.0F };
+	quader::QVec2 screen;
 	REQUIRE(quader_editor_core::project_viewport_point(camera, point, screen));
 	CHECK(screen.x > 400.0F);
 	CHECK(screen.y < 300.0F);
@@ -72,8 +72,8 @@ TEST_CASE("orthographic viewport projection preserves off-center ray origin roun
 	camera.viewport_size = { 800.0F, 400.0F };
 	camera.orthographic_size = 8.0;
 
-	const quader_poly::Vec3 point { 14.0F, 0.0F, 20.0F };
-	quader_poly::Vec2 screen;
+	const quader::QVec3 point { 14.0F, 0.0F, 20.0F };
+	quader::QVec2 screen;
 	REQUIRE(quader_editor_core::project_viewport_point(camera, point, screen));
 	CHECK(screen.x == Catch::Approx(600.0F).margin(0.001F));
 	CHECK(screen.y == Catch::Approx(300.0F).margin(0.001F));

@@ -30,7 +30,7 @@ struct EdgeLoopFaceSplit {
  */
 struct ResolvedKnifeTarget {
     ElementId vertex_id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
@@ -41,8 +41,8 @@ struct KnifeSegmentCandidate {
     Document document;
     ElementId previous_vertex = invalid_element_id;
     ElementId current_vertex = invalid_element_id;
-    Vec3 previous_position;
-    Vec3 current_position;
+    quader::QVec3 previous_position;
+    quader::QVec3 current_position;
     std::string message;
 };
 
@@ -52,7 +52,7 @@ struct KnifeSegmentCandidate {
 struct KnifeResolvedStrokePoint {
     ElementId vertex_id = invalid_element_id;
     ElementId face_id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**

@@ -34,7 +34,7 @@ TEST_CASE("negative thicken grows from the fixed source cap and winds inward", "
 	const ElementId original_face_id = selection.active_face;
 	const Face* source_before = find_face(fixture.document, original_face_id);
 	REQUIRE(source_before != nullptr);
-	const Vec3 source_normal = face_normal(fixture.document, *source_before);
+	const quader::QVec3 source_normal = face_normal(fixture.document, *source_before);
 
 	const OperationResult result = thicken_selected_faces(fixture.document, selection, -0.5F, false);
 
@@ -55,7 +55,7 @@ TEST_CASE("negative thicken grows from the fixed source cap and winds inward", "
 	REQUIRE(qdr_test::face_centroid(fixture.document, *source_cap).z < 0.01F);
 	REQUIRE(qdr_test::face_centroid(fixture.document, *offset_cap).z > 0.49F);
 	const auto front_side_face = std::find_if(fixture.document.faces.begin(), fixture.document.faces.end(), [&fixture](const Face& face) {
-		const Vec3 center = qdr_test::face_centroid(fixture.document, face);
+		const quader::QVec3 center = qdr_test::face_centroid(fixture.document, face);
 		return center.y < -0.9F && center.z > 0.01F && center.z < 0.49F;
 	});
 	REQUIRE(front_side_face != fixture.document.faces.end());

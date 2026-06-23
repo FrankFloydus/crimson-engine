@@ -110,7 +110,7 @@ enum class ViewCubeHitKind {
  */
 struct ViewportNavigationState {
 	ViewportNavigationMode mode = ViewportNavigationMode::none;
-	quader_poly::Vec3 pivot;
+	quader::QVec3 pivot;
 	bool has_pivot = false;
 	quader_poly::Transform3 orbit_snap_source_transform;
 	bool has_orbit_snap_source = false;
@@ -125,7 +125,7 @@ struct ViewportNavigationResult {
 	bool ok = true;
 	std::string message;
 	quader_poly::Transform3 camera_transform;
-	quader_poly::Vec3 pivot;
+	quader::QVec3 pivot;
 	bool has_camera_size = false;
 	double camera_size = 0.0;
 	bool orthogonal_snap = false;
@@ -181,8 +181,8 @@ struct ViewportButtonInput {
  */
 struct ViewportOrbitInput {
 	quader_poly::Transform3 camera_transform;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec2 screen_delta;
+	quader::QVec3 pivot;
+	quader::QVec2 screen_delta;
 	double sensitivity = navigation_orbit_radians_per_pixel;
 	bool snap_to_orthogonal = false;
 };
@@ -192,8 +192,8 @@ struct ViewportOrbitInput {
  */
 struct ViewportPanInput {
 	ViewportCameraState camera;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec2 screen_delta;
+	quader::QVec3 pivot;
+	quader::QVec2 screen_delta;
 };
 
 /**
@@ -201,7 +201,7 @@ struct ViewportPanInput {
  */
 struct ViewportZoomInput {
 	ViewportCameraState camera;
-	quader_poly::Vec3 pivot;
+	quader::QVec3 pivot;
 	double steps = 0.0;
 };
 
@@ -210,10 +210,10 @@ struct ViewportZoomInput {
  */
 struct ViewportZoomToCursorInput {
 	ViewportCameraState camera;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec3 ray_origin;
-	quader_poly::Vec3 ray_direction;
-	quader_poly::Vec3 cursor_target;
+	quader::QVec3 pivot;
+	quader::QVec3 ray_origin;
+	quader::QVec3 ray_direction;
+	quader::QVec3 cursor_target;
 	bool has_cursor_target = false;
 	double steps = 0.0;
 };
@@ -223,8 +223,8 @@ struct ViewportZoomToCursorInput {
  */
 struct ViewportFlyLookInput {
 	quader_poly::Transform3 camera_transform;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec2 screen_delta;
+	quader::QVec3 pivot;
+	quader::QVec2 screen_delta;
 	double sensitivity = navigation_fly_look_radians_per_pixel;
 };
 
@@ -233,8 +233,8 @@ struct ViewportFlyLookInput {
  */
 struct ViewportFlyMoveInput {
 	quader_poly::Transform3 camera_transform;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec3 local_direction;
+	quader::QVec3 pivot;
+	quader::QVec3 local_direction;
 	double distance = 0.0;
 };
 
@@ -243,8 +243,8 @@ struct ViewportFlyMoveInput {
  */
 struct ViewportFrameBoundsInput {
 	ViewportCameraState camera;
-	quader_poly::Vec3 min_bounds;
-	quader_poly::Vec3 max_bounds;
+	quader::QVec3 min_bounds;
+	quader::QVec3 max_bounds;
 	double margin = 1.0;
 };
 
@@ -255,18 +255,18 @@ struct ViewCubeFacePrimitive {
 	ViewAxis axis = ViewAxis::x;
 	int sign = 1;
 	double depth = 0.0;
-	quader_poly::Vec2 screen_position;
-	std::vector<quader_poly::Vec2> polygon;
+	quader::QVec2 screen_position;
+	std::vector<quader::QVec2> polygon;
 };
 
 /**
- * Represents a View Cube Axis Marker Primitive value used by the modal modeling interaction layer.
+ * Represents a View Cube QAxis Marker Primitive value used by the modal modeling interaction layer.
  */
 struct ViewCubeAxisMarkerPrimitive {
 	ViewAxis axis = ViewAxis::x;
 	int sign = 1;
 	double depth = 0.0;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 };
 
 /**
@@ -275,10 +275,10 @@ struct ViewCubeAxisMarkerPrimitive {
 struct ViewCubeEdgePrimitive {
 	ViewAxis axis = ViewAxis::x;
 	double depth = 0.0;
-	quader_poly::Vec3 local_start;
-	quader_poly::Vec3 local_end;
-	quader_poly::Vec2 screen_start;
-	quader_poly::Vec2 screen_end;
+	quader::QVec3 local_start;
+	quader::QVec3 local_end;
+	quader::QVec2 screen_start;
+	quader::QVec2 screen_end;
 };
 
 /**
@@ -286,9 +286,9 @@ struct ViewCubeEdgePrimitive {
  */
 struct ViewCubePrimitiveInput {
 	quader_poly::Transform3 camera_transform;
-	quader_poly::Vec2 viewport_size;
+	quader::QVec2 viewport_size;
 	double widget_size = 76.0;
-	quader_poly::Vec2 margin { 46.0F, 82.0F };
+	quader::QVec2 margin { 46.0F, 82.0F };
 };
 
 /**
@@ -296,9 +296,9 @@ struct ViewCubePrimitiveInput {
  */
 struct ViewCubePrimitives {
 	bool ok = true;
-	quader_poly::Vec2 screen_position;
-	quader_poly::Vec2 rect_position;
-	quader_poly::Vec2 rect_size;
+	quader::QVec2 screen_position;
+	quader::QVec2 rect_position;
+	quader::QVec2 rect_size;
 	std::vector<ViewCubeFacePrimitive> faces;
 	std::vector<ViewCubeEdgePrimitive> edges;
 	std::vector<ViewCubeEdgePrimitive> axis_edges;
@@ -310,7 +310,7 @@ struct ViewCubePrimitives {
  */
 struct ViewCubePickInput {
 	ViewCubePrimitiveInput primitives;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 };
 
 /**
@@ -323,16 +323,16 @@ struct ViewCubeHit {
 	ViewAxis axis = ViewAxis::x;
 	int sign = 1;
 	double depth = 0.0;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 };
 
-quader_poly::Vec3 viewport_camera_forward(const quader_poly::Transform3& camera_transform);
-quader_poly::Vec3 viewport_camera_right(const quader_poly::Transform3& camera_transform);
-quader_poly::Vec3 viewport_camera_up(const quader_poly::Transform3& camera_transform);
-double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 pivot);
-double viewport_aspect_for_size(quader_poly::Vec2 viewport_size);
+quader::QVec3 viewport_camera_forward(const quader_poly::Transform3& camera_transform);
+quader::QVec3 viewport_camera_right(const quader_poly::Transform3& camera_transform);
+quader::QVec3 viewport_camera_up(const quader_poly::Transform3& camera_transform);
+double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot);
+double viewport_aspect_for_size(quader::QVec2 viewport_size);
 double viewport_vertical_fov_radians(double fov_degrees);
-double viewport_orthographic_size_for_perspective(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 pivot, double fov_degrees);
+double viewport_orthographic_size_for_perspective(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot, double fov_degrees);
 double viewport_orbit_sensitivity(double mouse_sensitivity);
 double viewport_fly_look_sensitivity(double mouse_sensitivity);
 double viewport_fly_move_distance(double delta_seconds, bool fast, bool slow);
@@ -354,8 +354,8 @@ ViewportNavigationResult viewport_zoom_to_cursor(const ViewportZoomToCursorInput
 ViewportNavigationResult viewport_fly_look(const ViewportFlyLookInput& input);
 ViewportNavigationResult viewport_fly_move(const ViewportFlyMoveInput& input);
 ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& input);
-ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, quader_poly::Vec3 pivot, ViewAxis axis, int sign);
-ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& camera, quader_poly::Vec3 pivot, ViewAxisStepDirection direction);
+ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxis axis, int sign);
+ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxisStepDirection direction);
 ViewportInteractionAction plan_viewport_motion(const ViewportInteractionState& state, const ViewportMotionInput& input);
 ViewportInteractionAction plan_viewport_button(const ViewportInteractionState& state, const ViewportButtonInput& input);
 ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& input);

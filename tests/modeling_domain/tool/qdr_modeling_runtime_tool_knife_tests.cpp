@@ -81,19 +81,19 @@ TEST_CASE("knife preview reports stroke overlay state", "[editor-core][tool][kni
 
 TEST_CASE("knife snapping and accept flow stay in editor-core", "[editor-core][tool][knife]")
 {
-	const quader_poly::Vec3 snapped =
+	const quader::QVec3 snapped =
 		quader_editor_core::snap_knife_point_to_grid({ 0.49F, 0.26F, -0.49F }, 0.5, true);
 	CHECK(snapped.x == Catch::Approx(0.5F));
 	CHECK(snapped.y == Catch::Approx(0.5F));
 	CHECK(snapped.z == Catch::Approx(-0.5F));
 
-	const quader_poly::Vec3 raw =
+	const quader::QVec3 raw =
 		quader_editor_core::snap_knife_point_to_grid({ 0.49F, 0.26F, -0.49F }, 0.5, false);
 	CHECK(raw.x == Catch::Approx(0.49F));
 	CHECK(raw.y == Catch::Approx(0.26F));
 	CHECK(raw.z == Catch::Approx(-0.49F));
 
-	const quader_poly::Vec3 constrained =
+	const quader::QVec3 constrained =
 		quader_editor_core::constrain_knife_point_to_axis(
 			{ 0.0F, 0.0F, 0.0F },
 			{ 1.2F, 0.0F, 0.4F },
@@ -206,10 +206,10 @@ TEST_CASE("knife snapped face points stay projected onto tilted mesh surfaces", 
 
 	const quader_poly::Face *face = quader_poly::find_face(document, face_id);
 	REQUIRE(face != nullptr);
-	const quader_poly::Vec3 normal = quader_poly::face_normal(document, *face);
+	const quader::QVec3 normal = quader_poly::face_normal(document, *face);
 	const quader_poly::Vertex *origin = quader_poly::find_vertex(document, bottom_left);
 	REQUIRE(origin != nullptr);
-	const float signed_distance = quader_poly::dot(state.current_point - origin->position, normal);
+	const float signed_distance = quader::dot(state.current_point - origin->position, normal);
 	CHECK(std::abs(signed_distance) <= 0.0001F);
 	CHECK(state.current_point.y != Catch::Approx(2.0F));
 	CHECK(state.current_target.position.y == Catch::Approx(state.current_point.y));

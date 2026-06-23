@@ -340,7 +340,7 @@ void begin_editor_runtime_transform_drag_state(
 		ViewportInteractionTool tool,
 		TransformDragOperation operation,
 		TransformAxis axis,
-		quader_poly::Vec3 pivot)
+		quader::QVec3 pivot)
 {
 	reset_transform_drag(runtime.transform_drag);
 	runtime.transform_drag.active = true;
@@ -587,7 +587,7 @@ std::size_t copy_selected_objects_to_editor_runtime_clipboard(
 CommandResult paste_editor_runtime_clipboard(
 		EditorSession& session,
 		const EditorRuntimeState& runtime,
-		std::optional<quader_poly::Vec3> target_center)
+		std::optional<quader::QVec3> target_center)
 {
 	return session.paste_objects(runtime.clipboard_objects, target_center);
 }
@@ -816,8 +816,8 @@ void EditorRuntime::set_box_state(BoxToolState box)
 }
 
 BoxToolStateResult EditorRuntime::set_box_construction_plane(
-		quader_poly::Vec3 origin,
-		quader_poly::Vec3 normal)
+		quader::QVec3 origin,
+		quader::QVec3 normal)
 {
 	return quader_editor_core::set_box_construction_plane(state_.box, origin, normal);
 }
@@ -828,22 +828,22 @@ BoxConstructionPointResult EditorRuntime::box_construction_point_from_ray(const 
 }
 
 BoxToolStateResult EditorRuntime::begin_box_footprint(
-		quader_poly::Vec3 raw_start,
-		quader_poly::Vec3 raw_end,
+		quader::QVec3 raw_start,
+		quader::QVec3 raw_end,
 		bool grid_enabled)
 {
 	return quader_editor_core::begin_box_footprint(state_.box, raw_start, raw_end, grid_enabled, state_.box_grid_size);
 }
 
 BoxToolStateResult EditorRuntime::update_box_footprint(
-		quader_poly::Vec3 raw_end,
+		quader::QVec3 raw_end,
 		bool grid_enabled)
 {
 	return quader_editor_core::update_box_footprint(state_.box, raw_end, grid_enabled, state_.box_grid_size);
 }
 
 BoxToolStateResult EditorRuntime::update_box_hover_cell(
-		quader_poly::Vec3 local_point,
+		quader::QVec3 local_point,
 		bool grid_enabled)
 {
 	return quader_editor_core::update_box_hover_cell(state_.box, local_point, grid_enabled, state_.box_grid_size);
@@ -855,7 +855,7 @@ double EditorRuntime::box_height_distance_for_ray(const quader_poly::Ray& ray) c
 }
 
 BoxToolStateResult EditorRuntime::begin_box_height(
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		double axis_distance,
 		bool has_axis_distance,
 		bool grid_enabled)
@@ -872,7 +872,7 @@ BoxToolStateResult EditorRuntime::begin_box_height(
 BoxToolStateResult EditorRuntime::update_box_height_preview(
 		double axis_distance,
 		bool has_axis_distance,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		bool grid_enabled)
 {
 	return quader_editor_core::update_box_height_preview(
@@ -923,7 +923,7 @@ void EditorRuntime::begin_transform_drag_state(
 		ViewportInteractionTool tool,
 		TransformDragOperation operation,
 		TransformAxis axis,
-		quader_poly::Vec3 pivot)
+		quader::QVec3 pivot)
 {
 	begin_editor_runtime_transform_drag_state(state_, tool, operation, axis, pivot);
 }
@@ -1254,8 +1254,8 @@ void EditorRuntime::set_poly_active(bool active)
 }
 
 PolyToolResult EditorRuntime::update_poly_hover(
-		quader_poly::Vec3 position,
-		quader_poly::Vec3 plane_normal,
+		quader::QVec3 position,
+		quader::QVec3 plane_normal,
 		bool constrain_axis,
 		double grid_size,
 		bool snap_enabled)
@@ -1326,7 +1326,7 @@ std::size_t EditorRuntime::copy_selected_objects_to_clipboard(EditorSession& ses
 
 CommandResult EditorRuntime::paste_clipboard(
 		EditorSession& session,
-		std::optional<quader_poly::Vec3> target_center) const
+		std::optional<quader::QVec3> target_center) const
 {
 	return paste_editor_runtime_clipboard(session, state_, target_center);
 }

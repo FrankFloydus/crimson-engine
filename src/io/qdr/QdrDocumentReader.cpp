@@ -62,14 +62,14 @@ int readVersionHeader(const json& root) {
     return static_cast<int>(version);
 }
 
-Vec2 vec2FromJson(const json& value) {
+QVec2 vec2FromJson(const json& value) {
     return {
             value.value("x", 0.0f),
             value.value("y", 0.0f),
     };
 }
 
-Vec3 vec3FromJson(const json& value, Vec3 fallback = {}) {
+QVec3 vec3FromJson(const json& value, QVec3 fallback = {}) {
     if (!value.is_object()) {
         return fallback;
     }
@@ -178,18 +178,18 @@ TextureColorSpace parseTextureColorSpace(const std::string& value) {
     return TextureColorSpace::Srgb;
 }
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_poly::Vec2 polygonVec2FromJson(const json& value) {
+quader::QVec2 polygonVec2FromJson(const json& value) {
     return {
             value.value("x", 0.0f),
             value.value("y", 0.0f),
     };
 }
 
-quader_poly::Vec3 polygonVec3FromJson(const json& value) {
+quader::QVec3 polygonVec3FromJson(const json& value) {
     return {
             value.value("x", 0.0f),
             value.value("y", 0.0f),
@@ -540,7 +540,7 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
     return document;
 }
 
-Vec3 colorFromAbgr(std::uint32_t color) {
+QVec3 colorFromAbgr(std::uint32_t color) {
     const float r = static_cast<float>(color & 0xffu) / 255.0f;
     const float g = static_cast<float>((color >> 8u) & 0xffu) / 255.0f;
     const float b = static_cast<float>((color >> 16u) & 0xffu) / 255.0f;

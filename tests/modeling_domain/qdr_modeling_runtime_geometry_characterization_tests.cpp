@@ -23,12 +23,12 @@ bool nearly_equal(double left, double right, double epsilon = 0.0001)
 	return std::abs(left - right) <= epsilon;
 }
 
-bool vec2_nearly_equal(quader_poly::Vec2 left, quader_poly::Vec2 right, double epsilon = 0.0001)
+bool vec2_nearly_equal(quader::QVec2 left, quader::QVec2 right, double epsilon = 0.0001)
 {
 	return nearly_equal(left.x, right.x, epsilon) && nearly_equal(left.y, right.y, epsilon);
 }
 
-bool vec3_nearly_equal(quader_poly::Vec3 left, quader_poly::Vec3 right, double epsilon = 0.0001)
+bool vec3_nearly_equal(quader::QVec3 left, quader::QVec3 right, double epsilon = 0.0001)
 {
 	return nearly_equal(left.x, right.x, epsilon) && nearly_equal(left.y, right.y, epsilon) && nearly_equal(left.z, right.z, epsilon);
 }
@@ -49,7 +49,7 @@ quader_editor_core::ViewportCameraState front_camera()
 void viewport_projection_and_ray_construction_are_stable()
 {
 	const quader_editor_core::ViewportCameraState camera = front_camera();
-	quader_poly::Vec2 projected;
+	quader::QVec2 projected;
 	require_test(quader_editor_core::project_viewport_point(camera, { 0.0F, 0.0F, 0.0F }, projected),
 		"perspective camera should project a point in front of the camera");
 	require_test(vec2_nearly_equal(projected, { 400.0F, 300.0F }),
@@ -231,7 +231,7 @@ void cut_collinear_rejection_and_status_are_stable()
 void overlay_occluder_visibility_is_stable()
 {
 	quader_editor_core::OverlayVisibilityOccluder occluder;
-	const std::vector<quader_poly::Vec3> vertices {
+	const std::vector<quader::QVec3> vertices {
 		{ -1.0F, -1.0F, 0.0F },
 		{ 1.0F, -1.0F, 0.0F },
 		{ 1.0F, 1.0F, 0.0F },
@@ -266,7 +266,7 @@ void overlay_occluder_visibility_is_stable()
 void overlay_occluder_bounds_partitioning_is_stable()
 {
 	quader_editor_core::OverlayVisibilityOccluder occluder;
-	std::vector<quader_poly::Vec3> vertices;
+	std::vector<quader::QVec3> vertices;
 	std::vector<std::uint32_t> indices;
 	for (int row = 0; row < 3; ++row) {
 		for (int column = 0; column < 3; ++column) {

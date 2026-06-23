@@ -171,8 +171,8 @@ struct ModelingInstantOperationDescriptor {
  * Represents a Modeling Bounds value used by the modeling domain.
  */
 struct ModelingBounds {
-    Vec3 min;
-    Vec3 max;
+    QVec3 min;
+    QVec3 max;
 };
 
 /**
@@ -211,8 +211,8 @@ enum class ModelingActiveSelectionKind {
  * Represents a Modeling Ray value used by the modeling domain.
  */
 struct ModelingRay {
-    Vec3 origin;
-    Vec3 direction;
+    QVec3 origin;
+    QVec3 direction;
 };
 
 /**
@@ -220,11 +220,11 @@ struct ModelingRay {
  */
 struct ModelingViewportCamera {
     bool orthographic = false;
-    Vec3 origin = {};
-    Vec3 xAxis = {1.0f, 0.0f, 0.0f};
-    Vec3 yAxis = {0.0f, 1.0f, 0.0f};
-    Vec3 zAxis = {0.0f, 0.0f, 1.0f};
-    Vec2 viewportSize = {1.0f, 1.0f};
+    QVec3 origin = {};
+    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
+    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
+    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
+    QVec2 viewportSize = {1.0f, 1.0f};
     double orthographicSize = 24.0;
     double fovDegrees = 60.0;
 };
@@ -233,17 +233,17 @@ struct ModelingViewportCamera {
  * Represents a Modeling Transform3 value used by the modeling domain.
  */
 struct ModelingTransform3 {
-    Vec3 xAxis = {1.0f, 0.0f, 0.0f};
-    Vec3 yAxis = {0.0f, 1.0f, 0.0f};
-    Vec3 zAxis = {0.0f, 0.0f, 1.0f};
-    Vec3 origin = {};
+    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
+    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
+    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
+    QVec3 origin = {};
 };
 
 /**
  * Stores the Modeling Box Tool Event data contract used by the modeling domain.
  */
 struct ModelingBoxToolEvent {
-    Vec2 screenPosition;
+    QVec2 screenPosition;
     ModelingRay ray;
     double gridSize = 1.0;
     bool hasCamera = false;
@@ -254,7 +254,7 @@ struct ModelingBoxToolEvent {
  * Stores the Modeling Tool Ray Event data contract used by the modeling domain.
  */
 struct ModelingToolRayEvent {
-    Vec2 screenPosition;
+    QVec2 screenPosition;
     ModelingRay ray;
     ModelingViewportCamera camera;
     double gridSize = 1.0;
@@ -273,11 +273,11 @@ struct ModelingBoxPreview {
     bool valid = false;
     ModelingBoxDragState dragState = ModelingBoxDragState::Idle;
     std::string message;
-    std::array<Vec3, 4> footprint = {};
+    std::array<QVec3, 4> footprint = {};
     std::size_t footprintCount = 0;
-    std::array<Vec3, 8> corners = {};
+    std::array<QVec3, 8> corners = {};
     std::size_t cornerCount = 0;
-    Vec3 normal = {0.0f, 1.0f, 0.0f};
+    QVec3 normal = {0.0f, 1.0f, 0.0f};
     double distance = 0.0;
     ModelingBounds bounds {};
     bool boundsEmpty = true;
@@ -436,9 +436,9 @@ struct ModelingRepeatTransform {
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     ModelingTransformAxis axis = ModelingTransformAxis::None;
     bool duplicateSelected = false;
-    Vec3 moveDelta = {};
+    QVec3 moveDelta = {};
     double rotateAngleDegrees = 0.0;
-    Vec3 scale = {1.0f, 1.0f, 1.0f};
+    QVec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
 /**
@@ -463,7 +463,7 @@ struct ModelingToolStatus {
     int cutPointCount = 0;
     int cutCapturedPointCount = 0;
     bool cutHasLine = false;
-    std::array<Vec3, 3> cutPoints = {};
+    std::array<QVec3, 3> cutPoints = {};
     ModelingCutMode cutMode = ModelingCutMode::KeepBoth;
     bool mirrorActive = false;
     bool mirrorCanPreview = false;
@@ -475,7 +475,7 @@ struct ModelingToolStatus {
     int mirrorPointCount = 0;
     int mirrorCapturedPointCount = 0;
     bool mirrorHasLine = false;
-    std::array<Vec3, 3> mirrorPoints = {};
+    std::array<QVec3, 3> mirrorPoints = {};
     bool polyActive = false;
     bool polyClosed = false;
     bool polyHasCurrent = false;
@@ -541,12 +541,12 @@ struct ModelingTransformDragBeginRequest {
     ModelingTransformTool tool = ModelingTransformTool::Move;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     ModelingTransformAxis axis = ModelingTransformAxis::None;
-    Vec3 pivot = {};
-    Vec2 screenPosition = {};
-    Vec2 screenPivot = {};
-    Vec2 screenTip = {};
+    QVec3 pivot = {};
+    QVec2 screenPosition = {};
+    QVec2 screenPivot = {};
+    QVec2 screenTip = {};
     bool hasWorldDirection = false;
-    Vec3 worldDirection = {};
+    QVec3 worldDirection = {};
     ModelingRay ray;
     ModelingViewportCamera camera;
     double gridSize = 1.0;
@@ -558,7 +558,7 @@ struct ModelingTransformDragBeginRequest {
  * Stores the Modeling Transform Drag Update Request data contract used by the modeling domain.
  */
 struct ModelingTransformDragUpdateRequest {
-    Vec2 screenPosition = {};
+    QVec2 screenPosition = {};
     ModelingRay ray;
     ModelingViewportCamera camera;
     double gridSize = 1.0;
@@ -578,10 +578,10 @@ struct ModelingTransformDragPreview {
     ModelingTransformTool tool = ModelingTransformTool::Move;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
     ModelingTransformAxis axis = ModelingTransformAxis::None;
-    Vec3 pivot = {};
-    Vec3 moveDelta = {};
+    QVec3 pivot = {};
+    QVec3 moveDelta = {};
     double rotateAngleDegrees = 0.0;
-    Vec3 scale = {1.0f, 1.0f, 1.0f};
+    QVec3 scale = {1.0f, 1.0f, 1.0f};
     std::uint64_t contentRevision = 0;
     std::uint64_t selectionRevision = 0;
     bool sceneTransform = false;

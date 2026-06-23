@@ -40,17 +40,17 @@ namespace {
  */
 class TranslateSelectionOperation final : public PolyOperation {
 public:
-    explicit TranslateSelectionOperation(Vec3 delta);
+    explicit TranslateSelectionOperation(quader::QVec3 delta);
 
     [[nodiscard]] std::string_view id() const override { return "translate_selection"; }
     [[nodiscard]] std::string_view label() const override { return "Translate Selection"; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:
-    Vec3 delta_;
+    quader::QVec3 delta_;
 };
 
-TranslateSelectionOperation::TranslateSelectionOperation(Vec3 delta)
+TranslateSelectionOperation::TranslateSelectionOperation(quader::QVec3 delta)
     : delta_(delta)
 {
 }
@@ -78,7 +78,7 @@ OperationResult TranslateSelectionOperation::apply(Document& document, Selection
 
 } // namespace
 
-OperationResult translate_selection(Document& document, const Selection& selection, Vec3 delta)
+OperationResult translate_selection(Document& document, const Selection& selection, quader::QVec3 delta)
 {
     QDR_PROFILE_SCOPE("qdr_document.translate_selection");
     Selection operation_selection = selection;

@@ -32,27 +32,27 @@ namespace quader_poly::document_internal {
 
 bool ray_intersects_triangle(
     const Ray& ray,
-    const Vec3& a,
-    const Vec3& b,
-    const Vec3& c,
+    const quader::QVec3& a,
+    const quader::QVec3& b,
+    const quader::QVec3& c,
     float& distance,
-    Vec3& position)
+    quader::QVec3& position)
 {
-    const quader_geometry::Ray3<float> geometry_pick_ray = geometry_ray(ray);
-    const quader_geometry::Triangle3<float> triangle { geometry_vec3(a), geometry_vec3(b), geometry_vec3(c) };
+    const quader_geometry::QRay3<float> geometry_pick_ray = geometry_ray(ray);
+    const quader_geometry::QTriangle3<float> triangle { geometry_vec3(a), geometry_vec3(b), geometry_vec3(c) };
     const float picking_epsilon = std::nextafter(epsilon, 0.0F);
-    const quader_geometry::RayBoundedTriangleQueryOptions<float> options {
+    const quader_geometry::QRayBoundedTriangleQueryOptions<float> options {
         0.0F,
         std::numeric_limits<float>::infinity(),
         picking_epsilon,
     };
-    const quader_geometry::RayBoundedTriangleHit<float> hit = quader_geometry::intersect_ray_bounded_triangle<float>(
+    const quader_geometry::QRayBoundedTriangleHit<float> hit = quader_geometry::intersect_ray_bounded_triangle<float>(
         geometry_pick_ray,
         triangle,
         quader_geometry::triangle_aabb(triangle),
         options);
 
-    const quader_geometry::RayTriangleHit<float> triangle_hit =
+    const quader_geometry::QRayTriangleHit<float> triangle_hit =
         hit.hit ? hit.triangle_hit : quader_geometry::intersect_ray_triangle<float>(geometry_pick_ray, triangle, picking_epsilon);
     if (!triangle_hit.hit) {
         return false;
@@ -63,15 +63,15 @@ bool ray_intersects_triangle(
     return true;
 }
 
-float point_ray_distance(const Ray& ray, const Vec3& point, float& ray_distance)
+float point_ray_distance(const Ray& ray, const quader::QVec3& point, float& ray_distance)
 {
-    const Vec3 offset = point - ray.origin;
+    const quader::QVec3 offset = point - ray.origin;
     ray_distance = dot(offset, ray.direction);
     if (ray_distance < 0.0F) {
         return std::numeric_limits<float>::max();
     }
 
-    const quader_geometry::ClosestRayPoint<float> closest =
+    const quader_geometry::QClosestRayPoint<float> closest =
         quader_geometry::closest_point_on_ray<float>(geometry_vec3(point), geometry_ray(ray), epsilon);
     if (!closest.valid) {
         return length(point - ray.origin);
@@ -80,16 +80,16 @@ float point_ray_distance(const Ray& ray, const Vec3& point, float& ray_distance)
     return std::sqrt(closest.distance_squared);
 }
 
-float segment_ray_distance(const Ray& ray, const Vec3& a, const Vec3& b, float& ray_distance, Vec3& position)
+float segment_ray_distance(const Ray& ray, const quader::QVec3& a, const quader::QVec3& b, float& ray_distance, quader::QVec3& position)
 {
-    const Vec3 segment = b - a;
+    const quader::QVec3 segment = b - a;
     const float segment_length_squared = length_squared(segment);
     if (segment_length_squared <= epsilon) {
         position = a;
         return point_ray_distance(ray, a, ray_distance);
     }
 
-    const quader_geometry::SegmentRayClosestPoints<float> closest =
+    const quader_geometry::QSegmentRayClosestPoints<float> closest =
         quader_geometry::closest_points_segment_ray<float>(
             { geometry_vec3(a), geometry_vec3(b) },
             geometry_ray(ray),

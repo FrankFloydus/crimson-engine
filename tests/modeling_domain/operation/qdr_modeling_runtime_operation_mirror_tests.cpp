@@ -58,7 +58,7 @@ float object_center_y(const quader_editor_core::PolygonObject& object)
 	return (min_y + max_y) * 0.5F;
 }
 
-std::vector<quader_poly::Vec3> yz_mirror_plane_points()
+std::vector<quader::QVec3> yz_mirror_plane_points()
 {
 	return {
 		{ 0.0F, -1.0F, 0.0F },
@@ -74,7 +74,7 @@ TEST_CASE("mirror operation creates fresh selected mirrored object ids", "[opera
 	quader_editor_core::EditorSession session = selected_offset_cube_session();
 	const int source_id = session.objects().front().id;
 	const std::vector<int> selected_ids = session.selected_object_ids();
-	const std::vector<quader_poly::Vec3> plane_points = yz_mirror_plane_points();
+	const std::vector<quader::QVec3> plane_points = yz_mirror_plane_points();
 
 	const quader_editor_core::CommandResult mirror =
 		session.mirror_objects_across_plane(selected_ids, plane_points);
@@ -147,8 +147,8 @@ TEST_CASE("mesh flip mutates selected objects in place around each mesh center",
 	const quader_editor_core::PolygonObject* second_before_object = find_object(session, second_id);
 	REQUIRE(first_before_object != nullptr);
 	REQUIRE(second_before_object != nullptr);
-	const quader_poly::Vec3 first_before = first_before_object->document.vertices.front().position;
-	const quader_poly::Vec3 second_before = second_before_object->document.vertices.front().position;
+	const quader::QVec3 first_before = first_before_object->document.vertices.front().position;
+	const quader::QVec3 second_before = second_before_object->document.vertices.front().position;
 	const float first_center_x = object_center_x(*first_before_object);
 	const float second_center_x = object_center_x(*second_before_object);
 
@@ -184,7 +184,7 @@ TEST_CASE("vertical mesh flip uses the mesh center and global Y axis", "[operati
 {
 	quader_editor_core::EditorSession session = selected_offset_cube_session();
 	const int source_id = session.objects().front().id;
-	const quader_poly::Vec3 first_before = session.objects().front().document.vertices.front().position;
+	const quader::QVec3 first_before = session.objects().front().document.vertices.front().position;
 	const float center_y = object_center_y(session.objects().front());
 
 	const quader_editor_core::CommandResult flip =

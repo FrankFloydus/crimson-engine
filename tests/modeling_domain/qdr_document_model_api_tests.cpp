@@ -71,26 +71,26 @@ void face_perimeter_predicates_remain_data_driven()
 
 void vec3_math_and_edge_normalization_stay_linkable_after_split()
 {
-	const quader_poly::Vec3 a { 1.0F, 2.0F, 3.0F };
-	const quader_poly::Vec3 b { -4.0F, 5.0F, -6.0F };
+	const quader::QVec3 a { 1.0F, 2.0F, 3.0F };
+	const quader::QVec3 b { -4.0F, 5.0F, -6.0F };
 
-	const quader_poly::Vec3 sum = a + b;
+	const quader::QVec3 sum = a + b;
 	require_test(nearly_equal(sum.x, -3.0F) && nearly_equal(sum.y, 7.0F) && nearly_equal(sum.z, -3.0F),
-		"Vec3 addition should stay available from qdr_document");
-	const quader_poly::Vec3 difference = a - b;
+		"quader::QVec3 addition should stay available from qdr_document");
+	const quader::QVec3 difference = a - b;
 	require_test(nearly_equal(difference.x, 5.0F) && nearly_equal(difference.y, -3.0F) && nearly_equal(difference.z, 9.0F),
-		"Vec3 subtraction should stay available from qdr_document");
-	const quader_poly::Vec3 scaled = a * 2.0F;
+		"quader::QVec3 subtraction should stay available from qdr_document");
+	const quader::QVec3 scaled = a * 2.0F;
 	require_test(nearly_equal(scaled.x, 2.0F) && nearly_equal(scaled.y, 4.0F) && nearly_equal(scaled.z, 6.0F),
-		"Vec3 scalar multiply should stay available from qdr_document");
-	require_test(nearly_equal(quader_poly::dot(a, b), -12.0F), "Vec3 dot product should route through document model API");
+		"quader::QVec3 scalar multiply should stay available from qdr_document");
+	require_test(nearly_equal(quader::dot(a, b), -12.0F), "quader::QVec3 dot product should route through document model API");
 
-	const quader_poly::Vec3 cross = quader_poly::cross({ 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
+	const quader::QVec3 cross = quader::cross({ 1.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
 	require_test(nearly_equal(cross.x, 0.0F) && nearly_equal(cross.y, 0.0F) && nearly_equal(cross.z, 1.0F),
-		"Vec3 cross product should stay right-handed");
-	const quader_poly::Vec3 normalized = quader_poly::normalize_or_zero({ 0.0F, 3.0F, 4.0F });
+		"quader::QVec3 cross product should stay right-handed");
+	const quader::QVec3 normalized = quader::normalize_or_zero({ 0.0F, 3.0F, 4.0F });
 	require_test(nearly_equal(normalized.x, 0.0F) && nearly_equal(normalized.y, 0.6F) && nearly_equal(normalized.z, 0.8F),
-		"Vec3 normalization should keep model API behavior");
+		"quader::QVec3 normalization should keep model API behavior");
 
 	require_test(quader_poly::make_edge(7, 3) == quader_poly::Edge { 3, 7 },
 		"make_edge should normalize edge ids after model API split");

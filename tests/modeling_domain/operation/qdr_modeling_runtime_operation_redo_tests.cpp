@@ -11,7 +11,7 @@ TEST_CASE("redo operation reapplies the undone editor snapshot", "[operation][re
 	SECTION("redo reapplies an undone content command")
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
-		const quader_poly::Vec3 position_before = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 position_before = session.objects().front().document.vertices.front().position;
 		REQUIRE(session.apply_history_command([](quader_editor_core::EditorSession& editor) {
 			return editor.translate_selected({ 2.0F, 0.0F, 0.0F });
 		}).changed);

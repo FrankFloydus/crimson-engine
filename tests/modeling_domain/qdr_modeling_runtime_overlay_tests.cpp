@@ -76,14 +76,14 @@ bool nearly_equal(float left, float right, float epsilon = 0.0001F)
 	return std::abs(left - right) <= epsilon;
 }
 
-bool position_matches(quader_poly::Vec3 left, quader_poly::Vec3 right, float epsilon = 0.0001F)
+bool position_matches(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
 {
 	return nearly_equal(left.x, right.x, epsilon) &&
 		nearly_equal(left.y, right.y, epsilon) &&
 		nearly_equal(left.z, right.z, epsilon);
 }
 
-bool document_has_vertex_at(const quader_poly::Document& document, quader_poly::Vec3 position)
+bool document_has_vertex_at(const quader_poly::Document& document, quader::QVec3 position)
 {
 	return std::any_of(document.vertices.begin(), document.vertices.end(), [position](const quader_poly::Vertex& vertex) {
 		return position_matches(vertex.position, position);
@@ -92,8 +92,8 @@ bool document_has_vertex_at(const quader_poly::Document& document, quader_poly::
 
 quader_editor_core::PolygonObject diagnostic_single_edge_object(
 	int object_id,
-	quader_poly::Vec3 start,
-	quader_poly::Vec3 end)
+	quader::QVec3 start,
+	quader::QVec3 end)
 {
 	quader_editor_core::PolygonObject object;
 	object.id = object_id;
@@ -112,9 +112,9 @@ quader_editor_core::PolygonObject diagnostic_single_edge_object(
 
 quader_editor_core::PolygonObject diagnostic_triangle_object(
 	int object_id,
-	quader_poly::Vec3 a,
-	quader_poly::Vec3 b,
-	quader_poly::Vec3 c)
+	quader::QVec3 a,
+	quader::QVec3 b,
+	quader::QVec3 c)
 {
 	quader_editor_core::PolygonObject object;
 	object.id = object_id;

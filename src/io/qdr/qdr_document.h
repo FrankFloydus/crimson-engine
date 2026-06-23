@@ -70,8 +70,8 @@ struct QdrLight {
 	bool enabled = true;
 	QdrLightType type = QdrLightType::point;
 	bool selected = false;
-	quader_poly::Vec3 position { 0.0F, 3.0F, 0.0F };
-	quader_poly::Vec3 direction { 0.0F, -1.0F, 0.0F };
+	quader::QVec3 position { 0.0F, 3.0F, 0.0F };
+	quader::QVec3 direction { 0.0F, -1.0F, 0.0F };
 	std::uint32_t color_abgr = 0xFFFFFFFFU;
 	float intensity = 1.0F;
 	QdrLightShadowMode shadow_mode = QdrLightShadowMode::soft;

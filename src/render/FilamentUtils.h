@@ -14,7 +14,7 @@
 
 namespace quader {
 
-inline filament::math::float3 toFilament(Vec3 v) {
+inline filament::math::float3 toFilament(QVec3 v) {
     return {v.x, v.y, v.z};
 }
 

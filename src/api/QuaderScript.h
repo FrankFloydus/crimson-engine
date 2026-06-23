@@ -56,9 +56,9 @@ public:
     QuaderScript& clearSelection();
     QuaderScript& setSelectionMode(ModelingSelectionMode mode);
 
-    QuaderScript& moveSelection(Vec3 delta);
-    QuaderScript& rotateSelection(Vec3 eulerRadians, Vec3 pivot = {});
-    QuaderScript& scaleSelection(Vec3 scale, Vec3 pivot = {});
+    QuaderScript& moveSelection(QVec3 delta);
+    QuaderScript& rotateSelection(QVec3 eulerRadians, QVec3 pivot = {});
+    QuaderScript& scaleSelection(QVec3 scale, QVec3 pivot = {});
     QuaderScript& executeTool(std::string toolId);
     QuaderScript& assignMaterialSlot(std::uint32_t materialSlot);
     QuaderScript& undo();

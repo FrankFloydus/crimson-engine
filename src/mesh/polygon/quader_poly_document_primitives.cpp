@@ -34,7 +34,7 @@ int clamp_primitive_count(int value, int min_value, int max_value)
     return std::clamp(value, min_value, max_value);
 }
 
-Vec3 spherical_position(float radius, float theta, float phi)
+quader::QVec3 spherical_position(float radius, float theta, float phi)
 {
     const float sin_phi = std::sin(phi);
     return {
@@ -44,9 +44,9 @@ Vec3 spherical_position(float radius, float theta, float phi)
     };
 }
 
-Vec3 normalize_to_radius(Vec3 value, float radius)
+quader::QVec3 normalize_to_radius(quader::QVec3 value, float radius)
 {
-    const Vec3 normal = normalize_or_zero(value);
+    const quader::QVec3 normal = normalize_or_zero(value);
     if (length_squared(normal) <= epsilon) {
         return { 0.0F, radius, 0.0F };
     }
@@ -62,8 +62,8 @@ void add_oriented_triangle(Document& document, ElementId a, ElementId b, Element
         return;
     }
 
-    const Vec3 normal = cross(vertex_b->position - vertex_a->position, vertex_c->position - vertex_a->position);
-    const Vec3 centroid = (vertex_a->position + vertex_b->position + vertex_c->position) / 3.0F;
+    const quader::QVec3 normal = cross(vertex_b->position - vertex_a->position, vertex_c->position - vertex_a->position);
+    const quader::QVec3 centroid = (vertex_a->position + vertex_b->position + vertex_c->position) / 3.0F;
     if (dot(normal, centroid) >= 0.0F) {
         const std::array vertices { a, b, c };
         [[maybe_unused]] const ElementId face_id = add_face(document, vertices);
@@ -86,7 +86,7 @@ ElementId cube_sphere_vertex(
     }
 
     const float scale = 1.0F / static_cast<float>(segments);
-    const Vec3 cube_position {
+    const quader::QVec3 cube_position {
         static_cast<float>(key[0]) * scale,
         static_cast<float>(key[1]) * scale,
         static_cast<float>(key[2]) * scale,
@@ -154,7 +154,7 @@ Document make_cube(const CubePrimitiveSpec& spec)
             return existing->second;
         }
 
-        const Vec3 position {
+        const quader::QVec3 position {
             -width * 0.5F + (width * static_cast<float>(x) / static_cast<float>(width_segments)),
             -height * 0.5F + (height * static_cast<float>(y) / static_cast<float>(height_segments)),
             -depth * 0.5F + (depth * static_cast<float>(z) / static_cast<float>(depth_segments)),
@@ -422,7 +422,7 @@ Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec)
     const int subdivisions = clamp_primitive_count(spec.subdivisions, 0, 5);
     constexpr float t = 1.6180339887498948482F;
 
-    std::vector<Vec3> positions {
+    std::vector<quader::QVec3> positions {
         { -1.0F, t, 0.0F },
         { 1.0F, t, 0.0F },
         { -1.0F, -t, 0.0F },
@@ -436,7 +436,7 @@ Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec)
         { -t, 0.0F, -1.0F },
         { -t, 0.0F, 1.0F },
     };
-    for (Vec3& position : positions) {
+    for (quader::QVec3& position : positions) {
         position = normalize_to_radius(position, 1.0F);
     }
 
@@ -475,7 +475,7 @@ Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec)
                 return existing->second;
             }
 
-            const Vec3 midpoint = normalize_to_radius((positions[static_cast<std::size_t>(a)] + positions[static_cast<std::size_t>(b)]) * 0.5F, 1.0F);
+            const quader::QVec3 midpoint = normalize_to_radius((positions[static_cast<std::size_t>(a)] + positions[static_cast<std::size_t>(b)]) * 0.5F, 1.0F);
             const int index = static_cast<int>(positions.size());
             positions.push_back(midpoint);
             midpoint_indices.emplace(key, index);
@@ -499,7 +499,7 @@ Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec)
     Document document;
     std::vector<ElementId> vertex_ids;
     vertex_ids.reserve(positions.size());
-    for (const Vec3& position : positions) {
+    for (const quader::QVec3& position : positions) {
         vertex_ids.push_back(add_vertex(document, position * radius));
     }
 

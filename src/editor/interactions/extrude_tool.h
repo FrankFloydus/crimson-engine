@@ -29,11 +29,11 @@ struct ExtrudeToolState {
 	bool active = false;
 	int source_object_id = -1;
 	int source_face_index = -1;
-	quader_poly::Vec3 face_normal;
-	std::vector<quader_poly::Vec3> face_vertices;
+	quader::QVec3 face_normal;
+	std::vector<quader::QVec3> face_vertices;
 	std::vector<int> face_vertex_indices;
-	quader_poly::Vec3 face_center;
-	quader_poly::Vec2 screen_axis { 0.0F, 1.0F };
+	quader::QVec3 face_center;
+	quader::QVec2 screen_axis { 0.0F, 1.0F };
 	double drag_distance = 0.0;
 	double drag_pixels = 0.0;
 	double preview_distance = 0.0;
@@ -50,11 +50,11 @@ struct ExtrudeToolState {
 struct ExtrudeBeginInput {
 	int source_object_id = -1;
 	int source_face_index = -1;
-	quader_poly::Vec3 face_normal;
-	std::vector<quader_poly::Vec3> face_vertices;
+	quader::QVec3 face_normal;
+	std::vector<quader::QVec3> face_vertices;
 	std::vector<int> face_vertex_indices;
-	quader_poly::Vec3 face_center;
-	quader_poly::Vec2 screen_axis { 0.0F, 1.0F };
+	quader::QVec3 face_center;
+	quader::QVec2 screen_axis { 0.0F, 1.0F };
 };
 
 /**
@@ -107,7 +107,7 @@ ExtrudeStateResult preview_extrude_from_distance(ExtrudeToolState& state, double
 ExtrudeStateResult preview_extrude_from_drag_pixels(ExtrudeToolState& state, double pixels, bool precision, bool grid_enabled, double grid_size);
 ExtrudeStateResult adjust_extrude_cut_count(ExtrudeToolState& state, int delta, bool grid_enabled, double grid_size);
 double extrude_axis_distance_from_ray(const ExtrudeToolState& state, const quader_poly::Transform3& model_transform, const quader_poly::Ray& world_ray);
-quader_poly::Vec3 extrude_face_center_for_vertices(const std::vector<quader_poly::Vec3>& vertices);
+quader::QVec3 extrude_face_center_for_vertices(const std::vector<quader::QVec3>& vertices);
 void set_extrude_preview_valid(ExtrudeToolState& state, bool valid);
 ExtrudePreviewOperation extrude_preview_operation(const ExtrudeToolState& state);
 ExtrudePreviewStatus extrude_preview_status(const ExtrudeToolState& state, bool grid_enabled);

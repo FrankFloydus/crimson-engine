@@ -191,7 +191,7 @@ std::optional<PickHitRecord> box_surface_hit(EditorSession& session, const quade
 BoxToolStateResult set_box_construction_plane_from_ray(EditorSession& session, EditorRuntime& runtime, const quader_poly::Ray& ray)
 {
 	const std::optional<PickHitRecord> hit = box_surface_hit(session, ray);
-	if (hit.has_value() && quader_poly::length_squared(hit->local_normal) > 0.000001F) {
+	if (hit.has_value() && quader::length_squared(hit->local_normal) > 0.000001F) {
 		return runtime.set_box_construction_plane(hit->local_position, hit->local_normal);
 	}
 	return runtime.set_box_construction_plane({ 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
@@ -324,7 +324,7 @@ CommandResult commit_box(EditorSession& session, EditorRuntime& runtime)
 	if (preview.drag_state != BoxDragState::height) {
 		return { false, false, "Box height must be set before commit." };
 	}
-	const std::vector<quader_poly::Vec3> corners = box_preview_corners(preview);
+	const std::vector<quader::QVec3> corners = box_preview_corners(preview);
 	if (corners.size() != 8U) {
 		return { false, false, "Box preview has no volume corners." };
 	}
@@ -1150,7 +1150,7 @@ CommandResult flip_view(
 	return result;
 }
 
-std::optional<quader_poly::Vec3> paste_target_from_settings(PasteCopiedMeshesRuntimeCommandSettings settings)
+std::optional<quader::QVec3> paste_target_from_settings(PasteCopiedMeshesRuntimeCommandSettings settings)
 {
 	if (settings.target_center.valid) {
 		return settings.target_center.value;

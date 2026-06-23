@@ -34,7 +34,7 @@ public:
     QuaderApiVoidResult replaceMaterial(AssetId material, MaterialDocument replacement);
     QuaderApiVoidResult replaceTexture(AssetId texture, TextureAsset replacement);
 
-    QuaderApiVoidResult setMaterialBaseColor(AssetId material, Vec3 color);
+    QuaderApiVoidResult setMaterialBaseColor(AssetId material, QVec3 color);
     QuaderApiVoidResult setMaterialRoughness(AssetId material, float roughness);
     QuaderApiVoidResult setMaterialMetallic(AssetId material, float metallic);
     QuaderApiVoidResult setMaterialTexture(AssetId material, std::string slot, AssetId texture);

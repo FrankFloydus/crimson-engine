@@ -21,35 +21,35 @@ namespace {
 constexpr double visibility_epsilon = 0.000001;
 constexpr std::size_t occluder_leaf_triangle_count = 8;
 
-double axis_value(quader_poly::Vec3 value, quader_geometry::Axis axis)
+double axis_value(quader::QVec3 value, quader_geometry::QAxis axis)
 {
 	switch (axis) {
-		case quader_geometry::Axis::x:
+		case quader_geometry::QAxis::x:
 			return value.x;
-		case quader_geometry::Axis::y:
+		case quader_geometry::QAxis::y:
 			return value.y;
-		case quader_geometry::Axis::z:
+		case quader_geometry::QAxis::z:
 			return value.z;
 	}
 	return value.z;
 }
 
-quader_geometry::Vec3d to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3d to_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_geometry::Vec3f to_geometry_vec3f(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3f(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec3 to_poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 to_poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
 
-OverlayVisibilityBounds to_overlay_bounds(const quader_geometry::Aabb3f& bounds)
+OverlayVisibilityBounds to_overlay_bounds(const quader_geometry::QAabb3f& bounds)
 {
 	OverlayVisibilityBounds overlay_bounds;
 	if (!quader_geometry::aabb_is_valid(bounds)) {
@@ -61,12 +61,12 @@ OverlayVisibilityBounds to_overlay_bounds(const quader_geometry::Aabb3f& bounds)
 	return overlay_bounds;
 }
 
-quader_geometry::Ray3<double> to_geometry_ray(quader_poly::Ray ray)
+quader_geometry::QRay3<double> to_geometry_ray(quader_poly::Ray ray)
 {
 	return { to_geometry_vec3(ray.origin), to_geometry_vec3(ray.direction) };
 }
 
-quader_geometry::Aabb3f to_geometry_aabb(const OverlayVisibilityBounds& bounds)
+quader_geometry::QAabb3f to_geometry_aabb(const OverlayVisibilityBounds& bounds)
 {
 	if (bounds.empty) {
 		return quader_geometry::empty_aabb3<float>();
@@ -79,10 +79,10 @@ bool ray_intersects_bounds(quader_poly::Ray ray, const OverlayVisibilityBounds& 
 	if (bounds.empty) {
 		return false;
 	}
-	const quader_geometry::RayAabbHit<double> hit =
+	const quader_geometry::QRayAabbHit<double> hit =
 		quader_geometry::intersect_ray_aabb(
 			to_geometry_ray(ray),
-			quader_geometry::Aabb3d(to_geometry_aabb(bounds)),
+			quader_geometry::QAabb3d(to_geometry_aabb(bounds)),
 			visibility_epsilon);
 	out_distance = hit.min_distance;
 	return hit.hit;
@@ -90,22 +90,22 @@ bool ray_intersects_bounds(quader_poly::Ray ray, const OverlayVisibilityBounds& 
 
 bool ray_intersects_triangle(
 		quader_poly::Ray ray,
-		quader_poly::Vec3 a,
-		quader_poly::Vec3 b,
-		quader_poly::Vec3 c,
+		quader::QVec3 a,
+		quader::QVec3 b,
+		quader::QVec3 c,
 		double& out_distance)
 {
-	const quader_geometry::Triangle3<double> triangle { to_geometry_vec3(a), to_geometry_vec3(b), to_geometry_vec3(c) };
-	const quader_geometry::RayTriangleHit<double> hit =
+	const quader_geometry::QTriangle3<double> triangle { to_geometry_vec3(a), to_geometry_vec3(b), to_geometry_vec3(c) };
+	const quader_geometry::QRayTriangleHit<double> hit =
 		quader_geometry::intersect_ray_triangle(to_geometry_ray(ray), triangle, visibility_epsilon);
 	out_distance = hit.distance;
 	return hit.hit;
 }
 
-quader_poly::Vec3 viewport_forward(const ViewportCameraState& camera)
+quader::QVec3 viewport_forward(const ViewportCameraState& camera)
 {
-	quader_geometry::Vec3f forward = quader_geometry::length_squared(to_geometry_vec3f(camera.transform.z_axis)) <= visibility_epsilon ?
-		quader_geometry::Vec3f { 0.0F, 0.0F, -1.0F } :
+	quader_geometry::QVec3f forward = quader_geometry::length_squared(to_geometry_vec3f(camera.transform.z_axis)) <= visibility_epsilon ?
+		quader_geometry::QVec3f { 0.0F, 0.0F, -1.0F } :
 		quader_geometry::normalize_or_zero(to_geometry_vec3f(camera.transform.z_axis) * -1.0F, static_cast<float>(visibility_epsilon));
 	if (quader_geometry::length_squared(forward) <= visibility_epsilon) {
 		forward = { 0.0F, 0.0F, -1.0F };
@@ -124,7 +124,7 @@ void OverlayVisibilityOccluder::clear()
 	stack_.clear();
 }
 
-void OverlayVisibilityOccluder::set_mesh(std::span<const quader_poly::Vec3> vertices, std::span<const std::uint32_t> indices)
+void OverlayVisibilityOccluder::set_mesh(std::span<const quader::QVec3> vertices, std::span<const std::uint32_t> indices)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.set_mesh");
 	clear();
@@ -138,7 +138,7 @@ void OverlayVisibilityOccluder::set_mesh(std::span<const quader_poly::Vec3> vert
 void OverlayVisibilityOccluder::set_objects(std::span<const PolygonObject> objects)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.set_objects");
-	std::vector<quader_poly::Vec3> vertices;
+	std::vector<quader::QVec3> vertices;
 	std::vector<std::uint32_t> indices;
 	for (const PolygonObject& object : objects) {
 		QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.set_objects.compile_object");
@@ -167,7 +167,7 @@ bool OverlayVisibilityOccluder::empty() const
 	return nodes_.empty();
 }
 
-bool OverlayVisibilityOccluder::line_segment_is_visible(quader_poly::Vec3 a, quader_poly::Vec3 b, const ViewportCameraState& camera) const
+bool OverlayVisibilityOccluder::line_segment_is_visible(quader::QVec3 a, quader::QVec3 b, const ViewportCameraState& camera) const
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.line_segment_is_visible");
 	return point_is_visible(a + ((b - a) * 0.2F), camera) &&
@@ -209,7 +209,7 @@ std::vector<SelectionOverlayLine> OverlayVisibilityOccluder::visible_lines(std::
 	return visible;
 }
 
-void OverlayVisibilityOccluder::build_triangles(std::span<const quader_poly::Vec3> vertices, std::span<const std::uint32_t> indices)
+void OverlayVisibilityOccluder::build_triangles(std::span<const quader::QVec3> vertices, std::span<const std::uint32_t> indices)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.build_triangles");
 	for (std::size_t index = 0; index + 2 < indices.size(); index += 3) {
@@ -219,15 +219,15 @@ void OverlayVisibilityOccluder::build_triangles(std::span<const quader_poly::Vec
 		if (a_index >= vertices.size() || b_index >= vertices.size() || c_index >= vertices.size()) {
 			continue;
 		}
-		const quader_poly::Vec3 a = vertices[a_index];
-		const quader_poly::Vec3 b = vertices[b_index];
-		const quader_poly::Vec3 c = vertices[c_index];
-		const quader_geometry::Triangle3<float> geometry_triangle { to_geometry_vec3f(a), to_geometry_vec3f(b), to_geometry_vec3f(c) };
-		const quader_geometry::Vec3f normal = quader_geometry::cross(geometry_triangle.b - geometry_triangle.a, geometry_triangle.c - geometry_triangle.a);
+		const quader::QVec3 a = vertices[a_index];
+		const quader::QVec3 b = vertices[b_index];
+		const quader::QVec3 c = vertices[c_index];
+		const quader_geometry::QTriangle3<float> geometry_triangle { to_geometry_vec3f(a), to_geometry_vec3f(b), to_geometry_vec3f(c) };
+		const quader_geometry::QVec3f normal = quader_geometry::cross(geometry_triangle.b - geometry_triangle.a, geometry_triangle.c - geometry_triangle.a);
 		if (quader_geometry::length_squared(normal) <= visibility_epsilon) {
 			continue;
 		}
-		const quader_geometry::Aabb3f bounds = quader_geometry::triangle_aabb(geometry_triangle);
+		const quader_geometry::QAabb3f bounds = quader_geometry::triangle_aabb(geometry_triangle);
 		OverlayVisibilityTriangle triangle;
 		triangle.a = a_index;
 		triangle.b = b_index;
@@ -244,8 +244,8 @@ int OverlayVisibilityOccluder::build_node(std::size_t start, std::size_t count)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.build_node");
 	const int node_index = static_cast<int>(nodes_.size());
-	quader_geometry::Aabb3f bounds = quader_geometry::empty_aabb3<float>();
-	quader_geometry::Aabb3f centroid_bounds = quader_geometry::empty_aabb3<float>();
+	quader_geometry::QAabb3f bounds = quader_geometry::empty_aabb3<float>();
+	quader_geometry::QAabb3f centroid_bounds = quader_geometry::empty_aabb3<float>();
 	for (std::size_t index = 0; index < count; ++index) {
 		const OverlayVisibilityTriangle& triangle = triangles_[order_[start + index]];
 		quader_geometry::aabb_include(bounds, to_geometry_aabb(triangle.bounds));
@@ -257,7 +257,7 @@ int OverlayVisibilityOccluder::build_node(std::size_t start, std::size_t count)
 		nodes_[node_index] = { overlay_bounds, start, count, -1, -1 };
 		return node_index;
 	}
-	const quader_geometry::Axis axis = quader_geometry::aabb_longest_axis(centroid_bounds);
+	const quader_geometry::QAxis axis = quader_geometry::aabb_longest_axis(centroid_bounds);
 	std::sort(order_.begin() + static_cast<std::ptrdiff_t>(start), order_.begin() + static_cast<std::ptrdiff_t>(start + count), [&](std::size_t left, std::size_t right) {
 		return axis_value(triangles_[left].centroid, axis) < axis_value(triangles_[right].centroid, axis);
 	});
@@ -269,13 +269,13 @@ int OverlayVisibilityOccluder::build_node(std::size_t start, std::size_t count)
 	return node_index;
 }
 
-bool OverlayVisibilityOccluder::point_is_visible(quader_poly::Vec3 point, const ViewportCameraState& camera) const
+bool OverlayVisibilityOccluder::point_is_visible(quader::QVec3 point, const ViewportCameraState& camera) const
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.OverlayVisibilityOccluder.point_is_visible");
 	if (empty()) {
 		return true;
 	}
-	const quader_poly::Vec3 forward = viewport_forward(camera);
+	const quader::QVec3 forward = viewport_forward(camera);
 	quader_poly::Ray ray;
 	double target_distance = 0.0;
 	if (camera.projection == CameraProjection::orthographic) {
@@ -286,7 +286,7 @@ bool OverlayVisibilityOccluder::point_is_visible(quader_poly::Vec3 point, const 
 		ray.origin = point - (forward * static_cast<float>(target_distance));
 		ray.direction = forward;
 	} else {
-		const quader_poly::Vec3 to_point = point - camera.transform.origin;
+		const quader::QVec3 to_point = point - camera.transform.origin;
 		target_distance = quader_geometry::length(to_geometry_vec3f(to_point));
 		if (target_distance <= 0.0001) {
 			return true;

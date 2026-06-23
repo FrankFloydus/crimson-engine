@@ -30,13 +30,13 @@ constexpr double diagnostic_edge_factor_epsilon = 0.00001;
 struct DiagnosticEdgeRef {
 	int object_id = -1;
 	quader_poly::Edge edge;
-	quader_poly::Vec3 start;
-	quader_poly::Vec3 end;
-	quader_geometry::Segment3<double> segment;
-	quader_geometry::Aabb3<double> bounds;
+	quader::QVec3 start;
+	quader::QVec3 end;
+	quader_geometry::QSegment3<double> segment;
+	quader_geometry::QAabb3<double> bounds;
 };
 
-quader_geometry::Vec3d to_diagnostic_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3d to_diagnostic_vec3(quader::QVec3 value)
 {
 	return {
 		static_cast<double>(value.x),
@@ -45,9 +45,9 @@ quader_geometry::Vec3d to_diagnostic_vec3(quader_poly::Vec3 value)
 	};
 }
 
-quader_geometry::Aabb3<double> diagnostic_edge_bounds(
-		quader_geometry::Vec3d start,
-		quader_geometry::Vec3d end)
+quader_geometry::QAabb3<double> diagnostic_edge_bounds(
+		quader_geometry::QVec3d start,
+		quader_geometry::QVec3d end)
 {
 	return {
 		{
@@ -70,8 +70,8 @@ bool diagnostic_factor_is_interior(double factor)
 
 bool diagnostic_edges_overlap_colinearly(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
 {
-	const quader_geometry::Vec3d first_direction = first.segment.b - first.segment.a;
-	const quader_geometry::Vec3d second_direction = second.segment.b - second.segment.a;
+	const quader_geometry::QVec3d first_direction = first.segment.b - first.segment.a;
+	const quader_geometry::QVec3d second_direction = second.segment.b - second.segment.a;
 	const double first_length_squared = quader_geometry::length_squared(first_direction);
 	const double second_length_squared = quader_geometry::length_squared(second_direction);
 	const double epsilon_squared = diagnostic_edge_epsilon * diagnostic_edge_epsilon;
@@ -101,7 +101,7 @@ bool diagnostic_edges_overlap_colinearly(const DiagnosticEdgeRef& first, const D
 
 bool diagnostic_edges_point_intersect(const DiagnosticEdgeRef& first, const DiagnosticEdgeRef& second)
 {
-	const quader_geometry::SegmentSegmentClosestPoints<double> closest =
+	const quader_geometry::QSegmentSegmentClosestPoints<double> closest =
 		quader_geometry::closest_points_segment_segment(first.segment, second.segment, diagnostic_edge_epsilon);
 	if (!closest.valid || !closest.intersects) {
 		return false;
@@ -148,14 +148,14 @@ std::uint64_t overlay_face_edge_key(quader_poly::ElementId a_id, quader_poly::El
  */
 struct OpenEdgeOverlayRef {
 	quader_poly::Edge edge;
-	quader_poly::Vec3 face_centroid;
-	quader_poly::Vec3 face_normal;
+	quader::QVec3 face_centroid;
+	quader::QVec3 face_normal;
 	bool has_face = false;
 };
 
-quader_poly::Vec3 overlay_face_centroid(const quader_poly::Document& document, const quader_poly::Face& face)
+quader::QVec3 overlay_face_centroid(const quader_poly::Document& document, const quader_poly::Face& face)
 {
-	quader_poly::Vec3 centroid;
+	quader::QVec3 centroid;
 	int count = 0;
 	for (const quader_poly::ElementId vertex_id : face.vertices) {
 		const quader_poly::Vertex* vertex = quader_poly::find_vertex(document, vertex_id);
@@ -165,7 +165,7 @@ quader_poly::Vec3 overlay_face_centroid(const quader_poly::Document& document, c
 		centroid += vertex->position;
 		++count;
 	}
-	return count == 0 ? quader_poly::Vec3 {} : centroid / static_cast<float>(count);
+	return count == 0 ? quader::QVec3 {} : centroid / static_cast<float>(count);
 }
 
 void overlay_append_face_edges_to_set(
@@ -336,8 +336,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
 
 	auto append_line = [&](SelectionOverlayLayer layer,
-						   const quader_poly::Vec3& a,
-						   const quader_poly::Vec3& b,
+						   const quader::QVec3& a,
+						   const quader::QVec3& b,
 						   std::uint32_t color,
 						   float width,
 						   int object_id = -1,
@@ -347,7 +347,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 	};
 
 	auto append_point = [&](SelectionOverlayLayer layer,
-							const quader_poly::Vec3& position,
+							const quader::QVec3& position,
 							std::uint32_t color,
 							float size,
 							int object_id = -1,
@@ -371,8 +371,8 @@ SelectionOverlayFrame build_selection_overlay_frame(
 			if (face.vertices.size() < 2) {
 				continue;
 			}
-			const quader_poly::Vec3 centroid = overlay_face_centroid(document, face);
-			const quader_poly::Vec3 normal = quader_poly::face_normal(document, face);
+			const quader::QVec3 centroid = overlay_face_centroid(document, face);
+			const quader::QVec3 normal = quader_poly::face_normal(document, face);
 			for (std::size_t index = 0; index < face.vertices.size(); ++index) {
 				const quader_poly::ElementId a_id = face.vertices[index];
 				const quader_poly::ElementId b_id = face.vertices[(index + 1U) % face.vertices.size()];
@@ -419,22 +419,22 @@ SelectionOverlayFrame build_selection_overlay_frame(
 					quader_poly::invalid_element_id,
 					edge_ref.edge);
 
-			const quader_poly::Vec3 edge_vector = b->position - a->position;
-			const float edge_length = quader_poly::length(edge_vector);
+			const quader::QVec3 edge_vector = b->position - a->position;
+			const float edge_length = quader::length(edge_vector);
 			if (edge_length <= edge_epsilon) {
 				continue;
 			}
-			const quader_poly::Vec3 tangent = edge_vector / edge_length;
-			const quader_poly::Vec3 midpoint = (a->position + b->position) * 0.5F;
-			quader_poly::Vec3 tick_direction = edge_ref.face_centroid - midpoint;
-			tick_direction = tick_direction - tangent * quader_poly::dot(tick_direction, tangent);
-			if (quader_poly::length_squared(tick_direction) <= edge_epsilon * edge_epsilon) {
-				tick_direction = quader_poly::cross(edge_ref.face_normal, tangent);
+			const quader::QVec3 tangent = edge_vector / edge_length;
+			const quader::QVec3 midpoint = (a->position + b->position) * 0.5F;
+			quader::QVec3 tick_direction = edge_ref.face_centroid - midpoint;
+			tick_direction = tick_direction - tangent * quader::dot(tick_direction, tangent);
+			if (quader::length_squared(tick_direction) <= edge_epsilon * edge_epsilon) {
+				tick_direction = quader::cross(edge_ref.face_normal, tangent);
 			}
-			if (quader_poly::length_squared(tick_direction) <= edge_epsilon * edge_epsilon) {
+			if (quader::length_squared(tick_direction) <= edge_epsilon * edge_epsilon) {
 				continue;
 			}
-			tick_direction = quader_poly::normalize_or_zero(tick_direction);
+			tick_direction = quader::normalize_or_zero(tick_direction);
 			const int tick_count = std::clamp(
 					static_cast<int>(std::floor(edge_length / open_edge_tick_spacing)),
 					1,
@@ -442,7 +442,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 			const float tick_length = std::clamp(edge_length * 0.018F, 0.012F, 0.04F);
 			for (int tick_index = 0; tick_index < tick_count; ++tick_index) {
 				const float t = (static_cast<float>(tick_index) + 0.5F) / static_cast<float>(tick_count);
-				const quader_poly::Vec3 tick_start = a->position + edge_vector * t;
+				const quader::QVec3 tick_start = a->position + edge_vector * t;
 				append_line(
 						SelectionOverlayLayer::open_edge,
 						tick_start,
@@ -752,8 +752,8 @@ SelectionOverlayFrame build_diagnostic_edge_overlay_frame(
 			if (start_vertex == nullptr || end_vertex == nullptr) {
 				continue;
 			}
-			const quader_geometry::Vec3d start = to_diagnostic_vec3(start_vertex->position);
-			const quader_geometry::Vec3d end = to_diagnostic_vec3(end_vertex->position);
+			const quader_geometry::QVec3d start = to_diagnostic_vec3(start_vertex->position);
+			const quader_geometry::QVec3d end = to_diagnostic_vec3(end_vertex->position);
 			if (quader_geometry::length_squared(end - start) <= diagnostic_edge_epsilon * diagnostic_edge_epsilon) {
 				continue;
 			}

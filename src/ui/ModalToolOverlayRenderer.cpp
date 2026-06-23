@@ -17,7 +17,7 @@ namespace quader {
 namespace {
 
 std::optional<ImVec2> projectWorldToViewport(
-        Vec3 world,
+        QVec3 world,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize) {
@@ -36,8 +36,8 @@ std::optional<ImVec2> projectWorldToViewport(
 
 void drawWorldLine(
         ImDrawList* drawList,
-        Vec3 a,
-        Vec3 b,
+        QVec3 a,
+        QVec3 b,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize,
@@ -78,8 +78,8 @@ void ModalToolOverlayRenderer::drawBoxPreview(
 
     if (preview.footprintCount >= 4U) {
         for (std::size_t index = 0; index < preview.footprintCount; ++index) {
-            const Vec3 a = preview.footprint[index];
-            const Vec3 b = preview.footprint[(index + 1U) % preview.footprintCount];
+            const QVec3 a = preview.footprint[index];
+            const QVec3 b = preview.footprint[(index + 1U) % preview.footprintCount];
             drawWorldLine(drawList, a, b, camera, itemMin, itemSize, color, 2.0f);
         }
     }

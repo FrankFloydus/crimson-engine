@@ -20,17 +20,17 @@
 namespace quader_editor_core {
 namespace {
 
-quader_geometry::Vec2d to_geometry_vec2(quader_poly::Vec2 value)
+quader_geometry::QVec2d to_geometry_vec2(quader::QVec2 value)
 {
-	return quader_geometry::Vec2d(value);
+	return quader_geometry::QVec2d(value);
 }
 
-ScreenRect to_screen_rect(const quader_geometry::Rect2d& rect)
+ScreenRect to_screen_rect(const quader_geometry::QRect2d& rect)
 {
 	return { rect.min.x, rect.min.y, rect.max.x, rect.max.y };
 }
 
-quader_geometry::Rect2d to_geometry_rect(const ScreenRect& rect)
+quader_geometry::QRect2d to_geometry_rect(const ScreenRect& rect)
 {
 	return { { rect.min_x, rect.min_y }, { rect.max_x, rect.max_y } };
 }
@@ -170,7 +170,7 @@ public:
 		return operation == SelectionEditOperation::add || operation == SelectionEditOperation::remove;
 	}
 
-	void begin_box(SelectionBoxState& state, quader_poly::Vec2 position, SelectionEditOperation operation) const
+	void begin_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation) const
 	{
 		state.active = true;
 		state.dragging = false;
@@ -179,7 +179,7 @@ public:
 		state.end = position;
 	}
 
-	void update_box(SelectionBoxState& state, quader_poly::Vec2 position, double drag_threshold) const
+	void update_box(SelectionBoxState& state, quader::QVec2 position, double drag_threshold) const
 	{
 		if (!state.active) {
 			return;
@@ -190,7 +190,7 @@ public:
 		}
 	}
 
-	[[nodiscard]] SelectionBoxCommit finish_box(SelectionBoxState& state, quader_poly::Vec2 position, SelectionEditOperation operation, double drag_threshold) const
+	[[nodiscard]] SelectionBoxCommit finish_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation, double drag_threshold) const
 	{
 		(void)operation;
 		SelectionBoxCommit commit;
@@ -212,22 +212,22 @@ public:
 		state = SelectionBoxState();
 	}
 
-	[[nodiscard]] ScreenRect normalized_rect(quader_poly::Vec2 a, quader_poly::Vec2 b) const
+	[[nodiscard]] ScreenRect normalized_rect(quader::QVec2 a, quader::QVec2 b) const
 	{
-		quader_geometry::Rect2d rect = quader_geometry::empty_rect2<double>();
+		quader_geometry::QRect2d rect = quader_geometry::empty_rect2<double>();
 		quader_geometry::rect_include(rect, to_geometry_vec2(a));
 		quader_geometry::rect_include(rect, to_geometry_vec2(b));
 		return to_screen_rect(rect);
 	}
 
-	[[nodiscard]] bool rect_contains(const ScreenRect& rect, quader_poly::Vec2 point) const
+	[[nodiscard]] bool rect_contains(const ScreenRect& rect, quader::QVec2 point) const
 	{
 		return quader_geometry::rect_contains_point(to_geometry_rect(rect), to_geometry_vec2(point));
 	}
 
-	[[nodiscard]] bool rect_intersects_bounds(const ScreenRect& rect, quader_poly::Vec2 min_bounds, quader_poly::Vec2 max_bounds) const
+	[[nodiscard]] bool rect_intersects_bounds(const ScreenRect& rect, quader::QVec2 min_bounds, quader::QVec2 max_bounds) const
 	{
-		quader_geometry::Rect2d bounds = quader_geometry::empty_rect2<double>();
+		quader_geometry::QRect2d bounds = quader_geometry::empty_rect2<double>();
 		quader_geometry::rect_include(bounds, to_geometry_vec2(min_bounds));
 		quader_geometry::rect_include(bounds, to_geometry_vec2(max_bounds));
 		return quader_geometry::rect_overlaps(to_geometry_rect(rect), bounds);
@@ -329,7 +329,7 @@ public:
 
 	[[nodiscard]] std::vector<ElementHandlePickHit> pick_element_handle_candidates(
 			const std::vector<ElementHandlePickCandidate>& candidates,
-			quader_poly::Vec2 screen_position,
+			quader::QVec2 screen_position,
 			double pick_radius) const
 	{
 		const double radius = std::max(1.0, pick_radius);
@@ -628,17 +628,17 @@ bool selection_edit_operation_preserves_existing(SelectionEditOperation operatio
 	return select_tool_impl().edit_operation_preserves_existing(operation);
 }
 
-void begin_selection_box(SelectionBoxState& state, quader_poly::Vec2 position, SelectionEditOperation operation)
+void begin_selection_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation)
 {
 	select_tool_impl().begin_box(state, position, operation);
 }
 
-void update_selection_box(SelectionBoxState& state, quader_poly::Vec2 position, double drag_threshold)
+void update_selection_box(SelectionBoxState& state, quader::QVec2 position, double drag_threshold)
 {
 	select_tool_impl().update_box(state, position, drag_threshold);
 }
 
-SelectionBoxCommit finish_selection_box(SelectionBoxState& state, quader_poly::Vec2 position, SelectionEditOperation operation, double drag_threshold)
+SelectionBoxCommit finish_selection_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation, double drag_threshold)
 {
 	return select_tool_impl().finish_box(state, position, operation, drag_threshold);
 }
@@ -648,17 +648,17 @@ void clear_selection_box(SelectionBoxState& state)
 	select_tool_impl().clear_box(state);
 }
 
-ScreenRect normalized_screen_rect(quader_poly::Vec2 a, quader_poly::Vec2 b)
+ScreenRect normalized_screen_rect(quader::QVec2 a, quader::QVec2 b)
 {
 	return select_tool_impl().normalized_rect(a, b);
 }
 
-bool screen_rect_contains(const ScreenRect& rect, quader_poly::Vec2 point)
+bool screen_rect_contains(const ScreenRect& rect, quader::QVec2 point)
 {
 	return select_tool_impl().rect_contains(rect, point);
 }
 
-bool screen_rect_intersects_bounds(const ScreenRect& rect, quader_poly::Vec2 min_bounds, quader_poly::Vec2 max_bounds)
+bool screen_rect_intersects_bounds(const ScreenRect& rect, quader::QVec2 min_bounds, quader::QVec2 max_bounds)
 {
 	return select_tool_impl().rect_intersects_bounds(rect, min_bounds, max_bounds);
 }
@@ -680,7 +680,7 @@ std::vector<int> handle_target_object_ids_for_selection(const SelectionHandleTar
 
 std::vector<ElementHandlePickHit> pick_element_handle_candidates(
 		const std::vector<ElementHandlePickCandidate>& candidates,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		double pick_radius)
 {
 	return select_tool_impl().pick_element_handle_candidates(candidates, screen_position, pick_radius);

@@ -68,7 +68,7 @@ public:
     [[nodiscard]] std::optional<EntityId> entityForModelingObject(int modelingObjectId) const;
     [[nodiscard]] std::optional<int> modelingObjectForEntity(EntityId entity) const;
     [[nodiscard]] std::optional<MeshAsset> compileObjectMesh(int modelingObjectId) const;
-    [[nodiscard]] std::optional<Vec3> selectionCenter() const;
+    [[nodiscard]] std::optional<QVec3> selectionCenter() const;
     [[nodiscard]] ModelingSelectionMode selectionMode() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
     [[nodiscard]] std::uint64_t selectionOverlaySignature() const;
@@ -104,10 +104,10 @@ public:
     [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const;
     ModelingCommandResult executeInstantOperation(ModelingInstantOperationId operation);
     ModelingCommandResult beginTransformPreview(bool duplicateSelected);
-    ModelingCommandResult updateTransformTranslatePreview(Vec3 delta);
-    ModelingCommandResult updateTransformMatrixPreview(const ModelingTransform3& transform, Vec3 pivot);
-    ModelingCommandResult updateTransformExtrudePreview(Vec3 offset, float closedEdgeLedgeSize = 0.0f);
-    ModelingCommandResult updateTransformInsetPreview(const ModelingTransform3& transform, Vec3 pivot);
+    ModelingCommandResult updateTransformTranslatePreview(QVec3 delta);
+    ModelingCommandResult updateTransformMatrixPreview(const ModelingTransform3& transform, QVec3 pivot);
+    ModelingCommandResult updateTransformExtrudePreview(QVec3 offset, float closedEdgeLedgeSize = 0.0f);
+    ModelingCommandResult updateTransformInsetPreview(const ModelingTransform3& transform, QVec3 pivot);
     ModelingCommandResult commitTransformPreview();
     ModelingCommandResult cancelTransformPreview();
     ModelingCommandResult recordRepeatableTransform(const ModelingRepeatTransform& transform);
@@ -159,8 +159,8 @@ public:
     void projectObjectSelectionFromScene();
     ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request);
-    ModelingCommandResult moveSelection(Vec3 delta);
-    ModelingCommandResult transformSelection(const ModelingTransform3& transform, Vec3 pivot);
+    ModelingCommandResult moveSelection(QVec3 delta);
+    ModelingCommandResult transformSelection(const ModelingTransform3& transform, QVec3 pivot);
     ModelingCommandResult assignMaterialSlotToSelection(std::uint32_t materialSlot);
     ModelingCommandResult assignMaterialSlotToFace(int modelingObjectId, int faceId, std::uint32_t materialSlot);
     ModelingCommandResult setSelectionHover(const ModelingDirectHoverRequest& request);

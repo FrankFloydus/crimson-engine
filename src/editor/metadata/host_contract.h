@@ -354,7 +354,7 @@ struct HostGestureDescriptor {
 };
 
 /**
- * Stores the Host Transform Axis Descriptor data contract used by the editor metadata catalog.
+ * Stores the Host Transform QAxis Descriptor data contract used by the editor metadata catalog.
  */
 struct HostTransformAxisDescriptor {
 	std::string_view id;
@@ -363,7 +363,7 @@ struct HostTransformAxisDescriptor {
 };
 
 /**
- * Stores the Host Vector3 Descriptor data contract used by the editor metadata catalog.
+ * Stores the Host QVec3 Descriptor data contract used by the editor metadata catalog.
  */
 struct HostVector3Descriptor {
 	double x = 0.0;
@@ -571,7 +571,7 @@ enum class HostMaterialScalarKind {
 };
 
 /**
- * Stores the Host Vector2 Descriptor data contract used by the editor metadata catalog.
+ * Stores the Host QVec2 Descriptor data contract used by the editor metadata catalog.
  */
 struct HostVector2Descriptor {
 	double x = 0.0;

@@ -106,7 +106,7 @@ quader_poly::PlaneCutMode to_plane_cut_mode(CutMode mode)
 
 quader_poly::PlaneCutRequest plane_cut_request_from_state(const CutToolState& state)
 {
-	const std::vector<quader_poly::Vec3> points = cut_plane_points(state);
+	const std::vector<quader::QVec3> points = cut_plane_points(state);
 	quader_poly::PlaneCutRequest request;
 	request.mode = to_plane_cut_mode(state.mode);
 	if (points.size() >= 3) {
@@ -181,11 +181,11 @@ bool EditorSession::has_selection() const
 		!quader_editor_core::selected_light_ids(state_.lights).empty();
 }
 
-std::optional<quader_poly::Vec3> EditorSession::selection_center() const
+std::optional<quader::QVec3> EditorSession::selection_center() const
 {
-	const std::optional<quader_poly::Vec3> mesh_center =
+	const std::optional<quader::QVec3> mesh_center =
 		quader_editor_core::selection_center(state_.objects, state_.selection_mode, state_.active_object_id);
-	const std::optional<quader_poly::Vec3> light_center = selected_light_center(state_.lights);
+	const std::optional<quader::QVec3> light_center = selected_light_center(state_.lights);
 	if (mesh_center.has_value() && light_center.has_value()) {
 		return (mesh_center.value() + light_center.value()) * 0.5F;
 	}
@@ -369,7 +369,7 @@ CommandResult EditorSession::invert_selection()
 	return result.ok ? ok_result(changed) : result;
 }
 
-CommandResult EditorSession::translate_selected(quader_poly::Vec3 delta, bool texture_lock_enabled)
+CommandResult EditorSession::translate_selected(quader::QVec3 delta, bool texture_lock_enabled)
 {
 	const CommandResult mesh_result = quader_editor_core::translate_selected(state_.objects, state_.selection_mode, delta, texture_lock_enabled);
 	if (!mesh_result.ok) {
@@ -384,7 +384,7 @@ CommandResult EditorSession::translate_selected(quader_poly::Vec3 delta, bool te
 	return result;
 }
 
-CommandResult EditorSession::transform_selected(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled)
+CommandResult EditorSession::transform_selected(const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled)
 {
 	const CommandResult mesh_result = quader_editor_core::transform_selected(state_.objects, state_.selection_mode, transform, pivot, texture_lock_enabled, texture_lock_scale_enabled);
 	if (!mesh_result.ok) {
@@ -609,7 +609,7 @@ CommandResult EditorSession::delete_selected()
 	return ok_result(changed);
 }
 
-CommandResult EditorSession::create_box_from_bounds(quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds)
+CommandResult EditorSession::create_box_from_bounds(quader::QVec3 min_bounds, quader::QVec3 max_bounds)
 {
 	state_.next_object_id = next_polygon_object_id(state_.objects, state_.next_object_id);
 	const int object_id = state_.next_object_id++;
@@ -623,7 +623,7 @@ CommandResult EditorSession::create_box_from_bounds(quader_poly::Vec3 min_bounds
 	return result;
 }
 
-CommandResult EditorSession::create_box_from_corners(std::span<const quader_poly::Vec3> corners)
+CommandResult EditorSession::create_box_from_corners(std::span<const quader::QVec3> corners)
 {
 	state_.next_object_id = next_polygon_object_id(state_.objects, state_.next_object_id);
 	const int object_id = state_.next_object_id++;
@@ -642,7 +642,7 @@ CommandResult EditorSession::create_box_from_corners(std::span<const quader_poly
 	return result;
 }
 
-CommandResult EditorSession::create_polygon_from_points(std::span<const quader_poly::Vec3> points, quader_poly::Vec3 face_normal)
+CommandResult EditorSession::create_polygon_from_points(std::span<const quader::QVec3> points, quader::QVec3 face_normal)
 {
 	state_.next_object_id = next_polygon_object_id(state_.objects, state_.next_object_id);
 	const int object_id = state_.next_object_id++;
@@ -803,7 +803,7 @@ CommandResult EditorSession::radial_align_selected()
 	return result;
 }
 
-CommandResult EditorSession::extrude_selected_elements(quader_poly::Vec3 offset, float closed_edge_ledge_size)
+CommandResult EditorSession::extrude_selected_elements(quader::QVec3 offset, float closed_edge_ledge_size)
 {
 	const CommandResult result = quader_editor_core::extrude_selected_elements(state_.objects, state_.selection_mode, offset, closed_edge_ledge_size);
 	note_content_result(result);
@@ -813,7 +813,7 @@ CommandResult EditorSession::extrude_selected_elements(quader_poly::Vec3 offset,
 	return result;
 }
 
-CommandResult EditorSession::inset_selected_elements(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot)
+CommandResult EditorSession::inset_selected_elements(const quader_poly::Transform3& transform, quader::QVec3 pivot)
 {
 	const CommandResult result = quader_editor_core::inset_selected_elements(state_.objects, state_.selection_mode, transform, pivot);
 	note_content_result(result);
@@ -876,7 +876,7 @@ CommandResult EditorSession::commit_mirror_tool(MirrorToolState& state)
 		return error_result("Select one or more mesh objects before committing the mirror.");
 	}
 
-	const std::vector<quader_poly::Vec3> plane_points = mirror_plane_points(state);
+	const std::vector<quader::QVec3> plane_points = mirror_plane_points(state);
 	const std::vector<int> target_object_ids = state.target_object_ids;
 	const CommandResult result = apply_history_command([&target_object_ids, &plane_points](EditorSession& editor_session) {
 		return editor_session.mirror_objects_across_plane(target_object_ids, plane_points);
@@ -902,8 +902,8 @@ CommandResult EditorSession::commit_poly_tool(PolyToolState& state)
 		return error_result("Poly needs a non-degenerate polygon.");
 	}
 
-	const std::vector<quader_poly::Vec3> points = state.points;
-	const quader_poly::Vec3 face_normal = state.face_normal;
+	const std::vector<quader::QVec3> points = state.points;
+	const quader::QVec3 face_normal = state.face_normal;
 	const CommandResult result = apply_history_command([&points, face_normal](EditorSession& editor_session) {
 		return editor_session.create_polygon_from_points(points, face_normal);
 	});
@@ -933,7 +933,7 @@ CommandResult EditorSession::plane_cut(std::span<const int> object_ids, const qu
 	return result;
 }
 
-CommandResult EditorSession::mirror_objects_across_plane(std::span<const int> object_ids, std::span<const quader_poly::Vec3> plane_points)
+CommandResult EditorSession::mirror_objects_across_plane(std::span<const int> object_ids, std::span<const quader::QVec3> plane_points)
 {
 	const SelectionMode mode_before = state_.selection_mode;
 	const CommandResult result = quader_editor_core::mirror_objects_across_plane(
@@ -1068,7 +1068,7 @@ std::vector<PolygonObject> EditorSession::selected_object_copies() const
 	return quader_editor_core::selected_object_copies(state_.objects, state_.selection_mode);
 }
 
-CommandResult EditorSession::duplicate_selected_objects(quader_poly::Vec3 offset)
+CommandResult EditorSession::duplicate_selected_objects(quader::QVec3 offset)
 {
 	const CommandResult result = quader_editor_core::duplicate_selected_objects(state_.objects, state_.next_object_id, state_.selection_mode, state_.active_object_id, offset);
 	note_content_result(result);
@@ -1083,7 +1083,7 @@ CommandResult EditorSession::duplicate_selected_objects(DuplicateMeshesOperation
 	return duplicate_selected_objects(duplicate_meshes_offset_from_settings(settings));
 }
 
-CommandResult EditorSession::paste_objects(const std::vector<PolygonObject>& copied_objects, std::optional<quader_poly::Vec3> target_center)
+CommandResult EditorSession::paste_objects(const std::vector<PolygonObject>& copied_objects, std::optional<quader::QVec3> target_center)
 {
 	const CommandResult result = quader_editor_core::paste_objects(state_.objects, state_.next_object_id, state_.selection_mode, state_.active_object_id, copied_objects, target_center);
 	note_content_result(result);

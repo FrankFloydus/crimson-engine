@@ -57,7 +57,7 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
         AssetId materialId,
         const MaterialDocument* material,
         const AssetRegistry& assets,
-        const Mat4& worldTransform,
+        const QMat4& worldTransform,
         bool castShadows,
         bool doubleSided,
         std::uint64_t materialRevision) {

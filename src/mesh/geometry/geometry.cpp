@@ -25,66 +25,66 @@
 namespace quader_geometry::detail {
 
 /**
- * Enumerates MathBackend values used by the geometry layer.
+ * Enumerates QMathBackend values used by the geometry layer.
  */
-enum class MathBackend {
+enum class QMathBackend {
 	local,
 	gte,
 };
 
-[[nodiscard]] constexpr MathBackend active_math_backend()
+[[nodiscard]] constexpr QMathBackend active_math_backend()
 {
-	return MathBackend::gte;
+	return QMathBackend::gte;
 }
 
-static_assert(active_math_backend() == MathBackend::gte);
+static_assert(active_math_backend() == QMathBackend::gte);
 
-[[nodiscard]] gte::Vector2<double> to_gte(Vec2d value)
+[[nodiscard]] gte::Vector2<double> to_gte(QVec2d value)
 {
 	return { value.x, value.y };
 }
 
-[[nodiscard]] gte::Vector3<double> to_gte(Vec3d value)
+[[nodiscard]] gte::Vector3<double> to_gte(QVec3d value)
 {
 	return { value.x, value.y, value.z };
 }
 
-[[nodiscard]] Vec2d from_gte(gte::Vector2<double> value)
+[[nodiscard]] QVec2d from_gte(gte::Vector2<double> value)
 {
 	return { value[0], value[1] };
 }
 
-[[nodiscard]] Vec3d from_gte(gte::Vector3<double> value)
+[[nodiscard]] QVec3d from_gte(gte::Vector3<double> value)
 {
 	return { value[0], value[1], value[2] };
 }
 
-[[nodiscard]] gte::Ray3<double> to_gte(const Ray3<double>& ray)
+[[nodiscard]] gte::Ray3<double> to_gte(const QRay3<double>& ray)
 {
 	return { to_gte(ray.origin), to_gte(ray.direction) };
 }
 
-[[nodiscard]] gte::Line3<double> to_gte(const Line3<double>& line)
+[[nodiscard]] gte::Line3<double> to_gte(const QLine3<double>& line)
 {
 	return { to_gte(line.origin), to_gte(line.direction) };
 }
 
-[[nodiscard]] gte::Segment2<double> to_gte_segment(Vec2d segment_a, Vec2d segment_b)
+[[nodiscard]] gte::Segment2<double> to_gte_segment(QVec2d segment_a, QVec2d segment_b)
 {
 	return { to_gte(segment_a), to_gte(segment_b) };
 }
 
-[[nodiscard]] gte::Segment3<double> to_gte(const Segment3<double>& segment)
+[[nodiscard]] gte::Segment3<double> to_gte(const QSegment3<double>& segment)
 {
 	return { to_gte(segment.a), to_gte(segment.b) };
 }
 
-[[nodiscard]] gte::Triangle3<double> to_gte(const Triangle3<double>& triangle)
+[[nodiscard]] gte::Triangle3<double> to_gte(const QTriangle3<double>& triangle)
 {
 	return { to_gte(triangle.a), to_gte(triangle.b), to_gte(triangle.c) };
 }
 
-[[nodiscard]] gte::AlignedBox3<double> to_gte(const Aabb3<double>& aabb)
+[[nodiscard]] gte::AlignedBox3<double> to_gte(const QAabb3<double>& aabb)
 {
 	return { to_gte(aabb.min), to_gte(aabb.max) };
 }
@@ -100,19 +100,19 @@ static_assert(sizeof(gte::FIQuery<double, gte::Ray3<double>, gte::Triangle3<doub
 static_assert(sizeof(gte::FIQuery<double, gte::Ray3<double>, gte::AlignedBox3<double>>) > 0);
 static_assert(sizeof(gte::FIQuery<double, gte::Segment2<double>, gte::Segment2<double>>) > 0);
 
-[[nodiscard]] double triangle_projected_area_abs(Vec2d a, Vec2d b, Vec2d c)
+[[nodiscard]] double triangle_projected_area_abs(QVec2d a, QVec2d b, QVec2d c)
 {
 	const std::array points { a, b, c };
-	return std::abs(polygon_signed_area<double>(std::span<const Vec2d>(points)));
+	return std::abs(polygon_signed_area<double>(std::span<const QVec2d>(points)));
 }
 
 } // namespace quader_geometry::detail
 
 namespace quader_geometry {
 
-ClosestSegmentPoint2<double> closest_point_on_segment(Vec2d point, Vec2d segment_a, Vec2d segment_b, double epsilon)
+QClosestSegmentPoint2<double> closest_point_on_segment(QVec2d point, QVec2d segment_a, QVec2d segment_b, double epsilon)
 {
-	const Vec2d segment_direction = segment_b - segment_a;
+	const QVec2d segment_direction = segment_b - segment_a;
 	if (length_squared(segment_direction) <= epsilon * epsilon) {
 		return { true, 0.0, segment_a, length_squared(point - segment_a) };
 	}
@@ -122,14 +122,14 @@ ClosestSegmentPoint2<double> closest_point_on_segment(Vec2d point, Vec2d segment
 	return { true, result.parameter, detail::from_gte(result.closest[1]), result.sqrDistance };
 }
 
-double point_segment_distance_squared(Vec2d point, Vec2d segment_a, Vec2d segment_b, double epsilon)
+double point_segment_distance_squared(QVec2d point, QVec2d segment_a, QVec2d segment_b, double epsilon)
 {
 	return closest_point_on_segment(point, segment_a, segment_b, epsilon).distance_squared;
 }
 
-ClosestSegmentPoint3<double> closest_point_on_segment(Vec3d point, const Segment3<double>& segment, double epsilon)
+QClosestSegmentPoint3<double> closest_point_on_segment(QVec3d point, const QSegment3<double>& segment, double epsilon)
 {
-	const Vec3d segment_direction = segment.b - segment.a;
+	const QVec3d segment_direction = segment.b - segment.a;
 	if (length_squared(segment_direction) <= epsilon * epsilon) {
 		return { true, 0.0, segment.a, length_squared(point - segment.a) };
 	}
@@ -139,16 +139,16 @@ ClosestSegmentPoint3<double> closest_point_on_segment(Vec3d point, const Segment
 	return { true, result.parameter, detail::from_gte(result.closest[1]), result.sqrDistance };
 }
 
-double point_segment_distance_squared(Vec3d point, const Segment3<double>& segment, double epsilon)
+double point_segment_distance_squared(QVec3d point, const QSegment3<double>& segment, double epsilon)
 {
 	return closest_point_on_segment(point, segment, epsilon).distance_squared;
 }
 
-ClassifiedSegmentIntersection2<double> intersect_segments_2d(
-	Vec2d a, Vec2d b, Vec2d c, Vec2d d, double epsilon)
+QClassifiedSegmentIntersection2<double> intersect_segments_2d(
+	QVec2d a, QVec2d b, QVec2d c, QVec2d d, double epsilon)
 {
-	const Vec2d first_direction = b - a;
-	const Vec2d second_direction = d - c;
+	const QVec2d first_direction = b - a;
+	const QVec2d second_direction = d - c;
 	if (length_squared(first_direction) <= epsilon * epsilon ||
 			length_squared(second_direction) <= epsilon * epsilon) {
 		return detail::classify_segments_2d_local(a, b, c, d, epsilon);
@@ -173,9 +173,9 @@ ClassifiedSegmentIntersection2<double> intersect_segments_2d(
 			point(0));
 	}
 
-	ClassifiedSegmentIntersection2<double> classified;
+	QClassifiedSegmentIntersection2<double> classified;
 	classified.hit = true;
-	classified.kind = SegmentIntersectionKind2::overlap;
+	classified.kind = QSegmentIntersectionKind2::overlap;
 	classified.point_count = 2;
 	classified.first_factors[0] = std::clamp(result.segment0Parameter[0], 0.0, 1.0);
 	classified.first_factors[1] = std::clamp(result.segment0Parameter[1], 0.0, 1.0);
@@ -186,7 +186,7 @@ ClassifiedSegmentIntersection2<double> intersect_segments_2d(
 	return classified;
 }
 
-std::vector<TriangleIndices> triangulate_projected_polygon(std::span<const Vec2d> points, double epsilon, double coverage_tolerance_ratio)
+std::vector<QTriangleIndices> triangulate_projected_polygon(std::span<const QVec2d> points, double epsilon, double coverage_tolerance_ratio)
 {
 	if (points.size() < 3U) {
 		return {};
@@ -201,7 +201,7 @@ std::vector<TriangleIndices> triangulate_projected_polygon(std::span<const Vec2d
 	std::vector<std::vector<EarcutPoint>> polygon;
 	polygon.emplace_back();
 	polygon.front().reserve(points.size());
-	for (const Vec2d point : points) {
+	for (const QVec2d point : points) {
 		polygon.front().push_back({ point.x, point.y });
 	}
 
@@ -210,7 +210,7 @@ std::vector<TriangleIndices> triangulate_projected_polygon(std::span<const Vec2d
 		return {};
 	}
 
-	std::vector<TriangleIndices> triangles;
+	std::vector<QTriangleIndices> triangles;
 	triangles.reserve(indices.size() / 3U);
 	double covered_area = 0.0;
 	for (std::size_t index = 0; index < indices.size(); index += 3U) {
@@ -241,20 +241,20 @@ std::vector<TriangleIndices> triangulate_projected_polygon(std::span<const Vec2d
 	return triangles;
 }
 
-RayPlaneHit<float> intersect_ray_plane(const Ray3<float>& ray, const Plane3<float>& plane, float epsilon)
+QRayPlaneHit<float> intersect_ray_plane(const QRay3<float>& ray, const QPlane3<float>& plane, float epsilon)
 {
-	const RayPlaneHit<double> hit =
-		intersect_ray_plane<double>(Ray3<double>(ray), Plane3<double>(plane), static_cast<double>(epsilon));
+	const QRayPlaneHit<double> hit =
+		intersect_ray_plane<double>(QRay3<double>(ray), QPlane3<double>(plane), static_cast<double>(epsilon));
 	if (!hit.hit) {
 		return {};
 	}
-	return { true, static_cast<float>(hit.distance), static_cast<Vec3f>(hit.point) };
+	return { true, static_cast<float>(hit.distance), static_cast<QVec3f>(hit.point) };
 }
 
-RayTriangleHit<double> intersect_ray_triangle(const Ray3<double>& ray, const Triangle3<double>& triangle, double epsilon)
+QRayTriangleHit<double> intersect_ray_triangle(const QRay3<double>& ray, const QTriangle3<double>& triangle, double epsilon)
 {
-	const Vec3d edge1 = triangle.b - triangle.a;
-	const Vec3d edge2 = triangle.c - triangle.a;
+	const QVec3d edge1 = triangle.b - triangle.a;
+	const QVec3d edge2 = triangle.c - triangle.a;
 	const double determinant = dot(edge1, cross(ray.direction, edge2));
 	if (std::abs(determinant) <= epsilon) {
 		return {};
@@ -276,7 +276,7 @@ RayTriangleHit<double> intersect_ray_triangle(const Ray3<double>& ray, const Tri
 	};
 }
 
-RayAabbHit<double> intersect_ray_aabb(const Ray3<double>& ray, const Aabb3<double>& aabb, double epsilon)
+QRayAabbHit<double> intersect_ray_aabb(const QRay3<double>& ray, const QAabb3<double>& aabb, double epsilon)
 {
 	if (!aabb_is_valid(aabb)) {
 		return {};
@@ -303,7 +303,7 @@ RayAabbHit<double> intersect_ray_aabb(const Ray3<double>& ray, const Aabb3<doubl
 	};
 }
 
-ClosestRayPoint<double> closest_point_on_ray(Vec3d point, const Ray3<double>& ray, double epsilon)
+QClosestRayPoint<double> closest_point_on_ray(QVec3d point, const QRay3<double>& ray, double epsilon)
 {
 	if (length_squared(ray.direction) <= epsilon * epsilon) {
 		return {};
@@ -314,22 +314,22 @@ ClosestRayPoint<double> closest_point_on_ray(Vec3d point, const Ray3<double>& ra
 	return { true, result.parameter, detail::from_gte(result.closest[1]), result.sqrDistance };
 }
 
-double point_ray_distance_squared(Vec3d point, const Ray3<double>& ray, double epsilon)
+double point_ray_distance_squared(QVec3d point, const QRay3<double>& ray, double epsilon)
 {
-	const ClosestRayPoint<double> closest = closest_point_on_ray(point, ray, epsilon);
+	const QClosestRayPoint<double> closest = closest_point_on_ray(point, ray, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<double>::infinity();
 }
 
-SegmentRayClosestPoints<double> closest_points_segment_ray(const Segment3<double>& segment, const Ray3<double>& ray, double epsilon)
+QSegmentRayClosestPoints<double> closest_points_segment_ray(const QSegment3<double>& segment, const QRay3<double>& ray, double epsilon)
 {
-	const Vec3d segment_direction = segment.b - segment.a;
+	const QVec3d segment_direction = segment.b - segment.a;
 	const double segment_length_squared = length_squared(segment_direction);
 	if (length_squared(ray.direction) <= epsilon * epsilon) {
 		return {};
 	}
 
 	if (segment_length_squared <= epsilon * epsilon) {
-		const ClosestRayPoint<double> closest = closest_point_on_ray(segment.a, ray, epsilon);
+		const QClosestRayPoint<double> closest = closest_point_on_ray(segment.a, ray, epsilon);
 		if (!closest.valid) {
 			return {};
 		}
@@ -337,7 +337,7 @@ SegmentRayClosestPoints<double> closest_points_segment_ray(const Segment3<double
 	}
 
 	const auto candidate_for = [&](double segment_factor, double ray_distance) {
-		SegmentRayClosestPoints<double> candidate;
+		QSegmentRayClosestPoints<double> candidate;
 		candidate.valid = true;
 		candidate.segment_factor = std::clamp(segment_factor, 0.0, 1.0);
 		candidate.ray_distance = std::max(0.0, ray_distance);
@@ -347,8 +347,8 @@ SegmentRayClosestPoints<double> closest_points_segment_ray(const Segment3<double
 		return candidate;
 	};
 
-	SegmentRayClosestPoints<double> best = candidate_for(0.0, 0.0);
-	const auto keep_best = [&](SegmentRayClosestPoints<double> candidate) {
+	QSegmentRayClosestPoints<double> best = candidate_for(0.0, 0.0);
+	const auto keep_best = [&](QSegmentRayClosestPoints<double> candidate) {
 		if (!best.valid || candidate.distance_squared < best.distance_squared) {
 			best = candidate;
 		}
@@ -366,17 +366,17 @@ SegmentRayClosestPoints<double> closest_points_segment_ray(const Segment3<double
 	return best;
 }
 
-double segment_ray_distance_squared(const Segment3<double>& segment, const Ray3<double>& ray, double epsilon)
+double segment_ray_distance_squared(const QSegment3<double>& segment, const QRay3<double>& ray, double epsilon)
 {
-	const SegmentRayClosestPoints<double> closest = closest_points_segment_ray(segment, ray, epsilon);
+	const QSegmentRayClosestPoints<double> closest = closest_points_segment_ray(segment, ray, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<double>::infinity();
 }
 
-SegmentSegmentClosestPoints<double> closest_points_segment_segment(
-	const Segment3<double>& first, const Segment3<double>& second, double epsilon)
+QSegmentSegmentClosestPoints<double> closest_points_segment_segment(
+	const QSegment3<double>& first, const QSegment3<double>& second, double epsilon)
 {
-	const Vec3d first_direction = first.b - first.a;
-	const Vec3d second_direction = second.b - second.a;
+	const QVec3d first_direction = first.b - first.a;
+	const QVec3d second_direction = second.b - second.a;
 	if (length_squared(first_direction) <= epsilon * epsilon ||
 			length_squared(second_direction) <= epsilon * epsilon) {
 		return closest_points_segment_segment<double>(first, second, epsilon);
@@ -384,8 +384,8 @@ SegmentSegmentClosestPoints<double> closest_points_segment_segment(
 
 	gte::DCPQuery<double, gte::Segment3<double>, gte::Segment3<double>> query;
 	const auto result = query(detail::to_gte(first), detail::to_gte(second));
-	const Vec3d first_point = detail::from_gte(result.closest[0]);
-	const Vec3d second_point = detail::from_gte(result.closest[1]);
+	const QVec3d first_point = detail::from_gte(result.closest[0]);
+	const QVec3d second_point = detail::from_gte(result.closest[1]);
 	return {
 		true,
 		result.sqrDistance <= epsilon * epsilon,
@@ -398,13 +398,13 @@ SegmentSegmentClosestPoints<double> closest_points_segment_segment(
 	};
 }
 
-double segment_segment_distance_squared(const Segment3<double>& first, const Segment3<double>& second, double epsilon)
+double segment_segment_distance_squared(const QSegment3<double>& first, const QSegment3<double>& second, double epsilon)
 {
-	const SegmentSegmentClosestPoints<double> closest = closest_points_segment_segment(first, second, epsilon);
+	const QSegmentSegmentClosestPoints<double> closest = closest_points_segment_segment(first, second, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<double>::infinity();
 }
 
-LineLineClosestPoints<double> closest_points_line_line(const Line3<double>& first, const Line3<double>& second, double epsilon)
+QLineLineClosestPoints<double> closest_points_line_line(const QLine3<double>& first, const QLine3<double>& second, double epsilon)
 {
 	if (length_squared(first.direction) <= epsilon * epsilon || length_squared(second.direction) <= epsilon * epsilon) {
 		return {};
@@ -412,8 +412,8 @@ LineLineClosestPoints<double> closest_points_line_line(const Line3<double>& firs
 
 	gte::DCPQuery<double, gte::Line3<double>, gte::Line3<double>> query;
 	const auto result = query(detail::to_gte(first), detail::to_gte(second));
-	const Vec3d first_point = detail::from_gte(result.closest[0]);
-	const Vec3d second_point = detail::from_gte(result.closest[1]);
+	const QVec3d first_point = detail::from_gte(result.closest[0]);
+	const QVec3d second_point = detail::from_gte(result.closest[1]);
 	return {
 		true,
 		result.sqrDistance <= epsilon * epsilon,
@@ -426,9 +426,9 @@ LineLineClosestPoints<double> closest_points_line_line(const Line3<double>& firs
 	};
 }
 
-double line_line_distance_squared(const Line3<double>& first, const Line3<double>& second, double epsilon)
+double line_line_distance_squared(const QLine3<double>& first, const QLine3<double>& second, double epsilon)
 {
-	const LineLineClosestPoints<double> closest = closest_points_line_line(first, second, epsilon);
+	const QLineLineClosestPoints<double> closest = closest_points_line_line(first, second, epsilon);
 	return closest.valid ? closest.distance_squared : std::numeric_limits<double>::infinity();
 }
 

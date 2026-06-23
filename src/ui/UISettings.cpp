@@ -6,40 +6,20 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/UISettings.h"
 
-#include <algorithm>
-#include <cctype>
+#include "core/QStr.h"
+
 #include <cstdlib>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <utility>
 
 namespace quader {
 namespace {
 
-std::string trim(std::string value) {
-    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    });
-    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    }).base();
-    if (first >= last) {
-        return {};
-    }
-    return {first, last};
-}
-
 bool parseBool(std::string value, bool fallback) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    if (value == "1" || value == "true" || value == "yes" || value == "on") {
-        return true;
-    }
-    if (value == "0" || value == "false" || value == "no" || value == "off") {
-        return false;
-    }
-    return fallback;
+    const std::optional<bool> parsed = QStr::parseBoolToken(value);
+    return parsed.value_or(fallback);
 }
 
 std::filesystem::path localAppDataDirectory(const std::filesystem::path& executableDir) {
@@ -74,18 +54,18 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
     std::string line;
     while (std::getline(file, line)) {
-        line = trim(line);
+        line = QStr::trimAsciiWhitespace(line);
         if (line.empty() || line.front() == '#' || line.front() == '[') {
             continue;
         }
 
-        const std::size_t equals = line.find('=');
-        if (equals == std::string::npos) {
+        const std::optional<QStrSplitOnce> split = QStr::splitOnce(line, '=');
+        if (!split) {
             continue;
         }
 
-        const std::string key = trim(line.substr(0, equals));
-        const std::string value = trim(line.substr(equals + 1));
+        const std::string key = QStr::trimAsciiWhitespace(split->before);
+        const std::string value = QStr::trimAsciiWhitespace(split->after);
         if (key == uiPanelKey(UIPanelId::Outliner)) {
             settings.outlinerVisible_ = parseBool(value, settings.outlinerVisible_);
         } else if (key == uiPanelKey(UIPanelId::Inspector)) {
@@ -162,7 +142,7 @@ void UISettings::setPanelVisible(UIPanelId id, bool visible) {
 }
 
 void UISettings::setLocale(std::string locale) {
-    locale = trim(std::move(locale));
+    locale = QStr::trimAsciiWhitespace(locale);
     if (!locale.empty()) {
         locale_ = std::move(locale);
     }

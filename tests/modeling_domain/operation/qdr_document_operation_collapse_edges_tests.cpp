@@ -16,7 +16,7 @@ TEST_CASE("collapse edges replaces an edge with one centered survivor vertex", "
 	const Vertex* second = find_vertex(document, source_edge.b);
 	REQUIRE(first != nullptr);
 	REQUIRE(second != nullptr);
-	const Vec3 midpoint = (first->position + second->position) / 2.0F;
+	const quader::QVec3 midpoint = (first->position + second->position) / 2.0F;
 	Selection selection = qdr_test::edge_selection({ source_edge }, source_edge);
 
 	const OperationResult result = collapse_selected_edges(document, selection);

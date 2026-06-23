@@ -220,7 +220,7 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
     const RadialAlignDriverVertices driver_vertices = radial_align_driver_vertex_ids(document, selection, selected_ids);
     const std::vector<ElementId>& vertex_ids = driver_vertices.ids;
 
-    Vec3 center;
+    quader::QVec3 center;
     std::vector<Vertex*> vertices;
     vertices.reserve(vertex_ids.size());
     for (const ElementId vertex_id : vertex_ids) {
@@ -236,7 +236,7 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
     }
     center = center / static_cast<float>(vertices.size());
 
-    Vec3 normal;
+    quader::QVec3 normal;
     if (selection.mode == SelectionMode::face) {
         for (const ElementId face_id : selection.faces) {
             const Face* face = find_face(candidate, face_id);
@@ -247,8 +247,8 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
         normal = normalize_or_zero(normal);
     }
 
-    Vec3 u_axis;
-    Vec3 v_axis;
+    quader::QVec3 u_axis;
+    quader::QVec3 v_axis;
     if (length_squared(normal) > epsilon) {
         u_axis = cross(normal, { 0.0F, 1.0F, 0.0F });
         if (length_squared(u_axis) <= epsilon) {
@@ -257,8 +257,8 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
         u_axis = normalize_or_zero(u_axis);
         v_axis = normalize_or_zero(cross(normal, u_axis));
     } else {
-        Vec3 min = vertices.front()->position;
-        Vec3 max = vertices.front()->position;
+        quader::QVec3 min = vertices.front()->position;
+        quader::QVec3 max = vertices.front()->position;
         for (const Vertex* vertex : vertices) {
             min.x = std::min(min.x, vertex->position.x);
             min.y = std::min(min.y, vertex->position.y);
@@ -267,7 +267,7 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
             max.y = std::max(max.y, vertex->position.y);
             max.z = std::max(max.z, vertex->position.z);
         }
-        const Vec3 extents = max - min;
+        const quader::QVec3 extents = max - min;
         if (extents.x <= extents.y && extents.x <= extents.z) {
             normal = { 1.0F, 0.0F, 0.0F };
             u_axis = { 0.0F, 1.0F, 0.0F };
@@ -297,7 +297,7 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
     radial_vertices.reserve(vertices.size());
     float radius_sum = 0.0F;
     for (Vertex* vertex : vertices) {
-        const Vec3 delta = vertex->position - center;
+        const quader::QVec3 delta = vertex->position - center;
         const float u = dot(delta, u_axis);
         const float v = dot(delta, v_axis);
         const float radius = std::sqrt((u * u) + (v * v));
@@ -347,7 +347,7 @@ OperationResult radial_align_selection_impl(Document& document, Selection& selec
     for (std::size_t index = 0; index < radial_vertices.size(); ++index) {
         Vertex* vertex = radial_vertices[index].vertex;
         const float angle = start_angle + (angle_direction * angle_step * static_cast<float>(index));
-        const Vec3 desired =
+        const quader::QVec3 desired =
             center +
             (u_axis * (std::cos(angle) * radius)) +
             (v_axis * (std::sin(angle) * radius)) +

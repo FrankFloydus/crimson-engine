@@ -22,7 +22,7 @@ enum class ViewportRenderMode {
  * Represents an Environment Document value used by the render extraction and Filament resource layer.
  */
 struct EnvironmentDocument {
-    Vec3 clearColor = {0.051f, 0.051f, 0.051f};
+    QVec3 clearColor = {0.051f, 0.051f, 0.051f};
     float clearAlpha = 1.0f;
 };
 

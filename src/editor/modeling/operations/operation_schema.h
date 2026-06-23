@@ -73,10 +73,10 @@ struct CommandDistanceFact {
 };
 
 /**
- * Represents a Command Vec3 Fact value used by the modeling runtime domain.
+ * Represents a Command QVec3 Fact value used by the modeling runtime domain.
  */
 struct CommandVec3Fact {
-	quader_poly::Vec3 value {};
+	quader::QVec3 value {};
 	bool valid = false;
 };
 
@@ -374,7 +374,7 @@ inline float bevel_vertices_distance_from_settings(BevelVerticesOperationSetting
 	return static_cast<float>(command_grid_world_size_or_default(settings.focused_grid));
 }
 
-inline quader_poly::Vec3 duplicate_meshes_offset_from_settings(DuplicateMeshesOperationSettings settings)
+inline quader::QVec3 duplicate_meshes_offset_from_settings(DuplicateMeshesOperationSettings settings)
 {
 	if (settings.explicit_offset.valid &&
 			std::isfinite(settings.explicit_offset.value.x) &&

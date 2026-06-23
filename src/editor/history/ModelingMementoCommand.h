@@ -139,7 +139,7 @@ private:
  */
 class MoveSelectionHistoryCommand final : public ModelingMementoCommand {
 public:
-    MoveSelectionHistoryCommand(ModelingSessionService& modeling, Vec3 delta)
+    MoveSelectionHistoryCommand(ModelingSessionService& modeling, QVec3 delta)
         : ModelingMementoCommand(modeling, "Move Selection")
         , delta_(delta) {}
 
@@ -148,7 +148,7 @@ private:
         return modeling().moveSelection(delta_);
     }
 
-    Vec3 delta_;
+    QVec3 delta_;
 };
 
 /**
@@ -159,7 +159,7 @@ public:
     TransformSelectionHistoryCommand(
             ModelingSessionService& modeling,
             ModelingTransform3 transform,
-            Vec3 pivot)
+            QVec3 pivot)
         : ModelingMementoCommand(modeling, "Transform Selection")
         , transform_(transform)
         , pivot_(pivot) {}
@@ -170,7 +170,7 @@ private:
     }
 
     ModelingTransform3 transform_;
-    Vec3 pivot_;
+    QVec3 pivot_;
 };
 
 /**

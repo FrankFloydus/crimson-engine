@@ -11,13 +11,13 @@ TEST_CASE("translate operation moves selected object vertices and records conten
 	SECTION("object mode moves every selected object vertex")
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
-		const quader_poly::Vec3 before = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 before = session.objects().front().document.vertices.front().position;
 
 		const quader_editor_core::CommandResult result = session.translate_selected({ 2.0F, 0.0F, 0.0F });
 
 		REQUIRE(result.ok);
 		REQUIRE(result.changed);
-		const quader_poly::Vec3 after = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 after = session.objects().front().document.vertices.front().position;
 		REQUIRE(after.x == Catch::Approx(before.x + 2.0F));
 		REQUIRE(after.y == Catch::Approx(before.y));
 		REQUIRE(after.z == Catch::Approx(before.z));
@@ -27,8 +27,8 @@ TEST_CASE("translate operation moves selected object vertices and records conten
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const quader_poly::ElementId selected_id = session.objects().front().document.vertices.front().id;
-		const quader_poly::Vec3 selected_before = session.objects().front().document.vertices.front().position;
-		const quader_poly::Vec3 unselected_before = session.objects().front().document.vertices[1].position;
+		const quader::QVec3 selected_before = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 unselected_before = session.objects().front().document.vertices[1].position;
 		session.set_component_selection(
 			session.objects().front().id,
 			qdr_test::vertex_selection({ selected_id }, selected_id),
@@ -38,7 +38,7 @@ TEST_CASE("translate operation moves selected object vertices and records conten
 
 		REQUIRE(result.ok);
 		REQUIRE(result.changed);
-		REQUIRE(qdr_test::vec_nearly_equal(session.objects().front().document.vertices.front().position, selected_before + quader_poly::Vec3 { 0.0F, 3.0F, 0.0F }));
+		REQUIRE(qdr_test::vec_nearly_equal(session.objects().front().document.vertices.front().position, selected_before + quader::QVec3 { 0.0F, 3.0F, 0.0F }));
 		REQUIRE(qdr_test::vec_nearly_equal(session.objects().front().document.vertices[1].position, unselected_before));
 	}
 

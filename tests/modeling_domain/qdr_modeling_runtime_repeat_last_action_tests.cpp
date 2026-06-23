@@ -19,8 +19,8 @@ namespace qec = quader_editor_core;
 namespace {
 
 qec::EditorSession selected_box_session(
-		quader_poly::Vec3 min_bounds = { -1.0F, -1.0F, -1.0F },
-		quader_poly::Vec3 max_bounds = { 1.0F, 1.0F, 1.0F })
+		quader::QVec3 min_bounds = { -1.0F, -1.0F, -1.0F },
+		quader::QVec3 max_bounds = { 1.0F, 1.0F, 1.0F })
 {
 	qec::EditorSession session;
 	const qec::CommandResult create = session.create_box_from_bounds(min_bounds, max_bounds);
@@ -66,7 +66,7 @@ qec::EditorOperationCommand selection_command(qec::EditorOperationId operation_i
 	return command;
 }
 
-qec::EditorOperationCommand duplicate_command(quader_poly::Vec3 offset)
+qec::EditorOperationCommand duplicate_command(quader::QVec3 offset)
 {
 	qec::DuplicateMeshesOperationSettings settings;
 	settings.explicit_offset = { offset, true };
@@ -103,7 +103,7 @@ void select_first_face(qec::EditorSession& session)
 	session.set_component_selection(object.id, selection, qec::SelectionMode::face);
 }
 
-qec::TransformDragState move_drag(quader_poly::Vec3 delta, qec::TransformDragOperation operation = qec::TransformDragOperation::transform)
+qec::TransformDragState move_drag(quader::QVec3 delta, qec::TransformDragOperation operation = qec::TransformDragOperation::transform)
 {
 	qec::TransformDragState drag;
 	drag.active = true;
@@ -125,7 +125,7 @@ qec::TransformDragState rotate_drag(double angle_degrees)
 	return drag;
 }
 
-qec::TransformDragState scale_drag(quader_poly::Vec3 scale, qec::TransformDragOperation operation = qec::TransformDragOperation::transform)
+qec::TransformDragState scale_drag(quader::QVec3 scale, qec::TransformDragOperation operation = qec::TransformDragOperation::transform)
 {
 	qec::TransformDragState drag;
 	drag.active = true;

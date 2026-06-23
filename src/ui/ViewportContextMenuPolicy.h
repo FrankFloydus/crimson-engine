@@ -20,9 +20,9 @@ struct ViewportContextMenuOpenRequest {
     bool releaseInsideViewport = false;
     bool targetHit = false;
     bool hasActions = false;
-    Vec2 pressScreen = {};
-    Vec2 releaseScreen = {};
-    Vec2 accumulatedDragDelta = {};
+    QVec2 pressScreen = {};
+    QVec2 releaseScreen = {};
+    QVec2 accumulatedDragDelta = {};
     float maxClickDistanceSquared = 16.0f;
 };
 
@@ -32,7 +32,7 @@ struct ViewportContextMenuOpenRequest {
 struct ViewportContextMenuHoverRequest {
     bool rightPressTracked = false;
     bool flyHudActive = false;
-    Vec2 accumulatedDragDelta = {};
+    QVec2 accumulatedDragDelta = {};
     float maxClickDistanceSquared = 16.0f;
 };
 

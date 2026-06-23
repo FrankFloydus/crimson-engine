@@ -6,15 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/SceneBounds.h"
 
+#include "math/GlmBridge.h"
+
 #include <algorithm>
 #include <array>
 
 namespace quader {
 namespace {
 
-std::array<Vec3, 8> boundsCorners(const SceneBounds& bounds) {
-    const Vec3& min = bounds.min;
-    const Vec3& max = bounds.max;
+std::array<QVec3, 8> boundsCorners(const SceneBounds& bounds) {
+    const QVec3& min = bounds.min;
+    const QVec3& max = bounds.max;
     return {{
             {min.x, min.y, min.z},
             {max.x, min.y, min.z},
@@ -28,7 +30,7 @@ std::array<Vec3, 8> boundsCorners(const SceneBounds& bounds) {
 }
 
 void includeBounds(std::optional<SceneBounds>& result, const SceneBounds& bounds) {
-    for (const Vec3 corner : boundsCorners(bounds)) {
+    for (const QVec3 corner : boundsCorners(bounds)) {
         if (!result) {
             result = SceneBounds{.min = corner, .max = corner};
         } else {
@@ -54,7 +56,7 @@ std::optional<SceneBounds> localMeshBounds(const MeshAsset& mesh) {
     return bounds;
 }
 
-void includePoint(SceneBounds& bounds, Vec3 point) {
+void includePoint(SceneBounds& bounds, QVec3 point) {
     bounds.min.x = std::min(bounds.min.x, point.x);
     bounds.min.y = std::min(bounds.min.y, point.y);
     bounds.min.z = std::min(bounds.min.z, point.z);
@@ -63,7 +65,7 @@ void includePoint(SceneBounds& bounds, Vec3 point) {
     bounds.max.z = std::max(bounds.max.z, point.z);
 }
 
-Vec3 boundsCenter(const SceneBounds& bounds) {
+QVec3 boundsCenter(const SceneBounds& bounds) {
     return (bounds.min + bounds.max) * 0.5f;
 }
 
@@ -77,14 +79,14 @@ std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, cons
         return std::nullopt;
     }
 
-    const Mat4 worldFromLocal = document.worldTransformMatrix(entity);
+    const QMat4 worldFromLocal = document.worldTransformMatrix(entity);
     const MeshComponent* meshComponent = document.mesh(entity);
     if (meshComponent) {
         if (const MeshAsset* mesh = assets.mesh(meshComponent->mesh)) {
             if (const std::optional<SceneBounds> localBounds = localMeshBounds(*mesh)) {
                 std::optional<SceneBounds> result;
-                for (const Vec3 localCorner : boundsCorners(*localBounds)) {
-                    const Vec3 worldCorner = transformPoint(worldFromLocal, localCorner);
+                for (const QVec3 localCorner : boundsCorners(*localBounds)) {
+                    const QVec3 worldCorner = transformPoint(worldFromLocal, localCorner);
                     if (!result) {
                         result = SceneBounds{.min = worldCorner, .max = worldCorner};
                     } else {
@@ -96,7 +98,7 @@ std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, cons
         }
     }
 
-    const Vec3 worldPosition = transformPoint(worldFromLocal, {});
+    const QVec3 worldPosition = transformPoint(worldFromLocal, {});
     return SceneBounds{.min = worldPosition, .max = worldPosition};
 }
 

@@ -25,15 +25,15 @@ CircularBoundaryFixture make_circular_boundary_fixture()
 	CircularBoundaryFixture fixture;
 	std::array<ElementId, 8> inner {};
 	std::array<ElementId, 8> outer {};
-	const std::array<Vec3, 8> directions {
-		Vec3 { -0.70710677F, 0.0F, -0.70710677F },
-		Vec3 { 0.0F, 0.0F, -1.0F },
-		Vec3 { 0.70710677F, 0.0F, -0.70710677F },
-		Vec3 { 1.0F, 0.0F, 0.0F },
-		Vec3 { 0.70710677F, 0.0F, 0.70710677F },
-		Vec3 { 0.0F, 0.0F, 1.0F },
-		Vec3 { -0.70710677F, 0.0F, 0.70710677F },
-		Vec3 { -1.0F, 0.0F, 0.0F },
+	const std::array<quader::QVec3, 8> directions {
+		quader::QVec3 { -0.70710677F, 0.0F, -0.70710677F },
+		quader::QVec3 { 0.0F, 0.0F, -1.0F },
+		quader::QVec3 { 0.70710677F, 0.0F, -0.70710677F },
+		quader::QVec3 { 1.0F, 0.0F, 0.0F },
+		quader::QVec3 { 0.70710677F, 0.0F, 0.70710677F },
+		quader::QVec3 { 0.0F, 0.0F, 1.0F },
+		quader::QVec3 { -0.70710677F, 0.0F, 0.70710677F },
+		quader::QVec3 { -1.0F, 0.0F, 0.0F },
 	};
 
 	for (std::size_t index = 0; index < directions.size(); ++index) {
@@ -60,7 +60,7 @@ TEST_CASE("fill hole creates one face from a selected open edge loop", "[operati
 {
 	Document document = make_cube({});
 	const Face removed_face = document.faces.front();
-	const Vec3 removed_face_normal = face_normal(document, removed_face);
+	const quader::QVec3 removed_face_normal = face_normal(document, removed_face);
 	document.faces.erase(document.faces.begin());
 	Selection selection;
 	selection.mode = SelectionMode::edge;
@@ -118,7 +118,7 @@ TEST_CASE("fill hole orients caps from adjacent boundary winding after circular 
 		fixture.inner_edges[7],
 	}, fixture.inner_edges.back());
 
-	REQUIRE(extrude_selected_elements(fixture.document, selection, Vec3 { 0.0F, -0.5F, 0.0F }).changed);
+	REQUIRE(extrude_selected_elements(fixture.document, selection, quader::QVec3 { 0.0F, -0.5F, 0.0F }).changed);
 	const Selection copied_boundary_selection = selection;
 
 	const OperationResult result = fill_hole_from_selected_edges(fixture.document, selection);
@@ -128,7 +128,7 @@ TEST_CASE("fill hole orients caps from adjacent boundary winding after circular 
 	REQUIRE(selection.faces.size() == 1U);
 	const Face* fill_face = find_face(fixture.document, selection.faces.front());
 	REQUIRE(fill_face != nullptr);
-	REQUIRE(dot(face_normal(fixture.document, *fill_face), Vec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
+	REQUIRE(dot(face_normal(fixture.document, *fill_face), quader::QVec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
 	REQUIRE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
 	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 

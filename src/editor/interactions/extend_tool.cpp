@@ -87,12 +87,12 @@ public:
 		return preview_from_distance(state, raw_drag_distance(pixels, grid_size), precision, grid_enabled, grid_size);
 	}
 
-	[[nodiscard]] quader_poly::Vec3 handle_axis_for_normal(quader_poly::Vec3 normal) const
+	[[nodiscard]] quader::QVec3 handle_axis_for_normal(quader::QVec3 normal) const
 	{
 		if (vec3_is_tiny(normal)) {
 			return { 0.0F, 1.0F, 0.0F };
 		}
-		const quader_poly::Vec3 direction = normalized_axis(normal);
+		const quader::QVec3 direction = normalized_axis(normal);
 		const double abs_x = std::abs(direction.x);
 		const double abs_y = std::abs(direction.y);
 		const double abs_z = std::abs(direction.z);
@@ -119,9 +119,9 @@ public:
 		primitives.ring_center = input.screen_center;
 		primitives.ring_radius = input.ring_radius;
 
-		const quader_poly::Vec3 camera_direction = viewport_camera_forward(input.camera_transform);
+		const quader::QVec3 camera_direction = viewport_camera_forward(input.camera_transform);
 		const bool axis_parallel_to_camera = std::abs(vec3_dot(normalized_axis(primitives.handle_axis), camera_direction)) >= input.camera_parallel_dot;
-		quader_poly::Vec2 screen_axis = input.has_projected_axis_delta ? input.projected_axis_delta : quader_poly::Vec2();
+		quader::QVec2 screen_axis = input.has_projected_axis_delta ? input.projected_axis_delta : quader::QVec2();
 		if (vec2_is_tiny(screen_axis) && !axis_parallel_to_camera) {
 			screen_axis = {
 				static_cast<float>(vec3_dot(primitives.handle_axis, input.camera_transform.x_axis)),
@@ -196,7 +196,7 @@ ExtendStateResult preview_extend_from_drag_pixels(ExtendToolState& state, double
 	return extend_tool_impl().preview_from_drag_pixels(state, pixels, precision, grid_enabled, grid_size);
 }
 
-quader_poly::Vec3 extend_handle_axis_for_normal(quader_poly::Vec3 normal)
+quader::QVec3 extend_handle_axis_for_normal(quader::QVec3 normal)
 {
 	return extend_tool_impl().handle_axis_for_normal(normal);
 }

@@ -12,7 +12,7 @@ using namespace quader_poly;
 
 namespace {
 
-std::size_t count_vertices_at(const Document& document, Vec3 position)
+std::size_t count_vertices_at(const Document& document, quader::QVec3 position)
 {
 	return static_cast<std::size_t>(std::count_if(document.vertices.begin(), document.vertices.end(), [position](const Vertex& vertex) {
 		return qdr_test::vec_nearly_equal(vertex.position, position);
@@ -30,7 +30,7 @@ Document make_triangle_document(ElementId& face_id)
 	return document;
 }
 
-ElementId find_face_with_normal(const Document& document, Vec3 direction)
+ElementId find_face_with_normal(const Document& document, quader::QVec3 direction)
 {
 	const auto face = std::ranges::find_if(document.faces, [&document, direction](const Face& candidate) {
 		return dot(face_normal(document, candidate), direction) > 0.5F;
@@ -179,7 +179,7 @@ TEST_CASE("slice quad keeps generated right side wall cells oriented with the so
 		top_back,
 	});
 	REQUIRE(right_face != invalid_element_id);
-	const Vec3 source_normal = face_normal(document, *find_face(document, right_face));
+	const quader::QVec3 source_normal = face_normal(document, *find_face(document, right_face));
 	REQUIRE(dot(source_normal, { -1.0F, 0.0F, 0.0F }) > 0.5F);
 	Selection selection = qdr_test::face_selection({ right_face }, right_face);
 

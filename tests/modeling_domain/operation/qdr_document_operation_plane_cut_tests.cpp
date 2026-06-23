@@ -20,7 +20,7 @@ using quader_poly::Face;
 using quader_poly::PlaneCutMode;
 using quader_poly::PlaneCutRequest;
 using quader_poly::PlaneCutResult;
-using quader_poly::Vec3;
+using quader::QVec3;
 
 PlaneCutRequest center_x_cut(PlaneCutMode mode)
 {
@@ -145,10 +145,10 @@ TEST_CASE("plane cut splits a cube and keeps both closed halves", "[operation][p
 	const Face* front_cap = quader_poly::find_face(result.front_document, front_cap_id);
 	REQUIRE(front_cap != nullptr);
 	CHECK(front_cap->material_slot == 7);
-	CHECK(dot(face_normal(result.front_document, *front_cap), Vec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
+	CHECK(dot(face_normal(result.front_document, *front_cap), quader::QVec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
 
 	const Face* back_cap = selected_cap_face(result.back_document, result.back_selection);
-	CHECK(dot(face_normal(result.back_document, *back_cap), Vec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
+	CHECK(dot(face_normal(result.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
 }
 
 TEST_CASE("plane cut supports destructive front and back modes", "[operation][plane_cut]")
@@ -164,7 +164,7 @@ TEST_CASE("plane cut supports destructive front and back modes", "[operation][pl
 	check_closed_manifold(front.front_document);
 	check_closed_manifold(front.back_document);
 	const Face* front_cap = selected_cap_face(front.front_document, front.front_selection);
-	CHECK(dot(face_normal(front.front_document, *front_cap), Vec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
+	CHECK(dot(face_normal(front.front_document, *front_cap), quader::QVec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
 
 	const PlaneCutResult back = quader_poly::plane_cut(document, center_x_cut(PlaneCutMode::keep_back));
 	REQUIRE(back.changed);
@@ -173,7 +173,7 @@ TEST_CASE("plane cut supports destructive front and back modes", "[operation][pl
 	check_closed_manifold(back.front_document);
 	check_closed_manifold(back.back_document);
 	const Face* back_cap = selected_cap_face(back.back_document, back.back_selection);
-	CHECK(dot(face_normal(back.back_document, *back_cap), Vec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
+	CHECK(dot(face_normal(back.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
 }
 
 TEST_CASE("plane cut creates valid caps for tilted planes", "[operation][plane_cut]")

@@ -22,7 +22,7 @@ namespace {
 
 constexpr std::uint32_t hidden_slot = 99U;
 
-quader_editor_core::PolygonObject cube_object(int id, quader_poly::Vec3 offset = {})
+quader_editor_core::PolygonObject cube_object(int id, quader::QVec3 offset = {})
 {
 	quader_editor_core::PolygonObject object;
 	object.id = id;
@@ -44,7 +44,7 @@ quader_editor_core::PolygonObject open_top_cube_object(int id)
 			document.faces.begin(),
 			document.faces.end(),
 			[&document](const quader_poly::Face& face) {
-				return quader_poly::dot(
+				return quader::dot(
 					quader_poly::face_normal(document, face),
 					{ 0.0F, 1.0F, 0.0F }) > 0.5F;
 			}),

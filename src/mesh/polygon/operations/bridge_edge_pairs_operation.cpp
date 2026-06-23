@@ -45,7 +45,7 @@ struct BridgePairInfo {
 
 OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection, const std::vector<std::pair<Edge, Edge>>& edge_pairs, int steps);
 
-Vec3 edge_midpoint_or_zero(const Document& document, Edge edge)
+quader::QVec3 edge_midpoint_or_zero(const Document& document, Edge edge)
 {
     const Vertex* first = find_vertex(document, edge.a);
     const Vertex* second = find_vertex(document, edge.b);
@@ -79,19 +79,19 @@ std::vector<OpenBridgeEdgeInfo> bridge_edge_infos(
     return infos;
 }
 
-float bridge_edge_info_gap_score(const Document& document, const OpenBridgeEdgeInfo& info, Vec3 toward_other_edge)
+float bridge_edge_info_gap_score(const Document& document, const OpenBridgeEdgeInfo& info, quader::QVec3 toward_other_edge)
 {
-    const Vec3 toward = normalize_or_zero(toward_other_edge);
+    const quader::QVec3 toward = normalize_or_zero(toward_other_edge);
     if (length_squared(toward) <= epsilon) {
         return 0.0F;
     }
 
     float score = -std::numeric_limits<float>::infinity();
-    const Vec3 normal = normalize_or_zero(info.face_normal);
+    const quader::QVec3 normal = normalize_or_zero(info.face_normal);
     if (length_squared(normal) > epsilon) {
         score = std::max(score, dot(normal, toward));
     }
-    const Vec3 edge_outward = bridge_edge_outward_direction(document, info);
+    const quader::QVec3 edge_outward = bridge_edge_outward_direction(document, info);
     if (length_squared(edge_outward) > epsilon) {
         score = std::max(score, dot(edge_outward, toward));
     }
@@ -132,8 +132,8 @@ std::optional<BridgePairInfo> bridge_edge_info_pair(
         return std::nullopt;
     }
 
-    const Vec3 first_to_second = edge_midpoint_or_zero(document, second_edge) - edge_midpoint_or_zero(document, first_edge);
-    const Vec3 second_to_first = first_to_second * -1.0F;
+    const quader::QVec3 first_to_second = edge_midpoint_or_zero(document, second_edge) - edge_midpoint_or_zero(document, first_edge);
+    const quader::QVec3 second_to_first = first_to_second * -1.0F;
     std::optional<BridgePairInfo> best_pair;
     float best_rail_score = std::numeric_limits<float>::infinity();
     float best_gap_score = -std::numeric_limits<float>::infinity();
@@ -234,7 +234,7 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
         return true;
     };
 
-    auto interpolated_vertex = [&](ElementId start_id, ElementId end_id, Vec3 first_outward, Vec3 second_outward, int step_index) -> ElementId {
+    auto interpolated_vertex = [&](ElementId start_id, ElementId end_id, quader::QVec3 first_outward, quader::QVec3 second_outward, int step_index) -> ElementId {
         if (step_index <= 0 || start_id == end_id) {
             return start_id;
         }
@@ -305,8 +305,8 @@ OperationResult bridge_edge_pairs_impl(Document& document, Selection& selection,
                 return { false, "Bridge needs selected edges that share one vertex or no vertices." };
             }
 
-            const Vec3 first_outward = bridge_edge_outward_direction(document, pair_info.first);
-            const Vec3 second_outward = bridge_edge_outward_direction(document, pair_info.second);
+            const quader::QVec3 first_outward = bridge_edge_outward_direction(document, pair_info.first);
+            const quader::QVec3 second_outward = bridge_edge_outward_direction(document, pair_info.second);
             ElementId previous_a = first_a;
             ElementId previous_b = first_b;
             for (int step_index = 1; step_index <= step_count; ++step_index) {

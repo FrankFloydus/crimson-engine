@@ -135,7 +135,7 @@ TEST_CASE("bridge edges chooses gap-facing adjacent faces for angled non-boundar
 	REQUIRE(selection.faces.size() == 1U);
 	const Face* bridged_face = find_face(fixture.document, selection.faces.front());
 	REQUIRE(bridged_face != nullptr);
-	REQUIRE(dot(face_normal(fixture.document, *bridged_face), Vec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
+	REQUIRE(dot(face_normal(fixture.document, *bridged_face), quader::QVec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
 	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
@@ -160,7 +160,7 @@ TEST_CASE("bridge edges pairs endpoints without crossing angled gap faces", "[op
 		fixture.right_back,
 		fixture.right_front,
 	}));
-	REQUIRE(dot(face_normal(fixture.document, *bridged_face), Vec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
+	REQUIRE(dot(face_normal(fixture.document, *bridged_face), quader::QVec3 { 0.0F, 1.0F, 0.0F }) > 0.5F);
 	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 

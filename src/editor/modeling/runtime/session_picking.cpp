@@ -91,17 +91,17 @@ bool vertex_visible_for_pick_expansion(
 	return !has_incident_face;
 }
 
-quader_geometry::Vec2f to_geometry_vec2(quader_poly::Vec2 value)
+quader_geometry::QVec2f to_geometry_vec2(quader::QVec2 value)
 {
-	return quader_geometry::Vec2f(value);
+	return quader_geometry::QVec2f(value);
 }
 
-quader_geometry::Vec3f to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
 {
-	return quader_geometry::Vec3f(value);
+	return quader_geometry::QVec3f(value);
 }
 
-quader_geometry::Ray3<float> to_geometry_ray(const quader_poly::Ray& ray)
+quader_geometry::QRay3<float> to_geometry_ray(const quader_poly::Ray& ray)
 {
 	return { to_geometry_vec3(ray.origin), to_geometry_vec3(ray.direction) };
 }
@@ -119,11 +119,11 @@ float pick_bounds_padding(const quader_poly::PickOptions& options)
 	}
 }
 
-quader_geometry::Aabb3<float> object_pick_bounds(
+quader_geometry::QAabb3<float> object_pick_bounds(
 		const PolygonObject& object,
 		const quader_poly::PickOptions& options)
 {
-	quader_geometry::Aabb3<float> bounds = quader_geometry::empty_aabb3<float>();
+	quader_geometry::QAabb3<float> bounds = quader_geometry::empty_aabb3<float>();
 	for (const quader_poly::Vertex& vertex : object.document.vertices) {
 		quader_geometry::aabb_include(bounds, to_geometry_vec3(vertex.position));
 	}
@@ -131,14 +131,14 @@ quader_geometry::Aabb3<float> object_pick_bounds(
 	return padding > 0.0F ? quader_geometry::aabb_expanded(bounds, padding) : bounds;
 }
 
-quader_geometry::Aabb3<float> object_pick_bounds(
+quader_geometry::QAabb3<float> object_pick_bounds(
 		const PickObjectBounds& cached_bounds,
 		const quader_poly::PickOptions& options)
 {
 	if (cached_bounds.empty) {
 		return quader_geometry::empty_aabb3<float>();
 	}
-	quader_geometry::Aabb3<float> bounds {
+	quader_geometry::QAabb3<float> bounds {
 		to_geometry_vec3(cached_bounds.min),
 		to_geometry_vec3(cached_bounds.max),
 	};
@@ -186,7 +186,7 @@ bool ray_intersects_object_pick_bounds(
 		const quader_poly::PickOptions& options,
 		const PickObjectBounds* cached_bounds)
 {
-	const quader_geometry::Aabb3<float> bounds =
+	const quader_geometry::QAabb3<float> bounds =
 		cached_bounds == nullptr ? object_pick_bounds(object, options) : object_pick_bounds(*cached_bounds, options);
 	return quader_geometry::intersect_ray_aabb(to_geometry_ray(ray), bounds).hit;
 }
@@ -281,9 +281,9 @@ bool face_contains_vertex(const quader_poly::Face& face, quader_poly::ElementId 
 	return std::ranges::find(face.vertices, vertex_id) != face.vertices.end();
 }
 
-float pick_distance_from_ray(const quader_poly::Ray& ray, quader_poly::Vec3 position)
+float pick_distance_from_ray(const quader_poly::Ray& ray, quader::QVec3 position)
 {
-	const quader_geometry::Ray3<float> geometry_ray = to_geometry_ray(ray);
+	const quader_geometry::QRay3<float> geometry_ray = to_geometry_ray(ray);
 	if (quader_geometry::length_squared(geometry_ray.direction) <= transform_point_epsilon * transform_point_epsilon) {
 		return 0.0F;
 	}
@@ -294,29 +294,29 @@ float pick_distance_from_ray(const quader_poly::Ray& ray, quader_poly::Vec3 posi
 	return std::isfinite(distance_squared) ? std::sqrt(distance_squared) : 0.0F;
 }
 
-quader_poly::Vec3 averaged_vertex_normal(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
+quader::QVec3 averaged_vertex_normal(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
 {
-	quader_poly::Vec3 normal;
+	quader::QVec3 normal;
 	for (const quader_poly::Face& face : document.faces) {
 		if (std::find(face.vertices.begin(), face.vertices.end(), vertex_id) != face.vertices.end()) {
 			normal += quader_poly::face_normal(document, face);
 		}
 	}
-	return quader_poly::normalize_or_zero(normal);
+	return quader::normalize_or_zero(normal);
 }
 
-quader_poly::Vec3 averaged_edge_normal(const quader_poly::Document& document, quader_poly::Edge edge)
+quader::QVec3 averaged_edge_normal(const quader_poly::Document& document, quader_poly::Edge edge)
 {
-	quader_poly::Vec3 normal;
+	quader::QVec3 normal;
 	for (const quader_poly::Face& face : document.faces) {
 		if (face_contains_edge(face, edge)) {
 			normal += quader_poly::face_normal(document, face);
 		}
 	}
-	return quader_poly::normalize_or_zero(normal);
+	return quader::normalize_or_zero(normal);
 }
 
-quader_poly::Vec3 pick_hit_normal(const quader_poly::Document& document, const quader_poly::PickResult& hit)
+quader::QVec3 pick_hit_normal(const quader_poly::Document& document, const quader_poly::PickResult& hit)
 {
 	switch (hit.kind) {
 		case quader_poly::ElementKind::vertex:
@@ -450,7 +450,7 @@ std::optional<int> replacement_pick_hit_index(
 		const std::vector<PickHitRecord>& hits,
 		bool keep_all_component_hits,
 		bool can_pick_all,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		float max_screen_distance,
 		PickCycleStep& r_step)
 {
@@ -914,7 +914,7 @@ void reset_pick_cycle(PickCycleState& state)
 	state = PickCycleState();
 }
 
-PickCycleStep advance_pick_cycle(PickCycleState& state, std::string signature, int candidate_count, quader_poly::Vec2 screen_position, float max_screen_distance)
+PickCycleStep advance_pick_cycle(PickCycleState& state, std::string signature, int candidate_count, quader::QVec2 screen_position, float max_screen_distance)
 {
 	if (candidate_count <= 0) {
 		reset_pick_cycle(state);

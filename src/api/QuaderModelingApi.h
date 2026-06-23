@@ -48,10 +48,10 @@ public:
     QuaderApiVoidResult cancelPreview();
 
     QuaderApiVoidResult beginTransformPreview(bool duplicateSelected = false);
-    QuaderApiVoidResult updateTransformTranslate(Vec3 delta);
-    QuaderApiVoidResult updateTransformMatrix(const ModelingTransform3& transform, Vec3 pivot);
-    QuaderApiVoidResult updateTransformExtrude(Vec3 offset, float closedEdgeLedgeSize = 0.0f);
-    QuaderApiVoidResult updateTransformInset(const ModelingTransform3& transform, Vec3 pivot);
+    QuaderApiVoidResult updateTransformTranslate(QVec3 delta);
+    QuaderApiVoidResult updateTransformMatrix(const ModelingTransform3& transform, QVec3 pivot);
+    QuaderApiVoidResult updateTransformExtrude(QVec3 offset, float closedEdgeLedgeSize = 0.0f);
+    QuaderApiVoidResult updateTransformInset(const ModelingTransform3& transform, QVec3 pivot);
     QuaderApiVoidResult commitTransformPreview(std::string label = {});
     QuaderApiVoidResult cancelTransformPreview();
 
@@ -60,10 +60,10 @@ public:
     QuaderApiResult<ModelingTransformDragPreview> commitTransformDrag();
     QuaderApiVoidResult cancelTransformDrag();
 
-    QuaderApiVoidResult moveSelection(Vec3 delta);
-    QuaderApiVoidResult rotateSelection(Vec3 eulerRadians, Vec3 pivot = {});
-    QuaderApiVoidResult scaleSelection(Vec3 scale, Vec3 pivot = {});
-    QuaderApiVoidResult transformSelection(const ModelingTransform3& transform, Vec3 pivot = {});
+    QuaderApiVoidResult moveSelection(QVec3 delta);
+    QuaderApiVoidResult rotateSelection(QVec3 eulerRadians, QVec3 pivot = {});
+    QuaderApiVoidResult scaleSelection(QVec3 scale, QVec3 pivot = {});
+    QuaderApiVoidResult transformSelection(const ModelingTransform3& transform, QVec3 pivot = {});
     QuaderApiVoidResult duplicateSelectedHierarchyForGroupDrag();
 
     QuaderApiVoidResult applyActiveMaterial(std::uint32_t materialSlot = 0);

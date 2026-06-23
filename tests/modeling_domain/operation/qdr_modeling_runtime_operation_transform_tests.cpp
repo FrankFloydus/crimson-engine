@@ -28,18 +28,18 @@ TEST_CASE("transform operation applies matrix transforms around the requested pi
 	SECTION("pivot controls the transformed point")
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
-		const quader_poly::Vec3 before = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 before = session.objects().front().document.vertices.front().position;
 		quader_poly::Transform3 transform;
 		transform.x_axis = { 2.0F, 0.0F, 0.0F };
 		transform.y_axis = { 0.0F, 2.0F, 0.0F };
 		transform.z_axis = { 0.0F, 0.0F, 2.0F };
-		const quader_poly::Vec3 pivot { 1.0F, 1.0F, 1.0F };
+		const quader::QVec3 pivot { 1.0F, 1.0F, 1.0F };
 
 		const quader_editor_core::CommandResult result = session.transform_selected(transform, pivot);
 
 		REQUIRE(result.ok);
 		REQUIRE(result.changed);
-		const quader_poly::Vec3 after = session.objects().front().document.vertices.front().position;
+		const quader::QVec3 after = session.objects().front().document.vertices.front().position;
 		REQUIRE(qdr_test::vec_nearly_equal(after, {
 			pivot.x + ((before.x - pivot.x) * 2.0F),
 			pivot.y + ((before.y - pivot.y) * 2.0F),
@@ -66,7 +66,7 @@ TEST_CASE("transform operation applies matrix transforms around the requested pi
 		const int second_id = session.objects().back().id;
 		session.set_selected_object_ids({ first_id, second_id }, second_id);
 
-		const std::optional<quader_poly::Vec3> center = session.selection_center();
+		const std::optional<quader::QVec3> center = session.selection_center();
 
 		REQUIRE(center.has_value());
 		REQUIRE(qdr_test::vec_nearly_equal(*center, { 5.0F, 0.0F, 0.0F }));

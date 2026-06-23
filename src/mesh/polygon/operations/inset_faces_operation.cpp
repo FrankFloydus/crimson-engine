@@ -63,7 +63,7 @@ OperationResult inset_selected_faces_impl(Document& document, Selection& selecti
             continue;
         }
 
-        const Vec3 centroid = face_centroid(document, original_face);
+        const quader::QVec3 centroid = face_centroid(document, original_face);
         std::vector<ElementId> inner_vertices;
         inner_vertices.reserve(original_face.vertices.size());
         bool valid_face = true;

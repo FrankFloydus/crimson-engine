@@ -78,15 +78,15 @@ void clear_face_uvs(Document& document)
     }
 }
 
-void shift_face_uvs_for_translation(Document& document, Vec3 delta)
+void shift_face_uvs_for_translation(Document& document, quader::QVec3 delta)
 {
     ensure_face_uvs(document);
     for (Face& face : document.faces) {
         if (!face_has_loop_uvs(face)) {
             continue;
         }
-        const Vec2 delta_uv = translation_uv_delta(document, face, delta);
-        for (Vec2& uv : face.uvs) {
+        const quader::QVec2 delta_uv = translation_uv_delta(document, face, delta);
+        for (quader::QVec2& uv : face.uvs) {
             uv.x += delta_uv.x;
             uv.y += delta_uv.y;
         }

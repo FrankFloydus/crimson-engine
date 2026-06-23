@@ -42,8 +42,8 @@ enum class ViewportGridRotation {
  * Represents a Viewport Grid Axes value used by the viewport input, layout, and camera layer.
  */
 struct ViewportGridAxes {
-    Vec3 uAxis = {1.0f, 0.0f, 0.0f};
-    Vec3 vAxis = {0.0f, 0.0f, -1.0f};
+    QVec3 uAxis = {1.0f, 0.0f, 0.0f};
+    QVec3 vAxis = {0.0f, 0.0f, -1.0f};
     ViewportColorSettingId uColor = ViewportColorSettingId::GridXAxis;
     ViewportColorSettingId vColor = ViewportColorSettingId::GridZAxis;
 };
@@ -53,9 +53,9 @@ struct ViewportGridAxes {
  */
 struct ViewportGridPlacement {
     ViewportGridPlane plane = ViewportGridPlane::XZ;
-    Vec3 origin = {};
+    QVec3 origin = {};
     ViewportGridRotation rotation = ViewportGridRotation::Identity;
-    Vec2 planeSize = {kViewportGridDefaultPlaneSize, kViewportGridDefaultPlaneSize};
+    QVec2 planeSize = {kViewportGridDefaultPlaneSize, kViewportGridDefaultPlaneSize};
     ViewportGridAxes axes = {};
 };
 
@@ -84,7 +84,7 @@ public:
             return ViewportGridPlane::XZ;
         }
 
-        Vec3 forward = normalize(pose.target - pose.eye);
+        QVec3 forward = normalize(pose.target - pose.eye);
         if (length(forward) <= 0.000001f) {
             forward = {0.0f, 0.0f, 1.0f};
         }
@@ -101,7 +101,7 @@ public:
         return ViewportGridPlane::XZ;
     }
 
-    static Vec2 planeSize(
+    static QVec2 planeSize(
             ViewportGridPlane plane,
             const ViewportCameraController& camera,
             std::uint32_t viewportWidth,
@@ -140,7 +140,7 @@ public:
         return {};
     }
 
-    static Vec3 origin(ViewportGridPlane plane, const ViewportCameraPose& pose) {
+    static QVec3 origin(ViewportGridPlane plane, const ViewportCameraPose& pose) {
         if (plane == ViewportGridPlane::YZ) {
             return {kViewportGridPlaneOffset, pose.eye.y, pose.eye.z};
         }

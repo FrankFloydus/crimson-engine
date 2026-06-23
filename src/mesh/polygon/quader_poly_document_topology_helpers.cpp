@@ -70,19 +70,19 @@ std::map<std::pair<ElementId, ElementId>, std::vector<std::size_t>> face_indices
 
 } // namespace
 
-quader_geometry::Vec2d geometry_vec2(const std::array<double, 2>& value)
+quader_geometry::QVec2d geometry_vec2(const std::array<double, 2>& value)
 {
     return { value[0], value[1] };
 }
 
-std::array<double, 2> poly_vec2(quader_geometry::Vec2d value)
+std::array<double, 2> poly_vec2(quader_geometry::QVec2d value)
 {
     return { value.x, value.y };
 }
 
-std::vector<quader_geometry::Vec2d> geometry_vec2_points(std::span<const std::array<double, 2>> points)
+std::vector<quader_geometry::QVec2d> geometry_vec2_points(std::span<const std::array<double, 2>> points)
 {
-    std::vector<quader_geometry::Vec2d> geometry_points;
+    std::vector<quader_geometry::QVec2d> geometry_points;
     geometry_points.reserve(points.size());
     for (const std::array<double, 2>& point : points) {
         geometry_points.push_back(geometry_vec2(point));
@@ -90,29 +90,29 @@ std::vector<quader_geometry::Vec2d> geometry_vec2_points(std::span<const std::ar
     return geometry_points;
 }
 
-quader_geometry::Axis geometry_axis_from_dropped_axis(int dropped_axis)
+quader_geometry::QAxis geometry_axis_from_dropped_axis(int dropped_axis)
 {
     switch (dropped_axis) {
     case 0:
-        return quader_geometry::Axis::x;
+        return quader_geometry::QAxis::x;
     case 1:
-        return quader_geometry::Axis::y;
+        return quader_geometry::QAxis::y;
     default:
-        return quader_geometry::Axis::z;
+        return quader_geometry::QAxis::z;
     }
 }
 
-quader_geometry::Vec3f geometry_vec3(const Vec3& value)
+quader_geometry::QVec3f geometry_vec3(const quader::QVec3& value)
 {
     return { value.x, value.y, value.z };
 }
 
-Vec3 poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 poly_vec3(quader_geometry::QVec3f value)
 {
     return { value.x, value.y, value.z };
 }
 
-quader_geometry::Ray3<float> geometry_ray(const Ray& ray)
+quader_geometry::QRay3<float> geometry_ray(const Ray& ray)
 {
     return { geometry_vec3(ray.origin), geometry_vec3(ray.direction) };
 }
@@ -362,9 +362,9 @@ bool face_uses_any_edge(const Face& face, std::span<const Edge> edges)
     });
 }
 
-std::array<double, 2> projected_point_for_axis(const Vec3& position, int dropped_axis)
+std::array<double, 2> projected_point_for_axis(const quader::QVec3& position, int dropped_axis)
 {
-    const quader_geometry::Vec3d geometry_position {
+    const quader_geometry::QVec3d geometry_position {
         static_cast<double>(position.x),
         static_cast<double>(position.y),
         static_cast<double>(position.z),
@@ -375,8 +375,8 @@ std::array<double, 2> projected_point_for_axis(const Vec3& position, int dropped
 
 double signed_projected_area(std::span<const std::array<double, 2>> points)
 {
-    const std::vector<quader_geometry::Vec2d> geometry_points = geometry_vec2_points(points);
-    return quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::Vec2d>(geometry_points));
+    const std::vector<quader_geometry::QVec2d> geometry_points = geometry_vec2_points(points);
+    return quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::QVec2d>(geometry_points));
 }
 
 bool has_repeated_vertex(std::span<const ElementId> vertex_ids)
@@ -511,7 +511,7 @@ std::vector<ElementId> compact_face_vertices_for_merge(const Face& face, const s
 
 void prune_unused_vertices(Document& document);
 bool every_face_triangulates(const Document& document);
-void orient_face_toward_normal(const Document& document, Face& face, Vec3 expected_normal);
+void orient_face_toward_normal(const Document& document, Face& face, quader::QVec3 expected_normal);
 
 void restore_source_face_orientation(const Document& source, Document& candidate)
 {
@@ -521,8 +521,8 @@ void restore_source_face_orientation(const Document& source, Document& candidate
             continue;
         }
 
-        const Vec3 source_normal = face_normal(source, *source_face);
-        const Vec3 candidate_normal = face_normal(candidate, face);
+        const quader::QVec3 source_normal = face_normal(source, *source_face);
+        const quader::QVec3 candidate_normal = face_normal(candidate, face);
         if (length_squared(source_normal) <= epsilon || length_squared(candidate_normal) <= epsilon) {
             continue;
         }

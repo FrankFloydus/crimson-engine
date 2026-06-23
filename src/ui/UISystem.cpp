@@ -264,7 +264,7 @@ void UISystem::draw(QuaderEditorApi& editor,
     drawDockspace(editor, quitRequested, document, modeling);
 
     bool viewportCursorCaptureRequested = false;
-    Vec2 viewportCursorCapturePoint = {};
+    QVec2 viewportCursorCapturePoint = {};
     const UIPanelId previousFocusedPanel = focusedPanel_;
     bool panelFocusChanged = false;
     bool settingsChanged = false;
@@ -470,7 +470,7 @@ void UISystem::setViewportCursorCaptured(bool captured) {
     }
 }
 
-void UISystem::warpCapturedCursor(Vec2 point) {
+void UISystem::warpCapturedCursor(QVec2 point) {
     if (window_ == nullptr || !relativeMouseCaptured_) {
         return;
     }

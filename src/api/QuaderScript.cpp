@@ -132,19 +132,19 @@ QuaderScript& QuaderScript::setSelectionMode(ModelingSelectionMode mode) {
     });
 }
 
-QuaderScript& QuaderScript::moveSelection(Vec3 delta) {
+QuaderScript& QuaderScript::moveSelection(QVec3 delta) {
     return addStep("moveSelection", [this, delta](QuaderScriptResult&) {
         return statusFromResult(api_.modeling().moveSelection(delta));
     });
 }
 
-QuaderScript& QuaderScript::rotateSelection(Vec3 eulerRadians, Vec3 pivot) {
+QuaderScript& QuaderScript::rotateSelection(QVec3 eulerRadians, QVec3 pivot) {
     return addStep("rotateSelection", [this, eulerRadians, pivot](QuaderScriptResult&) {
         return statusFromResult(api_.modeling().rotateSelection(eulerRadians, pivot));
     });
 }
 
-QuaderScript& QuaderScript::scaleSelection(Vec3 scale, Vec3 pivot) {
+QuaderScript& QuaderScript::scaleSelection(QVec3 scale, QVec3 pivot) {
     return addStep("scaleSelection", [this, scale, pivot](QuaderScriptResult&) {
         return statusFromResult(api_.modeling().scaleSelection(scale, pivot));
     });

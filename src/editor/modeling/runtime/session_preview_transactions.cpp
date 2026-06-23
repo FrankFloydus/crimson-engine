@@ -193,7 +193,7 @@ CommandResult EditorSession::begin_transform_preview(bool duplicate_selected)
 	if (duplicate_selected &&
 			state_.selection_mode == SelectionMode::object &&
 			!quader_editor_core::selected_object_ids(state_.objects).empty()) {
-		const CommandResult duplicate = duplicate_selected_objects(quader_poly::Vec3 {});
+		const CommandResult duplicate = duplicate_selected_objects(quader::QVec3 {});
 		if (!duplicate.ok) {
 			set_state(preview_transaction_.history_state);
 			clear_preview_transaction();
@@ -211,14 +211,14 @@ CommandResult EditorSession::begin_transform_preview(bool duplicate_selected)
 	return ok_result(preview_transaction_.changed);
 }
 
-CommandResult EditorSession::update_transform_translate_preview(quader_poly::Vec3 delta, bool texture_lock_enabled)
+CommandResult EditorSession::update_transform_translate_preview(quader::QVec3 delta, bool texture_lock_enabled)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_translate_preview");
 	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
-	if (quader_poly::length(delta) <= transform_point_epsilon) {
+	if (quader::length(delta) <= transform_point_epsilon) {
 		const bool base_changed = state_revisions_differ(preview_transaction_.base_state, preview_transaction_.history_state);
 		preview_transaction_.changed = base_changed;
 		return ok_result(base_changed);
@@ -228,7 +228,7 @@ CommandResult EditorSession::update_transform_translate_preview(quader_poly::Vec
 
 CommandResult EditorSession::update_transform_matrix_preview(
 		const quader_poly::Transform3& transform,
-		quader_poly::Vec3 pivot,
+		quader::QVec3 pivot,
 		bool texture_lock_enabled,
 		bool texture_lock_scale_enabled)
 {
@@ -240,14 +240,14 @@ CommandResult EditorSession::update_transform_matrix_preview(
 	return update_transform_preview_from_base(transform_selected(transform, pivot, texture_lock_enabled, texture_lock_scale_enabled));
 }
 
-CommandResult EditorSession::update_transform_extrude_preview(quader_poly::Vec3 offset, float closed_edge_ledge_size)
+CommandResult EditorSession::update_transform_extrude_preview(quader::QVec3 offset, float closed_edge_ledge_size)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_extrude_preview");
 	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
-	if (quader_poly::length(offset) <= transform_point_epsilon) {
+	if (quader::length(offset) <= transform_point_epsilon) {
 		const bool base_changed = state_revisions_differ(preview_transaction_.base_state, preview_transaction_.history_state);
 		preview_transaction_.changed = base_changed;
 		return ok_result(base_changed);
@@ -255,14 +255,14 @@ CommandResult EditorSession::update_transform_extrude_preview(quader_poly::Vec3 
 	return update_transform_preview_from_base(extrude_selected_elements(offset, closed_edge_ledge_size));
 }
 
-CommandResult EditorSession::update_transform_inset_preview(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot)
+CommandResult EditorSession::update_transform_inset_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_inset_preview");
 	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
-	if (basis_is_identity(transform) && quader_poly::length(transform.origin) <= transform_point_epsilon) {
+	if (basis_is_identity(transform) && quader::length(transform.origin) <= transform_point_epsilon) {
 		const bool base_changed = state_revisions_differ(preview_transaction_.base_state, preview_transaction_.history_state);
 		preview_transaction_.changed = base_changed;
 		return ok_result(base_changed);

@@ -15,12 +15,12 @@ using namespace quader_editor_core;
 
 namespace {
 
-bool positions_match(quader_poly::Vec3 left, quader_poly::Vec3 right)
+bool positions_match(quader::QVec3 left, quader::QVec3 right)
 {
 	return qdr_test::vec_nearly_equal(left, right);
 }
 
-void translate_document(quader_poly::Document& document, quader_poly::Vec3 delta)
+void translate_document(quader_poly::Document& document, quader::QVec3 delta)
 {
 	for (quader_poly::Vertex& vertex : document.vertices) {
 		vertex.position += delta;
@@ -43,8 +43,8 @@ quader_poly::Document make_distance_merge_document(float offset)
 
 quader_poly::Edge edge_between_positions(
 		const quader_poly::Document& document,
-		quader_poly::Vec3 first_position,
-		quader_poly::Vec3 second_position)
+		quader::QVec3 first_position,
+		quader::QVec3 second_position)
 {
 	for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
 		const quader_poly::Vertex* first = quader_poly::find_vertex(document, edge.a);
@@ -68,11 +68,11 @@ quader_poly::Edge edge_between_positions(
 
 std::vector<quader_poly::ElementId> vertices_at_positions(
 		const quader_poly::Document& document,
-		std::initializer_list<quader_poly::Vec3> positions)
+		std::initializer_list<quader::QVec3> positions)
 {
 	std::vector<quader_poly::ElementId> vertices;
 	for (const quader_poly::Vertex& vertex : document.vertices) {
-		if (std::ranges::any_of(positions, [&vertex](quader_poly::Vec3 position) {
+		if (std::ranges::any_of(positions, [&vertex](quader::QVec3 position) {
 			return positions_match(vertex.position, position);
 		})) {
 			vertices.push_back(vertex.id);

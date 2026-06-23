@@ -18,10 +18,10 @@ namespace quader {
  * Represents a Viewport Camera Basis value used by the viewport input, layout, and camera layer.
  */
 struct ViewportCameraBasis {
-    Vec3 eye = {};
-    Vec3 forward = {0.0f, 0.0f, -1.0f};
-    Vec3 right = {1.0f, 0.0f, 0.0f};
-    Vec3 up = {0.0f, 1.0f, 0.0f};
+    QVec3 eye = {};
+    QVec3 forward = {0.0f, 0.0f, -1.0f};
+    QVec3 right = {1.0f, 0.0f, 0.0f};
+    QVec3 up = {0.0f, 1.0f, 0.0f};
 };
 
 /**
@@ -31,17 +31,17 @@ class ViewportCameraAdapter {
 public:
     static ViewportCameraBasis basis(const ViewportCameraController& camera) {
         const ViewportCameraPose pose = camera.pose();
-        Vec3 forward = normalize(pose.target - pose.eye);
+        QVec3 forward = normalize(pose.target - pose.eye);
         if (length(forward) <= 0.000001f) {
             forward = {0.0f, 0.0f, -1.0f};
         }
 
-        Vec3 right = normalize(cross(forward, pose.up));
+        QVec3 right = normalize(cross(forward, pose.up));
         if (length(right) <= 0.000001f) {
             right = {1.0f, 0.0f, 0.0f};
         }
 
-        Vec3 up = normalize(cross(right, forward));
+        QVec3 up = normalize(cross(right, forward));
         if (length(up) <= 0.000001f) {
             up = {0.0f, 1.0f, 0.0f};
         }
@@ -54,7 +54,7 @@ public:
         };
     }
 
-    static ViewportOverlayCamera overlayCamera(const ViewportCameraController& camera, Vec2 viewportSize) {
+    static ViewportOverlayCamera overlayCamera(const ViewportCameraController& camera, QVec2 viewportSize) {
         const ViewportCameraBasis cameraBasis = basis(camera);
         const ViewportCameraState& state = camera.state();
         return {
@@ -73,7 +73,7 @@ public:
         };
     }
 
-    static ModelingViewportCamera modelingCamera(const ViewportCameraController& camera, Vec2 viewportSize) {
+    static ModelingViewportCamera modelingCamera(const ViewportCameraController& camera, QVec2 viewportSize) {
         const ViewportCameraBasis cameraBasis = basis(camera);
         const ViewportCameraState& state = camera.state();
         return {

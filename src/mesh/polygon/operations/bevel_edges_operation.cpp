@@ -198,11 +198,11 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     builds.reserve(selected_edges.size());
     std::map<std::tuple<ElementId, ElementId, ElementId>, std::pair<std::size_t, int>> side_by_face_edge;
     std::map<ElementId, std::vector<EdgeBevelFaceVertexOffset>> offsets_by_vertex;
-    std::map<std::pair<ElementId, ElementId>, std::pair<ElementId, Vec3>> miter_vertices;
-    std::map<ElementId, std::vector<std::pair<ElementId, Vec3>>> profile_vertices_by_source;
-    const auto profile_points_are_collinear = [](Vec3 start, Vec3 middle, Vec3 end) {
-        const Vec3 first = middle - start;
-        const Vec3 second = middle - end;
+    std::map<std::pair<ElementId, ElementId>, std::pair<ElementId, quader::QVec3>> miter_vertices;
+    std::map<ElementId, std::vector<std::pair<ElementId, quader::QVec3>>> profile_vertices_by_source;
+    const auto profile_points_are_collinear = [](quader::QVec3 start, quader::QVec3 middle, quader::QVec3 end) {
+        const quader::QVec3 first = middle - start;
+        const quader::QVec3 second = middle - end;
         const float scale = length_squared(first) + length_squared(second);
         if (scale <= epsilon) {
             return true;
@@ -243,7 +243,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             if (from == nullptr || to == nullptr) {
                 continue;
             }
-            const Vec3 direction = normalize_or_zero(to->position - from->position);
+            const quader::QVec3 direction = normalize_or_zero(to->position - from->position);
             if (length_squared(direction) <= epsilon) {
                 continue;
             }
@@ -259,19 +259,19 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         const Vertex* source_a = find_vertex(document, build.edge.a);
         const Vertex* source_b = find_vertex(document, build.edge.b);
         if (source_a == nullptr || source_b == nullptr) {
-            return Vec3 {};
+            return quader::QVec3 {};
         }
 
         const bool endpoint_is_a = endpoint_id == build.edge.a;
         const Vertex* source_endpoint = endpoint_is_a ? source_a : source_b;
-        const Vec3 side0 = edge_bevel_side_endpoint_position(build.sides[0], endpoint_id);
-        const Vec3 side1 = edge_bevel_side_endpoint_position(build.sides[1], endpoint_id);
+        const quader::QVec3 side0 = edge_bevel_side_endpoint_position(build.sides[0], endpoint_id);
+        const quader::QVec3 side1 = edge_bevel_side_endpoint_position(build.sides[1], endpoint_id);
         const int selected_count = selected_edge_counts.contains(endpoint_id) ? selected_edge_counts.at(endpoint_id) : 0;
         const bool fully_selected = fully_selected_vertices.contains(endpoint_id) && fully_selected_vertices.at(endpoint_id);
         if (selected_count == 2 && !fully_selected) {
             return source_endpoint->position;
         }
-        Vec3 middle = endpoint_is_a ?
+        quader::QVec3 middle = endpoint_is_a ?
             edge_bevel_profile_middle_on_edge(source_a->position, source_b->position, side0, side1) :
             edge_bevel_profile_middle_on_edge(source_b->position, source_a->position, side0, side1);
 
@@ -281,7 +281,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             const std::optional<EdgeBevelOffsetLine> second_line =
                 selected_neighbor_profile_line_for_side(build, 1, endpoint_id);
             if (first_line.has_value() && second_line.has_value()) {
-                if (const std::optional<Vec3> meet_position =
+                if (const std::optional<quader::QVec3> meet_position =
                         edge_bevel_intersect_offset_lines(*first_line, *second_line)) {
                     middle = *meet_position;
                 }
@@ -301,7 +301,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 EdgeBevelSide& side = build.sides[static_cast<std::size_t>(side_index)];
                 for (const ElementId endpoint_id : { build.edge.a, build.edge.b }) {
                     ElementId offset_vertex_id = edge_bevel_side_endpoint_vertex(side, endpoint_id);
-                    const Vec3 offset_position = edge_bevel_side_endpoint_position(side, endpoint_id);
+                    const quader::QVec3 offset_position = edge_bevel_side_endpoint_position(side, endpoint_id);
                     auto& vertex_offsets = offsets_by_vertex[endpoint_id];
                     const auto reusable = std::ranges::find_if(vertex_offsets, [offset_position](const EdgeBevelFaceVertexOffset& existing) {
                         return length_squared(existing.position - offset_position) <= 0.000001F;
@@ -343,13 +343,13 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     continue;
                 }
 
-                const Vec3 side0_a = edge_bevel_side_endpoint_position(build.sides[0], build.edge.a);
-                const Vec3 side0_b = edge_bevel_side_endpoint_position(build.sides[0], build.edge.b);
-                const Vec3 side1_a = edge_bevel_side_endpoint_position(build.sides[1], build.edge.a);
-                const Vec3 side1_b = edge_bevel_side_endpoint_position(build.sides[1], build.edge.b);
-                const Vec3 middle_a = profile_middle_for_endpoint(build, build.edge.a);
-                const Vec3 middle_b = profile_middle_for_endpoint(build, build.edge.b);
-                const Vec3 profiled_a = edge_bevel_profile_point(
+                const quader::QVec3 side0_a = edge_bevel_side_endpoint_position(build.sides[0], build.edge.a);
+                const quader::QVec3 side0_b = edge_bevel_side_endpoint_position(build.sides[0], build.edge.b);
+                const quader::QVec3 side1_a = edge_bevel_side_endpoint_position(build.sides[1], build.edge.a);
+                const quader::QVec3 side1_b = edge_bevel_side_endpoint_position(build.sides[1], build.edge.b);
+                const quader::QVec3 middle_a = profile_middle_for_endpoint(build, build.edge.a);
+                const quader::QVec3 middle_b = profile_middle_for_endpoint(build, build.edge.b);
+                const quader::QVec3 profiled_a = edge_bevel_profile_point(
                     middle_a,
                     side0_a,
                     side1_a,
@@ -357,7 +357,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     settings.segments,
                     settings.profile,
                     settings.profile_type);
-                const Vec3 profiled_b = edge_bevel_profile_point(
+                const quader::QVec3 profiled_b = edge_bevel_profile_point(
                     middle_b,
                     side0_b,
                     side1_b,
@@ -402,7 +402,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             EdgeBevelSide bevel_side = std::move(*side);
             const Face& source_face = document.faces[adjacent_faces[side_index]];
             for (const ElementId endpoint_id : { build.edge.a, build.edge.b }) {
-                if (std::optional<std::pair<ElementId, Vec3>> miter =
+                if (std::optional<std::pair<ElementId, quader::QVec3>> miter =
                         edge_bevel_face_vertex_miter(
                             candidate,
                             document,
@@ -416,7 +416,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 }
 
                 ElementId offset_vertex_id = edge_bevel_side_endpoint_vertex(bevel_side, endpoint_id);
-                const Vec3 offset_position = edge_bevel_side_endpoint_position(bevel_side, endpoint_id);
+                const quader::QVec3 offset_position = edge_bevel_side_endpoint_position(bevel_side, endpoint_id);
                 auto& vertex_offsets = offsets_by_vertex[endpoint_id];
                 const auto reusable = std::ranges::find_if(vertex_offsets, [offset_position](const EdgeBevelFaceVertexOffset& existing) {
                     return length_squared(existing.position - offset_position) <= 0.000001F;
@@ -462,13 +462,13 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 continue;
             }
 
-            const Vec3 side0_a = edge_bevel_side_endpoint_position(build.sides[0], build.edge.a);
-            const Vec3 side0_b = edge_bevel_side_endpoint_position(build.sides[0], build.edge.b);
-            const Vec3 side1_a = edge_bevel_side_endpoint_position(build.sides[1], build.edge.a);
-            const Vec3 side1_b = edge_bevel_side_endpoint_position(build.sides[1], build.edge.b);
-            const Vec3 middle_a = profile_middle_for_endpoint(build, build.edge.a);
-            const Vec3 middle_b = profile_middle_for_endpoint(build, build.edge.b);
-            const Vec3 profiled_a = edge_bevel_profile_point(
+            const quader::QVec3 side0_a = edge_bevel_side_endpoint_position(build.sides[0], build.edge.a);
+            const quader::QVec3 side0_b = edge_bevel_side_endpoint_position(build.sides[0], build.edge.b);
+            const quader::QVec3 side1_a = edge_bevel_side_endpoint_position(build.sides[1], build.edge.a);
+            const quader::QVec3 side1_b = edge_bevel_side_endpoint_position(build.sides[1], build.edge.b);
+            const quader::QVec3 middle_a = profile_middle_for_endpoint(build, build.edge.a);
+            const quader::QVec3 middle_b = profile_middle_for_endpoint(build, build.edge.b);
+            const quader::QVec3 profiled_a = edge_bevel_profile_point(
                 middle_a,
                 side0_a,
                 side1_a,
@@ -476,7 +476,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 settings.segments,
                 settings.profile,
                 settings.profile_type);
-            const Vec3 profiled_b = edge_bevel_profile_point(
+            const quader::QVec3 profiled_b = edge_bevel_profile_point(
                 middle_b,
                 side0_b,
                 side1_b,
@@ -511,7 +511,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         int side_index = 0;
         ElementId endpoint_id = invalid_element_id;
         ElementId vertex_id = invalid_element_id;
-        Vec3 position;
+        quader::QVec3 position;
     };
 
     /**
@@ -522,8 +522,8 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         int side_index = 0;
         ElementId endpoint_id = invalid_element_id;
         ElementId vertex_id = invalid_element_id;
-        Vec3 position;
-        Vec3 normal;
+        quader::QVec3 position;
+        quader::QVec3 normal;
     };
 
     const auto split_miter_edge_line = [&document, &builds](const EdgeBevelSplitMiterRef& ref) -> std::optional<EdgeBevelOffsetLine> {
@@ -539,7 +539,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             return std::nullopt;
         }
 
-        const Vec3 direction = normalize_or_zero(other->position - endpoint->position);
+        const quader::QVec3 direction = normalize_or_zero(other->position - endpoint->position);
         if (length_squared(direction) <= epsilon) {
             return std::nullopt;
         }
@@ -563,7 +563,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             for (int side_index = 0; side_index < 2; ++side_index) {
                 EdgeBevelSide& side = build.sides[static_cast<std::size_t>(side_index)];
                 const ElementId endpoint_vertex_id = edge_bevel_side_endpoint_vertex(side, vertex_id);
-                const Vec3 endpoint_position = edge_bevel_side_endpoint_position(side, vertex_id);
+                const quader::QVec3 endpoint_position = edge_bevel_side_endpoint_position(side, vertex_id);
                 if (endpoint_vertex_id == invalid_element_id || length_squared(side.normal) <= epsilon) {
                     continue;
                 }
@@ -598,7 +598,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 continue;
             }
 
-            const std::optional<Vec3> miter_position = edge_bevel_intersect_offset_lines(*first_line, *second_line);
+            const std::optional<quader::QVec3> miter_position = edge_bevel_intersect_offset_lines(*first_line, *second_line);
             if (!miter_position.has_value()) {
                 continue;
             }
@@ -618,9 +618,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
     std::map<ElementId, ElementId> patch_miter_middle_by_vertex;
     const auto make_patch_miter_arc = [&candidate, &settings](
         ElementId first_vertex_id,
-        Vec3 first_position,
+        quader::QVec3 first_position,
         ElementId second_vertex_id,
-        Vec3 second_position) {
+        quader::QVec3 second_position) {
         EdgeBevelCornerArc arc;
         arc.use_global_profile = false;
         arc.profile = 0.25F;
@@ -631,7 +631,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         for (int segment_index = 0; segment_index <= settings.segments; ++segment_index) {
             const float t = static_cast<float>(segment_index) / static_cast<float>(settings.segments);
             ElementId vertex_id = invalid_element_id;
-            Vec3 position = first_position + ((second_position - first_position) * t);
+            quader::QVec3 position = first_position + ((second_position - first_position) * t);
             if (segment_index == 0) {
                 vertex_id = first_vertex_id;
                 position = first_position;
@@ -667,7 +667,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             for (int side_index = 0; side_index < 2; ++side_index) {
                 EdgeBevelSide& side = build.sides[static_cast<std::size_t>(side_index)];
                 const ElementId endpoint_vertex_id = edge_bevel_side_endpoint_vertex(side, vertex_id);
-                const Vec3 endpoint_position = edge_bevel_side_endpoint_position(side, vertex_id);
+                const quader::QVec3 endpoint_position = edge_bevel_side_endpoint_position(side, vertex_id);
                 if (endpoint_vertex_id == invalid_element_id) {
                     continue;
                 }
@@ -704,9 +704,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             continue;
         }
 
-        const Vec3 first_delta = singleton_refs[0].position - source_vertex->position;
-        const Vec3 second_delta = singleton_refs[1].position - source_vertex->position;
-        const Vec3 merged_position = source_vertex->position + first_delta + second_delta;
+        const quader::QVec3 first_delta = singleton_refs[0].position - source_vertex->position;
+        const quader::QVec3 second_delta = singleton_refs[1].position - source_vertex->position;
+        const quader::QVec3 merged_position = source_vertex->position + first_delta + second_delta;
         const ElementId merged_vertex_id = add_vertex(candidate, merged_position);
         const auto adjusted_patch_miter_ref =
             [&candidate, &builds, &document, source_vertex, merged_position](EdgeBevelEndpointSideRef ref) {
@@ -721,15 +721,15 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                     return ref;
                 }
 
-                const Vec3 edge_direction = normalize_or_zero(source_vertex->position - other_endpoint->position);
+                const quader::QVec3 edge_direction = normalize_or_zero(source_vertex->position - other_endpoint->position);
                 const EdgeBevelSide& opposite_side = build.sides[static_cast<std::size_t>(1 - ref.side_index)];
-                const Vec3 opposite_position = edge_bevel_side_endpoint_position(opposite_side, ref.endpoint_id);
+                const quader::QVec3 opposite_position = edge_bevel_side_endpoint_position(opposite_side, ref.endpoint_id);
                 if (length_squared(edge_direction) <= epsilon ||
                     length_squared(opposite_position - merged_position) <= epsilon) {
                     return ref;
                 }
 
-                const Vec3 adjusted_position =
+                const quader::QVec3 adjusted_position =
                     merged_position + (edge_direction * dot(opposite_position - merged_position, edge_direction));
                 if (length_squared(adjusted_position - merged_position) <= epsilon) {
                     return ref;
@@ -806,14 +806,14 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             return invalid_element_id;
         }
 
-        const Vec3 edge_delta = neighbor_vertex->position - source_vertex->position;
+        const quader::QVec3 edge_delta = neighbor_vertex->position - source_vertex->position;
         const float edge_length = length(edge_delta);
         if (edge_length <= epsilon) {
             return invalid_element_id;
         }
 
         const float boundary_distance = std::min(settings.width, edge_length * 0.999F);
-        const Vec3 boundary_position = source_vertex->position + (edge_delta * (boundary_distance / edge_length));
+        const quader::QVec3 boundary_position = source_vertex->position + (edge_delta * (boundary_distance / edge_length));
         if (const auto reusable = std::ranges::find_if(candidate.vertices, [boundary_position](const Vertex& vertex) {
                 return length_squared(vertex.position - boundary_position) <= 0.000001F;
             });
@@ -883,7 +883,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         ElementId next_id = invalid_element_id;
         std::vector<ElementId> profile_vertices;
         std::uint32_t material_slot = 0;
-        Vec3 expected_normal;
+        quader::QVec3 expected_normal;
     };
     std::vector<EdgeBevelTerminalCornerPatch> terminal_corner_patches;
     const auto append_patch_miter_face_arc = [&patch_miter_face_arcs_by_vertex](
@@ -1218,7 +1218,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         if (edge_a == nullptr || edge_b == nullptr) {
             continue;
         }
-        const Vec3 edge_direction = normalize_or_zero(edge_b->position - edge_a->position);
+        const quader::QVec3 edge_direction = normalize_or_zero(edge_b->position - edge_a->position);
         if (length_squared(edge_direction) <= epsilon) {
             continue;
         }
@@ -1237,14 +1237,14 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 const Vertex* endpoint = find_vertex(document, endpoint_id);
                 const Vertex* support = find_vertex(candidate, *support_vertex_id);
                 if (endpoint != nullptr && support != nullptr) {
-                    const Vec3 support_delta = support->position - endpoint->position;
+                    const quader::QVec3 support_delta = support->position - endpoint->position;
                     const float support_length = length(support_delta);
                     if (support_length > epsilon) {
                         const float cap_distance = std::min(settings.width, support_length * 0.999F);
                         const ElementId cap_vertex_id =
                             add_vertex(candidate, endpoint->position + (support_delta * (cap_distance / support_length)));
                         insert_terminal_cap_in_source_faces(*support_vertex_id, cap_vertex_id, profile->second);
-                        const Vec3 expected_normal = endpoint_id == build.edge.a ? edge_direction * -1.0F : edge_direction;
+                        const quader::QVec3 expected_normal = endpoint_id == build.edge.a ? edge_direction * -1.0F : edge_direction;
                         for (std::size_t profile_index = 0; profile_index + 1U < profile->second.size(); ++profile_index) {
                             append_edge_bevel_face(
                                 candidate,
@@ -1264,7 +1264,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
                 continue;
             }
 
-            const Vec3 expected_normal = endpoint_id == build.edge.a ? edge_direction * -1.0F : edge_direction;
+            const quader::QVec3 expected_normal = endpoint_id == build.edge.a ? edge_direction * -1.0F : edge_direction;
             for (std::size_t profile_index = 0; profile_index + 1U < profile->second.size(); ++profile_index) {
                 append_edge_bevel_face(
                     candidate,
@@ -1348,10 +1348,10 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             continue;
         }
 
-        Vec3 strip_normal = build.sides[0].normal + build.sides[1].normal;
+        quader::QVec3 strip_normal = build.sides[0].normal + build.sides[1].normal;
         if (length_squared(strip_normal) <= epsilon) {
-            const Vec3 edge_direction = normalize_or_zero(edge_b->position - edge_a->position);
-            const Vec3 side_delta =
+            const quader::QVec3 edge_direction = normalize_or_zero(edge_b->position - edge_a->position);
+            const quader::QVec3 side_delta =
                 edge_bevel_side_endpoint_position(build.sides[1], build.edge.a) -
                 edge_bevel_side_endpoint_position(build.sides[0], build.edge.a);
             strip_normal = normalize_or_zero(cross(edge_direction, side_delta));
@@ -1371,7 +1371,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
             }
         }
 
-        const Vec3 edge_direction = normalize_or_zero(edge_b->position - edge_a->position);
+        const quader::QVec3 edge_direction = normalize_or_zero(edge_b->position - edge_a->position);
         const bool edge_a_fully_selected = fully_selected_vertices.contains(build.edge.a) && fully_selected_vertices.at(build.edge.a);
         const bool edge_b_fully_selected = fully_selected_vertices.contains(build.edge.b) && fully_selected_vertices.at(build.edge.b);
         const bool edge_a_terminal = (selected_edge_counts.contains(build.edge.a) ? selected_edge_counts.at(build.edge.a) : 0) <= 1;
@@ -1520,7 +1520,7 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         }
 
         std::vector<EdgeBevelCornerArc> corner_arcs;
-        std::vector<std::pair<ElementId, Vec3>> patch_points;
+        std::vector<std::pair<ElementId, quader::QVec3>> patch_points;
         for (const EdgeBevelBuild& build : builds) {
             int endpoint_index = -1;
             if (build.edge.a == vertex_id) {
@@ -1577,9 +1577,9 @@ OperationResult bevel_selected_edges_impl(Document& document, Selection& selecti
         Face patch_face;
         patch_face.vertices = patch_vertices;
         const Vertex* source_vertex = find_vertex(candidate, vertex_id);
-        Vec3 expected_normal;
+        quader::QVec3 expected_normal;
         if (source_vertex != nullptr) {
-            const Vec3 patch_centroid = face_centroid(candidate, patch_face);
+            const quader::QVec3 patch_centroid = face_centroid(candidate, patch_face);
             expected_normal = fully_selected ? source_vertex->position - patch_centroid : patch_centroid - source_vertex->position;
         }
         if (settings.segments > 1 &&

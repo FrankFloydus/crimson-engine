@@ -22,34 +22,34 @@
 namespace quader_editor_core {
 namespace {
 
-quader_geometry::Vec2d to_geometry_vec2(quader_poly::Vec2 value)
+quader_geometry::QVec2d to_geometry_vec2(quader::QVec2 value)
 {
 	return { value.x, value.y };
 }
 
-quader_geometry::Vec3d to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3d to_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec2 to_poly_vec2(quader_geometry::Vec2d value)
+quader::QVec2 to_poly_vec2(quader_geometry::QVec2d value)
 {
 	return { static_cast<float>(value.x), static_cast<float>(value.y) };
 }
 
-quader_poly::Vec3 to_poly_vec3(quader_geometry::Vec3d value)
+quader::QVec3 to_poly_vec3(quader_geometry::QVec3d value)
 {
 	return { static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z) };
 }
 
-bool vec3_is_tiny(quader_poly::Vec3 value, double epsilon = tool_epsilon)
+bool vec3_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
 {
 	return quader_geometry::length_squared(to_geometry_vec3(value)) <= epsilon * epsilon;
 }
 
-quader_poly::Vec2 vec2_normalize_or(quader_poly::Vec2 value, quader_poly::Vec2 fallback)
+quader::QVec2 vec2_normalize_or(quader::QVec2 value, quader::QVec2 fallback)
 {
-	const quader_geometry::Vec2d geometry_value = to_geometry_vec2(value);
+	const quader_geometry::QVec2d geometry_value = to_geometry_vec2(value);
 	const double length_squared = quader_geometry::length_squared(geometry_value);
 	if (length_squared <= screen_epsilon) {
 		return fallback;
@@ -57,7 +57,7 @@ quader_poly::Vec2 vec2_normalize_or(quader_poly::Vec2 value, quader_poly::Vec2 f
 	return to_poly_vec2(geometry_value / std::sqrt(length_squared));
 }
 
-quader_poly::Vec3 normalized_axis(quader_poly::Vec3 value)
+quader::QVec3 normalized_axis(quader::QVec3 value)
 {
 	return to_poly_vec3(quader_geometry::normalize_or_zero(to_geometry_vec3(value), tool_epsilon));
 }
@@ -68,8 +68,8 @@ double safe_grid_size(double grid_size, double minimum)
 }
 
 std::optional<double> geometry_axis_drag_distance(
-		quader_poly::Vec3 axis_value,
-		quader_poly::Vec3 anchor,
+		quader::QVec3 axis_value,
+		quader::QVec3 anchor,
 		const quader_poly::Ray& ray,
 		double parallel_epsilon,
 		double vector_epsilon = tool_epsilon)
@@ -77,19 +77,19 @@ std::optional<double> geometry_axis_drag_distance(
 	if (vec3_is_tiny(axis_value, vector_epsilon) || vec3_is_tiny(ray.direction, vector_epsilon)) {
 		return std::nullopt;
 	}
-	const quader_geometry::Vec3d axis =
+	const quader_geometry::QVec3d axis =
 			quader_geometry::normalize_or_zero(to_geometry_vec3(axis_value), vector_epsilon);
-	const quader_geometry::Vec3d ray_direction =
+	const quader_geometry::QVec3d ray_direction =
 			quader_geometry::normalize_or_zero(to_geometry_vec3(ray.direction), vector_epsilon);
 	const double b = quader_geometry::dot(axis, ray_direction);
 	const double denominator = 1.0 - b * b;
 	if (std::abs(denominator) <= parallel_epsilon) {
 		return std::nullopt;
 	}
-	const quader_geometry::LineLineClosestPoints<double> closest =
+	const quader_geometry::QLineLineClosestPoints<double> closest =
 		quader_geometry::closest_points_line_line(
-			quader_geometry::Line3<double> { to_geometry_vec3(anchor), axis },
-			quader_geometry::Line3<double> { to_geometry_vec3(ray.origin), ray_direction },
+			quader_geometry::QLine3<double> { to_geometry_vec3(anchor), axis },
+			quader_geometry::QLine3<double> { to_geometry_vec3(ray.origin), ray_direction },
 			vector_epsilon);
 	return closest.valid ? std::optional<double> { closest.first_parameter } : std::nullopt;
 }
@@ -163,7 +163,7 @@ public:
 		state.active = true;
 		state.source_object_id = input.source_object_id;
 		state.source_face_index = input.source_face_index;
-		state.face_normal = vec3_is_tiny(input.face_normal, min_extrude_distance) ? quader_poly::Vec3() : normalized_axis(input.face_normal);
+		state.face_normal = vec3_is_tiny(input.face_normal, min_extrude_distance) ? quader::QVec3() : normalized_axis(input.face_normal);
 		state.face_vertices = input.face_vertices;
 		state.face_vertex_indices = input.face_vertex_indices;
 		state.face_center = input.face_center;
@@ -232,8 +232,8 @@ public:
 		if (!state.active || vec3_is_tiny(state.face_normal, min_extrude_distance) || vec3_is_tiny(world_ray.direction, min_extrude_distance)) {
 			return std::numeric_limits<double>::infinity();
 		}
-		const quader_poly::Vec3 local_ray_origin = inverse_transform_point(model_transform, world_ray.origin);
-		quader_poly::Vec3 local_ray_dir = inverse_transform_vector(model_transform, world_ray.direction);
+		const quader::QVec3 local_ray_origin = inverse_transform_point(model_transform, world_ray.origin);
+		quader::QVec3 local_ray_dir = inverse_transform_vector(model_transform, world_ray.direction);
 		if (vec3_is_tiny(local_ray_dir, min_extrude_distance)) {
 			return std::numeric_limits<double>::infinity();
 		}
@@ -246,13 +246,13 @@ public:
 		return distance.value_or(std::numeric_limits<double>::infinity());
 	}
 
-	[[nodiscard]] quader_poly::Vec3 extrude_face_center_for_vertices(const std::vector<quader_poly::Vec3>& vertices) const
+	[[nodiscard]] quader::QVec3 extrude_face_center_for_vertices(const std::vector<quader::QVec3>& vertices) const
 	{
 		if (vertices.empty()) {
 			return {};
 		}
-		quader_poly::Vec3 center;
-		for (const quader_poly::Vec3& vertex : vertices) {
+		quader::QVec3 center;
+		for (const quader::QVec3& vertex : vertices) {
 			center += vertex;
 		}
 		return center / static_cast<float>(vertices.size());
@@ -362,7 +362,7 @@ double extrude_axis_distance_from_ray(const ExtrudeToolState& state, const quade
 	return extrude_tool_impl().extrude_axis_distance_from_ray(state, model_transform, world_ray);
 }
 
-quader_poly::Vec3 extrude_face_center_for_vertices(const std::vector<quader_poly::Vec3>& vertices)
+quader::QVec3 extrude_face_center_for_vertices(const std::vector<quader::QVec3>& vertices)
 {
 	return extrude_tool_impl().extrude_face_center_for_vertices(vertices);
 }

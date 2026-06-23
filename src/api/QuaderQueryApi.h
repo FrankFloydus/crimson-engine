@@ -35,7 +35,7 @@ public:
     [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForId(
             QuaderModelingObjectId modelingObjectId) const;
     [[nodiscard]] std::optional<MeshAsset> compiledObjectMesh(QuaderModelingObjectRef object) const;
-    [[nodiscard]] std::optional<Vec3> selectionCenter() const;
+    [[nodiscard]] std::optional<QVec3> selectionCenter() const;
     [[nodiscard]] ModelingSelectionSummary selection() const;
     [[nodiscard]] ModelingToolStatus toolStatus() const;
     [[nodiscard]] QuaderAssetSnapshot assets() const;

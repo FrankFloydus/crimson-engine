@@ -11,7 +11,7 @@
 namespace quader {
 namespace {
 
-bool vec3Matches(Vec3 left, Vec3 right) {
+bool vec3Matches(QVec3 left, QVec3 right) {
     return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 

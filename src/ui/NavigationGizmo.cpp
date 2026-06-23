@@ -50,15 +50,15 @@ ViewportViewAxis toViewportViewAxis(quader_editor_core::ViewAxis axis) {
     return ViewportViewAxis::Z;
 }
 
-quader_poly::Vec3 toRuntime(Vec3 value) {
+quader::QVec3 toRuntime(QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
 quader_editor_core::ViewportCameraState makeRuntimeCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
-    const Vec3 right = normalize(cross(forward, pose.up));
-    const Vec3 up = normalize(pose.up);
+    const QVec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 right = normalize(cross(forward, pose.up));
+    const QVec3 up = normalize(pose.up);
 
     quader_editor_core::ViewportCameraState runtimeCamera;
     runtimeCamera.projection = camera.state().projection == ViewportProjection::Orthographic
@@ -91,9 +91,9 @@ bool NavigationGizmo::draw(ViewportCameraController& camera,
         ViewportPaneId paneId,
         ImVec2 itemMin,
         ImVec2 itemSize,
-        Vec2 capturedMouseDelta,
+        QVec2 capturedMouseDelta,
         bool* viewportCursorCaptureRequested,
-        Vec2* viewportCursorCapturePoint,
+        QVec2* viewportCursorCapturePoint,
         bool interactive) {
     if (!visible_) {
         return false;
@@ -126,7 +126,7 @@ bool NavigationGizmo::draw(ViewportCameraController& camera,
         hoverHit = quader_editor_core::pick_view_cube(pickInput);
     }
 
-    auto toViewCubeScreenPoint = [&](quader_poly::Vec2 point) {
+    auto toViewCubeScreenPoint = [&](quader::QVec2 point) {
         return ImVec2{
                 std::floor(itemMin.x + point.x) + 0.5f,
                 std::floor(itemMin.y + point.y) + 0.5f,
@@ -138,7 +138,7 @@ bool NavigationGizmo::draw(ViewportCameraController& camera,
     for (const quader_editor_core::ViewCubeFacePrimitive& face : primitives.faces) {
         std::vector<ImVec2> polygon;
         polygon.reserve(face.polygon.size());
-        for (quader_poly::Vec2 point : face.polygon) {
+        for (quader::QVec2 point : face.polygon) {
             polygon.push_back(toViewCubeScreenPoint(point));
         }
         if (polygon.size() < 3u) {
@@ -230,10 +230,10 @@ bool NavigationGizmo::draw(ViewportCameraController& camera,
         requestCapture();
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            const Vec2 fallbackDelta{io.MouseDelta.x, io.MouseDelta.y};
+            const QVec2 fallbackDelta{io.MouseDelta.x, io.MouseDelta.y};
             const float capturedDeltaLengthSquared =
                     capturedMouseDelta.x * capturedMouseDelta.x + capturedMouseDelta.y * capturedMouseDelta.y;
-            const Vec2 delta = capturedDeltaLengthSquared > 0.000001f ? capturedMouseDelta : fallbackDelta;
+            const QVec2 delta = capturedDeltaLengthSquared > 0.000001f ? capturedMouseDelta : fallbackDelta;
             accumulatedDrag_ = accumulatedDrag_ + delta;
             const float accumulatedLengthSquared =
                     accumulatedDrag_.x * accumulatedDrag_.x +

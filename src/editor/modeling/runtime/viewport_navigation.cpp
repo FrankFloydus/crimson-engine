@@ -16,44 +16,44 @@
 namespace quader_editor_core {
 namespace {
 
-quader_geometry::Vec3f geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3f geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec3 poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_geometry::Vec2d geometry_vec2(quader_poly::Vec2 value)
+quader_geometry::QVec2d geometry_vec2(quader::QVec2 value)
 {
 	return { value.x, value.y };
 }
 
-quader_poly::Vec2 poly_vec2(quader_geometry::Vec2d value)
+quader::QVec2 poly_vec2(quader_geometry::QVec2d value)
 {
 	return { static_cast<float>(value.x), static_cast<float>(value.y) };
 }
 
-quader_poly::Vec2 vec2_sub(quader_poly::Vec2 left, quader_poly::Vec2 right)
+quader::QVec2 vec2_sub(quader::QVec2 left, quader::QVec2 right)
 {
 	return { left.x - right.x, left.y - right.y };
 }
 
-double vec2_dot(quader_poly::Vec2 left, quader_poly::Vec2 right)
+double vec2_dot(quader::QVec2 left, quader::QVec2 right)
 {
 	return quader_geometry::dot(geometry_vec2(left), geometry_vec2(right));
 }
 
-bool vec2_is_tiny(quader_poly::Vec2 value)
+bool vec2_is_tiny(quader::QVec2 value)
 {
 	return quader_geometry::length_squared(geometry_vec2(value)) <= screen_epsilon;
 }
 
-quader_poly::Vec2 vec2_normalize_or(quader_poly::Vec2 value, quader_poly::Vec2 fallback)
+quader::QVec2 vec2_normalize_or(quader::QVec2 value, quader::QVec2 fallback)
 {
-	const quader_geometry::Vec2d geometry_value = geometry_vec2(value);
+	const quader_geometry::QVec2d geometry_value = geometry_vec2(value);
 	const double length_squared = quader_geometry::length_squared(geometry_value);
 	if (length_squared <= screen_epsilon) {
 		return fallback;
@@ -62,37 +62,37 @@ quader_poly::Vec2 vec2_normalize_or(quader_poly::Vec2 value, quader_poly::Vec2 f
 	return poly_vec2(geometry_value / length);
 }
 
-double geometry_dot(quader_poly::Vec3 left, quader_poly::Vec3 right)
+double geometry_dot(quader::QVec3 left, quader::QVec3 right)
 {
 	return quader_geometry::dot(geometry_vec3(left), geometry_vec3(right));
 }
 
-quader_poly::Vec3 geometry_cross(quader_poly::Vec3 left, quader_poly::Vec3 right)
+quader::QVec3 geometry_cross(quader::QVec3 left, quader::QVec3 right)
 {
 	return poly_vec3(quader_geometry::cross(geometry_vec3(left), geometry_vec3(right)));
 }
 
-double geometry_length_squared(quader_poly::Vec3 value)
+double geometry_length_squared(quader::QVec3 value)
 {
 	return quader_geometry::length_squared(geometry_vec3(value));
 }
 
-double geometry_length(quader_poly::Vec3 value)
+double geometry_length(quader::QVec3 value)
 {
 	return quader_geometry::length(geometry_vec3(value));
 }
 
-quader_poly::Vec3 geometry_scale(quader_poly::Vec3 value, double scalar)
+quader::QVec3 geometry_scale(quader::QVec3 value, double scalar)
 {
 	return poly_vec3(geometry_vec3(value) * static_cast<float>(scalar));
 }
 
-quader_poly::Vec3 geometry_normalized_axis(quader_poly::Vec3 value)
+quader::QVec3 geometry_normalized_axis(quader::QVec3 value)
 {
 	return poly_vec3(quader_geometry::normalize_or_zero(geometry_vec3(value), static_cast<float>(tool_epsilon)));
 }
 
-quader_poly::Vec3 geometry_transform_vector(const quader_poly::Transform3& transform, quader_poly::Vec3 value)
+quader::QVec3 geometry_transform_vector(const quader_poly::Transform3& transform, quader::QVec3 value)
 {
 	return poly_vec3(
 			geometry_vec3(transform.x_axis) * value.x +
@@ -100,14 +100,14 @@ quader_poly::Vec3 geometry_transform_vector(const quader_poly::Transform3& trans
 			geometry_vec3(transform.z_axis) * value.z);
 }
 
-bool geometry_is_tiny(quader_poly::Vec3 value, double epsilon = tool_epsilon)
+bool geometry_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
 {
 	return geometry_length_squared(value) <= epsilon * epsilon;
 }
 
-quader_poly::Vec3 rotate_vector_around_axis(quader_poly::Vec3 value, quader_poly::Vec3 axis, double angle_radians)
+quader::QVec3 rotate_vector_around_axis(quader::QVec3 value, quader::QVec3 axis, double angle_radians)
 {
-	const quader_poly::Vec3 normal = geometry_normalized_axis(axis);
+	const quader::QVec3 normal = geometry_normalized_axis(axis);
 	if (geometry_is_tiny(normal)) {
 		return value;
 	}
@@ -121,17 +121,17 @@ quader_poly::Vec3 rotate_vector_around_axis(quader_poly::Vec3 value, quader_poly
 
 quader_poly::Transform3 orthonormalized_basis(quader_poly::Transform3 basis)
 {
-	quader_poly::Vec3 right = geometry_normalized_axis(basis.x_axis);
+	quader::QVec3 right = geometry_normalized_axis(basis.x_axis);
 	if (geometry_is_tiny(right)) {
 		right = { 1.0F, 0.0F, 0.0F };
 	}
-	quader_poly::Vec3 up = basis.y_axis - geometry_scale(right, geometry_dot(basis.y_axis, right));
+	quader::QVec3 up = basis.y_axis - geometry_scale(right, geometry_dot(basis.y_axis, right));
 	up = geometry_normalized_axis(up);
 	if (geometry_is_tiny(up)) {
-		const quader_poly::Vec3 fallback = std::abs(right.y) > 0.9 ? quader_poly::Vec3 { 0.0F, 0.0F, 1.0F } : quader_poly::Vec3 { 0.0F, 1.0F, 0.0F };
+		const quader::QVec3 fallback = std::abs(right.y) > 0.9 ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : quader::QVec3 { 0.0F, 1.0F, 0.0F };
 		up = geometry_normalized_axis(fallback - geometry_scale(right, geometry_dot(fallback, right)));
 	}
-	quader_poly::Vec3 back = geometry_normalized_axis(geometry_cross(right, up));
+	quader::QVec3 back = geometry_normalized_axis(geometry_cross(right, up));
 	if (geometry_is_tiny(back)) {
 		back = { 0.0F, 0.0F, 1.0F };
 	}
@@ -139,9 +139,9 @@ quader_poly::Transform3 orthonormalized_basis(quader_poly::Transform3 basis)
 	return { right, up, back, basis.origin };
 }
 
-quader_poly::Transform3 rotation_basis(quader_poly::Vec3 axis, double angle_radians)
+quader_poly::Transform3 rotation_basis(quader::QVec3 axis, double angle_radians)
 {
-	const quader_poly::Vec3 normal = geometry_normalized_axis(axis);
+	const quader::QVec3 normal = geometry_normalized_axis(axis);
 	if (geometry_is_tiny(normal)) {
 		return {};
 	}
@@ -175,16 +175,16 @@ quader_poly::Transform3 rotated_camera_basis(const quader_poly::Transform3& came
 
 quader_poly::Transform3 clamped_rotation_to_upright(const quader_poly::Transform3& camera_transform, const quader_poly::Transform3& rotation)
 {
-	const quader_poly::Vec3 world_up { 0.0F, 1.0F, 0.0F };
-	const quader_poly::Vec3 new_up = geometry_normalized_axis(geometry_transform_vector(rotation, camera_transform.y_axis));
+	const quader::QVec3 world_up { 0.0F, 1.0F, 0.0F };
+	const quader::QVec3 new_up = geometry_normalized_axis(geometry_transform_vector(rotation, camera_transform.y_axis));
 	if (geometry_dot(new_up, world_up) >= 0.0) {
 		return orthonormalized_basis(rotation);
 	}
 
-	const quader_poly::Vec3 new_right = geometry_normalized_axis(geometry_transform_vector(rotation, camera_transform.x_axis));
-	const quader_poly::Vec3 new_forward = geometry_normalized_axis(geometry_transform_vector(rotation, geometry_scale(camera_transform.z_axis, -1.0)));
-	quader_poly::Vec3 clamped_up = new_up - geometry_scale(world_up, geometry_dot(new_up, world_up));
-	clamped_up = geometry_is_tiny(clamped_up) ? quader_poly::Vec3 { 1.0F, 0.0F, 0.0F } : geometry_normalized_axis(clamped_up);
+	const quader::QVec3 new_right = geometry_normalized_axis(geometry_transform_vector(rotation, camera_transform.x_axis));
+	const quader::QVec3 new_forward = geometry_normalized_axis(geometry_transform_vector(rotation, geometry_scale(camera_transform.z_axis, -1.0)));
+	quader::QVec3 clamped_up = new_up - geometry_scale(world_up, geometry_dot(new_up, world_up));
+	clamped_up = geometry_is_tiny(clamped_up) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : geometry_normalized_axis(clamped_up);
 
 	const double cos_angle = std::clamp(geometry_dot(clamped_up, new_up), -1.0, 1.0);
 	const double correction_angle = std::acos(cos_angle);
@@ -193,18 +193,18 @@ quader_poly::Transform3 clamped_rotation_to_upright(const quader_poly::Transform
 	return orthonormalized_basis(basis_multiply(correction, rotation));
 }
 
-quader_poly::Transform3 orthogonal_camera_basis_for_offset_axis(quader_poly::Vec3 axis)
+quader_poly::Transform3 orthogonal_camera_basis_for_offset_axis(quader::QVec3 axis)
 {
-	const quader_poly::Vec3 world_up { 0.0F, 1.0F, 0.0F };
-	const quader_poly::Vec3 back = geometry_is_tiny(axis) ? quader_poly::Vec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(axis);
-	quader_poly::Vec3 right;
+	const quader::QVec3 world_up { 0.0F, 1.0F, 0.0F };
+	const quader::QVec3 back = geometry_is_tiny(axis) ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(axis);
+	quader::QVec3 right;
 	if (std::abs(geometry_dot(back, world_up)) > 0.999) {
 		right = { 1.0F, 0.0F, 0.0F };
 	} else {
 		right = geometry_cross(world_up, back);
 	}
-	right = geometry_is_tiny(right) ? quader_poly::Vec3 { 1.0F, 0.0F, 0.0F } : geometry_normalized_axis(right);
-	const quader_poly::Vec3 up = geometry_normalized_axis(geometry_cross(back, right));
+	right = geometry_is_tiny(right) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : geometry_normalized_axis(right);
+	const quader::QVec3 up = geometry_normalized_axis(geometry_cross(back, right));
 	return orthonormalized_basis({ right, geometry_is_tiny(up) ? world_up : up, back, {} });
 }
 
@@ -215,9 +215,9 @@ double basis_alignment_score(const quader_poly::Transform3& left, const quader_p
 	return geometry_dot(a.x_axis, b.x_axis) + geometry_dot(a.y_axis, b.y_axis) + geometry_dot(a.z_axis, b.z_axis);
 }
 
-quader_poly::Transform3 closest_orthogonal_camera_basis_for_offset_axis(quader_poly::Vec3 axis, const quader_poly::Transform3& reference_basis)
+quader_poly::Transform3 closest_orthogonal_camera_basis_for_offset_axis(quader::QVec3 axis, const quader_poly::Transform3& reference_basis)
 {
-	const quader_poly::Vec3 back = geometry_is_tiny(axis) ? quader_poly::Vec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(axis);
+	const quader::QVec3 back = geometry_is_tiny(axis) ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(axis);
 	const quader_poly::Transform3 base = orthogonal_camera_basis_for_offset_axis(back);
 	static constexpr std::array<double, 4> rolls {
 		0.0,
@@ -240,7 +240,7 @@ quader_poly::Transform3 closest_orthogonal_camera_basis_for_offset_axis(quader_p
 	return orthonormalized_basis(best_basis);
 }
 
-ViewportNavigationResult navigation_result(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, double camera_size = -1.0)
+ViewportNavigationResult navigation_result(const quader_poly::Transform3& transform, quader::QVec3 pivot, double camera_size = -1.0)
 {
 	ViewportNavigationResult result;
 	result.ok = true;
@@ -266,16 +266,16 @@ double capped_orthographic_zoom_size(double current_size, double factor, double 
 	return std::max(navigation_min_orthographic_size, requested_size);
 }
 
-bool orthogonal_snap_transform(const quader_poly::Transform3& unsnapped_transform, quader_poly::Vec3 pivot, quader_poly::Transform3& snapped_transform)
+bool orthogonal_snap_transform(const quader_poly::Transform3& unsnapped_transform, quader::QVec3 pivot, quader_poly::Transform3& snapped_transform)
 {
-	const quader_poly::Vec3 offset = unsnapped_transform.origin - pivot;
+	const quader::QVec3 offset = unsnapped_transform.origin - pivot;
 	const double distance = geometry_length(offset);
 	if (distance <= navigation_min_camera_distance) {
 		return false;
 	}
 
-	const quader_poly::Vec3 direction = offset / static_cast<float>(distance);
-	const quader_poly::Vec3 axes[6] = {
+	const quader::QVec3 direction = offset / static_cast<float>(distance);
+	const quader::QVec3 axes[6] = {
 		{ 0.0F, 0.0F, 1.0F },
 		{ 0.0F, 0.0F, -1.0F },
 		{ 1.0F, 0.0F, 0.0F },
@@ -285,8 +285,8 @@ bool orthogonal_snap_transform(const quader_poly::Transform3& unsnapped_transfor
 	};
 
 	double best_dot = -1.0;
-	quader_poly::Vec3 best_axis = axes[0];
-	for (const quader_poly::Vec3& axis : axes) {
+	quader::QVec3 best_axis = axes[0];
+	for (const quader::QVec3& axis : axes) {
 		const double axis_dot = geometry_dot(direction, axis);
 		if (axis_dot > best_dot) {
 			best_dot = axis_dot;
@@ -307,32 +307,32 @@ bool orthogonal_snap_transform(const quader_poly::Transform3& unsnapped_transfor
 }
 
 /**
- * Represents an Axis Target value used by the modeling runtime domain.
+ * Represents an QAxis Target value used by the modeling runtime domain.
  */
 struct AxisTarget {
 	int axis_index = 2;
 	int sign = 1;
 };
 
-AxisTarget axis_target_from_vector(quader_poly::Vec3 value)
+AxisTarget axis_target_from_vector(quader::QVec3 value)
 {
-	value = geometry_is_tiny(value) ? quader_poly::Vec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(value);
-	const quader_geometry::Axis axis = quader_geometry::dominant_axis(geometry_vec3(value));
+	value = geometry_is_tiny(value) ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(value);
+	const quader_geometry::QAxis axis = quader_geometry::dominant_axis(geometry_vec3(value));
 	int axis_index = 2;
 	double component = value.z;
-	if (axis == quader_geometry::Axis::x) {
+	if (axis == quader_geometry::QAxis::x) {
 		axis_index = 0;
 		component = value.x;
-	} else if (axis == quader_geometry::Axis::y) {
+	} else if (axis == quader_geometry::QAxis::y) {
 		axis_index = 1;
 		component = value.y;
 	}
 	return { axis_index, component < 0.0 ? -1 : 1 };
 }
 
-AxisTarget current_view_axis_target(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 pivot)
+AxisTarget current_view_axis_target(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot)
 {
-	const quader_poly::Vec3 offset = camera_transform.origin - pivot;
+	const quader::QVec3 offset = camera_transform.origin - pivot;
 	if (geometry_length_squared(offset) > navigation_min_camera_distance * navigation_min_camera_distance) {
 		return axis_target_from_vector(offset);
 	}
@@ -411,7 +411,7 @@ TransformAxis transform_axis_from_index(int index)
 }
 
 
-quader_poly::Vec2 view_cube_center(quader_poly::Vec2 viewport_size, quader_poly::Vec2 margin)
+quader::QVec2 view_cube_center(quader::QVec2 viewport_size, quader::QVec2 margin)
 {
 	return {
 		static_cast<float>(std::max(0.0, static_cast<double>(margin.x))),
@@ -419,7 +419,7 @@ quader_poly::Vec2 view_cube_center(quader_poly::Vec2 viewport_size, quader_poly:
 	};
 }
 
-quader_poly::Vec2 project_view_cube_point(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 point, quader_poly::Vec2 center, double scale)
+quader::QVec2 project_view_cube_point(const quader_poly::Transform3& camera_transform, quader::QVec3 point, quader::QVec2 center, double scale)
 {
 	const quader_poly::Transform3 camera_basis = orthonormalized_basis(camera_transform);
 	return {
@@ -428,34 +428,34 @@ quader_poly::Vec2 project_view_cube_point(const quader_poly::Transform3& camera_
 	};
 }
 
-double view_cube_depth(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 point)
+double view_cube_depth(const quader_poly::Transform3& camera_transform, quader::QVec3 point)
 {
 	const quader_poly::Transform3 camera_basis = orthonormalized_basis(camera_transform);
 	return geometry_dot(camera_basis.z_axis, point);
 }
 
-std::vector<quader_poly::Vec2> make_view_cube_face_polygon(
+std::vector<quader::QVec2> make_view_cube_face_polygon(
 		const quader_poly::Transform3& camera_transform,
-		quader_poly::Vec2 center,
+		quader::QVec2 center,
 		double scale,
-		const std::array<quader_poly::Vec3, 4>& vertices)
+		const std::array<quader::QVec3, 4>& vertices)
 {
-	std::vector<quader_poly::Vec2> polygon;
+	std::vector<quader::QVec2> polygon;
 	polygon.reserve(vertices.size());
-	for (quader_poly::Vec3 vertex : vertices) {
+	for (quader::QVec3 vertex : vertices) {
 		polygon.push_back(project_view_cube_point(camera_transform, vertex, center, scale));
 	}
 	return polygon;
 }
 
-quader_poly::Vec2 polygon_center(const std::vector<quader_poly::Vec2>& polygon)
+quader::QVec2 polygon_center(const std::vector<quader::QVec2>& polygon)
 {
 	if (polygon.empty()) {
 		return {};
 	}
 	double x = 0.0;
 	double y = 0.0;
-	for (quader_poly::Vec2 point : polygon) {
+	for (quader::QVec2 point : polygon) {
 		x += point.x;
 		y += point.y;
 	}
@@ -469,35 +469,35 @@ quader_poly::Vec2 polygon_center(const std::vector<quader_poly::Vec2>& polygon)
 struct ViewCubeFaceDefinition {
 	int axis_index;
 	int sign;
-	quader_poly::Vec3 normal;
-	std::array<quader_poly::Vec3, 4> vertices;
+	quader::QVec3 normal;
+	std::array<quader::QVec3, 4> vertices;
 };
 
 const std::array<ViewCubeFaceDefinition, 6>& view_cube_face_definitions()
 {
 	static const std::array<ViewCubeFaceDefinition, 6> definitions = { {
-		{ 0, 1, { 1.0F, 0.0F, 0.0F }, { quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F } } },
-		{ 0, -1, { -1.0F, 0.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F } } },
-		{ 1, 1, { 0.0F, 1.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F } } },
-		{ 1, -1, { 0.0F, -1.0F, 0.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F } } },
-		{ 2, 1, { 0.0F, 0.0F, 1.0F }, { quader_poly::Vec3 { -1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, -1.0F, 1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, 1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, 1.0F } } },
-		{ 2, -1, { 0.0F, 0.0F, -1.0F }, { quader_poly::Vec3 { 1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, -1.0F, -1.0F }, quader_poly::Vec3 { -1.0F, 1.0F, -1.0F }, quader_poly::Vec3 { 1.0F, 1.0F, -1.0F } } },
+		{ 0, 1, { 1.0F, 0.0F, 0.0F }, { quader::QVec3 { 1.0F, -1.0F, -1.0F }, quader::QVec3 { 1.0F, 1.0F, -1.0F }, quader::QVec3 { 1.0F, 1.0F, 1.0F }, quader::QVec3 { 1.0F, -1.0F, 1.0F } } },
+		{ 0, -1, { -1.0F, 0.0F, 0.0F }, { quader::QVec3 { -1.0F, -1.0F, 1.0F }, quader::QVec3 { -1.0F, 1.0F, 1.0F }, quader::QVec3 { -1.0F, 1.0F, -1.0F }, quader::QVec3 { -1.0F, -1.0F, -1.0F } } },
+		{ 1, 1, { 0.0F, 1.0F, 0.0F }, { quader::QVec3 { -1.0F, 1.0F, -1.0F }, quader::QVec3 { -1.0F, 1.0F, 1.0F }, quader::QVec3 { 1.0F, 1.0F, 1.0F }, quader::QVec3 { 1.0F, 1.0F, -1.0F } } },
+		{ 1, -1, { 0.0F, -1.0F, 0.0F }, { quader::QVec3 { -1.0F, -1.0F, 1.0F }, quader::QVec3 { -1.0F, -1.0F, -1.0F }, quader::QVec3 { 1.0F, -1.0F, -1.0F }, quader::QVec3 { 1.0F, -1.0F, 1.0F } } },
+		{ 2, 1, { 0.0F, 0.0F, 1.0F }, { quader::QVec3 { -1.0F, -1.0F, 1.0F }, quader::QVec3 { 1.0F, -1.0F, 1.0F }, quader::QVec3 { 1.0F, 1.0F, 1.0F }, quader::QVec3 { -1.0F, 1.0F, 1.0F } } },
+		{ 2, -1, { 0.0F, 0.0F, -1.0F }, { quader::QVec3 { 1.0F, -1.0F, -1.0F }, quader::QVec3 { -1.0F, -1.0F, -1.0F }, quader::QVec3 { -1.0F, 1.0F, -1.0F }, quader::QVec3 { 1.0F, 1.0F, -1.0F } } },
 	} };
 	return definitions;
 }
 
-bool view_cube_same_corner(quader_poly::Vec3 left, quader_poly::Vec3 right)
+bool view_cube_same_corner(quader::QVec3 left, quader::QVec3 right)
 {
 	return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
-bool view_cube_same_edge(quader_poly::Vec3 left_start, quader_poly::Vec3 left_end, quader_poly::Vec3 right_start, quader_poly::Vec3 right_end)
+bool view_cube_same_edge(quader::QVec3 left_start, quader::QVec3 left_end, quader::QVec3 right_start, quader::QVec3 right_end)
 {
 	return (view_cube_same_corner(left_start, right_start) && view_cube_same_corner(left_end, right_end)) ||
 		(view_cube_same_corner(left_start, right_end) && view_cube_same_corner(left_end, right_start));
 }
 
-ViewAxis view_cube_edge_axis(quader_poly::Vec3 start, quader_poly::Vec3 end)
+ViewAxis view_cube_edge_axis(quader::QVec3 start, quader::QVec3 end)
 {
 	if (std::abs(start.x - end.x) > 0.5F) {
 		return ViewAxis::x;
@@ -508,20 +508,20 @@ ViewAxis view_cube_edge_axis(quader_poly::Vec3 start, quader_poly::Vec3 end)
 	return ViewAxis::z;
 }
 
-bool point_in_polygon(const std::vector<quader_poly::Vec2>& polygon, quader_poly::Vec2 point)
+bool point_in_polygon(const std::vector<quader::QVec2>& polygon, quader::QVec2 point)
 {
-	std::vector<quader_geometry::Vec2d> geometry_polygon;
+	std::vector<quader_geometry::QVec2d> geometry_polygon;
 	geometry_polygon.reserve(polygon.size());
-	for (quader_poly::Vec2 vertex : polygon) {
+	for (quader::QVec2 vertex : polygon) {
 		geometry_polygon.push_back(geometry_vec2(vertex));
 	}
 	return quader_geometry::point_in_or_on_polygon_2d(
 		geometry_vec2(point),
-		std::span<const quader_geometry::Vec2d>(geometry_polygon),
+		std::span<const quader_geometry::QVec2d>(geometry_polygon),
 		tool_epsilon);
 }
 
-std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double scale)
+std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_poly::Transform3& camera_transform, quader::QVec2 center, double scale)
 {
 	const quader_poly::Transform3 camera_basis = orthonormalized_basis(camera_transform);
 
@@ -545,15 +545,15 @@ std::vector<ViewCubeFacePrimitive> build_view_cube_faces_for_state(const quader_
 	return faces;
 }
 
-std::vector<ViewCubeEdgePrimitive> build_view_cube_edges_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double scale)
+std::vector<ViewCubeEdgePrimitive> build_view_cube_edges_for_state(const quader_poly::Transform3& camera_transform, quader::QVec2 center, double scale)
 {
 	const quader_poly::Transform3 camera_basis = orthonormalized_basis(camera_transform);
 	/**
 	 * Stores the Edge Key data contract used by the modeling runtime domain.
 	 */
 	struct EdgeKey {
-		quader_poly::Vec3 start;
-		quader_poly::Vec3 end;
+		quader::QVec3 start;
+		quader::QVec3 end;
 	};
 
 	std::vector<EdgeKey> emitted_edges;
@@ -565,8 +565,8 @@ std::vector<ViewCubeEdgePrimitive> build_view_cube_edges_for_state(const quader_
 		}
 
 		for (std::size_t index = 0; index < definition.vertices.size(); ++index) {
-			const quader_poly::Vec3 start = definition.vertices[index];
-			const quader_poly::Vec3 end = definition.vertices[(index + 1u) % definition.vertices.size()];
+			const quader::QVec3 start = definition.vertices[index];
+			const quader::QVec3 end = definition.vertices[(index + 1u) % definition.vertices.size()];
 			const bool already_emitted = std::any_of(
 				emitted_edges.begin(),
 				emitted_edges.end(),
@@ -595,12 +595,12 @@ std::vector<ViewCubeEdgePrimitive> build_view_cube_edges_for_state(const quader_
 	return edges;
 }
 
-std::vector<ViewCubeEdgePrimitive> build_view_cube_axis_edges_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double scale)
+std::vector<ViewCubeEdgePrimitive> build_view_cube_axis_edges_for_state(const quader_poly::Transform3& camera_transform, quader::QVec2 center, double scale)
 {
-	const quader_poly::Vec3 anchor { 1.0F, -1.0F, 1.0F };
+	const quader::QVec3 anchor { 1.0F, -1.0F, 1.0F };
 	const struct AxisEdgeDefinition {
 		ViewAxis axis;
-		quader_poly::Vec3 end;
+		quader::QVec3 end;
 	} axis_edges[3] = {
 		{ ViewAxis::x, { -1.0F, -1.0F, 1.0F } },
 		{ ViewAxis::y, { 1.0F, 1.0F, 1.0F } },
@@ -622,21 +622,21 @@ std::vector<ViewCubeEdgePrimitive> build_view_cube_axis_edges_for_state(const qu
 	return edges;
 }
 
-std::vector<ViewCubeAxisMarkerPrimitive> build_view_cube_markers_for_state(const quader_poly::Transform3& camera_transform, quader_poly::Vec2 center, double radius)
+std::vector<ViewCubeAxisMarkerPrimitive> build_view_cube_markers_for_state(const quader_poly::Transform3& camera_transform, quader::QVec2 center, double radius)
 {
 	std::vector<ViewCubeAxisMarkerPrimitive> markers;
-	const quader_poly::Vec3 axes[3] = {
+	const quader::QVec3 axes[3] = {
 		{ 1.0F, 0.0F, 0.0F },
 		{ 0.0F, 1.0F, 0.0F },
 		{ 0.0F, 0.0F, 1.0F },
 	};
 	for (int axis_index = 0; axis_index < 3; ++axis_index) {
-		quader_poly::Vec2 projected = project_view_cube_point(camera_transform, axes[axis_index], {}, 1.0);
+		quader::QVec2 projected = project_view_cube_point(camera_transform, axes[axis_index], {}, 1.0);
 		const double depth = view_cube_depth(camera_transform, axes[axis_index]);
 		if (vec2_is_tiny(projected)) {
-			projected = depth >= 0.0 ? quader_poly::Vec2 { 0.0F, -1.0F } : quader_poly::Vec2 { 0.0F, 1.0F };
+			projected = depth >= 0.0 ? quader::QVec2 { 0.0F, -1.0F } : quader::QVec2 { 0.0F, 1.0F };
 		}
-		const quader_poly::Vec2 normalized = vec2_normalize_or(projected, { 0.0F, -1.0F });
+		const quader::QVec2 normalized = vec2_normalize_or(projected, { 0.0F, -1.0F });
 		ViewCubeAxisMarkerPrimitive marker;
 		marker.axis = view_axis_from_index(axis_index);
 		marker.sign = 1;
@@ -655,7 +655,7 @@ std::vector<ViewCubeAxisMarkerPrimitive> build_view_cube_markers_for_state(const
 
 } // namespace
 
-quader_poly::Vec3 view_axis_vector(ViewAxis axis, int sign)
+quader::QVec3 view_axis_vector(ViewAxis axis, int sign)
 {
 	const float value = sign < 0 ? -1.0F : 1.0F;
 	if (axis == ViewAxis::x) {
@@ -667,25 +667,25 @@ quader_poly::Vec3 view_axis_vector(ViewAxis axis, int sign)
 	return { 0.0F, 0.0F, value };
 }
 
-quader_poly::Vec3 viewport_camera_forward(const quader_poly::Transform3& camera_transform)
+quader::QVec3 viewport_camera_forward(const quader_poly::Transform3& camera_transform)
 {
-	const quader_poly::Vec3 forward = geometry_scale(camera_transform.z_axis, -1.0);
-	return geometry_is_tiny(forward) ? quader_poly::Vec3 { 0.0F, 0.0F, -1.0F } : geometry_normalized_axis(forward);
+	const quader::QVec3 forward = geometry_scale(camera_transform.z_axis, -1.0);
+	return geometry_is_tiny(forward) ? quader::QVec3 { 0.0F, 0.0F, -1.0F } : geometry_normalized_axis(forward);
 }
 
-quader_poly::Vec3 viewport_camera_right(const quader_poly::Transform3& camera_transform)
+quader::QVec3 viewport_camera_right(const quader_poly::Transform3& camera_transform)
 {
-	return geometry_is_tiny(camera_transform.x_axis) ? quader_poly::Vec3 { 1.0F, 0.0F, 0.0F } : geometry_normalized_axis(camera_transform.x_axis);
+	return geometry_is_tiny(camera_transform.x_axis) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : geometry_normalized_axis(camera_transform.x_axis);
 }
 
-quader_poly::Vec3 viewport_camera_up(const quader_poly::Transform3& camera_transform)
+quader::QVec3 viewport_camera_up(const quader_poly::Transform3& camera_transform)
 {
-	return geometry_is_tiny(camera_transform.y_axis) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : geometry_normalized_axis(camera_transform.y_axis);
+	return geometry_is_tiny(camera_transform.y_axis) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : geometry_normalized_axis(camera_transform.y_axis);
 }
 
-double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 pivot)
+double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot)
 {
-	const quader_poly::Vec3 to_pivot = pivot - camera_transform.origin;
+	const quader::QVec3 to_pivot = pivot - camera_transform.origin;
 	const double forward_distance = geometry_dot(to_pivot, viewport_camera_forward(camera_transform));
 	if (forward_distance > navigation_min_camera_distance) {
 		return forward_distance;
@@ -693,7 +693,7 @@ double viewport_distance_to_pivot(const quader_poly::Transform3& camera_transfor
 	return std::max(navigation_min_camera_distance, geometry_length(to_pivot));
 }
 
-double viewport_aspect_for_size(quader_poly::Vec2 viewport_size)
+double viewport_aspect_for_size(quader::QVec2 viewport_size)
 {
 	const double width = std::max(1.0, static_cast<double>(viewport_size.x));
 	const double height = std::max(1.0, static_cast<double>(viewport_size.y));
@@ -706,7 +706,7 @@ double viewport_vertical_fov_radians(double fov_degrees)
 	return clamped_fov * std::acos(-1.0) / 180.0;
 }
 
-double viewport_orthographic_size_for_perspective(const quader_poly::Transform3& camera_transform, quader_poly::Vec3 pivot, double fov_degrees)
+double viewport_orthographic_size_for_perspective(const quader_poly::Transform3& camera_transform, quader::QVec3 pivot, double fov_degrees)
 {
 	const double distance = std::max(0.1, geometry_length(camera_transform.origin - pivot));
 	return std::max(navigation_min_orthographic_size, 2.0 * distance * std::tan(viewport_vertical_fov_radians(fov_degrees) * 0.5));
@@ -812,12 +812,12 @@ ViewportNavigationResult viewport_orbit(const ViewportOrbitInput& input)
 	const double pitch = -static_cast<double>(input.screen_delta.y) * sensitivity;
 
 	const quader_poly::Transform3 yaw_rotation = rotation_basis({ 0.0F, 1.0F, 0.0F }, yaw);
-	const quader_poly::Vec3 right = geometry_normalized_axis(geometry_transform_vector(yaw_rotation, viewport_camera_right(input.camera_transform)));
-	const quader_poly::Transform3 pitch_rotation = rotation_basis(geometry_is_tiny(right) ? quader_poly::Vec3 { 1.0F, 0.0F, 0.0F } : right, pitch);
+	const quader::QVec3 right = geometry_normalized_axis(geometry_transform_vector(yaw_rotation, viewport_camera_right(input.camera_transform)));
+	const quader_poly::Transform3 pitch_rotation = rotation_basis(geometry_is_tiny(right) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : right, pitch);
 	const quader_poly::Transform3 rotation = clamped_rotation_to_upright(input.camera_transform, basis_multiply(pitch_rotation, yaw_rotation));
 
 	quader_poly::Transform3 unsnapped_result = input.camera_transform;
-	const quader_poly::Vec3 rotated_offset = geometry_transform_vector(rotation, input.camera_transform.origin - input.pivot);
+	const quader::QVec3 rotated_offset = geometry_transform_vector(rotation, input.camera_transform.origin - input.pivot);
 	unsnapped_result.origin = input.pivot + rotated_offset;
 	const quader_poly::Transform3 rotated_basis = rotated_camera_basis(input.camera_transform, rotation);
 	unsnapped_result.x_axis = rotated_basis.x_axis;
@@ -845,7 +845,7 @@ ViewportNavigationResult viewport_pan(const ViewportPanInput& input)
 		world_per_pixel = std::max(0.0001, vertical_span) / viewport_height;
 	}
 
-	const quader_poly::Vec3 move =
+	const quader::QVec3 move =
 			geometry_scale(viewport_camera_right(input.camera.transform), -static_cast<double>(input.screen_delta.x) * world_per_pixel) +
 			geometry_scale(viewport_camera_up(input.camera.transform), static_cast<double>(input.screen_delta.y) * world_per_pixel);
 	quader_poly::Transform3 result_transform = input.camera.transform;
@@ -866,7 +866,7 @@ ViewportNavigationResult viewport_zoom(const ViewportZoomInput& input)
 		return navigation_result(input.camera.transform, input.pivot, new_size);
 	}
 
-	const quader_poly::Vec3 forward = viewport_camera_forward(input.camera.transform);
+	const quader::QVec3 forward = viewport_camera_forward(input.camera.transform);
 	const double distance = std::max(navigation_min_camera_distance, viewport_distance_to_pivot(input.camera.transform, input.pivot));
 	const double new_distance = std::max(navigation_min_camera_distance, distance / factor);
 	quader_poly::Transform3 result_transform = input.camera.transform;
@@ -882,14 +882,14 @@ ViewportNavigationResult viewport_zoom_to_cursor(const ViewportZoomToCursorInput
 	}
 
 	const double factor = std::pow(navigation_zoom_step_factor, input.steps);
-	const quader_poly::Vec3 ray_direction = geometry_is_tiny(input.ray_direction) ? viewport_camera_forward(input.camera.transform) : geometry_normalized_axis(input.ray_direction);
+	const quader::QVec3 ray_direction = geometry_is_tiny(input.ray_direction) ? viewport_camera_forward(input.camera.transform) : geometry_normalized_axis(input.ray_direction);
 	const double fallback_distance = std::max(navigation_min_camera_distance, viewport_distance_to_pivot(input.camera.transform, input.pivot));
-	quader_poly::Vec3 cursor_target = input.has_cursor_target ? input.cursor_target : input.ray_origin + geometry_scale(ray_direction, fallback_distance);
+	quader::QVec3 cursor_target = input.has_cursor_target ? input.cursor_target : input.ray_origin + geometry_scale(ray_direction, fallback_distance);
 
 	if (input.camera.projection == CameraProjection::orthographic) {
 		const double current_size = std::max(navigation_min_orthographic_size, input.camera.orthographic_size);
 		const double new_size = capped_orthographic_zoom_size(current_size, factor, input.steps);
-		quader_poly::Vec3 cursor_offset = input.ray_origin - input.camera.transform.origin;
+		quader::QVec3 cursor_offset = input.ray_origin - input.camera.transform.origin;
 		cursor_offset = cursor_offset - geometry_scale(ray_direction, geometry_dot(cursor_offset, ray_direction));
 		quader_poly::Transform3 result_transform = input.camera.transform;
 		result_transform.origin += geometry_scale(cursor_offset, 1.0 - (new_size / current_size));
@@ -914,8 +914,8 @@ ViewportNavigationResult viewport_fly_look(const ViewportFlyLookInput& input)
 	const double yaw = -static_cast<double>(input.screen_delta.x) * sensitivity;
 	const double pitch = -static_cast<double>(input.screen_delta.y) * sensitivity;
 	const quader_poly::Transform3 yaw_rotation = rotation_basis({ 0.0F, 1.0F, 0.0F }, yaw);
-	const quader_poly::Vec3 right = geometry_normalized_axis(geometry_transform_vector(yaw_rotation, viewport_camera_right(input.camera_transform)));
-	const quader_poly::Transform3 pitch_rotation = rotation_basis(geometry_is_tiny(right) ? quader_poly::Vec3 { 1.0F, 0.0F, 0.0F } : right, pitch);
+	const quader::QVec3 right = geometry_normalized_axis(geometry_transform_vector(yaw_rotation, viewport_camera_right(input.camera_transform)));
+	const quader_poly::Transform3 pitch_rotation = rotation_basis(geometry_is_tiny(right) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : right, pitch);
 	const quader_poly::Transform3 rotation = clamped_rotation_to_upright(input.camera_transform, basis_multiply(pitch_rotation, yaw_rotation));
 
 	quader_poly::Transform3 result_transform = input.camera_transform;
@@ -932,14 +932,14 @@ ViewportNavigationResult viewport_fly_move(const ViewportFlyMoveInput& input)
 	if (geometry_is_tiny(input.local_direction) || std::abs(input.distance) <= 0.000001) {
 		return navigation_result(input.camera_transform, input.pivot);
 	}
-	quader_poly::Vec3 world_direction =
+	quader::QVec3 world_direction =
 			geometry_scale(viewport_camera_right(input.camera_transform), input.local_direction.x) +
 			geometry_scale(viewport_camera_up(input.camera_transform), input.local_direction.y) +
 			geometry_scale(viewport_camera_forward(input.camera_transform), input.local_direction.z);
 	if (geometry_is_tiny(world_direction)) {
 		return navigation_result(input.camera_transform, input.pivot);
 	}
-	const quader_poly::Vec3 move = geometry_scale(geometry_normalized_axis(world_direction), input.distance);
+	const quader::QVec3 move = geometry_scale(geometry_normalized_axis(world_direction), input.distance);
 	quader_poly::Transform3 result_transform = input.camera_transform;
 	result_transform.origin += move;
 	return navigation_result(result_transform, input.pivot + move);
@@ -948,8 +948,8 @@ ViewportNavigationResult viewport_fly_move(const ViewportFlyMoveInput& input)
 ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& input)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.viewport_frame_bounds");
-	const quader_poly::Vec3 center = geometry_scale(input.min_bounds + input.max_bounds, 0.5);
-	const quader_poly::Vec3 extents = geometry_scale(input.max_bounds - input.min_bounds, 0.5);
+	const quader::QVec3 center = geometry_scale(input.min_bounds + input.max_bounds, 0.5);
+	const quader::QVec3 extents = geometry_scale(input.max_bounds - input.min_bounds, 0.5);
 	double radius = geometry_length(extents);
 	if (radius <= 0.0001) {
 		radius = 1.0;
@@ -974,9 +974,9 @@ ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& i
 	return navigation_result(result_transform, center);
 }
 
-ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, quader_poly::Vec3 pivot, ViewAxis axis, int sign)
+ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxis axis, int sign)
 {
-	const quader_poly::Vec3 offset_axis = view_axis_vector(axis, sign);
+	const quader::QVec3 offset_axis = view_axis_vector(axis, sign);
 	double distance = viewport_distance_to_pivot(camera.transform, pivot);
 	if (distance <= navigation_min_camera_distance) {
 		distance = navigation_default_frame_distance;
@@ -999,7 +999,7 @@ ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, q
 	return navigation_result(result_transform, pivot, camera_size);
 }
 
-ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& camera, quader_poly::Vec3 pivot, ViewAxisStepDirection direction)
+ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxisStepDirection direction)
 {
 	const AxisTarget current = current_view_axis_target(camera.transform, pivot);
 	const AxisTarget target = stepped_axis_target(current, direction);
@@ -1150,7 +1150,7 @@ ViewportInteractionAction plan_viewport_button(const ViewportInteractionState& s
 ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& input)
 {
 	const double widget_size = std::clamp(input.widget_size, view_cube_min_size, view_cube_max_size);
-	const quader_poly::Vec2 center = view_cube_center(input.viewport_size, input.margin);
+	const quader::QVec2 center = view_cube_center(input.viewport_size, input.margin);
 	const double cube_scale = widget_size * view_cube_half_factor;
 	const double marker_radius = widget_size * view_cube_axis_factor;
 
@@ -1172,9 +1172,9 @@ ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& inpu
 ViewCubeHit pick_view_cube(const ViewCubePickInput& input)
 {
 	const double widget_size = std::clamp(input.primitives.widget_size, view_cube_min_size, view_cube_max_size);
-	const quader_poly::Vec2 center = view_cube_center(input.primitives.viewport_size, input.primitives.margin);
+	const quader::QVec2 center = view_cube_center(input.primitives.viewport_size, input.primitives.margin);
 	const double radius = widget_size * 0.5;
-	const quader_poly::Vec2 from_center = vec2_sub(input.screen_position, center);
+	const quader::QVec2 from_center = vec2_sub(input.screen_position, center);
 
 	ViewCubeHit hit;
 	hit.ok = true;

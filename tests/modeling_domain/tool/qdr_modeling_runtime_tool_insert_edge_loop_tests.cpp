@@ -95,7 +95,7 @@ TEST_CASE("insert edge loop preview clears when snapped drag reaches an existing
 	REQUIRE(quader_editor_core::set_insert_edge_loop_preview(state, objects, hover, 3, edge, 0.5F, true));
 	REQUIRE_FALSE(state.preview_lines.empty());
 
-	const quader_poly::Vec3 near_start {
+	const quader::QVec3 near_start {
 		start->position.x + ((end->position.x - start->position.x) * 0.04F),
 		start->position.y + ((end->position.y - start->position.y) * 0.04F),
 		start->position.z + ((end->position.z - start->position.z) * 0.04F),

@@ -43,7 +43,7 @@ public:
     SceneExpect& entityCount(std::size_t count);
     SceneExpect& hasAlias(std::string_view alias);
     SceneExpect& selectedAliasIs(std::string_view alias);
-    SceneExpect& selectedBoundsCenterNear(Vec3 expected, float epsilon = 0.001f);
+    SceneExpect& selectedBoundsCenterNear(QVec3 expected, float epsilon = 0.001f);
     SceneExpect& entityTransformNear(std::string_view alias, TransformComponent expected, float epsilon = 0.001f);
 
 private:
@@ -84,9 +84,9 @@ public:
     MeshExpect& indexCount(std::size_t count);
     MeshExpect& verticesGreaterThan(const MeshSnapshot& before);
     MeshExpect& verticesDifferFrom(const MeshSnapshot& before, float epsilon = 0.001f);
-    MeshExpect& boundsMinNear(Vec3 expected, float epsilon = 0.001f);
-    MeshExpect& boundsMaxNear(Vec3 expected, float epsilon = 0.001f);
-    MeshExpect& boundsCenterNear(Vec3 expected, float epsilon = 0.001f);
+    MeshExpect& boundsMinNear(QVec3 expected, float epsilon = 0.001f);
+    MeshExpect& boundsMaxNear(QVec3 expected, float epsilon = 0.001f);
+    MeshExpect& boundsCenterNear(QVec3 expected, float epsilon = 0.001f);
 
 private:
     std::optional<MeshSnapshot> mesh_;
@@ -105,7 +105,7 @@ public:
     OverlayExpect& pointCount(ViewportOverlayLayer layer, std::size_t count);
     OverlayExpect& hasTriangle(ViewportOverlayLayer layer);
     OverlayExpect& triangleCount(ViewportOverlayLayer layer, std::size_t count);
-    OverlayExpect& pointBoundsCenterNear(ViewportOverlayLayer layer, Vec3 expected, float epsilon = 0.001f);
+    OverlayExpect& pointBoundsCenterNear(ViewportOverlayLayer layer, QVec3 expected, float epsilon = 0.001f);
     OverlayExpect& lineBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon = 0.001f);
     OverlayExpect& triangleBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon = 0.001f);
     OverlayExpect& finiteCoordinates(float maxAbsCoordinate = 1000.0f);
@@ -152,7 +152,7 @@ class SnapshotExpect final {
 public:
     explicit SnapshotExpect(const BehaviorSnapshot& snapshot) : snapshot_(snapshot) {}
 
-    SnapshotExpect& selectedBoundsCenterNear(Vec3 expected, float epsilon = 0.001f);
+    SnapshotExpect& selectedBoundsCenterNear(QVec3 expected, float epsilon = 0.001f);
     SnapshotExpect& entityCount(std::size_t count);
     SnapshotExpect& meshVertexCount(std::string_view alias, std::size_t count);
 

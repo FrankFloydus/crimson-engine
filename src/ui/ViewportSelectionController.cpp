@@ -17,7 +17,7 @@ ModelingSelectionSummary ViewportSelectionController::pickSelection(
         ViewportInputRouter& inputRouter,
         const ViewportSettings& settings,
         const ViewportCameraController& camera,
-        Vec2 localMouse,
+        QVec2 localMouse,
         ViewportModifiers modifiers,
         int clickCount,
         bool preserveSelectionOnMiss,

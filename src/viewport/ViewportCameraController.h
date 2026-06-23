@@ -50,7 +50,7 @@ enum class ViewportProjection {
  * Stores the Viewport Camera State data contract used by the viewport input, layout, and camera layer.
  */
 struct ViewportCameraState {
-    Vec3 target = {};
+    QVec3 target = {};
     float yawRadians = -0.6435011f;
     float pitchRadians = -0.4636476f;
     float distance = 11.18034f;
@@ -65,24 +65,24 @@ struct ViewportCameraState {
  * Represents a Viewport Camera Pose value used by the viewport input, layout, and camera layer.
  */
 struct ViewportCameraPose {
-    Vec3 eye;
-    Vec3 target;
-    Vec3 up;
+    QVec3 eye;
+    QVec3 target;
+    QVec3 up;
 };
 
 /**
  * Represents a Viewport Ray value used by the viewport input, layout, and camera layer.
  */
 struct ViewportRay {
-    Vec3 origin;
-    Vec3 direction;
+    QVec3 origin;
+    QVec3 direction;
 };
 
 /**
  * Represents a Viewport Screen Point value used by the viewport input, layout, and camera layer.
  */
 struct ViewportScreenPoint {
-    Vec2 position;
+    QVec2 position;
     float depth = 0.0f;
     bool visible = false;
 };
@@ -95,19 +95,19 @@ public:
     ViewportCameraController();
 
     void setViewportSize(float width, float height);
-    void beginDrag(Vec2 mouse, ViewportDragMode mode);
-    void updateDrag(Vec2 mouse);
-    void updateDrag(Vec2 mouse, ViewportDragMode mode);
+    void beginDrag(QVec2 mouse, ViewportDragMode mode);
+    void updateDrag(QVec2 mouse);
+    void updateDrag(QVec2 mouse, ViewportDragMode mode);
     void endDrag();
     void scroll(float wheelDelta);
-    void scrollToCursor(float wheelDelta, Vec2 localMouse);
+    void scrollToCursor(float wheelDelta, QVec2 localMouse);
     void focusOrigin(float distance = 64.0f);
-    void focusBounds(Vec3 minBounds, Vec3 maxBounds, float margin = 1.25f);
+    void focusBounds(QVec3 minBounds, QVec3 maxBounds, float margin = 1.25f);
     void viewAxis(ViewportViewAxis axis, int sign, ViewportAxisLock lock = ViewportAxisLock::Locked);
     void unlockOrthographicView();
-    void setViewDirection(Vec3 forwardDirection);
-    void updateDragDelta(Vec2 delta);
-    void flyMove(Vec3 localDirection, float deltaSeconds);
+    void setViewDirection(QVec3 forwardDirection);
+    void updateDragDelta(QVec2 delta);
+    void flyMove(QVec3 localDirection, float deltaSeconds);
     void adjustFlySpeed(float wheelSteps);
     void resetFlySpeed();
 
@@ -115,29 +115,29 @@ public:
     float flySpeed() const { return flySpeed_; }
     bool flySpeedIsDefault() const;
     ViewportCameraPose pose() const;
-    ViewportRay rayFromViewportPoint(Vec2 localMouse) const;
-    ViewportScreenPoint projectWorldPoint(Vec3 worldPoint) const;
+    ViewportRay rayFromViewportPoint(QVec2 localMouse) const;
+    ViewportScreenPoint projectWorldPoint(QVec3 worldPoint) const;
     bool isDragging() const { return dragMode_ != ViewportDragMode::None; }
     bool orthographicViewLocked() const { return orthographicViewLocked_; }
 
 private:
     float zoomedDistance(float wheelDelta) const;
-    Vec3 forward() const;
-    Vec3 right() const;
-    Vec3 up() const;
-    void setCameraBasis(Vec3 forwardDirection, Vec3 upDirection);
+    QVec3 forward() const;
+    QVec3 right() const;
+    QVec3 up() const;
+    void setCameraBasis(QVec3 forwardDirection, QVec3 upDirection);
     void syncBasisFromAngles();
     void syncAnglesFromBasis();
     void clearOrbitSnapSource();
 
     ViewportCameraState state_;
-    Vec3 cameraForward_ = {0.0f, 0.0f, -1.0f};
-    Vec3 cameraUp_ = {0.0f, 1.0f, 0.0f};
-    Vec3 pivot_ = {};
+    QVec3 cameraForward_ = {0.0f, 0.0f, -1.0f};
+    QVec3 cameraUp_ = {0.0f, 1.0f, 0.0f};
+    QVec3 pivot_ = {};
     float viewportWidth_ = 1.0f;
     float viewportHeight_ = 1.0f;
     float flySpeed_ = 15.0f;
-    Vec2 lastMouse_ = {};
+    QVec2 lastMouse_ = {};
     ViewportDragMode dragMode_ = ViewportDragMode::None;
     bool orthographicViewLocked_ = false;
     ViewportCameraPose orbitSnapSourcePose_ = {};

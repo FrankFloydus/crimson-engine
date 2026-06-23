@@ -257,14 +257,14 @@ void select_edge_loop(const Document& document, Selection& selection, Edge seed_
     }
 }
 
-std::optional<Vec3> selection_center(const Document& document, const Selection& selection)
+std::optional<quader::QVec3> selection_center(const Document& document, const Selection& selection)
 {
     const std::vector<ElementId> ids = selected_vertex_ids(document, selection);
     if (ids.empty()) {
         return std::nullopt;
     }
 
-    Vec3 center;
+    quader::QVec3 center;
     std::size_t count = 0;
     for (const ElementId id : ids) {
         const Vertex* vertex = find_vertex(document, id);

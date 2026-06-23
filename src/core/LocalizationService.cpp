@@ -7,28 +7,15 @@
 #include "core/LocalizationService.h"
 
 #include "core/Logger.h"
+#include "core/QStr.h"
 
 #include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <iterator>
 #include <sstream>
 
 namespace quader {
 namespace {
-
-std::string trim(std::string_view value) {
-    const auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    });
-    const auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    }).base();
-    if (begin >= end) {
-        return {};
-    }
-    return {begin, end};
-}
 
 std::string stripBom(std::string value) {
     constexpr unsigned char Bom0 = 0xef;
@@ -95,21 +82,21 @@ std::unordered_map<std::string, std::string> LocalizationService::parseLangText(
     std::istringstream stream(stripBom(std::string(text)));
     std::string line;
     while (std::getline(stream, line)) {
-        const std::string trimmed = trim(line);
+        const std::string trimmed = QStr::trimAsciiWhitespace(line);
         if (trimmed.empty() || trimmed.front() == '#' || trimmed.front() == ';') {
             continue;
         }
 
-        const std::size_t equals = trimmed.find('=');
-        if (equals == std::string::npos) {
+        const std::optional<QStrSplitOnce> split = QStr::splitOnce(trimmed, '=');
+        if (!split) {
             continue;
         }
 
-        const std::string key = trim(std::string_view(trimmed).substr(0, equals));
+        const std::string key = QStr::trimAsciiWhitespace(split->before);
         if (key.empty()) {
             continue;
         }
-        const std::string value = unescape(trim(std::string_view(trimmed).substr(equals + 1U)));
+        const std::string value = unescape(QStr::trimAsciiWhitespace(split->after));
         catalog[key] = value;
     }
     return catalog;

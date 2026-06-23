@@ -33,7 +33,7 @@ struct FaceRayHit {
     float distance = std::numeric_limits<float>::max();
 };
 
-Vec3 min_vec(Vec3 left, Vec3 right)
+quader::QVec3 min_vec(quader::QVec3 left, quader::QVec3 right)
 {
     return {
         std::min(left.x, right.x),
@@ -42,7 +42,7 @@ Vec3 min_vec(Vec3 left, Vec3 right)
     };
 }
 
-Vec3 max_vec(Vec3 left, Vec3 right)
+quader::QVec3 max_vec(quader::QVec3 left, quader::QVec3 right)
 {
     return {
         std::max(left.x, right.x),
@@ -51,7 +51,7 @@ Vec3 max_vec(Vec3 left, Vec3 right)
     };
 }
 
-quader_geometry::Aabb3<float> triangle_pick_bounds(const PickFaceTriangle& triangle)
+quader_geometry::QAabb3<float> triangle_pick_bounds(const PickFaceTriangle& triangle)
 {
     return {
         geometry_vec3(triangle.bounds_min),
@@ -59,7 +59,7 @@ quader_geometry::Aabb3<float> triangle_pick_bounds(const PickFaceTriangle& trian
     };
 }
 
-bool face_is_pickable_from_ray(Vec3 normal, const Ray& ray, const PickOptions& options)
+bool face_is_pickable_from_ray(quader::QVec3 normal, const Ray& ray, const PickOptions& options)
 {
     return options.pick_backfaces || dot(normal, ray.direction) < -epsilon;
 }
@@ -68,24 +68,24 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
 {
     QDR_PROFILE_SCOPE("qdr_document.nearest_cached_face_ray_hit");
     std::optional<FaceRayHit> nearest;
-    const quader_geometry::Ray3<float> geometry_pick_ray = geometry_ray(ray);
+    const quader_geometry::QRay3<float> geometry_pick_ray = geometry_ray(ray);
     const float picking_epsilon = std::nextafter(epsilon, 0.0F);
     for (const PickFaceTriangle& triangle : triangles) {
         if (!face_is_pickable_from_ray(triangle.normal, ray, options)) {
             continue;
         }
 
-        const quader_geometry::Triangle3<float> geometry_triangle {
+        const quader_geometry::QTriangle3<float> geometry_triangle {
             geometry_vec3(triangle.a),
             geometry_vec3(triangle.b),
             geometry_vec3(triangle.c),
         };
-        const quader_geometry::RayBoundedTriangleQueryOptions<float> options {
+        const quader_geometry::QRayBoundedTriangleQueryOptions<float> options {
             0.0F,
             nearest.has_value() ? nearest->distance : std::numeric_limits<float>::infinity(),
             picking_epsilon,
         };
-        const quader_geometry::RayBoundedTriangleHit<float> hit =
+        const quader_geometry::QRayBoundedTriangleHit<float> hit =
             quader_geometry::intersect_ray_bounded_triangle<float>(
                 geometry_pick_ray,
                 geometry_triangle,
@@ -152,7 +152,7 @@ std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const R
             continue;
         }
 
-        const Vec3 normal = face_normal(document, face);
+        const quader::QVec3 normal = face_normal(document, face);
         if (!face_is_pickable_from_ray(normal, ray, options)) {
             continue;
         }
@@ -167,7 +167,7 @@ std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const R
             }
 
             float distance = 0.0F;
-            Vec3 position;
+            quader::QVec3 position;
             if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
                 (!nearest.has_value() || distance < nearest->distance)) {
                 nearest = FaceRayHit { face.id, distance };
@@ -219,7 +219,7 @@ std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document,
             continue;
         }
 
-        const Vec3 normal = face_normal(document, face);
+        const quader::QVec3 normal = face_normal(document, face);
         const std::vector<Triangle> triangles = triangulate_face_local_indices(document, face);
         for (const Triangle& triangle : triangles) {
             const Vertex* a = find_vertex(document, face.vertices[triangle.a]);
@@ -229,8 +229,8 @@ std::vector<PickFaceTriangle> build_face_pick_geometry(const Document& document,
                 continue;
             }
 
-            const Vec3 bounds_min = min_vec(min_vec(a->position, b->position), c->position);
-            const Vec3 bounds_max = max_vec(max_vec(a->position, b->position), c->position);
+            const quader::QVec3 bounds_min = min_vec(min_vec(a->position, b->position), c->position);
+            const quader::QVec3 bounds_max = max_vec(max_vec(a->position, b->position), c->position);
             result.push_back({
                 face.id,
                 a->position,
@@ -330,7 +330,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
             }
 
             float ray_distance = 0.0F;
-            Vec3 position;
+            quader::QVec3 position;
             const float distance = segment_ray_distance(ray, a->position, b->position, ray_distance, position);
             if (distance <= options.edge_radius &&
                 !edge_pick_is_occluded(document, edge, ray_distance, surface_hit) &&
@@ -356,7 +356,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
             continue;
         }
 
-        const Vec3 normal = face_normal(document, face);
+        const quader::QVec3 normal = face_normal(document, face);
         if (!face_is_pickable_from_ray(normal, ray, options)) {
             continue;
         }
@@ -371,7 +371,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
             }
 
             float distance = 0.0F;
-            Vec3 position;
+            quader::QVec3 position;
             if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
                 distance < best.distance) {
                 best = {
@@ -415,8 +415,8 @@ OverlayData build_edge_loop_preview(const Document& document, Edge edge, float f
         const Edge face_entry = directed_face_edge(*face, i0);
         const Edge entry = same_directed_edge(split.entry_edge, face_entry) ? face_entry : Edge { face->vertices[i1], face->vertices[i0] };
         const Edge opposite = oriented_loop_opposite_edge(*face, i0, entry);
-        const std::optional<Vec3> entry_position = split_edge_position(document, entry, factor);
-        const std::optional<Vec3> opposite_position = split_edge_position(document, opposite, factor);
+        const std::optional<quader::QVec3> entry_position = split_edge_position(document, entry, factor);
+        const std::optional<quader::QVec3> opposite_position = split_edge_position(document, opposite, factor);
         if (!entry_position.has_value() || !opposite_position.has_value()) {
             continue;
         }

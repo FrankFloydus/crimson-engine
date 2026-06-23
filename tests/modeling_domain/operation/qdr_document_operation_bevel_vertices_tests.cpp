@@ -33,7 +33,7 @@ TEST_CASE("bevel vertices on a cube creates an outward cap and keeps the hull cl
 {
 	Document document = make_cube({});
 	const ElementId vertex_id = document.vertices.front().id;
-	const Vec3 vertex_position = document.vertices.front().position;
+	const quader::QVec3 vertex_position = document.vertices.front().position;
 	const std::size_t vertex_count_before = document.vertices.size();
 	const std::size_t face_count_before = document.faces.size();
 	Selection selection = qdr_test::vertex_selection({ vertex_id }, vertex_id);

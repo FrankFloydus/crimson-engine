@@ -251,7 +251,7 @@ quader_poly::SurfaceShading parse_surface_shading(const std::string& value)
 	throw std::runtime_error("Unknown face normal shading: " + value);
 }
 
-json to_json(quader_poly::Vec2 value)
+json to_json(quader::QVec2 value)
 {
 	return json {
 		{ "x", value.x },
@@ -259,7 +259,7 @@ json to_json(quader_poly::Vec2 value)
 	};
 }
 
-json to_json(quader_poly::Vec3 value)
+json to_json(quader::QVec3 value)
 {
 	return json {
 		{ "x", value.x },
@@ -301,7 +301,7 @@ json to_json(quader_poly::Edge edge)
 	};
 }
 
-quader_poly::Vec2 vec2_from_json(const json& value)
+quader::QVec2 vec2_from_json(const json& value)
 {
 	return {
 		value.at("x").get<float>(),
@@ -309,7 +309,7 @@ quader_poly::Vec2 vec2_from_json(const json& value)
 	};
 }
 
-quader_poly::Vec3 vec3_from_json(const json& value)
+quader::QVec3 vec3_from_json(const json& value)
 {
 	return {
 		value.at("x").get<float>(),
@@ -353,7 +353,7 @@ json document_to_json(const quader_poly::Document& document)
 	json faces = json::array();
 	for (const quader_poly::Face& face : document.faces) {
 		json uvs = json::array();
-		for (quader_poly::Vec2 uv : face.uvs) {
+		for (quader::QVec2 uv : face.uvs) {
 			uvs.push_back(to_json(uv));
 		}
 

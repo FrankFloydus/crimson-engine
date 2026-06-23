@@ -31,7 +31,7 @@ TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][
 		const int source_id = session.objects().front().id;
 
 		const quader_editor_core::CommandResult duplicate =
-			session.duplicate_selected_objects(quader_poly::Vec3 { 1.0F, 0.0F, 0.0F });
+			session.duplicate_selected_objects(quader::QVec3 { 1.0F, 0.0F, 0.0F });
 
 		REQUIRE(duplicate.ok);
 		REQUIRE(duplicate.changed);
@@ -51,7 +51,7 @@ TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][
 			quader_editor_core::SelectionMode::vertex);
 
 		const quader_editor_core::CommandResult duplicate =
-			session.duplicate_selected_objects(quader_poly::Vec3 { 1.0F, 0.0F, 0.0F });
+			session.duplicate_selected_objects(quader::QVec3 { 1.0F, 0.0F, 0.0F });
 
 		REQUIRE_FALSE(duplicate.ok);
 		REQUIRE_FALSE(duplicate.changed);

@@ -17,6 +17,7 @@
 #include "editor/modeling/services/SelectionModeAdapter.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
 #include "editor/selection/SelectionProjectionService.h"
+#include "math/GlmBridge.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -57,11 +58,11 @@
 namespace quader {
 namespace {
 
-quader_poly::Vec3 toRuntime(Vec3 value) {
+quader::QVec3 toRuntime(QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_poly::Vec2 toRuntime(Vec2 value) {
+quader::QVec2 toRuntime(QVec2 value) {
     return {value.x, value.y};
 }
 
@@ -186,7 +187,7 @@ ModelingCutMode fromRuntime(quader_editor_core::CutMode mode) {
     return ModelingCutMode::KeepBoth;
 }
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
@@ -536,9 +537,9 @@ ModelingBoxDragState fromRuntime(quader_editor_core::BoxDragState state) {
     return ModelingBoxDragState::Idle;
 }
 
-Vec3 transformObjectPoint(
+QVec3 transformObjectPoint(
         int objectId,
-        Vec3 point,
+        QVec3 point,
         const std::unordered_map<int, EntityId>& entityByObject,
         const SceneDocument& scene) {
     const auto entity = entityByObject.find(objectId);
@@ -653,27 +654,27 @@ void appendWorldSpaceRuntimeOverlayPoints(
  * Stores the Drawn Plane Preview Frame data contract used by the modeling application service layer.
  */
 struct DrawnPlanePreviewFrame {
-    Vec3 lineStart;
-    Vec3 lineEnd;
-    Vec3 normal;
-    Vec3 side;
+    QVec3 lineStart;
+    QVec3 lineEnd;
+    QVec3 normal;
+    QVec3 side;
     float lineLength = 0.0f;
 };
 
 bool buildDrawnPlanePreviewFrame(
-        Vec3 point0,
-        Vec3 point1,
-        Vec3 support,
+        QVec3 point0,
+        QVec3 point1,
+        QVec3 support,
         DrawnPlanePreviewFrame& frame) {
-    const Vec3 line = point1 - point0;
+    const QVec3 line = point1 - point0;
     const float lineLength = length(line);
     if (lineLength <= 0.0001f) {
         return false;
     }
 
-    const Vec3 lineDirection = line / lineLength;
-    const Vec3 supportVector = support - point0;
-    Vec3 normal = cross(line, supportVector);
+    const QVec3 lineDirection = line / lineLength;
+    const QVec3 supportVector = support - point0;
+    QVec3 normal = cross(line, supportVector);
     if (length(normal) <= 0.000001f) {
         normal = cross(lineDirection, {0.0f, 1.0f, 0.0f});
         if (length(normal) <= 0.000001f) {
@@ -685,7 +686,7 @@ bool buildDrawnPlanePreviewFrame(
         return false;
     }
 
-    Vec3 side = cross(normal, lineDirection);
+    QVec3 side = cross(normal, lineDirection);
     if (length(side) <= 0.000001f) {
         side = {0.0f, 1.0f, 0.0f};
     }
@@ -702,10 +703,10 @@ bool buildDrawnPlanePreviewFrame(
 
 void appendDrawnPlaneToolOverlay(
         ViewportOverlayFrame& frame,
-        std::span<const quader_poly::Vec3> visiblePoints,
-        quader_poly::Vec3 supportPoint,
+        std::span<const quader::QVec3> visiblePoints,
+        quader::QVec3 supportPoint,
         bool hasLine) {
-    std::array<Vec3, 3> points{};
+    std::array<QVec3, 3> points{};
     const std::size_t count = std::min<std::size_t>(visiblePoints.size(), points.size());
     for (std::size_t index = 0; index < count; ++index) {
         points[index] = fromRuntime(visiblePoints[index]);
@@ -744,8 +745,8 @@ void appendDrawnPlaneToolOverlay(
         return;
     }
 
-    const Vec3 side = planeFrame.side * planeFrame.lineLength;
-    const std::array<Vec3, 4> corners{{
+    const QVec3 side = planeFrame.side * planeFrame.lineLength;
+    const std::array<QVec3, 4> corners{{
             planeFrame.lineStart,
             planeFrame.lineEnd,
             planeFrame.lineEnd + side,
@@ -783,7 +784,7 @@ void appendDrawnPlaneToolOverlay(
     }
 }
 
-float runtimeLengthSquared(quader_poly::Vec3 value) {
+float runtimeLengthSquared(quader::QVec3 value) {
     return value.x * value.x + value.y * value.y + value.z * value.z;
 }
 
@@ -806,15 +807,15 @@ void mixToolStateHash(std::uint64_t& hash, double value) {
     mixToolStateHash(hash, bits);
 }
 
-void mixToolStateHash(std::uint64_t& hash, quader_poly::Vec3 value) {
+void mixToolStateHash(std::uint64_t& hash, quader::QVec3 value) {
     mixToolStateHash(hash, static_cast<double>(value.x));
     mixToolStateHash(hash, static_cast<double>(value.y));
     mixToolStateHash(hash, static_cast<double>(value.z));
 }
 
-quader_poly::Vec3 drawnPlaneSupportPoint(
-        std::span<const quader_poly::Vec3> visiblePoints,
-        quader_poly::Vec3 faceNormal) {
+quader::QVec3 drawnPlaneSupportPoint(
+        std::span<const quader::QVec3> visiblePoints,
+        quader::QVec3 faceNormal) {
     if (visiblePoints.size() > 2U) {
         return visiblePoints[2];
     }
@@ -828,7 +829,7 @@ quader_poly::Vec3 drawnPlaneSupportPoint(
  * Represents a Preview Triangle Mesh value used by the modeling application service layer.
  */
 struct PreviewTriangleMesh {
-    std::vector<Vec3> vertices;
+    std::vector<QVec3> vertices;
     std::vector<std::uint32_t> indices;
 
     [[nodiscard]] bool empty() const {
@@ -899,7 +900,7 @@ long long quantizeCutPreviewCoordinate(float value) {
     return static_cast<long long>(std::llround(value / kCutPreviewPlaneQuantization));
 }
 
-CutPreviewPointKey cutPreviewPointKey(Vec3 value) {
+CutPreviewPointKey cutPreviewPointKey(QVec3 value) {
     return {
             .x = quantizeCutPreviewCoordinate(value.x),
             .y = quantizeCutPreviewCoordinate(value.y),
@@ -924,7 +925,7 @@ struct CutPreviewEdgeKey {
     CutPreviewPointKey a;
     CutPreviewPointKey b;
 
-    CutPreviewEdgeKey(Vec3 first, Vec3 second) {
+    CutPreviewEdgeKey(QVec3 first, QVec3 second) {
         CutPreviewPointKey firstKey = cutPreviewPointKey(first);
         CutPreviewPointKey secondKey = cutPreviewPointKey(second);
         if (cutPreviewPointKeyLess(secondKey, firstKey)) {
@@ -951,16 +952,16 @@ struct CutPreviewEdgeKey {
  * Represents a Cut Preview Edge Accumulator value used by the modeling application service layer.
  */
 struct CutPreviewEdgeAccumulator {
-    Vec3 a;
-    Vec3 b;
-    Vec3 normal;
+    QVec3 a;
+    QVec3 b;
+    QVec3 normal;
     bool hasNormal = false;
     bool hasCapTriangle = false;
     bool hasSideTriangle = false;
     bool feature = false;
     int count = 0;
 
-    void add(Vec3 first, Vec3 second, bool onPlane, bool capTriangle, Vec3 triangleNormal) {
+    void add(QVec3 first, QVec3 second, bool onPlane, bool capTriangle, QVec3 triangleNormal) {
         if (length(first - second) <= 0.000001f) {
             return;
         }
@@ -991,7 +992,7 @@ struct CutPreviewEdgeAccumulator {
     }
 };
 
-float signedDistanceToPlane(Vec3 point, Vec3 planePoint, Vec3 planeNormal) {
+float signedDistanceToPlane(QVec3 point, QVec3 planePoint, QVec3 planeNormal) {
     return dot(point - planePoint, planeNormal);
 }
 
@@ -1000,9 +1001,9 @@ float previewMeshBoundsMagnitude(const PreviewTriangleMesh& mesh) {
         return 0.0f;
     }
 
-    Vec3 min = mesh.vertices.front();
-    Vec3 max = mesh.vertices.front();
-    for (const Vec3 vertex : mesh.vertices) {
+    QVec3 min = mesh.vertices.front();
+    QVec3 max = mesh.vertices.front();
+    for (const QVec3 vertex : mesh.vertices) {
         min.x = std::min(min.x, vertex.x);
         min.y = std::min(min.y, vertex.y);
         min.z = std::min(min.z, vertex.z);
@@ -1015,11 +1016,11 @@ float previewMeshBoundsMagnitude(const PreviewTriangleMesh& mesh) {
 
 void addCutPreviewEdge(
         std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator>& edges,
-        Vec3 a,
-        Vec3 b,
+        QVec3 a,
+        QVec3 b,
         bool onPlane,
         bool capTriangle,
-        Vec3 triangleNormal) {
+        QVec3 triangleNormal) {
     if (length(a - b) <= 0.000001f) {
         return;
     }
@@ -1028,15 +1029,15 @@ void addCutPreviewEdge(
 
 std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collectPreviewEdges(
         const PreviewTriangleMesh& mesh,
-        std::optional<Vec3> planePoint,
-        Vec3 planeNormal) {
+        std::optional<QVec3> planePoint,
+        QVec3 planeNormal) {
     std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges;
     if (mesh.empty()) {
         return edges;
     }
 
     const bool hasPlane = planePoint.has_value() && length(planeNormal) > 0.000001f;
-    const Vec3 normalizedPlaneNormal = hasPlane ? normalize(planeNormal) : Vec3{};
+    const QVec3 normalizedPlaneNormal = hasPlane ? normalize(planeNormal) : QVec3{};
     const float planeScale = std::max(1.0f, previewMeshBoundsMagnitude(mesh));
     const float planeEpsilon = std::max(kCutPreviewPlaneQuantization * 8.0f, planeScale * 0.00002f);
 
@@ -1048,10 +1049,10 @@ std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collectPreviewEdges(
             continue;
         }
 
-        const Vec3 a = mesh.vertices[ia];
-        const Vec3 b = mesh.vertices[ib];
-        const Vec3 c = mesh.vertices[ic];
-        Vec3 triangleNormal = cross(b - a, c - a);
+        const QVec3 a = mesh.vertices[ia];
+        const QVec3 b = mesh.vertices[ib];
+        const QVec3 c = mesh.vertices[ic];
+        QVec3 triangleNormal = cross(b - a, c - a);
         if (length(triangleNormal) <= 0.000001f) {
             continue;
         }
@@ -1080,8 +1081,8 @@ std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collectPreviewEdges(
 void appendPreviewLine(
         ViewportOverlayFrame& frame,
         ViewportOverlayLayer layer,
-        Vec3 start,
-        Vec3 end,
+        QVec3 start,
+        QVec3 end,
         std::uint32_t color,
         float widthPixels,
         ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewLine) {
@@ -1102,8 +1103,8 @@ void appendPreviewLine(
 void appendCutPreviewResultLines(
         ViewportOverlayFrame& frame,
         const PreviewTriangleMesh& mesh,
-        Vec3 planePoint,
-        Vec3 planeNormal,
+        QVec3 planePoint,
+        QVec3 planeNormal,
         std::uint32_t outlineColor) {
     const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
             collectPreviewEdges(mesh, planePoint, planeNormal);
@@ -1194,7 +1195,7 @@ std::optional<MeshAsset> boxPreviewMeshFromDescriptor(const quader_editor_core::
         return std::nullopt;
     }
 
-    const std::vector<quader_poly::Vec3> corners = quader_editor_core::box_preview_corners(preview);
+    const std::vector<quader::QVec3> corners = quader_editor_core::box_preview_corners(preview);
     if (corners.size() != 8U) {
         return std::nullopt;
     }
@@ -1273,7 +1274,7 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, float value) {
     return mixPickGeometryHash(hash, bits);
 }
 
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader_poly::Vec3 value) {
+std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader::QVec3 value) {
     hash = mixPickGeometryHash(hash, value.x);
     hash = mixPickGeometryHash(hash, value.y);
     hash = mixPickGeometryHash(hash, value.z);
@@ -1306,7 +1307,7 @@ std::uint64_t objectPickFaceGeometrySignature(
     return hash;
 }
 
-void includePickBoundsPoint(quader_editor_core::PickObjectBounds& bounds, quader_poly::Vec3 point) {
+void includePickBoundsPoint(quader_editor_core::PickObjectBounds& bounds, quader::QVec3 point) {
     if (bounds.empty) {
         bounds.min = point;
         bounds.max = point;
@@ -1446,7 +1447,7 @@ quader_poly::PickOptions pickOptionsFromRequest(const ModelingHoverRequest& requ
 
 ModelingBoxPreview fromRuntime(
         const quader_editor_core::BoxPreviewDescriptor& preview,
-        const std::vector<quader_poly::Vec3>& corners = {}) {
+        const std::vector<quader::QVec3>& corners = {}) {
     ModelingBoxPreview result;
     result.ok = preview.ok;
     result.valid = preview.ok && preview.footprint.footprint.size() >= 4U && !preview.bounds.empty;
@@ -1563,7 +1564,7 @@ public:
         return meshSyncService_.compileObjectMesh(*object);
     }
 
-    [[nodiscard]] std::optional<Vec3> selectionCenter() const {
+    [[nodiscard]] std::optional<QVec3> selectionCenter() const {
         if (session_.selection_mode() == quader_editor_core::SelectionMode::object) {
             if (const std::optional<SceneBounds> bounds = selectedWorldBounds(scene_, assets_)) {
                 return boundsCenter(*bounds);
@@ -1582,7 +1583,7 @@ public:
                 if (vertex == nullptr) {
                     continue;
                 }
-                const Vec3 world = transformObjectPoint(
+                const QVec3 world = transformObjectPoint(
                         object.id,
                         fromRuntime(vertex->position),
                         objectRegistry_.entitiesByObject(),
@@ -1597,8 +1598,8 @@ public:
         if (bounds) {
             return boundsCenter(*bounds);
         }
-        const std::optional<quader_poly::Vec3> center = session_.selection_center();
-        return center ? std::optional<Vec3>{fromRuntime(*center)} : std::nullopt;
+        const std::optional<quader::QVec3> center = session_.selection_center();
+        return center ? std::optional<QVec3>{fromRuntime(*center)} : std::nullopt;
     }
 
     [[nodiscard]] ModelingSelectionMode selectionMode() const {
@@ -1721,7 +1722,7 @@ public:
         }
         const quader_editor_core::CutToolState& cut = runtime_.cut_state();
         if (quader_editor_core::cut_is_active(cut)) {
-            const std::vector<quader_poly::Vec3> cutPoints =
+            const std::vector<quader::QVec3> cutPoints =
                     quader_editor_core::cut_overlay_points(cut, runtime_.cut_hover().position, runtime_.cut_hover().valid);
             if (quader_editor_core::cut_can_preview(cut) && cut.preview_valid) {
                 const std::vector<quader_editor_core::PolygonObject> previewObjects =
@@ -1769,7 +1770,7 @@ public:
         }
         const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
         if (quader_editor_core::mirror_is_active(mirror)) {
-            const std::vector<quader_poly::Vec3> mirrorPoints =
+            const std::vector<quader::QVec3> mirrorPoints =
                     quader_editor_core::mirror_overlay_points(
                             mirror,
                             runtime_.mirror_hover().position,
@@ -2299,7 +2300,7 @@ public:
         status.cutCanPreview = runtimeStatus.cut_can_preview;
         status.cutPreviewValid = runtimeStatus.cut_preview_valid;
         const quader_editor_core::CutToolState& cut = runtime_.cut_state();
-        const std::vector<quader_poly::Vec3> cutOverlayPoints =
+        const std::vector<quader::QVec3> cutOverlayPoints =
                 quader_editor_core::cut_overlay_points(cut, runtime_.cut_hover().position, runtime_.cut_hover().valid);
         status.cutDragging = quader_editor_core::cut_is_dragging(cut);
         status.cutDraggingNewPoint = cut.dragging_new_point;
@@ -2321,7 +2322,7 @@ public:
         status.mirrorCanPreview = runtimeStatus.mirror_can_preview;
         status.mirrorPreviewValid = runtimeStatus.mirror_preview_valid;
         const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
-        const std::vector<quader_poly::Vec3> mirrorOverlayPoints =
+        const std::vector<quader::QVec3> mirrorOverlayPoints =
                 quader_editor_core::mirror_overlay_points(
                         mirror,
                         runtime_.mirror_hover().position,
@@ -2605,20 +2606,20 @@ public:
         };
     }
 
-    ModelingCommandResult updateTransformTranslatePreview(Vec3 delta) {
+    ModelingCommandResult updateTransformTranslatePreview(QVec3 delta) {
         return updateTransformPreviewResult(session_.update_transform_translate_preview(toRuntime(delta)));
     }
 
-    ModelingCommandResult updateTransformMatrixPreview(const ModelingTransform3& transform, Vec3 pivot) {
+    ModelingCommandResult updateTransformMatrixPreview(const ModelingTransform3& transform, QVec3 pivot) {
         return updateTransformPreviewResult(session_.update_transform_matrix_preview(toRuntime(transform), toRuntime(pivot)));
     }
 
-    ModelingCommandResult updateTransformExtrudePreview(Vec3 offset, float closedEdgeLedgeSize) {
+    ModelingCommandResult updateTransformExtrudePreview(QVec3 offset, float closedEdgeLedgeSize) {
         return updateTransformPreviewResult(
                 session_.update_transform_extrude_preview(toRuntime(offset), closedEdgeLedgeSize));
     }
 
-    ModelingCommandResult updateTransformInsetPreview(const ModelingTransform3& transform, Vec3 pivot) {
+    ModelingCommandResult updateTransformInsetPreview(const ModelingTransform3& transform, QVec3 pivot) {
         return updateTransformPreviewResult(session_.update_transform_inset_preview(toRuntime(transform), toRuntime(pivot)));
     }
 
@@ -2686,7 +2687,7 @@ public:
                         tool,
                         session_.selection_mode());
         const quader_editor_core::TransformAxis axis = toRuntime(request.axis);
-        const quader_poly::Vec3 pivot = toRuntime(request.pivot);
+        const quader::QVec3 pivot = toRuntime(request.pivot);
         const bool duplicateSceneTransformPreview =
                 request.duplicateSelected &&
                 session_.selection_mode() == quader_editor_core::SelectionMode::object &&
@@ -2732,9 +2733,9 @@ public:
         }
 
         const quader_editor_core::ViewportCameraState camera = toRuntime(request.camera);
-        const quader_poly::Vec2 screenPosition = toRuntime(request.screenPosition);
-        const quader_poly::Vec2 screenPivot = toRuntime(request.screenPivot);
-        const quader_poly::Vec2 screenTip = toRuntime(request.screenTip);
+        const quader::QVec2 screenPosition = toRuntime(request.screenPosition);
+        const quader::QVec2 screenPivot = toRuntime(request.screenPivot);
+        const quader::QVec2 screenTip = toRuntime(request.screenTip);
 
         if (tool == quader_editor_core::ViewportInteractionTool::move) {
             quader_editor_core::MoveBeginInput begin;
@@ -3707,7 +3708,7 @@ public:
         return {.ok = true, .changed = session_.state().selection_revision != selectionBefore};
     }
 
-    ModelingCommandResult moveSelection(Vec3 delta) {
+    ModelingCommandResult moveSelection(QVec3 delta) {
         const quader_editor_core::CommandResult result = session_.translate_selected(toRuntime(delta));
         if (result.ok) {
             if (result.changed) {
@@ -3719,7 +3720,7 @@ public:
         return {.ok = result.ok, .changed = result.changed, .message = result.message};
     }
 
-    ModelingCommandResult transformSelection(const ModelingTransform3& transform, Vec3 pivot) {
+    ModelingCommandResult transformSelection(const ModelingTransform3& transform, QVec3 pivot) {
         const quader_editor_core::CommandResult result =
                 session_.transform_selected(toRuntime(transform), toRuntime(pivot));
         if (result.ok) {
@@ -3812,7 +3813,7 @@ private:
         const quader_editor_core::CutHoverState& cutHover = runtime_.cut_hover();
         mixToolStateHash(hash, quader_editor_core::cut_is_active(cut));
         mixToolStateHash(hash, static_cast<int>(cut.points.size()));
-        for (const quader_poly::Vec3& point : cut.points) {
+        for (const quader::QVec3& point : cut.points) {
             mixToolStateHash(hash, point);
         }
         mixToolStateHash(hash, static_cast<int>(cut.target_object_ids.size()));
@@ -3838,7 +3839,7 @@ private:
         const quader_editor_core::MirrorHoverState& mirrorHover = runtime_.mirror_hover();
         mixToolStateHash(hash, quader_editor_core::mirror_is_active(mirror));
         mixToolStateHash(hash, static_cast<int>(mirror.plane.points.size()));
-        for (const quader_poly::Vec3& point : mirror.plane.points) {
+        for (const quader::QVec3& point : mirror.plane.points) {
             mixToolStateHash(hash, point);
         }
         mixToolStateHash(hash, mirror.plane.face_normal);
@@ -4069,7 +4070,7 @@ private:
         }
 
         quader_editor_core::BoxPreviewDescriptor preview = runtime_.box_preview_descriptor(true);
-        std::vector<quader_poly::Vec3> corners;
+        std::vector<quader::QVec3> corners;
         if (preview.drag_state == quader_editor_core::BoxDragState::height) {
             corners = quader_editor_core::box_preview_corners(preview);
         }
@@ -4142,7 +4143,7 @@ std::optional<MeshAsset> ModelingSessionService::compileObjectMesh(int modelingO
     return impl_->compileObjectMesh(modelingObjectId);
 }
 
-std::optional<Vec3> ModelingSessionService::selectionCenter() const {
+std::optional<QVec3> ModelingSessionService::selectionCenter() const {
     return impl_->selectionCenter();
 }
 
@@ -4286,19 +4287,19 @@ ModelingCommandResult ModelingSessionService::beginTransformPreview(bool duplica
     return impl_->beginTransformPreview(duplicateSelected);
 }
 
-ModelingCommandResult ModelingSessionService::updateTransformTranslatePreview(Vec3 delta) {
+ModelingCommandResult ModelingSessionService::updateTransformTranslatePreview(QVec3 delta) {
     return impl_->updateTransformTranslatePreview(delta);
 }
 
-ModelingCommandResult ModelingSessionService::updateTransformMatrixPreview(const ModelingTransform3& transform, Vec3 pivot) {
+ModelingCommandResult ModelingSessionService::updateTransformMatrixPreview(const ModelingTransform3& transform, QVec3 pivot) {
     return impl_->updateTransformMatrixPreview(transform, pivot);
 }
 
-ModelingCommandResult ModelingSessionService::updateTransformExtrudePreview(Vec3 offset, float closedEdgeLedgeSize) {
+ModelingCommandResult ModelingSessionService::updateTransformExtrudePreview(QVec3 offset, float closedEdgeLedgeSize) {
     return impl_->updateTransformExtrudePreview(offset, closedEdgeLedgeSize);
 }
 
-ModelingCommandResult ModelingSessionService::updateTransformInsetPreview(const ModelingTransform3& transform, Vec3 pivot) {
+ModelingCommandResult ModelingSessionService::updateTransformInsetPreview(const ModelingTransform3& transform, QVec3 pivot) {
     return impl_->updateTransformInsetPreview(transform, pivot);
 }
 
@@ -4502,11 +4503,11 @@ ModelingCommandResult ModelingSessionService::setComponentSelection(const Modeli
     return impl_->setComponentSelection(request);
 }
 
-ModelingCommandResult ModelingSessionService::moveSelection(Vec3 delta) {
+ModelingCommandResult ModelingSessionService::moveSelection(QVec3 delta) {
     return impl_->moveSelection(delta);
 }
 
-ModelingCommandResult ModelingSessionService::transformSelection(const ModelingTransform3& transform, Vec3 pivot) {
+ModelingCommandResult ModelingSessionService::transformSelection(const ModelingTransform3& transform, QVec3 pivot) {
     return impl_->transformSelection(transform, pivot);
 }
 

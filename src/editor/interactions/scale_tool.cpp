@@ -53,9 +53,9 @@ public:
 		state.pivot = input.pivot;
 		state.screen_pivot = input.has_screen_pivot ? input.screen_pivot : input.screen_position;
 		state.start_mouse = input.screen_position;
-		const quader_poly::Vec2 screen_tip = input.has_screen_tip ?
+		const quader::QVec2 screen_tip = input.has_screen_tip ?
 			input.screen_tip :
-			quader_poly::Vec2 { input.screen_position.x + 1.0F, input.screen_position.y };
+			quader::QVec2 { input.screen_position.x + 1.0F, input.screen_position.y };
 		state.screen_axis = vec2_normalize_or(vec2_sub(screen_tip, state.screen_pivot), { 1.0F, 0.0F });
 		state.bounds = input.bounds;
 		state.preview_scale = { 1.0F, 1.0F, 1.0F };
@@ -64,7 +64,7 @@ public:
 
 	[[nodiscard]] ScalePreviewResult preview_scale_from_screen_position(
 			ScaleToolState& state,
-			quader_poly::Vec2 screen_position,
+			quader::QVec2 screen_position,
 			bool grid_enabled,
 			double grid_size) const
 	{
@@ -77,7 +77,7 @@ public:
 		return preview_scale_from_scale(state, axis_scale(state.axis, factor));
 	}
 
-	[[nodiscard]] ScalePreviewResult preview_scale_from_scale(ScaleToolState& state, quader_poly::Vec3 scale) const
+	[[nodiscard]] ScalePreviewResult preview_scale_from_scale(ScaleToolState& state, quader::QVec3 scale) const
 	{
 		if (!state.active) {
 			return { false, "Scale tool is not active.", {}, {}, {}, {} };
@@ -113,14 +113,14 @@ ScaleBeginResult begin_scale_drag(const ScaleBeginInput& input)
 
 ScalePreviewResult preview_scale_from_screen_position(
 		ScaleToolState& state,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		bool grid_enabled,
 		double grid_size)
 {
 	return scale_tool_impl().preview_scale_from_screen_position(state, screen_position, grid_enabled, grid_size);
 }
 
-ScalePreviewResult preview_scale_from_scale(ScaleToolState& state, quader_poly::Vec3 scale)
+ScalePreviewResult preview_scale_from_scale(ScaleToolState& state, quader::QVec3 scale)
 {
 	return scale_tool_impl().preview_scale_from_scale(state, scale);
 }

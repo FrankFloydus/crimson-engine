@@ -47,7 +47,7 @@ inline bool nearly_equal(double left, double right, double epsilon = 0.0001)
 	return std::abs(left - right) <= epsilon;
 }
 
-inline bool vec_nearly_equal(Vec3 left, Vec3 right, float epsilon = 0.0001F)
+inline bool vec_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
 {
 	const bool matches = nearly_equal(left.x, right.x, epsilon) &&
 		nearly_equal(left.y, right.y, epsilon) &&
@@ -55,7 +55,7 @@ inline bool vec_nearly_equal(Vec3 left, Vec3 right, float epsilon = 0.0001F)
 	return matches;
 }
 
-inline bool vec2_nearly_equal(Vec2 left, Vec2 right, float epsilon = 0.0001F)
+inline bool vec2_nearly_equal(quader::QVec2 left, quader::QVec2 right, float epsilon = 0.0001F)
 {
 	return nearly_equal(left.x, right.x, epsilon) && nearly_equal(left.y, right.y, epsilon);
 }
@@ -132,9 +132,9 @@ inline Selection all_face_selection(const Document& document)
 	return selection;
 }
 
-inline Vec3 face_centroid(const Document& document, const Face& face)
+inline quader::QVec3 face_centroid(const Document& document, const Face& face)
 {
-	Vec3 center;
+	quader::QVec3 center;
 	std::size_t count = 0;
 	for (ElementId vertex_id : face.vertices) {
 		const Vertex* vertex = find_vertex(document, vertex_id);
@@ -144,12 +144,12 @@ inline Vec3 face_centroid(const Document& document, const Face& face)
 		center += vertex->position;
 		++count;
 	}
-	return count == 0U ? Vec3 {} : center / static_cast<float>(count);
+	return count == 0U ? quader::QVec3 {} : center / static_cast<float>(count);
 }
 
-inline Vec3 document_vertex_centroid(const Document& document)
+inline quader::QVec3 document_vertex_centroid(const Document& document)
 {
-	Vec3 center;
+	quader::QVec3 center;
 	for (const Vertex& vertex : document.vertices) {
 		center += vertex.position;
 	}
@@ -158,9 +158,9 @@ inline Vec3 document_vertex_centroid(const Document& document)
 
 inline bool all_faces_point_relative_to_center(const Document& document, bool outward)
 {
-	const Vec3 center = document_vertex_centroid(document);
+	const quader::QVec3 center = document_vertex_centroid(document);
 	return std::all_of(document.faces.begin(), document.faces.end(), [&document, center, outward](const Face& face) {
-		const Vec3 expected = face_centroid(document, face) - center;
+		const quader::QVec3 expected = face_centroid(document, face) - center;
 		const float facing = dot(face_normal(document, face), expected);
 		return outward ? facing > 0.0F : facing < 0.0F;
 	});
@@ -236,7 +236,7 @@ inline bool document_has_edge(const Document& document, Edge edge)
 	return std::find(edges.begin(), edges.end(), normalized) != edges.end();
 }
 
-inline bool edge_positions_match_unordered(const Document& document, Edge edge, Vec3 first_position, Vec3 second_position)
+inline bool edge_positions_match_unordered(const Document& document, Edge edge, quader::QVec3 first_position, quader::QVec3 second_position)
 {
 	const Vertex* first = find_vertex(document, edge.a);
 	const Vertex* second = find_vertex(document, edge.b);

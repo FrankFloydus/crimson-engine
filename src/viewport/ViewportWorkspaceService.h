@@ -32,7 +32,7 @@ struct ViewportWorkspacePaneState {
     ViewportView view = ViewportView::Perspective;
     ViewportShadingMode shading = ViewportShadingMode::Shaded;
     ViewportCameraController camera;
-    Vec2 renderSize = {1.0f, 1.0f};
+    QVec2 renderSize = {1.0f, 1.0f};
     bool visibleThisFrame = false;
 };
 
@@ -76,8 +76,8 @@ public:
     void clearPaneVisibility();
     void setPaneVisible(ViewportPaneId pane, bool visible);
     [[nodiscard]] bool paneVisible(ViewportPaneId pane) const;
-    bool setPaneRenderSize(ViewportPaneId pane, Vec2 size);
-    [[nodiscard]] Vec2 paneRenderSize(ViewportPaneId pane) const;
+    bool setPaneRenderSize(ViewportPaneId pane, QVec2 size);
+    [[nodiscard]] QVec2 paneRenderSize(ViewportPaneId pane) const;
 
 private:
     [[nodiscard]] bool focusedPaneIsVisible() const;

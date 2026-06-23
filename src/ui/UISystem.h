@@ -79,7 +79,7 @@ private:
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
     void enforceSidebarDockMinimums();
     void setViewportCursorCaptured(bool captured);
-    void warpCapturedCursor(Vec2 point);
+    void warpCapturedCursor(QVec2 point);
     void loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir);
     void destroyIcons();
     void saveSettings();
@@ -110,7 +110,7 @@ private:
     bool hasSavedDockLayout_ = false;
     bool relativeMouseCaptured_ = false;
     bool relativeMouseCaptureWarningIssued_ = false;
-    Vec2 relativeMouseDelta_ = {};
+    QVec2 relativeMouseDelta_ = {};
     UIPanelId focusedPanel_ = UIPanelId::Viewport;
 };
 

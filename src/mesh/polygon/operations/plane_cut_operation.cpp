@@ -54,16 +54,16 @@ using namespace document_internal;
 inline constexpr float plane_cut_epsilon = 0.0001F;
 inline constexpr float plane_cut_epsilon_squared = plane_cut_epsilon * plane_cut_epsilon;
 
-using PlaneCutPlane = quader_geometry::Plane3<float>;
+using PlaneCutPlane = quader_geometry::QPlane3<float>;
 
 /**
  * Represents a Plane Cut Vertex value used by the polygon document and mesh editing core.
  */
 struct PlaneCutVertex {
     ElementId id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
     bool has_uv = false;
-    Vec2 uv;
+    quader::QVec2 uv;
 };
 
 /**
@@ -71,9 +71,9 @@ struct PlaneCutVertex {
  */
 struct PlaneCutPoint {
     ElementId id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
     bool has_uv = false;
-    Vec2 uv;
+    quader::QVec2 uv;
     bool on_plane = false;
 };
 
@@ -82,7 +82,7 @@ struct PlaneCutPoint {
  */
 struct PlaneCutIntersection {
     ElementId id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
@@ -102,7 +102,7 @@ struct PlaneCutWork {
     PlaneCutPlane plane;
     std::map<ElementId, PlaneCutVertex> source_vertices;
     std::map<std::pair<ElementId, ElementId>, PlaneCutIntersection> intersections;
-    std::map<ElementId, Vec3> plane_vertex_positions;
+    std::map<ElementId, quader::QVec3> plane_vertex_positions;
     std::vector<Edge> cut_segments;
     ElementId next_vertex_id = 1;
     std::uint32_t cap_material_slot = 0;
@@ -111,9 +111,9 @@ struct PlaneCutWork {
 
 std::optional<PlaneCutPlane> plane_from_request(const PlaneCutRequest& request)
 {
-    const Vec3 first_delta = request.second_point - request.first_point;
-    const Vec3 second_delta = request.third_point - request.first_point;
-    const quader_geometry::Vec3f normal =
+    const quader::QVec3 first_delta = request.second_point - request.first_point;
+    const quader::QVec3 second_delta = request.third_point - request.first_point;
+    const quader_geometry::QVec3f normal =
         quader_geometry::cross(geometry_vec3(first_delta), geometry_vec3(second_delta));
     const PlaneCutPlane plane = quader_geometry::plane_from_point_normal<float>(
         geometry_vec3(request.first_point),
@@ -125,7 +125,7 @@ std::optional<PlaneCutPlane> plane_from_request(const PlaneCutRequest& request)
     return plane;
 }
 
-float signed_distance_to_cut_plane(const PlaneCutPlane& plane, Vec3 point)
+float signed_distance_to_cut_plane(const PlaneCutPlane& plane, quader::QVec3 point)
 {
     return quader_geometry::signed_distance_to_plane<float>(geometry_vec3(point), plane);
 }
@@ -141,7 +141,7 @@ int plane_side(float distance)
     return 0;
 }
 
-Vec2 interpolate_uv(Vec2 first, Vec2 second, float factor)
+quader::QVec2 interpolate_uv(quader::QVec2 first, quader::QVec2 second, float factor)
 {
     return {
         first.x + ((second.x - first.x) * factor),
@@ -149,16 +149,16 @@ Vec2 interpolate_uv(Vec2 first, Vec2 second, float factor)
     };
 }
 
-float cut_edge_factor(const PlaneCutPlane& plane, Vec3 first_position, Vec3 second_position, float first_distance, float second_distance)
+float cut_edge_factor(const PlaneCutPlane& plane, quader::QVec3 first_position, quader::QVec3 second_position, float first_distance, float second_distance)
 {
-    const quader_geometry::SegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane<float>(
+    const quader_geometry::QSegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane<float>(
         { geometry_vec3(first_position), geometry_vec3(second_position) },
         plane,
         plane_cut_epsilon);
-    if (hit.type == quader_geometry::PlaneIntersectionType::point) {
+    if (hit.type == quader_geometry::QPlaneIntersectionType::point) {
         return std::clamp(hit.segment_factor, 0.0F, 1.0F);
     }
-    if (hit.type == quader_geometry::PlaneIntersectionType::coplanar) {
+    if (hit.type == quader_geometry::QPlaneIntersectionType::coplanar) {
         return 0.5F;
     }
 
@@ -167,7 +167,7 @@ float cut_edge_factor(const PlaneCutPlane& plane, Vec3 first_position, Vec3 seco
     return 0.5F;
 }
 
-void ensure_builder_vertex(PlaneCutBuilder& builder, ElementId id, Vec3 position)
+void ensure_builder_vertex(PlaneCutBuilder& builder, ElementId id, quader::QVec3 position)
 {
     if (id == invalid_element_id || builder.emitted_vertices.contains(id)) {
         return;
@@ -202,8 +202,8 @@ PlaneCutIntersection intersection_for_edge(
     PlaneCutWork& work,
     ElementId first_id,
     ElementId second_id,
-    Vec3 first_position,
-    Vec3 second_position,
+    quader::QVec3 first_position,
+    quader::QVec3 second_position,
     float first_distance,
     float second_distance)
 {
@@ -325,7 +325,7 @@ bool append_face_from_points(
 
 std::vector<ElementId> plane_vertices_for_split_loop(
     const PlaneCutPlane& plane,
-    const std::map<ElementId, Vec3>& positions,
+    const std::map<ElementId, quader::QVec3>& positions,
     std::span<const PlaneCutPoint> points)
 {
     std::vector<ElementId> ids;
@@ -542,9 +542,9 @@ std::optional<std::vector<std::vector<ElementId>>> cap_loops_from_segments(std::
 bool append_cap_face(
     PlaneCutBuilder& builder,
     std::span<const ElementId> loop,
-    const std::map<ElementId, Vec3>& positions,
+    const std::map<ElementId, quader::QVec3>& positions,
     std::uint32_t material_slot,
-    Vec3 expected_normal,
+    quader::QVec3 expected_normal,
     std::string& message)
 {
     Face face;

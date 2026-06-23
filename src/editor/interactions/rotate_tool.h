@@ -21,8 +21,8 @@ struct RotateToolState {
 	bool active = false;
 	TransformAxis axis = TransformAxis::none;
 	std::vector<int> object_ids;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec2 screen_pivot;
+	quader::QVec3 pivot;
+	quader::QVec2 screen_pivot;
 	double start_angle = 0.0;
 	double last_angle = 0.0;
 	double drag_view_sign = 1.0;
@@ -36,14 +36,14 @@ struct RotateToolState {
 struct RotateBeginInput {
 	TransformAxis axis = TransformAxis::none;
 	std::vector<int> object_ids;
-	quader_poly::Vec3 pivot;
-	quader_poly::Vec2 screen_position;
+	quader::QVec3 pivot;
+	quader::QVec2 screen_position;
 	bool has_screen_pivot = false;
-	quader_poly::Vec2 screen_pivot;
+	quader::QVec2 screen_pivot;
 	bool has_world_direction = false;
-	quader_poly::Vec3 world_direction;
+	quader::QVec3 world_direction;
 	bool has_world_pivot = false;
-	quader_poly::Vec3 world_pivot;
+	quader::QVec3 world_pivot;
 	bool has_camera = false;
 	quader_poly::Transform3 camera_transform;
 };
@@ -70,7 +70,7 @@ struct RotatePreviewResult {
 };
 
 RotateBeginResult begin_rotate_drag(const RotateBeginInput& input);
-RotatePreviewResult preview_rotate_from_screen_position(RotateToolState& state, quader_poly::Vec2 screen_position, double snap_degrees);
+RotatePreviewResult preview_rotate_from_screen_position(RotateToolState& state, quader::QVec2 screen_position, double snap_degrees);
 RotatePreviewResult preview_rotate_from_angle_degrees(RotateToolState& state, double angle_degrees, double snap_degrees);
 void reset_rotate(RotateToolState& state);
 

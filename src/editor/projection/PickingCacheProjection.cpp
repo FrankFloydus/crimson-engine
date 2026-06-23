@@ -7,6 +7,7 @@
 #include "editor/projection/PickingCacheProjection.h"
 
 #include "editor/modeling/runtime/ModelingObjectRuntimeMap.h"
+#include "math/GlmBridge.h"
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
@@ -15,11 +16,11 @@
 namespace quader {
 namespace {
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_poly::Vec3 toRuntime(Vec3 value) {
+quader::QVec3 toRuntime(QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
@@ -48,14 +49,14 @@ std::uint64_t mixPickGeometryHash(std::uint64_t hash, float value) {
     return mixPickGeometryHash(hash, bits);
 }
 
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader_poly::Vec3 value) {
+std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader::QVec3 value) {
     hash = mixPickGeometryHash(hash, value.x);
     hash = mixPickGeometryHash(hash, value.y);
     hash = mixPickGeometryHash(hash, value.z);
     return hash;
 }
 
-void includePickBoundsPoint(quader_editor_core::PickObjectBounds& bounds, quader_poly::Vec3 point) {
+void includePickBoundsPoint(quader_editor_core::PickObjectBounds& bounds, quader::QVec3 point) {
     if (bounds.empty) {
         bounds.min = point;
         bounds.max = point;
@@ -88,7 +89,7 @@ std::vector<quader_editor_core::PolygonObject> PickingCacheProjection::sceneTran
                 (visibility != nullptr && !visibility->selectable)) {
             continue;
         }
-        const Mat4 worldFromObject = scene.worldTransformMatrix(entity->second);
+        const QMat4 worldFromObject = scene.worldTransformMatrix(entity->second);
         for (quader_poly::Vertex& vertex : object.document.vertices) {
             vertex.position = toRuntime(transformPoint(worldFromObject, fromRuntime(vertex.position)));
         }

@@ -217,7 +217,7 @@ std::vector<EdgeLoopFaceSplit> collect_edge_loop_splits(const Document& document
     return splits;
 }
 
-std::optional<Vec3> split_edge_position(const Document& document, Edge edge, float factor)
+std::optional<quader::QVec3> split_edge_position(const Document& document, Edge edge, float factor)
 {
     const Vertex* a = find_vertex(document, edge.a);
     const Vertex* b = find_vertex(document, edge.b);
@@ -335,7 +335,7 @@ ElementId split_vertex_near_endpoint(
         return invalid_element_id;
     }
 
-    const Vec3 edge = neighbor->position - endpoint->position;
+    const quader::QVec3 edge = neighbor->position - endpoint->position;
     const float edge_length = length(edge);
     if (edge_length <= epsilon) {
         return invalid_element_id;
@@ -508,7 +508,7 @@ bool apply_knife_edge_splits_to_faces(Document& candidate, const KnifeEdgeSplitM
 std::vector<ElementId> loop_between_indices(const std::vector<ElementId>& loop, std::size_t start_index, std::size_t end_index);
 std::vector<ElementId> unique_valid_face_loop(std::vector<ElementId> vertices);
 
-KnifePoint2 knife_project_point(Vec3 position, int dropped_axis)
+KnifePoint2 knife_project_point(quader::QVec3 position, int dropped_axis)
 {
     return projected_point_for_axis(position, dropped_axis);
 }
@@ -538,8 +538,8 @@ bool knife_segments_intersect_2d(const KnifePoint2& a, const KnifePoint2& b, con
 
 double knife_signed_area_2d(std::span<const KnifePoint2> points)
 {
-    const std::vector<quader_geometry::Vec2d> geometry_points = geometry_vec2_points(points);
-    return quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::Vec2d>(geometry_points));
+    const std::vector<quader_geometry::QVec2d> geometry_points = geometry_vec2_points(points);
+    return quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::QVec2d>(geometry_points));
 }
 
 std::vector<KnifePoint2> knife_face_projected_loop(const Document& document, const Face& face, int dropped_axis)
@@ -560,10 +560,10 @@ std::vector<KnifePoint2> knife_face_projected_loop(const Document& document, con
 bool knife_point_in_or_on_polygon_2d(const KnifePoint2& point, std::span<const KnifePoint2> polygon)
 {
     constexpr double tolerance = 0.000001;
-    const std::vector<quader_geometry::Vec2d> geometry_polygon = geometry_vec2_points(polygon);
+    const std::vector<quader_geometry::QVec2d> geometry_polygon = geometry_vec2_points(polygon);
     return quader_geometry::point_in_or_on_polygon_2d(
         geometry_vec2(point),
-        std::span<const quader_geometry::Vec2d>(geometry_polygon),
+        std::span<const quader_geometry::QVec2d>(geometry_polygon),
         tolerance);
 }
 
@@ -575,7 +575,7 @@ bool knife_vertex_is_on_face_boundary(const Face& face, ElementId vertex_id)
 std::optional<KnifeBoundaryTarget> knife_face_boundary_target_at_position(
     const Document& document,
     const Face& face,
-    Vec3 position,
+    quader::QVec3 position,
     int dropped_axis)
 {
     if (face.vertices.size() < 2U) {
@@ -676,7 +676,7 @@ bool knife_segment_stays_inside_face(
         return false;
     }
 
-    const Vec3 mid = (a->position + b->position) * 0.5F;
+    const quader::QVec3 mid = (a->position + b->position) * 0.5F;
     return knife_point_in_or_on_polygon_2d(knife_project_point(mid, dropped_axis), projected_face);
 }
 
@@ -874,7 +874,7 @@ std::optional<KnifePoint2> knife_proper_segment_intersection_2d(
     const KnifePoint2& d)
 {
     constexpr double tolerance = 0.000001;
-    const quader_geometry::SegmentIntersection2<double> intersection =
+    const quader_geometry::QSegmentIntersection2<double> intersection =
         quader_geometry::proper_segment_intersection_2d(geometry_vec2(a), geometry_vec2(b), geometry_vec2(c), geometry_vec2(d), tolerance);
     if (!intersection.hit) {
         return std::nullopt;
@@ -882,15 +882,15 @@ std::optional<KnifePoint2> knife_proper_segment_intersection_2d(
     return poly_vec2(intersection.point);
 }
 
-Vec3 knife_unproject_face_point(const Document& document, const Face& face, int dropped_axis, const KnifePoint2& point)
+quader::QVec3 knife_unproject_face_point(const Document& document, const Face& face, int dropped_axis, const KnifePoint2& point)
 {
     const Vertex* origin = !face.vertices.empty() ? find_vertex(document, face.vertices.front()) : nullptr;
-    const Vec3 normal = face_normal(document, face);
+    const quader::QVec3 normal = face_normal(document, face);
     if (origin == nullptr || length_squared(normal) <= epsilon) {
         return {};
     }
 
-    const quader_geometry::Plane3<float> plane = quader_geometry::plane_from_point_normal<float>(
+    const quader_geometry::QPlane3<float> plane = quader_geometry::plane_from_point_normal<float>(
         geometry_vec3(origin->position),
         geometry_vec3(normal),
         epsilon);
@@ -898,7 +898,7 @@ Vec3 knife_unproject_face_point(const Document& document, const Face& face, int 
         return {};
     }
 
-    const quader_geometry::DominantAxisUnprojectResult<float> unprojected =
+    const quader_geometry::QDominantAxisUnprojectResult<float> unprojected =
         quader_geometry::unproject_dominant_axis_point_to_plane<float>(
             { static_cast<float>(point[0]), static_cast<float>(point[1]) },
             plane,
@@ -908,16 +908,16 @@ Vec3 knife_unproject_face_point(const Document& document, const Face& face, int 
         return poly_vec3(unprojected.point);
     }
 
-    const quader_geometry::Vec3f fallback_seed =
+    const quader_geometry::QVec3f fallback_seed =
         dropped_axis == 0 ?
-            quader_geometry::Vec3f { origin->position.x, static_cast<float>(point[0]), static_cast<float>(point[1]) } :
+            quader_geometry::QVec3f { origin->position.x, static_cast<float>(point[0]), static_cast<float>(point[1]) } :
         dropped_axis == 1 ?
-            quader_geometry::Vec3f { static_cast<float>(point[0]), origin->position.y, static_cast<float>(point[1]) } :
-            quader_geometry::Vec3f { static_cast<float>(point[0]), static_cast<float>(point[1]), origin->position.z };
+            quader_geometry::QVec3f { static_cast<float>(point[0]), origin->position.y, static_cast<float>(point[1]) } :
+            quader_geometry::QVec3f { static_cast<float>(point[0]), static_cast<float>(point[1]), origin->position.z };
     return poly_vec3(quader_geometry::project_point_to_plane<float>(fallback_seed, plane));
 }
 
-ElementId knife_vertex_at_position(Document& document, Vec3 position, float tolerance = 0.00001F)
+ElementId knife_vertex_at_position(Document& document, quader::QVec3 position, float tolerance = 0.00001F)
 {
     const float tolerance_squared = tolerance * tolerance;
     for (const Vertex& vertex : document.vertices) {
@@ -1433,8 +1433,8 @@ bool knife_vertex_is_on_shared_face_boundary(const Face& first, const Face& seco
 float knife_edge_factor_nearest_segment(
     const Document& document,
     Edge edge,
-    Vec3 segment_start,
-    Vec3 segment_end)
+    quader::QVec3 segment_start,
+    quader::QVec3 segment_end)
 {
     edge = make_edge(edge.a, edge.b);
     const Vertex* edge_start = find_vertex(document, edge.a);
@@ -1443,14 +1443,14 @@ float knife_edge_factor_nearest_segment(
         return 0.5F;
     }
 
-    quader_geometry::SegmentSegmentFactorOptions<float> options;
+    quader_geometry::QSegmentSegmentFactorOptions<float> options;
     options.length_squared_epsilon = epsilon;
     options.closest_epsilon = epsilon;
     options.parameter_epsilon = epsilon;
     options.min_factor = 0.01F;
     options.max_factor = 0.99F;
 
-    const quader_geometry::SegmentFactorClosestPoint3<float> closest =
+    const quader_geometry::QSegmentFactorClosestPoint3<float> closest =
         quader_geometry::closest_factor_on_segment_to_segment<float>(
             { geometry_vec3(edge_start->position), geometry_vec3(edge_end->position) },
             { geometry_vec3(segment_start), geometry_vec3(segment_end) },
@@ -1458,7 +1458,7 @@ float knife_edge_factor_nearest_segment(
     return closest.valid ? closest.segment_factor : 0.5F;
 }
 
-float knife_distance_squared_to_segment(Vec3 point, Vec3 segment_start, Vec3 segment_end)
+float knife_distance_squared_to_segment(quader::QVec3 point, quader::QVec3 segment_start, quader::QVec3 segment_end)
 {
     return quader_geometry::point_segment_distance_squared<float>(
         geometry_vec3(point),
@@ -1575,7 +1575,7 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
                 return build;
             }
 
-            const Vec3 normal = face_normal(build.document, *face);
+            const quader::QVec3 normal = face_normal(build.document, *face);
             const int dropped_axis = dropped_axis_for_normal(normal);
             const std::optional<KnifeBoundaryTarget> boundary =
                 knife_face_boundary_target_at_position(build.document, *face, target.position, dropped_axis);
@@ -1630,7 +1630,7 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
                 build.message = "Knife face point target was not found.";
                 return build;
             }
-            const Vec3 normal = face_normal(build.document, *face);
+            const quader::QVec3 normal = face_normal(build.document, *face);
             const int dropped_axis = dropped_axis_for_normal(normal);
             const std::vector<KnifePoint2> projected_face = knife_face_projected_loop(build.document, *face, dropped_axis);
             if (!knife_point_in_or_on_polygon_2d(knife_project_point(target.position, dropped_axis), projected_face)) {
@@ -1721,7 +1721,7 @@ KnifeStrokeCandidate build_knife_stroke_candidate(
                     shared_edge,
                     first_point.position,
                     second_point.position);
-                const std::optional<Vec3> edge_position = split_edge_position(build.document, shared_edge, factor);
+                const std::optional<quader::QVec3> edge_position = split_edge_position(build.document, shared_edge, factor);
                 if (!edge_position.has_value()) {
                     continue;
                 }

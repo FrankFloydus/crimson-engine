@@ -168,7 +168,7 @@ std::optional<MeshAsset> QuaderQueryApi::compiledObjectMesh(QuaderModelingObject
     return session_.modeling().compileObjectMesh(object.modelingObjectId);
 }
 
-std::optional<Vec3> QuaderQueryApi::selectionCenter() const {
+std::optional<QVec3> QuaderQueryApi::selectionCenter() const {
     return session_.modeling().selectionCenter();
 }
 

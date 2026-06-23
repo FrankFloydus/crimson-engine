@@ -18,7 +18,7 @@ TEST_CASE("paste operation inserts copied objects with fresh ids", "[operation][
 		const int source_id = session.objects().front().id;
 		const std::vector<quader_editor_core::PolygonObject> copied = session.selected_object_copies();
 
-		const quader_editor_core::CommandResult paste = session.paste_objects(copied, quader_poly::Vec3 { 4.0F, 0.0F, 0.0F });
+		const quader_editor_core::CommandResult paste = session.paste_objects(copied, quader::QVec3 { 4.0F, 0.0F, 0.0F });
 
 		REQUIRE(paste.ok);
 		REQUIRE(paste.changed);
@@ -65,7 +65,7 @@ TEST_CASE("editor runtime clipboard paste routes through session paste policy", 
 	REQUIRE(runtime.copy_selected_objects_to_clipboard(session) == 1);
 
 	const quader_editor_core::CommandResult paste =
-		runtime.paste_clipboard(session, quader_poly::Vec3 { 3.0F, 0.0F, 3.0F });
+		runtime.paste_clipboard(session, quader::QVec3 { 3.0F, 0.0F, 3.0F });
 
 	REQUIRE(paste.ok);
 	CHECK(paste.changed);

@@ -22,7 +22,7 @@ bool near(float left, float right)
 	return std::abs(left - right) <= 0.0001F;
 }
 
-bool vec_near(quader_poly::Vec3 left, quader_poly::Vec3 right)
+bool vec_near(quader::QVec3 left, quader::QVec3 right)
 {
 	return near(left.x, right.x) && near(left.y, right.y) && near(left.z, right.z);
 }
@@ -183,7 +183,7 @@ void selected_lights_supply_transform_gizmo_center_and_bounds()
 		{ 0.0F, -1.0F, 0.0F }).changed,
 		"fixture should create a selected light");
 
-	const std::optional<quader_poly::Vec3> center = session.selection_center();
+	const std::optional<quader::QVec3> center = session.selection_center();
 	require_test(center.has_value(), "selected light should provide a transform center");
 	require_test(vec_near(*center, { 3.0F, 4.0F, 5.0F }), "selected light center should use the light position");
 

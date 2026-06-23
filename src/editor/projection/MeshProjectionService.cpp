@@ -13,7 +13,7 @@
 namespace quader {
 namespace {
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 

@@ -15,7 +15,7 @@
 namespace quader {
 namespace {
 
-bool sameVec3(Vec3 left, Vec3 right) {
+bool sameVec3(QVec3 left, QVec3 right) {
     return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
@@ -116,7 +116,7 @@ QuaderApiVoidResult QuaderAssetApi::replaceTexture(AssetId texture, TextureAsset
     return mutations_.runAssetResult(true, "Texture replaced");
 }
 
-QuaderApiVoidResult QuaderAssetApi::setMaterialBaseColor(AssetId material, Vec3 color) {
+QuaderApiVoidResult QuaderAssetApi::setMaterialBaseColor(AssetId material, QVec3 color) {
     return updateMaterialOrFail(
             session_,
             mutations_,

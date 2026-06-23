@@ -186,12 +186,12 @@ struct ViewportInputFrame {
     bool rightReleased = false;
     float mouseWheel = 0.0f;
     float deltaSeconds = 1.0f / 60.0f;
-    Vec2 mouseScreen = {};
-    Vec2 mouseDelta = {};
-    Vec2 mouseLocal = {};
-    Vec2 viewportSize = {};
+    QVec2 mouseScreen = {};
+    QVec2 mouseDelta = {};
+    QVec2 mouseLocal = {};
+    QVec2 viewportSize = {};
     ViewportModifiers modifiers = {};
-    Vec3 flyLocalDirection = {};
+    QVec3 flyLocalDirection = {};
     std::vector<ViewportKey> pressedKeys;
 };
 

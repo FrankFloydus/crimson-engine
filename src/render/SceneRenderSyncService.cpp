@@ -111,7 +111,7 @@ void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetR
             continue;
         }
 
-        const Mat4 worldTransform = document.worldTransformMatrix(entityId);
+        const QMat4 worldTransform = document.worldTransformMatrix(entityId);
 
         if (const auto* meshComponent = document.mesh(entityId)) {
             const MeshAsset* mesh = assets.mesh(meshComponent->mesh);

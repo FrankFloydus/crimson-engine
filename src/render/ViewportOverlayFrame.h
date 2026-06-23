@@ -120,8 +120,8 @@ constexpr std::uint32_t rgba8(std::uint8_t r, std::uint8_t g, std::uint8_t b, st
  */
 struct ViewportOverlayLine {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire;
-    Vec3 start;
-    Vec3 end;
+    QVec3 start;
+    QVec3 end;
     std::uint32_t color = rgba8(255, 255, 255);
     float widthPixels = 1.0f;
     ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
@@ -134,9 +134,9 @@ struct ViewportOverlayLine {
  */
 struct ViewportOverlayTriangle {
     ViewportOverlayLayer layer = ViewportOverlayLayer::SelectedVisibleFace;
-    Vec3 a;
-    Vec3 b;
-    Vec3 c;
+    QVec3 a;
+    QVec3 b;
+    QVec3 c;
     std::uint32_t color = rgba8(255, 255, 255, 64);
     ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
     ViewportOverlaySource source = ViewportOverlaySource::Unknown;
@@ -148,7 +148,7 @@ struct ViewportOverlayTriangle {
  */
 struct ViewportOverlayPoint {
     ViewportOverlayLayer layer = ViewportOverlayLayer::UnselectedVertex;
-    Vec3 position;
+    QVec3 position;
     std::uint32_t color = rgba8(255, 255, 255);
     float sizePixels = 8.0f;
     ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::LayerDefault;
@@ -169,11 +169,11 @@ enum class ViewportOverlayProjection {
  * Represents a Viewport Overlay Camera value used by the render extraction and Filament resource layer.
  */
 struct ViewportOverlayCamera {
-    Vec3 eye;
-    Vec3 forward = {0.0f, 0.0f, -1.0f};
-    Vec3 right = {1.0f, 0.0f, 0.0f};
-    Vec3 up = {0.0f, 1.0f, 0.0f};
-    Vec2 viewportSize = {1.0f, 1.0f};
+    QVec3 eye;
+    QVec3 forward = {0.0f, 0.0f, -1.0f};
+    QVec3 right = {1.0f, 0.0f, 0.0f};
+    QVec3 up = {0.0f, 1.0f, 0.0f};
+    QVec2 viewportSize = {1.0f, 1.0f};
     ViewportOverlayProjection projection = ViewportOverlayProjection::Perspective;
     float orthographicSize = 24.0f;
     float fovDegrees = 60.0f;

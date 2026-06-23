@@ -20,13 +20,13 @@
 
 namespace quader_poly::document_internal {
 
-quader_geometry::Vec2d geometry_vec2(const std::array<double, 2>& value);
-std::array<double, 2> poly_vec2(quader_geometry::Vec2d value);
-std::vector<quader_geometry::Vec2d> geometry_vec2_points(std::span<const std::array<double, 2>> points);
-quader_geometry::Axis geometry_axis_from_dropped_axis(int dropped_axis);
-quader_geometry::Vec3f geometry_vec3(const Vec3& value);
-Vec3 poly_vec3(quader_geometry::Vec3f value);
-quader_geometry::Ray3<float> geometry_ray(const Ray& ray);
+quader_geometry::QVec2d geometry_vec2(const std::array<double, 2>& value);
+std::array<double, 2> poly_vec2(quader_geometry::QVec2d value);
+std::vector<quader_geometry::QVec2d> geometry_vec2_points(std::span<const std::array<double, 2>> points);
+quader_geometry::QAxis geometry_axis_from_dropped_axis(int dropped_axis);
+quader_geometry::QVec3f geometry_vec3(const quader::QVec3& value);
+quader::QVec3 poly_vec3(quader_geometry::QVec3f value);
+quader_geometry::QRay3<float> geometry_ray(const Ray& ray);
 bool contains_id(std::span<const ElementId> ids, ElementId id);
 bool contains_edge(std::span<const Edge> edges, Edge edge);
 SelectionMode selection_mode_for_kind(ElementKind kind);
@@ -50,7 +50,7 @@ bool face_uses_any_vertex(const Face& face, const std::set<ElementId>& vertex_id
 bool face_uses_edge(const Face& face, Edge edge);
 std::vector<Edge> face_edges(const Face& face);
 bool face_uses_any_edge(const Face& face, std::span<const Edge> edges);
-std::array<double, 2> projected_point_for_axis(const Vec3& position, int dropped_axis);
+std::array<double, 2> projected_point_for_axis(const quader::QVec3& position, int dropped_axis);
 double signed_projected_area(std::span<const std::array<double, 2>> points);
 bool has_repeated_vertex(std::span<const ElementId> vertex_ids);
 std::map<std::pair<ElementId, ElementId>, int> edge_incidence_counts(const Document& document);

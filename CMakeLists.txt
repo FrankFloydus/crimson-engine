@@ -148,6 +148,7 @@ add_library(quader_core STATIC
     src/assets/MaterialDocument.cpp
     src/core/LocalizationService.cpp
     src/core/Logger.cpp
+    src/core/QStr.cpp
     src/core/UndoRedoManager.cpp
     src/editor/commands/DocumentCommandService.cpp
     src/scene/document/ProjectDocument.cpp
@@ -463,7 +464,9 @@ if(QUADER_BUILD_TESTS)
         tests/agent_instruction_routing_tests.cpp
         tests/build_guardrail_tests.cpp
         tests/localization_tests.cpp
+        tests/math_types_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
+        tests/qstr_tests.cpp
         tests/programmatic_api_guardrail_tests.cpp
         tests/editor_api_tests.cpp
         tests/programmatic_api_tests.cpp

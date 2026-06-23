@@ -59,7 +59,7 @@ OperationResult SnapVerticesToActiveOperation::apply(Document& document, Selecti
         return { false, "Active vertex was not found." };
     }
 
-    const Vec3 target_position = active_vertex->position;
+    const quader::QVec3 target_position = active_vertex->position;
     bool has_other_vertex = false;
     bool changed = false;
     std::set<ElementId> visited_vertex_ids;

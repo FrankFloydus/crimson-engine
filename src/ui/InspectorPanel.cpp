@@ -47,7 +47,7 @@ void copyNameToBuffer(const NameComponent* name, std::array<char, 128>& buffer) 
     std::snprintf(buffer.data(), buffer.size(), "%s", name->name.c_str());
 }
 
-Vec3 componentScaleRatio(Vec3 next, Vec3 previous) {
+QVec3 componentScaleRatio(QVec3 next, QVec3 previous) {
     auto ratio = [](float nextValue, float previousValue) {
         const float denominator = std::abs(previousValue) <= 0.000001f ? 1.0f : previousValue;
         return nextValue / denominator;
@@ -55,11 +55,11 @@ Vec3 componentScaleRatio(Vec3 next, Vec3 previous) {
     return {ratio(next.x, previous.x), ratio(next.y, previous.y), ratio(next.z, previous.z)};
 }
 
-Vec3 multiplyComponents(Vec3 left, Vec3 right) {
+QVec3 multiplyComponents(QVec3 left, QVec3 right) {
     return {left.x * right.x, left.y * right.y, left.z * right.z};
 }
 
-Vec3 clampScale(Vec3 scale) {
+QVec3 clampScale(QVec3 scale) {
     return {
             std::max(scale.x, 0.001f),
             std::max(scale.y, 0.001f),
@@ -312,7 +312,7 @@ bool comboWithLeftLabel(const char* stableId,
 struct SelectedTransformPivot {
     EntityId entity = InvalidEntityId;
     TransformComponent transform;
-    Vec3 localPivot = {};
+    QVec3 localPivot = {};
 };
 
 /**
@@ -552,7 +552,7 @@ void InspectorPanel::drawContent(UIContext& context) {
             transform = document.transform(primary);
         };
 
-        auto selectedTransformPivots = [&](Vec3 worldPivot) {
+        auto selectedTransformPivots = [&](QVec3 worldPivot) {
             std::vector<SelectedTransformPivot> records;
             records.reserve(selected.size());
             for (const EntityId id : selected) {
@@ -570,7 +570,7 @@ void InspectorPanel::drawContent(UIContext& context) {
             return records;
         };
 
-        auto applyToSelectedTransformRecords = [&](Vec3 worldPivot, auto apply) {
+        auto applyToSelectedTransformRecords = [&](QVec3 worldPivot, auto apply) {
             const std::vector<SelectedTransformPivot> records = selectedTransformPivots(worldPivot);
             std::vector<DocumentTransformEdit> edits;
             edits.reserve(records.size());
@@ -596,15 +596,15 @@ void InspectorPanel::drawContent(UIContext& context) {
         const std::array<bool, 3> positionMixed = mixedPositionAxes(document, selected, *transform);
         const std::string positionLabel = localization.text("ui.inspector.position", "Position");
         if (axisDragFloat3("position", positionLabel.c_str(), position, positionMixed, mixedLabel.c_str(), context.style, 0.05f)) {
-            const Vec3 previous = transform->position;
-            const Vec3 nextPosition{position[0], position[1], position[2]};
-            const Vec3 delta = nextPosition - previous;
+            const QVec3 previous = transform->position;
+            const QVec3 nextPosition{position[0], position[1], position[2]};
+            const QVec3 delta = nextPosition - previous;
             applyToSelectedTransforms([&](TransformComponent& next) {
                 next.position = next.position + delta;
             });
         }
 
-        const Vec3 displayedRotation = positiveEulerRadians(transform->rotationEuler);
+        const QVec3 displayedRotation = positiveEulerRadians(transform->rotationEuler);
         float rotation[3] = {
                 displayedRotation.x * RadToDeg,
                 displayedRotation.y * RadToDeg,
@@ -613,10 +613,10 @@ void InspectorPanel::drawContent(UIContext& context) {
         const std::array<bool, 3> rotationMixed = mixedRotationAxes(document, selected, *transform);
         const std::string rotationLabel = localization.text("ui.inspector.rotation", "Rotation");
         if (axisDragFloat3("rotation", rotationLabel.c_str(), rotation, rotationMixed, mixedLabel.c_str(), context.style, 0.5f)) {
-            const Vec3 previous = displayedRotation;
-            const Vec3 nextRotation{rotation[0] * DegToRad, rotation[1] * DegToRad, rotation[2] * DegToRad};
-            const Vec3 delta = nextRotation - previous;
-            applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {
+            const QVec3 previous = displayedRotation;
+            const QVec3 nextRotation{rotation[0] * DegToRad, rotation[1] * DegToRad, rotation[2] * DegToRad};
+            const QVec3 delta = nextRotation - previous;
+            applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, QVec3 localPivot, QVec3 worldPivot) {
                 applyWorldRotationDeltaAroundPivot(next, delta, localPivot, worldPivot);
             });
         }
@@ -625,8 +625,8 @@ void InspectorPanel::drawContent(UIContext& context) {
         const std::array<bool, 3> scaleMixed = mixedScaleAxes(document, selected, *transform);
         const std::string scaleLabel = localization.text("ui.inspector.scale", "Scale");
         if (axisDragFloat3("scale", scaleLabel.c_str(), scale, scaleMixed, mixedLabel.c_str(), context.style, 0.02f, 0.001f, 1000.0f)) {
-            const Vec3 ratio = componentScaleRatio({scale[0], scale[1], scale[2]}, transform->scale);
-            applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, Vec3 localPivot, Vec3 worldPivot) {
+            const QVec3 ratio = componentScaleRatio({scale[0], scale[1], scale[2]}, transform->scale);
+            applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, QVec3 localPivot, QVec3 worldPivot) {
                 next.scale = clampScale(multiplyComponents(next.scale, ratio));
                 pinLocalPivotToWorldPoint(next, localPivot, worldPivot);
             });

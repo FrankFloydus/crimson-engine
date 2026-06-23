@@ -205,7 +205,7 @@ std::uint64_t OverlayRenderableBuilder::hashFloat(std::uint64_t hash, float valu
     return hashCombine(hash, std::bit_cast<std::uint32_t>(value));
 }
 
-std::uint64_t OverlayRenderableBuilder::hashVec3(std::uint64_t hash, Vec3 value) {
+std::uint64_t OverlayRenderableBuilder::hashVec3(std::uint64_t hash, QVec3 value) {
     hash = hashFloat(hash, value.x);
     hash = hashFloat(hash, value.y);
     return hashFloat(hash, value.z);

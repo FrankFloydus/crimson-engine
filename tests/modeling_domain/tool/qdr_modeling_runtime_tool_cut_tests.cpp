@@ -128,11 +128,11 @@ TEST_CASE("cut tool uses two snapped world-grid points", "[editor-core][tool][cu
 	REQUIRE(state.target_object_ids.size() == 1);
 	CHECK(state.target_object_ids[0] == 5);
 	CHECK(quader_editor_core::cut_can_preview(state));
-	const std::vector<quader_poly::Vec3> plane_points = quader_editor_core::cut_plane_points(state);
+	const std::vector<quader::QVec3> plane_points = quader_editor_core::cut_plane_points(state);
 	REQUIRE(plane_points.size() == 3);
 	CHECK(plane_points[2].y > plane_points[0].y);
 
-	const std::vector<quader_poly::Vec3> overlay_points =
+	const std::vector<quader::QVec3> overlay_points =
 		quader_editor_core::cut_overlay_points(state, { 2.0F, 0.0F, 2.0F }, true);
 	REQUIRE(overlay_points.size() == 2);
 	CHECK(overlay_points[0].x == state.points[0].x);

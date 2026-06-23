@@ -22,24 +22,24 @@ namespace {
 inline constexpr double poly_point_epsilon_squared = 0.0001;
 inline constexpr double poly_plane_epsilon_squared = 0.000001;
 
-quader_geometry::Vec3d to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3d to_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_geometry::Triangle3<double> to_geometry_triangle(quader_poly::Vec3 a, quader_poly::Vec3 b, quader_poly::Vec3 c)
+quader_geometry::QTriangle3<double> to_geometry_triangle(quader::QVec3 a, quader::QVec3 b, quader::QVec3 c)
 {
 	return { to_geometry_vec3(a), to_geometry_vec3(b), to_geometry_vec3(c) };
 }
 
-bool poly_points_are_collinear(quader_poly::Vec3 a, quader_poly::Vec3 b, quader_poly::Vec3 c)
+bool poly_points_are_collinear(quader::QVec3 a, quader::QVec3 b, quader::QVec3 c)
 {
-	const quader_geometry::Vec3d area_vector =
+	const quader_geometry::QVec3d area_vector =
 		quader_geometry::triangle_area_vector(to_geometry_triangle(a, b, c));
 	return quader_geometry::length_squared(area_vector) <= poly_plane_epsilon_squared * 0.25;
 }
 
-bool poly_points_have_area(const std::vector<quader_poly::Vec3>& points)
+bool poly_points_have_area(const std::vector<quader::QVec3>& points)
 {
 	if (points.size() < 3U) {
 		return false;
@@ -94,7 +94,7 @@ public:
 			return;
 		}
 
-		for (const quader_poly::Vec3& point : state.points) {
+		for (const quader::QVec3& point : state.points) {
 			state.preview_points.push_back({
 				SelectionOverlayLayer::selected_vertex,
 				point,
@@ -166,14 +166,14 @@ public:
 			result.first_point = state.points.front();
 			result.last_point = state.points.back();
 		}
-		result.current_point = state.has_current ? state.current_point : quader_poly::Vec3 {};
+		result.current_point = state.has_current ? state.current_point : quader::QVec3 {};
 		return result;
 	}
 
 	[[nodiscard]] PolyToolResult update_hover(
 			PolyToolState& state,
-			quader_poly::Vec3 position,
-			quader_poly::Vec3 plane_normal,
+			quader::QVec3 position,
+			quader::QVec3 plane_normal,
 			bool constrain_axis,
 			double grid_size,
 			bool snap_enabled) const
@@ -183,8 +183,8 @@ public:
 			rebuild_overlay(state);
 			return { true, false };
 		}
-		const quader_poly::Vec3 safe_normal = vec3_is_tiny(plane_normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(plane_normal);
-		quader_poly::Vec3 next_position = snap_knife_point_to_grid(position, grid_size, snap_enabled);
+		const quader::QVec3 safe_normal = vec3_is_tiny(plane_normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(plane_normal);
+		quader::QVec3 next_position = snap_knife_point_to_grid(position, grid_size, snap_enabled);
 		if (constrain_axis && !state.points.empty()) {
 			next_position = constrain_knife_point_to_axis(state.points.back(), next_position, safe_normal, grid_size, snap_enabled);
 		}
@@ -229,9 +229,9 @@ public:
 	}
 
 private:
-	[[nodiscard]] bool point_repeats_existing(const PolyToolState& state, quader_poly::Vec3 point) const
+	[[nodiscard]] bool point_repeats_existing(const PolyToolState& state, quader::QVec3 point) const
 	{
-		for (const quader_poly::Vec3 existing : state.points) {
+		for (const quader::QVec3 existing : state.points) {
 			if (vec3_distance_squared(existing, point) <= poly_point_epsilon_squared) {
 				return true;
 			}
@@ -282,8 +282,8 @@ PolyToolPreview poly_tool_preview(const PolyToolState& state)
 
 PolyToolResult update_poly_hover(
 		PolyToolState& state,
-		quader_poly::Vec3 position,
-		quader_poly::Vec3 plane_normal,
+		quader::QVec3 position,
+		quader::QVec3 plane_normal,
 		bool constrain_axis,
 		double grid_size,
 		bool snap_enabled)

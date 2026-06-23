@@ -30,7 +30,7 @@ TEST_CASE("transform selection applies the supplied transform to selected vertic
 	SECTION("edge selections transform only the edge endpoints")
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
-		const Vec3 unselected_before = find_vertex(fixture.document, fixture.top_right)->position;
+		const quader::QVec3 unselected_before = find_vertex(fixture.document, fixture.top_right)->position;
 		Selection selection = qdr_test::edge_selection({
 			make_edge(fixture.bottom_left, fixture.bottom_right),
 		});

@@ -46,12 +46,12 @@ struct NameComponent {
  * Represents a Transform Component value used by the scene graph document layer.
  */
 struct TransformComponent {
-    Vec3 position = {};
-    Vec3 rotationEuler = {};
-    Vec3 scale = {1.0f, 1.0f, 1.0f};
+    QVec3 position = {};
+    QVec3 rotationEuler = {};
+    QVec3 scale = {1.0f, 1.0f, 1.0f};
 
-    Transform spatialTransform() const {
-        return Transform{
+    QTransform spatialTransform() const {
+        return QTransform{
                 .position = position,
                 .rotation = quatFromEulerRadians(rotationEuler),
                 .scale = scale,
@@ -168,7 +168,7 @@ enum class LightType {
  */
 struct LightComponent {
     LightType type = LightType::Directional;
-    Vec3 color = {1.0f, 1.0f, 1.0f};
+    QVec3 color = {1.0f, 1.0f, 1.0f};
     float intensity = 80000.0f;
     bool castsShadows = false;
 };

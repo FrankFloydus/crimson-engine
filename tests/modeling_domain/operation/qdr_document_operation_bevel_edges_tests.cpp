@@ -27,7 +27,7 @@ bool nearly_equal(float left, float right, float epsilon = 0.0001F)
     return std::abs(left - right) <= epsilon;
 }
 
-bool vec_nearly_equal(Vec3 left, Vec3 right, float epsilon = 0.0001F)
+bool vec_nearly_equal(quader::QVec3 left, quader::QVec3 right, float epsilon = 0.0001F)
 {
     return nearly_equal(left.x, right.x, epsilon) &&
         nearly_equal(left.y, right.y, epsilon) &&
@@ -185,14 +185,14 @@ bool every_shared_edge_has_opposite_winding(const Document& document)
     });
 }
 
-bool has_vertex_near_position(const Document& document, Vec3 position, float epsilon = 0.001F)
+bool has_vertex_near_position(const Document& document, quader::QVec3 position, float epsilon = 0.001F)
 {
     return std::any_of(document.vertices.begin(), document.vertices.end(), [position, epsilon](const Vertex& vertex) {
         return vec_nearly_equal(vertex.position, position, epsilon);
     });
 }
 
-ElementId vertex_near_position(const Document& document, Vec3 position, float epsilon = 0.001F)
+ElementId vertex_near_position(const Document& document, quader::QVec3 position, float epsilon = 0.001F)
 {
     const auto vertex = std::find_if(document.vertices.begin(), document.vertices.end(), [position, epsilon](const Vertex& candidate) {
         return vec_nearly_equal(candidate.position, position, epsilon);
@@ -201,9 +201,9 @@ ElementId vertex_near_position(const Document& document, Vec3 position, float ep
     return vertex->id;
 }
 
-Vec3 face_centroid(const Document& document, const Face& face)
+quader::QVec3 face_centroid(const Document& document, const Face& face)
 {
-    Vec3 center;
+    quader::QVec3 center;
     std::size_t count = 0;
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
@@ -212,12 +212,12 @@ Vec3 face_centroid(const Document& document, const Face& face)
             ++count;
         }
     }
-    return count == 0U ? Vec3 {} : center / static_cast<float>(count);
+    return count == 0U ? quader::QVec3 {} : center / static_cast<float>(count);
 }
 
-Vec3 document_vertex_centroid(const Document& document)
+quader::QVec3 document_vertex_centroid(const Document& document)
 {
-    Vec3 center;
+    quader::QVec3 center;
     for (const Vertex& vertex : document.vertices) {
         center += vertex.position;
     }
@@ -226,9 +226,9 @@ Vec3 document_vertex_centroid(const Document& document)
 
 bool all_faces_point_relative_to_center(const Document& document)
 {
-    const Vec3 center = document_vertex_centroid(document);
+    const quader::QVec3 center = document_vertex_centroid(document);
     return std::all_of(document.faces.begin(), document.faces.end(), [&document, center](const Face& face) {
-        const Vec3 expected = face_centroid(document, face) - center;
+        const quader::QVec3 expected = face_centroid(document, face) - center;
         return length_squared(expected) <= 0.000001F || dot(face_normal(document, face), expected) > 0.0F;
     });
 }
@@ -300,7 +300,7 @@ int edge_use_count(const Document& document, Edge expected_edge)
     return count;
 }
 
-int edge_use_count_between_positions(const Document& document, Vec3 first, Vec3 second, float epsilon = 0.001F)
+int edge_use_count_between_positions(const Document& document, quader::QVec3 first, quader::QVec3 second, float epsilon = 0.001F)
 {
     return edge_use_count(
         document,
@@ -327,20 +327,20 @@ std::vector<ElementId> neighbor_vertices_for(const Document& document, ElementId
 std::vector<ElementId> vertices_near_spoke_direction(
     const Document& document,
     std::span<const ElementId> vertex_ids,
-    Vec3 origin,
-    Vec3 direction,
+    quader::QVec3 origin,
+    quader::QVec3 direction,
     float max_perpendicular_distance,
     float max_signed_distance)
 {
     std::vector<ElementId> matching;
-    const Vec3 axis = normalize_or_zero(direction);
+    const quader::QVec3 axis = normalize_or_zero(direction);
     REQUIRE(length_squared(axis) > 0.0F);
     for (const ElementId vertex_id : vertex_ids) {
         const Vertex* vertex = find_vertex(document, vertex_id);
         REQUIRE(vertex != nullptr);
-        const Vec3 relative_position = vertex->position - origin;
+        const quader::QVec3 relative_position = vertex->position - origin;
         const float signed_distance = dot(relative_position, axis);
-        const Vec3 perpendicular = relative_position - (axis * signed_distance);
+        const quader::QVec3 perpendicular = relative_position - (axis * signed_distance);
         if (signed_distance > 0.0F &&
             signed_distance <= max_signed_distance &&
             length(perpendicular) <= max_perpendicular_distance) {
@@ -350,7 +350,7 @@ std::vector<ElementId> vertices_near_spoke_direction(
     return matching;
 }
 
-void add_oriented_face(Document& document, std::vector<ElementId> vertices, Vec3 expected_normal)
+void add_oriented_face(Document& document, std::vector<ElementId> vertices, quader::QVec3 expected_normal)
 {
     Face face;
     face.id = document.next_face_id++;
@@ -520,7 +520,7 @@ std::map<ElementId, ElementId> support_corner_faces_for_roots(
 
 void require_single_support_corner_attach(
     const Document& document,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     const std::map<ElementId, ElementId>& support_corner_faces,
     float radius)
 {
@@ -534,7 +534,7 @@ void require_single_support_corner_attach(
         for (const ElementId vertex_id : support_face->vertices) {
             const Vertex* vertex = find_vertex(document, vertex_id);
             REQUIRE(vertex != nullptr);
-            const Vec3 delta = vertex->position - source_position;
+            const quader::QVec3 delta = vertex->position - source_position;
             if (length_squared(delta) > radius * radius ||
                 length_squared(delta) <= 0.00000001F) {
                 continue;
@@ -568,7 +568,7 @@ void require_original_selected_edges_consumed(const Document& document, const Se
 void require_generated_faces_point_away_from_source_corners(
     const Document& document,
     const Selection& selection,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius)
 {
     REQUIRE(selection.mode == SelectionMode::face);
@@ -579,16 +579,16 @@ void require_generated_faces_point_away_from_source_corners(
         for (const ElementId face_id : selection.faces) {
             const Face* face = find_face(document, face_id);
             REQUIRE(face != nullptr);
-            const Vec3 center = face_centroid(document, *face);
-            const Vec3 from_source = center - source_position;
+            const quader::QVec3 center = face_centroid(document, *face);
+            const quader::QVec3 from_source = center - source_position;
             if (length_squared(from_source) > radius * radius ||
                 length_squared(from_source) <= 0.00000001F) {
                 continue;
             }
 
             INFO("generated bevel face should point away from old corner vertex " << source_vertex_id << " face=" << face_id);
-            const Vec3 normal = face_normal(document, *face);
-            const Vec3 direction_from_source = from_source / length(from_source);
+            const quader::QVec3 normal = face_normal(document, *face);
+            const quader::QVec3 direction_from_source = from_source / length(from_source);
             REQUIRE(dot(normal, direction_from_source) > -0.5F);
             ++checked_face_count;
         }
@@ -600,7 +600,7 @@ void require_generated_faces_point_away_from_source_corners(
 void require_no_generated_triangles_near_source_corners(
     const Document& document,
     const Selection& selection,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius)
 {
     REQUIRE(selection.mode == SelectionMode::face);
@@ -611,8 +611,8 @@ void require_no_generated_triangles_near_source_corners(
         for (const ElementId face_id : selection.faces) {
             const Face* face = find_face(document, face_id);
             REQUIRE(face != nullptr);
-            const Vec3 center = face_centroid(document, *face);
-            const Vec3 from_source = center - source_position;
+            const quader::QVec3 center = face_centroid(document, *face);
+            const quader::QVec3 from_source = center - source_position;
             if (length_squared(from_source) > radius * radius ||
                 length_squared(from_source) <= 0.00000001F) {
                 continue;
@@ -629,19 +629,19 @@ void require_no_generated_triangles_near_source_corners(
 
 void require_outer_patch_support_vertices(
     const Document& document,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float width)
 {
     for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
         const float y_sign = source_position.y >= 0.0F ? 1.0F : -1.0F;
         const float z_sign = source_position.z >= 0.0F ? 1.0F : -1.0F;
-        const std::array<Vec3, 3> expected_positions {
-            source_position + Vec3 { 0.0F, y_sign * width, z_sign * width },
-            source_position + Vec3 { 0.0F, -y_sign * width, z_sign * width },
-            source_position + Vec3 { 0.0F, y_sign * width, -z_sign * width },
+        const std::array<quader::QVec3, 3> expected_positions {
+            source_position + quader::QVec3 { 0.0F, y_sign * width, z_sign * width },
+            source_position + quader::QVec3 { 0.0F, -y_sign * width, z_sign * width },
+            source_position + quader::QVec3 { 0.0F, y_sign * width, -z_sign * width },
         };
 
-        for (const Vec3 expected_position : expected_positions) {
+        for (const quader::QVec3 expected_position : expected_positions) {
             INFO("outer PATCH miter boundary should include Blender-style side/support vertex near old root " << source_vertex_id);
             CHECK(has_vertex_near_position(document, expected_position, 0.001F));
         }
@@ -651,7 +651,7 @@ void require_outer_patch_support_vertices(
 void require_no_generated_position_poles_near_source_corners(
     const Document& document,
     const Selection& selection,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius,
     float minimum_separation)
 {
@@ -666,7 +666,7 @@ void require_no_generated_position_poles_near_source_corners(
     }
 
     for (const auto& [source_vertex_id, source_position] : source_corner_positions) {
-        std::vector<std::pair<ElementId, Vec3>> nearby;
+        std::vector<std::pair<ElementId, quader::QVec3>> nearby;
         for (const ElementId vertex_id : selected_vertices) {
             const Vertex* vertex = find_vertex(document, vertex_id);
             REQUIRE(vertex != nullptr);
@@ -687,7 +687,7 @@ void require_no_generated_position_poles_near_source_corners(
 void require_single_generated_center_ngon_near_source_corners(
     const Document& document,
     const Selection& selection,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius,
     std::size_t side_count)
 {
@@ -702,7 +702,7 @@ void require_single_generated_center_ngon_near_source_corners(
             if (face->vertices.size() != side_count) {
                 continue;
             }
-            const Vec3 center = face_centroid(document, *face);
+            const quader::QVec3 center = face_centroid(document, *face);
             if (length(center - source_position) <= radius) {
                 ++matching_center_faces;
             }
@@ -716,7 +716,7 @@ void require_single_generated_center_ngon_near_source_corners(
 void require_patch_miter_center_rows_continue_source_side_lines(
     const Document& document,
     const Selection& selection,
-    const std::map<ElementId, Vec3>& source_corner_positions,
+    const std::map<ElementId, quader::QVec3>& source_corner_positions,
     float radius)
 {
     REQUIRE(selection.mode == SelectionMode::face);
@@ -730,7 +730,7 @@ void require_patch_miter_center_rows_continue_source_side_lines(
             if (face->vertices.size() != 5U) {
                 continue;
             }
-            const Vec3 center = face_centroid(document, *face);
+            const quader::QVec3 center = face_centroid(document, *face);
             if (length(center - source_position) > radius) {
                 continue;
             }
@@ -846,10 +846,10 @@ TEST_CASE("top perimeter bevel keeps unselected spoke edges single")
 
     std::array<ElementId, 8> top {};
     std::array<ElementId, 8> bottom {};
-    std::array<Vec3, 8> spoke_directions {};
+    std::array<quader::QVec3, 8> spoke_directions {};
     for (std::size_t index = 0; index < top.size(); ++index) {
         const float angle = (static_cast<float>(index) / static_cast<float>(top.size())) * 6.28318530717958647692F;
-        const Vec3 position { std::cos(angle) * radius, top_y, std::sin(angle) * radius };
+        const quader::QVec3 position { std::cos(angle) * radius, top_y, std::sin(angle) * radius };
         spoke_directions[index] = { position.x, 0.0F, position.z };
         top[index] = add_vertex(document, position);
         bottom[index] = add_vertex(document, { position.x, bottom_y, position.z });
@@ -1164,7 +1164,7 @@ TEST_CASE("convex valence three cube corners keep valid vmesh patches")
 
         const std::vector<ElementId> three_edge_corners = selected_edge_vertices_with_count(selection, 3);
         REQUIRE(three_edge_corners.size() == 8U);
-        std::map<ElementId, Vec3> source_corner_positions;
+        std::map<ElementId, quader::QVec3> source_corner_positions;
         for (const ElementId vertex_id : three_edge_corners) {
             const Vertex* vertex = find_vertex(document, vertex_id);
             REQUIRE(vertex != nullptr);
@@ -1242,7 +1242,7 @@ TEST_CASE("side extrusion bevel closes and orients all extrusion root corners")
         const std::map<ElementId, ElementId> support_corner_faces =
             support_corner_faces_for_roots(document, selection, fixture.root_corners);
         REQUIRE(support_corner_faces.size() == fixture.root_corners.size());
-        std::map<ElementId, Vec3> source_corner_positions;
+        std::map<ElementId, quader::QVec3> source_corner_positions;
         for (const ElementId vertex_id : fixture.root_corners) {
             const Vertex* vertex = find_vertex(document, vertex_id);
             REQUIRE(vertex != nullptr);
@@ -1333,7 +1333,7 @@ TEST_CASE("parallel top opening edge bevels close doorway terminal patches")
     INFO(doorway_top_region_summary(document));
     REQUIRE(every_edge_is_closed(document));
     REQUIRE(every_shared_edge_has_opposite_winding(document));
-    const std::array<std::pair<ElementId, Vec3>, 4> forbidden_outer_corner_edges {{
+    const std::array<std::pair<ElementId, quader::QVec3>, 4> forbidden_outer_corner_edges {{
         { fixture.root_corners[1], { 1.0F, 0.35F, -1.0F } },
         { fixture.root_corners[1], { 1.0F, 1.0F, -0.35F } },
         { fixture.root_corners[2], { 1.0F, 0.35F, 1.0F } },
@@ -1343,16 +1343,16 @@ TEST_CASE("parallel top opening edge bevels close doorway terminal patches")
         const ElementId neighbor_id = vertex_near_position(document, neighbor_position);
         REQUIRE(edge_use_count(document, make_edge(terminal_vertex_id, neighbor_id)) == 0);
     }
-    const std::array<Vec3, 4> expected_terminal_boundary_vertices {{
+    const std::array<quader::QVec3, 4> expected_terminal_boundary_vertices {{
         { 1.0F, 0.47F, -0.35F },
         { 1.0F, 0.35F, -0.47F },
         { 1.0F, 0.47F, 0.35F },
         { 1.0F, 0.35F, 0.47F },
     }};
-    for (const Vec3 boundary_position : expected_terminal_boundary_vertices) {
+    for (const quader::QVec3 boundary_position : expected_terminal_boundary_vertices) {
         REQUIRE(has_vertex_near_position(document, boundary_position));
     }
-    const std::array<std::pair<Vec3, Vec3>, 4> forbidden_long_terminal_diagonals {{
+    const std::array<std::pair<quader::QVec3, quader::QVec3>, 4> forbidden_long_terminal_diagonals {{
         { { 1.0F, 1.0F, -0.35F }, { 1.0F, 0.35F, -0.23F } },
         { { 1.0F, 0.35F, -1.0F }, { 1.0F, 0.23F, -0.35F } },
         { { 1.0F, 1.0F, 0.35F }, { 1.0F, 0.35F, 0.23F } },

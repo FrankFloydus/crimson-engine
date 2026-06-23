@@ -22,7 +22,7 @@ const quader_editor_core::PolygonObject* find_object(const quader_editor_core::E
 	return it == objects.end() ? nullptr : &*it;
 }
 
-quader_poly::Vec3 first_vertex_position(const quader_poly::Document& document)
+quader::QVec3 first_vertex_position(const quader_poly::Document& document)
 {
 	REQUIRE_FALSE(document.vertices.empty());
 	return document.vertices.front().position;
@@ -34,22 +34,22 @@ quader_poly::ElementId first_vertex_id(const quader_poly::Document& document)
 	return document.vertices.front().id;
 }
 
-quader_poly::Vec3 vertex_position(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
+quader::QVec3 vertex_position(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
 {
 	const quader_poly::Vertex* vertex = quader_poly::find_vertex(document, vertex_id);
 	REQUIRE(vertex != nullptr);
 	return vertex->position;
 }
 
-quader_poly::Vec3 averaged_face_normal_for_vertex(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
+quader::QVec3 averaged_face_normal_for_vertex(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
 {
-	quader_poly::Vec3 normal {};
+	quader::QVec3 normal {};
 	for (const quader_poly::Face& face : document.faces) {
 		if (std::find(face.vertices.begin(), face.vertices.end(), vertex_id) != face.vertices.end()) {
 			normal += quader_poly::face_normal(document, face);
 		}
 	}
-	return quader_poly::normalize_or_zero(normal);
+	return quader::normalize_or_zero(normal);
 }
 
 } // namespace
@@ -95,9 +95,9 @@ TEST_CASE("thicken operation previews generated topology transactionally", "[ope
 		const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
 		const std::size_t face_count_before = session.objects().front().document.faces.size();
 		const quader_poly::ElementId source_vertex_id = first_vertex_id(session.objects().front().document);
-		const quader_poly::Vec3 source_position_before = first_vertex_position(session.objects().front().document);
-		const quader_poly::Vec3 source_normal = averaged_face_normal_for_vertex(session.objects().front().document, source_vertex_id);
-		REQUIRE(quader_poly::length_squared(source_normal) > 0.0F);
+		const quader::QVec3 source_position_before = first_vertex_position(session.objects().front().document);
+		const quader::QVec3 source_normal = averaged_face_normal_for_vertex(session.objects().front().document, source_vertex_id);
+		REQUIRE(quader::length_squared(source_normal) > 0.0F);
 
 		REQUIRE(session.begin_thicken_preview(0.25F, false).changed);
 
@@ -118,10 +118,10 @@ TEST_CASE("thicken operation previews generated topology transactionally", "[ope
 		REQUIRE(source->document.faces.size() == face_count_before);
 		REQUIRE(hull->document.vertices.size() == vertex_count_before);
 		REQUIRE(hull->document.faces.size() == face_count_before);
-		REQUIRE(quader_poly::length(vertex_position(source->document, source_vertex_id) - source_position_before) == Catch::Approx(0.0F));
-		const quader_poly::Vec3 displacement = vertex_position(hull->document, source_vertex_id) - source_position_before;
-		REQUIRE(quader_poly::length(displacement) == Catch::Approx(0.25F));
-		REQUIRE(quader_poly::dot(displacement, source_normal) == Catch::Approx(-0.25F));
+		REQUIRE(quader::length(vertex_position(source->document, source_vertex_id) - source_position_before) == Catch::Approx(0.0F));
+		const quader::QVec3 displacement = vertex_position(hull->document, source_vertex_id) - source_position_before;
+		REQUIRE(quader::length(displacement) == Catch::Approx(0.25F));
+		REQUIRE(quader::dot(displacement, source_normal) == Catch::Approx(-0.25F));
 
 		const quader_editor_core::PreviewTransactionFinishResult commit =
 			session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
@@ -140,25 +140,25 @@ TEST_CASE("thicken operation previews generated topology transactionally", "[ope
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const std::size_t object_count_before = session.objects().size();
 		const quader_poly::ElementId source_vertex_id = first_vertex_id(session.objects().front().document);
-		const quader_poly::Vec3 source_position_before = first_vertex_position(session.objects().front().document);
-		const quader_poly::Vec3 source_normal = averaged_face_normal_for_vertex(session.objects().front().document, source_vertex_id);
-		REQUIRE(quader_poly::length_squared(source_normal) > 0.0F);
+		const quader::QVec3 source_position_before = first_vertex_position(session.objects().front().document);
+		const quader::QVec3 source_normal = averaged_face_normal_for_vertex(session.objects().front().document, source_vertex_id);
+		REQUIRE(quader::length_squared(source_normal) > 0.0F);
 		const std::size_t face_count_before = session.objects().front().document.faces.size();
 
 		REQUIRE(session.begin_thicken_preview(0.25F, false).changed);
 		REQUIRE(session.objects().size() == object_count_before + 1U);
 		const quader_editor_core::PolygonObject* first_hull = find_object(session, session.selected_object_ids().front());
 		REQUIRE(first_hull != nullptr);
-		quader_poly::Vec3 displacement = vertex_position(first_hull->document, source_vertex_id) - source_position_before;
-		REQUIRE(quader_poly::length(displacement) == Catch::Approx(0.25F));
-		REQUIRE(quader_poly::dot(displacement, source_normal) == Catch::Approx(-0.25F));
+		quader::QVec3 displacement = vertex_position(first_hull->document, source_vertex_id) - source_position_before;
+		REQUIRE(quader::length(displacement) == Catch::Approx(0.25F));
+		REQUIRE(quader::dot(displacement, source_normal) == Catch::Approx(-0.25F));
 		REQUIRE(session.update_thicken_preview(0.5F, false).changed);
 		REQUIRE(session.objects().size() == object_count_before + 1U);
 		const quader_editor_core::PolygonObject* updated_hull = find_object(session, session.selected_object_ids().front());
 		REQUIRE(updated_hull != nullptr);
 		displacement = vertex_position(updated_hull->document, source_vertex_id) - source_position_before;
-		REQUIRE(quader_poly::length(displacement) == Catch::Approx(0.5F));
-		REQUIRE(quader_poly::dot(displacement, source_normal) == Catch::Approx(-0.5F));
+		REQUIRE(quader::length(displacement) == Catch::Approx(0.5F));
+		REQUIRE(quader::dot(displacement, source_normal) == Catch::Approx(-0.5F));
 
 		const quader_editor_core::PreviewTransactionFinishResult cancel =
 			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);

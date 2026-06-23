@@ -27,11 +27,11 @@ enum class BoxDragState {
  * Represents a Box Construction Plane value used by the modal modeling interaction layer.
  */
 struct BoxConstructionPlane {
-	quader_poly::Vec3 origin;
-	quader_poly::Vec3 snap_origin;
-	quader_poly::Vec3 normal { 0.0F, 1.0F, 0.0F };
-	quader_poly::Vec3 axis_u { 1.0F, 0.0F, 0.0F };
-	quader_poly::Vec3 axis_v { 0.0F, 0.0F, 1.0F };
+	quader::QVec3 origin;
+	quader::QVec3 snap_origin;
+	quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
+	quader::QVec3 axis_u { 1.0F, 0.0F, 0.0F };
+	quader::QVec3 axis_v { 0.0F, 0.0F, 1.0F };
 };
 
 /**
@@ -40,17 +40,17 @@ struct BoxConstructionPlane {
 struct BoxToolState {
 	BoxDragState drag_state = BoxDragState::idle;
 	BoxConstructionPlane plane;
-	quader_poly::Vec3 raw_start_point;
-	quader_poly::Vec3 raw_end_point;
-	quader_poly::Vec3 start_point;
-	quader_poly::Vec3 end_point;
+	quader::QVec3 raw_start_point;
+	quader::QVec3 raw_end_point;
+	quader::QVec3 start_point;
+	quader::QVec3 end_point;
 	double height_distance = 0.0;
-	quader_poly::Vec2 height_mouse_start;
+	quader::QVec2 height_mouse_start;
 	double height_start_distance = 0.0;
 	double height_axis_start = std::numeric_limits<double>::infinity();
 	int preview_brush_id = -1;
 	bool preview_valid = false;
-	std::vector<quader_poly::Vec3> hover_cell_points;
+	std::vector<quader::QVec3> hover_cell_points;
 };
 
 /**
@@ -69,7 +69,7 @@ struct BoxToolStateResult {
 struct BoxConstructionPointResult {
 	bool ok = false;
 	std::string message;
-	quader_poly::Vec3 position;
+	quader::QVec3 position;
 	double distance = 0.0;
 };
 
@@ -79,10 +79,10 @@ struct BoxConstructionPointResult {
 struct BoxFootprintDescriptor {
 	bool ok = false;
 	std::string message;
-	std::vector<quader_poly::Vec3> footprint;
-	quader_poly::Vec2 size;
-	quader_poly::Vec2 signed_size;
-	quader_poly::Vec3 center;
+	std::vector<quader::QVec3> footprint;
+	quader::QVec2 size;
+	quader::QVec2 signed_size;
+	quader::QVec3 center;
 };
 
 /**
@@ -93,7 +93,7 @@ struct BoxPreviewDescriptor {
 	std::string message;
 	BoxDragState drag_state = BoxDragState::idle;
 	BoxFootprintDescriptor footprint;
-	quader_poly::Vec3 normal { 0.0F, 1.0F, 0.0F };
+	quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
 	double signed_height = 1.0;
 	double distance = 1.0;
 	Bounds3 bounds;
@@ -101,23 +101,23 @@ struct BoxPreviewDescriptor {
 	bool preview_valid = false;
 };
 
-quader_poly::Vec3 project_box_point_to_plane(quader_poly::Vec3 point, quader_poly::Vec3 origin, quader_poly::Vec3 normal);
-BoxConstructionPlane normalize_box_construction_plane(quader_poly::Vec3 origin, quader_poly::Vec3 normal);
-BoxToolStateResult set_box_construction_plane(BoxToolState& state, quader_poly::Vec3 origin, quader_poly::Vec3 normal);
+quader::QVec3 project_box_point_to_plane(quader::QVec3 point, quader::QVec3 origin, quader::QVec3 normal);
+BoxConstructionPlane normalize_box_construction_plane(quader::QVec3 origin, quader::QVec3 normal);
+BoxToolStateResult set_box_construction_plane(BoxToolState& state, quader::QVec3 origin, quader::QVec3 normal);
 BoxConstructionPointResult box_construction_point_from_ray(const BoxConstructionPlane& plane, const quader_poly::Ray& ray);
-quader_poly::Vec2 box_directional_snap_pair(double start_value, double end_value, double grid_size);
-quader_poly::Vec2 box_footprint_signed_size(quader_poly::Vec3 start_point, quader_poly::Vec3 end_point, quader_poly::Vec3 axis_u, quader_poly::Vec3 axis_v, double grid_size);
-std::vector<quader_poly::Vec3> box_footprint_points(quader_poly::Vec3 start_point, quader_poly::Vec3 end_point, quader_poly::Vec3 axis_u, quader_poly::Vec3 axis_v, double grid_size);
-BoxFootprintDescriptor box_footprint_descriptor(quader_poly::Vec3 start_point, quader_poly::Vec3 end_point, quader_poly::Vec3 axis_u, quader_poly::Vec3 axis_v, double grid_size);
+quader::QVec2 box_directional_snap_pair(double start_value, double end_value, double grid_size);
+quader::QVec2 box_footprint_signed_size(quader::QVec3 start_point, quader::QVec3 end_point, quader::QVec3 axis_u, quader::QVec3 axis_v, double grid_size);
+std::vector<quader::QVec3> box_footprint_points(quader::QVec3 start_point, quader::QVec3 end_point, quader::QVec3 axis_u, quader::QVec3 axis_v, double grid_size);
+BoxFootprintDescriptor box_footprint_descriptor(quader::QVec3 start_point, quader::QVec3 end_point, quader::QVec3 axis_u, quader::QVec3 axis_v, double grid_size);
 double snap_box_height_distance(double distance, bool grid_enabled, double grid_size);
-BoxToolStateResult begin_box_footprint(BoxToolState& state, quader_poly::Vec3 raw_start, quader_poly::Vec3 raw_end, bool grid_enabled, double grid_size);
-BoxToolStateResult update_box_footprint(BoxToolState& state, quader_poly::Vec3 raw_end, bool grid_enabled, double grid_size);
-BoxToolStateResult update_box_hover_cell(BoxToolState& state, quader_poly::Vec3 local_point, bool grid_enabled, double grid_size);
-BoxToolStateResult begin_box_height(BoxToolState& state, quader_poly::Vec2 screen_position, double axis_distance, bool has_axis_distance, bool grid_enabled, double grid_size);
+BoxToolStateResult begin_box_footprint(BoxToolState& state, quader::QVec3 raw_start, quader::QVec3 raw_end, bool grid_enabled, double grid_size);
+BoxToolStateResult update_box_footprint(BoxToolState& state, quader::QVec3 raw_end, bool grid_enabled, double grid_size);
+BoxToolStateResult update_box_hover_cell(BoxToolState& state, quader::QVec3 local_point, bool grid_enabled, double grid_size);
+BoxToolStateResult begin_box_height(BoxToolState& state, quader::QVec2 screen_position, double axis_distance, bool has_axis_distance, bool grid_enabled, double grid_size);
 double box_height_distance_for_ray(const BoxToolState& state, const quader_poly::Ray& ray, double grid_size);
-BoxToolStateResult update_box_height_preview(BoxToolState& state, double axis_distance, bool has_axis_distance, quader_poly::Vec2 screen_position, bool grid_enabled, double grid_size);
+BoxToolStateResult update_box_height_preview(BoxToolState& state, double axis_distance, bool has_axis_distance, quader::QVec2 screen_position, bool grid_enabled, double grid_size);
 BoxPreviewDescriptor box_preview_descriptor(const BoxToolState& state, bool grid_enabled, double grid_size);
-std::vector<quader_poly::Vec3> box_preview_corners(const BoxPreviewDescriptor& preview);
+std::vector<quader::QVec3> box_preview_corners(const BoxPreviewDescriptor& preview);
 void set_box_preview_state(BoxToolState& state, int preview_brush_id, bool preview_valid);
 void clear_box_preview_state(BoxToolState& state);
 void sync_box_state(BoxToolState& state, const BoxToolState& source);

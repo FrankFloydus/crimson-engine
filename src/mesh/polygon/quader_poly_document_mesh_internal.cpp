@@ -22,7 +22,7 @@ namespace quader_poly::document_internal {
 namespace {
 
 /**
- * Represents a Triangulation Axis Candidate value used by the polygon document and mesh editing core.
+ * Represents a Triangulation QAxis Candidate value used by the polygon document and mesh editing core.
  */
 struct TriangulationAxisCandidate {
     int dropped_axis = 1;
@@ -30,12 +30,12 @@ struct TriangulationAxisCandidate {
     bool has_duplicate_points = false;
 };
 
-quader_geometry::Vec3f geometry_vec3(const Vec3& value)
+quader_geometry::QVec3f geometry_vec3(const quader::QVec3& value)
 {
     return { value.x, value.y, value.z };
 }
 
-quader_geometry::Vec3d geometry_vec3d(const Vec3& value)
+quader_geometry::QVec3d geometry_vec3d(const quader::QVec3& value)
 {
     return {
         static_cast<double>(value.x),
@@ -44,68 +44,68 @@ quader_geometry::Vec3d geometry_vec3d(const Vec3& value)
     };
 }
 
-Vec3 poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 poly_vec3(quader_geometry::QVec3f value)
 {
     return { value.x, value.y, value.z };
 }
 
-quader_geometry::Triangle3<float> geometry_triangle(const Vec3& a, const Vec3& b, const Vec3& c)
+quader_geometry::QTriangle3<float> geometry_triangle(const quader::QVec3& a, const quader::QVec3& b, const quader::QVec3& c)
 {
     return { geometry_vec3(a), geometry_vec3(b), geometry_vec3(c) };
 }
 
-quader_geometry::Vec3f geometry_triangle_area_vector(const Vec3& a, const Vec3& b, const Vec3& c)
+quader_geometry::QVec3f geometry_triangle_area_vector(const quader::QVec3& a, const quader::QVec3& b, const quader::QVec3& c)
 {
     return quader_geometry::triangle_area_vector(geometry_triangle(a, b, c));
 }
 
-float triangle_cross_length_squared(const Vec3& a, const Vec3& b, const Vec3& c)
+float triangle_cross_length_squared(const quader::QVec3& a, const quader::QVec3& b, const quader::QVec3& c)
 {
-    const quader_geometry::Vec3f area_vector = geometry_triangle_area_vector(a, b, c);
+    const quader_geometry::QVec3f area_vector = geometry_triangle_area_vector(a, b, c);
     return quader_geometry::length_squared(area_vector) * 4.0F;
 }
 
-int dropped_axis_from_geometry_axis(quader_geometry::Axis axis)
+int dropped_axis_from_geometry_axis(quader_geometry::QAxis axis)
 {
     switch (axis) {
-    case quader_geometry::Axis::x:
+    case quader_geometry::QAxis::x:
         return 0;
-    case quader_geometry::Axis::y:
+    case quader_geometry::QAxis::y:
         return 1;
     default:
         return 2;
     }
 }
 
-quader_geometry::Axis geometry_axis_from_dropped_axis(int dropped_axis)
+quader_geometry::QAxis geometry_axis_from_dropped_axis(int dropped_axis)
 {
     switch (dropped_axis) {
     case 0:
-        return quader_geometry::Axis::x;
+        return quader_geometry::QAxis::x;
     case 1:
-        return quader_geometry::Axis::y;
+        return quader_geometry::QAxis::y;
     default:
-        return quader_geometry::Axis::z;
+        return quader_geometry::QAxis::z;
     }
 }
 
-quader_geometry::Vec2d projected_point_for_axis(const Vec3& position, int dropped_axis)
+quader_geometry::QVec2d projected_point_for_axis(const quader::QVec3& position, int dropped_axis)
 {
     return quader_geometry::project_dominant_axis<double>(
         geometry_vec3d(position),
         geometry_axis_from_dropped_axis(dropped_axis));
 }
 
-bool projected_points_nearly_equal(quader_geometry::Vec2d left, quader_geometry::Vec2d right)
+bool projected_points_nearly_equal(quader_geometry::QVec2d left, quader_geometry::QVec2d right)
 {
     constexpr double projected_epsilon = 0.000001;
     return quader_geometry::length_squared(left - right) <= projected_epsilon * projected_epsilon;
 }
 
-Vec3 project_vector_to_plane(const Vec3& vector, const Vec3& normal, const Vec3& origin)
+quader::QVec3 project_vector_to_plane(const quader::QVec3& vector, const quader::QVec3& normal, const quader::QVec3& origin)
 {
-    const quader_geometry::Vec3f geometry_origin = geometry_vec3(origin);
-    const quader_geometry::Plane3<float> plane =
+    const quader_geometry::QVec3f geometry_origin = geometry_vec3(origin);
+    const quader_geometry::QPlane3<float> plane =
         quader_geometry::plane_from_point_normal<float>(geometry_origin, geometry_vec3(normal), epsilon);
     if (quader_geometry::length_squared(plane.normal) <= epsilon * epsilon) {
         return {};
@@ -116,7 +116,7 @@ Vec3 project_vector_to_plane(const Vec3& vector, const Vec3& normal, const Vec3&
 
 TriangulationAxisCandidate triangulation_axis_candidate(const Document& document, const Face& face, int dropped_axis)
 {
-    std::vector<quader_geometry::Vec2d> points;
+    std::vector<quader_geometry::QVec2d> points;
     points.reserve(face.vertices.size());
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
@@ -138,7 +138,7 @@ TriangulationAxisCandidate triangulation_axis_candidate(const Document& document
 
     return {
         dropped_axis,
-        std::abs(quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::Vec2d>(points))),
+        std::abs(quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::QVec2d>(points))),
         has_duplicate_points,
     };
 }
@@ -146,7 +146,7 @@ TriangulationAxisCandidate triangulation_axis_candidate(const Document& document
 std::vector<Triangle> triangulate_face_local_indices_for_axis(const Document& document, const Face& face, int dropped_axis)
 {
     QDR_PROFILE_SCOPE("qdr_document.triangulate_face_local_indices_for_axis");
-    std::vector<quader_geometry::Vec2d> projected_points;
+    std::vector<quader_geometry::QVec2d> projected_points;
     projected_points.reserve(face.vertices.size());
 
     for (const ElementId vertex_id : face.vertices) {
@@ -158,13 +158,13 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(const Document& do
     }
 
     const double polygon_area = std::abs(
-        quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::Vec2d>(projected_points)));
+        quader_geometry::polygon_signed_area<double>(std::span<const quader_geometry::QVec2d>(projected_points)));
     if (polygon_area <= 0.000001) {
         return {};
     }
 
-    const std::vector<quader_geometry::TriangleIndices> indices =
-        quader_geometry::triangulate_projected_polygon(std::span<const quader_geometry::Vec2d>(projected_points));
+    const std::vector<quader_geometry::QTriangleIndices> indices =
+        quader_geometry::triangulate_projected_polygon(std::span<const quader_geometry::QVec2d>(projected_points));
     if (indices.empty()) {
         return {};
     }
@@ -172,7 +172,7 @@ std::vector<Triangle> triangulate_face_local_indices_for_axis(const Document& do
     std::vector<Triangle> triangles;
     triangles.reserve(indices.size());
     double covered_area = 0.0;
-    for (const quader_geometry::TriangleIndices& triangle_indices : indices) {
+    for (const quader_geometry::QTriangleIndices& triangle_indices : indices) {
         if (triangle_indices[0] >= face.vertices.size() ||
             triangle_indices[1] >= face.vertices.size() ||
             triangle_indices[2] >= face.vertices.size()) {
@@ -240,8 +240,8 @@ std::vector<Triangle> triangulate_quad_face_local_indices(const Document& docume
 
     const std::vector<Triangle> first_third_diagonal { { 0U, 1U, 2U }, { 0U, 2U, 3U } };
     const std::vector<Triangle> second_fourth_diagonal { { 0U, 1U, 3U }, { 1U, 2U, 3U } };
-    const quader_geometry::Vec3f first_area_vector = geometry_triangle_area_vector(a->position, b->position, c->position);
-    const quader_geometry::Vec3f second_area_vector = geometry_triangle_area_vector(a->position, c->position, d->position);
+    const quader_geometry::QVec3f first_area_vector = geometry_triangle_area_vector(a->position, b->position, c->position);
+    const quader_geometry::QVec3f second_area_vector = geometry_triangle_area_vector(a->position, c->position, d->position);
     if (quader_geometry::length_squared(first_area_vector) * 4.0F > face_area_score_epsilon &&
         quader_geometry::length_squared(second_area_vector) * 4.0F > face_area_score_epsilon &&
         quader_geometry::dot(first_area_vector, second_area_vector) < 0.0F) {
@@ -259,17 +259,17 @@ std::vector<Triangle> triangulate_quad_face_local_indices(const Document& docume
     return {};
 }
 
-Vec3 quader_to_source_vector(const Vec3& vector)
+quader::QVec3 quader_to_source_vector(const quader::QVec3& vector)
 {
     return { vector.x, -vector.z, vector.y };
 }
 
-Vec3 source_to_quader_vector(const Vec3& vector)
+quader::QVec3 source_to_quader_vector(const quader::QVec3& vector)
 {
     return { vector.x, vector.z, -vector.y };
 }
 
-Vec2 source_projected_coord(const Vec3& source_position, int source_dropped_axis)
+quader::QVec2 source_projected_coord(const quader::QVec3& source_position, int source_dropped_axis)
 {
     float u = 0.0F;
     float v = 0.0F;
@@ -303,21 +303,21 @@ int source_dropped_axis_from_quader_dropped_axis(int dropped_axis)
     }
 }
 
-int source_dropped_axis_for_normal(const Vec3& source_normal)
+int source_dropped_axis_for_normal(const quader::QVec3& source_normal)
 {
     return dropped_axis_from_geometry_axis(quader_geometry::dominant_axis(geometry_vec3(source_normal)));
 }
 
-Vec2 generated_planar_uv(const Vec3& position, int dropped_axis)
+quader::QVec2 generated_planar_uv(const quader::QVec3& position, int dropped_axis)
 {
-    const Vec2 coord = source_projected_coord(quader_to_source_vector(position), source_dropped_axis_from_quader_dropped_axis(dropped_axis));
+    const quader::QVec2 coord = source_projected_coord(quader_to_source_vector(position), source_dropped_axis_from_quader_dropped_axis(dropped_axis));
     return {
         coord.x * generated_uv_tiles_per_world_unit,
         coord.y * generated_uv_tiles_per_world_unit,
     };
 }
 
-FaceUvBasis source_projected_uv_basis_for_normal(const Vec3& source_normal)
+FaceUvBasis source_projected_uv_basis_for_normal(const quader::QVec3& source_normal)
 {
     FaceUvBasis basis;
     basis.origin = {};
@@ -351,7 +351,7 @@ FaceUvBasis source_projected_uv_basis_for_normal(const Vec3& source_normal)
 
 } // namespace
 
-int dropped_axis_for_normal(const Vec3& normal)
+int dropped_axis_for_normal(const quader::QVec3& normal)
 {
     return dropped_axis_from_geometry_axis(quader_geometry::dominant_axis(geometry_vec3(normal)));
 }
@@ -375,7 +375,7 @@ std::vector<Triangle> triangulate_face_local_indices(const Document& document, c
         }
     }
 
-    const Vec3 normal = face_normal(document, face);
+    const quader::QVec3 normal = face_normal(document, face);
     const int preferred_axis = dropped_axis_for_normal(normal);
     std::array<TriangulationAxisCandidate, 3> axes {
         triangulation_axis_candidate(document, face, 0),
@@ -421,7 +421,7 @@ std::vector<Triangle> triangulate_face_local_indices(const Document& document, c
     return triangles;
 }
 
-FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, const Vec3& normal)
+FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal)
 {
     FaceUvBasis basis;
     if (face.vertices.empty()) {
@@ -431,24 +431,24 @@ FaceUvBasis generated_face_uv_basis(const Document& document, const Face& face, 
     if (find_vertex(document, face.vertices.front()) == nullptr) {
         return basis;
     }
-    const Vec3 safe_normal = length_squared(normal) > epsilon ? normalize_or_zero(normal) : Vec3 { 0.0F, 1.0F, 0.0F };
-    const Vec3 source_normal = normalize_or_zero(quader_to_source_vector(safe_normal));
+    const quader::QVec3 safe_normal = length_squared(normal) > epsilon ? normalize_or_zero(normal) : quader::QVec3 { 0.0F, 1.0F, 0.0F };
+    const quader::QVec3 source_normal = normalize_or_zero(quader_to_source_vector(safe_normal));
     if (length_squared(source_normal) <= epsilon) {
         return basis;
     }
     return source_projected_uv_basis_for_normal(source_normal);
 }
 
-FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, const Vec3& normal, const Vec3& origin)
+FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, const quader::QVec3& normal, const quader::QVec3& origin)
 {
     FaceUvBasis basis;
     if (!generated_basis.valid) {
         return basis;
     }
 
-    const Vec3 safe_normal = length_squared(normal) > epsilon ? normalize_or_zero(normal) : Vec3 { 0.0F, 1.0F, 0.0F };
-    Vec3 u_axis = project_vector_to_plane(generated_basis.u_axis, safe_normal, origin);
-    Vec3 v_reference = project_vector_to_plane(generated_basis.v_axis, safe_normal, origin);
+    const quader::QVec3 safe_normal = length_squared(normal) > epsilon ? normalize_or_zero(normal) : quader::QVec3 { 0.0F, 1.0F, 0.0F };
+    quader::QVec3 u_axis = project_vector_to_plane(generated_basis.u_axis, safe_normal, origin);
+    quader::QVec3 v_reference = project_vector_to_plane(generated_basis.v_axis, safe_normal, origin);
     if (length_squared(u_axis) <= epsilon) {
         u_axis = v_reference;
         v_reference = project_vector_to_plane(generated_basis.u_axis, safe_normal, origin);
@@ -458,7 +458,7 @@ FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, c
     }
     u_axis = normalize_or_zero(u_axis);
 
-    Vec3 v_axis = v_reference - u_axis * dot(v_reference, u_axis);
+    quader::QVec3 v_axis = v_reference - u_axis * dot(v_reference, u_axis);
     if (length_squared(v_axis) <= epsilon) {
         v_axis = cross(safe_normal, u_axis);
         if (dot(v_axis, generated_basis.v_axis) < 0.0F) {
@@ -477,7 +477,7 @@ FaceUvBasis project_uv_basis_to_face_plane(const FaceUvBasis& generated_basis, c
     return basis;
 }
 
-FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, const Vec3& normal)
+FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, const quader::QVec3& normal)
 {
     FaceUvBasis basis;
     if (face.vertices.size() < 2) {
@@ -497,7 +497,7 @@ FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, cons
         }
     }
 
-    const Vec3 safe_normal = length_squared(normal) > epsilon ? normalize_or_zero(normal) : Vec3 { 0.0F, 1.0F, 0.0F };
+    const quader::QVec3 safe_normal = length_squared(normal) > epsilon ? normalize_or_zero(normal) : quader::QVec3 { 0.0F, 1.0F, 0.0F };
     float best_length_sq = 0.0F;
     bool found_edge = false;
     for (std::size_t index = 0; index < face.vertices.size(); ++index) {
@@ -506,7 +506,7 @@ FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, cons
         if (a == nullptr || b == nullptr) {
             continue;
         }
-        const Vec3 edge = b->position - a->position;
+        const quader::QVec3 edge = b->position - a->position;
         const float edge_length_sq = length_squared(edge);
         if (edge_length_sq <= epsilon || edge_length_sq <= best_length_sq) {
             continue;
@@ -528,19 +528,19 @@ FaceUvBasis face_local_uv_basis(const Document& document, const Face& face, cons
     return basis;
 }
 
-Vec2 generated_face_uv(const Vec3& position, const FaceUvBasis& basis)
+quader::QVec2 generated_face_uv(const quader::QVec3& position, const FaceUvBasis& basis)
 {
     if (!basis.valid) {
         return {};
     }
-    const Vec3 local = position - basis.origin;
+    const quader::QVec3 local = position - basis.origin;
     return {
         dot(local, basis.u_axis) * generated_uv_tiles_per_world_unit,
         dot(local, basis.v_axis) * generated_uv_tiles_per_world_unit,
     };
 }
 
-Vec2 generated_uv_for_position(const Vec3& position, const FaceUvBasis& basis, int dropped_axis)
+quader::QVec2 generated_uv_for_position(const quader::QVec3& position, const FaceUvBasis& basis, int dropped_axis)
 {
     return basis.valid ? generated_face_uv(position, basis) : generated_planar_uv(position, dropped_axis);
 }
@@ -554,7 +554,7 @@ bool assign_generated_face_uvs(Document& document, Face& face)
 {
     face.uvs.clear();
     face.uvs.reserve(face.vertices.size());
-    const Vec3 normal = face_normal(document, face);
+    const quader::QVec3 normal = face_normal(document, face);
     const int dropped_axis = dropped_axis_for_normal(normal);
     const FaceUvBasis basis = generated_face_uv_basis(document, face, normal);
     for (const ElementId vertex_id : face.vertices) {
@@ -588,13 +588,13 @@ bool assign_face_uvs_from_basis(Document& document, Face& face, const FaceUvBasi
 
 bool assign_face_local_uvs(Document& document, Face& face)
 {
-    const Vec3 normal = face_normal(document, face);
+    const quader::QVec3 normal = face_normal(document, face);
     return assign_face_uvs_from_basis(document, face, face_local_uv_basis(document, face, normal));
 }
 
-Vec2 translation_uv_delta(const Document& document, const Face& face, const Vec3& delta)
+quader::QVec2 translation_uv_delta(const Document& document, const Face& face, const quader::QVec3& delta)
 {
-    const Vec3 normal = face_normal(document, face);
+    const quader::QVec3 normal = face_normal(document, face);
     const FaceUvBasis basis = generated_face_uv_basis(document, face, normal);
     if (basis.valid) {
         return {

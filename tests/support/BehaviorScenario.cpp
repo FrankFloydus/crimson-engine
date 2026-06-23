@@ -323,13 +323,13 @@ BehaviorWhen& BehaviorWhen::activate(ModelingViewportTool) {
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::pick(Vec3 rayOrigin, PickOptions options) {
+BehaviorWhen& BehaviorWhen::pick(QVec3 rayOrigin, PickOptions options) {
     const QuaderApiResult<ModelingSelectionSummary> result = scenario_.api().selection().pickSelect(pickAt(rayOrigin, options));
     scenario_.recordSelection(result);
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::hover(Vec3 rayOrigin, HoverOptions options) {
+BehaviorWhen& BehaviorWhen::hover(QVec3 rayOrigin, HoverOptions options) {
     const QuaderApiResult<ModelingHoverSummary> result = scenario_.api().selection().hover(hoverAt(rayOrigin, options));
     scenario_.recordStatus(result);
     return *this;
@@ -356,13 +356,13 @@ BehaviorWhen& BehaviorWhen::beginTransformPreview(bool duplicateSelected) {
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::translatePreview(Vec3 delta) {
+BehaviorWhen& BehaviorWhen::translatePreview(QVec3 delta) {
     const QuaderApiStatus status = scenario_.api().modeling().updateTransformTranslate(delta);
     scenario_.recordStatus(status);
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::matrixPreview(const ModelingTransform3& transform, Vec3 pivot) {
+BehaviorWhen& BehaviorWhen::matrixPreview(const ModelingTransform3& transform, QVec3 pivot) {
     const QuaderApiStatus status = scenario_.api().modeling().updateTransformMatrix(transform, pivot);
     scenario_.recordStatus(status);
     return *this;
@@ -382,7 +382,7 @@ BehaviorWhen& BehaviorWhen::cancelTransformPreview() {
 
 BehaviorWhen& BehaviorWhen::beginTransformDrag(DragBeginOptions options) {
     if (options.useSelectionCenter) {
-        if (const std::optional<Vec3> center = scenario_.api().query().selectionCenter()) {
+        if (const std::optional<QVec3> center = scenario_.api().query().selectionCenter()) {
             options.pivot = *center;
         }
     }
@@ -395,7 +395,7 @@ BehaviorWhen& BehaviorWhen::beginTransformDrag(DragBeginOptions options) {
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::updateTransformDrag(Vec2 screenPosition) {
+BehaviorWhen& BehaviorWhen::updateTransformDrag(QVec2 screenPosition) {
     const QuaderApiResult<ModelingTransformDragPreview> result =
             scenario_.api().modeling().updateTransformDrag(transformDragUpdate(screenPosition));
     scenario_.recordDrag(result.value);
@@ -406,7 +406,7 @@ BehaviorWhen& BehaviorWhen::updateTransformDrag(Vec2 screenPosition) {
 }
 
 BehaviorWhen& BehaviorWhen::updateTransformDrag(float screenX) {
-    return updateTransformDrag(Vec2{screenX, 0.0f});
+    return updateTransformDrag(QVec2{screenX, 0.0f});
 }
 
 BehaviorWhen& BehaviorWhen::beginXMoveDrag(DragBeginOptions options) {

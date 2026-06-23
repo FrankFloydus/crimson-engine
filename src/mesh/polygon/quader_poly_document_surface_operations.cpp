@@ -19,7 +19,7 @@ using namespace document_internal;
 
 namespace {
 
-Vec3 basis_transform_point(const Transform3& transform, Vec3 point)
+quader::QVec3 basis_transform_point(const Transform3& transform, quader::QVec3 point)
 {
     return {
         (transform.x_axis.x * point.x) + (transform.y_axis.x * point.y) + (transform.z_axis.x * point.z),
@@ -28,14 +28,14 @@ Vec3 basis_transform_point(const Transform3& transform, Vec3 point)
     };
 }
 
-Vec3 transform_point_around_pivot(const Transform3& transform, Vec3 pivot, Vec3 point)
+quader::QVec3 transform_point_around_pivot(const Transform3& transform, quader::QVec3 pivot, quader::QVec3 point)
 {
-    const Vec3 pivot_after_basis = basis_transform_point(transform, pivot);
-    const Vec3 translation = pivot + transform.origin - pivot_after_basis;
+    const quader::QVec3 pivot_after_basis = basis_transform_point(transform, pivot);
+    const quader::QVec3 translation = pivot + transform.origin - pivot_after_basis;
     return basis_transform_point(transform, point) + translation;
 }
 
-ElementId copied_vertex_with_offset(Document& document, std::map<ElementId, ElementId>& copied_vertices, ElementId source_id, Vec3 offset)
+ElementId copied_vertex_with_offset(Document& document, std::map<ElementId, ElementId>& copied_vertices, ElementId source_id, quader::QVec3 offset)
 {
     const auto existing = copied_vertices.find(source_id);
     if (existing != copied_vertices.end()) {
@@ -57,7 +57,7 @@ ElementId copied_vertex_with_transform(
     std::map<ElementId, ElementId>& copied_vertices,
     ElementId source_id,
     const Transform3& transform,
-    Vec3 pivot)
+    quader::QVec3 pivot)
 {
     const auto existing = copied_vertices.find(source_id);
     if (existing != copied_vertices.end()) {
@@ -80,7 +80,7 @@ ElementId copied_vertex_with_transform(
 struct EdgeExtrudeFaceSource {
     ElementId face_id = invalid_element_id;
     std::pair<ElementId, ElementId> oriented_edge;
-    Vec3 source_normal;
+    quader::QVec3 source_normal;
     std::uint32_t material_slot = 0;
 };
 
@@ -111,7 +111,7 @@ EdgeExtrudeSource edge_extrude_source_for_edge(const Document& document, Edge ed
     return source;
 }
 
-Vec3 copied_edge_delta(
+quader::QVec3 copied_edge_delta(
     const Document& document,
     Edge edge,
     const std::map<ElementId, ElementId>& copied_vertices)
@@ -139,7 +139,7 @@ std::pair<const EdgeExtrudeFaceSource*, const EdgeExtrudeFaceSource*> closed_edg
         return { nullptr, nullptr };
     }
 
-    const Vec3 delta = normalize_or_zero(copied_edge_delta(document, edge, copied_vertices));
+    const quader::QVec3 delta = normalize_or_zero(copied_edge_delta(document, edge, copied_vertices));
     if (length_squared(delta) <= epsilon) {
         return { &source.faces[0], &source.faces[1] };
     }
@@ -168,7 +168,7 @@ bool append_renderable_face(Document& document, std::span<const ElementId> verti
     return true;
 }
 
-bool append_renderable_face_oriented(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, Vec3 expected_normal)
+bool append_renderable_face_oriented(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot, quader::QVec3 expected_normal)
 {
     if (vertices.size() < 3) {
         return false;
@@ -231,12 +231,12 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
         return false;
     }
 
-    const Vec3 cap_from_position = vertex_position_or_zero(document, cap_from);
-    const Vec3 cap_to_position = vertex_position_or_zero(document, cap_to);
-    const Vec3 from_neighbor_position = vertex_position_or_zero(document, from_neighbor);
-    const Vec3 to_neighbor_position = vertex_position_or_zero(document, to_neighbor);
-    const Vec3 from_strip_direction = normalize_or_zero(from_neighbor_position - cap_from_position);
-    const Vec3 to_strip_direction = normalize_or_zero(to_neighbor_position - cap_to_position);
+    const quader::QVec3 cap_from_position = vertex_position_or_zero(document, cap_from);
+    const quader::QVec3 cap_to_position = vertex_position_or_zero(document, cap_to);
+    const quader::QVec3 from_neighbor_position = vertex_position_or_zero(document, from_neighbor);
+    const quader::QVec3 to_neighbor_position = vertex_position_or_zero(document, to_neighbor);
+    const quader::QVec3 from_strip_direction = normalize_or_zero(from_neighbor_position - cap_from_position);
+    const quader::QVec3 to_strip_direction = normalize_or_zero(to_neighbor_position - cap_to_position);
     const float from_strip_length = length(from_neighbor_position - cap_from_position);
     const float to_strip_length = length(to_neighbor_position - cap_to_position);
     const float drag_length = length(copied_edge_delta(document, edge, copied_vertices));
@@ -268,7 +268,7 @@ bool append_closed_edge_ledge_extrusion_with_copied_vertices(
         return false;
     }
 
-    const Vec3 edge_direction = normalize_or_zero(cap_to_position - cap_from_position);
+    const quader::QVec3 edge_direction = normalize_or_zero(cap_to_position - cap_from_position);
     const std::array to_cap {
         root_cap_to,
         to_inner,
@@ -484,7 +484,7 @@ OperationResult extrude_selected_edges_with_copied_vertices(
 
 namespace document_internal {
 
-OperationResult extrude_selected_elements_impl(Document& document, Selection& selection, Vec3 offset, float closed_edge_ledge_size)
+OperationResult extrude_selected_elements_impl(Document& document, Selection& selection, quader::QVec3 offset, float closed_edge_ledge_size)
 {
     QDR_PROFILE_SCOPE("qdr_document.extrude_selected_elements_impl");
     if (length(offset) <= epsilon) {
@@ -519,7 +519,7 @@ OperationResult extrude_selected_elements_impl(Document& document, Selection& se
     return { false, "Extrude needs a face or edge selection." };
 }
 
-OperationResult inset_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, Vec3 pivot)
+OperationResult inset_selected_elements_impl(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot)
 {
     QDR_PROFILE_SCOPE("qdr_document.inset_selected_elements_impl");
     if (selection.mode == SelectionMode::face) {

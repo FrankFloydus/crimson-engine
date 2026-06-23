@@ -16,8 +16,8 @@ bool poly_can_commit(const PolyToolState& state);
 PolyToolPreview poly_tool_preview(const PolyToolState& state);
 PolyToolResult update_poly_hover(
 	PolyToolState& state,
-	quader_poly::Vec3 position,
-	quader_poly::Vec3 plane_normal,
+	quader::QVec3 position,
+	quader::QVec3 plane_normal,
 	bool constrain_axis,
 	double grid_size,
 	bool snap_enabled);

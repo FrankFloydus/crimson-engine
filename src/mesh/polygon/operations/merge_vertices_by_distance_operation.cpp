@@ -45,7 +45,7 @@ private:
  */
 struct DistanceMergeVertex {
     ElementId id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
     std::size_t input_index = 0;
 };
 
@@ -55,19 +55,19 @@ struct DistanceMergeVertex {
 struct DistanceMergeCluster {
     std::vector<DistanceMergeVertex> vertices;
     ElementId survivor_id = invalid_element_id;
-    Vec3 centroid;
+    quader::QVec3 centroid;
 };
 
-Vec3 centroid_for_distance_cluster(std::span<const DistanceMergeVertex> vertices)
+quader::QVec3 centroid_for_distance_cluster(std::span<const DistanceMergeVertex> vertices)
 {
-    Vec3 centroid;
+    quader::QVec3 centroid;
     for (const DistanceMergeVertex& vertex : vertices) {
         centroid += vertex.position;
     }
     return vertices.empty() ? centroid : centroid / static_cast<float>(vertices.size());
 }
 
-ElementId survivor_for_distance_cluster(std::span<const DistanceMergeVertex> vertices, Vec3 centroid)
+ElementId survivor_for_distance_cluster(std::span<const DistanceMergeVertex> vertices, quader::QVec3 centroid)
 {
     if (vertices.empty()) {
         return invalid_element_id;

@@ -121,19 +121,19 @@ public:
     explicit BehaviorWhen(BehaviorScenario& scenario) : scenario_(scenario) {}
 
     BehaviorWhen& activate(ModelingViewportTool tool);
-    BehaviorWhen& pick(Vec3 rayOrigin, PickOptions options = {});
-    BehaviorWhen& hover(Vec3 rayOrigin, HoverOptions options = {});
+    BehaviorWhen& pick(QVec3 rayOrigin, PickOptions options = {});
+    BehaviorWhen& hover(QVec3 rayOrigin, HoverOptions options = {});
     BehaviorWhen& hoverVertex(std::string_view alias, int vertex);
     BehaviorWhen& clearHover();
 
     BehaviorWhen& beginTransformPreview(bool duplicateSelected = false);
-    BehaviorWhen& translatePreview(Vec3 delta);
-    BehaviorWhen& matrixPreview(const ModelingTransform3& transform, Vec3 pivot);
+    BehaviorWhen& translatePreview(QVec3 delta);
+    BehaviorWhen& matrixPreview(const ModelingTransform3& transform, QVec3 pivot);
     BehaviorWhen& commitTransformPreview();
     BehaviorWhen& cancelTransformPreview();
 
     BehaviorWhen& beginTransformDrag(DragBeginOptions options = {});
-    BehaviorWhen& updateTransformDrag(Vec2 screenPosition);
+    BehaviorWhen& updateTransformDrag(QVec2 screenPosition);
     BehaviorWhen& updateTransformDrag(float screenX);
     BehaviorWhen& beginXMoveDrag(DragBeginOptions options = {});
     BehaviorWhen& updateXMoveDrag(float screenX);

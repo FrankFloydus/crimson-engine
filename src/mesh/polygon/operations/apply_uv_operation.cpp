@@ -73,7 +73,7 @@ OperationResult apply_uv_to_selection(
         if (face == nullptr || face->vertices.size() < 3) {
             continue;
         }
-        const std::vector<Vec2> before = face->uvs;
+        const std::vector<quader::QVec2> before = face->uvs;
         bool operation_applied = false;
 
         if (operation == "align_grid") {

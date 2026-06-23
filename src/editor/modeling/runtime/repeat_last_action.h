@@ -38,9 +38,9 @@ struct RepeatTransformAction {
 	TransformDragOperation operation = TransformDragOperation::transform;
 	TransformAxis axis = TransformAxis::none;
 	bool duplicate_selected = false;
-	quader_poly::Vec3 move_delta;
+	quader::QVec3 move_delta;
 	double rotate_angle_degrees = 0.0;
-	quader_poly::Vec3 scale { 1.0F, 1.0F, 1.0F };
+	quader::QVec3 scale { 1.0F, 1.0F, 1.0F };
 	RepeatTransformDirectionMode direction_mode = RepeatTransformDirectionMode::world_delta;
 	float signed_forward_distance = 0.0F;
 };

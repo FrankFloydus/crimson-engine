@@ -50,7 +50,7 @@ ViewportView viewForCamera(const ViewportCameraController& camera) {
     }
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
     const float absX = std::abs(forward.x);
     const float absY = std::abs(forward.y);
     const float absZ = std::abs(forward.z);
@@ -215,7 +215,7 @@ bool ViewportWorkspaceService::paneVisible(ViewportPaneId paneId) const {
     return pane(paneId).visibleThisFrame;
 }
 
-bool ViewportWorkspaceService::setPaneRenderSize(ViewportPaneId paneId, Vec2 size) {
+bool ViewportWorkspaceService::setPaneRenderSize(ViewportPaneId paneId, QVec2 size) {
     ViewportWorkspacePaneState& paneState = pane(paneId);
     if (paneState.renderSize.x == size.x && paneState.renderSize.y == size.y) {
         return false;
@@ -225,7 +225,7 @@ bool ViewportWorkspaceService::setPaneRenderSize(ViewportPaneId paneId, Vec2 siz
     return true;
 }
 
-Vec2 ViewportWorkspaceService::paneRenderSize(ViewportPaneId paneId) const {
+QVec2 ViewportWorkspaceService::paneRenderSize(ViewportPaneId paneId) const {
     return pane(paneId).renderSize;
 }
 

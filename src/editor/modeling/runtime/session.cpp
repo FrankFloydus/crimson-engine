@@ -25,12 +25,12 @@ namespace quader_editor_core {
 namespace {
 
 
-quader_geometry::Vec3f to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec3 to_poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 to_poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
@@ -131,43 +131,43 @@ int first_selected_index(const std::vector<PolygonObject>& objects)
 	return -1;
 }
 
-quader_poly::Vec3 bounds_center(const Bounds3& bounds)
+quader::QVec3 bounds_center(const Bounds3& bounds)
 {
 	if (bounds.empty) {
 		return {};
 	}
-	return to_poly_vec3(quader_geometry::aabb_center(quader_geometry::Aabb3f { to_geometry_vec3(bounds.min), to_geometry_vec3(bounds.max) }));
+	return to_poly_vec3(quader_geometry::aabb_center(quader_geometry::QAabb3f { to_geometry_vec3(bounds.min), to_geometry_vec3(bounds.max) }));
 }
 
-void translate_document_vertices(quader_poly::Document& document, quader_poly::Vec3 delta)
+void translate_document_vertices(quader_poly::Document& document, quader::QVec3 delta)
 {
 	for (quader_poly::Vertex& vertex : document.vertices) {
 		vertex.position += delta;
 	}
 }
 
-bool finite_vec3(quader_poly::Vec3 value)
+bool finite_vec3(quader::QVec3 value)
 {
 	return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-quader_poly::Vec3 average_points(std::span<const quader_poly::Vec3> points)
+quader::QVec3 average_points(std::span<const quader::QVec3> points)
 {
-	quader_poly::Vec3 center;
-	for (quader_poly::Vec3 point : points) {
+	quader::QVec3 center;
+	for (quader::QVec3 point : points) {
 		center += point;
 	}
 	return points.empty() ? center : center / static_cast<float>(points.size());
 }
 
-quader_geometry::Vec3f oriented_quad_area_vector(
-		std::span<const quader_poly::Vec3> corners,
+quader_geometry::QVec3f oriented_quad_area_vector(
+		std::span<const quader::QVec3> corners,
 		const std::array<int, 4>& indices)
 {
-	quader_geometry::Vec3f area {};
+	quader_geometry::QVec3f area {};
 	for (std::size_t index = 0; index < indices.size(); ++index) {
-		const quader_geometry::Vec3f current = to_geometry_vec3(corners[static_cast<std::size_t>(indices[index])]);
-		const quader_geometry::Vec3f next = to_geometry_vec3(corners[static_cast<std::size_t>(indices[(index + 1U) % indices.size()])]);
+		const quader_geometry::QVec3f current = to_geometry_vec3(corners[static_cast<std::size_t>(indices[index])]);
+		const quader_geometry::QVec3f next = to_geometry_vec3(corners[static_cast<std::size_t>(indices[(index + 1U) % indices.size()])]);
 		area = area + quader_geometry::cross(current, next);
 	}
 	return area;
@@ -176,21 +176,21 @@ quader_geometry::Vec3f oriented_quad_area_vector(
 bool add_oriented_box_quad(
 		quader_poly::Document& document,
 		const std::array<quader_poly::ElementId, 8>& vertex_ids,
-		std::span<const quader_poly::Vec3> corners,
+		std::span<const quader::QVec3> corners,
 		std::array<int, 4> indices,
-		quader_poly::Vec3 box_center)
+		quader::QVec3 box_center)
 {
-	const std::array<quader_poly::Vec3, 4> face_points {
+	const std::array<quader::QVec3, 4> face_points {
 		corners[static_cast<std::size_t>(indices[0])],
 		corners[static_cast<std::size_t>(indices[1])],
 		corners[static_cast<std::size_t>(indices[2])],
 		corners[static_cast<std::size_t>(indices[3])],
 	};
-	const quader_poly::Vec3 face_center = average_points(face_points);
-	const quader_poly::Vec3 outward = face_center - box_center;
-	const quader_geometry::Vec3f area = oriented_quad_area_vector(corners, indices);
+	const quader::QVec3 face_center = average_points(face_points);
+	const quader::QVec3 outward = face_center - box_center;
+	const quader_geometry::QVec3f area = oriented_quad_area_vector(corners, indices);
 	if (quader_geometry::length_squared(area) <= create_box_epsilon * create_box_epsilon ||
-			quader_poly::length_squared(outward) <= create_box_epsilon * create_box_epsilon) {
+			quader::length_squared(outward) <= create_box_epsilon * create_box_epsilon) {
 		return false;
 	}
 	if (quader_geometry::dot(area, to_geometry_vec3(outward)) < 0.0F) {
@@ -245,9 +245,9 @@ bool state_revisions_differ(const SessionState& left, const SessionState& right)
 }
 bool basis_is_identity(const quader_poly::Transform3& transform)
 {
-	return quader_geometry::length_squared(to_geometry_vec3(transform.x_axis - quader_poly::Vec3 { 1.0F, 0.0F, 0.0F })) <= transform_basis_epsilon &&
-		quader_geometry::length_squared(to_geometry_vec3(transform.y_axis - quader_poly::Vec3 { 0.0F, 1.0F, 0.0F })) <= transform_basis_epsilon &&
-		quader_geometry::length_squared(to_geometry_vec3(transform.z_axis - quader_poly::Vec3 { 0.0F, 0.0F, 1.0F })) <= transform_basis_epsilon;
+	return quader_geometry::length_squared(to_geometry_vec3(transform.x_axis - quader::QVec3 { 1.0F, 0.0F, 0.0F })) <= transform_basis_epsilon &&
+		quader_geometry::length_squared(to_geometry_vec3(transform.y_axis - quader::QVec3 { 0.0F, 1.0F, 0.0F })) <= transform_basis_epsilon &&
+		quader_geometry::length_squared(to_geometry_vec3(transform.z_axis - quader::QVec3 { 0.0F, 0.0F, 1.0F })) <= transform_basis_epsilon;
 }
 std::uint32_t saturated_history_size(std::size_t size)
 {
@@ -404,7 +404,7 @@ bool has_selection(const std::vector<PolygonObject>& objects, SelectionMode mode
 	return mode == SelectionMode::object || !objects[index].selection.empty();
 }
 
-std::optional<quader_poly::Vec3> selection_center(const std::vector<PolygonObject>& objects, SelectionMode mode, int active_object_id)
+std::optional<quader::QVec3> selection_center(const std::vector<PolygonObject>& objects, SelectionMode mode, int active_object_id)
 {
 	(void)active_object_id;
 	const Bounds3 bounds = selection_bounds(objects, mode);
@@ -548,10 +548,10 @@ struct BridgeBoundaryGroup {
 	bool closed = false;
 };
 
-quader_poly::Vec3 bridge_vertex_position(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
+quader::QVec3 bridge_vertex_position(const quader_poly::Document& document, quader_poly::ElementId vertex_id)
 {
 	const quader_poly::Vertex* vertex = quader_poly::find_vertex(document, vertex_id);
-	return vertex != nullptr ? vertex->position : quader_poly::Vec3 {};
+	return vertex != nullptr ? vertex->position : quader::QVec3 {};
 }
 
 std::vector<quader_poly::Edge> bridge_edges_from_vertices(const std::vector<quader_poly::ElementId>& vertices, bool closed)
@@ -689,8 +689,8 @@ float bridge_alignment_score(
 
 	float score = 0.0F;
 	for (std::size_t index = 0; index < first.vertices.size(); ++index) {
-		const quader_poly::Vec3 delta = bridge_vertex_position(document, first.vertices[index]) - bridge_vertex_position(document, second_vertices[index]);
-		score += quader_poly::length_squared(delta);
+		const quader::QVec3 delta = bridge_vertex_position(document, first.vertices[index]) - bridge_vertex_position(document, second_vertices[index]);
+		score += quader::length_squared(delta);
 	}
 	return score;
 }
@@ -924,7 +924,7 @@ CommandResult snap_selected_vertices_to_active(std::vector<PolygonObject>& objec
 		return error_result("Active vertex was not found.");
 	}
 
-	const quader_poly::Vec3 target_position = active_vertex->position;
+	const quader::QVec3 target_position = active_vertex->position;
 	bool has_other_vertex = false;
 	bool changed = false;
 	for (PolygonObject& object : objects) {
@@ -946,7 +946,7 @@ CommandResult snap_selected_vertices_to_active(std::vector<PolygonObject>& objec
 			}
 
 			has_other_vertex = true;
-			if (quader_poly::length_squared(vertex->position - target_position) <= transform_point_epsilon) {
+			if (quader::length_squared(vertex->position - target_position) <= transform_point_epsilon) {
 				continue;
 			}
 
@@ -1000,8 +1000,8 @@ CommandResult snap_selected_edges_to_active(std::vector<PolygonObject>& objects,
 		return error_result("Active edge vertices were not found.");
 	}
 
-	const quader_poly::Vec3 target_a_position = target_a->position;
-	const quader_poly::Vec3 target_b_position = target_b->position;
+	const quader::QVec3 target_a_position = target_a->position;
+	const quader::QVec3 target_b_position = target_b->position;
 	bool has_other_edge = false;
 	bool changed = false;
 	for (PolygonObject& object : objects) {
@@ -1009,7 +1009,7 @@ CommandResult snap_selected_edges_to_active(std::vector<PolygonObject>& objects,
 			continue;
 		}
 
-		std::unordered_map<quader_poly::ElementId, quader_poly::Vec3> targets;
+		std::unordered_map<quader_poly::ElementId, quader::QVec3> targets;
 		object.selection.mode = quader_poly::SelectionMode::edge;
 		for (quader_poly::Edge edge : object.selection.edges) {
 			edge = quader_poly::make_edge(edge.a, edge.b);
@@ -1028,21 +1028,21 @@ CommandResult snap_selected_edges_to_active(std::vector<PolygonObject>& objects,
 
 			has_other_edge = true;
 			const float direct_cost =
-					quader_poly::length_squared(source_a->position - target_a_position) +
-					quader_poly::length_squared(source_b->position - target_b_position);
+					quader::length_squared(source_a->position - target_a_position) +
+					quader::length_squared(source_b->position - target_b_position);
 			const float flipped_cost =
-					quader_poly::length_squared(source_a->position - target_b_position) +
-					quader_poly::length_squared(source_b->position - target_a_position);
-			const quader_poly::Vec3 desired_a = direct_cost <= flipped_cost ? target_a_position : target_b_position;
-			const quader_poly::Vec3 desired_b = direct_cost <= flipped_cost ? target_b_position : target_a_position;
+					quader::length_squared(source_a->position - target_b_position) +
+					quader::length_squared(source_b->position - target_a_position);
+			const quader::QVec3 desired_a = direct_cost <= flipped_cost ? target_a_position : target_b_position;
+			const quader::QVec3 desired_b = direct_cost <= flipped_cost ? target_b_position : target_a_position;
 
-			const auto add_target = [&targets](quader_poly::ElementId vertex_id, quader_poly::Vec3 desired_position) -> std::optional<std::string> {
+			const auto add_target = [&targets](quader_poly::ElementId vertex_id, quader::QVec3 desired_position) -> std::optional<std::string> {
 				const auto existing = targets.find(vertex_id);
 				if (existing == targets.end()) {
 					targets[vertex_id] = desired_position;
 					return std::nullopt;
 				}
-				if (quader_poly::length_squared(existing->second - desired_position) > transform_point_epsilon) {
+				if (quader::length_squared(existing->second - desired_position) > transform_point_epsilon) {
 					return std::string("Edge Snap has conflicting selected-edge endpoint targets.");
 				}
 				return std::nullopt;
@@ -1065,8 +1065,8 @@ CommandResult snap_selected_edges_to_active(std::vector<PolygonObject>& objects,
 			if (vertex == nullptr) {
 				continue;
 			}
-			const quader_poly::Vec3 desired = entry.second;
-			if (quader_poly::length_squared(vertex->position - desired) <= transform_point_epsilon) {
+			const quader::QVec3 desired = entry.second;
+			if (quader::length_squared(vertex->position - desired) <= transform_point_epsilon) {
 				continue;
 			}
 			vertex->position = desired;
@@ -1733,7 +1733,7 @@ CommandResult delete_selected(std::vector<PolygonObject>& objects, SelectionMode
 	return ok_result(true);
 }
 
-CommandResult create_box_from_bounds(std::vector<PolygonObject>& objects, int object_id, quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds, int& active_object_id, SelectionMode& selection_mode)
+CommandResult create_box_from_bounds(std::vector<PolygonObject>& objects, int object_id, quader::QVec3 min_bounds, quader::QVec3 max_bounds, int& active_object_id, SelectionMode& selection_mode)
 {
 	const float min_x = std::min(min_bounds.x, max_bounds.x);
 	const float min_y = std::min(min_bounds.y, max_bounds.y);
@@ -1781,21 +1781,21 @@ CommandResult create_box_from_bounds(std::vector<PolygonObject>& objects, int ob
 CommandResult create_box_from_corners(
 		std::vector<PolygonObject>& objects,
 		int object_id,
-		std::span<const quader_poly::Vec3> corners,
+		std::span<const quader::QVec3> corners,
 		int& active_object_id,
 		SelectionMode& selection_mode)
 {
 	if (corners.size() != 8U) {
 		return error_result("Box needs eight corner points.");
 	}
-	for (const quader_poly::Vec3& corner : corners) {
+	for (const quader::QVec3& corner : corners) {
 		if (!finite_vec3(corner)) {
 			return error_result("Box corners must be finite.");
 		}
 	}
 	for (std::size_t left = 0; left < corners.size(); ++left) {
 		for (std::size_t right = left + 1U; right < corners.size(); ++right) {
-			if (quader_poly::length_squared(corners[left] - corners[right]) <= create_box_epsilon * create_box_epsilon) {
+			if (quader::length_squared(corners[left] - corners[right]) <= create_box_epsilon * create_box_epsilon) {
 				return error_result("Box needs width, height, and depth.");
 			}
 		}
@@ -1807,7 +1807,7 @@ CommandResult create_box_from_corners(
 		vertex_ids[index] = quader_poly::add_vertex(document, corners[index]);
 	}
 
-	const quader_poly::Vec3 center = average_points(corners);
+	const quader::QVec3 center = average_points(corners);
 	const std::array<std::array<int, 4>, 6> faces {{
 		{ 0, 1, 2, 3 },
 		{ 4, 5, 6, 7 },
@@ -1844,24 +1844,24 @@ CommandResult create_box_from_corners(
 CommandResult create_polygon_from_points(
 		std::vector<PolygonObject>& objects,
 		int object_id,
-		std::span<const quader_poly::Vec3> points,
-		quader_poly::Vec3 face_normal,
+		std::span<const quader::QVec3> points,
+		quader::QVec3 face_normal,
 		int& active_object_id,
 		SelectionMode& selection_mode)
 {
 	constexpr float polygon_epsilon_squared = 0.00000001F;
-	std::vector<quader_poly::Vec3> unique_points;
+	std::vector<quader::QVec3> unique_points;
 	unique_points.reserve(points.size());
-	for (const quader_poly::Vec3& point : points) {
+	for (const quader::QVec3& point : points) {
 		if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
 			return error_result("Poly vertices must be finite.");
 		}
-		if (unique_points.empty() || quader_poly::length_squared(unique_points.back() - point) > polygon_epsilon_squared) {
+		if (unique_points.empty() || quader::length_squared(unique_points.back() - point) > polygon_epsilon_squared) {
 			unique_points.push_back(point);
 		}
 	}
 	if (unique_points.size() >= 2U &&
-			quader_poly::length_squared(unique_points.front() - unique_points.back()) <= polygon_epsilon_squared) {
+			quader::length_squared(unique_points.front() - unique_points.back()) <= polygon_epsilon_squared) {
 		unique_points.pop_back();
 	}
 	if (unique_points.size() < 3U) {
@@ -1869,22 +1869,22 @@ CommandResult create_polygon_from_points(
 	}
 	for (std::size_t i = 0; i < unique_points.size(); ++i) {
 		for (std::size_t j = i + 1U; j < unique_points.size(); ++j) {
-			if (quader_poly::length_squared(unique_points[i] - unique_points[j]) <= polygon_epsilon_squared) {
+			if (quader::length_squared(unique_points[i] - unique_points[j]) <= polygon_epsilon_squared) {
 				return error_result("Poly vertices must stay distinct.");
 			}
 		}
 	}
 
-	quader_geometry::Vec3f normal {};
+	quader_geometry::QVec3f normal {};
 	for (std::size_t index = 0; index < unique_points.size(); ++index) {
-		const quader_poly::Vec3 current = unique_points[index];
-		const quader_poly::Vec3 next = unique_points[(index + 1U) % unique_points.size()];
+		const quader::QVec3 current = unique_points[index];
+		const quader::QVec3 next = unique_points[(index + 1U) % unique_points.size()];
 		normal = normal + quader_geometry::cross(to_geometry_vec3(current), to_geometry_vec3(next));
 	}
 	if (quader_geometry::length_squared(normal) <= polygon_epsilon_squared) {
 		return error_result("Poly needs a non-degenerate polygon.");
 	}
-	if (quader_poly::length_squared(face_normal) > polygon_epsilon_squared &&
+	if (quader::length_squared(face_normal) > polygon_epsilon_squared &&
 			quader_geometry::dot(normal, to_geometry_vec3(face_normal)) < 0.0F) {
 		std::reverse(unique_points.begin(), unique_points.end());
 	}
@@ -1892,7 +1892,7 @@ CommandResult create_polygon_from_points(
 	quader_poly::Document document;
 	std::vector<quader_poly::ElementId> vertex_ids;
 	vertex_ids.reserve(unique_points.size());
-	for (const quader_poly::Vec3& point : unique_points) {
+	for (const quader::QVec3& point : unique_points) {
 		vertex_ids.push_back(quader_poly::add_vertex(document, point));
 	}
 	const quader_poly::ElementId face_id = quader_poly::add_face(document, vertex_ids);
@@ -2127,10 +2127,10 @@ bool offset_document_along_face_normals(quader_poly::Document& document, float d
 		return false;
 	}
 
-	std::map<quader_poly::ElementId, quader_poly::Vec3> normal_sums;
+	std::map<quader_poly::ElementId, quader::QVec3> normal_sums;
 	for (const quader_poly::Face& face : document.faces) {
-		const quader_poly::Vec3 normal = quader_poly::face_normal(document, face);
-		if (quader_poly::length_squared(normal) <= normal_epsilon_squared) {
+		const quader::QVec3 normal = quader_poly::face_normal(document, face);
+		if (quader::length_squared(normal) <= normal_epsilon_squared) {
 			continue;
 		}
 		for (const quader_poly::ElementId vertex_id : face.vertices) {
@@ -2149,8 +2149,8 @@ bool offset_document_along_face_normals(quader_poly::Document& document, float d
 			continue;
 		}
 
-		const quader_poly::Vec3 normal = quader_poly::normalize_or_zero(normal_sum->second);
-		if (quader_poly::length_squared(normal) <= normal_epsilon_squared) {
+		const quader::QVec3 normal = quader::normalize_or_zero(normal_sum->second);
+		if (quader::length_squared(normal) <= normal_epsilon_squared) {
 			continue;
 		}
 
@@ -2474,7 +2474,7 @@ CommandResult radial_align_selected(std::vector<PolygonObject>& objects, Selecti
 	return ok_result(true);
 }
 
-CommandResult extrude_selected_elements(std::vector<PolygonObject>& objects, SelectionMode mode, quader_poly::Vec3 offset, float closed_edge_ledge_size)
+CommandResult extrude_selected_elements(std::vector<PolygonObject>& objects, SelectionMode mode, quader::QVec3 offset, float closed_edge_ledge_size)
 {
 	if (mode != SelectionMode::face && mode != SelectionMode::edge) {
 		return error_result("Extrude needs face or edge selection mode.");
@@ -2508,7 +2508,7 @@ CommandResult inset_selected_elements(
 		std::vector<PolygonObject>& objects,
 		SelectionMode mode,
 		const quader_poly::Transform3& transform,
-		quader_poly::Vec3 pivot)
+		quader::QVec3 pivot)
 {
 	if (mode != SelectionMode::face && mode != SelectionMode::edge) {
 		return error_result("Inset needs face or edge selection mode.");
@@ -2662,7 +2662,7 @@ CommandResult plane_cut(
 CommandResult mirror_objects_across_plane(
 		std::vector<PolygonObject>& objects,
 		std::span<const int> object_ids,
-		std::span<const quader_poly::Vec3> plane_points,
+		std::span<const quader::QVec3> plane_points,
 		int& next_object_id,
 		int& active_object_id,
 		SelectionMode& mode)
@@ -2727,7 +2727,7 @@ std::vector<PolygonObject> selected_object_copies(const std::vector<PolygonObjec
 	return copied_objects;
 }
 
-CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, quader_poly::Vec3 offset)
+CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, quader::QVec3 offset)
 {
 	std::vector<PolygonObject> copied_objects = selected_object_copies(objects, mode);
 	if (copied_objects.empty()) {
@@ -2763,20 +2763,20 @@ CommandResult paste_objects(
 		SelectionMode& mode,
 		int& active_object_id,
 		const std::vector<PolygonObject>& copied_objects,
-		std::optional<quader_poly::Vec3> target_center)
+		std::optional<quader::QVec3> target_center)
 {
 	if (copied_objects.empty()) {
 		return error_result("Copy one or more meshes before pasting.");
 	}
 
 	const Bounds3 copied_bounds = document_bounds(copied_objects);
-	const quader_poly::Vec3 copied_center = bounds_center(copied_bounds);
+	const quader::QVec3 copied_center = bounds_center(copied_bounds);
 	if (!target_center.has_value()) {
 		target_center = selection_center(objects, mode, active_object_id);
 	}
-	const quader_poly::Vec3 paste_delta = target_center.has_value() ?
+	const quader::QVec3 paste_delta = target_center.has_value() ?
 		(target_center.value() - copied_center) :
-		quader_poly::Vec3 { 1.0F, 0.0F, 1.0F };
+		quader::QVec3 { 1.0F, 0.0F, 1.0F };
 
 	for (PolygonObject& object : objects) {
 		object.selected = false;

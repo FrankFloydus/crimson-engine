@@ -50,7 +50,7 @@ OperationResult MergeVerticesToCenterOperation::apply(Document& document, Select
 
     std::vector<ElementId> selected_vertices;
     selected_vertices.reserve(selection.vertices.size());
-    Vec3 center;
+    quader::QVec3 center;
     for (const ElementId vertex_id : selection.vertices) {
         if (vertex_id == invalid_element_id || contains_id(selected_vertices, vertex_id)) {
             continue;

@@ -18,13 +18,13 @@ namespace quader {
  * Represents a Scene Bounds value used by the scene graph document layer.
  */
 struct SceneBounds {
-    Vec3 min;
-    Vec3 max;
+    QVec3 min;
+    QVec3 max;
 };
 
 std::optional<SceneBounds> localMeshBounds(const MeshAsset& mesh);
-void includePoint(SceneBounds& bounds, Vec3 point);
-Vec3 boundsCenter(const SceneBounds& bounds);
+void includePoint(SceneBounds& bounds, QVec3 point);
+QVec3 boundsCenter(const SceneBounds& bounds);
 std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
 std::optional<SceneBounds> entityHierarchyWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
 std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets);

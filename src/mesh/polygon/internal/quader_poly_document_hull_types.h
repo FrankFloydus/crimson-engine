@@ -13,21 +13,21 @@
 
 namespace quader_poly::document_internal {
 
-using Plane3 = quader_geometry::Plane3<float>;
+using QPlane3 = quader_geometry::QPlane3<float>;
 
 /**
  * Represents a Hull Vertex value used by the polygon document and mesh editing core.
  */
 struct HullVertex {
     ElementId id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
  * Represents a Hull Face value used by the polygon document and mesh editing core.
  */
 struct HullFace {
-    Plane3 plane { {}, 0.0F };
+    QPlane3 plane { {}, 0.0F };
     std::vector<ElementId> vertex_ids;
 };
 

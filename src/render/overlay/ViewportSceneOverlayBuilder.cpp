@@ -7,6 +7,7 @@
 #include "render/overlay/ViewportSceneOverlayBuilder.h"
 
 #include "assets/AssetRegistry.h"
+#include "math/GlmBridge.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -72,14 +73,14 @@ struct WireEdgeKeyHash {
  * Stores the Wire Edge Record data contract used by scene overlay extraction.
  */
 struct WireEdgeRecord {
-    Vec3 start = {};
-    Vec3 end = {};
-    Vec3 firstNormal = {};
+    QVec3 start = {};
+    QVec3 end = {};
+    QVec3 firstNormal = {};
     std::uint32_t count = 0;
     bool coplanarWithFirst = true;
 };
 
-WireEdgePoint quantizedWirePoint(Vec3 value) {
+WireEdgePoint quantizedWirePoint(QVec3 value) {
     constexpr double kScale = 1000000.0;
     return {
             static_cast<std::int64_t>(std::llround(static_cast<double>(value.x) * kScale)),
@@ -98,7 +99,7 @@ bool wirePointLess(const WireEdgePoint& left, const WireEdgePoint& right) {
     return left.z < right.z;
 }
 
-WireEdgeKey wireEdgeKey(Vec3 a, Vec3 b) {
+WireEdgeKey wireEdgeKey(QVec3 a, QVec3 b) {
     WireEdgePoint qa = quantizedWirePoint(a);
     WireEdgePoint qb = quantizedWirePoint(b);
     if (wirePointLess(qb, qa)) {
@@ -130,16 +131,16 @@ void appendMeshSelectionWire(
         return;
     }
 
-    const Mat4 worldFromLocal = document.worldTransformMatrix(entity);
+    const QMat4 worldFromLocal = document.worldTransformMatrix(entity);
     std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
     edges.reserve(mesh->indices.size());
 
-    auto appendEdge = [&](std::uint32_t a, std::uint32_t b, Vec3 triangleNormal) {
+    auto appendEdge = [&](std::uint32_t a, std::uint32_t b, QVec3 triangleNormal) {
         if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || a == b) {
             return;
         }
-        const Vec3 start = transformPoint(worldFromLocal, mesh->vertices[a].position);
-        const Vec3 end = transformPoint(worldFromLocal, mesh->vertices[b].position);
+        const QVec3 start = transformPoint(worldFromLocal, mesh->vertices[a].position);
+        const QVec3 end = transformPoint(worldFromLocal, mesh->vertices[b].position);
         const WireEdgeKey key = wireEdgeKey(start, end);
         WireEdgeRecord& record = edges[key];
         if (record.count == 0u) {
@@ -161,10 +162,10 @@ void appendMeshSelectionWire(
         if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || c >= mesh->vertices.size()) {
             continue;
         }
-        const Vec3 worldA = transformPoint(worldFromLocal, mesh->vertices[a].position);
-        const Vec3 worldB = transformPoint(worldFromLocal, mesh->vertices[b].position);
-        const Vec3 worldC = transformPoint(worldFromLocal, mesh->vertices[c].position);
-        Vec3 normal = cross(worldB - worldA, worldC - worldA);
+        const QVec3 worldA = transformPoint(worldFromLocal, mesh->vertices[a].position);
+        const QVec3 worldB = transformPoint(worldFromLocal, mesh->vertices[b].position);
+        const QVec3 worldC = transformPoint(worldFromLocal, mesh->vertices[c].position);
+        QVec3 normal = cross(worldB - worldA, worldC - worldA);
         if (length(normal) > 0.000001f) {
             normal = normalize(normal);
         }
@@ -216,7 +217,7 @@ void appendHierarchySelectionWires(
 }
 
 void appendBoundsCage(ViewportOverlayFrame& frame, const SceneBounds& bounds) {
-    const std::array<Vec3, 8> corners{{
+    const std::array<QVec3, 8> corners{{
             {bounds.min.x, bounds.min.y, bounds.min.z},
             {bounds.max.x, bounds.min.y, bounds.min.z},
             {bounds.max.x, bounds.max.y, bounds.min.z},

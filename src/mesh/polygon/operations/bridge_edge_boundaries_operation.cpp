@@ -74,12 +74,12 @@ OperationResult bridge_edge_boundaries_impl(
     }
 
     const std::map<std::pair<ElementId, ElementId>, int> incidence_counts = edge_incidence_counts(document);
-    std::vector<Vec3> first_outwards(vertex_count);
-    std::vector<Vec3> second_outwards(vertex_count);
+    std::vector<quader::QVec3> first_outwards(vertex_count);
+    std::vector<quader::QVec3> second_outwards(vertex_count);
     std::vector<std::uint32_t> material_slots(edge_count, 0U);
     std::set<std::pair<ElementId, ElementId>> used_edges;
 
-    auto append_outward = [](std::vector<Vec3>& outwards, std::size_t index, Vec3 outward) {
+    auto append_outward = [](std::vector<quader::QVec3>& outwards, std::size_t index, quader::QVec3 outward) {
         if (index < outwards.size()) {
             outwards[index] += outward;
         }
@@ -106,8 +106,8 @@ OperationResult bridge_edge_boundaries_impl(
             return { false, "Bridge needs selected edges that belong to faces." };
         }
 
-        const Vec3 first_outward = bridge_edge_outward_direction(document, *first_info);
-        const Vec3 second_outward = bridge_edge_outward_direction(document, *second_info);
+        const quader::QVec3 first_outward = bridge_edge_outward_direction(document, *first_info);
+        const quader::QVec3 second_outward = bridge_edge_outward_direction(document, *second_info);
         append_outward(first_outwards, edge_index, first_outward);
         append_outward(first_outwards, next_index, first_outward);
         append_outward(second_outwards, edge_index, second_outward);
@@ -115,10 +115,10 @@ OperationResult bridge_edge_boundaries_impl(
         material_slots[edge_index] = first_info->material_slot;
     }
 
-    for (Vec3& outward : first_outwards) {
+    for (quader::QVec3& outward : first_outwards) {
         outward = normalize_or_zero(outward);
     }
-    for (Vec3& outward : second_outwards) {
+    for (quader::QVec3& outward : second_outwards) {
         outward = normalize_or_zero(outward);
     }
 
@@ -155,7 +155,7 @@ OperationResult bridge_edge_boundaries_impl(
             };
             Face expected_face;
             expected_face.vertices = quad;
-            const Vec3 expected_normal = face_normal(candidate, expected_face);
+            const quader::QVec3 expected_normal = face_normal(candidate, expected_face);
             if (!append_bridge_face(candidate, std::move(quad), material_slots[edge_index], expected_normal, bridge_face_ids)) {
                 return { false, "Bridge could not create a valid stepped boundary face." };
             }

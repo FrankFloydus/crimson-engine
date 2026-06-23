@@ -51,6 +51,36 @@ std::vector<std::string_view> requiredInstructionFiles() {
     };
 }
 
+std::vector<std::string_view> nestedInstructionFiles() {
+    return {
+            "benchmarks/AGENTS.md",
+            "cmake/AGENTS.md",
+            "docs/AGENTS.md",
+            "examples/AGENTS.md",
+            "resources/AGENTS.md",
+            "src/AGENTS.md",
+            "src/api/AGENTS.md",
+            "src/app/AGENTS.md",
+            "src/assets/AGENTS.md",
+            "src/core/AGENTS.md",
+            "src/diagnostics/AGENTS.md",
+            "src/editor/AGENTS.md",
+            "src/io/AGENTS.md",
+            "src/io/qdr/AGENTS.md",
+            "src/math/AGENTS.md",
+            "src/mesh/AGENTS.md",
+            "src/platform/AGENTS.md",
+            "src/render/AGENTS.md",
+            "src/scene/AGENTS.md",
+            "src/ui/AGENTS.md",
+            "src/viewport/AGENTS.md",
+            "tests/AGENTS.md",
+            "tests/modeling_domain/AGENTS.md",
+            "thirdparty/AGENTS.md",
+            "tools/AGENTS.md",
+    };
+}
+
 bool contains(const std::string& source, std::string_view needle) {
     return source.find(needle) != std::string::npos;
 }
@@ -82,6 +112,21 @@ TEST(AgentInstructionRoutingTests, RequiredDomainInstructionFilesExistAndAreRout
     for (const std::string_view relative : requiredInstructionFiles()) {
         EXPECT_TRUE(std::filesystem::exists(sourceRoot() / relative)) << relative;
         EXPECT_TRUE(contains(root, relative) || relative == "agents/README.md") << relative;
+    }
+}
+
+TEST(AgentInstructionRoutingTests, NestedPackageInstructionFilesExistAndStayFocused) {
+    const std::string root = readFile("AGENTS.md");
+
+    EXPECT_TRUE(contains(root, "Nested Package Routing"));
+    EXPECT_TRUE(contains(root, "src/<package>/AGENTS.md"));
+    EXPECT_TRUE(contains(root, "nearest nested `AGENTS.md`"));
+
+    for (const std::string_view relative : nestedInstructionFiles()) {
+        const std::string source = readFile(std::string(relative));
+        EXPECT_FALSE(source.empty()) << relative;
+        EXPECT_LT(source.size(), 2500u) << relative;
+        EXPECT_TRUE(contains(source, "# ")) << relative;
     }
 }
 

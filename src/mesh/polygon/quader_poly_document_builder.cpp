@@ -33,21 +33,21 @@ Selection all_vertex_selection(const Document& document)
     return selection;
 }
 
-Vec3 basis_transform_point(const Transform3& transform, Vec3 point)
+quader::QVec3 basis_transform_point(const Transform3& transform, quader::QVec3 point)
 {
     return (transform.x_axis * point.x) +
         (transform.y_axis * point.y) +
         (transform.z_axis * point.z);
 }
 
-Transform3 transform_around_pivot(const Transform3& transform, Vec3 pivot)
+Transform3 transform_around_pivot(const Transform3& transform, quader::QVec3 pivot)
 {
     Transform3 result = transform;
     result.origin = transform.origin + pivot - basis_transform_point(transform, pivot);
     return result;
 }
 
-Transform3 scale_transform(Vec3 scale, Vec3 pivot)
+Transform3 scale_transform(quader::QVec3 scale, quader::QVec3 pivot)
 {
     Transform3 transform;
     transform.x_axis = { scale.x, 0.0F, 0.0F };
@@ -56,26 +56,26 @@ Transform3 scale_transform(Vec3 scale, Vec3 pivot)
     return transform_around_pivot(transform, pivot);
 }
 
-bool finite_vec3(Vec3 value)
+bool finite_vec3(quader::QVec3 value)
 {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
-Vec3 average_points(std::span<const Vec3> points)
+quader::QVec3 average_points(std::span<const quader::QVec3> points)
 {
-    Vec3 center;
-    for (Vec3 point : points) {
+    quader::QVec3 center;
+    for (quader::QVec3 point : points) {
         center += point;
     }
     return points.empty() ? center : center / static_cast<float>(points.size());
 }
 
-Vec3 oriented_quad_area_vector(std::span<const Vec3> corners, const std::array<int, 4>& indices)
+quader::QVec3 oriented_quad_area_vector(std::span<const quader::QVec3> corners, const std::array<int, 4>& indices)
 {
-    Vec3 area;
+    quader::QVec3 area;
     for (std::size_t index = 0; index < indices.size(); ++index) {
-        const Vec3 current = corners[static_cast<std::size_t>(indices[index])];
-        const Vec3 next = corners[static_cast<std::size_t>(indices[(index + 1U) % indices.size()])];
+        const quader::QVec3 current = corners[static_cast<std::size_t>(indices[index])];
+        const quader::QVec3 next = corners[static_cast<std::size_t>(indices[(index + 1U) % indices.size()])];
         area += cross(current, next);
     }
     return area;
@@ -84,20 +84,20 @@ Vec3 oriented_quad_area_vector(std::span<const Vec3> corners, const std::array<i
 bool add_oriented_box_quad(
     Document& document,
     const std::array<ElementId, 8>& vertex_ids,
-    std::span<const Vec3> corners,
+    std::span<const quader::QVec3> corners,
     std::array<int, 4> indices,
-    Vec3 box_center,
+    quader::QVec3 box_center,
     std::uint32_t material_slot)
 {
-    const std::array<Vec3, 4> face_points {
+    const std::array<quader::QVec3, 4> face_points {
         corners[static_cast<std::size_t>(indices[0])],
         corners[static_cast<std::size_t>(indices[1])],
         corners[static_cast<std::size_t>(indices[2])],
         corners[static_cast<std::size_t>(indices[3])],
     };
-    const Vec3 face_center = average_points(face_points);
-    const Vec3 outward = face_center - box_center;
-    const Vec3 area = oriented_quad_area_vector(corners, indices);
+    const quader::QVec3 face_center = average_points(face_points);
+    const quader::QVec3 outward = face_center - box_center;
+    const quader::QVec3 area = oriented_quad_area_vector(corners, indices);
     if (length_squared(area) <= document_internal::epsilon * document_internal::epsilon ||
         length_squared(outward) <= document_internal::epsilon * document_internal::epsilon) {
         return false;
@@ -212,16 +212,16 @@ bool resolve_vertex_indices(
 
 } // namespace
 
-DocumentBuilder::VertexRef DocumentBuilder::vertex(Vec3 position)
+DocumentBuilder::VertexRef DocumentBuilder::vertex(quader::QVec3 position)
 {
     const ElementId id = add_vertex(document_, position);
     vertexIds_.push_back(id);
     return { vertexIds_.size() - 1U };
 }
 
-DocumentBuilder& DocumentBuilder::vertices(std::span<const Vec3> positions)
+DocumentBuilder& DocumentBuilder::vertices(std::span<const quader::QVec3> positions)
 {
-    for (const Vec3 position : positions) {
+    for (const quader::QVec3 position : positions) {
         static_cast<void>(vertex(position));
     }
     return *this;
@@ -257,7 +257,7 @@ DocumentBuilder& DocumentBuilder::triangle(VertexRef a, VertexRef b, VertexRef c
     return face(vertices, materialSlot);
 }
 
-DocumentBuilder& DocumentBuilder::cube(Vec3 minBounds, Vec3 maxBounds, std::uint32_t materialSlot)
+DocumentBuilder& DocumentBuilder::cube(quader::QVec3 minBounds, quader::QVec3 maxBounds, std::uint32_t materialSlot)
 {
     if (!finite_vec3(minBounds) || !finite_vec3(maxBounds)) {
         return *this;
@@ -283,7 +283,7 @@ DocumentBuilder& DocumentBuilder::cube(Vec3 minBounds, Vec3 maxBounds, std::uint
     spec.depth = depth;
 
     Document cube_document = make_cube(spec);
-    const Vec3 center {
+    const quader::QVec3 center {
         (min_x + max_x) * 0.5F,
         (min_y + max_y) * 0.5F,
         (min_z + max_z) * 0.5F,
@@ -293,12 +293,12 @@ DocumentBuilder& DocumentBuilder::cube(Vec3 minBounds, Vec3 maxBounds, std::uint
     return *this;
 }
 
-DocumentBuilder& DocumentBuilder::boxFromCorners(std::span<const Vec3> corners, std::uint32_t materialSlot)
+DocumentBuilder& DocumentBuilder::boxFromCorners(std::span<const quader::QVec3> corners, std::uint32_t materialSlot)
 {
     if (corners.size() != 8U) {
         return *this;
     }
-    for (const Vec3 corner : corners) {
+    for (const quader::QVec3 corner : corners) {
         if (!finite_vec3(corner)) {
             return *this;
         }
@@ -317,7 +317,7 @@ DocumentBuilder& DocumentBuilder::boxFromCorners(std::span<const Vec3> corners, 
         vertex_ids[index] = add_vertex(box_document, corners[index]);
     }
 
-    const Vec3 center = average_points(corners);
+    const quader::QVec3 center = average_points(corners);
     const std::array<std::array<int, 4>, 6> faces {{
         { 0, 1, 2, 3 },
         { 4, 5, 6, 7 },
@@ -339,19 +339,19 @@ DocumentBuilder& DocumentBuilder::boxFromCorners(std::span<const Vec3> corners, 
     return *this;
 }
 
-DocumentBuilder& DocumentBuilder::translate(Vec3 delta)
+DocumentBuilder& DocumentBuilder::translate(quader::QVec3 delta)
 {
     static_cast<void>(translate_selection(document_, all_vertex_selection(document_), delta));
     return *this;
 }
 
-DocumentBuilder& DocumentBuilder::scale(Vec3 scale, Vec3 pivot)
+DocumentBuilder& DocumentBuilder::scale(quader::QVec3 scale, quader::QVec3 pivot)
 {
     static_cast<void>(transform_selection(document_, all_vertex_selection(document_), scale_transform(scale, pivot)));
     return *this;
 }
 
-DocumentBuilder& DocumentBuilder::transform(const Transform3& transform, Vec3 pivot)
+DocumentBuilder& DocumentBuilder::transform(const Transform3& transform, quader::QVec3 pivot)
 {
     static_cast<void>(transform_selection(document_, all_vertex_selection(document_), transform_around_pivot(transform, pivot)));
     return *this;

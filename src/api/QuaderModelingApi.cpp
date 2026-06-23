@@ -14,8 +14,8 @@
 #include "editor/history/ModelingMementoCommand.h"
 #include "editor/selection/EditorSelectionService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "math/GlmBridge.h"
 
-#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <memory>
@@ -60,7 +60,7 @@ QuaderApiResult<ModelingTransformDragPreview> resultFromTransformDragPreview(
     return result;
 }
 
-ModelingTransform3 rotationTransform(Vec3 eulerRadians) {
+ModelingTransform3 rotationTransform(QVec3 eulerRadians) {
     const glm::mat3 rotation = glm::mat3_cast(toGlm(quatFromEulerRadians(eulerRadians)));
     return {
             .xAxis = fromGlm(glm::vec3(rotation[0])),
@@ -70,7 +70,7 @@ ModelingTransform3 rotationTransform(Vec3 eulerRadians) {
     };
 }
 
-ModelingTransform3 scaleTransform(Vec3 scale) {
+ModelingTransform3 scaleTransform(QVec3 scale) {
     return {
             .xAxis = {scale.x, 0.0f, 0.0f},
             .yAxis = {0.0f, scale.y, 0.0f},
@@ -183,25 +183,25 @@ QuaderApiVoidResult QuaderModelingApi::beginTransformPreview(bool duplicateSelec
             "Begin Transform Preview");
 }
 
-QuaderApiVoidResult QuaderModelingApi::updateTransformTranslate(Vec3 delta) {
+QuaderApiVoidResult QuaderModelingApi::updateTransformTranslate(QVec3 delta) {
     return mutations_.runModelingResult(
             session_.modeling().updateTransformTranslatePreview(delta),
             "Update Transform Preview");
 }
 
-QuaderApiVoidResult QuaderModelingApi::updateTransformMatrix(const ModelingTransform3& transform, Vec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::updateTransformMatrix(const ModelingTransform3& transform, QVec3 pivot) {
     return mutations_.runModelingResult(
             session_.modeling().updateTransformMatrixPreview(transform, pivot),
             "Update Transform Preview");
 }
 
-QuaderApiVoidResult QuaderModelingApi::updateTransformExtrude(Vec3 offset, float closedEdgeLedgeSize) {
+QuaderApiVoidResult QuaderModelingApi::updateTransformExtrude(QVec3 offset, float closedEdgeLedgeSize) {
     return mutations_.runModelingResult(
             session_.modeling().updateTransformExtrudePreview(offset, closedEdgeLedgeSize),
             "Update Transform Preview");
 }
 
-QuaderApiVoidResult QuaderModelingApi::updateTransformInset(const ModelingTransform3& transform, Vec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::updateTransformInset(const ModelingTransform3& transform, QVec3 pivot) {
     return mutations_.runModelingResult(
             session_.modeling().updateTransformInsetPreview(transform, pivot),
             "Update Transform Preview");
@@ -245,21 +245,21 @@ QuaderApiVoidResult QuaderModelingApi::cancelTransformDrag() {
             "Cancel Transform Drag");
 }
 
-QuaderApiVoidResult QuaderModelingApi::moveSelection(Vec3 delta) {
+QuaderApiVoidResult QuaderModelingApi::moveSelection(QVec3 delta) {
     return mutations_.runModelingCommand(
             std::make_unique<MoveSelectionHistoryCommand>(session_.modeling(), delta),
             "Move Selection");
 }
 
-QuaderApiVoidResult QuaderModelingApi::rotateSelection(Vec3 eulerRadians, Vec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::rotateSelection(QVec3 eulerRadians, QVec3 pivot) {
     return transformSelection(rotationTransform(eulerRadians), pivot);
 }
 
-QuaderApiVoidResult QuaderModelingApi::scaleSelection(Vec3 scale, Vec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::scaleSelection(QVec3 scale, QVec3 pivot) {
     return transformSelection(scaleTransform(scale), pivot);
 }
 
-QuaderApiVoidResult QuaderModelingApi::transformSelection(const ModelingTransform3& transform, Vec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::transformSelection(const ModelingTransform3& transform, QVec3 pivot) {
     return mutations_.runModelingCommand(
             std::make_unique<TransformSelectionHistoryCommand>(session_.modeling(), transform, pivot),
             "Transform Selection");

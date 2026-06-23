@@ -141,8 +141,8 @@ struct LightEntity {
 	bool enabled = true;
 	LightType type = LightType::point;
 	bool selected = false;
-	quader_poly::Vec3 position { 0.0F, 3.0F, 0.0F };
-	quader_poly::Vec3 direction { 0.0F, -1.0F, 0.0F };
+	quader::QVec3 position { 0.0F, 3.0F, 0.0F };
+	quader::QVec3 direction { 0.0F, -1.0F, 0.0F };
 	std::uint32_t color_abgr = 0xFFFFFFFFU;
 	float intensity = 1.0F;
 	LightShadowMode shadow_mode = LightShadowMode::soft;
@@ -161,8 +161,8 @@ struct LightEntity {
 struct PickObjectBounds {
 	int object_id = -1;
 	bool empty = true;
-	quader_poly::Vec3 min;
-	quader_poly::Vec3 max;
+	quader::QVec3 min;
+	quader::QVec3 max;
 };
 
 /**
@@ -178,8 +178,8 @@ struct PickObjectFaceGeometry {
  */
 struct Bounds3 {
 	bool empty = true;
-	quader_poly::Vec3 min;
-	quader_poly::Vec3 max;
+	quader::QVec3 min;
+	quader::QVec3 max;
 };
 
 /**
@@ -221,9 +221,9 @@ struct SelectionHoverUpdateResult {
  */
 struct SelectionOverlayTriangle {
 	SelectionOverlayLayer layer = SelectionOverlayLayer::selected_visible_face;
-	quader_poly::Vec3 a;
-	quader_poly::Vec3 b;
-	quader_poly::Vec3 c;
+	quader::QVec3 a;
+	quader::QVec3 b;
+	quader::QVec3 c;
 	std::uint32_t color_abgr = 0xffffffffU;
 	int object_id = -1;
 	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
@@ -234,8 +234,8 @@ struct SelectionOverlayTriangle {
  */
 struct SelectionOverlayLine {
 	SelectionOverlayLayer layer = SelectionOverlayLayer::selected_face_edge;
-	quader_poly::Vec3 start;
-	quader_poly::Vec3 end;
+	quader::QVec3 start;
+	quader::QVec3 end;
 	std::uint32_t color_abgr = 0xffffffffU;
 	float width_pixels = 1.0F;
 	int object_id = -1;
@@ -248,7 +248,7 @@ struct SelectionOverlayLine {
  */
 struct SelectionOverlayPoint {
 	SelectionOverlayLayer layer = SelectionOverlayLayer::unselected_vertex;
-	quader_poly::Vec3 position;
+	quader::QVec3 position;
 	std::uint32_t color_abgr = 0xffffffffU;
 	float size_pixels = 8.0F;
 	int object_id = -1;
@@ -338,14 +338,14 @@ struct KnifeToolState {
 	bool current_target_valid = false;
 	int target_object_id = -1;
 	quader_poly::KnifePointTarget current_target;
-	quader_poly::Vec3 current_point;
-	quader_poly::Vec3 face_normal { 0.0F, 1.0F, 0.0F };
+	quader::QVec3 current_point;
+	quader::QVec3 face_normal { 0.0F, 1.0F, 0.0F };
 	std::uint32_t active_stroke_start = 0;
 	std::uint32_t previous_point_index = 0;
 	std::vector<quader_poly::KnifePointTarget> points;
-	std::vector<quader_poly::Vec3> point_positions;
+	std::vector<quader::QVec3> point_positions;
 	std::vector<quader_poly::KnifeStrokeSegment> segments;
-	std::vector<quader_poly::Vec3> intersection_preview_points;
+	std::vector<quader::QVec3> intersection_preview_points;
 	KnifeToolStatus status = KnifeToolStatus::idle;
 	std::vector<SelectionOverlayLine> preview_lines;
 	std::vector<SelectionOverlayPoint> preview_points;
@@ -360,8 +360,8 @@ struct KnifeToolPreview {
 	bool has_active_stroke = false;
 	bool has_current = false;
 	int target_object_id = -1;
-	quader_poly::Vec3 previous_point;
-	quader_poly::Vec3 current_point;
+	quader::QVec3 previous_point;
+	quader::QVec3 current_point;
 	std::uint32_t preview_point_count = 0;
 	std::uint32_t preview_line_count = 0;
 	std::uint32_t point_count = 0;
@@ -389,9 +389,9 @@ struct PolyToolState {
 	bool active = false;
 	bool closed = false;
 	bool has_current = false;
-	quader_poly::Vec3 current_point;
-	quader_poly::Vec3 face_normal { 0.0F, 1.0F, 0.0F };
-	std::vector<quader_poly::Vec3> points;
+	quader::QVec3 current_point;
+	quader::QVec3 face_normal { 0.0F, 1.0F, 0.0F };
+	std::vector<quader::QVec3> points;
 	std::vector<SelectionOverlayLine> preview_lines;
 	std::vector<SelectionOverlayPoint> preview_points;
 };
@@ -407,9 +407,9 @@ struct PolyToolPreview {
 	bool finalizable = false;
 	std::uint32_t point_count = 0;
 	std::uint32_t line_count = 0;
-	quader_poly::Vec3 first_point;
-	quader_poly::Vec3 last_point;
-	quader_poly::Vec3 current_point;
+	quader::QVec3 first_point;
+	quader::QVec3 last_point;
+	quader::QVec3 current_point;
 };
 
 /**
@@ -441,8 +441,8 @@ struct PickHitRecord {
 	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
 	quader_poly::Edge edge;
 	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	quader_poly::Vec3 local_position;
-	quader_poly::Vec3 local_normal;
+	quader::QVec3 local_position;
+	quader::QVec3 local_normal;
 	float ray_distance = 0.0F;
 	float pick_distance = 0.0F;
 	std::string signature;
@@ -659,7 +659,7 @@ struct SelectionHandleTarget {
 	int face_index = -1;
 	std::vector<int> vertex_indices;
 	std::vector<SelectionElementGroup> element_groups;
-	quader_poly::Vec3 position;
+	quader::QVec3 position;
 };
 
 /**
@@ -855,7 +855,7 @@ struct ElementHandlePickCandidate {
 	int object_id = -1;
 	int a_index = -1;
 	int b_index = -1;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 	double camera_distance = 0.0;
 };
 
@@ -891,7 +891,7 @@ struct SelectionHoverFeedback {
  */
 struct PickCycleState {
 	bool active = false;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 	std::string signature;
 	int index = 0;
 };
@@ -922,7 +922,7 @@ struct ClickPickRequest {
 	SelectionEditOperation operation = SelectionEditOperation::replace;
 	bool handles_enabled = false;
 	bool can_pick_all = true;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 	float max_screen_distance = pick_cycle_default_max_screen_distance;
 };
 
@@ -1070,7 +1070,7 @@ std::vector<int> selected_light_ids(const std::vector<LightEntity>& lights);
 void set_selection_mode(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 void clear_selection(std::vector<PolygonObject>& objects, int& active_object_id);
 bool has_selection(const std::vector<PolygonObject>& objects, SelectionMode mode, int active_object_id);
-std::optional<quader_poly::Vec3> selection_center(const std::vector<PolygonObject>& objects, SelectionMode mode, int active_object_id);
+std::optional<quader::QVec3> selection_center(const std::vector<PolygonObject>& objects, SelectionMode mode, int active_object_id);
 ActiveSelection active_selection(const std::vector<PolygonObject>& objects, SelectionMode mode, int active_object_id);
 int next_polygon_object_id(const std::vector<PolygonObject>& objects, int next_object_id = 1);
 
@@ -1094,7 +1094,7 @@ std::optional<int> selected_handle_pick_hit_index(const PickSelectionState& sele
 std::optional<int> front_unselected_handle_pick_hit_index(const PickSelectionState& selection, const std::vector<PickHitRecord>& hits);
 std::vector<int> pick_cycle_candidate_indices(const std::vector<PickHitRecord>& hits, bool keep_all_component_hits);
 void reset_pick_cycle(PickCycleState& state);
-PickCycleStep advance_pick_cycle(PickCycleState& state, std::string signature, int candidate_count, quader_poly::Vec2 screen_position, float max_screen_distance);
+PickCycleStep advance_pick_cycle(PickCycleState& state, std::string signature, int candidate_count, quader::QVec2 screen_position, float max_screen_distance);
 ClickPickPlan plan_click_pick(PickCycleState& state, const PickSelectionState& selection, const std::vector<PickHitRecord>& handle_hits, const std::vector<PickHitRecord>& surface_hits, const ClickPickRequest& request);
 DragSeedPickPlan plan_drag_seed_pick(const PickSelectionState& selection, const std::vector<PickHitRecord>& handle_hits, const std::vector<PickHitRecord>& surface_hits, const DragSeedPickRequest& request);
 RectangleSelectionResult apply_rectangle_selection(const RectangleSelectionRequest& request);
@@ -1143,7 +1143,7 @@ SelectionSourceWireSuppression source_wire_suppression_for_selection(const Recta
 std::vector<int> object_operation_object_ids_for_selection(const RectangleSelectionState& selection);
 SelectionCenterPlan plan_selection_center(const SelectionCenterPlanRequest& request);
 std::vector<int> handle_target_object_ids_for_selection(const SelectionHandleTargetObjectRequest& request);
-std::vector<ElementHandlePickHit> pick_element_handle_candidates(const std::vector<ElementHandlePickCandidate>& candidates, quader_poly::Vec2 screen_position, double pick_radius);
+std::vector<ElementHandlePickHit> pick_element_handle_candidates(const std::vector<ElementHandlePickCandidate>& candidates, quader::QVec2 screen_position, double pick_radius);
 bool selection_mode_uses_element_handles(SelectionMode mode);
 ViewportToolIntent default_viewport_tool_for_selection_mode(SelectionMode mode);
 bool selection_has_move_tool_target(const RectangleSelectionState& selection);
@@ -1188,8 +1188,8 @@ Bounds3 selection_bounds(const std::vector<PolygonObject>& objects, SelectionMod
 
 CommandResult select_all(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 CommandResult invert_selection(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
-CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionMode mode, quader_poly::Vec3 delta, bool texture_lock_enabled);
-CommandResult transform_selected(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled);
+CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionMode mode, quader::QVec3 delta, bool texture_lock_enabled);
+CommandResult transform_selected(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled);
 CommandResult snap_selected_vertices_to_active(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 CommandResult snap_selected_edges_to_active(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 CommandResult merge_selected_vertices_to_active(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
@@ -1207,9 +1207,9 @@ CommandResult fill_hole_from_selected_edges(std::vector<PolygonObject>& objects,
 CommandResult bevel_selected_edges(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id, const quader_poly::EdgeBevelSettings& settings);
 CommandResult bridge_selected_edges(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id, int steps = 1);
 CommandResult delete_selected(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
-CommandResult create_box_from_bounds(std::vector<PolygonObject>& objects, int object_id, quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds, int& active_object_id, SelectionMode& selection_mode);
-CommandResult create_box_from_corners(std::vector<PolygonObject>& objects, int object_id, std::span<const quader_poly::Vec3> corners, int& active_object_id, SelectionMode& selection_mode);
-CommandResult create_polygon_from_points(std::vector<PolygonObject>& objects, int object_id, std::span<const quader_poly::Vec3> points, quader_poly::Vec3 face_normal, int& active_object_id, SelectionMode& selection_mode);
+CommandResult create_box_from_bounds(std::vector<PolygonObject>& objects, int object_id, quader::QVec3 min_bounds, quader::QVec3 max_bounds, int& active_object_id, SelectionMode& selection_mode);
+CommandResult create_box_from_corners(std::vector<PolygonObject>& objects, int object_id, std::span<const quader::QVec3> corners, int& active_object_id, SelectionMode& selection_mode);
+CommandResult create_polygon_from_points(std::vector<PolygonObject>& objects, int object_id, std::span<const quader::QVec3> points, quader::QVec3 face_normal, int& active_object_id, SelectionMode& selection_mode);
 CommandResult extract_selected_faces(std::vector<PolygonObject>& objects, int object_id, SelectionMode mode, int& active_object_id);
 CommandResult detach_selected_faces(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 CommandResult bridge_selected_faces(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id, int steps = 1);
@@ -1225,14 +1225,14 @@ CommandResult combine_selected_faces(std::vector<PolygonObject>& objects, Select
 CommandResult combine_selected_meshes(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 CommandResult collapse_selected_faces(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
 CommandResult radial_align_selected(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id);
-CommandResult extrude_selected_elements(std::vector<PolygonObject>& objects, SelectionMode mode, quader_poly::Vec3 offset, float closed_edge_ledge_size = 0.0F);
-CommandResult inset_selected_elements(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader_poly::Vec3 pivot);
+CommandResult extrude_selected_elements(std::vector<PolygonObject>& objects, SelectionMode mode, quader::QVec3 offset, float closed_edge_ledge_size = 0.0F);
+CommandResult inset_selected_elements(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader::QVec3 pivot);
 CommandResult extrude_selected_faces(std::vector<PolygonObject>& objects, float distance);
 CommandResult inset_selected_faces(std::vector<PolygonObject>& objects, float amount);
 CommandResult insert_edge_loop(std::vector<PolygonObject>& objects, float factor);
 CommandResult insert_edge_loop(std::vector<PolygonObject>& objects, int object_id, quader_poly::Edge edge, float factor, int& active_object_id, SelectionMode& mode);
 CommandResult plane_cut(std::vector<PolygonObject>& objects, std::span<const int> object_ids, const quader_poly::PlaneCutRequest& request, int& next_object_id, int& active_object_id, SelectionMode& mode);
-CommandResult mirror_objects_across_plane(std::vector<PolygonObject>& objects, std::span<const int> object_ids, std::span<const quader_poly::Vec3> plane_points, int& next_object_id, int& active_object_id, SelectionMode& mode);
+CommandResult mirror_objects_across_plane(std::vector<PolygonObject>& objects, std::span<const int> object_ids, std::span<const quader::QVec3> plane_points, int& next_object_id, int& active_object_id, SelectionMode& mode);
 CommandResult mirror_objects_across_world_axis(std::vector<PolygonObject>& objects, std::span<const int> object_ids, TransformAxis axis, int& next_object_id, int& active_object_id, SelectionMode& mode);
 CommandResult flip_objects_by_orientation(std::vector<PolygonObject>& objects, std::span<const int> object_ids, SelectionMode& mode, ViewportFlipOrientation orientation, int& active_object_id);
 InsertEdgeLoopPreview build_insert_edge_loop_preview(const std::vector<PolygonObject>& objects, int object_id, quader_poly::Edge edge, float factor);
@@ -1260,8 +1260,8 @@ CommandResult apply_uv_operation(std::vector<PolygonObject>& objects, SelectionM
 CommandResult assign_material_to_selection(std::vector<PolygonObject>& objects, SelectionMode mode, std::uint32_t material_slot);
 CommandResult assign_material_to_face(std::vector<PolygonObject>& objects, int object_id, quader_poly::ElementId face_id, std::uint32_t material_slot);
 std::vector<PolygonObject> selected_object_copies(const std::vector<PolygonObject>& objects, SelectionMode mode);
-CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, quader_poly::Vec3 offset);
-CommandResult paste_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, const std::vector<PolygonObject>& copied_objects, std::optional<quader_poly::Vec3> target_center);
+CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, quader::QVec3 offset);
+CommandResult paste_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, const std::vector<PolygonObject>& copied_objects, std::optional<quader::QVec3> target_center);
 
 /**
  * Owns Editor Session behavior within the modeling runtime domain.
@@ -1334,10 +1334,10 @@ public:
 	CommandResult update_merge_by_distance_preview(double tolerance);
 	CommandResult update_merge_by_distance_preview(MergeByDistanceOperationSettings settings);
 	CommandResult begin_transform_preview(bool duplicate_selected = false);
-	CommandResult update_transform_translate_preview(quader_poly::Vec3 delta, bool texture_lock_enabled = false);
-	CommandResult update_transform_matrix_preview(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, bool texture_lock_enabled = false, bool texture_lock_scale_enabled = false);
-	CommandResult update_transform_extrude_preview(quader_poly::Vec3 offset, float closed_edge_ledge_size = 0.0F);
-	CommandResult update_transform_inset_preview(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot);
+	CommandResult update_transform_translate_preview(quader::QVec3 delta, bool texture_lock_enabled = false);
+	CommandResult update_transform_matrix_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled = false, bool texture_lock_scale_enabled = false);
+	CommandResult update_transform_extrude_preview(quader::QVec3 offset, float closed_edge_ledge_size = 0.0F);
+	CommandResult update_transform_inset_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot);
 	PreviewTransactionFinishResult commit_preview_transaction(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
 	PreviewTransactionFinishResult cancel_preview_transaction(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
 
@@ -1345,7 +1345,7 @@ public:
 	void clear_selection();
 	void set_selected_object_ids(const std::vector<int>& object_ids, int active_id = -1);
 	void set_component_selection(int object_id, quader_poly::Selection selection, SelectionMode mode);
-	CommandResult create_light(LightType type, quader_poly::Vec3 position, quader_poly::Vec3 direction);
+	CommandResult create_light(LightType type, quader::QVec3 position, quader::QVec3 direction);
 	CommandResult select_light(int light_id);
 	CommandResult delete_selected_lights();
 	CommandResult set_light_name(int light_id, std::string name);
@@ -1354,11 +1354,11 @@ public:
 	CommandResult set_light_color(int light_id, std::uint32_t color_abgr);
 	CommandResult set_light_shadow_mode(int light_id, LightShadowMode shadow_mode);
 	CommandResult set_light_float(int light_id, LightFloatProperty property, float value);
-	CommandResult set_light_position(int light_id, quader_poly::Vec3 position);
-	CommandResult set_light_direction(int light_id, quader_poly::Vec3 direction);
+	CommandResult set_light_position(int light_id, quader::QVec3 position);
+	CommandResult set_light_direction(int light_id, quader::QVec3 direction);
 
 	[[nodiscard]] bool has_selection() const;
-	[[nodiscard]] std::optional<quader_poly::Vec3> selection_center() const;
+	[[nodiscard]] std::optional<quader::QVec3> selection_center() const;
 	[[nodiscard]] Bounds3 document_bounds() const;
 	[[nodiscard]] Bounds3 selection_bounds() const;
 	[[nodiscard]] ActiveSelection active_selection() const;
@@ -1380,8 +1380,8 @@ public:
 
 	CommandResult select_all();
 	CommandResult invert_selection();
-	CommandResult translate_selected(quader_poly::Vec3 delta, bool texture_lock_enabled = false);
-	CommandResult transform_selected(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, bool texture_lock_enabled = false, bool texture_lock_scale_enabled = false);
+	CommandResult translate_selected(quader::QVec3 delta, bool texture_lock_enabled = false);
+	CommandResult transform_selected(const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled = false, bool texture_lock_scale_enabled = false);
 	CommandResult snap_selected_vertices_to_active();
 	CommandResult snap_selected_edges_to_active();
 	CommandResult merge_selected_vertices_to_active();
@@ -1403,9 +1403,9 @@ public:
 	CommandResult bridge_selected_edges(int steps = 1);
 	CommandResult bridge_selected_edges(BridgeOperationSettings settings);
 	CommandResult delete_selected();
-	CommandResult create_box_from_bounds(quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds);
-	CommandResult create_box_from_corners(std::span<const quader_poly::Vec3> corners);
-	CommandResult create_polygon_from_points(std::span<const quader_poly::Vec3> points, quader_poly::Vec3 face_normal);
+	CommandResult create_box_from_bounds(quader::QVec3 min_bounds, quader::QVec3 max_bounds);
+	CommandResult create_box_from_corners(std::span<const quader::QVec3> corners);
+	CommandResult create_polygon_from_points(std::span<const quader::QVec3> points, quader::QVec3 face_normal);
 	CommandResult create_object_from_document(
 		quader_poly::Document document,
 		std::string name = "Mesh",
@@ -1422,8 +1422,8 @@ public:
 	CommandResult combine_selected_meshes();
 	CommandResult collapse_selected_faces();
 	CommandResult radial_align_selected();
-	CommandResult extrude_selected_elements(quader_poly::Vec3 offset, float closed_edge_ledge_size = 0.0F);
-	CommandResult inset_selected_elements(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot);
+	CommandResult extrude_selected_elements(quader::QVec3 offset, float closed_edge_ledge_size = 0.0F);
+	CommandResult inset_selected_elements(const quader_poly::Transform3& transform, quader::QVec3 pivot);
 	CommandResult extrude_selected_faces(float distance);
 	CommandResult inset_selected_faces(float amount);
 	CommandResult insert_edge_loop(float factor);
@@ -1437,7 +1437,7 @@ CommandResult commit_poly_tool(PolyToolState& state);
 CommandResult knife_segment(int object_id, const quader_poly::KnifePointTarget& previous, const quader_poly::KnifePointTarget& current);
 CommandResult knife_stroke(int object_id, std::span<const quader_poly::KnifePointTarget> points, std::span<const quader_poly::KnifeStrokeSegment> segments);
 CommandResult plane_cut(std::span<const int> object_ids, const quader_poly::PlaneCutRequest& request);
-CommandResult mirror_objects_across_plane(std::span<const int> object_ids, std::span<const quader_poly::Vec3> plane_points);
+CommandResult mirror_objects_across_plane(std::span<const int> object_ids, std::span<const quader::QVec3> plane_points);
 CommandResult mirror_selected_objects_across_axis(TransformAxis axis);
 CommandResult flip_selected_objects_by_orientation(ViewportFlipOrientation orientation);
 CommandResult flip_selected_face_normals();
@@ -1451,9 +1451,9 @@ CommandResult flip_selected_face_normals();
 	CommandResult assign_material_to_selection(std::uint32_t material_slot);
 	CommandResult assign_material_to_face(int object_id, quader_poly::ElementId face_id, std::uint32_t material_slot);
 	[[nodiscard]] std::vector<PolygonObject> selected_object_copies() const;
-	CommandResult duplicate_selected_objects(quader_poly::Vec3 offset);
+	CommandResult duplicate_selected_objects(quader::QVec3 offset);
 	CommandResult duplicate_selected_objects(DuplicateMeshesOperationSettings settings);
-	CommandResult paste_objects(const std::vector<PolygonObject>& copied_objects, std::optional<quader_poly::Vec3> target_center);
+	CommandResult paste_objects(const std::vector<PolygonObject>& copied_objects, std::optional<quader::QVec3> target_center);
 
 private:
 	SessionState state_;

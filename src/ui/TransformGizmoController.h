@@ -91,9 +91,9 @@ private:
     std::optional<quader_editor_core::RotateToolState> sceneOnlyRotateState_;
     SceneTransformDragService sceneTransformDrag_;
     TransformAxisHandle activeAxis_ = TransformAxisHandle::None;
-    Vec2 lastMouse_ = {};
-    Vec3 startWorldPivot_ = {};
-    Vec2 startMouse_ = {};
+    QVec2 lastMouse_ = {};
+    QVec3 startWorldPivot_ = {};
+    QVec2 startMouse_ = {};
 };
 
 } // namespace quader

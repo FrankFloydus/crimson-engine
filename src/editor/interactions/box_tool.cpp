@@ -18,17 +18,17 @@
 namespace quader_editor_core {
 namespace {
 
-quader_geometry::Vec3d to_box_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3d to_box_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec3 to_box_poly_vec3(quader_geometry::Vec3d value)
+quader::QVec3 to_box_poly_vec3(quader_geometry::QVec3d value)
 {
 	return { static_cast<float>(value.x), static_cast<float>(value.y), static_cast<float>(value.z) };
 }
 
-Bounds3 to_box_editor_bounds(const quader_geometry::Aabb3<double>& bounds)
+Bounds3 to_box_editor_bounds(const quader_geometry::QAabb3<double>& bounds)
 {
 	Bounds3 result;
 	if (!quader_geometry::aabb_is_valid(bounds)) {
@@ -40,34 +40,34 @@ Bounds3 to_box_editor_bounds(const quader_geometry::Aabb3<double>& bounds)
 	return result;
 }
 
-quader_geometry::Ray3<double> to_box_geometry_ray(quader_poly::Ray ray)
+quader_geometry::QRay3<double> to_box_geometry_ray(quader_poly::Ray ray)
 {
 	return { to_box_geometry_vec3(ray.origin), to_box_geometry_vec3(ray.direction) };
 }
 
-quader_geometry::Line3<double> to_box_geometry_line(quader_poly::Ray ray)
+quader_geometry::QLine3<double> to_box_geometry_line(quader_poly::Ray ray)
 {
 	return { to_box_geometry_vec3(ray.origin), to_box_geometry_vec3(ray.direction) };
 }
 
-quader_geometry::Plane3<double> to_box_geometry_plane(quader_poly::Vec3 origin, quader_poly::Vec3 normal)
+quader_geometry::QPlane3<double> to_box_geometry_plane(quader::QVec3 origin, quader::QVec3 normal)
 {
 	return quader_geometry::plane_from_point_normal(to_box_geometry_vec3(origin), to_box_geometry_vec3(normal), tool_epsilon);
 }
 
-quader_poly::Vec3 project_box_poly_point_to_plane(quader_poly::Vec3 point, const quader_geometry::Plane3<double>& plane)
+quader::QVec3 project_box_poly_point_to_plane(quader::QVec3 point, const quader_geometry::QPlane3<double>& plane)
 {
 	return to_box_poly_vec3(quader_geometry::project_point_to_plane(to_box_geometry_vec3(point), plane));
 }
 
-quader_poly::Vec3 box_geometry_plane_point_to_poly(const quader_geometry::PlaneBasis3<double>& basis, double u, double v)
+quader::QVec3 box_geometry_plane_point_to_poly(const quader_geometry::QPlaneBasis3<double>& basis, double u, double v)
 {
 	return to_box_poly_vec3(quader_geometry::plane_point_from_coordinates(basis, u, v));
 }
 
-quader_geometry::PlaneBasis3<double> box_geometry_basis(const BoxConstructionPlane& plane)
+quader_geometry::QPlaneBasis3<double> box_geometry_basis(const BoxConstructionPlane& plane)
 {
-	quader_geometry::PlaneBasis3<double> basis;
+	quader_geometry::QPlaneBasis3<double> basis;
 	basis.valid = !vec3_is_tiny(plane.normal) && !vec3_is_tiny(plane.axis_u) && !vec3_is_tiny(plane.axis_v);
 	basis.origin = to_box_geometry_vec3(plane.snap_origin);
 	basis.normal = to_box_geometry_vec3(plane.normal);
@@ -77,8 +77,8 @@ quader_geometry::PlaneBasis3<double> box_geometry_basis(const BoxConstructionPla
 }
 
 std::optional<double> box_geometry_axis_drag_distance(
-		quader_poly::Vec3 axis_value,
-		quader_poly::Vec3 anchor,
+		quader::QVec3 axis_value,
+		quader::QVec3 anchor,
 		const quader_poly::Ray& ray,
 		double parallel_epsilon,
 		double vector_epsilon = tool_epsilon)
@@ -86,19 +86,19 @@ std::optional<double> box_geometry_axis_drag_distance(
 	if (vec3_is_tiny(axis_value, vector_epsilon) || vec3_is_tiny(ray.direction, vector_epsilon)) {
 		return std::nullopt;
 	}
-	const quader_geometry::Vec3d axis =
+	const quader_geometry::QVec3d axis =
 			quader_geometry::normalize_or_zero(to_box_geometry_vec3(axis_value), vector_epsilon);
-	const quader_geometry::Vec3d ray_direction =
+	const quader_geometry::QVec3d ray_direction =
 			quader_geometry::normalize_or_zero(to_box_geometry_vec3(ray.direction), vector_epsilon);
 	const double b = quader_geometry::dot(axis, ray_direction);
 	const double denominator = 1.0 - b * b;
 	if (std::abs(denominator) <= parallel_epsilon) {
 		return std::nullopt;
 	}
-	const quader_geometry::LineLineClosestPoints<double> closest =
+	const quader_geometry::QLineLineClosestPoints<double> closest =
 		quader_geometry::closest_points_line_line(
-			quader_geometry::Line3<double> { to_box_geometry_vec3(anchor), axis },
-			quader_geometry::Line3<double> { to_box_geometry_vec3(ray.origin), ray_direction },
+			quader_geometry::QLine3<double> { to_box_geometry_vec3(anchor), axis },
+			quader_geometry::QLine3<double> { to_box_geometry_vec3(ray.origin), ray_direction },
 			vector_epsilon);
 	return closest.valid ? std::optional<double> { closest.first_parameter } : std::nullopt;
 }
@@ -143,26 +143,26 @@ public:
 		reset_editor_runtime_box_state(runtime);
 	}
 
-	[[nodiscard]] quader_poly::Vec3 project_point_to_plane(
-			quader_poly::Vec3 point,
-			quader_poly::Vec3 origin,
-			quader_poly::Vec3 normal) const
+	[[nodiscard]] quader::QVec3 project_point_to_plane(
+			quader::QVec3 point,
+			quader::QVec3 origin,
+			quader::QVec3 normal) const
 	{
-		const quader_poly::Vec3 safe_normal = vec3_is_tiny(normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(normal);
+		const quader::QVec3 safe_normal = vec3_is_tiny(normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(normal);
 		return project_box_poly_point_to_plane(point, to_box_geometry_plane(origin, safe_normal));
 	}
 
-	[[nodiscard]] BoxConstructionPlane normalize_construction_plane(quader_poly::Vec3 origin, quader_poly::Vec3 normal) const
+	[[nodiscard]] BoxConstructionPlane normalize_construction_plane(quader::QVec3 origin, quader::QVec3 normal) const
 	{
 		BoxConstructionPlane plane;
 		plane.origin = origin;
-		plane.normal = vec3_is_tiny(normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(normal);
+		plane.normal = vec3_is_tiny(normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(normal);
 		plane.snap_origin = project_point_to_plane({}, plane.origin, plane.normal);
-		quader_poly::Vec3 preferred { 1.0F, 0.0F, 0.0F };
+		quader::QVec3 preferred { 1.0F, 0.0F, 0.0F };
 		if (std::abs(vec3_dot(plane.normal, preferred)) > 0.9) {
 			preferred = { 0.0F, 0.0F, 1.0F };
 		}
-		const quader_geometry::PlaneBasis3<double> basis = quader_geometry::make_plane_basis(
+		const quader_geometry::QPlaneBasis3<double> basis = quader_geometry::make_plane_basis(
 				to_box_geometry_vec3(plane.origin),
 				to_box_geometry_vec3(plane.normal),
 				to_box_geometry_vec3(preferred),
@@ -176,8 +176,8 @@ public:
 
 	[[nodiscard]] BoxToolStateResult set_construction_plane(
 			BoxToolState& state,
-			quader_poly::Vec3 origin,
-			quader_poly::Vec3 normal) const
+			quader::QVec3 origin,
+			quader::QVec3 normal) const
 	{
 		state.plane = normalize_construction_plane(origin, normal);
 		return box_result(state, box_ok_status(true));
@@ -190,22 +190,22 @@ public:
 		if (vec3_is_tiny(ray.direction)) {
 			return { false, "Invalid construction ray.", {}, 0.0 };
 		}
-		const quader_geometry::Plane3<double> geometry_plane = to_box_geometry_plane(plane.origin, plane.normal);
-		const quader_geometry::RayPlaneHit<double> ray_hit =
+		const quader_geometry::QPlane3<double> geometry_plane = to_box_geometry_plane(plane.origin, plane.normal);
+		const quader_geometry::QRayPlaneHit<double> ray_hit =
 			quader_geometry::intersect_ray_plane(to_box_geometry_ray(ray), geometry_plane, tool_epsilon);
 		if (!ray_hit.hit) {
-			const quader_geometry::LinePlaneHit<double> line_hit =
+			const quader_geometry::QLinePlaneHit<double> line_hit =
 				quader_geometry::intersect_line_plane(to_box_geometry_line(ray), geometry_plane, tool_epsilon);
-			if (line_hit.type != quader_geometry::PlaneIntersectionType::point) {
+			if (line_hit.type != quader_geometry::QPlaneIntersectionType::point) {
 				return { false, "Construction ray is parallel to the plane.", {}, 0.0 };
 			}
 			return { false, "Construction plane is behind the ray.", {}, line_hit.parameter };
 		}
-		const quader_poly::Vec3 point = to_box_poly_vec3(quader_geometry::project_point_to_plane(ray_hit.point, geometry_plane));
+		const quader::QVec3 point = to_box_poly_vec3(quader_geometry::project_point_to_plane(ray_hit.point, geometry_plane));
 		return { true, {}, point, ray_hit.distance };
 	}
 
-	[[nodiscard]] quader_poly::Vec2 directional_snap_pair(double start_value, double end_value, double grid_size) const
+	[[nodiscard]] quader::QVec2 directional_snap_pair(double start_value, double end_value, double grid_size) const
 	{
 		const double grid = box_grid_or_default(grid_size);
 		if (end_value >= start_value) {
@@ -225,15 +225,15 @@ public:
 		return { static_cast<float>(start_snap), static_cast<float>(end_snap) };
 	}
 
-	[[nodiscard]] quader_poly::Vec2 footprint_signed_size(
-			quader_poly::Vec3 start_point,
-			quader_poly::Vec3 end_point,
-			quader_poly::Vec3 axis_u,
-			quader_poly::Vec3 axis_v,
+	[[nodiscard]] quader::QVec2 footprint_signed_size(
+			quader::QVec3 start_point,
+			quader::QVec3 end_point,
+			quader::QVec3 axis_u,
+			quader::QVec3 axis_v,
 			double grid_size) const
 	{
 		const double grid = box_grid_or_default(grid_size);
-		const quader_poly::Vec3 delta = end_point - start_point;
+		const quader::QVec3 delta = end_point - start_point;
 		double u = vec3_dot(axis_u, delta);
 		double v = vec3_dot(axis_v, delta);
 		if (std::abs(u) <= min_box_size) {
@@ -245,16 +245,16 @@ public:
 		return { static_cast<float>(u), static_cast<float>(v) };
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> footprint_points(
-			quader_poly::Vec3 start_point,
-			quader_poly::Vec3 end_point,
-			quader_poly::Vec3 axis_u,
-			quader_poly::Vec3 axis_v,
+	[[nodiscard]] std::vector<quader::QVec3> footprint_points(
+			quader::QVec3 start_point,
+			quader::QVec3 end_point,
+			quader::QVec3 axis_u,
+			quader::QVec3 axis_v,
 			double grid_size) const
 	{
-		const quader_poly::Vec2 size = footprint_signed_size(start_point, end_point, axis_u, axis_v, grid_size);
-		const quader_poly::Vec3 u = vec3_scale(axis_u, size.x);
-		const quader_poly::Vec3 v = vec3_scale(axis_v, size.y);
+		const quader::QVec2 size = footprint_signed_size(start_point, end_point, axis_u, axis_v, grid_size);
+		const quader::QVec3 u = vec3_scale(axis_u, size.x);
+		const quader::QVec3 v = vec3_scale(axis_v, size.y);
 		return {
 			start_point,
 			start_point + v,
@@ -264,10 +264,10 @@ public:
 	}
 
 	[[nodiscard]] BoxFootprintDescriptor footprint_descriptor(
-			quader_poly::Vec3 start_point,
-			quader_poly::Vec3 end_point,
-			quader_poly::Vec3 axis_u,
-			quader_poly::Vec3 axis_v,
+			quader::QVec3 start_point,
+			quader::QVec3 end_point,
+			quader::QVec3 axis_u,
+			quader::QVec3 axis_v,
 			double grid_size) const
 	{
 		BoxFootprintDescriptor descriptor;
@@ -275,7 +275,7 @@ public:
 		descriptor.signed_size = footprint_signed_size(start_point, end_point, axis_u, axis_v, grid_size);
 		descriptor.size = { static_cast<float>(std::abs(descriptor.signed_size.x)), static_cast<float>(std::abs(descriptor.signed_size.y)) };
 		descriptor.footprint = footprint_points(start_point, end_point, axis_u, axis_v, grid_size);
-		for (const quader_poly::Vec3& point : descriptor.footprint) {
+		for (const quader::QVec3& point : descriptor.footprint) {
 			descriptor.center += point;
 		}
 		if (!descriptor.footprint.empty()) {
@@ -298,8 +298,8 @@ public:
 
 	[[nodiscard]] BoxToolStateResult begin_footprint(
 			BoxToolState& state,
-			quader_poly::Vec3 raw_start,
-			quader_poly::Vec3 raw_end,
+			quader::QVec3 raw_start,
+			quader::QVec3 raw_end,
 			bool grid_enabled,
 			double grid_size) const
 	{
@@ -314,7 +314,7 @@ public:
 
 	[[nodiscard]] BoxToolStateResult update_footprint(
 			BoxToolState& state,
-			quader_poly::Vec3 raw_end,
+			quader::QVec3 raw_end,
 			bool grid_enabled,
 			double grid_size) const
 	{
@@ -326,13 +326,13 @@ public:
 		}
 
 		const double grid = box_grid_or_default(grid_size);
-		const quader_geometry::PlaneBasis3<double> basis = box_geometry_basis(state.plane);
-		const quader_geometry::PlaneCoordinates3<double> raw_start_coords =
+		const quader_geometry::QPlaneBasis3<double> basis = box_geometry_basis(state.plane);
+		const quader_geometry::QPlaneCoordinates3<double> raw_start_coords =
 			quader_geometry::plane_coordinates(to_box_geometry_vec3(state.raw_start_point), basis);
-		const quader_geometry::PlaneCoordinates3<double> raw_end_coords =
+		const quader_geometry::QPlaneCoordinates3<double> raw_end_coords =
 			quader_geometry::plane_coordinates(to_box_geometry_vec3(state.raw_end_point), basis);
-		const quader_poly::Vec2 u_pair = directional_snap_pair(raw_start_coords.u, raw_end_coords.u, grid);
-		const quader_poly::Vec2 v_pair = directional_snap_pair(raw_start_coords.v, raw_end_coords.v, grid);
+		const quader::QVec2 u_pair = directional_snap_pair(raw_start_coords.u, raw_end_coords.u, grid);
+		const quader::QVec2 v_pair = directional_snap_pair(raw_start_coords.v, raw_end_coords.v, grid);
 		state.start_point = box_geometry_plane_point_to_poly(basis, u_pair.x, v_pair.x);
 		state.end_point = box_geometry_plane_point_to_poly(basis, u_pair.y, v_pair.y);
 		return box_result(state, box_ok_status(true));
@@ -340,7 +340,7 @@ public:
 
 	[[nodiscard]] BoxToolStateResult update_hover_cell(
 			BoxToolState& state,
-			quader_poly::Vec3 local_point,
+			quader::QVec3 local_point,
 			bool grid_enabled,
 			double grid_size) const
 	{
@@ -357,7 +357,7 @@ public:
 
 	[[nodiscard]] BoxToolStateResult begin_height(
 			BoxToolState& state,
-			quader_poly::Vec2 screen_position,
+			quader::QVec2 screen_position,
 			double axis_distance,
 			bool has_axis_distance,
 			bool grid_enabled,
@@ -379,8 +379,8 @@ public:
 		if (vec3_is_tiny(ray.direction)) {
 			return std::numeric_limits<double>::infinity();
 		}
-		const quader_poly::Vec3 axis = vec3_is_tiny(state.plane.normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(state.plane.normal);
-		const quader_poly::Vec3 center = footprint_descriptor(state.start_point, state.end_point, state.plane.axis_u, state.plane.axis_v, grid_size).center;
+		const quader::QVec3 axis = vec3_is_tiny(state.plane.normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(state.plane.normal);
+		const quader::QVec3 center = footprint_descriptor(state.start_point, state.end_point, state.plane.axis_u, state.plane.axis_v, grid_size).center;
 		const std::optional<double> distance = box_geometry_axis_drag_distance(axis, center, ray, screen_epsilon);
 		return distance.value_or(std::numeric_limits<double>::infinity());
 	}
@@ -389,7 +389,7 @@ public:
 			BoxToolState& state,
 			double axis_distance,
 			bool has_axis_distance,
-			quader_poly::Vec2 screen_position,
+			quader::QVec2 screen_position,
 			bool grid_enabled,
 			double grid_size) const
 	{
@@ -417,11 +417,11 @@ public:
 		descriptor.signed_height = snap_height_distance(state.height_distance, grid_enabled, grid_size);
 		descriptor.normal = descriptor.signed_height >= 0.0 ? state.plane.normal : vec3_scale(state.plane.normal, -1.0);
 		descriptor.distance = std::abs(descriptor.signed_height);
-		quader_geometry::Aabb3<double> bounds = quader_geometry::empty_aabb3<double>();
-		const auto include_bound = [&bounds](quader_poly::Vec3 point) {
+		quader_geometry::QAabb3<double> bounds = quader_geometry::empty_aabb3<double>();
+		const auto include_bound = [&bounds](quader::QVec3 point) {
 			quader_geometry::aabb_include(bounds, to_box_geometry_vec3(point));
 		};
-		for (const quader_poly::Vec3& point : descriptor.footprint.footprint) {
+		for (const quader::QVec3& point : descriptor.footprint.footprint) {
 			include_bound(point);
 			if (descriptor.drag_state == BoxDragState::height) {
 				include_bound(point + vec3_scale(descriptor.normal, descriptor.distance));
@@ -433,13 +433,13 @@ public:
 		return descriptor;
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> preview_corners(const BoxPreviewDescriptor& preview) const
+	[[nodiscard]] std::vector<quader::QVec3> preview_corners(const BoxPreviewDescriptor& preview) const
 	{
 		if (!preview.ok || preview.drag_state != BoxDragState::height || preview.footprint.footprint.size() < 4U) {
 			return {};
 		}
-		const quader_poly::Vec3 height = vec3_scale(preview.normal, preview.distance);
-		std::vector<quader_poly::Vec3> corners;
+		const quader::QVec3 height = vec3_scale(preview.normal, preview.distance);
+		std::vector<quader::QVec3> corners;
 		corners.reserve(8);
 		for (std::size_t index = 0; index < 4U; ++index) {
 			corners.push_back(preview.footprint.footprint[index]);
@@ -465,9 +465,9 @@ public:
 	void sync_state(BoxToolState& state, const BoxToolState& source) const
 	{
 		state = source;
-		state.plane.normal = vec3_is_tiny(state.plane.normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(state.plane.normal);
-		state.plane.axis_u = vec3_is_tiny(state.plane.axis_u) ? quader_poly::Vec3 { 1.0F, 0.0F, 0.0F } : normalized_axis(state.plane.axis_u);
-		state.plane.axis_v = vec3_is_tiny(state.plane.axis_v) ? quader_poly::Vec3 { 0.0F, 0.0F, 1.0F } : normalized_axis(state.plane.axis_v);
+		state.plane.normal = vec3_is_tiny(state.plane.normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(state.plane.normal);
+		state.plane.axis_u = vec3_is_tiny(state.plane.axis_u) ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : normalized_axis(state.plane.axis_u);
+		state.plane.axis_v = vec3_is_tiny(state.plane.axis_v) ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : normalized_axis(state.plane.axis_v);
 		state.height_axis_start = std::isfinite(state.height_axis_start) ? state.height_axis_start : std::numeric_limits<double>::infinity();
 	}
 
@@ -490,17 +490,17 @@ const EditorTool& box_tool()
 	return box_tool_instance();
 }
 
-quader_poly::Vec3 project_box_point_to_plane(quader_poly::Vec3 point, quader_poly::Vec3 origin, quader_poly::Vec3 normal)
+quader::QVec3 project_box_point_to_plane(quader::QVec3 point, quader::QVec3 origin, quader::QVec3 normal)
 {
 	return box_tool_instance().project_point_to_plane(point, origin, normal);
 }
 
-BoxConstructionPlane normalize_box_construction_plane(quader_poly::Vec3 origin, quader_poly::Vec3 normal)
+BoxConstructionPlane normalize_box_construction_plane(quader::QVec3 origin, quader::QVec3 normal)
 {
 	return box_tool_instance().normalize_construction_plane(origin, normal);
 }
 
-BoxToolStateResult set_box_construction_plane(BoxToolState& state, quader_poly::Vec3 origin, quader_poly::Vec3 normal)
+BoxToolStateResult set_box_construction_plane(BoxToolState& state, quader::QVec3 origin, quader::QVec3 normal)
 {
 	return box_tool_instance().set_construction_plane(state, origin, normal);
 }
@@ -510,36 +510,36 @@ BoxConstructionPointResult box_construction_point_from_ray(const BoxConstruction
 	return box_tool_instance().construction_point_from_ray(plane, ray);
 }
 
-quader_poly::Vec2 box_directional_snap_pair(double start_value, double end_value, double grid_size)
+quader::QVec2 box_directional_snap_pair(double start_value, double end_value, double grid_size)
 {
 	return box_tool_instance().directional_snap_pair(start_value, end_value, grid_size);
 }
 
-quader_poly::Vec2 box_footprint_signed_size(
-		quader_poly::Vec3 start_point,
-		quader_poly::Vec3 end_point,
-		quader_poly::Vec3 axis_u,
-		quader_poly::Vec3 axis_v,
+quader::QVec2 box_footprint_signed_size(
+		quader::QVec3 start_point,
+		quader::QVec3 end_point,
+		quader::QVec3 axis_u,
+		quader::QVec3 axis_v,
 		double grid_size)
 {
 	return box_tool_instance().footprint_signed_size(start_point, end_point, axis_u, axis_v, grid_size);
 }
 
-std::vector<quader_poly::Vec3> box_footprint_points(
-		quader_poly::Vec3 start_point,
-		quader_poly::Vec3 end_point,
-		quader_poly::Vec3 axis_u,
-		quader_poly::Vec3 axis_v,
+std::vector<quader::QVec3> box_footprint_points(
+		quader::QVec3 start_point,
+		quader::QVec3 end_point,
+		quader::QVec3 axis_u,
+		quader::QVec3 axis_v,
 		double grid_size)
 {
 	return box_tool_instance().footprint_points(start_point, end_point, axis_u, axis_v, grid_size);
 }
 
 BoxFootprintDescriptor box_footprint_descriptor(
-		quader_poly::Vec3 start_point,
-		quader_poly::Vec3 end_point,
-		quader_poly::Vec3 axis_u,
-		quader_poly::Vec3 axis_v,
+		quader::QVec3 start_point,
+		quader::QVec3 end_point,
+		quader::QVec3 axis_u,
+		quader::QVec3 axis_v,
 		double grid_size)
 {
 	return box_tool_instance().footprint_descriptor(start_point, end_point, axis_u, axis_v, grid_size);
@@ -552,22 +552,22 @@ double snap_box_height_distance(double distance, bool grid_enabled, double grid_
 
 BoxToolStateResult begin_box_footprint(
 		BoxToolState& state,
-		quader_poly::Vec3 raw_start,
-		quader_poly::Vec3 raw_end,
+		quader::QVec3 raw_start,
+		quader::QVec3 raw_end,
 		bool grid_enabled,
 		double grid_size)
 {
 	return box_tool_instance().begin_footprint(state, raw_start, raw_end, grid_enabled, grid_size);
 }
 
-BoxToolStateResult update_box_footprint(BoxToolState& state, quader_poly::Vec3 raw_end, bool grid_enabled, double grid_size)
+BoxToolStateResult update_box_footprint(BoxToolState& state, quader::QVec3 raw_end, bool grid_enabled, double grid_size)
 {
 	return box_tool_instance().update_footprint(state, raw_end, grid_enabled, grid_size);
 }
 
 BoxToolStateResult update_box_hover_cell(
 		BoxToolState& state,
-		quader_poly::Vec3 local_point,
+		quader::QVec3 local_point,
 		bool grid_enabled,
 		double grid_size)
 {
@@ -576,7 +576,7 @@ BoxToolStateResult update_box_hover_cell(
 
 BoxToolStateResult begin_box_height(
 		BoxToolState& state,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		double axis_distance,
 		bool has_axis_distance,
 		bool grid_enabled,
@@ -594,7 +594,7 @@ BoxToolStateResult update_box_height_preview(
 		BoxToolState& state,
 		double axis_distance,
 		bool has_axis_distance,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		bool grid_enabled,
 		double grid_size)
 {
@@ -606,7 +606,7 @@ BoxPreviewDescriptor box_preview_descriptor(const BoxToolState& state, bool grid
 	return box_tool_instance().preview_descriptor(state, grid_enabled, grid_size);
 }
 
-std::vector<quader_poly::Vec3> box_preview_corners(const BoxPreviewDescriptor& preview)
+std::vector<quader::QVec3> box_preview_corners(const BoxPreviewDescriptor& preview)
 {
 	return box_tool_instance().preview_corners(preview);
 }

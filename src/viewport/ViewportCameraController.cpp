@@ -28,7 +28,7 @@ float verticalFovRadians(float fovDegrees) {
     return fovDegrees * std::numbers::pi_v<float> / 180.0f;
 }
 
-Vec3 forwardFromAngles(float yawRadians, float pitchRadians) {
+QVec3 forwardFromAngles(float yawRadians, float pitchRadians) {
     const float cp = std::cos(pitchRadians);
     return normalize({
         std::sin(yawRadians) * cp,
@@ -37,9 +37,9 @@ Vec3 forwardFromAngles(float yawRadians, float pitchRadians) {
     });
 }
 
-Vec3 fallbackUpForForward(Vec3 forward) {
+QVec3 fallbackUpForForward(QVec3 forward) {
     if (std::abs(forward.y) > 0.999f) {
-        return forward.y < 0.0f ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 0.0f, -1.0f};
+        return forward.y < 0.0f ? QVec3{0.0f, 0.0f, 1.0f} : QVec3{0.0f, 0.0f, -1.0f};
     }
     return {0.0f, 1.0f, 0.0f};
 }
@@ -48,12 +48,12 @@ Vec3 fallbackUpForForward(Vec3 forward) {
  * Represents a Camera Basis value used by the viewport input, layout, and camera layer.
  */
 struct CameraBasis {
-    Vec3 forward;
-    Vec3 up;
+    QVec3 forward;
+    QVec3 up;
 };
 
-CameraBasis makeCameraBasis(Vec3 forwardDirection, Vec3 upDirection, Vec3 fallbackForward = {0.0f, 0.0f, -1.0f}) {
-    Vec3 forward = normalize(forwardDirection);
+CameraBasis makeCameraBasis(QVec3 forwardDirection, QVec3 upDirection, QVec3 fallbackForward = {0.0f, 0.0f, -1.0f}) {
+    QVec3 forward = normalize(forwardDirection);
     if (length(forward) <= 0.000001f) {
         forward = normalize(fallbackForward);
     }
@@ -61,17 +61,17 @@ CameraBasis makeCameraBasis(Vec3 forwardDirection, Vec3 upDirection, Vec3 fallba
         forward = {0.0f, 0.0f, -1.0f};
     }
 
-    Vec3 candidateUp = normalize(upDirection);
+    QVec3 candidateUp = normalize(upDirection);
     if (length(candidateUp) <= 0.000001f || std::abs(dot(candidateUp, forward)) > 0.999f) {
         candidateUp = fallbackUpForForward(forward);
     }
 
-    Vec3 right = normalize(cross(forward, candidateUp));
+    QVec3 right = normalize(cross(forward, candidateUp));
     if (length(right) <= 0.000001f) {
         right = {1.0f, 0.0f, 0.0f};
     }
 
-    Vec3 up = normalize(cross(right, forward));
+    QVec3 up = normalize(cross(right, forward));
     if (length(up) <= 0.000001f) {
         up = fallbackUpForForward(forward);
     }
@@ -79,21 +79,21 @@ CameraBasis makeCameraBasis(Vec3 forwardDirection, Vec3 upDirection, Vec3 fallba
     return {.forward = forward, .up = up};
 }
 
-void syncAnglesForForward(ViewportCameraState& state, Vec3 forward) {
+void syncAnglesForForward(ViewportCameraState& state, QVec3 forward) {
     state.pitchRadians = std::asin(clamp(forward.y, -1.0f, 1.0f));
     state.yawRadians = std::atan2(forward.x, -forward.z);
 }
 
 
-quader_poly::Vec2 toRuntime(Vec2 value) {
+quader::QVec2 toRuntime(QVec2 value) {
     return {value.x, value.y};
 }
 
-quader_poly::Vec3 toRuntime(Vec3 value) {
+quader::QVec3 toRuntime(QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
@@ -110,17 +110,17 @@ quader_editor_core::ViewAxis toRuntime(ViewportViewAxis axis) {
 }
 
 quader_poly::Transform3 makeRuntimeTransform(const ViewportCameraPose& pose) {
-    Vec3 forward = normalize(pose.target - pose.eye);
+    QVec3 forward = normalize(pose.target - pose.eye);
     if (length(forward) <= 0.000001f) {
         forward = {0.0f, 0.0f, -1.0f};
     }
 
-    Vec3 right = normalize(cross(forward, pose.up));
+    QVec3 right = normalize(cross(forward, pose.up));
     if (length(right) <= 0.000001f) {
         right = {1.0f, 0.0f, 0.0f};
     }
 
-    Vec3 up = normalize(cross(right, forward));
+    QVec3 up = normalize(cross(right, forward));
     if (length(up) <= 0.000001f) {
         up = {0.0f, 1.0f, 0.0f};
     }
@@ -134,13 +134,13 @@ quader_poly::Transform3 makeRuntimeTransform(const ViewportCameraPose& pose) {
 }
 
 ViewportCameraPose poseFromRuntimeTransform(const quader_poly::Transform3& transform, float distance) {
-    const Vec3 origin = fromRuntime(transform.origin);
-    Vec3 forward = normalize(fromRuntime(transform.z_axis) * -1.0f);
+    const QVec3 origin = fromRuntime(transform.origin);
+    QVec3 forward = normalize(fromRuntime(transform.z_axis) * -1.0f);
     if (length(forward) <= 0.000001f) {
         forward = {0.0f, 0.0f, -1.0f};
     }
 
-    Vec3 up = normalize(fromRuntime(transform.y_axis));
+    QVec3 up = normalize(fromRuntime(transform.y_axis));
     if (length(up) <= 0.000001f) {
         up = {0.0f, 1.0f, 0.0f};
     }
@@ -168,7 +168,7 @@ quader_editor_core::ViewportCameraState makeRuntimeCamera(
     return camera;
 }
 
-float distanceAlongForwardToPivot(Vec3 origin, Vec3 forward, Vec3 pivot) {
+float distanceAlongForwardToPivot(QVec3 origin, QVec3 forward, QVec3 pivot) {
     const float forwardDistance = dot(pivot - origin, forward);
     if (forwardDistance > kMinCameraDistance) {
         return forwardDistance;
@@ -177,17 +177,17 @@ float distanceAlongForwardToPivot(Vec3 origin, Vec3 forward, Vec3 pivot) {
 }
 
 void applyRuntimeTransform(ViewportCameraState& state,
-        Vec3& pivot,
-        Vec3& cameraForward,
-        Vec3& cameraUp,
+        QVec3& pivot,
+        QVec3& cameraForward,
+        QVec3& cameraUp,
         const quader_editor_core::ViewportNavigationResult& result,
         std::optional<float> preservedViewDistance = std::nullopt) {
     if (!result.ok) {
         return;
     }
 
-    const Vec3 origin = fromRuntime(result.camera_transform.origin);
-    Vec3 forward = normalize(fromRuntime(result.camera_transform.z_axis) * -1.0f);
+    const QVec3 origin = fromRuntime(result.camera_transform.origin);
+    QVec3 forward = normalize(fromRuntime(result.camera_transform.z_axis) * -1.0f);
     if (length(forward) <= 0.000001f) {
         forward = forwardFromAngles(state.yawRadians, state.pitchRadians);
     }
@@ -209,7 +209,7 @@ void applyRuntimeTransform(ViewportCameraState& state,
 }
 
 
-Vec3 fallbackForwardForAxis(ViewportViewAxis axis, int sign) {
+QVec3 fallbackForwardForAxis(ViewportViewAxis axis, int sign) {
     const float value = sign < 0 ? 1.0f : -1.0f;
     switch (axis) {
     case ViewportViewAxis::X:
@@ -237,7 +237,7 @@ void ViewportCameraController::setViewportSize(float width, float height) {
     viewportHeight_ = std::max(1.0f, height);
 }
 
-void ViewportCameraController::beginDrag(Vec2 mouse, ViewportDragMode mode) {
+void ViewportCameraController::beginDrag(QVec2 mouse, ViewportDragMode mode) {
     dragMode_ = mode;
     lastMouse_ = mouse;
     clearOrbitSnapSource();
@@ -247,12 +247,12 @@ void ViewportCameraController::beginDrag(Vec2 mouse, ViewportDragMode mode) {
     }
 }
 
-void ViewportCameraController::updateDrag(Vec2 mouse) {
+void ViewportCameraController::updateDrag(QVec2 mouse) {
     updateDrag(mouse, dragMode_);
 }
 
-void ViewportCameraController::updateDrag(Vec2 mouse, ViewportDragMode mode) {
-    const Vec2 delta{mouse.x - lastMouse_.x, mouse.y - lastMouse_.y};
+void ViewportCameraController::updateDrag(QVec2 mouse, ViewportDragMode mode) {
+    const QVec2 delta{mouse.x - lastMouse_.x, mouse.y - lastMouse_.y};
     lastMouse_ = mouse;
     if (dragMode_ == ViewportDragMode::OrbitSnap && mode != ViewportDragMode::OrbitSnap) {
         clearOrbitSnapSource();
@@ -261,7 +261,7 @@ void ViewportCameraController::updateDrag(Vec2 mouse, ViewportDragMode mode) {
     updateDragDelta(delta);
 }
 
-void ViewportCameraController::updateDragDelta(Vec2 delta) {
+void ViewportCameraController::updateDragDelta(QVec2 delta) {
     if (dragMode_ == ViewportDragMode::Orbit || dragMode_ == ViewportDragMode::OrbitSnap) {
         const ViewportHostDefaults defaults = viewportHostDefaults();
         if (orthographicViewLocked_) {
@@ -339,7 +339,7 @@ void ViewportCameraController::scroll(float wheelDelta) {
     applyRuntimeTransform(state_, pivot_, cameraForward_, cameraUp_, quader_editor_core::viewport_zoom(input));
 }
 
-void ViewportCameraController::scrollToCursor(float wheelDelta, Vec2 localMouse) {
+void ViewportCameraController::scrollToCursor(float wheelDelta, QVec2 localMouse) {
     if (std::abs(wheelDelta) <= 0.000001f) {
         return;
     }
@@ -365,7 +365,7 @@ void ViewportCameraController::focusOrigin(float distance) {
     }
 }
 
-void ViewportCameraController::focusBounds(Vec3 minBounds, Vec3 maxBounds, float margin) {
+void ViewportCameraController::focusBounds(QVec3 minBounds, QVec3 maxBounds, float margin) {
     clearOrbitSnapSource();
     quader_editor_core::ViewportFrameBoundsInput input;
     input.camera = makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
@@ -393,9 +393,9 @@ void ViewportCameraController::unlockOrthographicView() {
     }
 }
 
-void ViewportCameraController::setViewDirection(Vec3 forwardDirection) {
+void ViewportCameraController::setViewDirection(QVec3 forwardDirection) {
     clearOrbitSnapSource();
-    const Vec3 direction = normalize(forwardDirection);
+    const QVec3 direction = normalize(forwardDirection);
     if (length(direction) <= 0.000001f) {
         return;
     }
@@ -404,7 +404,7 @@ void ViewportCameraController::setViewDirection(Vec3 forwardDirection) {
     pivot_ = state_.target;
 }
 
-void ViewportCameraController::flyMove(Vec3 localDirection, float deltaSeconds) {
+void ViewportCameraController::flyMove(QVec3 localDirection, float deltaSeconds) {
     if (length(localDirection) <= 0.000001f) {
         return;
     }
@@ -444,12 +444,12 @@ bool ViewportCameraController::flySpeedIsDefault() const {
 }
 
 ViewportCameraPose ViewportCameraController::pose() const {
-    const Vec3 fwd = forward();
-    const Vec3 eye = state_.target - fwd * state_.distance;
+    const QVec3 fwd = forward();
+    const QVec3 eye = state_.target - fwd * state_.distance;
     return {eye, state_.target, up()};
 }
 
-ViewportRay ViewportCameraController::rayFromViewportPoint(Vec2 localMouse) const {
+ViewportRay ViewportCameraController::rayFromViewportPoint(QVec2 localMouse) const {
     const quader_poly::Ray ray = quader_editor_core::ray_from_viewport_screen_point(
             makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_),
             toRuntime(localMouse));
@@ -459,13 +459,13 @@ ViewportRay ViewportCameraController::rayFromViewportPoint(Vec2 localMouse) cons
     };
 }
 
-ViewportScreenPoint ViewportCameraController::projectWorldPoint(Vec3 worldPoint) const {
+ViewportScreenPoint ViewportCameraController::projectWorldPoint(QVec3 worldPoint) const {
     const quader_editor_core::ViewportCameraState camera =
             makeRuntimeCamera(pose(), state_, viewportWidth_, viewportHeight_);
-    quader_poly::Vec2 screen{};
+    quader::QVec2 screen{};
     const bool projected = quader_editor_core::project_viewport_point(camera, toRuntime(worldPoint), screen);
     const ViewportCameraPose cameraPose = pose();
-    const Vec3 fwd = normalize(cameraPose.target - cameraPose.eye);
+    const QVec3 fwd = normalize(cameraPose.target - cameraPose.eye);
     const float depth = dot(worldPoint - cameraPose.eye, fwd);
     return {
             .position = {screen.x, screen.y},
@@ -479,27 +479,27 @@ float ViewportCameraController::zoomedDistance(float wheelDelta) const {
     return clamp(state_.distance / zoomFactor, kMinCameraDistance, 500.0f);
 }
 
-Vec3 ViewportCameraController::forward() const {
+QVec3 ViewportCameraController::forward() const {
     return cameraForward_;
 }
 
-Vec3 ViewportCameraController::right() const {
-    Vec3 value = cross(cameraForward_, cameraUp_);
+QVec3 ViewportCameraController::right() const {
+    QVec3 value = cross(cameraForward_, cameraUp_);
     if (length(value) <= 0.000001f) {
         value = {1.0f, 0.0f, 0.0f};
     }
     return normalize(value);
 }
 
-Vec3 ViewportCameraController::up() const {
-    Vec3 value = normalize(cameraUp_);
+QVec3 ViewportCameraController::up() const {
+    QVec3 value = normalize(cameraUp_);
     if (length(value) <= 0.000001f) {
         value = {0.0f, 1.0f, 0.0f};
     }
     return value;
 }
 
-void ViewportCameraController::setCameraBasis(Vec3 forwardDirection, Vec3 upDirection) {
+void ViewportCameraController::setCameraBasis(QVec3 forwardDirection, QVec3 upDirection) {
     const CameraBasis basis = makeCameraBasis(forwardDirection, upDirection, cameraForward_);
     cameraForward_ = basis.forward;
     cameraUp_ = basis.up;

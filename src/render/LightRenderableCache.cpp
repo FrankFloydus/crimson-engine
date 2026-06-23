@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/LightRenderableCache.h"
 
+#include "math/GlmBridge.h"
 #include "render/FilamentUtils.h"
 
 #include <filament/LightManager.h>
@@ -26,7 +27,7 @@ filament::LightManager::Type toFilamentLightType(LightType type) {
     return filament::LightManager::Type::DIRECTIONAL;
 }
 
-filament::math::float3 directionFromMatrix(const Mat4& transform) {
+filament::math::float3 directionFromMatrix(const QMat4& transform) {
     return toFilament(normalize(transformVector(transform, {0.0f, -1.0f, 1.0f})));
 }
 
@@ -54,7 +55,7 @@ void LightRenderableCache::shutdown() {
     scene_ = nullptr;
 }
 
-void LightRenderableCache::syncLight(EntityId entityId, const LightComponent& light, const Mat4& worldTransform) {
+void LightRenderableCache::syncLight(EntityId entityId, const LightComponent& light, const QMat4& worldTransform) {
     if (!engine_ || !scene_) {
         return;
     }

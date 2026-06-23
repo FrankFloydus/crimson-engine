@@ -29,19 +29,19 @@ struct InsertEdgeLoopSnapResult {
 	bool snapped_to_existing_edge = false;
 };
 
-quader_geometry::Vec3f to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec3 to_poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 to_poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_poly::Vec3 normalize_or(quader_poly::Vec3 value, quader_poly::Vec3 fallback)
+quader::QVec3 normalize_or(quader::QVec3 value, quader::QVec3 fallback)
 {
-	const quader_geometry::Vec3f geometry_value = to_geometry_vec3(value);
+	const quader_geometry::QVec3f geometry_value = to_geometry_vec3(value);
 	return quader_geometry::length_squared(geometry_value) <= static_cast<float>(tool_epsilon * tool_epsilon) ?
 		fallback :
 		to_poly_vec3(quader_geometry::normalize_or_zero(geometry_value));
@@ -127,7 +127,7 @@ std::optional<float> snap_insert_edge_loop_preview_factor(const quader_poly::Doc
 	return result.snapped_to_existing_edge ? std::optional<float> {} : std::optional<float> { result.factor };
 }
 
-quader_poly::Vec3 snap_knife_point_to_grid(quader_poly::Vec3 point, double grid_size, bool snap_enabled)
+quader::QVec3 snap_knife_point_to_grid(quader::QVec3 point, double grid_size, bool snap_enabled)
 {
 	if (!snap_enabled || !std::isfinite(grid_size) || grid_size <= 0.0001) {
 		return point;
@@ -139,32 +139,32 @@ quader_poly::Vec3 snap_knife_point_to_grid(quader_poly::Vec3 point, double grid_
 	};
 }
 
-quader_poly::Vec3 constrain_knife_point_to_axis(
-		quader_poly::Vec3 previous,
-		quader_poly::Vec3 point,
-		quader_poly::Vec3 face_normal,
+quader::QVec3 constrain_knife_point_to_axis(
+		quader::QVec3 previous,
+		quader::QVec3 point,
+		quader::QVec3 face_normal,
 		double grid_size,
 		bool snap_enabled)
 {
-	const quader_poly::Vec3 delta = point - previous;
-	if (quader_poly::length_squared(delta) <= tool_epsilon) {
+	const quader::QVec3 delta = point - previous;
+	if (quader::length_squared(delta) <= tool_epsilon) {
 		return previous;
 	}
 
-	const std::array<quader_poly::Vec3, 3> axes {
-		quader_poly::Vec3 { 1.0F, 0.0F, 0.0F },
-		quader_poly::Vec3 { 0.0F, 1.0F, 0.0F },
-		quader_poly::Vec3 { 0.0F, 0.0F, 1.0F },
+	const std::array<quader::QVec3, 3> axes {
+		quader::QVec3 { 1.0F, 0.0F, 0.0F },
+		quader::QVec3 { 0.0F, 1.0F, 0.0F },
+		quader::QVec3 { 0.0F, 0.0F, 1.0F },
 	};
-	const quader_poly::Vec3 normal = normalize_or(face_normal, { 0.0F, 1.0F, 0.0F });
-	const quader_poly::Vec3 direction = normalize_or(delta, { 1.0F, 0.0F, 0.0F });
-	const quader_geometry::Vec3f geometry_normal = to_geometry_vec3(normal);
-	const quader_geometry::Vec3f geometry_direction = to_geometry_vec3(direction);
-	quader_poly::Vec3 best_axis = axes[0];
+	const quader::QVec3 normal = normalize_or(face_normal, { 0.0F, 1.0F, 0.0F });
+	const quader::QVec3 direction = normalize_or(delta, { 1.0F, 0.0F, 0.0F });
+	const quader_geometry::QVec3f geometry_normal = to_geometry_vec3(normal);
+	const quader_geometry::QVec3f geometry_direction = to_geometry_vec3(direction);
+	quader::QVec3 best_axis = axes[0];
 	double best_score = -std::numeric_limits<double>::infinity();
-	for (quader_poly::Vec3 axis : axes) {
-		const quader_geometry::Vec3f geometry_axis = to_geometry_vec3(axis);
-		const quader_geometry::Vec3f projected_axis =
+	for (quader::QVec3 axis : axes) {
+		const quader_geometry::QVec3f geometry_axis = to_geometry_vec3(axis);
+		const quader_geometry::QVec3f projected_axis =
 			quader_geometry::normalize_or_zero(geometry_axis - (geometry_normal * quader_geometry::dot(geometry_axis, geometry_normal)), 0.000001F);
 		if (quader_geometry::length_squared(projected_axis) <= 0.000001F) {
 			continue;

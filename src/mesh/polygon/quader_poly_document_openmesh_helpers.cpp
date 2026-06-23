@@ -55,12 +55,12 @@ struct OpenMeshTopologyDocument {
     std::map<ElementId, OpenMeshTopologyMesh::VertexHandle> vertices_by_id;
 };
 
-OpenMeshTopologyMesh::Point openmesh_point_from_vec3(const Vec3& position)
+OpenMeshTopologyMesh::Point openmesh_point_from_vec3(const quader::QVec3& position)
 {
     return { position.x, position.y, position.z };
 }
 
-Vec3 vec3_from_openmesh_point(const OpenMeshTopologyMesh::Point& point)
+quader::QVec3 vec3_from_openmesh_point(const OpenMeshTopologyMesh::Point& point)
 {
     return { point[0], point[1], point[2] };
 }

@@ -53,19 +53,19 @@ float clamp_range(float value, float minimum, float maximum)
 	return std::clamp(finite_or(value, minimum), minimum, maximum);
 }
 
-bool vec3_equal(quader_poly::Vec3 left, quader_poly::Vec3 right)
+bool vec3_equal(quader::QVec3 left, quader::QVec3 right)
 {
 	return left.x == right.x && left.y == right.y && left.z == right.z;
 }
 
-bool vec3_tiny(quader_poly::Vec3 value)
+bool vec3_tiny(quader::QVec3 value)
 {
-	return quader_poly::length_squared(value) <= transform_point_epsilon;
+	return quader::length_squared(value) <= transform_point_epsilon;
 }
 
-quader_poly::Vec3 normalized_or(quader_poly::Vec3 value, quader_poly::Vec3 fallback)
+quader::QVec3 normalized_or(quader::QVec3 value, quader::QVec3 fallback)
 {
-	const float length = quader_poly::length(value);
+	const float length = quader::length(value);
 	if (length <= 0.000001F) {
 		return fallback;
 	}
@@ -74,18 +74,18 @@ quader_poly::Vec3 normalized_or(quader_poly::Vec3 value, quader_poly::Vec3 fallb
 
 bool basis_is_orthonormal(const quader_poly::Transform3& transform)
 {
-	const float x_length = quader_poly::length(transform.x_axis);
-	const float y_length = quader_poly::length(transform.y_axis);
-	const float z_length = quader_poly::length(transform.z_axis);
+	const float x_length = quader::length(transform.x_axis);
+	const float y_length = quader::length(transform.y_axis);
+	const float z_length = quader::length(transform.z_axis);
 	return std::abs(x_length - 1.0F) <= transform_basis_epsilon &&
 		std::abs(y_length - 1.0F) <= transform_basis_epsilon &&
 		std::abs(z_length - 1.0F) <= transform_basis_epsilon &&
-		std::abs(quader_poly::dot(transform.x_axis, transform.y_axis)) <= transform_basis_epsilon &&
-		std::abs(quader_poly::dot(transform.x_axis, transform.z_axis)) <= transform_basis_epsilon &&
-		std::abs(quader_poly::dot(transform.y_axis, transform.z_axis)) <= transform_basis_epsilon;
+		std::abs(quader::dot(transform.x_axis, transform.y_axis)) <= transform_basis_epsilon &&
+		std::abs(quader::dot(transform.x_axis, transform.z_axis)) <= transform_basis_epsilon &&
+		std::abs(quader::dot(transform.y_axis, transform.z_axis)) <= transform_basis_epsilon;
 }
 
-quader_poly::Vec3 basis_xform(const quader_poly::Transform3& transform, quader_poly::Vec3 point)
+quader::QVec3 basis_xform(const quader_poly::Transform3& transform, quader::QVec3 point)
 {
 	return {
 		transform.x_axis.x * point.x + transform.y_axis.x * point.y + transform.z_axis.x * point.z,
@@ -94,14 +94,14 @@ quader_poly::Vec3 basis_xform(const quader_poly::Transform3& transform, quader_p
 	};
 }
 
-quader_poly::Vec3 transformed_point(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, quader_poly::Vec3 point)
+quader::QVec3 transformed_point(const quader_poly::Transform3& transform, quader::QVec3 pivot, quader::QVec3 point)
 {
-	const quader_poly::Vec3 pivot_after_basis = basis_xform(transform, pivot);
-	const quader_poly::Vec3 translation = pivot + transform.origin - pivot_after_basis;
+	const quader::QVec3 pivot_after_basis = basis_xform(transform, pivot);
+	const quader::QVec3 translation = pivot + transform.origin - pivot_after_basis;
 	return basis_xform(transform, point) + translation;
 }
 
-void include_point(Bounds3& bounds, quader_poly::Vec3 point)
+void include_point(Bounds3& bounds, quader::QVec3 point)
 {
 	if (bounds.empty) {
 		bounds.empty = false;
@@ -277,9 +277,9 @@ bool clear_light_selection_state(std::vector<LightEntity>& lights, int& active_l
 	return changed;
 }
 
-std::optional<quader_poly::Vec3> selected_light_center(const std::vector<LightEntity>& lights)
+std::optional<quader::QVec3> selected_light_center(const std::vector<LightEntity>& lights)
 {
-	quader_poly::Vec3 sum {};
+	quader::QVec3 sum {};
 	int count = 0;
 	for (const LightEntity& light : lights) {
 		if (!light.selected) {
@@ -314,7 +314,7 @@ Bounds3 light_bounds(const std::vector<LightEntity>& lights)
 	return bounds;
 }
 
-CommandResult translate_selected_lights(std::vector<LightEntity>& lights, quader_poly::Vec3 delta)
+CommandResult translate_selected_lights(std::vector<LightEntity>& lights, quader::QVec3 delta)
 {
 	if (vec3_tiny(delta)) {
 		return ok_result(false);
@@ -333,7 +333,7 @@ CommandResult translate_selected_lights(std::vector<LightEntity>& lights, quader
 CommandResult transform_selected_lights(
 		std::vector<LightEntity>& lights,
 		const quader_poly::Transform3& transform,
-		quader_poly::Vec3 pivot)
+		quader::QVec3 pivot)
 {
 	bool changed = false;
 	const bool transform_direction = basis_is_orthonormal(transform);
@@ -341,8 +341,8 @@ CommandResult transform_selected_lights(
 		if (!light.selected) {
 			continue;
 		}
-		const quader_poly::Vec3 next_position = transformed_point(transform, pivot, light.position);
-		const quader_poly::Vec3 next_direction =
+		const quader::QVec3 next_position = transformed_point(transform, pivot, light.position);
+		const quader::QVec3 next_direction =
 			transform_direction ? normalized_or(basis_xform(transform, light.direction), light.direction) : light.direction;
 		if (!vec3_equal(light.position, next_position)) {
 			light.position = next_position;
@@ -356,7 +356,7 @@ CommandResult transform_selected_lights(
 	return ok_result(changed);
 }
 
-CommandResult EditorSession::create_light(LightType type, quader_poly::Vec3 position, quader_poly::Vec3 direction)
+CommandResult EditorSession::create_light(LightType type, quader::QVec3 position, quader::QVec3 direction)
 {
 	type = sanitize_light_type(type);
 	state_.next_light_id = next_light_entity_id(state_.lights, state_.next_light_id);
@@ -510,7 +510,7 @@ CommandResult EditorSession::set_light_float(int light_id, LightFloatProperty pr
 	return ok_result(true);
 }
 
-CommandResult EditorSession::set_light_position(int light_id, quader_poly::Vec3 position)
+CommandResult EditorSession::set_light_position(int light_id, quader::QVec3 position)
 {
 	LightEntity* light = light_by_id(state_.lights, light_id);
 	if (light == nullptr) {
@@ -524,7 +524,7 @@ CommandResult EditorSession::set_light_position(int light_id, quader_poly::Vec3 
 	return ok_result(true);
 }
 
-CommandResult EditorSession::set_light_direction(int light_id, quader_poly::Vec3 direction)
+CommandResult EditorSession::set_light_direction(int light_id, quader::QVec3 direction)
 {
 	LightEntity* light = light_by_id(state_.lights, light_id);
 	if (light == nullptr) {

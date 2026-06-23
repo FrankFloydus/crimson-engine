@@ -13,7 +13,7 @@ TEST_CASE("translate selection moves only vertices referenced by the active sele
 	SECTION("face selections translate every face vertex")
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
-		const Vec3 bottom_left_before = find_vertex(fixture.document, fixture.bottom_left)->position;
+		const quader::QVec3 bottom_left_before = find_vertex(fixture.document, fixture.bottom_left)->position;
 		Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 
 		const OperationResult result = translate_selection(fixture.document, selection, { 2.0F, -1.0F, 0.5F });
@@ -21,21 +21,21 @@ TEST_CASE("translate selection moves only vertices referenced by the active sele
 		REQUIRE(result.changed);
 		const Vertex* bottom_left = find_vertex(fixture.document, fixture.bottom_left);
 		REQUIRE(bottom_left != nullptr);
-		REQUIRE(qdr_test::vec_nearly_equal(bottom_left->position, bottom_left_before + Vec3 { 2.0F, -1.0F, 0.5F }));
+		REQUIRE(qdr_test::vec_nearly_equal(bottom_left->position, bottom_left_before + quader::QVec3 { 2.0F, -1.0F, 0.5F }));
 		REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 	}
 
 	SECTION("vertex selections leave unselected vertices untouched")
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
-		const Vec3 selected_before = find_vertex(fixture.document, fixture.bottom_left)->position;
-		const Vec3 unselected_before = find_vertex(fixture.document, fixture.bottom_right)->position;
+		const quader::QVec3 selected_before = find_vertex(fixture.document, fixture.bottom_left)->position;
+		const quader::QVec3 unselected_before = find_vertex(fixture.document, fixture.bottom_right)->position;
 		Selection selection = qdr_test::vertex_selection({ fixture.bottom_left }, fixture.bottom_left);
 
 		const OperationResult result = translate_selection(fixture.document, selection, { 0.0F, 3.0F, 0.0F });
 
 		REQUIRE(result.changed);
-		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_left)->position, selected_before + Vec3 { 0.0F, 3.0F, 0.0F }));
+		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_left)->position, selected_before + quader::QVec3 { 0.0F, 3.0F, 0.0F }));
 		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_right)->position, unselected_before));
 	}
 

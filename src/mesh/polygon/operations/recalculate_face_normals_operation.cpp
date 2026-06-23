@@ -56,7 +56,7 @@ OperationResult recalculate_selected_face_normals_impl(Document& document, const
     }
 
     Document candidate = document;
-    const Vec3 center = document_vertex_centroid(candidate);
+    const quader::QVec3 center = document_vertex_centroid(candidate);
     bool changed = false;
     bool found_face = false;
     for (const ElementId face_id : selection.faces) {
@@ -66,7 +66,7 @@ OperationResult recalculate_selected_face_normals_impl(Document& document, const
         }
 
         found_face = true;
-        Vec3 expected_normal = face_centroid(candidate, *face) - center;
+        quader::QVec3 expected_normal = face_centroid(candidate, *face) - center;
         if (!outside) {
             expected_normal = expected_normal * -1.0F;
         }
@@ -74,9 +74,9 @@ OperationResult recalculate_selected_face_normals_impl(Document& document, const
             continue;
         }
 
-        const Vec3 before = face_normal(candidate, *face);
+        const quader::QVec3 before = face_normal(candidate, *face);
         orient_face_toward_normal(candidate, *face, expected_normal);
-        const Vec3 after = face_normal(candidate, *face);
+        const quader::QVec3 after = face_normal(candidate, *face);
         if (length_squared(before) > epsilon && length_squared(after) > epsilon && dot(before, after) < 0.0F) {
             changed = true;
         }

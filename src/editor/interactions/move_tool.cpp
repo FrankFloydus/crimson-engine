@@ -40,7 +40,7 @@ bool transform_axis_is_single_axis(TransformAxis axis)
 		axis == TransformAxis::z;
 }
 
-double axis_coordinate(quader_poly::Vec3 position, TransformAxis axis)
+double axis_coordinate(quader::QVec3 position, TransformAxis axis)
 {
 	switch (axis) {
 	case TransformAxis::x:
@@ -54,7 +54,7 @@ double axis_coordinate(quader_poly::Vec3 position, TransformAxis axis)
 	}
 }
 
-quader_poly::Vec3 transform_plane_normal(TransformAxis axis)
+quader::QVec3 transform_plane_normal(TransformAxis axis)
 {
 	if (axis == TransformAxis::xy) {
 		return { 0.0F, 0.0F, 1.0F };
@@ -68,9 +68,9 @@ quader_poly::Vec3 transform_plane_normal(TransformAxis axis)
 	return {};
 }
 
-quader_poly::Vec3 plane_drag_delta(TransformAxis axis, quader_poly::Vec3 raw_delta, double grid_size, bool grid_enabled)
+quader::QVec3 plane_drag_delta(TransformAxis axis, quader::QVec3 raw_delta, double grid_size, bool grid_enabled)
 {
-	quader_poly::Vec3 delta;
+	quader::QVec3 delta;
 	if (axis == TransformAxis::xy) {
 		delta.x = static_cast<float>(maybe_snap_world_value(raw_delta.x, grid_size, grid_enabled));
 		delta.y = static_cast<float>(maybe_snap_world_value(raw_delta.y, grid_size, grid_enabled));
@@ -84,9 +84,9 @@ quader_poly::Vec3 plane_drag_delta(TransformAxis axis, quader_poly::Vec3 raw_del
 	return delta;
 }
 
-quader_poly::Vec3 snap_center_drag_delta(TransformAxis axis, quader_poly::Vec3 center_world, quader_poly::Vec3 raw_delta, double grid_size)
+quader::QVec3 snap_center_drag_delta(TransformAxis axis, quader::QVec3 center_world, quader::QVec3 raw_delta, double grid_size)
 {
-	quader_poly::Vec3 delta;
+	quader::QVec3 delta;
 	if (axis == TransformAxis::x || axis == TransformAxis::xy || axis == TransformAxis::xz) {
 		delta.x = static_cast<float>(snap_world_value(static_cast<double>(center_world.x + raw_delta.x), grid_size) - center_world.x);
 	}
@@ -234,7 +234,7 @@ public:
 
 	[[nodiscard]] MoveBeginResult begin_move_drag(const MoveBeginInput& input) const
 	{
-		quader_poly::Vec3 next_world_axis = input.has_world_direction ? input.world_direction : axis_vector(input.axis);
+		quader::QVec3 next_world_axis = input.has_world_direction ? input.world_direction : axis_vector(input.axis);
 		if (vec3_is_tiny(next_world_axis)) {
 			next_world_axis = axis_vector(input.axis);
 			if (vec3_is_tiny(next_world_axis)) {
@@ -242,7 +242,7 @@ public:
 			}
 		}
 
-		const quader_poly::Vec3 next_local_axis = inverse_transform_vector(input.model_transform, next_world_axis);
+		const quader::QVec3 next_local_axis = inverse_transform_vector(input.model_transform, next_world_axis);
 		if (vec3_is_tiny(next_local_axis)) {
 			return { false, "Invalid local move axis.", {} };
 		}
@@ -320,7 +320,7 @@ public:
 
 	[[nodiscard]] MovePreviewResult preview_move_to_axis_snap_target(
 			MoveToolState& state,
-			quader_poly::Vec3 target_position) const
+			quader::QVec3 target_position) const
 	{
 		if (!state.active) {
 			return { false, "Move tool is not active.", {}, {}, {} };
@@ -338,7 +338,7 @@ public:
 
 	[[nodiscard]] MovePreviewResult preview_move_from_viewport(
 			MoveToolState& state,
-			quader_poly::Vec2 screen_position,
+			quader::QVec2 screen_position,
 			quader_poly::Ray ray,
 			const ViewportCameraState& camera,
 			bool precision,
@@ -350,24 +350,24 @@ public:
 			return { false, "Move tool is not active.", {}, {}, {} };
 		}
 
-		quader_poly::Vec3 delta;
+		quader::QVec3 delta;
 		double distance = 0.0;
 		if (transform_axis_is_plane(state.axis)) {
 			const DragPointResult current_plane_point =
 				drag_point_on_plane(ray, state.center_world, transform_plane_normal(state.axis));
 			if (current_plane_point.ok) {
-				const quader_poly::Vec3 raw_delta = current_plane_point.point - state.plane_start_point;
+				const quader::QVec3 raw_delta = current_plane_point.point - state.plane_start_point;
 				delta = snap_center_to_grid && grid_enabled
 					? snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size)
 					: plane_drag_delta(state.axis, raw_delta, grid_size, grid_enabled);
-				distance = quader_poly::length(delta);
+				distance = quader::length(delta);
 			}
 		} else {
-			const quader_poly::Vec2 screen_delta = vec2_sub(screen_position, state.start_screen);
+			const quader::QVec2 screen_delta = vec2_sub(screen_position, state.start_screen);
 			const double pixel_delta = vec2_dot(screen_delta, state.screen_axis);
 			const double raw_distance = pixel_delta * viewport_world_units_per_pixel(camera, state.center_world);
 			if (snap_center_to_grid && grid_enabled) {
-				const quader_poly::Vec3 raw_delta = vec3_scale(state.world_axis, raw_distance);
+				const quader::QVec3 raw_delta = vec3_scale(state.world_axis, raw_distance);
 				delta = snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size);
 				distance = axis_coordinate(state.center_world + delta, state.axis) - axis_coordinate(state.center_world, state.axis);
 			} else {
@@ -427,7 +427,7 @@ public:
 
 		const double epsilon = std::max(input.epsilon, 0.0);
 		if (state.tool == ViewportInteractionTool::move) {
-			const quader_poly::Vec3 previous_delta = state.move.preview_delta;
+			const quader::QVec3 previous_delta = state.move.preview_delta;
 			const TransformSnapTarget previous_snap_target = state.snap_target;
 			state.snap_target = {};
 			MovePreviewResult preview;
@@ -451,8 +451,8 @@ public:
 			}
 			const bool snap_changed = !snap_targets_match(previous_snap_target, state.snap_target);
 			const bool non_zero_preview =
-				quader_poly::length_squared(previous_delta) > static_cast<float>(epsilon * epsilon) ||
-				quader_poly::length_squared(preview.preview_delta) > static_cast<float>(epsilon * epsilon);
+				quader::length_squared(previous_delta) > static_cast<float>(epsilon * epsilon) ||
+				quader::length_squared(preview.preview_delta) > static_cast<float>(epsilon * epsilon);
 			if (!snap_changed && non_zero_preview && vec3_distance_squared(previous_delta, preview.preview_delta) <= epsilon * epsilon) {
 				return { true, false, {} };
 			}
@@ -486,7 +486,7 @@ public:
 		}
 
 		if (state.tool == ViewportInteractionTool::scale) {
-			const quader_poly::Vec3 previous_scale = state.scale.preview_scale;
+			const quader::QVec3 previous_scale = state.scale.preview_scale;
 			const ScalePreviewResult preview =
 				preview_scale_from_screen_position(state.scale, input.screen_position, !input.precision, input.grid_size);
 			if (!preview.ok) {
@@ -546,14 +546,14 @@ MovePreviewResult preview_move_from_drag_pixels(MoveToolState& state, double pix
 	return move_tool_impl().preview_move_from_drag_pixels(state, pixels, precision, grid_enabled, grid_size);
 }
 
-MovePreviewResult preview_move_to_axis_snap_target(MoveToolState& state, quader_poly::Vec3 target_position)
+MovePreviewResult preview_move_to_axis_snap_target(MoveToolState& state, quader::QVec3 target_position)
 {
 	return move_tool_impl().preview_move_to_axis_snap_target(state, target_position);
 }
 
 MovePreviewResult preview_move_from_viewport(
 		MoveToolState& state,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		quader_poly::Ray ray,
 		const ViewportCameraState& camera,
 		bool precision,
@@ -664,7 +664,7 @@ ModalMoveUpdatePlan plan_modal_move_drag_update(const ModalMoveUpdateInput& inpu
 		return plan;
 	}
 	plan.changed = true;
-	if (quader_poly::length_squared(input.delta) <= static_cast<float>(epsilon)) {
+	if (quader::length_squared(input.delta) <= static_cast<float>(epsilon)) {
 		plan.route = ModalMovePreviewRoute::clear_preview;
 		return plan;
 	}
@@ -689,7 +689,7 @@ ModalMoveCommitPlan plan_modal_move_drag_commit(const ModalMoveCommitInput& inpu
 	}
 	plan.handled = true;
 	const double epsilon = std::max(input.epsilon, 0.0);
-	if (quader_poly::length_squared(input.delta) <= static_cast<float>(epsilon)) {
+	if (quader::length_squared(input.delta) <= static_cast<float>(epsilon)) {
 		plan.restore_base_snapshot = input.duplicate_active;
 		plan.restore_selection = input.duplicate_active;
 		return plan;

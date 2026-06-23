@@ -39,9 +39,9 @@ public:
     QuaderApiVoidResult setTransform(TransformComponent transform);
     QuaderApiVoidResult setVisible(bool visible);
     QuaderApiVoidResult setLocked(bool locked);
-    QuaderApiVoidResult move(Vec3 delta);
-    QuaderApiVoidResult rotateEuler(Vec3 eulerRadians, Vec3 pivot = {});
-    QuaderApiVoidResult scale(Vec3 scale, Vec3 pivot = {});
+    QuaderApiVoidResult move(QVec3 delta);
+    QuaderApiVoidResult rotateEuler(QVec3 eulerRadians, QVec3 pivot = {});
+    QuaderApiVoidResult scale(QVec3 scale, QVec3 pivot = {});
 
     QuaderApiVoidResult assignMaterial(AssetId material);
     QuaderApiVoidResult assignMaterialSlot(std::uint32_t materialSlot);

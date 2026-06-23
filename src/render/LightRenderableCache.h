@@ -33,7 +33,7 @@ public:
         return engine_ != nullptr && scene_ != nullptr;
     }
 
-    void syncLight(EntityId entityId, const LightComponent& light, const Mat4& worldTransform);
+    void syncLight(EntityId entityId, const LightComponent& light, const QMat4& worldTransform);
     void remove(EntityId entityId);
     void removeExcept(const std::unordered_set<EntityId>& liveLightEntities);
 

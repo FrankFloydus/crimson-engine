@@ -23,9 +23,9 @@ std::string message(std::string_view label, std::string_view suffix)
 	return std::string(label) + std::string(suffix);
 }
 
-quader_poly::Vec3 safe_face_normal(quader_poly::Vec3 normal)
+quader::QVec3 safe_face_normal(quader::QVec3 normal)
 {
-	return vec3_is_tiny(normal) ? quader_poly::Vec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(normal);
+	return vec3_is_tiny(normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(normal);
 }
 
 } // namespace
@@ -56,8 +56,8 @@ DrawnPlaneToolStateConstRef drawn_plane_state_ref(const DrawnPlaneToolState& sta
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::capture_first(
 		DrawnPlaneToolStateRef state,
-		quader_poly::Vec3 position,
-		quader_poly::Vec3 plane_normal,
+		quader::QVec3 position,
+		quader::QVec3 plane_normal,
 		std::string_view) const
 {
 	state.points = { position };
@@ -70,7 +70,7 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::capture_first(
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::capture_second(
 		DrawnPlaneToolStateRef state,
-		quader_poly::Vec3 position,
+		quader::QVec3 position,
 		std::string_view label) const
 {
 	if (state.points.size() != 1) {
@@ -88,7 +88,7 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::capture_second(
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_new_point(
 		DrawnPlaneToolStateRef state,
-		quader_poly::Vec3 position,
+		quader::QVec3 position,
 		std::string_view label) const
 {
 	if (state.points.size() != 1 && state.points.size() != 2) {
@@ -107,8 +107,8 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_new_point(
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_point(
 		DrawnPlaneToolStateRef state,
-		quader_poly::Vec3 position,
-		quader_poly::Vec3 plane_normal,
+		quader::QVec3 position,
+		quader::QVec3 plane_normal,
 		std::string_view label) const
 {
 	if (state.dragging_point_index < 0 || state.dragging_point_index >= static_cast<int>(state.points.size())) {
@@ -117,13 +117,13 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_point(
 	if (point_repeats_other({ state.points, state.face_normal, state.dragging_point_index, state.dragging_new_point, state.dragging_line, state.drag_line_anchor }, position, state.dragging_point_index)) {
 		return { false, false, message(label, " points must stay distinct.") };
 	}
-	std::vector<quader_poly::Vec3> next_points = state.points;
+	std::vector<quader::QVec3> next_points = state.points;
 	next_points[static_cast<std::size_t>(state.dragging_point_index)] = position;
 	if (next_points.size() >= 2 && vec3_distance_squared(next_points[0], next_points[1]) <= drawn_plane_point_epsilon_squared) {
 		return { false, false, message(label, " line is too short.") };
 	}
 	state.points = std::move(next_points);
-	if (state.dragging_point_index == 0 && quader_poly::length_squared(plane_normal) > drawn_plane_epsilon_squared) {
+	if (state.dragging_point_index == 0 && quader::length_squared(plane_normal) > drawn_plane_epsilon_squared) {
 		state.face_normal = normalized_axis(plane_normal);
 	}
 	return { true, true };
@@ -145,7 +145,7 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::begin_point_drag(
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::begin_line_drag(
 		DrawnPlaneToolStateRef state,
-		quader_poly::Vec3 anchor,
+		quader::QVec3 anchor,
 		std::string_view label) const
 {
 	if (state.points.size() < 2U) {
@@ -160,7 +160,7 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::begin_line_drag(
 
 DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_line(
 		DrawnPlaneToolStateRef state,
-		quader_poly::Vec3 position,
+		quader::QVec3 position,
 		std::string_view label) const
 {
 	if (!state.dragging_line) {
@@ -170,13 +170,13 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::update_dragged_line(
 		return { false, false, message(label, " needs a placed line to drag.") };
 	}
 
-	const quader_poly::Vec3 delta = position - state.drag_line_anchor;
+	const quader::QVec3 delta = position - state.drag_line_anchor;
 	state.drag_line_anchor = position;
-	if (vec3_distance_squared(delta, quader_poly::Vec3 {}) <= drawn_plane_epsilon_squared) {
+	if (vec3_distance_squared(delta, quader::QVec3 {}) <= drawn_plane_epsilon_squared) {
 		return { true, false };
 	}
 
-	for (quader_poly::Vec3& point : state.points) {
+	for (quader::QVec3& point : state.points) {
 		point += delta;
 	}
 	return { true, true };
@@ -200,16 +200,16 @@ DrawnPlaneToolResult DrawnPlaneToolLogic::end_line_drag(DrawnPlaneToolStateRef s
 	return { true, false };
 }
 
-std::vector<quader_poly::Vec3> DrawnPlaneToolLogic::overlay_points(
+std::vector<quader::QVec3> DrawnPlaneToolLogic::overlay_points(
 		DrawnPlaneToolStateConstRef state,
-		quader_poly::Vec3 hover_position,
+		quader::QVec3 hover_position,
 		bool has_hover) const
 {
 	if (state.points.empty()) {
-		return has_hover ? std::vector<quader_poly::Vec3> { hover_position } : state.points;
+		return has_hover ? std::vector<quader::QVec3> { hover_position } : state.points;
 	}
 
-	std::vector<quader_poly::Vec3> points;
+	std::vector<quader::QVec3> points;
 	points.push_back(state.points[0]);
 	if (state.points.size() >= 2U) {
 		points.push_back(state.points[1]);
@@ -221,7 +221,7 @@ std::vector<quader_poly::Vec3> DrawnPlaneToolLogic::overlay_points(
 	return points;
 }
 
-std::vector<quader_poly::Vec3> DrawnPlaneToolLogic::plane_points(DrawnPlaneToolStateConstRef state) const
+std::vector<quader::QVec3> DrawnPlaneToolLogic::plane_points(DrawnPlaneToolStateConstRef state) const
 {
 	if (state.points.size() < 2U) {
 		return {};
@@ -233,9 +233,9 @@ std::vector<quader_poly::Vec3> DrawnPlaneToolLogic::plane_points(DrawnPlaneToolS
 	};
 }
 
-bool DrawnPlaneToolLogic::point_repeats_existing(DrawnPlaneToolStateConstRef state, quader_poly::Vec3 point) const
+bool DrawnPlaneToolLogic::point_repeats_existing(DrawnPlaneToolStateConstRef state, quader::QVec3 point) const
 {
-	for (const quader_poly::Vec3 existing : state.points) {
+	for (const quader::QVec3 existing : state.points) {
 		if (vec3_distance_squared(existing, point) <= drawn_plane_point_epsilon_squared) {
 			return true;
 		}
@@ -245,7 +245,7 @@ bool DrawnPlaneToolLogic::point_repeats_existing(DrawnPlaneToolStateConstRef sta
 
 bool DrawnPlaneToolLogic::point_repeats_other(
 		DrawnPlaneToolStateConstRef state,
-		quader_poly::Vec3 point,
+		quader::QVec3 point,
 		int point_index) const
 {
 	for (int i = 0; i < static_cast<int>(state.points.size()); ++i) {
@@ -278,7 +278,7 @@ bool DrawnPlaneToolLogic::update_hover(
 		DrawnPlaneHoverState& state,
 		bool valid,
 		int object_id,
-		quader_poly::Vec3 position,
+		quader::QVec3 position,
 		double epsilon) const
 {
 	const bool changed = state.valid != valid ||
@@ -296,26 +296,26 @@ const DrawnPlaneToolLogic& drawn_plane_tool_logic()
 	return logic;
 }
 
-DrawnPlaneSurface drawn_plane_surface_from_points(std::span<const quader_poly::Vec3> points)
+DrawnPlaneSurface drawn_plane_surface_from_points(std::span<const quader::QVec3> points)
 {
 	if (points.size() < 3U) {
 		return { false, {}, {}, "Drawn plane needs three plane points." };
 	}
-	const quader_poly::Vec3 first_edge = points[1] - points[0];
-	const quader_poly::Vec3 second_edge = points[2] - points[0];
-	const quader_poly::Vec3 normal = vec3_cross(first_edge, second_edge);
+	const quader::QVec3 first_edge = points[1] - points[0];
+	const quader::QVec3 second_edge = points[2] - points[0];
+	const quader::QVec3 normal = vec3_cross(first_edge, second_edge);
 	if (vec3_is_tiny(normal)) {
 		return { false, {}, {}, "Drawn plane is degenerate." };
 	}
 	return { true, points[0], normalized_axis(normal), {} };
 }
 
-quader_poly::Vec3 reflect_point_across_plane(
-		quader_poly::Vec3 point,
-		quader_poly::Vec3 plane_origin,
-		quader_poly::Vec3 plane_normal)
+quader::QVec3 reflect_point_across_plane(
+		quader::QVec3 point,
+		quader::QVec3 plane_origin,
+		quader::QVec3 plane_normal)
 {
-	const quader_poly::Vec3 normal = safe_face_normal(plane_normal);
+	const quader::QVec3 normal = safe_face_normal(plane_normal);
 	const float distance = static_cast<float>(vec3_dot(point - plane_origin, normal));
 	return point - normal * (2.0F * distance);
 }

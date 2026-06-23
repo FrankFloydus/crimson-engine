@@ -170,7 +170,7 @@ std::string localizedViewportShadingModeLabel(const LocalizationService& localiz
 }
 
 std::optional<ImVec2> projectWorldToViewport(
-        Vec3 world,
+        QVec3 world,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize) {
@@ -188,9 +188,9 @@ std::optional<ImVec2> projectWorldToViewport(
 }
 
 std::optional<int> hitDrawnPlaneCapturedPoint(
-        const std::array<Vec3, 3>& points,
+        const std::array<QVec3, 3>& points,
         int capturedPointCount,
-        Vec2 mouseLocal,
+        QVec2 mouseLocal,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize) {
@@ -211,10 +211,10 @@ std::optional<int> hitDrawnPlaneCapturedPoint(
 }
 
 bool hitDrawnPlaneLine(
-        const std::array<Vec3, 3>& points,
+        const std::array<QVec3, 3>& points,
         int capturedPointCount,
         bool hasLine,
-        Vec2 mouseLocal,
+        QVec2 mouseLocal,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize) {
@@ -782,9 +782,9 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         AssetRegistry& assets,
         ModelingSessionService& modeling,
         AssetId defaultMaterial,
-        Vec2 capturedMouseDelta,
+        QVec2 capturedMouseDelta,
         bool* viewportCursorCaptureRequested,
-        Vec2* viewportCursorCapturePoint,
+        QVec2* viewportCursorCapturePoint,
         const UIContext& uiContext) {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -841,7 +841,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         Pane& paneState = pane(placement.paneId);
         const ImVec2 itemMin = paneRectMin(canvasMin, available, placement.normalizedRect);
         const ImVec2 itemSize = paneRectSize(available, placement.normalizedRect);
-        const Vec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
+        const QVec2 renderSize = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
         viewportWorkspace.setPaneRenderSize(placement.paneId, renderSize);
         viewportWorkspace.setPaneVisible(placement.paneId, true);
         paneState.renderer.resize(
@@ -1014,9 +1014,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         AssetRegistry& assets,
         ModelingSessionService& modeling,
         AssetId defaultMaterial,
-        Vec2 capturedMouseDelta,
+        QVec2 capturedMouseDelta,
         bool* viewportCursorCaptureRequested,
-        Vec2* viewportCursorCapturePoint,
+        QVec2* viewportCursorCapturePoint,
         const UIContext& uiContext,
         ImVec2 itemMin,
         ImVec2 itemSize,
@@ -1094,7 +1094,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         contextMenuRightDragDelta_ = contextMenuRightDragDelta_ + input.mouseDelta;
     }
     bool pendingContextMenuClick = false;
-    Vec2 pendingContextMenuLocalMouse = {};
+    QVec2 pendingContextMenuLocalMouse = {};
     ViewportContextMenuOpenRequest pendingContextMenuRequest;
     if (input.rightReleased && contextMenuRightPressActive_) {
         const bool releaseInsideViewport =
@@ -1301,8 +1301,8 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     const bool leftReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
     const ImVec2 leftClickScreen = io.MouseClickedPos[ImGuiMouseButton_Left];
-    const Vec2 leftClickLocal = leftClicked ?
-            Vec2{leftClickScreen.x - itemMin.x, leftClickScreen.y - itemMin.y} :
+    const QVec2 leftClickLocal = leftClicked ?
+            QVec2{leftClickScreen.x - itemMin.x, leftClickScreen.y - itemMin.y} :
             input.mouseLocal;
     const int leftClickCount = std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
     const ModelingToolStatus releaseToolStatus = modeling.toolStatus();
@@ -1354,7 +1354,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .selectionRevision = hoverSelectionSummary.selectionRevision,
         });
     };
-    auto makeSelectionHoverRequestAt = [&](Vec2 mouseLocal, bool selectedModifierPressed) {
+    auto makeSelectionHoverRequestAt = [&](QVec2 mouseLocal, bool selectedModifierPressed) {
         const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
         const ViewportSettings& settings = activeViewportSettings();
         return ModelingHoverRequest{
@@ -1367,7 +1367,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
         };
     };
-    auto makeModelingToolEventAt = [&](Vec2 mouseLocal, bool dragging = false) {
+    auto makeModelingToolEventAt = [&](QVec2 mouseLocal, bool dragging = false) {
         const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
         return ModelingToolRayEvent{
                 .screenPosition = mouseLocal,
@@ -1397,7 +1397,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             selectionOverlayCache_.markDirty();
         }
     };
-    auto suppressSelectionHoverAfterSelection = [&](Vec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {}) {
+    auto suppressSelectionHoverAfterSelection = [&](QVec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {}) {
         if (hoverTargetValid(hoveredTargetBeforeSelection)) {
             selectionHoverSuppressedTarget_ = hoveredTargetBeforeSelection;
         } else {
@@ -1459,10 +1459,10 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
 
     ViewportPointToolContext pointToolContext;
     pointToolContext.makeEventAt = makeModelingToolEventAt;
-    pointToolContext.hitDrawnPlaneCapturedPoint = [&](const std::array<Vec3, 3>& points, int capturedPointCount) {
+    pointToolContext.hitDrawnPlaneCapturedPoint = [&](const std::array<QVec3, 3>& points, int capturedPointCount) {
         return hitDrawnPlaneCapturedPoint(points, capturedPointCount, leftClickLocal, camera, itemMin, itemSize);
     };
-    pointToolContext.hitDrawnPlaneLine = [&](const std::array<Vec3, 3>& points, int capturedPointCount, bool hasLine) {
+    pointToolContext.hitDrawnPlaneLine = [&](const std::array<QVec3, 3>& points, int capturedPointCount, bool hasLine) {
         return hitDrawnPlaneLine(points, capturedPointCount, hasLine, leftClickLocal, camera, itemMin, itemSize);
     };
 

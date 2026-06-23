@@ -19,9 +19,9 @@ double determinant(const quader_poly::Transform3& transform)
 	return vec3_dot(transform.x_axis, vec3_cross(transform.y_axis, transform.z_axis));
 }
 
-quader_poly::Vec3 rotate_vector_around_axis(quader_poly::Vec3 value, quader_poly::Vec3 axis, double angle_radians)
+quader::QVec3 rotate_vector_around_axis(quader::QVec3 value, quader::QVec3 axis, double angle_radians)
 {
-	const quader_poly::Vec3 normal = normalized_axis(axis);
+	const quader::QVec3 normal = normalized_axis(axis);
 	if (vec3_is_tiny(normal)) {
 		return value;
 	}
@@ -33,7 +33,7 @@ quader_poly::Vec3 rotate_vector_around_axis(quader_poly::Vec3 value, quader_poly
 		vec3_scale(normal, vec3_dot(normal, value) * one_minus_c);
 }
 
-double base_scale_distance(TransformAxis axis, quader_poly::Vec3 bounds_min, quader_poly::Vec3 bounds_max, quader_poly::Vec3 pivot)
+double base_scale_distance(TransformAxis axis, quader::QVec3 bounds_min, quader::QVec3 bounds_max, quader::QVec3 pivot)
 {
 	const auto max_abs = [](double left, double right) {
 		return std::max(std::abs(left), std::abs(right));
@@ -86,7 +86,7 @@ bool axis_includes_component(TransformAxis axis, int component)
 	return false;
 }
 
-double bounds_extent_component(quader_poly::Vec3 bounds_min, quader_poly::Vec3 bounds_max, int component)
+double bounds_extent_component(quader::QVec3 bounds_min, quader::QVec3 bounds_max, int component)
 {
 	if (component == 0) {
 		return std::abs(bounds_max.x - bounds_min.x);
@@ -100,7 +100,7 @@ double bounds_extent_component(quader_poly::Vec3 bounds_min, quader_poly::Vec3 b
 	return 0.0;
 }
 
-double minimum_scale_factor_for_grid(TransformAxis axis, quader_poly::Vec3 bounds_min, quader_poly::Vec3 bounds_max, double grid_size, bool shrinking)
+double minimum_scale_factor_for_grid(TransformAxis axis, quader::QVec3 bounds_min, quader::QVec3 bounds_max, double grid_size, bool shrinking)
 {
 	double factor = min_scale_factor;
 	for (int component = 0; component < 3; ++component) {
@@ -122,7 +122,7 @@ double minimum_scale_factor_for_grid(TransformAxis axis, quader_poly::Vec3 bound
 
 } // namespace
 
-quader_poly::Vec3 axis_vector(TransformAxis axis)
+quader::QVec3 axis_vector(TransformAxis axis)
 {
 	switch (axis) {
 		case TransformAxis::x:
@@ -145,7 +145,7 @@ quader_poly::Vec3 axis_vector(TransformAxis axis)
 	}
 }
 
-quader_poly::Vec3 rotation_axis_vector(TransformAxis axis)
+quader::QVec3 rotation_axis_vector(TransformAxis axis)
 {
 	switch (axis) {
 		case TransformAxis::x:
@@ -164,9 +164,9 @@ quader_poly::Vec3 rotation_axis_vector(TransformAxis axis)
 	}
 }
 
-quader_poly::Vec3 axis_scale(TransformAxis axis, double factor)
+quader::QVec3 axis_scale(TransformAxis axis, double factor)
 {
-	quader_poly::Vec3 scale { 1.0F, 1.0F, 1.0F };
+	quader::QVec3 scale { 1.0F, 1.0F, 1.0F };
 	switch (axis) {
 		case TransformAxis::x:
 			scale.x = static_cast<float>(factor);
@@ -199,7 +199,7 @@ quader_poly::Vec3 axis_scale(TransformAxis axis, double factor)
 	return scale;
 }
 
-quader_poly::Vec3 transform_vector(const quader_poly::Transform3& transform, quader_poly::Vec3 value)
+quader::QVec3 transform_vector(const quader_poly::Transform3& transform, quader::QVec3 value)
 {
 	return {
 		transform.x_axis.x * value.x + transform.y_axis.x * value.y + transform.z_axis.x * value.z,
@@ -208,12 +208,12 @@ quader_poly::Vec3 transform_vector(const quader_poly::Transform3& transform, qua
 	};
 }
 
-quader_poly::Vec3 transform_point(const quader_poly::Transform3& transform, quader_poly::Vec3 point)
+quader::QVec3 transform_point(const quader_poly::Transform3& transform, quader::QVec3 point)
 {
 	return transform_vector(transform, point) + transform.origin;
 }
 
-quader_poly::Vec3 inverse_transform_vector(const quader_poly::Transform3& transform, quader_poly::Vec3 value)
+quader::QVec3 inverse_transform_vector(const quader_poly::Transform3& transform, quader::QVec3 value)
 {
 	const double det = determinant(transform);
 	if (std::abs(det) <= tool_epsilon) {
@@ -226,12 +226,12 @@ quader_poly::Vec3 inverse_transform_vector(const quader_poly::Transform3& transf
 	};
 }
 
-quader_poly::Vec3 inverse_transform_point(const quader_poly::Transform3& transform, quader_poly::Vec3 point)
+quader::QVec3 inverse_transform_point(const quader_poly::Transform3& transform, quader::QVec3 point)
 {
 	return inverse_transform_vector(transform, point - transform.origin);
 }
 
-quader_poly::Transform3 pivoted_transform(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot)
+quader_poly::Transform3 pivoted_transform(const quader_poly::Transform3& transform, quader::QVec3 pivot)
 {
 	quader_poly::Transform3 result = transform;
 	result.origin = pivot + transform.origin - transform_vector(transform, pivot);
@@ -240,7 +240,7 @@ quader_poly::Transform3 pivoted_transform(const quader_poly::Transform3& transfo
 
 quader_poly::Transform3 rotation_transform(TransformAxis axis, double angle_radians)
 {
-	const quader_poly::Vec3 axis_value = rotation_axis_vector(axis);
+	const quader::QVec3 axis_value = rotation_axis_vector(axis);
 	if (vec3_is_tiny(axis_value)) {
 		return {};
 	}
@@ -252,7 +252,7 @@ quader_poly::Transform3 rotation_transform(TransformAxis axis, double angle_radi
 	};
 }
 
-quader_poly::Transform3 scale_transform(quader_poly::Vec3 scale)
+quader_poly::Transform3 scale_transform(quader::QVec3 scale)
 {
 	return {
 		{ scale.x, 0.0F, 0.0F },
@@ -262,7 +262,7 @@ quader_poly::Transform3 scale_transform(quader_poly::Vec3 scale)
 	};
 }
 
-double scale_delta(quader_poly::Vec3 scale)
+double scale_delta(quader::QVec3 scale)
 {
 	return std::abs(scale.x - 1.0) + std::abs(scale.y - 1.0) + std::abs(scale.z - 1.0);
 }
@@ -287,7 +287,7 @@ double snap_move_distance(double distance, bool precision, bool grid_enabled, do
 	return snapped;
 }
 
-double snapped_scale_factor(TransformAxis axis, double factor, const ToolBounds3& bounds, quader_poly::Vec3 pivot, bool grid_enabled, double grid_size)
+double snapped_scale_factor(TransformAxis axis, double factor, const ToolBounds3& bounds, quader::QVec3 pivot, bool grid_enabled, double grid_size)
 {
 	if (!bounds.has_bounds || !grid_enabled || grid_size <= screen_epsilon) {
 		return factor;

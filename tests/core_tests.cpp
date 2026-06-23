@@ -176,7 +176,7 @@ void expectColorNear(ViewportSettingColor actual, ViewportSettingColor expected)
     EXPECT_NEAR(actual.a, expected.a, 0.001f);
 }
 
-void expectVec3Near(Vec3 actual, Vec3 expected) {
+void expectVec3Near(QVec3 actual, QVec3 expected) {
     EXPECT_NEAR(actual.x, expected.x, 0.001f);
     EXPECT_NEAR(actual.y, expected.y, 0.001f);
     EXPECT_NEAR(actual.z, expected.z, 0.001f);
@@ -234,7 +234,7 @@ ModelingToolRayEvent testDrawnPlaneEvent(float x, bool dragging = false) {
 }
 
 ModelingTransformDragBeginRequest testXMoveDragBeginRequest(
-        Vec3 pivot = {},
+        QVec3 pivot = {},
         ModelingTransformOperation operation = ModelingTransformOperation::Transform,
         bool duplicateSelected = false) {
     return {
@@ -1129,7 +1129,7 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
     EXPECT_EQ(source.find("drawSelectionOverlay2d"), std::string::npos);
     EXPECT_EQ(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
     EXPECT_EQ(source.find("pointVisibleFromCamera"), std::string::npos);
-    EXPECT_EQ(source.find("rayIntersectsTriangle(Vec3 origin"), std::string::npos);
+    EXPECT_EQ(source.find("rayIntersectsTriangle(QVec3 origin"), std::string::npos);
     EXPECT_EQ(source.find("renderBridge.setOverlayFrame(selectionOverlay, camera"), std::string::npos);
     EXPECT_EQ(source.find("shouldDrawOverlayLayer2d"), std::string::npos);
     EXPECT_EQ(source.find("layerNeedsSceneVisibility2d"), std::string::npos);
@@ -1566,10 +1566,10 @@ TEST(ViewportPanelTests, HoverWorkKeyIncludesPaneAndCameraSignature) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(header.find("ViewportPaneId paneId"), std::string::npos);
-    EXPECT_NE(header.find("Vec3 cameraEye"), std::string::npos);
-    EXPECT_NE(header.find("Vec3 cameraForward"), std::string::npos);
-    EXPECT_NE(header.find("Vec3 cameraRight"), std::string::npos);
-    EXPECT_NE(header.find("Vec3 cameraUp"), std::string::npos);
+    EXPECT_NE(header.find("QVec3 cameraEye"), std::string::npos);
+    EXPECT_NE(header.find("QVec3 cameraForward"), std::string::npos);
+    EXPECT_NE(header.find("QVec3 cameraRight"), std::string::npos);
+    EXPECT_NE(header.find("QVec3 cameraUp"), std::string::npos);
     EXPECT_NE(header.find("ViewportOverlayProjection cameraProjection"), std::string::npos);
     EXPECT_NE(header.find("bool primaryModifier"), std::string::npos);
     EXPECT_NE(header.find("double vertexRadius"), std::string::npos);
@@ -1763,7 +1763,7 @@ TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
             std::istreambuf_iterator<char>(drawnPlaneToolFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("const Vec2 leftClickLocal"), std::string::npos);
+    EXPECT_NE(source.find("const QVec2 leftClickLocal"), std::string::npos);
     EXPECT_NE(drawnPlaneTool.find("pointContext.makeEventAt(pointer.leftClickLocal, true)"), std::string::npos);
     EXPECT_NE(drawnPlaneTool.find("pointContext.makeEventAt(pointer.leftClickLocal, false)"), std::string::npos);
     EXPECT_NE(drawnPlaneTool.find("context.modeling.updateCutHover(pointContext.makeEventAt(pointer.mouseLocal, true))"), std::string::npos);
@@ -1977,7 +1977,7 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     EXPECT_NE(source.find("quader_editor_core::begin_rotate_drag({"), std::string::npos);
     EXPECT_NE(source.find("if (wasDragging && !sceneOnlyDrag_)"), std::string::npos);
     EXPECT_NE(source.find("if (!sceneOnlyDrag_)"), std::string::npos);
-    EXPECT_NE(source.find("transformPoint(document.worldTransformMatrix(selected), Vec3{})"), std::string::npos);
+    EXPECT_NE(source.find("transformPoint(document.worldTransformMatrix(selected), QVec3{})"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, RemovesViewportPaddingAndUsesBoxPreviewOutline) {
@@ -2041,7 +2041,7 @@ TEST(ViewportPanelTests, SuppressesHoverPickingDuringCameraNavigation) {
     EXPECT_NE(source.find("const ModelingSelectionSummary hoverSelectionSummary = uiContext.editor.selection().summary();\n    auto makeViewportHoverWorkKey"), std::string::npos);
     EXPECT_EQ(source.find("auto makeViewportHoverWorkKey = [&](bool consumedByGizmo) {\n        const ModelingSelectionSummary hoverSelectionSummary = uiContext.editor.selection().summary();"), std::string::npos);
     EXPECT_EQ(source.find("auto preserveSelectionHoverAfterSelection = [&]()"), std::string::npos);
-    EXPECT_NE(source.find("auto suppressSelectionHoverAfterSelection = [&](Vec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {})"), std::string::npos);
+    EXPECT_NE(source.find("auto suppressSelectionHoverAfterSelection = [&](QVec2 mouseLocal, ModelingHoverTarget hoveredTargetBeforeSelection = {})"), std::string::npos);
     EXPECT_NE(source.find("if (hoverTargetValid(hoveredTargetBeforeSelection)) {\n            selectionHoverSuppressedTarget_ = hoveredTargetBeforeSelection;"), std::string::npos);
     EXPECT_NE(source.find("uiContext.editor.selection().previewHover(makeSelectionHoverRequestAt(mouseLocal, input.modifiers.primary))"), std::string::npos);
     EXPECT_NE(source.find("selectionHoverSuppressedTarget_ = hover.target"), std::string::npos);
@@ -2529,8 +2529,8 @@ TEST(InspectorPanelTests, TransformInputsUseResponsiveRowsAndWorldRotationDeltas
     EXPECT_NE(source.find("ui.inspector.double_sided"), std::string::npos);
     EXPECT_NE(source.find("ui.inspector.hidden"), std::string::npos);
     EXPECT_NE(source.find(".after = !hidden"), std::string::npos);
-    EXPECT_NE(source.find("const Vec3 displayedRotation = positiveEulerRadians(transform->rotationEuler)"), std::string::npos);
-    EXPECT_NE(source.find("const Vec3 previous = displayedRotation"), std::string::npos);
+    EXPECT_NE(source.find("const QVec3 displayedRotation = positiveEulerRadians(transform->rotationEuler)"), std::string::npos);
+    EXPECT_NE(source.find("const QVec3 previous = displayedRotation"), std::string::npos);
     EXPECT_NE(source.find("applyWorldRotationDeltaAroundPivot(next, delta"), std::string::npos);
     EXPECT_EQ(source.find("next.rotationEuler = next.rotationEuler + delta"), std::string::npos);
 }
@@ -3194,7 +3194,7 @@ TEST(SceneDocumentTests, TracksHierarchyTreeOrderAndInheritedState) {
     EXPECT_EQ(records[1].depth, 1);
     EXPECT_EQ(records[2].depth, 2);
 
-    const Vec3 worldPoint = transformPoint(scene.worldTransformMatrix(grandchild), {});
+    const QVec3 worldPoint = transformPoint(scene.worldTransformMatrix(grandchild), {});
     EXPECT_FLOAT_EQ(worldPoint.x, 12.0f);
     EXPECT_FLOAT_EQ(worldPoint.y, 3.0f);
     EXPECT_FLOAT_EQ(worldPoint.z, 0.0f);
@@ -3217,9 +3217,9 @@ TEST(SceneDocumentTests, ReparentCanPreserveWorldTransformAndDestroyChildren) {
     scene.setTransform(leaf, TransformComponent{.position = {1.0f, 0.0f, 0.0f}});
     ASSERT_TRUE(scene.setParent(child, group, false));
 
-    const Vec3 before = transformPoint(scene.worldTransformMatrix(child), {});
+    const QVec3 before = transformPoint(scene.worldTransformMatrix(child), {});
     ASSERT_TRUE(scene.setParent(child, InvalidEntityId, true));
-    const Vec3 after = transformPoint(scene.worldTransformMatrix(child), {});
+    const QVec3 after = transformPoint(scene.worldTransformMatrix(child), {});
     EXPECT_FLOAT_EQ(before.x, after.x);
     EXPECT_FLOAT_EQ(before.y, after.y);
     ASSERT_NE(scene.transform(child), nullptr);
@@ -3270,7 +3270,7 @@ TEST(SceneBoundsTests, ComputesSelectedWorldBoundsFromSpatialTransforms) {
     EXPECT_NEAR(bounds->max.y, 5.0f, 0.001f);
     EXPECT_NEAR(bounds->max.z, 4.0f, 0.001f);
 
-    const Vec3 center = boundsCenter(*bounds);
+    const QVec3 center = boundsCenter(*bounds);
     EXPECT_NEAR(center.x, 4.0f, 0.001f);
     EXPECT_NEAR(center.y, 1.0f, 0.001f);
     EXPECT_NEAR(center.z, 0.0f, 0.001f);
@@ -3293,7 +3293,7 @@ TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
 
     const std::optional<SceneBounds> bounds = selectedWorldBounds(scene, assets);
     ASSERT_TRUE(bounds.has_value());
-    const Vec3 center = boundsCenter(*bounds);
+    const QVec3 center = boundsCenter(*bounds);
     EXPECT_NEAR(center.x, 0.0f, 0.001f);
     EXPECT_NEAR(center.y, 1.0f, 0.001f);
     EXPECT_NEAR(center.z, 0.0f, 0.001f);
@@ -3301,14 +3301,14 @@ TEST(SceneBoundsTests, CentersBottomOriginMeshOnItsSelectedWorldBounds) {
 
 TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringRotation) {
     TransformComponent transform;
-    const Vec3 worldPivot{0.0f, 1.0f, 0.0f};
-    const Vec3 localPivot = localPivotForWorldPoint(transform, worldPivot);
+    const QVec3 worldPivot{0.0f, 1.0f, 0.0f};
+    const QVec3 localPivot = localPivotForWorldPoint(transform, worldPivot);
 
     TransformComponent rotated = transform;
     rotated.rotationEuler.z = 1.57079632679f;
     pinLocalPivotToWorldPoint(rotated, localPivot, worldPivot);
 
-    const Vec3 pinnedWorldPivot = transformPoint(composeTransform(rotated.spatialTransform()), localPivot);
+    const QVec3 pinnedWorldPivot = transformPoint(composeTransform(rotated.spatialTransform()), localPivot);
     EXPECT_NEAR(pinnedWorldPivot.x, worldPivot.x, 0.001f);
     EXPECT_NEAR(pinnedWorldPivot.y, worldPivot.y, 0.001f);
     EXPECT_NEAR(pinnedWorldPivot.z, worldPivot.z, 0.001f);
@@ -3318,14 +3318,14 @@ TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringRotation) {
 
 TEST(TransformPivotTests, KeepsNonOriginVisualPivotFixedDuringScale) {
     TransformComponent transform;
-    const Vec3 worldPivot{0.0f, 1.0f, 0.0f};
-    const Vec3 localPivot = localPivotForWorldPoint(transform, worldPivot);
+    const QVec3 worldPivot{0.0f, 1.0f, 0.0f};
+    const QVec3 localPivot = localPivotForWorldPoint(transform, worldPivot);
 
     TransformComponent scaled = transform;
     scaled.scale = {2.0f, 3.0f, 4.0f};
     pinLocalPivotToWorldPoint(scaled, localPivot, worldPivot);
 
-    const Vec3 pinnedWorldPivot = transformPoint(composeTransform(scaled.spatialTransform()), localPivot);
+    const QVec3 pinnedWorldPivot = transformPoint(composeTransform(scaled.spatialTransform()), localPivot);
     EXPECT_NEAR(pinnedWorldPivot.x, worldPivot.x, 0.001f);
     EXPECT_NEAR(pinnedWorldPivot.y, worldPivot.y, 0.001f);
     EXPECT_NEAR(pinnedWorldPivot.z, worldPivot.z, 0.001f);
@@ -3343,35 +3343,35 @@ TEST(TransformPivotTests, AppliesRotationDeltaInGlobalSpace) {
 
     const glm::mat4 current = glm::mat4_cast(toGlm(quatFromEulerRadians(transform.rotationEuler)));
     const glm::mat4 delta = glm::mat4_cast(toGlm(quatFromEulerRadians({HalfPi, 0.0f, 0.0f})));
-    const Mat4 expectedWorldRotation = fromGlm(delta * current);
-    const Mat4 actualWorldRotation = composeTransform(rotated.spatialTransform());
+    const QMat4 expectedWorldRotation = fromGlm(delta * current);
+    const QMat4 actualWorldRotation = composeTransform(rotated.spatialTransform());
 
-    const std::array<Vec3, 3> basis = {{
+    const std::array<QVec3, 3> basis = {{
             {1.0f, 0.0f, 0.0f},
             {0.0f, 1.0f, 0.0f},
             {0.0f, 0.0f, 1.0f},
     }};
-    for (const Vec3 axis : basis) {
-        const Vec3 expected = transformVector(expectedWorldRotation, axis);
-        const Vec3 actual = transformVector(actualWorldRotation, axis);
+    for (const QVec3 axis : basis) {
+        const QVec3 expected = transformVector(expectedWorldRotation, axis);
+        const QVec3 actual = transformVector(actualWorldRotation, axis);
         EXPECT_NEAR(actual.x, expected.x, 0.001f);
         EXPECT_NEAR(actual.y, expected.y, 0.001f);
         EXPECT_NEAR(actual.z, expected.z, 0.001f);
     }
 
     TransformComponent locallyAdded = transform;
-    locallyAdded.rotationEuler = locallyAdded.rotationEuler + Vec3{HalfPi, 0.0f, 0.0f};
-    const Vec3 worldSpaceY = transformVector(actualWorldRotation, {0.0f, 1.0f, 0.0f});
-    const Vec3 localSpaceY = transformVector(composeTransform(locallyAdded.spatialTransform()), {0.0f, 1.0f, 0.0f});
+    locallyAdded.rotationEuler = locallyAdded.rotationEuler + QVec3{HalfPi, 0.0f, 0.0f};
+    const QVec3 worldSpaceY = transformVector(actualWorldRotation, {0.0f, 1.0f, 0.0f});
+    const QVec3 localSpaceY = transformVector(composeTransform(locallyAdded.spatialTransform()), {0.0f, 1.0f, 0.0f});
     EXPECT_GT(length(worldSpaceY - localSpaceY), 0.1f);
 }
 
 TEST(TransformPivotTests, KeepsEquivalentEulerAnglesNearReferenceValues) {
     constexpr float Pi = 3.14159265358979323846f;
-    const Vec3 reference{};
-    const Vec3 decomposedEquivalent{Pi, Pi / 3.0f, Pi};
+    const QVec3 reference{};
+    const QVec3 decomposedEquivalent{Pi, Pi / 3.0f, Pi};
 
-    const Vec3 stable = equivalentEulerRadiansClosestTo(decomposedEquivalent, reference);
+    const QVec3 stable = equivalentEulerRadiansClosestTo(decomposedEquivalent, reference);
     EXPECT_NEAR(stable.x, 0.0f, 0.001f);
     EXPECT_NEAR(stable.y, 2.0f * Pi / 3.0f, 0.001f);
     EXPECT_NEAR(stable.z, 0.0f, 0.001f);
@@ -3379,7 +3379,7 @@ TEST(TransformPivotTests, KeepsEquivalentEulerAnglesNearReferenceValues) {
 
 TEST(TransformPivotTests, NormalizesEulerDisplayAnglesToPositiveTurn) {
     constexpr float Pi = 3.14159265358979323846f;
-    const Vec3 normalized = positiveEulerRadians({0.0f, -Pi / 12.0f, Pi * 2.0f});
+    const QVec3 normalized = positiveEulerRadians({0.0f, -Pi / 12.0f, Pi * 2.0f});
 
     EXPECT_NEAR(normalized.x, 0.0f, 0.001f);
     EXPECT_NEAR(normalized.y, Pi * 23.0f / 12.0f, 0.001f);
@@ -3387,21 +3387,21 @@ TEST(TransformPivotTests, NormalizesEulerDisplayAnglesToPositiveTurn) {
 }
 
 TEST(MathTypesTests, ComposeTransformRoundTripsPoints) {
-    const Transform transform{
+    const QTransform transform{
             .position = {2.0f, 3.0f, 4.0f},
             .rotation = {},
             .scale = {2.0f, 3.0f, 4.0f},
     };
 
-    const Mat4 localToWorld = composeTransform(transform);
-    const Mat4 worldToLocal = inverse(localToWorld);
+    const QMat4 localToWorld = composeTransform(transform);
+    const QMat4 worldToLocal = inverse(localToWorld);
 
-    const Vec3 worldPoint = transformPoint(localToWorld, {1.0f, 1.0f, 1.0f});
+    const QVec3 worldPoint = transformPoint(localToWorld, {1.0f, 1.0f, 1.0f});
     EXPECT_NEAR(worldPoint.x, 4.0f, 0.001f);
     EXPECT_NEAR(worldPoint.y, 6.0f, 0.001f);
     EXPECT_NEAR(worldPoint.z, 8.0f, 0.001f);
 
-    const Vec3 localPoint = transformPoint(worldToLocal, worldPoint);
+    const QVec3 localPoint = transformPoint(worldToLocal, worldPoint);
     EXPECT_NEAR(localPoint.x, 1.0f, 0.001f);
     EXPECT_NEAR(localPoint.y, 1.0f, 0.001f);
     EXPECT_NEAR(localPoint.z, 1.0f, 0.001f);
@@ -3675,7 +3675,7 @@ TEST(ViewportCameraTests, BuildsPickingRaysFromViewportPoints) {
 
     const ViewportRay centerRay = camera.rayFromViewportPoint({400.0f, 300.0f});
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
 
     EXPECT_NEAR(centerRay.origin.x, pose.eye.x, 0.001f);
     EXPECT_NEAR(centerRay.origin.y, pose.eye.y, 0.001f);
@@ -3698,9 +3698,9 @@ TEST(ViewportCameraTests, ProjectsWorldPointsToViewportPixels) {
     EXPECT_NEAR(center.position.y, 300.0f, 0.001f);
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
-    const Vec3 right = normalize(cross(forward, pose.up));
-    const Vec3 up = normalize(cross(right, forward));
+    const QVec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 right = normalize(cross(forward, pose.up));
+    const QVec3 up = normalize(cross(right, forward));
     const ViewportScreenPoint rightUp = camera.projectWorldPoint(pose.target + right * 0.5f + up * 0.5f);
 
     ASSERT_TRUE(rightUp.visible);
@@ -3724,12 +3724,12 @@ TEST(ViewportCameraTests, SetViewDirectionKeepsTargetDistanceAndSnapsAxis) {
     ViewportCameraController camera;
     camera.focusBounds({10.0f, -2.0f, -4.0f}, {14.0f, 2.0f, 4.0f});
 
-    const Vec3 targetBefore = camera.state().target;
+    const QVec3 targetBefore = camera.state().target;
     const float distanceBefore = camera.state().distance;
     camera.setViewDirection({-1.0f, 0.0f, 0.0f});
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
     EXPECT_NEAR(camera.state().target.x, targetBefore.x, 0.001f);
     EXPECT_NEAR(camera.state().target.y, targetBefore.y, 0.001f);
     EXPECT_NEAR(camera.state().target.z, targetBefore.z, 0.001f);
@@ -3743,12 +3743,12 @@ TEST(ViewportCameraTests, ViewAxisUsesRuntimeNavigationPolicy) {
     ViewportCameraController camera;
     camera.focusBounds({10.0f, -2.0f, -4.0f}, {14.0f, 2.0f, 4.0f});
 
-    const Vec3 targetBefore = camera.state().target;
+    const QVec3 targetBefore = camera.state().target;
     const float distanceBefore = camera.state().distance;
     camera.viewAxis(ViewportViewAxis::Y, 1);
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
     EXPECT_NEAR(camera.state().target.x, targetBefore.x, 0.001f);
     EXPECT_NEAR(camera.state().target.y, targetBefore.y, 0.001f);
     EXPECT_NEAR(camera.state().target.z, targetBefore.z, 0.001f);
@@ -3831,7 +3831,7 @@ TEST(ViewportCameraTests, OrthographicAxisViewBuildsParallelPickingRays) {
     const ViewportRay centerRay = camera.rayFromViewportPoint({400.0f, 300.0f});
     const ViewportRay cornerRay = camera.rayFromViewportPoint({800.0f, 0.0f});
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
 
     EXPECT_NEAR(dot(centerRay.direction, forward), 1.0f, 0.001f);
     EXPECT_NEAR(dot(cornerRay.direction, centerRay.direction), 1.0f, 0.001f);
@@ -3863,7 +3863,7 @@ TEST(ViewportCameraTests, SetViewDirectionClampsVerticalViewWithoutDegenerateBas
     camera.setViewDirection({0.0f, -1.0f, 0.0f});
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
     EXPECT_LT(forward.y, -0.99f);
     EXPECT_GT(length(pose.up), 0.99f);
 }
@@ -3878,7 +3878,7 @@ TEST(ViewportCameraTests, OrbitSnapUsesRuntimeOrthogonalSnap) {
     camera.endDrag();
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
     EXPECT_NEAR(forward.x, 0.0f, 0.001f);
     EXPECT_NEAR(forward.y, 0.0f, 0.001f);
     EXPECT_NEAR(forward.z, -1.0f, 0.001f);
@@ -3900,8 +3900,8 @@ TEST(ViewportCameraTests, FlyLookKeepsEyeFixedAndFlyMoveAdvancesCamera) {
     camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Fly);
     camera.updateDrag({160.0f, 80.0f});
     const ViewportCameraPose lookPose = camera.pose();
-    const Vec3 startForward = normalize(startPose.target - startPose.eye);
-    const Vec3 lookForward = normalize(lookPose.target - lookPose.eye);
+    const QVec3 startForward = normalize(startPose.target - startPose.eye);
+    const QVec3 lookForward = normalize(lookPose.target - lookPose.eye);
 
     EXPECT_NEAR(length(lookPose.eye - startPose.eye), 0.0f, 0.001f);
     EXPECT_LT(dot(lookForward, startForward), 0.999f);
@@ -3912,7 +3912,7 @@ TEST(ViewportCameraTests, FlyLookKeepsEyeFixedAndFlyMoveAdvancesCamera) {
 
     camera.flyMove({0.0f, 0.0f, 1.0f}, 0.25f);
     const ViewportCameraPose movedPose = camera.pose();
-    const Vec3 movedDelta = movedPose.eye - lookPose.eye;
+    const QVec3 movedDelta = movedPose.eye - lookPose.eye;
 
     EXPECT_GT(dot(movedDelta, lookForward), 3.7f);
     EXPECT_NEAR(length((movedPose.target - lookPose.target) - movedDelta), 0.0f, 0.001f);
@@ -3927,7 +3927,7 @@ TEST(ViewportCameraTests, FlyLookDoesNotSnapToTopOrBottomView) {
     camera.endDrag();
 
     ViewportCameraPose pose = camera.pose();
-    Vec3 forward = normalize(pose.target - pose.eye);
+    QVec3 forward = normalize(pose.target - pose.eye);
     EXPECT_GT(std::sqrt(forward.x * forward.x + forward.z * forward.z), 0.001f);
     EXPECT_GT(length(pose.up), 0.99f);
     EXPECT_NEAR(dot(forward, pose.up), 0.0f, 0.001f);
@@ -3958,7 +3958,7 @@ TEST(ViewportCameraTests, PlainMiddleOrbitNearOrthogonalAxisDoesNotSnapToOrthogr
     camera.endDrag();
 
     const ViewportCameraPose pose = camera.pose();
-    const Vec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = normalize(pose.target - pose.eye);
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
     EXPECT_FALSE(camera.orthographicViewLocked());
     EXPECT_GT(std::abs(forward.x), 0.001f);
@@ -4534,7 +4534,7 @@ TEST(ViewportInputRouterTests, ShiftMiddleMousePansLockedOrthographicView) {
     camera.viewAxis(ViewportViewAxis::Z, 1);
     ASSERT_TRUE(camera.orthographicViewLocked());
 
-    const Vec3 targetBefore = camera.state().target;
+    const QVec3 targetBefore = camera.state().target;
 
     ViewportInputFrame input;
     input.viewportHovered = true;
@@ -4704,7 +4704,7 @@ TEST(ViewportInputRouterTests, RightMouseFlyLookNearOrthogonalAxisStaysPerspecti
     result = router.handleFrame(input, camera);
 
     const ViewportCameraPose after = camera.pose();
-    const Vec3 afterForward = normalize(after.target - after.eye);
+    const QVec3 afterForward = normalize(after.target - after.eye);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(result.flyNavigationActive);
     EXPECT_TRUE(result.cameraChanged);
@@ -5394,7 +5394,7 @@ TEST(DocumentCommandTests, SceneTransformDragServiceFiltersTargetsAndRecordsScen
     ASSERT_TRUE(scene.setActiveSelection(parent));
 
     SceneTransformDragService service;
-    ASSERT_TRUE(service.begin(scene, Vec3{}, true, "Move Preview"));
+    ASSERT_TRUE(service.begin(scene, QVec3{}, true, "Move Preview"));
     ASSERT_TRUE(service.previewActive());
     ASSERT_EQ(service.targets().size(), 1u);
     EXPECT_EQ(service.targets().front().entity, parent);
@@ -5415,7 +5415,7 @@ TEST(DocumentCommandTests, SceneTransformDragServiceFiltersTargetsAndRecordsScen
     ASSERT_NE(scene.transform(parent), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
 
-    ASSERT_TRUE(service.begin(scene, Vec3{}, true, "Move Preview"));
+    ASSERT_TRUE(service.begin(scene, QVec3{}, true, "Move Preview"));
     preview = service.targets().front().transform;
     preview.position = {4.0f, 0.0f, 0.0f};
     ASSERT_TRUE(service.previewTransform(parent, preview).ok);
@@ -6105,7 +6105,7 @@ TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndL
     auto meshPositionFingerprint = [](const MeshAsset& mesh) {
         double value = 0.0;
         for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
-            const Vec3& position = mesh.vertices[index].position;
+            const QVec3& position = mesh.vertices[index].position;
             const double weight = static_cast<double>(index + 1);
             value += weight * (
                     static_cast<double>(position.x * position.x) * 0.31 +
@@ -6365,7 +6365,7 @@ TEST(ModelingSessionServiceTests, CreatesBoxThroughRuntimeWhenAvailable) {
     EXPECT_TRUE(storedMesh->hasStableCpuTopology);
     const std::optional<SceneBounds> selectedBounds = selectedWorldBounds(scene, assets);
     ASSERT_TRUE(selectedBounds.has_value());
-    const Vec3 selectedCenter = boundsCenter(*selectedBounds);
+    const QVec3 selectedCenter = boundsCenter(*selectedBounds);
     EXPECT_NEAR(selectedCenter.x, 0.0f, 0.001f);
     EXPECT_NEAR(selectedCenter.y, 0.0f, 0.001f);
     EXPECT_NEAR(selectedCenter.z, 0.0f, 0.001f);
@@ -6854,7 +6854,7 @@ TEST(ModelingSessionServiceTests, EditorSelectionProjectsSceneSelectionToRuntime
     ASSERT_TRUE(second.ok) << second.message;
 
     ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {first.object.entity}).ok);
-    std::optional<Vec3> center = service.selectionCenter();
+    std::optional<QVec3> center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_FLOAT_EQ(center->x, 0.0f);
     EXPECT_FLOAT_EQ(center->y, 0.0f);
@@ -6948,7 +6948,7 @@ TEST(ModelingSessionServiceTests, ElementSelectionCommandsWorkAcrossDifferentMes
     EXPECT_EQ(summary.selectedFaceCount, 2u);
     EXPECT_EQ(scene.selectedEntities().size(), 2u);
 
-    const std::optional<Vec3> center = service.selectionCenter();
+    const std::optional<QVec3> center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_NEAR(center->x, 2.5f, 0.001f);
     EXPECT_NEAR(center->z, 1.0f, 0.001f);
@@ -6983,7 +6983,7 @@ TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransform
     scene.setTransform(box.object.entity, moved);
     ASSERT_TRUE(selectThroughEditor(editorSelection.selection, {box.object.entity}).ok);
 
-    const std::optional<Vec3> center = service.selectionCenter();
+    const std::optional<QVec3> center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_NEAR(center->x, 7.0f, 0.001f);
     EXPECT_NEAR(center->y, 2.0f, 0.001f);
@@ -7001,7 +7001,7 @@ TEST(ModelingSessionServiceTests, SelectionCenterAndOverlayRespectSceneTransform
         includePoint(*overlayBounds, line.end);
     }
     ASSERT_TRUE(overlayBounds.has_value());
-    const Vec3 overlayCenter = boundsCenter(*overlayBounds);
+    const QVec3 overlayCenter = boundsCenter(*overlayBounds);
     EXPECT_NEAR(overlayCenter.x, 7.0f, 0.001f);
     EXPECT_NEAR(overlayCenter.y, 2.0f, 0.001f);
     EXPECT_NEAR(overlayCenter.z, -3.0f, 0.001f);
@@ -8092,7 +8092,7 @@ TEST(ModelingSessionServiceTests, FaceTransformDragKeepsComponentSelectionAndMov
     EXPECT_NEAR(beforeBounds->min.x, -1.0f, 0.001f);
     EXPECT_NEAR(beforeBounds->max.x, 1.0f, 0.001f);
 
-    const std::optional<Vec3> selectionCenter = service.selectionCenter();
+    const std::optional<QVec3> selectionCenter = service.selectionCenter();
     ASSERT_TRUE(selectionCenter.has_value());
     ModelingTransformDragPreview begin = service.beginTransformDrag(testXMoveDragBeginRequest(*selectionCenter));
     ASSERT_TRUE(begin.ok) << begin.message;
@@ -8477,7 +8477,7 @@ TEST(ModelingSessionServiceTests, RepeatLastActionReplaysRecordedTransformPrevie
     });
     ASSERT_TRUE(command.ok) << command.message;
 
-    std::optional<Vec3> center = service.selectionCenter();
+    std::optional<QVec3> center = service.selectionCenter();
     ASSERT_TRUE(center.has_value());
     EXPECT_NEAR(center->x, 2.0f, 0.001f);
 

@@ -36,7 +36,7 @@ TEST_CASE("merge vertices to center keeps a simple cube hull closed", "[operatio
 	const Vertex* second = find_vertex(document, edge.b);
 	REQUIRE(first != nullptr);
 	REQUIRE(second != nullptr);
-	const Vec3 expected_center = (first->position + second->position) / 2.0F;
+	const quader::QVec3 expected_center = (first->position + second->position) / 2.0F;
 	const std::size_t vertex_count_before = document.vertices.size();
 	Selection selection = qdr_test::vertex_selection({ edge.a, edge.b }, edge.a);
 

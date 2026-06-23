@@ -66,7 +66,7 @@ OperationResult extrude_selected_faces_impl(Document& document, Selection& selec
             continue;
         }
 
-        const Vec3 offset = face_normal(document, original_face) * distance;
+        const quader::QVec3 offset = face_normal(document, original_face) * distance;
         std::vector<ElementId> cap_vertices;
         cap_vertices.reserve(original_face.vertices.size());
         bool valid_face = true;

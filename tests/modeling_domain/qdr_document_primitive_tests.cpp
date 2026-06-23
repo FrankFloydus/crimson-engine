@@ -96,7 +96,7 @@ void sphere_factories_keep_orientation_and_topology_after_split()
     require_document_compiles(ico_sphere, "ico sphere");
 
     for (const Face& face : ico_sphere.faces) {
-        Vec3 centroid;
+        quader::QVec3 centroid;
         for (const ElementId vertex_id : face.vertices) {
             const Vertex* vertex = find_vertex(ico_sphere, vertex_id);
             require_test(vertex != nullptr, "ico sphere face should resolve every vertex");

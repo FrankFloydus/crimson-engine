@@ -64,7 +64,7 @@ const Face* find_original_face(const std::vector<Face>& faces, ElementId face_id
  */
 struct QuadSliceBasis {
     std::array<ElementId, 4> vertices {};
-    std::array<Vec3, 4> positions {};
+    std::array<quader::QVec3, 4> positions {};
 };
 
 /**
@@ -90,7 +90,7 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
     }
 
     std::array<Vertex, 4> source_vertices {};
-    Vec3 center;
+    quader::QVec3 center;
     for (std::size_t index = 0; index < source_vertices.size(); ++index) {
         const ElementId vertex_id = face.vertices[index];
         const Vertex* vertex = find_vertex(document, vertex_id);
@@ -102,23 +102,23 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
     }
     center = center / 4.0F;
 
-    const Vec3 normal = normalize_or_zero(face_normal(document, face));
+    const quader::QVec3 normal = normalize_or_zero(face_normal(document, face));
     if (length_squared(normal) <= epsilon) {
         return std::nullopt;
     }
 
-    const std::array<Vec3, 3> world_axes {
-        Vec3 { 1.0F, 0.0F, 0.0F },
-        Vec3 { 0.0F, 1.0F, 0.0F },
-        Vec3 { 0.0F, 0.0F, 1.0F },
+    const std::array<quader::QVec3, 3> world_axes {
+        quader::QVec3 { 1.0F, 0.0F, 0.0F },
+        quader::QVec3 { 0.0F, 1.0F, 0.0F },
+        quader::QVec3 { 0.0F, 0.0F, 1.0F },
     };
-    const auto project_to_plane = [normal](Vec3 axis) {
+    const auto project_to_plane = [normal](quader::QVec3 axis) {
         return axis - (normal * dot(axis, normal));
     };
 
     std::size_t u_axis_index = 0;
     float best_u_length = -1.0F;
-    std::array<Vec3, 3> projected_axes {};
+    std::array<quader::QVec3, 3> projected_axes {};
     for (std::size_t index = 0; index < world_axes.size(); ++index) {
         projected_axes[index] = project_to_plane(world_axes[index]);
         const float projected_length = length_squared(projected_axes[index]);
@@ -131,7 +131,7 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
         return std::nullopt;
     }
 
-    Vec3 u_axis = normalize_or_zero(projected_axes[u_axis_index]);
+    quader::QVec3 u_axis = normalize_or_zero(projected_axes[u_axis_index]);
     std::size_t v_world_axis_index = u_axis_index == 0U ? 1U : 0U;
     float best_v_length = -1.0F;
     for (std::size_t index = 0; index < projected_axes.size(); ++index) {
@@ -144,11 +144,11 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
             v_world_axis_index = index;
         }
     }
-    Vec3 v_axis = normalize_or_zero(cross(normal, u_axis));
+    quader::QVec3 v_axis = normalize_or_zero(cross(normal, u_axis));
     if (length_squared(v_axis) <= epsilon) {
         return std::nullopt;
     }
-    const Vec3 preferred_v_axis = normalize_or_zero(projected_axes[v_world_axis_index]);
+    const quader::QVec3 preferred_v_axis = normalize_or_zero(projected_axes[v_world_axis_index]);
     if (length_squared(preferred_v_axis) > epsilon && dot(v_axis, preferred_v_axis) < 0.0F) {
         v_axis = v_axis * -1.0F;
     }
@@ -158,14 +158,14 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
      */
     struct ScoredVertex {
         ElementId id = invalid_element_id;
-        Vec3 position;
+        quader::QVec3 position;
         float u = 0.0F;
         float v = 0.0F;
     };
 
     std::array<ScoredVertex, 4> scored {};
     for (std::size_t index = 0; index < source_vertices.size(); ++index) {
-        const Vec3 offset = source_vertices[index].position - center;
+        const quader::QVec3 offset = source_vertices[index].position - center;
         scored[index] = {
             source_vertices[index].id,
             source_vertices[index].position,
@@ -193,10 +193,10 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
     return basis;
 }
 
-Vec3 bilinear_quad_point(Vec3 a, Vec3 b, Vec3 c, Vec3 d, float x_factor, float y_factor)
+quader::QVec3 bilinear_quad_point(quader::QVec3 a, quader::QVec3 b, quader::QVec3 c, quader::QVec3 d, float x_factor, float y_factor)
 {
-    const Vec3 top = a + ((b - a) * x_factor);
-    const Vec3 bottom = d + ((c - d) * x_factor);
+    const quader::QVec3 top = a + ((b - a) * x_factor);
+    const quader::QVec3 bottom = d + ((c - d) * x_factor);
     return top + ((bottom - top) * y_factor);
 }
 
@@ -206,7 +206,7 @@ ElementId boundary_split_vertex(
     ElementId from,
     ElementId to,
     float factor_from_start,
-    Vec3 position)
+    quader::QVec3 position)
 {
     if (factor_from_start <= epsilon) {
         return from;
@@ -237,7 +237,7 @@ ElementId boundary_grid_vertex(
     int y,
     int columns,
     int rows,
-    Vec3 position)
+    quader::QVec3 position)
 {
     if (y == 0) {
         return boundary_split_vertex(
@@ -381,7 +381,7 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
         if (!slice_basis.has_value()) {
             return { false, "Slice Quad could not resolve the selected quad vertices." };
         }
-        const Vec3 source_normal = face_normal(candidate, *face);
+        const quader::QVec3 source_normal = face_normal(candidate, *face);
 
         std::vector<ElementId> grid(static_cast<std::size_t>(columns + 1) * static_cast<std::size_t>(rows + 1), invalid_element_id);
         const auto grid_index = [columns](int x, int y) {
@@ -401,7 +401,7 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
                 } else {
                     const float x_factor = static_cast<float>(x) / static_cast<float>(columns);
                     const float y_factor = static_cast<float>(y) / static_cast<float>(rows);
-                    const Vec3 position =
+                    const quader::QVec3 position =
                         bilinear_quad_point(
                             slice_basis->positions[0],
                             slice_basis->positions[1],

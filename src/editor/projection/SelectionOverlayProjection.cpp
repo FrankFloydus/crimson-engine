@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/SelectionOverlayProjection.h"
 
+#include "math/GlmBridge.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneDocument.h"
 
@@ -14,7 +15,7 @@
 namespace quader {
 namespace {
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
@@ -170,9 +171,9 @@ ViewportOverlayElementRef runtimeElementRef(
     };
 }
 
-Vec3 transformObjectPoint(
+QVec3 transformObjectPoint(
         int objectId,
-        Vec3 point,
+        QVec3 point,
         const std::unordered_map<int, EntityId>& entityByObject,
         const SceneDocument& scene) {
     const auto entity = entityByObject.find(objectId);

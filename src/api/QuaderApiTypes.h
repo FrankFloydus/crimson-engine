@@ -63,9 +63,9 @@ enum class QuaderEntityKind {
  * Represents a Quader Transform value used by the public Quader API surface.
  */
 struct QuaderTransform {
-    Vec3 position = {};
-    Vec3 rotationEuler = {};
-    Vec3 scale = {1.0f, 1.0f, 1.0f};
+    QVec3 position = {};
+    QVec3 rotationEuler = {};
+    QVec3 scale = {1.0f, 1.0f, 1.0f};
 };
 
 /**
@@ -181,8 +181,8 @@ struct QuaderComponentRef {
  * Represents a Quader Bounds value used by the public Quader API surface.
  */
 struct QuaderBounds {
-    Vec3 min;
-    Vec3 max;
+    QVec3 min;
+    QVec3 max;
 };
 
 /**
@@ -275,7 +275,7 @@ struct QuaderToolStatus {
     int cutPointCount = 0;
     int cutCapturedPointCount = 0;
     bool cutHasLine = false;
-    std::array<Vec3, 3> cutPoints = {};
+    std::array<QVec3, 3> cutPoints = {};
     QuaderCutMode cutMode = QuaderCutMode::KeepBoth;
     bool mirrorActive = false;
     bool mirrorCanPreview = false;
@@ -287,7 +287,7 @@ struct QuaderToolStatus {
     int mirrorPointCount = 0;
     int mirrorCapturedPointCount = 0;
     bool mirrorHasLine = false;
-    std::array<Vec3, 3> mirrorPoints = {};
+    std::array<QVec3, 3> mirrorPoints = {};
     bool polyActive = false;
     bool polyClosed = false;
     bool polyHasCurrent = false;
@@ -415,8 +415,8 @@ constexpr std::uint32_t quaderRgba8(std::uint8_t r, std::uint8_t g, std::uint8_t
  */
 struct QuaderOverlayLine {
     QuaderOverlayLayer layer = QuaderOverlayLayer::SourceWire;
-    Vec3 start;
-    Vec3 end;
+    QVec3 start;
+    QVec3 end;
     std::uint32_t color = quaderRgba8(255, 255, 255);
     float widthPixels = 1.0f;
     QuaderOverlayStyleRole styleRole = QuaderOverlayStyleRole::LayerDefault;
@@ -429,9 +429,9 @@ struct QuaderOverlayLine {
  */
 struct QuaderOverlayTriangle {
     QuaderOverlayLayer layer = QuaderOverlayLayer::SelectedVisibleFace;
-    Vec3 a;
-    Vec3 b;
-    Vec3 c;
+    QVec3 a;
+    QVec3 b;
+    QVec3 c;
     std::uint32_t color = quaderRgba8(255, 255, 255, 64);
     QuaderOverlayStyleRole styleRole = QuaderOverlayStyleRole::LayerDefault;
     QuaderOverlaySource source = QuaderOverlaySource::Unknown;
@@ -443,7 +443,7 @@ struct QuaderOverlayTriangle {
  */
 struct QuaderOverlayPoint {
     QuaderOverlayLayer layer = QuaderOverlayLayer::UnselectedVertex;
-    Vec3 position;
+    QVec3 position;
     std::uint32_t color = quaderRgba8(255, 255, 255);
     float sizePixels = 8.0f;
     QuaderOverlayStyleRole styleRole = QuaderOverlayStyleRole::LayerDefault;
@@ -513,7 +513,7 @@ struct QuaderPreviewSettings {
  */
 struct QuaderMaterialArgs {
     std::string name = "Material";
-    Vec3 baseColor = {1.0f, 1.0f, 1.0f};
+    QVec3 baseColor = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
 };

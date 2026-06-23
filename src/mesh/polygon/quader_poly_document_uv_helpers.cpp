@@ -31,12 +31,12 @@
 
 namespace quader_poly::document_internal {
 
-quader_geometry::Vec2f geometry_uv(Vec2 value)
+quader_geometry::QVec2f geometry_uv(quader::QVec2 value)
 {
     return { value.x, value.y };
 }
 
-Vec2 poly_uv(quader_geometry::Vec2f value)
+quader::QVec2 poly_uv(quader_geometry::QVec2f value)
 {
     return { value.x, value.y };
 }
@@ -48,7 +48,7 @@ std::vector<ElementId> unique_vertex_ids(std::vector<ElementId> ids)
     return ids;
 }
 
-std::optional<Vec3> uv_basis_origin_for_anchor(const Vec3& position, const Vec2& uv, const Vec3& u_axis, const Vec3& v_axis)
+std::optional<quader::QVec3> uv_basis_origin_for_anchor(const quader::QVec3& position, const quader::QVec2& uv, const quader::QVec3& u_axis, const quader::QVec3& v_axis)
 {
     const float uu = dot(u_axis, u_axis);
     const float uv_dot = dot(u_axis, v_axis);
@@ -76,14 +76,14 @@ bool uv_basis_varies_on_face(const Document& document, const Face& face, const F
         return false;
     }
 
-    std::vector<Vec2> projected;
+    std::vector<quader::QVec2> projected;
     projected.reserve(face.vertices.size());
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
             return false;
         }
-        const Vec3 edge = vertex->position - origin->position;
+        const quader::QVec3 edge = vertex->position - origin->position;
         projected.push_back({ dot(edge, basis.u_axis), dot(edge, basis.v_axis) });
     }
 
@@ -130,8 +130,8 @@ std::optional<FaceUvBasis> face_uv_basis_from_loop_uvs(const Document& document,
                     continue;
                 }
 
-                const Vec3 first_edge = first->position - anchor->position;
-                const Vec3 second_edge = second->position - anchor->position;
+                const quader::QVec3 first_edge = first->position - anchor->position;
+                const quader::QVec3 second_edge = second->position - anchor->position;
                 const float first_first = dot(first_edge, first_edge);
                 const float first_second = dot(first_edge, second_edge);
                 const float second_second = dot(second_edge, second_edge);
@@ -146,9 +146,9 @@ std::optional<FaceUvBasis> face_uv_basis_from_loop_uvs(const Document& document,
                     return (first_edge * alpha) + (second_edge * beta);
                 };
 
-                const Vec2 anchor_uv = face.uvs[anchor_index];
-                const Vec2 first_uv = face.uvs[first_index];
-                const Vec2 second_uv = face.uvs[second_index];
+                const quader::QVec2 anchor_uv = face.uvs[anchor_index];
+                const quader::QVec2 first_uv = face.uvs[first_index];
+                const quader::QVec2 second_uv = face.uvs[second_index];
                 FaceUvBasis basis;
                 basis.u_axis = solve_axis(
                     (first_uv.x - anchor_uv.x) / generated_uv_tiles_per_world_unit,
@@ -163,7 +163,7 @@ std::optional<FaceUvBasis> face_uv_basis_from_loop_uvs(const Document& document,
                     continue;
                 }
 
-                const std::optional<Vec3> origin =
+                const std::optional<quader::QVec3> origin =
                     uv_basis_origin_for_anchor(anchor->position, anchor_uv, basis.u_axis, basis.v_axis);
                 if (!origin.has_value()) {
                     continue;
@@ -177,7 +177,7 @@ std::optional<FaceUvBasis> face_uv_basis_from_loop_uvs(const Document& document,
                         matches_loops = false;
                         break;
                     }
-                    const Vec2 projected_uv = generated_face_uv(vertex->position, basis);
+                    const quader::QVec2 projected_uv = generated_face_uv(vertex->position, basis);
                     if (std::abs(projected_uv.x - face.uvs[loop_index].x) > 0.01F ||
                         std::abs(projected_uv.y - face.uvs[loop_index].y) > 0.01F) {
                         matches_loops = false;
@@ -201,7 +201,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id)
 {
-    const Vec3 target_normal = face_normal(document, face);
+    const quader::QVec3 target_normal = face_normal(document, face);
     if (length_squared(target_normal) <= epsilon) {
         return std::nullopt;
     }
@@ -260,7 +260,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
             }
         }
 
-        const Vec3 source_normal = face_normal(source_document, source_face);
+        const quader::QVec3 source_normal = face_normal(source_document, source_face);
         const float normal_dot = dot(normalize_or_zero(source_normal), normalize_or_zero(target_normal));
         if (normal_dot < -0.001F) {
             continue;
@@ -282,7 +282,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
         return std::nullopt;
     }
 
-    const Vec3 source_normal = face_normal(source_document, *best_source_face);
+    const quader::QVec3 source_normal = face_normal(source_document, *best_source_face);
     const int source_dropped_axis = dropped_axis_for_normal(source_normal);
     FaceUvBasis source_basis;
     bool inherited_loop_basis = false;
@@ -301,7 +301,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
         return std::nullopt;
     }
 
-    std::vector<Vec2> source_loop_uvs;
+    std::vector<quader::QVec2> source_loop_uvs;
     source_loop_uvs.reserve(best_source_face->vertices.size());
     if (face_has_loop_uvs(*best_source_face)) {
         source_loop_uvs = best_source_face->uvs;
@@ -316,7 +316,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
     }
 
     const Vertex* anchor_vertex = nullptr;
-    Vec2 anchor_uv {};
+    quader::QVec2 anchor_uv {};
     float best_anchor_distance_sq = std::numeric_limits<float>::infinity();
     bool found_anchor = false;
     for (const ElementId target_vertex_id : face.vertices) {
@@ -357,7 +357,7 @@ std::optional<FaceUvProjectionAssignment> face_uv_projection_assignment_from_sou
     if (!basis.valid) {
         return std::nullopt;
     }
-    const std::optional<Vec3> origin =
+    const std::optional<quader::QVec3> origin =
         uv_basis_origin_for_anchor(anchor_vertex->position, anchor_uv, basis.u_axis, basis.v_axis);
     if (!origin.has_value()) {
         return std::nullopt;
@@ -405,7 +405,7 @@ std::optional<std::size_t> face_vertex_index(const Face& face, ElementId vertex_
     return std::nullopt;
 }
 
-std::optional<Vec2> face_uv_for_vertex_id(const Face& face, ElementId vertex_id)
+std::optional<quader::QVec2> face_uv_for_vertex_id(const Face& face, ElementId vertex_id)
 {
     if (!face_has_loop_uvs(face)) {
         return std::nullopt;
@@ -420,7 +420,7 @@ std::optional<Vec2> face_uv_for_vertex_id(const Face& face, ElementId vertex_id)
 
 bool face_has_y_span(const Document& document, const Face& face)
 {
-    quader_geometry::Aabb3f bounds = quader_geometry::empty_aabb3<float>();
+    quader_geometry::QAabb3f bounds = quader_geometry::empty_aabb3<float>();
     for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
@@ -433,7 +433,7 @@ bool face_has_y_span(const Document& document, const Face& face)
 
 bool face_is_merge_split_slope(const Document& document, const Face& face)
 {
-    const Vec3 normal = face_normal(document, face);
+    const quader::QVec3 normal = face_normal(document, face);
     return face_has_loop_uvs(face) &&
         std::abs(normal.y) > 0.25F &&
         face_has_y_span(document, face);
@@ -449,17 +449,17 @@ std::optional<Edge> shared_edge_between_faces(const Face& left, const Face& righ
     return std::nullopt;
 }
 
-Vec2 face_uv_delta_for_edge(const Face& face, Edge edge)
+quader::QVec2 face_uv_delta_for_edge(const Face& face, Edge edge)
 {
-    const std::optional<Vec2> a = face_uv_for_vertex_id(face, edge.a);
-    const std::optional<Vec2> b = face_uv_for_vertex_id(face, edge.b);
+    const std::optional<quader::QVec2> a = face_uv_for_vertex_id(face, edge.a);
+    const std::optional<quader::QVec2> b = face_uv_for_vertex_id(face, edge.b);
     if (!a.has_value() || !b.has_value()) {
         return {};
     }
     return { b->x - a->x, b->y - a->y };
 }
 
-float uv_delta_length_squared(Vec2 delta)
+float uv_delta_length_squared(quader::QVec2 delta)
 {
     return quader_geometry::length_squared(geometry_uv(delta));
 }
@@ -476,10 +476,10 @@ const MergeFaceUvAssignment* uv_assignment_for_face(
 
 void stitch_uv_axis_to_reference_seam(Face& target_face, const Face& reference_face, Edge shared_edge, bool stitch_u_axis)
 {
-    const std::optional<Vec2> target_a = face_uv_for_vertex_id(target_face, shared_edge.a);
-    const std::optional<Vec2> target_b = face_uv_for_vertex_id(target_face, shared_edge.b);
-    const std::optional<Vec2> reference_a = face_uv_for_vertex_id(reference_face, shared_edge.a);
-    const std::optional<Vec2> reference_b = face_uv_for_vertex_id(reference_face, shared_edge.b);
+    const std::optional<quader::QVec2> target_a = face_uv_for_vertex_id(target_face, shared_edge.a);
+    const std::optional<quader::QVec2> target_b = face_uv_for_vertex_id(target_face, shared_edge.b);
+    const std::optional<quader::QVec2> reference_a = face_uv_for_vertex_id(reference_face, shared_edge.a);
+    const std::optional<quader::QVec2> reference_b = face_uv_for_vertex_id(reference_face, shared_edge.b);
     if (!target_a.has_value() || !target_b.has_value() || !reference_a.has_value() || !reference_b.has_value()) {
         return;
     }
@@ -494,7 +494,7 @@ void stitch_uv_axis_to_reference_seam(Face& target_face, const Face& reference_f
     }
 
     const float scale = (reference_end - reference_start) / target_delta;
-    for (Vec2& uv : target_face.uvs) {
+    for (quader::QVec2& uv : target_face.uvs) {
         float& component = stitch_u_axis ? uv.x : uv.y;
         component = reference_start + ((component - target_start) * scale);
     }
@@ -514,10 +514,10 @@ void stitch_merge_split_uv_pair(const Face& reference_face, Face& target_face, E
              std::abs(reference_end - target_end) > seam_endpoint_epsilon);
     };
 
-    const std::optional<Vec2> reference_a = face_uv_for_vertex_id(reference_face, shared_edge.a);
-    const std::optional<Vec2> reference_b = face_uv_for_vertex_id(reference_face, shared_edge.b);
-    const std::optional<Vec2> target_a = face_uv_for_vertex_id(target_face, shared_edge.a);
-    const std::optional<Vec2> target_b = face_uv_for_vertex_id(target_face, shared_edge.b);
+    const std::optional<quader::QVec2> reference_a = face_uv_for_vertex_id(reference_face, shared_edge.a);
+    const std::optional<quader::QVec2> reference_b = face_uv_for_vertex_id(reference_face, shared_edge.b);
+    const std::optional<quader::QVec2> target_a = face_uv_for_vertex_id(target_face, shared_edge.a);
+    const std::optional<quader::QVec2> target_b = face_uv_for_vertex_id(target_face, shared_edge.b);
     if (!reference_a.has_value() || !reference_b.has_value() || !target_a.has_value() || !target_b.has_value()) {
         return;
     }
@@ -557,8 +557,8 @@ void stitch_merge_split_uv_density(Document& document, std::span<const MergeFace
                 continue;
             }
 
-            const Vec2 left_delta = face_uv_delta_for_edge(left_face, *shared_edge);
-            const Vec2 right_delta = face_uv_delta_for_edge(right_face, *shared_edge);
+            const quader::QVec2 left_delta = face_uv_delta_for_edge(left_face, *shared_edge);
+            const quader::QVec2 right_delta = face_uv_delta_for_edge(right_face, *shared_edge);
             const float left_length_sq = uv_delta_length_squared(left_delta);
             const float right_length_sq = uv_delta_length_squared(right_delta);
             Face* reference_face = &left_face;
@@ -593,7 +593,7 @@ bool assign_face_uvs_from_source_projection(
     return assignment.has_value() && assign_face_uvs_from_projection_assignment(document, face, *assignment);
 }
 
-bool face_uvs_equal(std::span<const Vec2> left, std::span<const Vec2> right)
+bool face_uvs_equal(std::span<const quader::QVec2> left, std::span<const quader::QVec2> right)
 {
     if (left.size() != right.size()) {
         return false;
@@ -613,8 +613,8 @@ FaceUvBounds face_uv_bounds(const Face& face)
     if (!face_has_loop_uvs(face)) {
         return bounds;
     }
-    quader_geometry::Rect2f rect = quader_geometry::empty_rect2<float>();
-    for (const Vec2& uv : face.uvs) {
+    quader_geometry::QRect2f rect = quader_geometry::empty_rect2<float>();
+    for (const quader::QVec2& uv : face.uvs) {
         quader_geometry::rect_include(rect, geometry_uv(uv));
     }
     if (quader_geometry::rect_is_valid(rect)) {
@@ -672,7 +672,7 @@ bool fit_face_uvs(Face& face, bool fit_u, bool fit_v)
     if ((fit_u && width <= epsilon) || (fit_v && height <= epsilon)) {
         return false;
     }
-    for (Vec2& uv : face.uvs) {
+    for (quader::QVec2& uv : face.uvs) {
         if (fit_u) {
             uv.x = (uv.x - bounds.min.x) / width;
         }
@@ -688,7 +688,7 @@ bool shift_face_uvs(Face& face, float delta_u, float delta_v)
     if (!face_has_loop_uvs(face) || (std::abs(delta_u) <= epsilon && std::abs(delta_v) <= epsilon)) {
         return false;
     }
-    for (Vec2& uv : face.uvs) {
+    for (quader::QVec2& uv : face.uvs) {
         uv.x += delta_u;
         uv.y += delta_v;
     }
@@ -738,7 +738,7 @@ bool shift_face_uvs_for_operation(Face& face, std::string_view operation, float 
     return false;
 }
 
-Vec3 transform_point(const Transform3& transform, Vec3 point)
+quader::QVec3 transform_point(const Transform3& transform, quader::QVec3 point)
 {
     return transform.origin +
         (transform.x_axis * point.x) +

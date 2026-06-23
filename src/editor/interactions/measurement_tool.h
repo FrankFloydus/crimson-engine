@@ -26,8 +26,8 @@ struct TransformDragState;
  */
 struct MeasurementLine {
 	TransformAxis axis = TransformAxis::none;
-	quader_poly::Vec2 start;
-	quader_poly::Vec2 end;
+	quader::QVec2 start;
+	quader::QVec2 end;
 };
 
 /**
@@ -36,7 +36,7 @@ struct MeasurementLine {
 struct MeasurementLabel {
 	TransformAxis axis = TransformAxis::none;
 	bool text_color = false;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 	std::string text;
 };
 

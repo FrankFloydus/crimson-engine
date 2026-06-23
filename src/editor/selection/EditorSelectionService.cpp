@@ -10,6 +10,7 @@
 #include "assets/MeshAsset.h"
 #include "editor/commands/DocumentCommandService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "math/GlmBridge.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 
@@ -23,7 +24,7 @@
 namespace quader {
 namespace {
 
-bool rayIntersectsBounds(Vec3 origin, Vec3 direction, const SceneBounds& bounds, float& outDistance) {
+bool rayIntersectsBounds(QVec3 origin, QVec3 direction, const SceneBounds& bounds, float& outDistance) {
     float tMin = 0.0f;
     float tMax = std::numeric_limits<float>::max();
 
@@ -303,22 +304,22 @@ EntityId EditorSelectionService::pickMeshEntityByBounds(const ModelingRay& ray) 
             continue;
         }
 
-        const Mat4 worldFromLocal = scene_.worldTransformMatrix(id);
-        const Mat4 localFromWorld = inverse(worldFromLocal);
-        const Vec3 localOrigin = transformPoint(localFromWorld, ray.origin);
-        const Vec3 unnormalizedLocalDirection = transformVector(localFromWorld, ray.direction);
+        const QMat4 worldFromLocal = scene_.worldTransformMatrix(id);
+        const QMat4 localFromWorld = inverse(worldFromLocal);
+        const QVec3 localOrigin = transformPoint(localFromWorld, ray.origin);
+        const QVec3 unnormalizedLocalDirection = transformVector(localFromWorld, ray.direction);
         if (length(unnormalizedLocalDirection) <= 0.000001f) {
             continue;
         }
-        const Vec3 localDirection = normalize(unnormalizedLocalDirection);
+        const QVec3 localDirection = normalize(unnormalizedLocalDirection);
 
         float localDistance = 0.0f;
         if (!rayIntersectsBounds(localOrigin, localDirection, *bounds, localDistance)) {
             continue;
         }
 
-        const Vec3 localHit = localOrigin + localDirection * localDistance;
-        const Vec3 worldHit = transformPoint(worldFromLocal, localHit);
+        const QVec3 localHit = localOrigin + localDirection * localDistance;
+        const QVec3 worldHit = transformPoint(worldFromLocal, localHit);
         const float worldDistance = length(worldHit - ray.origin);
         if (worldDistance < bestDistance) {
             bestDistance = worldDistance;

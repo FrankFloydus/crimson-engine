@@ -79,12 +79,12 @@ void KnifeToolImpl::reset_runtime_state(EditorRuntimeState& runtime, bool keep_a
 
 namespace {
 
-quader_geometry::Vec3f to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-quader_geometry::Vec2d to_geometry_vec2(quader_poly::Vec2 value)
+quader_geometry::QVec2d to_geometry_vec2(quader::QVec2 value)
 {
 	return { static_cast<double>(value.x), static_cast<double>(value.y) };
 }
@@ -123,8 +123,8 @@ KnifeToolPreview knife_tool_preview(const KnifeToolState& state)
 	preview.previous_point =
 		state.has_active_stroke && state.previous_point_index < state.point_positions.size() ?
 			state.point_positions[state.previous_point_index] :
-			quader_poly::Vec3 {};
-	preview.current_point = state.has_current ? state.current_point : quader_poly::Vec3 {};
+			quader::QVec3 {};
+	preview.current_point = state.has_current ? state.current_point : quader::QVec3 {};
 	preview.preview_point_count = saturated_history_size(state.preview_points.size());
 	preview.preview_line_count = saturated_history_size(state.preview_lines.size());
 	preview.point_count = saturated_history_size(state.points.size());
@@ -166,7 +166,7 @@ void rebuild_knife_overlay(KnifeToolState& state)
 			3.0F,
 		});
 	}
-	for (const quader_poly::Vec3& point : state.intersection_preview_points) {
+	for (const quader::QVec3& point : state.intersection_preview_points) {
 		state.preview_points.push_back({
 			SelectionOverlayLayer::selected_vertex,
 			point,
@@ -198,7 +198,7 @@ bool knife_object_allowed(const KnifeToolState& state, int object_id)
 	return object_id > 0 && (state.target_object_id <= 0 || object_id == state.target_object_id);
 }
 
-std::optional<quader_poly::Vec3> edge_position_from_factor(
+std::optional<quader::QVec3> edge_position_from_factor(
 		const quader_poly::Document& document,
 		quader_poly::Edge edge,
 		float factor)
@@ -214,29 +214,29 @@ std::optional<quader_poly::Vec3> edge_position_from_factor(
 	return a->position + ((b->position - a->position) * clamped);
 }
 
-quader_poly::Vec3 normalize_or(quader_poly::Vec3 value, quader_poly::Vec3 fallback)
+quader::QVec3 normalize_or(quader::QVec3 value, quader::QVec3 fallback)
 {
-	const quader_poly::Vec3 normalized = quader_poly::normalize_or_zero(value);
-	return quader_poly::length_squared(normalized) <= transform_point_epsilon ? fallback : normalized;
+	const quader::QVec3 normalized = quader::normalize_or_zero(value);
+	return quader::length_squared(normalized) <= transform_point_epsilon ? fallback : normalized;
 }
 
 bool knife_object_allowed(const KnifeToolState& state, int object_id);
 
-quader_poly::Vec3 project_point_to_plane(quader_poly::Vec3 point, quader_poly::Vec3 origin, quader_poly::Vec3 normal)
+quader::QVec3 project_point_to_plane(quader::QVec3 point, quader::QVec3 origin, quader::QVec3 normal)
 {
-	const float normal_length_squared = quader_poly::length_squared(normal);
+	const float normal_length_squared = quader::length_squared(normal);
 	if (normal_length_squared <= transform_point_epsilon) {
 		return point;
 	}
 
-	const float signed_distance = quader_poly::dot(point - origin, normal) / normal_length_squared;
+	const float signed_distance = quader::dot(point - origin, normal) / normal_length_squared;
 	return point - (normal * signed_distance);
 }
 
-std::optional<quader_poly::Vec3> project_point_to_face_plane(
+std::optional<quader::QVec3> project_point_to_face_plane(
 		const quader_poly::Document& document,
 		quader_poly::ElementId face_id,
-		quader_poly::Vec3 point)
+		quader::QVec3 point)
 {
 	const quader_poly::Face *face = quader_poly::find_face(document, face_id);
 	if (face == nullptr || face->vertices.empty()) {
@@ -248,8 +248,8 @@ std::optional<quader_poly::Vec3> project_point_to_face_plane(
 		return std::nullopt;
 	}
 
-	const quader_poly::Vec3 normal = quader_poly::face_normal(document, *face);
-	if (quader_poly::length_squared(normal) <= transform_point_epsilon) {
+	const quader::QVec3 normal = quader_poly::face_normal(document, *face);
+	if (quader::length_squared(normal) <= transform_point_epsilon) {
 		return std::nullopt;
 	}
 	return project_point_to_plane(point, origin->position, normal);
@@ -258,18 +258,18 @@ std::optional<quader_poly::Vec3> project_point_to_face_plane(
 quader_poly::Ray projection_ray_through_grid_point(
 		const ViewportCameraState& camera,
 		const quader_poly::Ray& pick_ray,
-		quader_poly::Vec3 grid_point)
+		quader::QVec3 grid_point)
 {
-	const quader_poly::Vec3 fallback_direction = normalize_or(pick_ray.direction, { 0.0F, -1.0F, 0.0F });
+	const quader::QVec3 fallback_direction = normalize_or(pick_ray.direction, { 0.0F, -1.0F, 0.0F });
 	if (camera.projection == CameraProjection::perspective) {
-		const quader_poly::Vec3 camera_delta = grid_point - camera.transform.origin;
+		const quader::QVec3 camera_delta = grid_point - camera.transform.origin;
 		return {
 			camera.transform.origin,
 			normalize_or(camera_delta, fallback_direction),
 		};
 	}
 
-	const float guide_distance = std::abs(quader_poly::dot(grid_point - pick_ray.origin, fallback_direction));
+	const float guide_distance = std::abs(quader::dot(grid_point - pick_ray.origin, fallback_direction));
 	const float origin_distance = std::max(1.0F, std::isfinite(guide_distance) ? guide_distance : 1.0F);
 	return {
 		grid_point - (fallback_direction * origin_distance),
@@ -311,8 +311,8 @@ struct KnifeResolvedPoint {
 	bool target_valid = false;
 	int object_id = -1;
 	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
-	quader_poly::Vec3 point;
-	quader_poly::Vec3 normal { 0.0F, 1.0F, 0.0F };
+	quader::QVec3 point;
+	quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
 	quader_poly::KnifePointTarget target;
 };
 
@@ -368,13 +368,13 @@ bool fill_knife_edge_target(
 		return false;
 	}
 
-	quader_poly::Vec3 factor_point = hit->local_position;
+	quader::QVec3 factor_point = hit->local_position;
 	if (snap_enabled) {
 		factor_point = snap_knife_point_to_grid(factor_point, grid_size, true);
 	}
 
 	const std::optional<float> factor = quader_poly::edge_factor_from_position(object->document, hit->edge, factor_point);
-	const std::optional<quader_poly::Vec3> point = factor.has_value() ?
+	const std::optional<quader::QVec3> point = factor.has_value() ?
 		edge_position_from_factor(object->document, hit->edge, *factor) :
 		std::nullopt;
 	if (!factor.has_value() || !point.has_value()) {
@@ -424,7 +424,7 @@ bool fill_knife_face_point(
 	}
 
 	const PolygonObject *object = object_by_id(session.objects(), surface_hit.object_id);
-	quader_poly::Vec3 point = surface_hit.local_position;
+	quader::QVec3 point = surface_hit.local_position;
 	if (state.has_active_stroke && constrain_axis && state.previous_point_index < state.point_positions.size()) {
 		point = constrain_knife_point_to_axis(
 			state.point_positions[state.previous_point_index],
@@ -438,7 +438,7 @@ bool fill_knife_face_point(
 		}
 	}
 	if (object != nullptr) {
-		const std::optional<quader_poly::Vec3> face_point =
+		const std::optional<quader::QVec3> face_point =
 			project_point_to_face_plane(object->document, surface_hit.face_id, point);
 		if (face_point.has_value()) {
 			point = *face_point;
@@ -489,7 +489,7 @@ bool knife_current_closes_active_stroke(const KnifeToolState& state, double grid
 	}
 
 	const float threshold = static_cast<float>(std::max(0.025, std::isfinite(grid_size) && grid_size > 0.0001 ? grid_size * 0.10 : 0.025));
-	return quader_poly::length_squared(state.current_point - state.point_positions[state.active_stroke_start]) <= threshold * threshold;
+	return quader::length_squared(state.current_point - state.point_positions[state.active_stroke_start]) <= threshold * threshold;
 }
 
 std::uint32_t append_knife_point(KnifeToolState& state)
@@ -499,7 +499,7 @@ std::uint32_t append_knife_point(KnifeToolState& state)
 	return static_cast<std::uint32_t>(state.points.size() - 1U);
 }
 
-std::uint32_t append_knife_point(KnifeToolState& state, quader_poly::KnifePointTarget target, quader_poly::Vec3 position)
+std::uint32_t append_knife_point(KnifeToolState& state, quader_poly::KnifePointTarget target, quader::QVec3 position)
 {
 	state.points.push_back(target);
 	state.point_positions.push_back(position);
@@ -537,8 +537,8 @@ bool knife_target_is_on_edge(const quader_poly::KnifePointTarget& target, quader
 float edge_factor_nearest_segment(
 		const quader_poly::Document& document,
 		quader_poly::Edge edge,
-		quader_poly::Vec3 segment_start,
-		quader_poly::Vec3 segment_end)
+		quader::QVec3 segment_start,
+		quader::QVec3 segment_end)
 {
 	edge = quader_poly::make_edge(edge.a, edge.b);
 	const quader_poly::Vertex *edge_start = quader_poly::find_vertex(document, edge.a);
@@ -547,14 +547,14 @@ float edge_factor_nearest_segment(
 		return 0.5F;
 	}
 
-	quader_geometry::SegmentSegmentFactorOptions<float> options;
+	quader_geometry::QSegmentSegmentFactorOptions<float> options;
 	options.length_squared_epsilon = transform_point_epsilon;
 	options.closest_epsilon = transform_point_epsilon;
 	options.parameter_epsilon = transform_point_epsilon;
 	options.min_factor = 0.01F;
 	options.max_factor = 0.99F;
 
-	const quader_geometry::SegmentFactorClosestPoint3<float> closest =
+	const quader_geometry::QSegmentFactorClosestPoint3<float> closest =
 		quader_geometry::closest_factor_on_segment_to_segment<float>(
 			{ to_geometry_vec3(edge_start->position), to_geometry_vec3(edge_end->position) },
 			{ to_geometry_vec3(segment_start), to_geometry_vec3(segment_end) },
@@ -566,8 +566,8 @@ std::optional<float> edge_factor_from_camera_cut_plane(
 		const ViewportCameraState& camera,
 		const quader_poly::Document& document,
 		quader_poly::Edge edge,
-		quader_poly::Vec3 segment_start,
-		quader_poly::Vec3 segment_end)
+		quader::QVec3 segment_start,
+		quader::QVec3 segment_end)
 {
 	edge = quader_poly::make_edge(edge.a, edge.b);
 	const quader_poly::Vertex *edge_start = quader_poly::find_vertex(document, edge.a);
@@ -576,28 +576,28 @@ std::optional<float> edge_factor_from_camera_cut_plane(
 		return std::nullopt;
 	}
 
-	const quader_poly::Vec3 camera_origin = camera.transform.origin;
-	const quader_poly::Vec3 camera_forward = normalize_or(camera.transform.z_axis * -1.0F, { 0.0F, 0.0F, -1.0F });
-	const quader_poly::Vec3 segment_delta = segment_end - segment_start;
-	quader_poly::Vec3 cut_plane_normal;
+	const quader::QVec3 camera_origin = camera.transform.origin;
+	const quader::QVec3 camera_forward = normalize_or(camera.transform.z_axis * -1.0F, { 0.0F, 0.0F, -1.0F });
+	const quader::QVec3 segment_delta = segment_end - segment_start;
+	quader::QVec3 cut_plane_normal;
 	if (camera.projection == CameraProjection::orthographic) {
-		cut_plane_normal = quader_poly::cross(segment_delta, camera_forward);
+		cut_plane_normal = quader::cross(segment_delta, camera_forward);
 	} else {
-		cut_plane_normal = quader_poly::cross(segment_start - camera_origin, segment_end - camera_origin);
+		cut_plane_normal = quader::cross(segment_start - camera_origin, segment_end - camera_origin);
 	}
-	if (quader_poly::length_squared(cut_plane_normal) <= transform_point_epsilon) {
+	if (quader::length_squared(cut_plane_normal) <= transform_point_epsilon) {
 		return std::nullopt;
 	}
 
-	const quader_geometry::Plane3<float> cut_plane = quader_geometry::plane_from_point_normal(
+	const quader_geometry::QPlane3<float> cut_plane = quader_geometry::plane_from_point_normal(
 		to_geometry_vec3(segment_start),
 		to_geometry_vec3(cut_plane_normal),
 		transform_point_epsilon);
-	const quader_geometry::SegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane(
-		quader_geometry::Segment3<float> { to_geometry_vec3(edge_start->position), to_geometry_vec3(edge_end->position) },
+	const quader_geometry::QSegmentPlaneHit<float> hit = quader_geometry::intersect_segment_plane(
+		quader_geometry::QSegment3<float> { to_geometry_vec3(edge_start->position), to_geometry_vec3(edge_end->position) },
 		cut_plane,
 		transform_point_epsilon);
-	if (hit.type != quader_geometry::PlaneIntersectionType::point) {
+	if (hit.type != quader_geometry::QPlaneIntersectionType::point) {
 		return std::nullopt;
 	}
 
@@ -616,27 +616,27 @@ struct KnifeScreenEdgeHit {
 	float edge_factor = 0.5F;
 	quader_poly::ElementId face_id = quader_poly::invalid_element_id;
 	double segment_factor = 0.0;
-	quader_poly::Vec3 position;
+	quader::QVec3 position;
 };
 
-double vec2_distance_squared(quader_poly::Vec2 left, quader_poly::Vec2 right)
+double vec2_distance_squared(quader::QVec2 left, quader::QVec2 right)
 {
 	return quader_geometry::length_squared(to_geometry_vec2(left) - to_geometry_vec2(right));
 }
 
 std::optional<std::pair<double, double>> screen_segment_intersection_factors(
-		quader_poly::Vec2 line_start,
-		quader_poly::Vec2 line_end,
-		quader_poly::Vec2 edge_start,
-		quader_poly::Vec2 edge_end)
+		quader::QVec2 line_start,
+		quader::QVec2 line_end,
+		quader::QVec2 edge_start,
+		quader::QVec2 edge_end)
 {
-	const quader_geometry::ClassifiedSegmentIntersection2<double> intersection =
+	const quader_geometry::QClassifiedSegmentIntersection2<double> intersection =
 		quader_geometry::intersect_segments_2d(
 			to_geometry_vec2(line_start),
 			to_geometry_vec2(line_end),
 			to_geometry_vec2(edge_start),
 			to_geometry_vec2(edge_end));
-	if (!intersection.hit || intersection.kind != quader_geometry::SegmentIntersectionKind2::point) {
+	if (!intersection.hit || intersection.kind != quader_geometry::QSegmentIntersectionKind2::point) {
 		return std::nullopt;
 	}
 
@@ -658,7 +658,7 @@ std::optional<quader_poly::ElementId> knife_screen_edge_hit_face(
 		int object_id,
 		const ViewportCameraState& camera,
 		quader_poly::Edge edge,
-		quader_poly::Vec2 screen_hit)
+		quader::QVec2 screen_hit)
 {
 	quader_poly::PickOptions options;
 	options.mode = quader_poly::SelectionMode::face;
@@ -692,8 +692,8 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 		return hits;
 	}
 
-	quader_poly::Vec2 line_start;
-	quader_poly::Vec2 line_end;
+	quader::QVec2 line_start;
+	quader::QVec2 line_end;
 	if (!project_viewport_point(camera, state.point_positions[state.previous_point_index], line_start) ||
 		!project_viewport_point(camera, state.current_point, line_end) ||
 		vec2_distance_squared(line_start, line_end) <= 1.0) {
@@ -719,8 +719,8 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 			continue;
 		}
 
-		quader_poly::Vec2 edge_start;
-		quader_poly::Vec2 edge_end;
+		quader::QVec2 edge_start;
+		quader::QVec2 edge_end;
 		if (!project_viewport_point(camera, first->position, edge_start) ||
 			!project_viewport_point(camera, second->position, edge_end)) {
 			continue;
@@ -732,7 +732,7 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 			continue;
 		}
 
-		const quader_poly::Vec2 screen_hit {
+		const quader::QVec2 screen_hit {
 			static_cast<float>(static_cast<double>(line_start.x) + (static_cast<double>(line_end.x - line_start.x) * factors->first)),
 			static_cast<float>(static_cast<double>(line_start.y) + (static_cast<double>(line_end.y - line_start.y) * factors->first)),
 		};
@@ -753,10 +753,10 @@ std::vector<KnifeScreenEdgeHit> collect_knife_screen_edge_hits(
 		}
 
 		const float edge_factor = *cut_plane_edge_factor;
-		const std::optional<quader_poly::Vec3> position = edge_position_from_factor(object->document, edge, edge_factor);
+		const std::optional<quader::QVec3> position = edge_position_from_factor(object->document, edge, edge_factor);
 		if (!position.has_value() ||
-			quader_poly::length_squared(*position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon ||
-			quader_poly::length_squared(*position - state.current_point) <= transform_point_epsilon) {
+			quader::length_squared(*position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon ||
+			quader::length_squared(*position - state.current_point) <= transform_point_epsilon) {
 			continue;
 		}
 
@@ -793,7 +793,7 @@ bool append_knife_screen_edge_hits(EditorSession& session, KnifeToolState& state
 	bool appended = false;
 	for (const KnifeScreenEdgeHit& hit : collect_knife_screen_edge_hits(session, state, camera)) {
 		if (state.previous_point_index < state.point_positions.size() &&
-			quader_poly::length_squared(hit.position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon) {
+			quader::length_squared(hit.position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon) {
 			continue;
 		}
 
@@ -857,10 +857,10 @@ std::optional<std::uint32_t> append_knife_boundary_crossing_point(EditorSession&
 		*crossing_edge,
 		state.point_positions[state.previous_point_index],
 		state.current_point);
-	const std::optional<quader_poly::Vec3> crossing_position = edge_position_from_factor(object->document, *crossing_edge, factor);
+	const std::optional<quader::QVec3> crossing_position = edge_position_from_factor(object->document, *crossing_edge, factor);
 	if (!crossing_position.has_value() ||
-		quader_poly::length_squared(*crossing_position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon ||
-		quader_poly::length_squared(*crossing_position - state.current_point) <= transform_point_epsilon) {
+		quader::length_squared(*crossing_position - state.point_positions[state.previous_point_index]) <= transform_point_epsilon ||
+		quader::length_squared(*crossing_position - state.current_point) <= transform_point_epsilon) {
 		return std::nullopt;
 	}
 
@@ -950,8 +950,8 @@ void refresh_knife_intersection_preview(EditorSession& session, KnifeToolState& 
 			const auto duplicate = std::find_if(
 				state.intersection_preview_points.begin(),
 				state.intersection_preview_points.end(),
-				[&hit](const quader_poly::Vec3& point) {
-					return quader_poly::length_squared(point - hit.position) <= transform_point_epsilon;
+				[&hit](const quader::QVec3& point) {
+					return quader::length_squared(point - hit.position) <= transform_point_epsilon;
 				});
 			if (duplicate == state.intersection_preview_points.end()) {
 				state.intersection_preview_points.push_back(hit.position);

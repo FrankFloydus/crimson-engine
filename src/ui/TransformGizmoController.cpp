@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/TransformGizmoController.h"
 
+#include "math/GlmBridge.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
 #include "editor/selection/EditorSelectionService.h"
@@ -63,7 +64,7 @@ bool isComponentSelectionMode(ModelingSelectionMode mode) {
             mode == ModelingSelectionMode::Face;
 }
 
-Vec3 parentLocalPointForWorldPoint(const SceneDocument& document, EntityId entity, Vec3 worldPoint) {
+QVec3 parentLocalPointForWorldPoint(const SceneDocument& document, EntityId entity, QVec3 worldPoint) {
     const EntityId parent = document.parent(entity);
     if (parent == InvalidEntityId) {
         return worldPoint;
@@ -71,7 +72,7 @@ Vec3 parentLocalPointForWorldPoint(const SceneDocument& document, EntityId entit
     return transformPoint(inverse(document.worldTransformMatrix(parent)), worldPoint);
 }
 
-Vec3 parentLocalVectorForWorldVector(const SceneDocument& document, EntityId entity, Vec3 worldVector) {
+QVec3 parentLocalVectorForWorldVector(const SceneDocument& document, EntityId entity, QVec3 worldVector) {
     const EntityId parent = document.parent(entity);
     if (parent == InvalidEntityId) {
         return worldVector;
@@ -79,7 +80,7 @@ Vec3 parentLocalVectorForWorldVector(const SceneDocument& document, EntityId ent
     return transformVector(inverse(document.worldTransformMatrix(parent)), worldVector);
 }
 
-Vec3 worldAxisForHandle(TransformAxisHandle axis) {
+QVec3 worldAxisForHandle(TransformAxisHandle axis) {
     switch (axis) {
     case TransformAxisHandle::X:
         return {1.0f, 0.0f, 0.0f};
@@ -97,7 +98,7 @@ Vec3 worldAxisForHandle(TransformAxisHandle axis) {
     return {};
 }
 
-glm::quat normalizedRotationQuaternion(Vec3 eulerRadians) {
+glm::quat normalizedRotationQuaternion(QVec3 eulerRadians) {
     return glm::normalize(toGlm(quatFromEulerRadians(eulerRadians)));
 }
 
@@ -117,19 +118,19 @@ TransformComponent localTransformAfterWorldQuaternionRotation(
         const SceneDocument& document,
         EntityId entity,
         const TransformComponent& startTransform,
-        const Mat4& startWorld,
-        Vec3 worldAxis,
+        const QMat4& startWorld,
+        QVec3 worldAxis,
         float angleRadians,
-        Vec3 worldPivot,
-        Vec3 eulerReference) {
-    const Vec3 normalizedAxis = normalize(worldAxis);
+        QVec3 worldPivot,
+        QVec3 eulerReference) {
+    const QVec3 normalizedAxis = normalize(worldAxis);
     if (length(normalizedAxis) <= 0.000001f || std::abs(angleRadians) <= 0.000001f) {
         return startTransform;
     }
 
     const glm::quat delta = glm::normalize(glm::angleAxis(angleRadians, toGlm(normalizedAxis)));
-    const Vec3 startWorldOrigin = transformPoint(startWorld, {});
-    const Vec3 nextWorldOrigin =
+    const QVec3 startWorldOrigin = transformPoint(startWorld, {});
+    const QVec3 nextWorldOrigin =
             worldPivot + fromGlm(delta * toGlm(startWorldOrigin - worldPivot));
 
     const EntityId parent = document.parent(entity);
@@ -155,9 +156,9 @@ void pinDocumentLocalPivotToWorldPoint(
         const SceneDocument& document,
         EntityId entity,
         TransformComponent& transform,
-        Vec3 localPivot,
-        Vec3 worldPivot) {
-    Transform spatial = transform.spatialTransform();
+        QVec3 localPivot,
+        QVec3 worldPivot) {
+    QTransform spatial = transform.spatialTransform();
     spatial.position = {};
     transform.position =
             parentLocalPointForWorldPoint(document, entity, worldPivot) -
@@ -207,7 +208,7 @@ float snapWorldValue(float value, double gridSize) {
     return static_cast<float>(std::round(static_cast<double>(value) / grid) * grid);
 }
 
-Vec3 snapWorldDeltaForHandle(Vec3 delta, TransformAxisHandle activeAxis, Vec3 startPivot, double gridSize, bool snapEnabled) {
+QVec3 snapWorldDeltaForHandle(QVec3 delta, TransformAxisHandle activeAxis, QVec3 startPivot, double gridSize, bool snapEnabled) {
     if (!snapEnabled) {
         return delta;
     }
@@ -233,9 +234,9 @@ float snapRotationRadians(float radians, bool snapEnabled) {
     return static_cast<float>(snappedDegrees * static_cast<double>(kPi) / 180.0);
 }
 
-Vec3 axisScaleForHandle(TransformAxisHandle activeAxis, double factor) {
+QVec3 axisScaleForHandle(TransformAxisHandle activeAxis, double factor) {
     const float value = static_cast<float>(factor);
-    Vec3 scale{1.0f, 1.0f, 1.0f};
+    QVec3 scale{1.0f, 1.0f, 1.0f};
     if (handleIncludesAxis(activeAxis, TransformAxisHandle::X)) {
         scale.x = value;
     }
@@ -249,7 +250,7 @@ Vec3 axisScaleForHandle(TransformAxisHandle activeAxis, double factor) {
 }
 
 std::optional<ImVec2> projectWorldToViewport(
-        Vec3 world,
+        QVec3 world,
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize) {
@@ -267,19 +268,19 @@ std::optional<ImVec2> projectWorldToViewport(
 }
 
 
-quader_poly::Vec3 toRuntime(Vec3 value) {
+quader::QVec3 toRuntime(QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader_poly::Vec2 toRuntime(Vec2 value) {
+quader::QVec2 toRuntime(QVec2 value) {
     return {value.x, value.y};
 }
 
-Vec3 fromRuntime(quader_poly::Vec3 value) {
+QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-Vec2 fromRuntime(quader_poly::Vec2 value) {
+QVec2 fromRuntime(quader::QVec2 value) {
     return {value.x, value.y};
 }
 
@@ -386,7 +387,7 @@ quader_editor_core::ViewportCameraState makeRuntimeCamera(const ViewportCameraCo
 
 quader_editor_core::TransformGizmoFrameInput makeRuntimeGizmoInput(
         const ViewportCameraController& camera,
-        Vec3 pivot,
+        QVec3 pivot,
         quader_editor_core::ViewportInteractionTool tool,
         TransformAxisHandle activeAxis,
         TransformAxisHandle hoverAxis,
@@ -447,7 +448,7 @@ ImU32 movePlaneImColor(quader_editor_core::TransformAxis axis) {
     }
 }
 
-ImVec2 toScreen(quader_poly::Vec2 point, ImVec2 itemMin) {
+ImVec2 toScreen(quader::QVec2 point, ImVec2 itemMin) {
     return {itemMin.x + point.x, itemMin.y + point.y};
 }
 
@@ -500,10 +501,10 @@ void drawArrowHead(ImDrawList* drawList, ImVec2 start, ImVec2 tip, ImU32 color, 
     drawList->AddPolyline(outline.data(), static_cast<int>(outline.size()), color, ImDrawFlags_Closed, 1.1f);
 }
 
-Vec3 fallbackPerpendicular(Vec3 axis) {
-    Vec3 side = cross(axis, Vec3{0.0f, 1.0f, 0.0f});
+QVec3 fallbackPerpendicular(QVec3 axis) {
+    QVec3 side = cross(axis, QVec3{0.0f, 1.0f, 0.0f});
     if (dot(side, side) <= 0.000001f) {
-        side = cross(axis, Vec3{1.0f, 0.0f, 0.0f});
+        side = cross(axis, QVec3{1.0f, 0.0f, 0.0f});
     }
     if (dot(side, side) <= 0.000001f) {
         return {0.0f, 0.0f, 1.0f};
@@ -516,16 +517,16 @@ bool drawProjectedConeHandle(
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize,
-        quader_poly::Vec3 start,
-        quader_poly::Vec3 tip,
+        quader::QVec3 start,
+        quader::QVec3 tip,
         ImU32 color,
         float sizeScale) {
     constexpr int coneSegments = 14;
     constexpr float circleTau = kPi * 2.0f;
 
-    const Vec3 rawStart = fromRuntime(start);
-    const Vec3 rawTip = fromRuntime(tip);
-    Vec3 axis = rawTip - rawStart;
+    const QVec3 rawStart = fromRuntime(start);
+    const QVec3 rawTip = fromRuntime(tip);
+    QVec3 axis = rawTip - rawStart;
     const float axisLength = length(axis);
     if (axisLength <= 0.000001f) {
         return false;
@@ -533,17 +534,17 @@ bool drawProjectedConeHandle(
     axis = axis / axisLength;
     const float coneLength = axisLength * 0.22f * sizeScale;
     const float radius = coneLength * 0.38f;
-    Vec3 u = fallbackPerpendicular(axis);
-    Vec3 v = cross(axis, u);
+    QVec3 u = fallbackPerpendicular(axis);
+    QVec3 v = cross(axis, u);
     if (dot(v, v) <= 0.000001f) {
         v = fallbackPerpendicular(u);
     } else {
         v = normalize(v);
     }
     u = normalize(cross(v, axis));
-    const Vec3 baseCenter = rawTip - axis * coneLength;
+    const QVec3 baseCenter = rawTip - axis * coneLength;
 
-    std::array<Vec3, coneSegments> basePoints = {};
+    std::array<QVec3, coneSegments> basePoints = {};
     for (int i = 0; i < coneSegments; ++i) {
         const float angle = circleTau * static_cast<float>(i) / static_cast<float>(coneSegments);
         basePoints[static_cast<std::size_t>(i)] = baseCenter +
@@ -580,7 +581,7 @@ void drawProjectedCubeHandle(
         const ViewportCameraController& camera,
         ImVec2 itemMin,
         ImVec2 itemSize,
-        quader_poly::Vec3 center,
+        quader::QVec3 center,
         float worldSize,
         ImU32 color,
         bool hovered) {
@@ -588,17 +589,17 @@ void drawProjectedCubeHandle(
         return;
     }
 
-    const Vec3 rawCenter = fromRuntime(center);
+    const QVec3 rawCenter = fromRuntime(center);
     const float half = worldSize * 0.5f;
-    const std::array<Vec3, 8> corners = {{
-            rawCenter + Vec3{-half, -half, -half},
-            rawCenter + Vec3{half, -half, -half},
-            rawCenter + Vec3{half, half, -half},
-            rawCenter + Vec3{-half, half, -half},
-            rawCenter + Vec3{-half, -half, half},
-            rawCenter + Vec3{half, -half, half},
-            rawCenter + Vec3{half, half, half},
-            rawCenter + Vec3{-half, half, half},
+    const std::array<QVec3, 8> corners = {{
+            rawCenter + QVec3{-half, -half, -half},
+            rawCenter + QVec3{half, -half, -half},
+            rawCenter + QVec3{half, half, -half},
+            rawCenter + QVec3{-half, half, -half},
+            rawCenter + QVec3{-half, -half, half},
+            rawCenter + QVec3{half, -half, half},
+            rawCenter + QVec3{half, half, half},
+            rawCenter + QVec3{-half, half, half},
     }};
     constexpr std::array<std::array<int, 4>, 6> faces = {{
             {{1, 5, 6, 2}},
@@ -608,7 +609,7 @@ void drawProjectedCubeHandle(
             {{5, 4, 7, 6}},
             {{0, 1, 2, 3}},
     }};
-    const std::array<Vec3, 6> normals = {{
+    const std::array<QVec3, 6> normals = {{
             {1.0f, 0.0f, 0.0f},
             {-1.0f, 0.0f, 0.0f},
             {0.0f, 1.0f, 0.0f},
@@ -617,7 +618,7 @@ void drawProjectedCubeHandle(
             {0.0f, 0.0f, -1.0f},
     }};
 
-    Vec3 viewDirection = camera.pose().eye - rawCenter;
+    QVec3 viewDirection = camera.pose().eye - rawCenter;
     if (dot(viewDirection, viewDirection) <= 0.000001f) {
         viewDirection = {0.0f, 0.0f, 1.0f};
     } else {
@@ -750,7 +751,7 @@ double snappedSceneScaleFactor(
         TransformAxisHandle activeAxis,
         double factor,
         const std::optional<SceneBounds>& bounds,
-        Vec3 pivot,
+        QVec3 pivot,
         bool snapEnabled,
         double gridSize) {
     quader_editor_core::ToolBounds3 runtimeBounds;
@@ -839,12 +840,12 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     const bool componentSelectionMode = isComponentSelectionMode(activeSelectionMode);
     const bool groupSelectionMode = activeSelectionMode == ModelingSelectionMode::Group;
     const std::optional<SceneBounds> selectionBounds = selectedTransformWorldBounds(document, request.assets);
-    const std::optional<Vec3> runtimeSelectionCenter = modeling.selectionCenter();
-    const Vec3 selectedWorldPosition = transformPoint(document.worldTransformMatrix(selected), Vec3{});
+    const std::optional<QVec3> runtimeSelectionCenter = modeling.selectionCenter();
+    const QVec3 selectedWorldPosition = transformPoint(document.worldTransformMatrix(selected), QVec3{});
     const bool usePrimaryEntityPivot =
             !componentSelectionMode &&
             (document.modelingObject(selected) == nullptr || document.hasChildren(selected));
-    const Vec3 pivot =
+    const QVec3 pivot =
             (componentSelectionMode && runtimeSelectionCenter) ? *runtimeSelectionCenter :
             usePrimaryEntityPivot ? selectedWorldPosition :
             (selectionBounds ? boundsCenter(*selectionBounds) : runtimeSelectionCenter.value_or(selectedWorldPosition));
@@ -901,7 +902,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     quader_editor_core::TransformGizmoFrameInput runtimeInput =
             makeRuntimeGizmoInput(camera, pivot, runtimeTool, activeAxis_, TransformAxisHandle::None, activeGridSize, sizeScale, itemSize);
     if (interactive && !dragging_ && mouseInsideViewport && !request.suppressHoverWork) {
-        const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+        const QVec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         const quader_editor_core::TransformGizmoPickHit hoverHit =
                 quader_editor_core::pick_transform_gizmo(runtimeInput, toRuntime(localMouse));
         runtimeInput.hover_axis = hoverHit.hit ? hoverHit.axis : quader_editor_core::TransformAxis::none;
@@ -913,7 +914,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     const ViewportCameraPose pose = camera.pose();
     const float cameraDistance = std::max(length(pose.eye - pivot), 0.1f);
     const float worldLength = std::clamp(cameraDistance * 0.22f * sizeScale, 0.35f, 8.0f);
-    const std::array<Vec3, 3> axisVectors = {{
+    const std::array<QVec3, 3> axisVectors = {{
             {1.0f, 0.0f, 0.0f},
             {0.0f, 1.0f, 0.0f},
             {0.0f, 0.0f, 1.0f},
@@ -969,7 +970,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     bool consumed = dragging_;
     if (!dragging_ && mouseInsideViewport && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         quader_editor_core::TransformGizmoPickHit runtimeHit;
-        const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+        const QVec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         runtimeHit = quader_editor_core::pick_transform_gizmo(runtimeInput, toRuntime(localMouse));
         activeAxis_ = runtimeHit.hit ? fromRuntimeAxis(runtimeHit.axis) : TransformAxisHandle::None;
         if (activeAxis_ == TransformAxisHandle::None && !useModelingTransformDrag) {
@@ -999,8 +1000,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 dragReady = false;
                 sceneOnlyRotateState_.reset();
 
-                const quader_poly::Vec2 runtimeScreenPivot = toRuntime(projectedPivot.position);
-                const quader_poly::Vec2 runtimeScreenTip = runtimeHit.hit ? runtimeHit.screen_tip : runtimeScreenPivot;
+                const quader::QVec2 runtimeScreenPivot = toRuntime(projectedPivot.position);
+                const quader::QVec2 runtimeScreenTip = runtimeHit.hit ? runtimeHit.screen_tip : runtimeScreenPivot;
                 const ViewportRay startRay = camera.rayFromViewportPoint(localMouse);
                 const bool duplicateSelected = !componentSelectionMode && io.KeyShift;
                 const bool topologyModifier = componentSelectionMode && io.KeyShift;
@@ -1132,7 +1133,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         return consumed;
     }
 
-    const Vec2 currentMouse{mouse.x, mouse.y};
+    const QVec2 currentMouse{mouse.x, mouse.y};
     auto pinStartPivot = [&](TransformComponent& next, const SceneTransformDragTarget& start) {
         pinDocumentLocalPivotToWorldPoint(document, start.entity, next, start.localPivot, startWorldPivot_);
     };
@@ -1153,7 +1154,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     };
 
     if (!sceneOnlyDrag_) {
-        const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+        const QVec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
         const ViewportRay dragRay = camera.rayFromViewportPoint(localMouse);
         const bool precision = io.KeyCtrl || io.KeySuper;
         const ModelingTransformDragPreview preview = modeling.updateTransformDrag({
@@ -1181,9 +1182,9 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             return true;
         }
 
-        Vec3 previewMoveDelta = preview.moveDelta;
+        QVec3 previewMoveDelta = preview.moveDelta;
         const float angleRadians = static_cast<float>(preview.rotateAngleDegrees * kPi / 180.0);
-        Vec3 previewScaleFactor = preview.scale;
+        QVec3 previewScaleFactor = preview.scale;
 
         for (const SceneTransformDragTarget& start : sceneTransformDrag_.targets()) {
             TransformComponent next = start.transform;
@@ -1209,7 +1210,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         }
     } else
     {
-        const Vec2 delta = currentMouse - startMouse_;
+        const QVec2 delta = currentMouse - startMouse_;
         const bool precision = io.KeyCtrl || io.KeySuper;
         const bool snapEnabled = !precision;
         lastMouse_ = currentMouse;
@@ -1279,14 +1280,14 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         for (const SceneTransformDragTarget& start : sceneTransformDrag_.targets()) {
             TransformComponent next = start.transform;
             if (tool == ViewportToolId::Move) {
-                Vec3 worldMoveDelta = {};
+                QVec3 worldMoveDelta = {};
                 applyAxis(worldMoveDelta.x, worldMoveDelta.y, worldMoveDelta.z, screenAxisDelta(activeAxis_) * worldPerPixel);
                 worldMoveDelta = snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, startWorldPivot_, activeGridSize, snapEnabled);
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, worldMoveDelta);
             } else if (tool == ViewportToolId::Rotate) {
                 float angleRadians = 0.0f;
                 if (sceneOnlyRotateState_) {
-                    const Vec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+                    const QVec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
                     const quader_editor_core::RotatePreviewResult rotatePreview =
                             quader_editor_core::preview_rotate_from_screen_position(
                                     *sceneOnlyRotateState_,
@@ -1322,7 +1323,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                         startWorldPivot_,
                         snapEnabled,
                         activeGridSize);
-                const Vec3 scaleFactor = axisScaleForHandle(activeAxis_, factor);
+                const QVec3 scaleFactor = axisScaleForHandle(activeAxis_, factor);
                 next.scale.x = start.transform.scale.x * scaleFactor.x;
                 next.scale.y = start.transform.scale.y * scaleFactor.y;
                 next.scale.z = start.transform.scale.z * scaleFactor.z;

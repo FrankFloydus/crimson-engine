@@ -6,16 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "math/GlmBridge.h"
 #include "scene/Components.h"
 
 namespace quader {
 
-inline Vec3 localPivotForWorldPoint(const TransformComponent& transform, Vec3 worldPivot) {
+inline QVec3 localPivotForWorldPoint(const TransformComponent& transform, QVec3 worldPivot) {
     return transformPoint(inverse(composeTransform(transform.spatialTransform())), worldPivot);
 }
 
-inline void pinLocalPivotToWorldPoint(TransformComponent& transform, Vec3 localPivot, Vec3 worldPivot) {
-    Transform spatial = transform.spatialTransform();
+inline void pinLocalPivotToWorldPoint(TransformComponent& transform, QVec3 localPivot, QVec3 worldPivot) {
+    QTransform spatial = transform.spatialTransform();
     spatial.position = {};
     transform.position = worldPivot - transformPoint(composeTransform(spatial), localPivot);
 }
@@ -43,7 +44,7 @@ inline float positiveRadians(float radians) {
     return value;
 }
 
-inline Vec3 positiveEulerRadians(Vec3 eulerRadians) {
+inline QVec3 positiveEulerRadians(QVec3 eulerRadians) {
     return {
             positiveRadians(eulerRadians.x),
             positiveRadians(eulerRadians.y),
@@ -51,22 +52,22 @@ inline Vec3 positiveEulerRadians(Vec3 eulerRadians) {
     };
 }
 
-inline Vec3 equivalentEulerRadiansClosestTo(Vec3 eulerRadians, Vec3 referenceEulerRadians) {
+inline QVec3 equivalentEulerRadiansClosestTo(QVec3 eulerRadians, QVec3 referenceEulerRadians) {
     constexpr float Pi = 3.14159265358979323846f;
-    const auto normalizeCandidate = [&](Vec3 candidate) {
-        return Vec3{
+    const auto normalizeCandidate = [&](QVec3 candidate) {
+        return QVec3{
                 radiansNearReference(candidate.x, referenceEulerRadians.x),
                 radiansNearReference(candidate.y, referenceEulerRadians.y),
                 radiansNearReference(candidate.z, referenceEulerRadians.z),
         };
     };
-    const auto score = [&](Vec3 candidate) {
-        const Vec3 delta = candidate - referenceEulerRadians;
+    const auto score = [&](QVec3 candidate) {
+        const QVec3 delta = candidate - referenceEulerRadians;
         return dot(delta, delta);
     };
 
-    const Vec3 primary = normalizeCandidate(eulerRadians);
-    const Vec3 alternate = normalizeCandidate({
+    const QVec3 primary = normalizeCandidate(eulerRadians);
+    const QVec3 alternate = normalizeCandidate({
             eulerRadians.x + Pi,
             Pi - eulerRadians.y,
             eulerRadians.z + Pi,
@@ -74,7 +75,7 @@ inline Vec3 equivalentEulerRadiansClosestTo(Vec3 eulerRadians, Vec3 referenceEul
     return score(alternate) < score(primary) ? alternate : primary;
 }
 
-inline Vec3 eulerRadiansAfterWorldRotationDelta(Vec3 currentEulerRadians, Vec3 worldRotationDeltaRadians) {
+inline QVec3 eulerRadiansAfterWorldRotationDelta(QVec3 currentEulerRadians, QVec3 worldRotationDeltaRadians) {
     const glm::quat delta = glm::quat(toGlm(worldRotationDeltaRadians));
     const glm::quat current = toGlm(quatFromEulerRadians(currentEulerRadians));
     return equivalentEulerRadiansClosestTo(
@@ -84,9 +85,9 @@ inline Vec3 eulerRadiansAfterWorldRotationDelta(Vec3 currentEulerRadians, Vec3 w
 
 inline void applyWorldRotationDeltaAroundPivot(
         TransformComponent& transform,
-        Vec3 worldRotationDeltaRadians,
-        Vec3 localPivot,
-        Vec3 worldPivot) {
+        QVec3 worldRotationDeltaRadians,
+        QVec3 localPivot,
+        QVec3 worldPivot) {
     transform.rotationEuler = eulerRadiansAfterWorldRotationDelta(transform.rotationEuler, worldRotationDeltaRadians);
     pinLocalPivotToWorldPoint(transform, localPivot, worldPivot);
 }

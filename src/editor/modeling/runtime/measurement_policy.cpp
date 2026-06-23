@@ -31,9 +31,9 @@ constexpr double face_measurement_screen_offset = 16.0;
  * Represents a Measurement Label Source value used by the modeling runtime domain.
  */
 struct MeasurementLabelSource {
-	quader_poly::Vec3 world_position;
-	std::vector<quader_poly::Vec3> candidates;
-	quader_poly::Vec3 face_normal;
+	quader::QVec3 world_position;
+	std::vector<quader::QVec3> candidates;
+	quader::QVec3 face_normal;
 	bool has_face_normal = false;
 	bool screen_outer = false;
 	TransformAxis axis = TransformAxis::none;
@@ -41,42 +41,42 @@ struct MeasurementLabelSource {
 	std::string text;
 };
 
-quader_geometry::Vec2d to_geometry_vec2(quader_poly::Vec2 value)
+quader_geometry::QVec2d to_geometry_vec2(quader::QVec2 value)
 {
-	return quader_geometry::Vec2d(value);
+	return quader_geometry::QVec2d(value);
 }
 
-quader_geometry::Vec3d to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3d to_geometry_vec3(quader::QVec3 value)
 {
-	return quader_geometry::Vec3d(value);
+	return quader_geometry::QVec3d(value);
 }
 
-quader_geometry::Vec3f to_geometry_vec3f(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3f(quader::QVec3 value)
 {
-	return quader_geometry::Vec3f(value);
+	return quader_geometry::QVec3f(value);
 }
 
-quader_poly::Vec3 to_poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 to_poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
 
-TransformAxis to_transform_axis(quader_geometry::Axis axis)
+TransformAxis to_transform_axis(quader_geometry::QAxis axis)
 {
 	switch (axis) {
-		case quader_geometry::Axis::x:
+		case quader_geometry::QAxis::x:
 			return TransformAxis::x;
-		case quader_geometry::Axis::y:
+		case quader_geometry::QAxis::y:
 			return TransformAxis::y;
-		case quader_geometry::Axis::z:
+		case quader_geometry::QAxis::z:
 			return TransformAxis::z;
 	}
 	return TransformAxis::z;
 }
 
-quader_poly::Vec3 normalize_or(quader_poly::Vec3 value, quader_poly::Vec3 fallback)
+quader::QVec3 normalize_or(quader::QVec3 value, quader::QVec3 fallback)
 {
-	const quader_geometry::Vec3f geometry_value = to_geometry_vec3f(value);
+	const quader_geometry::QVec3f geometry_value = to_geometry_vec3f(value);
 	if (quader_geometry::length(geometry_value) <= static_cast<float>(measurement_geometry_epsilon)) {
 		return fallback;
 	}
@@ -90,9 +90,9 @@ bool transform_axis_is_plane_local(TransformAxis axis)
 		axis == TransformAxis::yz;
 }
 
-bool document_bounds(const quader_poly::Document& document, quader_poly::Vec3& out_min, quader_poly::Vec3& out_max)
+bool document_bounds(const quader_poly::Document& document, quader::QVec3& out_min, quader::QVec3& out_max)
 {
-	quader_geometry::Aabb3f bounds = quader_geometry::empty_aabb3<float>();
+	quader_geometry::QAabb3f bounds = quader_geometry::empty_aabb3<float>();
 	for (const quader_poly::Vertex& vertex : document.vertices) {
 		quader_geometry::aabb_include(bounds, to_geometry_vec3f(vertex.position));
 	}
@@ -104,7 +104,7 @@ bool document_bounds(const quader_poly::Document& document, quader_poly::Vec3& o
 	return true;
 }
 
-void include_bounds_point(Bounds3& bounds, quader_poly::Vec3 point)
+void include_bounds_point(Bounds3& bounds, quader::QVec3 point)
 {
 	if (bounds.empty) {
 		bounds.empty = false;
@@ -189,7 +189,7 @@ Bounds3 selected_measurement_display_bounds(const MeasurementFrameInput& input, 
 
 void append_world_label(
 		std::vector<MeasurementLabelSource>& labels,
-		quader_poly::Vec3 world_position,
+		quader::QVec3 world_position,
 		std::string text,
 		TransformAxis axis,
 		bool text_color = false)
@@ -219,7 +219,7 @@ bool append_edge_measurement_label(
 	if (a == nullptr || b == nullptr) {
 		return false;
 	}
-	const quader_poly::Vec3 edge = b->position - a->position;
+	const quader::QVec3 edge = b->position - a->position;
 	const double world_length = quader_geometry::length(to_geometry_vec3(edge));
 	if (world_length <= measurement_geometry_epsilon) {
 		return false;
@@ -232,7 +232,7 @@ bool append_edge_measurement_label(
 	return true;
 }
 
-bool edge_directions_match(quader_poly::Vec3 existing, quader_poly::Vec3 direction)
+bool edge_directions_match(quader::QVec3 existing, quader::QVec3 direction)
 {
 	return std::abs(quader_geometry::dot(to_geometry_vec3(existing), to_geometry_vec3(direction))) >= 0.985F;
 }
@@ -247,10 +247,10 @@ void append_face_dimension_measurements(
 	 * Represents an Edge Group value used by the modeling runtime domain.
 	 */
 	struct EdgeGroup {
-		quader_poly::Vec3 direction;
+		quader::QVec3 direction;
 		std::string text;
 		TransformAxis axis = TransformAxis::none;
-		std::vector<quader_poly::Vec3> candidates;
+		std::vector<quader::QVec3> candidates;
 	};
 
 	for (const quader_poly::ElementId face_id : selection.faces) {
@@ -258,7 +258,7 @@ void append_face_dimension_measurements(
 		if (face == nullptr || face->vertices.size() < 2) {
 			continue;
 		}
-		quader_poly::Vec3 face_normal = quader_poly::face_normal(document, *face);
+		quader::QVec3 face_normal = quader_poly::face_normal(document, *face);
 		if (quader_geometry::length_squared(to_geometry_vec3(face_normal)) > measurement_geometry_epsilon) {
 			face_normal = normalize_or(face_normal, { 0.0F, 1.0F, 0.0F });
 		}
@@ -272,12 +272,12 @@ void append_face_dimension_measurements(
 			if (a == nullptr || b == nullptr) {
 				continue;
 			}
-			const quader_poly::Vec3 edge = b->position - a->position;
+			const quader::QVec3 edge = b->position - a->position;
 			const double edge_length = quader_geometry::length(to_geometry_vec3(edge));
 			if (edge_length <= measurement_geometry_epsilon) {
 				continue;
 			}
-			const quader_poly::Vec3 direction = edge / static_cast<float>(edge_length);
+			const quader::QVec3 direction = edge / static_cast<float>(edge_length);
 			EdgeGroup *matching_group = nullptr;
 			for (EdgeGroup& group : groups) {
 				if (edge_directions_match(group.direction, direction)) {
@@ -285,7 +285,7 @@ void append_face_dimension_measurements(
 					break;
 				}
 			}
-			const quader_poly::Vec3 midpoint = (a->position + b->position) * 0.5F;
+			const quader::QVec3 midpoint = (a->position + b->position) * 0.5F;
 			if (matching_group != nullptr) {
 				matching_group->candidates.push_back(midpoint);
 				continue;
@@ -319,7 +319,7 @@ void append_face_dimension_measurements(
 
 void append_dimension_measurement(
 		std::vector<MeasurementLabelSource>& labels,
-		const std::vector<quader_poly::Vec3>& candidates,
+		const std::vector<quader::QVec3>& candidates,
 		double world_length,
 		TransformAxis axis,
 		double map_units_per_world_unit)
@@ -337,8 +337,8 @@ void append_dimension_measurement(
 
 void append_bounds_dimension_measurements(
 		std::vector<MeasurementLabelSource>& labels,
-		quader_poly::Vec3 min_value,
-		quader_poly::Vec3 max_value,
+		quader::QVec3 min_value,
+		quader::QVec3 max_value,
 		double map_units_per_world_unit)
 {
 	append_dimension_measurement(labels, {
@@ -372,8 +372,8 @@ void append_bounds_dimension_measurements(
 
 void append_document_dimension_measurements(std::vector<MeasurementLabelSource>& labels, const quader_poly::Document& document, double map_units_per_world_unit)
 {
-	quader_poly::Vec3 min_value;
-	quader_poly::Vec3 max_value;
+	quader::QVec3 min_value;
+	quader::QVec3 max_value;
 	if (!document_bounds(document, min_value, max_value)) {
 		return;
 	}
@@ -414,26 +414,26 @@ std::vector<MeasurementLabelSource> build_measurement_label_sources(const Measur
 	return labels;
 }
 
-quader_poly::Vec3 best_measurement_world_position(const ViewportCameraState& camera, const MeasurementLabelSource& label)
+quader::QVec3 best_measurement_world_position(const ViewportCameraState& camera, const MeasurementLabelSource& label)
 {
 	if (label.candidates.empty()) {
 		return label.world_position;
 	}
-	quader_poly::Vec3 center;
-	for (quader_poly::Vec3 candidate : label.candidates) {
+	quader::QVec3 center;
+	for (quader::QVec3 candidate : label.candidates) {
 		center += candidate;
 	}
 	center = center / static_cast<float>(label.candidates.size());
 
 	if (label.screen_outer) {
-		quader_poly::Vec3 best_position = label.world_position;
+		quader::QVec3 best_position = label.world_position;
 		double best_score = -std::numeric_limits<double>::infinity();
 		bool found = false;
-		for (quader_poly::Vec3 candidate : label.candidates) {
+		for (quader::QVec3 candidate : label.candidates) {
 			if (viewport_point_is_behind_camera(camera, candidate)) {
 				continue;
 			}
-			quader_poly::Vec2 screen;
+			quader::QVec2 screen;
 			if (!project_viewport_point(camera, candidate, screen)) {
 				continue;
 			}
@@ -449,14 +449,14 @@ quader_poly::Vec3 best_measurement_world_position(const ViewportCameraState& cam
 		}
 	}
 
-	const quader_poly::Vec3 camera_position = camera.transform.origin;
-	const quader_poly::Vec3 view_direction = quader_geometry::length_squared(to_geometry_vec3(camera_position - center)) > measurement_geometry_epsilon ?
+	const quader::QVec3 camera_position = camera.transform.origin;
+	const quader::QVec3 view_direction = quader_geometry::length_squared(to_geometry_vec3(camera_position - center)) > measurement_geometry_epsilon ?
 		normalize_or(camera_position - center, { 0.0F, 1.0F, 0.0F }) :
-		quader_poly::Vec3 { 0.0F, 1.0F, 0.0F };
-	quader_poly::Vec3 best_position = label.world_position;
+		quader::QVec3 { 0.0F, 1.0F, 0.0F };
+	quader::QVec3 best_position = label.world_position;
 	double best_score = -std::numeric_limits<double>::infinity();
 	bool found = false;
-	for (quader_poly::Vec3 candidate : label.candidates) {
+	for (quader::QVec3 candidate : label.candidates) {
 		if (viewport_point_is_behind_camera(camera, candidate)) {
 			continue;
 		}
@@ -470,19 +470,19 @@ quader_poly::Vec3 best_measurement_world_position(const ViewportCameraState& cam
 	return best_position;
 }
 
-quader_poly::Vec2 screen_outer_measurement_offset(const ViewportCameraState& camera, const MeasurementLabelSource& label, quader_poly::Vec3 world_position)
+quader::QVec2 screen_outer_measurement_offset(const ViewportCameraState& camera, const MeasurementLabelSource& label, quader::QVec3 world_position)
 {
 	if (!label.screen_outer || !label.has_face_normal || quader_geometry::length_squared(to_geometry_vec3(label.face_normal)) <= measurement_geometry_epsilon) {
 		return {};
 	}
-	const quader_poly::Vec3 normal = normalize_or(label.face_normal, { 0.0F, 1.0F, 0.0F });
-	quader_poly::Vec2 base_screen;
-	quader_poly::Vec2 normal_screen;
+	const quader::QVec3 normal = normalize_or(label.face_normal, { 0.0F, 1.0F, 0.0F });
+	quader::QVec2 base_screen;
+	quader::QVec2 normal_screen;
 	if (!project_viewport_point(camera, world_position, base_screen) ||
 			!project_viewport_point(camera, world_position + normal * static_cast<float>(face_measurement_normal_world_offset), normal_screen)) {
 		return {};
 	}
-	quader_geometry::Vec2d delta = to_geometry_vec2(normal_screen) - to_geometry_vec2(base_screen);
+	quader_geometry::QVec2d delta = to_geometry_vec2(normal_screen) - to_geometry_vec2(base_screen);
 	delta = quader_geometry::normalize_or_zero(delta, measurement_geometry_epsilon);
 	if (quader_geometry::length_squared(delta) <= 0.0) {
 		return {};
@@ -500,7 +500,7 @@ quader_poly::Vec2 screen_outer_measurement_offset(const ViewportCameraState& cam
 void append_screen_measurement(
 		MeasurementFrame& frame,
 		const std::string& text,
-		quader_poly::Vec2 screen_position,
+		quader::QVec2 screen_position,
 		TransformAxis axis,
 		bool text_color)
 {
@@ -510,7 +510,7 @@ void append_screen_measurement(
 	frame.labels.push_back({ axis, text_color, screen_position, text });
 }
 
-void append_screen_measurement_line(MeasurementFrame& frame, quader_poly::Vec2 start, quader_poly::Vec2 end, TransformAxis axis)
+void append_screen_measurement_line(MeasurementFrame& frame, quader::QVec2 start, quader::QVec2 end, TransformAxis axis)
 {
 	if (!std::isfinite(start.x) || !std::isfinite(start.y) || !std::isfinite(end.x) || !std::isfinite(end.y) ||
 			quader_geometry::length_squared(to_geometry_vec2(start) - to_geometry_vec2(end)) <= 0.25) {
@@ -521,15 +521,15 @@ void append_screen_measurement_line(MeasurementFrame& frame, quader_poly::Vec2 s
 
 void append_projected_measurement(MeasurementFrame& frame, const ViewportCameraState& camera, const MeasurementLabelSource& label)
 {
-	const quader_poly::Vec3 world_position = best_measurement_world_position(camera, label);
+	const quader::QVec3 world_position = best_measurement_world_position(camera, label);
 	if (viewport_point_is_behind_camera(camera, world_position)) {
 		return;
 	}
-	quader_poly::Vec2 screen;
+	quader::QVec2 screen;
 	if (!project_viewport_point(camera, world_position, screen)) {
 		return;
 	}
-	const quader_poly::Vec2 outer_offset = screen_outer_measurement_offset(camera, label, world_position);
+	const quader::QVec2 outer_offset = screen_outer_measurement_offset(camera, label, world_position);
 	screen.x += outer_offset.x;
 	screen.y += outer_offset.y - 4.0F;
 	append_screen_measurement(frame, label.text, screen, label.axis, label.text_color);
@@ -538,8 +538,8 @@ void append_projected_measurement(MeasurementFrame& frame, const ViewportCameraS
 void append_world_segment_measurement(
 		MeasurementFrame& frame,
 		const ViewportCameraState& camera,
-		quader_poly::Vec3 start,
-		quader_poly::Vec3 end,
+		quader::QVec3 start,
+		quader::QVec3 end,
 		TransformAxis axis,
 		double map_units_per_world_unit)
 {
@@ -547,21 +547,21 @@ void append_world_segment_measurement(
 	if (world_length <= measurement_geometry_epsilon) {
 		return;
 	}
-	const quader_poly::Vec3 midpoint = (start + end) * 0.5F;
+	const quader::QVec3 midpoint = (start + end) * 0.5F;
 	if (viewport_point_is_behind_camera(camera, midpoint)) {
 		return;
 	}
-	quader_poly::Vec2 screen_start;
-	quader_poly::Vec2 screen_end;
-	quader_poly::Vec2 screen_mid;
+	quader::QVec2 screen_start;
+	quader::QVec2 screen_end;
+	quader::QVec2 screen_mid;
 	if (!project_viewport_point(camera, start, screen_start) ||
 			!project_viewport_point(camera, end, screen_end) ||
 			!project_viewport_point(camera, midpoint, screen_mid)) {
 		return;
 	}
-	quader_poly::Vec2 offset { 8.0F, -8.0F };
-	const quader_geometry::Vec2d screen_delta = to_geometry_vec2(screen_end) - to_geometry_vec2(screen_start);
-	const quader_geometry::Vec2d screen_direction = quader_geometry::normalize_or_zero(screen_delta, 1.0);
+	quader::QVec2 offset { 8.0F, -8.0F };
+	const quader_geometry::QVec2d screen_delta = to_geometry_vec2(screen_end) - to_geometry_vec2(screen_start);
+	const quader_geometry::QVec2d screen_direction = quader_geometry::normalize_or_zero(screen_delta, 1.0);
 	if (quader_geometry::length_squared(screen_direction) > 0.0) {
 		offset = {
 			static_cast<float>(-screen_direction.y * 10.0),
@@ -573,7 +573,7 @@ void append_world_segment_measurement(
 	append_screen_measurement(frame, measurement_length_text(world_length, map_units_per_world_unit, false), screen_mid, axis, false);
 }
 
-TransformAxis measurement_axis_for_direction(quader_poly::Vec3 direction)
+TransformAxis measurement_axis_for_direction(quader::QVec3 direction)
 {
 	if (quader_geometry::length_squared(to_geometry_vec3(direction)) <= measurement_geometry_epsilon) {
 		return TransformAxis::none;
@@ -592,7 +592,7 @@ void append_box_measurements(const MeasurementFrameInput& input, MeasurementFram
 		return;
 	}
 
-	const std::vector<quader_poly::Vec3>& footprint = preview.footprint.footprint;
+	const std::vector<quader::QVec3>& footprint = preview.footprint.footprint;
 	append_world_segment_measurement(
 			frame,
 			input.camera,
@@ -608,7 +608,7 @@ void append_box_measurements(const MeasurementFrameInput& input, MeasurementFram
 			measurement_axis_for_direction(footprint[2] - footprint[1]),
 			input.map_units_per_world_unit);
 	if (preview.drag_state == BoxDragState::height) {
-		const quader_poly::Vec3 height = preview.normal * static_cast<float>(preview.distance);
+		const quader::QVec3 height = preview.normal * static_cast<float>(preview.distance);
 		append_world_segment_measurement(
 				frame,
 				input.camera,
@@ -629,22 +629,22 @@ void append_transform_drag_measurements(const MeasurementFrameInput& input, Meas
 		double world_delta = quader_geometry::length(to_geometry_vec3(drag.move.preview_delta));
 		TransformAxis measurement_axis = TransformAxis::none;
 		if (!transform_axis_is_plane_local(drag.axis)) {
-			const quader_poly::Vec3 axis = normalize_or(axis_vector(drag.axis), {});
+			const quader::QVec3 axis = normalize_or(axis_vector(drag.axis), {});
 			if (quader_geometry::length_squared(to_geometry_vec3(axis)) > measurement_geometry_epsilon) {
 				world_delta = quader_geometry::dot(to_geometry_vec3(axis), to_geometry_vec3(drag.move.preview_delta));
 				measurement_axis = drag.axis;
 			}
 		}
-		const quader_poly::Vec3 start_position = drag.move.center_world;
-		const quader_poly::Vec3 label_position = drag.move.center_world + drag.move.preview_delta;
-		quader_poly::Vec2 start_screen;
-		quader_poly::Vec2 end_screen;
+		const quader::QVec3 start_position = drag.move.center_world;
+		const quader::QVec3 label_position = drag.move.center_world + drag.move.preview_delta;
+		quader::QVec2 start_screen;
+		quader::QVec2 end_screen;
 		if (!viewport_point_is_behind_camera(input.camera, start_position) &&
 				!viewport_point_is_behind_camera(input.camera, label_position) &&
 				project_viewport_point(input.camera, start_position, start_screen) &&
 				project_viewport_point(input.camera, label_position, end_screen)) {
 			append_screen_measurement_line(frame, start_screen, end_screen, TransformAxis::z);
-			quader_poly::Vec2 label_screen {
+			quader::QVec2 label_screen {
 				(start_screen.x + end_screen.x) * 0.5F + 12.0F,
 				(start_screen.y + end_screen.y) * 0.5F - 8.0F,
 			};
@@ -653,7 +653,7 @@ void append_transform_drag_measurements(const MeasurementFrameInput& input, Meas
 	}
 
 	if (drag.tool == ViewportInteractionTool::rotate && drag.rotate.active) {
-		quader_poly::Vec2 label_position = drag.rotate.screen_pivot;
+		quader::QVec2 label_position = drag.rotate.screen_pivot;
 		label_position.x += 74.0F;
 		append_screen_measurement(frame, measurement_number_text(drag.rotate.preview_angle_degrees, true), label_position, drag.rotate.axis, true);
 	}

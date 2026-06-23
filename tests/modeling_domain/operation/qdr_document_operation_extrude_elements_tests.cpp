@@ -25,15 +25,15 @@ CircularBoundaryFixture make_circular_boundary_fixture()
 	CircularBoundaryFixture fixture;
 	std::array<ElementId, 8> inner {};
 	std::array<ElementId, 8> outer {};
-	const std::array<Vec3, 8> directions {
-		Vec3 { -0.70710677F, 0.0F, -0.70710677F },
-		Vec3 { 0.0F, 0.0F, -1.0F },
-		Vec3 { 0.70710677F, 0.0F, -0.70710677F },
-		Vec3 { 1.0F, 0.0F, 0.0F },
-		Vec3 { 0.70710677F, 0.0F, 0.70710677F },
-		Vec3 { 0.0F, 0.0F, 1.0F },
-		Vec3 { -0.70710677F, 0.0F, 0.70710677F },
-		Vec3 { -1.0F, 0.0F, 0.0F },
+	const std::array<quader::QVec3, 8> directions {
+		quader::QVec3 { -0.70710677F, 0.0F, -0.70710677F },
+		quader::QVec3 { 0.0F, 0.0F, -1.0F },
+		quader::QVec3 { 0.70710677F, 0.0F, -0.70710677F },
+		quader::QVec3 { 1.0F, 0.0F, 0.0F },
+		quader::QVec3 { 0.70710677F, 0.0F, 0.70710677F },
+		quader::QVec3 { 0.0F, 0.0F, 1.0F },
+		quader::QVec3 { -0.70710677F, 0.0F, 0.70710677F },
+		quader::QVec3 { -1.0F, 0.0F, 0.0F },
 	};
 
 	for (std::size_t index = 0; index < directions.size(); ++index) {
@@ -66,8 +66,8 @@ bool vertical_wall_normals_have_consistent_radial_direction(const Document& docu
 			continue;
 		}
 
-		const Vec3 normal = face_normal(document, face);
-		const Vec3 center = qdr_test::face_centroid(document, face);
+		const quader::QVec3 normal = face_normal(document, face);
+		const quader::QVec3 center = qdr_test::face_centroid(document, face);
 		const float radial_dot = dot(normal, { center.x, 0.0F, center.z });
 		if (std::abs(radial_dot) <= 0.001F) {
 			return false;
@@ -101,7 +101,7 @@ TEST_CASE("extrude selected edge elements creates side geometry and selects the 
 
 TEST_CASE("extrude selected circular boundary edges keeps wall normals and winding coherent", "[operation][extrude_elements]")
 {
-	for (const Vec3 offset : { Vec3 { 0.0F, 0.5F, 0.0F }, Vec3 { 0.0F, -0.5F, 0.0F } }) {
+	for (const quader::QVec3 offset : { quader::QVec3 { 0.0F, 0.5F, 0.0F }, quader::QVec3 { 0.0F, -0.5F, 0.0F } }) {
 		CircularBoundaryFixture fixture = make_circular_boundary_fixture();
 		Selection selection = qdr_test::edge_selection({
 			fixture.inner_edges[0],

@@ -31,7 +31,7 @@ quader_editor_core::ViewportCameraState front_camera()
 
 quader_editor_core::PolygonObject cube_object(
 		int id,
-		quader_poly::Vec3 offset = {},
+		quader::QVec3 offset = {},
 		bool selected = false)
 {
 	quader_editor_core::PolygonObject object;
@@ -48,7 +48,7 @@ quader_editor_core::PolygonObject cube_object(
 
 quader_editor_core::MoveToolState begin_axis_move(
 		quader_editor_core::TransformAxis axis,
-		quader_poly::Vec3 center)
+		quader::QVec3 center)
 {
 	quader_editor_core::MoveBeginInput input;
 	input.axis = axis;
@@ -58,8 +58,8 @@ quader_editor_core::MoveToolState begin_axis_move(
 	input.has_screen_axis = true;
 	input.screen_pivot = { 100.0F, 100.0F };
 	input.screen_tip = axis == quader_editor_core::TransformAxis::y ?
-		quader_poly::Vec2 { 100.0F, 200.0F } :
-		quader_poly::Vec2 { 200.0F, 100.0F };
+		quader::QVec2 { 100.0F, 200.0F } :
+		quader::QVec2 { 200.0F, 100.0F };
 	input.screen_position = { 100.0F, 100.0F };
 	const quader_editor_core::MoveBeginResult begin = quader_editor_core::begin_move_drag(input);
 	REQUIRE(begin.ok);

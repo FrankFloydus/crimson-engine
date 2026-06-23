@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/SceneDocument.h"
 
+#include "math/GlmBridge.h"
+
 #include <algorithm>
 #include <utility>
 
@@ -19,15 +21,15 @@ std::uint32_t entityKey(entt::entity entity) {
     return static_cast<std::uint32_t>(entt::to_integral(entity));
 }
 
-Mat4 identityMatrix() {
-    return Mat4{};
+QMat4 identityMatrix() {
+    return QMat4{};
 }
 
-Mat4 multiply(const Mat4& left, const Mat4& right) {
+QMat4 multiply(const QMat4& left, const QMat4& right) {
     return fromGlm(toGlm(left) * toGlm(right));
 }
 
-TransformComponent transformFromMatrix(const Mat4& matrix) {
+TransformComponent transformFromMatrix(const QMat4& matrix) {
     glm::vec3 scale{1.0f};
     glm::quat orientation{1.0f, 0.0f, 0.0f, 0.0f};
     glm::vec3 translation{0.0f};
@@ -290,7 +292,7 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
         return true;
     }
 
-    const Mat4 childWorld = preserveWorldTransform ? worldTransformMatrix(child) : localTransformMatrix(child);
+    const QMat4 childWorld = preserveWorldTransform ? worldTransformMatrix(child) : localTransformMatrix(child);
 
     if (HierarchyComponent* oldParentHierarchy = hierarchy(oldParent)) {
         removeChild(oldParentHierarchy->children, child);
@@ -305,7 +307,7 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
     }
 
     if (preserveWorldTransform) {
-        const Mat4 parentWorld = newParent == InvalidEntityId ? identityMatrix() : worldTransformMatrix(newParent);
+        const QMat4 parentWorld = newParent == InvalidEntityId ? identityMatrix() : worldTransformMatrix(newParent);
         if (TransformComponent* localTransform = transform(child)) {
             *localTransform = transformFromMatrix(multiply(inverse(parentWorld), childWorld));
         }
@@ -671,14 +673,14 @@ bool SceneDocument::isEffectivelyLocked(EntityId id) const {
     return false;
 }
 
-Mat4 SceneDocument::localTransformMatrix(EntityId id) const {
+QMat4 SceneDocument::localTransformMatrix(EntityId id) const {
     if (const TransformComponent* component = transform(id)) {
         return composeTransform(component->spatialTransform());
     }
     return identityMatrix();
 }
 
-Mat4 SceneDocument::worldTransformMatrix(EntityId id) const {
+QMat4 SceneDocument::worldTransformMatrix(EntityId id) const {
     if (requireEntity(id) == entt::null) {
         return identityMatrix();
     }

@@ -16,21 +16,21 @@
 namespace quader_editor_core {
 namespace {
 
-quader_geometry::Vec3f to_geometry_vec3(quader_poly::Vec3 value)
+quader_geometry::QVec3f to_geometry_vec3(quader::QVec3 value)
 {
-	return quader_geometry::Vec3f(value);
+	return quader_geometry::QVec3f(value);
 }
 
-quader_poly::Vec3 to_poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 to_poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
 
-void include_point(Bounds3& bounds, quader_poly::Vec3 point)
+void include_point(Bounds3& bounds, quader::QVec3 point)
 {
-	quader_geometry::Aabb3f geometry_bounds = bounds.empty ?
+	quader_geometry::QAabb3f geometry_bounds = bounds.empty ?
 		quader_geometry::empty_aabb3<float>() :
-		quader_geometry::Aabb3f { to_geometry_vec3(bounds.min), to_geometry_vec3(bounds.max) };
+		quader_geometry::QAabb3f { to_geometry_vec3(bounds.min), to_geometry_vec3(bounds.max) };
 	quader_geometry::aabb_include(geometry_bounds, to_geometry_vec3(point));
 	bounds.empty = !quader_geometry::aabb_is_valid(geometry_bounds);
 	if (!bounds.empty) {
@@ -39,7 +39,7 @@ void include_point(Bounds3& bounds, quader_poly::Vec3 point)
 	}
 }
 
-quader_poly::Vec3 basis_xform(const quader_poly::Transform3& transform, quader_poly::Vec3 point)
+quader::QVec3 basis_xform(const quader_poly::Transform3& transform, quader::QVec3 point)
 {
 	return {
 		transform.x_axis.x * point.x + transform.y_axis.x * point.y + transform.z_axis.x * point.z,
@@ -48,18 +48,18 @@ quader_poly::Vec3 basis_xform(const quader_poly::Transform3& transform, quader_p
 	};
 }
 
-quader_poly::Vec3 transformed_point(const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, quader_poly::Vec3 point)
+quader::QVec3 transformed_point(const quader_poly::Transform3& transform, quader::QVec3 pivot, quader::QVec3 point)
 {
-	const quader_poly::Vec3 pivot_after_basis = basis_xform(transform, pivot);
-	const quader_poly::Vec3 translation = pivot + transform.origin - pivot_after_basis;
+	const quader::QVec3 pivot_after_basis = basis_xform(transform, pivot);
+	const quader::QVec3 translation = pivot + transform.origin - pivot_after_basis;
 	return basis_xform(transform, point) + translation;
 }
 
 bool basis_has_scale_or_shear(const quader_poly::Transform3& transform)
 {
-	const quader_geometry::Vec3f x_axis = to_geometry_vec3(transform.x_axis);
-	const quader_geometry::Vec3f y_axis = to_geometry_vec3(transform.y_axis);
-	const quader_geometry::Vec3f z_axis = to_geometry_vec3(transform.z_axis);
+	const quader_geometry::QVec3f x_axis = to_geometry_vec3(transform.x_axis);
+	const quader_geometry::QVec3f y_axis = to_geometry_vec3(transform.y_axis);
+	const quader_geometry::QVec3f z_axis = to_geometry_vec3(transform.z_axis);
 	return std::abs(quader_geometry::length_squared(x_axis) - 1.0F) > transform_basis_epsilon ||
 		std::abs(quader_geometry::length_squared(y_axis) - 1.0F) > transform_basis_epsilon ||
 		std::abs(quader_geometry::length_squared(z_axis) - 1.0F) > transform_basis_epsilon ||
@@ -127,7 +127,7 @@ Bounds3 selection_bounds(const std::vector<PolygonObject>& objects, SelectionMod
 	return bounds;
 }
 
-CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionMode mode, quader_poly::Vec3 delta, bool texture_lock_enabled)
+CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionMode mode, quader::QVec3 delta, bool texture_lock_enabled)
 {
 	bool changed = false;
 	for (PolygonObject& object : objects) {
@@ -150,7 +150,7 @@ CommandResult translate_selected(std::vector<PolygonObject>& objects, SelectionM
 	return ok_result(changed);
 }
 
-CommandResult transform_selected(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader_poly::Vec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled)
+CommandResult transform_selected(std::vector<PolygonObject>& objects, SelectionMode mode, const quader_poly::Transform3& transform, quader::QVec3 pivot, bool texture_lock_enabled, bool texture_lock_scale_enabled)
 {
 	bool changed = false;
 	const bool identity_basis = basis_is_identity(transform);
@@ -181,7 +181,7 @@ CommandResult transform_selected(std::vector<PolygonObject>& objects, SelectionM
 			if (!vertex_ids.contains(vertex.id)) {
 				continue;
 			}
-			const quader_poly::Vec3 after = transformed_point(transform, pivot, vertex.position);
+			const quader::QVec3 after = transformed_point(transform, pivot, vertex.position);
 			if (quader_geometry::length_squared(to_geometry_vec3(after - vertex.position)) <= transform_point_epsilon) {
 				continue;
 			}

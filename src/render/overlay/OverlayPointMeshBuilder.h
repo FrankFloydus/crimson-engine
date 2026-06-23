@@ -31,7 +31,7 @@ public:
 
     static bool appendPointQuad(
             OverlayPointMesh& mesh,
-            Vec3 position,
+            QVec3 position,
             std::uint32_t color,
             const OverlayCameraProjector& projector,
             float sizePixels,

@@ -9,6 +9,7 @@
 #include "api/QuaderEditorApi.h"
 #include "api/QuaderSceneApi.h"
 #include "editor/commands/document/DocumentCommandEdits.h"
+#include "math/GlmBridge.h"
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
@@ -33,7 +34,7 @@ bool hasSelectedAncestor(const SceneDocument& document, EntityId entity) {
     return false;
 }
 
-Vec3 documentLocalPivotForWorldPoint(const SceneDocument& document, EntityId entity, Vec3 worldPivot) {
+QVec3 documentLocalPivotForWorldPoint(const SceneDocument& document, EntityId entity, QVec3 worldPivot) {
     return transformPoint(inverse(document.worldTransformMatrix(entity)), worldPivot);
 }
 
@@ -105,7 +106,7 @@ SceneTransformDragService& SceneTransformDragService::operator=(SceneTransformDr
 
 bool SceneTransformDragService::begin(
         SceneDocument& document,
-        Vec3 worldPivot,
+        QVec3 worldPivot,
         bool startPreview,
         std::string label) {
     reset();

@@ -24,9 +24,9 @@ namespace quader {
  * Represents a Mesh Vertex value used by the asset document and registry layer.
  */
 struct MeshVertex {
-    Vec3 position;
-    Vec3 normal;
-    Vec2 uv;
+    QVec3 position;
+    QVec3 normal;
+    QVec2 uv;
     std::uint32_t rgba = 0xffffffffu;
 };
 

@@ -79,7 +79,7 @@ TEST_CASE("merge vertices to active preserves cube topology and sloped UV loops"
 		bool checked_sloped_uv = false;
 		std::size_t compiled_vertex_offset = 0;
 		for (const Face& face : document.faces) {
-			const Vec3 normal = face_normal(document, face);
+			const quader::QVec3 normal = face_normal(document, face);
 			if (std::abs(normal.y) > 0.25F && qdr_test::face_has_vertical_span(document, face)) {
 				REQUIRE(face.uvs.size() == face.vertices.size());
 				for (std::size_t index = 0; index < face.vertices.size(); ++index) {
@@ -111,7 +111,7 @@ TEST_CASE("merge vertices to active preserves cube topology and sloped UV loops"
 
 		bool checked_sloped_uv = false;
 		for (const Face& face : document.faces) {
-			const Vec3 normal = face_normal(document, face);
+			const quader::QVec3 normal = face_normal(document, face);
 			if (std::abs(normal.y) > 0.25F &&
 				qdr_test::face_has_vertical_span(document, face) &&
 				face.uvs.size() == face.vertices.size()) {

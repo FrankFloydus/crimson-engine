@@ -15,8 +15,8 @@ namespace quader::test {
  * Represents a Camera Spec value used by the behavior test DSL.
  */
 struct CameraSpec {
-    Vec3 origin = {0.0f, 0.0f, 5.0f};
-    Vec2 viewportSize = {1280.0f, 720.0f};
+    QVec3 origin = {0.0f, 0.0f, 5.0f};
+    QVec2 viewportSize = {1280.0f, 720.0f};
     double orthographicSize = 12.0;
 };
 
@@ -47,24 +47,24 @@ struct DragBeginOptions {
     ModelingTransformTool tool = ModelingTransformTool::Move;
     ModelingTransformAxis axis = ModelingTransformAxis::X;
     ModelingTransformOperation operation = ModelingTransformOperation::Transform;
-    Vec3 pivot = {};
+    QVec3 pivot = {};
     bool useSelectionCenter = true;
-    Vec2 screenPosition = {0.0f, 0.0f};
-    Vec2 screenPivot = {0.0f, 0.0f};
-    Vec2 screenTip = {10.0f, 0.0f};
+    QVec2 screenPosition = {0.0f, 0.0f};
+    QVec2 screenPivot = {0.0f, 0.0f};
+    QVec2 screenTip = {10.0f, 0.0f};
     bool hasWorldDirection = true;
-    Vec3 worldDirection = {1.0f, 0.0f, 0.0f};
+    QVec3 worldDirection = {1.0f, 0.0f, 0.0f};
     bool duplicateSelected = false;
 };
 
 [[nodiscard]] ModelingViewportCamera orthographicCamera(CameraSpec spec = {});
-[[nodiscard]] ModelingRay forwardRay(Vec3 origin = {0.0f, 0.0f, 5.0f});
-[[nodiscard]] ModelingPickSelectRequest pickAt(Vec3 origin, PickOptions options = {});
-[[nodiscard]] ModelingHoverRequest hoverAt(Vec3 origin, HoverOptions options = {});
-[[nodiscard]] ModelingToolRayEvent edgeLoopEvent(Vec3 origin = {1.0f, 0.0f, 5.0f});
+[[nodiscard]] ModelingRay forwardRay(QVec3 origin = {0.0f, 0.0f, 5.0f});
+[[nodiscard]] ModelingPickSelectRequest pickAt(QVec3 origin, PickOptions options = {});
+[[nodiscard]] ModelingHoverRequest hoverAt(QVec3 origin, HoverOptions options = {});
+[[nodiscard]] ModelingToolRayEvent edgeLoopEvent(QVec3 origin = {1.0f, 0.0f, 5.0f});
 [[nodiscard]] ModelingToolRayEvent drawnPlaneEvent(float x, bool dragging = false);
 [[nodiscard]] ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options = {});
-[[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(Vec2 screenPosition);
+[[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(QVec2 screenPosition);
 [[nodiscard]] ModelingTransformDragUpdateRequest transformDragUpdate(float screenX);
 [[nodiscard]] ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options = {});
 [[nodiscard]] ModelingTransformDragUpdateRequest xMoveDragUpdate(float screenX);

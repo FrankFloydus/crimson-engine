@@ -26,8 +26,8 @@ class SceneDocument;
 struct SceneTransformDragTarget {
     EntityId entity = InvalidEntityId;
     TransformComponent transform;
-    Vec3 localPivot = {};
-    Mat4 worldTransform;
+    QVec3 localPivot = {};
+    QMat4 worldTransform;
 };
 
 /**
@@ -45,7 +45,7 @@ public:
 
     [[nodiscard]] bool begin(
             SceneDocument& document,
-            Vec3 worldPivot,
+            QVec3 worldPivot,
             bool startPreview,
             std::string label = "Transform Selection");
     [[nodiscard]] bool previewActive() const;

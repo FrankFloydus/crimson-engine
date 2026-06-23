@@ -102,18 +102,18 @@ private:
             AssetRegistry& assets,
             ModelingSessionService& modeling,
             AssetId defaultMaterial,
-            Vec2 capturedMouseDelta,
+            QVec2 capturedMouseDelta,
             bool* viewportCursorCaptureRequested,
-            Vec2* viewportCursorCapturePoint,
+            QVec2* viewportCursorCapturePoint,
             const UIContext& uiContext);
     void drawPaneContents(Pane& pane,
             SceneDocument& document,
             AssetRegistry& assets,
             ModelingSessionService& modeling,
             AssetId defaultMaterial,
-            Vec2 capturedMouseDelta,
+            QVec2 capturedMouseDelta,
             bool* viewportCursorCaptureRequested,
-            Vec2* viewportCursorCapturePoint,
+            QVec2* viewportCursorCapturePoint,
             const UIContext& uiContext,
             ImVec2 itemMin,
             ImVec2 itemSize,
@@ -161,11 +161,11 @@ private:
     ModalToolOverlayRenderer modalToolOverlayRenderer_;
     ViewportPaneOverlayCache selectionOverlayCache_;
     bool paintSelectionActive_ = false;
-    Vec2 contextMenuRightPressScreen_ = {};
-    Vec2 contextMenuRightDragDelta_ = {};
+    QVec2 contextMenuRightPressScreen_ = {};
+    QVec2 contextMenuRightDragDelta_ = {};
     bool contextMenuRightPressActive_ = false;
     NavigationGizmo navigationGizmo_;
-    Vec2 flyCursorCaptureScreen_ = {};
+    QVec2 flyCursorCaptureScreen_ = {};
     bool selectionHoverClearIssued_ = false;
     std::optional<ModelingHoverTarget> selectionHoverSuppressedTarget_;
     bool deleteObjectsPopupOpen_ = false;

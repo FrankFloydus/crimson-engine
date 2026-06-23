@@ -10,7 +10,7 @@ using namespace quader_editor_core;
 
 namespace {
 
-void translate_document(quader_poly::Document& document, quader_poly::Vec3 delta)
+void translate_document(quader_poly::Document& document, quader::QVec3 delta)
 {
 	for (quader_poly::Vertex& vertex : document.vertices) {
 		vertex.position += delta;

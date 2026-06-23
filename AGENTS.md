@@ -54,6 +54,19 @@ effects, cache invalidation, and error handling.
 - Dependencies, licenses, SDK/third-party changes:
   read `agents/dependencies.md`.
 
+## Nested Package Routing
+
+This repo uses nested `AGENTS.md` files for package-specific guidance. Codex automatically loads
+nested files only along the session working-directory path. When a session starts at the repository
+root and the task edits a specialized subtree, read the nearest nested `AGENTS.md` in that subtree
+before editing.
+
+- For source changes, read `src/AGENTS.md`, then `src/<package>/AGENTS.md` when present.
+- For tests, docs, examples, resources, CMake, tooling, benchmarks, or third-party changes, read the
+  `AGENTS.md` in that top-level directory when present.
+- Keep nested files focused on local ownership, routing, and verification rules. Do not duplicate
+  project identity, restore, worktree, or build rules from this root file.
+
 ## Public API Rule
 
 Use the public API when code expresses user/editor intent:

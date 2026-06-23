@@ -59,9 +59,9 @@ bool edge_exists(const quader_poly::Document& document, quader_poly::Edge edge)
 	return std::find(edges.begin(), edges.end(), edge) != edges.end();
 }
 
-std::optional<quader_poly::Vec3> selected_edge_forward_direction(const EditorSession& session)
+std::optional<quader::QVec3> selected_edge_forward_direction(const EditorSession& session)
 {
-	quader_poly::Vec3 direction;
+	quader::QVec3 direction;
 	for (const PolygonObject& object : session.objects()) {
 		if (!object.selected) {
 			continue;
@@ -82,25 +82,25 @@ std::optional<quader_poly::Vec3> selected_edge_forward_direction(const EditorSes
 				if (start == nullptr || end == nullptr) {
 					continue;
 				}
-				const quader_poly::Vec3 edge_direction = quader_poly::normalize_or_zero(end->position - start->position);
-				const quader_poly::Vec3 normal = quader_poly::normalize_or_zero(quader_poly::face_normal(object.document, face));
-				const quader_poly::Vec3 outward = quader_poly::normalize_or_zero(quader_poly::cross(edge_direction, normal));
-				if (quader_poly::length_squared(outward) > 0.000001F) {
+				const quader::QVec3 edge_direction = quader::normalize_or_zero(end->position - start->position);
+				const quader::QVec3 normal = quader::normalize_or_zero(quader_poly::face_normal(object.document, face));
+				const quader::QVec3 outward = quader::normalize_or_zero(quader::cross(edge_direction, normal));
+				if (quader::length_squared(outward) > 0.000001F) {
 					direction += outward;
 					break;
 				}
 			}
 		}
 	}
-	if (quader_poly::length_squared(direction) <= 0.000001F) {
+	if (quader::length_squared(direction) <= 0.000001F) {
 		return std::nullopt;
 	}
-	return quader_poly::normalize_or_zero(direction);
+	return quader::normalize_or_zero(direction);
 }
 
-std::optional<quader_poly::Vec3> selected_face_forward_direction(const EditorSession& session)
+std::optional<quader::QVec3> selected_face_forward_direction(const EditorSession& session)
 {
-	quader_poly::Vec3 direction;
+	quader::QVec3 direction;
 	for (const PolygonObject& object : session.objects()) {
 		if (!object.selected) {
 			continue;
@@ -110,19 +110,19 @@ std::optional<quader_poly::Vec3> selected_face_forward_direction(const EditorSes
 			if (face == nullptr) {
 				continue;
 			}
-			const quader_poly::Vec3 normal = quader_poly::normalize_or_zero(quader_poly::face_normal(object.document, *face));
-			if (quader_poly::length_squared(normal) > 0.000001F) {
+			const quader::QVec3 normal = quader::normalize_or_zero(quader_poly::face_normal(object.document, *face));
+			if (quader::length_squared(normal) > 0.000001F) {
 				direction += normal;
 			}
 		}
 	}
-	if (quader_poly::length_squared(direction) <= 0.000001F) {
+	if (quader::length_squared(direction) <= 0.000001F) {
 		return std::nullopt;
 	}
-	return quader_poly::normalize_or_zero(direction);
+	return quader::normalize_or_zero(direction);
 }
 
-std::optional<quader_poly::Vec3> selected_component_forward_direction(const EditorSession& session)
+std::optional<quader::QVec3> selected_component_forward_direction(const EditorSession& session)
 {
 	if (session.selection_mode() == SelectionMode::edge) {
 		return selected_edge_forward_direction(session);
@@ -219,14 +219,14 @@ void record_repeatable_transform(
 
 	if (drag.tool == ViewportInteractionTool::move &&
 			drag.operation == TransformDragOperation::extrude &&
-			quader_poly::length_squared(drag.move.preview_delta) > 0.000001F) {
-		if (const std::optional<quader_poly::Vec3> forward = selected_component_forward_direction(session)) {
-			const quader_poly::Vec3 normalized_delta = quader_poly::normalize_or_zero(drag.move.preview_delta);
-			const float alignment = quader_poly::dot(normalized_delta, *forward);
+			quader::length_squared(drag.move.preview_delta) > 0.000001F) {
+		if (const std::optional<quader::QVec3> forward = selected_component_forward_direction(session)) {
+			const quader::QVec3 normalized_delta = quader::normalize_or_zero(drag.move.preview_delta);
+			const float alignment = quader::dot(normalized_delta, *forward);
 			if (std::abs(alignment) >= 0.85F) {
 				action.direction_mode = RepeatTransformDirectionMode::selection_forward;
 				action.signed_forward_distance =
-					quader_poly::length(drag.move.preview_delta) * (alignment < 0.0F ? -1.0F : 1.0F);
+					quader::length(drag.move.preview_delta) * (alignment < 0.0F ? -1.0F : 1.0F);
 			}
 		}
 	}
@@ -251,10 +251,10 @@ CommandResult execute_repeatable_transform(
 
 	CommandResult update_result;
 	if (action.tool == ViewportInteractionTool::move) {
-		quader_poly::Vec3 delta = action.move_delta;
+		quader::QVec3 delta = action.move_delta;
 		if (action.operation == TransformDragOperation::extrude) {
 			if (action.direction_mode == RepeatTransformDirectionMode::selection_forward) {
-				const std::optional<quader_poly::Vec3> forward = selected_component_forward_direction(session);
+				const std::optional<quader::QVec3> forward = selected_component_forward_direction(session);
 				if (!forward.has_value()) {
 					(void)session.cancel_preview_transaction(PreviewTransactionKind::transform);
 					return { false, false, "Could not resolve the current selection forward direction." };
@@ -268,7 +268,7 @@ CommandResult execute_repeatable_transform(
 		return commit_repeat_transform_preview(session, update_result);
 	}
 
-	const quader_poly::Vec3 pivot = session.selection_center().value_or(quader_poly::Vec3 {});
+	const quader::QVec3 pivot = session.selection_center().value_or(quader::QVec3 {});
 	if (action.tool == ViewportInteractionTool::rotate) {
 		RotateToolState rotate;
 		rotate.active = true;

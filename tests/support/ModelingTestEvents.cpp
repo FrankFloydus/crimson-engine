@@ -21,14 +21,14 @@ ModelingViewportCamera orthographicCamera(CameraSpec spec) {
     };
 }
 
-ModelingRay forwardRay(Vec3 origin) {
+ModelingRay forwardRay(QVec3 origin) {
     return {
             .origin = origin,
             .direction = {0.0f, 0.0f, -1.0f},
     };
 }
 
-ModelingPickSelectRequest pickAt(Vec3 origin, PickOptions options) {
+ModelingPickSelectRequest pickAt(QVec3 origin, PickOptions options) {
     return {
             .ray = forwardRay(origin),
             .clickCount = options.clickCount,
@@ -41,14 +41,14 @@ ModelingPickSelectRequest pickAt(Vec3 origin, PickOptions options) {
     };
 }
 
-ModelingHoverRequest hoverAt(Vec3 origin, HoverOptions options) {
+ModelingHoverRequest hoverAt(QVec3 origin, HoverOptions options) {
     return {
             .ray = forwardRay(origin),
             .selectedModifierPressed = options.selectedModifierPressed,
     };
 }
 
-ModelingToolRayEvent edgeLoopEvent(Vec3 origin) {
+ModelingToolRayEvent edgeLoopEvent(QVec3 origin) {
     return {
             .screenPosition = {},
             .ray = forwardRay(origin),
@@ -95,7 +95,7 @@ ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options) {
     };
 }
 
-ModelingTransformDragUpdateRequest transformDragUpdate(Vec2 screenPosition) {
+ModelingTransformDragUpdateRequest transformDragUpdate(QVec2 screenPosition) {
     return {
             .screenPosition = screenPosition,
             .ray = forwardRay(),
@@ -107,7 +107,7 @@ ModelingTransformDragUpdateRequest transformDragUpdate(Vec2 screenPosition) {
 }
 
 ModelingTransformDragUpdateRequest transformDragUpdate(float screenX) {
-    return transformDragUpdate(Vec2{screenX, 0.0f});
+    return transformDragUpdate(QVec2{screenX, 0.0f});
 }
 
 ModelingTransformDragBeginRequest xMoveDragBegin(DragBeginOptions options) {

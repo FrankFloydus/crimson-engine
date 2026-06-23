@@ -6,6 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "math/types/QVec2.h"
+#include "math/types/QVec3.h"
+
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -21,38 +24,21 @@ using ElementId = std::uint32_t;
 inline constexpr ElementId invalid_element_id = 0;
 
 /**
- * Represents a Vec2 value used by the polygon document and mesh editing core.
- */
-struct Vec2 {
-    float x = 0.0F;
-    float y = 0.0F;
-};
-
-/**
- * Represents a Vec3 value used by the polygon document and mesh editing core.
- */
-struct Vec3 {
-    float x = 0.0F;
-    float y = 0.0F;
-    float z = 0.0F;
-};
-
-/**
  * Represents a Transform3 value used by the polygon document and mesh editing core.
  */
 struct Transform3 {
-    Vec3 x_axis { 1.0F, 0.0F, 0.0F };
-    Vec3 y_axis { 0.0F, 1.0F, 0.0F };
-    Vec3 z_axis { 0.0F, 0.0F, 1.0F };
-    Vec3 origin { 0.0F, 0.0F, 0.0F };
+    quader::QVec3 x_axis { 1.0F, 0.0F, 0.0F };
+    quader::QVec3 y_axis { 0.0F, 1.0F, 0.0F };
+    quader::QVec3 z_axis { 0.0F, 0.0F, 1.0F };
+    quader::QVec3 origin { 0.0F, 0.0F, 0.0F };
 };
 
 /**
  * Represents a Ray value used by the polygon document and mesh editing core.
  */
 struct Ray {
-    Vec3 origin;
-    Vec3 direction { 0.0F, 0.0F, 1.0F };
+    quader::QVec3 origin;
+    quader::QVec3 direction { 0.0F, 0.0F, 1.0F };
 };
 
 /**
@@ -60,7 +46,7 @@ struct Ray {
  */
 struct Vertex {
     ElementId id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
@@ -88,7 +74,7 @@ enum class SurfaceShading {
 struct Face {
     ElementId id = invalid_element_id;
     std::vector<ElementId> vertices;
-    std::vector<Vec2> uvs;
+    std::vector<quader::QVec2> uvs;
     std::uint32_t material_slot = 0;
     SurfaceShading normal_shading = SurfaceShading::flat;
 };
@@ -253,9 +239,9 @@ struct Selection {
  * Represents a Compiled Vertex value used by the polygon document and mesh editing core.
  */
 struct CompiledVertex {
-    Vec3 position;
-    Vec3 normal { 0.0F, 1.0F, 0.0F };
-    Vec2 uv0;
+    quader::QVec3 position;
+    quader::QVec3 normal { 0.0F, 1.0F, 0.0F };
+    quader::QVec2 uv0;
     std::uint32_t color = 0xff9f9f9f;
 };
 
@@ -298,9 +284,9 @@ enum class PlaneCutMode {
  * Stores the Plane Cut Request data contract used by the polygon document and mesh editing core.
  */
 struct PlaneCutRequest {
-    Vec3 first_point;
-    Vec3 second_point;
-    Vec3 third_point;
+    quader::QVec3 first_point;
+    quader::QVec3 second_point;
+    quader::QVec3 third_point;
     PlaneCutMode mode = PlaneCutMode::keep_both;
 };
 
@@ -355,7 +341,7 @@ struct KnifePointTarget {
     Edge edge;
     float edge_factor = 0.5F;
     ElementId face_id = invalid_element_id;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
@@ -409,7 +395,7 @@ struct PickResult {
     Edge edge;
     ElementId face_id = invalid_element_id;
     float distance = 0.0F;
-    Vec3 position;
+    quader::QVec3 position;
 };
 
 /**
@@ -417,20 +403,20 @@ struct PickResult {
  */
 struct PickFaceTriangle {
     ElementId face_id = invalid_element_id;
-    Vec3 a;
-    Vec3 b;
-    Vec3 c;
-    Vec3 normal;
-    Vec3 bounds_min;
-    Vec3 bounds_max;
+    quader::QVec3 a;
+    quader::QVec3 b;
+    quader::QVec3 c;
+    quader::QVec3 normal;
+    quader::QVec3 bounds_min;
+    quader::QVec3 bounds_max;
 };
 
 /**
  * Represents an Overlay Line value used by the polygon document and mesh editing core.
  */
 struct OverlayLine {
-    Vec3 start;
-    Vec3 end;
+    quader::QVec3 start;
+    quader::QVec3 end;
     std::uint32_t color = 0xffffffff;
     float width_pixels = 1.0F;
     Edge edge;
@@ -441,9 +427,9 @@ struct OverlayLine {
  * Represents an Overlay Triangle value used by the polygon document and mesh editing core.
  */
 struct OverlayTriangle {
-    Vec3 a;
-    Vec3 b;
-    Vec3 c;
+    quader::QVec3 a;
+    quader::QVec3 b;
+    quader::QVec3 c;
     std::uint32_t color = 0xffffffff;
     ElementId face_id = invalid_element_id;
 };
@@ -452,7 +438,7 @@ struct OverlayTriangle {
  * Represents an Overlay Point value used by the polygon document and mesh editing core.
  */
 struct OverlayPoint {
-    Vec3 position;
+    quader::QVec3 position;
     std::uint32_t color = 0xffffffff;
     float size_pixels = 5.0F;
     ElementId vertex_id = invalid_element_id;
@@ -491,23 +477,12 @@ struct OverlayData {
  */
 struct KnifeSegmentPreview {
     bool valid = false;
-    Vec3 start;
-    Vec3 end;
+    quader::QVec3 start;
+    quader::QVec3 end;
     OverlayData overlay;
     std::string message;
 };
 
-[[nodiscard]] Vec3 operator+(const Vec3& left, const Vec3& right);
-[[nodiscard]] Vec3 operator-(const Vec3& left, const Vec3& right);
-[[nodiscard]] Vec3 operator*(const Vec3& value, float scalar);
-[[nodiscard]] Vec3 operator/(const Vec3& value, float scalar);
-Vec3& operator+=(Vec3& left, const Vec3& right);
-
-[[nodiscard]] float dot(const Vec3& left, const Vec3& right);
-[[nodiscard]] Vec3 cross(const Vec3& left, const Vec3& right);
-[[nodiscard]] float length_squared(const Vec3& value);
-[[nodiscard]] float length(const Vec3& value);
-[[nodiscard]] Vec3 normalize_or_zero(const Vec3& value);
 [[nodiscard]] Edge make_edge(ElementId a, ElementId b);
 
 [[nodiscard]] Document make_cube(const CubePrimitiveSpec& spec);
@@ -518,7 +493,7 @@ Vec3& operator+=(Vec3& left, const Vec3& right);
 [[nodiscard]] Document make_uv_sphere(const UvSpherePrimitiveSpec& spec);
 [[nodiscard]] Document make_ico_sphere(const IcoSpherePrimitiveSpec& spec);
 [[nodiscard]] Document make_torus(const TorusPrimitiveSpec& spec);
-[[nodiscard]] ElementId add_vertex(Document& document, Vec3 position);
+[[nodiscard]] ElementId add_vertex(Document& document, quader::QVec3 position);
 [[nodiscard]] ElementId add_face(Document& document, std::span<const ElementId> vertices, std::uint32_t material_slot = 0);
 [[nodiscard]] const Vertex* find_vertex(const Document& document, ElementId id);
 [[nodiscard]] Vertex* find_vertex(Document& document, ElementId id);
@@ -527,13 +502,13 @@ Vec3& operator+=(Vec3& left, const Vec3& right);
 [[nodiscard]] std::vector<Edge> document_edges(const Document& document);
 [[nodiscard]] FacePerimeterInfo face_perimeter_info(const Document& document, ElementId face_id);
 [[nodiscard]] FacePerimeterInfo selected_faces_perimeter_info(const Document& document, const Selection& selection);
-[[nodiscard]] Vec3 face_normal(const Document& document, const Face& face);
-[[nodiscard]] std::optional<float> edge_factor_from_position(const Document& document, Edge edge, Vec3 position);
+[[nodiscard]] quader::QVec3 face_normal(const Document& document, const Face& face);
+[[nodiscard]] std::optional<float> edge_factor_from_position(const Document& document, Edge edge, quader::QVec3 position);
 [[nodiscard]] std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, const Ray& ray);
 void ensure_face_uvs(Document& document);
 void regenerate_face_uvs(Document& document);
 void clear_face_uvs(Document& document);
-void shift_face_uvs_for_translation(Document& document, Vec3 delta);
+void shift_face_uvs_for_translation(Document& document, quader::QVec3 delta);
 [[nodiscard]] OperationResult apply_uv_operation(Document& document, const Selection& selection, std::string_view operation, float shift_world_amount = 1.0F);
 [[nodiscard]] OperationResult assign_selected_face_material_slot(Document& document, const Selection& selection, std::uint32_t material_slot);
 [[nodiscard]] OperationResult assign_face_material_slot(Document& document, ElementId face_id, std::uint32_t material_slot);
@@ -550,8 +525,8 @@ void convert_selection_mode(const Document& document, Selection& selection, Sele
 [[nodiscard]] std::vector<ElementId> selected_vertex_ids(const Document& document, const Selection& selection);
 [[nodiscard]] std::vector<Edge> edge_loop_edges(const Document& document, Edge seed_edge);
 void select_edge_loop(const Document& document, Selection& selection, Edge seed_edge, bool toggle = false);
-[[nodiscard]] std::optional<Vec3> selection_center(const Document& document, const Selection& selection);
-[[nodiscard]] OperationResult translate_selection(Document& document, const Selection& selection, Vec3 delta);
+[[nodiscard]] std::optional<quader::QVec3> selection_center(const Document& document, const Selection& selection);
+[[nodiscard]] OperationResult translate_selection(Document& document, const Selection& selection, quader::QVec3 delta);
 [[nodiscard]] OperationResult transform_selection(Document& document, const Selection& selection, const Transform3& transform);
 [[nodiscard]] OperationResult snap_selected_vertices_to_active(Document& document, Selection& selection);
 [[nodiscard]] OperationResult merge_selected_vertices_to_active(Document& document, Selection& selection);
@@ -585,8 +560,8 @@ void select_edge_loop(const Document& document, Selection& selection, Edge seed_
 [[nodiscard]] OperationResult slice_selected_quads(Document& document, Selection& selection, int x_slices = 1, int y_slices = 1);
 [[nodiscard]] OperationResult knife_segment(Document& document, Selection& selection, const KnifePointTarget& previous, const KnifePointTarget& current);
 [[nodiscard]] OperationResult knife_stroke(Document& document, Selection& selection, std::span<const KnifePointTarget> points, std::span<const KnifeStrokeSegment> segments);
-[[nodiscard]] OperationResult extrude_selected_elements(Document& document, Selection& selection, Vec3 offset, float closed_edge_ledge_size = 0.0F);
-[[nodiscard]] OperationResult inset_selected_elements(Document& document, Selection& selection, const Transform3& transform, Vec3 pivot);
+[[nodiscard]] OperationResult extrude_selected_elements(Document& document, Selection& selection, quader::QVec3 offset, float closed_edge_ledge_size = 0.0F);
+[[nodiscard]] OperationResult inset_selected_elements(Document& document, Selection& selection, const Transform3& transform, quader::QVec3 pivot);
 [[nodiscard]] OperationResult inset_selected_faces(Document& document, Selection& selection, float amount = 0.18F);
 [[nodiscard]] OperationResult extrude_selected_faces(Document& document, Selection& selection, float distance = 0.45F);
 [[nodiscard]] OperationResult detach_selected_faces(Document& document, Selection& selection);

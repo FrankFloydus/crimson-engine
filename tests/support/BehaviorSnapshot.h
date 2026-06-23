@@ -33,8 +33,8 @@ namespace quader::test {
  * Represents a Behavior Bounds value used by the behavior test DSL.
  */
 struct BehaviorBounds {
-    Vec3 min = {};
-    Vec3 max = {};
+    QVec3 min = {};
+    QVec3 max = {};
 };
 
 /**
@@ -58,7 +58,7 @@ struct MeshSnapshot {
     std::size_t vertexCount = 0;
     std::size_t indexCount = 0;
     BehaviorBounds bounds;
-    std::vector<Vec3> positions;
+    std::vector<QVec3> positions;
 };
 
 /**

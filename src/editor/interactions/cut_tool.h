@@ -40,15 +40,15 @@ struct CutPreviewCounts {
  * Stores the Cut Tool State data contract used by the modal modeling interaction layer.
  */
 struct CutToolState {
-	std::vector<quader_poly::Vec3> points;
+	std::vector<quader::QVec3> points;
 	std::vector<int> target_object_ids;
 	int source_object_id = -1;
-	quader_poly::Vec3 face_normal;
+	quader::QVec3 face_normal;
 	CutMode mode = CutMode::keep_both;
 	int dragging_point_index = -1;
 	bool dragging_new_point = false;
 	bool dragging_line = false;
-	quader_poly::Vec3 drag_line_anchor;
+	quader::QVec3 drag_line_anchor;
 	bool preview_valid = false;
 	CutPreviewCounts preview_counts;
 };
@@ -71,7 +71,7 @@ struct CutPreviewRequest {
 	bool ok = false;
 	std::string message;
 	std::vector<int> object_ids;
-	std::vector<quader_poly::Vec3> points;
+	std::vector<quader::QVec3> points;
 	CutMode mode = CutMode::keep_both;
 	bool can_preview = false;
 	int point_count = 0;
@@ -98,7 +98,7 @@ struct CutPreviewMetadata {
 struct CutHoverState {
 	bool valid = false;
 	int object_id = -1;
-	quader_poly::Vec3 position;
+	quader::QVec3 position;
 };
 
 /**
@@ -129,22 +129,22 @@ quader_poly::PlaneCutRequest plane_cut_request_from_cut_state(const CutToolState
 
 std::vector<int> cut_target_object_ids_for_selection(const RectangleSelectionState& selection);
 CutToolResult set_cut_targets_from_selection(CutToolState& state, const RectangleSelectionState& selection);
-CutToolResult capture_first_cut_point(CutToolState& state, const RectangleSelectionState& selection, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal);
-CutToolResult capture_second_cut_point(CutToolState& state, quader_poly::Vec3 position);
-CutToolResult update_dragged_new_cut_point(CutToolState& state, quader_poly::Vec3 position);
-CutToolResult update_dragged_cut_point(CutToolState& state, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal);
+CutToolResult capture_first_cut_point(CutToolState& state, const RectangleSelectionState& selection, quader::QVec3 position, quader::QVec3 plane_normal);
+CutToolResult capture_second_cut_point(CutToolState& state, quader::QVec3 position);
+CutToolResult update_dragged_new_cut_point(CutToolState& state, quader::QVec3 position);
+CutToolResult update_dragged_cut_point(CutToolState& state, quader::QVec3 position, quader::QVec3 plane_normal);
 CutToolResult begin_cut_point_drag(CutToolState& state, int point_index);
-CutToolResult begin_cut_line_drag(CutToolState& state, quader_poly::Vec3 anchor);
-CutToolResult update_dragged_cut_line(CutToolState& state, quader_poly::Vec3 position);
+CutToolResult begin_cut_line_drag(CutToolState& state, quader::QVec3 anchor);
+CutToolResult update_dragged_cut_line(CutToolState& state, quader::QVec3 position);
 CutToolResult end_cut_point_drag(CutToolState& state);
 CutToolResult end_new_cut_point_drag(CutToolState& state);
 CutToolResult end_cut_line_drag(CutToolState& state);
 CutToolResult set_cut_mode(CutToolState& state, CutMode mode);
-std::vector<quader_poly::Vec3> cut_overlay_points(const CutToolState& state, quader_poly::Vec3 hover_position, bool has_hover);
-std::vector<quader_poly::Vec3> cut_plane_points(const CutToolState& state);
+std::vector<quader::QVec3> cut_overlay_points(const CutToolState& state, quader::QVec3 hover_position, bool has_hover);
+std::vector<quader::QVec3> cut_plane_points(const CutToolState& state);
 std::vector<int> dirty_object_ids_for_cut(const std::vector<int>& source_ids, const std::vector<int>& result_ids);
-bool cut_point_repeats_existing(const CutToolState& state, quader_poly::Vec3 point);
-bool cut_point_repeats_other(const CutToolState& state, quader_poly::Vec3 point, int point_index);
+bool cut_point_repeats_existing(const CutToolState& state, quader::QVec3 point);
+bool cut_point_repeats_other(const CutToolState& state, quader::QVec3 point, int point_index);
 CutPreviewRequest cut_preview_request(CutToolState& state, CutMode mode);
 CutToolResult set_cut_preview_result(CutToolState& state, CutMode mode, bool ok, const CutPreviewCounts& counts, std::string message = {});
 CutToolResult invalidate_cut_preview(CutToolState& state);
@@ -155,7 +155,7 @@ bool cut_is_active(const CutToolState& state);
 bool cut_can_preview(const CutToolState& state);
 CutPreviewMetadata cut_preview_metadata(const CutToolState& state);
 std::string cut_preview_status(const CutToolState& state, CutMode mode, const CutPreviewCounts& fallback_counts = {});
-bool update_cut_hover(CutHoverState& state, bool valid, int object_id, quader_poly::Vec3 position, double epsilon);
+bool update_cut_hover(CutHoverState& state, bool valid, int object_id, quader::QVec3 position, double epsilon);
 
 CutToolResult refresh_cut_preview(CutToolState& state, std::span<const PolygonObject> objects);
 CutToolResult refresh_cut_preview_from_selection(

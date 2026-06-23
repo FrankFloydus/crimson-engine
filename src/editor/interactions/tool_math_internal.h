@@ -15,59 +15,59 @@
 
 namespace quader_editor_core {
 
-static inline quader_geometry::Vec2d tool_geometry_vec2(quader_poly::Vec2 value)
+static inline quader_geometry::QVec2d tool_geometry_vec2(quader::QVec2 value)
 {
 	return { value.x, value.y };
 }
 
-static inline quader_geometry::Vec3f tool_geometry_vec3(quader_poly::Vec3 value)
+static inline quader_geometry::QVec3f tool_geometry_vec3(quader::QVec3 value)
 {
 	return { value.x, value.y, value.z };
 }
 
-static inline quader_poly::Vec2 tool_poly_vec2(quader_geometry::Vec2d value)
+static inline quader::QVec2 tool_poly_vec2(quader_geometry::QVec2d value)
 {
 	return { static_cast<float>(value.x), static_cast<float>(value.y) };
 }
 
-static inline quader_poly::Vec3 tool_poly_vec3(quader_geometry::Vec3f value)
+static inline quader::QVec3 tool_poly_vec3(quader_geometry::QVec3f value)
 {
 	return { value.x, value.y, value.z };
 }
 
-static inline quader_poly::Vec2 vec2_sub(quader_poly::Vec2 left, quader_poly::Vec2 right)
+static inline quader::QVec2 vec2_sub(quader::QVec2 left, quader::QVec2 right)
 {
 	return { left.x - right.x, left.y - right.y };
 }
 
-static inline quader_poly::Vec2 vec2_add(quader_poly::Vec2 left, quader_poly::Vec2 right)
+static inline quader::QVec2 vec2_add(quader::QVec2 left, quader::QVec2 right)
 {
 	return { left.x + right.x, left.y + right.y };
 }
 
-static inline quader_poly::Vec2 vec2_scale(quader_poly::Vec2 value, double scalar)
+static inline quader::QVec2 vec2_scale(quader::QVec2 value, double scalar)
 {
 	return tool_poly_vec2(tool_geometry_vec2(value) * scalar);
 }
 
-static inline double vec2_dot(quader_poly::Vec2 left, quader_poly::Vec2 right)
+static inline double vec2_dot(quader::QVec2 left, quader::QVec2 right)
 {
 	return quader_geometry::dot(tool_geometry_vec2(left), tool_geometry_vec2(right));
 }
 
-static inline double vec2_distance_squared(quader_poly::Vec2 left, quader_poly::Vec2 right)
+static inline double vec2_distance_squared(quader::QVec2 left, quader::QVec2 right)
 {
 	return quader_geometry::length_squared(tool_geometry_vec2(left) - tool_geometry_vec2(right));
 }
 
-static inline bool vec2_is_tiny(quader_poly::Vec2 value)
+static inline bool vec2_is_tiny(quader::QVec2 value)
 {
 	return quader_geometry::length_squared(tool_geometry_vec2(value)) <= screen_epsilon;
 }
 
-static inline quader_poly::Vec2 vec2_normalize_or(quader_poly::Vec2 value, quader_poly::Vec2 fallback)
+static inline quader::QVec2 vec2_normalize_or(quader::QVec2 value, quader::QVec2 fallback)
 {
-	const quader_geometry::Vec2d geometry_value = tool_geometry_vec2(value);
+	const quader_geometry::QVec2d geometry_value = tool_geometry_vec2(value);
 	const double length_squared = quader_geometry::length_squared(geometry_value);
 	if (length_squared <= screen_epsilon) {
 		return fallback;
@@ -76,27 +76,27 @@ static inline quader_poly::Vec2 vec2_normalize_or(quader_poly::Vec2 value, quade
 	return tool_poly_vec2(geometry_value / length);
 }
 
-static inline bool vec3_is_tiny(quader_poly::Vec3 value, double epsilon = tool_epsilon)
+static inline bool vec3_is_tiny(quader::QVec3 value, double epsilon = tool_epsilon)
 {
 	return quader_geometry::length_squared(tool_geometry_vec3(value)) <= static_cast<float>(epsilon * epsilon);
 }
 
-static inline quader_poly::Vec3 vec3_scale(quader_poly::Vec3 value, double scalar)
+static inline quader::QVec3 vec3_scale(quader::QVec3 value, double scalar)
 {
 	return tool_poly_vec3(tool_geometry_vec3(value) * static_cast<float>(scalar));
 }
 
-static inline quader_poly::Vec3 vec3_cross(quader_poly::Vec3 left, quader_poly::Vec3 right)
+static inline quader::QVec3 vec3_cross(quader::QVec3 left, quader::QVec3 right)
 {
 	return tool_poly_vec3(quader_geometry::cross(tool_geometry_vec3(left), tool_geometry_vec3(right)));
 }
 
-static inline double vec3_dot(quader_poly::Vec3 left, quader_poly::Vec3 right)
+static inline double vec3_dot(quader::QVec3 left, quader::QVec3 right)
 {
 	return quader_geometry::dot(tool_geometry_vec3(left), tool_geometry_vec3(right));
 }
 
-static inline quader_poly::Vec3 normalized_axis(quader_poly::Vec3 value)
+static inline quader::QVec3 normalized_axis(quader::QVec3 value)
 {
 	return tool_poly_vec3(quader_geometry::normalize_or_zero(tool_geometry_vec3(value), 0.000001F));
 }
@@ -132,11 +132,11 @@ static inline std::vector<int> merge_unique_ids(const std::vector<int>& first, c
 	return result;
 }
 
-static inline double vec3_distance_squared(quader_poly::Vec3 left, quader_poly::Vec3 right)
+static inline double vec3_distance_squared(quader::QVec3 left, quader::QVec3 right)
 {
 	return quader_geometry::length_squared(tool_geometry_vec3(left) - tool_geometry_vec3(right));
 }
 
-double viewport_world_units_per_pixel(const ViewportCameraState& camera, quader_poly::Vec3 anchor);
+double viewport_world_units_per_pixel(const ViewportCameraState& camera, quader::QVec3 anchor);
 
 } // namespace quader_editor_core

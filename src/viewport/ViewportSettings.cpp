@@ -6,8 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/ViewportSettings.h"
 
+#include "core/QStr.h"
+
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -77,9 +78,9 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::Background, ViewportSettingsSectionId::Scene, "Background", key("BackgroundColor"), rgba8(0x0d0d0dffU)},
         {ViewportColorSettingId::GridMinor, ViewportSettingsSectionId::Grid, "Minor", key("GridMinorColor"), color(0.8f, 0.8f, 0.8f, 0.05f)},
         {ViewportColorSettingId::GridMajor, ViewportSettingsSectionId::Grid, "Major", key("GridMajorColor"), color(0.298f, 0.298f, 0.298f, 0.459f)},
-        {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X Axis", key("GridXAxisColor"), color(1.0f, 0.239f, 0.0f, 0.72f)},
-        {ViewportColorSettingId::GridYAxis, ViewportSettingsSectionId::Grid, "Y Axis", key("GridYAxisColor"), color(0.29f, 0.58f, 0.0f, 0.0f)},
-        {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z Axis", key("GridZAxisColor"), color(0.059f, 0.612f, 1.0f, 0.72f)},
+        {ViewportColorSettingId::GridXAxis, ViewportSettingsSectionId::Grid, "X QAxis", key("GridXAxisColor"), color(1.0f, 0.239f, 0.0f, 0.72f)},
+        {ViewportColorSettingId::GridYAxis, ViewportSettingsSectionId::Grid, "Y QAxis", key("GridYAxisColor"), color(0.29f, 0.58f, 0.0f, 0.0f)},
+        {ViewportColorSettingId::GridZAxis, ViewportSettingsSectionId::Grid, "Z QAxis", key("GridZAxisColor"), color(0.059f, 0.612f, 1.0f, 0.72f)},
         {ViewportColorSettingId::SelectionFace, ViewportSettingsSectionId::Selection, "Face Fill", key("SelectionFaceColor"), abgr8(0x081facffU)},
         {ViewportColorSettingId::SelectionWire, ViewportSettingsSectionId::Selection, "Wire", key("SelectionWireColor"), abgr8(0xff1fd3ffU)},
         {ViewportColorSettingId::SourceWire, ViewportSettingsSectionId::Overlay, "Source Wire", key("SourceWireColor"), abgr8(0xebffe05cU)},
@@ -100,7 +101,7 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
         {ViewportFloatSettingId::GridMinorLineSize, ViewportSettingsSectionId::Grid, "Minor Line", key("GridMinorLineSize"), kMinLineSize, kMaxLineSize, 0.32f},
         {ViewportFloatSettingId::GridMajorLineSize, ViewportSettingsSectionId::Grid, "Major Line", key("GridMajorLineSize"), kMinLineSize, kMaxLineSize, 0.36f},
-        {ViewportFloatSettingId::GridAxisLineSize, ViewportSettingsSectionId::Grid, "Axis Line", key("GridAxisLineSize"), kMinLineSize, kMaxLineSize, 0.65f},
+        {ViewportFloatSettingId::GridAxisLineSize, ViewportSettingsSectionId::Grid, "QAxis Line", key("GridAxisLineSize"), kMinLineSize, kMaxLineSize, 0.65f},
         {ViewportFloatSettingId::SourceWireLineSize, ViewportSettingsSectionId::Overlay, "Source Wire Size", key("SourceWireLineSize"), kMinLineSize, kMaxLineSize, 1.5f},
         {ViewportFloatSettingId::SelectionFaceWireLineSize, ViewportSettingsSectionId::Selection, "Face Wire Size", key("SelectionFaceWireLineSize"), kMinLineSize, kMaxLineSize, 2.5f},
         {ViewportFloatSettingId::SelectionEdgeLineSize, ViewportSettingsSectionId::Selection, "Edge Line Size", key("SelectionEdgeLineSize"), kMinLineSize, kMaxLineSize, 2.5f},
@@ -126,39 +127,14 @@ std::string fullKey(std::string_view suffix) {
     return value;
 }
 
-std::string trim(std::string value) {
-    const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    });
-    const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    }).base();
-    if (first >= last) {
-        return {};
-    }
-    return {first, last};
-}
-
 bool parseBool(std::string value, bool fallback) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    if (value == "1" || value == "true" || value == "yes" || value == "on") {
-        return true;
-    }
-    if (value == "0" || value == "false" || value == "no" || value == "off") {
-        return false;
-    }
-    return fallback;
+    const std::optional<bool> parsed = QStr::parseBoolToken(value);
+    return parsed.value_or(fallback);
 }
 
 float parseFloat(const std::string& value, float fallback, float minimum, float maximum) {
-    try {
-        const float parsed = std::stof(value);
-        if (std::isfinite(parsed)) {
-            return std::clamp(parsed, minimum, maximum);
-        }
-    } catch (...) {
+    if (const std::optional<float> parsed = QStr::parseFiniteFloatToken(value)) {
+        return std::clamp(*parsed, minimum, maximum);
     }
     return fallback;
 }
@@ -189,7 +165,7 @@ std::optional<std::uint8_t> parseHexByte(const std::string& value, std::size_t i
 }
 
 std::optional<ViewportSettingColor> parseColor(std::string value) {
-    value = trim(value);
+    value = QStr::trimAsciiWhitespace(value);
     if (!value.empty() && value.front() == '#') {
         value.erase(value.begin());
     }
@@ -306,18 +282,18 @@ ViewportSettings ViewportSettings::load(const std::filesystem::path& path) {
 
     std::string line;
     while (std::getline(file, line)) {
-        line = trim(line);
+        line = QStr::trimAsciiWhitespace(line);
         if (line.empty() || line.front() == '#' || line.front() == '[') {
             continue;
         }
 
-        const std::size_t equals = line.find('=');
-        if (equals == std::string::npos) {
+        const std::optional<QStrSplitOnce> split = QStr::splitOnce(line, '=');
+        if (!split) {
             continue;
         }
 
-        const std::string key = trim(line.substr(0, equals));
-        const std::string value = trim(line.substr(equals + 1));
+        const std::string key = QStr::trimAsciiWhitespace(split->before);
+        const std::string value = QStr::trimAsciiWhitespace(split->after);
         for (const ViewportColorSettingDescriptor& descriptor : kColorSettings) {
             if (key == fullKey(descriptor.key)) {
                 if (const std::optional<ViewportSettingColor> parsed = parseColor(value)) {

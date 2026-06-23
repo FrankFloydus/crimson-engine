@@ -115,7 +115,7 @@ public:
 
 	[[nodiscard]] quader_poly::PlaneCutRequest plane_cut_request(const CutToolState& state) const
 	{
-		const std::vector<quader_poly::Vec3> points = plane_points(state);
+		const std::vector<quader::QVec3> points = plane_points(state);
 		quader_poly::PlaneCutRequest request;
 		request.mode = plane_cut_mode(state.mode);
 		if (points.size() >= 3U) {
@@ -142,8 +142,8 @@ public:
 	[[nodiscard]] CutToolResult capture_first_point(
 			CutToolState& state,
 			const RectangleSelectionState& selection,
-			quader_poly::Vec3 position,
-			quader_poly::Vec3 plane_normal) const
+			quader::QVec3 position,
+			quader::QVec3 plane_normal) const
 	{
 		(void)set_targets_from_selection(state, selection);
 		state.source_object_id = -1;
@@ -155,7 +155,7 @@ public:
 		return cut_result_from_drawn_plane(result, static_cast<int>(state.target_object_ids.size()));
 	}
 
-	[[nodiscard]] CutToolResult capture_second_point(CutToolState& state, quader_poly::Vec3 position) const
+	[[nodiscard]] CutToolResult capture_second_point(CutToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().capture_second(cut_drawn_plane_ref(state), position, label());
@@ -165,7 +165,7 @@ public:
 		return cut_result_from_drawn_plane(result);
 	}
 
-	[[nodiscard]] CutToolResult update_dragged_new_point(CutToolState& state, quader_poly::Vec3 position) const
+	[[nodiscard]] CutToolResult update_dragged_new_point(CutToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().update_dragged_new_point(cut_drawn_plane_ref(state), position, label());
@@ -175,7 +175,7 @@ public:
 		return cut_result_from_drawn_plane(result);
 	}
 
-	[[nodiscard]] CutToolResult update_dragged_point(CutToolState& state, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal) const
+	[[nodiscard]] CutToolResult update_dragged_point(CutToolState& state, quader::QVec3 position, quader::QVec3 plane_normal) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().update_dragged_point(cut_drawn_plane_ref(state), position, plane_normal, label());
@@ -191,13 +191,13 @@ public:
 			drawn_plane_tool_logic().begin_point_drag(cut_drawn_plane_ref(state), point_index, label()));
 	}
 
-	[[nodiscard]] CutToolResult begin_line_drag(CutToolState& state, quader_poly::Vec3 anchor) const
+	[[nodiscard]] CutToolResult begin_line_drag(CutToolState& state, quader::QVec3 anchor) const
 	{
 		return cut_result_from_drawn_plane(
 			drawn_plane_tool_logic().begin_line_drag(cut_drawn_plane_ref(state), anchor, label()));
 	}
 
-	[[nodiscard]] CutToolResult update_dragged_line(CutToolState& state, quader_poly::Vec3 position) const
+	[[nodiscard]] CutToolResult update_dragged_line(CutToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().update_dragged_line(cut_drawn_plane_ref(state), position, label());
@@ -233,15 +233,15 @@ public:
 		return { true, previous_mode != state.mode };
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> overlay_points(
+	[[nodiscard]] std::vector<quader::QVec3> overlay_points(
 			const CutToolState& state,
-			quader_poly::Vec3 hover_position,
+			quader::QVec3 hover_position,
 			bool has_hover) const
 	{
 		return drawn_plane_tool_logic().overlay_points(cut_drawn_plane_ref(state), hover_position, has_hover);
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> plane_points(const CutToolState& state) const
+	[[nodiscard]] std::vector<quader::QVec3> plane_points(const CutToolState& state) const
 	{
 		return drawn_plane_tool_logic().plane_points(cut_drawn_plane_ref(state));
 	}
@@ -251,12 +251,12 @@ public:
 		return merge_unique_ids(source_ids, result_ids);
 	}
 
-	[[nodiscard]] bool point_repeats_existing(const CutToolState& state, quader_poly::Vec3 point) const
+	[[nodiscard]] bool point_repeats_existing(const CutToolState& state, quader::QVec3 point) const
 	{
 		return drawn_plane_tool_logic().point_repeats_existing(cut_drawn_plane_ref(state), point);
 	}
 
-	[[nodiscard]] bool point_repeats_other(const CutToolState& state, quader_poly::Vec3 point, int point_index) const
+	[[nodiscard]] bool point_repeats_other(const CutToolState& state, quader::QVec3 point, int point_index) const
 	{
 		return drawn_plane_tool_logic().point_repeats_other(cut_drawn_plane_ref(state), point, point_index);
 	}
@@ -368,7 +368,7 @@ public:
 			" removed preview. Enter/Space confirms; F flips.";
 	}
 
-	[[nodiscard]] bool update_hover(CutHoverState& state, bool valid, int object_id, quader_poly::Vec3 position, double epsilon) const
+	[[nodiscard]] bool update_hover(CutHoverState& state, bool valid, int object_id, quader::QVec3 position, double epsilon) const
 	{
 		DrawnPlaneHoverState hover { state.valid, state.object_id, state.position };
 		const bool changed = drawn_plane_tool_logic().update_hover(hover, valid, object_id, position, epsilon);
@@ -569,22 +569,22 @@ CutToolResult set_cut_targets_from_selection(CutToolState& state, const Rectangl
 	return cut_tool_instance().set_targets_from_selection(state, selection);
 }
 
-CutToolResult capture_first_cut_point(CutToolState& state, const RectangleSelectionState& selection, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal)
+CutToolResult capture_first_cut_point(CutToolState& state, const RectangleSelectionState& selection, quader::QVec3 position, quader::QVec3 plane_normal)
 {
 	return cut_tool_instance().capture_first_point(state, selection, position, plane_normal);
 }
 
-CutToolResult capture_second_cut_point(CutToolState& state, quader_poly::Vec3 position)
+CutToolResult capture_second_cut_point(CutToolState& state, quader::QVec3 position)
 {
 	return cut_tool_instance().capture_second_point(state, position);
 }
 
-CutToolResult update_dragged_new_cut_point(CutToolState& state, quader_poly::Vec3 position)
+CutToolResult update_dragged_new_cut_point(CutToolState& state, quader::QVec3 position)
 {
 	return cut_tool_instance().update_dragged_new_point(state, position);
 }
 
-CutToolResult update_dragged_cut_point(CutToolState& state, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal)
+CutToolResult update_dragged_cut_point(CutToolState& state, quader::QVec3 position, quader::QVec3 plane_normal)
 {
 	return cut_tool_instance().update_dragged_point(state, position, plane_normal);
 }
@@ -594,12 +594,12 @@ CutToolResult begin_cut_point_drag(CutToolState& state, int point_index)
 	return cut_tool_instance().begin_point_drag(state, point_index);
 }
 
-CutToolResult begin_cut_line_drag(CutToolState& state, quader_poly::Vec3 anchor)
+CutToolResult begin_cut_line_drag(CutToolState& state, quader::QVec3 anchor)
 {
 	return cut_tool_instance().begin_line_drag(state, anchor);
 }
 
-CutToolResult update_dragged_cut_line(CutToolState& state, quader_poly::Vec3 position)
+CutToolResult update_dragged_cut_line(CutToolState& state, quader::QVec3 position)
 {
 	return cut_tool_instance().update_dragged_line(state, position);
 }
@@ -624,12 +624,12 @@ CutToolResult set_cut_mode(CutToolState& state, CutMode mode)
 	return cut_tool_instance().set_mode(state, mode);
 }
 
-std::vector<quader_poly::Vec3> cut_overlay_points(const CutToolState& state, quader_poly::Vec3 hover_position, bool has_hover)
+std::vector<quader::QVec3> cut_overlay_points(const CutToolState& state, quader::QVec3 hover_position, bool has_hover)
 {
 	return cut_tool_instance().overlay_points(state, hover_position, has_hover);
 }
 
-std::vector<quader_poly::Vec3> cut_plane_points(const CutToolState& state)
+std::vector<quader::QVec3> cut_plane_points(const CutToolState& state)
 {
 	return cut_tool_instance().plane_points(state);
 }
@@ -639,12 +639,12 @@ std::vector<int> dirty_object_ids_for_cut(const std::vector<int>& source_ids, co
 	return cut_tool_instance().dirty_object_ids(source_ids, result_ids);
 }
 
-bool cut_point_repeats_existing(const CutToolState& state, quader_poly::Vec3 point)
+bool cut_point_repeats_existing(const CutToolState& state, quader::QVec3 point)
 {
 	return cut_tool_instance().point_repeats_existing(state, point);
 }
 
-bool cut_point_repeats_other(const CutToolState& state, quader_poly::Vec3 point, int point_index)
+bool cut_point_repeats_other(const CutToolState& state, quader::QVec3 point, int point_index)
 {
 	return cut_tool_instance().point_repeats_other(state, point, point_index);
 }
@@ -699,7 +699,7 @@ std::string cut_preview_status(const CutToolState& state, CutMode mode, const Cu
 	return cut_tool_instance().preview_status(state, mode, fallback_counts);
 }
 
-bool update_cut_hover(CutHoverState& state, bool valid, int object_id, quader_poly::Vec3 position, double epsilon)
+bool update_cut_hover(CutHoverState& state, bool valid, int object_id, quader::QVec3 position, double epsilon)
 {
 	return cut_tool_instance().update_hover(state, valid, object_id, position, epsilon);
 }

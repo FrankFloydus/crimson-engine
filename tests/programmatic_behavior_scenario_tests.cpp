@@ -16,7 +16,7 @@ namespace {
 /// verified across vertex, edge, and face selection modes.
 struct ComponentPickCase {
     quader::ModelingSelectionMode mode = quader::ModelingSelectionMode::Face;
-    quader::Vec3 rayOrigin = {};
+    quader::QVec3 rayOrigin = {};
     quader::ModelingTransformTool tool = quader::ModelingTransformTool::Move;
 };
 

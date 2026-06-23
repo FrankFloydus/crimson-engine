@@ -123,8 +123,8 @@ public:
     EntityKind kind(EntityId id) const;
     bool isEffectivelyVisible(EntityId id) const;
     bool isEffectivelyLocked(EntityId id) const;
-    Mat4 localTransformMatrix(EntityId id) const;
-    Mat4 worldTransformMatrix(EntityId id) const;
+    QMat4 localTransformMatrix(EntityId id) const;
+    QMat4 worldTransformMatrix(EntityId id) const;
 
     entt::entity enttEntity(EntityId id) const;
     EntityId entityId(entt::entity entity) const;

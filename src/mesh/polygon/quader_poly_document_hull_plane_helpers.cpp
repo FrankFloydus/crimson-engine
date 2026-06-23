@@ -50,18 +50,18 @@ bool assign_face_uvs_from_source_projection(
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id);
 
-bool points_nearly_equal(Vec3 left, Vec3 right, float tolerance = hull_distance_epsilon)
+bool points_nearly_equal(quader::QVec3 left, quader::QVec3 right, float tolerance = hull_distance_epsilon)
 {
     return quader_geometry::length_squared(geometry_vec3(left) - geometry_vec3(right)) <= tolerance * tolerance;
 }
 
-bool append_unique_hull_plane(std::vector<Plane3>& planes, Plane3 plane)
+bool append_unique_hull_plane(std::vector<QPlane3>& planes, QPlane3 plane)
 {
     plane = quader_geometry::normalize_plane(plane, epsilon);
     if (quader_geometry::length_squared(plane.normal) <= epsilon * epsilon) {
         return false;
     }
-    for (const Plane3& existing : planes) {
+    for (const QPlane3& existing : planes) {
         if (quader_geometry::planes_nearly_equal(existing, plane, hull_distance_epsilon)) {
             return false;
         }
@@ -89,14 +89,14 @@ std::vector<HullVertex> unique_hull_vertices_from_document(const Document& docum
     return vertices;
 }
 
-std::vector<Plane3> build_hull_planes_from_vertices(std::span<const HullVertex> vertices)
+std::vector<QPlane3> build_hull_planes_from_vertices(std::span<const HullVertex> vertices)
 {
-    std::vector<Plane3> planes;
+    std::vector<QPlane3> planes;
     if (vertices.size() < 4) {
         return planes;
     }
 
-    Vec3 center;
+    quader::QVec3 center;
     for (const HullVertex& vertex : vertices) {
         center += vertex.position;
     }
@@ -105,16 +105,16 @@ std::vector<Plane3> build_hull_planes_from_vertices(std::span<const HullVertex> 
     for (std::size_t i = 0; i < vertices.size(); ++i) {
         for (std::size_t j = i + 1U; j < vertices.size(); ++j) {
             for (std::size_t k = j + 1U; k < vertices.size(); ++k) {
-                const quader_geometry::Triangle3<float> triangle {
+                const quader_geometry::QTriangle3<float> triangle {
                     geometry_vec3(vertices[i].position),
                     geometry_vec3(vertices[j].position),
                     geometry_vec3(vertices[k].position),
                 };
-                const quader_geometry::Vec3f area_vector = quader_geometry::triangle_area_vector(triangle);
+                const quader_geometry::QVec3f area_vector = quader_geometry::triangle_area_vector(triangle);
                 if (quader_geometry::length_squared(area_vector) * 4.0F <= epsilon) {
                     continue;
                 }
-                quader_geometry::Plane3<float> plane = quader_geometry::plane_from_point_normal<float>(
+                quader_geometry::QPlane3<float> plane = quader_geometry::plane_from_point_normal<float>(
                     triangle.a,
                     area_vector,
                     epsilon);
@@ -151,17 +151,17 @@ std::vector<Plane3> build_hull_planes_from_vertices(std::span<const HullVertex> 
 
 namespace {
 
-bool point_inside_hull_planes(Vec3 point, std::span<const Plane3> planes)
+bool point_inside_hull_planes(quader::QVec3 point, std::span<const QPlane3> planes)
 {
-    return std::ranges::all_of(planes, [point](const Plane3& plane) {
+    return std::ranges::all_of(planes, [point](const QPlane3& plane) {
         return quader_geometry::plane_side<float>(geometry_vec3(point), plane, hull_distance_epsilon) !=
-            quader_geometry::PlaneSide::positive;
+            quader_geometry::QPlaneSide::positive;
     });
 }
 
-std::optional<Vec3> intersect_hull_planes(const Plane3& a, const Plane3& b, const Plane3& c)
+std::optional<quader::QVec3> intersect_hull_planes(const QPlane3& a, const QPlane3& b, const QPlane3& c)
 {
-    const quader_geometry::ThreePlaneIntersection<float> intersection =
+    const quader_geometry::QThreePlaneIntersection<float> intersection =
         quader_geometry::intersect_three_planes(a, b, c, hull_distance_epsilon);
     if (!intersection.hit) {
         return std::nullopt;
@@ -171,7 +171,7 @@ std::optional<Vec3> intersect_hull_planes(const Plane3& a, const Plane3& b, cons
 
 } // namespace
 
-ElementId hull_vertex_id_for_position(std::span<const HullVertex> source_vertices, Vec3 position)
+ElementId hull_vertex_id_for_position(std::span<const HullVertex> source_vertices, quader::QVec3 position)
 {
     ElementId best_id = invalid_element_id;
     float best_distance = std::numeric_limits<float>::infinity();
@@ -193,10 +193,10 @@ const HullVertex* find_hull_vertex_by_id(const HullGeometry& geometry, ElementId
     return found == geometry.vertices.end() ? nullptr : &*found;
 }
 
-Vec3 hull_position_for_id(const HullGeometry& geometry, ElementId id)
+quader::QVec3 hull_position_for_id(const HullGeometry& geometry, ElementId id)
 {
     const HullVertex* vertex = find_hull_vertex_by_id(geometry, id);
-    return vertex == nullptr ? Vec3 {} : vertex->position;
+    return vertex == nullptr ? quader::QVec3 {} : vertex->position;
 }
 
 void sort_hull_face_vertices(const HullGeometry& geometry, HullFace& face)
@@ -205,35 +205,35 @@ void sort_hull_face_vertices(const HullGeometry& geometry, HullFace& face)
         return;
     }
 
-    Vec3 center;
+    quader::QVec3 center;
     for (const ElementId vertex_id : face.vertex_ids) {
         center += hull_position_for_id(geometry, vertex_id);
     }
     center = center / static_cast<float>(face.vertex_ids.size());
 
-    const Plane3& geometry_face_plane = face.plane;
-    quader_geometry::Vec3f preferred_u =
-        quader_geometry::cross(geometry_face_plane.normal, quader_geometry::Vec3f { 0.0F, 1.0F, 0.0F });
+    const QPlane3& geometry_face_plane = face.plane;
+    quader_geometry::QVec3f preferred_u =
+        quader_geometry::cross(geometry_face_plane.normal, quader_geometry::QVec3f { 0.0F, 1.0F, 0.0F });
     if (quader_geometry::length_squared(preferred_u) <= epsilon) {
-        preferred_u = quader_geometry::cross(geometry_face_plane.normal, quader_geometry::Vec3f { 1.0F, 0.0F, 0.0F });
+        preferred_u = quader_geometry::cross(geometry_face_plane.normal, quader_geometry::QVec3f { 1.0F, 0.0F, 0.0F });
     }
-    const quader_geometry::PlaneBasis3<float> basis =
+    const quader_geometry::QPlaneBasis3<float> basis =
         quader_geometry::make_plane_basis(geometry_vec3(center), geometry_face_plane.normal, preferred_u, epsilon);
     if (!basis.valid) {
         return;
     }
 
     std::ranges::sort(face.vertex_ids, [&geometry, basis](ElementId left_id, ElementId right_id) {
-        const quader_geometry::PlaneCoordinates3<float> left_coordinates =
+        const quader_geometry::QPlaneCoordinates3<float> left_coordinates =
             quader_geometry::plane_coordinates(geometry_vec3(hull_position_for_id(geometry, left_id)), basis);
-        const quader_geometry::PlaneCoordinates3<float> right_coordinates =
+        const quader_geometry::QPlaneCoordinates3<float> right_coordinates =
             quader_geometry::plane_coordinates(geometry_vec3(hull_position_for_id(geometry, right_id)), basis);
         const float left_angle = std::atan2(left_coordinates.v, left_coordinates.u);
         const float right_angle = std::atan2(right_coordinates.v, right_coordinates.u);
         return left_angle < right_angle;
     });
 
-    const quader_geometry::Triangle3<float> orientation_triangle {
+    const quader_geometry::QTriangle3<float> orientation_triangle {
         geometry_vec3(hull_position_for_id(geometry, face.vertex_ids[0])),
         geometry_vec3(hull_position_for_id(geometry, face.vertex_ids[1])),
         geometry_vec3(hull_position_for_id(geometry, face.vertex_ids[2])),
@@ -245,7 +245,7 @@ void sort_hull_face_vertices(const HullGeometry& geometry, HullFace& face)
     }
 }
 
-bool hull_has_equivalent_face(const HullGeometry& geometry, const Plane3& plane)
+bool hull_has_equivalent_face(const HullGeometry& geometry, const QPlane3& plane)
 {
     return std::ranges::any_of(geometry.faces, [&plane](const HullFace& face) {
         return face.vertex_ids.size() >= 3 &&
@@ -256,7 +256,7 @@ bool hull_has_equivalent_face(const HullGeometry& geometry, const Plane3& plane)
 bool build_convex_hull_geometry(std::span<const HullVertex> source_vertices, HullGeometry& geometry)
 {
     geometry = {};
-    const std::vector<Plane3> planes = build_hull_planes_from_vertices(source_vertices);
+    const std::vector<QPlane3> planes = build_hull_planes_from_vertices(source_vertices);
     if (planes.size() < 4) {
         return false;
     }
@@ -264,7 +264,7 @@ bool build_convex_hull_geometry(std::span<const HullVertex> source_vertices, Hul
     for (std::size_t i = 0; i < planes.size(); ++i) {
         for (std::size_t j = i + 1U; j < planes.size(); ++j) {
             for (std::size_t k = j + 1U; k < planes.size(); ++k) {
-                const std::optional<Vec3> point = intersect_hull_planes(planes[i], planes[j], planes[k]);
+                const std::optional<quader::QVec3> point = intersect_hull_planes(planes[i], planes[j], planes[k]);
                 if (!point.has_value() || !point_inside_hull_planes(*point, planes)) {
                     continue;
                 }
@@ -292,14 +292,14 @@ bool build_convex_hull_geometry(std::span<const HullVertex> source_vertices, Hul
         return false;
     }
 
-    for (const Plane3& plane : planes) {
+    for (const QPlane3& plane : planes) {
         if (hull_has_equivalent_face(geometry, plane)) {
             continue;
         }
 
         HullFace face;
         face.plane = plane;
-        const Plane3& geometry_hull_plane = plane;
+        const QPlane3& geometry_hull_plane = plane;
         for (const HullVertex& vertex : geometry.vertices) {
             if (std::abs(quader_geometry::signed_distance_to_plane<float>(
                     geometry_vec3(vertex.position),
@@ -498,7 +498,7 @@ bool build_convex_hull_vertex_merge_candidate(
         Document& candidate,
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id,
-        Vec3 target_position)
+        quader::QVec3 target_position)
 {
     if (!document_is_simple_convex_hull(document)) {
         return false;
@@ -510,7 +510,7 @@ bool build_convex_hull_vertex_merge_candidate(
         if (merge_vertex_ids.contains(vertex.id)) {
             continue;
         }
-        const Vec3 position = vertex.id == survivor_vertex_id ? target_position : vertex.position;
+        const quader::QVec3 position = vertex.id == survivor_vertex_id ? target_position : vertex.position;
         const auto duplicate_position = std::ranges::find_if(merged_vertices, [position](const HullVertex& existing) {
             return points_nearly_equal(existing.position, position);
         });
@@ -559,7 +559,7 @@ bool face_needs_vertex_merge_repair(
 
 float face_loop_area_score(const Document& document, std::span<const ElementId> vertex_ids)
 {
-    Vec3 area;
+    quader::QVec3 area;
     if (vertex_ids.size() < 3) {
         return 0.0F;
     }
@@ -763,7 +763,7 @@ OperationResult build_topology_vertex_merge_candidate(
         Document& candidate,
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id,
-        Vec3 target_position)
+        quader::QVec3 target_position)
 {
     candidate = document;
     Vertex* survivor_vertex = find_vertex(candidate, survivor_vertex_id);
@@ -864,7 +864,7 @@ OperationResult build_vertex_merge_candidate(
         Document& candidate,
         const std::set<ElementId>& merge_vertex_ids,
         ElementId survivor_vertex_id,
-        Vec3 target_position)
+        quader::QVec3 target_position)
 {
     const OperationResult topology_result =
             build_topology_vertex_merge_candidate(document, candidate, merge_vertex_ids, survivor_vertex_id, target_position);

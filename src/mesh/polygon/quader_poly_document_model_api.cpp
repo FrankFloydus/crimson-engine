@@ -18,12 +18,12 @@ namespace {
 
 using namespace document_internal;
 
-quader_geometry::Vec3f geometry_vec3(const Vec3& value)
+quader_geometry::QVec3f geometry_vec3(const quader::QVec3& value)
 {
     return { value.x, value.y, value.z };
 }
 
-Vec3 poly_vec3(quader_geometry::Vec3f value)
+quader::QVec3 poly_vec3(quader_geometry::QVec3f value)
 {
     return { value.x, value.y, value.z };
 }
@@ -77,57 +77,6 @@ bool FacePerimeterInfo::has_only_closed_edges() const
     return !edges.empty() && closed_edges.size() == edges.size();
 }
 
-Vec3 operator+(const Vec3& left, const Vec3& right)
-{
-    return { left.x + right.x, left.y + right.y, left.z + right.z };
-}
-
-Vec3 operator-(const Vec3& left, const Vec3& right)
-{
-    return { left.x - right.x, left.y - right.y, left.z - right.z };
-}
-
-Vec3 operator*(const Vec3& value, float scalar)
-{
-    return { value.x * scalar, value.y * scalar, value.z * scalar };
-}
-
-Vec3 operator/(const Vec3& value, float scalar)
-{
-    return { value.x / scalar, value.y / scalar, value.z / scalar };
-}
-
-Vec3& operator+=(Vec3& left, const Vec3& right)
-{
-    left = left + right;
-    return left;
-}
-
-float dot(const Vec3& left, const Vec3& right)
-{
-    return quader_geometry::dot(geometry_vec3(left), geometry_vec3(right));
-}
-
-Vec3 cross(const Vec3& left, const Vec3& right)
-{
-    return poly_vec3(quader_geometry::cross(geometry_vec3(left), geometry_vec3(right)));
-}
-
-float length_squared(const Vec3& value)
-{
-    return quader_geometry::length_squared(geometry_vec3(value));
-}
-
-float length(const Vec3& value)
-{
-    return quader_geometry::length(geometry_vec3(value));
-}
-
-Vec3 normalize_or_zero(const Vec3& value)
-{
-    return poly_vec3(quader_geometry::normalize_or_zero(geometry_vec3(value), epsilon));
-}
-
 Edge make_edge(ElementId a, ElementId b)
 {
     if (a > b) {
@@ -136,7 +85,7 @@ Edge make_edge(ElementId a, ElementId b)
     return { a, b };
 }
 
-std::optional<float> edge_factor_from_position(const Document& document, Edge edge, Vec3 position)
+std::optional<float> edge_factor_from_position(const Document& document, Edge edge, quader::QVec3 position)
 {
     edge = make_edge(edge.a, edge.b);
     const Vertex* a = find_vertex(document, edge.a);
@@ -145,12 +94,12 @@ std::optional<float> edge_factor_from_position(const Document& document, Edge ed
         return std::nullopt;
     }
 
-    const quader_geometry::Segment3<float> segment { geometry_vec3(a->position), geometry_vec3(b->position) };
+    const quader_geometry::QSegment3<float> segment { geometry_vec3(a->position), geometry_vec3(b->position) };
     if (quader_geometry::length_squared(segment.b - segment.a) <= epsilon) {
         return std::nullopt;
     }
 
-    const quader_geometry::ClosestSegmentPoint3<float> closest =
+    const quader_geometry::QClosestSegmentPoint3<float> closest =
         quader_geometry::closest_point_on_segment<float>(
             geometry_vec3(position),
             segment,
@@ -176,7 +125,7 @@ std::optional<float> edge_factor_from_ray(const Document& document, Edge edge, c
         return std::nullopt;
     }
 
-    const quader_geometry::SegmentRayClosestPoints<float> closest =
+    const quader_geometry::QSegmentRayClosestPoints<float> closest =
         quader_geometry::closest_points_segment_ray<float>(
             { geometry_vec3(a->position), geometry_vec3(b->position) },
             { geometry_vec3(ray.origin), geometry_vec3(ray.direction) },

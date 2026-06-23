@@ -26,7 +26,7 @@ struct ToolPreviewMesh {
     EntityId sourceEntity = InvalidEntityId;
     AssetId material = InvalidAssetId;
     MeshAsset mesh;
-    Mat4 transform;
+    QMat4 transform;
 };
 
 /**

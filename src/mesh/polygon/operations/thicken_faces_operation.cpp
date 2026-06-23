@@ -68,16 +68,16 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
     }
 
     std::set<ElementId> selected_face_ids;
-    std::map<ElementId, Vec3> normal_sums;
+    std::map<ElementId, quader::QVec3> normal_sums;
     for (const Face& face : selected_faces) {
         selected_face_ids.insert(face.id);
-        const Vec3 normal = face_normal(document, face);
+        const quader::QVec3 normal = face_normal(document, face);
         for (const ElementId vertex_id : face.vertices) {
             normal_sums[vertex_id] += normal;
         }
     }
 
-    std::map<ElementId, Vec3> source_positions;
+    std::map<ElementId, quader::QVec3> source_positions;
     for (const auto& [vertex_id, normal_sum] : normal_sums) {
         (void)normal_sum;
         const Vertex* vertex = find_vertex(document, vertex_id);
@@ -101,11 +101,11 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
             return invalid_element_id;
         }
 
-        const Vec3 normal = normalize_or_zero(normal_sum->second);
+        const quader::QVec3 normal = normalize_or_zero(normal_sum->second);
         if (length_squared(normal) <= epsilon) {
             return invalid_element_id;
         }
-        const Vec3 offset = normal * -thickness;
+        const quader::QVec3 offset = normal * -thickness;
         duplicate_vertices[source_vertex_id] = add_vertex(candidate, source_position->second + offset);
         return duplicate_vertices[source_vertex_id];
     };
@@ -147,13 +147,13 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
         candidate.faces.push_back(std::move(cap_face));
     }
 
-    const Vec3 selected_center = [&source_positions]() {
-        Vec3 center;
+    const quader::QVec3 selected_center = [&source_positions]() {
+        quader::QVec3 center;
         for (const auto& [vertex_id, position] : source_positions) {
             (void)vertex_id;
             center += position;
         }
-        return source_positions.empty() ? Vec3 {} : center / static_cast<float>(source_positions.size());
+        return source_positions.empty() ? quader::QVec3 {} : center / static_cast<float>(source_positions.size());
     }();
 
     std::vector<ElementId> side_face_ids;
@@ -170,7 +170,7 @@ OperationResult thicken_selected_faces_impl(Document& document, Selection& selec
             std::vector<ElementId> { edge.b, edge.a, duplicate_a->second, duplicate_b->second };
         Face normal_probe;
         normal_probe.vertices = side_vertices;
-        const Vec3 side_outward_normal = face_centroid(candidate, normal_probe) - selected_center;
+        const quader::QVec3 side_outward_normal = face_centroid(candidate, normal_probe) - selected_center;
         if (!append_bridge_face(
                 candidate,
                 std::move(side_vertices),

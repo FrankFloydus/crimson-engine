@@ -23,7 +23,7 @@ struct ViewportInputFrameBuildRequest {
     ImVec2 itemSize = {};
     bool routeActiveNavigationInput = false;
     bool useCapturedMouseDelta = false;
-    Vec2 capturedMouseDelta = {};
+    QVec2 capturedMouseDelta = {};
 };
 
 /**

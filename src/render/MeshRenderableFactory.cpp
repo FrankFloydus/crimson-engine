@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/MeshRenderableFactory.h"
 
+#include "math/GlmBridge.h"
 #include "render/FilamentBufferDescriptorFactory.h"
 #include "render/FilamentUtils.h"
 #include "render/MaterialBindingService.h"
@@ -50,13 +51,13 @@ std::uint64_t hashFloat(std::uint64_t hash, float value) {
     return hashCombine(hash, std::bit_cast<std::uint32_t>(value));
 }
 
-std::uint64_t hashVec3(std::uint64_t hash, Vec3 value) {
+std::uint64_t hashVec3(std::uint64_t hash, QVec3 value) {
     hash = hashFloat(hash, value.x);
     hash = hashFloat(hash, value.y);
     return hashFloat(hash, value.z);
 }
 
-filament::math::mat4f makeTransform(const Mat4& transform) {
+filament::math::mat4f makeTransform(const QMat4& transform) {
     const glm::mat4 glmTransform = toGlm(transform);
     filament::math::mat4f result;
     for (int column = 0; column < 4; ++column) {
@@ -67,21 +68,21 @@ filament::math::mat4f makeTransform(const Mat4& transform) {
     return result;
 }
 
-filament::math::float4 tangentFrameFromNormal(Vec3 normal) {
+filament::math::float4 tangentFrameFromNormal(QVec3 normal) {
     if (length(normal) <= 0.000001f) {
         normal = {0.0f, 1.0f, 0.0f};
     } else {
         normal = normalize(normal);
     }
 
-    const Vec3 reference = std::fabs(normal.y) < 0.999f ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
-    Vec3 tangent = cross(reference, normal);
+    const QVec3 reference = std::fabs(normal.y) < 0.999f ? QVec3{0.0f, 1.0f, 0.0f} : QVec3{1.0f, 0.0f, 0.0f};
+    QVec3 tangent = cross(reference, normal);
     if (length(tangent) <= 0.000001f) {
         tangent = {1.0f, 0.0f, 0.0f};
     } else {
         tangent = normalize(tangent);
     }
-    const Vec3 bitangent = cross(normal, tangent);
+    const QVec3 bitangent = cross(normal, tangent);
     const filament::math::mat3f tangentFrame{
             toFilament(tangent),
             toFilament(bitangent),
@@ -135,7 +136,7 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         AssetId materialId,
         const MaterialDocument* material,
         const AssetRegistry& assets,
-        const Mat4& worldTransform,
+        const QMat4& worldTransform,
         bool castShadows,
         bool doubleSided,
         std::uint64_t materialRevision) {
@@ -205,7 +206,7 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
     return proxy;
 }
 
-void MeshRenderableFactory::updateTransform(const MeshRenderableProxy& proxy, const Mat4& worldTransform) {
+void MeshRenderableFactory::updateTransform(const MeshRenderableProxy& proxy, const QMat4& worldTransform) {
     if (!engine_ || !proxy.entity) {
         return;
     }

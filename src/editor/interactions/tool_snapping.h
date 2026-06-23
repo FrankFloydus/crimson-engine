@@ -26,11 +26,11 @@ std::optional<float> snap_insert_edge_loop_preview_factor(
 	float factor,
 	double grid_size,
 	bool snap_enabled);
-quader_poly::Vec3 snap_knife_point_to_grid(quader_poly::Vec3 point, double grid_size, bool snap_enabled);
-quader_poly::Vec3 constrain_knife_point_to_axis(
-	quader_poly::Vec3 previous,
-	quader_poly::Vec3 point,
-	quader_poly::Vec3 face_normal,
+quader::QVec3 snap_knife_point_to_grid(quader::QVec3 point, double grid_size, bool snap_enabled);
+quader::QVec3 constrain_knife_point_to_axis(
+	quader::QVec3 previous,
+	quader::QVec3 point,
+	quader::QVec3 face_normal,
 	double grid_size,
 	bool snap_enabled);
 

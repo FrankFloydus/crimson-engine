@@ -36,14 +36,14 @@ std::size_t frame_label_count(const quader_editor_core::MeasurementFrame& frame,
 	}));
 }
 
-quader_poly::Document box_document(quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds)
+quader_poly::Document box_document(quader::QVec3 min_bounds, quader::QVec3 max_bounds)
 {
 	quader_poly::CubePrimitiveSpec spec;
 	spec.width = max_bounds.x - min_bounds.x;
 	spec.height = max_bounds.y - min_bounds.y;
 	spec.depth = max_bounds.z - min_bounds.z;
 	quader_poly::Document document = quader_poly::make_cube(spec);
-	const quader_poly::Vec3 center {
+	const quader::QVec3 center {
 		(min_bounds.x + max_bounds.x) * 0.5F,
 		(min_bounds.y + max_bounds.y) * 0.5F,
 		(min_bounds.z + max_bounds.z) * 0.5F,
@@ -70,7 +70,7 @@ quader_poly::Selection all_face_selection(const quader_poly::Document& document)
 	return selection;
 }
 
-quader_editor_core::PolygonObject selected_object(int id, quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds)
+quader_editor_core::PolygonObject selected_object(int id, quader::QVec3 min_bounds, quader::QVec3 max_bounds)
 {
 	quader_editor_core::PolygonObject object;
 	object.id = id;
@@ -79,7 +79,7 @@ quader_editor_core::PolygonObject selected_object(int id, quader_poly::Vec3 min_
 	return object;
 }
 
-quader_editor_core::PolygonObject selected_face_object(int id, quader_poly::Vec3 min_bounds, quader_poly::Vec3 max_bounds)
+quader_editor_core::PolygonObject selected_face_object(int id, quader::QVec3 min_bounds, quader::QVec3 max_bounds)
 {
 	quader_editor_core::PolygonObject object = selected_object(id, min_bounds, max_bounds);
 	object.selection = all_face_selection(object.document);

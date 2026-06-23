@@ -39,11 +39,11 @@ std::string stringFromView(std::string_view value) {
     return std::string(value.data(), value.size());
 }
 
-json vec2ToJson(Vec2 value) {
+json vec2ToJson(QVec2 value) {
     return json{{"x", value.x}, {"y", value.y}};
 }
 
-json vec3ToJson(Vec3 value) {
+json vec3ToJson(QVec3 value) {
     return json{{"x", value.x}, {"y", value.y}, {"z", value.z}};
 }
 
@@ -145,11 +145,11 @@ std::string textureColorSpaceName(TextureColorSpace colorSpace) {
     return "srgb";
 }
 
-json polygonVec2ToJson(quader_poly::Vec2 value) {
+json polygonVec2ToJson(quader::QVec2 value) {
     return json{{"x", value.x}, {"y", value.y}};
 }
 
-json polygonVec3ToJson(quader_poly::Vec3 value) {
+json polygonVec3ToJson(quader::QVec3 value) {
     return json{{"x", value.x}, {"y", value.y}, {"z", value.z}};
 }
 
@@ -181,7 +181,7 @@ json polygonDocumentToJson(const quader_poly::Document& document) {
     json faces = json::array();
     for (const quader_poly::Face& face : document.faces) {
         json uvs = json::array();
-        for (quader_poly::Vec2 uv : face.uvs) {
+        for (quader::QVec2 uv : face.uvs) {
             uvs.push_back(polygonVec2ToJson(uv));
         }
         faces.push_back(json{

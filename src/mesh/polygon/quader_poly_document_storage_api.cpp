@@ -12,7 +12,7 @@
 
 namespace quader_poly {
 
-ElementId add_vertex(Document& document, Vec3 position)
+ElementId add_vertex(Document& document, quader::QVec3 position)
 {
     const ElementId id = document.next_vertex_id++;
     document.vertices.push_back({ id, position });

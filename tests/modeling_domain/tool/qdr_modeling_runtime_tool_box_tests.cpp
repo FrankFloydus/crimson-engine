@@ -238,7 +238,7 @@ TEST_CASE("box preview corners commit a wall-planar oriented volume", "[editor-c
 	const quader_editor_core::BoxPreviewDescriptor preview =
 		quader_editor_core::box_preview_descriptor(state, false, 1.0);
 	REQUIRE(preview.ok);
-	const std::vector<quader_poly::Vec3> corners = quader_editor_core::box_preview_corners(preview);
+	const std::vector<quader::QVec3> corners = quader_editor_core::box_preview_corners(preview);
 	REQUIRE(corners.size() == 8);
 
 	quader_editor_core::EditorSession session;
@@ -275,7 +275,7 @@ TEST_CASE("box preview corners commit a wall-planar oriented volume", "[editor-c
 			all_base_x = all_base_x && vertex->position.x == Catch::Approx(2.0F);
 			all_top_x = all_top_x && vertex->position.x == Catch::Approx(4.0F);
 		}
-		const quader_poly::Vec3 normal = quader_poly::face_normal(document, face);
+		const quader::QVec3 normal = quader_poly::face_normal(document, face);
 		if (all_base_x) {
 			found_base_face = true;
 			CHECK(normal.x == Catch::Approx(-1.0F));

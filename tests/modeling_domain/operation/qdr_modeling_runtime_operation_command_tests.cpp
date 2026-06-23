@@ -178,7 +178,7 @@ TEST_CASE("editor operation command facade executes active selection operations"
 			1,
 			qdr_test::vertex_selection({ fixture.bottom_left, fixture.bottom_right }, fixture.bottom_left),
 			qec::SelectionMode::vertex);
-		const quader_poly::Vec3 source_position_before =
+		const quader::QVec3 source_position_before =
 			quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right)->position;
 
 		const qec::EditorOperationCommandResult result =
@@ -211,9 +211,9 @@ TEST_CASE("editor operation command facade executes active selection operations"
 			object.id,
 			qdr_test::edge_selection({ active, source_edge }, active),
 			qec::SelectionMode::edge);
-		const quader_poly::Vec3 source_a_before =
+		const quader::QVec3 source_a_before =
 			quader_poly::find_vertex(session.objects().front().document, source_edge.a)->position;
-		const quader_poly::Vec3 source_b_before =
+		const quader::QVec3 source_b_before =
 			quader_poly::find_vertex(session.objects().front().document, source_edge.b)->position;
 
 		const qec::EditorOperationCommandResult result =

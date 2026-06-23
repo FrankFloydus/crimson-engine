@@ -16,12 +16,12 @@ filament::Box computeBounds(const MeshAsset& mesh) {
         return {{0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}};
     }
 
-    Vec3 minValue{
+    QVec3 minValue{
         std::numeric_limits<float>::max(),
         std::numeric_limits<float>::max(),
         std::numeric_limits<float>::max(),
     };
-    Vec3 maxValue{
+    QVec3 maxValue{
         std::numeric_limits<float>::lowest(),
         std::numeric_limits<float>::lowest(),
         std::numeric_limits<float>::lowest(),

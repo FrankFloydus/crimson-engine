@@ -72,7 +72,7 @@ QuaderApiVoidResult QuaderObjectHandle::setLocked(bool locked) {
     return api_->scene().setLocked(ref_.entity, locked);
 }
 
-QuaderApiVoidResult QuaderObjectHandle::move(Vec3 delta) {
+QuaderApiVoidResult QuaderObjectHandle::move(QVec3 delta) {
     QuaderApiVoidResult selected = select();
     if (!selected.ok) {
         return selected;
@@ -80,7 +80,7 @@ QuaderApiVoidResult QuaderObjectHandle::move(Vec3 delta) {
     return api_->modeling().moveSelection(delta);
 }
 
-QuaderApiVoidResult QuaderObjectHandle::rotateEuler(Vec3 eulerRadians, Vec3 pivot) {
+QuaderApiVoidResult QuaderObjectHandle::rotateEuler(QVec3 eulerRadians, QVec3 pivot) {
     QuaderApiVoidResult selected = select();
     if (!selected.ok) {
         return selected;
@@ -88,7 +88,7 @@ QuaderApiVoidResult QuaderObjectHandle::rotateEuler(Vec3 eulerRadians, Vec3 pivo
     return api_->modeling().rotateSelection(eulerRadians, pivot);
 }
 
-QuaderApiVoidResult QuaderObjectHandle::scale(Vec3 scale, Vec3 pivot) {
+QuaderApiVoidResult QuaderObjectHandle::scale(QVec3 scale, QVec3 pivot) {
     QuaderApiVoidResult selected = select();
     if (!selected.ok) {
         return selected;

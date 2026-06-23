@@ -16,7 +16,7 @@ bool isViewportContextMenuClickGesture(const ViewportContextMenuOpenRequest& req
         return false;
     }
 
-    const Vec2 delta = request.releaseScreen - request.pressScreen;
+    const QVec2 delta = request.releaseScreen - request.pressScreen;
     const float releaseDistanceSquared = delta.x * delta.x + delta.y * delta.y;
     const float dragDistanceSquared =
             request.accumulatedDragDelta.x * request.accumulatedDragDelta.x +

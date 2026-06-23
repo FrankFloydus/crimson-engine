@@ -98,7 +98,7 @@ struct TransformSnapTarget {
 	TransformSnapLandmarkKind kind = TransformSnapLandmarkKind::none;
 	int object_id = -1;
 	quader_poly::ElementId vertex_id = quader_poly::invalid_element_id;
-	quader_poly::Vec3 position;
+	quader::QVec3 position;
 };
 
 /**
@@ -109,7 +109,7 @@ struct TransformDragState {
 	ViewportInteractionTool tool = ViewportInteractionTool::select;
 	TransformDragOperation operation = TransformDragOperation::transform;
 	TransformAxis axis = TransformAxis::none;
-	quader_poly::Vec3 pivot;
+	quader::QVec3 pivot;
 	bool scene_transform_preview_eligible = false;
 	TransformSnapTarget snap_target;
 	MoveToolState move;
@@ -142,8 +142,8 @@ struct ModalMoveUpdateInput {
 	bool active = false;
 	ModalMoveDragTool tool = ModalMoveDragTool::move;
 	bool preview_uses_transform = false;
-	quader_poly::Vec3 previous_delta;
-	quader_poly::Vec3 delta;
+	quader::QVec3 previous_delta;
+	quader::QVec3 delta;
 	double epsilon = tool_epsilon;
 };
 
@@ -164,7 +164,7 @@ struct ModalMoveCommitInput {
 	bool active = false;
 	ModalMoveDragTool tool = ModalMoveDragTool::move;
 	bool duplicate_active = false;
-	quader_poly::Vec3 delta;
+	quader::QVec3 delta;
 	double epsilon = tool_epsilon;
 };
 
@@ -207,7 +207,7 @@ struct ModalTransformUpdateInput {
 	ModalTransformDragTool tool = ModalTransformDragTool::rotate;
 	bool preview_ok = false;
 	double preview_angle_degrees = 0.0;
-	quader_poly::Vec3 preview_scale { 1.0F, 1.0F, 1.0F };
+	quader::QVec3 preview_scale { 1.0F, 1.0F, 1.0F };
 	double epsilon = tool_epsilon;
 };
 
@@ -249,7 +249,7 @@ struct ModalTransformCommitPlan {
  */
 struct TransformDragPreviewInput {
 	ViewportCameraState camera;
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
 	bool precision = false;

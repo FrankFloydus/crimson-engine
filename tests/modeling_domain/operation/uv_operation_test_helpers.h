@@ -26,7 +26,7 @@ struct UvBounds {
 inline UvBounds uv_bounds(const quader_poly::Face& face)
 {
 	UvBounds bounds;
-	for (const quader_poly::Vec2& uv : face.uvs) {
+	for (const quader::QVec2& uv : face.uvs) {
 		bounds.min_u = std::min(bounds.min_u, uv.x);
 		bounds.max_u = std::max(bounds.max_u, uv.x);
 		bounds.min_v = std::min(bounds.min_v, uv.y);

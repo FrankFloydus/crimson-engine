@@ -156,7 +156,7 @@ struct MirrorPointDragRuntimeCommandSettings {
 };
 
 /**
- * Represents a Mirror Axis Runtime Command Settings value used by the modeling runtime domain.
+ * Represents a Mirror QAxis Runtime Command Settings value used by the modeling runtime domain.
  */
 struct MirrorAxisRuntimeCommandSettings {
 	TransformAxis axis = TransformAxis::none;
@@ -181,7 +181,7 @@ struct BoxRayRuntimeCommandSettings {
  * Represents a Box Height Runtime Command Settings value used by the modeling runtime domain.
  */
 struct BoxHeightRuntimeCommandSettings {
-	quader_poly::Vec2 screen_position;
+	quader::QVec2 screen_position;
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
 	bool has_camera = false;
@@ -192,8 +192,8 @@ struct BoxHeightRuntimeCommandSettings {
  * Represents a Create Box From Bounds Runtime Command Settings value used by the modeling runtime domain.
  */
 struct CreateBoxFromBoundsRuntimeCommandSettings {
-	quader_poly::Vec3 min_bounds;
-	quader_poly::Vec3 max_bounds;
+	quader::QVec3 min_bounds;
+	quader::QVec3 max_bounds;
 };
 
 using EditorRuntimeCommandSettings = std::variant<

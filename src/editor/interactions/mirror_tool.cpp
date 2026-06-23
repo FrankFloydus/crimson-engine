@@ -53,7 +53,7 @@ bool id_span_contains(std::span<const int> ids, int value)
 	return std::find(ids.begin(), ids.end(), value) != ids.end();
 }
 
-quader_poly::Vec3 bounds_center_for_flip(const Bounds3& bounds)
+quader::QVec3 bounds_center_for_flip(const Bounds3& bounds)
 {
 	if (bounds.empty) {
 		return {};
@@ -109,7 +109,7 @@ public:
 		return surface;
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> world_axis_plane_points(TransformAxis axis) const
+	[[nodiscard]] std::vector<quader::QVec3> world_axis_plane_points(TransformAxis axis) const
 	{
 		switch (axis) {
 			case TransformAxis::x:
@@ -130,7 +130,7 @@ public:
 
 	[[nodiscard]] DrawnPlaneSurface mesh_flip_surface(
 			ViewportFlipOrientation orientation,
-			quader_poly::Vec3 pivot) const
+			quader::QVec3 pivot) const
 	{
 		DrawnPlaneSurface surface;
 		surface.valid = true;
@@ -296,8 +296,8 @@ public:
 	[[nodiscard]] MirrorToolResult capture_first_point(
 			MirrorToolState& state,
 			const RectangleSelectionState& selection,
-			quader_poly::Vec3 position,
-			quader_poly::Vec3 plane_normal) const
+			quader::QVec3 position,
+			quader::QVec3 plane_normal) const
 	{
 		(void)set_targets_from_selection(state, selection);
 		const DrawnPlaneToolResult result =
@@ -308,7 +308,7 @@ public:
 		return mirror_result_from_drawn_plane(result, static_cast<int>(state.target_object_ids.size()));
 	}
 
-	[[nodiscard]] MirrorToolResult capture_second_point(MirrorToolState& state, quader_poly::Vec3 position) const
+	[[nodiscard]] MirrorToolResult capture_second_point(MirrorToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().capture_second(drawn_plane_state_ref(state.plane), position, label());
@@ -318,7 +318,7 @@ public:
 		return mirror_result_from_drawn_plane(result);
 	}
 
-	[[nodiscard]] MirrorToolResult update_dragged_new_point(MirrorToolState& state, quader_poly::Vec3 position) const
+	[[nodiscard]] MirrorToolResult update_dragged_new_point(MirrorToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().update_dragged_new_point(drawn_plane_state_ref(state.plane), position, label());
@@ -328,7 +328,7 @@ public:
 		return mirror_result_from_drawn_plane(result);
 	}
 
-	[[nodiscard]] MirrorToolResult update_dragged_point(MirrorToolState& state, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal) const
+	[[nodiscard]] MirrorToolResult update_dragged_point(MirrorToolState& state, quader::QVec3 position, quader::QVec3 plane_normal) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().update_dragged_point(drawn_plane_state_ref(state.plane), position, plane_normal, label());
@@ -344,13 +344,13 @@ public:
 			drawn_plane_tool_logic().begin_point_drag(drawn_plane_state_ref(state.plane), point_index, label()));
 	}
 
-	[[nodiscard]] MirrorToolResult begin_line_drag(MirrorToolState& state, quader_poly::Vec3 anchor) const
+	[[nodiscard]] MirrorToolResult begin_line_drag(MirrorToolState& state, quader::QVec3 anchor) const
 	{
 		return mirror_result_from_drawn_plane(
 			drawn_plane_tool_logic().begin_line_drag(drawn_plane_state_ref(state.plane), anchor, label()));
 	}
 
-	[[nodiscard]] MirrorToolResult update_dragged_line(MirrorToolState& state, quader_poly::Vec3 position) const
+	[[nodiscard]] MirrorToolResult update_dragged_line(MirrorToolState& state, quader::QVec3 position) const
 	{
 		const DrawnPlaneToolResult result =
 			drawn_plane_tool_logic().update_dragged_line(drawn_plane_state_ref(state.plane), position, label());
@@ -375,25 +375,25 @@ public:
 		return mirror_result_from_drawn_plane(drawn_plane_tool_logic().end_line_drag(drawn_plane_state_ref(state.plane)));
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> overlay_points(
+	[[nodiscard]] std::vector<quader::QVec3> overlay_points(
 			const MirrorToolState& state,
-			quader_poly::Vec3 hover_position,
+			quader::QVec3 hover_position,
 			bool has_hover) const
 	{
 		return drawn_plane_tool_logic().overlay_points(drawn_plane_state_ref(state.plane), hover_position, has_hover);
 	}
 
-	[[nodiscard]] std::vector<quader_poly::Vec3> plane_points(const MirrorToolState& state) const
+	[[nodiscard]] std::vector<quader::QVec3> plane_points(const MirrorToolState& state) const
 	{
 		return drawn_plane_tool_logic().plane_points(drawn_plane_state_ref(state.plane));
 	}
 
-	[[nodiscard]] bool point_repeats_existing(const MirrorToolState& state, quader_poly::Vec3 point) const
+	[[nodiscard]] bool point_repeats_existing(const MirrorToolState& state, quader::QVec3 point) const
 	{
 		return drawn_plane_tool_logic().point_repeats_existing(drawn_plane_state_ref(state.plane), point);
 	}
 
-	[[nodiscard]] bool point_repeats_other(const MirrorToolState& state, quader_poly::Vec3 point, int point_index) const
+	[[nodiscard]] bool point_repeats_other(const MirrorToolState& state, quader::QVec3 point, int point_index) const
 	{
 		return drawn_plane_tool_logic().point_repeats_other(drawn_plane_state_ref(state.plane), point, point_index);
 	}
@@ -493,7 +493,7 @@ public:
 			" mirrored. Enter/Space confirms.";
 	}
 
-	[[nodiscard]] bool update_hover(MirrorHoverState& state, bool valid, int object_id, quader_poly::Vec3 position, double epsilon) const
+	[[nodiscard]] bool update_hover(MirrorHoverState& state, bool valid, int object_id, quader::QVec3 position, double epsilon) const
 	{
 		return drawn_plane_tool_logic().update_hover(state, valid, object_id, position, epsilon);
 	}
@@ -670,14 +670,14 @@ DrawnPlaneSurface mirror_world_axis_surface(TransformAxis axis)
 	return mirror_operation_service().world_axis_surface(axis);
 }
 
-std::vector<quader_poly::Vec3> mirror_world_axis_plane_points(TransformAxis axis)
+std::vector<quader::QVec3> mirror_world_axis_plane_points(TransformAxis axis)
 {
 	return mirror_operation_service().world_axis_plane_points(axis);
 }
 
 DrawnPlaneSurface mirror_mesh_flip_surface(
 		ViewportFlipOrientation orientation,
-		quader_poly::Vec3 pivot)
+		quader::QVec3 pivot)
 {
 	return mirror_operation_service().mesh_flip_surface(orientation, pivot);
 }
@@ -724,22 +724,22 @@ MirrorToolResult set_mirror_targets_from_selection(MirrorToolState& state, const
 	return mirror_tool_instance().set_targets_from_selection(state, selection);
 }
 
-MirrorToolResult capture_first_mirror_point(MirrorToolState& state, const RectangleSelectionState& selection, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal)
+MirrorToolResult capture_first_mirror_point(MirrorToolState& state, const RectangleSelectionState& selection, quader::QVec3 position, quader::QVec3 plane_normal)
 {
 	return mirror_tool_instance().capture_first_point(state, selection, position, plane_normal);
 }
 
-MirrorToolResult capture_second_mirror_point(MirrorToolState& state, quader_poly::Vec3 position)
+MirrorToolResult capture_second_mirror_point(MirrorToolState& state, quader::QVec3 position)
 {
 	return mirror_tool_instance().capture_second_point(state, position);
 }
 
-MirrorToolResult update_dragged_new_mirror_point(MirrorToolState& state, quader_poly::Vec3 position)
+MirrorToolResult update_dragged_new_mirror_point(MirrorToolState& state, quader::QVec3 position)
 {
 	return mirror_tool_instance().update_dragged_new_point(state, position);
 }
 
-MirrorToolResult update_dragged_mirror_point(MirrorToolState& state, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal)
+MirrorToolResult update_dragged_mirror_point(MirrorToolState& state, quader::QVec3 position, quader::QVec3 plane_normal)
 {
 	return mirror_tool_instance().update_dragged_point(state, position, plane_normal);
 }
@@ -749,12 +749,12 @@ MirrorToolResult begin_mirror_point_drag(MirrorToolState& state, int point_index
 	return mirror_tool_instance().begin_point_drag(state, point_index);
 }
 
-MirrorToolResult begin_mirror_line_drag(MirrorToolState& state, quader_poly::Vec3 anchor)
+MirrorToolResult begin_mirror_line_drag(MirrorToolState& state, quader::QVec3 anchor)
 {
 	return mirror_tool_instance().begin_line_drag(state, anchor);
 }
 
-MirrorToolResult update_dragged_mirror_line(MirrorToolState& state, quader_poly::Vec3 position)
+MirrorToolResult update_dragged_mirror_line(MirrorToolState& state, quader::QVec3 position)
 {
 	return mirror_tool_instance().update_dragged_line(state, position);
 }
@@ -774,22 +774,22 @@ MirrorToolResult end_mirror_line_drag(MirrorToolState& state)
 	return mirror_tool_instance().end_line_drag(state);
 }
 
-std::vector<quader_poly::Vec3> mirror_overlay_points(const MirrorToolState& state, quader_poly::Vec3 hover_position, bool has_hover)
+std::vector<quader::QVec3> mirror_overlay_points(const MirrorToolState& state, quader::QVec3 hover_position, bool has_hover)
 {
 	return mirror_tool_instance().overlay_points(state, hover_position, has_hover);
 }
 
-std::vector<quader_poly::Vec3> mirror_plane_points(const MirrorToolState& state)
+std::vector<quader::QVec3> mirror_plane_points(const MirrorToolState& state)
 {
 	return mirror_tool_instance().plane_points(state);
 }
 
-bool mirror_point_repeats_existing(const MirrorToolState& state, quader_poly::Vec3 point)
+bool mirror_point_repeats_existing(const MirrorToolState& state, quader::QVec3 point)
 {
 	return mirror_tool_instance().point_repeats_existing(state, point);
 }
 
-bool mirror_point_repeats_other(const MirrorToolState& state, quader_poly::Vec3 point, int point_index)
+bool mirror_point_repeats_other(const MirrorToolState& state, quader::QVec3 point, int point_index)
 {
 	return mirror_tool_instance().point_repeats_other(state, point, point_index);
 }
@@ -844,7 +844,7 @@ std::string mirror_preview_status(const MirrorToolState& state, const MirrorPrev
 	return mirror_tool_instance().preview_status(state, fallback_counts);
 }
 
-bool update_mirror_hover(MirrorHoverState& state, bool valid, int object_id, quader_poly::Vec3 position, double epsilon)
+bool update_mirror_hover(MirrorHoverState& state, bool valid, int object_id, quader::QVec3 position, double epsilon)
 {
 	return mirror_tool_instance().update_hover(state, valid, object_id, position, epsilon);
 }

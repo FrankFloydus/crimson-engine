@@ -34,7 +34,7 @@ qec::EditorRuntimeCommand no_settings_command(qec::EditorRuntimeCommandId comman
 	return command;
 }
 
-qec::EditorRuntimeCommand paste_command(std::optional<quader_poly::Vec3> target)
+qec::EditorRuntimeCommand paste_command(std::optional<quader::QVec3> target)
 {
 	qec::PasteCopiedMeshesRuntimeCommandSettings settings;
 	if (target.has_value()) {
@@ -252,7 +252,7 @@ qec::EditorRuntimeCommand box_ray_command(
 
 qec::EditorRuntimeCommand box_height_command(
 		qec::EditorRuntimeCommandId command_id,
-		quader_poly::Vec2 screen_position = { 400.0F, 300.0F },
+		quader::QVec2 screen_position = { 400.0F, 300.0F },
 		quader_poly::Ray ray = box_ground_ray())
 {
 	qec::BoxHeightRuntimeCommandSettings settings;
@@ -267,8 +267,8 @@ qec::EditorRuntimeCommand box_height_command(
 }
 
 qec::EditorRuntimeCommand create_box_from_bounds_command(
-		quader_poly::Vec3 min_bounds = { -2.0F, -1.0F, -3.0F },
-		quader_poly::Vec3 max_bounds = { 2.0F, 1.0F, 3.0F })
+		quader::QVec3 min_bounds = { -2.0F, -1.0F, -3.0F },
+		quader::QVec3 max_bounds = { 2.0F, 1.0F, 3.0F })
 {
 	qec::CreateBoxFromBoundsRuntimeCommandSettings settings;
 	settings.min_bounds = min_bounds;
@@ -415,7 +415,7 @@ TEST_CASE("editor runtime command facade pastes copied meshes through history", 
 	const std::uint64_t selection_revision_before = session.state().selection_revision;
 
 	const qec::EditorRuntimeCommandResult result =
-		qec::execute_runtime_command(session, runtime, paste_command(quader_poly::Vec3 { 3.0F, 0.0F, 3.0F }));
+		qec::execute_runtime_command(session, runtime, paste_command(quader::QVec3 { 3.0F, 0.0F, 3.0F }));
 
 	REQUIRE(result.command.ok);
 	REQUIRE(result.command.changed);
@@ -908,7 +908,7 @@ TEST_CASE("editor runtime command facade mirrors selected meshes around a world 
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	const int source_id = session.objects().front().id;
-	const quader_poly::Vec3 first_before = session.objects().front().document.vertices.front().position;
+	const quader::QVec3 first_before = session.objects().front().document.vertices.front().position;
 
 	const qec::EditorRuntimeCommandResult result =
 		qec::execute_runtime_command(session, runtime, mirror_axis_command(qec::TransformAxis::x));
@@ -938,7 +938,7 @@ TEST_CASE("editor runtime command facade flips selected meshes in place through 
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::EditorRuntime runtime;
 	const int source_id = session.objects().front().id;
-	const quader_poly::Vec3 first_before = session.objects().front().document.vertices.front().position;
+	const quader::QVec3 first_before = session.objects().front().document.vertices.front().position;
 
 	const qec::EditorRuntimeCommandResult result =
 		qec::execute_runtime_command(session, runtime, flip_view_command(qec::ViewportFlipOrientation::horizontal));

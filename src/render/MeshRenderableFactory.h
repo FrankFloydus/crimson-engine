@@ -39,11 +39,11 @@ public:
             AssetId materialId,
             const MaterialDocument* material,
             const AssetRegistry& assets,
-            const Mat4& worldTransform,
+            const QMat4& worldTransform,
             bool castShadows,
             bool doubleSided,
             std::uint64_t materialRevision);
-    void updateTransform(const MeshRenderableProxy& proxy, const Mat4& worldTransform);
+    void updateTransform(const MeshRenderableProxy& proxy, const QMat4& worldTransform);
     void destroy(MeshRenderableProxy& proxy);
 
     static std::uint64_t meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh);

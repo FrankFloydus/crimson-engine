@@ -62,7 +62,7 @@ struct MirrorPreviewRequest {
 	bool ok = false;
 	std::string message;
 	std::vector<int> object_ids;
-	std::vector<quader_poly::Vec3> points;
+	std::vector<quader::QVec3> points;
 	bool can_preview = false;
 	int point_count = 0;
 	int target_count = 0;
@@ -85,10 +85,10 @@ using MirrorHoverState = DrawnPlaneHoverState;
 
 void mirror_document_across_drawn_plane(quader_poly::Document& document, const DrawnPlaneSurface& surface);
 DrawnPlaneSurface mirror_world_axis_surface(TransformAxis axis);
-std::vector<quader_poly::Vec3> mirror_world_axis_plane_points(TransformAxis axis);
+std::vector<quader::QVec3> mirror_world_axis_plane_points(TransformAxis axis);
 DrawnPlaneSurface mirror_mesh_flip_surface(
 	ViewportFlipOrientation orientation,
-	quader_poly::Vec3 pivot);
+	quader::QVec3 pivot);
 CommandResult mirror_objects_across_surface(
 	std::vector<PolygonObject>& objects,
 	std::span<const int> object_ids,
@@ -104,20 +104,20 @@ CommandResult flip_objects_by_orientation(
 	SelectionMode& mode);
 std::vector<int> mirror_target_object_ids_for_selection(const RectangleSelectionState& selection);
 MirrorToolResult set_mirror_targets_from_selection(MirrorToolState& state, const RectangleSelectionState& selection);
-MirrorToolResult capture_first_mirror_point(MirrorToolState& state, const RectangleSelectionState& selection, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal);
-MirrorToolResult capture_second_mirror_point(MirrorToolState& state, quader_poly::Vec3 position);
-MirrorToolResult update_dragged_new_mirror_point(MirrorToolState& state, quader_poly::Vec3 position);
-MirrorToolResult update_dragged_mirror_point(MirrorToolState& state, quader_poly::Vec3 position, quader_poly::Vec3 plane_normal);
+MirrorToolResult capture_first_mirror_point(MirrorToolState& state, const RectangleSelectionState& selection, quader::QVec3 position, quader::QVec3 plane_normal);
+MirrorToolResult capture_second_mirror_point(MirrorToolState& state, quader::QVec3 position);
+MirrorToolResult update_dragged_new_mirror_point(MirrorToolState& state, quader::QVec3 position);
+MirrorToolResult update_dragged_mirror_point(MirrorToolState& state, quader::QVec3 position, quader::QVec3 plane_normal);
 MirrorToolResult begin_mirror_point_drag(MirrorToolState& state, int point_index);
-MirrorToolResult begin_mirror_line_drag(MirrorToolState& state, quader_poly::Vec3 anchor);
-MirrorToolResult update_dragged_mirror_line(MirrorToolState& state, quader_poly::Vec3 position);
+MirrorToolResult begin_mirror_line_drag(MirrorToolState& state, quader::QVec3 anchor);
+MirrorToolResult update_dragged_mirror_line(MirrorToolState& state, quader::QVec3 position);
 MirrorToolResult end_mirror_point_drag(MirrorToolState& state);
 MirrorToolResult end_new_mirror_point_drag(MirrorToolState& state);
 MirrorToolResult end_mirror_line_drag(MirrorToolState& state);
-std::vector<quader_poly::Vec3> mirror_overlay_points(const MirrorToolState& state, quader_poly::Vec3 hover_position, bool has_hover);
-std::vector<quader_poly::Vec3> mirror_plane_points(const MirrorToolState& state);
-bool mirror_point_repeats_existing(const MirrorToolState& state, quader_poly::Vec3 point);
-bool mirror_point_repeats_other(const MirrorToolState& state, quader_poly::Vec3 point, int point_index);
+std::vector<quader::QVec3> mirror_overlay_points(const MirrorToolState& state, quader::QVec3 hover_position, bool has_hover);
+std::vector<quader::QVec3> mirror_plane_points(const MirrorToolState& state);
+bool mirror_point_repeats_existing(const MirrorToolState& state, quader::QVec3 point);
+bool mirror_point_repeats_other(const MirrorToolState& state, quader::QVec3 point, int point_index);
 MirrorPreviewRequest mirror_preview_request(MirrorToolState& state);
 MirrorToolResult set_mirror_preview_result(MirrorToolState& state, bool ok, const MirrorPreviewCounts& counts, std::string message = {});
 MirrorToolResult invalidate_mirror_preview(MirrorToolState& state);
@@ -128,7 +128,7 @@ bool mirror_is_active(const MirrorToolState& state);
 bool mirror_can_preview(const MirrorToolState& state);
 MirrorPreviewMetadata mirror_preview_metadata(const MirrorToolState& state);
 std::string mirror_preview_status(const MirrorToolState& state, const MirrorPreviewCounts& fallback_counts = {});
-bool update_mirror_hover(MirrorHoverState& state, bool valid, int object_id, quader_poly::Vec3 position, double epsilon);
+bool update_mirror_hover(MirrorHoverState& state, bool valid, int object_id, quader::QVec3 position, double epsilon);
 
 MirrorToolResult refresh_mirror_preview(MirrorToolState& state, std::span<const PolygonObject> objects);
 MirrorToolResult refresh_mirror_preview_from_selection(
