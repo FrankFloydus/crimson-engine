@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace Rml {
@@ -28,6 +29,14 @@ class SystemInterface;
 namespace quader {
 
 class RenderSystem;
+
+/// Stores an RmlUi element rectangle in framebuffer pixels.
+struct RmlElementRect {
+    int left = 0;
+    int top = 0;
+    int width = 0;
+    int height = 0;
+};
 
 /**
  * Owns the active RmlUi context, document, resource loading, and render bridge.
@@ -51,6 +60,7 @@ public:
 
     bool processEvent(const SDL_Event& event, float windowToFramebufferScaleX, float windowToFramebufferScaleY);
     void setDensityIndependentPixelRatio(float dpRatio);
+    void updateLayout(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
     void prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
     void render(RenderSystem& renderSystem);
 
@@ -62,6 +72,8 @@ public:
     void clearTextureSources();
 
     void setElementDisplay(const std::string& elementId, const std::string& display);
+    void setElementInnerRml(const std::string& elementId, const std::string& innerRml);
+    [[nodiscard]] std::optional<RmlElementRect> measureElementById(const std::string& elementId) const;
     [[nodiscard]] bool initialized() const { return initialized_; }
 
 private:

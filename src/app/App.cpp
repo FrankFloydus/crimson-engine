@@ -84,6 +84,9 @@ int App::run() {
         }
 
         ui_.beginFrame(frameTiming);
+        window_.refreshPixelSize();
+        ui_.prepareLayout(window_.widthPixels(), window_.heightPixels());
+
         bool quitRequested = false;
         ui_.draw(*editor_,
                 renderBridge_,
@@ -98,7 +101,6 @@ int App::run() {
         }
         (void)editor_->render().syncScene(renderBridge_);
 
-        window_.refreshPixelSize();
         ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
         ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
 

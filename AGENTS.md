@@ -60,6 +60,8 @@ effects, cache invalidation, and error handling.
 - UI, panels, menus, localization, dock layout:
   read `agents/ui-localization.md`; if the task mutates editor state, also read
   `agents/public-api-and-scripting.md`.
+  For RmlUi MainLayout shell work, also read `src/ui/AGENTS.md` and `resources/AGENTS.md` before
+  touching generated RML/RCSS, UI settings, viewport frame routing, or runtime UI resources.
 - Modeling tools, Polygon-backed operations, component selection, transform previews:
   read `agents/modeling-tools.md`, `agents/public-api-and-scripting.md`.
 - Viewport tools, camera, navigation, shortcuts, gizmos, modal tool input:

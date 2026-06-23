@@ -31,6 +31,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -237,6 +238,26 @@ int rmlMouseButtonIndex(Uint8 button) {
     return static_cast<int>(button);
 }
 
+std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        return event.window.windowID;
+    case SDL_EVENT_MOUSE_MOTION:
+        return event.motion.windowID;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return event.button.windowID;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return event.wheel.windowID;
+    case SDL_EVENT_TEXT_INPUT:
+        return event.text.windowID;
+    default:
+        return std::nullopt;
+    }
+}
+
 } // namespace
 
 RmlUiContextHost::RmlUiContextHost() = default;
@@ -341,6 +362,10 @@ bool RmlUiContextHost::processEvent(
     if (!context_) {
         return false;
     }
+    const std::optional<SDL_WindowID> targetWindow = eventWindowId(event);
+    if (targetWindow && window_ && *targetWindow != SDL_GetWindowID(window_)) {
+        return false;
+    }
 
     auto mousePixelX = [&](float x) {
         return static_cast<int>(std::lround(x * windowToFramebufferScaleX));
@@ -385,7 +410,7 @@ void RmlUiContextHost::setDensityIndependentPixelRatio(float dpRatio) {
     context_->SetDensityIndependentPixelRatio(dpRatio_);
 }
 
-void RmlUiContextHost::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
+void RmlUiContextHost::updateLayout(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
     if (!context_) {
         return;
     }
@@ -393,8 +418,15 @@ void RmlUiContextHost::prepareRenderData(std::uint32_t framebufferWidth, std::ui
     context_->SetDimensions(Rml::Vector2i(
             static_cast<int>(std::max(1u, framebufferWidth)),
             static_cast<int>(std::max(1u, framebufferHeight))));
-    renderer_.beginFrame(framebufferWidth, framebufferHeight);
     context_->Update();
+}
+
+void RmlUiContextHost::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
+    if (!context_) {
+        return;
+    }
+
+    renderer_.beginFrame(framebufferWidth, framebufferHeight);
     context_->Render();
 }
 
@@ -422,6 +454,40 @@ void RmlUiContextHost::setElementDisplay(const std::string& elementId, const std
     if (Rml::Element* element = document_->GetElementById(elementId)) {
         element->SetProperty("display", display);
     }
+}
+
+void RmlUiContextHost::setElementInnerRml(const std::string& elementId, const std::string& innerRml) {
+    if (!document_) {
+        return;
+    }
+
+    if (Rml::Element* element = document_->GetElementById(elementId)) {
+        element->SetInnerRML(innerRml);
+    }
+}
+
+std::optional<RmlElementRect> RmlUiContextHost::measureElementById(const std::string& elementId) const {
+    if (!document_) {
+        return std::nullopt;
+    }
+
+    Rml::Element* element = document_->GetElementById(elementId);
+    if (!element) {
+        return std::nullopt;
+    }
+
+    const int width = static_cast<int>(std::lround(element->GetOffsetWidth()));
+    const int height = static_cast<int>(std::lround(element->GetOffsetHeight()));
+    if (width <= 0 || height <= 0) {
+        return std::nullopt;
+    }
+
+    return RmlElementRect{
+            .left = static_cast<int>(std::lround(element->GetAbsoluteLeft())),
+            .top = static_cast<int>(std::lround(element->GetAbsoluteTop())),
+            .width = width,
+            .height = height,
+    };
 }
 
 } // namespace quader

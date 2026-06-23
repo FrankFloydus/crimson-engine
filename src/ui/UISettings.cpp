@@ -12,6 +12,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -32,6 +33,26 @@ std::filesystem::path localAppDataDirectory(const std::filesystem::path& executa
     }
 #endif
     return executableDir;
+}
+
+bool parseBool(std::string_view value, bool fallback) {
+    if (value == "true" || value == "1" || value == "yes") {
+        return true;
+    }
+    if (value == "false" || value == "0" || value == "no") {
+        return false;
+    }
+    return fallback;
+}
+
+int parseInt(std::string_view value, int fallback) {
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(std::string(value), &consumed);
+        return consumed == value.size() ? parsed : fallback;
+    } catch (...) {
+        return fallback;
+    }
 }
 
 } // namespace
@@ -63,9 +84,26 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         const std::string value = QStr::trimAsciiWhitespace(split->after);
         if (key == "Locale") {
             settings.setLocale(value);
+        } else if (key == "SidebarSide") {
+            if (const std::optional<MainLayoutSidebarSide> side = mainLayoutSidebarSideFromName(value)) {
+                settings.mainLayout().sidebarSide = *side;
+            }
+        } else if (key == "SidebarWidthDp") {
+            settings.mainLayout().sidebarWidthDp =
+                    mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().sidebarWidthDp));
+        } else if (key == "SidebarCollapsed") {
+            settings.mainLayout().sidebarCollapsed = parseBool(value, settings.mainLayout().sidebarCollapsed);
+        } else if (key == "OutlinerHeightDp") {
+            settings.mainLayout().outlinerHeightDp =
+                    mainLayoutClampedOutlinerHeightDp(parseInt(value, settings.mainLayout().outlinerHeightDp));
+        } else if (key == "OutlinerVisible") {
+            settings.mainLayout().outlinerVisible = parseBool(value, settings.mainLayout().outlinerVisible);
+        } else if (key == "InspectorVisible") {
+            settings.mainLayout().inspectorVisible = parseBool(value, settings.mainLayout().inspectorVisible);
         }
     }
 
+    settings.setMainLayout(settings.mainLayout());
     return settings;
 }
 
@@ -88,6 +126,13 @@ bool UISettings::save(const std::filesystem::path& path) const {
 
     file << "[Localization]\n";
     file << "Locale=" << locale_ << '\n';
+    file << "\n[MainLayout]\n";
+    file << "SidebarSide=" << mainLayoutSidebarSideName(mainLayout_.sidebarSide) << '\n';
+    file << "SidebarWidthDp=" << mainLayout_.sidebarWidthDp << '\n';
+    file << "SidebarCollapsed=" << (mainLayout_.sidebarCollapsed ? "true" : "false") << '\n';
+    file << "OutlinerHeightDp=" << mainLayout_.outlinerHeightDp << '\n';
+    file << "OutlinerVisible=" << (mainLayout_.outlinerVisible ? "true" : "false") << '\n';
+    file << "InspectorVisible=" << (mainLayout_.inspectorVisible ? "true" : "false") << '\n';
     return true;
 }
 
@@ -96,6 +141,10 @@ void UISettings::setLocale(std::string locale) {
     if (!locale.empty()) {
         locale_ = std::move(locale);
     }
+}
+
+void UISettings::setMainLayout(MainLayoutModel layout) {
+    mainLayout_ = normalizedMainLayoutModel(std::move(layout));
 }
 
 } // namespace quader

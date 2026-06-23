@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/components/organisms/MainLayoutModel.h"
+
 #include <filesystem>
 #include <string>
 
@@ -33,9 +35,13 @@ public:
 
     const std::string& locale() const { return locale_; }
     void setLocale(std::string locale);
+    const MainLayoutModel& mainLayout() const { return mainLayout_; }
+    MainLayoutModel& mainLayout() { return mainLayout_; }
+    void setMainLayout(MainLayoutModel layout);
 
 private:
     std::string locale_ = "en-US";
+    MainLayoutModel mainLayout_ = MainLayoutModel::defaults();
 };
 
 } // namespace quader

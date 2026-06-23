@@ -161,6 +161,10 @@ add_library(quader_core STATIC
     src/scene/SceneBounds.cpp
     src/scene/SceneDocument.cpp
     src/ui/ConsoleModel.cpp
+    src/ui/backends/rml/MainLayoutRmlBuilder.cpp
+    src/ui/components/organisms/MainLayoutModel.cpp
+    src/ui/controllers/MainLayoutController.cpp
+    src/ui/controllers/ResizableSplitController.cpp
     src/ui/DebugPaletteView.cpp
     src/ui/UIUtilityTokens.cpp
     src/ui/ViewportContextMenuPolicy.cpp

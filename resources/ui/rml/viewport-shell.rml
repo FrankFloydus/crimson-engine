@@ -4,8 +4,14 @@
     <link type="text/rcss" href="quader://ui/rcss/app-shell.rcss"/>
 </head>
 <body class="font-ui text-md leading-md bg-gray-950 text-gray-50">
-    <div id="viewport-panel" class="viewport-panel">
-        <img id="main-viewport" class="viewport-surface" src="quader://viewport/main"/>
+    <div id="viewport-panel" class="app-shell bg-gray-950">
+        <div id="toolbar" class="shell-bar shell-toolbar h-12 px-3 bg-gray-800 border-gray-600 text-gray-100">
+            <span id="toolbar-label"></span>
+        </div>
+        <div id="main-layout-slot" class="main-layout-slot"></div>
+        <div id="statusbar" class="shell-bar shell-statusbar h-10 px-3 bg-gray-900 border-gray-600 text-gray-100">
+            <span id="statusbar-label"></span>
+        </div>
     </div>
     <div id="debug-palette-slot"></div>
 </body>

@@ -39,6 +39,11 @@
 #include "scene/TransformPivot.h"
 #include "api/QuaderEditorApi.h"
 #include "ui/ConsoleModel.h"
+#include "ui/backends/rml/MainLayoutRmlBuilder.h"
+#include "ui/components/common/ResizableSplit.h"
+#include "ui/components/organisms/MainLayoutModel.h"
+#include "ui/controllers/MainLayoutController.h"
+#include "ui/controllers/ResizableSplitController.h"
 #include "ui/DebugPaletteView.h"
 #include "ui/UISettings.h"
 #include "ui/UIUtilityTokens.h"
@@ -64,6 +69,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <string>
@@ -366,22 +372,405 @@ TEST(UISettingsTests, DefaultsKeepViewportShellLocale) {
     const UISettings settings = UISettings::defaults();
 
     EXPECT_EQ(settings.locale(), "en-US");
+    EXPECT_EQ(settings.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
+    EXPECT_EQ(settings.mainLayout().sidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(settings.mainLayout().outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
+    EXPECT_FALSE(settings.mainLayout().sidebarCollapsed);
+    EXPECT_TRUE(settings.mainLayout().outlinerVisible);
+    EXPECT_TRUE(settings.mainLayout().inspectorVisible);
 }
 
-TEST(UISettingsTests, RoundTripsLocaleOnly) {
+TEST(UISettingsTests, RoundTripsLocaleAndMainLayout) {
     const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "quader_ui_settings_round_trip.ini";
     std::filesystem::remove(path);
 
     UISettings settings = UISettings::defaults();
     settings.setLocale("it-IT");
+    MainLayoutModel layout = settings.mainLayout();
+    layout.sidebarSide = MainLayoutSidebarSide::Left;
+    layout.sidebarWidthDp = 333;
+    layout.outlinerHeightDp = 271;
+    layout.sidebarCollapsed = true;
+    layout.outlinerVisible = false;
+    layout.inspectorVisible = true;
+    settings.setMainLayout(layout);
 
     ASSERT_TRUE(settings.save(path));
     const UISettings loaded = UISettings::load(path);
 
     EXPECT_EQ(loaded.locale(), "it-IT");
+    EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Left);
+    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, 333);
+    EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, 271);
+    EXPECT_TRUE(loaded.mainLayout().sidebarCollapsed);
+    EXPECT_FALSE(loaded.mainLayout().outlinerVisible);
+    EXPECT_TRUE(loaded.mainLayout().inspectorVisible);
 
     std::filesystem::remove(path);
+}
+
+TEST(UISettingsTests, LoadsLegacyLocaleOnlySettingsWithDefaultLayout) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_ui_settings_legacy_locale_only.ini";
+    {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[Localization]\n";
+        file << "Locale=it-IT\n";
+    }
+
+    const UISettings loaded = UISettings::load(path);
+
+    EXPECT_EQ(loaded.locale(), "it-IT");
+    EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
+    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
+    EXPECT_FALSE(loaded.mainLayout().sidebarCollapsed);
+    EXPECT_TRUE(loaded.mainLayout().outlinerVisible);
+    EXPECT_TRUE(loaded.mainLayout().inspectorVisible);
+
+    std::filesystem::remove(path);
+}
+
+TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_ui_settings_malformed_layout.ini";
+    {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[MainLayout]\n";
+        file << "SidebarSide=Bottom\n";
+        file << "SidebarWidthDp=9999\n";
+        file << "SidebarCollapsed=maybe\n";
+        file << "OutlinerHeightDp=-42\n";
+        file << "OutlinerVisible=what\n";
+        file << "InspectorVisible=0\n";
+    }
+
+    const UISettings loaded = UISettings::load(path);
+
+    EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
+    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, kMainLayoutSidebarMaxWidthDp);
+    EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutPanelMinHeightDp);
+    EXPECT_FALSE(loaded.mainLayout().sidebarCollapsed);
+    EXPECT_TRUE(loaded.mainLayout().outlinerVisible);
+    EXPECT_FALSE(loaded.mainLayout().inspectorVisible);
+
+    std::filesystem::remove(path);
+}
+
+TEST(MainLayoutModelTests, DefaultLayoutContainsViewportAndRightSidebarPanels) {
+    const MainLayoutModel layout = MainLayoutModel::defaults();
+
+    EXPECT_EQ(layout.sidebarSide, MainLayoutSidebarSide::Right);
+    EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
+    EXPECT_FALSE(layout.sidebarCollapsed);
+    EXPECT_TRUE(layout.outlinerVisible);
+    EXPECT_TRUE(layout.inspectorVisible);
+    EXPECT_TRUE(mainLayoutPanelIdIsViewport(kMainLayoutPanelViewport));
+    EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelViewport));
+    EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelOutliner));
+    EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelInspector));
+    const std::optional<std::string_view> legacyOutliner = mainLayoutCanonicalPanelId("Outliner");
+    const std::optional<std::string_view> legacyInspector = mainLayoutCanonicalPanelId("Inspector");
+    ASSERT_TRUE(legacyOutliner);
+    ASSERT_TRUE(legacyInspector);
+    EXPECT_EQ(*legacyOutliner, kMainLayoutPanelOutliner);
+    EXPECT_EQ(*legacyInspector, kMainLayoutPanelInspector);
+    EXPECT_FALSE(mainLayoutPanelIdIsKnown("Console"));
+}
+
+TEST(MainLayoutControllerTests, ResizesSidebarAndPanelSplitWithClamps) {
+    MainLayoutModel layout = MainLayoutModel::defaults();
+    MainLayoutController controller(layout);
+
+    EXPECT_TRUE(controller.resizeSidebar(12));
+    EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarMinWidthDp);
+    EXPECT_TRUE(controller.resizeSidebar(800));
+    EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarMaxWidthDp);
+    EXPECT_TRUE(controller.resizeSidebar(280));
+    EXPECT_EQ(layout.sidebarWidthDp, 280);
+
+    EXPECT_TRUE(controller.setSidebarCollapsed(true));
+    EXPECT_TRUE(layout.sidebarCollapsed);
+    EXPECT_TRUE(controller.resizeSidebar(300));
+    EXPECT_EQ(layout.sidebarWidthDp, 300);
+    EXPECT_FALSE(layout.sidebarCollapsed);
+
+    EXPECT_TRUE(controller.resizeOutlinerPanel(12));
+    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutPanelMinHeightDp);
+    EXPECT_TRUE(controller.resizeOutlinerPanel(10000));
+    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutPanelMaxHeightDp);
+    EXPECT_TRUE(controller.resizeOutlinerPanel(260));
+    EXPECT_EQ(layout.outlinerHeightDp, 260);
+}
+
+TEST(MainLayoutControllerTests, TogglesFixedPanelsAndPreparesSidebarFlip) {
+    MainLayoutModel layout = MainLayoutModel::defaults();
+    MainLayoutController controller(layout);
+
+    EXPECT_TRUE(controller.setSidebarSide(MainLayoutSidebarSide::Left));
+    EXPECT_EQ(layout.sidebarSide, MainLayoutSidebarSide::Left);
+    EXPECT_FALSE(controller.setSidebarSide(MainLayoutSidebarSide::Left));
+
+    EXPECT_TRUE(controller.setPanelVisible(kMainLayoutPanelOutliner, false));
+    EXPECT_FALSE(controller.isPanelVisible(kMainLayoutPanelOutliner));
+    EXPECT_TRUE(controller.setPanelVisible(kMainLayoutPanelInspector, false));
+    EXPECT_FALSE(controller.isPanelVisible(kMainLayoutPanelInspector));
+    EXPECT_FALSE(controller.setPanelVisible("Console", true));
+}
+
+TEST(ResizableSplitControllerTests, HitTestsInflatedRegionsByAxis) {
+    ResizableSplitController controller;
+    controller.setHitRegions({
+            {
+                    .id = "sidebar",
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .rect = ResizableSplitController::inflatedHitRect(
+                            UIPixelRect{.left = 100, .top = 0, .width = 1, .height = 500},
+                            ResizableSplitAxis::Horizontal,
+                            12),
+            },
+            {
+                    .id = "panels",
+                    .axis = ResizableSplitAxis::Vertical,
+                    .rect = ResizableSplitController::inflatedHitRect(
+                            UIPixelRect{.left = 0, .top = 200, .width = 240, .height = 1},
+                            ResizableSplitAxis::Vertical,
+                            12),
+            },
+    });
+
+    const std::optional<ResizableSplitHitRegion> sidebar = controller.hitTest(96.0f, 20.0f);
+    ASSERT_TRUE(sidebar.has_value());
+    EXPECT_EQ(sidebar->id, "sidebar");
+    EXPECT_EQ(sidebar->axis, ResizableSplitAxis::Horizontal);
+
+    const std::optional<ResizableSplitHitRegion> panels = controller.hitTest(20.0f, 196.0f);
+    ASSERT_TRUE(panels.has_value());
+    EXPECT_EQ(panels->id, "panels");
+    EXPECT_EQ(panels->axis, ResizableSplitAxis::Vertical);
+
+    EXPECT_FALSE(controller.hitTest(20.0f, 20.0f).has_value());
+}
+
+TEST(ResizableSplitControllerTests, ResizesWithDirectionDpScaleAndClamps) {
+    ResizableSplitController controller;
+    controller.beginDrag(
+            {
+                    .id = "right-sidebar",
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .growth = ResizableSplitGrowthDirection::Negative,
+                    .sizeDp = 240,
+                    .minSize = ResizableSplitSizeRule::dp(160),
+                    .maxSize = ResizableSplitSizeRule::dp(420),
+            },
+            400.0f,
+            0.0f,
+            2.0f);
+
+    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(360.0f, 0.0f, 2.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->id, "right-sidebar");
+    EXPECT_EQ(resize->sizeDp, 260);
+
+    resize = controller.updateDrag(1200.0f, 0.0f, 2.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->sizeDp, 160);
+
+    controller.endDrag();
+    EXPECT_FALSE(controller.updateDrag(360.0f, 0.0f, 2.0f).has_value());
+
+    controller.beginDrag(
+            {
+                    .id = "top-panel",
+                    .axis = ResizableSplitAxis::Vertical,
+                    .growth = ResizableSplitGrowthDirection::Positive,
+                    .sizeDp = 320,
+                    .minSize = ResizableSplitSizeRule::dp(120),
+                    .maxSize = ResizableSplitSizeRule::dp(900),
+            },
+            0.0f,
+            100.0f,
+            1.0f);
+    resize = controller.updateDrag(0.0f, 40.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->sizeDp, 260);
+}
+
+TEST(ResizableSplitControllerTests, ClampsAgainstOppositeMinSizeInsideContainer) {
+    ResizableSplitController controller;
+    controller.beginDrag(
+            {
+                    .id = "sidebar-panels",
+                    .axis = ResizableSplitAxis::Vertical,
+                    .growth = ResizableSplitGrowthDirection::Positive,
+                    .sizeDp = 320,
+                    .minSize = ResizableSplitSizeRule::dp(120),
+                    .maxSize = ResizableSplitSizeRule::dp(900),
+                    .oppositeMinSize = ResizableSplitSizeRule::dp(120),
+                    .containerSizeDp = 480,
+            },
+            0.0f,
+            100.0f,
+            1.0f);
+
+    const std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(0.0f, 1000.0f, 1.0f);
+
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->sizeDp, 360);
+    EXPECT_FALSE(resize->collapsed);
+}
+
+TEST(ResizableSplitControllerTests, SupportsPercentBasedSizeRules) {
+    ResizableSplitController controller;
+    controller.beginDrag(
+            {
+                    .id = "percent",
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .growth = ResizableSplitGrowthDirection::Positive,
+                    .sizeDp = 250,
+                    .minSize = ResizableSplitSizeRule::percent(20.0f),
+                    .maxSize = ResizableSplitSizeRule::percent(80.0f),
+                    .containerSizeDp = 500,
+            },
+            100.0f,
+            0.0f,
+            1.0f);
+
+    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(-1000.0f, 0.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->sizeDp, 100);
+
+    resize = controller.updateDrag(1000.0f, 0.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->sizeDp, 400);
+}
+
+TEST(ResizableSplitControllerTests, SupportsOptionalSnapCollapse) {
+    ResizableSplitController controller;
+    controller.beginDrag(
+            {
+                    .id = "sidebar",
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .growth = ResizableSplitGrowthDirection::Positive,
+                    .sizeDp = 160,
+                    .minSize = ResizableSplitSizeRule::dp(160),
+                    .maxSize = ResizableSplitSizeRule::dp(420),
+                    .collapse = {
+                            .enabled = true,
+                            .collapsedSizeDp = 0,
+                    },
+            },
+            160.0f,
+            0.0f,
+            1.0f);
+
+    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(50.0f, 0.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_TRUE(resize->collapsed);
+    EXPECT_EQ(resize->sizeDp, 0);
+
+    resize = controller.updateDrag(100.0f, 0.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_FALSE(resize->collapsed);
+    EXPECT_EQ(resize->sizeDp, 160);
+
+    controller.endDrag();
+    controller.beginDrag(
+            {
+                    .id = "sidebar",
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .growth = ResizableSplitGrowthDirection::Positive,
+                    .sizeDp = 0,
+                    .minSize = ResizableSplitSizeRule::dp(160),
+                    .maxSize = ResizableSplitSizeRule::dp(420),
+                    .collapse = {
+                            .enabled = true,
+                            .collapsedSizeDp = 0,
+                    },
+            },
+            0.0f,
+            0.0f,
+            1.0f);
+
+    resize = controller.updateDrag(70.0f, 0.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_TRUE(resize->collapsed);
+
+    resize = controller.updateDrag(100.0f, 0.0f, 1.0f);
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_FALSE(resize->collapsed);
+    EXPECT_EQ(resize->sizeDp, 160);
+}
+
+TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
+    const MainLayoutModel layout = MainLayoutModel::defaults();
+    const std::string rml = buildMainLayoutRml(layout, {.viewport = "Viewport"});
+
+    EXPECT_NE(rml.find("class=\"main-layout bg-gray-950 main-layout-sidebar-right\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"main-viewport\""), std::string::npos);
+    EXPECT_NE(rml.find("src=\"quader://viewport/main\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"main-layout-sidebar\" class=\"main-layout-sidebar min-w-40 bg-gray-950 border-gray-600\""),
+            std::string::npos);
+    EXPECT_NE(rml.find("main-layout-panel min-h-30 bg-gray-950"), std::string::npos);
+    EXPECT_NE(rml.find("data-main-layout-resizer=\"sidebar\""), std::string::npos);
+    EXPECT_NE(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
+    EXPECT_NE(rml.find("main-layout-resizer-drag-line-vertical"), std::string::npos);
+    EXPECT_NE(rml.find("main-layout-resizer-drag-line-horizontal"), std::string::npos);
+    EXPECT_EQ(rml.find("main-layout-resizer-active"), std::string::npos);
+    EXPECT_EQ(rml.find("main-layout-panel-tabbar"), std::string::npos);
+    EXPECT_EQ(rml.find("viewport-label"), std::string::npos);
+    EXPECT_EQ(rml.find("<rml>"), std::string::npos);
+}
+
+TEST(MainLayoutRmlBuilderTests, MarksActiveResizerDuringDrag) {
+    const MainLayoutModel layout = MainLayoutModel::defaults();
+
+    const std::string sidebarRml = buildMainLayoutRml(
+            layout,
+            {},
+            {.activeResizer = MainLayoutActiveResizer::Sidebar});
+    EXPECT_NE(sidebarRml.find("main-layout-sidebar-resizer\" class=\"main-layout-sidebar-resizer main-layout-resizer-active"),
+            std::string::npos);
+
+    const std::string panelsRml = buildMainLayoutRml(
+            layout,
+            {},
+            {.activeResizer = MainLayoutActiveResizer::Panels});
+    EXPECT_NE(panelsRml.find("main-layout-panel-resizer\" class=\"main-layout-panel-resizer main-layout-resizer-active"),
+            std::string::npos);
+}
+
+TEST(MainLayoutRmlBuilderTests, CanProjectLeftSidebarAndHiddenPanels) {
+    MainLayoutModel layout = MainLayoutModel::defaults();
+    layout.sidebarSide = MainLayoutSidebarSide::Left;
+    layout.outlinerVisible = false;
+
+    const std::string rml = buildMainLayoutRml(layout, {.viewport = "Viewport"});
+
+    EXPECT_NE(rml.find("class=\"main-layout bg-gray-950 main-layout-sidebar-left\""), std::string::npos);
+    EXPECT_EQ(rml.find("main-layout-panel-outliner"), std::string::npos);
+    EXPECT_NE(rml.find("main-layout-panel-inspector"), std::string::npos);
+    EXPECT_EQ(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
+    EXPECT_LT(rml.find("main-layout-sidebar"), rml.find("viewport-host"));
+}
+
+TEST(MainLayoutRmlBuilderTests, CollapsedSidebarKeepsEdgeResizerWithoutSidebarSurface) {
+    MainLayoutModel layout = MainLayoutModel::defaults();
+    layout.sidebarCollapsed = true;
+
+    const std::string rml = buildMainLayoutRml(layout, {.viewport = "Viewport"});
+
+    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
+    EXPECT_EQ(rml.find("id=\"main-layout-sidebar\""), std::string::npos);
+    EXPECT_EQ(rml.find("main-layout-panel-outliner"), std::string::npos);
+    EXPECT_EQ(rml.find("main-layout-panel-inspector"), std::string::npos);
+    EXPECT_NE(rml.find("data-main-layout-resizer=\"sidebar\""), std::string::npos);
+    EXPECT_NE(rml.find("main-layout-sidebar-resizer-collapsed-right"), std::string::npos);
 }
 
 TEST(DebugPaletteViewTests, AppPaletteTokenPathUsesRuntimeUiTokenDirectory) {
@@ -487,6 +876,7 @@ TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
             {.name = "leading-sm", .value = "18dp"},
             {.name = "space-3", .value = "12dp"},
             {.name = "size-8", .value = "32dp"},
+            {.name = "size-60", .value = "240dp"},
             {.name = "border-1", .value = "1dp"},
     };
     const std::vector<DebugPaletteColorToken> paletteColors = {
@@ -503,6 +893,10 @@ TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
     EXPECT_NE(rcss.find(".px-3 { padding-left: 12dp; padding-right: 12dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".mr-3 { margin-right: 12dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".size-8 { width: 32dp; height: 32dp; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".w-8 { width: 32dp; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".h-8 { height: 32dp; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".min-w-60 { min-width: 240dp; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".max-h-60 { max-height: 240dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".border-1 { border-width: 1dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".bg-gray-50 { background-color: #F7F7F7; }"), std::string::npos);
     EXPECT_NE(rcss.find(".text-gray-50 { color: #F7F7F7; }"), std::string::npos);
@@ -527,25 +921,44 @@ TEST(UIUtilityTokensTests, AppUtilityTokensStayFlatAndDpBased) {
 
     EXPECT_NE(utilityTokens.find("\"text-sm\": \"14dp\""), std::string::npos);
     EXPECT_NE(utilityTokens.find("\"space-3\": \"12dp\""), std::string::npos);
+    EXPECT_NE(utilityTokens.find("\"size-px\": \"1dp\""), std::string::npos);
+    EXPECT_NE(utilityTokens.find("\"size-60\": \"240dp\""), std::string::npos);
     EXPECT_NE(utilityTokens.find("\"font-medium\": 500"), std::string::npos);
+    EXPECT_EQ(utilityTokens.find("\"w-24\""), std::string::npos);
+    EXPECT_EQ(utilityTokens.find("\"h-6\""), std::string::npos);
     EXPECT_EQ(utilityTokens.find("\"font\""), std::string::npos);
     EXPECT_EQ(utilityTokens.find("\"typography\""), std::string::npos);
     EXPECT_EQ(utilityTokens.find("$type"), std::string::npos);
     EXPECT_EQ(utilityTokens.find("$value"), std::string::npos);
 }
 
-TEST(UISystemTests, RmlShellOwnsSingleViewportPanel) {
+TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
     const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
+    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
     const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
     const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/ViewportComponent.h");
+    const std::string mainLayoutModelHeader = readSourceFile("src/ui/components/organisms/MainLayoutModel.h");
+    const std::string mainLayoutControllerSource = readSourceFile("src/ui/controllers/MainLayoutController.cpp");
+    const std::string resizableSplitHeader = readSourceFile("src/ui/components/common/ResizableSplit.h");
+    const std::string resizableSplitControllerSource = readSourceFile("src/ui/controllers/ResizableSplitController.cpp");
+    const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
     const std::string shellRml = readSourceFile("resources/ui/rml/viewport-shell.rml");
     const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
 
     EXPECT_NE(uiSystemHeader.find("RmlUiContextHost rmlHost_"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("MainLayoutModel mainLayout_"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("MainLayoutController mainLayoutController_"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("ResizableSplitController mainLayoutResizeController_"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("mainLayoutWidthDp_"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("mainLayoutSidebarHeightDp_"), std::string::npos);
     EXPECT_NE(uiSystemHeader.find("ViewportHost viewportHost_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("rmlHost_.initialize"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("buildMainLayoutRml(mainLayout_"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("measureElementById(\"main-layout-slot\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("measureElementById(\"main-layout-sidebar\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("setSidebarCollapsed(true)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportHost_.handleFrame"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("<rml>"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("LoadDocumentFromMemory"), std::string::npos);
@@ -557,18 +970,85 @@ TEST(UISystemTests, RmlShellOwnsSingleViewportPanel) {
     EXPECT_NE(rmlHostSource.find("context_->LoadDocument(documentPath.string())"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("debugPaletteSlot->SetInnerRML(debugPaletteRml)"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("quader://ui/rcss/app-utility.generated.rcss"), std::string::npos);
+    EXPECT_NE(rmlHostHeader.find("measureElementById"), std::string::npos);
+    EXPECT_NE(rmlHostHeader.find("setElementInnerRml"), std::string::npos);
+    EXPECT_NE(rmlHostSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
+    EXPECT_NE(rmlHostSource.find("SDL_GetWindowID(window_)"), std::string::npos);
+    EXPECT_EQ(rmlHostHeader.find("RmlMainLayoutEvent"), std::string::npos);
+    EXPECT_EQ(rmlHostSource.find("MainLayoutEventListener"), std::string::npos);
 
     EXPECT_NE(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.resize(framebufferWidth_, framebufferHeight_)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("mousePixel.x - static_cast<float>(mainViewportFrame_.left)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.setSceneVisible(true)"), std::string::npos);
     EXPECT_NE(viewportComponentHeader.find("kMainViewportTextureSource = \"quader://viewport/main\""), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("enum class MainLayoutSidebarSide"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("kMainLayoutPanelOutliner = \"outliner\""), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutCanonicalPanelId"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("sidebarCollapsed"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("outlinerVisible"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("inspectorVisible"), std::string::npos);
+    EXPECT_NE(mainLayoutControllerSource.find("resizeSidebar"), std::string::npos);
+    EXPECT_NE(mainLayoutControllerSource.find("resizeOutlinerPanel"), std::string::npos);
+    EXPECT_NE(mainLayoutControllerSource.find("setSidebarCollapsed"), std::string::npos);
+    EXPECT_NE(mainLayoutControllerSource.find("setPanelVisible"), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("enum class ResizableSplitAxis"), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("enum class ResizableSplitSizeUnit"), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("struct ResizableSplitHandle"), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("struct ResizableSplitCollapseOptions"), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("oppositeMinSize"), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("containerSizeDp"), std::string::npos);
+    EXPECT_NE(resizableSplitControllerSource.find("ResizableSplitController::inflatedHitRect"), std::string::npos);
+    EXPECT_NE(resizableSplitControllerSource.find("ResizableSplitGrowthDirection::Positive"), std::string::npos);
+    EXPECT_NE(resizableSplitControllerSource.find("effectiveMaxSizeDp"), std::string::npos);
+    EXPECT_NE(resizableSplitControllerSource.find("std::clamp"), std::string::npos);
+    EXPECT_EQ(uiSystemHeader.find("struct MainLayoutResizeDrag"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("horizontalHitRect"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("verticalHitRect"), std::string::npos);
+    EXPECT_NE(mainLayoutBuilderSource.find("buildMainLayoutRml"), std::string::npos);
+    EXPECT_EQ(mainLayoutBuilderSource.find("main-layout-panel-tabbar"), std::string::npos);
+    EXPECT_EQ(mainLayoutBuilderSource.find("viewport-label"), std::string::npos);
 
-    EXPECT_NE(shellRml.find("<img id=\"main-viewport\""), std::string::npos);
-    EXPECT_NE(shellRml.find("src=\"quader://viewport/main\""), std::string::npos);
+    EXPECT_EQ(shellRml.find("id=\"topbar\""), std::string::npos);
+    EXPECT_EQ(shellRml.find("topbar-label"), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"toolbar\""), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"main-layout-slot\""), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"statusbar\""), std::string::npos);
+    EXPECT_EQ(shellRml.find("shell-topbar"), std::string::npos);
+    EXPECT_NE(shellRml.find("shell-toolbar h-12 px-3 bg-gray-800 border-gray-600"), std::string::npos);
+    EXPECT_NE(shellRml.find("shell-statusbar h-10 px-3 bg-gray-900 border-gray-600"), std::string::npos);
+    EXPECT_EQ(shellRml.find("id=\"dock-interaction-slot\""), std::string::npos);
     EXPECT_NE(shellRml.find("quader://ui/rcss/app-utility.generated.rcss"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".viewport-panel"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".main-layout"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".main-layout-sidebar"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".main-layout-panel-resizer"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".main-layout-resizer-drag-line"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".viewport-surface"), std::string::npos);
+    EXPECT_EQ(shellRcss.find("#2E2E2E"), std::string::npos);
+    EXPECT_EQ(shellRcss.find("#0F0F0F"), std::string::npos);
+    EXPECT_EQ(shellRcss.find("#9A64D8"), std::string::npos);
+    EXPECT_NE(mainLayoutBuilderSource.find("bg-gray-600"), std::string::npos);
+    EXPECT_NE(mainLayoutBuilderSource.find("bg-purple-500"), std::string::npos);
+    EXPECT_NE(shellRcss.find("transition: opacity 0.12s sine-out"), std::string::npos);
+    EXPECT_NE(shellRcss.find("width: 3dp"), std::string::npos);
+    EXPECT_NE(shellRcss.find("height: 3dp"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".main-layout-sidebar-resizer-collapsed"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".main-layout-resizer-active .main-layout-resizer-drag-line"), std::string::npos);
+    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::Sidebar"), std::string::npos);
+    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::Panels"), std::string::npos);
+    EXPECT_EQ(shellRcss.find(".dock-slot-preview"), std::string::npos);
+    EXPECT_EQ(shellRcss.find(".dock-drag-panel"), std::string::npos);
     EXPECT_NE(shellRcss.find("#debug-palette-page"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("Only the viewport panel is available in the RmlUi shell."), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("updateDockDragFeedback"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("DockDropZone"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("dock-drop"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_SYSTEM_CURSOR_EW_RESIZE"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_SYSTEM_CURSOR_NS_RESIZE"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_CaptureMouse(true)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("SDL_EVENT_WINDOW_FOCUS_LOST"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("rmlConsumedEventBlocksViewport"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("setElementDisplay(\"viewport-panel\", debugPaletteVisible_ ? \"none\" : \"flex\")"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("Only the viewport panel is available in the RmlUi shell."), std::string::npos);
     EXPECT_NE(uiSystemSource.find("QuaderPreferencesRuntimeHooks"), std::string::npos);
 }
 
@@ -1673,22 +2153,28 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
 
     const std::size_t prepareViewports =
             appSource.find("ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets())");
+    const std::size_t prepareLayout =
+            appSource.find("ui_.prepareLayout(window_.widthPixels(), window_.heightPixels())");
     const std::size_t prepareRenderData =
             appSource.find("ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels())");
     const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
     ASSERT_NE(prepareViewports, std::string::npos);
+    ASSERT_NE(prepareLayout, std::string::npos);
     ASSERT_NE(prepareRenderData, std::string::npos);
     ASSERT_NE(beginFrame, std::string::npos);
+    EXPECT_LT(prepareLayout, prepareViewports);
     EXPECT_LT(prepareViewports, prepareRenderData);
+    EXPECT_LT(prepareLayout, beginFrame);
     EXPECT_LT(prepareViewports, beginFrame);
     EXPECT_LT(prepareRenderData, beginFrame);
 
+    EXPECT_NE(uiSystemSource.find("void UISystem::prepareLayout("), std::string::npos);
     EXPECT_NE(uiSystemSource.find("void UISystem::prepareViewports("), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportHost_.prepareViewports(editor, renderBridge, document, assets)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("ViewportWorkspaceService& workspace"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("const SceneDocument& document"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("const AssetRegistry& assets"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.resize(framebufferWidth_, framebufferHeight_)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.setSceneVisible(true)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.setOverlayVisible(false)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
@@ -1773,18 +2259,28 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
 }
 
 TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
+    const std::string appSource = readSourceFile("src/app/App.cpp");
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
     const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
 
+    const std::size_t prepareLayout = appSource.find("ui_.prepareLayout(window_.widthPixels(), window_.heightPixels())");
+    const std::size_t draw = appSource.find("ui_.draw(*editor_");
+    ASSERT_NE(prepareLayout, std::string::npos);
+    ASSERT_NE(draw, std::string::npos);
+    EXPECT_LT(prepareLayout, draw);
     EXPECT_NE(viewportHostSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("inputRouter_.handleFrame(buildViewportInputFrame(), camera)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("setCursorCaptured(result.flyCursorCaptureActive)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("mainViewportContainsWindowPoint(event.button.x, event.button.y)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("middlePressed_ = middlePressed_ || startedInMainViewport"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("rightPressed_ = rightPressed_ || startedInMainViewport"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("context_->SetDimensions"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("context_->Render()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.resize(framebufferWidth_, framebufferHeight_)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("input.mouseLocal = mouseLocal"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("rmlHost_.registerTextureSource("), std::string::npos);
 }
 
@@ -1799,13 +2295,29 @@ TEST(UISystemTests, RmlViewportShellForcesSingleLayoutForV1) {
     EXPECT_EQ(uiSystemSource.find("mainMenuBar_.draw"), std::string::npos);
 }
 
-TEST(UISystemTests, RmlViewportShellLoadsViewportSettingsWithoutDockPanels) {
+TEST(UISystemTests, RmlViewportShellLoadsViewportAndMainLayoutSettings) {
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
+    const std::string uiSettingsSource = readSourceFile("src/ui/UISettings.cpp");
 
     EXPECT_NE(uiSystemSource.find("settingsPaths_ = UISettings::resolvePaths(executableDir)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("uiSettings_ = UISettings::load(settingsPaths_.settingsFile)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("mainLayout_ = uiSettings_.mainLayout()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("saveViewportSettings()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("saveUISettings()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("uiSettings_.setMainLayout(mainLayout_)"), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("SidebarSide="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("SidebarWidthDp="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("SidebarCollapsed="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("OutlinerHeightDp="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("OutlinerVisible="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("InspectorVisible="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("mainLayoutSidebarSideFromName(value)"), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("mainLayoutClampedSidebarWidthDp"), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("mainLayoutClampedOutlinerHeightDp"), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("normalizedMainLayoutModel(std::move(layout))"), std::string::npos);
+    EXPECT_EQ(uiSettingsSource.find("DockLayoutJson"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("toolSettingsPanelOpen_"), std::string::npos);

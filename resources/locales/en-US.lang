@@ -30,6 +30,8 @@ ui.panel.console=Console
 ui.panel.settings=Settings
 ui.panel.tool_settings=Tool Settings
 ui.panel.unknown=Panel
+ui.shell.toolbar=Toolbar
+ui.shell.status=Status
 
 ui.settings.interface=Interface
 ui.settings.locale=Language

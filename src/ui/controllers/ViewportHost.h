@@ -32,6 +32,14 @@ namespace quader {
 class QuaderEditorApi;
 class ViewportWorkspaceService;
 
+/// Stores the measured viewport frame in framebuffer pixels.
+struct ViewportFrameRect {
+    int left = 0;
+    int top = 0;
+    std::uint32_t width = 1u;
+    std::uint32_t height = 1u;
+};
+
 /**
  * Coordinates UI viewport components, render targets, texture sources, and viewport input.
  */
@@ -46,6 +54,7 @@ public:
     bool processEvent(const SDL_Event& event);
     void beginFrame(const FrameTiming& frameTiming);
     void resize(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
+    void setMainViewportFrame(int left, int top, std::uint32_t width, std::uint32_t height);
     void handleFrame(QuaderEditorApi& editor, SceneDocument& document, const AssetRegistry& assets, bool inputSuppressed);
     void prepareViewports(
             QuaderEditorApi& editor,
@@ -71,6 +80,7 @@ private:
     struct ViewportWindowInstance;
 
     void updateWindowMetrics();
+    [[nodiscard]] bool mainViewportContainsWindowPoint(float windowX, float windowY) const;
     ViewportInputFrame buildViewportInputFrame() const;
     ViewportModifiers currentModifiers() const;
     void clearTransientInput();
@@ -94,6 +104,7 @@ private:
     FrameTiming currentFrameTiming_ = {};
     std::uint32_t framebufferWidth_ = 1u;
     std::uint32_t framebufferHeight_ = 1u;
+    ViewportFrameRect mainViewportFrame_;
     int windowWidth_ = 1;
     int windowHeight_ = 1;
     QVec2 mouseWindow_ = {};

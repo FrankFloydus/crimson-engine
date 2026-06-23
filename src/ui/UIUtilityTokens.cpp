@@ -103,6 +103,20 @@ void appendSpacingUtilities(std::ostringstream& rcss, std::string_view suffix, s
     appendRule(rcss, std::string("ml-") + std::string(suffix), "margin-left", value);
 }
 
+void appendSizingUtilities(std::ostringstream& rcss, std::string_view suffix, std::string_view value) {
+    if (!isSafeUtilityName(suffix) || !isSafeRcssValue(value)) {
+        return;
+    }
+
+    appendRule2(rcss, std::string("size-") + std::string(suffix), "width", value, "height", value);
+    appendRule(rcss, std::string("w-") + std::string(suffix), "width", value);
+    appendRule(rcss, std::string("h-") + std::string(suffix), "height", value);
+    appendRule(rcss, std::string("min-w-") + std::string(suffix), "min-width", value);
+    appendRule(rcss, std::string("max-w-") + std::string(suffix), "max-width", value);
+    appendRule(rcss, std::string("min-h-") + std::string(suffix), "min-height", value);
+    appendRule(rcss, std::string("max-h-") + std::string(suffix), "max-height", value);
+}
+
 void appendUtilityToken(std::ostringstream& rcss, const UIUtilityToken& token) {
     if (!isSafeUtilityName(token.name) || !isSafeRcssValue(token.value)) {
         return;
@@ -119,11 +133,19 @@ void appendUtilityToken(std::ostringstream& rcss, const UIUtilityToken& token) {
     } else if (startsWith(name, "space-")) {
         appendSpacingUtilities(rcss, name.substr(6), value);
     } else if (startsWith(name, "size-")) {
-        appendRule2(rcss, name, "width", value, "height", value);
+        appendSizingUtilities(rcss, name.substr(5), value);
     } else if (startsWith(name, "w-")) {
         appendRule(rcss, name, "width", value);
     } else if (startsWith(name, "h-")) {
         appendRule(rcss, name, "height", value);
+    } else if (startsWith(name, "min-w-")) {
+        appendRule(rcss, name, "min-width", value);
+    } else if (startsWith(name, "max-w-")) {
+        appendRule(rcss, name, "max-width", value);
+    } else if (startsWith(name, "min-h-")) {
+        appendRule(rcss, name, "min-height", value);
+    } else if (startsWith(name, "max-h-")) {
+        appendRule(rcss, name, "max-height", value);
     } else if (startsWith(name, "border-")) {
         appendRule(rcss, name, "border-width", value);
     } else if (startsWith(name, "kerning-")) {

@@ -380,6 +380,10 @@ TEST(BuildGuardrailTests, PaletteTokenResourcesArePackagedWithRuntime) {
 
     expectContains(rootCMake, "src/ui/DebugPaletteView.cpp");
     expectContains(rootCMake, "src/ui/UIUtilityTokens.cpp");
+    expectContains(rootCMake, "src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
+    expectContains(rootCMake, "src/ui/components/organisms/MainLayoutModel.cpp");
+    expectContains(rootCMake, "src/ui/controllers/MainLayoutController.cpp");
+    expectContains(rootCMake, "src/ui/controllers/ResizableSplitController.cpp");
     expectContains(rootCMake, "src/ui/backends/rml/RmlUiContextHost.cpp");
     expectContains(rootCMake, "src/ui/controllers/ViewportHost.cpp");
     expectContains(rootCMake, "resources/ui/rml/viewport-shell.rml");

@@ -200,6 +200,12 @@ void ViewportHost::initialize(SDL_Window* window, RenderSystem& renderSystem, co
     renderSystem_ = &renderSystem;
     settings_ = settings;
     updateWindowMetrics();
+    mainViewportFrame_ = {
+            .left = 0,
+            .top = 0,
+            .width = framebufferWidth_,
+            .height = framebufferHeight_,
+    };
     renderer_.initialize(renderSystem.engine(),
             renderSystem.scene(),
             renderSystem.textures(),
@@ -246,14 +252,23 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_UP: {
         mouseWindow_ = {event.button.x, event.button.y};
         const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        const bool startedInMainViewport = down && mainViewportContainsWindowPoint(event.button.x, event.button.y);
         if (event.button.button == SDL_BUTTON_MIDDLE) {
-            middleDown_ = down;
-            middlePressed_ = middlePressed_ || down;
-            middleReleased_ = middleReleased_ || !down;
+            if (down) {
+                middleDown_ = startedInMainViewport;
+                middlePressed_ = middlePressed_ || startedInMainViewport;
+            } else {
+                middleReleased_ = middleReleased_ || middleDown_;
+                middleDown_ = false;
+            }
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
-            rightDown_ = down;
-            rightPressed_ = rightPressed_ || down;
-            rightReleased_ = rightReleased_ || !down;
+            if (down) {
+                rightDown_ = startedInMainViewport;
+                rightPressed_ = rightPressed_ || startedInMainViewport;
+            } else {
+                rightReleased_ = rightReleased_ || rightDown_;
+                rightDown_ = false;
+            }
         }
         break;
     }
@@ -325,6 +340,19 @@ void ViewportHost::resize(std::uint32_t framebufferWidth, std::uint32_t framebuf
     framebufferHeight_ = std::max(1u, framebufferHeight);
 }
 
+void ViewportHost::setMainViewportFrame(
+        int left,
+        int top,
+        std::uint32_t width,
+        std::uint32_t height) {
+    mainViewportFrame_ = {
+            .left = std::max(0, left),
+            .top = std::max(0, top),
+            .width = std::max(1u, width),
+            .height = std::max(1u, height),
+    };
+}
+
 void ViewportHost::handleFrame(
         QuaderEditorApi& editor,
         SceneDocument& document,
@@ -336,8 +364,8 @@ void ViewportHost::handleFrame(
     workspace.clearPaneVisibility();
     workspace.setPaneVisible(mainViewport_.pane, true);
     workspace.setPaneRenderSize(mainViewport_.pane, {
-            static_cast<float>(framebufferWidth_),
-            static_cast<float>(framebufferHeight_),
+            static_cast<float>(mainViewportFrame_.width),
+            static_cast<float>(mainViewportFrame_.height),
     });
 
     if (inputSuppressed) {
@@ -372,12 +400,12 @@ void ViewportHost::prepareViewports(
     ViewportWorkspaceService& workspace = QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
     workspace.setPaneVisible(mainViewport_.pane, true);
     workspace.setPaneRenderSize(mainViewport_.pane, {
-            static_cast<float>(framebufferWidth_),
-            static_cast<float>(framebufferHeight_),
+            static_cast<float>(mainViewportFrame_.width),
+            static_cast<float>(mainViewportFrame_.height),
     });
 
     ViewportWorkspacePaneState& pane = workspace.pane(mainViewport_.pane);
-    renderer_.resize(framebufferWidth_, framebufferHeight_);
+    renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height);
     renderer_.updateCamera(pane.camera);
     renderer_.updateGroundGrid(
             pane.camera,
@@ -470,8 +498,29 @@ void ViewportHost::updateWindowMetrics() {
     float mouseY = 0.0f;
     const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mouseX, &mouseY);
     mouseWindow_ = {mouseX, mouseY};
-    middleDown_ = (buttons & SDL_BUTTON_MMASK) != 0u;
-    rightDown_ = (buttons & SDL_BUTTON_RMASK) != 0u;
+    if ((buttons & SDL_BUTTON_MMASK) == 0u) {
+        middleDown_ = false;
+    }
+    if ((buttons & SDL_BUTTON_RMASK) == 0u) {
+        rightDown_ = false;
+    }
+}
+
+bool ViewportHost::mainViewportContainsWindowPoint(float windowX, float windowY) const {
+    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
+    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
+    const QVec2 mousePixel = {
+            windowX * scaleX,
+            windowY * scaleY,
+    };
+    const QVec2 mouseLocal = {
+            mousePixel.x - static_cast<float>(mainViewportFrame_.left),
+            mousePixel.y - static_cast<float>(mainViewportFrame_.top),
+    };
+    return mouseLocal.x >= 0.0f &&
+            mouseLocal.y >= 0.0f &&
+            mouseLocal.x <= static_cast<float>(mainViewportFrame_.width) &&
+            mouseLocal.y <= static_cast<float>(mainViewportFrame_.height);
 }
 
 ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
@@ -481,13 +530,17 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
             mouseWindow_.x * scaleX,
             mouseWindow_.y * scaleY,
     };
+    const QVec2 mouseLocal = {
+            mousePixel.x - static_cast<float>(mainViewportFrame_.left),
+            mousePixel.y - static_cast<float>(mainViewportFrame_.top),
+    };
     const QVec2 mouseDelta = relativeMouseCaptured_
             ? relativeMouseDelta_
             : QVec2{mouseDeltaWindow_.x * scaleX, mouseDeltaWindow_.y * scaleY};
-    const bool hovered = mousePixel.x >= 0.0f &&
-            mousePixel.y >= 0.0f &&
-            mousePixel.x <= static_cast<float>(framebufferWidth_) &&
-            mousePixel.y <= static_cast<float>(framebufferHeight_);
+    const bool hovered = mouseLocal.x >= 0.0f &&
+            mouseLocal.y >= 0.0f &&
+            mouseLocal.x <= static_cast<float>(mainViewportFrame_.width) &&
+            mouseLocal.y <= static_cast<float>(mainViewportFrame_.height);
     ViewportInputFrame input;
     input.viewportHovered = hovered || inputRouter_.navigating();
     input.viewportFocused = true;
@@ -501,11 +554,11 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
     input.mouseWheel = input.viewportHovered ? wheelY_ : 0.0f;
     input.deltaSeconds = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
     input.mouseScreen = mousePixel;
-    input.mouseLocal = mousePixel;
+    input.mouseLocal = mouseLocal;
     input.mouseDelta = mouseDelta;
     input.viewportSize = {
-            static_cast<float>(framebufferWidth_),
-            static_cast<float>(framebufferHeight_),
+            static_cast<float>(mainViewportFrame_.width),
+            static_cast<float>(mainViewportFrame_.height),
     };
     input.modifiers = currentModifiers();
     if (keysDown_.contains(ViewportKey::W)) {
