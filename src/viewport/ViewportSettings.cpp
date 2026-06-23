@@ -32,8 +32,6 @@ constexpr float kMinVertexSize = 2.0f;
 constexpr float kMaxVertexSize = 32.0f;
 constexpr float kMinVertexGrowth = 0.0f;
 constexpr float kMaxVertexGrowth = 12.0f;
-constexpr float kMinMeasurementTextSize = 8.0f;
-constexpr float kMaxMeasurementTextSize = 28.0f;
 constexpr float kMinPickRadius = 0.001f;
 constexpr float kMaxPickRadius = 2.0f;
 
@@ -69,7 +67,6 @@ const std::array<ViewportSettingsSectionDescriptor, kViewportSettingsSectionCoun
         {ViewportSettingsSectionId::Selection, "Selection", false},
         {ViewportSettingsSectionId::Overlay, "Overlay", false},
         {ViewportSettingsSectionId::Vertices, "Vertices", false},
-        {ViewportSettingsSectionId::Measurements, "Measurements", false},
         {ViewportSettingsSectionId::Picking, "Picking", false},
         {ViewportSettingsSectionId::Gizmo, "Gizmo", false},
 }};
@@ -94,8 +91,6 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount> kCo
         {ViewportColorSettingId::SelectedVertex, ViewportSettingsSectionId::Vertices, "Selected Vertex", key("SelectedVertexColor"), abgr8(0xff1fadffU)},
         {ViewportColorSettingId::HoverVertex, ViewportSettingsSectionId::Vertices, "Hover Vertex", key("HoverVertexColor"), abgr8(0xff38ff00U)},
         {ViewportColorSettingId::RemoveSelectionVertex, ViewportSettingsSectionId::Vertices, "Remove Vertex", key("RemoveSelectionVertexColor"), abgr8(0xffff6b1fU)},
-        {ViewportColorSettingId::MeasurementText, ViewportSettingsSectionId::Measurements, "Text", key("MeasurementTextColor"), color(1.0f, 1.0f, 1.0f, 1.0f)},
-        {ViewportColorSettingId::MeasurementOutline, ViewportSettingsSectionId::Measurements, "Outline", key("MeasurementOutlineColor"), color(0.0f, 0.0f, 0.0f, 0.95f)},
 }};
 
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFloatSettings{{
@@ -112,8 +107,6 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::SelectedVertexGrowth, ViewportSettingsSectionId::Vertices, "Selected Growth", key("SelectedVertexGrowth"), kMinVertexGrowth, kMaxVertexGrowth, 0.5f},
         {ViewportFloatSettingId::HoverVertexGrowth, ViewportSettingsSectionId::Vertices, "Hover Growth", key("HoverVertexGrowth"), kMinVertexGrowth, kMaxVertexGrowth, 0.5f},
         {ViewportFloatSettingId::VertexOutlineSize, ViewportSettingsSectionId::Vertices, "Outline Size", key("VertexOutlineSize"), kMinVertexGrowth, kMaxVertexGrowth, 1.0f},
-        {ViewportFloatSettingId::MeasurementLineSize, ViewportSettingsSectionId::Measurements, "Line Size", key("MeasurementLineSize"), kMinLineSize, kMaxLineSize, 2.0f},
-        {ViewportFloatSettingId::MeasurementTextSize, ViewportSettingsSectionId::Measurements, "Text Size", key("MeasurementTextSize"), kMinMeasurementTextSize, kMaxMeasurementTextSize, 8.0f},
         {ViewportFloatSettingId::PickVertexRadius, ViewportSettingsSectionId::Picking, "Vertex Radius", key("PickVertexRadius"), kMinPickRadius, kMaxPickRadius, 0.3f},
         {ViewportFloatSettingId::PickEdgeRadius, ViewportSettingsSectionId::Picking, "Edge Radius", key("PickEdgeRadius"), kMinPickRadius, kMaxPickRadius, 0.2f},
         {ViewportFloatSettingId::GizmoSize, ViewportSettingsSectionId::Gizmo, "Size", key("GizmoSize"), kMinGizmoSize, kMaxGizmoSize, 1.0f},

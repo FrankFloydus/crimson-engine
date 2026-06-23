@@ -94,6 +94,7 @@ private:
     QVec2 lastMouse_ = {};
     QVec3 startWorldPivot_ = {};
     QVec2 startMouse_ = {};
+    std::optional<QVec3> rotationOverlayStartDirection_;
 };
 
 } // namespace quader

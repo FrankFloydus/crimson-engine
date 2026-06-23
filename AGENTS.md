@@ -26,6 +26,25 @@ Always read:
 - `agents/domain-ownership.md`
 - `agents/testing-build.md`
 
+## Duplication And Source-Of-Truth Rule
+
+Before adding new behavior, search for existing implementations, helpers, services, command paths,
+projection code, cached state, and tests that already solve the same problem. Prefer extending or
+moving the owner implementation over copying similar logic into another layer.
+
+Treat these as architecture risks, not cleanup preferences:
+
+- repeated logic that could be one helper/service/command;
+- overlapping code with the same behavior but different names or ordering;
+- parallel sources of truth for scene, modeling, viewport, UI, history, asset, or render state;
+- copied cache/projection/conversion helpers that can drift;
+- similar command, selection, transform, hierarchy, or asset-validation behavior written
+  differently in public API, UI, services, and low-level owners.
+
+When you find duplication, route the call site to the existing owner if one exists. If no clear
+owner exists, create the narrowest owner in the domain that owns the data and invariants, then update
+call sites to use it. Add or update guardrail tests when the change prevents future drift.
+
 ## Restore Rule
 
 When the user asks to restore previous working behavior, do not redesign, reinterpret, or replace
@@ -94,6 +113,11 @@ The worktree may already be dirty. Do not revert changes you did not make unless
 asks. Work with existing edits when they affect the task, and ignore unrelated edits.
 
 ## Expected Commands
+
+When launching builds, tests, or full verification commands through Codex tools, set the command
+timeout to at least 10 minutes (`600000` ms). Do not use short defaults such as 120 seconds for
+`cmake --build`, `ctest`, or wrapper scripts that run them; this project often needs more than
+5 minutes before the build finishes.
 
 ```powershell
 cmake --preset vs2026

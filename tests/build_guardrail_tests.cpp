@@ -240,8 +240,6 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     expectContains(buildFiles, "quader_qdr_runtime_io");
     expectContains(buildFiles, "qdr_custom_engine_modeling_runtime_smoke_tests");
     expectContains(buildFiles, "qdr_runtime_io_compat_tests");
-    expectContains(buildFiles, "qdr_modeling_runtime_measurement_tests");
-    expectContains(buildFiles, "tests/modeling_domain/qdr_modeling_runtime_measurement_tests.cpp");
     expectContains(buildFiles, "tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp");
     expectContains(buildFiles, "qdr_editor_metadata_operation_catalog_tests");
     expectMissing(buildFiles, "src/modeling");

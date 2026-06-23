@@ -347,7 +347,7 @@ struct HostGestureDescriptor {
 	bool blocked_by_active_preview = false;
 	bool suppressed_while_fly_navigation = false;
 	bool consumes_pointer_when_active = false;
-	bool suppresses_gizmo_and_measurements = false;
+	bool suppresses_gizmo = false;
 	bool returns_to_select_on_cancel = false;
 	bool returns_to_select_on_success = false;
 	bool rebuilds_mesh_on_success = false;
@@ -459,8 +459,8 @@ struct HostOverlayRenderPolicyDescriptor {
  * Stores the Host Overlay Presentation Descriptor data contract used by the editor metadata catalog.
  */
 struct HostOverlayPresentationDescriptor {
-	bool suppress_gizmo_and_measurements_for_blocking_preview = true;
-	bool suppress_gizmo_and_measurements_for_modal_tool = true;
+	bool suppress_gizmo_for_blocking_preview = true;
+	bool suppress_gizmo_for_modal_tool = true;
 	HostColorDescriptor blocking_preview_wire_color;
 	std::span<const std::string_view> blocking_preview_override_layer_ids;
 	std::span<const std::string_view> draw_order_layer_ids;

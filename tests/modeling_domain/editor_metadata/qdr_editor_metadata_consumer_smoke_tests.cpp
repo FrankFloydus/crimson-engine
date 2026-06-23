@@ -151,7 +151,7 @@ TEST_CASE("custom engine shell can resolve preference-backed panels and tool gro
 {
 	const qhc::HostPanelDescriptor *viewport_settings = qhc::find_panel_descriptor("viewport_settings");
 	REQUIRE(viewport_settings != nullptr);
-	REQUIRE(viewport_settings->preference_group_ids.size() == 8U);
+	REQUIRE(viewport_settings->preference_group_ids.size() == 7U);
 	for (std::string_view group_id : viewport_settings->preference_group_ids) {
 		const qhc::HostPreferenceGroupDescriptor *group = qhc::find_preference_group_descriptor(group_id);
 		REQUIRE(group != nullptr);

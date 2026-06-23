@@ -459,13 +459,12 @@ std::span<const HostToolGroupDescriptor> tool_group_descriptors()
 
 std::span<const HostPanelDescriptor> panel_descriptors()
 {
-	static constexpr std::array<std::string_view, 8> viewport_settings_groups {{
+	static constexpr std::array<std::string_view, 7> viewport_settings_groups {{
 		"viewport.scene",
 		"viewport.grid",
 		"viewport.selection",
 		"viewport.overlay",
 		"viewport.vertices",
-		"viewport.measurements",
 		"viewport.picking",
 		"viewport.gizmo",
 	}};
@@ -684,7 +683,7 @@ HostGestureDescriptor gesture(
 		bool blocked_by_active_preview,
 		bool suppressed_while_fly_navigation,
 		bool consumes_pointer_when_active,
-		bool suppresses_gizmo_and_measurements,
+		bool suppresses_gizmo,
 		bool returns_to_select_on_cancel,
 		bool returns_to_select_on_success,
 		bool rebuilds_mesh_on_success)
@@ -704,7 +703,7 @@ HostGestureDescriptor gesture(
 		blocked_by_active_preview,
 		suppressed_while_fly_navigation,
 		consumes_pointer_when_active,
-		suppresses_gizmo_and_measurements,
+		suppresses_gizmo,
 		returns_to_select_on_cancel,
 		returns_to_select_on_success,
 		rebuilds_mesh_on_success,
@@ -1168,7 +1167,7 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_both), true },
 	}};
 
-	static const std::array<HostPreferenceDescriptor, 49> descriptors {{
+	static const std::array<HostPreferenceDescriptor, 45> descriptors {{
 		operation_int_preference("operation.bridge.steps", bridge.steps, "operation.bridge", bridge.operation_id),
 		operation_float_preference("operation.edge_bevel.width", edge_bevel.width, "operation.edge_bevel", edge_bevel.operation_id),
 		operation_float_preference("operation.edge_bevel.profile", edge_bevel.profile, "operation.edge_bevel", edge_bevel.operation_id),
@@ -1199,9 +1198,6 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 		color_preference("viewport.vertices.selected_vertex_color", "Selected Vertex", color_from_abgr(0xff1fadffU), "viewport.vertices", "selected_vertex"),
 		color_preference("viewport.vertices.hover_vertex_color", "Hover Vertex", color_from_abgr(0xff38ff00U), "viewport.vertices", "hover_vertex"),
 		color_preference("viewport.vertices.remove_selection_vertex_color", "Remove Vertex", color_from_abgr(0xffff6b1fU), "viewport.vertices", "hover_vertex"),
-		color_preference("viewport.measurements.text_color", "Text", color_rgba(1.0, 1.0, 1.0, 1.0), "viewport.measurements"),
-		color_preference("viewport.measurements.outline_color", "Outline", color_rgba(0.0, 0.0, 0.0, 0.95), "viewport.measurements"),
-
 		float_preference("viewport.grid.minor_line_size", "Minor Line", HostPreferenceScope::viewport_style, 0.32, 0.25, 8.0, 0.0, "viewport.grid"),
 		float_preference("viewport.grid.major_line_size", "Major Line", HostPreferenceScope::viewport_style, 0.36, 0.25, 8.0, 0.0, "viewport.grid"),
 		float_preference("viewport.grid.axis_line_size", "QAxis Line", HostPreferenceScope::viewport_style, 0.65, 0.25, 8.0, 0.0, "viewport.grid"),
@@ -1215,8 +1211,6 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 		float_preference("viewport.vertices.selected_growth", "Selected Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "selected_vertex"),
 		float_preference("viewport.vertices.hover_growth", "Hover Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "hover_vertex"),
 		float_preference("viewport.vertices.outline_size", "Outline Size", HostPreferenceScope::viewport_style, 1.0, 0.0, 12.0, 0.0, "viewport.vertices"),
-		float_preference("viewport.measurements.line_size", "Line Size", HostPreferenceScope::viewport_style, 2.0, 0.25, 8.0, 0.0, "viewport.measurements"),
-		float_preference("viewport.measurements.text_size", "Text Size", HostPreferenceScope::viewport_style, 8.0, 8.0, 28.0, 0.0, "viewport.measurements"),
 		float_preference("viewport.picking.vertex_radius", "Vertex Radius", HostPreferenceScope::viewport_picking, 0.3, 0.001, 2.0, 0.0, "viewport.picking"),
 		float_preference("viewport.picking.edge_radius", "Edge Radius", HostPreferenceScope::viewport_picking, 0.2, 0.001, 2.0, 0.0, "viewport.picking"),
 		float_preference("viewport.gizmo.size", "Size", HostPreferenceScope::viewport_interaction, 1.0, 0.5, 2.0, 0.0, "viewport.gizmo"),
@@ -1290,12 +1284,6 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 		"viewport.vertices.hover_growth",
 		"viewport.vertices.outline_size",
 	}};
-	static constexpr std::array<std::string_view, 4> viewport_measurement_preferences {{
-		"viewport.measurements.text_color",
-		"viewport.measurements.outline_color",
-		"viewport.measurements.line_size",
-		"viewport.measurements.text_size",
-	}};
 	static constexpr std::array<std::string_view, 2> viewport_picking_preferences {{
 		"viewport.picking.vertex_radius",
 		"viewport.picking.edge_radius",
@@ -1304,7 +1292,7 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 		"viewport.gizmo.size",
 	}};
 
-	static const std::array<HostPreferenceGroupDescriptor, 14> descriptors {{
+	static const std::array<HostPreferenceGroupDescriptor, 13> descriptors {{
 		{ "operation.bridge", "Bridge", HostPreferenceScope::operation, operation_bridge_preferences },
 		{ "operation.edge_bevel", "Edge Bevel", HostPreferenceScope::operation, operation_edge_bevel_preferences },
 		{ "operation.thicken", "Thicken", HostPreferenceScope::operation, operation_thicken_preferences },
@@ -1316,7 +1304,6 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 		{ "viewport.selection", "Selection", HostPreferenceScope::viewport_style, viewport_selection_preferences },
 		{ "viewport.overlay", "Overlay", HostPreferenceScope::viewport_style, viewport_overlay_preferences },
 		{ "viewport.vertices", "Vertices", HostPreferenceScope::viewport_style, viewport_vertex_preferences },
-		{ "viewport.measurements", "Measurements", HostPreferenceScope::viewport_style, viewport_measurement_preferences },
 		{ "viewport.picking", "Picking", HostPreferenceScope::viewport_picking, viewport_picking_preferences },
 		{ "viewport.gizmo", "Gizmo", HostPreferenceScope::viewport_interaction, viewport_gizmo_preferences },
 	}};
@@ -1801,8 +1788,8 @@ const HostPreferenceGroupDescriptor *find_preference_group_descriptor(std::strin
 HostOverlayPresentationDescriptor overlay_presentation()
 {
 	HostOverlayPresentationDescriptor descriptor;
-	descriptor.suppress_gizmo_and_measurements_for_blocking_preview = true;
-	descriptor.suppress_gizmo_and_measurements_for_modal_tool = true;
+	descriptor.suppress_gizmo_for_blocking_preview = true;
+	descriptor.suppress_gizmo_for_modal_tool = true;
 	descriptor.blocking_preview_wire_color = color_from_abgr(0xebffe05cU);
 	descriptor.blocking_preview_override_layer_ids = blocking_preview_override_layer_ids();
 	descriptor.draw_order_layer_ids = overlay_draw_order_layer_ids();

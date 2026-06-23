@@ -43,7 +43,6 @@ inline constexpr double selection_box_default_drag_threshold = 4.0;
 inline constexpr double transform_gizmo_tau = 6.28318530717958647692;
 inline constexpr double transform_gizmo_axis_hide_score = 0.02;
 inline constexpr double transform_gizmo_axis_full_score = 0.1;
-inline constexpr double measurement_default_map_units_per_world_unit = 32.0;
 inline constexpr float pick_cycle_default_max_screen_distance = 4.0F;
 inline constexpr float default_map_units_per_world_unit = 32.0F;
 inline constexpr float default_scene_footprint_map_units = 128.0F;

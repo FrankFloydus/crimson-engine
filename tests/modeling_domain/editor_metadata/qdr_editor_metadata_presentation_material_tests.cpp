@@ -83,8 +83,8 @@ TEST_CASE("host contract describes viewport overlay presentation policy", "[host
 {
 	const qhc::HostOverlayPresentationDescriptor presentation = qhc::overlay_presentation();
 
-	CHECK(presentation.suppress_gizmo_and_measurements_for_blocking_preview);
-	CHECK(presentation.suppress_gizmo_and_measurements_for_modal_tool);
+	CHECK(presentation.suppress_gizmo_for_blocking_preview);
+	CHECK(presentation.suppress_gizmo_for_modal_tool);
 	check_color(presentation.blocking_preview_wire_color, 0x5c / 255.0, 0xe0 / 255.0, 1.0, 0xeb / 255.0);
 
 	REQUIRE(presentation.blocking_preview_override_layer_ids.size() == 4U);

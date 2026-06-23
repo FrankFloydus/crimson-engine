@@ -91,6 +91,18 @@ struct TransformGizmoPlanePrimitive {
  */
 struct TransformGizmoRingSegmentPrimitive {
 	TransformAxis axis = TransformAxis::none;
+	quader::QVec3 world_start;
+	quader::QVec3 world_end;
+	quader::QVec2 screen_start;
+	quader::QVec2 screen_end;
+	float alpha = 1.0F;
+	bool front_facing = true;
+};
+
+/**
+ * Represents a Transform Gizmo Trackball Ring Segment value used by the modal modeling interaction layer.
+ */
+struct TransformGizmoTrackballSegmentPrimitive {
 	quader::QVec2 screen_start;
 	quader::QVec2 screen_end;
 };
@@ -116,6 +128,7 @@ struct TransformGizmoFrame {
 	std::vector<TransformGizmoAxisPrimitive> axes;
 	std::vector<TransformGizmoPlanePrimitive> planes;
 	std::vector<TransformGizmoRingSegmentPrimitive> ring_segments;
+	std::vector<TransformGizmoTrackballSegmentPrimitive> trackball_segments;
 };
 
 /**
@@ -142,6 +155,7 @@ double transform_gizmo_axis_projection_scale(quader::QVec3 camera_origin, quader
 bool transform_gizmo_axis_is_visible(quader::QVec3 camera_origin, quader::QVec3 world_center, quader::QVec3 world_axis);
 double transform_gizmo_axis_alpha(quader::QVec3 camera_origin, quader::QVec3 world_center, quader::QVec3 world_axis);
 quader::QVec3 transform_gizmo_ring_point(quader::QVec3 world_center, const TransformGizmoAxisBasis& axis, double radius, double angle);
+double viewport_world_units_per_pixel(const ViewportCameraState& camera, quader::QVec3 anchor);
 TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& input);
 TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input, quader::QVec2 screen_position);
 double distance_to_screen_segment_squared(quader::QVec2 point, quader::QVec2 a, quader::QVec2 b);

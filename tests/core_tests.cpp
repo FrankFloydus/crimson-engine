@@ -430,16 +430,15 @@ TEST(UISystemTests, ShowMenuTogglesNavigationGizmo) {
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     const ViewportSettings settings = ViewportSettings::defaults();
 
-    ASSERT_EQ(viewportSettingsSections().size(), 8u);
+    ASSERT_EQ(viewportSettingsSections().size(), 7u);
     EXPECT_EQ(viewportSettingsSections()[0].label, "Scene");
     EXPECT_TRUE(viewportSettingsSections()[0].defaultExpanded);
     EXPECT_EQ(viewportSettingsSections()[1].label, "Grid");
     EXPECT_EQ(viewportSettingsSections()[2].label, "Selection");
     EXPECT_EQ(viewportSettingsSections()[3].label, "Overlay");
     EXPECT_EQ(viewportSettingsSections()[4].label, "Vertices");
-    EXPECT_EQ(viewportSettingsSections()[5].label, "Measurements");
-    EXPECT_EQ(viewportSettingsSections()[6].label, "Picking");
-    EXPECT_EQ(viewportSettingsSections()[7].label, "Gizmo");
+    EXPECT_EQ(viewportSettingsSections()[5].label, "Picking");
+    EXPECT_EQ(viewportSettingsSections()[6].label, "Gizmo");
 
     expectColorNear(settings.color(ViewportColorSettingId::Background), {0.0509804f, 0.0509804f, 0.0509804f, 1.0f});
     expectColorNear(settings.color(ViewportColorSettingId::SelectionWire), {1.0f, 0.827451f, 0.121569f, 1.0f});
@@ -1438,7 +1437,7 @@ TEST(TransformGizmoTests, ScreenSizedMoveScaleFrameDoesNotUseGridAsVisualFloor) 
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const double axis_length = pixel_world * screen_size;"), std::string::npos);
-    EXPECT_NE(source.find("const double plane_offset = pixel_world * (screen_size * 0.36);"), std::string::npos);
+    EXPECT_NE(source.find("const double plane_offset = pixel_world * (screen_size * 0.50);"), std::string::npos);
     EXPECT_NE(source.find("const double plane_half_size = pixel_world * (8.0 * visual_scale);"), std::string::npos);
     EXPECT_EQ(source.find("safe_grid"), std::string::npos);
     EXPECT_EQ(source.find("safe_grid *"), std::string::npos);

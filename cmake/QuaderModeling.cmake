@@ -151,7 +151,6 @@ endif()
 target_link_libraries(quader_modeling_polygon PRIVATE quader_geometry quader_modeling_profile)
 
 set(QUADER_MODELING_RUNTIME_SOURCES
-    src/editor/modeling/runtime/measurement_policy.cpp
     src/editor/modeling/runtime/overlay_visibility.cpp
     src/editor/modeling/runtime/repeat_last_action.cpp
     src/editor/modeling/runtime/selection_policy.cpp
@@ -390,7 +389,6 @@ if(QUADER_BUILD_TESTS)
     quader_add_qdr_document_domain_test(qdr_io_document_tests tests/modeling_domain/qdr_io_document_tests.cpp)
     quader_add_qdr_runtime_domain_test(qdr_runtime_io_compat_tests tests/modeling_domain/qdr_runtime_io_compat_tests.cpp)
 
-    quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_measurement_tests tests/modeling_domain/qdr_modeling_runtime_measurement_tests.cpp)
     quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_overlay_tests tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp)
     quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_picking_tests tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp)
     quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_lifecycle_tests tests/modeling_domain/qdr_modeling_runtime_lifecycle_tests.cpp)

@@ -15,8 +15,19 @@ file except through prior written authorization from Francesco Di Blasi.
 - Scene data, assets, descriptors, logger sinks, and viewport navigation should be testable without
   opening a window.
 - GPU/window behavior is validated with manual smoke tests until a render-test harness exists.
+- When fixing duplicated logic or source-of-truth drift, add a behavioral test for the state that
+  used to desynchronize and, where useful, a focused guardrail test that points future agents at the
+  canonical owner.
+- Prefer synthetic tests that verify undo/redo, revision stamps, selection sync, cache invalidation,
+  mesh/material component settings, viewport derived state, and command aliases after the shared
+  owner path runs.
 
 ## Expected Commands
+
+When launching these commands through Codex tools, set `timeout_ms` to at least 10 minutes
+(`600000`). Clean builds and full verification scripts may need longer. Do not run
+`cmake --build`, `ctest`, or wrappers around them with 120-second timeouts, because this project
+often needs more than 5 minutes before the build finishes.
 
 ```powershell
 cmake --preset vs2026
@@ -31,6 +42,7 @@ If PowerShell inherits conflicting `PATH`/`Path` entries and CMake cannot find t
 
 ```powershell
 $p = $env:Path
+# Use timeout_ms >= 600000 when running this workaround through Codex tools.
 cmd /c "set PATH=& set Path=$p& cmake --build --preset vs2026-debug --target quader"
 ```
 

@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/tool_snapping.h>
 
-#include <editor/interactions/measurement_tool.h>
 #include <editor/modeling/runtime/tool_constants.h>
 
 #include <mesh/geometry/geometry.h>
@@ -14,8 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
-#include <cstdio>
 #include <limits>
 
 namespace quader_editor_core {
@@ -83,27 +80,6 @@ InsertEdgeLoopSnapResult snap_insert_edge_loop_factor_result(
 }
 
 } // namespace
-
-std::string measurement_number_text(double value, bool force_decimals)
-{
-	if (std::abs(value) < 0.005) {
-		value = 0.0;
-	}
-	if (!force_decimals) {
-		const double rounded = std::round(value);
-		if (std::abs(value - rounded) < 0.005) {
-			return std::to_string(static_cast<std::int64_t>(rounded));
-		}
-	}
-	char buffer[32] {};
-	std::snprintf(buffer, sizeof(buffer), "%.2f", value);
-	return buffer;
-}
-
-std::string measurement_length_text(double world_length, double map_units_per_world_unit, bool force_decimals)
-{
-	return measurement_number_text(world_length * map_units_per_world_unit, force_decimals);
-}
 
 double snap_world_value(double value, double grid_size)
 {

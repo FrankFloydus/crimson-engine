@@ -23,9 +23,13 @@ struct RotateToolState {
 	std::vector<int> object_ids;
 	quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
+	quader::QVec2 start_screen;
 	double start_angle = 0.0;
 	double last_angle = 0.0;
 	double drag_view_sign = 1.0;
+	bool edge_on_linear_drag = false;
+	quader::QVec2 edge_on_screen_axis { 1.0F, 0.0F };
+	double edge_on_radius_pixels = 1.0;
 	double accumulated_angle_degrees = 0.0;
 	double preview_angle_degrees = 0.0;
 };
@@ -40,6 +44,8 @@ struct RotateBeginInput {
 	quader::QVec2 screen_position;
 	bool has_screen_pivot = false;
 	quader::QVec2 screen_pivot;
+	bool has_screen_tip = false;
+	quader::QVec2 screen_tip;
 	bool has_world_direction = false;
 	quader::QVec3 world_direction;
 	bool has_world_pivot = false;

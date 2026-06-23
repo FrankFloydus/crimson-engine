@@ -13,7 +13,6 @@
 #include <io/qdr/QdrRuntimeIoCompat.h>
 #include <mesh/polygon/document.h>
 
-#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -119,17 +118,6 @@ TEST_CASE("custom engine consumer can run a modeling session through app-owned m
 	REQUIRE(gizmo.info.ok);
 	CHECK_FALSE(gizmo.axes.empty());
 	CHECK_FALSE(gizmo.planes.empty());
-
-	qec::MeasurementFrameInput measurement_input;
-	measurement_input.session = &session;
-	measurement_input.hover = &hover;
-	measurement_input.camera = front_camera();
-
-	const qec::MeasurementFrame measurements = qec::build_measurement_frame(measurement_input);
-	CHECK_FALSE(measurements.labels.empty());
-	CHECK(std::any_of(measurements.labels.begin(), measurements.labels.end(), [](const qec::MeasurementLabel& label) {
-		return !label.text.empty();
-	}));
 
 	const std::string serialized = quader_io::serialize_session_state(session.state());
 	REQUIRE(serialized.find("\"format\": \"quader.qdr\"") != std::string::npos);

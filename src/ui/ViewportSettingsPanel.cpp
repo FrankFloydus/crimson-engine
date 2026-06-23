@@ -30,8 +30,6 @@ std::string_view sectionStableId(ViewportSettingsSectionId section) {
         return "overlay";
     case ViewportSettingsSectionId::Vertices:
         return "vertices";
-    case ViewportSettingsSectionId::Measurements:
-        return "measurements";
     case ViewportSettingsSectionId::Picking:
         return "picking";
     case ViewportSettingsSectionId::Gizmo:

@@ -32,7 +32,6 @@ enum class ViewportSettingsSectionId {
     Selection,
     Overlay,
     Vertices,
-    Measurements,
     Picking,
     Gizmo,
     Count,
@@ -61,8 +60,6 @@ enum class ViewportColorSettingId {
     SelectedVertex,
     HoverVertex,
     RemoveSelectionVertex,
-    MeasurementText,
-    MeasurementOutline,
     Count,
 };
 
@@ -83,8 +80,6 @@ enum class ViewportFloatSettingId {
     SelectedVertexGrowth,
     HoverVertexGrowth,
     VertexOutlineSize,
-    MeasurementLineSize,
-    MeasurementTextSize,
     PickVertexRadius,
     PickEdgeRadius,
     GizmoSize,

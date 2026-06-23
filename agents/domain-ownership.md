@@ -10,6 +10,27 @@ file except through prior written authorization from Francesco Di Blasi.
 
 Use these boundaries when deciding where behavior belongs.
 
+## DRY Ownership Checks
+
+Before implementing a behavior, search the repository for existing code that already owns the same
+decision, conversion, projection, cache, command, or state transition. Do not add a second source of
+truth just because the nearby call site needs a similar result.
+
+If behavior exists in multiple places, choose one owner by domain:
+
+- document entity state, hierarchy, selection records, undoable scene edits, and asset reference
+  validation belong in scene/project/assets/document-command owners;
+- modeling object identity, runtime-to-scene synchronization, mesh projection, picking caches, and
+  selection projection belong in modeling/projection owners;
+- viewport view, camera basis, pane state, grid defaults, and input frame timing belong in viewport
+  or app-frame owners;
+- UI files may assemble context and render presentation, but repeated screen geometry, hit testing,
+  command routing, or editor mutations should be moved to focused helpers/services.
+
+When resolving duplicated behavior, preserve ordering, revision stamps, undo/redo mementos, cache
+invalidation, selection sync, and asset/material/mesh side effects. A refactor that removes
+duplication but changes these state transitions is not acceptable.
+
 ## Former SDK Code And Editor Domains
 
 Former SDK geometry, polygon, editor-core, host-contract, and QDR IO code is now native-app code.

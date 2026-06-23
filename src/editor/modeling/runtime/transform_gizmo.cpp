@@ -242,28 +242,10 @@ void add_gizmo_plane(
 	frame.planes.push_back(primitive);
 }
 
-double projected_axis_length(const ViewportCameraState& camera, quader::QVec3 center, quader::QVec3 axis, double probe_length)
+double screen_sized_world_radius(const ViewportCameraState& camera, quader::QVec3 center, double screen_size)
 {
-	quader::QVec2 screen_center;
-	quader::QVec2 screen_tip;
-	if (!project_viewport_point(camera, center, screen_center) ||
-			!project_viewport_point(camera, center + vec3_scale(axis, probe_length), screen_tip)) {
-		return 0.0;
-	}
-	return std::sqrt(vec2_distance_squared(screen_center, screen_tip));
-}
-
-double screen_sized_world_radius(const ViewportCameraState& camera, quader::QVec3 center, quader::QVec3 ring_a, quader::QVec3 ring_b, double screen_size)
-{
-	const double camera_distance = std::sqrt(quader::length_squared(camera.transform.origin - center));
-	const double probe_length = std::max(1.0, camera_distance * 0.05);
-	const double projected_a = projected_axis_length(camera, center, ring_a, probe_length);
-	const double projected_b = projected_axis_length(camera, center, ring_b, probe_length);
-	const double projected = std::max(projected_a, projected_b);
-	if (projected <= 0.0001) {
-		return 0.0;
-	}
-	return probe_length * std::max(24.0, screen_size) / projected;
+	const double pixel_world = viewport_world_units_per_pixel_impl(camera, center);
+	return std::max(0.001, pixel_world * std::max(24.0, screen_size));
 }
 
 void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camera, TransformAxis axis, quader::QVec3 center, double screen_size, int ring_segment_count)
@@ -272,16 +254,19 @@ void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camer
 	if (basis.axis == TransformAxis::none) {
 		return;
 	}
-	const double radius = screen_sized_world_radius(camera, center, basis.ring_world_a, basis.ring_world_b, screen_size);
+	const double radius = screen_sized_world_radius(camera, center, screen_size);
 	if (radius <= 0.0001) {
 		return;
 	}
 	const int segment_count = std::max(3, ring_segment_count);
+	const quader::QVec3 view_direction = normalized_axis(camera.transform.origin - center);
 	for (int index = 0; index < segment_count; ++index) {
 		const double a0 = transform_gizmo_tau * static_cast<double>(index) / static_cast<double>(segment_count);
 		const double a1 = transform_gizmo_tau * static_cast<double>(index + 1) / static_cast<double>(segment_count);
+		const double mid_angle = (a0 + a1) * 0.5;
 		const quader::QVec3 p0 = transform_gizmo_ring_point(center, basis, radius, a0);
 		const quader::QVec3 p1 = transform_gizmo_ring_point(center, basis, radius, a1);
+		const quader::QVec3 pm = transform_gizmo_ring_point(center, basis, radius, mid_angle);
 		quader::QVec2 screen0;
 		quader::QVec2 screen1;
 		if (!project_viewport_point(camera, p0, screen0) || !project_viewport_point(camera, p1, screen1)) {
@@ -289,9 +274,44 @@ void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camer
 		}
 		TransformGizmoRingSegmentPrimitive segment;
 		segment.axis = axis;
+		segment.world_start = p0;
+		segment.world_end = p1;
 		segment.screen_start = screen0;
 		segment.screen_end = screen1;
+		segment.front_facing = vec3_is_tiny(view_direction) || vec3_dot(normalized_axis(pm - center), view_direction) >= -0.01;
+		segment.alpha = segment.front_facing ? 1.0F : 0.28F;
 		frame.ring_segments.push_back(segment);
+	}
+}
+
+void add_gizmo_trackball_ring(TransformGizmoFrame& frame, const ViewportCameraState& camera, quader::QVec3 center, double screen_size, int ring_segment_count)
+{
+	constexpr double view_rotation_scale = 1.14;
+	const double radius = screen_sized_world_radius(camera, center, screen_size * view_rotation_scale);
+	quader::QVec3 right = normalized_axis(camera.transform.x_axis);
+	quader::QVec3 up = normalized_axis(camera.transform.y_axis);
+	if (vec3_is_tiny(right)) {
+		right = { 1.0F, 0.0F, 0.0F };
+	}
+	up = normalized_axis(up - vec3_scale(right, vec3_dot(up, right)));
+	if (vec3_is_tiny(up)) {
+		up = { 0.0F, 1.0F, 0.0F };
+	}
+	const int segment_count = std::max(16, ring_segment_count);
+	for (int index = 0; index < segment_count; ++index) {
+		const double a0 = transform_gizmo_tau * static_cast<double>(index) / static_cast<double>(segment_count);
+		const double a1 = transform_gizmo_tau * static_cast<double>(index + 1) / static_cast<double>(segment_count);
+		const quader::QVec3 p0 = center + vec3_scale(right * static_cast<float>(std::cos(a0)) + up * static_cast<float>(std::sin(a0)), radius);
+		const quader::QVec3 p1 = center + vec3_scale(right * static_cast<float>(std::cos(a1)) + up * static_cast<float>(std::sin(a1)), radius);
+		quader::QVec2 screen0;
+		quader::QVec2 screen1;
+		if (!project_viewport_point(camera, p0, screen0) || !project_viewport_point(camera, p1, screen1)) {
+			continue;
+		}
+		TransformGizmoTrackballSegmentPrimitive segment;
+		segment.screen_start = screen0;
+		segment.screen_end = screen1;
+		frame.trackball_segments.push_back(segment);
 	}
 }
 
@@ -352,6 +372,7 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 	frame.info.screen_pivot = screen_pivot;
 
 	if (input.tool == ViewportInteractionTool::rotate) {
+		add_gizmo_trackball_ring(frame, input.camera, input.pivot, screen_size, input.ring_segments);
 		add_gizmo_ring(frame, input.camera, TransformAxis::x, input.pivot, screen_size, input.ring_segments);
 		add_gizmo_ring(frame, input.camera, TransformAxis::y, input.pivot, screen_size, input.ring_segments);
 		add_gizmo_ring(frame, input.camera, TransformAxis::z, input.pivot, screen_size, input.ring_segments);
@@ -360,7 +381,7 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 
 	const double pixel_world = viewport_world_units_per_pixel(input.camera, input.pivot);
 	const double axis_length = pixel_world * screen_size;
-	const double plane_offset = pixel_world * (screen_size * 0.36);
+	const double plane_offset = pixel_world * (screen_size * 0.50);
 	const double plane_half_size = pixel_world * (8.0 * visual_scale);
 	add_gizmo_axis(frame, input.camera, TransformAxis::x, input.pivot, axis_length);
 	add_gizmo_axis(frame, input.camera, TransformAxis::y, input.pivot, axis_length);

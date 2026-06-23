@@ -58,6 +58,36 @@ TEST_CASE("rotate drag accumulates circular motion beyond half turns", "[editor-
 	CHECK(preview.preview_angle_degrees == Catch::Approx(270.0));
 }
 
+TEST_CASE("rotate drag uses linear sensitivity when axis is edge-on", "[editor-core][tool][rotate]")
+{
+	quader_editor_core::RotateBeginInput input;
+	input.axis = quader_editor_core::TransformAxis::x;
+	input.screen_position = { 100.0F, 100.0F };
+	input.has_screen_pivot = true;
+	input.screen_pivot = { 100.0F, 100.0F };
+	input.has_screen_tip = true;
+	input.screen_tip = { 100.0F, 20.0F };
+	input.has_world_direction = true;
+	input.world_direction = { 1.0F, 0.0F, 0.0F };
+	input.has_world_pivot = true;
+	input.world_pivot = {};
+	input.has_camera = true;
+	input.camera_transform.origin = { 0.0F, 0.0F, 6.0F };
+	input.camera_transform.x_axis = { 1.0F, 0.0F, 0.0F };
+	input.camera_transform.y_axis = { 0.0F, 1.0F, 0.0F };
+	input.camera_transform.z_axis = { 0.0F, 0.0F, 1.0F };
+
+	const quader_editor_core::RotateBeginResult begin = quader_editor_core::begin_rotate_drag(input);
+	REQUIRE(begin.ok);
+	quader_editor_core::RotateToolState state = begin.state;
+	REQUIRE(state.edge_on_linear_drag);
+
+	const quader_editor_core::RotatePreviewResult preview =
+		quader_editor_core::preview_rotate_from_screen_position(state, { 100.0F, 180.0F }, 0.0);
+	REQUIRE(preview.ok);
+	CHECK(preview.preview_angle_degrees == Catch::Approx(90.0));
+}
+
 TEST_CASE("modal rotate planner clears tiny duplicate previews", "[editor-core][tool][rotate]")
 {
 	quader_editor_core::ModalTransformBeginPlan begin =

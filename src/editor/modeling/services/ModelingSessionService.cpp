@@ -2513,6 +2513,8 @@ public:
             begin.screen_position = screenPosition;
             begin.has_screen_pivot = true;
             begin.screen_pivot = screenPivot;
+            begin.has_screen_tip = true;
+            begin.screen_tip = screenTip;
             begin.has_world_direction = request.hasWorldDirection;
             begin.world_direction = toRuntime(request.worldDirection);
             begin.has_world_pivot = true;

@@ -82,7 +82,7 @@ void check_float_preference(
 TEST_CASE("host contract preference catalog exposes viewport setting defaults as engine-neutral descriptors", "[host-contract]")
 {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
-	REQUIRE(preferences.size() == 49U);
+	REQUIRE(preferences.size() == 45U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
 	CHECK(background.scope == qhc::HostPreferenceScope::viewport_style);
@@ -108,7 +108,6 @@ TEST_CASE("host contract preference catalog exposes viewport setting defaults as
 	check_float_preference(diagnostic_edge_line, 4.0, 0.25, 8.0, "viewport.overlay");
 	CHECK(same_text(diagnostic_edge_line.related_overlay_layer_id, "diagnostic_edge"));
 	check_float_preference(require_preference("viewport.vertices.vertex_size"), 7.0, 2.0, 32.0, "viewport.vertices");
-	check_float_preference(require_preference("viewport.measurements.text_size"), 8.0, 8.0, 28.0, "viewport.measurements");
 
 	const qhc::HostPreferenceDescriptor& pick_vertex = require_preference("viewport.picking.vertex_radius");
 	check_float_preference(pick_vertex, 0.3, 0.001, 2.0, "viewport.picking");
@@ -173,7 +172,7 @@ TEST_CASE("host contract operation preferences link back to editor-core operatio
 TEST_CASE("host contract preference groups can drive custom engine settings panes", "[host-contract]")
 {
 	const std::span<const qhc::HostPreferenceGroupDescriptor> groups = qhc::preference_group_catalog();
-	REQUIRE(groups.size() == 14U);
+	REQUIRE(groups.size() == 13U);
 
 	const qhc::HostPreferenceGroupDescriptor& cut = require_group("operation.cut");
 	CHECK(cut.scope == qhc::HostPreferenceScope::operation);

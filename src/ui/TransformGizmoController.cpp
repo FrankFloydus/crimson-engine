@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <optional>
 #include <span>
 #include <vector>
@@ -291,6 +292,21 @@ std::uint8_t alphaByte(float alpha) {
     return static_cast<std::uint8_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
 }
 
+ImU32 multiplyImColor(ImU32 color, float rgbScale, float alphaScale = 1.0f) {
+    ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
+    value.x = std::clamp(value.x * rgbScale, 0.0f, 1.0f);
+    value.y = std::clamp(value.y * rgbScale, 0.0f, 1.0f);
+    value.z = std::clamp(value.z * rgbScale, 0.0f, 1.0f);
+    value.w = std::clamp(value.w * alphaScale, 0.0f, 1.0f);
+    return ImGui::ColorConvertFloat4ToU32(value);
+}
+
+ImU32 imColorWithAlpha(ImU32 color, float alpha) {
+    ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
+    value.w = std::clamp(alpha, 0.0f, 1.0f);
+    return ImGui::ColorConvertFloat4ToU32(value);
+}
+
 ImU32 axisImColor(quader_editor_core::TransformAxis axis, float alpha = 1.0f) {
     const std::uint8_t a = alphaByte(alpha);
     switch (axis) {
@@ -390,7 +406,24 @@ ImVec2 toScreen(quader::QVec2 point, ImVec2 itemMin) {
 }
 
 void drawGizmoLine(ImDrawList* drawList, ImVec2 start, ImVec2 end, ImU32 color, float width) {
-    drawList->AddLine(start, end, color, std::max(width, 1.0f));
+    const float clampedWidth = std::max(width, 1.0f);
+    drawList->AddLine(start, end, IM_COL32(0, 0, 0, 112), clampedWidth + 1.6f);
+    drawList->AddLine(start, end, color, clampedWidth);
+}
+
+float screenDistance(ImVec2 a, ImVec2 b) {
+    const float dx = b.x - a.x;
+    const float dy = b.y - a.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+ImVec2 normalizedScreenVector(ImVec2 value, ImVec2 fallback = {1.0f, 0.0f}) {
+    const float lengthSquared = value.x * value.x + value.y * value.y;
+    if (lengthSquared <= 0.0001f) {
+        return fallback;
+    }
+    const float invLength = 1.0f / std::sqrt(lengthSquared);
+    return {value.x * invLength, value.y * invLength};
 }
 
 float signedArea(const std::array<ImVec2, 4>& points) {
@@ -554,6 +587,10 @@ void drawProjectedCubeHandle(
             {0.0f, 0.0f, 1.0f},
             {0.0f, 0.0f, -1.0f},
     }};
+    struct ProjectedFace {
+        std::array<ImVec2, 4> polygon;
+        ImU32 fillColor = 0;
+    };
 
     QVec3 viewDirection = camera.pose().eye - rawCenter;
     if (dot(viewDirection, viewDirection) <= 0.000001f) {
@@ -561,9 +598,14 @@ void drawProjectedCubeHandle(
     } else {
         viewDirection = normalize(viewDirection);
     }
+    QVec3 lightDirection = normalize(QVec3{-0.45f, -0.65f, 0.62f});
+
+    std::vector<ProjectedFace> projectedFaces;
+    projectedFaces.reserve(faces.size());
 
     for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
-        if (dot(normals[faceIndex], viewDirection) <= 0.000001f) {
+        const float facing = dot(normals[faceIndex], viewDirection);
+        if (facing <= 0.000001f) {
             continue;
         }
 
@@ -581,14 +623,196 @@ void drawProjectedCubeHandle(
         if (!ok) {
             continue;
         }
-        drawList->AddConvexPolyFilled(polygon.data(), static_cast<int>(polygon.size()), color);
-        drawList->AddPolyline(
-                polygon.data(),
-                static_cast<int>(polygon.size()),
-                color,
-                ImDrawFlags_Closed,
-                hovered ? 1.4f : 0.9f);
+        const float lit = std::max(dot(normals[faceIndex], lightDirection), 0.0f);
+        const float shade = std::clamp(0.46f + lit * 0.36f + std::min(facing, 1.0f) * 0.18f, 0.42f, 1.12f);
+        projectedFaces.push_back({
+                polygon,
+                multiplyImColor(color, hovered ? shade * 1.15f : shade),
+        });
     }
+
+    for (const ProjectedFace& face : projectedFaces) {
+        drawList->AddConvexPolyFilled(face.polygon.data(), static_cast<int>(face.polygon.size()), face.fillColor);
+        if (hovered) {
+            drawList->AddPolyline(
+                    face.polygon.data(),
+                    static_cast<int>(face.polygon.size()),
+                    IM_COL32(255, 246, 128, 180),
+                    ImDrawFlags_Closed,
+                    1.0f);
+        }
+    }
+}
+
+float rotationRingRadiusPixels(const quader_editor_core::TransformGizmoFrame& frame) {
+    float radius = 0.0f;
+    const ImVec2 pivot{frame.info.screen_pivot.x, frame.info.screen_pivot.y};
+    for (const quader_editor_core::TransformGizmoTrackballSegmentPrimitive& segment : frame.trackball_segments) {
+        radius = std::max(radius, screenDistance(pivot, {segment.screen_start.x, segment.screen_start.y}));
+        radius = std::max(radius, screenDistance(pivot, {segment.screen_end.x, segment.screen_end.y}));
+    }
+    for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment : frame.ring_segments) {
+        radius = std::max(radius, screenDistance(pivot, {segment.screen_start.x, segment.screen_start.y}));
+        radius = std::max(radius, screenDistance(pivot, {segment.screen_end.x, segment.screen_end.y}));
+    }
+    return std::max(radius, 24.0f);
+}
+
+float rotationRingRadiusWorld(
+        const quader_editor_core::TransformGizmoFrame& frame,
+        quader_editor_core::TransformAxis axis) {
+    float radius = 0.0f;
+    const QVec3 pivot = fromRuntime(frame.info.pivot);
+    for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment : frame.ring_segments) {
+        if (segment.axis != axis) {
+            continue;
+        }
+        radius = std::max(radius, length(fromRuntime(segment.world_start) - pivot));
+        radius = std::max(radius, length(fromRuntime(segment.world_end) - pivot));
+    }
+    return std::max(radius, 0.001f);
+}
+
+QVec3 projectedOntoPlane(QVec3 value, QVec3 normal) {
+    return value - normal * dot(value, normal);
+}
+
+QVec3 rotateAroundAxis(QVec3 value, QVec3 axis, float angleRadians) {
+    const float c = std::cos(angleRadians);
+    const float s = std::sin(angleRadians);
+    return value * c + cross(axis, value) * s + axis * (dot(axis, value) * (1.0f - c));
+}
+
+std::optional<QVec3> intersectRayPlane(const ViewportRay& ray, QVec3 planePoint, QVec3 planeNormal) {
+    const QVec3 normal = normalize(planeNormal);
+    const float denominator = dot(normal, ray.direction);
+    if (length(normal) <= 0.000001f || std::abs(denominator) <= 0.000001f) {
+        return std::nullopt;
+    }
+    const float distance = dot(normal, planePoint - ray.origin) / denominator;
+    if (!std::isfinite(distance) || distance < 0.0f) {
+        return std::nullopt;
+    }
+    return ray.origin + ray.direction * distance;
+}
+
+QVec3 fallbackRotationPlaneDirection(const ViewportCameraController& camera, QVec3 planeNormal) {
+    const ViewportCameraBasis cameraBasis = ViewportCameraAdapter::basis(camera);
+    QVec3 direction = projectedOntoPlane(cameraBasis.right, planeNormal);
+    if (length(direction) <= 0.000001f) {
+        direction = projectedOntoPlane(cameraBasis.up, planeNormal);
+    }
+    if (length(direction) <= 0.000001f) {
+        direction = fallbackPerpendicular(planeNormal);
+    }
+    return normalize(direction);
+}
+
+QVec3 rotationOverlayStartDirectionFromMouse(
+        const ViewportCameraController& camera,
+        QVec2 localMouse,
+        QVec3 worldPivot,
+        QVec3 planeNormal) {
+    planeNormal = normalize(planeNormal);
+    if (length(planeNormal) <= 0.000001f) {
+        return {};
+    }
+
+    const ViewportRay ray = camera.rayFromViewportPoint(localMouse);
+    std::optional<QVec3> hit = intersectRayPlane(ray, worldPivot, planeNormal);
+    if (!hit) {
+        const ViewportCameraBasis cameraBasis = ViewportCameraAdapter::basis(camera);
+        hit = intersectRayPlane(ray, worldPivot, cameraBasis.forward);
+    }
+    if (hit) {
+        const QVec3 direction = projectedOntoPlane(*hit - worldPivot, planeNormal);
+        if (length(direction) > 0.000001f) {
+            return normalize(direction);
+        }
+    }
+
+    return fallbackRotationPlaneDirection(camera, planeNormal);
+}
+
+QVec3 normalizedRotationOverlayStartDirection(
+        const ViewportCameraController& camera,
+        QVec3 requestedDirection,
+        QVec3 planeNormal) {
+    QVec3 direction = projectedOntoPlane(requestedDirection, planeNormal);
+    if (length(direction) <= 0.000001f) {
+        return fallbackRotationPlaneDirection(camera, planeNormal);
+    }
+    return normalize(direction);
+}
+
+void drawRotationDragOverlay(
+        const quader_editor_core::TransformGizmoFrame& frame,
+        const ViewportCameraController& camera,
+        ImVec2 itemMin,
+        ImVec2 itemSize,
+        ImVec2 center,
+        QVec3 worldPivot,
+        QVec3 worldAxis,
+        QVec3 rotationStartDirection,
+        ImVec2 currentMouse,
+        quader_editor_core::TransformAxis axis,
+        double angleDegrees) {
+    if (!frame.info.ok || axis == quader_editor_core::TransformAxis::none) {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    QVec3 planeNormal = normalize(worldAxis);
+    if (length(planeNormal) <= 0.000001f) {
+        return;
+    }
+    const QVec3 startDirection =
+            normalizedRotationOverlayStartDirection(camera, rotationStartDirection, planeNormal);
+    const float angleRadians = static_cast<float>(angleDegrees * static_cast<double>(kPi) / 180.0);
+    const QVec3 currentDirection = normalize(rotateAroundAxis(startDirection, planeNormal, angleRadians));
+
+    const float ringRadiusWorld = rotationRingRadiusWorld(frame, axis);
+    const float pieRadiusWorld = ringRadiusWorld * 0.98f;
+    const int arcSteps = std::clamp(static_cast<int>(std::abs(angleRadians) / (kPi / 24.0f)) + 2, 3, 72);
+
+    std::vector<ImVec2> wedge;
+    wedge.reserve(static_cast<std::size_t>(arcSteps + 2));
+    wedge.push_back(center);
+    for (int step = 0; step <= arcSteps; ++step) {
+        const float t = static_cast<float>(step) / static_cast<float>(arcSteps);
+        const QVec3 direction = rotateAroundAxis(startDirection, planeNormal, angleRadians * t);
+        const std::optional<ImVec2> screen =
+                projectWorldToViewport(worldPivot + direction * pieRadiusWorld, camera, itemMin, itemSize);
+        if (!screen) {
+            return;
+        }
+        wedge.push_back(*screen);
+    }
+    if (std::abs(angleRadians) > 0.005f) {
+        drawList->AddConvexPolyFilled(wedge.data(), static_cast<int>(wedge.size()), IM_COL32(156, 162, 168, 92));
+    }
+
+    drawGizmoLine(drawList, center, currentMouse, IM_COL32(218, 224, 230, 188), 1.55f);
+
+    std::array<char, 32> label{};
+    std::snprintf(label.data(), label.size(), "%.2f", angleDegrees);
+    QVec3 labelDirection = startDirection + currentDirection;
+    if (length(labelDirection) <= 0.000001f) {
+        labelDirection = currentDirection;
+    } else {
+        labelDirection = normalize(labelDirection);
+    }
+    const std::optional<ImVec2> labelAnchor =
+            projectWorldToViewport(worldPivot + labelDirection * ringRadiusWorld * 0.92f, camera, itemMin, itemSize);
+    const ImVec2 labelSize = ImGui::CalcTextSize(label.data());
+    const ImVec2 fallbackLabelOffset = normalizedScreenVector({currentMouse.x - center.x, currentMouse.y - center.y});
+    const ImVec2 labelBase = labelAnchor.value_or(ImVec2{
+            center.x + fallbackLabelOffset.x * (rotationRingRadiusPixels(frame) * 0.78f),
+            center.y + fallbackLabelOffset.y * (rotationRingRadiusPixels(frame) * 0.78f),
+    });
+    const ImVec2 labelPosition{labelBase.x - labelSize.x * 0.5f, labelBase.y - labelSize.y * 0.5f};
+    drawList->AddText({labelPosition.x + 1.0f, labelPosition.y + 1.0f}, IM_COL32(0, 0, 0, 190), label.data());
+    drawList->AddText(labelPosition, IM_COL32(255, 255, 255, 245), label.data());
 }
 
 void drawQuaderGizmo(
@@ -612,13 +836,25 @@ void drawQuaderGizmo(
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
     if (frame.info.tool == quader_editor_core::ViewportInteractionTool::rotate) {
+        const float trackballWidth = 2.65f * widthScale * sizeScale;
+        for (const quader_editor_core::TransformGizmoTrackballSegmentPrimitive& segment : frame.trackball_segments) {
+            drawGizmoLine(
+                    drawList,
+                    toScreen(segment.screen_start, itemMin),
+                    toScreen(segment.screen_end, itemMin),
+                    IM_COL32(191, 191, 191, 118),
+                    trackballWidth);
+        }
         for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment : frame.ring_segments) {
+            if (!segment.front_facing) {
+                continue;
+            }
             const bool hovered = frame.info.hover_axis == segment.axis || frame.info.active_axis == segment.axis;
             drawGizmoLine(drawList,
                     toScreen(segment.screen_start, itemMin),
                     toScreen(segment.screen_end, itemMin),
-                    hovered ? hoverColor : axisImColor(segment.axis),
-                    2.0f * widthScale * sizeScale);
+                    hovered ? hoverColor : axisImColor(segment.axis, segment.alpha),
+                    3.45f * widthScale * sizeScale);
         }
         return;
     }
@@ -645,7 +881,7 @@ void drawQuaderGizmo(
                     0.0001f,
                     length(fromRuntime(axis.world_tip) - fromRuntime(axis.world_start)) *
                             (scaleHandleSize / 68.0f) * sizeScale);
-            drawProjectedCubeHandle(drawList, camera, itemMin, itemSize, axis.world_tip, worldSize, color, false);
+            drawProjectedCubeHandle(drawList, camera, itemMin, itemSize, axis.world_tip, worldSize, color, hovered);
         } else {
             if (!drawProjectedConeHandle(drawList, camera, itemMin, itemSize, axis.world_start, axis.world_tip, color, sizeScale)) {
                 drawArrowHead(drawList, start, tip, color, moveArrowSize * gizmoScale);
@@ -673,7 +909,7 @@ void drawQuaderGizmo(
                 frame.info.pivot,
                 worldSize,
                 centerHovered ? hoverColor : moveCenterColor,
-                false);
+                centerHovered);
     } else {
         drawList->AddCircleFilled(pivot, moveCenterRadius * gizmoScale, moveCenterColor, 18);
     }
@@ -848,19 +1084,6 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             quader_editor_core::build_transform_gizmo_frame(runtimeInput);
     drawQuaderGizmo(runtimeFrame, camera, itemMin, itemSize);
 
-    const ViewportCameraPose pose = camera.pose();
-    const float cameraDistance = std::max(length(pose.eye - pivot), 0.1f);
-    const float worldLength = std::clamp(cameraDistance * 0.22f * sizeScale, 0.35f, 8.0f);
-    const std::array<QVec3, 3> axisVectors = {{
-            {1.0f, 0.0f, 0.0f},
-            {0.0f, 1.0f, 0.0f},
-            {0.0f, 0.0f, 1.0f},
-    }};
-    const std::array<ImU32, 3> axisColors = {{
-            IM_COL32(235, 76, 82, 255),
-            IM_COL32(90, 205, 118, 255),
-            IM_COL32(78, 142, 255, 255),
-    }};
     const std::array<TransformAxisHandle, 3> axes = {{
             TransformAxisHandle::X,
             TransformAxisHandle::Y,
@@ -868,13 +1091,17 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     }};
 
     std::array<std::optional<ImVec2>, 3> axisEnds;
-    for (std::size_t index = 0; index < axisVectors.size(); ++index) {
-        axisEnds[index] = projectWorldToViewport(pivot + axisVectors[index] * worldLength, camera, itemMin, itemSize);
+    for (const quader_editor_core::TransformGizmoAxisPrimitive& axis : runtimeFrame.axes) {
+        const TransformAxisHandle handle = fromRuntimeAxis(axis.axis);
+        for (std::size_t index = 0; index < axes.size(); ++index) {
+            if (axes[index] == handle) {
+                axisEnds[index] = toScreen(axis.screen_tip, itemMin);
+            }
+        }
     }
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     (void)drawList;
-    (void)axisColors;
 
     if (!interactive) {
         return false;
@@ -933,12 +1160,24 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             }
 
             bool dragReady = true;
+            const quader::QVec2 runtimeScreenPivot = toRuntime(projectedPivot.position);
+            auto runtimeScreenTipForActiveAxis = [&]() {
+                if (runtimeHit.hit) {
+                    return runtimeHit.screen_tip;
+                }
+                const quader_editor_core::TransformAxis runtimeAxis = toRuntimeAxis(activeAxis_);
+                for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment : runtimeFrame.ring_segments) {
+                    if (segment.axis == runtimeAxis) {
+                        return segment.screen_start;
+                    }
+                }
+                return runtimeScreenPivot;
+            };
+            const quader::QVec2 runtimeScreenTip = runtimeScreenTipForActiveAxis();
             if (useModelingTransformDrag) {
                 dragReady = false;
                 sceneOnlyRotateState_.reset();
 
-                const quader::QVec2 runtimeScreenPivot = toRuntime(projectedPivot.position);
-                const quader::QVec2 runtimeScreenTip = runtimeHit.hit ? runtimeHit.screen_tip : runtimeScreenPivot;
                 const ViewportRay startRay = camera.rayFromViewportPoint(localMouse);
                 const bool duplicateSelected = !componentSelectionMode && io.KeyShift;
                 const bool topologyModifier = componentSelectionMode && io.KeyShift;
@@ -986,6 +1225,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                                     .screen_position = toRuntime(localMouse),
                                     .has_screen_pivot = true,
                                     .screen_pivot = toRuntime(projectedPivot.position),
+                                    .has_screen_tip = true,
+                                    .screen_tip = runtimeScreenTip,
                                     .has_world_direction = true,
                                     .world_direction = toRuntime(worldAxisForHandle(activeAxis_)),
                                     .has_world_pivot = true,
@@ -1025,6 +1266,14 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             lastMouse_ = {mouse.x, mouse.y};
             startMouse_ = lastMouse_;
             startWorldPivot_ = pivot;
+            rotationOverlayStartDirection_.reset();
+            if (tool == ViewportToolId::Rotate) {
+                rotationOverlayStartDirection_ = rotationOverlayStartDirectionFromMouse(
+                        camera,
+                        localMouse,
+                        startWorldPivot_,
+                        worldAxisForHandle(activeAxis_));
+            }
             const bool needsSceneTransformPreview = sceneOnlyDrag_ || !modelingDragPreviewDriven_;
             if (!sceneTransformDrag_.begin(document, pivot, needsSceneTransformPreview, "Transform Selection")) {
                 if (modelingDragActive_) {
@@ -1114,6 +1363,21 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             return consumed;
         }
 
+        if (tool == ViewportToolId::Rotate) {
+            drawRotationDragOverlay(
+                    runtimeFrame,
+                    camera,
+                    itemMin,
+                    itemSize,
+                    origin,
+                    startWorldPivot_,
+                    worldAxisForHandle(activeAxis_),
+                    rotationOverlayStartDirection_.value_or(QVec3{}),
+                    {currentMouse.x, currentMouse.y},
+                    toRuntimeAxis(activeAxis_),
+                    preview.rotateAngleDegrees);
+        }
+
         if (preview.previewDriven) {
             modelingDragPreviewDriven_ = true;
             return true;
@@ -1152,9 +1416,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         const bool snapEnabled = !precision;
         lastMouse_ = currentMouse;
 
-        const float worldPerPixel =
-                2.0f * cameraDistance * std::tan(camera.state().fovDegrees * kPi / 180.0f * 0.5f) /
-                std::max(itemSize.y, 1.0f);
+        const float worldPerPixel = static_cast<float>(
+                quader_editor_core::viewport_world_units_per_pixel(runtimeInput.camera, toRuntime(startWorldPivot_)));
 
         auto screenAxisDeltaAt = [&](std::size_t index) {
             if (!axisEnds[index]) {
@@ -1214,6 +1477,39 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             }
         };
 
+        double rotateAngleDegrees = 0.0;
+        if (tool == ViewportToolId::Rotate) {
+            if (sceneOnlyRotateState_) {
+                const QVec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
+                const quader_editor_core::RotatePreviewResult rotatePreview =
+                        quader_editor_core::preview_rotate_from_screen_position(
+                                *sceneOnlyRotateState_,
+                                toRuntime(localMouse),
+                                snapEnabled ? 15.0 : 0.0);
+                if (rotatePreview.ok) {
+                    rotateAngleDegrees = rotatePreview.preview_angle_degrees;
+                } else {
+                    LOG_ERROR("Scene transform rotate preview failed: {}", rotatePreview.message);
+                }
+            } else {
+                const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
+                rotateAngleDegrees = snapRotationRadians(screenDelta * 0.01f, snapEnabled) * 180.0f / kPi;
+            }
+
+            drawRotationDragOverlay(
+                    runtimeFrame,
+                    camera,
+                    itemMin,
+                    itemSize,
+                    origin,
+                    startWorldPivot_,
+                    worldAxisForHandle(activeAxis_),
+                    rotationOverlayStartDirection_.value_or(QVec3{}),
+                    {currentMouse.x, currentMouse.y},
+                    toRuntimeAxis(activeAxis_),
+                    rotateAngleDegrees);
+        }
+
         for (const SceneTransformDragTarget& start : sceneTransformDrag_.targets()) {
             TransformComponent next = start.transform;
             if (tool == ViewportToolId::Move) {
@@ -1222,24 +1518,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 worldMoveDelta = snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, startWorldPivot_, activeGridSize, snapEnabled);
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, worldMoveDelta);
             } else if (tool == ViewportToolId::Rotate) {
-                float angleRadians = 0.0f;
-                if (sceneOnlyRotateState_) {
-                    const QVec2 localMouse{mouse.x - itemMin.x, mouse.y - itemMin.y};
-                    const quader_editor_core::RotatePreviewResult rotatePreview =
-                            quader_editor_core::preview_rotate_from_screen_position(
-                                    *sceneOnlyRotateState_,
-                                    toRuntime(localMouse),
-                                    snapEnabled ? 15.0 : 0.0);
-                    if (rotatePreview.ok) {
-                        angleRadians = static_cast<float>(rotatePreview.preview_angle_degrees * kPi / 180.0);
-                    } else {
-                        LOG_ERROR("Scene transform rotate preview failed: {}", rotatePreview.message);
-                    }
-                } else
-                {
-                    const float screenDelta = (std::abs(delta.x) > std::abs(delta.y)) ? delta.x : -delta.y;
-                    angleRadians = snapRotationRadians(screenDelta * 0.01f, snapEnabled);
-                }
+                const float angleRadians = static_cast<float>(rotateAngleDegrees * kPi / 180.0);
                 next = localTransformAfterWorldQuaternionRotation(
                         document,
                         start.entity,
@@ -1349,6 +1628,7 @@ void TransformGizmoController::resetDragState() {
     sceneOnlyRotateState_.reset();
     sceneTransformDrag_.reset();
     activeAxis_ = TransformAxisHandle::None;
+    rotationOverlayStartDirection_.reset();
 }
 
 } // namespace quader

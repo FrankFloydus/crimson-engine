@@ -56,6 +56,7 @@ public:
 		state.object_ids = input.object_ids;
 		state.pivot = input.pivot;
 		state.screen_pivot = input.has_screen_pivot ? input.screen_pivot : input.screen_position;
+		state.start_screen = input.screen_position;
 
 		quader::QVec2 start_vector = vec2_sub(input.screen_position, state.screen_pivot);
 		if (vec2_is_tiny(start_vector)) {
@@ -72,7 +73,26 @@ public:
 			const quader::QVec3 world_pivot = input.has_world_pivot ? input.world_pivot : input.pivot;
 			const quader::QVec3 to_camera = input.camera_transform.origin - world_pivot;
 			if (!vec3_is_tiny(world_axis) && !vec3_is_tiny(to_camera)) {
-				state.drag_view_sign = vec3_dot(normalized_axis(world_axis), normalized_axis(to_camera)) >= 0.0 ? 1.0 : -1.0;
+				world_axis = normalized_axis(world_axis);
+				const quader::QVec3 view_to_camera = normalized_axis(to_camera);
+				state.drag_view_sign = vec3_dot(world_axis, view_to_camera) >= 0.0 ? 1.0 : -1.0;
+
+				static constexpr double edge_on_threshold = 0.08715574274765817; // cos(85 degrees).
+				state.edge_on_linear_drag = std::abs(vec3_dot(world_axis, view_to_camera)) < edge_on_threshold;
+				if (state.edge_on_linear_drag) {
+					const quader::QVec3 camera_plane_normal = vec3_scale(view_to_camera, -1.0);
+					const quader::QVec3 projection_axis = normalized_axis(vec3_cross(camera_plane_normal, world_axis));
+					const quader::QVec2 projected_screen_axis {
+						static_cast<float>(vec3_dot(projection_axis, normalized_axis(input.camera_transform.x_axis))),
+						static_cast<float>(-vec3_dot(projection_axis, normalized_axis(input.camera_transform.y_axis))),
+					};
+					state.edge_on_screen_axis = vec2_normalize_or(projected_screen_axis, { 1.0F, 0.0F });
+
+					const quader::QVec2 screen_tip = input.has_screen_tip ?
+						input.screen_tip :
+						vec2_add(state.screen_pivot, vec2_scale(start_vector, 1.0));
+					state.edge_on_radius_pixels = std::sqrt(std::max(vec2_distance_squared(screen_tip, state.screen_pivot), 1.0));
+				}
 			}
 		}
 		return { true, {}, state };
@@ -85,6 +105,11 @@ public:
 	{
 		if (!state.active) {
 			return { false, "Rotate tool is not active.", {}, {}, {}, {} };
+		}
+		if (state.edge_on_linear_drag) {
+			const double projected_pixels = vec2_dot(vec2_sub(screen_position, state.start_screen), state.edge_on_screen_axis);
+			const double angle_degrees = projected_pixels * 90.0 / std::max(state.edge_on_radius_pixels, 1.0);
+			return preview_rotate_from_angle_degrees(state, angle_degrees, snap_degrees);
 		}
 		const quader::QVec2 current_vector = vec2_sub(screen_position, state.screen_pivot);
 		if (vec2_is_tiny(current_vector)) {

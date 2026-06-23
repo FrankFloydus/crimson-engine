@@ -135,7 +135,7 @@ TEST_CASE("host contract gesture catalog preserves viewport routing priority", "
 
 	CHECK(active_tools.requires_active_tool);
 	CHECK(active_tools.consumes_pointer_when_active);
-	CHECK(active_tools.suppresses_gizmo_and_measurements);
+	CHECK(active_tools.suppresses_gizmo);
 	check_tool_order(active_tools, std::array<std::string_view, 6> {{
 		"box",
 		"insert_edge_loop",
@@ -151,7 +151,7 @@ TEST_CASE("host contract gesture catalog describes modal tool pointer phases and
 	const qhc::HostGestureDescriptor& box = require_gesture("box_tool_gesture");
 	CHECK(box.requires_active_tool);
 	CHECK(box.consumes_pointer_when_active);
-	CHECK(box.suppresses_gizmo_and_measurements);
+	CHECK(box.suppresses_gizmo);
 	CHECK_FALSE(box.returns_to_select_on_cancel);
 	CHECK_FALSE(box.returns_to_select_on_success);
 	CHECK(box.rebuilds_mesh_on_success);
@@ -195,7 +195,7 @@ TEST_CASE("host contract gesture catalog describes preview and transform blockin
 	CHECK(preview_block.requires_active_preview);
 	CHECK(preview_block.suppressed_while_fly_navigation);
 	CHECK(preview_block.consumes_pointer_when_active);
-	CHECK(preview_block.suppresses_gizmo_and_measurements);
+	CHECK(preview_block.suppresses_gizmo);
 	CHECK(has_pointer_input(preview_block, qhc::HostPointerInputKind::primary_down));
 	CHECK(has_pointer_input(preview_block, qhc::HostPointerInputKind::primary_drag));
 	CHECK(has_pointer_input(preview_block, qhc::HostPointerInputKind::primary_up));
@@ -203,7 +203,7 @@ TEST_CASE("host contract gesture catalog describes preview and transform blockin
 	const qhc::HostGestureDescriptor& transform = require_gesture("transform_gizmo_drag");
 	CHECK(transform.blocked_by_active_preview);
 	CHECK(transform.suppressed_while_fly_navigation);
-	CHECK_FALSE(transform.suppresses_gizmo_and_measurements);
+	CHECK_FALSE(transform.suppresses_gizmo);
 	CHECK(transform.rebuilds_mesh_on_success);
 	CHECK(has_tool(transform, "move"));
 	CHECK(has_tool(transform, "rotate"));
@@ -215,7 +215,7 @@ TEST_CASE("host contract gesture catalog describes preview and transform blockin
 	const qhc::HostGestureDescriptor& selection = require_gesture("selection_pick_and_paint");
 	CHECK(selection.blocked_by_active_preview);
 	CHECK(selection.suppressed_while_fly_navigation);
-	CHECK_FALSE(selection.suppresses_gizmo_and_measurements);
+	CHECK_FALSE(selection.suppresses_gizmo);
 	CHECK(has_modifier_meaning(selection, "primary_modifier:toggle_selection"));
 	CHECK(has_modifier_meaning(selection, "shift:extend_selection"));
 	CHECK(has_modifier_meaning(selection, "platform_modifier:multi_select"));
@@ -227,7 +227,7 @@ TEST_CASE("host contract gesture catalog describes viewport navigation inputs", 
 	const qhc::HostGestureDescriptor& zoom = require_gesture("viewport_scroll_zoom");
 	CHECK(zoom.target_kind == qhc::HostGestureTargetKind::viewport_action);
 	CHECK(same_text(zoom.target_id, "zoom"));
-	CHECK_FALSE(zoom.suppresses_gizmo_and_measurements);
+	CHECK_FALSE(zoom.suppresses_gizmo);
 	CHECK(has_pointer_input(zoom, qhc::HostPointerInputKind::scroll));
 	CHECK(has_modifier_meaning(zoom, "primary_modifier:zoom_to_cursor"));
 
@@ -250,7 +250,7 @@ TEST_CASE("host contract gesture catalog describes key-only preview and layout b
 	const qhc::HostGestureDescriptor& preview = require_gesture("active_preview_commit_or_cancel");
 	CHECK(preview.requires_active_preview);
 	CHECK(preview.suppressed_while_fly_navigation);
-	CHECK(preview.suppresses_gizmo_and_measurements);
+	CHECK(preview.suppresses_gizmo);
 	CHECK(preview.rebuilds_mesh_on_success);
 	CHECK(has_key_input(preview, "Escape"));
 	CHECK(has_key_input(preview, "Space"));

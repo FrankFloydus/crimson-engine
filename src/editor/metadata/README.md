@@ -110,5 +110,5 @@ modeling-session sample.
 `qdr_custom_engine_modeling_runtime_smoke_tests` complements that descriptor
 proof from the absorbed modeling-domain side: it links app-owned editor metadata,
 modeling runtime, and QDR runtime IO targets directly, creates a session,
-executes a modeling operation, compiles meshes, builds overlay/gizmo/measurement
+executes a modeling operation, compiles meshes, builds overlay/gizmo
 frames, and roundtrips QDR without using workflow-shaped editor adapters.

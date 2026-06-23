@@ -14,7 +14,6 @@
 #include <editor/interactions/extrude_tool.h>
 #include <editor/interactions/insert_edge_loop_tool.h>
 #include <editor/interactions/knife_tool.h>
-#include <editor/interactions/measurement_tool.h>
 #include <editor/interactions/mirror_tool.h>
 #include <editor/interactions/move_tool.h>
 #include <editor/interactions/overlay_visibility.h>

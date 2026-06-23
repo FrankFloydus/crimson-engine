@@ -122,15 +122,14 @@ TEST_CASE("host contract UI groups and shell targets are discoverable", "[host-c
 
 	const qhc::HostPanelDescriptor *viewport_settings = qhc::find_panel_descriptor("viewport_settings");
 	REQUIRE(viewport_settings != nullptr);
-	REQUIRE(viewport_settings->preference_group_ids.size() == 8U);
+	REQUIRE(viewport_settings->preference_group_ids.size() == 7U);
 	CHECK(same_text(viewport_settings->preference_group_ids[0], "viewport.scene"));
 	CHECK(same_text(viewport_settings->preference_group_ids[1], "viewport.grid"));
 	CHECK(same_text(viewport_settings->preference_group_ids[2], "viewport.selection"));
 	CHECK(same_text(viewport_settings->preference_group_ids[3], "viewport.overlay"));
 	CHECK(same_text(viewport_settings->preference_group_ids[4], "viewport.vertices"));
-	CHECK(same_text(viewport_settings->preference_group_ids[5], "viewport.measurements"));
-	CHECK(same_text(viewport_settings->preference_group_ids[6], "viewport.picking"));
-	CHECK(same_text(viewport_settings->preference_group_ids[7], "viewport.gizmo"));
+	CHECK(same_text(viewport_settings->preference_group_ids[5], "viewport.picking"));
+	CHECK(same_text(viewport_settings->preference_group_ids[6], "viewport.gizmo"));
 }
 
 TEST_CASE("host contract UI placements resolve to known descriptor-only targets", "[host-contract]")
