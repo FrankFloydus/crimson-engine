@@ -287,12 +287,16 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
                  quader::QuaderCommand::ModelingInvertMesh.string(),
                  quader::QuaderCommand::ModelingFlipHorizontal.string(),
                  quader::QuaderCommand::ModelingFlipVertical.string(),
+                 quader::QuaderCommand::ToolsActivateExtend.string(),
          }) {
         EXPECT_TRUE(ids.contains(std::string(neutral))) << neutral;
     }
 
     const std::unordered_set<std::string_view> neutralModelingTools{
             "delete_selection",
+            "clear_selection",
+            "select_all",
+            "invert_selection",
             "copy_selection",
             "paste_selection",
             "duplicate_meshes",
@@ -580,6 +584,49 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     EXPECT_FALSE(session.scene().lock(second.value().id)->locked);
 }
 
+TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::QuaderCreateEntityArgs args;
+    args.name = "Repeated Batch Entity";
+    const quader::QuaderApiResult<quader::QuaderEntityRef> entity = editor.scene().createEntity(args);
+    ASSERT_TRUE(entity.ok()) << entity.errorMessage();
+
+    quader::TransformComponent firstMove;
+    firstMove.position = {1.0f, 0.0f, 0.0f};
+    quader::TransformComponent secondMove;
+    secondMove.position = {2.0f, 0.0f, 0.0f};
+
+    const quader::QuaderApiVoidResult batch = editor.scene().batch("Repeated Batch")
+            .setVisible(entity.value().id, false)
+            .setVisible(entity.value().id, true)
+            .setLocked(entity.value().id, true)
+            .setLocked(entity.value().id, false)
+            .setTransform(entity.value().id, firstMove)
+            .setTransform(entity.value().id, secondMove)
+            .commit();
+    ASSERT_TRUE(batch.ok()) << batch.errorMessage();
+    EXPECT_TRUE(batch.changed());
+
+    ASSERT_NE(session.scene().visibility(entity.value().id), nullptr);
+    EXPECT_TRUE(session.scene().visibility(entity.value().id)->visible);
+    ASSERT_NE(session.scene().lock(entity.value().id), nullptr);
+    EXPECT_FALSE(session.scene().lock(entity.value().id)->locked);
+    ASSERT_NE(session.scene().transform(entity.value().id), nullptr);
+    EXPECT_EQ(session.scene().transform(entity.value().id)->position.x, 2.0f);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_TRUE(session.scene().visibility(entity.value().id)->visible);
+    EXPECT_FALSE(session.scene().lock(entity.value().id)->locked);
+    EXPECT_EQ(session.scene().transform(entity.value().id)->position.x, 0.0f);
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_TRUE(session.scene().visibility(entity.value().id)->visible);
+    EXPECT_FALSE(session.scene().lock(entity.value().id)->locked);
+    EXPECT_EQ(session.scene().transform(entity.value().id)->position.x, 2.0f);
+}
+
 TEST(EditorApiTests, SelectionApiDelegatesTypedTargetsToEditorSelectionService) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(session);
@@ -697,6 +744,83 @@ TEST(EditorApiTests, AppCommandAliasesAndDirectOperationsShareChronologicalUndoS
     EXPECT_LT(editor.query().entities().size(), 2u);
 }
 
+TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::QuaderCreateEntityArgs parentArgs;
+    parentArgs.name = "Duplicate State Parent";
+    parentArgs.kind = quader::QuaderEntityKind::Empty;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> parent = editor.scene().createEntity(parentArgs);
+    ASSERT_TRUE(parent.ok()) << parent.errorMessage();
+
+    const quader::QuaderModelingObjectRef source = createSelectedBox(editor, "Duplicate State Source");
+    ASSERT_TRUE(editor.scene().reparent(source.entity, parent.value().id, false).ok());
+
+    quader::TransformComponent transform;
+    transform.position = {2.0f, 3.0f, 4.0f};
+    transform.rotationEuler = {0.25f, 0.5f, 0.75f};
+    ASSERT_TRUE(editor.scene().setTransform(source.entity, transform).ok());
+    ASSERT_TRUE(editor.scene().setVisible(source.entity, false).ok());
+    ASSERT_TRUE(editor.scene().setLocked(source.entity, true).ok());
+
+    const quader::QuaderApiResult<quader::QuaderAssetRef> material =
+            editor.assets().addMaterial(quader::QuaderMaterialArgs{.name = "Duplicate State Material"});
+    ASSERT_TRUE(material.ok()) << material.errorMessage();
+    ASSERT_TRUE(editor.assets().assignMaterialToEntity(source.entity, material.value().id).ok());
+
+    const quader::MeshComponent* sourceMesh = session.scene().mesh(source.entity);
+    ASSERT_NE(sourceMesh, nullptr);
+    quader::MeshComponent meshSettings = *sourceMesh;
+    meshSettings.castShadows = false;
+    meshSettings.doubleSided = false;
+    meshSettings.displayCollision = true;
+    ASSERT_TRUE(editor.scene().setMeshComponent(source.entity, meshSettings).ok());
+
+    ASSERT_TRUE(editor.selection().selectObject(source).ok());
+    const quader::QuaderApiVoidResult duplicated =
+            editor.commands().execute(quader::QuaderCommand::DuplicateSelection);
+    ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
+
+    ASSERT_EQ(session.scene().selectedEntities().size(), 1u);
+    const quader::EntityId duplicateEntity = session.scene().selectedEntities().front();
+    EXPECT_NE(duplicateEntity, source.entity);
+    EXPECT_EQ(session.scene().parent(duplicateEntity), parent.value().id);
+    ASSERT_NE(session.scene().transform(duplicateEntity), nullptr);
+    EXPECT_NEAR(session.scene().transform(duplicateEntity)->position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(session.scene().transform(duplicateEntity)->rotationEuler.z, 0.75f, 0.001f);
+    ASSERT_NE(session.scene().visibility(duplicateEntity), nullptr);
+    EXPECT_FALSE(session.scene().visibility(duplicateEntity)->visible);
+    ASSERT_NE(session.scene().lock(duplicateEntity), nullptr);
+    EXPECT_TRUE(session.scene().lock(duplicateEntity)->locked);
+    ASSERT_NE(session.scene().material(duplicateEntity), nullptr);
+    EXPECT_EQ(session.scene().material(duplicateEntity)->material, material.value().id);
+    ASSERT_NE(session.scene().mesh(duplicateEntity), nullptr);
+    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->castShadows);
+    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->doubleSided);
+    EXPECT_TRUE(session.scene().mesh(duplicateEntity)->displayCollision);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FALSE(session.scene().exists(duplicateEntity));
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    ASSERT_TRUE(session.scene().exists(duplicateEntity));
+    EXPECT_EQ(session.scene().parent(duplicateEntity), parent.value().id);
+    ASSERT_NE(session.scene().transform(duplicateEntity), nullptr);
+    EXPECT_NEAR(session.scene().transform(duplicateEntity)->position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(session.scene().transform(duplicateEntity)->rotationEuler.z, 0.75f, 0.001f);
+    ASSERT_NE(session.scene().visibility(duplicateEntity), nullptr);
+    EXPECT_FALSE(session.scene().visibility(duplicateEntity)->visible);
+    ASSERT_NE(session.scene().lock(duplicateEntity), nullptr);
+    EXPECT_TRUE(session.scene().lock(duplicateEntity)->locked);
+    ASSERT_NE(session.scene().material(duplicateEntity), nullptr);
+    EXPECT_EQ(session.scene().material(duplicateEntity)->material, material.value().id);
+    ASSERT_NE(session.scene().mesh(duplicateEntity), nullptr);
+    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->castShadows);
+    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->doubleSided);
+    EXPECT_TRUE(session.scene().mesh(duplicateEntity)->displayCollision);
+}
+
 TEST(EditorApiTests, PublicNoopOperationsPreserveRedoUntilChangedAppCommand) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(session);
@@ -717,6 +841,37 @@ TEST(EditorApiTests, PublicNoopOperationsPreserveRedoUntilChangedAppCommand) {
     ASSERT_TRUE(duplicate.ok()) << duplicate.errorMessage();
     EXPECT_TRUE(duplicate.changed());
     EXPECT_FALSE(editor.history().canRedo());
+}
+
+TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::MaterialDocument invalidMaterial;
+    invalidMaterial.name = "Dangling Texture Material";
+    invalidMaterial.textureSlots.emplace(quader::MaterialTextureSlot::BaseColor, 9000u);
+    const quader::QuaderApiResult<quader::QuaderAssetRef> added =
+            editor.assets().addMaterial(invalidMaterial);
+    EXPECT_FALSE(added.ok());
+    EXPECT_EQ(added.errorMessage(), "Texture asset does not exist");
+
+    const quader::QuaderApiResult<quader::QuaderAssetRef> validMaterial =
+            editor.assets().addMaterial(quader::QuaderMaterialArgs{.name = "Valid Material"});
+    ASSERT_TRUE(validMaterial.ok()) << validMaterial.errorMessage();
+    const quader::QuaderApiVoidResult replaced =
+            editor.assets().replaceMaterial(validMaterial.value().id, invalidMaterial);
+    EXPECT_FALSE(replaced.ok());
+    EXPECT_EQ(replaced.errorMessage(), "Texture asset does not exist");
+
+    const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Dangling Mesh Component Box");
+    const quader::MeshComponent* currentMesh = session.scene().mesh(box.entity);
+    ASSERT_NE(currentMesh, nullptr);
+    quader::MeshComponent invalidMesh = *currentMesh;
+    invalidMesh.mesh = 9100u;
+    const quader::QuaderApiVoidResult meshResult =
+            editor.scene().setMeshComponent(box.entity, invalidMesh);
+    EXPECT_FALSE(meshResult.ok());
+    EXPECT_EQ(meshResult.errorMessage(), "Mesh asset does not exist");
 }
 
 TEST(EditorApiTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
@@ -743,5 +898,13 @@ TEST(EditorApiTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
     EXPECT_FALSE(commandUndo.ok());
     EXPECT_FALSE(commandUndo.changed());
     EXPECT_EQ(commandUndo.errorMessage(), "Command is disabled.");
+    EXPECT_EQ(commandUndo.revisions.sceneRevision, editor.revisions().sceneRevision);
+    EXPECT_EQ(commandUndo.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
     EXPECT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
+
+    const quader::QuaderApiVoidResult unknownTool = editor.tools().activate("__missing_tool__");
+    EXPECT_FALSE(unknownTool.ok());
+    EXPECT_EQ(unknownTool.errorMessage(), "Unknown viewport tool.");
+    EXPECT_EQ(unknownTool.revisions.sceneRevision, editor.revisions().sceneRevision);
+    EXPECT_EQ(unknownTool.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
 }

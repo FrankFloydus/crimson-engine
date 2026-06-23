@@ -82,7 +82,7 @@ void check_float_preference(
 TEST_CASE("host contract preference catalog exposes viewport setting defaults as engine-neutral descriptors", "[host-contract]")
 {
 	const std::span<const qhc::HostPreferenceDescriptor> preferences = qhc::preference_catalog();
-	REQUIRE(preferences.size() == 47U);
+	REQUIRE(preferences.size() == 49U);
 
 	const qhc::HostPreferenceDescriptor& background = require_preference("viewport.scene.background_color");
 	CHECK(background.scope == qhc::HostPreferenceScope::viewport_style);
@@ -96,7 +96,17 @@ TEST_CASE("host contract preference catalog exposes viewport setting defaults as
 	CHECK(same_text(selection_wire.related_overlay_layer_id, "selected_face_edge"));
 	check_color(selection_wire.default_color, 1.0, 211.0 / 255.0, 31.0 / 255.0, 1.0);
 
+	const qhc::HostPreferenceDescriptor& diagnostic_edge =
+		require_preference("viewport.overlay.diagnostic_edge_color");
+	CHECK(diagnostic_edge.value_kind == qhc::HostPreferenceValueKind::color_rgba);
+	CHECK(same_text(diagnostic_edge.related_overlay_layer_id, "diagnostic_edge"));
+	check_color(diagnostic_edge.default_color, 1.0, 0.0, 0.0, 1.0);
+
 	check_float_preference(require_preference("viewport.grid.minor_line_size"), 0.32, 0.25, 8.0, "viewport.grid");
+	const qhc::HostPreferenceDescriptor& diagnostic_edge_line =
+		require_preference("viewport.overlay.diagnostic_edge_line_size");
+	check_float_preference(diagnostic_edge_line, 4.0, 0.25, 8.0, "viewport.overlay");
+	CHECK(same_text(diagnostic_edge_line.related_overlay_layer_id, "diagnostic_edge"));
 	check_float_preference(require_preference("viewport.vertices.vertex_size"), 7.0, 2.0, 32.0, "viewport.vertices");
 	check_float_preference(require_preference("viewport.measurements.text_size"), 8.0, 8.0, 28.0, "viewport.measurements");
 
@@ -176,6 +186,13 @@ TEST_CASE("host contract preference groups can drive custom engine settings pane
 	REQUIRE(grid.preference_ids.size() == 8U);
 	CHECK(group_contains(grid, "viewport.grid.minor_color"));
 	CHECK(group_contains(grid, "viewport.grid.axis_line_size"));
+
+	const qhc::HostPreferenceGroupDescriptor& overlay = require_group("viewport.overlay");
+	CHECK(same_text(overlay.label, "Overlay"));
+	CHECK(overlay.scope == qhc::HostPreferenceScope::viewport_style);
+	REQUIRE(overlay.preference_ids.size() == 11U);
+	CHECK(group_contains(overlay, "viewport.overlay.diagnostic_edge_color"));
+	CHECK(group_contains(overlay, "viewport.overlay.diagnostic_edge_line_size"));
 
 	const qhc::HostPreferenceGroupDescriptor& picking = require_group("viewport.picking");
 	CHECK(picking.scope == qhc::HostPreferenceScope::viewport_picking);

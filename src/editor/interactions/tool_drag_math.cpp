@@ -172,10 +172,11 @@ DragDistanceResult axis_distance_from_ray(
 		quader::QVec3 world_axis,
 		quader::QVec3 anchor,
 		const quader_poly::Ray& ray,
-		double parallel_epsilon)
+		double parallel_epsilon,
+		double vector_epsilon)
 {
 	const std::optional<double> distance =
-			geometry_axis_drag_distance(world_axis, anchor, ray, parallel_epsilon);
+			geometry_axis_drag_distance(world_axis, anchor, ray, parallel_epsilon, vector_epsilon);
 	if (!distance.has_value()) {
 		return {};
 	}

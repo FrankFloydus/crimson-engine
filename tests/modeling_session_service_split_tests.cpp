@@ -8,6 +8,7 @@
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "editor/modeling/services/ModelingSessionServices.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
+#include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 #include "editor/selection/SelectionProjectionService.h"
 #include "scene/SceneDocument.h"
 
@@ -72,11 +73,38 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapOwnsModelingSceneMappings
     EXPECT_EQ(objectMap.modelingObjectForEntity(first), std::nullopt);
 }
 
+TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapRebindClearsStaleReverseMappings) {
+    SceneDocument scene;
+    const EntityId first = scene.createEntity("First", EntityKind::Mesh);
+    const EntityId second = scene.createEntity("Second", EntityKind::Mesh);
+
+    ModelingObjectRuntimeMap objectMap;
+    objectMap.bind(100, first);
+    objectMap.bind(100, second);
+
+    EXPECT_EQ(objectMap.entityForModelingObject(100), second);
+    EXPECT_EQ(objectMap.modelingObjectForEntity(first), std::nullopt);
+    EXPECT_EQ(objectMap.modelingObjectForEntity(second), 100);
+
+    objectMap.bind(200, second);
+
+    EXPECT_EQ(objectMap.entityForModelingObject(100), std::nullopt);
+    EXPECT_EQ(objectMap.entityForModelingObject(200), second);
+    EXPECT_EQ(objectMap.modelingObjectForEntity(second), 200);
+}
+
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapKeepsDestroyedSceneIdentityForRedoProjection) {
     SceneDocument scene;
+    const EntityId parent = scene.createEntity("Parent", EntityKind::Empty);
     const EntityId entity = scene.createEntity("Redo Source", EntityKind::Mesh);
     scene.setMesh(entity, MeshComponent{.mesh = 99});
     scene.setMaterial(entity, MaterialComponent{.material = 42});
+    TransformComponent transform;
+    transform.position = {2.0f, 3.0f, 4.0f};
+    scene.setTransform(entity, transform);
+    ASSERT_TRUE(scene.setParent(entity, parent, false));
+    scene.setVisible(entity, false);
+    scene.setLocked(entity, true);
     const EditorObjectId editorObjectId = scene.editorObjectId(entity);
 
     ModelingObjectRuntimeMap objectMap;
@@ -88,7 +116,14 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapKeepsDestroyedSceneIdenti
     EXPECT_EQ(identity->entity, entity);
     EXPECT_EQ(identity->editorObjectId, editorObjectId);
     EXPECT_EQ(identity->name, "Redo Source");
-    EXPECT_EQ(identity->material, 42);
+    EXPECT_EQ(identity->parent, parent);
+    EXPECT_EQ(identity->transform.position.x, transform.position.x);
+    EXPECT_FALSE(identity->visibility.visible);
+    EXPECT_TRUE(identity->lock.locked);
+    ASSERT_TRUE(identity->mesh.has_value());
+    EXPECT_EQ(identity->mesh->mesh, 99);
+    ASSERT_TRUE(identity->material.has_value());
+    EXPECT_EQ(identity->material->material, 42);
 
     ASSERT_TRUE(scene.destroyEntity(entity));
     objectMap.unbindObject(300);
@@ -173,6 +208,7 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) 
 TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInFocusedService) {
     const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
     const std::string service = readSourceFile("src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp");
+    const std::string documentHelpers = readSourceFile("src/editor/commands/document/DocumentCommandSceneHelpers.h");
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
     EXPECT_NE(cmake.find("src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp"), std::string::npos);
@@ -180,8 +216,10 @@ TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInF
     EXPECT_EQ(facade.find("std::unordered_map<EntityId, EntityId> cloneBySource"), std::string::npos);
     EXPECT_EQ(facade.find("auto copyCommonEntityState"), std::string::npos);
     EXPECT_NE(service.find("pairDuplicateMeshes("), std::string::npos);
-    EXPECT_NE(service.find("copyCommonEntityState("), std::string::npos);
-    EXPECT_NE(service.find("cloneHierarchyEntity("), std::string::npos);
+    EXPECT_NE(service.find("duplicateHierarchyWithExistingClones("), std::string::npos);
+    EXPECT_EQ(service.find("copyCommonEntityState("), std::string::npos);
+    EXPECT_EQ(service.find("cloneHierarchyEntity("), std::string::npos);
+    EXPECT_NE(documentHelpers.find("documentCommandDuplicateEntitySnapshotTree("), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, SceneAwareDeletePolicyLivesInFocusedCommand) {
@@ -319,6 +357,24 @@ TEST(ModelingSessionServiceSplitTests, ContextActionServiceAppliesModalQueryStat
             service.resolveExecutableAction(summary, "delete_selection", false);
     EXPECT_TRUE(enabledResult.ok);
     EXPECT_EQ(enabledResult.action.actionId, "delete_selection");
+}
+
+TEST(ModelingSessionServiceSplitTests, InstantOperationEnablementUsesHostSingleObjectConstraint) {
+    const ModelingInstantOperationCatalogEntry* connect =
+            findModelingInstantOperationCatalogEntry(ModelingInstantOperationId::ConnectVertices);
+    ASSERT_NE(connect, nullptr);
+
+    ModelingSelectionSummary summary;
+    summary.mode = ModelingSelectionMode::Vertex;
+    summary.hasSelection = true;
+    summary.activeKind = ModelingActiveSelectionKind::Vertex;
+    summary.selectedVertexCount = 2;
+    summary.selectedObjectCount = 2;
+
+    EXPECT_FALSE(modelingInstantOperationEnabled(*connect, summary));
+
+    summary.selectedObjectCount = 1;
+    EXPECT_TRUE(modelingInstantOperationEnabled(*connect, summary));
 }
 
 TEST(ModelingSessionServiceSplitTests, FacadeDelegatesToSplitServicesThroughPublicApi) {

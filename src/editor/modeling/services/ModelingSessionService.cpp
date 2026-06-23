@@ -10,6 +10,7 @@
 #include "core/IUndoableCommand.h"
 #include "editor/commands/DocumentCommandService.h"
 #include "editor/commands/modeling/SceneAwareDeleteSelectionCommand.h"
+#include "editor/projection/MeshProjectionService.h"
 #include "editor/projection/SelectionOverlayProjection.h"
 #include "editor/modeling/services/ModelingHierarchyDuplicateService.h"
 #include "editor/modeling/services/ModelingInstantOperationCatalog.h"
@@ -373,158 +374,6 @@ ModelingHoverSummary fromRuntimeHoverSummary(
     };
 }
 
-ViewportOverlayLayer fromRuntime(quader_editor_core::SelectionOverlayLayer layer) {
-    switch (layer) {
-    case quader_editor_core::SelectionOverlayLayer::selected_visible_face:
-        return ViewportOverlayLayer::SelectedVisibleFace;
-    case quader_editor_core::SelectionOverlayLayer::selected_face_edge:
-        return ViewportOverlayLayer::SelectedFaceEdge;
-    case quader_editor_core::SelectionOverlayLayer::unselected_vertex:
-        return ViewportOverlayLayer::UnselectedVertex;
-    case quader_editor_core::SelectionOverlayLayer::selected_vertex:
-        return ViewportOverlayLayer::SelectedVertex;
-    case quader_editor_core::SelectionOverlayLayer::hover_face:
-        return ViewportOverlayLayer::HoverFace;
-    case quader_editor_core::SelectionOverlayLayer::hover_face_edge:
-        return ViewportOverlayLayer::HoverFaceEdge;
-    case quader_editor_core::SelectionOverlayLayer::hover_edge:
-        return ViewportOverlayLayer::HoverEdge;
-    case quader_editor_core::SelectionOverlayLayer::hover_vertex:
-        return ViewportOverlayLayer::HoverVertex;
-    case quader_editor_core::SelectionOverlayLayer::selected_edge:
-        return ViewportOverlayLayer::SelectedEdge;
-    case quader_editor_core::SelectionOverlayLayer::selected_xray_face:
-        return ViewportOverlayLayer::SelectedXrayFace;
-    case quader_editor_core::SelectionOverlayLayer::selected_face_mask:
-        return ViewportOverlayLayer::SelectedFaceMask;
-    case quader_editor_core::SelectionOverlayLayer::source_wire:
-        return ViewportOverlayLayer::SourceWire;
-    case quader_editor_core::SelectionOverlayLayer::open_edge:
-        return ViewportOverlayLayer::OpenEdge;
-    case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:
-        return ViewportOverlayLayer::SnapTargetVertex;
-    case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:
-        return ViewportOverlayLayer::DiagnosticEdge;
-    }
-    return ViewportOverlayLayer::SourceWire;
-}
-
-ViewportOverlayStyleRole runtimeTriangleStyleRole(
-        quader_editor_core::SelectionOverlayLayer layer,
-        std::uint32_t colorAbgr) {
-    switch (layer) {
-    case quader_editor_core::SelectionOverlayLayer::selected_visible_face:
-    case quader_editor_core::SelectionOverlayLayer::selected_xray_face:
-    case quader_editor_core::SelectionOverlayLayer::selected_face_mask:
-        return ViewportOverlayStyleRole::SelectionFace;
-    case quader_editor_core::SelectionOverlayLayer::hover_face:
-        return viewportOverlayIsNativeRemoveColor(colorAbgr)
-                ? ViewportOverlayStyleRole::RemoveSelectionFace
-                : ViewportOverlayStyleRole::HoverFace;
-    default:
-        return ViewportOverlayStyleRole::ExplicitColor;
-    }
-}
-
-ViewportOverlayStyleRole runtimeLineStyleRole(
-        quader_editor_core::SelectionOverlayLayer layer,
-        std::uint32_t colorAbgr) {
-    switch (layer) {
-    case quader_editor_core::SelectionOverlayLayer::source_wire:
-        return viewportOverlayIsNativeSelectionWireColor(colorAbgr)
-                ? ViewportOverlayStyleRole::SelectedSourceWire
-                : ViewportOverlayStyleRole::SourceWire;
-    case quader_editor_core::SelectionOverlayLayer::selected_face_edge:
-    case quader_editor_core::SelectionOverlayLayer::selected_edge:
-        return ViewportOverlayStyleRole::SelectionWire;
-    case quader_editor_core::SelectionOverlayLayer::hover_face_edge:
-    case quader_editor_core::SelectionOverlayLayer::hover_edge:
-        return viewportOverlayIsNativeRemoveColor(colorAbgr)
-                ? ViewportOverlayStyleRole::RemoveSelectionWire
-                : ViewportOverlayStyleRole::HoverWire;
-    case quader_editor_core::SelectionOverlayLayer::open_edge:
-        return ViewportOverlayStyleRole::OpenEdge;
-    case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:
-        return ViewportOverlayStyleRole::DiagnosticEdge;
-    default:
-        return ViewportOverlayStyleRole::ExplicitColor;
-    }
-}
-
-ViewportOverlayStyleRole runtimePointStyleRole(
-        quader_editor_core::SelectionOverlayLayer layer,
-        std::uint32_t colorAbgr) {
-    switch (layer) {
-    case quader_editor_core::SelectionOverlayLayer::unselected_vertex:
-        return ViewportOverlayStyleRole::Vertex;
-    case quader_editor_core::SelectionOverlayLayer::selected_vertex:
-        return ViewportOverlayStyleRole::SelectedVertex;
-    case quader_editor_core::SelectionOverlayLayer::hover_vertex:
-        return viewportOverlayIsNativeRemoveColor(colorAbgr)
-                ? ViewportOverlayStyleRole::RemoveSelectionVertex
-                : ViewportOverlayStyleRole::HoverVertex;
-    case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:
-        return ViewportOverlayStyleRole::SnapTargetVertex;
-    default:
-        return ViewportOverlayStyleRole::ExplicitColor;
-    }
-}
-
-ViewportOverlaySource overlaySourceForRole(ViewportOverlayStyleRole role) {
-    switch (role) {
-    case ViewportOverlayStyleRole::HoverFace:
-    case ViewportOverlayStyleRole::HoverWire:
-    case ViewportOverlayStyleRole::HoverVertex:
-    case ViewportOverlayStyleRole::RemoveSelectionFace:
-    case ViewportOverlayStyleRole::RemoveSelectionWire:
-    case ViewportOverlayStyleRole::RemoveSelectionVertex:
-        return ViewportOverlaySource::Hover;
-    case ViewportOverlayStyleRole::OpenEdge:
-    case ViewportOverlayStyleRole::DiagnosticEdge:
-        return ViewportOverlaySource::Diagnostic;
-    case ViewportOverlayStyleRole::ToolPlaneFill:
-    case ViewportOverlayStyleRole::ToolPlaneLine:
-    case ViewportOverlayStyleRole::ToolHandle:
-    case ViewportOverlayStyleRole::ToolPreviewFill:
-    case ViewportOverlayStyleRole::ToolPreviewLine:
-    case ViewportOverlayStyleRole::ToolPreviewSeam:
-    case ViewportOverlayStyleRole::CutPreviewKeepFill:
-    case ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill:
-    case ViewportOverlayStyleRole::CutPreviewDiscardFill:
-    case ViewportOverlayStyleRole::CutPreviewKeepBothOutline:
-    case ViewportOverlayStyleRole::CutPreviewDiscardOutline:
-    case ViewportOverlayStyleRole::CutPreviewSeam:
-        return ViewportOverlaySource::Tool;
-    case ViewportOverlayStyleRole::LayerDefault:
-    case ViewportOverlayStyleRole::ExplicitColor:
-    case ViewportOverlayStyleRole::SelectionFace:
-    case ViewportOverlayStyleRole::SelectionWire:
-    case ViewportOverlayStyleRole::SelectedSourceWire:
-    case ViewportOverlayStyleRole::SourceWire:
-    case ViewportOverlayStyleRole::Vertex:
-    case ViewportOverlayStyleRole::SelectedVertex:
-    case ViewportOverlayStyleRole::SnapTargetVertex:
-    case ViewportOverlayStyleRole::GroupBounds:
-    case ViewportOverlayStyleRole::WireframeBase:
-        return ViewportOverlaySource::Selection;
-    }
-    return ViewportOverlaySource::Unknown;
-}
-
-ViewportOverlayElementRef runtimeElementRef(
-        int objectId,
-        quader_poly::ElementId vertexId,
-        quader_poly::Edge edge,
-        quader_poly::ElementId faceId) {
-    return {
-            .objectId = objectId,
-            .vertexId = static_cast<int>(vertexId),
-            .edgeA = static_cast<int>(edge.a),
-            .edgeB = static_cast<int>(edge.b),
-            .faceId = static_cast<int>(faceId),
-    };
-}
-
 ModelingBoxDragState fromRuntime(quader_editor_core::BoxDragState state) {
     switch (state) {
     case quader_editor_core::BoxDragState::idle:
@@ -551,103 +400,6 @@ QVec3 transformObjectPoint(
         return point;
     }
     return transformPoint(scene.worldTransformMatrix(entity->second), point);
-}
-
-bool objectEffectivelyVisible(
-        int objectId,
-        const std::unordered_map<int, EntityId>& entityByObject,
-        const SceneDocument& scene) {
-    if (objectId < 0) {
-        return true;
-    }
-    const auto entity = entityByObject.find(objectId);
-    return entity != entityByObject.end() && scene.isEffectivelyVisible(entity->second);
-}
-
-ViewportOverlayFrame fromRuntime(
-        const quader_editor_core::SelectionOverlayFrame& frame,
-        const std::unordered_map<int, EntityId>& entityByObject,
-        const SceneDocument& scene) {
-    ViewportOverlayFrame result;
-    result.triangles.reserve(frame.triangles.size());
-    result.lines.reserve(frame.lines.size());
-    result.points.reserve(frame.points.size());
-    result.hoverTargetSelected = frame.hover_target_selected;
-
-    for (const quader_editor_core::SelectionOverlayTriangle& triangle : frame.triangles) {
-        if (!objectEffectivelyVisible(triangle.object_id, entityByObject, scene)) {
-            continue;
-        }
-        const ViewportOverlayLayer layer = fromRuntime(triangle.layer);
-        const ViewportOverlayStyleRole role = runtimeTriangleStyleRole(triangle.layer, triangle.color_abgr);
-        result.triangles.push_back(ViewportOverlayTriangle{
-                .layer = layer,
-                .a = transformObjectPoint(triangle.object_id, fromRuntime(triangle.a), entityByObject, scene),
-                .b = transformObjectPoint(triangle.object_id, fromRuntime(triangle.b), entityByObject, scene),
-                .c = transformObjectPoint(triangle.object_id, fromRuntime(triangle.c), entityByObject, scene),
-                .color = viewportOverlayColorFor(layer, triangle.color_abgr),
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(triangle.object_id, quader_poly::invalid_element_id, {}, triangle.face_id),
-        });
-    }
-    for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
-        if (!objectEffectivelyVisible(line.object_id, entityByObject, scene)) {
-            continue;
-        }
-        const ViewportOverlayLayer layer = fromRuntime(line.layer);
-        const ViewportOverlayStyleRole role = runtimeLineStyleRole(line.layer, line.color_abgr);
-        result.lines.push_back(ViewportOverlayLine{
-                .layer = layer,
-                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), entityByObject, scene),
-                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), entityByObject, scene),
-                .color = viewportOverlayColorFor(layer, line.color_abgr),
-                .widthPixels = line.width_pixels,
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(
-                        line.object_id,
-                        quader_poly::invalid_element_id,
-                        line.edge,
-                        line.face_id),
-        });
-    }
-    for (const quader_editor_core::SelectionOverlayPoint& point : frame.points) {
-        if (!objectEffectivelyVisible(point.object_id, entityByObject, scene)) {
-            continue;
-        }
-        const ViewportOverlayLayer layer = fromRuntime(point.layer);
-        const ViewportOverlayStyleRole role = runtimePointStyleRole(point.layer, point.color_abgr);
-        result.points.push_back(ViewportOverlayPoint{
-                .layer = layer,
-                .position = transformObjectPoint(point.object_id, fromRuntime(point.position), entityByObject, scene),
-                .color = viewportOverlayColorFor(layer, point.color_abgr),
-                .sizePixels = point.size_pixels,
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(point.object_id, point.vertex_id, {}, quader_poly::invalid_element_id),
-        });
-    }
-    return result;
-}
-
-void appendWorldSpaceRuntimeOverlayPoints(
-        ViewportOverlayFrame& frame,
-        const std::vector<quader_editor_core::SelectionOverlayPoint>& points) {
-    frame.points.reserve(frame.points.size() + points.size());
-    for (const quader_editor_core::SelectionOverlayPoint& point : points) {
-        const ViewportOverlayLayer layer = fromRuntime(point.layer);
-        const ViewportOverlayStyleRole role = runtimePointStyleRole(point.layer, point.color_abgr);
-        frame.points.push_back(ViewportOverlayPoint{
-                .layer = layer,
-                .position = fromRuntime(point.position),
-                .color = viewportOverlayColorFor(layer, point.color_abgr),
-                .sizePixels = point.size_pixels,
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(point.object_id, point.vertex_id, {}, quader_poly::invalid_element_id),
-        });
-    }
 }
 
 /**
@@ -1153,41 +905,6 @@ void appendPreviewFeatureLines(
     }
 }
 
-MeshAsset toMeshAsset(const quader_poly::CompiledMesh& compiled) {
-    MeshAsset mesh;
-    mesh.name = "Mesh";
-    mesh.vertices.reserve(compiled.vertices.size());
-    mesh.indices = compiled.indices;
-    mesh.primitives.reserve(compiled.primitives.size());
-    mesh.hasStableCpuTopology = true;
-
-    for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
-        mesh.vertices.push_back(MeshVertex{
-                .position = fromRuntime(vertex.position),
-                .normal = fromRuntime(vertex.normal),
-                .uv = {vertex.uv0.x, vertex.uv0.y},
-                .rgba = vertex.color,
-        });
-    }
-    for (const quader_poly::CompiledPrimitive& primitive : compiled.primitives) {
-        mesh.primitives.push_back(MeshPrimitiveSpan{
-                .indexOffset = primitive.index_offset,
-                .indexCount = primitive.index_count,
-                .materialSlot = primitive.material_slot,
-        });
-    }
-
-    return mesh;
-}
-
-MeshAsset toMeshAsset(const quader_poly::Document& document) {
-    return toMeshAsset(quader_poly::compile_document(document));
-}
-
-MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
-    return toMeshAsset(object.document);
-}
-
 std::optional<MeshAsset> boxPreviewMeshFromDescriptor(const quader_editor_core::BoxPreviewDescriptor& preview) {
     if (!preview.ok ||
             preview.drag_state != quader_editor_core::BoxDragState::height ||
@@ -1209,7 +926,7 @@ std::optional<MeshAsset> boxPreviewMeshFromDescriptor(const quader_editor_core::
         return std::nullopt;
     }
 
-    MeshAsset mesh = toMeshAsset(objects.front());
+    MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(objects.front().document);
     mesh.name = "Box Preview";
     if (mesh.vertices.empty() || mesh.indices.empty()) {
         return std::nullopt;
@@ -1508,10 +1225,14 @@ quader_editor_core::EditorRuntimeCommand noSettingsRuntimeCommand(quader_editor_
  * Stores the private runtime session state for a Modeling Session Memento.
  */
 struct ModelingSessionMemento::Impl {
-    explicit Impl(quader_editor_core::SessionState snapshot)
-        : state(std::move(snapshot)) {}
+    Impl(
+            quader_editor_core::SessionState snapshot,
+            std::unordered_map<int, ModelingObjectSceneIdentity> sceneIdentitySnapshot)
+        : state(std::move(snapshot))
+        , sceneIdentities(std::move(sceneIdentitySnapshot)) {}
 
     quader_editor_core::SessionState state;
+    std::unordered_map<int, ModelingObjectSceneIdentity> sceneIdentities;
 };
 
 ModelingSessionMemento::ModelingSessionMemento() = default;
@@ -1820,7 +1541,7 @@ public:
             if (documentIndex >= documents.size()) {
                 break;
             }
-            MeshAsset mesh = toMeshAsset(documents[documentIndex++]);
+            MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(documents[documentIndex++]);
             if (mesh.vertices.empty() || mesh.indices.empty()) {
                 continue;
             }
@@ -1844,8 +1565,29 @@ public:
         return previewMeshes;
     }
 
+    [[nodiscard]] std::unordered_set<int> liveModelingObjectIds() const {
+        std::unordered_set<int> ids;
+        ids.reserve(session_.objects().size());
+        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+            ids.insert(object.id);
+        }
+        return ids;
+    }
+
+    void refreshLiveSceneIdentities() {
+        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+            const std::optional<EntityId> entity = objectRegistry_.entityForModelingObject(object.id);
+            if (entity.has_value() && scene_.exists(*entity)) {
+                objectRegistry_.rememberSceneEntity(object.id, scene_, *entity);
+            }
+        }
+    }
+
     [[nodiscard]] ModelingSessionMemento captureHistoryMemento() const {
-        return ModelingSessionMemento(std::make_shared<ModelingSessionMemento::Impl>(session_.state()));
+        const std::unordered_set<int> liveIds = liveModelingObjectIds();
+        return ModelingSessionMemento(std::make_shared<ModelingSessionMemento::Impl>(
+                session_.state(),
+                objectRegistry_.captureSceneIdentitiesForModelingObjects(scene_, liveIds)));
     }
 
     ModelingCommandResult restoreHistoryMemento(const ModelingSessionMemento& memento) {
@@ -1861,9 +1603,12 @@ public:
         const quader_editor_core::SessionState& current = session_.state();
         state.content_revision = std::max(state.content_revision, current.content_revision + 1U);
         state.selection_revision = std::max(state.selection_revision, current.selection_revision + 1U);
+        objectRegistry_.restoreSceneIdentities(memento.impl_->sceneIdentities);
         session_.set_state(std::move(state));
         session_.clear_history();
         syncSceneObjectsFromModeling(true);
+        objectRegistry_.restoreSceneIdentities(memento.impl_->sceneIdentities);
+        refreshLiveSceneIdentities();
         syncSceneSelectionFromModeling();
         invalidateSelectionOverlayCaches();
         return {
@@ -2037,6 +1782,7 @@ public:
             } else {
                 scene_.clearMaterial(*duplicate);
             }
+            objectRegistry_.rememberSceneEntity(duplicateObjectIds[index], scene_, *duplicate);
         }
     }
 

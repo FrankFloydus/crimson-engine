@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/DocumentCommandService.h"
 
+#include "assets/AssetRegistry.h"
 #include "editor/commands/document/ApplyEntityTransformCommand.h"
 #include "editor/commands/document/BatchDocumentCommand.h"
 #include "editor/commands/document/CreateEntityCommand.h"
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <unordered_set>
 #include <utility>
 
 namespace quader {
@@ -98,9 +100,13 @@ std::vector<DocumentLockEdit> normalizedLockEdits(
 
 } // namespace
 
-DocumentCommandService::DocumentCommandService(SceneDocument& scene, EditorHistoryService& history)
+DocumentCommandService::DocumentCommandService(
+        SceneDocument& scene,
+        EditorHistoryService& history,
+        const AssetRegistry* assets)
     : scene_(scene)
-    , history_(history) {}
+    , history_(history)
+    , assets_(assets) {}
 
 DocumentCreateEntityResult DocumentCommandService::createEntity(
         std::string name,
@@ -190,6 +196,49 @@ DocumentDuplicateEntityResult DocumentCommandService::duplicateEntity(EntityId e
 
 DocumentDuplicateHierarchyResult DocumentCommandService::duplicateSelectedHierarchy() {
     auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(scene_);
+    DuplicateSelectedHierarchyCommand* duplicateCommand = command.get();
+    DocumentDuplicateHierarchyResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.duplicateRoots = duplicateCommand->duplicateRoots();
+    }
+    return result;
+}
+
+DocumentDuplicateHierarchyResult DocumentCommandService::duplicateHierarchyWithExistingClones(
+        std::vector<EntityId> roots,
+        std::unordered_map<EntityId, EntityId> existingClonesBySource) {
+    std::unordered_set<EntityId> seenRoots;
+    std::vector<EntityId> existingRoots;
+    existingRoots.reserve(roots.size());
+    for (const EntityId root : roots) {
+        if (root != InvalidEntityId && scene_.exists(root) && seenRoots.insert(root).second) {
+            existingRoots.push_back(root);
+        }
+    }
+    roots = std::move(existingRoots);
+    if (roots.empty()) {
+        DocumentDuplicateHierarchyResult result;
+        assignDocumentCommandStatus(result, documentCommandUnchangedResult());
+        return result;
+    }
+
+    std::vector<DocumentEntitySnapshot> sourceSnapshots;
+    sourceSnapshots.reserve(roots.size());
+    for (const EntityId root : roots) {
+        std::optional<DocumentEntitySnapshot> snapshot = documentCommandCaptureEntitySnapshot(scene_, root);
+        if (!snapshot.has_value()) {
+            DocumentDuplicateHierarchyResult result;
+            assignDocumentCommandStatus(result, documentCommandMissingEntityResult());
+            return result;
+        }
+        sourceSnapshots.push_back(std::move(*snapshot));
+    }
+
+    auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(
+            scene_,
+            std::move(sourceSnapshots),
+            std::move(existingClonesBySource));
     DuplicateSelectedHierarchyCommand* duplicateCommand = command.get();
     DocumentDuplicateHierarchyResult result;
     assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
@@ -304,6 +353,9 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
     if (material == InvalidAssetId) {
         return documentCommandInvalidRequestResult("Material asset is invalid");
     }
+    if (assets_ != nullptr && assets_->material(material) == nullptr) {
+        return documentCommandInvalidRequestResult("Material asset does not exist");
+    }
     if (!scene_.exists(entity)) {
         return documentCommandMissingEntityResult();
     }
@@ -326,18 +378,17 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
 }
 
 DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, MeshComponent mesh) {
+    if (mesh.mesh == InvalidAssetId) {
+        return documentCommandInvalidRequestResult("Mesh asset is invalid");
+    }
+    if (assets_ != nullptr && assets_->mesh(mesh.mesh) == nullptr) {
+        return documentCommandInvalidRequestResult("Mesh asset does not exist");
+    }
     const MeshComponent* currentMesh = scene_.mesh(entity);
     if (!currentMesh) {
         return documentCommandMissingEntityResult();
     }
-    if (currentMesh->mesh == mesh.mesh &&
-            currentMesh->editorOnly == mesh.editorOnly &&
-            currentMesh->castShadows == mesh.castShadows &&
-            currentMesh->doubleSided == mesh.doubleSided &&
-            currentMesh->generateCollisions == mesh.generateCollisions &&
-            currentMesh->collisionType == mesh.collisionType &&
-            currentMesh->displayCollision == mesh.displayCollision &&
-            currentMesh->bodyType == mesh.bodyType) {
+    if (documentCommandSameMeshComponent(*currentMesh, mesh)) {
         return documentCommandUnchangedResult();
     }
 

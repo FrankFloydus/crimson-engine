@@ -29,5 +29,6 @@ std::optional<SceneBounds> entityWorldBounds(const SceneDocument& document, cons
 std::optional<SceneBounds> entityHierarchyWorldBounds(const SceneDocument& document, const AssetRegistry& assets, EntityId entity);
 std::optional<SceneBounds> documentWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
 std::optional<SceneBounds> selectedWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
+std::optional<SceneBounds> selectedTransformWorldBounds(const SceneDocument& document, const AssetRegistry& assets);
 
 } // namespace quader

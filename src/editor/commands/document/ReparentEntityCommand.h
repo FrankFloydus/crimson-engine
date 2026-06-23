@@ -32,6 +32,21 @@ public:
         }
     }
 
+    ReparentEntityCommand(
+            SceneDocument& scene,
+            EntityId entity,
+            EntityId beforeParent,
+            EntityId afterParent,
+            TransformComponent beforeTransform,
+            TransformComponent afterTransform)
+        : SceneCommand(scene, "Reparent Entity")
+        , entity_(entity)
+        , beforeParent_(beforeParent)
+        , afterParent_(afterParent)
+        , beforeTransform_(beforeTransform)
+        , afterTransform_(afterTransform)
+        , capturedAfterTransform_(true) {}
+
     DocumentCommandResult undo() override {
         return apply(beforeParent_, beforeTransform_);
     }

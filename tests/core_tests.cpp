@@ -847,7 +847,7 @@ TEST(ViewportOverlayStyleResolverTests, PrioritizesDiagnosticsThenExternalOverri
 
 TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     const std::filesystem::path sourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionService.cpp";
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "projection" / "SelectionOverlayProjection.cpp";
     std::ifstream sourceFile(sourcePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
 
@@ -859,7 +859,7 @@ TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::source_wire:"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:"), std::string::npos);
-    EXPECT_NE(source.find("runtimeLineStyleRole"), std::string::npos);
+    EXPECT_NE(source.find("lineStyleRole"), std::string::npos);
     EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"), std::string::npos);
 }
 
@@ -1391,10 +1391,14 @@ TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
     const std::filesystem::path servicePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "transform" / "SceneTransformDragService.cpp";
+    const std::filesystem::path boundsPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "scene" / "SceneBounds.cpp";
     std::ifstream sourceFile(sourcePath);
     std::ifstream serviceFile(servicePath);
+    std::ifstream boundsFile(boundsPath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
     ASSERT_TRUE(serviceFile.is_open()) << servicePath.string();
+    ASSERT_TRUE(boundsFile.is_open()) << boundsPath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
@@ -1402,9 +1406,12 @@ TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
     const std::string service{
             std::istreambuf_iterator<char>(serviceFile),
             std::istreambuf_iterator<char>()};
+    const std::string bounds{
+            std::istreambuf_iterator<char>(boundsFile),
+            std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("selectedTransformWorldBounds(document, request.assets)"), std::string::npos);
-    EXPECT_NE(source.find("entityHierarchyWorldBounds(document, assets, entity)"), std::string::npos);
+    EXPECT_NE(bounds.find("entityHierarchyWorldBounds(document, assets, entity)"), std::string::npos);
     EXPECT_NE(service.find("documentLocalPivotForWorldPoint(document, entity, worldPivot)"), std::string::npos);
     EXPECT_NE(source.find("snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, startWorldPivot_, activeGridSize, snapEnabled)"),
             std::string::npos);
@@ -1910,6 +1917,40 @@ TEST(ViewportPanelTests, TransformDragRuntimeStateIsOwnedByModelingService) {
     EXPECT_NE(source.find("quader_editor_core::preview_rotate_from_screen_position"), std::string::npos);
     EXPECT_NE(source.find("*sceneOnlyRotateState_"), std::string::npos);
     EXPECT_EQ(source.find("quader_editor_core::preview_scale_from_screen_position"), std::string::npos);
+}
+
+TEST(ViewportPanelTests, TransformGizmoSupportsRegisteredRuntimeTransformTools) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::size_t supportGate = source.find("bool TransformGizmoController::supportsViewportTool");
+    const std::size_t runtimeMapping = source.find("quader_editor_core::ViewportInteractionTool TransformGizmoController::runtimeToolFor");
+    ASSERT_NE(supportGate, std::string::npos);
+    ASSERT_NE(runtimeMapping, std::string::npos);
+
+    EXPECT_NE(source.find("tool == ViewportToolId::Extend", supportGate), std::string::npos);
+    EXPECT_NE(source.find("tool == ViewportToolId::Extrude", supportGate), std::string::npos);
+    EXPECT_NE(source.find("case ViewportToolId::Extend:", runtimeMapping), std::string::npos);
+    EXPECT_NE(source.find("return quader_editor_core::ViewportInteractionTool::extend;", runtimeMapping), std::string::npos);
+    EXPECT_NE(source.find("case ViewportToolId::Extrude:", runtimeMapping), std::string::npos);
+    EXPECT_NE(source.find("return quader_editor_core::ViewportInteractionTool::extrude;", runtimeMapping), std::string::npos);
+}
+
+TEST(ModelingInteractionTests, AxisDragDistanceMathLivesInSharedHelper) {
+    const std::string extrudeSource = readSourceFile("src/editor/interactions/extrude_tool.cpp");
+    const std::string boxSource = readSourceFile("src/editor/interactions/box_tool.cpp");
+    const std::string dragMathSource = readSourceFile("src/editor/interactions/tool_drag_math.cpp");
+
+    EXPECT_NE(dragMathSource.find("DragDistanceResult axis_distance_from_ray"), std::string::npos);
+    EXPECT_NE(extrudeSource.find("axis_distance_from_ray("), std::string::npos);
+    EXPECT_NE(boxSource.find("axis_distance_from_ray("), std::string::npos);
+    EXPECT_EQ(extrudeSource.find("geometry_axis_drag_distance"), std::string::npos);
+    EXPECT_EQ(boxSource.find("box_geometry_axis_drag_distance"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, TransformGizmoAppliesRotationPreviewInWorldSpace) {
@@ -3589,6 +3630,7 @@ TEST(ViewportLayoutTests, SplitStateDefaultsAndClamps) {
 
 TEST(ViewportWorkspaceServiceTests, MaximizedPaneStateOwnsActiveLayout) {
     ViewportWorkspaceService workspace;
+    EXPECT_EQ(workspace.gridPreset(), viewportDefaultGridPreset());
     ASSERT_TRUE(workspace.setLayout(ViewportLayoutId::FourQuad));
     ASSERT_TRUE(workspace.focusPane(ViewportPaneId::Side));
 
@@ -3625,6 +3667,17 @@ TEST(ViewportWorkspaceServiceTests, LayoutChangeClearsMaximizedPaneState) {
     ASSERT_EQ(placements.size(), 1u);
     expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 1.0f, 1.0f);
     EXPECT_TRUE(workspace.activeSplitHandles().empty());
+}
+
+TEST(ViewportWorkspaceServiceTests, ViewReflectsCameraMutationsOutsideSetView) {
+    ViewportWorkspaceService workspace;
+    ASSERT_TRUE(workspace.setView(ViewportPaneId::Perspective, ViewportView::Top));
+    ASSERT_EQ(workspace.view(ViewportPaneId::Perspective), ViewportView::Top);
+
+    resetViewportCameraForView(workspace.camera(ViewportPaneId::Perspective), ViewportView::Front);
+
+    EXPECT_EQ(workspace.view(ViewportPaneId::Perspective), ViewportView::Front);
+    EXPECT_EQ(workspace.pane(ViewportPaneId::Perspective).view, ViewportView::Front);
 }
 
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
@@ -5680,6 +5733,28 @@ TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
 
     ASSERT_TRUE(history.undo().ok);
     EXPECT_FALSE(scene.lock(locked)->locked);
+}
+
+TEST(DocumentCommandServiceTests, AssetAwareServiceRejectsDanglingAssetReferences) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history, &assets);
+
+    MeshAsset mesh;
+    const AssetId meshId = assets.addMesh(mesh);
+    const EntityId entity = scene.createEntity("Asset Checked", EntityKind::Mesh);
+    scene.setMesh(entity, MeshComponent{.mesh = meshId});
+
+    MeshComponent invalidMesh = *scene.mesh(entity);
+    invalidMesh.mesh = meshId + 1000u;
+    DocumentCommandResult result = commands.setMeshComponent(entity, invalidMesh);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Mesh asset does not exist");
+
+    result = commands.setMaterial(entity, meshId + 2000u);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Material asset does not exist");
 }
 
 TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleCommands) {

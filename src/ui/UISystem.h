@@ -7,6 +7,7 @@
 #pragma once
 
 #include "assets/AssetRegistry.h"
+#include "core/FrameTiming.h"
 #include "core/LocalizationService.h"
 #include "core/Types.h"
 #include "render/ImGuiFilamentRenderer.h"
@@ -50,7 +51,7 @@ public:
     void shutdown();
 
     bool processEvent(const SDL_Event& event);
-    void beginFrame();
+    void beginFrame(const FrameTiming& frameTiming);
     void draw(QuaderEditorApi& editor,
             SceneRenderBridge& renderBridge,
             SceneDocument& document,
@@ -111,6 +112,7 @@ private:
     bool relativeMouseCaptured_ = false;
     bool relativeMouseCaptureWarningIssued_ = false;
     QVec2 relativeMouseDelta_ = {};
+    FrameTiming currentFrameTiming_ = {};
     UIPanelId focusedPanel_ = UIPanelId::Viewport;
 };
 

@@ -7,32 +7,14 @@
 #include "ui/ModalToolOverlayRenderer.h"
 
 #include "core/LocalizationService.h"
+#include "ui/ViewportScreenGeometry.h"
 
 #include <array>
 #include <cstdio>
-#include <optional>
 #include <string>
 
 namespace quader {
 namespace {
-
-std::optional<ImVec2> projectWorldToViewport(
-        QVec3 world,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    (void)itemSize;
-
-    const ViewportScreenPoint projected = camera.projectWorldPoint(world);
-    if (projected.depth <= camera.state().nearPlane || projected.depth >= camera.state().farPlane) {
-        return std::nullopt;
-    }
-
-    return ImVec2{
-            itemMin.x + projected.position.x,
-            itemMin.y + projected.position.y,
-    };
-}
 
 void drawWorldLine(
         ImDrawList* drawList,

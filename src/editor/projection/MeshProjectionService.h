@@ -17,6 +17,8 @@ namespace quader {
  */
 class MeshProjectionService final {
 public:
+    [[nodiscard]] static MeshAsset meshAssetFromCompiledMesh(const quader_poly::CompiledMesh& compiled);
+    [[nodiscard]] static MeshAsset compilePolygonDocumentMesh(const quader_poly::Document& document);
     [[nodiscard]] static MeshAsset compileObjectMesh(const quader_editor_core::PolygonObject& object);
 };
 

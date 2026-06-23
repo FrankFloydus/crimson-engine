@@ -38,7 +38,7 @@ ViewportInputFrame ViewportInputFrameBuilder::build(const ViewportInputFrameBuil
     input.rightDown = ImGui::IsMouseDown(ImGuiMouseButton_Right);
     input.rightReleased = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
     input.mouseWheel = (request.hovered || request.routeActiveNavigationInput) ? io.MouseWheel : 0.0f;
-    input.deltaSeconds = std::max(io.DeltaTime, 0.0f);
+    input.deltaSeconds = std::max(request.deltaSeconds, 0.0f);
     input.mouseScreen = {io.MousePos.x, io.MousePos.y};
     input.mouseDelta = request.useCapturedMouseDelta ? request.capturedMouseDelta : QVec2{io.MouseDelta.x, io.MouseDelta.y};
     input.mouseLocal = {io.MousePos.x - request.itemMin.x, io.MousePos.y - request.itemMin.y};

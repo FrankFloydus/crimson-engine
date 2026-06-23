@@ -36,6 +36,9 @@ struct ViewportWorkspacePaneState {
     bool visibleThisFrame = false;
 };
 
+void resetViewportCameraForView(ViewportCameraController& camera, ViewportView view);
+[[nodiscard]] ViewportView viewportViewForCamera(const ViewportCameraController& camera);
+
 /**
  * Coordinates Viewport Workspace Service responsibilities for the viewport input, layout, and camera layer.
  */
@@ -88,7 +91,7 @@ private:
     ViewportLayoutId layout_ = ViewportLayoutId::Single;
     ViewportPaneId focusedPane_ = ViewportPaneId::Perspective;
     bool focusedPaneMaximized_ = false;
-    int gridPreset_ = 6;
+    int gridPreset_ = 0;
 };
 
 } // namespace quader

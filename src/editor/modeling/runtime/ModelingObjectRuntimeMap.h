@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -26,7 +27,12 @@ struct ModelingObjectSceneIdentity {
     EntityId entity = InvalidEntityId;
     EditorObjectId editorObjectId = InvalidEditorObjectId;
     std::string name;
-    AssetId material = InvalidAssetId;
+    EntityId parent = InvalidEntityId;
+    TransformComponent transform;
+    VisibilityComponent visibility;
+    LockComponent lock;
+    std::optional<MeshComponent> mesh;
+    std::optional<MaterialComponent> material;
 };
 
 /**
@@ -43,10 +49,14 @@ public:
     [[nodiscard]] std::optional<EntityId> entityForModelingObject(int modelingObjectId) const;
     [[nodiscard]] std::optional<int> modelingObjectForEntity(EntityId entity) const;
     [[nodiscard]] std::optional<ModelingObjectSceneIdentity> sceneIdentityForModelingObject(int modelingObjectId) const;
+    [[nodiscard]] std::unordered_map<int, ModelingObjectSceneIdentity> captureSceneIdentitiesForModelingObjects(
+            const SceneDocument& scene,
+            const std::unordered_set<int>& modelingObjectIds) const;
     [[nodiscard]] std::vector<ModelingObjectRecord> records(const SceneDocument& scene) const;
 
     void bind(int modelingObjectId, EntityId entity);
     void rememberSceneEntity(int modelingObjectId, const SceneDocument& scene, EntityId entity);
+    void restoreSceneIdentities(std::unordered_map<int, ModelingObjectSceneIdentity> identities);
     void unbindObject(int modelingObjectId);
     void clear();
 

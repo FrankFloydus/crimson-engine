@@ -15,6 +15,7 @@
 #include "scene/TransformPivot.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "editor/tools/ViewportToolCatalog.h"
+#include "ui/ViewportScreenGeometry.h"
 
 #include <algorithm>
 #include <array>
@@ -34,29 +35,6 @@ namespace quader {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
-
-float distanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
-    const ImVec2 ab{b.x - a.x, b.y - a.y};
-    const ImVec2 ap{point.x - a.x, point.y - a.y};
-    const float lengthSquared = ab.x * ab.x + ab.y * ab.y;
-    if (lengthSquared <= 0.0001f) {
-        const float dx = point.x - a.x;
-        const float dy = point.y - a.y;
-        return dx * dx + dy * dy;
-    }
-
-    const float t = std::clamp((ap.x * ab.x + ap.y * ab.y) / lengthSquared, 0.0f, 1.0f);
-    const ImVec2 closest{a.x + ab.x * t, a.y + ab.y * t};
-    const float dx = point.x - closest.x;
-    const float dy = point.y - closest.y;
-    return dx * dx + dy * dy;
-}
-
-float distanceSquared(ImVec2 a, ImVec2 b) {
-    const float dx = a.x - b.x;
-    const float dy = a.y - b.y;
-    return dx * dx + dy * dy;
-}
 
 bool isComponentSelectionMode(ModelingSelectionMode mode) {
     return mode == ModelingSelectionMode::Vertex ||
@@ -165,28 +143,6 @@ void pinDocumentLocalPivotToWorldPoint(
             transformPoint(composeTransform(spatial), localPivot);
 }
 
-void includeBounds(std::optional<SceneBounds>& result, const SceneBounds& bounds) {
-    if (!result) {
-        result = bounds;
-        return;
-    }
-    includePoint(*result, bounds.min);
-    includePoint(*result, bounds.max);
-}
-
-std::optional<SceneBounds> selectedTransformWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
-    std::optional<SceneBounds> result;
-    for (const EntityId entity : document.selectedEntities()) {
-        const std::optional<SceneBounds> bounds = document.hasChildren(entity)
-                ? entityHierarchyWorldBounds(document, assets, entity)
-                : entityWorldBounds(document, assets, entity);
-        if (bounds) {
-            includeBounds(result, *bounds);
-        }
-    }
-    return result;
-}
-
 bool handleIncludesAxis(TransformAxisHandle activeAxis, TransformAxisHandle axis) {
     if (activeAxis == TransformAxisHandle::None || activeAxis == axis) {
         return true;
@@ -248,25 +204,6 @@ QVec3 axisScaleForHandle(TransformAxisHandle activeAxis, double factor) {
     }
     return scale;
 }
-
-std::optional<ImVec2> projectWorldToViewport(
-        QVec3 world,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    (void)itemSize;
-
-    const ViewportScreenPoint projected = camera.projectWorldPoint(world);
-    if (projected.depth <= camera.state().nearPlane || projected.depth >= camera.state().farPlane) {
-        return std::nullopt;
-    }
-
-    return ImVec2{
-            itemMin.x + projected.position.x,
-            itemMin.y + projected.position.y,
-    };
-}
-
 
 quader::QVec3 toRuntime(QVec3 value) {
     return {value.x, value.y, value.z};
@@ -945,7 +882,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
 
     auto fallbackHit = [&]() {
         if (tool == ViewportToolId::Rotate) {
-            const float radius = std::sqrt(distanceSquared(mouse, origin));
+            const float radius = std::sqrt(viewportDistanceSquared(mouse, origin));
             const float baseRadius = std::clamp(std::min(itemSize.x, itemSize.y) * 0.075f, 34.0f, 92.0f);
             if (std::abs(radius - baseRadius) < 8.0f) {
                 return TransformAxisHandle::X;
@@ -960,7 +897,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         }
 
         for (std::size_t index = 0; index < axisEnds.size(); ++index) {
-            if (axisEnds[index] && distanceToSegmentSquared(mouse, origin, *axisEnds[index]) < 144.0f) {
+            if (axisEnds[index] && viewportDistanceToSegmentSquared(mouse, origin, *axisEnds[index]) < 144.0f) {
                 return axes[index];
             }
         }
@@ -1368,7 +1305,11 @@ bool TransformGizmoController::cancelActiveDrag(SceneDocument& document, Modelin
 }
 
 bool TransformGizmoController::supportsViewportTool(ViewportToolId tool) const {
-    return tool == ViewportToolId::Move || tool == ViewportToolId::Rotate || tool == ViewportToolId::Scale;
+    return tool == ViewportToolId::Move ||
+            tool == ViewportToolId::Extend ||
+            tool == ViewportToolId::Extrude ||
+            tool == ViewportToolId::Rotate ||
+            tool == ViewportToolId::Scale;
 }
 
 bool TransformGizmoController::suppressesHover(bool navigationGizmoConsumed, bool transformGizmoConsumed) const {

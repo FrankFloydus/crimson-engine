@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "app/AppFrameClock.h"
 #include "core/Types.h"
 #include "scene/document/ProjectSession.h"
 #include "platform/PlatformWindow.h"
@@ -42,6 +43,7 @@ public:
 private:
     void createStartupScene();
 
+    AppFrameClock frameClock_;
     PlatformWindow window_;
     RenderSystem renderSystem_;
     SceneRenderBridge renderBridge_;

@@ -12,6 +12,35 @@
 #include <utility>
 
 namespace quader {
+namespace {
+
+ModelingObjectSceneIdentity captureSceneIdentity(const SceneDocument& scene, EntityId entity) {
+    ModelingObjectSceneIdentity identity;
+    identity.entity = entity;
+    identity.editorObjectId = scene.editorObjectId(entity);
+    if (const NameComponent* name = scene.name(entity)) {
+        identity.name = name->name;
+    }
+    identity.parent = scene.parent(entity);
+    if (const TransformComponent* transform = scene.transform(entity)) {
+        identity.transform = *transform;
+    }
+    if (const VisibilityComponent* visibility = scene.visibility(entity)) {
+        identity.visibility = *visibility;
+    }
+    if (const LockComponent* lock = scene.lock(entity)) {
+        identity.lock = *lock;
+    }
+    if (const MeshComponent* mesh = scene.mesh(entity)) {
+        identity.mesh = *mesh;
+    }
+    if (const MaterialComponent* material = scene.material(entity)) {
+        identity.material = *material;
+    }
+    return identity;
+}
+
+} // namespace
 
 std::size_t ModelingObjectRuntimeMap::size() const {
     return entitiesByObject_.size();
@@ -62,6 +91,25 @@ std::optional<ModelingObjectSceneIdentity> ModelingObjectRuntimeMap::sceneIdenti
     return it->second;
 }
 
+std::unordered_map<int, ModelingObjectSceneIdentity> ModelingObjectRuntimeMap::captureSceneIdentitiesForModelingObjects(
+        const SceneDocument& scene,
+        const std::unordered_set<int>& modelingObjectIds) const {
+    std::unordered_map<int, ModelingObjectSceneIdentity> identities;
+    identities.reserve(modelingObjectIds.size());
+    for (const int modelingObjectId : modelingObjectIds) {
+        const auto entity = entitiesByObject_.find(modelingObjectId);
+        if (entity != entitiesByObject_.end() && scene.exists(entity->second)) {
+            identities.emplace(modelingObjectId, captureSceneIdentity(scene, entity->second));
+            continue;
+        }
+        const auto identity = sceneIdentityByObject_.find(modelingObjectId);
+        if (identity != sceneIdentityByObject_.end()) {
+            identities.emplace(modelingObjectId, identity->second);
+        }
+    }
+    return identities;
+}
+
 std::vector<ModelingObjectRecord> ModelingObjectRuntimeMap::records(const SceneDocument& scene) const {
     std::vector<ModelingObjectRecord> records;
     records.reserve(entitiesByObject_.size());
@@ -87,6 +135,20 @@ std::vector<ModelingObjectRecord> ModelingObjectRuntimeMap::records(const SceneD
 }
 
 void ModelingObjectRuntimeMap::bind(int modelingObjectId, EntityId entity) {
+    if (const auto existingEntity = entitiesByObject_.find(modelingObjectId);
+            existingEntity != entitiesByObject_.end() && existingEntity->second != entity) {
+        const auto reverse = objectsByEntity_.find(existingEntity->second);
+        if (reverse != objectsByEntity_.end() && reverse->second == modelingObjectId) {
+            objectsByEntity_.erase(reverse);
+        }
+    }
+    if (const auto existingObject = objectsByEntity_.find(entity);
+            existingObject != objectsByEntity_.end() && existingObject->second != modelingObjectId) {
+        const auto forward = entitiesByObject_.find(existingObject->second);
+        if (forward != entitiesByObject_.end() && forward->second == entity) {
+            entitiesByObject_.erase(forward);
+        }
+    }
     entitiesByObject_[modelingObjectId] = entity;
     objectsByEntity_[entity] = modelingObjectId;
 }
@@ -99,16 +161,12 @@ void ModelingObjectRuntimeMap::rememberSceneEntity(
         return;
     }
 
-    ModelingObjectSceneIdentity identity;
-    identity.entity = entity;
-    identity.editorObjectId = scene.editorObjectId(entity);
-    if (const NameComponent* name = scene.name(entity)) {
-        identity.name = name->name;
-    }
-    if (const MaterialComponent* material = scene.material(entity)) {
-        identity.material = material->material;
-    }
-    sceneIdentityByObject_[modelingObjectId] = std::move(identity);
+    sceneIdentityByObject_[modelingObjectId] = captureSceneIdentity(scene, entity);
+}
+
+void ModelingObjectRuntimeMap::restoreSceneIdentities(
+        std::unordered_map<int, ModelingObjectSceneIdentity> identities) {
+    sceneIdentityByObject_ = std::move(identities);
 }
 
 void ModelingObjectRuntimeMap::unbindObject(int modelingObjectId) {

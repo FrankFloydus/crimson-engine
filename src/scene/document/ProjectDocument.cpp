@@ -118,12 +118,6 @@ const ProjectObjectRecord* ProjectDocument::objectRecord(EditorObjectId objectId
     return existing == objects_.end() ? nullptr : &existing->second;
 }
 
-ProjectObjectRecord* ProjectDocument::objectRecord(EditorObjectId objectId) {
-    syncObjectRecordsWithScene();
-    auto existing = objects_.find(objectId);
-    return existing == objects_.end() ? nullptr : &existing->second;
-}
-
 EditorObjectId ProjectDocument::objectIdForEntity(EntityId entity) const {
     if (const EditorObjectId objectId = scene_.editorObjectId(entity); objectId != InvalidEditorObjectId) {
         syncObjectRecordsWithScene();

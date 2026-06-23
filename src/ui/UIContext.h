@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/FrameTiming.h"
 #include "core/Types.h"
 #include "math/Types.h"
 #include "ui/UIIconSet.h"
@@ -41,6 +42,7 @@ struct UIContext {
     LocalizationService& localization;
     UISettings& settings;
     ViewportSettings& viewportSettings;
+    FrameTiming frameTiming = {};
     QVec2 viewportRelativeMouseDelta = {};
     bool* viewportCursorCaptureRequested = nullptr;
     QVec2* viewportCursorCapturePoint = nullptr;

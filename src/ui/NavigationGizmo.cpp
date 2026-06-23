@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/NavigationGizmo.h"
 
+#include "viewport/ViewportCameraAdapter.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -55,19 +57,16 @@ quader::QVec3 toRuntime(QVec3 value) {
 }
 
 quader_editor_core::ViewportCameraState makeRuntimeCamera(const ViewportCameraController& camera, ImVec2 itemSize) {
-    const ViewportCameraPose pose = camera.pose();
-    const QVec3 forward = normalize(pose.target - pose.eye);
-    const QVec3 right = normalize(cross(forward, pose.up));
-    const QVec3 up = normalize(pose.up);
+    const ViewportCameraBasis cameraBasis = ViewportCameraAdapter::basis(camera);
 
     quader_editor_core::ViewportCameraState runtimeCamera;
     runtimeCamera.projection = camera.state().projection == ViewportProjection::Orthographic
             ? quader_editor_core::CameraProjection::orthographic
             : quader_editor_core::CameraProjection::perspective;
-    runtimeCamera.transform.origin = toRuntime(pose.eye);
-    runtimeCamera.transform.x_axis = toRuntime(right);
-    runtimeCamera.transform.y_axis = toRuntime(up);
-    runtimeCamera.transform.z_axis = toRuntime(forward * -1.0f);
+    runtimeCamera.transform.origin = toRuntime(cameraBasis.eye);
+    runtimeCamera.transform.x_axis = toRuntime(cameraBasis.right);
+    runtimeCamera.transform.y_axis = toRuntime(cameraBasis.up);
+    runtimeCamera.transform.z_axis = toRuntime(cameraBasis.forward * -1.0f);
     runtimeCamera.viewport_size = {std::max(itemSize.x, 1.0f), std::max(itemSize.y, 1.0f)};
     runtimeCamera.orthographic_size = std::max(camera.state().orthographicSize, 0.0001f);
     runtimeCamera.fov_degrees = camera.state().fovDegrees;

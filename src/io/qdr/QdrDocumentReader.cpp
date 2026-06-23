@@ -7,6 +7,7 @@
 #include "io/qdr/QdrDocumentReader.h"
 
 #include "assets/MaterialDocument.h"
+#include "editor/projection/MeshProjectionService.h"
 #include "io/qdr/QdrFormat.h"
 
 #include <nlohmann/json.hpp>
@@ -241,30 +242,10 @@ quader_poly::Document polygonDocumentFromJson(const json& value) {
 }
 
 MeshAsset meshFromPolygonDocument(const quader_poly::Document& document, std::string name) {
-    const quader_poly::CompiledMesh compiled = quader_poly::compile_document(document);
-    MeshAsset mesh;
+    MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(document);
     mesh.name = std::move(name);
-    mesh.vertices.reserve(compiled.vertices.size());
-    mesh.indices = compiled.indices;
-    mesh.primitives.reserve(compiled.primitives.size());
-    mesh.hasStableCpuTopology = true;
     mesh.hasAuthoredPolygonDocument = true;
     mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(document);
-    for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
-        mesh.vertices.push_back(MeshVertex{
-                .position = fromRuntime(vertex.position),
-                .normal = fromRuntime(vertex.normal),
-                .uv = {vertex.uv0.x, vertex.uv0.y},
-                .rgba = vertex.color,
-        });
-    }
-    for (const quader_poly::CompiledPrimitive& primitive : compiled.primitives) {
-        mesh.primitives.push_back(MeshPrimitiveSpan{
-                .indexOffset = primitive.index_offset,
-                .indexCount = primitive.index_count,
-                .materialSlot = primitive.material_slot,
-        });
-    }
     return mesh;
 }
 

@@ -6,13 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/ViewportWorkspaceService.h"
 
+#include "viewport/HostViewportContractAdapter.h"
+#include "viewport/ViewportCameraAdapter.h"
+
 #include <algorithm>
 #include <cmath>
 
 namespace quader {
-namespace {
 
-void resetCameraForView(ViewportCameraController& camera, ViewportView view) {
+void resetViewportCameraForView(ViewportCameraController& camera, ViewportView view) {
     camera = ViewportCameraController{};
     switch (view) {
     case ViewportView::Top:
@@ -44,13 +46,12 @@ void resetCameraForView(ViewportCameraController& camera, ViewportView view) {
     }
 }
 
-ViewportView viewForCamera(const ViewportCameraController& camera) {
+ViewportView viewportViewForCamera(const ViewportCameraController& camera) {
     if (camera.state().projection != ViewportProjection::Orthographic) {
         return ViewportView::Perspective;
     }
 
-    const ViewportCameraPose pose = camera.pose();
-    const QVec3 forward = normalize(pose.target - pose.eye);
+    const QVec3 forward = ViewportCameraAdapter::basis(camera).forward;
     const float absX = std::abs(forward.x);
     const float absY = std::abs(forward.y);
     const float absZ = std::abs(forward.z);
@@ -67,16 +68,15 @@ ViewportView viewForCamera(const ViewportCameraController& camera) {
     return ViewportView::Perspective;
 }
 
-} // namespace
-
 ViewportWorkspaceService::ViewportWorkspaceService() {
+    gridPreset_ = viewportDefaultGridPreset();
     panes_[viewportPaneIndex(ViewportPaneId::Perspective)].id = ViewportPaneId::Perspective;
     panes_[viewportPaneIndex(ViewportPaneId::Top)].id = ViewportPaneId::Top;
     panes_[viewportPaneIndex(ViewportPaneId::Front)].id = ViewportPaneId::Front;
     panes_[viewportPaneIndex(ViewportPaneId::Side)].id = ViewportPaneId::Side;
     for (ViewportWorkspacePaneState& paneState : panes_) {
         paneState.view = viewportViewForPane(paneState.id);
-        resetCameraForView(paneState.camera, paneState.view);
+        resetViewportCameraForView(paneState.camera, paneState.view);
     }
 }
 
@@ -137,23 +137,23 @@ bool ViewportWorkspaceService::setShadingMode(ViewportPaneId paneId, ViewportSha
 }
 
 ViewportView ViewportWorkspaceService::view(ViewportPaneId paneId) const {
-    return pane(paneId).view;
+    return viewportViewForCamera(pane(paneId).camera);
 }
 
 bool ViewportWorkspaceService::setView(ViewportPaneId paneId, ViewportView view) {
     ViewportWorkspacePaneState& paneState = pane(paneId);
-    const bool changed = paneState.view != view || viewForCamera(paneState.camera) != view;
+    const bool changed = paneState.view != view || viewportViewForCamera(paneState.camera) != view;
     if (!changed) {
         return false;
     }
     paneState.view = view;
-    resetCameraForView(paneState.camera, view);
+    resetViewportCameraForView(paneState.camera, view);
     return true;
 }
 
 void ViewportWorkspaceService::syncViewFromCamera(ViewportPaneId paneId) {
     ViewportWorkspacePaneState& paneState = pane(paneId);
-    paneState.view = viewForCamera(paneState.camera);
+    paneState.view = viewportViewForCamera(paneState.camera);
 }
 
 ViewportCameraController& ViewportWorkspaceService::camera(ViewportPaneId paneId) {
@@ -171,7 +171,9 @@ bool ViewportWorkspaceService::focusOrigin(ViewportPaneId paneId, float distance
 }
 
 ViewportWorkspacePaneState& ViewportWorkspaceService::pane(ViewportPaneId paneId) {
-    return panes_[viewportPaneIndex(paneId)];
+    ViewportWorkspacePaneState& paneState = panes_[viewportPaneIndex(paneId)];
+    paneState.view = viewportViewForCamera(paneState.camera);
+    return paneState;
 }
 
 const ViewportWorkspacePaneState& ViewportWorkspaceService::pane(ViewportPaneId paneId) const {

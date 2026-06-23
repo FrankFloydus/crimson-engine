@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <editor/interactions/box_tool.h>
 #include <editor/modeling/runtime/editor_tool.h>
+#include <editor/interactions/tool_drag_math.h>
 #include "tool_math_internal.h"
 
 #include <mesh/geometry/geometry.h>
@@ -74,33 +75,6 @@ quader_geometry::QPlaneBasis3<double> box_geometry_basis(const BoxConstructionPl
 	basis.u = to_box_geometry_vec3(plane.axis_u);
 	basis.v = to_box_geometry_vec3(plane.axis_v);
 	return basis;
-}
-
-std::optional<double> box_geometry_axis_drag_distance(
-		quader::QVec3 axis_value,
-		quader::QVec3 anchor,
-		const quader_poly::Ray& ray,
-		double parallel_epsilon,
-		double vector_epsilon = tool_epsilon)
-{
-	if (vec3_is_tiny(axis_value, vector_epsilon) || vec3_is_tiny(ray.direction, vector_epsilon)) {
-		return std::nullopt;
-	}
-	const quader_geometry::QVec3d axis =
-			quader_geometry::normalize_or_zero(to_box_geometry_vec3(axis_value), vector_epsilon);
-	const quader_geometry::QVec3d ray_direction =
-			quader_geometry::normalize_or_zero(to_box_geometry_vec3(ray.direction), vector_epsilon);
-	const double b = quader_geometry::dot(axis, ray_direction);
-	const double denominator = 1.0 - b * b;
-	if (std::abs(denominator) <= parallel_epsilon) {
-		return std::nullopt;
-	}
-	const quader_geometry::QLineLineClosestPoints<double> closest =
-		quader_geometry::closest_points_line_line(
-			quader_geometry::QLine3<double> { to_box_geometry_vec3(anchor), axis },
-			quader_geometry::QLine3<double> { to_box_geometry_vec3(ray.origin), ray_direction },
-			vector_epsilon);
-	return closest.valid ? std::optional<double> { closest.first_parameter } : std::nullopt;
 }
 
 ToolStatus box_ok_status(bool changed = false)
@@ -381,8 +355,8 @@ public:
 		}
 		const quader::QVec3 axis = vec3_is_tiny(state.plane.normal) ? quader::QVec3 { 0.0F, 1.0F, 0.0F } : normalized_axis(state.plane.normal);
 		const quader::QVec3 center = footprint_descriptor(state.start_point, state.end_point, state.plane.axis_u, state.plane.axis_v, grid_size).center;
-		const std::optional<double> distance = box_geometry_axis_drag_distance(axis, center, ray, screen_epsilon);
-		return distance.value_or(std::numeric_limits<double>::infinity());
+		const DragDistanceResult distance = axis_distance_from_ray(axis, center, ray, screen_epsilon);
+		return distance.ok ? distance.distance : std::numeric_limits<double>::infinity();
 	}
 
 	[[nodiscard]] BoxToolStateResult update_height_preview(

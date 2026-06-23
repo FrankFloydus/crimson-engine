@@ -22,6 +22,7 @@
 #include "ui/UIContext.h"
 #include "ui/ViewportContextMenuPolicy.h"
 #include "ui/ViewportPaneController.h"
+#include "ui/ViewportScreenGeometry.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "viewport/HostViewportContractAdapter.h"
 #include "editor/tools/ViewportToolCatalog.h"
@@ -42,29 +43,6 @@
 
 namespace quader {
 namespace {
-
-float distanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
-    const ImVec2 ab{b.x - a.x, b.y - a.y};
-    const ImVec2 ap{point.x - a.x, point.y - a.y};
-    const float lengthSquared = ab.x * ab.x + ab.y * ab.y;
-    if (lengthSquared <= 0.0001f) {
-        const float dx = point.x - a.x;
-        const float dy = point.y - a.y;
-        return dx * dx + dy * dy;
-    }
-
-    const float t = std::clamp((ap.x * ab.x + ap.y * ab.y) / lengthSquared, 0.0f, 1.0f);
-    const ImVec2 closest{a.x + ab.x * t, a.y + ab.y * t};
-    const float dx = point.x - closest.x;
-    const float dy = point.y - closest.y;
-    return dx * dx + dy * dy;
-}
-
-float distanceSquared(ImVec2 a, ImVec2 b) {
-    const float dx = a.x - b.x;
-    const float dy = a.y - b.y;
-    return dx * dx + dy * dy;
-}
 
 bool componentSelectionMode(ModelingSelectionMode mode) {
     return mode == ModelingSelectionMode::Vertex ||
@@ -169,24 +147,6 @@ std::string localizedViewportShadingModeLabel(const LocalizationService& localiz
     return localization.text(viewportShadingModeLocalizationKey(mode), std::string(viewportShadingModeLabel(mode)));
 }
 
-std::optional<ImVec2> projectWorldToViewport(
-        QVec3 world,
-        const ViewportCameraController& camera,
-        ImVec2 itemMin,
-        ImVec2 itemSize) {
-    (void)itemSize;
-
-    const ViewportScreenPoint projected = camera.projectWorldPoint(world);
-    if (projected.depth <= camera.state().nearPlane || projected.depth >= camera.state().farPlane) {
-        return std::nullopt;
-    }
-
-    return ImVec2{
-            itemMin.x + projected.position.x,
-            itemMin.y + projected.position.y,
-    };
-}
-
 std::optional<int> hitDrawnPlaneCapturedPoint(
         const std::array<QVec3, 3>& points,
         int capturedPointCount,
@@ -203,7 +163,7 @@ std::optional<int> hitDrawnPlaneCapturedPoint(
         if (!screen) {
             continue;
         }
-        if (distanceSquared(mouse, *screen) <= kPointHitRadiusPixels * kPointHitRadiusPixels) {
+        if (viewportDistanceSquared(mouse, *screen) <= kPointHitRadiusPixels * kPointHitRadiusPixels) {
             return index;
         }
     }
@@ -230,7 +190,7 @@ bool hitDrawnPlaneLine(
     }
 
     const ImVec2 mouse{itemMin.x + mouseLocal.x, itemMin.y + mouseLocal.y};
-    return distanceToSegmentSquared(mouse, *start, *end) <= kLineHitRadiusPixels * kLineHitRadiusPixels;
+    return viewportDistanceToSegmentSquared(mouse, *start, *end) <= kLineHitRadiusPixels * kLineHitRadiusPixels;
 }
 
 ModelingBoxToolEvent modelingBoxEvent(
@@ -1041,6 +1001,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             .routeActiveNavigationInput = inputRouter_.navigating(),
             .useCapturedMouseDelta = useCapturedMouseDelta,
             .capturedMouseDelta = capturedMouseDelta,
+            .deltaSeconds = static_cast<float>(std::max(uiContext.frameTiming.deltaSeconds, 0.0)),
     });
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     const ModelingToolSettingsTarget toolSettingsTarget = modeling.toolSettingsTarget();

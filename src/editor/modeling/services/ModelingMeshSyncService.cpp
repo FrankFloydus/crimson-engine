@@ -47,6 +47,18 @@ std::unordered_map<std::uint32_t, AssetId> materialSlotsForLiveModelingNodes(
     return materialBySlot;
 }
 
+void applySceneIdentityToEntity(
+        SceneDocument& scene,
+        EntityId entity,
+        const ModelingObjectSceneIdentity& identity) {
+    scene.setTransform(entity, identity.transform);
+    if (identity.parent != InvalidEntityId && scene.exists(identity.parent)) {
+        (void)scene.setParent(entity, identity.parent, false);
+    }
+    scene.setVisible(entity, identity.visibility.visible);
+    scene.setLocked(entity, identity.lock.locked);
+}
+
 void reconcileModelingObjectSceneNodes(
         const quader_editor_core::EditorSession& session,
         SceneDocument& scene,
@@ -82,17 +94,19 @@ void reconcileModelingObjectSceneNodes(
                 .objectId = object.id,
                 .materialSlot = materialSlot,
         });
+        if (identity.has_value()) {
+            applySceneIdentityToEntity(scene, entity, *identity);
+        }
         const auto material = materialBySlot.find(materialSlot);
         if (material != materialBySlot.end()) {
             scene.setMaterial(entity, MaterialComponent{.material = material->second});
-        } else if (identity.has_value() && identity->material != InvalidAssetId) {
-            scene.setMaterial(entity, MaterialComponent{.material = identity->material});
+        } else if (identity.has_value() && identity->material.has_value()) {
+            scene.setMaterial(entity, *identity->material);
         } else if (firstModelingMaterial) {
             scene.setMaterial(entity, MaterialComponent{.material = *firstModelingMaterial});
         }
 
         objectMap.bind(object.id, entity);
-        objectMap.rememberSceneEntity(object.id, scene, entity);
     }
 
     std::vector<int> staleObjects;
@@ -166,7 +180,11 @@ void projectModelingMeshesToScene(
         }
         const MeshComponent* currentMesh = scene.mesh(entity);
         if (currentMesh == nullptr || currentMesh->mesh != meshId || meshContentsReplaced) {
-            MeshComponent nextMesh = currentMesh != nullptr ? *currentMesh : MeshComponent{};
+            const std::optional<ModelingObjectSceneIdentity> identity =
+                    objectRegistry.sceneIdentityForModelingObject(object.id);
+            MeshComponent nextMesh = currentMesh != nullptr
+                    ? *currentMesh
+                    : (identity.has_value() && identity->mesh.has_value() ? *identity->mesh : MeshComponent{});
             nextMesh.mesh = meshId;
             scene.setMesh(entity, nextMesh);
         }

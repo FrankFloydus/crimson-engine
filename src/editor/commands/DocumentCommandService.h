@@ -13,18 +13,20 @@
 #include "scene/Components.h"
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
 
 class SceneDocument;
+class AssetRegistry;
 
 /**
  * Coordinates Document Command Service responsibilities for the editor document ownership layer.
  */
 class DocumentCommandService {
 public:
-    DocumentCommandService(SceneDocument& scene, EditorHistoryService& history);
+    DocumentCommandService(SceneDocument& scene, EditorHistoryService& history, const AssetRegistry* assets = nullptr);
 
     DocumentCreateEntityResult createEntity(
             std::string name,
@@ -42,6 +44,9 @@ public:
     DocumentCommandResult ungroupSelection();
     DocumentDuplicateEntityResult duplicateEntity(EntityId entity);
     DocumentDuplicateHierarchyResult duplicateSelectedHierarchy();
+    DocumentDuplicateHierarchyResult duplicateHierarchyWithExistingClones(
+            std::vector<EntityId> roots,
+            std::unordered_map<EntityId, EntityId> existingClonesBySource);
     DocumentCommandResult selectEntities(std::vector<EntityId> entities, EntityId active = InvalidEntityId);
     DocumentCommandResult applyEntityTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult renameEntity(EntityId entity, std::string name);
@@ -57,6 +62,7 @@ public:
 private:
     SceneDocument& scene_;
     EditorHistoryService& history_;
+    const AssetRegistry* assets_ = nullptr;
 };
 
 } // namespace quader

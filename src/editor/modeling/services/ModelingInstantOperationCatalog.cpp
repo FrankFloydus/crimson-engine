@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 
+#include "editor/metadata/host_contract.h"
+
 #include <algorithm>
 #include <array>
 
@@ -47,6 +49,41 @@ namespace {
             .enablement = enablement,
             .runtimeOperation = std::nullopt,
     };
+}
+
+[[nodiscard]] quader_host_contract::HostSelectionMode toHostSelectionMode(ModelingSelectionMode mode) {
+    using quader_host_contract::HostSelectionMode;
+    switch (mode) {
+    case ModelingSelectionMode::Vertex:
+        return HostSelectionMode::vertex;
+    case ModelingSelectionMode::Edge:
+        return HostSelectionMode::edge;
+    case ModelingSelectionMode::Face:
+        return HostSelectionMode::face;
+    case ModelingSelectionMode::Object:
+        return HostSelectionMode::object;
+    case ModelingSelectionMode::Group:
+        return HostSelectionMode::group;
+    }
+    return HostSelectionMode::object;
+}
+
+[[nodiscard]] bool hostRequiresSingleObjectForCurrentMode(
+        const ModelingInstantOperationCatalogEntry& entry,
+        ModelingSelectionMode mode) {
+    const quader_host_contract::HostSelectionMode hostMode = toHostSelectionMode(mode);
+    for (const quader_host_contract::HostActionDescriptor& descriptor :
+            quader_host_contract::action_catalog()) {
+        if (descriptor.kind != quader_host_contract::HostActionKind::operation ||
+                descriptor.operation_id != entry.operationId ||
+                descriptor.availability.selection_mode != hostMode) {
+            continue;
+        }
+        if (descriptor.availability.requires_single_object) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -280,35 +317,51 @@ bool modelingInstantOperationEnabled(
     const bool hasEdges = summary.selectedEdgeCount > 0;
     const bool hasFaces = summary.selectedFaceCount > 0;
 
+    bool enabled = false;
     switch (entry.enablement) {
     case ModelingInstantOperationEnablement::AnySelection:
-        return hasSelection;
+        enabled = hasSelection;
+        break;
     case ModelingInstantOperationEnablement::ObjectSelection:
-        return objectMode && summary.selectedObjectCount > 0;
+        enabled = objectMode && summary.selectedObjectCount > 0;
+        break;
     case ModelingInstantOperationEnablement::MultipleObjects:
-        return objectMode && summary.selectedObjectCount > 1;
+        enabled = objectMode && summary.selectedObjectCount > 1;
+        break;
     case ModelingInstantOperationEnablement::FaceSelection:
-        return faceMode && hasFaces;
+        enabled = faceMode && hasFaces;
+        break;
     case ModelingInstantOperationEnablement::EdgeOrFaceSelection:
-        return (edgeMode && hasEdges) || (faceMode && hasFaces);
+        enabled = (edgeMode && hasEdges) || (faceMode && hasFaces);
+        break;
     case ModelingInstantOperationEnablement::ActiveVertexSelection:
-        return vertexMode && summary.selectedVertexCount > 1 &&
+        enabled = vertexMode && summary.selectedVertexCount > 1 &&
                 summary.activeKind == ModelingActiveSelectionKind::Vertex;
+        break;
     case ModelingInstantOperationEnablement::VertexSelection:
-        return vertexMode && hasVertices;
+        enabled = vertexMode && hasVertices;
+        break;
     case ModelingInstantOperationEnablement::MultipleVertices:
-        return vertexMode && summary.selectedVertexCount > 1;
+        enabled = vertexMode && summary.selectedVertexCount > 1;
+        break;
     case ModelingInstantOperationEnablement::ActiveEdgeSelection:
-        return edgeMode && summary.selectedEdgeCount > 1 &&
+        enabled = edgeMode && summary.selectedEdgeCount > 1 &&
                 summary.activeKind == ModelingActiveSelectionKind::Edge;
+        break;
     case ModelingInstantOperationEnablement::EdgeSelection:
-        return edgeMode && hasEdges;
+        enabled = edgeMode && hasEdges;
+        break;
     case ModelingInstantOperationEnablement::NonObjectSelection:
-        return hasSelection && !objectMode;
+        enabled = hasSelection && !objectMode;
+        break;
     case ModelingInstantOperationEnablement::ObjectOrFaceSelection:
-        return (objectMode && hasSelection) || (faceMode && hasFaces);
+        enabled = (objectMode && hasSelection) || (faceMode && hasFaces);
+        break;
     }
-    return false;
+    if (!enabled) {
+        return false;
+    }
+    return !hostRequiresSingleObjectForCurrentMode(entry, summary.mode) || summary.selectedObjectCount == 1U;
 }
 
 } // namespace quader

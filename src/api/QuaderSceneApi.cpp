@@ -18,7 +18,11 @@
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 
+#include <functional>
 #include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -40,6 +44,17 @@ bool isDefaultTransform(const TransformComponent& transform) {
             transform.scale.y == 1.0f &&
             transform.scale.z == 1.0f;
 }
+
+/**
+ * Stores the simulated batch entity state used while converting a public scene batch to commands.
+ */
+struct BatchEntityState {
+    std::string name;
+    EntityId parent = InvalidEntityId;
+    TransformComponent transform;
+    bool visible = true;
+    bool locked = false;
+};
 
 TransformComponent groupTransformOrSelectedBoundsCenter(ProjectSession& session, TransformComponent transform) {
     if (!isDefaultTransform(transform)) {
@@ -192,6 +207,9 @@ QuaderApiVoidResult QuaderSceneApi::setLocks(std::span<const DocumentLockEdit> e
 }
 
 QuaderApiVoidResult QuaderSceneApi::setMeshComponent(EntityId entity, MeshComponent mesh) {
+    if (mesh.mesh == InvalidAssetId || session_.assets().mesh(mesh.mesh) == nullptr) {
+        return mutations_.runDocumentCommand(commandInvalidResult("Mesh asset does not exist"), "Set Mesh Component");
+    }
     return mutations_.runDocumentResult(
             session_.documentCommands().setMeshComponent(entity, std::move(mesh)),
             "Set Mesh Component");
@@ -288,9 +306,31 @@ QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
     SceneDocument& scene = session_.scene();
     std::vector<std::unique_ptr<IUndoableCommand>> commands;
     commands.reserve(batch.operations_.size());
+    std::unordered_map<EntityId, BatchEntityState> simulated;
 
     auto failure = [&](std::string message) {
         return mutations_.runDocumentCommand(commandInvalidResult(std::move(message)), batch.label_);
+    };
+
+    auto simulatedState = [&](EntityId entity) -> std::optional<std::reference_wrapper<BatchEntityState>> {
+        if (const auto existing = simulated.find(entity); existing != simulated.end()) {
+            return existing->second;
+        }
+        const NameComponent* name = scene.name(entity);
+        const TransformComponent* transform = scene.transform(entity);
+        const VisibilityComponent* visibility = scene.visibility(entity);
+        const LockComponent* lock = scene.lock(entity);
+        if (name == nullptr || transform == nullptr || visibility == nullptr || lock == nullptr) {
+            return std::nullopt;
+        }
+        auto [inserted, _] = simulated.emplace(entity, BatchEntityState{
+                .name = name->name,
+                .parent = scene.parent(entity),
+                .transform = *transform,
+                .visible = visibility->visible,
+                .locked = lock->locked,
+        });
+        return inserted->second;
     };
 
     for (const QuaderSceneBatch::Operation& operation : batch.operations_) {
@@ -300,78 +340,90 @@ QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
 
         switch (operation.kind) {
         case QuaderSceneBatch::OperationKind::Rename: {
-            const NameComponent* current = scene.name(operation.entity);
-            if (current == nullptr) {
+            std::optional<std::reference_wrapper<BatchEntityState>> state = simulatedState(operation.entity);
+            if (!state.has_value()) {
                 return failure("Batch entity cannot be renamed.");
             }
-            if (current->name == operation.name) {
+            if (state->get().name == operation.name) {
                 break;
             }
             commands.push_back(std::make_unique<RenameEntityCommand>(
                     scene,
                     operation.entity,
-                    current->name,
+                    state->get().name,
                     operation.name));
+            state->get().name = operation.name;
             break;
         }
         case QuaderSceneBatch::OperationKind::Reparent:
             if (operation.parent != InvalidEntityId && !scene.exists(operation.parent)) {
                 return failure("Batch parent entity does not exist.");
             }
-            if (scene.parent(operation.entity) == operation.parent) {
+            if (std::optional<std::reference_wrapper<BatchEntityState>> state = simulatedState(operation.entity);
+                    state.has_value()) {
+                if (state->get().parent == operation.parent) {
+                    break;
+                }
+                commands.push_back(std::make_unique<ReparentEntityCommand>(
+                        scene,
+                        operation.entity,
+                        state->get().parent,
+                        operation.parent,
+                        state->get().transform,
+                        state->get().transform));
+                state->get().parent = operation.parent;
                 break;
             }
-            commands.push_back(std::make_unique<ReparentEntityCommand>(
-                    scene,
-                    operation.entity,
-                    operation.parent,
-                    operation.preserveWorldTransform));
+            return failure("Batch entity cannot be reparented.");
             break;
         case QuaderSceneBatch::OperationKind::SetTransform: {
-            const TransformComponent* current = scene.transform(operation.entity);
-            if (current == nullptr) {
+            std::optional<std::reference_wrapper<BatchEntityState>> state = simulatedState(operation.entity);
+            if (!state.has_value()) {
                 return failure("Batch entity has no transform.");
             }
-            if (scene.isEffectivelyLocked(operation.entity) ||
-                    documentCommandSameTransform(*current, operation.transform)) {
+            if (state->get().locked || scene.isEffectivelyLocked(operation.entity) ||
+                    documentCommandSameTransform(state->get().transform, operation.transform)) {
                 break;
             }
             commands.push_back(std::make_unique<ApplyEntityTransformCommand>(
                     scene,
                     operation.entity,
-                    *current,
+                    state->get().transform,
                     operation.transform,
                     batch.label_));
+            state->get().transform = operation.transform;
             break;
         }
         case QuaderSceneBatch::OperationKind::SetVisible: {
-            const VisibilityComponent* current = scene.visibility(operation.entity);
-            if (current == nullptr) {
+            std::optional<std::reference_wrapper<BatchEntityState>> state = simulatedState(operation.entity);
+            if (!state.has_value()) {
                 return failure("Batch entity has no visibility component.");
             }
-            if (current->visible == operation.flag) {
+            if (state->get().visible == operation.flag) {
                 break;
             }
             commands.push_back(std::make_unique<SetVisibilityCommand>(
                     scene,
                     operation.entity,
-                    current->visible,
+                    state->get().visible,
                     operation.flag));
+            state->get().visible = operation.flag;
             break;
         }
         case QuaderSceneBatch::OperationKind::SetLocked: {
-            const LockComponent* current = scene.lock(operation.entity);
-            if (current == nullptr) {
+            std::optional<std::reference_wrapper<BatchEntityState>> state = simulatedState(operation.entity);
+            if (!state.has_value()) {
                 return failure("Batch entity has no lock component.");
             }
-            if (current->locked == operation.flag) {
+            if (state->get().locked == operation.flag) {
                 break;
             }
             commands.push_back(std::make_unique<SetLockCommand>(
                     scene,
                     operation.entity,
-                    current->locked,
+                    state->get().locked,
                     operation.flag));
+            state->get().locked = operation.flag;
             break;
         }
         }

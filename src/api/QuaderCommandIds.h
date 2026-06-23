@@ -68,6 +68,7 @@ inline constexpr QuaderCommandId ModelingApplyActiveMaterial{"edit.apply_materia
 
 inline constexpr QuaderCommandId ToolsActivateSelect{"tools.activate.select"};
 inline constexpr QuaderCommandId ToolsActivateMove{"tools.activate.move"};
+inline constexpr QuaderCommandId ToolsActivateExtend{"tools.activate.extend"};
 inline constexpr QuaderCommandId ToolsActivateRotate{"tools.activate.rotate"};
 inline constexpr QuaderCommandId ToolsActivateScale{"tools.activate.scale"};
 inline constexpr QuaderCommandId ToolsActivateBox{"tools.activate.box"};

@@ -7,6 +7,7 @@
 #include <editor/interactions/extrude_tool.h>
 
 #include <editor/modeling/runtime/editor_tool.h>
+#include <editor/interactions/tool_drag_math.h>
 #include <editor/interactions/tool_transform_math.h>
 #include <editor/modeling/runtime/tool_constants.h>
 
@@ -15,7 +16,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <optional>
 #include <string>
 #include <utility>
 
@@ -65,33 +65,6 @@ quader::QVec3 normalized_axis(quader::QVec3 value)
 double safe_grid_size(double grid_size, double minimum)
 {
 	return std::max(grid_size, minimum);
-}
-
-std::optional<double> geometry_axis_drag_distance(
-		quader::QVec3 axis_value,
-		quader::QVec3 anchor,
-		const quader_poly::Ray& ray,
-		double parallel_epsilon,
-		double vector_epsilon = tool_epsilon)
-{
-	if (vec3_is_tiny(axis_value, vector_epsilon) || vec3_is_tiny(ray.direction, vector_epsilon)) {
-		return std::nullopt;
-	}
-	const quader_geometry::QVec3d axis =
-			quader_geometry::normalize_or_zero(to_geometry_vec3(axis_value), vector_epsilon);
-	const quader_geometry::QVec3d ray_direction =
-			quader_geometry::normalize_or_zero(to_geometry_vec3(ray.direction), vector_epsilon);
-	const double b = quader_geometry::dot(axis, ray_direction);
-	const double denominator = 1.0 - b * b;
-	if (std::abs(denominator) <= parallel_epsilon) {
-		return std::nullopt;
-	}
-	const quader_geometry::QLineLineClosestPoints<double> closest =
-		quader_geometry::closest_points_line_line(
-			quader_geometry::QLine3<double> { to_geometry_vec3(anchor), axis },
-			quader_geometry::QLine3<double> { to_geometry_vec3(ray.origin), ray_direction },
-			vector_epsilon);
-	return closest.valid ? std::optional<double> { closest.first_parameter } : std::nullopt;
 }
 
 /**
@@ -237,13 +210,13 @@ public:
 		if (vec3_is_tiny(local_ray_dir, min_extrude_distance)) {
 			return std::numeric_limits<double>::infinity();
 		}
-		const std::optional<double> distance = geometry_axis_drag_distance(
+		const DragDistanceResult distance = axis_distance_from_ray(
 				state.face_normal,
 				state.face_center,
 				{ local_ray_origin, local_ray_dir },
 				screen_epsilon,
 				min_extrude_distance);
-		return distance.value_or(std::numeric_limits<double>::infinity());
+		return distance.ok ? distance.distance : std::numeric_limits<double>::infinity();
 	}
 
 	[[nodiscard]] quader::QVec3 extrude_face_center_for_vertices(const std::vector<quader::QVec3>& vertices) const

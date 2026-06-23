@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/commands/document/DocumentCommandEdits.h"
 #include "editor/commands/document/SceneCommand.h"
 
 namespace quader {
@@ -26,24 +27,13 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (sameMeshComponent(before_, after_)) {
+        if (documentCommandSameMeshComponent(before_, after_)) {
             return documentCommandUnchangedResult();
         }
         return apply(after_);
     }
 
 private:
-    static bool sameMeshComponent(const MeshComponent& left, const MeshComponent& right) {
-        return left.mesh == right.mesh &&
-                left.editorOnly == right.editorOnly &&
-                left.castShadows == right.castShadows &&
-                left.doubleSided == right.doubleSided &&
-                left.generateCollisions == right.generateCollisions &&
-                left.collisionType == right.collisionType &&
-                left.displayCollision == right.displayCollision &&
-                left.bodyType == right.bodyType;
-    }
-
     DocumentCommandResult apply(MeshComponent mesh) {
         if (!scene().exists(entity_)) {
             return documentCommandMissingEntityResult();

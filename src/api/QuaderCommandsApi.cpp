@@ -31,6 +31,15 @@ std::optional<QuaderCommandId> fixedCommandIdForModelingAction(std::string_view 
     if (actionId == "delete_selection") {
         return QuaderCommand::DeleteSelection;
     }
+    if (actionId == "clear_selection") {
+        return QuaderCommand::EditClearSelection;
+    }
+    if (actionId == "select_all") {
+        return QuaderCommand::EditSelectAll;
+    }
+    if (actionId == "invert_selection") {
+        return QuaderCommand::EditInvertSelection;
+    }
     if (actionId == "copy_selection") {
         return QuaderCommand::CopySelection;
     }
@@ -121,6 +130,7 @@ QuaderApiVoidResult QuaderCommandsApi::executeToolActivation(std::string_view to
 
 QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
     if (std::optional<QuaderApiVoidResult> result = registry_.execute(commandId)) {
+        result->revisions = api_.revisions();
         return *result;
     }
     return failure("Unknown command id.");
@@ -249,6 +259,9 @@ void QuaderCommandsApi::registerCommands() {
 
     const std::unordered_set<std::string_view> neutralModelingTools{
             "delete_selection",
+            "clear_selection",
+            "select_all",
+            "invert_selection",
             "copy_selection",
             "paste_selection",
             "duplicate_meshes",

@@ -50,4 +50,15 @@ inline bool documentCommandSameTransform(const TransformComponent& left, const T
             left.scale.z == right.scale.z;
 }
 
+inline bool documentCommandSameMeshComponent(const MeshComponent& left, const MeshComponent& right) {
+    return left.mesh == right.mesh &&
+            left.editorOnly == right.editorOnly &&
+            left.castShadows == right.castShadows &&
+            left.doubleSided == right.doubleSided &&
+            left.generateCollisions == right.generateCollisions &&
+            left.collisionType == right.collisionType &&
+            left.displayCollision == right.displayCollision &&
+            left.bodyType == right.bodyType;
+}
+
 } // namespace quader

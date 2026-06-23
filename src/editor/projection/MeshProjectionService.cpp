@@ -17,7 +17,7 @@ QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-MeshAsset toMeshAsset(const quader_poly::CompiledMesh& compiled) {
+MeshAsset meshAssetFromCompiledMesh(const quader_poly::CompiledMesh& compiled) {
     MeshAsset mesh;
     mesh.name = "Mesh";
     mesh.vertices.reserve(compiled.vertices.size());
@@ -44,17 +44,21 @@ MeshAsset toMeshAsset(const quader_poly::CompiledMesh& compiled) {
     return mesh;
 }
 
-MeshAsset toMeshAsset(const quader_editor_core::PolygonObject& object) {
-    MeshAsset mesh = toMeshAsset(quader_poly::compile_document(object.document));
+} // namespace
+
+MeshAsset MeshProjectionService::meshAssetFromCompiledMesh(const quader_poly::CompiledMesh& compiled) {
+    return quader::meshAssetFromCompiledMesh(compiled);
+}
+
+MeshAsset MeshProjectionService::compilePolygonDocumentMesh(const quader_poly::Document& document) {
+    return meshAssetFromCompiledMesh(quader_poly::compile_document(document));
+}
+
+MeshAsset MeshProjectionService::compileObjectMesh(const quader_editor_core::PolygonObject& object) {
+    MeshAsset mesh = compilePolygonDocumentMesh(object.document);
     mesh.hasAuthoredPolygonDocument = true;
     mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(object.document);
     return mesh;
-}
-
-} // namespace
-
-MeshAsset MeshProjectionService::compileObjectMesh(const quader_editor_core::PolygonObject& object) {
-    return toMeshAsset(object);
 }
 
 } // namespace quader

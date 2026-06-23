@@ -8,10 +8,8 @@
 
 #include "editor/commands/document/DocumentCommandSceneHelpers.h"
 #include "editor/commands/document/SceneCommand.h"
-#include "scene/SceneEntityNaming.h"
 
 #include <optional>
-#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -25,6 +23,15 @@ class DuplicateSelectedHierarchyCommand final : public SceneCommand {
 public:
     explicit DuplicateSelectedHierarchyCommand(SceneDocument& scene)
         : SceneCommand(scene, "Duplicate Hierarchy") {}
+
+    DuplicateSelectedHierarchyCommand(
+            SceneDocument& scene,
+            std::vector<DocumentEntitySnapshot> sourceSnapshots,
+            std::unordered_map<EntityId, EntityId> existingClonesBySource)
+        : SceneCommand(scene, "Duplicate Hierarchy")
+        , capturedSources_(true)
+        , sourceSnapshots_(std::move(sourceSnapshots))
+        , existingClonesBySource_(std::move(existingClonesBySource)) {}
 
     [[nodiscard]] const std::vector<EntityId>& duplicateRoots() const {
         return duplicateRoots_;
@@ -100,7 +107,12 @@ private:
             const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
                     ? snapshot.originalParent
                     : InvalidEntityId;
-            const EntityId duplicate = duplicateSnapshotTree(snapshot, parent);
+            const EntityId duplicate = documentCommandDuplicateEntitySnapshotTree(
+                    scene(),
+                    snapshot,
+                    parent,
+                    false,
+                    existingClonesBySource_.empty() ? nullptr : &existingClonesBySource_);
             if (duplicate == InvalidEntityId) {
                 return documentCommandInvalidRequestResult("Selected hierarchy could not be duplicated");
             }
@@ -137,23 +149,6 @@ private:
         return documentCommandChangedResult();
     }
 
-    EntityId duplicateSnapshotTree(const DocumentEntitySnapshot& snapshot, EntityId parent) {
-        const std::string name = SceneEntityNaming::nextName(scene(), snapshot.name);
-        const EntityId duplicate =
-                documentCommandCreateEntityFromSnapshot(scene(), snapshot, parent, name, false);
-        if (duplicate == InvalidEntityId) {
-            return InvalidEntityId;
-        }
-
-        for (const DocumentEntitySnapshot& child : snapshot.children) {
-            const EntityId childDuplicate = duplicateSnapshotTree(child, duplicate);
-            if (childDuplicate == InvalidEntityId) {
-                return InvalidEntityId;
-            }
-        }
-        return duplicate;
-    }
-
     void destroyDuplicateRoots() {
         for (auto it = duplicateRoots_.rbegin(); it != duplicateRoots_.rend(); ++it) {
             if (scene().exists(*it)) {
@@ -165,6 +160,7 @@ private:
 
     bool capturedSources_ = false;
     std::vector<DocumentEntitySnapshot> sourceSnapshots_;
+    std::unordered_map<EntityId, EntityId> existingClonesBySource_;
     std::vector<DocumentEntitySnapshot> duplicateSnapshots_;
     std::vector<EntityId> duplicateRoots_;
     DocumentSelectionState beforeSelection_;

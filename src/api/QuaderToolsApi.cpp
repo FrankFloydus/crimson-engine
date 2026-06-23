@@ -92,20 +92,24 @@ std::string QuaderToolsApi::activeTool() const {
     return std::string(viewportToolCatalogId(viewportToolForModeling(session_.modeling().toolStatus().activeTool)));
 }
 
-QuaderApiVoidResult QuaderToolsApi::statusFrom(ModelingCommandResult result, std::string_view label) const {
+QuaderRevisionStamp QuaderToolsApi::currentRevisions() const {
     const ModelingSelectionSummary summary = session_.modeling().selectionSummary();
+    return {
+            .projectRevision = session_.document().revision(),
+            .sceneRevision = session_.scene().revision(),
+            .assetRevision = session_.assets().revision(),
+            .modelingContentRevision = summary.contentRevision,
+            .modelingSelectionRevision = summary.selectionRevision,
+    };
+}
+
+QuaderApiVoidResult QuaderToolsApi::statusFrom(ModelingCommandResult result, std::string_view label) const {
     return {
             .ok = result.ok,
             .changed = result.changed,
             .message = result.message.empty() ? std::string(label) : std::move(result.message),
-            .mutationKind = result.changed ? QuaderMutationKind::Modeling : QuaderMutationKind::None,
-            .revisions = {
-                    .projectRevision = session_.document().revision(),
-                    .sceneRevision = session_.scene().revision(),
-                    .assetRevision = session_.assets().revision(),
-                    .modelingContentRevision = summary.contentRevision,
-                    .modelingSelectionRevision = summary.selectionRevision,
-            },
+            .mutationKind = result.ok && result.changed ? QuaderMutationKind::Modeling : QuaderMutationKind::None,
+            .revisions = currentRevisions(),
     };
 }
 
@@ -115,6 +119,7 @@ QuaderApiVoidResult QuaderToolsApi::failure(std::string message) const {
             .changed = false,
             .message = std::move(message),
             .mutationKind = QuaderMutationKind::None,
+            .revisions = currentRevisions(),
     };
 }
 

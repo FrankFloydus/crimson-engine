@@ -28,7 +28,7 @@ ProjectSession::~ProjectSession() = default;
 
 void ProjectSession::rebuildServices() {
     history_ = std::make_unique<EditorHistoryService>();
-    documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *history_);
+    documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *history_, &document_.assets());
     modeling_ = std::make_unique<ModelingSessionService>(document_.scene(), document_.assets());
     selection_ = std::make_unique<EditorSelectionService>(
             document_.scene(),

@@ -59,8 +59,10 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
 
 int App::run() {
     LOG_INFO("Entering main loop");
+    frameClock_.reset();
 
     while (running_) {
+        const FrameTiming frameTiming = frameClock_.tick();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ui_.processEvent(event);
@@ -76,7 +78,7 @@ int App::run() {
             break;
         }
 
-        ui_.beginFrame();
+        ui_.beginFrame(frameTiming);
         bool quitRequested = false;
         ui_.draw(*editor_,
                 renderBridge_,

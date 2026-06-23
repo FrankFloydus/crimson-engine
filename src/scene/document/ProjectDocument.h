@@ -83,7 +83,6 @@ public:
     EditorObjectId createObjectRecord(ProjectObjectRecord record);
     EditorObjectId upsertObjectRecord(ProjectObjectRecord record);
     const ProjectObjectRecord* objectRecord(EditorObjectId objectId) const;
-    ProjectObjectRecord* objectRecord(EditorObjectId objectId);
     EditorObjectId objectIdForEntity(EntityId entity) const;
     EntityId entityForObjectId(EditorObjectId objectId) const;
     void forgetObjectRecord(EditorObjectId objectId);

@@ -146,4 +146,17 @@ std::optional<SceneBounds> selectedWorldBounds(const SceneDocument& document, co
     return result;
 }
 
+std::optional<SceneBounds> selectedTransformWorldBounds(const SceneDocument& document, const AssetRegistry& assets) {
+    std::optional<SceneBounds> result;
+    for (const EntityId entity : document.selectedEntities()) {
+        const std::optional<SceneBounds> bounds = document.hasChildren(entity)
+                ? entityHierarchyWorldBounds(document, assets, entity)
+                : entityWorldBounds(document, assets, entity);
+        if (bounds) {
+            includeBounds(result, *bounds);
+        }
+    }
+    return result;
+}
+
 } // namespace quader

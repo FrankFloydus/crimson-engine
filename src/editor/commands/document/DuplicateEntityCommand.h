@@ -8,10 +8,8 @@
 
 #include "editor/commands/document/DocumentCommandSceneHelpers.h"
 #include "editor/commands/document/SceneCommand.h"
-#include "scene/SceneEntityNaming.h"
 
 #include <optional>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -72,7 +70,7 @@ public:
             if (!snapshot.has_value()) {
                 return documentCommandMissingEntityResult();
             }
-            duplicate = duplicateSnapshot(*snapshot, scene().parent(source_));
+            duplicate = documentCommandDuplicateEntitySnapshotTree(scene(), *snapshot, scene().parent(source_));
             if (duplicate != InvalidEntityId) {
                 duplicateSnapshot_ = documentCommandCaptureEntitySnapshot(scene(), duplicate);
             }
@@ -88,19 +86,6 @@ public:
     }
 
 private:
-    EntityId duplicateSnapshot(const DocumentEntitySnapshot& snapshot, EntityId parent) {
-        const std::string name = SceneEntityNaming::nextName(scene(), snapshot.name);
-        const EntityId duplicate =
-                documentCommandCreateEntityFromSnapshot(scene(), snapshot, parent, name, false);
-        for (const DocumentEntitySnapshot& child : snapshot.children) {
-            const EntityId childDuplicate = duplicateSnapshot(child, duplicate);
-            if (childDuplicate == InvalidEntityId) {
-                return InvalidEntityId;
-            }
-        }
-        return duplicate;
-    }
-
     EntityId source_ = InvalidEntityId;
     bool selectDuplicate_ = true;
     std::vector<EntityId> duplicateRoots_;

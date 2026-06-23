@@ -76,7 +76,8 @@ DragDistanceResult axis_distance_from_ray(
 	quader::QVec3 world_axis,
 	quader::QVec3 anchor,
 	const quader_poly::Ray& ray,
-	double parallel_epsilon = tool_epsilon);
+	double parallel_epsilon = tool_epsilon,
+	double vector_epsilon = tool_epsilon);
 DragDistanceResult projected_axis_drag_distance(const ProjectedAxisDragInput& input);
 
 } // namespace quader_editor_core

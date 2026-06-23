@@ -1168,7 +1168,7 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_both), true },
 	}};
 
-	static const std::array<HostPreferenceDescriptor, 47> descriptors {{
+	static const std::array<HostPreferenceDescriptor, 49> descriptors {{
 		operation_int_preference("operation.bridge.steps", bridge.steps, "operation.bridge", bridge.operation_id),
 		operation_float_preference("operation.edge_bevel.width", edge_bevel.width, "operation.edge_bevel", edge_bevel.operation_id),
 		operation_float_preference("operation.edge_bevel.profile", edge_bevel.profile, "operation.edge_bevel", edge_bevel.operation_id),
@@ -1190,6 +1190,7 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 		color_preference("viewport.selection.wire_color", "Wire", color_from_abgr(0xff1fd3ffU), "viewport.selection", "selected_face_edge"),
 		color_preference("viewport.overlay.source_wire_color", "Source Wire", color_from_abgr(0xebffe05cU), "viewport.overlay", "source_wire"),
 		color_preference("viewport.overlay.open_edge_color", "Open Edge", color_from_abgr(0xff00ffffU), "viewport.overlay", "open_edge"),
+		color_preference("viewport.overlay.diagnostic_edge_color", "Diagnostic Edge", color_from_abgr(0xff0000ffU), "viewport.overlay", "diagnostic_edge"),
 		color_preference("viewport.overlay.hover_face_color", "Hover Face", color_from_abgr(0x161fff66U), "viewport.overlay", "hover_face"),
 		color_preference("viewport.overlay.hover_wire_color", "Hover Wire", color_from_abgr(0xff00ff51U), "viewport.overlay", "hover_edge"),
 		color_preference("viewport.overlay.remove_selection_face_color", "Remove Face", color_from_abgr(0x52ff6b1fU), "viewport.overlay", "hover_face"),
@@ -1209,6 +1210,7 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 		float_preference("viewport.selection.edge_line_size", "Edge Line Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_edge"),
 		float_preference("viewport.overlay.hover_wire_line_size", "Hover Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "hover_edge"),
 		float_preference("viewport.overlay.open_edge_line_size", "Open Edge Size", HostPreferenceScope::viewport_style, 1.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "open_edge"),
+		float_preference("viewport.overlay.diagnostic_edge_line_size", "Diagnostic Edge Size", HostPreferenceScope::viewport_style, 4.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "diagnostic_edge"),
 		float_preference("viewport.vertices.vertex_size", "Vertex Size", HostPreferenceScope::viewport_style, 7.0, 2.0, 32.0, 0.0, "viewport.vertices", {}, {}, "unselected_vertex"),
 		float_preference("viewport.vertices.selected_growth", "Selected Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "selected_vertex"),
 		float_preference("viewport.vertices.hover_growth", "Hover Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "hover_vertex"),
@@ -1265,9 +1267,10 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 		"viewport.selection.face_wire_line_size",
 		"viewport.selection.edge_line_size",
 	}};
-	static constexpr std::array<std::string_view, 9> viewport_overlay_preferences {{
+	static constexpr std::array<std::string_view, 11> viewport_overlay_preferences {{
 		"viewport.overlay.source_wire_color",
 		"viewport.overlay.open_edge_color",
+		"viewport.overlay.diagnostic_edge_color",
 		"viewport.overlay.hover_face_color",
 		"viewport.overlay.hover_wire_color",
 		"viewport.overlay.remove_selection_face_color",
@@ -1275,6 +1278,7 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 		"viewport.overlay.source_wire_line_size",
 		"viewport.overlay.hover_wire_line_size",
 		"viewport.overlay.open_edge_line_size",
+		"viewport.overlay.diagnostic_edge_line_size",
 	}};
 	static constexpr std::array<std::string_view, 8> viewport_vertex_preferences {{
 		"viewport.vertices.vertex_color",

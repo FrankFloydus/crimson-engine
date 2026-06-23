@@ -10,6 +10,7 @@
 #include "scene/document/ProjectSession.h"
 
 #include <functional>
+#include <optional>
 #include <utility>
 
 namespace quader {
@@ -32,6 +33,33 @@ QuaderApiResult<QuaderAssetRef> assetResult(
     result.revisions = status.revisions;
     result.value = QuaderAssetRef{.id = id, .kind = kind};
     return result;
+}
+
+QuaderApiResult<QuaderAssetRef> assetFailureResult(
+        QuaderApiMutationRunner& mutations,
+        std::string message) {
+    QuaderApiResult<QuaderAssetRef> result;
+    const QuaderApiVoidResult status = mutations.runAssetFailure(std::move(message));
+    result.ok = status.ok;
+    result.changed = status.changed;
+    result.message = status.message;
+    result.mutationKind = status.mutationKind;
+    result.revisions = status.revisions;
+    return result;
+}
+
+std::optional<std::string> materialTextureReferenceError(
+        const AssetRegistry& assets,
+        const MaterialDocument& material) {
+    for (const auto& [slot, texture] : material.textureSlots) {
+        if (slot.empty()) {
+            return "Material texture slot is empty";
+        }
+        if (texture == InvalidAssetId || assets.texture(texture) == nullptr) {
+            return "Texture asset does not exist";
+        }
+    }
+    return std::nullopt;
 }
 
 QuaderApiVoidResult updateMaterialOrFail(
@@ -60,6 +88,9 @@ QuaderAssetApi::QuaderAssetApi(ProjectSession& session, QuaderApiMutationRunner&
     , mutations_(mutations) {}
 
 QuaderApiResult<QuaderAssetRef> QuaderAssetApi::addMaterial(MaterialDocument material) {
+    if (const std::optional<std::string> error = materialTextureReferenceError(session_.assets(), material)) {
+        return assetFailureResult(mutations_, *error);
+    }
     const AssetId id = session_.assets().addMaterial(std::move(material));
     return assetResult(mutations_, id, QuaderAssetKind::Material);
 }
@@ -103,6 +134,9 @@ QuaderApiVoidResult QuaderAssetApi::replaceStandaloneMesh(AssetId mesh, MeshAsse
 }
 
 QuaderApiVoidResult QuaderAssetApi::replaceMaterial(AssetId material, MaterialDocument replacement) {
+    if (const std::optional<std::string> error = materialTextureReferenceError(session_.assets(), replacement)) {
+        return mutations_.runAssetFailure(*error);
+    }
     if (!session_.assets().replaceMaterial(material, std::move(replacement))) {
         return mutations_.runAssetFailure("Material asset does not exist");
     }

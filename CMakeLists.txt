@@ -311,6 +311,7 @@ quader_compile_material(imgui_material resources/materials/imgui.mat imgui)
 quader_compile_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_runtime STATIC
+    src/app/AppFrameClock.cpp
     src/app/App.cpp
     src/editor/transform/SceneTransformDragService.cpp
     src/platform/FatalErrorHandler.cpp
@@ -460,6 +461,7 @@ if(QUADER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
     add_executable(quader_tests
+        tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
         tests/agent_instruction_routing_tests.cpp
         tests/build_guardrail_tests.cpp

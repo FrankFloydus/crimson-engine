@@ -24,6 +24,7 @@ struct ViewportInputFrameBuildRequest {
     bool routeActiveNavigationInput = false;
     bool useCapturedMouseDelta = false;
     QVec2 capturedMouseDelta = {};
+    float deltaSeconds = 1.0f / 60.0f;
 };
 
 /**

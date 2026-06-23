@@ -10,6 +10,7 @@
 #include "editor/commands/document/DocumentCommandResult.h"
 #include "scene/Components.h"
 #include "scene/SceneDocument.h"
+#include "scene/SceneEntityNaming.h"
 
 #include <algorithm>
 #include <optional>
@@ -215,6 +216,18 @@ inline void documentCommandApplyEntitySnapshotComponents(
     scene.setEntityKind(entity, snapshot.kind);
 }
 
+inline void documentCommandApplyEntitySnapshotCommonState(
+        SceneDocument& scene,
+        EntityId entity,
+        const DocumentEntitySnapshot& snapshot,
+        std::string name) {
+    scene.renameEntity(entity, std::move(name));
+    scene.setTransform(entity, snapshot.transform);
+    scene.setVisible(entity, snapshot.visibility.visible);
+    scene.setLocked(entity, snapshot.lock.locked);
+    scene.setEntityKind(entity, snapshot.kind);
+}
+
 inline EntityId documentCommandCreateEntityFromSnapshot(
         SceneDocument& scene,
         const DocumentEntitySnapshot& snapshot,
@@ -237,6 +250,54 @@ inline EntityId documentCommandCreateEntityFromSnapshot(
     }
     documentCommandApplyEntitySnapshotComponents(scene, entity, snapshot, includeModelingObject);
     return entity;
+}
+
+inline EntityId documentCommandDuplicateEntitySnapshotTree(
+        SceneDocument& scene,
+        const DocumentEntitySnapshot& snapshot,
+        EntityId parent,
+        bool includeModelingObject = false,
+        const std::unordered_map<EntityId, EntityId>* existingClonesBySource = nullptr) {
+    EntityId duplicate = InvalidEntityId;
+    const std::string duplicateName = SceneEntityNaming::nextName(scene, snapshot.name);
+    if (existingClonesBySource != nullptr) {
+        const auto existing = existingClonesBySource->find(snapshot.originalId);
+        if (existing != existingClonesBySource->end()) {
+            duplicate = existing->second;
+            if (duplicate == InvalidEntityId || !scene.exists(duplicate)) {
+                return InvalidEntityId;
+            }
+            if (scene.parent(duplicate) != parent && !scene.setParent(duplicate, parent, false)) {
+                return InvalidEntityId;
+            }
+            documentCommandApplyEntitySnapshotCommonState(scene, duplicate, snapshot, duplicateName);
+        }
+    }
+
+    if (duplicate == InvalidEntityId) {
+        duplicate = documentCommandCreateEntityFromSnapshot(
+                scene,
+                snapshot,
+                parent,
+                duplicateName,
+                includeModelingObject);
+        if (duplicate == InvalidEntityId) {
+            return InvalidEntityId;
+        }
+    }
+
+    for (const DocumentEntitySnapshot& child : snapshot.children) {
+        const EntityId childDuplicate = documentCommandDuplicateEntitySnapshotTree(
+                scene,
+                child,
+                duplicate,
+                includeModelingObject,
+                existingClonesBySource);
+        if (childDuplicate == InvalidEntityId) {
+            return InvalidEntityId;
+        }
+    }
+    return duplicate;
 }
 
 inline EntityId documentCommandRestoreEntitySnapshotTree(

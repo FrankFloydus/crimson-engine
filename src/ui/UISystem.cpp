@@ -180,7 +180,8 @@ bool UISystem::processEvent(const SDL_Event& event) {
     return ImGui_ImplSDL3_ProcessEvent(&event);
 }
 
-void UISystem::beginFrame() {
+void UISystem::beginFrame(const FrameTiming& frameTiming) {
+    currentFrameTiming_ = frameTiming;
     renderer_.releaseFrameResources();
     relativeMouseDelta_ = {};
     if (relativeMouseCaptured_) {
@@ -190,6 +191,7 @@ void UISystem::beginFrame() {
         relativeMouseDelta_ = {deltaX, deltaY};
     }
     ImGui_ImplSDL3_NewFrame();
+    ImGui::GetIO().DeltaTime = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
     ImGui::NewFrame();
 }
 
@@ -282,6 +284,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             .localization = localization_,
             .settings = settings_,
             .viewportSettings = viewportSettings_,
+            .frameTiming = currentFrameTiming_,
             .viewportRelativeMouseDelta = relativeMouseDelta_,
             .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
             .viewportCursorCapturePoint = &viewportCursorCapturePoint,

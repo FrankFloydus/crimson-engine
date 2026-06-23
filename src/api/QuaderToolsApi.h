@@ -29,6 +29,7 @@ public:
     [[nodiscard]] std::string activeTool() const;
 
 private:
+    [[nodiscard]] QuaderRevisionStamp currentRevisions() const;
     [[nodiscard]] QuaderApiVoidResult statusFrom(ModelingCommandResult result, std::string_view label) const;
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
 
