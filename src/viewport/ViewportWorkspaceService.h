@@ -48,6 +48,9 @@ public:
 
     [[nodiscard]] ViewportPaneId focusedPane() const { return focusedPane_; }
     bool focusPane(ViewportPaneId pane);
+    [[nodiscard]] bool focusedPaneMaximized() const { return focusedPaneMaximized_; }
+    bool setFocusedPaneMaximized(bool maximized);
+    bool toggleFocusedPaneMaximized();
 
     [[nodiscard]] int gridPreset() const { return gridPreset_; }
     bool setGridPreset(int preset);
@@ -66,8 +69,8 @@ public:
     [[nodiscard]] ViewportWorkspacePaneState& pane(ViewportPaneId pane);
     [[nodiscard]] const ViewportWorkspacePaneState& pane(ViewportPaneId pane) const;
 
-    [[nodiscard]] std::vector<ViewportPanePlacement> activePanePlacements(bool maximized) const;
-    [[nodiscard]] std::vector<ViewportSplitHandle> activeSplitHandles(bool maximized) const;
+    [[nodiscard]] std::vector<ViewportPanePlacement> activePanePlacements() const;
+    [[nodiscard]] std::vector<ViewportSplitHandle> activeSplitHandles() const;
     void setSplitHandlePosition(ViewportSplitHandleId handle, float normalizedPosition);
 
     void clearPaneVisibility();
@@ -77,12 +80,14 @@ public:
     [[nodiscard]] Vec2 paneRenderSize(ViewportPaneId pane) const;
 
 private:
-    [[nodiscard]] bool focusedPaneIsVisible(bool maximized) const;
+    [[nodiscard]] bool focusedPaneIsVisible() const;
+    [[nodiscard]] std::vector<ViewportPanePlacement> layoutPanePlacements() const;
 
     std::array<ViewportWorkspacePaneState, kViewportPaneCount> panes_;
     ViewportLayoutState layoutState_;
     ViewportLayoutId layout_ = ViewportLayoutId::Single;
     ViewportPaneId focusedPane_ = ViewportPaneId::Perspective;
+    bool focusedPaneMaximized_ = false;
     int gridPreset_ = 6;
 };
 

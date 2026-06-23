@@ -7,8 +7,6 @@
 #pragma once
 
 #include "api/QuaderApiTypes.h"
-#include "assets/AssetRevision.h"
-#include "render/ViewportOverlayFrame.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -22,11 +20,11 @@ namespace quader {
  */
 struct QuaderEntitySnapshot {
     EntityId id = InvalidEntityId;
-    EditorObjectId editorObjectId = InvalidEditorObjectId;
+    QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
     std::string name;
-    EntityKind kind = EntityKind::Generic;
+    QuaderEntityKind kind = QuaderEntityKind::Generic;
     EntityId parent = InvalidEntityId;
-    TransformComponent transform;
+    QuaderTransform transform;
     bool visible = true;
     bool selectable = true;
     bool locked = false;
@@ -37,7 +35,7 @@ struct QuaderEntitySnapshot {
     bool hasModelingObject = false;
     AssetId mesh = InvalidAssetId;
     AssetId material = InvalidAssetId;
-    ModelingObjectId modelingObjectId = InvalidModelingObjectId;
+    QuaderModelingObjectId modelingObjectId = InvalidQuaderModelingObjectId;
 };
 
 /**
@@ -45,7 +43,7 @@ struct QuaderEntitySnapshot {
  */
 struct QuaderMeshSnapshot {
     AssetId mesh = InvalidAssetId;
-    MeshAssetRevision revision;
+    std::uint64_t revision = 0;
     std::size_t vertexCount = 0;
     std::size_t indexCount = 0;
     std::size_t primitiveCount = 0;
@@ -80,12 +78,12 @@ struct QuaderHistorySnapshot {
 struct QuaderApiSnapshot {
     QuaderRevisionStamp revisions;
     std::vector<QuaderEntitySnapshot> entities;
-    std::vector<ModelingObjectRecord> modelingObjects;
-    ModelingSelectionSummary selection;
-    ModelingToolStatus toolStatus;
+    std::vector<QuaderModelingObjectRecord> modelingObjects;
+    QuaderSelectionSummary selection;
+    QuaderToolStatus toolStatus;
     QuaderAssetSnapshot assets;
     QuaderHistorySnapshot history;
-    ViewportOverlayFrame selectionOverlay;
+    QuaderOverlayFrame selectionOverlay;
 };
 
 } // namespace quader

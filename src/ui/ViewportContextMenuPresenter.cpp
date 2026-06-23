@@ -6,14 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/ViewportContextMenuPresenter.h"
 
-#include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "core/Logger.h"
 #include "editor/modeling/services/ModelingActionCatalog.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "editor/modeling/services/SelectionModeAdapter.h"
-#include "editor/commands/ModelingCommandToolCatalog.h"
 #include "viewport/ViewportInputRouter.h"
 
 #include <imgui.h>
@@ -27,19 +25,6 @@ namespace {
 
 bool isGenericContextAction(std::string_view actionId) {
     return actionId == "delete_selection" || actionId == "duplicate_meshes";
-}
-
-std::string contextMenuCommandId(std::string_view actionId) {
-    if (actionId == "delete_selection") {
-        return std::string(QuaderCommand::DeleteSelection.string());
-    }
-    if (actionId == "duplicate_meshes") {
-        return std::string(QuaderCommand::DuplicateSelection.string());
-    }
-
-    std::string commandId = "modeling.action.";
-    commandId.append(actionId);
-    return commandId;
 }
 
 bool shouldCloseOperationsPopupForMouseClick() {
@@ -91,8 +76,9 @@ void ViewportContextMenuPresenter::drawOperationsPopup(
         stableId.append(action.actionId);
         const std::string label = localization.imguiLabel(labelKey, stableId, action.label);
         if (ImGui::MenuItem(label.c_str(), nullptr, false, enabled)) {
-            const std::string commandId = contextMenuCommandId(action.actionId);
-            const QuaderApiVoidResult result = editor.commands().execute(commandId);
+            const QuaderApiVoidResult result = action.kind == ModelingActionKind::Tool ?
+                    editor.commands().executeToolActivation(action.toolId) :
+                    editor.commands().executeModelingAction(action.actionId);
             if (!result.ok) {
                 LOG_ERROR("Operation '{}' failed: {}", action.actionId, result.message.empty() ? "Operation failed." : result.message);
             }

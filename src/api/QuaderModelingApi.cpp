@@ -6,8 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderModelingApi.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderApiMutationRunner.h"
+#include "api/QuaderPolygonDocumentInternalAccess.h"
 #include "scene/document/ProjectSession.h"
+#include "editor/commands/modeling/CommitBoxPreviewCommand.h"
 #include "editor/history/ModelingMementoCommand.h"
 #include "editor/selection/EditorSelectionService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
@@ -86,7 +89,7 @@ QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(const Quad
     auto command = std::make_unique<CreateBoxFromBoundsHistoryCommand>(
             session_.modeling(),
             ModelingCreateBoxRequest{
-                    .bounds = args.bounds,
+                    .bounds = toModelingBounds(args.bounds),
                     .name = args.name,
             });
     CreateBoxFromBoundsHistoryCommand* createCommand = command.get();
@@ -99,18 +102,42 @@ QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(const Quad
     return resultFromCreate(std::move(status), created);
 }
 
-QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(ModelingBounds bounds, std::string name) {
+QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(QuaderBounds bounds, std::string name) {
     return createBox(QuaderCreateBoxArgs{
             .bounds = bounds,
             .name = std::move(name),
     });
 }
 
+QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(ModelingBounds bounds, std::string name) {
+    return createBox(toApiBounds(bounds), std::move(name));
+}
+
+QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::commitBoxPreview(
+        std::string name,
+        AssetId defaultMaterial) {
+    auto command = std::make_unique<CommitBoxPreviewCommand>(
+            session_.modeling(),
+            session_.scene(),
+            std::move(name),
+            defaultMaterial);
+    CommitBoxPreviewCommand* commitCommand = command.get();
+    QuaderApiVoidResult status = mutations_.runModelingUndoableCommand(
+            std::move(command),
+            "Create Box");
+
+    QuaderModelingObjectRef created;
+    if (status.ok && status.changed) {
+        created = refFromRecord(commitCommand->committed().object);
+    }
+    return resultFromCreate(std::move(status), created);
+}
+
 QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createMesh(
         QuaderPolygonDocument document,
         QuaderCreateMeshArgs args) {
     ModelingCreateMeshRequest request;
-    request.document = std::move(document);
+    request.document = QuaderPolygonDocumentInternalAccess::toBackend(document);
     request.name = std::move(args.name);
     request.materialSlot = args.materialSlot;
     auto command = std::make_unique<CreateMeshHistoryCommand>(session_.modeling(), std::move(request));
@@ -138,7 +165,7 @@ QuaderApiVoidResult QuaderModelingApi::beginPreview(std::string_view actionId) {
 
 QuaderApiVoidResult QuaderModelingApi::updatePreview(const QuaderPreviewSettings& settings) {
     return mutations_.runModelingResult(
-            session_.modeling().setInteractionSettings(settings.interaction),
+            session_.modeling().setInteractionSettings(toModelingInteractionSettings(settings.interaction)),
             "Update Operation Preview");
 }
 

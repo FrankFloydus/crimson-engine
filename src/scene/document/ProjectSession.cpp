@@ -15,11 +15,13 @@ namespace quader {
 
 ProjectSession::ProjectSession() {
     rebuildServices();
+    markClean();
 }
 
 ProjectSession::ProjectSession(ProjectDocument document)
     : document_(std::move(document)) {
     rebuildServices();
+    markClean();
 }
 
 ProjectSession::~ProjectSession() = default;
@@ -33,6 +35,24 @@ void ProjectSession::rebuildServices() {
             *documentCommands_,
             document_.assets(),
             *modeling_);
+}
+
+ProjectContentRevisionStamp ProjectSession::contentRevisionStamp() const {
+    const ModelingSelectionSummary modeling = modeling_->selectionSummary();
+    return {
+            .projectRevision = document_.revision(),
+            .sceneRevision = document_.scene().revision(),
+            .assetRevision = document_.assets().revision(),
+            .modelingContentRevision = modeling.contentRevision,
+    };
+}
+
+bool ProjectSession::dirty() const {
+    return !(contentRevisionStamp() == cleanStamp_);
+}
+
+void ProjectSession::markClean() {
+    cleanStamp_ = contentRevisionStamp();
 }
 
 std::unique_ptr<ProjectSession> ProjectSessionService::createSession() const {

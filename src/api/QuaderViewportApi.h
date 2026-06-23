@@ -7,11 +7,14 @@
 #pragma once
 
 #include "api/QuaderEditorApiTypes.h"
-#include "viewport/ViewportWorkspaceService.h"
+
+#include <cstddef>
+#include <memory>
 
 namespace quader {
 
 class QuaderCameraHandle;
+class QuaderViewportApiRuntimeAccess;
 class QuaderViewportHandle;
 
 /**
@@ -19,14 +22,19 @@ class QuaderViewportHandle;
  */
 class QuaderViewportApi final {
 public:
-    explicit QuaderViewportApi(ViewportWorkspaceService& workspace);
+    QuaderViewportApi();
+    ~QuaderViewportApi();
+
+    QuaderViewportApi(const QuaderViewportApi&) = delete;
+    QuaderViewportApi& operator=(const QuaderViewportApi&) = delete;
+    QuaderViewportApi(QuaderViewportApi&&) noexcept;
+    QuaderViewportApi& operator=(QuaderViewportApi&&) noexcept;
 
     void setRuntimeHooks(QuaderViewportRuntimeHooks hooks);
-    [[nodiscard]] ViewportWorkspaceService& workspace();
-    [[nodiscard]] const ViewportWorkspaceService& workspace() const;
 
     [[nodiscard]] ViewportLayoutId layout() const;
     QuaderApiVoidResult setLayout(ViewportLayoutId layout);
+    [[nodiscard]] std::size_t activePaneCount() const;
 
     [[nodiscard]] int gridPreset() const;
     QuaderApiVoidResult setGridPreset(int preset);
@@ -46,11 +54,14 @@ public:
     [[nodiscard]] QuaderViewportHandle pane(ViewportPaneId pane);
 
 private:
+    friend class QuaderViewportApiRuntimeAccess;
+
+    class Impl;
+
     [[nodiscard]] QuaderApiVoidResult unavailable(std::string message) const;
     [[nodiscard]] QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) const;
 
-    ViewportWorkspaceService& workspace_;
-    QuaderViewportRuntimeHooks hooks_;
+    std::unique_ptr<Impl> impl_;
 };
 
 /**

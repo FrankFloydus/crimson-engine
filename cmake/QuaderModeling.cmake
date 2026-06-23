@@ -306,71 +306,77 @@ function(quader_ensure_catch2)
     endif()
 endfunction()
 
-function(quader_add_modeling_domain_catch2_test target)
-    quader_ensure_catch2()
-    add_executable(${target} ${ARGN})
-    target_compile_features(${target} PRIVATE cxx_std_20)
-    target_compile_definitions(${target} PRIVATE QUADER_MODELING_TEST_SUPPORT_CATCH2=1)
-    target_include_directories(${target}
-        PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/src"
-            "${QUADER_MODELING_DOMAIN_TEST_ROOT}"
-            "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation")
-    target_link_libraries(${target} PRIVATE Catch2::Catch2WithMain)
-    add_test(NAME ${target} COMMAND ${target})
+function(quader_add_modeling_domain_catch2_sources target)
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
 endfunction()
 
 function(quader_add_polygon_domain_test target)
-    quader_add_modeling_domain_catch2_test(${target} ${ARGN})
-    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon")
-    target_link_libraries(${target} PRIVATE quader_modeling_polygon)
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
 endfunction()
 
 function(quader_add_modeling_runtime_domain_test target)
-    quader_add_modeling_domain_catch2_test(${target} ${ARGN})
-    target_include_directories(${target}
-        PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/modeling")
-    target_link_libraries(${target} PRIVATE quader_modeling_polygon quader_modeling_runtime)
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
 endfunction()
 
 function(quader_add_editor_metadata_domain_test target)
-    quader_add_modeling_domain_catch2_test(${target} ${ARGN})
-    target_compile_definitions(${target} PRIVATE
-        "QUADER_HOST_CONTRACT_HEADER_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.h\""
-        "QUADER_HOST_CONTRACT_SOURCE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.cpp\"")
-    target_link_libraries(${target} PRIVATE quader_editor_metadata quader_modeling_runtime)
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
 endfunction()
 
 function(quader_add_qdr_document_domain_test target)
-    quader_add_modeling_domain_catch2_test(${target} ${ARGN})
-    target_compile_definitions(${target} PRIVATE
-        "QUADER_QDR_TEST_FIXTURE_DIR=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/fixtures/io\"")
-    target_link_libraries(${target} PRIVATE quader_qdr_document_io)
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
 endfunction()
 
 function(quader_add_qdr_runtime_domain_test target)
-    quader_add_modeling_domain_catch2_test(${target} ${ARGN})
-    target_compile_definitions(${target} PRIVATE
-        "QUADER_QDR_TEST_FIXTURE_DIR=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/fixtures/io\"")
-    target_link_libraries(${target} PRIVATE quader_qdr_runtime_io)
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
+endfunction()
+
+function(quader_add_modeling_domain_catch2_test_target target)
+    quader_ensure_catch2()
+    add_executable(${target} ${QUADER_MODELING_DOMAIN_TEST_SOURCES})
+    target_compile_features(${target} PRIVATE cxx_std_20)
+    target_compile_definitions(${target}
+        PRIVATE
+            QUADER_MODELING_TEST_SUPPORT_CATCH2=1
+            "QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/qdr_custom_engine_modeling_runtime_smoke_tests.cpp\""
+            "QUADER_HOST_CONTRACT_HEADER_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.h\""
+            "QUADER_HOST_CONTRACT_SOURCE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.cpp\""
+            "QUADER_QDR_TEST_FIXTURE_DIR=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/fixtures/io\"")
+    target_include_directories(${target}
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/modeling"
+            "${QUADER_MODELING_DOMAIN_TEST_ROOT}"
+            "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation")
+    target_link_libraries(${target}
+        PRIVATE
+            Catch2::Catch2WithMain
+            quader_geometry
+            quader_modeling_polygon
+            quader_modeling_runtime
+            quader_editor_metadata
+            quader_qdr_document_io
+            quader_qdr_runtime_io)
+    add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
 if(QUADER_BUILD_TESTS)
-    quader_add_modeling_domain_catch2_test(qdr_modeling_domain_smoke
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCES)
+
+    quader_add_modeling_domain_catch2_sources(qdr_modeling_domain_smoke
         tests/modeling_domain/qdr_modeling_domain_smoke.cpp)
-    target_link_libraries(qdr_modeling_domain_smoke PRIVATE quader_modeling_polygon quader_modeling_runtime quader_qdr_runtime_io)
 
-    quader_add_modeling_domain_catch2_test(qdr_custom_engine_modeling_runtime_smoke_tests
+    quader_add_modeling_domain_catch2_sources(qdr_custom_engine_modeling_runtime_smoke_tests
         tests/modeling_domain/qdr_custom_engine_modeling_runtime_smoke_tests.cpp)
-    target_compile_definitions(qdr_custom_engine_modeling_runtime_smoke_tests PRIVATE
-        "QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/qdr_custom_engine_modeling_runtime_smoke_tests.cpp\"")
-    target_link_libraries(qdr_custom_engine_modeling_runtime_smoke_tests PRIVATE quader_editor_metadata quader_modeling_runtime quader_qdr_runtime_io)
 
-    quader_add_modeling_domain_catch2_test(qdr_geometry_tests
+    quader_add_modeling_domain_catch2_sources(qdr_geometry_tests
         tests/modeling_domain/qdr_geometry_tests.cpp)
-    target_link_libraries(qdr_geometry_tests PRIVATE quader_geometry)
 
     quader_add_polygon_domain_test(qdr_poly_geometry_characterization_tests tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp)
     quader_add_polygon_domain_test(qdr_document_model_api_tests tests/modeling_domain/qdr_document_model_api_tests.cpp)
@@ -379,7 +385,6 @@ if(QUADER_BUILD_TESTS)
     quader_add_polygon_domain_test(qdr_document_builder_tests tests/modeling_domain/qdr_document_builder_tests.cpp)
     if(QUADER_USE_OPENMESH_TOPOLOGY)
         quader_add_polygon_domain_test(qdr_document_openmesh_topology_query_tests tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp)
-        target_link_libraries(qdr_document_openmesh_topology_query_tests PRIVATE quader_geometry)
     endif()
 
     quader_add_qdr_document_domain_test(qdr_io_document_tests tests/modeling_domain/qdr_io_document_tests.cpp)
@@ -426,4 +431,6 @@ if(QUADER_BUILD_TESTS)
         get_filename_component(_quader_runtime_tool_test_target "${_quader_runtime_tool_test_source}" NAME_WE)
         quader_add_modeling_runtime_domain_test("${_quader_runtime_tool_test_target}" "${_quader_runtime_tool_test_source}")
     endforeach()
+
+    quader_add_modeling_domain_catch2_test_target(quader_modeling_domain_tests)
 endif()

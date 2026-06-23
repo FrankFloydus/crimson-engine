@@ -90,6 +90,7 @@ public:
     QuaderApiVoidResult select(EntityId entity);
 
     QuaderApiResult<QuaderEntityRef> duplicate(EntityId entity);
+    QuaderApiResult<QuaderDuplicateHierarchyResult> duplicateSelectedHierarchy();
     QuaderApiResult<QuaderEntityRef> groupSelection(std::string groupName = {}, TransformComponent transform = {});
     QuaderApiVoidResult ungroupSelection();
     [[nodiscard]] QuaderSceneBatch batch(std::string label = "Scene Batch");

@@ -9,7 +9,6 @@
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "scene/SceneDocument.h"
-#include "scene/SceneEntityNaming.h"
 #include "ui/UIContext.h"
 #include "ui/UIStyleTokens.h"
 
@@ -17,7 +16,6 @@
 
 #include <algorithm>
 #include <functional>
-#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -97,19 +95,6 @@ std::vector<EntityId> selectedRootEntities(const SceneDocument& document) {
     return roots;
 }
 
-std::vector<EntityId> selectedHierarchyEntities(const SceneDocument& document) {
-    std::vector<EntityId> result;
-    std::unordered_set<EntityId> seen;
-    for (const EntityId root : selectedRootEntities(document)) {
-        for (const EntityId entity : document.descendants(root, true)) {
-            if (seen.insert(entity).second) {
-                result.push_back(entity);
-            }
-        }
-    }
-    return result;
-}
-
 bool selectOnly(UIContext& context, const std::vector<EntityId>& entities, EntityId active = InvalidEntityId) {
     QuaderApiVoidResult result = context.editor.selection().selectObjects(
             std::span<const EntityId>(entities.data(), entities.size()),
@@ -171,118 +156,8 @@ void deleteSelection(UIContext& context) {
     (void)context.editor.commands().execute(QuaderCommand::DeleteSelection);
 }
 
-std::vector<EntityId> duplicateModelingEntities(UIContext& context, const std::vector<EntityId>& sourceMeshes) {
-    if (sourceMeshes.empty()) {
-        return {};
-    }
-
-    const std::vector<EntityId> beforeEntities = context.document.entities();
-    std::unordered_set<EntityId> beforeSet(beforeEntities.begin(), beforeEntities.end());
-    (void)selectOnly(context, sourceMeshes);
-    const QuaderApiVoidResult duplicateResult = context.editor.commands().execute(QuaderCommand::DuplicateSelection);
-    if (!duplicateResult.ok) {
-        return {};
-    }
-
-    std::vector<EntityId> duplicates;
-    for (const EntityId entity : context.document.entities()) {
-        if (!beforeSet.contains(entity) && context.document.modelingObject(entity) != nullptr) {
-            duplicates.push_back(entity);
-        }
-    }
-    std::sort(duplicates.begin(), duplicates.end());
-    return duplicates;
-}
-
-void copyCommonEntityState(UIContext& context, EntityId source, EntityId clone, bool renameClone = true) {
-    SceneDocument& document = context.document;
-    if (renameClone) {
-        const NameComponent* name = document.name(source);
-        if (name != nullptr) {
-            (void)context.editor.scene().rename(clone, SceneEntityNaming::nextName(document, name->name));
-        }
-    }
-    if (const TransformComponent* transform = document.transform(source)) {
-        (void)context.editor.scene().setTransform(clone, *transform);
-    }
-    if (const VisibilityComponent* visibility = document.visibility(source)) {
-        (void)context.editor.scene().setVisible(clone, visibility->visible);
-    }
-    if (const LockComponent* lock = document.lock(source)) {
-        (void)context.editor.scene().setLocked(clone, lock->locked);
-    }
-}
-
 void duplicateSelection(UIContext& context) {
-    SceneDocument& document = context.document;
-    const std::vector<EntityId> roots = selectedRootEntities(document);
-    if (roots.empty()) {
-        return;
-    }
-
-    std::vector<EntityId> sourceMeshes;
-    for (const EntityId root : roots) {
-        for (const EntityId entity : document.descendants(root, true)) {
-            if (document.modelingObject(entity) != nullptr) {
-                sourceMeshes.push_back(entity);
-            }
-        }
-    }
-
-    const std::vector<EntityId> duplicateMeshes = duplicateModelingEntities(context, sourceMeshes);
-    std::unordered_map<EntityId, EntityId> cloneBySource;
-    for (std::size_t index = 0; index < sourceMeshes.size() && index < duplicateMeshes.size(); ++index) {
-        cloneBySource[sourceMeshes[index]] = duplicateMeshes[index];
-    }
-
-    std::function<EntityId(EntityId)> cloneEntity = [&](EntityId source) -> EntityId {
-        EntityId clone = InvalidEntityId;
-        if (document.modelingObject(source) != nullptr) {
-            const auto mapped = cloneBySource.find(source);
-            if (mapped == cloneBySource.end()) {
-                return InvalidEntityId;
-            }
-            clone = mapped->second;
-            copyCommonEntityState(context, source, clone);
-        } else {
-            const NameComponent* name = document.name(source);
-            const std::string baseName = name ? name->name : "Entity";
-            TransformComponent transform;
-            if (const TransformComponent* sourceTransform = document.transform(source)) {
-                transform = *sourceTransform;
-            }
-            const QuaderApiResult<QuaderEntityRef> created = context.editor.scene().createEntity(QuaderCreateEntityArgs{
-                    .name = SceneEntityNaming::nextName(document, baseName),
-                    .kind = document.kind(source),
-                    .parent = InvalidEntityId,
-                    .transform = transform,
-            });
-            if (!created.ok || !created.changed) {
-                return InvalidEntityId;
-            }
-            clone = created.value.id;
-            copyCommonEntityState(context, source, clone, false);
-        }
-
-        for (const EntityId child : document.children(source)) {
-            const EntityId childClone = cloneEntity(child);
-            if (childClone != InvalidEntityId) {
-                (void)context.editor.scene().reparent(childClone, clone, false);
-            }
-        }
-        return clone;
-    };
-
-    std::vector<EntityId> rootClones;
-    for (const EntityId root : roots) {
-        const EntityId clone = cloneEntity(root);
-        if (clone != InvalidEntityId) {
-            (void)context.editor.scene().reparent(clone, document.parent(root), false);
-            rootClones.push_back(clone);
-        }
-    }
-
-    (void)selectOnly(context, rootClones);
+    (void)context.editor.scene().duplicateSelectedHierarchy();
 }
 
 ImTextureID iconFor(const UIIconSet& icons, EntityKind kind) {

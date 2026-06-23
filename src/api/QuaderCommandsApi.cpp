@@ -21,29 +21,81 @@
 namespace quader {
 namespace {
 
-std::string commandIdForModelingTool(std::string_view toolId) {
-    if (toolId == "delete_selection") {
-        return std::string(QuaderCommand::DeleteSelection.string());
+std::string prefixedCommandId(std::string_view prefix, std::string_view suffix) {
+    std::string commandId(prefix);
+    commandId.append(suffix);
+    return commandId;
+}
+
+std::optional<QuaderCommandId> fixedCommandIdForModelingAction(std::string_view actionId) {
+    if (actionId == "delete_selection") {
+        return QuaderCommand::DeleteSelection;
     }
-    if (toolId == "copy_selection") {
-        return std::string(QuaderCommand::CopySelection.string());
+    if (actionId == "copy_selection") {
+        return QuaderCommand::CopySelection;
     }
-    if (toolId == "paste_selection") {
-        return std::string(QuaderCommand::PasteSelection.string());
+    if (actionId == "paste_selection") {
+        return QuaderCommand::PasteSelection;
     }
-    if (toolId == "duplicate_meshes") {
-        return std::string(QuaderCommand::DuplicateSelection.string());
+    if (actionId == "duplicate_meshes") {
+        return QuaderCommand::DuplicateSelection;
     }
-    if (toolId == "repeat_last_action") {
-        return std::string(QuaderCommand::EditRepeatLastAction.string());
+    if (actionId == "repeat_last_action") {
+        return QuaderCommand::EditRepeatLastAction;
     }
-    if (toolId == "assign_material" || toolId == "apply_active_material") {
-        return std::string(QuaderCommand::ApplyMaterial.string());
+    if (actionId == "assign_material" || actionId == "apply_active_material") {
+        return QuaderCommand::ApplyMaterial;
+    }
+    if (actionId == "dissolve_edges") {
+        return QuaderCommand::ModelingDissolveEdges;
+    }
+    if (actionId == "dissolve_vertices") {
+        return QuaderCommand::ModelingDissolveVertices;
+    }
+    if (actionId == "combine_meshes") {
+        return QuaderCommand::ModelingCombineMeshes;
+    }
+    if (actionId == "merge_vertices_to_active") {
+        return QuaderCommand::ModelingMergeVerticesToActive;
+    }
+    if (actionId == "merge_vertices_to_center") {
+        return QuaderCommand::ModelingMergeVerticesToCenter;
+    }
+    if (actionId == "mirror_selection_x") {
+        return QuaderCommand::ModelingMirrorSelectionX;
+    }
+    if (actionId == "mirror_selection_y") {
+        return QuaderCommand::ModelingMirrorSelectionY;
+    }
+    if (actionId == "mirror_selection_z") {
+        return QuaderCommand::ModelingMirrorSelectionZ;
+    }
+    if (actionId == "invert_mesh") {
+        return QuaderCommand::ModelingInvertMesh;
+    }
+    if (actionId == "flip_horizontal") {
+        return QuaderCommand::ModelingFlipHorizontal;
+    }
+    if (actionId == "flip_vertical") {
+        return QuaderCommand::ModelingFlipVertical;
+    }
+    return std::nullopt;
+}
+
+std::string commandIdForModelingAction(std::string_view actionId) {
+    if (const std::optional<QuaderCommandId> fixed = fixedCommandIdForModelingAction(actionId)) {
+        return std::string(fixed->string());
     }
 
-    std::string commandId = "modeling.";
-    commandId.append(toolId);
-    return commandId;
+    return prefixedCommandId("modeling.", actionId);
+}
+
+std::string commandIdForToolActivation(std::string_view toolId) {
+    return prefixedCommandId("tools.activate.", toolId);
+}
+
+std::string legacyActionAlias(std::string_view actionId) {
+    return prefixedCommandId("modeling.action.", actionId);
 }
 
 } // namespace
@@ -59,6 +111,14 @@ QuaderApiVoidResult QuaderCommandsApi::execute(QuaderCommandId commandId) {
     return execute(commandId.string());
 }
 
+QuaderApiVoidResult QuaderCommandsApi::executeModelingAction(std::string_view actionId) {
+    return execute(commandIdForModelingAction(actionId));
+}
+
+QuaderApiVoidResult QuaderCommandsApi::executeToolActivation(std::string_view toolId) {
+    return execute(commandIdForToolActivation(toolId));
+}
+
 QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
     if (std::optional<QuaderApiVoidResult> result = registry_.execute(commandId)) {
         return *result;
@@ -68,6 +128,14 @@ QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
 
 std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {
     return registry_.available();
+}
+
+std::string QuaderCommandsApi::commandIdForModelingAction(std::string_view actionId) const {
+    return quader::commandIdForModelingAction(actionId);
+}
+
+std::string QuaderCommandsApi::commandIdForToolActivation(std::string_view toolId) const {
+    return quader::commandIdForToolActivation(toolId);
 }
 
 std::string QuaderCommandsApi::shortcutFor(std::string_view commandId) const {
@@ -80,57 +148,57 @@ std::string QuaderCommandsApi::shortcutFor(QuaderCommandId commandId) const {
 
 void QuaderCommandsApi::registerCommands() {
     registerCommand(
-            "edit.undo",
+            QuaderCommand::EditUndo,
             "Undo",
             [this] { return api_.history().undo(); },
             "Ctrl+Z",
             [this] { return api_.history().canUndo(); });
     registerCommand(
-            "edit.redo",
+            QuaderCommand::EditRedo,
             "Redo",
             [this] { return api_.history().redo(); },
             "Ctrl+Y",
             [this] { return api_.history().canRedo(); });
     registerCommand(
-            "edit.repeat_last_action",
+            QuaderCommand::EditRepeatLastAction,
             "Repeat Last Action",
             [this] { return api_.history().repeatLastAction(); },
             "Ctrl+R");
     registerCommand(
-            "edit.clear_selection",
+            QuaderCommand::EditClearSelection,
             "Clear Selection",
             [this] { return api_.selection().clear(); });
     registerCommand(
-            "edit.select_all",
+            QuaderCommand::EditSelectAll,
             "Select All",
             [this] { return api_.selection().selectAll(); },
             "Ctrl+A");
     registerCommand(
-            "edit.invert_selection",
+            QuaderCommand::EditInvertSelection,
             "Invert Selection",
             [this] { return api_.selection().invert(); },
             "Ctrl+I");
     registerCommand(
-            "edit.delete",
+            QuaderCommand::DeleteSelection,
             "Delete Selection",
             [this] { return api_.modeling().executeTool("delete_selection"); });
     registerCommand(
-            "edit.copy",
+            QuaderCommand::CopySelection,
             "Copy Selection",
             [this] { return api_.modeling().executeTool("copy_selection"); },
             "Ctrl+C");
     registerCommand(
-            "edit.paste",
+            QuaderCommand::PasteSelection,
             "Paste Selection",
             [this] { return api_.modeling().executeTool("paste_selection"); },
             "Ctrl+V");
     registerCommand(
-            "edit.duplicate",
+            QuaderCommand::DuplicateSelection,
             "Duplicate Selection",
             [this] { return api_.modeling().executeTool("duplicate_meshes"); },
             "Ctrl+D");
     registerCommand(
-            "edit.group",
+            QuaderCommand::GroupSelection,
             "Group Selection",
             [this] {
                 const QuaderApiResult<QuaderEntityRef> result = api_.scene().groupSelection();
@@ -144,40 +212,40 @@ void QuaderCommandsApi::registerCommands() {
             },
             "Ctrl+G");
     registerCommand(
-            "edit.ungroup",
+            QuaderCommand::UngroupSelection,
             "Ungroup Selection",
             [this] { return api_.scene().ungroupSelection(); },
             "Shift+Ctrl+G");
     registerCommand(
-            "edit.apply_material",
+            QuaderCommand::ApplyMaterial,
             "Apply Material",
             [this] { return api_.modeling().executeTool("assign_material"); });
     registerCommand(
-            "viewport.frame_selection",
+            QuaderCommand::ViewportFrameSelection,
             "Frame Selection",
             [this] { return viewports_.frameSelection(); },
             "Home");
     registerCommand(
-            "viewport.focus_origin",
+            QuaderCommand::ViewportFocusOrigin,
             "Focus Origin",
             [this] { return viewports_.focusOrigin(); },
             "Shift+Home");
 
-    registerAlias("history.undo", "edit.undo");
-    registerAlias("history.redo", "edit.redo");
-    registerAlias("history.repeat_last_action", "edit.repeat_last_action");
-    registerAlias("selection.clear", "edit.clear_selection");
-    registerAlias("selection.select_all", "edit.select_all");
-    registerAlias("selection.invert", "edit.invert_selection");
-    registerAlias("modeling.delete_selection", "edit.delete");
-    registerAlias("modeling.copy_selection", "edit.copy");
-    registerAlias("modeling.paste_selection", "edit.paste");
-    registerAlias("modeling.duplicate_meshes", "edit.duplicate");
-    registerAlias("scene.group_selection", "edit.group");
-    registerAlias("scene.ungroup_selection", "edit.ungroup");
-    registerAlias("modeling.repeat_last_action", "edit.repeat_last_action");
-    registerAlias("modeling.assign_material", "edit.apply_material");
-    registerAlias("modeling.apply_active_material", "edit.apply_material");
+    registerAlias("history.undo", QuaderCommand::EditUndo);
+    registerAlias("history.redo", QuaderCommand::EditRedo);
+    registerAlias("history.repeat_last_action", QuaderCommand::EditRepeatLastAction);
+    registerAlias("selection.clear", QuaderCommand::EditClearSelection);
+    registerAlias("selection.select_all", QuaderCommand::EditSelectAll);
+    registerAlias("selection.invert", QuaderCommand::EditInvertSelection);
+    registerAlias("modeling.delete_selection", QuaderCommand::DeleteSelection);
+    registerAlias("modeling.copy_selection", QuaderCommand::CopySelection);
+    registerAlias("modeling.paste_selection", QuaderCommand::PasteSelection);
+    registerAlias("modeling.duplicate_meshes", QuaderCommand::DuplicateSelection);
+    registerAlias("scene.group_selection", QuaderCommand::GroupSelection);
+    registerAlias("scene.ungroup_selection", QuaderCommand::UngroupSelection);
+    registerAlias("modeling.repeat_last_action", QuaderCommand::EditRepeatLastAction);
+    registerAlias("modeling.assign_material", QuaderCommand::ApplyMaterial);
+    registerAlias("modeling.apply_active_material", QuaderCommand::ApplyMaterial);
 
     const std::unordered_set<std::string_view> neutralModelingTools{
             "delete_selection",
@@ -192,11 +260,11 @@ void QuaderCommandsApi::registerCommands() {
         if (tool == nullptr) {
             continue;
         }
-        registerAlias("modeling.action." + std::string(tool->id()), commandIdForModelingTool(tool->id()));
+        registerAlias(legacyActionAlias(tool->id()), commandIdForModelingAction(tool->id()));
         if (neutralModelingTools.contains(tool->id())) {
             continue;
         }
-        std::string id = commandIdForModelingTool(tool->id());
+        std::string id = commandIdForModelingAction(tool->id());
         registerCommand(
                 id,
                 std::string(tool->label()),
@@ -208,10 +276,8 @@ void QuaderCommandsApi::registerCommands() {
         if (tool == nullptr) {
             continue;
         }
-        std::string id = "tools.activate.";
-        id.append(tool->id());
         registerCommand(
-                id,
+                commandIdForToolActivation(tool->id()),
                 std::string(tool->label()),
                 [this, toolId = std::string(tool->id())] {
                     return tools_.activate(toolId);
@@ -225,6 +291,22 @@ void QuaderCommandsApi::registerCommands() {
     registry_.registerPrefix("tools.activate.", [this](std::string_view toolId) {
         return tools_.activate(toolId);
     });
+}
+
+void QuaderCommandsApi::registerCommand(
+        QuaderCommandId id,
+        std::string label,
+        std::function<QuaderApiVoidResult()> execute,
+        std::string shortcut,
+        std::function<bool()> enabled,
+        bool visible) {
+    registerCommand(
+            std::string(id.string()),
+            std::move(label),
+            std::move(execute),
+            std::move(shortcut),
+            std::move(enabled),
+            visible);
 }
 
 void QuaderCommandsApi::registerCommand(
@@ -242,6 +324,10 @@ void QuaderCommandsApi::registerCommand(
             .execute = std::move(execute),
             .enabled = std::move(enabled),
     });
+}
+
+void QuaderCommandsApi::registerAlias(std::string aliasId, QuaderCommandId targetId) {
+    registerAlias(std::move(aliasId), std::string(targetId.string()));
 }
 
 void QuaderCommandsApi::registerAlias(std::string aliasId, std::string targetId) {

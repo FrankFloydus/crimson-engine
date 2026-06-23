@@ -13,8 +13,7 @@
 namespace quader {
 
 QuaderProjectApi::QuaderProjectApi(ProjectSession& session)
-    : session_(session)
-    , savedRevision_(session.document().revision()) {}
+    : session_(session) {}
 
 QuaderApiVoidResult QuaderProjectApi::newProject() {
     return unsupported("Project replacement is not implemented until ProjectSession owns a reset/open lifecycle.");
@@ -39,7 +38,7 @@ QuaderApiVoidResult QuaderProjectApi::close() {
 }
 
 bool QuaderProjectApi::dirty() const {
-    return session_.document().revision() != savedRevision_;
+    return session_.dirty();
 }
 
 const std::filesystem::path& QuaderProjectApi::path() const {

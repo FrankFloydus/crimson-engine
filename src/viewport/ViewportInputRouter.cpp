@@ -252,10 +252,6 @@ void ViewportInputRouter::setGridPreset(int preset) {
     state_.gridPreset = preset;
 }
 
-void ViewportInputRouter::setMaximized(bool maximized) {
-    state_.maximized = maximized;
-}
-
 bool ViewportInputRouter::activeToolOwnsViewport() const {
     return toolRuntime_ != nullptr && toolRuntime_->activeToolOwnsViewport();
 }

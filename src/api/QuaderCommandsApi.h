@@ -30,12 +30,23 @@ public:
 
     QuaderApiVoidResult execute(std::string_view commandId);
     QuaderApiVoidResult execute(QuaderCommandId commandId);
+    QuaderApiVoidResult executeModelingAction(std::string_view actionId);
+    QuaderApiVoidResult executeToolActivation(std::string_view toolId);
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
+    [[nodiscard]] std::string commandIdForModelingAction(std::string_view actionId) const;
+    [[nodiscard]] std::string commandIdForToolActivation(std::string_view toolId) const;
     [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
     [[nodiscard]] std::string shortcutFor(QuaderCommandId commandId) const;
 
 private:
     void registerCommands();
+    void registerCommand(
+            QuaderCommandId id,
+            std::string label,
+            std::function<QuaderApiVoidResult()> execute,
+            std::string shortcut = {},
+            std::function<bool()> enabled = {},
+            bool visible = true);
     void registerCommand(
             std::string id,
             std::string label,
@@ -43,6 +54,7 @@ private:
             std::string shortcut = {},
             std::function<bool()> enabled = {},
             bool visible = true);
+    void registerAlias(std::string aliasId, QuaderCommandId targetId);
     void registerAlias(std::string aliasId, std::string targetId);
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
 

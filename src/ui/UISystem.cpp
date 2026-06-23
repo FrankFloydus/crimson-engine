@@ -9,6 +9,7 @@
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/viewport/QuaderViewportApiRuntimeAccess.h"
 #include "render/FilamentBufferDescriptorFactory.h"
 #include "ui/ConsolePanel.h"
 #include "ui/InspectorPanel.h"
@@ -329,7 +330,11 @@ void UISystem::prepareViewports(
         const SceneDocument& document,
         const AssetRegistry& assets) {
     if (viewportPanel_ != nullptr) {
-        viewportPanel_->prepareViewports(editor.viewports().workspace(), renderBridge, document, assets);
+        viewportPanel_->prepareViewports(
+                QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
+                renderBridge,
+                document,
+                assets);
     }
 }
 

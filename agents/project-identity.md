@@ -9,7 +9,6 @@ file except through prior written authorization from Francesco Di Blasi.
 # Project Identity
 
 - This repository is the native standalone Windows Quader app.
-- `app-refactor.md` is the accepted native-app architecture direction as of 2026-06-22.
 - This app owns former SDK code in app modules. Do not preserve the old top-level copied SDK boundary,
   modeling SDK directory override, or compile-time SDK presence macro as native-app authority.
 - Preserve established native behavior while moving code, but keep editor document, command,

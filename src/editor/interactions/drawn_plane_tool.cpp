@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "tool_math_internal.h"
-
 #include <editor/interactions/drawn_plane_tool.h>
+
+#include "tool_math_internal.h"
 
 #include <algorithm>
 #include <span>

@@ -34,43 +34,6 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 
-QuaderApiVoidResult commitSceneTransformPreviewThroughApi(
-        QuaderEditorApi& editor,
-        SceneTransformPreviewTransaction& transaction) {
-    std::vector<DocumentTransformEdit> changedEdits;
-    changedEdits.reserve(transaction.edits().size());
-    for (const DocumentTransformEdit& edit : transaction.edits()) {
-        if (!documentCommandSameTransform(edit.before, edit.after)) {
-            changedEdits.push_back(edit);
-        }
-    }
-
-    const DocumentCommandResult reset = transaction.cancel();
-    if (!reset.ok) {
-        return {
-                .ok = false,
-                .changed = false,
-                .message = reset.message,
-                .mutationKind = QuaderMutationKind::None,
-        };
-    }
-    if (changedEdits.empty()) {
-        return {
-                .ok = true,
-                .changed = false,
-                .message = "Transform Selection",
-                .mutationKind = QuaderMutationKind::None,
-                .revisions = editor.revisions(),
-        };
-    }
-
-    QuaderSceneBatch batch = editor.scene().batch("Transform Selection");
-    for (const DocumentTransformEdit& edit : changedEdits) {
-        batch.setTransform(edit.entity, edit.after);
-    }
-    return batch.commit();
-}
-
 float distanceToSegmentSquared(ImVec2 point, ImVec2 a, ImVec2 b) {
     const ImVec2 ab{b.x - a.x, b.y - a.y};
     const ImVec2 ap{point.x - a.x, point.y - a.y};
@@ -94,26 +57,10 @@ float distanceSquared(ImVec2 a, ImVec2 b) {
     return dx * dx + dy * dy;
 }
 
-bool entitySelected(const SceneDocument& document, EntityId entity) {
-    const SelectionComponent* selection = document.selection(entity);
-    return selection != nullptr && selection->selected;
-}
-
 bool isComponentSelectionMode(ModelingSelectionMode mode) {
     return mode == ModelingSelectionMode::Vertex ||
             mode == ModelingSelectionMode::Edge ||
             mode == ModelingSelectionMode::Face;
-}
-
-bool hasSelectedAncestor(const SceneDocument& document, EntityId entity) {
-    EntityId parent = document.parent(entity);
-    while (parent != InvalidEntityId) {
-        if (entitySelected(document, parent)) {
-            return true;
-        }
-        parent = document.parent(parent);
-    }
-    return false;
 }
 
 Vec3 parentLocalPointForWorldPoint(const SceneDocument& document, EntityId entity, Vec3 worldPoint) {
@@ -130,10 +77,6 @@ Vec3 parentLocalVectorForWorldVector(const SceneDocument& document, EntityId ent
         return worldVector;
     }
     return transformVector(inverse(document.worldTransformMatrix(parent)), worldVector);
-}
-
-Vec3 documentLocalPivotForWorldPoint(const SceneDocument& document, EntityId entity, Vec3 worldPivot) {
-    return transformPoint(inverse(document.worldTransformMatrix(entity)), worldPivot);
 }
 
 Vec3 worldAxisForHandle(TransformAxisHandle axis) {
@@ -1144,24 +1087,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             lastMouse_ = {mouse.x, mouse.y};
             startMouse_ = lastMouse_;
             startWorldPivot_ = pivot;
-            startTransforms_.clear();
-            for (const EntityId entity : document.selectedEntities()) {
-                if (document.isEffectivelyLocked(entity)) {
-                    continue;
-                }
-                if (hasSelectedAncestor(document, entity)) {
-                    continue;
-                }
-                if (const TransformComponent* selectedTransform = document.transform(entity)) {
-                    startTransforms_.push_back(StartTransform{
-                            .entity = entity,
-                            .transform = *selectedTransform,
-                            .localPivot = documentLocalPivotForWorldPoint(document, entity, pivot),
-                            .worldTransform = document.worldTransformMatrix(entity),
-                    });
-                }
-            }
-            if (startTransforms_.empty()) {
+            const bool needsSceneTransformPreview = sceneOnlyDrag_ || !modelingDragPreviewDriven_;
+            if (!sceneTransformDrag_.begin(document, pivot, needsSceneTransformPreview, "Transform Selection")) {
                 if (modelingDragActive_) {
                     const ModelingCommandResult cancel = modeling.cancelTransformDrag();
                     if (!cancel.ok) {
@@ -1170,15 +1097,6 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
                 }
                 resetDragState();
                 return consumed;
-            }
-            const bool needsSceneTransformPreview = sceneOnlyDrag_ || !modelingDragPreviewDriven_;
-            if (needsSceneTransformPreview) {
-                std::vector<EntityId> previewEntities;
-                previewEntities.reserve(startTransforms_.size());
-                for (const StartTransform& start : startTransforms_) {
-                    previewEntities.push_back(start.entity);
-                }
-                sceneTransformPreview_.emplace(document, std::move(previewEntities), "Transform Selection");
             }
             consumed = true;
         }
@@ -1196,12 +1114,11 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             modelingDragActive_ = false;
             modelingDragPreviewDriven_ = false;
         }
-        if (wasDragging && !modelingPreviewHandled && sceneTransformPreview_) {
+        if (wasDragging && !modelingPreviewHandled && sceneTransformDrag_.previewActive()) {
             if (request.editor == nullptr) {
                 LOG_ERROR("Transform command record failed: editor API is unavailable.");
             } else {
-                const QuaderApiVoidResult recorded =
-                        commitSceneTransformPreviewThroughApi(*request.editor, *sceneTransformPreview_);
+                const QuaderApiVoidResult recorded = sceneTransformDrag_.commit(*request.editor);
                 if (!recorded.ok) {
                     LOG_ERROR("Transform command record failed: {}", recorded.message);
                 }
@@ -1216,19 +1133,19 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
     }
 
     const Vec2 currentMouse{mouse.x, mouse.y};
-    auto pinStartPivot = [&](TransformComponent& next, const StartTransform& start) {
+    auto pinStartPivot = [&](TransformComponent& next, const SceneTransformDragTarget& start) {
         pinDocumentLocalPivotToWorldPoint(document, start.entity, next, start.localPivot, startWorldPivot_);
     };
-    auto previewDocumentTransform = [&](const StartTransform& start, const TransformComponent& next) {
-        if (!sceneTransformPreview_) {
+    auto previewDocumentTransform = [&](const SceneTransformDragTarget& start, const TransformComponent& next) {
+        if (!sceneTransformDrag_.previewActive()) {
             return;
         }
-        const DocumentCommandResult preview = sceneTransformPreview_->previewTransform(start.entity, next);
+        const DocumentCommandResult preview = sceneTransformDrag_.previewTransform(start.entity, next);
         if (!preview.ok) {
             LOG_ERROR("Transform preview update failed: {}", preview.message);
         }
     };
-    auto rotationEulerReference = [&](const StartTransform& start) {
+    auto rotationEulerReference = [&](const SceneTransformDragTarget& start) {
         if (const TransformComponent* current = document.transform(start.entity)) {
             return positiveEulerRadians(current->rotationEuler);
         }
@@ -1268,7 +1185,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
         const float angleRadians = static_cast<float>(preview.rotateAngleDegrees * kPi / 180.0);
         Vec3 previewScaleFactor = preview.scale;
 
-        for (const StartTransform& start : startTransforms_) {
+        for (const SceneTransformDragTarget& start : sceneTransformDrag_.targets()) {
             TransformComponent next = start.transform;
             if (tool == ViewportToolId::Move) {
                 next.position = start.transform.position + parentLocalVectorForWorldVector(document, start.entity, previewMoveDelta);
@@ -1359,7 +1276,7 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
             }
         };
 
-        for (const StartTransform& start : startTransforms_) {
+        for (const SceneTransformDragTarget& start : sceneTransformDrag_.targets()) {
             TransformComponent next = start.transform;
             if (tool == ViewportToolId::Move) {
                 Vec3 worldMoveDelta = {};
@@ -1422,6 +1339,8 @@ bool TransformGizmoController::draw(const TransformGizmoFrameRequest& request) {
 }
 
 bool TransformGizmoController::cancelActiveDrag(SceneDocument& document, ModelingSessionService& modeling) {
+    (void)document;
+
     if (!dragging_) {
         return false;
     }
@@ -1435,8 +1354,8 @@ bool TransformGizmoController::cancelActiveDrag(SceneDocument& document, Modelin
     }
     if (!previewDrivenCancel)
     {
-        if (sceneTransformPreview_) {
-            const DocumentCommandResult cancel = sceneTransformPreview_->cancel();
+        if (sceneTransformDrag_.previewActive()) {
+            const DocumentCommandResult cancel = sceneTransformDrag_.cancel();
             if (!cancel.ok) {
                 LOG_ERROR("Transform preview cancel failed: {}", cancel.message);
             }
@@ -1486,9 +1405,8 @@ void TransformGizmoController::resetDragState() {
     modelingDragPreviewDriven_ = false;
     sceneOnlyDrag_ = false;
     sceneOnlyRotateState_.reset();
-    sceneTransformPreview_.reset();
+    sceneTransformDrag_.reset();
     activeAxis_ = TransformAxisHandle::None;
-    startTransforms_.clear();
 }
 
 } // namespace quader

@@ -32,7 +32,6 @@ public:
     [[nodiscard]] ViewportShortcutControllerResult handleOperationPreviewShortcut(
             const ViewportInputResult& inputResult,
             const ModelingToolSettingsTarget& toolSettingsTarget,
-            ViewportInputRouter& inputRouter,
             QuaderEditorApi& editor,
             ModelingSessionService& modeling) const;
 

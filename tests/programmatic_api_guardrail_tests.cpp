@@ -69,6 +69,24 @@ std::vector<std::filesystem::path> publicDocAndExampleFilesUnder(const std::file
     return files;
 }
 
+bool isInternalApiHeader(const std::filesystem::path& path) {
+    const std::string relative = std::filesystem::relative(path, sourceRoot()).generic_string();
+    return relative == "src/api/QuaderApiMutationRunner.h" ||
+            relative == "src/api/QuaderApiTypeConversions.h" ||
+            relative == "src/api/QuaderPolygonDocumentInternalAccess.h" ||
+            relative == "src/editor/viewport/QuaderViewportApiRuntimeAccess.h";
+}
+
+std::vector<std::filesystem::path> publicApiHeaderFiles() {
+    std::vector<std::filesystem::path> headers;
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/api", ".h")) {
+        if (!isInternalApiHeader(file)) {
+            headers.push_back(file);
+        }
+    }
+    return headers;
+}
+
 std::string normalizedRelative(const std::filesystem::path& path) {
     return std::filesystem::relative(path, sourceRoot()).generic_string();
 }
@@ -98,16 +116,6 @@ std::vector<std::string> linesContaining(const std::string& source, const std::v
     return matches;
 }
 
-bool allowedSceneDocumentMutation(std::string_view relative, std::string_view line) {
-    if (relative != "src/editor/tools/base/TwoStageBoxTool.cpp") {
-        return false;
-    }
-
-    return line.find("document.setMaterial(") != std::string_view::npos ||
-            line.find("document.clearSelection(") != std::string_view::npos ||
-            line.find("document.setSelected(") != std::string_view::npos;
-}
-
 bool allowedRawModelingMutation(std::string_view relative, std::string_view line) {
     if (relative == "src/ui/TransformGizmoController.cpp") {
         return line.find("modeling.beginTransformDrag(") != std::string_view::npos ||
@@ -121,7 +129,7 @@ bool allowedRawModelingMutation(std::string_view relative, std::string_view line
 } // namespace
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals) {
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/api", ".h")) {
+    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
 
@@ -140,14 +148,45 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals)
     }
 }
 
+TEST(ProgrammaticApiGuardrailTests, PublicApiValueContractHeadersAvoidInternalOwnerHeaders) {
+    for (const std::string_view relative : {
+                 std::string_view{"src/api/QuaderApiTypes.h"},
+                 std::string_view{"src/api/QuaderApiSnapshot.h"},
+         }) {
+        const std::string source = readFile(sourceRoot() / std::string(relative));
+
+        EXPECT_FALSE(containsAny(source, {
+                             "\"editor/",
+                             "\"scene/",
+                             "\"assets/",
+                             "\"render/",
+                             "\"viewport/",
+                             "\"mesh/",
+                             "<mesh/",
+                             "quader_poly::",
+                             "quader_editor_core::",
+                             "quader_io::",
+                             "quader_host_contract::",
+                             "TransformComponent",
+                             "ModelingBounds",
+                             "ModelingSelectionSummary",
+                             "ModelingToolStatus",
+                             "ViewportOverlayFrame",
+                             "MeshAssetRevision",
+                     }))
+                << relative;
+    }
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOwners) {
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/api", ".h")) {
+    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
 
         for (std::string_view forbidden : {
                      "SceneDocument&",
                      "AssetRegistry&",
+                     "ViewportWorkspaceService",
                      "MeshAsset*",
                      "MaterialDocument*",
                      "TextureAsset*",
@@ -163,11 +202,17 @@ TEST(ProgrammaticApiGuardrailTests, ModelingSessionServiceDoesNotExposeSelection
     const std::string header = readFile(sourceRoot() / "src/editor/modeling/services/ModelingSessionService.h");
     EXPECT_EQ(header.find("syncObjectSelectionFromScene("), std::string::npos);
     EXPECT_EQ(header.find("syncSceneSelectionFromModeling("), std::string::npos);
+    EXPECT_EQ(header.find("projectSceneSelectionFromModeling("), std::string::npos);
+    EXPECT_EQ(header.find("friend class EditorSelectionService;"), std::string::npos);
+
+    const std::string source = readFile(sourceRoot() / "src/editor/modeling/services/ModelingSessionService.cpp");
+    EXPECT_EQ(source.find("scene_.setSelected("), std::string::npos);
+    EXPECT_NE(source.find("SelectionProjectionService"), std::string::npos);
+
     const std::string editorSelectionHeader =
             readFile(sourceRoot() / "src" / "editor" / "selection" / "EditorSelectionService.h");
     EXPECT_EQ(editorSelectionHeader.find("syncObjectsFromScene("), std::string::npos);
     EXPECT_EQ(editorSelectionHeader.find("syncSceneFromModeling("), std::string::npos);
-    EXPECT_NE(header.find("friend class EditorSelectionService;"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotBypassCommandExecutionBoundary) {
@@ -308,12 +353,17 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddSceneDocumentMutatio
             "context.document.setModelingObject(",
     };
 
-    for (const std::filesystem::path& root : {sourceRoot() / "src/ui", sourceRoot() / "src/app", sourceRoot() / "src/viewport"}) {
+    for (const std::filesystem::path& root : {
+                 sourceRoot() / "src/ui",
+                 sourceRoot() / "src/app",
+                 sourceRoot() / "src/viewport",
+                 sourceRoot() / "src/editor/tools",
+         }) {
         for (const std::filesystem::path& file : filesWithExtension(root, ".cpp")) {
             const std::string source = readFile(file);
             const std::string relative = normalizedRelative(file);
             for (const std::string& line : linesContaining(source, directSceneMutations)) {
-                EXPECT_TRUE(allowedSceneDocumentMutation(relative, line)) << relative << ": " << line;
+                ADD_FAILURE() << relative << ": " << line;
             }
         }
     }
@@ -378,6 +428,27 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
             for (const std::string& line : linesContaining(source, rawModelingMutations)) {
                 EXPECT_TRUE(allowedRawModelingMutation(relative, line)) << relative << ": " << line;
             }
+        }
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, ViewportRoutesDoNotExecuteFixedRawModelingCommandStrings) {
+    const std::vector<std::string_view> forbiddenRawCommandRoutes = {
+            "commands().execute(\"modeling.",
+            "std::string command = \"modeling.\"",
+            "command.append(toolId)",
+            "contextMenuCommandId(std::string_view",
+            "const std::string commandId = contextMenuCommandId(action.actionId)",
+    };
+
+    for (std::string_view relative : {
+                 std::string_view{"src/ui/ViewportShortcutController.cpp"},
+                 std::string_view{"src/ui/ViewportContextMenuPresenter.cpp"},
+                 std::string_view{"src/ui/ViewportPanel.cpp"},
+         }) {
+        const std::string source = readFile(sourceRoot() / std::string(relative));
+        for (const std::string& line : linesContaining(source, forbiddenRawCommandRoutes)) {
+            EXPECT_TRUE(false) << relative << ": " << line;
         }
     }
 }
@@ -524,14 +595,11 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersExposeAppNamedTypes) {
             "quader_host_contract::",
     };
 
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/api", ".h")) {
+    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
         for (const std::string& line : linesContaining(source, absorbedNamespaces)) {
-            const bool allowedAlias =
-                    relative == "src/api/QuaderApiTypes.h" &&
-                    line.find("using QuaderPolygonDocument = quader_poly::Document;") != std::string::npos;
-            EXPECT_TRUE(allowedAlias) << relative << ": " << line;
+            EXPECT_TRUE(false) << relative << ": " << line;
         }
     }
 }

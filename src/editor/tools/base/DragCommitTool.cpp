@@ -27,10 +27,12 @@ ViewportToolResult DragCommitTool::handleEvent(
             event.tool != viewportTool() ||
             modelingTool() != ModelingViewportTool::InsertEdgeLoop ||
             context.modalState == nullptr ||
-            !context.makeToolEventAt) {
+            context.point == nullptr ||
+            !context.point->makeEventAt) {
         return ModalViewportTool::handleEvent(context, event);
     }
 
+    ViewportPointToolContext& pointContext = *context.point;
     const ViewportPointerToolEvent& pointer = event.pointer;
     const bool dragging =
             context.modalState->insertEdgeLoopDragActive ||
@@ -44,18 +46,18 @@ ViewportToolResult DragCommitTool::handleEvent(
             (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
         handleResult(context,
                 "Insert edge loop hover",
-                context.modeling.updateInsertEdgeLoopHover(context.makeToolEventAt(pointer.mouseLocal, false)));
+                context.modeling.updateInsertEdgeLoopHover(pointContext.makeEventAt(pointer.mouseLocal, false)));
     }
 
     if (pointer.canInteract && pointer.leftClicked) {
         const ModelingCommandResult command =
-                context.modeling.beginInsertEdgeLoopDrag(context.makeToolEventAt(pointer.mouseLocal, true));
+                context.modeling.beginInsertEdgeLoopDrag(pointContext.makeEventAt(pointer.mouseLocal, true));
         handleResult(context, "Insert edge loop drag begin", command);
         context.modalState->insertEdgeLoopDragActive = command.ok && context.modeling.toolStatus().insertEdgeLoopDragging;
     } else if (pointer.canInteract && pointer.leftDown && dragging) {
         handleResult(context,
                 "Insert edge loop drag update",
-                context.modeling.updateInsertEdgeLoopDrag(context.makeToolEventAt(pointer.mouseLocal, true)));
+                context.modeling.updateInsertEdgeLoopDrag(pointContext.makeEventAt(pointer.mouseLocal, true)));
     }
 
     if (pointer.leftReleased && dragging) {

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/ModelingSessionServices.h"
 
+#include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
 #include "editor/projection/PickingCacheProjection.h"
 #include "scene/SceneDocument.h"
@@ -575,97 +576,30 @@ ModelingCommandExecutor::SyncPlan ModelingCommandExecutor::operationSyncPlan(
 std::optional<RuntimeOperationExecutor::OperationCommand> RuntimeOperationExecutor::operationForInstantCommand(
         ModelingInstantOperationId operation,
         const ModelingInteractionSettings& interactionSettings) const {
+    const ModelingInstantOperationCatalogEntry* entry = findModelingInstantOperationCatalogEntry(operation);
+    if (entry == nullptr || !entry->runtimeOperation.has_value()) {
+        return std::nullopt;
+    }
+
     OperationCommand command;
+    command.operation = *entry->runtimeOperation;
     command.settings = quader_editor_core::SelectionOperationSettings{};
 
-    switch (operation) {
-    case ModelingInstantOperationId::DuplicateMeshes:
-        command.operation = quader_editor_core::EditorOperationId::duplicate_meshes;
+    switch (entry->settingsKind) {
+    case RuntimeOperationSettingsKind::Selection:
+        break;
+    case RuntimeOperationSettingsKind::DuplicateMeshes:
         command.settings = quader_editor_core::DuplicateMeshesOperationSettings{};
         break;
-    case ModelingInstantOperationId::CombineMeshes:
-        command.operation = quader_editor_core::EditorOperationId::combine_meshes;
-        break;
-    case ModelingInstantOperationId::ExtractFaces:
-        command.operation = quader_editor_core::EditorOperationId::extract_faces;
-        break;
-    case ModelingInstantOperationId::DetachFaces:
-        command.operation = quader_editor_core::EditorOperationId::detach_faces;
-        break;
-    case ModelingInstantOperationId::Bridge:
-        command.operation = quader_editor_core::EditorOperationId::bridge;
+    case RuntimeOperationSettingsKind::Bridge:
         command.settings = quader_editor_core::BridgeOperationSettings{.steps = interactionSettings.bridgeSteps};
         break;
-    case ModelingInstantOperationId::SnapVerticesToActive:
-        command.operation = quader_editor_core::EditorOperationId::snap_vertices_to_active;
-        break;
-    case ModelingInstantOperationId::ConnectVertices:
-        command.operation = quader_editor_core::EditorOperationId::connect_vertices;
-        break;
-    case ModelingInstantOperationId::DissolveVertices:
-        command.operation = quader_editor_core::EditorOperationId::dissolve_vertices;
-        break;
-    case ModelingInstantOperationId::BevelVertices:
-        command.operation = quader_editor_core::EditorOperationId::bevel_vertices;
+    case RuntimeOperationSettingsKind::BevelVertices:
         command.settings = quader_editor_core::BevelVerticesOperationSettings{};
         break;
-    case ModelingInstantOperationId::MergeVerticesToActive:
-        command.operation = quader_editor_core::EditorOperationId::merge_vertices_to_active;
-        break;
-    case ModelingInstantOperationId::MergeVerticesToCenter:
-        command.operation = quader_editor_core::EditorOperationId::merge_vertices_to_center;
-        break;
-    case ModelingInstantOperationId::SnapEdgesToActive:
-        command.operation = quader_editor_core::EditorOperationId::snap_edges_to_active;
-        break;
-    case ModelingInstantOperationId::ConnectEdges:
-        command.operation = quader_editor_core::EditorOperationId::connect_edges;
-        break;
-    case ModelingInstantOperationId::SplitEdges:
-        command.operation = quader_editor_core::EditorOperationId::split_edges;
-        break;
-    case ModelingInstantOperationId::DissolveEdges:
-        command.operation = quader_editor_core::EditorOperationId::dissolve_edges;
-        break;
-    case ModelingInstantOperationId::MergeEdges:
-        command.operation = quader_editor_core::EditorOperationId::merge_edges;
-        break;
-    case ModelingInstantOperationId::CollapseEdges:
-        command.operation = quader_editor_core::EditorOperationId::collapse_edges;
-        break;
-    case ModelingInstantOperationId::FillHole:
-        command.operation = quader_editor_core::EditorOperationId::fill_hole;
-        break;
-    case ModelingInstantOperationId::CombineFaces:
-        command.operation = quader_editor_core::EditorOperationId::combine_faces;
-        break;
-    case ModelingInstantOperationId::CollapseFaces:
-        command.operation = quader_editor_core::EditorOperationId::collapse_faces;
-        break;
-    case ModelingInstantOperationId::RadialAlign:
-        command.operation = quader_editor_core::EditorOperationId::radial_align;
-        break;
-    case ModelingInstantOperationId::FlipFaceNormals:
-        command.operation = quader_editor_core::EditorOperationId::flip_face_normals;
-        break;
-    case ModelingInstantOperationId::RecalculateFaceNormals:
-        command.operation = quader_editor_core::EditorOperationId::recalculate_face_normals;
+    case RuntimeOperationSettingsKind::RecalculateFaceNormals:
         command.settings = quader_editor_core::RecalculateFaceNormalsOperationSettings{};
         break;
-    case ModelingInstantOperationId::ShadeFacesSmooth:
-        command.operation = quader_editor_core::EditorOperationId::shade_faces_smooth;
-        break;
-    case ModelingInstantOperationId::ShadeFacesFlat:
-        command.operation = quader_editor_core::EditorOperationId::shade_faces_flat;
-        break;
-    case ModelingInstantOperationId::HardenEdgeNormals:
-        command.operation = quader_editor_core::EditorOperationId::harden_edge_normals;
-        break;
-    case ModelingInstantOperationId::SoftenEdgeNormals:
-        command.operation = quader_editor_core::EditorOperationId::soften_edge_normals;
-        break;
-    case ModelingInstantOperationId::DeleteSelection:
-        return std::nullopt;
     }
 
     return command;

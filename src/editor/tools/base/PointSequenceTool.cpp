@@ -35,10 +35,11 @@ ViewportToolResult PointSequenceTool::handleEvent(
         return ModalViewportTool::handleEvent(context, event);
     }
 
+    ViewportPointToolContext* pointContext = context.point;
     const ViewportPointerToolEvent& pointer = event.pointer;
     switch (modelingTool()) {
     case ModelingViewportTool::Knife:
-        if (!context.makeToolEventAt) {
+        if (pointContext == nullptr || !pointContext->makeEventAt) {
             break;
         }
         if (pointer.canInteract &&
@@ -46,12 +47,12 @@ ViewportToolResult PointSequenceTool::handleEvent(
                 (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
             handleResult(context,
                     "Knife hover",
-                    context.modeling.updateKnifeHover(context.makeToolEventAt(pointer.mouseLocal, false)));
+                    context.modeling.updateKnifeHover(pointContext->makeEventAt(pointer.mouseLocal, false)));
         }
         if (pointer.canInteract && pointer.leftClicked) {
             handleResult(context,
                     "Knife point",
-                    context.modeling.acceptKnifePoint(context.makeToolEventAt(pointer.mouseLocal, false)));
+                    context.modeling.acceptKnifePoint(pointContext->makeEventAt(pointer.mouseLocal, false)));
         }
         if (pointer.finalizePressed) {
             const ModelingCommandResult command = context.modeling.commitKnifeTool();
@@ -71,11 +72,12 @@ ViewportToolResult PointSequenceTool::handleEvent(
     case ModelingViewportTool::Poly:
         if (pointer.canInteract &&
                 !pointer.suppressHoverWork &&
-                context.makeToolEventAt &&
+                pointContext != nullptr &&
+                pointContext->makeEventAt &&
                 (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
             handleResult(context,
                     "Poly hover",
-                    context.modeling.updatePolyHover(context.makeToolEventAt(pointer.mouseLocal, false)));
+                    context.modeling.updatePolyHover(pointContext->makeEventAt(pointer.mouseLocal, false)));
         }
         if (pointer.canInteract && pointer.leftClicked) {
             handleResult(context, "Poly point", context.modeling.acceptPolyPoint());

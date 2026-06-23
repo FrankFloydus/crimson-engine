@@ -40,17 +40,13 @@ std::unordered_set<std::string> availableCommandIds(const quader::QuaderEditorAp
     return result;
 }
 
-std::string commandIdForContextAction(const quader::ModelingActionItem& action) {
-    if (action.actionId == "delete_selection") {
-        return std::string(quader::QuaderCommand::DeleteSelection.string());
-    }
-    if (action.actionId == "duplicate_meshes") {
-        return std::string(quader::QuaderCommand::DuplicateSelection.string());
-    }
+std::string commandIdForContextAction(
+        const quader::QuaderEditorApi& editor,
+        const quader::ModelingActionItem& action) {
     if (action.kind == quader::ModelingActionKind::Tool) {
-        return "tools.activate." + action.toolId;
+        return editor.commands().commandIdForToolActivation(action.toolId);
     }
-    return "modeling.action." + action.actionId;
+    return editor.commands().commandIdForModelingAction(action.actionId);
 }
 
 /// Owns an isolated editor session for command routing tests that need fresh
@@ -114,6 +110,14 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
     EXPECT_EQ(editor.commands().shortcutFor("history.undo"), "Ctrl+Z");
     EXPECT_EQ(editor.commands().shortcutFor("modeling.action.delete_selection"), "");
+    EXPECT_EQ(
+            editor.commands().commandIdForModelingAction("delete_selection"),
+            std::string(quader::QuaderCommand::DeleteSelection.string()));
+    EXPECT_EQ(
+            editor.commands().commandIdForModelingAction("invert_mesh"),
+            std::string(quader::QuaderCommand::ModelingInvertMesh.string()));
+    EXPECT_EQ(editor.commands().commandIdForModelingAction("bridge_edges"), "modeling.bridge_edges");
+    EXPECT_EQ(editor.commands().commandIdForToolActivation("knife"), "tools.activate.knife");
     EXPECT_FALSE(editor.commands().execute("__missing_command__").ok());
     EXPECT_FALSE(editor.commands().execute("__missing_command__"));
     EXPECT_EQ(editor.commands().execute("__missing_command__").errorMessage(), "Unknown command id.");
@@ -134,6 +138,92 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
     EXPECT_TRUE(undo.ok()) << undo.errorMessage();
     EXPECT_TRUE(undo.changed());
+}
+
+TEST(EditorApiTests, ProjectDirtyStateAggregatesProjectSceneAssetAndModelingContentRevisions) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    EXPECT_FALSE(editor.project().dirty());
+
+    session.document().rename("Dirty Project");
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    quader::QuaderCreateEntityArgs entityArgs;
+    entityArgs.name = "Dirty Entity";
+    const quader::QuaderApiResult<quader::QuaderEntityRef> entity =
+            editor.scene().createEntity(entityArgs);
+    ASSERT_TRUE(entity.ok()) << entity.errorMessage();
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    quader::TransformComponent moved;
+    moved.position = {1.0f, 2.0f, 3.0f};
+    const quader::QuaderApiVoidResult transformed =
+            editor.scene().setTransform(entity.value().id, moved);
+    ASSERT_TRUE(transformed.ok()) << transformed.errorMessage();
+    EXPECT_TRUE(transformed.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const quader::QuaderApiVoidResult hidden = editor.scene().setVisible(entity.value().id, false);
+    ASSERT_TRUE(hidden.ok()) << hidden.errorMessage();
+    EXPECT_TRUE(hidden.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const quader::QuaderApiVoidResult locked = editor.scene().setLocked(entity.value().id, true);
+    ASSERT_TRUE(locked.ok()) << locked.errorMessage();
+    EXPECT_TRUE(locked.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    quader::QuaderMaterialArgs materialArgs;
+    materialArgs.name = "Dirty Material";
+    materialArgs.baseColor = {0.8f, 0.7f, 0.6f};
+    const quader::QuaderApiResult<quader::QuaderAssetRef> material =
+            editor.assets().addMaterial(materialArgs);
+    ASSERT_TRUE(material.ok()) << material.errorMessage();
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const quader::QuaderApiVoidResult assigned =
+            editor.assets().assignMaterialToEntity(entity.value().id, material.value().id);
+    ASSERT_TRUE(assigned.ok()) << assigned.errorMessage();
+    EXPECT_TRUE(assigned.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const quader::QuaderApiVoidResult recolored =
+            editor.assets().setMaterialBaseColor(material.value().id, {0.1f, 0.2f, 0.3f});
+    ASSERT_TRUE(recolored.ok()) << recolored.errorMessage();
+    EXPECT_TRUE(recolored.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
+            editor.modeling().createBox(
+                    quader::ModelingBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Dirty Modeling Box");
+    ASSERT_TRUE(box.ok()) << box.errorMessage();
+    ASSERT_TRUE(editor.selection().selectObject(box.value()).ok());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const quader::QuaderApiVoidResult movedSelection =
+            editor.modeling().moveSelection({0.25f, 0.0f, 0.0f});
+    ASSERT_TRUE(movedSelection.ok()) << movedSelection.errorMessage();
+    EXPECT_TRUE(movedSelection.changed());
+    EXPECT_TRUE(editor.project().dirty());
 }
 
 TEST(EditorApiTests, LegacyModelingActionCommandIdsRouteThroughCommandRegistry) {
@@ -186,6 +276,17 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
                  quader::QuaderCommand::ApplyMaterial.string(),
                  quader::QuaderCommand::ViewportFrameSelection.string(),
                  quader::QuaderCommand::ViewportFocusOrigin.string(),
+                 quader::QuaderCommand::ModelingDissolveEdges.string(),
+                 quader::QuaderCommand::ModelingDissolveVertices.string(),
+                 quader::QuaderCommand::ModelingCombineMeshes.string(),
+                 quader::QuaderCommand::ModelingMergeVerticesToActive.string(),
+                 quader::QuaderCommand::ModelingMergeVerticesToCenter.string(),
+                 quader::QuaderCommand::ModelingMirrorSelectionX.string(),
+                 quader::QuaderCommand::ModelingMirrorSelectionY.string(),
+                 quader::QuaderCommand::ModelingMirrorSelectionZ.string(),
+                 quader::QuaderCommand::ModelingInvertMesh.string(),
+                 quader::QuaderCommand::ModelingFlipHorizontal.string(),
+                 quader::QuaderCommand::ModelingFlipVertical.string(),
          }) {
         EXPECT_TRUE(ids.contains(std::string(neutral))) << neutral;
     }
@@ -240,7 +341,7 @@ TEST(EditorApiTests, EnabledContextMenuOperationsExecuteThroughCommandRegistry) 
             SCOPED_TRACE(action.actionId);
             CommandTestHarness executeHarness;
             setupSelectionForMode(executeHarness.editor, mode);
-            const std::string commandId = commandIdForContextAction(action);
+            const std::string commandId = commandIdForContextAction(executeHarness.editor, action);
             const quader::QuaderApiVoidResult result = executeHarness.editor.commands().execute(commandId);
             ++routedActionCount;
             EXPECT_TRUE(result.ok() || knownNonSuccessCommandMessage(result.errorMessage()))
@@ -400,7 +501,7 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
 
     EXPECT_TRUE(editor.viewports().setLayout(quader::ViewportLayoutId::FourQuad).ok());
     EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::FourQuad);
-    EXPECT_EQ(editor.viewports().workspace().activePanePlacements(false).size(), 4u);
+    EXPECT_EQ(editor.viewports().activePaneCount(), 4u);
 
     EXPECT_TRUE(editor.viewports().setGridPreset(4).ok());
     EXPECT_EQ(editor.viewports().gridPreset(), 4);

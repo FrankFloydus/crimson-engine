@@ -9,6 +9,7 @@
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiSnapshot.h"
 #include "api/QuaderApiTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 
 #include <functional>
 #include <string>

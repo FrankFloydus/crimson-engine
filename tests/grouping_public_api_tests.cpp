@@ -17,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -198,7 +199,7 @@ TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestor
     const EntityId group = groupSelection(h.editor, "Pair", groupTransform);
 
     ASSERT_TRUE(containsEntity(h.editor, group));
-    EXPECT_EQ(entity(h.editor, group)->kind, EntityKind::Empty);
+    EXPECT_EQ(entity(h.editor, group)->kind, QuaderEntityKind::Empty);
     EXPECT_EQ(entity(h.editor, left.entity)->parent, group);
     EXPECT_EQ(entity(h.editor, right.entity)->parent, group);
     EXPECT_TRUE(entity(h.editor, group)->selected);
@@ -261,7 +262,7 @@ TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacem
     const std::optional<QuaderEntitySnapshot> restored = activeSelection(h.editor);
     ASSERT_TRUE(restored.has_value());
     EXPECT_EQ(restored->name, "Ungroup Me");
-    EXPECT_EQ(restored->kind, EntityKind::Empty);
+    EXPECT_EQ(restored->kind, QuaderEntityKind::Empty);
     EXPECT_EQ(entity(h.editor, first.entity)->parent, restored->id);
     EXPECT_EQ(entity(h.editor, second.entity)->parent, restored->id);
     expectVecNear(worldPosition(h.editor, first.entity), {-2.0f, 0.0f, 0.0f});
@@ -681,4 +682,100 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
     EXPECT_FALSE(entity(h.editor, group)->visible);
     EXPECT_TRUE(entity(h.editor, group)->locked);
     expectVecNear(entity(h.editor, group)->transform.position, {2.0f, 3.0f, 0.0f});
+}
+
+TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAndUndoRedoAsOneOperation) {
+    PublicApiGroupingHarness h;
+
+    QuaderCreateEntityArgs parentArgs;
+    parentArgs.name = "Duplicate Parent";
+    parentArgs.kind = QuaderEntityKind::Empty;
+    const QuaderApiResult<QuaderEntityRef> parent = h.editor.scene().createEntity(parentArgs);
+    ASSERT_TRUE(parent.ok()) << parent.errorMessage();
+
+    QuaderTransform groupTransform;
+    groupTransform.position = {1.0f, 2.0f, 3.0f};
+    groupTransform.rotationEuler = {0.1f, 0.2f, 0.3f};
+    QuaderCreateEntityArgs groupArgs;
+    groupArgs.name = "Duplicate Source";
+    groupArgs.kind = QuaderEntityKind::Empty;
+    groupArgs.parent = parent.value().id;
+    groupArgs.transform = groupTransform;
+    const QuaderApiResult<QuaderEntityRef> group = h.editor.scene().createEntity(groupArgs);
+    ASSERT_TRUE(group.ok()) << group.errorMessage();
+
+    QuaderTransform childTransform;
+    childTransform.position = {4.0f, 5.0f, 6.0f};
+    childTransform.rotationEuler = {0.4f, 0.5f, 0.6f};
+    QuaderCreateEntityArgs childArgs;
+    childArgs.name = "Duplicate Child";
+    childArgs.kind = QuaderEntityKind::Mesh;
+    childArgs.parent = group.value().id;
+    childArgs.transform = childTransform;
+    const QuaderApiResult<QuaderEntityRef> child = h.editor.scene().createEntity(childArgs);
+    ASSERT_TRUE(child.ok()) << child.errorMessage();
+
+    MeshAsset mesh;
+    mesh.name = "Duplicate Child Mesh";
+    const QuaderApiResult<QuaderAssetRef> meshAsset = h.editor.assets().addStandaloneMesh(std::move(mesh));
+    ASSERT_TRUE(meshAsset.ok()) << meshAsset.errorMessage();
+    h.session.scene().setMesh(child.value().id, MeshComponent{.mesh = meshAsset.value().id});
+
+    const QuaderApiResult<QuaderAssetRef> material =
+            h.editor.assets().addMaterial(QuaderMaterialArgs{.name = "Duplicate Material"});
+    ASSERT_TRUE(material.ok()) << material.errorMessage();
+    ASSERT_TRUE(h.editor.assets().assignMaterialToEntity(child.value().id, material.value().id).ok());
+
+    ASSERT_TRUE(h.editor.scene().setVisible(group.value().id, false).ok());
+    ASSERT_TRUE(h.editor.scene().setLocked(group.value().id, true).ok());
+    ASSERT_TRUE(h.editor.scene().setVisible(child.value().id, false).ok());
+    ASSERT_TRUE(h.editor.scene().setLocked(child.value().id, true).ok());
+
+    selectObjects(h.editor, {group.value().id, child.value().id}, child.value().id);
+    const QuaderApiResult<QuaderDuplicateHierarchyResult> duplicated =
+            h.editor.scene().duplicateSelectedHierarchy();
+    ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
+    ASSERT_TRUE(duplicated.changed());
+    ASSERT_EQ(duplicated.value.rootEntities.size(), 1u);
+    const EntityId duplicateGroup = duplicated.value.rootEntities.front().id;
+
+    const std::optional<QuaderEntitySnapshot> duplicateGroupSnapshot = entity(h.editor, duplicateGroup);
+    ASSERT_TRUE(duplicateGroupSnapshot.has_value());
+    EXPECT_EQ(duplicateGroupSnapshot->name, "Duplicate Source_1");
+    EXPECT_EQ(duplicateGroupSnapshot->parent, parent.value().id);
+    EXPECT_FALSE(duplicateGroupSnapshot->visible);
+    EXPECT_TRUE(duplicateGroupSnapshot->locked);
+    expectVecNear(duplicateGroupSnapshot->transform.position, groupTransform.position);
+    expectVecNear(duplicateGroupSnapshot->transform.rotationEuler, groupTransform.rotationEuler);
+
+    const std::vector<QuaderEntitySnapshot> duplicateChildren = childrenOf(h.editor, duplicateGroup);
+    ASSERT_EQ(duplicateChildren.size(), 1u);
+    const QuaderEntitySnapshot& duplicateChild = duplicateChildren.front();
+    EXPECT_EQ(duplicateChild.name, "Duplicate Child_1");
+    EXPECT_EQ(duplicateChild.parent, duplicateGroup);
+    EXPECT_FALSE(duplicateChild.visible);
+    EXPECT_TRUE(duplicateChild.locked);
+    EXPECT_TRUE(duplicateChild.hasMesh);
+    EXPECT_EQ(duplicateChild.mesh, meshAsset.value().id);
+    EXPECT_TRUE(duplicateChild.hasMaterial);
+    EXPECT_EQ(duplicateChild.material, material.value().id);
+    expectVecNear(duplicateChild.transform.position, childTransform.position);
+    expectVecNear(duplicateChild.transform.rotationEuler, childTransform.rotationEuler);
+    EXPECT_EQ(selectedEntities(h.editor), (std::vector<EntityId>{duplicateGroup}));
+    ASSERT_TRUE(activeSelection(h.editor).has_value());
+    EXPECT_EQ(activeSelection(h.editor)->id, duplicateGroup);
+    EXPECT_EQ(h.editor.query().history().undoLabel, "Duplicate Hierarchy");
+
+    ASSERT_TRUE(h.editor.history().undo().ok());
+    EXPECT_FALSE(entity(h.editor, duplicateGroup).has_value());
+    EXPECT_FALSE(entity(h.editor, duplicateChild.id).has_value());
+    EXPECT_EQ(selectedEntities(h.editor), (std::vector<EntityId>{group.value().id, child.value().id}));
+    ASSERT_TRUE(activeSelection(h.editor).has_value());
+    EXPECT_EQ(activeSelection(h.editor)->id, child.value().id);
+    EXPECT_EQ(h.editor.query().history().redoLabel, "Duplicate Hierarchy");
+
+    ASSERT_TRUE(h.editor.history().redo().ok());
+    ASSERT_TRUE(entity(h.editor, duplicateGroup).has_value());
+    EXPECT_EQ(childrenOf(h.editor, duplicateGroup).size(), 1u);
+    EXPECT_EQ(selectedEntities(h.editor), (std::vector<EntityId>{duplicateGroup}));
 }

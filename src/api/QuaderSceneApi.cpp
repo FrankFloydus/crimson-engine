@@ -212,8 +212,8 @@ QuaderApiVoidResult QuaderSceneApi::select(EntityId entity) {
 }
 
 QuaderApiResult<QuaderEntityRef> QuaderSceneApi::duplicate(EntityId entity) {
-    EntityId duplicateEntity = InvalidEntityId;
-    DocumentCommandResult command = session_.documentCommands().duplicateEntity(entity, &duplicateEntity);
+    DocumentDuplicateEntityResult command = session_.documentCommands().duplicateEntity(entity);
+    const EntityId duplicateEntity = command.duplicateEntity;
 
     QuaderApiResult<QuaderEntityRef> result;
     const QuaderApiVoidResult status = mutations_.runDocumentResult(std::move(command), "Duplicate Entity");
@@ -231,12 +231,34 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::duplicate(EntityId entity) {
     return result;
 }
 
+QuaderApiResult<QuaderDuplicateHierarchyResult> QuaderSceneApi::duplicateSelectedHierarchy() {
+    DocumentDuplicateHierarchyResult command = session_.documentCommands().duplicateSelectedHierarchy();
+    const std::vector<EntityId> duplicateRoots = command.duplicateRoots;
+
+    QuaderApiResult<QuaderDuplicateHierarchyResult> result;
+    const QuaderApiVoidResult status = mutations_.runDocumentResult(std::move(command), "Duplicate Hierarchy");
+    result.ok = status.ok;
+    result.changed = status.changed;
+    result.message = status.message;
+    result.mutationKind = status.mutationKind;
+    result.revisions = status.revisions;
+    if (result.ok && result.changed) {
+        result.value.rootEntities.reserve(duplicateRoots.size());
+        for (const EntityId duplicate : duplicateRoots) {
+            result.value.rootEntities.push_back(QuaderEntityRef{
+                    .id = duplicate,
+                    .editorObjectId = session_.scene().editorObjectId(duplicate),
+            });
+        }
+    }
+    return result;
+}
+
 QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string groupName, TransformComponent transform) {
-    EntityId groupEntity = InvalidEntityId;
-    DocumentCommandResult command = session_.documentCommands().groupSelection(
+    DocumentGroupSelectionResult command = session_.documentCommands().groupSelection(
             std::move(groupName),
-            groupTransformOrSelectedBoundsCenter(session_, transform),
-            &groupEntity);
+            groupTransformOrSelectedBoundsCenter(session_, transform));
+    const EntityId groupEntity = command.groupEntity;
 
     QuaderApiResult<QuaderEntityRef> result;
     const QuaderApiVoidResult status = mutations_.runDocumentResult(std::move(command), "Group Selection");

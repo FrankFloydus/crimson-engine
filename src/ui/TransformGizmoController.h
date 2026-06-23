@@ -8,8 +8,8 @@
 
 #include "assets/AssetRegistry.h"
 #include "core/Types.h"
-#include "editor/history/SceneTransformPreviewTransaction.h"
 #include "editor/modeling/ModelingTypes.h"
+#include "editor/transform/SceneTransformDragService.h"
 #include "scene/SceneDocument.h"
 #include "viewport/ViewportCameraController.h"
 #include "viewport/ViewportInputRouter.h"
@@ -80,16 +80,6 @@ public:
     [[nodiscard]] quader_editor_core::ViewportInteractionTool runtimeToolFor(ViewportToolId tool) const;
 
 private:
-    /**
-     * Represents a Start Transform value used by the ImGui editor presentation layer.
-     */
-    struct StartTransform {
-        EntityId entity = InvalidEntityId;
-        TransformComponent transform;
-        Vec3 localPivot = {};
-        Mat4 worldTransform;
-    };
-
     void resetDragState();
 
     bool dragging_ = false;
@@ -99,12 +89,11 @@ private:
     bool modelingDragPreviewDriven_ = false;
     bool sceneOnlyDrag_ = false;
     std::optional<quader_editor_core::RotateToolState> sceneOnlyRotateState_;
-    std::optional<SceneTransformPreviewTransaction> sceneTransformPreview_;
+    SceneTransformDragService sceneTransformDrag_;
     TransformAxisHandle activeAxis_ = TransformAxisHandle::None;
     Vec2 lastMouse_ = {};
     Vec3 startWorldPivot_ = {};
     Vec2 startMouse_ = {};
-    std::vector<StartTransform> startTransforms_;
 };
 
 } // namespace quader

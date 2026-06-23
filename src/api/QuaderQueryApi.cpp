@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderQueryApi.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "scene/document/ProjectSession.h"
 #include "editor/history/EditorHistoryService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
@@ -46,7 +47,7 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
     QuaderEntitySnapshot snapshot;
     snapshot.id = entity;
     snapshot.editorObjectId = scene.editorObjectId(entity);
-    snapshot.kind = scene.kind(entity);
+    snapshot.kind = toApiEntityKind(scene.kind(entity));
     snapshot.parent = scene.parent(entity);
     snapshot.active = scene.primarySelection() == entity;
 
@@ -54,7 +55,7 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
         snapshot.name = name->name;
     }
     if (const TransformComponent* transform = scene.transform(entity)) {
-        snapshot.transform = *transform;
+        snapshot.transform = toApiTransform(*transform);
     }
     if (const VisibilityComponent* visibility = scene.visibility(entity)) {
         snapshot.visible = visibility->visible;
@@ -84,7 +85,7 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
 QuaderMeshSnapshot meshSnapshotFor(AssetId id, const MeshAsset& mesh) {
     QuaderMeshSnapshot snapshot;
     snapshot.mesh = id;
-    snapshot.revision = mesh.revision;
+    snapshot.revision = mesh.revision.value;
     snapshot.vertexCount = mesh.vertices.size();
     snapshot.indexCount = mesh.indices.size();
     snapshot.primitiveCount = mesh.primitives.size();
@@ -152,7 +153,7 @@ std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForEntity(E
     return ref;
 }
 
-std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForId(ModelingObjectId modelingObjectId) const {
+std::optional<QuaderModelingObjectRef> QuaderQueryApi::modelingObjectForId(QuaderModelingObjectId modelingObjectId) const {
     const std::optional<EntityId> entity = session_.modeling().entityForModelingObject(modelingObjectId);
     if (!entity.has_value()) {
         return std::nullopt;
@@ -217,15 +218,22 @@ QuaderRevisionStamp QuaderQueryApi::revisions() const {
 }
 
 QuaderApiSnapshot QuaderQueryApi::snapshot() const {
+    const std::vector<ModelingObjectRecord> records = modelingObjects();
+    std::vector<QuaderModelingObjectRecord> apiRecords;
+    apiRecords.reserve(records.size());
+    for (const ModelingObjectRecord& record : records) {
+        apiRecords.push_back(toApiModelingObjectRecord(record));
+    }
+
     return {
             .revisions = revisions(),
             .entities = entityTree(),
-            .modelingObjects = modelingObjects(),
-            .selection = selection(),
-            .toolStatus = toolStatus(),
+            .modelingObjects = std::move(apiRecords),
+            .selection = toApiSelectionSummary(selection()),
+            .toolStatus = toApiToolStatus(toolStatus()),
             .assets = assets(),
             .history = history(),
-            .selectionOverlay = selectionOverlay(),
+            .selectionOverlay = toApiOverlayFrame(selectionOverlay()),
     };
 }
 

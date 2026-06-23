@@ -20,9 +20,7 @@ public:
     [[nodiscard]] bool hasActivePreview(const ModelingBoxPreview& preview) const;
     void logPreviewFailure(const char* action, const ModelingBoxPreview& preview) const;
     [[nodiscard]] bool commitPreview(
-            ModelingSessionService& modeling,
-            AssetId defaultMaterial,
-            SceneDocument& document,
+            ViewportBoxToolContext& boxContext,
             const std::string& name) const;
     [[nodiscard]] ViewportToolResult handleEvent(
             ViewportToolContext& context,

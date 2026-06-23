@@ -56,6 +56,14 @@ inline constexpr QuaderCommandId ModelingDuplicateMeshes{"edit.duplicate"};
 inline constexpr QuaderCommandId ModelingDissolveEdges{"modeling.dissolve_edges"};
 inline constexpr QuaderCommandId ModelingDissolveVertices{"modeling.dissolve_vertices"};
 inline constexpr QuaderCommandId ModelingCombineMeshes{"modeling.combine_meshes"};
+inline constexpr QuaderCommandId ModelingMergeVerticesToActive{"modeling.merge_vertices_to_active"};
+inline constexpr QuaderCommandId ModelingMergeVerticesToCenter{"modeling.merge_vertices_to_center"};
+inline constexpr QuaderCommandId ModelingMirrorSelectionX{"modeling.mirror_selection_x"};
+inline constexpr QuaderCommandId ModelingMirrorSelectionY{"modeling.mirror_selection_y"};
+inline constexpr QuaderCommandId ModelingMirrorSelectionZ{"modeling.mirror_selection_z"};
+inline constexpr QuaderCommandId ModelingInvertMesh{"modeling.invert_mesh"};
+inline constexpr QuaderCommandId ModelingFlipHorizontal{"modeling.flip_horizontal"};
+inline constexpr QuaderCommandId ModelingFlipVertical{"modeling.flip_vertical"};
 inline constexpr QuaderCommandId ModelingApplyActiveMaterial{"edit.apply_material"};
 
 inline constexpr QuaderCommandId ToolsActivateSelect{"tools.activate.select"};

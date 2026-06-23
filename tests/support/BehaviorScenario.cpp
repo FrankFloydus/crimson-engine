@@ -217,7 +217,10 @@ BehaviorGiven& BehaviorGiven::unitBox(std::string_view alias, std::string name) 
 
 BehaviorGiven& BehaviorGiven::box(std::string_view alias, ModelingBounds bounds, std::string name) {
     QuaderCreateBoxArgs args;
-    args.bounds = bounds;
+    args.bounds = {
+            .min = bounds.min,
+            .max = bounds.max,
+    };
     args.name = std::move(name);
     const QuaderApiResult<QuaderModelingObjectRef> result = scenario_.api().modeling().createBox(args);
     scenario_.recordStatus(result);

@@ -89,8 +89,6 @@ std::vector<std::filesystem::path> projectOwnedCommentCapableFiles() {
             ".gitignore",
             "AGENTS.md",
             "CMakeLists.txt",
-            "app-refactor.md",
-            "programmatic-api-plan.md",
             "agents",
             "benchmarks",
             "cmake",
@@ -315,7 +313,6 @@ TEST(BuildGuardrailTests, SourceBuildAndTestsDoNotUseOldSdkIncludeOrPackagePaths
 
 TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
     const std::vector<std::filesystem::path> docs = {
-            "programmatic-api-plan.md",
             "docs/absorbed_modeling/README.md",
             "src/editor/metadata/README.md",
             "src/io/qdr/README.md",

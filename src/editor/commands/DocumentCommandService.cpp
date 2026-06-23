@@ -11,6 +11,7 @@
 #include "editor/commands/document/CreateEntityCommand.h"
 #include "editor/commands/document/DestroyEntityCommand.h"
 #include "editor/commands/document/DuplicateEntityCommand.h"
+#include "editor/commands/document/DuplicateSelectedHierarchyCommand.h"
 #include "editor/commands/document/GroupSelectionCommand.h"
 #include "editor/commands/document/RenameEntityCommand.h"
 #include "editor/commands/document/ReparentEntityCommand.h"
@@ -33,6 +34,12 @@ DocumentCommandResult executeDocumentCommand(
         EditorHistoryService& history,
         std::unique_ptr<IUndoableCommand> command) {
     return history.execute(std::move(command));
+}
+
+void assignDocumentCommandStatus(DocumentCommandResult& target, DocumentCommandResult source) {
+    target.ok = source.ok;
+    target.changed = source.changed;
+    target.message = std::move(source.message);
 }
 
 std::vector<DocumentTransformEdit> normalizedTransformEdits(
@@ -95,16 +102,11 @@ DocumentCommandService::DocumentCommandService(SceneDocument& scene, EditorHisto
     : scene_(scene)
     , history_(history) {}
 
-DocumentCommandResult DocumentCommandService::createEntity(
+DocumentCreateEntityResult DocumentCommandService::createEntity(
         std::string name,
         EntityKind kind,
         EntityId parent,
-        TransformComponent transform,
-        EntityId* createdEntity) {
-    if (createdEntity != nullptr) {
-        *createdEntity = InvalidEntityId;
-    }
-
+        TransformComponent transform) {
     auto command = std::make_unique<CreateEntityCommand>(
             scene_,
             std::move(name),
@@ -112,9 +114,10 @@ DocumentCommandResult DocumentCommandService::createEntity(
             parent,
             transform);
     CreateEntityCommand* createdCommand = command.get();
-    DocumentCommandResult result = executeDocumentCommand(history_, std::move(command));
-    if (result.ok && result.changed && createdEntity != nullptr) {
-        *createdEntity = createdCommand->entity();
+    DocumentCreateEntityResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.entity = createdCommand->entity();
     }
     return result;
 }
@@ -146,22 +149,18 @@ DocumentCommandResult DocumentCommandService::reparentEntity(
             std::make_unique<ReparentEntityCommand>(scene_, entity, parent, preserveWorldTransform));
 }
 
-DocumentCommandResult DocumentCommandService::groupSelection(
+DocumentGroupSelectionResult DocumentCommandService::groupSelection(
         std::string groupName,
-        TransformComponent groupTransform,
-        EntityId* groupEntity) {
-    if (groupEntity != nullptr) {
-        *groupEntity = InvalidEntityId;
-    }
-
+        TransformComponent groupTransform) {
     auto command = std::make_unique<GroupSelectionCommand>(
             scene_,
             std::move(groupName),
             groupTransform);
     GroupSelectionCommand* groupCommand = command.get();
-    DocumentCommandResult result = executeDocumentCommand(history_, std::move(command));
-    if (result.ok && result.changed && groupEntity != nullptr) {
-        *groupEntity = groupCommand->groupEntity();
+    DocumentGroupSelectionResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.groupEntity = groupCommand->groupEntity();
     }
     return result;
 }
@@ -172,19 +171,30 @@ DocumentCommandResult DocumentCommandService::ungroupSelection() {
             std::make_unique<UngroupSelectionCommand>(scene_));
 }
 
-DocumentCommandResult DocumentCommandService::duplicateEntity(EntityId entity, EntityId* duplicateEntity) {
-    if (duplicateEntity != nullptr) {
-        *duplicateEntity = InvalidEntityId;
-    }
+DocumentDuplicateEntityResult DocumentCommandService::duplicateEntity(EntityId entity) {
     if (!scene_.exists(entity)) {
-        return documentCommandMissingEntityResult();
+        DocumentDuplicateEntityResult result;
+        assignDocumentCommandStatus(result, documentCommandMissingEntityResult());
+        return result;
     }
 
     auto command = std::make_unique<DuplicateEntityCommand>(scene_, entity);
     DuplicateEntityCommand* duplicateCommand = command.get();
-    DocumentCommandResult result = executeDocumentCommand(history_, std::move(command));
-    if (result.ok && result.changed && duplicateEntity != nullptr) {
-        *duplicateEntity = duplicateCommand->duplicateEntity();
+    DocumentDuplicateEntityResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.duplicateEntity = duplicateCommand->duplicateEntity();
+    }
+    return result;
+}
+
+DocumentDuplicateHierarchyResult DocumentCommandService::duplicateSelectedHierarchy() {
+    auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(scene_);
+    DuplicateSelectedHierarchyCommand* duplicateCommand = command.get();
+    DocumentDuplicateHierarchyResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.duplicateRoots = duplicateCommand->duplicateRoots();
     }
     return result;
 }

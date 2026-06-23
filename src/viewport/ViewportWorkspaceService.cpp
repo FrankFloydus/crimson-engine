@@ -81,11 +81,14 @@ ViewportWorkspaceService::ViewportWorkspaceService() {
 }
 
 bool ViewportWorkspaceService::setLayout(ViewportLayoutId layout) {
-    if (layout_ == layout) {
+    const bool layoutChanged = layout_ != layout;
+    const bool maximizedChanged = focusedPaneMaximized_;
+    if (!layoutChanged && !maximizedChanged) {
         return false;
     }
     layout_ = layout;
-    if (!focusedPaneIsVisible(false)) {
+    focusedPaneMaximized_ = false;
+    if (!focusedPaneIsVisible()) {
         focusedPane_ = ViewportPaneId::Perspective;
     }
     return true;
@@ -96,6 +99,19 @@ bool ViewportWorkspaceService::focusPane(ViewportPaneId pane) {
         return false;
     }
     focusedPane_ = pane;
+    return true;
+}
+
+bool ViewportWorkspaceService::setFocusedPaneMaximized(bool maximized) {
+    if (focusedPaneMaximized_ == maximized) {
+        return false;
+    }
+    focusedPaneMaximized_ = maximized;
+    return true;
+}
+
+bool ViewportWorkspaceService::toggleFocusedPaneMaximized() {
+    focusedPaneMaximized_ = !focusedPaneMaximized_;
     return true;
 }
 
@@ -162,18 +178,18 @@ const ViewportWorkspacePaneState& ViewportWorkspaceService::pane(ViewportPaneId 
     return panes_[viewportPaneIndex(paneId)];
 }
 
-std::vector<ViewportPanePlacement> ViewportWorkspaceService::activePanePlacements(bool maximized) const {
-    if (maximized) {
+std::vector<ViewportPanePlacement> ViewportWorkspaceService::activePanePlacements() const {
+    if (focusedPaneMaximized_) {
         return {ViewportPanePlacement{
                 .paneId = focusedPane_,
                 .normalizedRect = {},
         }};
     }
-    return viewportLayoutPlacements(layout_, layoutState_);
+    return layoutPanePlacements();
 }
 
-std::vector<ViewportSplitHandle> ViewportWorkspaceService::activeSplitHandles(bool maximized) const {
-    if (maximized) {
+std::vector<ViewportSplitHandle> ViewportWorkspaceService::activeSplitHandles() const {
+    if (focusedPaneMaximized_) {
         return {};
     }
     return viewportLayoutSplitHandles(layout_, layoutState_);
@@ -213,11 +229,15 @@ Vec2 ViewportWorkspaceService::paneRenderSize(ViewportPaneId paneId) const {
     return pane(paneId).renderSize;
 }
 
-bool ViewportWorkspaceService::focusedPaneIsVisible(bool maximized) const {
-    const std::vector<ViewportPanePlacement> placements = activePanePlacements(maximized);
+bool ViewportWorkspaceService::focusedPaneIsVisible() const {
+    const std::vector<ViewportPanePlacement> placements = layoutPanePlacements();
     return std::any_of(placements.begin(), placements.end(), [&](const ViewportPanePlacement& placement) {
         return placement.paneId == focusedPane_;
     });
+}
+
+std::vector<ViewportPanePlacement> ViewportWorkspaceService::layoutPanePlacements() const {
+    return viewportLayoutPlacements(layout_, layoutState_);
 }
 
 } // namespace quader

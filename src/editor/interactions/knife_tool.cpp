@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/modeling/runtime/session_internal.h"
-
-#include <diagnostics/profile.h>
 #include <editor/interactions/knife_tool.h>
 #include <editor/interactions/tool_snapping.h>
+#include <diagnostics/profile.h>
 #include <editor/modeling/runtime/tool_operation_contracts.h>
+
+#include "editor/modeling/runtime/session_internal.h"
 
 #include <mesh/geometry/geometry.h>
 

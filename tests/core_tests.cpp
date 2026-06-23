@@ -11,6 +11,7 @@
 #include "core/UndoRedoManager.h"
 #include "editor/commands/DocumentCommandService.h"
 #include "editor/history/SceneTransformPreviewTransaction.h"
+#include "editor/transform/SceneTransformDragService.h"
 #include "editor/commands/document/ApplyEntityTransformCommand.h"
 #include "editor/commands/document/BatchDocumentCommand.h"
 #include "editor/commands/document/CreateEntityCommand.h"
@@ -36,6 +37,7 @@
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 #include "scene/TransformPivot.h"
+#include "api/QuaderEditorApi.h"
 #include "ui/ConsoleModel.h"
 #include "ui/UISettings.h"
 #include "ui/ViewportContextMenuPolicy.h"
@@ -46,6 +48,7 @@
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportLayout.h"
 #include "viewport/ViewportSettings.h"
+#include "viewport/ViewportWorkspaceService.h"
 
 #include <gtest/gtest.h>
 
@@ -1115,11 +1118,13 @@ TEST(ViewportPanelTests, RoutesSelectionOverlayThroughRenderBridgeWithoutCpuVisi
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("refreshCachedSelectionOverlayFrame(document, assets, modeling)"), std::string::npos);
-    EXPECT_NE(source.find("appendHierarchySelectionWires(frame, document, assets)"), std::string::npos);
+    EXPECT_NE(source.find("ViewportSceneOverlayBuilder::buildSelectionFrame("), std::string::npos);
     EXPECT_NE(source.find(".assetRevision = assets.revision()"), std::string::npos);
     EXPECT_NE(source.find("selectionOverlayCache_.needsRefresh(key)"), std::string::npos);
     EXPECT_NE(source.find("renderBridge.setOverlayFrame(\n                viewportPaneIndex(paneId)"), std::string::npos);
     EXPECT_NE(source.find("ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize)"), std::string::npos);
+    EXPECT_EQ(source.find("appendHierarchySelectionWires"), std::string::npos);
+    EXPECT_EQ(source.find("appendGroupSelectionCages"), std::string::npos);
     EXPECT_EQ(source.find("renderBridge.setOverlayFrame(cachedSelectionOverlayFrame_, ViewportCameraAdapter::overlayCamera(camera, itemSize));"), std::string::npos);
     EXPECT_EQ(source.find("drawSelectionOverlay2d"), std::string::npos);
     EXPECT_EQ(source.find("drawVisibilityClippedOverlayLine"), std::string::npos);
@@ -1158,7 +1163,7 @@ TEST(ViewportPanelTests, ShutdownIsIdempotentAndClearsBorrowedWorkspace) {
     EXPECT_NE(source.find("workspace_->clearPaneVisibility();\n        workspace_ = nullptr;"), std::string::npos);
 }
 
-TEST(ViewportPanelTests, WireframeObjectSelectionUsesWhiteBaseAndShadedOverlayWires) {
+TEST(ViewportPanelTests, WorkspaceAccessRequiresInjectionWithoutStaticFallback) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
     std::ifstream sourceFile(sourcePath);
@@ -1168,36 +1173,68 @@ TEST(ViewportPanelTests, WireframeObjectSelectionUsesWhiteBaseAndShadedOverlayWi
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("stripWireframeObjectFaceFills(overlayFrame, overlayMode)"), std::string::npos);
-    EXPECT_NE(source.find("wireframeUsesWireOnlyObjectSelection"), std::string::npos);
-    EXPECT_NE(source.find("rgba8(255, 255, 255)"), std::string::npos);
-    EXPECT_NE(source.find("ViewportOverlayLayer::WireframeBase"), std::string::npos);
-    EXPECT_NE(source.find("ViewportOverlayLayer::SelectedVisibleFace"), std::string::npos);
-    EXPECT_NE(source.find("ViewportOverlayLayer::HoverFace"), std::string::npos);
-    EXPECT_EQ(source.find("selectedWire ? kOverlaySelectionWireColor : kOverlaySourceWireColor"), std::string::npos);
-    EXPECT_NE(source.find("appendMeshSelectionWire(\n                frame,\n                document,\n                assets,\n                entity"),
+    EXPECT_EQ(source.find("static ViewportWorkspaceService fallbackWorkspace"), std::string::npos);
+    EXPECT_NE(source.find("throw std::logic_error(\"ViewportPanel requires an attached ViewportWorkspaceService.\")"),
             std::string::npos);
-    EXPECT_NE(source.find("appendSceneWireframeOverlay(overlayFrame, document, assets);\n        }\n        ViewportOverlayStyleResolver::apply("),
+}
+
+TEST(ViewportPanelTests, WireframeObjectSelectionUsesWhiteBaseAndShadedOverlayWires) {
+    const std::filesystem::path panelPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
+    const std::filesystem::path builderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "ViewportSceneOverlayBuilder.cpp";
+    std::ifstream panelFile(panelPath);
+    std::ifstream builderFile(builderPath);
+    ASSERT_TRUE(panelFile.is_open()) << panelPath.string();
+    ASSERT_TRUE(builderFile.is_open()) << builderPath.string();
+
+    const std::string panel{
+            std::istreambuf_iterator<char>(panelFile),
+            std::istreambuf_iterator<char>()};
+    const std::string builder{
+            std::istreambuf_iterator<char>(builderFile),
+            std::istreambuf_iterator<char>()};
+
+    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildWireframeFrame("), std::string::npos);
+    EXPECT_NE(builder.find("stripWireframeObjectFaceFills(baseFrame, selectionMode)"), std::string::npos);
+    EXPECT_NE(builder.find("wireframeUsesWireOnlyObjectSelection"), std::string::npos);
+    EXPECT_NE(builder.find("rgba8(255, 255, 255)"), std::string::npos);
+    EXPECT_NE(builder.find("ViewportOverlayLayer::WireframeBase"), std::string::npos);
+    EXPECT_NE(builder.find("ViewportOverlayLayer::SelectedVisibleFace"), std::string::npos);
+    EXPECT_NE(builder.find("ViewportOverlayLayer::HoverFace"), std::string::npos);
+    EXPECT_EQ(builder.find("selectedWire ? kOverlaySelectionWireColor : kOverlaySourceWireColor"), std::string::npos);
+    EXPECT_NE(builder.find("appendMeshSelectionWire(\n                frame,\n                document,\n                assets,\n                entity"),
             std::string::npos);
-    EXPECT_EQ(source.find("ViewportOverlayStyleResolver::apply(overlayFrame, settings);\n            appendSceneWireframeOverlay"),
+    EXPECT_EQ(panel.find("appendSceneWireframeOverlay"), std::string::npos);
+    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildWireframeFrame(\n                    std::move(overlayFrame),"),
+            std::string::npos);
+    EXPECT_EQ(panel.find("ViewportOverlayStyleResolver::apply(overlayFrame, settings);\n            appendSceneWireframeOverlay"),
             std::string::npos);
 }
 
 TEST(ViewportPanelTests, GroupSelectionCageUsesDedicatedYellowLayerOutsideGroupMode) {
-    const std::filesystem::path sourcePath =
+    const std::filesystem::path panelPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "ViewportPanel.cpp";
-    std::ifstream sourceFile(sourcePath);
-    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    const std::filesystem::path builderPath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "overlay" / "ViewportSceneOverlayBuilder.cpp";
+    std::ifstream panelFile(panelPath);
+    std::ifstream builderFile(builderPath);
+    ASSERT_TRUE(panelFile.is_open()) << panelPath.string();
+    ASSERT_TRUE(builderFile.is_open()) << builderPath.string();
 
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
+    const std::string panel{
+            std::istreambuf_iterator<char>(panelFile),
+            std::istreambuf_iterator<char>()};
+    const std::string builder{
+            std::istreambuf_iterator<char>(builderFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find(".layer = ViewportOverlayLayer::GroupBounds"), std::string::npos);
-    EXPECT_NE(source.find(".color = kOverlayGroupBoundsColor"), std::string::npos);
-    EXPECT_NE(source.find("appendGroupSelectionCages(frame, document, assets);\n    selectionOverlayCache_.update"),
+    EXPECT_NE(builder.find(".layer = ViewportOverlayLayer::GroupBounds"), std::string::npos);
+    EXPECT_NE(builder.find(".color = kOverlayGroupBoundsColor"), std::string::npos);
+    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildSelectionFrame(\n            modeling.selectionOverlayFrame(),"),
             std::string::npos);
-    EXPECT_EQ(source.find("if (overlaySummary.mode == ModelingSelectionMode::Group) {\n        appendGroupSelectionCages"),
+    EXPECT_EQ(panel.find("appendGroupSelectionCages"), std::string::npos);
+    EXPECT_EQ(builder.find("if (overlaySummary.mode == ModelingSelectionMode::Group) {\n        appendGroupSelectionCages"),
             std::string::npos);
 }
 
@@ -1352,15 +1389,23 @@ TEST(ViewportPanelTests, GizmoSizeUsesRuntimeScaleWithoutReplacingActiveGrid) {
 TEST(ViewportPanelTests, SceneOnlyGroupTransformsSnapWithActiveGrid) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
+    const std::filesystem::path servicePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "transform" / "SceneTransformDragService.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream serviceFile(servicePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(serviceFile.is_open()) << servicePath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
+    const std::string service{
+            std::istreambuf_iterator<char>(serviceFile),
+            std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("selectedTransformWorldBounds(document, request.assets)"), std::string::npos);
     EXPECT_NE(source.find("entityHierarchyWorldBounds(document, assets, entity)"), std::string::npos);
+    EXPECT_NE(service.find("documentLocalPivotForWorldPoint(document, entity, worldPivot)"), std::string::npos);
     EXPECT_NE(source.find("snapWorldDeltaForHandle(worldMoveDelta, activeAxis_, startWorldPivot_, activeGridSize, snapEnabled)"),
             std::string::npos);
     EXPECT_NE(source.find("sceneOnlyRotateState_"), std::string::npos);
@@ -1402,8 +1447,9 @@ TEST(ViewportPanelTests, SpaceMaximizeTargetsHoveredPane) {
             std::istreambuf_iterator<char>(sourceFile),
             std::istreambuf_iterator<char>()};
 
-    EXPECT_NE(source.find("result.shortcut.kind == ViewportShortcutKind::ToggleMaximized"), std::string::npos);
+    EXPECT_NE(source.find("result.maximizedToggleRequested && !operationPreviewShortcutConsumed"), std::string::npos);
     EXPECT_NE(source.find("viewportWorkspace.focusPane(paneState.id)"), std::string::npos);
+    EXPECT_NE(source.find("viewportWorkspace.toggleFocusedPaneMaximized()"), std::string::npos);
 }
 
 TEST(ViewportPanelTests, HoverUpdatesFocusedPaneWithoutClick) {
@@ -1577,11 +1623,10 @@ TEST(ViewportPanelTests, RmbContextMenuUsesContextActionsAndDisabledItems) {
     EXPECT_NE(presenter.find("labelKey.append(action.actionId)"), std::string::npos);
     EXPECT_NE(presenter.find("localization.imguiLabel(labelKey, stableId, action.label)"), std::string::npos);
     EXPECT_NE(presenter.find("ImGui::MenuItem(label.c_str(), nullptr, false, enabled)"), std::string::npos);
-    EXPECT_NE(presenter.find("std::string contextMenuCommandId(std::string_view actionId)"), std::string::npos);
-    EXPECT_NE(presenter.find("return std::string(QuaderCommand::DeleteSelection.string())"), std::string::npos);
-    EXPECT_NE(presenter.find("return std::string(QuaderCommand::DuplicateSelection.string())"), std::string::npos);
-    EXPECT_NE(presenter.find("const std::string commandId = contextMenuCommandId(action.actionId)"), std::string::npos);
-    EXPECT_NE(presenter.find("editor.commands().execute(commandId)"), std::string::npos);
+    EXPECT_NE(presenter.find("editor.commands().executeToolActivation(action.toolId)"), std::string::npos);
+    EXPECT_NE(presenter.find("editor.commands().executeModelingAction(action.actionId)"), std::string::npos);
+    EXPECT_EQ(presenter.find("contextMenuCommandId("), std::string::npos);
+    EXPECT_EQ(presenter.find("editor.commands().execute(commandId)"), std::string::npos);
     EXPECT_NE(presenter.find("shouldCloseOperationsPopupForMouseClick()"), std::string::npos);
     EXPECT_NE(presenter.find("isGenericContextAction(action.actionId)"), std::string::npos);
     EXPECT_NE(presenter.find("ImGui::Separator()"), std::string::npos);
@@ -1691,7 +1736,7 @@ TEST(ViewportPanelTests, InsertEdgeLoopOwnsMouseReleaseAndCommitsActiveDrag) {
     EXPECT_NE(toolState.find("bool insertEdgeLoopDragActive = false"), std::string::npos);
     EXPECT_NE(source.find("const bool insertEdgeLoopDragRelease"), std::string::npos);
     EXPECT_NE(source.find("!insertEdgeLoopDragRelease"), std::string::npos);
-    EXPECT_NE(dragTool.find("context.modeling.beginInsertEdgeLoopDrag(context.makeToolEventAt(pointer.mouseLocal, true))"), std::string::npos);
+    EXPECT_NE(dragTool.find("context.modeling.beginInsertEdgeLoopDrag(pointContext.makeEventAt(pointer.mouseLocal, true))"), std::string::npos);
     EXPECT_NE(dragTool.find("context.modalState->insertEdgeLoopDragActive = command.ok && context.modeling.toolStatus().insertEdgeLoopDragging"), std::string::npos);
     EXPECT_NE(dragTool.find("const bool dragging"), std::string::npos);
     EXPECT_NE(dragTool.find("!pointer.leftReleased"), std::string::npos);
@@ -1719,10 +1764,10 @@ TEST(ViewportPanelTests, DrawnPlaneToolsUseClickDownPositionForFirstPoint) {
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("const Vec2 leftClickLocal"), std::string::npos);
-    EXPECT_NE(drawnPlaneTool.find("context.makeToolEventAt(pointer.leftClickLocal, true)"), std::string::npos);
-    EXPECT_NE(drawnPlaneTool.find("context.makeToolEventAt(pointer.leftClickLocal, false)"), std::string::npos);
-    EXPECT_NE(drawnPlaneTool.find("context.modeling.updateCutHover(context.makeToolEventAt(pointer.mouseLocal, true))"), std::string::npos);
-    EXPECT_NE(drawnPlaneTool.find("context.modeling.updateMirrorHover(context.makeToolEventAt(pointer.mouseLocal, true))"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("pointContext.makeEventAt(pointer.leftClickLocal, true)"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("pointContext.makeEventAt(pointer.leftClickLocal, false)"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("context.modeling.updateCutHover(pointContext.makeEventAt(pointer.mouseLocal, true))"), std::string::npos);
+    EXPECT_NE(drawnPlaneTool.find("context.modeling.updateMirrorHover(pointContext.makeEventAt(pointer.mouseLocal, true))"), std::string::npos);
     EXPECT_EQ(drawnPlaneTool.find("afterClick.cutDraggingNewPoint"), std::string::npos);
     EXPECT_EQ(drawnPlaneTool.find("afterClick.mirrorDraggingNewPoint"), std::string::npos);
 }
@@ -1830,7 +1875,7 @@ TEST(ViewportPanelTests, TransformPreviewCapturesShiftDuplicateOperationAtDragBe
     const std::size_t duplicateField = source.find(".duplicateSelected = duplicateSelected", beginPreview);
     const std::size_t updatePreview = source.find("modeling.updateTransformDrag({");
     const std::size_t localFallback =
-            source.find("for (const StartTransform& start : startTransforms_)", updatePreview);
+            source.find("for (const SceneTransformDragTarget& start : sceneTransformDrag_.targets())", updatePreview);
     const std::size_t commitPreview = source.find("modeling.commitTransformDrag()");
 
     ASSERT_NE(duplicateStart, std::string::npos);
@@ -1905,11 +1950,18 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
 
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "TransformGizmoController.cpp";
+    const std::filesystem::path servicePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "transform" / "SceneTransformDragService.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream serviceFile(servicePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(serviceFile.is_open()) << servicePath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string service{
+            std::istreambuf_iterator<char>(serviceFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_NE(source.find("selectedHasSceneOnlyTransform"), std::string::npos);
@@ -1918,7 +1970,9 @@ TEST(ViewportPanelTests, SceneOnlySelectionsUseDocumentGizmoDrag) {
     EXPECT_NE(source.find("componentSelectionMode || !selectedHasHierarchyTransform || objectDuplicateRequested"), std::string::npos);
     EXPECT_NE(source.find("activeAxis_ = fallbackHit()"), std::string::npos);
     EXPECT_NE(source.find("parentLocalVectorForWorldVector(document, start.entity"), std::string::npos);
-    EXPECT_NE(source.find("documentLocalPivotForWorldPoint(document, entity, pivot)"), std::string::npos);
+    EXPECT_NE(service.find("documentLocalPivotForWorldPoint(document, entity, worldPivot)"), std::string::npos);
+    EXPECT_NE(service.find("hasSelectedAncestor(document, entity)"), std::string::npos);
+    EXPECT_NE(source.find("sceneTransformDrag_.begin(document, pivot"), std::string::npos);
     EXPECT_NE(source.find("sceneOnlyDrag_ = true"), std::string::npos);
     EXPECT_NE(source.find("quader_editor_core::begin_rotate_drag({"), std::string::npos);
     EXPECT_NE(source.find("if (wasDragging && !sceneOnlyDrag_)"), std::string::npos);
@@ -2534,17 +2588,22 @@ TEST(OutlinerPanelTests, RoutesDocumentMutationsThroughPublicApi) {
 
     EXPECT_NE(source.find("context.editor.selection().selectObjects"), std::string::npos);
     EXPECT_EQ(source.find("context.editor.scene().select"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().createEntity"), std::string::npos);
+    EXPECT_NE(source.find("context.editor.scene().duplicateSelectedHierarchy"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().createEntity"), std::string::npos);
     EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::DeleteSelection)"), std::string::npos);
     EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::GroupSelection)"), std::string::npos);
     EXPECT_NE(source.find("context.editor.commands().execute(QuaderCommand::UngroupSelection)"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().reparent"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.commands().execute(QuaderCommand::DuplicateSelection)"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().reparent"), std::string::npos);
     EXPECT_EQ(source.find("context.editor.scene().groupSelection"), std::string::npos);
     EXPECT_EQ(source.find("context.editor.scene().ungroupSelection"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().rename"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().setTransform"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().setVisible"), std::string::npos);
-    EXPECT_NE(source.find("context.editor.scene().setLocked"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().rename"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().setTransform"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().setVisible"), std::string::npos);
+    EXPECT_EQ(source.find("context.editor.scene().setLocked"), std::string::npos);
+    EXPECT_EQ(source.find("cloneBySource"), std::string::npos);
+    EXPECT_EQ(source.find("copyCommonEntityState"), std::string::npos);
+    EXPECT_EQ(source.find("duplicateModelingEntities"), std::string::npos);
 
     EXPECT_EQ(source.find("document.clearSelection("), std::string::npos);
     EXPECT_EQ(source.find("document.setSelected("), std::string::npos);
@@ -2571,7 +2630,7 @@ TEST(OutlinerPanelTests, DeleteSelectionUsesUnifiedDeleteCommandWithoutSplitHier
 
     const std::size_t start = source.find("void deleteSelection(UIContext& context)");
     ASSERT_NE(start, std::string::npos);
-    const std::size_t end = source.find("std::vector<EntityId> duplicateModelingEntities", start);
+    const std::size_t end = source.find("void duplicateSelection(UIContext& context)", start);
     ASSERT_NE(end, std::string::npos);
     const std::string body = source.substr(start, end - start);
 
@@ -2580,6 +2639,31 @@ TEST(OutlinerPanelTests, DeleteSelectionUsesUnifiedDeleteCommandWithoutSplitHier
     EXPECT_EQ(body.find("context.editor.scene().destroy"), std::string::npos);
     EXPECT_EQ(body.find("selectOnly(context, modelingEntities"), std::string::npos);
     EXPECT_EQ(body.find("context.modeling.syncObjectSelectionFromScene()"), std::string::npos);
+}
+
+TEST(OutlinerPanelTests, DuplicateSelectionDelegatesHierarchyPolicyToSceneApi) {
+    const std::filesystem::path sourcePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui" / "OutlinerPanel.cpp";
+    std::ifstream sourceFile(sourcePath);
+    ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+
+    const std::string source{
+            std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+
+    const std::size_t start = source.find("void duplicateSelection(UIContext& context)");
+    ASSERT_NE(start, std::string::npos);
+    const std::size_t end = source.find("ImTextureID iconFor", start);
+    ASSERT_NE(end, std::string::npos);
+    const std::string body = source.substr(start, end - start);
+
+    EXPECT_NE(body.find("context.editor.scene().duplicateSelectedHierarchy()"), std::string::npos);
+    EXPECT_EQ(body.find("context.editor.commands().execute(QuaderCommand::DuplicateSelection)"), std::string::npos);
+    EXPECT_EQ(body.find("context.editor.scene().createEntity"), std::string::npos);
+    EXPECT_EQ(body.find("context.editor.scene().reparent"), std::string::npos);
+    EXPECT_EQ(body.find("context.editor.scene().rename"), std::string::npos);
+    EXPECT_EQ(body.find("context.editor.scene().setTransform"), std::string::npos);
+    EXPECT_EQ(body.find("cloneBySource"), std::string::npos);
 }
 
 TEST(OutlinerPanelTests, UsesSingleSelectedTreeRowFill) {
@@ -3503,6 +3587,46 @@ TEST(ViewportLayoutTests, SplitStateDefaultsAndClamps) {
     EXPECT_FLOAT_EQ(state.fourHorizontalSplit(), 0.65f);
 }
 
+TEST(ViewportWorkspaceServiceTests, MaximizedPaneStateOwnsActiveLayout) {
+    ViewportWorkspaceService workspace;
+    ASSERT_TRUE(workspace.setLayout(ViewportLayoutId::FourQuad));
+    ASSERT_TRUE(workspace.focusPane(ViewportPaneId::Side));
+
+    EXPECT_FALSE(workspace.focusedPaneMaximized());
+    EXPECT_EQ(workspace.activePanePlacements().size(), 4u);
+    EXPECT_EQ(workspace.activeSplitHandles().size(), 2u);
+
+    ASSERT_TRUE(workspace.toggleFocusedPaneMaximized());
+
+    EXPECT_TRUE(workspace.focusedPaneMaximized());
+    std::vector<ViewportPanePlacement> placements = workspace.activePanePlacements();
+    ASSERT_EQ(placements.size(), 1u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Side, 0.0f, 0.0f, 1.0f, 1.0f);
+    EXPECT_TRUE(workspace.activeSplitHandles().empty());
+
+    ASSERT_TRUE(workspace.setFocusedPaneMaximized(false));
+
+    EXPECT_FALSE(workspace.focusedPaneMaximized());
+    EXPECT_EQ(workspace.activePanePlacements().size(), 4u);
+    EXPECT_EQ(workspace.activeSplitHandles().size(), 2u);
+}
+
+TEST(ViewportWorkspaceServiceTests, LayoutChangeClearsMaximizedPaneState) {
+    ViewportWorkspaceService workspace;
+    ASSERT_TRUE(workspace.setLayout(ViewportLayoutId::FourQuad));
+    ASSERT_TRUE(workspace.focusPane(ViewportPaneId::Side));
+    ASSERT_TRUE(workspace.setFocusedPaneMaximized(true));
+
+    ASSERT_TRUE(workspace.setLayout(ViewportLayoutId::Single));
+
+    EXPECT_FALSE(workspace.focusedPaneMaximized());
+    EXPECT_EQ(workspace.focusedPane(), ViewportPaneId::Perspective);
+    std::vector<ViewportPanePlacement> placements = workspace.activePanePlacements();
+    ASSERT_EQ(placements.size(), 1u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 1.0f, 1.0f);
+    EXPECT_TRUE(workspace.activeSplitHandles().empty());
+}
+
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
     ViewportCameraController camera;
     const auto before = camera.pose();
@@ -4088,13 +4212,31 @@ TEST(ViewportInputRouterTests, ModalToolGestureKeysAreNotConsumedByViewShortcuts
     input.pressedKeys = {ViewportKey::Space};
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
-    EXPECT_FALSE(router.state().maximized);
+    EXPECT_FALSE(result.maximizedToggleRequested);
 
     router.setActiveTool(ViewportTool::Mirror);
     input.pressedKeys = {ViewportKey::Space};
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
-    EXPECT_FALSE(router.state().maximized);
+    EXPECT_FALSE(result.maximizedToggleRequested);
+}
+
+TEST(ViewportInputRouterTests, ToggleMaximizedShortcutReportsWorkspaceRequest) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.pressedKeys = {ViewportKey::Space};
+
+    const ViewportInputResult result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_TRUE(result.maximizedToggleRequested);
+    EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::ToggleMaximized);
+    EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
+    EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Object);
+    EXPECT_EQ(router.state().gridPreset, viewportDefaultGridPreset());
 }
 
 TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
@@ -4739,13 +4881,10 @@ TEST(AssetRegistryTests, TracksTypedRevisionsAndScopedUpdates) {
     EXPECT_EQ(registry.meshRevision(InvalidAssetId).value, 0u);
 }
 
-TEST(AssetProjectArchitectureTests, NamedTypedStoresStampDocumentsWithoutAssetRegistryCeremony) {
-    static_assert(std::is_base_of_v<TypedAssetStore<MeshAsset, MeshAssetRevision>, MeshAssetStore>);
-    static_assert(std::is_base_of_v<TypedAssetStore<MaterialDocument, MaterialAssetRevision>, MaterialAssetStore>);
-    static_assert(std::is_base_of_v<TypedAssetStore<TextureAsset, TextureAssetRevision>, TextureAssetStore>);
-    static_assert(std::is_final_v<MeshAssetStore>);
-    static_assert(std::is_final_v<MaterialAssetStore>);
-    static_assert(std::is_final_v<TextureAssetStore>);
+TEST(AssetProjectArchitectureTests, TypedStoreAliasesStampDocumentsWithoutAssetRegistryCeremony) {
+    static_assert(std::is_same_v<MeshAssetStore, TypedAssetStore<MeshAsset, MeshAssetRevision>>);
+    static_assert(std::is_same_v<MaterialAssetStore, TypedAssetStore<MaterialDocument, MaterialAssetRevision>>);
+    static_assert(std::is_same_v<TextureAssetStore, TypedAssetStore<TextureAsset, TextureAssetRevision>>);
 
     MeshAssetStore meshes;
     MeshAsset mesh;
@@ -4939,14 +5078,13 @@ TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWir
     ASSERT_NE(session->document().assets().material(material), nullptr);
     EXPECT_EQ(session->document().assets().material(material)->name, "Session Material");
 
-    EntityId entity = InvalidEntityId;
-    DocumentCommandResult result = session->documentCommands().createEntity(
+    const DocumentCreateEntityResult result = session->documentCommands().createEntity(
             "Session Entity",
             EntityKind::Mesh,
             InvalidEntityId,
-            {},
-            &entity);
+            {});
     ASSERT_TRUE(result.ok) << result.message;
+    const EntityId entity = result.entity;
     ASSERT_NE(entity, InvalidEntityId);
     EXPECT_TRUE(session->scene().exists(entity));
     EXPECT_TRUE(session->history().canUndo());
@@ -5004,9 +5142,17 @@ TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectur
 
     EXPECT_NE(assetDocumentSource.find("struct AssetDocumentBase"), std::string::npos);
     EXPECT_NE(typedStoreSource.find("class TypedAssetStore"), std::string::npos);
-    EXPECT_NE(registrySource.find("class MeshAssetStore final"), std::string::npos);
-    EXPECT_NE(registrySource.find("class MaterialAssetStore final"), std::string::npos);
-    EXPECT_NE(registrySource.find("class TextureAssetStore final"), std::string::npos);
+    EXPECT_NE(registrySource.find("using MeshAssetStore = TypedAssetStore<MeshAsset, MeshAssetRevision>;"),
+              std::string::npos);
+    EXPECT_NE(
+            registrySource.find(
+                    "using MaterialAssetStore = TypedAssetStore<MaterialDocument, MaterialAssetRevision>;"),
+            std::string::npos);
+    EXPECT_NE(registrySource.find("using TextureAssetStore = TypedAssetStore<TextureAsset, TextureAssetRevision>;"),
+              std::string::npos);
+    EXPECT_EQ(registrySource.find("class MeshAssetStore"), std::string::npos);
+    EXPECT_EQ(registrySource.find("class MaterialAssetStore"), std::string::npos);
+    EXPECT_EQ(registrySource.find("class TextureAssetStore"), std::string::npos);
     EXPECT_NE(registrySource.find("MeshAssetStore meshes_"), std::string::npos);
     EXPECT_NE(registrySource.find("MaterialAssetStore materials_"), std::string::npos);
     EXPECT_NE(registrySource.find("TextureAssetStore textures_"), std::string::npos);
@@ -5233,6 +5379,62 @@ TEST(DocumentCommandTests, SceneTransformPreviewTransactionCommitsAndCancelsThro
     ASSERT_TRUE(history.redo().ok);
     ASSERT_NE(scene.transform(entity), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+}
+
+TEST(DocumentCommandTests, SceneTransformDragServiceFiltersTargetsAndRecordsScenePreviewThroughApi) {
+    ProjectSession session;
+    QuaderEditorApi editor(session);
+    SceneDocument& scene = session.scene();
+
+    const EntityId parent = scene.createEntity("Parent");
+    const EntityId child = scene.createEntity("Child");
+    ASSERT_TRUE(scene.setParent(child, parent));
+    ASSERT_TRUE(scene.setSelected(parent, true));
+    ASSERT_TRUE(scene.setSelected(child, true));
+    ASSERT_TRUE(scene.setActiveSelection(parent));
+
+    SceneTransformDragService service;
+    ASSERT_TRUE(service.begin(scene, Vec3{}, true, "Move Preview"));
+    ASSERT_TRUE(service.previewActive());
+    ASSERT_EQ(service.targets().size(), 1u);
+    EXPECT_EQ(service.targets().front().entity, parent);
+
+    TransformComponent preview = service.targets().front().transform;
+    preview.position = {2.0f, 0.0f, 0.0f};
+    DocumentCommandResult previewResult = service.previewTransform(parent, preview);
+    ASSERT_TRUE(previewResult.ok) << previewResult.message;
+    EXPECT_TRUE(previewResult.changed);
+    ASSERT_NE(scene.transform(parent), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 2.0f);
+
+    DocumentCommandResult cancelResult = service.cancel();
+    ASSERT_TRUE(cancelResult.ok) << cancelResult.message;
+    EXPECT_TRUE(cancelResult.changed);
+    EXPECT_FALSE(service.previewActive());
+    EXPECT_TRUE(service.targets().empty());
+    ASSERT_NE(scene.transform(parent), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
+
+    ASSERT_TRUE(service.begin(scene, Vec3{}, true, "Move Preview"));
+    preview = service.targets().front().transform;
+    preview.position = {4.0f, 0.0f, 0.0f};
+    ASSERT_TRUE(service.previewTransform(parent, preview).ok);
+    QuaderApiVoidResult commit = service.commit(editor);
+    ASSERT_TRUE(commit.ok) << commit.message;
+    EXPECT_TRUE(commit.changed);
+    EXPECT_FALSE(service.previewActive());
+    EXPECT_TRUE(service.targets().empty());
+    ASSERT_NE(scene.transform(parent), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
+    ASSERT_NE(session.history().undoLabel(), nullptr);
+    EXPECT_EQ(*session.history().undoLabel(), "Move Preview");
+
+    ASSERT_TRUE(session.history().undo().ok);
+    ASSERT_NE(scene.transform(parent), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
+    ASSERT_TRUE(session.history().redo().ok);
+    ASSERT_NE(scene.transform(parent), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
 }
 
 TEST(DocumentCommandTests, TypedEntityCommandsRoundTripHierarchySelectionAndTransforms) {
@@ -5485,18 +5687,20 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     EditorHistoryService history;
     DocumentCommandService commands(scene, history);
 
-    EntityId first = InvalidEntityId;
-    EntityId second = InvalidEntityId;
-    DocumentCommandResult result = commands.createEntity("First", EntityKind::Generic, InvalidEntityId, {}, &first);
-    ASSERT_TRUE(result.ok) << result.message;
+    const DocumentCreateEntityResult firstCreated =
+            commands.createEntity("First", EntityKind::Generic, InvalidEntityId, {});
+    ASSERT_TRUE(firstCreated.ok) << firstCreated.message;
+    const EntityId first = firstCreated.entity;
     ASSERT_NE(first, InvalidEntityId);
-    result = commands.createEntity("Second", EntityKind::Generic, InvalidEntityId, {}, &second);
-    ASSERT_TRUE(result.ok) << result.message;
+    const DocumentCreateEntityResult secondCreated =
+            commands.createEntity("Second", EntityKind::Generic, InvalidEntityId, {});
+    ASSERT_TRUE(secondCreated.ok) << secondCreated.message;
+    const EntityId second = secondCreated.entity;
     ASSERT_NE(second, InvalidEntityId);
 
     TransformComponent moved;
     moved.position = {5.0f, 0.0f, 0.0f};
-    result = commands.applyEntityTransform(first, moved);
+    DocumentCommandResult result = commands.applyEntityTransform(first, moved);
     ASSERT_TRUE(result.ok) << result.message;
     ASSERT_NE(scene.transform(first), nullptr);
     EXPECT_FLOAT_EQ(scene.transform(first)->position.x, 5.0f);
@@ -5509,11 +5713,11 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     EXPECT_EQ(scene.selectedEntities().size(), 2u);
     EXPECT_EQ(scene.primarySelection(), second);
 
-    EntityId group = InvalidEntityId;
     TransformComponent groupTransform;
     groupTransform.position = {2.0f, 0.0f, 0.0f};
-    result = commands.groupSelection("Group", groupTransform, &group);
-    ASSERT_TRUE(result.ok) << result.message;
+    const DocumentGroupSelectionResult grouped = commands.groupSelection("Group", groupTransform);
+    ASSERT_TRUE(grouped.ok) << grouped.message;
+    const EntityId group = grouped.groupEntity;
     ASSERT_TRUE(scene.exists(group));
     EXPECT_EQ(scene.parent(first), group);
     EXPECT_EQ(scene.parent(second), group);
@@ -5551,9 +5755,9 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     ASSERT_TRUE(history.undo().ok);
     EXPECT_EQ(scene.parent(first), restoredGroup);
 
-    EntityId duplicate = InvalidEntityId;
-    result = commands.duplicateEntity(first, &duplicate);
-    ASSERT_TRUE(result.ok) << result.message;
+    const DocumentDuplicateEntityResult duplicated = commands.duplicateEntity(first);
+    ASSERT_TRUE(duplicated.ok) << duplicated.message;
+    const EntityId duplicate = duplicated.duplicateEntity;
     ASSERT_TRUE(scene.exists(duplicate));
     EXPECT_EQ(scene.parent(duplicate), restoredGroup);
     EXPECT_EQ(scene.primarySelection(), duplicate);
@@ -5567,28 +5771,53 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     EXPECT_TRUE(scene.exists(scene.primarySelection()));
 }
 
+TEST(DocumentCommandServiceTests, EntityPayloadResultsKeepInvalidIdsWhenCommandsFailOrNoop) {
+    SceneDocument scene;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
+
+    const DocumentCreateEntityResult invalidCreate =
+            commands.createEntity("Child", EntityKind::Generic, 999u, {});
+    EXPECT_FALSE(invalidCreate.ok);
+    EXPECT_FALSE(invalidCreate.changed);
+    EXPECT_EQ(invalidCreate.entity, InvalidEntityId);
+    EXPECT_FALSE(history.canUndo());
+
+    const DocumentGroupSelectionResult emptyGroup = commands.groupSelection("Empty Group", {});
+    EXPECT_TRUE(emptyGroup.ok) << emptyGroup.message;
+    EXPECT_FALSE(emptyGroup.changed);
+    EXPECT_EQ(emptyGroup.groupEntity, InvalidEntityId);
+    EXPECT_FALSE(history.canUndo());
+
+    const DocumentDuplicateEntityResult missingDuplicate = commands.duplicateEntity(999u);
+    EXPECT_FALSE(missingDuplicate.ok);
+    EXPECT_FALSE(missingDuplicate.changed);
+    EXPECT_EQ(missingDuplicate.duplicateEntity, InvalidEntityId);
+    EXPECT_FALSE(history.canUndo());
+}
+
 TEST(DocumentCommandServiceTests, GroupsAreSceneOwnedEditorObjectsNotModelingObjects) {
     ProjectSession session;
 
-    EntityId first = InvalidEntityId;
-    EntityId second = InvalidEntityId;
-    ASSERT_TRUE(session.documentCommands().createEntity(
+    const DocumentCreateEntityResult firstCreated = session.documentCommands().createEntity(
             "First",
             EntityKind::Mesh,
             InvalidEntityId,
-            {},
-            &first).ok);
-    ASSERT_TRUE(session.documentCommands().createEntity(
+            {});
+    ASSERT_TRUE(firstCreated.ok) << firstCreated.message;
+    const EntityId first = firstCreated.entity;
+    const DocumentCreateEntityResult secondCreated = session.documentCommands().createEntity(
             "Second",
             EntityKind::Mesh,
             InvalidEntityId,
-            {},
-            &second).ok);
+            {});
+    ASSERT_TRUE(secondCreated.ok) << secondCreated.message;
+    const EntityId second = secondCreated.entity;
     ASSERT_TRUE(session.documentCommands().selectEntities({first, second}, second).ok);
 
-    EntityId group = InvalidEntityId;
-    const DocumentCommandResult grouped = session.documentCommands().groupSelection("Group", {}, &group);
+    const DocumentGroupSelectionResult grouped = session.documentCommands().groupSelection("Group", {});
     ASSERT_TRUE(grouped.ok) << grouped.message;
+    const EntityId group = grouped.groupEntity;
     ASSERT_TRUE(session.scene().exists(group));
     EXPECT_EQ(session.scene().kind(group), EntityKind::Empty);
     EXPECT_EQ(session.scene().modelingObject(group), nullptr);
@@ -8426,8 +8655,9 @@ TEST(ModelingSessionServiceTests, GroupShiftDragDuplicateClonesHierarchyWithoutR
     scene.setTransform(right.object.entity, rightTransform);
 
     ASSERT_TRUE(commands.selectEntities({left.object.entity, right.object.entity}, left.object.entity).ok);
-    EntityId group = InvalidEntityId;
-    ASSERT_TRUE(commands.groupSelection("Box Pair", {}, &group).ok);
+    const DocumentGroupSelectionResult grouped = commands.groupSelection("Box Pair", {});
+    ASSERT_TRUE(grouped.ok) << grouped.message;
+    const EntityId group = grouped.groupEntity;
     ASSERT_NE(group, InvalidEntityId);
     ASSERT_EQ(scene.parent(left.object.entity), group);
     ASSERT_EQ(scene.parent(right.object.entity), group);

@@ -85,6 +85,7 @@ ui.inspector.body_type.static_body=Static Body
 ui.inspector.body_type.rigid_body=Rigid Body
 
 ui.viewport.delete_popup.title=Delete Selected Objects
+ui.viewport.delete_popup.window_title=Delete
 ui.viewport.delete_popup.delete=Delete
 ui.viewport.delete_popup.cancel=Cancel
 ui.viewport.delete_vertices=Delete Vertices

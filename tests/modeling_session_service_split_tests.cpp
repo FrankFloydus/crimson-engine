@@ -8,16 +8,21 @@
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "editor/modeling/services/ModelingSessionServices.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
+#include "editor/selection/SelectionProjectionService.h"
 #include "scene/SceneDocument.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <optional>
 #include <string>
+#include <vector>
 #include <variant>
+
+#include <editor/modeling/runtime/session.h>
 
 #ifndef QUADER_SOURCE_DIR
 #define QUADER_SOURCE_DIR "."
@@ -93,6 +98,66 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapKeepsDestroyedSceneIdenti
     EXPECT_EQ(objectMap.sceneIdentityForModelingObject(300)->entity, entity);
 }
 
+TEST(ModelingSessionServiceSplitTests, SelectionProjectionServiceProjectsSceneSelectionIntoModelingOnly) {
+    SceneDocument scene;
+    const EntityId group = scene.createEntity("Group", EntityKind::Empty);
+    const EntityId first = scene.createEntity("First", EntityKind::Mesh);
+    const EntityId second = scene.createEntity("Second", EntityKind::Mesh);
+
+    ModelingObjectRuntimeMap objectMap;
+    objectMap.bind(100, first);
+    objectMap.bind(200, second);
+
+    quader_editor_core::EditorSession session({
+            quader_editor_core::PolygonObject{.id = 100},
+            quader_editor_core::PolygonObject{.id = 200},
+    });
+
+    scene.setSelected(group, true);
+    scene.setSelected(first, true);
+    scene.setSelected(second, true);
+    scene.setActiveSelection(second);
+
+    const SelectionProjectionService projection;
+    EXPECT_TRUE(projection.projectObjectSelectionFromScene(session, scene, objectMap));
+
+    std::vector<int> selectedObjectIds = session.selected_object_ids();
+    std::sort(selectedObjectIds.begin(), selectedObjectIds.end());
+    EXPECT_EQ(selectedObjectIds, (std::vector<int>{100, 200}));
+    EXPECT_EQ(session.active_object_id(), 200);
+
+    std::vector<EntityId> selectedEntities = scene.selectedEntities();
+    std::sort(selectedEntities.begin(), selectedEntities.end());
+    EXPECT_EQ(selectedEntities, (std::vector<EntityId>{group, first, second}));
+    EXPECT_EQ(scene.primarySelection(), second);
+}
+
+TEST(ModelingSessionServiceSplitTests, SelectionProjectionServiceProjectsModelingSelectionIntoScene) {
+    SceneDocument scene;
+    const EntityId group = scene.createEntity("Group", EntityKind::Empty);
+    const EntityId first = scene.createEntity("First", EntityKind::Mesh);
+    const EntityId second = scene.createEntity("Second", EntityKind::Mesh);
+
+    ModelingObjectRuntimeMap objectMap;
+    objectMap.bind(100, first);
+    objectMap.bind(200, second);
+
+    quader_editor_core::EditorSession session({
+            quader_editor_core::PolygonObject{.id = 100},
+            quader_editor_core::PolygonObject{.id = 200},
+    });
+    session.set_selected_object_ids({100, 200}, 200);
+    scene.setSelected(group, true);
+
+    const SelectionProjectionService projection;
+    EXPECT_TRUE(projection.projectSceneSelectionFromModeling(session, scene, objectMap));
+
+    std::vector<EntityId> selectedEntities = scene.selectedEntities();
+    std::sort(selectedEntities.begin(), selectedEntities.end());
+    EXPECT_EQ(selectedEntities, (std::vector<EntityId>{first, second}));
+    EXPECT_EQ(scene.primarySelection(), second);
+}
+
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
     const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
@@ -103,6 +168,40 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) 
     EXPECT_EQ(cmake.find("src/editor/modeling/services/ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(serviceAggregate.find("ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(services.find("ModelingObjectRuntimeMap::"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInFocusedService) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
+    const std::string service = readSourceFile("src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp");
+    const std::string cmake = readSourceFile("CMakeLists.txt");
+
+    EXPECT_NE(cmake.find("src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp"), std::string::npos);
+    EXPECT_NE(facade.find("hierarchyDuplicateService_.duplicateSelectedHierarchyForGroupDrag("), std::string::npos);
+    EXPECT_EQ(facade.find("std::unordered_map<EntityId, EntityId> cloneBySource"), std::string::npos);
+    EXPECT_EQ(facade.find("auto copyCommonEntityState"), std::string::npos);
+    EXPECT_NE(service.find("pairDuplicateMeshes("), std::string::npos);
+    EXPECT_NE(service.find("copyCommonEntityState("), std::string::npos);
+    EXPECT_NE(service.find("cloneHierarchyEntity("), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, SceneAwareDeletePolicyLivesInFocusedCommand) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
+    const std::string command = readSourceFile("src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp");
+    const std::string cmake = readSourceFile("CMakeLists.txt");
+
+    EXPECT_NE(cmake.find("src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp"), std::string::npos);
+    EXPECT_NE(facade.find("createSceneAwareDeleteSelectionCommand("), std::string::npos);
+    EXPECT_NE(facade.find("SceneAwareDeleteRuntime{"), std::string::npos);
+    EXPECT_EQ(facade.find("struct SceneAwareDeleteState"), std::string::npos);
+    EXPECT_EQ(facade.find("class SceneAwareDeleteSelectionCommand"), std::string::npos);
+    EXPECT_EQ(facade.find("captureSceneAwareDeleteState"), std::string::npos);
+    EXPECT_EQ(facade.find("redoSceneAwareDelete"), std::string::npos);
+    EXPECT_EQ(facade.find("undoSceneAwareDelete"), std::string::npos);
+    EXPECT_NE(command.find("struct SceneAwareDeleteState"), std::string::npos);
+    EXPECT_NE(command.find("class SceneAwareDeleteSelectionCommand"), std::string::npos);
+    EXPECT_NE(command.find("captureSceneAwareDeleteState"), std::string::npos);
+    EXPECT_NE(command.find("redoSceneAwareDelete"), std::string::npos);
+    EXPECT_NE(command.find("undoSceneAwareDelete"), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {

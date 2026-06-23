@@ -10,12 +10,25 @@
 #include "editor/history/EditorHistoryService.h"
 #include "scene/document/ProjectDocument.h"
 
+#include <cstdint>
 #include <memory>
 
 namespace quader {
 
 class EditorSelectionService;
 class ModelingSessionService;
+
+/**
+ * Stores the persisted-content revision stamp used by the project session dirty-state boundary.
+ */
+struct ProjectContentRevisionStamp {
+    std::uint64_t projectRevision = 0;
+    std::uint64_t sceneRevision = 0;
+    std::uint64_t assetRevision = 0;
+    std::uint64_t modelingContentRevision = 0;
+
+    [[nodiscard]] bool operator==(const ProjectContentRevisionStamp&) const = default;
+};
 
 /**
  * Owns Project Session behavior within the editor document ownership layer.
@@ -49,10 +62,15 @@ public:
     EditorSelectionService& selection() { return *selection_; }
     const EditorSelectionService& selection() const { return *selection_; }
 
+    [[nodiscard]] ProjectContentRevisionStamp contentRevisionStamp() const;
+    [[nodiscard]] bool dirty() const;
+    void markClean();
+
 private:
     void rebuildServices();
 
     ProjectDocument document_;
+    ProjectContentRevisionStamp cleanStamp_;
     std::unique_ptr<EditorHistoryService> history_;
     std::unique_ptr<DocumentCommandService> documentCommands_;
     std::unique_ptr<ModelingSessionService> modeling_;

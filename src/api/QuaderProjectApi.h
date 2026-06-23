@@ -34,7 +34,6 @@ private:
 
     ProjectSession& session_;
     std::filesystem::path path_;
-    std::uint64_t savedRevision_ = 0;
 };
 
 } // namespace quader

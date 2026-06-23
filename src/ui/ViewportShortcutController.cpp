@@ -9,25 +9,22 @@
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "editor/commands/ModelingCommandToolCatalog.h"
 
 #include <optional>
-#include <string>
-#include <string_view>
 
 namespace quader {
 namespace {
 
-ModelingMirrorAxis viewportMirrorAxisToModeling(ViewportMirrorAxis axis) {
+QuaderCommandId commandForMirrorAxis(ViewportMirrorAxis axis) {
     switch (axis) {
     case ViewportMirrorAxis::X:
-        return ModelingMirrorAxis::X;
+        return QuaderCommand::ModelingMirrorSelectionX;
     case ViewportMirrorAxis::Y:
-        return ModelingMirrorAxis::Y;
+        return QuaderCommand::ModelingMirrorSelectionY;
     case ViewportMirrorAxis::Z:
-        return ModelingMirrorAxis::Z;
+        return QuaderCommand::ModelingMirrorSelectionZ;
     }
-    return ModelingMirrorAxis::X;
+    return QuaderCommand::ModelingMirrorSelectionX;
 }
 
 std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
@@ -53,21 +50,17 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
     case ViewportShortcutKind::RepeatLastAction:
         return editor.commands().execute(QuaderCommand::EditRepeatLastAction);
     case ViewportShortcutKind::MergeActive:
-        return editor.commands().execute("modeling.merge_vertices_to_active");
+        return editor.commands().execute(QuaderCommand::ModelingMergeVerticesToActive);
     case ViewportShortcutKind::MergeCenter:
-        return editor.commands().execute("modeling.merge_vertices_to_center");
+        return editor.commands().execute(QuaderCommand::ModelingMergeVerticesToCenter);
     case ViewportShortcutKind::MirrorAxis:
-        {
-            std::string command = "modeling.";
-            command.append(modelingMirrorSelectionToolId(viewportMirrorAxisToModeling(shortcut.mirrorAxis)));
-            return editor.commands().execute(command);
-        }
+        return editor.commands().execute(commandForMirrorAxis(shortcut.mirrorAxis));
     case ViewportShortcutKind::FlipMeshNormals:
-        return editor.commands().execute("modeling.invert_mesh");
+        return editor.commands().execute(QuaderCommand::ModelingInvertMesh);
     case ViewportShortcutKind::FlipHorizontal:
-        return editor.commands().execute("modeling.flip_horizontal");
+        return editor.commands().execute(QuaderCommand::ModelingFlipHorizontal);
     case ViewportShortcutKind::FlipVertical:
-        return editor.commands().execute("modeling.flip_vertical");
+        return editor.commands().execute(QuaderCommand::ModelingFlipVertical);
     case ViewportShortcutKind::ApplyMaterial:
         return editor.commands().execute(QuaderCommand::ApplyMaterial);
     case ViewportShortcutKind::None:
@@ -89,7 +82,6 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
 ViewportShortcutControllerResult ViewportShortcutController::handleOperationPreviewShortcut(
         const ViewportInputResult& inputResult,
         const ModelingToolSettingsTarget& toolSettingsTarget,
-        ViewportInputRouter& inputRouter,
         QuaderEditorApi& editor,
         ModelingSessionService& modeling) const {
     (void)modeling;
@@ -98,7 +90,6 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
     }
 
     if (inputResult.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
-        inputRouter.setMaximized(!inputRouter.state().maximized);
         const QuaderApiVoidResult command = editor.modeling().commitPreview("Apply Tool Preview");
         if (!command.ok) {
             LOG_ERROR("Tool preview apply failed: {}", command.message.empty() ? "Command failed." : command.message);

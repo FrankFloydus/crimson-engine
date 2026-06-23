@@ -19,9 +19,11 @@
 #include "editor/commands/ContextOperationCommandTool.h"
 #include "editor/commands/InstantOperationCommandTool.h"
 #include "editor/commands/PreviewOperationCommandTool.h"
+#include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <vector>
 
 namespace quader {
@@ -92,17 +94,14 @@ private:
     CommandToolDescriptor descriptor_;
 };
 
-[[nodiscard]] CommandToolDescriptor instantDescriptor(
-        std::string_view id,
-        std::string_view operationId,
-        std::string_view label) {
+[[nodiscard]] CommandToolDescriptor instantDescriptor(const ModelingInstantOperationCatalogEntry& entry) {
     return {
-            .id = id,
-            .operationId = operationId,
-            .label = label,
+            .id = entry.id,
+            .operationId = entry.operationId,
+            .label = entry.commandLabel,
             .kind = CommandToolKind::Instant,
             .previewKind = ModelingActionPreviewKind::None,
-            .rebuildsMeshOnSuccess = true,
+            .rebuildsMeshOnSuccess = entry.rebuildsMeshOnSuccess,
     };
 }
 
@@ -140,121 +139,24 @@ private:
 } // namespace
 
 std::span<const InstantCommandTool* const> modelingInstantOperationCommandTools() {
-    static CatalogInstantOperationTool deleteSelection{
-            instantDescriptor("delete_selection", "delete_selection", "Delete"),
-            ModelingInstantOperationId::DeleteSelection};
-    static CatalogInstantOperationTool duplicateMeshes{
-            instantDescriptor("duplicate_meshes", "duplicate_meshes", "Duplicate Meshes"),
-            ModelingInstantOperationId::DuplicateMeshes};
-    static CatalogInstantOperationTool combineMeshes{
-            instantDescriptor("combine_meshes", "combine_meshes", "Combine Meshes"),
-            ModelingInstantOperationId::CombineMeshes};
-    static CatalogInstantOperationTool extractFaces{
-            instantDescriptor("extract_faces", "extract_faces", "Extract Faces"),
-            ModelingInstantOperationId::ExtractFaces};
-    static CatalogInstantOperationTool detachFaces{
-            instantDescriptor("detach_faces", "detach_faces", "Detach Faces"),
-            ModelingInstantOperationId::DetachFaces};
-    static CatalogInstantOperationTool bridge{
-            instantDescriptor("bridge", "bridge", "Bridge"),
-            ModelingInstantOperationId::Bridge};
-    static CatalogInstantOperationTool snapVerticesToActive{
-            instantDescriptor("snap_vertices_to_active", "snap_vertices_to_active", "Snap Vertices to Active"),
-            ModelingInstantOperationId::SnapVerticesToActive};
-    static CatalogInstantOperationTool connectVertices{
-            instantDescriptor("connect_vertices", "connect_vertices", "Connect Vertices"),
-            ModelingInstantOperationId::ConnectVertices};
-    static CatalogInstantOperationTool dissolveVertices{
-            instantDescriptor("dissolve_vertices", "dissolve_vertices", "Dissolve Vertices"),
-            ModelingInstantOperationId::DissolveVertices};
-    static CatalogInstantOperationTool bevelVertices{
-            instantDescriptor("bevel_vertices", "bevel_vertices", "Bevel Vertex"),
-            ModelingInstantOperationId::BevelVertices};
-    static CatalogInstantOperationTool mergeVerticesToActive{
-            instantDescriptor("merge_vertices_to_active", "merge_vertices_to_active", "Merge Vertices to Active"),
-            ModelingInstantOperationId::MergeVerticesToActive};
-    static CatalogInstantOperationTool mergeVerticesToCenter{
-            instantDescriptor("merge_vertices_to_center", "merge_vertices_to_center", "Merge Vertices to Center"),
-            ModelingInstantOperationId::MergeVerticesToCenter};
-    static CatalogInstantOperationTool snapEdgesToActive{
-            instantDescriptor("snap_edges_to_active", "snap_edges_to_active", "Snap Edges to Active"),
-            ModelingInstantOperationId::SnapEdgesToActive};
-    static CatalogInstantOperationTool connectEdges{
-            instantDescriptor("connect_edges", "connect_edges", "Connect Edges"),
-            ModelingInstantOperationId::ConnectEdges};
-    static CatalogInstantOperationTool splitEdges{
-            instantDescriptor("split_edges", "split_edges", "Split Edges"),
-            ModelingInstantOperationId::SplitEdges};
-    static CatalogInstantOperationTool dissolveEdges{
-            instantDescriptor("dissolve_edges", "dissolve_edges", "Dissolve Edges"),
-            ModelingInstantOperationId::DissolveEdges};
-    static CatalogInstantOperationTool mergeEdges{
-            instantDescriptor("merge_edges", "merge_edges", "Merge Edges"),
-            ModelingInstantOperationId::MergeEdges};
-    static CatalogInstantOperationTool collapseEdges{
-            instantDescriptor("collapse_edges", "collapse_edges", "Collapse Edges"),
-            ModelingInstantOperationId::CollapseEdges};
-    static CatalogInstantOperationTool fillHole{
-            instantDescriptor("fill_hole", "fill_hole", "Fill Hole"),
-            ModelingInstantOperationId::FillHole};
-    static CatalogInstantOperationTool combineFaces{
-            instantDescriptor("combine_faces", "combine_faces", "Combine Faces"),
-            ModelingInstantOperationId::CombineFaces};
-    static CatalogInstantOperationTool collapseFaces{
-            instantDescriptor("collapse_faces", "collapse_faces", "Collapse Faces"),
-            ModelingInstantOperationId::CollapseFaces};
-    static CatalogInstantOperationTool radialAlign{
-            instantDescriptor("radial_align", "radial_align", "Radial Align"),
-            ModelingInstantOperationId::RadialAlign};
-    static CatalogInstantOperationTool flipFaceNormals{
-            instantDescriptor("flip_face_normals", "flip_face_normals", "Flip Face Normals"),
-            ModelingInstantOperationId::FlipFaceNormals};
-    static CatalogInstantOperationTool recalculateFaceNormals{
-            instantDescriptor("recalculate_face_normals", "recalculate_face_normals", "Recalculate Face Normals"),
-            ModelingInstantOperationId::RecalculateFaceNormals};
-    static CatalogInstantOperationTool shadeFacesSmooth{
-            instantDescriptor("shade_faces_smooth", "shade_faces_smooth", "Shade Smooth"),
-            ModelingInstantOperationId::ShadeFacesSmooth};
-    static CatalogInstantOperationTool shadeFacesFlat{
-            instantDescriptor("shade_faces_flat", "shade_faces_flat", "Shade Flat"),
-            ModelingInstantOperationId::ShadeFacesFlat};
-    static CatalogInstantOperationTool hardenEdgeNormals{
-            instantDescriptor("harden_edge_normals", "harden_edge_normals", "Harden Edge Normals"),
-            ModelingInstantOperationId::HardenEdgeNormals};
-    static CatalogInstantOperationTool softenEdgeNormals{
-            instantDescriptor("soften_edge_normals", "soften_edge_normals", "Soften Edge Normals"),
-            ModelingInstantOperationId::SoftenEdgeNormals};
+    static const std::vector<std::unique_ptr<CatalogInstantOperationTool>> ownedTools = [] {
+        std::vector<std::unique_ptr<CatalogInstantOperationTool>> result;
+        for (const ModelingInstantOperationCatalogEntry& entry : modelingInstantOperationCatalog()) {
+            result.push_back(std::make_unique<CatalogInstantOperationTool>(
+                    instantDescriptor(entry),
+                    entry.operation));
+        }
+        return result;
+    }();
 
-    static const std::array<const InstantCommandTool*, 28> tools{{
-            &deleteSelection,
-            &duplicateMeshes,
-            &combineMeshes,
-            &extractFaces,
-            &detachFaces,
-            &bridge,
-            &snapVerticesToActive,
-            &connectVertices,
-            &dissolveVertices,
-            &bevelVertices,
-            &mergeVerticesToActive,
-            &mergeVerticesToCenter,
-            &snapEdgesToActive,
-            &connectEdges,
-            &splitEdges,
-            &dissolveEdges,
-            &mergeEdges,
-            &collapseEdges,
-            &fillHole,
-            &combineFaces,
-            &collapseFaces,
-            &radialAlign,
-            &flipFaceNormals,
-            &recalculateFaceNormals,
-            &shadeFacesSmooth,
-            &shadeFacesFlat,
-            &hardenEdgeNormals,
-            &softenEdgeNormals,
-    }};
+    static const std::vector<const InstantCommandTool*> tools = [] {
+        std::vector<const InstantCommandTool*> result;
+        result.reserve(ownedTools.size());
+        for (const std::unique_ptr<CatalogInstantOperationTool>& tool : ownedTools) {
+            result.push_back(tool.get());
+        }
+        return result;
+    }();
     return {tools.data(), tools.size()};
 }
 

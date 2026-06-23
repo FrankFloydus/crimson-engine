@@ -4,8 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/editor_tool.h>
 #include <editor/interactions/scale_tool.h>
+#include <editor/modeling/runtime/editor_tool.h>
 
 #include "tool_math_internal.h"
 

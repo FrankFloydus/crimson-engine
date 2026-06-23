@@ -9,6 +9,9 @@
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiSnapshot.h"
 #include "api/QuaderApiTypes.h"
+#include "assets/MeshAsset.h"
+#include "editor/modeling/ModelingTypes.h"
+#include "scene/Components.h"
 
 #include <optional>
 #include <string>

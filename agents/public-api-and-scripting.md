@@ -12,8 +12,6 @@ file except through prior written authorization from Francesco Di Blasi.
 app. Use `QuaderApi` for document/modeling-only automation, tests, and examples that do not need
 runtime editor domains. Lua scripting, when implemented, must bind only to public API surfaces.
 
-Read `programmatic-api-plan.md` for the current global plan.
-
 ## Add To Public API When
 
 Add a capability to the public API when it is:

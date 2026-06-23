@@ -126,6 +126,16 @@ std::string trim(std::string value) {
     return {first, last};
 }
 
+std::string firstIncludeLine(const std::string& source) {
+    for (const std::string& line : lines(source)) {
+        const std::string trimmed = trim(line);
+        if (startsWith(trimmed, "#include ")) {
+            return trimmed;
+        }
+    }
+    return {};
+}
+
 bool hasNearbyDeclarationDoc(const std::vector<std::string>& fileLines, std::size_t declarationLine) {
     if (declarationLine == 0) {
         return false;
@@ -179,6 +189,28 @@ TEST(OopArchitectureGuardrailTests, SourceCppFilesAreNotEmptyOrConstructorOnly) 
 
         EXPECT_FALSE(source.empty()) << relative;
         EXPECT_FALSE(looksConstructorOnlyCpp(source)) << relative;
+    }
+}
+
+TEST(OopArchitectureGuardrailTests, InteractionSourceFilesIncludeTheirPublicHeaderFirst) {
+    const std::filesystem::path root = sourceRoot() / "src/editor/interactions";
+    for (const std::filesystem::path& file : filesWithExtension(root, ".cpp")) {
+        const std::filesystem::path header = file.parent_path() / (file.stem().string() + ".h");
+        if (!std::filesystem::exists(header)) {
+            continue;
+        }
+
+        const std::string firstInclude = firstIncludeLine(readFile(file));
+        const std::string relative = normalizedRelative(file);
+        const std::string stem = file.stem().string();
+        const std::vector<std::string> allowed{
+                "#include <editor/interactions/" + stem + ".h>",
+                "#include \"editor/interactions/" + stem + ".h\"",
+                "#include \"" + stem + ".h\"",
+        };
+
+        EXPECT_NE(std::find(allowed.begin(), allowed.end(), firstInclude), allowed.end())
+                << relative << " first include was: " << firstInclude;
     }
 }
 
@@ -236,6 +268,13 @@ TEST(OopArchitectureGuardrailTests, ModelingInternalDomainHeadersAvoidFacadeDepe
     }
 }
 
+TEST(OopArchitectureGuardrailTests, SceneDocumentDoesNotExposeRawRegistryAccess) {
+    const std::string header = readFile(sourceRoot() / "src/scene/SceneDocument.h");
+
+    EXPECT_EQ(header.find("registry& registry("), std::string::npos);
+    EXPECT_EQ(header.find("entt::registry& registry("), std::string::npos);
+}
+
 TEST(OopArchitectureGuardrailTests, UiDoesNotBypassCommandAndPreviewBoundaries) {
     for (const std::filesystem::path& root : {sourceRoot() / "src/ui", sourceRoot() / "src/app", sourceRoot() / "src/viewport"}) {
         for (const std::filesystem::path& file : filesWithExtension(root, ".cpp")) {
@@ -276,6 +315,81 @@ TEST(OopArchitectureGuardrailTests, ViewportPanelDoesNotOwnToolImplementations) 
          }) {
         EXPECT_EQ(source.find(forbidden), std::string::npos) << forbidden;
     }
+}
+
+TEST(OopArchitectureGuardrailTests, ViewportPanelDelegatesSceneOverlayExtraction) {
+    const std::string panel = readFile(sourceRoot() / "src/ui/ViewportPanel.cpp");
+    const std::string builder = readFile(sourceRoot() / "src/render/overlay/ViewportSceneOverlayBuilder.cpp");
+
+    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildSelectionFrame("), std::string::npos);
+    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildWireframeFrame("), std::string::npos);
+    EXPECT_NE(builder.find("appendHierarchySelectionWires"), std::string::npos);
+    EXPECT_NE(builder.find("appendGroupSelectionCages"), std::string::npos);
+    EXPECT_NE(builder.find("appendSceneWireframeOverlay"), std::string::npos);
+    EXPECT_NE(builder.find("stripWireframeObjectFaceFills"), std::string::npos);
+
+    for (std::string_view forbidden : {
+                 "appendMeshSelectionWire",
+                 "appendHierarchySelectionWires",
+                 "appendGroupSelectionCages",
+                 "appendSceneWireframeOverlay",
+                 "stripWireframeObjectFaceFills",
+                 "WireEdgeKey",
+         }) {
+        EXPECT_EQ(panel.find(forbidden), std::string::npos) << forbidden;
+    }
+}
+
+TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceService) {
+    const std::string inputHeader = readFile(sourceRoot() / "src/viewport/ViewportInputRouter.h");
+    const std::string inputSource = readFile(sourceRoot() / "src/viewport/ViewportInputRouter.cpp");
+    const std::string runtimeSource = readFile(sourceRoot() / "src/editor/tools/ViewportToolRuntime.cpp");
+    const std::string workspaceHeader = readFile(sourceRoot() / "src/viewport/ViewportWorkspaceService.h");
+    const std::string workspaceSource = readFile(sourceRoot() / "src/viewport/ViewportWorkspaceService.cpp");
+
+    const std::size_t stateStart = inputHeader.find("struct ViewportToolState");
+    ASSERT_NE(stateStart, std::string::npos);
+    const std::size_t stateEnd = inputHeader.find("};", stateStart);
+    ASSERT_NE(stateEnd, std::string::npos);
+    const std::string stateBody = inputHeader.substr(stateStart, stateEnd - stateStart);
+
+    EXPECT_EQ(stateBody.find("maximized"), std::string::npos);
+    EXPECT_EQ(inputHeader.find("setMaximized"), std::string::npos);
+    EXPECT_EQ(inputSource.find("setMaximized"), std::string::npos);
+    EXPECT_EQ(runtimeSource.find("state.maximized"), std::string::npos);
+    EXPECT_EQ(workspaceHeader.find("activePanePlacements(bool"), std::string::npos);
+    EXPECT_EQ(workspaceHeader.find("activeSplitHandles(bool"), std::string::npos);
+    EXPECT_EQ(workspaceSource.find("activePanePlacements(bool"), std::string::npos);
+    EXPECT_EQ(workspaceSource.find("activeSplitHandles(bool"), std::string::npos);
+    EXPECT_NE(workspaceHeader.find("focusedPaneMaximized"), std::string::npos);
+    EXPECT_NE(workspaceSource.find("focusedPaneMaximized_"), std::string::npos);
+    EXPECT_NE(runtimeSource.find("result.maximizedToggleRequested = true"), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests, TransformGizmoControllerDelegatesSceneTransformPreviewOwnership) {
+    const std::string header = readFile(sourceRoot() / "src/ui/TransformGizmoController.h");
+    const std::string source = readFile(sourceRoot() / "src/ui/TransformGizmoController.cpp");
+    const std::string serviceSource =
+            readFile(sourceRoot() / "src/editor/transform/SceneTransformDragService.cpp");
+
+    EXPECT_NE(header.find("SceneTransformDragService sceneTransformDrag_"), std::string::npos);
+    EXPECT_EQ(header.find("SceneTransformPreviewTransaction"), std::string::npos);
+    EXPECT_EQ(header.find("struct StartTransform"), std::string::npos);
+    EXPECT_EQ(header.find("std::vector<StartTransform>"), std::string::npos);
+
+    EXPECT_NE(source.find("sceneTransformDrag_.begin(document, pivot, needsSceneTransformPreview"), std::string::npos);
+    EXPECT_NE(source.find("sceneTransformDrag_.previewTransform(start.entity, next)"), std::string::npos);
+    EXPECT_NE(source.find("sceneTransformDrag_.commit(*request.editor)"), std::string::npos);
+    EXPECT_NE(source.find("sceneTransformDrag_.cancel()"), std::string::npos);
+    EXPECT_EQ(source.find("commitSceneTransformPreviewThroughApi("), std::string::npos);
+    EXPECT_EQ(source.find("SceneTransformPreviewTransaction"), std::string::npos);
+    EXPECT_EQ(source.find("hasSelectedAncestor("), std::string::npos);
+    EXPECT_EQ(source.find("documentLocalPivotForWorldPoint("), std::string::npos);
+
+    EXPECT_NE(serviceSource.find("SceneTransformPreviewTransaction"), std::string::npos);
+    EXPECT_NE(serviceSource.find("hasSelectedAncestor(document, entity)"), std::string::npos);
+    EXPECT_NE(serviceSource.find("documentLocalPivotForWorldPoint(document, entity, worldPivot)"), std::string::npos);
+    EXPECT_NE(serviceSource.find("editor.scene().batch(label)"), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals) {

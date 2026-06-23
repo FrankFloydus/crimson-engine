@@ -7,13 +7,43 @@
 #pragma once
 
 #include "core/CommandResult.h"
+#include "core/Types.h"
 
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace quader {
 
 using DocumentCommandResult = CommandResult;
+
+/**
+ * Stores Create Entity Command payload data for document command callers.
+ */
+struct DocumentCreateEntityResult : DocumentCommandResult {
+    EntityId entity = InvalidEntityId;
+};
+
+/**
+ * Stores Group Selection Command payload data for document command callers.
+ */
+struct DocumentGroupSelectionResult : DocumentCommandResult {
+    EntityId groupEntity = InvalidEntityId;
+};
+
+/**
+ * Stores Duplicate Entity Command payload data for document command callers.
+ */
+struct DocumentDuplicateEntityResult : DocumentCommandResult {
+    EntityId duplicateEntity = InvalidEntityId;
+};
+
+/**
+ * Stores Duplicate Selected Hierarchy Command payload data for document command callers.
+ */
+struct DocumentDuplicateHierarchyResult : DocumentCommandResult {
+    std::vector<EntityId> duplicateRoots;
+};
 
 inline DocumentCommandResult documentCommandChangedResult() {
     return {

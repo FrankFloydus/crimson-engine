@@ -36,21 +36,17 @@ void TwoStageBoxTool::logPreviewFailure(const char* action, const ModelingBoxPre
 }
 
 bool TwoStageBoxTool::commitPreview(
-        ModelingSessionService& modeling,
-        AssetId defaultMaterial,
-        SceneDocument& document,
+        ViewportBoxToolContext& boxContext,
         const std::string& name) const {
-    const ModelingCreateBoxResult committed = modeling.commitBox(name);
+    if (!boxContext.commitPreview) {
+        LOG_ERROR("Box commit failed: Commit command is not available.");
+        return false;
+    }
+
+    const ModelingCreateBoxResult committed = boxContext.commitPreview(name, boxContext.defaultMaterial);
     if (!committed.ok) {
         LOG_ERROR("Box commit failed: {}", committed.message);
         return false;
-    }
-    if (committed.changed) {
-        if (defaultMaterial != InvalidAssetId) {
-            document.setMaterial(committed.object.entity, MaterialComponent{.material = defaultMaterial});
-        }
-        document.clearSelection();
-        document.setSelected(committed.object.entity, true);
     }
     return committed.changed;
 }
@@ -83,14 +79,16 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
     if (event.kind != ViewportToolEventKind::Frame ||
             event.tool != viewportTool() ||
             context.modalState == nullptr ||
-            !context.makeBoxEvent ||
-            context.document == nullptr) {
+            context.box == nullptr ||
+            !context.box->makeEvent ||
+            !context.box->commitPreview) {
         return ModalViewportTool::handleEvent(context, event);
     }
 
+    ViewportBoxToolContext& boxContext = *context.box;
     ModelingBoxPreview& preview = context.modalState->boxPreview;
     const ViewportPointerToolEvent& pointer = event.pointer;
-    const ModelingBoxToolEvent boxEvent = context.makeBoxEvent();
+    const ModelingBoxToolEvent boxEvent = boxContext.makeEvent();
     bool actionConsumed = false;
     bool activeToolSyncRequested = false;
 
@@ -105,8 +103,8 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
 
     if (pointer.leftClicked && !pointer.gizmoConsumed && !pointer.navigationActive) {
         if (preview.dragState == ModelingBoxDragState::Height) {
-            const std::string name = context.nextMeshName ? context.nextMeshName() : std::string{"Mesh"};
-            if (commitPreview(context.modeling, context.defaultMaterial, *context.document, name)) {
+            const std::string name = boxContext.nextMeshName ? boxContext.nextMeshName() : std::string{"Mesh"};
+            if (commitPreview(boxContext, name)) {
                 if (context.setSelectionMode) {
                     context.setSelectionMode(ViewportSelectionMode::Object);
                 }

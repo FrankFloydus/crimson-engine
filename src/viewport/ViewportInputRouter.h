@@ -169,7 +169,6 @@ struct ViewportToolState {
     ViewportToolId activeTool = ViewportToolId::Select;
     ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
     int gridPreset = 6;
-    bool maximized = false;
 };
 
 /**
@@ -216,6 +215,7 @@ struct ViewportInputResult {
     bool zoomedToCursor = false;
     bool cancelRequested = false;
     bool focusDocumentRequested = false;
+    bool maximizedToggleRequested = false;
     ViewportShortcut shortcut = {};
 };
 
@@ -232,7 +232,6 @@ public:
     void setActiveTool(ViewportToolId tool);
     void setSelectionMode(ViewportSelectionMode mode);
     void setGridPreset(int preset);
-    void setMaximized(bool maximized);
     bool activeToolOwnsViewport() const;
     bool activeToolBlocksViewportFocusShortcuts() const;
     bool activeToolAllowsSelectionFallback() const;

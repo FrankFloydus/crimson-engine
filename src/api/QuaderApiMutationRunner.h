@@ -42,6 +42,9 @@ public:
     QuaderApiVoidResult runModelingCommand(
             std::unique_ptr<ModelingMementoCommand> command,
             std::string_view label);
+    QuaderApiVoidResult runModelingUndoableCommand(
+            std::unique_ptr<IUndoableCommand> command,
+            std::string_view label);
     QuaderApiVoidResult runTrackedModelingTool(std::string_view toolId);
     QuaderApiVoidResult beginTrackedModelingPreview(std::string_view actionId);
     QuaderApiVoidResult commitModelingPreview(std::string label);

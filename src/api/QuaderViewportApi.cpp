@@ -6,9 +6,30 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderViewportApi.h"
 
+#include "editor/viewport/QuaderViewportApiRuntimeAccess.h"
+#include "viewport/ViewportWorkspaceService.h"
+
+#include <memory>
 #include <utility>
 
 namespace quader {
+/**
+ * Owns QuaderViewportApi implementation state that should not leak through public headers.
+ */
+class QuaderViewportApi::Impl final {
+public:
+    ViewportWorkspaceService workspace;
+    QuaderViewportRuntimeHooks hooks;
+};
+
+ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(QuaderViewportApi& api) {
+    return api.impl_->workspace;
+}
+
+const ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(const QuaderViewportApi& api) {
+    return api.impl_->workspace;
+}
+
 namespace {
 
 ViewportShadingMode toViewportShadingMode(QuaderShadingMode mode) {
@@ -38,66 +59,67 @@ QuaderShadingMode toQuaderShadingMode(ViewportShadingMode mode) {
 
 } // namespace
 
-QuaderViewportApi::QuaderViewportApi(ViewportWorkspaceService& workspace)
-    : workspace_(workspace) {}
+QuaderViewportApi::QuaderViewportApi()
+    : impl_(std::make_unique<Impl>()) {}
+
+QuaderViewportApi::~QuaderViewportApi() = default;
+
+QuaderViewportApi::QuaderViewportApi(QuaderViewportApi&&) noexcept = default;
+QuaderViewportApi& QuaderViewportApi::operator=(QuaderViewportApi&&) noexcept = default;
 
 void QuaderViewportApi::setRuntimeHooks(QuaderViewportRuntimeHooks hooks) {
-    hooks_ = std::move(hooks);
-}
-
-ViewportWorkspaceService& QuaderViewportApi::workspace() {
-    return workspace_;
-}
-
-const ViewportWorkspaceService& QuaderViewportApi::workspace() const {
-    return workspace_;
+    impl_->hooks = std::move(hooks);
 }
 
 ViewportLayoutId QuaderViewportApi::layout() const {
-    return workspace_.layout();
+    return impl_->workspace.layout();
 }
 
 QuaderApiVoidResult QuaderViewportApi::setLayout(ViewportLayoutId layout) {
-    return runtimeStatus(workspace_.setLayout(layout));
+    return runtimeStatus(impl_->workspace.setLayout(layout));
+}
+
+std::size_t QuaderViewportApi::activePaneCount() const {
+    return impl_->workspace.activePanePlacements().size();
 }
 
 int QuaderViewportApi::gridPreset() const {
-    return workspace_.gridPreset();
+    return impl_->workspace.gridPreset();
 }
 
 QuaderApiVoidResult QuaderViewportApi::setGridPreset(int preset) {
-    return runtimeStatus(workspace_.setGridPreset(preset));
+    return runtimeStatus(impl_->workspace.setGridPreset(preset));
 }
 
 QuaderShadingMode QuaderViewportApi::shadingMode(ViewportPaneId pane) const {
-    return toQuaderShadingMode(workspace_.shadingMode(pane));
+    return toQuaderShadingMode(impl_->workspace.shadingMode(pane));
 }
 
 QuaderApiVoidResult QuaderViewportApi::setShadingMode(ViewportPaneId pane, QuaderShadingMode mode) {
-    return runtimeStatus(workspace_.setShadingMode(pane, toViewportShadingMode(mode)));
+    return runtimeStatus(impl_->workspace.setShadingMode(pane, toViewportShadingMode(mode)));
 }
 
 ViewportView QuaderViewportApi::view(ViewportPaneId pane) const {
-    return workspace_.view(pane);
+    return impl_->workspace.view(pane);
 }
 
 QuaderApiVoidResult QuaderViewportApi::setView(ViewportPaneId pane, ViewportView view) {
-    return runtimeStatus(workspace_.setView(pane, view));
+    return runtimeStatus(impl_->workspace.setView(pane, view));
 }
 
 QuaderApiVoidResult QuaderViewportApi::frameSelection(ViewportPaneId pane) {
-    return hooks_.frameSelection ? hooks_.frameSelection(pane) : unavailable("Viewport camera runtime is not attached.");
+    return impl_->hooks.frameSelection ? impl_->hooks.frameSelection(pane) : unavailable("Viewport camera runtime is not attached.");
 }
 
 QuaderApiVoidResult QuaderViewportApi::focusOrigin(ViewportPaneId pane) {
-    if (hooks_.focusOrigin) {
-        return hooks_.focusOrigin(pane);
+    if (impl_->hooks.focusOrigin) {
+        return impl_->hooks.focusOrigin(pane);
     }
-    return runtimeStatus(workspace_.focusOrigin(pane));
+    return runtimeStatus(impl_->workspace.focusOrigin(pane));
 }
 
 QuaderApiVoidResult QuaderViewportApi::captureScreenshot(const std::filesystem::path& path, ViewportPaneId pane) {
-    return hooks_.captureScreenshot ? hooks_.captureScreenshot(pane, path) : unavailable("Viewport screenshot runtime is not attached.");
+    return impl_->hooks.captureScreenshot ? impl_->hooks.captureScreenshot(pane, path) : unavailable("Viewport screenshot runtime is not attached.");
 }
 
 QuaderViewportHandle QuaderViewportApi::main() {

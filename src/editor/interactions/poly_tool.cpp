@@ -4,13 +4,13 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "tool_math_internal.h"
-
-#include <editor/modeling/runtime/editor_tool.h>
 #include <editor/interactions/poly_tool.h>
 #include <editor/interactions/tool_snapping.h>
+#include <editor/modeling/runtime/editor_tool.h>
 
 #include <mesh/geometry/geometry.h>
+
+#include "tool_math_internal.h"
 
 #include <cstdint>
 #include <limits>

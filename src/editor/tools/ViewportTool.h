@@ -104,29 +104,44 @@ struct ViewportToolResult {
 };
 
 /**
- * Stores the Viewport Tool Context data contract used by editor-owned viewport tool interactions.
+ * Stores the Box Tool Context data contract used by box-shaped viewport tool interactions.
+ */
+struct ViewportBoxToolContext {
+    AssetId defaultMaterial = InvalidAssetId;
+    std::function<ModelingBoxToolEvent()> makeEvent;
+    std::function<ModelingCreateBoxResult(std::string, AssetId)> commitPreview;
+    std::function<std::string()> nextMeshName;
+};
+
+/**
+ * Stores the Point Tool Context data contract used by point/ray viewport tool interactions.
+ */
+struct ViewportPointToolContext {
+    std::function<ModelingToolRayEvent(Vec2, bool)> makeEventAt;
+    std::function<std::optional<int>(const std::array<Vec3, 3>&, int)> hitDrawnPlaneCapturedPoint;
+    std::function<bool(const std::array<Vec3, 3>&, int, bool)> hitDrawnPlaneLine;
+};
+
+/**
+ * Stores the Viewport Tool Context data contract used by shared editor-owned viewport tool interactions.
  */
 struct ViewportToolContext {
     ViewportToolState& state;
     ViewportCameraController& camera;
     ModelingSessionService& modeling;
     SceneDocument* document = nullptr;
-    AssetId defaultMaterial = InvalidAssetId;
     const ViewportSettings* settings = nullptr;
     ViewportModalToolState* modalState = nullptr;
+    ViewportBoxToolContext* box = nullptr;
+    ViewportPointToolContext* point = nullptr;
 
-    std::function<ModelingBoxToolEvent()> makeBoxEvent;
-    std::function<ModelingToolRayEvent(Vec2, bool)> makeToolEventAt;
     std::function<bool(ModelingBoxDragState)> claimHover;
     std::function<void()> invalidateHover;
     std::function<void()> markOverlayDirty;
     std::function<void(ViewportToolId)> setActiveTool;
     std::function<void(ViewportSelectionMode)> setSelectionMode;
     std::function<void(ModelingSelectionMode)> setAppSelectionMode;
-    std::function<std::string()> nextMeshName;
     std::function<void(std::string_view, const ModelingCommandResult&)> handleToolCommandResult;
-    std::function<std::optional<int>(const std::array<Vec3, 3>&, int)> hitDrawnPlaneCapturedPoint;
-    std::function<bool(const std::array<Vec3, 3>&, int, bool)> hitDrawnPlaneLine;
 };
 
 /**

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderApiMutationRunner.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "scene/document/ProjectSession.h"
 #include "editor/history/ModelingMementoCommand.h"
 #include "editor/modeling/services/ModelingSessionService.h"
@@ -46,13 +47,12 @@ QuaderRevisionStamp QuaderApiMutationRunner::currentRevisions() const {
 }
 
 QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const QuaderCreateEntityArgs& args) {
-    EntityId createdEntity = InvalidEntityId;
-    DocumentCommandResult command = session_.documentCommands().createEntity(
+    DocumentCreateEntityResult command = session_.documentCommands().createEntity(
             args.name,
-            args.kind,
+            toSceneEntityKind(args.kind),
             args.parent,
-            args.transform,
-            &createdEntity);
+            toSceneTransform(args.transform));
+    const EntityId createdEntity = command.entity;
 
     QuaderApiResult<QuaderEntityRef> result;
     const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Entity");
@@ -94,6 +94,12 @@ QuaderApiVoidResult QuaderApiMutationRunner::runModelingCommand(
         std::unique_ptr<ModelingMementoCommand> command,
         std::string_view label) {
     return statusFrom(editorCommands_.executeModeling(std::move(command)), QuaderMutationKind::Modeling, label);
+}
+
+QuaderApiVoidResult QuaderApiMutationRunner::runModelingUndoableCommand(
+        std::unique_ptr<IUndoableCommand> command,
+        std::string_view label) {
+    return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Modeling, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingTool(std::string_view toolId) {

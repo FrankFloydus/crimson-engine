@@ -9,11 +9,14 @@
 #include "assets/AssetRegistry.h"
 #include "core/IUndoableCommand.h"
 #include "editor/commands/DocumentCommandService.h"
-#include "editor/commands/document/DocumentCommandSceneHelpers.h"
+#include "editor/commands/modeling/SceneAwareDeleteSelectionCommand.h"
 #include "editor/projection/SelectionOverlayProjection.h"
+#include "editor/modeling/services/ModelingHierarchyDuplicateService.h"
+#include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 #include "editor/modeling/services/ModelingSessionServices.h"
 #include "editor/modeling/services/SelectionModeAdapter.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
+#include "editor/selection/SelectionProjectionService.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -1869,40 +1872,18 @@ public:
     }
 
     void syncObjectSelectionFromScene(bool forceObjectMode = false) {
-        if (!forceObjectMode && session_.selection_mode() != quader_editor_core::SelectionMode::object) {
+        if (!selectionProjectionService_.shouldProjectObjectSelectionFromScene(session_, forceObjectMode)) {
             return;
         }
         if (!sceneObjectsSyncedForCurrentModelingContent()) {
             syncSceneObjectsFromModeling();
         }
 
-        std::vector<int> objectIds;
-        objectIds.reserve(scene_.selectedEntities().size());
-        for (const EntityId entity : scene_.selectedEntities()) {
-            const auto it = objectRegistry_.objectsByEntity().find(entity);
-            if (it != objectRegistry_.objectsByEntity().end()) {
-                objectIds.push_back(it->second);
-            }
-        }
-
-        int activeObjectId = -1;
-        const auto primary = objectRegistry_.objectsByEntity().find(scene_.primarySelection());
-        if (primary != objectRegistry_.objectsByEntity().end()) {
-            activeObjectId = primary->second;
-        }
-
-        std::vector<int> currentObjectIds = session_.selected_object_ids();
-        std::sort(currentObjectIds.begin(), currentObjectIds.end());
-        std::vector<int> desiredObjectIds = objectIds;
-        std::sort(desiredObjectIds.begin(), desiredObjectIds.end());
-        const bool alreadyObjectMode = session_.selection_mode() == quader_editor_core::SelectionMode::object;
-        if ((!forceObjectMode || alreadyObjectMode) &&
-                currentObjectIds == desiredObjectIds &&
-                session_.active_object_id() == activeObjectId) {
-            return;
-        }
-
-        session_.set_selected_object_ids(objectIds, activeObjectId);
+        selectionProjectionService_.projectObjectSelectionFromScene(
+                session_,
+                scene_,
+                objectRegistry_,
+                forceObjectMode);
     }
 
     void promoteDrawnPlaneToolObjectSelection() {
@@ -1948,67 +1929,11 @@ public:
         if (!sceneObjectsSyncedForCurrentModelingContent()) {
             syncSceneObjectsFromModeling();
         }
-        std::vector<int> selectedObjectIds = session_.selected_object_ids();
-        const int activeObjectId = session_.active_object_id();
-        std::unordered_set<EntityId> desiredSelection;
-        desiredSelection.reserve(selectedObjectIds.size());
-        for (const int objectId : selectedObjectIds) {
-            const auto it = objectRegistry_.entitiesByObject().find(objectId);
-            if (it != objectRegistry_.entitiesByObject().end()) {
-                desiredSelection.insert(it->second);
-            }
-        }
-
-        for (const EntityId entity : scene_.selectedEntities()) {
-            if (!desiredSelection.contains(entity)) {
-                scene_.setSelected(entity, false);
-            }
-        }
-        for (const EntityId entity : desiredSelection) {
-            const SelectionComponent* selection = scene_.selection(entity);
-            if (selection == nullptr || !selection->selected) {
-                scene_.setSelected(entity, true);
-            }
-        }
-        const auto active = objectRegistry_.entitiesByObject().find(activeObjectId);
-        if (active != objectRegistry_.entitiesByObject().end()) {
-            const SelectionComponent* selection = scene_.selection(active->second);
-            if (selection && selection->selected) {
-                scene_.setActiveSelection(active->second);
-            }
-        }
+        selectionProjectionService_.projectSceneSelectionFromModeling(session_, scene_, objectRegistry_);
     }
 
     void restoreSceneSelection(const std::vector<EntityId>& selected, EntityId active) {
-        std::unordered_set<EntityId> desired;
-        desired.reserve(selected.size());
-        for (const EntityId entity : selected) {
-            if (scene_.exists(entity)) {
-                desired.insert(entity);
-            }
-        }
-
-        for (const EntityId entity : scene_.selectedEntities()) {
-            if (!desired.contains(entity)) {
-                scene_.setSelected(entity, false);
-            }
-        }
-        for (const EntityId entity : selected) {
-            if (scene_.exists(entity)) {
-                scene_.setSelected(entity, true);
-            }
-        }
-
-        if (active != InvalidEntityId && desired.contains(active)) {
-            scene_.setActiveSelection(active);
-            return;
-        }
-        for (const EntityId entity : selected) {
-            if (scene_.exists(entity)) {
-                scene_.setActiveSelection(entity);
-                return;
-            }
-        }
+        selectionProjectionService_.restoreSceneSelection(scene_, selected, active);
     }
 
     /**
@@ -2115,174 +2040,27 @@ public:
     }
 
     ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {
-        const std::vector<EntityId> selected = scene_.selectedEntities();
-        std::unordered_set<EntityId> selectedSet(selected.begin(), selected.end());
-        std::vector<EntityId> roots;
-        for (const EntityId entity : scene_.entityTreeOrder()) {
-            if (!selectedSet.contains(entity)) {
-                continue;
-            }
-            bool ancestorSelected = false;
-            EntityId parent = scene_.parent(entity);
-            while (parent != InvalidEntityId) {
-                if (selectedSet.contains(parent)) {
-                    ancestorSelected = true;
-                    break;
-                }
-                parent = scene_.parent(parent);
-            }
-            if (!ancestorSelected) {
-                roots.push_back(entity);
-            }
-        }
-        if (roots.empty()) {
-            return {.ok = false, .changed = false, .message = "Select a group to duplicate."};
-        }
-
-        std::vector<EntityId> sourceMeshTreeOrder;
-        for (const EntityId root : roots) {
-            for (const EntityId entity : scene_.descendants(root, true)) {
-                if (scene_.modelingObject(entity) != nullptr) {
-                    sourceMeshTreeOrder.push_back(entity);
-                }
-            }
-        }
-
-        std::vector<EntityId> sourceMeshes = sourceMeshTreeOrder;
-        if (!sourceMeshTreeOrder.empty()) {
-            if (!sceneObjectsSyncedForCurrentModelingContent()) {
-                syncSceneObjectsFromModeling();
-            }
-            const std::unordered_set<EntityId> sourceMeshSet(sourceMeshTreeOrder.begin(), sourceMeshTreeOrder.end());
-            sourceMeshes.clear();
-            sourceMeshes.reserve(sourceMeshTreeOrder.size());
-            for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-                const std::optional<EntityId> entity = objectRegistry_.entityForModelingObject(object.id);
-                if (entity.has_value() && sourceMeshSet.contains(*entity)) {
-                    sourceMeshes.push_back(*entity);
-                }
-            }
-        }
-
-        std::vector<EntityId> duplicateMeshes;
-        auto restoreGroupSelection = [&]() {
-            (void)documentCommands.selectEntities(roots, roots.front());
-            (void)setSelectionMode(ModelingSelectionMode::Group);
-        };
-        if (!sourceMeshes.empty()) {
-            const ModelingCommandResult objectMode = setSelectionMode(ModelingSelectionMode::Object);
-            if (!objectMode.ok) {
-                restoreGroupSelection();
-                return objectMode;
-            }
-            (void)documentCommands.selectEntities(sourceMeshes, sourceMeshes.front());
-            syncObjectSelectionFromScene();
-            const ModelingCommandResult duplicate = executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes, false);
-            if (!duplicate.ok) {
-                restoreGroupSelection();
-                return duplicate;
-            }
-
-            const std::vector<int> selectedDuplicateObjectIds = session_.selected_object_ids();
-            const std::unordered_set<int> duplicateObjectSet(
-                    selectedDuplicateObjectIds.begin(),
-                    selectedDuplicateObjectIds.end());
-            duplicateMeshes.reserve(selectedDuplicateObjectIds.size());
-            for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-                if (!duplicateObjectSet.contains(object.id)) {
-                    continue;
-                }
-                const std::optional<EntityId> entity = objectRegistry_.entityForModelingObject(object.id);
-                if (entity.has_value()) {
-                    duplicateMeshes.push_back(*entity);
-                }
-            }
-            if (duplicateMeshes.size() != sourceMeshes.size()) {
-                restoreGroupSelection();
-                return {
-                        .ok = false,
-                        .changed = duplicate.changed,
-                        .message = "Group duplicate did not create matching mesh clones.",
-                };
-            }
-        }
-
-        std::unordered_map<EntityId, EntityId> cloneBySource;
-        for (std::size_t index = 0; index < sourceMeshes.size() && index < duplicateMeshes.size(); ++index) {
-            cloneBySource[sourceMeshes[index]] = duplicateMeshes[index];
-        }
-
-        auto copyCommonEntityState = [&](EntityId source, EntityId clone, bool renameClone = true) {
-            if (renameClone) {
-                if (const NameComponent* name = scene_.name(source)) {
-                    (void)documentCommands.renameEntity(clone, SceneEntityNaming::nextName(scene_, name->name));
-                }
-            }
-            if (const TransformComponent* sourceTransform = scene_.transform(source)) {
-                (void)documentCommands.applyEntityTransform(clone, *sourceTransform);
-            }
-            if (const VisibilityComponent* visibility = scene_.visibility(source)) {
-                (void)documentCommands.setVisible(clone, visibility->visible);
-            }
-            if (const LockComponent* lock = scene_.lock(source)) {
-                (void)documentCommands.setLocked(clone, lock->locked);
-            }
-        };
-
-        std::function<EntityId(EntityId)> cloneEntity = [&](EntityId source) -> EntityId {
-            EntityId clone = InvalidEntityId;
-            if (scene_.modelingObject(source) != nullptr) {
-                const auto mapped = cloneBySource.find(source);
-                if (mapped == cloneBySource.end()) {
-                    return InvalidEntityId;
-                }
-                clone = mapped->second;
-                copyCommonEntityState(source, clone);
-            } else {
-                const NameComponent* name = scene_.name(source);
-                const std::string baseName = name ? name->name : "Entity";
-                TransformComponent transform;
-                if (const TransformComponent* sourceTransform = scene_.transform(source)) {
-                    transform = *sourceTransform;
-                }
-                const DocumentCommandResult created = documentCommands.createEntity(
-                        SceneEntityNaming::nextName(scene_, baseName),
-                        scene_.kind(source),
-                        InvalidEntityId,
-                        transform,
-                        &clone);
-                if (!created.ok || !created.changed) {
-                    return InvalidEntityId;
-                }
-                copyCommonEntityState(source, clone, false);
-            }
-
-            for (const EntityId child : scene_.children(source)) {
-                const EntityId childClone = cloneEntity(child);
-                if (childClone != InvalidEntityId) {
-                    (void)documentCommands.reparentEntity(childClone, clone, false);
-                }
-            }
-            return clone;
-        };
-
-        std::vector<EntityId> rootClones;
-        for (const EntityId root : roots) {
-            const EntityId clone = cloneEntity(root);
-            if (clone != InvalidEntityId) {
-                (void)documentCommands.reparentEntity(clone, scene_.parent(root), false);
-                rootClones.push_back(clone);
-            }
-        }
-
-        if (rootClones.empty()) {
-            restoreGroupSelection();
-            return {.ok = false, .changed = false, .message = "Group duplicate failed."};
-        }
-
-        (void)documentCommands.selectEntities(rootClones, rootClones.front());
-        (void)setSelectionMode(ModelingSelectionMode::Group);
-        return {.ok = true, .changed = true, .message = "Group duplicated."};
+        return hierarchyDuplicateService_.duplicateSelectedHierarchyForGroupDrag(
+                session_,
+                scene_,
+                objectRegistry_,
+                documentCommands,
+                ModelingHierarchyDuplicateRuntime{
+                        .ensureSceneObjectsSynced = [&]() {
+                            if (!sceneObjectsSyncedForCurrentModelingContent()) {
+                                syncSceneObjectsFromModeling();
+                            }
+                        },
+                        .setSelectionMode = [&](ModelingSelectionMode mode) {
+                            return setSelectionMode(mode);
+                        },
+                        .projectObjectSelectionFromScene = [&]() {
+                            syncObjectSelectionFromScene();
+                        },
+                        .duplicateSelectedMeshes = [&]() {
+                            return executeInstantOperation(ModelingInstantOperationId::DuplicateMeshes, false);
+                        },
+                });
     }
 
     ModelingCommandResult setSelectionMode(ModelingSelectionMode mode) {
@@ -2337,14 +2115,7 @@ public:
             syncObjectSelectionFromScene();
         }
         syncSceneSelectionFromModeling();
-        for (const EntityId entity : sceneOnlySelection) {
-            if (scene_.exists(entity)) {
-                scene_.setSelected(entity, true);
-            }
-        }
-        if (activeSceneOnlySelection != InvalidEntityId && scene_.exists(activeSceneOnlySelection)) {
-            scene_.setActiveSelection(activeSceneOnlySelection);
-        }
+        selectionProjectionService_.addSceneSelection(scene_, sceneOnlySelection, activeSceneOnlySelection);
         return {
                 .ok = result.command.ok,
                 .changed = result.command.changed,
@@ -2368,232 +2139,47 @@ public:
         return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::delete_selection, true);
     }
 
-    /**
-     * Stores the Scene Aware Delete State data contract used by the modeling application service layer.
-     */
-    struct SceneAwareDeleteState {
-        std::vector<DocumentEntitySnapshot> roots;
-        DocumentSelectionState beforeSelection;
-        ModelingSelectionMode beforeMode = ModelingSelectionMode::Object;
-        std::vector<int> modelingObjectIds;
-        std::vector<EntityId> currentRoots;
-        ModelingSessionMemento beforeModeling;
-        ModelingSessionMemento afterModeling;
-        bool captured = false;
-        bool runtimeDeleteExecuted = false;
-    };
-
-    [[nodiscard]] std::vector<EntityId> selectedSceneDeleteRoots() const {
-        return documentCommandSelectedRootEntities(scene_);
-    }
-
     [[nodiscard]] bool hasSelectedSceneGroupRoot() const {
-        for (const EntityId root : selectedSceneDeleteRoots()) {
-            if (scene_.kind(root) == EntityKind::Empty && scene_.hasChildren(root)) {
-                return true;
-            }
-        }
-        return false;
+        return sceneAwareDeleteHasSelectedSceneGroupRoot(scene_);
     }
 
-    void appendModelingObjectIds(
-            const DocumentEntitySnapshot& snapshot,
-            std::vector<int>& objectIds) const {
-        if (snapshot.modelingObject.has_value() &&
-                snapshot.modelingObject->objectId != InvalidModelingObjectId) {
-            objectIds.push_back(snapshot.modelingObject->objectId);
-        }
-        for (const DocumentEntitySnapshot& child : snapshot.children) {
-            appendModelingObjectIds(child, objectIds);
-        }
-    }
-
-    [[nodiscard]] std::vector<int> snapshotModelingObjectIds(
-            const std::vector<DocumentEntitySnapshot>& snapshots) const {
-        std::vector<int> objectIds;
-        for (const DocumentEntitySnapshot& snapshot : snapshots) {
-            appendModelingObjectIds(snapshot, objectIds);
-        }
-        std::sort(objectIds.begin(), objectIds.end());
-        objectIds.erase(std::unique(objectIds.begin(), objectIds.end()), objectIds.end());
-        return objectIds;
-    }
-
-    [[nodiscard]] EntityId entityForSnapshotModelingObject(const DocumentEntitySnapshot& snapshot) const {
-        if (!snapshot.modelingObject.has_value()) {
-            return InvalidEntityId;
-        }
-        const ModelingObjectId objectId = snapshot.modelingObject->objectId;
-        for (const EntityId entity : scene_.entities()) {
-            const ModelingObjectComponent* modelingObject = scene_.modelingObject(entity);
-            if (modelingObject != nullptr && modelingObject->objectId == objectId) {
-                return entity;
-            }
-        }
-        return InvalidEntityId;
-    }
-
-    EntityId restoreSceneDeleteSnapshot(
-            const DocumentEntitySnapshot& snapshot,
-            EntityId parent,
-            std::unordered_map<EntityId, EntityId>& remappedEntities) {
-        EntityId restored = entityForSnapshotModelingObject(snapshot);
-        if (restored == InvalidEntityId || !scene_.exists(restored)) {
-            restored = documentCommandCreateEntityFromSnapshot(
-                    scene_,
-                    snapshot,
-                    InvalidEntityId,
-                    snapshot.name,
-                    true,
-                    true);
-        } else {
-            (void)scene_.renameEntity(restored, snapshot.name);
-            (void)scene_.setEditorObjectId(restored, snapshot.editorObjectId);
-            documentCommandApplyEntitySnapshotComponents(scene_, restored, snapshot, true);
-        }
-
-        if (restored == InvalidEntityId || !scene_.exists(restored)) {
-            return InvalidEntityId;
-        }
-        if (!scene_.setParent(restored, parent, false)) {
-            return InvalidEntityId;
-        }
-        scene_.setTransform(restored, snapshot.transform);
-        remappedEntities[snapshot.originalId] = restored;
-
-        for (const DocumentEntitySnapshot& child : snapshot.children) {
-            if (restoreSceneDeleteSnapshot(child, restored, remappedEntities) == InvalidEntityId) {
-                return InvalidEntityId;
-            }
-        }
-        return restored;
-    }
-
-    ModelingCommandResult captureSceneAwareDeleteState(SceneAwareDeleteState& state) {
-        state = {};
-        state.beforeMode = appSelectionMode_;
-        state.beforeSelection = documentCommandCaptureSelection(scene_);
-
-        const std::vector<EntityId> roots = selectedSceneDeleteRoots();
-        if (roots.empty()) {
-            return {.ok = false, .changed = false, .message = "Selection is empty."};
-        }
-
-        state.roots.reserve(roots.size());
-        for (const EntityId root : roots) {
-            std::optional<DocumentEntitySnapshot> snapshot =
-                    documentCommandCaptureEntitySnapshot(scene_, root);
-            if (!snapshot.has_value()) {
-                return {.ok = false, .changed = false, .message = "Selected entity is missing."};
-            }
-            state.roots.push_back(std::move(*snapshot));
-            state.currentRoots.push_back(root);
-        }
-        state.modelingObjectIds = snapshotModelingObjectIds(state.roots);
-        state.beforeModeling = captureHistoryMemento();
-        state.captured = true;
-        return {.ok = true, .changed = !state.roots.empty()};
-    }
-
-    ModelingCommandResult executeSceneAwareDeleteModelingObjects(SceneAwareDeleteState& state) {
-        if (state.modelingObjectIds.empty()) {
-            return {.ok = true, .changed = false};
-        }
-        session_.set_selection_mode(quader_editor_core::SelectionMode::object);
-        session_.set_selected_object_ids(state.modelingObjectIds, state.modelingObjectIds.front());
-        ModelingCommandResult result =
-                executeRuntimeCommand(noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::delete_selection), true);
-        if (result.ok && result.changed) {
-            state.runtimeDeleteExecuted = true;
-        }
-        return result;
-    }
-
-    ModelingCommandResult destroySceneAwareDeleteRoots(SceneAwareDeleteState& state) {
-        bool changed = false;
-        for (const EntityId root : state.currentRoots) {
-            if (scene_.exists(root)) {
-                changed = scene_.destroyEntity(root) || changed;
-            }
-        }
-        state.currentRoots.clear();
-        invalidateSelectionOverlayCaches();
-        return {.ok = true, .changed = changed};
-    }
-
-    ModelingCommandResult redoSceneAwareDelete(SceneAwareDeleteState& state, bool initialRedo) {
-        if (initialRedo) {
-            ModelingCommandResult captured = captureSceneAwareDeleteState(state);
-            if (!captured.ok || !captured.changed) {
-                return captured;
-            }
-            ModelingCommandResult runtimeDelete = executeSceneAwareDeleteModelingObjects(state);
-            if (!runtimeDelete.ok) {
-                return runtimeDelete;
-            }
-            ModelingCommandResult sceneDelete = destroySceneAwareDeleteRoots(state);
-            if (runtimeDelete.changed) {
-                state.afterModeling = captureHistoryMemento();
-            }
-            return {
-                    .ok = true,
-                    .changed = runtimeDelete.changed || sceneDelete.changed,
-                    .message = "Delete Selection",
-            };
-        }
-
-        ModelingCommandResult runtimeRedo{.ok = true, .changed = false};
-        if (state.runtimeDeleteExecuted) {
-            runtimeRedo = restoreHistoryMemento(state.afterModeling);
-            if (!runtimeRedo.ok) {
-                return runtimeRedo;
-            }
-        }
-        ModelingCommandResult sceneDelete = destroySceneAwareDeleteRoots(state);
-        return {
-                .ok = true,
-                .changed = runtimeRedo.changed || sceneDelete.changed,
-                .message = "Delete Selection",
-        };
-    }
-
-    ModelingCommandResult undoSceneAwareDelete(SceneAwareDeleteState& state) {
-        if (!state.captured) {
-            return {.ok = false, .changed = false, .message = "Delete selection was not captured."};
-        }
-
-        if (state.runtimeDeleteExecuted) {
-            ModelingCommandResult runtimeUndo = restoreHistoryMemento(state.beforeModeling);
-            if (!runtimeUndo.ok) {
-                return runtimeUndo;
-            }
-        }
-
-        std::unordered_map<EntityId, EntityId> remappedEntities;
-        std::vector<EntityId> restoredRoots;
-        restoredRoots.reserve(state.roots.size());
-        for (const DocumentEntitySnapshot& snapshot : state.roots) {
-            const EntityId parent = snapshot.originalParent != InvalidEntityId && scene_.exists(snapshot.originalParent)
-                    ? snapshot.originalParent
-                    : InvalidEntityId;
-            const EntityId restored = restoreSceneDeleteSnapshot(snapshot, parent, remappedEntities);
-            if (restored == InvalidEntityId) {
-                return {.ok = false, .changed = false, .message = "Deleted hierarchy could not be restored."};
-            }
-            restoredRoots.push_back(restored);
-        }
-
-        state.currentRoots = restoredRoots;
-        appSelectionMode_ = state.beforeMode;
-        documentCommandApplySelection(scene_, documentCommandRemapSelection(state.beforeSelection, remappedEntities));
-        if (state.beforeMode == ModelingSelectionMode::Object) {
-            syncObjectSelectionFromScene(true);
-        } else if (state.beforeMode == ModelingSelectionMode::Group) {
-            session_.set_selection_mode(quader_editor_core::SelectionMode::object);
-            session_.set_selected_object_ids({}, -1);
-        }
-        invalidateSelectionOverlayCaches();
-        return {.ok = true, .changed = true, .message = "Delete Selection"};
+    std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand() {
+        return createSceneAwareDeleteSelectionCommand(
+                scene_,
+                SceneAwareDeleteRuntime{
+                        .captureModelingMemento = [&]() {
+                            return captureHistoryMemento();
+                        },
+                        .restoreModelingMemento = [&](const ModelingSessionMemento& memento) {
+                            return restoreHistoryMemento(memento);
+                        },
+                        .appSelectionMode = [&]() {
+                            return appSelectionMode_;
+                        },
+                        .setAppSelectionMode = [&](ModelingSelectionMode mode) {
+                            appSelectionMode_ = mode;
+                        },
+                        .deleteModelingObjects = [&](const std::vector<int>& modelingObjectIds) {
+                            if (modelingObjectIds.empty()) {
+                                return ModelingCommandResult{.ok = true, .changed = false};
+                            }
+                            session_.set_selection_mode(quader_editor_core::SelectionMode::object);
+                            session_.set_selected_object_ids(modelingObjectIds, modelingObjectIds.front());
+                            return executeRuntimeCommand(
+                                    noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::delete_selection),
+                                    true);
+                        },
+                        .syncObjectSelectionFromScene = [&](bool forceObjectMode) {
+                            syncObjectSelectionFromScene(forceObjectMode);
+                        },
+                        .clearRuntimeObjectSelectionForGroupMode = [&]() {
+                            session_.set_selection_mode(quader_editor_core::SelectionMode::object);
+                            session_.set_selected_object_ids({}, -1);
+                        },
+                        .invalidateSelectionOverlayCaches = [&]() {
+                            invalidateSelectionOverlayCaches();
+                        },
+                });
     }
 
     ModelingCommandResult copySelection() {
@@ -2949,45 +2535,17 @@ public:
 
     [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const {
         const ModelingSelectionSummary summary = selectionSummary();
-        const bool hasSelection = summary.hasSelection;
-        const bool objectMode = summary.mode == ModelingSelectionMode::Object;
-        const bool vertexMode = summary.mode == ModelingSelectionMode::Vertex;
-        const bool edgeMode = summary.mode == ModelingSelectionMode::Edge;
-        const bool faceMode = summary.mode == ModelingSelectionMode::Face;
-        const bool hasVertices = summary.selectedVertexCount > 0;
-        const bool hasEdges = summary.selectedEdgeCount > 0;
-        const bool hasFaces = summary.selectedFaceCount > 0;
-
-        return {
-                {ModelingInstantOperationId::DeleteSelection, "delete_selection", "Delete", hasSelection},
-                {ModelingInstantOperationId::DuplicateMeshes, "duplicate_meshes", "Duplicate", objectMode && summary.selectedObjectCount > 0},
-                {ModelingInstantOperationId::CombineMeshes, "combine_meshes", "Combine Meshes", objectMode && summary.selectedObjectCount > 1},
-                {ModelingInstantOperationId::ExtractFaces, "extract_faces", "Extract Faces", faceMode && hasFaces},
-                {ModelingInstantOperationId::DetachFaces, "detach_faces", "Detach Faces", faceMode && hasFaces},
-                {ModelingInstantOperationId::Bridge, "bridge", "Bridge", (edgeMode && hasEdges) || (faceMode && hasFaces)},
-                {ModelingInstantOperationId::SnapVerticesToActive, "snap_vertices_to_active", "Snap to Vertex", vertexMode && summary.selectedVertexCount > 1 && summary.activeKind == ModelingActiveSelectionKind::Vertex},
-                {ModelingInstantOperationId::ConnectVertices, "connect_vertices", "Connect Vertices", vertexMode && hasVertices},
-                {ModelingInstantOperationId::DissolveVertices, "dissolve_vertices", "Dissolve Vertices", vertexMode && hasVertices},
-                {ModelingInstantOperationId::BevelVertices, "bevel_vertices", "Bevel Vertex", vertexMode && hasVertices},
-                {ModelingInstantOperationId::MergeVerticesToActive, "merge_vertices_to_active", "Merge Vertices To Active", vertexMode && summary.selectedVertexCount > 1},
-                {ModelingInstantOperationId::MergeVerticesToCenter, "merge_vertices_to_center", "Merge Vertices To Center", vertexMode && summary.selectedVertexCount > 1},
-                {ModelingInstantOperationId::SnapEdgesToActive, "snap_edges_to_active", "Snap to Edge", edgeMode && summary.selectedEdgeCount > 1 && summary.activeKind == ModelingActiveSelectionKind::Edge},
-                {ModelingInstantOperationId::ConnectEdges, "connect_edges", "Connect Edges", edgeMode && hasEdges},
-                {ModelingInstantOperationId::SplitEdges, "split_edges", "Split Edges", edgeMode && hasEdges},
-                {ModelingInstantOperationId::DissolveEdges, "dissolve_edges", "Dissolve Edges", edgeMode && hasEdges},
-                {ModelingInstantOperationId::MergeEdges, "merge_edges", "Merge Edges", edgeMode && hasEdges},
-                {ModelingInstantOperationId::CollapseEdges, "collapse_edges", "Collapse Edges", edgeMode && hasEdges},
-                {ModelingInstantOperationId::FillHole, "fill_hole", "Fill Hole", edgeMode && hasEdges},
-                {ModelingInstantOperationId::CombineFaces, "combine_faces", "Combine Faces", faceMode && hasFaces},
-                {ModelingInstantOperationId::CollapseFaces, "collapse_faces", "Collapse Faces", faceMode && hasFaces},
-                {ModelingInstantOperationId::RadialAlign, "radial_align", "Radial Align", hasSelection && !objectMode},
-                {ModelingInstantOperationId::FlipFaceNormals, "flip_face_normals", "Flip Face Normals", (objectMode && hasSelection) || (faceMode && hasFaces)},
-                {ModelingInstantOperationId::RecalculateFaceNormals, "recalculate_face_normals", "Recalculate Face Normals", (objectMode && hasSelection) || (faceMode && hasFaces)},
-                {ModelingInstantOperationId::ShadeFacesSmooth, "shade_faces_smooth", "Shade Smooth", (objectMode && hasSelection) || (faceMode && hasFaces)},
-                {ModelingInstantOperationId::ShadeFacesFlat, "shade_faces_flat", "Shade Flat", (objectMode && hasSelection) || (faceMode && hasFaces)},
-                {ModelingInstantOperationId::HardenEdgeNormals, "harden_edge_normals", "Harden Edge Normals", edgeMode && hasEdges},
-                {ModelingInstantOperationId::SoftenEdgeNormals, "soften_edge_normals", "Soften Edge Normals", edgeMode && hasEdges},
-        };
+        std::vector<ModelingInstantOperationDescriptor> operations;
+        for (const ModelingInstantOperationCatalogEntry& entry : modelingInstantOperationCatalog()) {
+            operations.push_back({
+                    .operation = entry.operation,
+                    .id = std::string(entry.id),
+                    .label = std::string(entry.liveLabel),
+                    .enabled = modelingInstantOperationEnabled(entry, summary),
+                    .rebuildsMeshOnSuccess = entry.rebuildsMeshOnSuccess,
+            });
+        }
+        return operations;
     }
 
     ModelingCommandResult executeRuntimeOperation(
@@ -4241,56 +3799,6 @@ public:
         return {.ok = true, .changed = changed};
     }
 
-    /**
-     * Applies Scene Aware Delete Selection Command behavior as a command in the modeling application service layer.
-     */
-    class SceneAwareDeleteSelectionCommand final : public IUndoableCommand {
-    public:
-        explicit SceneAwareDeleteSelectionCommand(Impl& owner)
-            : owner_(owner) {}
-
-        [[nodiscard]] const std::string& label() const override {
-            return label_;
-        }
-
-        CommandResult undo() override {
-            if (!executed_) {
-                return {
-                        .ok = false,
-                        .changed = false,
-                        .message = "Delete Selection has not been executed.",
-                };
-            }
-            return toCommandResult(owner_.undoSceneAwareDelete(state_));
-        }
-
-        CommandResult redo() override {
-            ModelingCommandResult result = owner_.redoSceneAwareDelete(state_, !executed_);
-            if (result.ok && result.changed) {
-                executed_ = true;
-            }
-            return toCommandResult(std::move(result));
-        }
-
-    private:
-        static CommandResult toCommandResult(ModelingCommandResult result) {
-            return {
-                    .ok = result.ok,
-                    .changed = result.changed,
-                    .message = std::move(result.message),
-            };
-        }
-
-        Impl& owner_;
-        SceneAwareDeleteState state_;
-        bool executed_ = false;
-        std::string label_ = "Delete Selection";
-    };
-
-    std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand() {
-        return std::make_unique<SceneAwareDeleteSelectionCommand>(*this);
-    }
-
 private:
     void invalidateSelectionOverlayCaches() const {
         overlayService_.invalidate();
@@ -4579,7 +4087,9 @@ private:
     ModelingObjectRuntimeMap objectRegistry_;
     SceneModelingSyncService sceneSyncService_;
     ModelingMeshSyncService meshSyncService_;
+    ModelingHierarchyDuplicateService hierarchyDuplicateService_;
     ModelingSelectionService selectionService_;
+    SelectionProjectionService selectionProjectionService_;
     mutable ModelingOverlayService overlayService_;
     ModelingCommandExecutor commandExecutor_;
     ModelingContextActionService contextActionService_;
@@ -4666,10 +4176,6 @@ ModelingCommandResult ModelingSessionService::restoreHistoryMemento(const Modeli
 
 void ModelingSessionService::projectObjectSelectionFromScene() {
     impl_->syncObjectSelectionFromScene();
-}
-
-void ModelingSessionService::projectSceneSelectionFromModeling() {
-    impl_->syncSceneSelectionFromModeling();
 }
 
 ModelingCommandResult ModelingSessionService::duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands) {

@@ -4,35 +4,23 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/QuaderEditorApi.h"
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneDocument.h"
+#include "scene/document/ProjectSession.h"
 #include "editor/tools/ViewportToolCatalog.h"
 #include "editor/tools/ViewportToolRuntime.h"
-#include "editor/tools/base/DrawnPlaneTool.h"
-#include "editor/tools/base/DragCommitTool.h"
-#include "editor/tools/base/PointSequenceTool.h"
-#include "editor/tools/base/TwoStageBoxTool.h"
-#include "editor/tools/interactive/BoxTool.h"
-#include "editor/tools/interactive/CutTool.h"
-#include "editor/tools/interactive/ExtendTool.h"
-#include "editor/tools/interactive/ExtrudeTool.h"
-#include "editor/tools/interactive/InsertEdgeLoopTool.h"
-#include "editor/tools/interactive/KnifeTool.h"
-#include "editor/tools/interactive/MirrorTool.h"
-#include "editor/tools/interactive/MoveTool.h"
-#include "editor/tools/interactive/PolyTool.h"
-#include "editor/tools/interactive/RotateTool.h"
-#include "editor/tools/interactive/ScaleTool.h"
-#include "editor/tools/interactive/SelectTool.h"
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
-#include <type_traits>
+#include <string_view>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -42,46 +30,64 @@ std::string readSourceFile(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 }
 
-TEST(ViewportToolCatalogTests, ViewportToolIsConcreteToolBase) {
-    static_assert(std::is_base_of_v<Tool, ViewportTool>);
-    static_assert(std::is_base_of_v<ViewportTool, InteractiveViewportTool>);
-    static_assert(std::is_base_of_v<InteractiveViewportTool, TransformViewportTool>);
-    static_assert(std::is_base_of_v<InteractiveViewportTool, ModalViewportTool>);
-    static_assert(std::is_base_of_v<ModalViewportTool, TwoStageBoxTool>);
-    static_assert(std::is_base_of_v<ModalViewportTool, DrawnPlaneTool>);
-    static_assert(std::is_base_of_v<ModalViewportTool, PointSequenceTool>);
-    static_assert(std::is_base_of_v<ModalViewportTool, DragCommitTool>);
+std::string sourceSlice(
+        const std::string& source,
+        std::string_view beginMarker,
+        std::string_view endMarker) {
+    const std::size_t begin = source.find(beginMarker);
+    if (begin == std::string::npos) {
+        return {};
+    }
+    const std::size_t end = source.find(endMarker, begin + beginMarker.size());
+    if (end == std::string::npos) {
+        return source.substr(begin);
+    }
+    return source.substr(begin, end - begin + endMarker.size());
 }
 
-TEST(ViewportToolCatalogTests, ContainsConcreteInteractiveTools) {
-    ASSERT_NE(dynamic_cast<const SelectTool*>(findViewportTool(ViewportToolId::Select)), nullptr);
-    ASSERT_NE(dynamic_cast<const MoveTool*>(findViewportTool(ViewportToolId::Move)), nullptr);
-    ASSERT_NE(dynamic_cast<const ExtendTool*>(findViewportTool(ViewportToolId::Extend)), nullptr);
-    ASSERT_NE(dynamic_cast<const ExtrudeTool*>(findViewportTool(ViewportToolId::Extrude)), nullptr);
-    ASSERT_NE(dynamic_cast<const RotateTool*>(findViewportTool(ViewportToolId::Rotate)), nullptr);
-    ASSERT_NE(dynamic_cast<const ScaleTool*>(findViewportTool(ViewportToolId::Scale)), nullptr);
-    ASSERT_NE(dynamic_cast<const BoxTool*>(findViewportTool(ViewportToolId::Box)), nullptr);
-    ASSERT_NE(dynamic_cast<const InsertEdgeLoopTool*>(findViewportTool(ViewportToolId::InsertEdgeLoop)), nullptr);
-    ASSERT_NE(dynamic_cast<const KnifeTool*>(findViewportTool(ViewportToolId::Knife)), nullptr);
-    ASSERT_NE(dynamic_cast<const CutTool*>(findViewportTool(ViewportToolId::Cut)), nullptr);
-    ASSERT_NE(dynamic_cast<const PolyTool*>(findViewportTool(ViewportToolId::Poly)), nullptr);
-    ASSERT_NE(dynamic_cast<const MirrorTool*>(findViewportTool(ViewportToolId::Mirror)), nullptr);
-}
+TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) {
+    /**
+     * Stores expected viewport tool descriptor values for catalog contract checks.
+     */
+    struct ExpectedTool {
+        ViewportToolId tool;
+        ModelingViewportTool modelingTool;
+        std::string_view id;
+        std::string_view label;
+        ToolKind kind;
+        ToolMenuGroup menuGroup;
+        bool ownsViewport;
+        bool blocksFocusShortcuts;
+    };
+    constexpr std::array<ExpectedTool, 12> expected{{
+            {ViewportToolId::Select, ModelingViewportTool::Select, "select", "Select", ToolKind::Selection, ToolMenuGroup::Navigation, false, false},
+            {ViewportToolId::Move, ModelingViewportTool::Move, "move", "Move", ToolKind::Transform, ToolMenuGroup::Navigation, false, false},
+            {ViewportToolId::Extend, ModelingViewportTool::Extend, "extend", "Extend", ToolKind::Transform, ToolMenuGroup::Modeling, false, false},
+            {ViewportToolId::Extrude, ModelingViewportTool::Extrude, "extrude", "Extrude", ToolKind::Transform, ToolMenuGroup::Modeling, false, false},
+            {ViewportToolId::Rotate, ModelingViewportTool::Rotate, "rotate", "Rotate", ToolKind::Transform, ToolMenuGroup::Navigation, false, false},
+            {ViewportToolId::Scale, ModelingViewportTool::Scale, "scale", "Scale", ToolKind::Transform, ToolMenuGroup::Navigation, false, false},
+            {ViewportToolId::Box, ModelingViewportTool::Box, "box", "Box", ToolKind::Modal, ToolMenuGroup::Modeling, true, false},
+            {ViewportToolId::InsertEdgeLoop, ModelingViewportTool::InsertEdgeLoop, "insert_edge_loop", "Insert Edge Loop", ToolKind::Modal, ToolMenuGroup::Modeling, true, false},
+            {ViewportToolId::Knife, ModelingViewportTool::Knife, "knife", "Knife", ToolKind::Modal, ToolMenuGroup::Modeling, true, true},
+            {ViewportToolId::Cut, ModelingViewportTool::Cut, "cut", "Cut", ToolKind::Modal, ToolMenuGroup::Modeling, true, true},
+            {ViewportToolId::Poly, ModelingViewportTool::Poly, "poly", "Poly", ToolKind::Modal, ToolMenuGroup::Modeling, true, true},
+            {ViewportToolId::Mirror, ModelingViewportTool::Mirror, "mirror", "Mirror", ToolKind::Modal, ToolMenuGroup::Modeling, true, true},
+    }};
 
-TEST(ViewportToolCatalogTests, ConcreteToolsUseExpectedInteractiveInheritance) {
-    EXPECT_NE(dynamic_cast<const InteractiveViewportTool*>(findViewportTool(ViewportToolId::Select)), nullptr);
-    EXPECT_NE(dynamic_cast<const TransformViewportTool*>(findViewportTool(ViewportToolId::Move)), nullptr);
-    EXPECT_NE(dynamic_cast<const TransformViewportTool*>(findViewportTool(ViewportToolId::Extend)), nullptr);
-    EXPECT_NE(dynamic_cast<const TransformViewportTool*>(findViewportTool(ViewportToolId::Extrude)), nullptr);
-    EXPECT_NE(dynamic_cast<const TransformViewportTool*>(findViewportTool(ViewportToolId::Rotate)), nullptr);
-    EXPECT_NE(dynamic_cast<const TransformViewportTool*>(findViewportTool(ViewportToolId::Scale)), nullptr);
-    EXPECT_NE(dynamic_cast<const ModalViewportTool*>(findViewportTool(ViewportToolId::Box)), nullptr);
-    EXPECT_NE(dynamic_cast<const TwoStageBoxTool*>(findViewportTool(ViewportToolId::Box)), nullptr);
-    EXPECT_NE(dynamic_cast<const DragCommitTool*>(findViewportTool(ViewportToolId::InsertEdgeLoop)), nullptr);
-    EXPECT_NE(dynamic_cast<const PointSequenceTool*>(findViewportTool(ViewportToolId::Knife)), nullptr);
-    EXPECT_NE(dynamic_cast<const DrawnPlaneTool*>(findViewportTool(ViewportToolId::Cut)), nullptr);
-    EXPECT_NE(dynamic_cast<const PointSequenceTool*>(findViewportTool(ViewportToolId::Poly)), nullptr);
-    EXPECT_NE(dynamic_cast<const DrawnPlaneTool*>(findViewportTool(ViewportToolId::Mirror)), nullptr);
+    ASSERT_EQ(viewportToolCatalog().size(), expected.size());
+    for (const ExpectedTool& item : expected) {
+        const ViewportTool* tool = findViewportTool(item.tool);
+        ASSERT_NE(tool, nullptr) << static_cast<int>(item.tool);
+        EXPECT_EQ(findViewportTool(item.id), tool);
+        EXPECT_EQ(tool->viewportTool(), item.tool);
+        EXPECT_EQ(tool->modelingTool(), item.modelingTool);
+        EXPECT_EQ(tool->id(), item.id);
+        EXPECT_EQ(tool->label(), item.label);
+        EXPECT_EQ(tool->kind(), item.kind);
+        EXPECT_EQ(tool->menuGroup(), item.menuGroup);
+        EXPECT_EQ(tool->ownsViewport(), item.ownsViewport);
+        EXPECT_EQ(tool->blocksViewportFocusShortcuts(), item.blocksFocusShortcuts);
+    }
 }
 
 TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
@@ -193,12 +199,212 @@ TEST(ViewportToolRuntimeTests, RuntimeRoutesToolEventsToActiveTool) {
     EXPECT_EQ(runtime.activeTool()->viewportTool(), ViewportToolId::Select);
 }
 
+TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
+    ProjectSession session;
+    QuaderEditorApi editor(session);
+    ViewportToolState state;
+    ViewportCameraController camera;
+    ViewportModalToolState modalState;
+
+    const QuaderApiResult<QuaderAssetRef> material = editor.assets().addMaterial(QuaderMaterialArgs{
+            .name = "Viewport Box Material",
+            .baseColor = {0.2f, 0.4f, 0.8f},
+    });
+    ASSERT_TRUE(material.ok) << material.message;
+
+    const ViewportTool* boxTool = findViewportTool(ViewportToolId::Box);
+    ASSERT_NE(boxTool, nullptr);
+    ASSERT_TRUE(session.modeling().activateBoxTool().ok);
+
+    const ModelingBoxToolEvent start{
+            .screenPosition = {400.0f, 300.0f},
+            .ray = {
+                    .origin = {4.0f, 4.0f, 4.0f},
+                    .direction = {0.0f, -1.0f, 0.0f},
+            },
+            .gridSize = 1.0,
+    };
+    const ModelingBoxToolEvent footprintEnd{
+            .screenPosition = {400.0f, 300.0f},
+            .ray = {
+                    .origin = {6.0f, 4.0f, 7.0f},
+                    .direction = {0.0f, -1.0f, 0.0f},
+            },
+            .gridSize = 1.0,
+    };
+    const ModelingBoxToolEvent heightEnd{
+            .screenPosition = {400.0f, 360.0f},
+            .ray = start.ray,
+            .gridSize = 1.0,
+    };
+    ModelingBoxToolEvent currentEvent = start;
+    EntityId committedEntity = InvalidEntityId;
+    int commitCount = 0;
+
+    ViewportBoxToolContext boxContext{
+            .defaultMaterial = material.value.id,
+    };
+    boxContext.makeEvent = [&]() {
+        return currentEvent;
+    };
+    boxContext.commitPreview = [&](std::string name, AssetId defaultMaterial) {
+        ++commitCount;
+        const QuaderApiResult<QuaderModelingObjectRef> result =
+                editor.modeling().commitBoxPreview(std::move(name), defaultMaterial);
+        ModelingCreateBoxResult committed{
+                .ok = result.ok,
+                .changed = result.changed,
+                .message = result.message,
+        };
+        if (result.ok && result.changed) {
+            committedEntity = result.value.entity;
+            committed.object = {
+                    .modelingObjectId = result.value.modelingObjectId,
+                    .entity = result.value.entity,
+                    .mesh = result.value.mesh,
+                    .name = "Viewport Box",
+            };
+        }
+        return committed;
+    };
+    boxContext.nextMeshName = [] {
+        return std::string{"Viewport Box"};
+    };
+
+    ViewportToolContext context{
+            .state = state,
+            .camera = camera,
+            .modeling = session.modeling(),
+            .document = &session.scene(),
+            .modalState = &modalState,
+            .box = &boxContext,
+    };
+    context.setAppSelectionMode = [&](ModelingSelectionMode mode) {
+        (void)editor.selection().setMode(mode);
+    };
+
+    auto dispatchFrame = [&](ViewportPointerToolEvent pointer) {
+        return boxTool->handleEvent(context, ViewportToolEvent{
+                .kind = ViewportToolEventKind::Frame,
+                .tool = ViewportToolId::Box,
+                .pointer = pointer,
+        });
+    };
+
+    ViewportToolResult result = dispatchFrame(ViewportPointerToolEvent{
+            .hovered = true,
+            .leftClicked = true,
+    });
+    ASSERT_TRUE(result.handled);
+    ASSERT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Footprint);
+
+    currentEvent = footprintEnd;
+    result = dispatchFrame(ViewportPointerToolEvent{
+            .hovered = true,
+            .leftDown = true,
+    });
+    ASSERT_TRUE(result.handled);
+    ASSERT_TRUE(modalState.boxPreview.valid);
+
+    currentEvent = start;
+    result = dispatchFrame(ViewportPointerToolEvent{
+            .hovered = true,
+            .leftReleased = true,
+    });
+    ASSERT_TRUE(result.handled);
+    ASSERT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Height);
+
+    currentEvent = heightEnd;
+    result = dispatchFrame(ViewportPointerToolEvent{
+            .hovered = true,
+    });
+    ASSERT_TRUE(result.handled);
+    ASSERT_TRUE(modalState.boxPreview.valid);
+
+    result = dispatchFrame(ViewportPointerToolEvent{
+            .hovered = true,
+            .leftClicked = true,
+    });
+    ASSERT_TRUE(result.handled);
+    ASSERT_TRUE(result.activeToolChanged);
+    EXPECT_EQ(commitCount, 1);
+    ASSERT_NE(committedEntity, InvalidEntityId);
+    ASSERT_TRUE(session.scene().exists(committedEntity));
+    ASSERT_NE(session.scene().material(committedEntity), nullptr);
+    EXPECT_EQ(session.scene().material(committedEntity)->material, material.value.id);
+    EXPECT_EQ(session.scene().primarySelection(), committedEntity);
+
+    ASSERT_TRUE(editor.history().canUndo());
+    const QuaderApiVoidResult undo = editor.history().undo();
+    ASSERT_TRUE(undo.ok) << undo.message;
+    ASSERT_TRUE(undo.changed);
+    EXPECT_FALSE(session.scene().exists(committedEntity));
+    EXPECT_EQ(session.scene().primarySelection(), InvalidEntityId);
+    ASSERT_TRUE(editor.history().canRedo());
+
+    const QuaderApiVoidResult redo = editor.history().redo();
+    ASSERT_TRUE(redo.ok) << redo.message;
+    ASSERT_TRUE(redo.changed);
+    ASSERT_TRUE(session.scene().exists(committedEntity));
+    ASSERT_NE(session.scene().material(committedEntity), nullptr);
+    EXPECT_EQ(session.scene().material(committedEntity)->material, material.value.id);
+    EXPECT_EQ(session.scene().primarySelection(), committedEntity);
+}
+
 TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {
     const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
     const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
     const std::string catalogHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportToolCatalog.h");
     EXPECT_EQ(toolHeader.find("ViewportToolBase"), std::string::npos);
     EXPECT_EQ(catalogHeader.find("ViewportToolBase"), std::string::npos);
+}
+
+TEST(ViewportToolGuardrailTests, BoxToolUsesFocusedContextInsteadOfBroadToolBag) {
+    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
+    const std::string broadContext =
+            sourceSlice(toolHeader, "struct ViewportToolContext {", "};");
+    const std::string boxToolSource =
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "TwoStageBoxTool.cpp");
+
+    EXPECT_NE(toolHeader.find("struct ViewportBoxToolContext"), std::string::npos);
+    EXPECT_NE(broadContext.find("ViewportBoxToolContext* box"), std::string::npos);
+    EXPECT_EQ(broadContext.find("makeBoxEvent"), std::string::npos);
+    EXPECT_EQ(broadContext.find("commitBoxPreview"), std::string::npos);
+    EXPECT_EQ(broadContext.find("nextMeshName"), std::string::npos);
+    EXPECT_EQ(broadContext.find("defaultMaterial"), std::string::npos);
+
+    EXPECT_NE(boxToolSource.find("ViewportBoxToolContext& boxContext = *context.box"), std::string::npos);
+    EXPECT_EQ(boxToolSource.find("context.makeBoxEvent"), std::string::npos);
+    EXPECT_EQ(boxToolSource.find("context.commitBoxPreview"), std::string::npos);
+    EXPECT_EQ(boxToolSource.find("context.nextMeshName"), std::string::npos);
+}
+
+TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBag) {
+    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
+    const std::string broadContext =
+            sourceSlice(toolHeader, "struct ViewportToolContext {", "};");
+    const std::string dragToolSource =
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "DragCommitTool.cpp");
+    const std::string pointSequenceToolSource =
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "PointSequenceTool.cpp");
+    const std::string drawnPlaneToolSource =
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "DrawnPlaneTool.cpp");
+    const std::string viewportPanelSource =
+            readSourceFile(root / "src" / "ui" / "ViewportPanel.cpp");
+
+    EXPECT_NE(toolHeader.find("struct ViewportPointToolContext"), std::string::npos);
+    EXPECT_NE(broadContext.find("ViewportPointToolContext* point"), std::string::npos);
+    EXPECT_EQ(broadContext.find("makeToolEventAt"), std::string::npos);
+    EXPECT_EQ(broadContext.find("hitDrawnPlaneCapturedPoint"), std::string::npos);
+    EXPECT_EQ(broadContext.find("hitDrawnPlaneLine"), std::string::npos);
+
+    EXPECT_NE(dragToolSource.find("ViewportPointToolContext& pointContext = *context.point"), std::string::npos);
+    EXPECT_NE(pointSequenceToolSource.find("ViewportPointToolContext* pointContext = context.point"), std::string::npos);
+    EXPECT_NE(drawnPlaneToolSource.find("ViewportPointToolContext& pointContext = *context.point"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportPointToolContext pointToolContext"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find(".point = &pointToolContext"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {

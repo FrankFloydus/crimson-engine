@@ -8,6 +8,8 @@
 
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiTypes.h"
+#include "editor/modeling/ModelingTypes.h"
+#include "editor/modeling/services/ModelingActionCatalog.h"
 
 #include <cstdint>
 #include <string>
@@ -27,7 +29,11 @@ public:
     QuaderModelingApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
 
     QuaderApiResult<QuaderModelingObjectRef> createBox(const QuaderCreateBoxArgs& args);
+    QuaderApiResult<QuaderModelingObjectRef> createBox(QuaderBounds bounds, std::string name = "Box");
     QuaderApiResult<QuaderModelingObjectRef> createBox(ModelingBounds bounds, std::string name = "Box");
+    QuaderApiResult<QuaderModelingObjectRef> commitBoxPreview(
+            std::string name = "Box",
+            AssetId defaultMaterial = InvalidAssetId);
 
     QuaderApiResult<QuaderModelingObjectRef> createMesh(
             QuaderPolygonDocument document,

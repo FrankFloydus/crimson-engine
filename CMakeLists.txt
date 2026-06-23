@@ -87,6 +87,8 @@ set(QUADER_MODELING_TOOL_SOURCES
     src/editor/commands/ModelingCommandToolCatalog.cpp
     src/editor/commands/modeling/AssignMaterialTool.cpp
     src/editor/commands/modeling/ClearSelectionTool.cpp
+    src/editor/commands/modeling/CommitBoxPreviewCommand.cpp
+    src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp
     src/editor/commands/modeling/CopySelectionTool.cpp
     src/editor/commands/modeling/FlipHorizontalTool.cpp
     src/editor/commands/modeling/FlipVerticalTool.cpp
@@ -114,8 +116,11 @@ add_library(quader_modeling STATIC
     src/editor/projection/MeshProjectionService.cpp
     src/editor/projection/PickingCacheProjection.cpp
     src/editor/projection/SelectionOverlayProjection.cpp
+    src/editor/selection/SelectionProjectionService.cpp
     src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp
     src/editor/modeling/services/ModelingActionCatalog.cpp
+    src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp
+    src/editor/modeling/services/ModelingInstantOperationCatalog.cpp
     src/editor/modeling/services/ModelingMeshSyncService.cpp
     src/editor/modeling/services/ModelingOperationSettings.cpp
     src/editor/modeling/services/ModelingSessionServices.cpp
@@ -176,6 +181,7 @@ target_compile_features(quader_core PUBLIC cxx_std_20)
 
 add_library(quader_api STATIC
     src/api/QuaderApi.cpp
+    src/api/QuaderApiTypes.cpp
     src/api/QuaderApiMutationRunner.cpp
     src/api/QuaderAssetApi.cpp
     src/api/QuaderCommandsApi.cpp
@@ -305,6 +311,7 @@ quader_compile_material(ground_grid_material resources/materials/ground_grid.mat
 
 add_library(quader_runtime STATIC
     src/app/App.cpp
+    src/editor/transform/SceneTransformDragService.cpp
     src/platform/FatalErrorHandler.cpp
     src/platform/PlatformWindow.cpp
     src/render/FilamentUtils.cpp
@@ -325,6 +332,7 @@ add_library(quader_runtime STATIC
     src/render/overlay/OverlayProxyFactory.cpp
     src/render/overlay/OverlayRenderableBuilder.cpp
     src/render/overlay/OverlayRenderableCache.cpp
+    src/render/overlay/ViewportSceneOverlayBuilder.cpp
     src/render/overlay/ViewportOverlayStyleResolver.cpp
     src/render/RenderSystem.cpp
     src/render/SceneRenderBridge.cpp

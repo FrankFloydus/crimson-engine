@@ -17,18 +17,9 @@
 
 namespace quader {
 
-/**
- * Owns Mesh Asset Store behavior within the asset document and registry layer.
- */
-class MeshAssetStore final : public TypedAssetStore<MeshAsset, MeshAssetRevision> {};
-/**
- * Owns Material Asset Store behavior within the asset document and registry layer.
- */
-class MaterialAssetStore final : public TypedAssetStore<MaterialDocument, MaterialAssetRevision> {};
-/**
- * Owns Texture Asset Store behavior within the asset document and registry layer.
- */
-class TextureAssetStore final : public TypedAssetStore<TextureAsset, TextureAssetRevision> {};
+using MeshAssetStore = TypedAssetStore<MeshAsset, MeshAssetRevision>;
+using MaterialAssetStore = TypedAssetStore<MaterialDocument, MaterialAssetRevision>;
+using TextureAssetStore = TypedAssetStore<TextureAsset, TextureAssetRevision>;
 
 /**
  * Owns Asset Registry lookup and registration for the asset document and registry layer.

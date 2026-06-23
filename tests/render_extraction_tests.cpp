@@ -4,6 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "assets/AssetRegistry.h"
+#include "assets/MeshAsset.h"
 #include "core/ColorSpace.h"
 #include "render/RenderLayers.h"
 #include "render/ViewportRenderPassCoordinator.h"
@@ -13,14 +15,18 @@
 #include "render/overlay/OverlayProxyFactory.h"
 #include "render/overlay/OverlayRenderableCache.h"
 #include "render/overlay/OverlayRenderableBuilder.h"
+#include "render/overlay/ViewportSceneOverlayBuilder.h"
+#include "scene/SceneDocument.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <utility>
 
 using namespace quader;
 
@@ -40,7 +46,124 @@ ViewportOverlayCamera testOverlayCamera() {
     };
 }
 
+MeshAsset makeOverlayTriangleMesh() {
+    MeshAsset mesh;
+    mesh.name = "Overlay Triangle";
+    mesh.vertices = {
+            MeshVertex{.position = {-0.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}},
+            MeshVertex{.position = {0.5f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 0.0f}},
+            MeshVertex{.position = {0.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.5f, 1.0f}},
+    };
+    mesh.indices = {0u, 1u, 2u};
+    mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 0u}};
+    return mesh;
+}
+
+std::size_t lineCountFor(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
+    return static_cast<std::size_t>(std::count_if(frame.lines.begin(), frame.lines.end(), [layer](const ViewportOverlayLine& line) {
+        return line.layer == layer;
+    }));
+}
+
+std::size_t lineSourceCountFor(const ViewportOverlayFrame& frame, ViewportOverlaySource source) {
+    return static_cast<std::size_t>(std::count_if(frame.lines.begin(), frame.lines.end(), [source](const ViewportOverlayLine& line) {
+        return line.source == source;
+    }));
+}
+
+std::size_t triangleCountFor(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
+    return static_cast<std::size_t>(std::count_if(
+            frame.triangles.begin(),
+            frame.triangles.end(),
+            [layer](const ViewportOverlayTriangle& triangle) {
+                return triangle.layer == layer;
+            }));
+}
+
 } // namespace
+
+TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds) {
+    SceneDocument document;
+    AssetRegistry assets;
+    const AssetId mesh = assets.addMesh(makeOverlayTriangleMesh());
+    const EntityId group = document.createEmpty("Selected Group");
+    const EntityId child = document.createEntity("Child Mesh", EntityKind::Mesh);
+    document.setMesh(child, MeshComponent{.mesh = mesh});
+    ASSERT_TRUE(document.setParent(child, group));
+    ASSERT_TRUE(document.setSelected(group, true));
+
+    ViewportOverlayFrame baseFrame;
+    baseFrame.lines.push_back({
+            .layer = ViewportOverlayLayer::SelectedEdge,
+            .start = {},
+            .end = {1.0f, 0.0f, 0.0f},
+            .source = ViewportOverlaySource::Selection,
+    });
+
+    const ViewportOverlayFrame frame =
+            ViewportSceneOverlayBuilder::buildSelectionFrame(std::move(baseFrame), document, assets);
+
+    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::SelectedEdge), 1u);
+    EXPECT_EQ(lineSourceCountFor(frame, ViewportOverlaySource::HierarchySelection), 3u);
+    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::GroupBounds), 12u);
+    EXPECT_TRUE(std::all_of(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.layer != ViewportOverlayLayer::GroupBounds ||
+                (line.color == kOverlayGroupBoundsColor &&
+                        line.styleRole == ViewportOverlayStyleRole::GroupBounds &&
+                        line.source == ViewportOverlaySource::GroupBounds);
+    }));
+}
+
+TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFills) {
+    SceneDocument document;
+    AssetRegistry assets;
+    const AssetId mesh = assets.addMesh(makeOverlayTriangleMesh());
+    const EntityId entity = document.createEntity("Wire Mesh", EntityKind::Mesh);
+    document.setMesh(entity, MeshComponent{.mesh = mesh});
+
+    ViewportOverlayFrame baseFrame;
+    baseFrame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SelectedVisibleFace,
+            .a = {},
+            .b = {1.0f, 0.0f, 0.0f},
+            .c = {0.0f, 1.0f, 0.0f},
+    });
+    baseFrame.triangles.push_back({
+            .layer = ViewportOverlayLayer::HoverFace,
+            .a = {},
+            .b = {1.0f, 0.0f, 0.0f},
+            .c = {0.0f, 0.0f, 1.0f},
+    });
+    baseFrame.triangles.push_back({
+            .layer = ViewportOverlayLayer::ToolPreviewFill,
+            .a = {},
+            .b = {0.0f, 1.0f, 0.0f},
+            .c = {0.0f, 0.0f, 1.0f},
+            .source = ViewportOverlaySource::Tool,
+    });
+
+    const ViewportOverlayFrame objectFrame =
+            ViewportSceneOverlayBuilder::buildWireframeFrame(baseFrame, ModelingSelectionMode::Object, document, assets);
+
+    EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::SelectedVisibleFace), 0u);
+    EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::HoverFace), 0u);
+    EXPECT_EQ(triangleCountFor(objectFrame, ViewportOverlayLayer::ToolPreviewFill), 1u);
+    EXPECT_EQ(lineCountFor(objectFrame, ViewportOverlayLayer::WireframeBase), 3u);
+    EXPECT_TRUE(std::all_of(objectFrame.lines.begin(), objectFrame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.layer != ViewportOverlayLayer::WireframeBase ||
+                (line.color == rgba8(255, 255, 255) &&
+                        line.styleRole == ViewportOverlayStyleRole::WireframeBase &&
+                        line.source == ViewportOverlaySource::SceneWireframe);
+    }));
+
+    const ViewportOverlayFrame faceFrame =
+            ViewportSceneOverlayBuilder::buildWireframeFrame(baseFrame, ModelingSelectionMode::Face, document, assets);
+
+    EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::SelectedVisibleFace), 1u);
+    EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::HoverFace), 1u);
+    EXPECT_EQ(triangleCountFor(faceFrame, ViewportOverlayLayer::ToolPreviewFill), 1u);
+    EXPECT_EQ(lineCountFor(faceFrame, ViewportOverlayLayer::WireframeBase), 3u);
+}
 
 TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
     ViewportOverlayFrame frame;

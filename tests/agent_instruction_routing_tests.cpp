@@ -55,6 +55,14 @@ bool contains(const std::string& source, std::string_view needle) {
     return source.find(needle) != std::string::npos;
 }
 
+std::vector<std::string> retiredRefactorPlanFiles() {
+    return {
+            std::string("app-") + "refactor.md",
+            std::string("oop-") + "refactor.md",
+            std::string("programmatic-api-") + "plan.md",
+    };
+}
+
 } // namespace
 
 TEST(AgentInstructionRoutingTests, RootAgentsFileIsThinRouterToDomainInstructions) {
@@ -75,6 +83,16 @@ TEST(AgentInstructionRoutingTests, RequiredDomainInstructionFilesExistAndAreRout
         EXPECT_TRUE(std::filesystem::exists(sourceRoot() / relative)) << relative;
         EXPECT_TRUE(contains(root, relative) || relative == "agents/README.md") << relative;
     }
+}
+
+TEST(AgentInstructionRoutingTests, ArchitectureGuidanceLivesInDomainInstructions) {
+    const std::string projectIdentity = readFile("agents/project-identity.md");
+    const std::string publicApi = readFile("agents/public-api-and-scripting.md");
+
+    EXPECT_TRUE(contains(projectIdentity, "native standalone Windows Quader app"));
+    EXPECT_TRUE(contains(projectIdentity, "Do not preserve the old top-level copied SDK boundary"));
+    EXPECT_TRUE(contains(publicApi, "QuaderEditorApi"));
+    EXPECT_TRUE(contains(publicApi, "Add To Public API When"));
 }
 
 TEST(AgentInstructionRoutingTests, PublicApiPolicyIsFirstClassInstruction) {
@@ -103,22 +121,22 @@ TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
             "agents/testing-build.md",
             "agents/dependencies.md",
             "agents/docs-public-examples.md",
-            "programmatic-api-plan.md",
     };
 
     for (const std::filesystem::path& file : files) {
         const std::string source = readFile(file);
-        EXPECT_FALSE(contains(source, "oop-refactor.md")) << file.generic_string();
+        for (const std::string& retiredPlan : retiredRefactorPlanFiles()) {
+            EXPECT_FALSE(contains(source, retiredPlan)) << file.generic_string();
+        }
         EXPECT_FALSE(contains(source, "Progress Ledger")) << file.generic_string();
     }
 }
 
-TEST(AgentInstructionRoutingTests, AppRefactorSupersedesCopiedSdkBoundary) {
+TEST(AgentInstructionRoutingTests, ProjectIdentitySupersedesCopiedSdkBoundary) {
     const std::string projectIdentity = readFile("agents/project-identity.md");
     const std::string domainOwnership = readFile("agents/domain-ownership.md");
     const std::string testingBuild = readFile("agents/testing-build.md");
 
-    EXPECT_TRUE(contains(projectIdentity, "app-refactor.md"));
     EXPECT_TRUE(contains(projectIdentity, "Do not preserve the old top-level copied SDK boundary"));
     EXPECT_TRUE(contains(projectIdentity, "compile-time SDK presence macro"));
     EXPECT_TRUE(contains(domainOwnership, "Former SDK geometry, polygon, editor-core"));
@@ -145,7 +163,6 @@ TEST(AgentInstructionRoutingTests, AgentInstructionsStayNative) {
             "agents/testing-build.md",
             "agents/dependencies.md",
             "agents/docs-public-examples.md",
-            "programmatic-api-plan.md",
     };
 
     const std::string retiredInstructionName = std::string("sdk-") + "un" + "ity-" + "par" + "ity.md";

@@ -8,6 +8,8 @@
 
 #include "api/QuaderApiSnapshot.h"
 #include "assets/MeshAsset.h"
+#include "editor/modeling/ModelingTypes.h"
+#include "render/ViewportOverlayFrame.h"
 
 #include <optional>
 #include <vector>
@@ -30,7 +32,8 @@ public:
     [[nodiscard]] std::optional<QuaderMeshSnapshot> mesh(AssetId id) const;
     [[nodiscard]] std::vector<ModelingObjectRecord> modelingObjects() const;
     [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForEntity(EntityId entity) const;
-    [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForId(ModelingObjectId modelingObjectId) const;
+    [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForId(
+            QuaderModelingObjectId modelingObjectId) const;
     [[nodiscard]] std::optional<MeshAsset> compiledObjectMesh(QuaderModelingObjectRef object) const;
     [[nodiscard]] std::optional<Vec3> selectionCenter() const;
     [[nodiscard]] ModelingSelectionSummary selection() const;

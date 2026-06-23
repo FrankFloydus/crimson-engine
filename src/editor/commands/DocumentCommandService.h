@@ -26,23 +26,22 @@ class DocumentCommandService {
 public:
     DocumentCommandService(SceneDocument& scene, EditorHistoryService& history);
 
-    DocumentCommandResult createEntity(
+    DocumentCreateEntityResult createEntity(
             std::string name,
             EntityKind kind = EntityKind::Generic,
             EntityId parent = InvalidEntityId,
-            TransformComponent transform = TransformComponent{},
-            EntityId* createdEntity = nullptr);
+            TransformComponent transform = TransformComponent{});
     DocumentCommandResult destroyEntity(EntityId entity);
     DocumentCommandResult reparentEntity(
             EntityId entity,
             EntityId parent,
             bool preserveWorldTransform = true);
-    DocumentCommandResult groupSelection(
+    DocumentGroupSelectionResult groupSelection(
             std::string groupName = {},
-            TransformComponent groupTransform = TransformComponent{},
-            EntityId* groupEntity = nullptr);
+            TransformComponent groupTransform = TransformComponent{});
     DocumentCommandResult ungroupSelection();
-    DocumentCommandResult duplicateEntity(EntityId entity, EntityId* duplicateEntity = nullptr);
+    DocumentDuplicateEntityResult duplicateEntity(EntityId entity);
+    DocumentDuplicateHierarchyResult duplicateSelectedHierarchy();
     DocumentCommandResult selectEntities(std::vector<EntityId> entities, EntityId active = InvalidEntityId);
     DocumentCommandResult applyEntityTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult renameEntity(EntityId entity, std::string name);

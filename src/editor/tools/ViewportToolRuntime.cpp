@@ -192,7 +192,7 @@ bool ViewportToolRuntime::handleShortcut(
         if (activeToolBlocksViewportFocusShortcuts()) {
             return false;
         }
-        state.maximized = !state.maximized;
+        result.maximizedToggleRequested = true;
         return true;
     case ViewportShortcutKind::SetGridPreset:
         result.gridPresetChanged = state.gridPreset != shortcut.gridPreset;

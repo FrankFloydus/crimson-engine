@@ -126,8 +126,6 @@ public:
     Mat4 localTransformMatrix(EntityId id) const;
     Mat4 worldTransformMatrix(EntityId id) const;
 
-    entt::registry& registry() { return registry_; }
-    const entt::registry& registry() const { return registry_; }
     entt::entity enttEntity(EntityId id) const;
     EntityId entityId(entt::entity entity) const;
 

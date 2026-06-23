@@ -22,7 +22,6 @@ namespace quader {
 
 class AssetRegistry;
 class DocumentCommandService;
-class EditorSelectionService;
 class IUndoableCommand;
 class SceneDocument;
 
@@ -157,6 +156,7 @@ public:
     ModelingCreateBoxResult commitBox(std::string name);
     ModelingCommandResult cancelBox();
     ModelingCreateBoxResult createMesh(const ModelingCreateMeshRequest& request);
+    void projectObjectSelectionFromScene();
     ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request);
     ModelingCommandResult moveSelection(Vec3 delta);
@@ -166,11 +166,6 @@ public:
     ModelingCommandResult setSelectionHover(const ModelingDirectHoverRequest& request);
 
 private:
-    friend class EditorSelectionService;
-
-    void projectObjectSelectionFromScene();
-    void projectSceneSelectionFromModeling();
-
     class Impl;
     std::unique_ptr<Impl> impl_;
 };

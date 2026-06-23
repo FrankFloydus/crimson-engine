@@ -6,13 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/ViewportPanel.h"
 
+#include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
 #include "core/Logger.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "editor/modeling/services/SelectionModeAdapter.h"
+#include "editor/viewport/QuaderViewportApiRuntimeAccess.h"
+#include "render/overlay/ViewportSceneOverlayBuilder.h"
 #include "render/overlay/ViewportOverlayStyleResolver.h"
-#include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneEntityNaming.h"
 #include "render/RenderLayers.h"
@@ -26,15 +28,13 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -66,11 +66,6 @@ float distanceSquared(ImVec2 a, ImVec2 b) {
     return dx * dx + dy * dy;
 }
 
-bool entitySelected(const SceneDocument& document, EntityId entity) {
-    const SelectionComponent* selection = document.selection(entity);
-    return selection != nullptr && selection->selected;
-}
-
 bool componentSelectionMode(ModelingSelectionMode mode) {
     return mode == ModelingSelectionMode::Vertex ||
             mode == ModelingSelectionMode::Edge ||
@@ -93,267 +88,6 @@ ViewportOverlaySelectionContext overlaySelectionContext(ModelingSelectionMode mo
     return ViewportOverlaySelectionContext::Any;
 }
 
-/**
- * Represents a Wire Edge Point value used by the ImGui editor presentation layer.
- */
-struct WireEdgePoint {
-    std::int64_t x = 0;
-    std::int64_t y = 0;
-    std::int64_t z = 0;
-};
-
-/**
- * Stores the Wire Edge Key data contract used by the ImGui editor presentation layer.
- */
-struct WireEdgeKey {
-    WireEdgePoint a;
-    WireEdgePoint b;
-
-    bool operator==(const WireEdgeKey& other) const {
-        return a.x == other.a.x && a.y == other.a.y && a.z == other.a.z &&
-                b.x == other.b.x && b.y == other.b.y && b.z == other.b.z;
-    }
-};
-
-/**
- * Represents a Wire Edge Key Hash value used by the ImGui editor presentation layer.
- */
-struct WireEdgeKeyHash {
-    std::size_t operator()(const WireEdgeKey& key) const {
-        auto mix = [](std::size_t hash, std::int64_t value) {
-            hash ^= static_cast<std::size_t>(value) + 0x9e3779b97f4a7c15ull + (hash << 6u) + (hash >> 2u);
-            return hash;
-        };
-        std::size_t hash = 1469598103934665603ull;
-        hash = mix(hash, key.a.x);
-        hash = mix(hash, key.a.y);
-        hash = mix(hash, key.a.z);
-        hash = mix(hash, key.b.x);
-        hash = mix(hash, key.b.y);
-        return mix(hash, key.b.z);
-    }
-};
-
-/**
- * Stores the Wire Edge Record data contract used by the ImGui editor presentation layer.
- */
-struct WireEdgeRecord {
-    Vec3 start = {};
-    Vec3 end = {};
-    Vec3 firstNormal = {};
-    std::uint32_t count = 0;
-    bool coplanarWithFirst = true;
-};
-
-WireEdgePoint quantizedWirePoint(Vec3 value) {
-    constexpr double kScale = 1000000.0;
-    return {
-            static_cast<std::int64_t>(std::llround(static_cast<double>(value.x) * kScale)),
-            static_cast<std::int64_t>(std::llround(static_cast<double>(value.y) * kScale)),
-            static_cast<std::int64_t>(std::llround(static_cast<double>(value.z) * kScale)),
-    };
-}
-
-bool wirePointLess(const WireEdgePoint& left, const WireEdgePoint& right) {
-    if (left.x != right.x) {
-        return left.x < right.x;
-    }
-    if (left.y != right.y) {
-        return left.y < right.y;
-    }
-    return left.z < right.z;
-}
-
-WireEdgeKey wireEdgeKey(Vec3 a, Vec3 b) {
-    WireEdgePoint qa = quantizedWirePoint(a);
-    WireEdgePoint qb = quantizedWirePoint(b);
-    if (wirePointLess(qb, qa)) {
-        std::swap(qa, qb);
-    }
-    return {.a = qa, .b = qb};
-}
-
-void appendMeshSelectionWire(
-        ViewportOverlayFrame& frame,
-        const SceneDocument& document,
-        const AssetRegistry& assets,
-        EntityId entity,
-        std::uint32_t color = kOverlaySelectionWireColor,
-        ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire,
-        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::SelectedSourceWire,
-        ViewportOverlaySource source = ViewportOverlaySource::Selection) {
-    if (!document.isEffectivelyVisible(entity)) {
-        return;
-    }
-
-    const MeshComponent* meshComponent = document.mesh(entity);
-    if (meshComponent == nullptr) {
-        return;
-    }
-
-    const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
-    if (mesh == nullptr || mesh->vertices.empty() || mesh->indices.size() < 3u) {
-        return;
-    }
-
-    const Mat4 worldFromLocal = document.worldTransformMatrix(entity);
-    std::unordered_map<WireEdgeKey, WireEdgeRecord, WireEdgeKeyHash> edges;
-    edges.reserve(mesh->indices.size());
-
-    auto appendEdge = [&](std::uint32_t a, std::uint32_t b, Vec3 triangleNormal) {
-        if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || a == b) {
-            return;
-        }
-        const Vec3 start = transformPoint(worldFromLocal, mesh->vertices[a].position);
-        const Vec3 end = transformPoint(worldFromLocal, mesh->vertices[b].position);
-        const WireEdgeKey key = wireEdgeKey(start, end);
-        WireEdgeRecord& record = edges[key];
-        if (record.count == 0u) {
-            record.start = start;
-            record.end = end;
-            record.firstNormal = triangleNormal;
-        } else if (length(record.firstNormal) > 0.000001f && length(triangleNormal) > 0.000001f) {
-            record.coplanarWithFirst =
-                    record.coplanarWithFirst &&
-                    std::abs(dot(normalize(record.firstNormal), normalize(triangleNormal))) > 0.999f;
-        }
-        ++record.count;
-    };
-
-    for (std::size_t index = 0; index + 2u < mesh->indices.size(); index += 3u) {
-        const std::uint32_t a = mesh->indices[index];
-        const std::uint32_t b = mesh->indices[index + 1u];
-        const std::uint32_t c = mesh->indices[index + 2u];
-        if (a >= mesh->vertices.size() || b >= mesh->vertices.size() || c >= mesh->vertices.size()) {
-            continue;
-        }
-        const Vec3 worldA = transformPoint(worldFromLocal, mesh->vertices[a].position);
-        const Vec3 worldB = transformPoint(worldFromLocal, mesh->vertices[b].position);
-        const Vec3 worldC = transformPoint(worldFromLocal, mesh->vertices[c].position);
-        Vec3 normal = cross(worldB - worldA, worldC - worldA);
-        if (length(normal) > 0.000001f) {
-            normal = normalize(normal);
-        }
-        appendEdge(a, b, normal);
-        appendEdge(b, c, normal);
-        appendEdge(c, a, normal);
-    }
-
-    for (const auto& [key, edge] : edges) {
-        (void)key;
-        if (edge.count == 2u && edge.coplanarWithFirst) {
-            continue;
-        }
-        frame.lines.push_back(ViewportOverlayLine{
-                .layer = layer,
-                .start = edge.start,
-                .end = edge.end,
-                .color = color,
-                .widthPixels = 0.0f,
-                .styleRole = styleRole,
-                .source = source,
-        });
-    }
-}
-
-void appendHierarchySelectionWires(
-        ViewportOverlayFrame& frame,
-        const SceneDocument& document,
-        const AssetRegistry& assets) {
-    for (const EntityId selected : document.selectedEntities()) {
-        if (!document.hasChildren(selected)) {
-            continue;
-        }
-        for (const EntityId descendant : document.descendants(selected, false)) {
-            if (entitySelected(document, descendant)) {
-                continue;
-            }
-            appendMeshSelectionWire(
-                    frame,
-                    document,
-                    assets,
-                    descendant,
-                    kOverlaySelectionWireColor,
-                    ViewportOverlayLayer::SourceWire,
-                    ViewportOverlayStyleRole::SelectedSourceWire,
-                    ViewportOverlaySource::HierarchySelection);
-        }
-    }
-}
-
-void appendBoundsCage(ViewportOverlayFrame& frame, const SceneBounds& bounds) {
-    const std::array<Vec3, 8> corners{{
-            {bounds.min.x, bounds.min.y, bounds.min.z},
-            {bounds.max.x, bounds.min.y, bounds.min.z},
-            {bounds.max.x, bounds.max.y, bounds.min.z},
-            {bounds.min.x, bounds.max.y, bounds.min.z},
-            {bounds.min.x, bounds.min.y, bounds.max.z},
-            {bounds.max.x, bounds.min.y, bounds.max.z},
-            {bounds.max.x, bounds.max.y, bounds.max.z},
-            {bounds.min.x, bounds.max.y, bounds.max.z},
-    }};
-    constexpr std::array<std::array<int, 2>, 12> edges{{
-            {{0, 1}},
-            {{1, 2}},
-            {{2, 3}},
-            {{3, 0}},
-            {{4, 5}},
-            {{5, 6}},
-            {{6, 7}},
-            {{7, 4}},
-            {{0, 4}},
-            {{1, 5}},
-            {{2, 6}},
-            {{3, 7}},
-    }};
-    for (const auto edge : edges) {
-        frame.lines.push_back(ViewportOverlayLine{
-                .layer = ViewportOverlayLayer::GroupBounds,
-                .start = corners[static_cast<std::size_t>(edge[0])],
-                .end = corners[static_cast<std::size_t>(edge[1])],
-                .color = kOverlayGroupBoundsColor,
-                .widthPixels = 1.5f,
-                .styleRole = ViewportOverlayStyleRole::GroupBounds,
-                .source = ViewportOverlaySource::GroupBounds,
-        });
-    }
-}
-
-void appendGroupSelectionCages(
-        ViewportOverlayFrame& frame,
-        const SceneDocument& document,
-        const AssetRegistry& assets) {
-    for (const EntityId selected : document.selectedEntities()) {
-        if (document.kind(selected) != EntityKind::Empty || !document.hasChildren(selected)) {
-            continue;
-        }
-        if (const std::optional<SceneBounds> bounds = entityHierarchyWorldBounds(document, assets, selected)) {
-            appendBoundsCage(frame, *bounds);
-        }
-    }
-}
-
-void appendSceneWireframeOverlay(
-        ViewportOverlayFrame& frame,
-        const SceneDocument& document,
-        const AssetRegistry& assets) {
-    for (const EntityId entity : document.entities()) {
-        appendMeshSelectionWire(
-                frame,
-                document,
-                assets,
-                entity,
-                rgba8(255, 255, 255),
-                ViewportOverlayLayer::WireframeBase,
-                ViewportOverlayStyleRole::WireframeBase,
-                ViewportOverlaySource::SceneWireframe);
-    }
-}
-
-bool wireframeUsesWireOnlyObjectSelection(ModelingSelectionMode mode) {
-    return mode == ModelingSelectionMode::Object || mode == ModelingSelectionMode::Group;
-}
-
 bool hasSelectedSceneGroupRoot(const SceneDocument& document) {
     for (const EntityId selected : document.selectedEntities()) {
         if (document.kind(selected) == EntityKind::Empty && document.hasChildren(selected)) {
@@ -361,25 +95,6 @@ bool hasSelectedSceneGroupRoot(const SceneDocument& document) {
         }
     }
     return false;
-}
-
-bool wireframeSuppressesTriangleLayer(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
-            layer == ViewportOverlayLayer::SelectedXrayFace ||
-            layer == ViewportOverlayLayer::SelectedFaceMask ||
-            layer == ViewportOverlayLayer::HoverFace;
-}
-
-void stripWireframeObjectFaceFills(ViewportOverlayFrame& frame, ModelingSelectionMode mode) {
-    if (!wireframeUsesWireOnlyObjectSelection(mode)) {
-        return;
-    }
-
-    frame.triangles.erase(
-            std::remove_if(frame.triangles.begin(), frame.triangles.end(), [](const ViewportOverlayTriangle& triangle) {
-                return wireframeSuppressesTriangleLayer(triangle.layer);
-            }),
-            frame.triangles.end());
 }
 
 bool hoverTargetValid(const ModelingHoverTarget& target) {
@@ -550,12 +265,13 @@ void focusDocument(SceneDocument& document, const AssetRegistry& assets, Viewpor
 QuaderApiVoidResult executeDeletePopupCommand(
         QuaderEditorApi& editor,
         ViewportInputRouter& inputRouter,
-        std::string_view toolId) {
-    std::string command = "modeling.";
-    command.append(toolId);
-    const QuaderApiVoidResult result = editor.commands().execute(command);
+        QuaderCommandId commandId) {
+    const QuaderApiVoidResult result = editor.commands().execute(commandId);
     if (!result.ok) {
-        LOG_ERROR("Delete popup operation '{}' failed: {}", toolId, result.message.empty() ? "Operation failed." : result.message);
+        LOG_ERROR(
+                "Delete popup command '{}' failed: {}",
+                commandId.string(),
+                result.message.empty() ? "Operation failed." : result.message);
     }
     inputRouter.setSelectionMode(appSelectionModeToViewport(editor.selection().summary().mode));
     return result;
@@ -588,7 +304,7 @@ bool drawViewportDeletePopup(
             const std::string deleteLabel = localization.text("ui.viewport.delete_popup.delete", "Delete");
             if (ImGui::Button(deleteLabel.c_str())) {
                 const QuaderApiVoidResult result =
-                        executeDeletePopupCommand(editor, inputRouter, "delete_selection");
+                        executeDeletePopupCommand(editor, inputRouter, QuaderCommand::DeleteSelection);
                 changed = result.changed;
                 open = false;
             }
@@ -610,25 +326,25 @@ bool drawViewportDeletePopup(
         struct PopupAction {
             const char* labelKey;
             const char* fallback;
-            const char* toolId;
+            QuaderCommandId commandId;
             bool enabled;
         };
         const PopupAction actions[] = {
-                {"ui.viewport.delete_vertices", "Delete Vertices", "delete_selection",
+                {"ui.viewport.delete_vertices", "Delete Vertices", QuaderCommand::DeleteSelection,
                         summary.mode == ModelingSelectionMode::Vertex && summary.selectedVertexCount > 0u},
-                {"ui.viewport.delete_face", "Delete Face", "delete_selection",
+                {"ui.viewport.delete_face", "Delete Face", QuaderCommand::DeleteSelection,
                         summary.mode == ModelingSelectionMode::Face && summary.selectedFaceCount > 0u},
-                {"ui.viewport.delete_edges", "Delete Edges", "delete_selection",
+                {"ui.viewport.delete_edges", "Delete Edges", QuaderCommand::DeleteSelection,
                         summary.mode == ModelingSelectionMode::Edge && summary.selectedEdgeCount > 0u},
-                {"ui.viewport.dissolve_edges", "Dissolve Edges", "dissolve_edges",
+                {"ui.viewport.dissolve_edges", "Dissolve Edges", QuaderCommand::ModelingDissolveEdges,
                         summary.mode == ModelingSelectionMode::Edge && summary.selectedEdgeCount > 0u},
-                {"ui.viewport.dissolve_vertex", "Dissolve Vertex", "dissolve_vertices",
+                {"ui.viewport.dissolve_vertex", "Dissolve Vertex", QuaderCommand::ModelingDissolveVertices,
                         summary.mode == ModelingSelectionMode::Vertex && summary.selectedVertexCount > 0u},
         };
         for (const PopupAction& action : actions) {
             const std::string label = localization.text(action.labelKey, action.fallback);
             if (ImGui::MenuItem(label.c_str(), nullptr, false, action.enabled)) {
-                const QuaderApiVoidResult result = executeDeletePopupCommand(editor, inputRouter, action.toolId);
+                const QuaderApiVoidResult result = executeDeletePopupCommand(editor, inputRouter, action.commandId);
                 changed = changed || result.changed;
                 ImGui::CloseCurrentPopup();
             }
@@ -736,8 +452,11 @@ void ViewportPanel::prepareViewports(
                 ? selectionOverlayCache_.key().selectionMode
                 : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
         if (paneWorkspace.shading == ViewportShadingMode::Wireframe) {
-            stripWireframeObjectFaceFills(overlayFrame, overlayMode);
-            appendSceneWireframeOverlay(overlayFrame, document, assets);
+            overlayFrame = ViewportSceneOverlayBuilder::buildWireframeFrame(
+                    std::move(overlayFrame),
+                    overlayMode,
+                    document,
+                    assets);
         }
         ViewportOverlayStyleResolver::apply(
                 overlayFrame,
@@ -762,8 +481,7 @@ void ViewportPanel::renderViewports(filament::Renderer& renderer) {
 }
 
 void ViewportPanel::setViewportLayout(ViewportLayoutId layoutId) {
-    workspace().setLayout(layoutId);
-    inputRouter_.setMaximized(false);
+    (void)workspace().setLayout(layoutId);
 }
 
 ViewportLayoutId ViewportPanel::viewportLayout() const {
@@ -859,11 +577,11 @@ const ViewportPanel::Pane& ViewportPanel::pane(ViewportPaneId paneId) const {
 }
 
 std::vector<ViewportPanePlacement> ViewportPanel::activePanePlacements() const {
-    return workspace().activePanePlacements(inputRouter_.state().maximized);
+    return workspace().activePanePlacements();
 }
 
 std::vector<ViewportSplitHandle> ViewportPanel::activeSplitHandles() const {
-    return workspace().activeSplitHandles(inputRouter_.state().maximized);
+    return workspace().activeSplitHandles();
 }
 
 bool ViewportPanel::drawPaneChrome(
@@ -1077,7 +795,8 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
             nullptr,
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
-    ViewportWorkspaceService& viewportWorkspace = uiContext.editor.viewports().workspace();
+    ViewportWorkspaceService& viewportWorkspace =
+            QuaderViewportApiRuntimeAccess::workspace(uiContext.editor.viewports());
     workspace_ = &viewportWorkspace;
     inputRouter_.setGridPreset(viewportWorkspace.gridPreset());
     if (!visible) {
@@ -1269,20 +988,25 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
         return;
     }
 
-    ViewportOverlayFrame frame = modeling.selectionOverlayFrame();
-    appendHierarchySelectionWires(frame, document, assets);
-    appendGroupSelectionCages(frame, document, assets);
+    ViewportOverlayFrame frame = ViewportSceneOverlayBuilder::buildSelectionFrame(
+            modeling.selectionOverlayFrame(),
+            document,
+            assets);
     selectionOverlayCache_.update(std::move(frame), key);
 }
 
 ViewportWorkspaceService& ViewportPanel::workspace() {
-    static ViewportWorkspaceService fallbackWorkspace;
-    return workspace_ != nullptr ? *workspace_ : fallbackWorkspace;
+    if (workspace_ == nullptr) {
+        throw std::logic_error("ViewportPanel requires an attached ViewportWorkspaceService.");
+    }
+    return *workspace_;
 }
 
 const ViewportWorkspaceService& ViewportPanel::workspace() const {
-    static ViewportWorkspaceService fallbackWorkspace;
-    return workspace_ != nullptr ? *workspace_ : fallbackWorkspace;
+    if (workspace_ == nullptr) {
+        throw std::logic_error("ViewportPanel requires an attached ViewportWorkspaceService.");
+    }
+    return *workspace_;
 }
 
 void ViewportPanel::drawPaneContents(Pane& paneState,
@@ -1321,7 +1045,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     const ModelingToolSettingsTarget toolSettingsTarget = modeling.toolSettingsTarget();
     const ViewportShortcutControllerResult operationPreviewShortcut =
-            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, inputRouter_, uiContext.editor, modeling);
+            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, uiContext.editor, modeling);
     const bool operationPreviewShortcutConsumed = operationPreviewShortcut.consumed;
     if (operationPreviewShortcut.invalidateHover) {
         hoverController_.invalidate();
@@ -1329,11 +1053,11 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     if (operationPreviewShortcut.markOverlayDirty) {
         selectionOverlayCache_.markDirty();
     }
-    if (hovered &&
-            result.shortcutHandled &&
-            !operationPreviewShortcutConsumed &&
-            result.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
-        viewportWorkspace.focusPane(paneState.id);
+    if (result.maximizedToggleRequested && !operationPreviewShortcutConsumed) {
+        if (hovered) {
+            viewportWorkspace.focusPane(paneState.id);
+        }
+        viewportWorkspace.toggleFocusedPaneMaximized();
     }
     if (result.gridPresetChanged) {
         viewportWorkspace.setGridPreset(inputRouter_.state().gridPreset);
@@ -1705,19 +1429,52 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             !result.navigationActive &&
             ImGui::IsKeyPressed(ImGuiKey_F, false);
 
+    ViewportBoxToolContext boxToolContext{
+            .defaultMaterial = defaultMaterial,
+    };
+    boxToolContext.makeEvent = [&]() {
+        const float gridSize = gridSizeForPreset(inputRouter_.state().gridPreset);
+        return modelingBoxEvent(camera, input, gridSize);
+    };
+    boxToolContext.commitPreview = [&](std::string name, AssetId material) {
+        const QuaderApiResult<QuaderModelingObjectRef> result =
+                uiContext.editor.modeling().commitBoxPreview(std::move(name), material);
+        ModelingCreateBoxResult committed{
+                .ok = result.ok,
+                .changed = result.changed,
+                .message = result.message,
+        };
+        if (result.ok && result.changed) {
+            committed.object = {
+                    .modelingObjectId = result.value.modelingObjectId,
+                    .entity = result.value.entity,
+                    .mesh = result.value.mesh,
+            };
+        }
+        return committed;
+    };
+    boxToolContext.nextMeshName = [&]() {
+        return SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
+    };
+
+    ViewportPointToolContext pointToolContext;
+    pointToolContext.makeEventAt = makeModelingToolEventAt;
+    pointToolContext.hitDrawnPlaneCapturedPoint = [&](const std::array<Vec3, 3>& points, int capturedPointCount) {
+        return hitDrawnPlaneCapturedPoint(points, capturedPointCount, leftClickLocal, camera, itemMin, itemSize);
+    };
+    pointToolContext.hitDrawnPlaneLine = [&](const std::array<Vec3, 3>& points, int capturedPointCount, bool hasLine) {
+        return hitDrawnPlaneLine(points, capturedPointCount, hasLine, leftClickLocal, camera, itemMin, itemSize);
+    };
+
     ViewportToolContext toolContext{
             .state = const_cast<ViewportToolState&>(inputRouter_.state()),
             .camera = camera,
             .modeling = modeling,
             .document = &document,
-            .defaultMaterial = defaultMaterial,
             .settings = &activeViewportSettings(),
+            .box = &boxToolContext,
+            .point = &pointToolContext,
     };
-    toolContext.makeBoxEvent = [&]() {
-        const float gridSize = gridSizeForPreset(inputRouter_.state().gridPreset);
-        return modelingBoxEvent(camera, input, gridSize);
-    };
-    toolContext.makeToolEventAt = makeModelingToolEventAt;
     toolContext.claimHover = claimToolHover;
     toolContext.invalidateHover = [&]() {
         hoverController_.invalidate();
@@ -1738,16 +1495,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         }
         inputRouter_.setSelectionMode(appSelectionModeToViewport(uiContext.editor.selection().summary().mode));
     };
-    toolContext.nextMeshName = [&]() {
-        return SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
-    };
     toolContext.handleToolCommandResult = handleToolCommandResult;
-    toolContext.hitDrawnPlaneCapturedPoint = [&](const std::array<Vec3, 3>& points, int capturedPointCount) {
-        return hitDrawnPlaneCapturedPoint(points, capturedPointCount, leftClickLocal, camera, itemMin, itemSize);
-    };
-    toolContext.hitDrawnPlaneLine = [&](const std::array<Vec3, 3>& points, int capturedPointCount, bool hasLine) {
-        return hitDrawnPlaneLine(points, capturedPointCount, hasLine, leftClickLocal, camera, itemMin, itemSize);
-    };
 
     const bool canInteractWithActiveTool = hovered && !gizmoConsumed && !result.navigationActive;
     const ViewportToolResult activeToolFrameResult = inputRouter_.handleActiveToolEvent(toolContext, ViewportToolEvent{
