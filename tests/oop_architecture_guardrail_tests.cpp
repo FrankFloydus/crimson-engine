@@ -292,8 +292,8 @@ TEST(OopArchitectureGuardrailTests, UiDoesNotBypassCommandAndPreviewBoundaries) 
     }
 }
 
-TEST(OopArchitectureGuardrailTests, ViewportPanelDoesNotOwnToolImplementations) {
-    const std::string source = readFile(sourceRoot() / "src/ui/ViewportPanel.cpp");
+TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
+    const std::string source = readFile(sourceRoot() / "src/ui/UISystem.cpp");
 
     for (std::string_view forbidden : {
                  "selectFromViewport",
@@ -317,18 +317,21 @@ TEST(OopArchitectureGuardrailTests, ViewportPanelDoesNotOwnToolImplementations) 
     }
 }
 
-TEST(OopArchitectureGuardrailTests, ViewportPanelDelegatesSceneOverlayExtraction) {
-    const std::string panel = readFile(sourceRoot() / "src/ui/ViewportPanel.cpp");
+TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderBuilder) {
+    const std::string uiSystem = readFile(sourceRoot() / "src/ui/UISystem.cpp");
+    const std::string viewportHost = readFile(sourceRoot() / "src/ui/controllers/ViewportHost.cpp");
+    const std::string uiShell = uiSystem + viewportHost;
     const std::string builder = readFile(sourceRoot() / "src/render/overlay/ViewportSceneOverlayBuilder.cpp");
 
-    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildSelectionFrame("), std::string::npos);
-    EXPECT_NE(panel.find("ViewportSceneOverlayBuilder::buildWireframeFrame("), std::string::npos);
     EXPECT_NE(builder.find("appendHierarchySelectionWires"), std::string::npos);
     EXPECT_NE(builder.find("appendGroupSelectionCages"), std::string::npos);
     EXPECT_NE(builder.find("appendSceneWireframeOverlay"), std::string::npos);
     EXPECT_NE(builder.find("stripWireframeObjectFaceFills"), std::string::npos);
+    EXPECT_NE(viewportHost.find("ViewportOverlayFrame{}"), std::string::npos);
 
     for (std::string_view forbidden : {
+                 "ViewportSceneOverlayBuilder::buildSelectionFrame(",
+                 "ViewportSceneOverlayBuilder::buildWireframeFrame(",
                  "appendMeshSelectionWire",
                  "appendHierarchySelectionWires",
                  "appendGroupSelectionCages",
@@ -336,7 +339,7 @@ TEST(OopArchitectureGuardrailTests, ViewportPanelDelegatesSceneOverlayExtraction
                  "stripWireframeObjectFaceFills",
                  "WireEdgeKey",
          }) {
-        EXPECT_EQ(panel.find(forbidden), std::string::npos) << forbidden;
+        EXPECT_EQ(uiShell.find(forbidden), std::string::npos) << forbidden;
     }
 }
 
@@ -366,25 +369,12 @@ TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceServ
     EXPECT_NE(runtimeSource.find("result.maximizedToggleRequested = true"), std::string::npos);
 }
 
-TEST(OopArchitectureGuardrailTests, TransformGizmoControllerDelegatesSceneTransformPreviewOwnership) {
-    const std::string header = readFile(sourceRoot() / "src/ui/TransformGizmoController.h");
-    const std::string source = readFile(sourceRoot() / "src/ui/TransformGizmoController.cpp");
+TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPreviewTransactions) {
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/TransformGizmoController.h"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/TransformGizmoController.cpp"));
+
     const std::string serviceSource =
             readFile(sourceRoot() / "src/editor/transform/SceneTransformDragService.cpp");
-
-    EXPECT_NE(header.find("SceneTransformDragService sceneTransformDrag_"), std::string::npos);
-    EXPECT_EQ(header.find("SceneTransformPreviewTransaction"), std::string::npos);
-    EXPECT_EQ(header.find("struct StartTransform"), std::string::npos);
-    EXPECT_EQ(header.find("std::vector<StartTransform>"), std::string::npos);
-
-    EXPECT_NE(source.find("sceneTransformDrag_.begin(document, pivot, needsSceneTransformPreview"), std::string::npos);
-    EXPECT_NE(source.find("sceneTransformDrag_.previewTransform(start.entity, next)"), std::string::npos);
-    EXPECT_NE(source.find("sceneTransformDrag_.commit(*request.editor)"), std::string::npos);
-    EXPECT_NE(source.find("sceneTransformDrag_.cancel()"), std::string::npos);
-    EXPECT_EQ(source.find("commitSceneTransformPreviewThroughApi("), std::string::npos);
-    EXPECT_EQ(source.find("SceneTransformPreviewTransaction"), std::string::npos);
-    EXPECT_EQ(source.find("hasSelectedAncestor("), std::string::npos);
-    EXPECT_EQ(source.find("documentLocalPivotForWorldPoint("), std::string::npos);
 
     EXPECT_NE(serviceSource.find("SceneTransformPreviewTransaction"), std::string::npos);
     EXPECT_NE(serviceSource.find("hasSelectedAncestor(document, entity)"), std::string::npos);

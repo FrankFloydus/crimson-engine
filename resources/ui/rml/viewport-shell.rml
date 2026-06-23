@@ -1,0 +1,12 @@
+<rml>
+<head>
+    <link type="text/rcss" href="quader://ui/rcss/app-utility.generated.rcss"/>
+    <link type="text/rcss" href="quader://ui/rcss/app-shell.rcss"/>
+</head>
+<body class="font-ui text-md leading-md bg-gray-950 text-gray-50">
+    <div id="viewport-panel" class="viewport-panel">
+        <img id="main-viewport" class="viewport-surface" src="quader://viewport/main"/>
+    </div>
+    <div id="debug-palette-slot"></div>
+</body>
+</rml>

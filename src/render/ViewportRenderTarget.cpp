@@ -44,7 +44,7 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height, fil
         return;
     }
 
-    destroy();
+    destroyRenderResources();
     width_ = width;
     height_ = height;
 
@@ -71,16 +71,27 @@ void ViewportRenderTarget::resize(std::uint32_t width, std::uint32_t height, fil
             .texture(filament::RenderTarget::AttachmentPoint::DEPTH, depthTexture_)
             .build(*engine_);
 
-    textureId_ = textureRegistry_->registerTexture(colorTexture_, TextureSampleColorSpace::LinearSrgb);
+    if (textureHandle_ == InvalidRenderTextureHandle) {
+        textureHandle_ = textureRegistry_->registerTexture(colorTexture_, TextureSampleColorSpace::LinearSrgb);
+    } else {
+        textureRegistry_->updateTexture(textureHandle_, colorTexture_, TextureSampleColorSpace::LinearSrgb);
+    }
     view->setRenderTarget(renderTarget_);
     view->setViewport({0, 0, width_, height_});
-    LOG_INFO("Viewport render target ready {}x{} as texture id {}", width_, height_, textureId_);
+    LOG_INFO("Viewport render target ready {}x{} as texture handle {}", width_, height_, textureHandle_);
 }
 
 void ViewportRenderTarget::destroy() {
-    if (textureRegistry_ && textureId_ != ImTextureID_Invalid) {
-        textureRegistry_->unregisterTexture(textureId_);
-        textureId_ = ImTextureID_Invalid;
+    if (textureRegistry_ && textureHandle_ != InvalidRenderTextureHandle) {
+        textureRegistry_->unregisterTexture(textureHandle_);
+        textureHandle_ = InvalidRenderTextureHandle;
+    }
+    destroyRenderResources();
+}
+
+void ViewportRenderTarget::destroyRenderResources() {
+    if (!engine_) {
+        return;
     }
     if (renderTarget_) {
         engine_->destroy(renderTarget_);

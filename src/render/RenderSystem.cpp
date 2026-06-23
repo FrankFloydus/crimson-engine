@@ -11,6 +11,8 @@
 #include <filament/Renderer.h>
 #include <math/vec4.h>
 
+#include <cstdint>
+
 namespace quader {
 namespace {
 
@@ -24,6 +26,19 @@ filament::backend::Backend toFilamentBackend(RendererBackend backend) {
         return filament::backend::Backend::METAL;
     }
     return filament::backend::Backend::VULKAN;
+}
+
+std::uint64_t swapChainFlagsFor(filament::Engine& engine, SwapChainPresentationColorSpace colorSpace) {
+    switch (colorSpace) {
+    case SwapChainPresentationColorSpace::Native:
+        return 0u;
+    case SwapChainPresentationColorSpace::Srgb:
+        if (!filament::SwapChain::isSRGBSwapChainSupported(engine)) {
+            LOG_WARN("sRGB swapchain presentation was requested but is not supported by this Filament backend");
+        }
+        return filament::SwapChain::CONFIG_SRGB_COLORSPACE;
+    }
+    return 0u;
 }
 
 } // namespace
@@ -94,8 +109,33 @@ bool RenderSystem::beginFrame() {
     return renderer_->beginFrame(swapChain_);
 }
 
+bool RenderSystem::beginFrame(filament::SwapChain* swapChain) {
+    return renderer_ != nullptr && swapChain != nullptr && renderer_->beginFrame(swapChain);
+}
+
 void RenderSystem::endFrame() {
     renderer_->endFrame();
+}
+
+filament::SwapChain* RenderSystem::createAdditionalSwapChain(
+        void* nativeWindow,
+        SwapChainPresentationColorSpace colorSpace) {
+    if (!engine_ || nativeWindow == nullptr) {
+        return nullptr;
+    }
+
+    const std::uint64_t flags = swapChainFlagsFor(*engine_, colorSpace);
+    filament::SwapChain* swapChain = engine_->createSwapChain(nativeWindow, flags);
+    LOG_INFO("Filament additional swapchain created for native window {} with flags {}", nativeWindow, flags);
+    return swapChain;
+}
+
+void RenderSystem::destroyAdditionalSwapChain(filament::SwapChain* swapChain) {
+    if (!engine_ || !swapChain) {
+        return;
+    }
+
+    engine_->destroy(swapChain);
 }
 
 } // namespace quader

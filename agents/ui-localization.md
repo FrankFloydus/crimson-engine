@@ -11,21 +11,15 @@ file except through prior written authorization from Francesco Di Blasi.
 Use `UI` casing for UI infrastructure types:
 
 - `UISystem`
-- `UIPanel`
-- `UIContext`
-- `UIPanelManager`
 - `UISettings`
-- `UIStyleTokens`
 
 ## UI Ownership
 
-- Keep `UISystem` as the composition root for ImGui initialization, menus, dockspace, layout
-  persistence, and panel registration.
-- Put panel contents in concrete `UIPanel` classes such as `ViewportPanel`, `OutlinerPanel`,
-  `InspectorPanel`, and `ConsolePanel`.
-- Route frame dependencies through `UIContext`.
-- Do not make panels reach sideways into app globals.
-- UI panels and controllers own presentation and routing only.
+- Keep `UISystem` as the composition root for the active UI backend and the native viewport shell.
+- The current v1 UI is a single full-window viewport hosted by RmlUi. Do not recreate the deleted
+  docked panel stack unless a new backend-neutral panel architecture is intentionally introduced.
+- UI shell code owns presentation, backend integration, and input routing only.
+- Do not make UI code reach sideways into app globals.
 - For user-intent mutations, prefer `QuaderApi` or future `QuaderEditorApi`.
 
 ## Localization
@@ -49,12 +43,14 @@ fallback/debug text.
 
 ## Layout Rules
 
-- Put shared UI colors, font sizes, paddings, and visual constants in `UIStyleTokens`.
-- Persist dock layout through ImGui's ini file and panel visibility through `UISettings`.
+- Put shared UI colors, font sizes, paddings, and visual constants in backend-neutral theme or layout
+  helpers when those surfaces exist.
+- Persist only live UI preferences through `UISettings`; viewport rendering preferences belong in
+  `ViewportSettings`.
 - Keep these under the user profile rather than repo-local files.
-- Keep ImGui's dock/window menu button available.
-- Avoid fragile fill-width widgets in resizable dock panels.
-- Use responsive fixed/minimum widths or `UILayout` helpers so inputs cannot collapse to 1px.
+- Avoid fragile fill-width widgets in resizable UI surfaces.
+- Use responsive fixed/minimum widths or backend-neutral layout helpers so inputs cannot collapse to
+  1px.
 - Do not create placeholder startup scene content unless a product requirement explicitly asks.
 - For scene names, use `SceneEntityNaming`.
 - Mesh names start as `Mesh`, then `Mesh_1`, `Mesh_2`, etc.

@@ -19,12 +19,19 @@
 #include <filament/Renderer.h>
 #include <filament/Scene.h>
 #include <filament/View.h>
-#include <imgui.h>
 #include <utils/Entity.h>
 
 #include <cstdint>
 
 namespace quader {
+
+/**
+ * Selects whether a viewport renders into a texture or directly into the active swapchain.
+ */
+enum class ViewportRenderSurface {
+    Texture,
+    Swapchain,
+};
 
 /**
  * Owns Viewport Renderer behavior within the render extraction and Filament resource layer.
@@ -37,7 +44,8 @@ public:
             filament::Scene& scene,
             TextureRegistry& textureRegistry,
             filament::Material& groundGridMaterial,
-            std::uint8_t gridLayerMask);
+            std::uint8_t gridLayerMask,
+            ViewportRenderSurface surface = ViewportRenderSurface::Texture);
     void shutdown();
 
     void resize(std::uint32_t width, std::uint32_t height);
@@ -50,9 +58,9 @@ public:
     void setSceneVisible(bool visible);
     void render(filament::Renderer& renderer);
 
-    ImTextureID textureId() const { return renderTarget_.textureId(); }
-    std::uint32_t width() const { return renderTarget_.width(); }
-    std::uint32_t height() const { return renderTarget_.height(); }
+    RenderTextureHandle textureHandle() const { return renderTarget_.textureHandle(); }
+    std::uint32_t width() const { return width_; }
+    std::uint32_t height() const { return height_; }
 
 private:
     void updateVisibleLayers();
@@ -66,6 +74,9 @@ private:
     ViewportGridRenderer gridRenderer_;
     ViewportRenderPassCoordinator renderPassCoordinator_;
     ViewportRenderTarget renderTarget_;
+    ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
+    std::uint32_t width_ = 1u;
+    std::uint32_t height_ = 1u;
 };
 
 } // namespace quader

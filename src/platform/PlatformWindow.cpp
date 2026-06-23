@@ -12,14 +12,39 @@
 #include <SDL3/SDL_video.h>
 
 namespace quader {
+namespace {
+
+int gSdlVideoWindowCount = 0;
+
+bool acquireSdlVideo() {
+    if (gSdlVideoWindowCount == 0 && !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
+        LOG_ERROR("SDL_Init failed: {}", SDL_GetError());
+        return false;
+    }
+
+    ++gSdlVideoWindowCount;
+    return true;
+}
+
+void releaseSdlVideo() {
+    if (gSdlVideoWindowCount <= 0) {
+        return;
+    }
+
+    --gSdlVideoWindowCount;
+    if (gSdlVideoWindowCount == 0) {
+        SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
+    }
+}
+
+} // namespace
 
 PlatformWindow::~PlatformWindow() {
     destroy();
 }
 
 bool PlatformWindow::create(const char* title, int width, int height, PlatformWindowOptions options) {
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
-        LOG_ERROR("SDL_Init failed: {}", SDL_GetError());
+    if (!acquireSdlVideo()) {
         return false;
     }
 
@@ -37,7 +62,7 @@ bool PlatformWindow::create(const char* title, int width, int height, PlatformWi
 
     if (!window_) {
         LOG_ERROR("SDL_CreateWindow failed: {}", SDL_GetError());
-        SDL_Quit();
+        releaseSdlVideo();
         return false;
     }
 
@@ -49,7 +74,7 @@ void PlatformWindow::destroy() {
     if (window_) {
         SDL_DestroyWindow(window_);
         window_ = nullptr;
-        SDL_Quit();
+        releaseSdlVideo();
     }
 }
 

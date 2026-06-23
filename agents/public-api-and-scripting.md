@@ -69,7 +69,7 @@ Lua bindings must not expose:
 - `AssetRegistry`;
 - SDK `EditorSession`;
 - `ModelingSessionService`;
-- Filament, ImGui, SDL, EnTT, or raw platform state;
+- UI, render, platform, ECS, or raw backend internals;
 - mutable internal pointers.
 
 Lua handles store stable refs/IDs and validate liveness on every call.

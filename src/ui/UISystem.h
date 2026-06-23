@@ -8,21 +8,12 @@
 
 #include "assets/AssetRegistry.h"
 #include "core/FrameTiming.h"
-#include "core/LocalizationService.h"
-#include "core/Types.h"
-#include "render/ImGuiFilamentRenderer.h"
 #include "render/RenderSystem.h"
 #include "render/SceneRenderBridge.h"
-#include "render/ViewportRenderer.h"
 #include "scene/SceneDocument.h"
-#include "ui/MainMenuBar.h"
-#include "ui/ToolSettingsPanel.h"
-#include "ui/UIPanelManager.h"
-#include "ui/UIIconSet.h"
+#include "ui/backends/rml/RmlUiContextHost.h"
+#include "ui/controllers/ViewportHost.h"
 #include "ui/UISettings.h"
-#include "ui/UIStyleTokens.h"
-#include "ui/ViewportSettingsPanel.h"
-#include "ui/ViewportPanel.h"
 #include "viewport/ViewportSettings.h"
 
 #include <SDL3/SDL_events.h>
@@ -30,21 +21,19 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <string>
-#include <vector>
 
 namespace quader {
 
 class QuaderEditorApi;
 class EditorSelectionService;
 class ModelingSessionService;
-class TextureRegistry;
 
 /**
- * Owns UI System behavior within the ImGui editor presentation layer.
+ * Owns the RmlUi-backed viewport shell for the native app.
  */
 class UISystem {
 public:
+    UISystem();
     ~UISystem();
 
     void initialize(SDL_Window* window, RenderSystem& renderSystem, const std::filesystem::path& executableDir);
@@ -67,53 +56,30 @@ public:
             const SceneDocument& document,
             const AssetRegistry& assets);
     void renderViewports(RenderSystem& renderSystem);
+    void renderWindowedViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
-    const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }
+    void installRuntimeHooks(QuaderEditorApi& editor);
+    const ViewportToolState& viewportToolState() const { return viewportHost_.viewportToolState(); }
 
 private:
-    void registerPanels(RenderSystem& renderSystem);
-    void drawDockspace(
-            QuaderEditorApi& editor,
-            bool& quitRequested,
-            SceneDocument& document,
-            ModelingSessionService& modeling);
-    void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
-    void enforceSidebarDockMinimums();
-    void setViewportCursorCaptured(bool captured);
-    void warpCapturedCursor(QVec2 point);
-    void loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir);
-    void destroyIcons();
-    void saveSettings();
+    void updateWindowMetrics();
+    void updateRmlDensityScale();
     void saveViewportSettings();
+    void toggleDebugPalette();
+    void applyDebugPaletteVisibility();
 
     SDL_Window* window_ = nullptr;
-    ImGuiFilamentRenderer renderer_;
-    UIStyleTokens style_;
-    UIPanelManager panels_;
-    MainMenuBar mainMenuBar_;
-    ViewportSettingsPanel viewportSettingsPanel_;
-    ToolSettingsPanel toolSettingsPanel_;
-    ViewportPanel* viewportPanel_ = nullptr;
-    UIIconSet icons_;
-    LocalizationService localization_;
-    std::vector<filament::Texture*> iconTextures_;
-    std::vector<ImTextureID> iconTextureIds_;
-    filament::Engine* iconEngine_ = nullptr;
-    TextureRegistry* iconTextureRegistry_ = nullptr;
-    UISettings settings_;
+    RmlUiContextHost rmlHost_;
+    ViewportHost viewportHost_;
     UISettingsPaths settingsPaths_;
     ViewportSettings viewportSettings_;
-    std::string imguiIniPath_;
-    bool settingsPanelOpen_ = false;
-    bool toolSettingsPanelOpen_ = false;
+    std::uint32_t framebufferWidth_ = 1u;
+    std::uint32_t framebufferHeight_ = 1u;
+    int windowWidth_ = 1;
+    int windowHeight_ = 1;
+    float rmlDpRatio_ = 1.0f;
     bool initialized_ = false;
-    bool dockLayoutBuilt_ = false;
-    bool hasSavedDockLayout_ = false;
-    bool relativeMouseCaptured_ = false;
-    bool relativeMouseCaptureWarningIssued_ = false;
-    QVec2 relativeMouseDelta_ = {};
-    FrameTiming currentFrameTiming_ = {};
-    UIPanelId focusedPanel_ = UIPanelId::Viewport;
+    bool debugPaletteVisible_ = false;
 };
 
 } // namespace quader

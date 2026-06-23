@@ -52,6 +52,7 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
 
     createStartupScene();
     editor_ = std::make_unique<QuaderEditorApi>(projectSession_);
+    ui_.installRuntimeHooks(*editor_);
 
     running_ = true;
     return true;
@@ -64,13 +65,17 @@ int App::run() {
     while (running_) {
         const FrameTiming frameTiming = frameClock_.tick();
         SDL_Event event;
+        const SDL_WindowID mainWindowId = SDL_GetWindowID(window_.sdlWindow());
         while (SDL_PollEvent(&event)) {
             ui_.processEvent(event);
-            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+            if (event.type == SDL_EVENT_QUIT ||
+                    (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                            event.window.windowID == mainWindowId)) {
                 running_ = false;
             }
-            if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-                    event.type == SDL_EVENT_WINDOW_RESIZED) {
+            if ((event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+                        event.type == SDL_EVENT_WINDOW_RESIZED) &&
+                    event.window.windowID == mainWindowId) {
                 window_.refreshPixelSize();
             }
         }
@@ -94,14 +99,15 @@ int App::run() {
         (void)editor_->render().syncScene(renderBridge_);
 
         window_.refreshPixelSize();
-        ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
         ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
+        ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
 
         if (renderSystem_.beginFrame()) {
             ui_.renderViewports(renderSystem_);
             ui_.render(renderSystem_);
             renderSystem_.endFrame();
         }
+        ui_.renderWindowedViewports(renderSystem_);
 
         SDL_Delay(1);
     }

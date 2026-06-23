@@ -12,7 +12,6 @@
 #include <filament/RenderTarget.h>
 #include <filament/Texture.h>
 #include <filament/View.h>
-#include <imgui.h>
 
 #include <cstdint>
 
@@ -36,17 +35,19 @@ public:
     void destroy();
 
     filament::RenderTarget* renderTarget() const { return renderTarget_; }
-    ImTextureID textureId() const { return textureId_; }
+    RenderTextureHandle textureHandle() const { return textureHandle_; }
     std::uint32_t width() const { return width_; }
     std::uint32_t height() const { return height_; }
 
 private:
+    void destroyRenderResources();
+
     filament::Engine* engine_ = nullptr;
     TextureRegistry* textureRegistry_ = nullptr;
     filament::Texture* colorTexture_ = nullptr;
     filament::Texture* depthTexture_ = nullptr;
     filament::RenderTarget* renderTarget_ = nullptr;
-    ImTextureID textureId_ = ImTextureID_Invalid;
+    RenderTextureHandle textureHandle_ = InvalidRenderTextureHandle;
     std::uint32_t width_ = 1;
     std::uint32_t height_ = 1;
 };

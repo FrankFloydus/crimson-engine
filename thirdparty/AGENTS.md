@@ -13,7 +13,7 @@ Read `../agents/dependencies.md` before changing this directory.
 ## Third-Party Rules
 
 - Keep dependency version notes and license evidence under `thirdparty/`.
-- Do not vendor SDL, ImGui, spdlog, GoogleTest, or a new Filament SDK into this repo.
+- Do not vendor SDL, UI backend libraries, spdlog, GoogleTest, or a new Filament SDK into this repo.
 - Avoid GPL, AGPL, LGPL with unclear linking obligations, SSPL, BUSL, copyleft, or source-available
   dependencies unless explicitly approved.
 - Any new dependency must have license evidence and a clear CMake/vcpkg integration path.

@@ -161,6 +161,8 @@ add_library(quader_core STATIC
     src/scene/SceneBounds.cpp
     src/scene/SceneDocument.cpp
     src/ui/ConsoleModel.cpp
+    src/ui/DebugPaletteView.cpp
+    src/ui/UIUtilityTokens.cpp
     src/ui/ViewportContextMenuPolicy.cpp
     src/ui/UISettings.cpp
     src/viewport/ViewportCameraController.cpp
@@ -275,7 +277,7 @@ if(WIN32)
 endif()
 
 find_package(SDL3 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
+find_package(RmlUi CONFIG REQUIRED)
 find_package(lodepng CONFIG REQUIRED)
 
 set(QUADER_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -307,7 +309,7 @@ quader_compile_material(quader_mesh_material resources/materials/quader_mesh.mat
 quader_compile_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_compile_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
 quader_compile_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
-quader_compile_material(imgui_material resources/materials/imgui.mat imgui)
+quader_compile_material(rmlui_material resources/materials/rmlui.mat rmlui)
 quader_compile_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_runtime STATIC
@@ -319,7 +321,7 @@ add_library(quader_runtime STATIC
     src/render/FilamentUtils.cpp
     src/render/FilamentBufferDescriptorFactory.cpp
     src/render/FilamentMaterialLibrary.cpp
-    src/render/ImGuiFilamentRenderer.cpp
+    src/render/RmlFilamentRenderer.cpp
     src/api/QuaderEditorApi.cpp
     src/api/QuaderRenderApi.cpp
     src/render/LightRenderableCache.cpp
@@ -347,27 +349,10 @@ add_library(quader_runtime STATIC
     src/render/ViewportRenderPassCoordinator.cpp
     src/render/ViewportRenderTarget.cpp
     src/render/ViewportRenderer.cpp
-    src/ui/ConsolePanel.cpp
-    src/ui/InspectorPanel.cpp
-    src/ui/MainMenuBar.cpp
-    src/ui/ModalToolOverlayRenderer.cpp
-    src/ui/NavigationGizmo.cpp
-    src/ui/OutlinerPanel.cpp
-    src/ui/ToolSettingsPanel.cpp
-    src/ui/TransformGizmoController.cpp
-    src/ui/UIPanelManager.cpp
-    src/ui/UISystem.cpp
-    src/ui/UIStyleTokens.cpp
-    src/ui/ViewportContextMenuPresenter.cpp
-    src/ui/ViewportFocusController.cpp
-    src/ui/ViewportHoverController.cpp
-    src/ui/ViewportInputFrameBuilder.cpp
-    src/ui/ViewportPaneController.cpp
-    src/ui/ViewportPaneOverlayCache.cpp
-    src/ui/ViewportSelectionController.cpp
+    src/ui/backends/rml/RmlUiContextHost.cpp
+    src/ui/controllers/ViewportHost.cpp
     src/ui/ViewportShortcutController.cpp
-    src/ui/ViewportSettingsPanel.cpp
-    src/ui/ViewportPanel.cpp
+    src/ui/UISystem.cpp
 )
 
 target_include_directories(quader_runtime PUBLIC src)
@@ -380,7 +365,7 @@ target_link_libraries(quader_runtime
         quader_api
         filament_sdk
         SDL3::SDL3
-        imgui::imgui
+        RmlUi::RmlUi
         lodepng
 )
 if(WIN32)
@@ -391,7 +376,7 @@ add_dependencies(quader_runtime
     vertex_color_overlay_material
     quader_overlay_line_material
     quader_overlay_point_material
-    imgui_material
+    rmlui_material
     ground_grid_material)
 
 add_executable(quader WIN32 src/main.cpp)
@@ -401,7 +386,7 @@ add_dependencies(quader
     vertex_color_overlay_material
     quader_overlay_line_material
     quader_overlay_point_material
-    imgui_material
+    rmlui_material
     ground_grid_material)
 
 if(MSVC)
@@ -414,6 +399,9 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/fonts"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/locales"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ui/rml"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ui/rcss"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ui/tokens"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${quader_mesh_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat"
@@ -427,8 +415,8 @@ add_custom_command(TARGET quader POST_BUILD
             "${quader_overlay_point_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/quader_overlay_point.filamat"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${imgui_material_OUTPUT}"
-            "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat"
+            "${rmlui_material_OUTPUT}"
+            "$<TARGET_FILE_DIR:quader>/materials/rmlui.filamat"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${ground_grid_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/ground_grid.filamat"
@@ -444,6 +432,18 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales"
             "$<TARGET_FILE_DIR:quader>/locales"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/rml/viewport-shell.rml"
+            "$<TARGET_FILE_DIR:quader>/ui/rml/viewport-shell.rml"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/rcss/app-shell.rcss"
+            "$<TARGET_FILE_DIR:quader>/ui/rcss/app-shell.rcss"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tokens/app-palette.tokens.json"
+            "$<TARGET_FILE_DIR:quader>/ui/tokens/app-palette.tokens.json"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tokens/app-utility.tokens.json"
+            "$<TARGET_FILE_DIR:quader>/ui/tokens/app-utility.tokens.json"
     VERBATIM)
 
 if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}")

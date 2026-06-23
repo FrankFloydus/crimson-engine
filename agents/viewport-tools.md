@@ -30,11 +30,11 @@ file except through prior written authorization from Francesco Di Blasi.
 - Register viewport tools in the viewport catalog implementation, not inline in headers.
 - Update `tests/viewport_tool_catalog_tests.cpp` when ids, shortcuts, ownership, or runtime behavior
   changes.
-- `ViewportPanel` builds context and delegates; it does not own modal tool implementation,
+- The UI shell builds presentation input and delegates; it does not own modal tool implementation,
   selection-picking policy, transform-gizmo behavior, or box/cut/knife/mirror state machines.
 - `ViewportWorkspaceService` owns viewport workspace state: layout, focused pane, pane view,
   pane shading, grid preset, render size/visibility bookkeeping, and pane camera controllers.
-  `ViewportPanel` should consume that service for UI/render orchestration instead of introducing
+  `UISystem` should consume that service for UI/render orchestration instead of introducing
   new long-lived layout, camera, shading, or grid fields.
 - `QuaderViewportApi` should expose user/editor viewport intent through the workspace service.
   Runtime hooks are for host/render actions that cannot be represented as core viewport state,

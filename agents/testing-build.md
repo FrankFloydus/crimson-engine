@@ -50,9 +50,7 @@ cmd /c "set PATH=& set Path=$p& cmake --build --preset vs2026-debug --target qua
 
 - Vulkan backend initializes.
 - Main SDL window opens without a separate console window.
-- Dockspace appears.
-- Console panel is docked in-app and receives log lines.
-- Viewport panel docks/moves and renders app-created polygon meshes with the default material.
-- Create and select a cube, capture the viewport, and verify selected/source mesh wires are visible
-  with no giant viewport-sized overlay lines.
+- RmlUi shell appears as one full-window viewport panel.
+- The viewport texture renders app-created polygon meshes with the default material.
+- Window resize keeps the viewport texture visible without stale or blank UI content.
 - MMB orbits, Shift+MMB pans, mouse wheel zooms.

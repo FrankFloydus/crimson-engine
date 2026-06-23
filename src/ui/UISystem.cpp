@@ -8,84 +8,23 @@
 
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "editor/modeling/services/ModelingSessionService.h"
-#include "editor/viewport/QuaderViewportApiRuntimeAccess.h"
-#include "render/FilamentBufferDescriptorFactory.h"
-#include "ui/ConsolePanel.h"
-#include "ui/InspectorPanel.h"
-#include "ui/OutlinerPanel.h"
-#include "ui/UIContext.h"
+#include "ui/DebugPaletteView.h"
+#include "ui/UIUtilityTokens.h"
 
-#include <filament/Texture.h>
-#include <imgui.h>
-#include <imgui_impl_sdl3.h>
-#include <imgui_internal.h>
-#include <lodepng.h>
-#include <SDL3/SDL_error.h>
-#include <SDL3/SDL_mouse.h>
+#include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_keycode.h>
 
 #include <algorithm>
-#include <cstddef>
-#include <cstring>
+#include <cmath>
 #include <filesystem>
-#include <memory>
-#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
 
 namespace quader {
 namespace {
-
-void clampDockLeafNodeWidth(ImGuiDockNode* node, float minimumWidth) {
-    if (node == nullptr || node->ParentNode == nullptr || node->ParentNode->SplitAxis != ImGuiAxis_X) {
-        return;
-    }
-
-    ImGuiDockNode* parent = node->ParentNode;
-    ImGuiDockNode* sibling = parent->ChildNodes[0] == node ? parent->ChildNodes[1] : parent->ChildNodes[0];
-    if (sibling == nullptr || parent->Size.x <= minimumWidth + 1.0f || node->Size.x >= minimumWidth) {
-        return;
-    }
-
-    const bool nodeIsLeftChild = parent->ChildNodes[0] == node;
-    const float clampedWidth = std::min(minimumWidth, parent->Size.x - 1.0f);
-    const float siblingWidth = std::max(1.0f, parent->Size.x - clampedWidth);
-
-    node->Size.x = clampedWidth;
-    node->SizeRef.x = clampedWidth;
-    sibling->Size.x = siblingWidth;
-    sibling->SizeRef.x = siblingWidth;
-
-    if (nodeIsLeftChild) {
-        node->Pos.x = parent->Pos.x;
-        sibling->Pos.x = parent->Pos.x + clampedWidth;
-    } else {
-        sibling->Pos.x = parent->Pos.x;
-        node->Pos.x = parent->Pos.x + siblingWidth;
-    }
-
-    node->WantLockSizeOnce = true;
-    sibling->WantLockSizeOnce = true;
-}
-
-void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
-    ImGuiWindow* window = ImGui::FindWindowByName(windowName);
-    if (window == nullptr || window->DockNode == nullptr) {
-        return;
-    }
-    clampDockLeafNodeWidth(window->DockNode, minimumWidth);
-}
-
-std::optional<UIPanelId> panelIdFromName(std::string_view name) {
-    for (const UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
-        if (name == uiPanelKey(id)) {
-            return id;
-        }
-    }
-    return std::nullopt;
-}
 
 QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) {
     return {
@@ -107,92 +46,89 @@ QuaderApiVoidResult runtimeFailure(std::string message) {
 
 } // namespace
 
+UISystem::UISystem() = default;
+
 UISystem::~UISystem() {
     shutdown();
 }
 
 void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const std::filesystem::path& executableDir) {
     window_ = window;
+    updateWindowMetrics();
+
     settingsPaths_ = UISettings::resolvePaths(executableDir);
     std::error_code error;
     std::filesystem::create_directories(settingsPaths_.directory, error);
-    settings_ = UISettings::load(settingsPaths_.settingsFile);
-    localization_.load(executableDir / "locales", settings_.locale());
-    if (settings_.locale() != localization_.currentLocale()) {
-        settings_.setLocale(localization_.currentLocale());
-    }
     viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile);
-    imguiIniPath_ = settingsPaths_.imguiIniFile.string();
-    const bool iniExists = std::filesystem::exists(settingsPaths_.imguiIniFile, error);
-    const std::uintmax_t iniSize = iniExists ? std::filesystem::file_size(settingsPaths_.imguiIniFile, error) : 0u;
-    hasSavedDockLayout_ = iniExists && !error && iniSize > 0u;
 
-    registerPanels(renderSystem);
-    panels_.applySettings(settings_);
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->setNavigationGizmoVisible(settings_.navigationGizmoVisible());
+    viewportHost_.initialize(window_, renderSystem, viewportSettings_);
+
+    const std::vector<DebugPaletteColorToken> debugPaletteColors =
+            loadDebugPaletteColorTokens(appPaletteTokenPath(executableDir));
+    const std::vector<UIUtilityToken> utilityTokens =
+            loadUIUtilityTokens(appUtilityTokenPath(executableDir));
+    const std::string utilityRcss = buildUIUtilityRcss(utilityTokens, debugPaletteColors);
+    const std::string debugPaletteRml = buildDebugPalettePageRml(debugPaletteColors);
+
+    if (!rmlHost_.initialize(window_,
+                renderSystem,
+                executableDir,
+                utilityRcss,
+                debugPaletteRml,
+                viewportHost_.textureSource(),
+                viewportHost_.textureHandle(),
+                viewportHost_.textureWidth(),
+                viewportHost_.textureHeight())) {
+        shutdown();
+        return;
     }
+    updateRmlDensityScale();
+    applyDebugPaletteVisibility();
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.IniFilename = imguiIniPath_.c_str();
-
-    loadUIDefaultFont(executableDir, style_);
-    applyUIStyle(style_);
-
-    LOG_INFO("Initializing ImGui SDL3 backend");
-    ImGui_ImplSDL3_InitForOther(window_);
-    LOG_INFO("Initializing ImGui Filament renderer");
-    renderer_.initialize(renderSystem.engine(), renderSystem.imguiMaterial(), renderSystem.textures());
-    loadIcons(renderSystem.engine(), renderSystem.textures(), executableDir);
     initialized_ = true;
-    LOG_INFO("ImGui docking UI initialized");
+    LOG_INFO("RmlUi viewport shell initialized");
 }
 
 void UISystem::shutdown() {
-    if (!initialized_) {
+    if (!initialized_ && !rmlHost_.initialized()) {
         return;
     }
 
-    setViewportCursorCaptured(false);
-    saveSettings();
+    viewportHost_.setCursorCaptured(false);
     saveViewportSettings();
-    if (!imguiIniPath_.empty()) {
-        ImGui::SaveIniSettingsToDisk(imguiIniPath_.c_str());
-    }
-
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->shutdown();
-    }
-    renderer_.shutdown();
-    destroyIcons();
-    ImGui_ImplSDL3_Shutdown();
-    ImGui::DestroyContext();
+    rmlHost_.shutdown();
+    viewportHost_.shutdown();
     initialized_ = false;
     window_ = nullptr;
-    viewportPanel_ = nullptr;
 }
 
 bool UISystem::processEvent(const SDL_Event& event) {
-    return ImGui_ImplSDL3_ProcessEvent(&event);
+    if (!window_) {
+        return false;
+    }
+
+    updateWindowMetrics();
+    if (event.type == SDL_EVENT_KEY_DOWN &&
+            event.key.key == SDLK_F1 &&
+            !event.key.repeat &&
+            (SDL_GetModState() & SDL_KMOD_SHIFT) != 0) {
+        toggleDebugPalette();
+        return true;
+    }
+
+    if (viewportHost_.processEvent(event)) {
+        return true;
+    }
+
+    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
+    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
+    (void)rmlHost_.processEvent(event, scaleX, scaleY);
+    return false;
 }
 
 void UISystem::beginFrame(const FrameTiming& frameTiming) {
-    currentFrameTiming_ = frameTiming;
-    renderer_.releaseFrameResources();
-    relativeMouseDelta_ = {};
-    if (relativeMouseCaptured_) {
-        float deltaX = 0.0f;
-        float deltaY = 0.0f;
-        (void)SDL_GetRelativeMouseState(&deltaX, &deltaY);
-        relativeMouseDelta_ = {deltaX, deltaY};
-    }
-    ImGui_ImplSDL3_NewFrame();
-    ImGui::GetIO().DeltaTime = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
-    ImGui::NewFrame();
+    updateWindowMetrics();
+    viewportHost_.beginFrame(frameTiming);
 }
 
 void UISystem::draw(QuaderEditorApi& editor,
@@ -203,128 +139,26 @@ void UISystem::draw(QuaderEditorApi& editor,
         EditorSelectionService& selection,
         AssetId defaultMaterial,
         bool& quitRequested) {
-    editor.ui().setRuntimeHooks(QuaderUIRuntimeHooks{
-            .isPanelVisible = [this](std::string_view panel) {
-                const std::optional<UIPanelId> id = panelIdFromName(panel);
-                return id.has_value() && panels_.isVisible(*id);
-            },
-            .setPanelVisible = [this](std::string_view panel, bool visible) {
-                const std::optional<UIPanelId> id = panelIdFromName(panel);
-                if (!id.has_value()) {
-                    return runtimeFailure("Unknown UI panel.");
-                }
-                const bool before = panels_.isVisible(*id);
-                panels_.setVisible(*id, visible);
-                if (before != visible) {
-                    saveSettings();
-                }
-                return runtimeStatus(before != visible);
-            },
-            .focusPanel = [this](std::string_view panel) {
-                const std::optional<UIPanelId> id = panelIdFromName(panel);
-                if (!id.has_value()) {
-                    return runtimeFailure("Unknown UI panel.");
-                }
-                focusedPanel_ = *id;
-                return runtimeStatus(true);
-            },
-    });
-    editor.preferences().setRuntimeHooks(QuaderPreferencesRuntimeHooks{
-            .locale = [this]() {
-                return settings_.locale();
-            },
-            .setLocale = [this](std::string locale) {
-                if (!localization_.selectLocale(locale)) {
-                    return runtimeFailure("Unknown locale.");
-                }
-                const bool changed = settings_.locale() != localization_.currentLocale();
-                settings_.setLocale(localization_.currentLocale());
-                if (changed) {
-                    saveSettings();
-                }
-                return runtimeStatus(changed);
-            },
-            .save = [this]() {
-                saveSettings();
-                saveViewportSettings();
-                return runtimeStatus(false, "Preferences saved.");
-            },
-            .navigationGizmoVisible = [this]() {
-                return viewportPanel_ != nullptr && viewportPanel_->navigationGizmoVisible();
-            },
-            .setNavigationGizmoVisible = [this](bool visible) {
-                if (viewportPanel_ == nullptr) {
-                    return runtimeFailure("Viewport panel is not available.");
-                }
-                const bool before = viewportPanel_->navigationGizmoVisible();
-                viewportPanel_->setNavigationGizmoVisible(visible);
-                settings_.setNavigationGizmoVisible(visible);
-                saveSettings();
-                return runtimeStatus(before != visible);
-            },
-    });
-    drawDockspace(editor, quitRequested, document, modeling);
+    (void)renderBridge;
+    (void)modeling;
+    (void)selection;
+    (void)defaultMaterial;
+    (void)quitRequested;
 
-    bool viewportCursorCaptureRequested = false;
-    QVec2 viewportCursorCapturePoint = {};
-    const UIPanelId previousFocusedPanel = focusedPanel_;
-    bool panelFocusChanged = false;
-    bool settingsChanged = false;
-    UIContext context{
-            .editor = editor,
-            .renderBridge = renderBridge,
-            .document = document,
-            .assets = assets,
-            .modeling = modeling,
-            .selection = selection,
-            .defaultMaterial = defaultMaterial,
-            .quitRequested = quitRequested,
-            .style = style_,
-            .icons = icons_,
-            .localization = localization_,
-            .settings = settings_,
-            .viewportSettings = viewportSettings_,
-            .frameTiming = currentFrameTiming_,
-            .viewportRelativeMouseDelta = relativeMouseDelta_,
-            .viewportCursorCaptureRequested = &viewportCursorCaptureRequested,
-            .viewportCursorCapturePoint = &viewportCursorCapturePoint,
-            .focusedPanel = focusedPanel_,
-            .previousFocusedPanel = previousFocusedPanel,
-            .focusedPanelStorage = &focusedPanel_,
-            .panelFocusChanged = &panelFocusChanged,
-            .settingsChanged = &settingsChanged,
-    };
-    panels_.draw(context);
-    if (viewportSettingsPanel_.draw(context, settingsPanelOpen_)) {
-        saveViewportSettings();
-    }
-    if (settingsChanged) {
-        saveSettings();
-    }
-    toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
-    std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
-    std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
-    renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
-    for (ModelingToolPreviewMesh& previewMesh : modelingPreviewMeshes) {
-        const AssetId material = previewMesh.material != InvalidAssetId ? previewMesh.material : defaultMaterial;
-        renderPreviewMeshes.push_back(SceneRenderBridge::PreviewMesh{
-                .sourceEntity = previewMesh.sourceEntity,
-                .material = material,
-                .mesh = std::move(previewMesh.mesh),
-                .transform = {},
-        });
-    }
-    renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets);
-    enforceSidebarDockMinimums();
-    setViewportCursorCaptured(viewportCursorCaptureRequested);
-    if (viewportCursorCaptureRequested) {
-        warpCapturedCursor(viewportCursorCapturePoint);
-    }
+    viewportHost_.handleFrame(editor, document, assets, debugPaletteVisible_);
 }
 
 void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
-    ImGui::Render();
-    renderer_.prepare(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
+    framebufferWidth_ = std::max(1u, framebufferWidth);
+    framebufferHeight_ = std::max(1u, framebufferHeight);
+    viewportHost_.resize(framebufferWidth_, framebufferHeight_);
+    rmlHost_.clearTextureSources();
+    rmlHost_.registerTextureSource(
+            viewportHost_.textureSource(),
+            viewportHost_.textureHandle(),
+            viewportHost_.textureWidth(),
+            viewportHost_.textureHeight());
+    rmlHost_.prepareRenderData(framebufferWidth_, framebufferHeight_);
 }
 
 void UISystem::prepareViewports(
@@ -332,238 +166,115 @@ void UISystem::prepareViewports(
         SceneRenderBridge& renderBridge,
         const SceneDocument& document,
         const AssetRegistry& assets) {
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->prepareViewports(
-                QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
-                renderBridge,
-                document,
-                assets);
-    }
+    viewportHost_.prepareViewports(editor, renderBridge, document, assets);
 }
 
 void UISystem::renderViewports(RenderSystem& renderSystem) {
-    if (viewportPanel_ != nullptr) {
-        viewportPanel_->renderViewports(renderSystem.renderer());
-    }
+    viewportHost_.renderViewports(renderSystem);
+}
+
+void UISystem::renderWindowedViewports(RenderSystem& renderSystem) {
+    viewportHost_.renderWindowedViewports(renderSystem);
 }
 
 void UISystem::render(RenderSystem& renderSystem) {
-    renderer_.render(renderSystem.renderer());
+    rmlHost_.render(renderSystem);
 }
 
-void UISystem::registerPanels(RenderSystem& renderSystem) {
-    panels_.add(std::make_unique<OutlinerPanel>());
-
-    auto viewport = std::make_unique<ViewportPanel>();
-    viewport->initialize(renderSystem);
-    viewportPanel_ = viewport.get();
-    panels_.add(std::move(viewport));
-
-    panels_.add(std::make_unique<InspectorPanel>());
-    panels_.add(std::make_unique<ConsolePanel>());
-}
-
-void UISystem::drawDockspace(
-        QuaderEditorApi& editor,
-        bool& quitRequested,
-        SceneDocument& document,
-        ModelingSessionService& modeling) {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-    ImGui::SetNextWindowViewport(viewport->ID);
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::Begin("Main Dockspace", nullptr, flags);
-    ImGui::PopStyleVar(2);
-
-    const MainMenuBarResult menuResult = mainMenuBar_.draw({
-            .quitRequested = quitRequested,
-            .editor = editor,
-            .document = document,
-            .modeling = modeling,
-            .viewportPanel = viewportPanel_,
-            .panels = panels_,
-            .settings = settings_,
-            .localization = localization_,
-            .viewportSettingsPanelOpen = settingsPanelOpen_,
-            .toolSettingsPanelOpen = toolSettingsPanelOpen_,
+void UISystem::installRuntimeHooks(QuaderEditorApi& editor) {
+    editor.ui().setRuntimeHooks(QuaderUIRuntimeHooks{
+            .isPanelVisible = [](std::string_view panel) {
+                return panel == "Viewport";
+            },
+            .setPanelVisible = [](std::string_view panel, bool visible) {
+                if (panel != "Viewport") {
+                    return runtimeFailure("Only the viewport panel is available in the RmlUi shell.");
+                }
+                return runtimeStatus(false, visible ? "Viewport is always visible." : "Viewport cannot be hidden.");
+            },
+            .focusPanel = [](std::string_view panel) {
+                if (panel != "Viewport") {
+                    return runtimeFailure("Only the viewport panel is available in the RmlUi shell.");
+                }
+                return runtimeStatus(false);
+            },
+            .notify = [](QuaderNotification) {
+                return runtimeStatus(false);
+            },
     });
-    if (menuResult.settingsChanged) {
-        saveSettings();
-    }
-
-    const ImGuiID dockspaceId = ImGui::GetID("QuaderDockspace");
-    const ImVec2 dockspaceSize = ImGui::GetContentRegionAvail();
-    if (!hasSavedDockLayout_ && !dockLayoutBuilt_ && dockspaceSize.x > 1.0f && dockspaceSize.y > 1.0f) {
-        buildDefaultDockLayout(dockspaceId, dockspaceSize);
-        dockLayoutBuilt_ = true;
-    }
-
-    enforceSidebarDockMinimums();
-    const ImVec2 savedWindowMinSize = ImGui::GetStyle().WindowMinSize;
-    ImGui::PushStyleVar(
-            ImGuiStyleVar_WindowMinSize,
-            ImVec2(std::max(savedWindowMinSize.x, style_.sidebarMinWidth), savedWindowMinSize.y));
-    ImGui::DockSpace(dockspaceId, {0.0f, 0.0f}, ImGuiDockNodeFlags_AutoHideTabBar);
-    ImGui::PopStyleVar();
-    enforceSidebarDockMinimums();
-
-    ImGui::End();
+    editor.preferences().setRuntimeHooks(QuaderPreferencesRuntimeHooks{
+            .locale = []() {
+                return std::string("en-US");
+            },
+            .setLocale = [](std::string) {
+                return runtimeFailure("Locale selection is not exposed in the RmlUi viewport shell yet.");
+            },
+            .save = [this]() {
+                saveViewportSettings();
+                return runtimeStatus(false, "Preferences saved.");
+            },
+            .navigationGizmoVisible = []() {
+                return false;
+            },
+            .setNavigationGizmoVisible = [](bool) {
+                return runtimeFailure("Navigation gizmo is not available in the RmlUi viewport shell yet.");
+            },
+    });
 }
 
-void UISystem::buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize) {
-    ImGui::DockBuilderRemoveNode(dockspaceId);
-    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace | ImGuiDockNodeFlags_AutoHideTabBar);
-    ImGui::DockBuilderSetNodeSize(dockspaceId, dockspaceSize);
-
-    ImGuiID mainId = dockspaceId;
-    ImGuiID consoleId = 0;
-    if (panels_.isVisible(UIPanelId::Console)) {
-        consoleId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Down, 0.24f, nullptr, &mainId);
-    }
-    const float sidebarMinimumRatio = style_.sidebarMinWidth / std::max(dockspaceSize.x, 1.0f);
-    const float outlinerRatio = std::clamp(std::max(0.18f, sidebarMinimumRatio), 0.18f, 0.35f);
-    const float inspectorRatio = std::clamp(std::max(0.24f, sidebarMinimumRatio), 0.24f, 0.35f);
-    const ImGuiID outlinerId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Left, outlinerRatio, nullptr, &mainId);
-    const ImGuiID inspectorId = ImGui::DockBuilderSplitNode(mainId, ImGuiDir_Right, inspectorRatio, nullptr, &mainId);
-
-    ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Outliner), outlinerId);
-    ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Viewport), mainId);
-    ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Inspector), inspectorId);
-    if (consoleId != 0) {
-        ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Console), consoleId);
-    }
-    ImGui::DockBuilderFinish(dockspaceId);
-}
-
-void UISystem::enforceSidebarDockMinimums() {
-    clampDockedWindowWidth(uiPanelKey(UIPanelId::Outliner), style_.sidebarMinWidth);
-    clampDockedWindowWidth(uiPanelKey(UIPanelId::Inspector), style_.sidebarMinWidth);
-}
-
-void UISystem::setViewportCursorCaptured(bool captured) {
-    if (window_ == nullptr || relativeMouseCaptured_ == captured) {
+void UISystem::updateWindowMetrics() {
+    if (!window_) {
         return;
     }
 
-    if (!SDL_SetWindowRelativeMouseMode(window_, captured)) {
-        if (!relativeMouseCaptureWarningIssued_) {
-            LOG_WARN("Unable to {} viewport relative mouse mode: {}",
-                    captured ? "enable" : "disable",
-                    SDL_GetError());
-            relativeMouseCaptureWarningIssued_ = true;
-        }
+    int framebufferW = 1;
+    int framebufferH = 1;
+    SDL_GetWindowSizeInPixels(window_, &framebufferW, &framebufferH);
+    framebufferWidth_ = static_cast<std::uint32_t>(std::max(1, framebufferW));
+    framebufferHeight_ = static_cast<std::uint32_t>(std::max(1, framebufferH));
+    SDL_GetWindowSize(window_, &windowWidth_, &windowHeight_);
+    windowWidth_ = std::max(1, windowWidth_);
+    windowHeight_ = std::max(1, windowHeight_);
+    updateRmlDensityScale();
+}
+
+void UISystem::updateRmlDensityScale() {
+    if (!window_) {
         return;
     }
 
-    relativeMouseCaptured_ = captured;
-    relativeMouseCaptureWarningIssued_ = false;
-    if (captured) {
-        float discardX = 0.0f;
-        float discardY = 0.0f;
-        (void)SDL_GetRelativeMouseState(&discardX, &discardY);
-        relativeMouseDelta_ = {};
-    }
-}
-
-void UISystem::warpCapturedCursor(QVec2 point) {
-    if (window_ == nullptr || !relativeMouseCaptured_) {
+    const float displayScale = SDL_GetWindowDisplayScale(window_);
+    if (!std::isfinite(displayScale) || displayScale <= 0.0f) {
         return;
     }
-    SDL_WarpMouseInWindow(window_, point.x, point.y);
-    float discardX = 0.0f;
-    float discardY = 0.0f;
-    (void)SDL_GetRelativeMouseState(&discardX, &discardY);
-    relativeMouseDelta_ = {};
-}
 
-void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, const std::filesystem::path& executableDir) {
-    iconEngine_ = &engine;
-    iconTextureRegistry_ = &textures;
-
-    auto load = [&](const char* filename) {
-        const std::filesystem::path iconPath = executableDir / "icons" / filename;
-        std::vector<unsigned char> pixels;
-        unsigned width = 0;
-        unsigned height = 0;
-        const unsigned error = lodepng::decode(pixels, width, height, iconPath.string());
-        if (error != 0u || pixels.empty() || width == 0u || height == 0u) {
-            LOG_WARN("Unable to load UI icon {}: {}", iconPath.string(), lodepng_error_text(error));
-            return ImTextureID_Invalid;
-        }
-
-        const std::size_t rowByteCount = static_cast<std::size_t>(width) * 4u;
-        std::vector<unsigned char> flipped(pixels.size());
-        for (unsigned y = 0; y < height; ++y) {
-            const std::size_t sourceOffset = static_cast<std::size_t>(y) * rowByteCount;
-            const std::size_t targetOffset = static_cast<std::size_t>(height - 1u - y) * rowByteCount;
-            std::memcpy(flipped.data() + targetOffset, pixels.data() + sourceOffset, rowByteCount);
-        }
-
-        filament::Texture* texture = filament::Texture::Builder()
-                .width(width)
-                .height(height)
-                .levels(1)
-                .format(filament::Texture::InternalFormat::RGBA8)
-                .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
-                .build(engine);
-        texture->setImage(engine, 0, FilamentBufferDescriptorFactory::rgbaPixels(flipped.data(), flipped.size()));
-        const ImTextureID id = textures.registerTexture(texture);
-        iconTextures_.push_back(texture);
-        iconTextureIds_.push_back(id);
-        return id;
-    };
-
-    icons_.mesh = load("mesh_icon.png");
-    icons_.empty = load("empty_icon.png");
-    icons_.lock = load("lock_icon.png");
-    icons_.hide = load("hide_icon.png");
-}
-
-void UISystem::destroyIcons() {
-    if (iconTextureRegistry_ != nullptr) {
-        for (const ImTextureID id : iconTextureIds_) {
-            if (id != ImTextureID_Invalid) {
-                iconTextureRegistry_->unregisterTexture(id);
-            }
-        }
+    const float dpRatio = std::clamp(displayScale, 0.75f, 4.0f);
+    if (std::abs(dpRatio - rmlDpRatio_) <= 0.001f) {
+        return;
     }
-    iconTextureIds_.clear();
 
-    if (iconEngine_ != nullptr) {
-        for (filament::Texture* texture : iconTextures_) {
-            if (texture != nullptr) {
-                iconEngine_->destroy(texture);
-            }
-        }
-    }
-    iconTextures_.clear();
-    icons_ = UIIconSet{};
-    iconEngine_ = nullptr;
-    iconTextureRegistry_ = nullptr;
-}
-
-void UISystem::saveSettings() {
-    panels_.writeSettings(settings_);
-    if (viewportPanel_ != nullptr) {
-        settings_.setNavigationGizmoVisible(viewportPanel_->navigationGizmoVisible());
-    }
-    if (!settings_.save(settingsPaths_.settingsFile)) {
-        LOG_WARN("Unable to save UI settings to {}", settingsPaths_.settingsFile.string());
-    }
+    rmlDpRatio_ = dpRatio;
+    rmlHost_.setDensityIndependentPixelRatio(rmlDpRatio_);
 }
 
 void UISystem::saveViewportSettings() {
-    if (!viewportSettings_.save(settingsPaths_.viewportSettingsFile)) {
+    if (!settingsPaths_.viewportSettingsFile.empty() &&
+            !viewportSettings_.save(settingsPaths_.viewportSettingsFile)) {
         LOG_WARN("Unable to save viewport settings to {}", settingsPaths_.viewportSettingsFile.string());
     }
+}
+
+void UISystem::toggleDebugPalette() {
+    debugPaletteVisible_ = !debugPaletteVisible_;
+    applyDebugPaletteVisibility();
+    if (debugPaletteVisible_) {
+        viewportHost_.setCursorCaptured(false);
+    }
+}
+
+void UISystem::applyDebugPaletteVisibility() {
+    rmlHost_.setElementDisplay("viewport-panel", debugPaletteVisible_ ? "none" : "block");
+    rmlHost_.setElementDisplay("debug-palette-page", debugPaletteVisible_ ? "block" : "none");
 }
 
 } // namespace quader

@@ -9,7 +9,7 @@ file except through prior written authorization from Francesco Di Blasi.
 # Dependencies
 
 - Use CMake and vcpkg manifest mode.
-- Do not vendor SDL, ImGui, spdlog, GoogleTest, or a new Filament SDK into this repo.
+- Do not vendor SDL, UI backend libraries, spdlog, GoogleTest, or a new Filament SDK into this repo.
 - Use the Filament SDK path provided by `FILAMENT_SDK_ROOT`.
 - Default Filament SDK path:
   `C:\Users\Drako\Desktop\quader-windows\_SOURCES\filament-v1.71.6-windows`.

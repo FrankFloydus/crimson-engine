@@ -391,8 +391,6 @@ TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBa
             readSourceFile(root / "src" / "editor" / "tools" / "base" / "PointSequenceTool.cpp");
     const std::string drawnPlaneToolSource =
             readSourceFile(root / "src" / "editor" / "tools" / "base" / "DrawnPlaneTool.cpp");
-    const std::string viewportPanelSource =
-            readSourceFile(root / "src" / "ui" / "ViewportPanel.cpp");
 
     EXPECT_NE(toolHeader.find("struct ViewportPointToolContext"), std::string::npos);
     EXPECT_NE(broadContext.find("ViewportPointToolContext* point"), std::string::npos);
@@ -403,8 +401,6 @@ TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBa
     EXPECT_NE(dragToolSource.find("ViewportPointToolContext& pointContext = *context.point"), std::string::npos);
     EXPECT_NE(pointSequenceToolSource.find("ViewportPointToolContext* pointContext = context.point"), std::string::npos);
     EXPECT_NE(drawnPlaneToolSource.find("ViewportPointToolContext& pointContext = *context.point"), std::string::npos);
-    EXPECT_NE(viewportPanelSource.find("ViewportPointToolContext pointToolContext"), std::string::npos);
-    EXPECT_NE(viewportPanelSource.find(".point = &pointToolContext"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
@@ -415,16 +411,16 @@ TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
     EXPECT_FALSE(std::filesystem::exists(root / "src" / "viewport" / "modes"));
 }
 
-TEST(ViewportToolGuardrailTests, ViewportPanelHasNoDirectModalToolBranches) {
+TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
     const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
-    const std::string panel = readSourceFile(root / "src" / "ui" / "ViewportPanel.cpp");
-    EXPECT_EQ(panel.find("activeTool == ViewportToolId::Box"), std::string::npos);
-    EXPECT_EQ(panel.find("activeTool == ViewportToolId::InsertEdgeLoop"), std::string::npos);
-    EXPECT_EQ(panel.find("activeTool == ViewportToolId::Knife"), std::string::npos);
-    EXPECT_EQ(panel.find("activeTool == ViewportToolId::Cut"), std::string::npos);
-    EXPECT_EQ(panel.find("activeTool == ViewportToolId::Mirror"), std::string::npos);
-    EXPECT_EQ(panel.find("activeTool == ViewportToolId::Poly"), std::string::npos);
-    EXPECT_EQ(panel.find("boxPreviewController_"), std::string::npos);
+    const std::string uiShell = readSourceFile(root / "src" / "ui" / "UISystem.cpp");
+    EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Box"), std::string::npos);
+    EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::InsertEdgeLoop"), std::string::npos);
+    EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Knife"), std::string::npos);
+    EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Cut"), std::string::npos);
+    EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Mirror"), std::string::npos);
+    EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Poly"), std::string::npos);
+    EXPECT_EQ(uiShell.find("boxPreviewController_"), std::string::npos);
 }
 
 } // namespace

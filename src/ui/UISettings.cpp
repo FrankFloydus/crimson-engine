@@ -17,11 +17,6 @@
 namespace quader {
 namespace {
 
-bool parseBool(std::string value, bool fallback) {
-    const std::optional<bool> parsed = QStr::parseBoolToken(value);
-    return parsed.value_or(fallback);
-}
-
 std::filesystem::path localAppDataDirectory(const std::filesystem::path& executableDir) {
 #ifdef _WIN32
     if (const char* localAppData = std::getenv("LOCALAPPDATA")) {
@@ -66,15 +61,7 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
         const std::string key = QStr::trimAsciiWhitespace(split->before);
         const std::string value = QStr::trimAsciiWhitespace(split->after);
-        if (key == uiPanelKey(UIPanelId::Outliner)) {
-            settings.outlinerVisible_ = parseBool(value, settings.outlinerVisible_);
-        } else if (key == uiPanelKey(UIPanelId::Inspector)) {
-            settings.inspectorVisible_ = parseBool(value, settings.inspectorVisible_);
-        } else if (key == uiPanelKey(UIPanelId::Console)) {
-            settings.consoleVisible_ = parseBool(value, settings.consoleVisible_);
-        } else if (key == "NavigationGizmo") {
-            settings.navigationGizmoVisible_ = parseBool(value, settings.navigationGizmoVisible_);
-        } else if (key == "Locale") {
+        if (key == "Locale") {
             settings.setLocale(value);
         }
     }
@@ -85,7 +72,6 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 UISettingsPaths UISettings::resolvePaths(const std::filesystem::path& executableDir) {
     UISettingsPaths paths;
     paths.directory = localAppDataDirectory(executableDir);
-    paths.imguiIniFile = paths.directory / "quader_ui.ini";
     paths.settingsFile = paths.directory / "ui_settings.ini";
     paths.viewportSettingsFile = paths.directory / "viewport_settings.ini";
     return paths;
@@ -100,45 +86,9 @@ bool UISettings::save(const std::filesystem::path& path) const {
         return false;
     }
 
-    file << "[Panels]\n";
-    file << uiPanelKey(UIPanelId::Outliner) << '=' << (outlinerVisible_ ? "true" : "false") << '\n';
-    file << uiPanelKey(UIPanelId::Inspector) << '=' << (inspectorVisible_ ? "true" : "false") << '\n';
-    file << uiPanelKey(UIPanelId::Console) << '=' << (consoleVisible_ ? "true" : "false") << '\n';
-    file << "\n[Show]\n";
-    file << "NavigationGizmo=" << (navigationGizmoVisible_ ? "true" : "false") << '\n';
-    file << "\n[Localization]\n";
+    file << "[Localization]\n";
     file << "Locale=" << locale_ << '\n';
     return true;
-}
-
-bool UISettings::isPanelVisible(UIPanelId id) const {
-    switch (id) {
-    case UIPanelId::Viewport:
-        return true;
-    case UIPanelId::Outliner:
-        return outlinerVisible_;
-    case UIPanelId::Inspector:
-        return inspectorVisible_;
-    case UIPanelId::Console:
-        return consoleVisible_;
-    }
-    return true;
-}
-
-void UISettings::setPanelVisible(UIPanelId id, bool visible) {
-    switch (id) {
-    case UIPanelId::Viewport:
-        break;
-    case UIPanelId::Outliner:
-        outlinerVisible_ = visible;
-        break;
-    case UIPanelId::Inspector:
-        inspectorVisible_ = visible;
-        break;
-    case UIPanelId::Console:
-        consoleVisible_ = visible;
-        break;
-    }
 }
 
 void UISettings::setLocale(std::string locale) {

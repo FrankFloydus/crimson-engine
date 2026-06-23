@@ -7,12 +7,14 @@
 #pragma once
 
 #include <filament/Texture.h>
-#include <imgui.h>
 
 #include <cstdint>
 #include <unordered_map>
 
 namespace quader {
+
+using RenderTextureHandle = std::uintptr_t;
+constexpr RenderTextureHandle InvalidRenderTextureHandle = 0u;
 
 /**
  * Enumerates TextureSampleColorSpace values used by the render layer.
@@ -27,10 +29,13 @@ enum class TextureSampleColorSpace {
  */
 class TextureRegistry {
 public:
-    ImTextureID registerTexture(filament::Texture* texture, TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb);
-    filament::Texture* texture(ImTextureID id) const;
-    TextureSampleColorSpace sampleColorSpace(ImTextureID id) const;
-    void unregisterTexture(ImTextureID id);
+    RenderTextureHandle registerTexture(filament::Texture* texture, TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb);
+    void updateTexture(RenderTextureHandle id,
+            filament::Texture* texture,
+            TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb);
+    filament::Texture* texture(RenderTextureHandle id) const;
+    TextureSampleColorSpace sampleColorSpace(RenderTextureHandle id) const;
+    void unregisterTexture(RenderTextureHandle id);
     void clear();
 
 private:
@@ -42,8 +47,8 @@ private:
         TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb;
     };
 
-    std::uint64_t nextId_ = 1;
-    std::unordered_map<ImTextureID, TextureRecord> textures_;
+    RenderTextureHandle nextId_ = 1u;
+    std::unordered_map<RenderTextureHandle, TextureRecord> textures_;
 };
 
 } // namespace quader

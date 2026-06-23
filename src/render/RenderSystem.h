@@ -22,6 +22,14 @@
 namespace quader {
 
 /**
+ * Enumerates SwapChainPresentationColorSpace values used by the render extraction and Filament resource layer.
+ */
+enum class SwapChainPresentationColorSpace {
+    Native,
+    Srgb,
+};
+
+/**
  * Owns Render System behavior within the render extraction and Filament resource layer.
  */
 class RenderSystem {
@@ -32,7 +40,12 @@ public:
     void shutdown();
 
     bool beginFrame();
+    bool beginFrame(filament::SwapChain* swapChain);
     void endFrame();
+    filament::SwapChain* createAdditionalSwapChain(
+            void* nativeWindow,
+            SwapChainPresentationColorSpace colorSpace = SwapChainPresentationColorSpace::Native);
+    void destroyAdditionalSwapChain(filament::SwapChain* swapChain);
 
     filament::Engine& engine() { return *engine_; }
     filament::Renderer& renderer() { return *renderer_; }
@@ -41,7 +54,7 @@ public:
     filament::Material& vertexColorOverlayMaterial() { return materialLibrary_.vertexColorOverlay(); }
     filament::Material& overlayLineMaterial() { return materialLibrary_.overlayLine(); }
     filament::Material& overlayPointMaterial() { return materialLibrary_.overlayPoint(); }
-    filament::Material& imguiMaterial() { return materialLibrary_.imgui(); }
+    filament::Material& rmlUiMaterial() { return materialLibrary_.rmlUi(); }
     filament::Material& groundGridMaterial() { return materialLibrary_.groundGrid(); }
     TextureRegistry& textures() { return textureRegistry_; }
 

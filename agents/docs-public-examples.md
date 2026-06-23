@@ -36,7 +36,7 @@ Avoid starting public examples with:
 - `ModelingSessionService`;
 - SDK `EditorSession`;
 - `SceneRenderBridge`;
-- ImGui/Filament/SDL internals.
+- UI, render, platform, and backend internals.
 
 Internal docs may explain those systems, but must be clearly labeled as internals.
 

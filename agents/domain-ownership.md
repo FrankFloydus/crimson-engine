@@ -83,11 +83,11 @@ identity.
 ## Viewport
 
 Viewport pointer, modal, transform, camera, and drawing interactions belong in `src/viewport/**` and
-viewport controllers/services. `ViewportPanel` builds context and delegates.
+viewport controllers/services. The UI shell builds presentation input and delegates.
 
 Viewport layout, focused pane, pane view, pane shading, grid preset, pane render size/visibility,
 and camera controllers belong in `ViewportWorkspaceService`. `QuaderViewportApi` delegates core
-viewport state to that service. `ViewportPanel` may own ImGui presentation and renderer lifetimes,
+viewport state to that service. `UISystem` may own UI backend presentation and renderer lifetimes,
 but it must not become the long-lived owner of viewport workspace state.
 
 ## UI

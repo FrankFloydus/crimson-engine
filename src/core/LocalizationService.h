@@ -50,10 +50,6 @@ public:
     [[nodiscard]] std::string format(std::string_view key,
             std::string_view fallback,
             std::initializer_list<std::pair<std::string_view, std::string_view>> replacements) const;
-    [[nodiscard]] std::string imguiLabel(
-            std::string_view key,
-            std::string_view stableId,
-            std::string_view fallback) const;
 
 private:
     static Catalog loadCatalogFile(const std::filesystem::path& path);

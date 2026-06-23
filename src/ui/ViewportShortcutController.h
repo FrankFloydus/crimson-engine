@@ -15,7 +15,7 @@ class QuaderEditorApi;
 class ModelingSessionService;
 
 /**
- * Stores the Viewport Shortcut Controller Result data contract used by the ImGui editor presentation layer.
+ * Stores the Viewport Shortcut Controller Result data contract used by the editor presentation layer.
  */
 struct ViewportShortcutControllerResult {
     bool consumed = false;
@@ -25,7 +25,7 @@ struct ViewportShortcutControllerResult {
 };
 
 /**
- * Coordinates Viewport Shortcut Controller state transitions for the ImGui editor presentation layer.
+ * Coordinates Viewport Shortcut Controller state transitions for the editor presentation layer.
  */
 class ViewportShortcutController {
 public:

@@ -16,7 +16,7 @@
 namespace quader {
 
 /**
- * Represents a Console Filter value used by the ImGui editor presentation layer.
+ * Represents a Console Filter value used by the editor presentation layer.
  */
 struct ConsoleFilter {
     spdlog::level::level_enum minimumLevel = spdlog::level::trace;
@@ -24,7 +24,7 @@ struct ConsoleFilter {
 };
 
 /**
- * Owns Console Model behavior within the ImGui editor presentation layer.
+ * Owns Console Model behavior within the editor presentation layer.
  */
 class ConsoleModel {
 public:

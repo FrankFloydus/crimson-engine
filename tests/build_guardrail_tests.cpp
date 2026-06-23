@@ -375,6 +375,49 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
     EXPECT_FALSE(readSourceFile("resources/locales/it-IT.lang").empty());
 }
 
+TEST(BuildGuardrailTests, PaletteTokenResourcesArePackagedWithRuntime) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+
+    expectContains(rootCMake, "src/ui/DebugPaletteView.cpp");
+    expectContains(rootCMake, "src/ui/UIUtilityTokens.cpp");
+    expectContains(rootCMake, "src/ui/backends/rml/RmlUiContextHost.cpp");
+    expectContains(rootCMake, "src/ui/controllers/ViewportHost.cpp");
+    expectContains(rootCMake, "resources/ui/rml/viewport-shell.rml");
+    expectContains(rootCMake, "resources/ui/rcss/app-shell.rcss");
+    expectContains(rootCMake, "resources/ui/tokens/app-palette.tokens.json");
+    expectContains(rootCMake, "resources/ui/tokens/app-utility.tokens.json");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rml/viewport-shell.rml");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rcss/app-shell.rcss");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-palette.tokens.json");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-utility.tokens.json");
+    expectContains(rootCMake, "copy_if_different");
+
+    EXPECT_FALSE(readSourceFile("resources/ui/rml/viewport-shell.rml").empty());
+    EXPECT_FALSE(readSourceFile("resources/ui/rcss/app-shell.rcss").empty());
+    EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-palette.tokens.json").empty());
+    EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-utility.tokens.json").empty());
+}
+
+TEST(BuildGuardrailTests, RuntimeUiDoesNotReintroduceImGui) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string manifest = readSourceFile("vcpkg.json");
+
+    expectMissing(rootCMake, "imgui");
+    expectMissing(rootCMake, "ImGui");
+    expectMissing(manifest, "\"imgui\"");
+
+    for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
+        const std::string path = relativePath.generic_string();
+        if (!pathStartsWith(path, "src/")) {
+            continue;
+        }
+
+        const std::string source = readSourceFile(relativePath);
+        expectMissing(source, "imgui");
+        expectMissing(source, "ImGui");
+    }
+}
+
 TEST(BuildGuardrailTests, EditorAggregateStaysInRuntimeTarget) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
 
@@ -408,7 +451,6 @@ TEST(BuildGuardrailTests, ViewportWorkspaceServiceStaysCoreAndRuntimeFree) {
     EXPECT_LT(workspaceSource, apiTarget);
 
     for (const std::string& forbidden : {
-                 "imgui",
                  "SDL",
                  "filament",
                  "SceneDocument",
@@ -460,10 +502,29 @@ TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
     expectContains(manifest, "licenses/nlohmann-json-MIT.txt");
     expectContains(manifest, "Geometric Tools Engine Mathematics");
     expectContains(manifest, "licenses/geometrictools-BSL-1.0.txt");
+    expectContains(manifest, "RmlUi");
+    expectContains(manifest, "licenses/rmlui-MIT.txt");
+    expectContains(manifest, "licenses/itlib-MIT.txt");
+    expectContains(manifest, "licenses/robin-hood-hashing-MIT.txt");
+    expectContains(manifest, "licenses/freetype-FTL-OR-GPL-2.0-or-later.txt");
+    expectContains(manifest, "licenses/brotli-MIT.txt");
+    expectContains(manifest, "licenses/bzip2-Bzip2.txt");
+    expectContains(manifest, "licenses/libpng-Libpng-2.0.txt");
+    expectContains(manifest, "licenses/zlib-Zlib.txt");
+    expectContains(manifest, "licenses/lodepng-Zlib.txt");
 
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/catch2-BSL-1.0.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/earcut-hpp-ISC.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/nlohmann-json-MIT.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/geometrictools-BSL-1.0.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/rmlui-MIT.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/itlib-MIT.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/robin-hood-hashing-MIT.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/freetype-FTL-OR-GPL-2.0-or-later.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/brotli-MIT.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/bzip2-Bzip2.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/libpng-Libpng-2.0.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/zlib-Zlib.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/lodepng-Zlib.txt").empty());
 }

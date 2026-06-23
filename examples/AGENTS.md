@@ -16,5 +16,5 @@ Read `../agents/docs-public-examples.md` before changing examples.
 - Prefer typed command IDs, result helpers, object handles, scene batches, and behavior-scenario
   patterns where relevant.
 - Do not demonstrate direct access to `SceneDocument`, `AssetRegistry`, `ModelingSessionService`,
-  Filament, ImGui, SDL, or raw platform state.
+  UI/render/platform backend internals, or raw platform state.
 - Examples should compile or be clearly marked as documentation-only.

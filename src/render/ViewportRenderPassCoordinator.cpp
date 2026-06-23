@@ -62,7 +62,8 @@ void ViewportRenderPassCoordinator::applyVisibleLayers(filament::View* view) con
 }
 
 void ViewportRenderPassCoordinator::render(filament::Renderer& renderer, filament::View* view, filament::RenderTarget* renderTarget) const {
-    if (!view || !renderTarget) {
+    (void)renderTarget;
+    if (!view) {
         return;
     }
 

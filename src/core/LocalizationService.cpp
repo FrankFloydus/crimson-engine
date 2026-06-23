@@ -236,16 +236,6 @@ std::string LocalizationService::format(
     return value;
 }
 
-std::string LocalizationService::imguiLabel(
-        std::string_view key,
-        std::string_view stableId,
-        std::string_view fallback) const {
-    std::string value = text(key, fallback);
-    value.append("###");
-    value.append(stableId);
-    return value;
-}
-
 LocalizationService::Catalog LocalizationService::loadCatalogFile(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {

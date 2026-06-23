@@ -9,8 +9,10 @@
 #include "core/Logger.h"
 #include "render/RenderLayers.h"
 
+#include <filament/Viewport.h>
 #include <utils/EntityManager.h>
 
+#include <algorithm>
 #include <cstdint>
 
 namespace quader {
@@ -23,13 +25,17 @@ void ViewportRenderer::initialize(filament::Engine& engine,
         filament::Scene& scene,
         TextureRegistry& textureRegistry,
         filament::Material& groundGridMaterial,
-        std::uint8_t gridLayerMask) {
+        std::uint8_t gridLayerMask,
+        ViewportRenderSurface surface) {
     engine_ = &engine;
     scene_ = &scene;
     textureRegistry_ = &textureRegistry;
+    surface_ = surface;
     const std::uint8_t resolvedGridLayerMask = gridLayerMask == 0u ? viewportGridLayerMask(0) : gridLayerMask;
     renderPassCoordinator_.initialize(resolvedGridLayerMask);
-    renderTarget_.initialize(engine, textureRegistry);
+    if (surface_ == ViewportRenderSurface::Texture) {
+        renderTarget_.initialize(engine, textureRegistry);
+    }
     LOG_INFO("Creating viewport Filament view");
     view_ = engine_->createView();
     view_->setName("Main Viewport");
@@ -74,7 +80,17 @@ void ViewportRenderer::shutdown() {
 }
 
 void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
-    renderTarget_.resize(width, height, view_);
+    width_ = std::max(1u, width);
+    height_ = std::max(1u, height);
+    if (surface_ == ViewportRenderSurface::Texture) {
+        renderTarget_.resize(width_, height_, view_);
+        return;
+    }
+
+    if (view_) {
+        view_->setRenderTarget(nullptr);
+        view_->setViewport({0, 0, width_, height_});
+    }
 }
 
 void ViewportRenderer::updateCamera(const ViewportCameraController& controller) {

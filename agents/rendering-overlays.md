@@ -29,7 +29,7 @@ adapters so OpenGL and Metal can be added later.
   centralized there.
 - Do not scatter overlay color constants through unrelated files.
 - `SceneRenderBridge` renders face/fill triangle overlays and GPU screen-space wire/vertex overlays.
-- Do not reintroduce raw Filament `LINES`/`POINTS`, ImGui wire fallbacks, or unfeathered
+- Do not reintroduce raw Filament `LINES`/`POINTS`, UI-backend wire fallbacks, or unfeathered
   triangle-strip shortcuts for selection overlays.
 - Wire and vertex overlays are screen-space quads.
 - Overlay materials live at:

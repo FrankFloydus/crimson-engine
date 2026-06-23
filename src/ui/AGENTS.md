@@ -13,11 +13,12 @@ read `../../agents/public-api-and-scripting.md`.
 
 ## UI Rules
 
-- UI panels and controllers own presentation, routing, and frame input assembly only.
+- UI shell code owns presentation, backend integration, routing, and frame input assembly only.
 - User/editor intent should route through `QuaderEditorApi`, `QuaderApi`, typed commands, or owner
   services.
-- Keep panel contents in `UIPanel` classes and route frame dependencies through `UIContext`.
+- The current v1 shell is a single RmlUi-hosted viewport. Do not recreate the deleted docked panel
+  stack unless a new backend-neutral panel architecture is intentionally introduced.
 - User-facing labels, menu text, panel titles, settings names, and status text must go through
   localization resources.
-- Put shared sizes, paddings, colors, and visual constants in `UIStyleTokens` or layout helpers.
+- Put shared sizes, paddings, colors, and visual constants in backend-neutral theme or layout helpers.
 - Add/update localization and UI guardrail tests when user-facing UI text or placement changes.

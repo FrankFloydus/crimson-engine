@@ -18,5 +18,5 @@ Read `../../agents/rendering-overlays.md` before changing this package.
 - Keep backend-specific behavior behind renderer/platform adapters so other backends remain possible.
 - Centralize overlay order, colors, depth behavior, widths, and point sizes in render overlay policy
   and style resolver code.
-- Do not reintroduce ImGui wire fallbacks or raw Filament line/point overlay shortcuts.
+- Do not reintroduce UI-backend wire fallbacks or raw Filament line/point overlay shortcuts.
 - Use manual smoke checks for GPU/window/pixel behavior until render readback coverage exists.

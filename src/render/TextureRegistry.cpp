@@ -8,26 +8,36 @@
 
 namespace quader {
 
-ImTextureID TextureRegistry::registerTexture(filament::Texture* texture, TextureSampleColorSpace sampleColorSpace) {
-    const ImTextureID id = static_cast<ImTextureID>(nextId_++);
+RenderTextureHandle TextureRegistry::registerTexture(filament::Texture* texture, TextureSampleColorSpace sampleColorSpace) {
+    const RenderTextureHandle id = nextId_++;
+    updateTexture(id, texture, sampleColorSpace);
+    return id;
+}
+
+void TextureRegistry::updateTexture(
+        RenderTextureHandle id,
+        filament::Texture* texture,
+        TextureSampleColorSpace sampleColorSpace) {
+    if (id == InvalidRenderTextureHandle) {
+        return;
+    }
     textures_[id] = TextureRecord{
             .texture = texture,
             .sampleColorSpace = sampleColorSpace,
     };
-    return id;
 }
 
-filament::Texture* TextureRegistry::texture(ImTextureID id) const {
+filament::Texture* TextureRegistry::texture(RenderTextureHandle id) const {
     const auto it = textures_.find(id);
     return it == textures_.end() ? nullptr : it->second.texture;
 }
 
-TextureSampleColorSpace TextureRegistry::sampleColorSpace(ImTextureID id) const {
+TextureSampleColorSpace TextureRegistry::sampleColorSpace(RenderTextureHandle id) const {
     const auto it = textures_.find(id);
     return it == textures_.end() ? TextureSampleColorSpace::DisplaySrgb : it->second.sampleColorSpace;
 }
 
-void TextureRegistry::unregisterTexture(ImTextureID id) {
+void TextureRegistry::unregisterTexture(RenderTextureHandle id) {
     textures_.erase(id);
 }
 

@@ -117,12 +117,8 @@ std::vector<std::string> linesContaining(const std::string& source, const std::v
 }
 
 bool allowedRawModelingMutation(std::string_view relative, std::string_view line) {
-    if (relative == "src/ui/TransformGizmoController.cpp") {
-        return line.find("modeling.beginTransformDrag(") != std::string_view::npos ||
-                line.find("modeling.updateTransformDrag(") != std::string_view::npos ||
-                line.find("modeling.commitTransformDrag(") != std::string_view::npos ||
-                line.find("modeling.cancelTransformDrag(") != std::string_view::npos;
-    }
+    (void)relative;
+    (void)line;
     return false;
 }
 
@@ -137,8 +133,9 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals)
         EXPECT_FALSE(containsAny(source, {
                              "<filament/",
                              "\"filament/",
-                             "<imgui",
-                             "\"imgui",
+                             "<RmlUi/",
+                             "\"RmlUi/",
+                             "Rml::",
                              "<SDL",
                              "\"SDL",
                              "<entt/",
@@ -443,8 +440,7 @@ TEST(ProgrammaticApiGuardrailTests, ViewportRoutesDoNotExecuteFixedRawModelingCo
 
     for (std::string_view relative : {
                  std::string_view{"src/ui/ViewportShortcutController.cpp"},
-                 std::string_view{"src/ui/ViewportContextMenuPresenter.cpp"},
-                 std::string_view{"src/ui/ViewportPanel.cpp"},
+                 std::string_view{"src/ui/UISystem.cpp"},
          }) {
         const std::string source = readFile(sourceRoot() / std::string(relative));
         for (const std::string& line : linesContaining(source, forbiddenRawCommandRoutes)) {
