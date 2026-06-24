@@ -6,42 +6,13 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/DebugPaletteView.h"
 
+#include "ui/backends/rml/RmlMarkupWriter.h"
+
 #include <cctype>
 #include <sstream>
 #include <string_view>
 
 namespace quader {
-namespace {
-
-std::string rmlEscape(std::string_view value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (char character : value) {
-        switch (character) {
-        case '&':
-            escaped += "&amp;";
-            break;
-        case '<':
-            escaped += "&lt;";
-            break;
-        case '>':
-            escaped += "&gt;";
-            break;
-        case '"':
-            escaped += "&quot;";
-            break;
-        case '\'':
-            escaped += "&#39;";
-            break;
-        default:
-            escaped += character;
-            break;
-        }
-    }
-    return escaped;
-}
-
-} // namespace
 
 std::string debugPaletteUtilityClassSuffix(std::string_view tokenName) {
     std::string suffix;
@@ -68,8 +39,8 @@ std::string buildDebugPalettePageRml(const std::vector<DebugPaletteColorToken>& 
 )RML";
 
     for (const DebugPaletteColorToken& color : colors) {
-        const std::string name = rmlEscape(color.name);
-        const std::string hex = rmlEscape(color.hex);
+        const std::string name = escapeRmlText(color.name);
+        const std::string hex = escapeRmlText(color.hex);
         const std::string swatchClass = "bg-" + debugPaletteUtilityClassSuffix(color.name);
         rml << "            <div class=\"debug-palette-token w-52 h-11 mr-4 mb-3\">\n"
             << "                <div class=\"debug-palette-swatch size-8 mr-3 border-1 border-gray-500 " << swatchClass << "\"></div>\n"

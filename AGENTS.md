@@ -8,7 +8,7 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Agent Guide
 
-This file is intentionally thin. It routes agents to the detailed instructions under `agents/`.
+This file routes agents to the detailed instructions under `agents/`.
 Read this file first, then read the domain files that match the task before editing code.
 
 ## Project Identity
@@ -58,8 +58,8 @@ effects, cache invalidation, and error handling.
   read `agents/public-api-and-scripting.md`, `agents/domain-ownership.md`,
   `agents/docs-public-examples.md`.
 - UI, panels, menus, localization, dock layout:
-  read `agents/ui-localization.md`; if the task mutates editor state, also read
-  `agents/public-api-and-scripting.md`.
+  read `agents/ui-localization.md`; for retained components/buttons, also read
+  `agents/ui-components.md`; if the task mutates editor state, also read `agents/public-api-and-scripting.md`.
   For RmlUi MainLayout shell work, also read `src/ui/AGENTS.md` and `resources/AGENTS.md` before
   touching generated RML/RCSS, UI settings, viewport frame routing, or runtime UI resources.
 - Input, keybindings, shortcuts, user rebinding, keybinding contexts, mouse gestures, or shortcut
@@ -82,10 +82,8 @@ effects, cache invalidation, and error handling.
 
 ## Nested Package Routing
 
-This repo uses nested `AGENTS.md` files for package-specific guidance. Codex automatically loads
-nested files only along the session working-directory path. When a session starts at the repository
-root and the task edits a specialized subtree, read the nearest nested `AGENTS.md` in that subtree
-before editing.
+This repo uses nested `AGENTS.md` files for package guidance. When a root session edits a
+specialized subtree, read the nearest nested `AGENTS.md` before editing.
 
 - For source changes, read `src/AGENTS.md`, then `src/<package>/AGENTS.md` when present.
 - For tests, docs, examples, resources, CMake, tooling, benchmarks, or third-party changes, read the

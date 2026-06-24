@@ -6,8 +6,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/backends/rml/MainLayoutRmlBuilder.h"
 
+#include "ui/backends/rml/RmlMarkupWriter.h"
 #include "ui/components/common/ResizableSplit.h"
 #include "ui/components/organisms/ViewportComponent.h"
+#include "ui/core/UIElement.h"
 
 #include <optional>
 #include <sstream>
@@ -24,35 +26,16 @@ constexpr std::string_view kMainLayoutAuxiliarySidebarResizerHandleId = "auxilia
 constexpr std::string_view kMainLayoutBottomDockResizerHandleId = "bottom-dock";
 constexpr std::string_view kMainLayoutBottomSplitResizerHandlePrefix = "bottom-split:";
 
-std::string escapeRml(std::string_view text) {
-    std::string escaped;
-    escaped.reserve(text.size());
-    for (const char character : text) {
-        switch (character) {
-        case '&':
-            escaped += "&amp;";
-            break;
-        case '<':
-            escaped += "&lt;";
-            break;
-        case '>':
-            escaped += "&gt;";
-            break;
-        case '"':
-            escaped += "&quot;";
-            break;
-        default:
-            escaped.push_back(character);
-            break;
-        }
-    }
-    return escaped;
-}
-
 void appendViewport(std::ostringstream& rml) {
-    rml << "<div id=\"viewport-host\" class=\"viewport-host bg-gray-950\">"
-        << "<img id=\"main-viewport\" class=\"viewport-surface\" src=\"" << kMainViewportTextureSource << "\"/>"
-        << "</div>";
+    UIElement viewport = UIElement::div()
+            .id("viewport-host")
+            .addClass("viewport-host")
+            .addClass("bg-gray-950")
+            .child(UIElement::img()
+                           .id("main-viewport")
+                           .addClass("viewport-surface")
+                           .attr("src", kMainViewportTextureSource));
+    rml << writeRmlMarkup(viewport);
 }
 
 void appendPanelDragHandle(
@@ -66,9 +49,9 @@ void appendPanelDragHandle(
         rml << " main-layout-panel-header-drag-source";
     }
     rml << "\" data-main-layout-drag-panel=\""
-        << escapeRml(panelId)
+        << escapeRmlText(panelId)
         << "\">"
-        << "<span class=\"main-layout-panel-title text-sm text-gray-200\">" << escapeRml(title) << "</span>"
+        << "<span class=\"main-layout-panel-title text-sm text-gray-200\">" << escapeRmlText(title) << "</span>"
         << "</div>";
 }
 
@@ -120,8 +103,8 @@ void appendPanel(
     if (fixed) {
         rml << " style=\"height: " << heightDp << "dp; flex-grow: 0; flex-shrink: 0;\"";
     }
-    rml << " data-main-layout-panel=\"" << escapeRml(panelId) << "\""
-        << " data-main-layout-panel-title=\"" << escapeRml(title) << "\">";
+    rml << " data-main-layout-panel=\"" << escapeRmlText(panelId) << "\""
+        << " data-main-layout-panel-title=\"" << escapeRmlText(title) << "\">";
     if (targetDrop) {
         appendPanelDropOverlay(rml, drop->position, ResizableSplitAxis::Vertical);
     }
@@ -150,14 +133,14 @@ void appendBottomDockTab(
         rml << " main-layout-tab-drop-target";
     }
     rml << "\" data-main-layout-drag-panel=\""
-        << escapeRml(panelId)
+        << escapeRmlText(panelId)
         << "\" data-main-layout-tab-panel=\""
-        << escapeRml(panelId)
+        << escapeRmlText(panelId)
         << "\">";
     if (insertionDrop) {
         appendTabDropInsertionLine(rml, drop->position);
     }
-    rml << "<span class=\"main-layout-tab-title text-sm text-gray-200\">" << escapeRml(title) << "</span>"
+    rml << "<span class=\"main-layout-tab-title text-sm text-gray-200\">" << escapeRmlText(title) << "</span>"
         << "</div>";
 }
 
@@ -192,8 +175,8 @@ void appendBottomPanelBody(
             << *widthDp
             << "dp; flex-grow: 0; flex-shrink: 0;\"";
     }
-    rml << " data-main-layout-panel=\"" << escapeRml(panelId) << "\""
-        << " data-main-layout-panel-title=\"" << escapeRml(title) << "\">";
+    rml << " data-main-layout-panel=\"" << escapeRmlText(panelId) << "\""
+        << " data-main-layout-panel-title=\"" << escapeRmlText(title) << "\">";
     if (targetDrop) {
         appendPanelDropOverlay(rml, drop->position, ResizableSplitAxis::Horizontal);
     }
@@ -213,7 +196,7 @@ void appendBottomSplitResizer(
     }
     rml << "\" data-main-layout-resizer=\""
         << kMainLayoutBottomSplitResizerHandlePrefix
-        << escapeRml(panelId)
+        << escapeRmlText(panelId)
         << "\">"
         << "<div class=\"main-layout-resizer-base-line main-layout-resizer-base-line-vertical bg-gray-600\"></div>"
         << "<div class=\"main-layout-resizer-drag-line main-layout-resizer-drag-line-vertical bg-purple-500\"></div>"
@@ -493,7 +476,7 @@ void appendDockDragPreview(
     }
     rml << "\">"
         << "<span class=\"main-layout-panel-title main-layout-dock-drag-preview-title text-sm text-gray-200\">"
-        << escapeRml(labelForPanel(drag.panelId, labels))
+        << escapeRmlText(labelForPanel(drag.panelId, labels))
         << "</span>"
         << "</div>";
 }

@@ -10,6 +10,7 @@
 #include "core/Logger.h"
 #include "ui/DebugPaletteView.h"
 #include "ui/UIUtilityTokens.h"
+#include "ui/components/organisms/WindowChromeControlsComponent.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_keyboard.h>
@@ -525,6 +526,7 @@ void UISystem::rebuildMainLayout() {
         };
     }
 
+    rmlHost_.setElementInnerRml("chrome-window-controls", buildWindowChromeControlsInnerRml());
     rmlHost_.setElementInnerRml("toolbar-label", escapeRmlText(localization_.text("ui.shell.toolbar", "Toolbar")));
     rmlHost_.setElementInnerRml("statusbar-label", escapeRmlText(localization_.text("ui.shell.status", "Status")));
     rmlHost_.setElementInnerRml("main-layout-slot", buildMainLayoutRml(mainLayout_, mainLayoutLabels_, interaction));

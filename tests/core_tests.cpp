@@ -41,11 +41,18 @@
 #include "api/QuaderEditorApi.h"
 #include "ui/ConsoleModel.h"
 #include "ui/backends/rml/MainLayoutRmlBuilder.h"
+#include "ui/backends/rml/RmlMarkupWriter.h"
+#include "ui/components/atoms/UIButtonComponent.h"
+#include "ui/components/atoms/UIChromeButtonComponent.h"
 #include "ui/components/common/DockLayoutModel.h"
 #include "ui/components/common/ResizableSplit.h"
 #include "ui/components/common/UIDragDrop.h"
 #include "ui/components/common/UITabStripModel.h"
 #include "ui/components/organisms/MainLayoutModel.h"
+#include "ui/components/organisms/WindowChromeControlsComponent.h"
+#include "ui/core/UIClassList.h"
+#include "ui/core/UIElement.h"
+#include "ui/core/UIIconRegistry.h"
 #include "ui/controllers/MainLayoutController.h"
 #include "ui/controllers/MainLayoutDockDragController.h"
 #include "ui/controllers/MainLayoutSashRegistry.h"
@@ -2304,6 +2311,101 @@ TEST(UIUtilityTokensTests, LoadsTailwindStyleTokenConfigInAuthorOrder) {
     std::filesystem::remove(path);
 }
 
+TEST(UIClassListTests, MaintainsOrderedDuplicateFreeClasses) {
+    UIClassList classes;
+    classes.add("chrome-icon-button").add("bg-gray-800").add("chrome-icon-button").addIf(false, "hidden");
+
+    EXPECT_TRUE(classes.contains("chrome-icon-button"));
+    EXPECT_FALSE(classes.contains("hidden"));
+    EXPECT_EQ(classes.toString(), "chrome-icon-button bg-gray-800");
+}
+
+TEST(RmlMarkupWriterTests, EscapesAttributesTextAndStyles) {
+    UIElement element = UIElement::div()
+            .id("root&panel")
+            .addClass("panel")
+            .attr("data-title", "A \"quoted\" title")
+            .style("height", "10dp")
+            .child(UIElement::span().text("A < B & C"));
+
+    EXPECT_EQ(
+            writeRmlMarkup(element),
+            "<div id=\"root&amp;panel\" class=\"panel\" data-title=\"A &quot;quoted&quot; title\" "
+            "style=\"height: 10dp;\"><span>A &lt; B &amp; C</span></div>");
+}
+
+TEST(UIIconRegistryTests, RendersSemanticIconsThroughCurrentResourceProvider) {
+    const UIIconRegistry& registry = UIIconRegistry::instance();
+    const UIIconDefinition* closeIcon = registry.find(UIIconId::ChromeClose);
+
+    ASSERT_NE(closeIcon, nullptr);
+    EXPECT_EQ(closeIcon->name, "chrome-close");
+    EXPECT_EQ(closeIcon->className, "ui-icon-chrome-close");
+    EXPECT_EQ(closeIcon->provider, UIIconProvider::ImageResource);
+    EXPECT_EQ(closeIcon->resourcePath, "quader://icons/close_icon.png");
+    EXPECT_EQ(uiIconProviderClass(closeIcon->provider), "ui-icon-resource-image");
+
+    EXPECT_EQ(
+            writeRmlMarkup(registry.renderIcon(UIIconId::ChromeClose, "toolbar-icon")),
+            "<span class=\"ui-icon ui-icon-resource-image ui-icon-chrome-close toolbar-icon\" "
+            "data-ui-icon=\"chrome-close\"></span>");
+}
+
+TEST(UIButtonComponentTests, RendersStatefulLabeledIconButtonsThroughBaseClass) {
+    /// Test-only button variant for exercising base button rendering.
+    class TestButton final : public UIButtonComponent {
+    public:
+        TestButton()
+            : UIButtonComponent("test-button") {
+            setIcon(UIIconId::ChromeClose, UIButtonIconPlacement::Left);
+            setLabel("Run");
+            setHovered(true);
+            setToggleButton(true);
+            setToggled(true);
+        }
+
+    protected:
+        void appendButtonClasses(UIElement& button) const override {
+            button.addClass("test-button");
+        }
+
+        void appendButtonAttributes(UIElement& button) const override {
+            UIButtonComponent::appendButtonAttributes(button);
+            button.data("test-action", "run");
+        }
+    };
+
+    const TestButton button;
+
+    EXPECT_EQ(
+            writeRmlMarkup(button.render()),
+            "<button id=\"test-button\" class=\"test-button\" data-ui-hover=\"true\" aria-pressed=\"true\" "
+            "data-ui-toggle=\"on\" data-test-action=\"run\"><span class=\"ui-icon ui-icon-resource-image "
+            "ui-icon-chrome-close ui-button-icon\" data-ui-icon=\"chrome-close\"></span><span "
+            "class=\"ui-button-label\">Run</span></button>");
+}
+
+TEST(UIChromeButtonComponentTests, BuildsCurrentWindowChromeButtonsFromComponents) {
+    EXPECT_EQ(chromeButtonElementId(UIChromeButtonKind::Minimize), "chrome-minimize-button");
+    EXPECT_EQ(chromeButtonActionName(UIChromeButtonKind::Restore), "restore");
+    EXPECT_EQ(chromeButtonIconId(UIChromeButtonKind::Close), UIIconId::ChromeClose);
+
+    const std::string rml = buildWindowChromeControlsRml();
+    const std::string innerRml = buildWindowChromeControlsInnerRml();
+
+    EXPECT_NE(rml.find("<div id=\"chrome-window-controls\" class=\"chrome-window-controls\">"), std::string::npos);
+    EXPECT_NE(rml.find("id=\"chrome-minimize-button\" class=\"chrome-icon-button bg-gray-800 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"minimize\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"chrome-restore-button\" class=\"chrome-icon-button bg-gray-800 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"restore\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"chrome-close-button\" class=\"chrome-icon-button bg-gray-800 hover-bg-red-500 active-bg-red-600\" data-chrome-window-action=\"close\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-chrome-minimize ui-button-icon\" data-ui-icon=\"chrome-minimize\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-chrome-restore ui-button-icon\" data-ui-icon=\"chrome-restore\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-chrome-close ui-button-icon\" data-ui-icon=\"chrome-close\""), std::string::npos);
+    EXPECT_EQ(countOccurrences(rml, "data-chrome-window-action"), 3u);
+    EXPECT_EQ(countOccurrences(rml, "data-ui-icon"), 3u);
+    EXPECT_EQ(innerRml.find("id=\"chrome-window-controls\""), std::string::npos);
+    EXPECT_EQ(countOccurrences(innerRml, "data-chrome-window-action"), 3u);
+}
+
 TEST(DebugPaletteViewTests, BuildsCopyablePaletteSwatchRml) {
     const std::vector<DebugPaletteColorToken> colors = {
             {.name = "gray.50", .hex = "#F7F7F7"},
@@ -2489,6 +2591,10 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     const std::string uiDragDropControllerSource = readSourceFile("src/ui/controllers/UIDragDropController.cpp");
     const std::string resizableSplitHeader = readSourceFile("src/ui/components/common/ResizableSplit.h");
     const std::string resizableSplitControllerSource = readSourceFile("src/ui/controllers/ResizableSplitController.cpp");
+    const std::string uiButtonHeader = readSourceFile("src/ui/components/atoms/UIButtonComponent.h");
+    const std::string uiChromeButtonHeader = readSourceFile("src/ui/components/atoms/UIChromeButtonComponent.h");
+    const std::string windowChromeControlsHeader =
+            readSourceFile("src/ui/components/organisms/WindowChromeControlsComponent.h");
     const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
     const std::string shellRml = readSourceFile("resources/ui/rml/viewport-shell.rml");
     const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
@@ -2508,6 +2614,7 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_EQ(uiSystemHeader.find("mainLayoutSidebarHeightDp_"), std::string::npos);
     EXPECT_NE(uiSystemHeader.find("ViewportHost viewportHost_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("rmlHost_.initialize"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("buildWindowChromeControlsInnerRml()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("buildMainLayoutRml(mainLayout_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("measureElementById(\"main-layout-slot\")"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("mainLayoutEditorColumnElementId()"), std::string::npos);
@@ -2626,7 +2733,11 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(cmakeSource.find("src/ui/controllers/MainLayoutDockDragController.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/controllers/MainLayoutSashRegistry.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/controllers/UIDragDropController.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIButtonComponent.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIChromeButtonComponent.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/components/common/UITabStripModel.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/WindowChromeControlsComponent.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/core/UIIconRegistry.cpp"), std::string::npos);
     EXPECT_NE(uiGeometryHeader.find("struct UIPixelPoint"), std::string::npos);
     EXPECT_NE(uiGeometryHeader.find("struct UIPixelRect"), std::string::npos);
     EXPECT_NE(uiTabStripModelHeader.find("class UITabStripModel"), std::string::npos);
@@ -2653,6 +2764,12 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(resizableSplitControllerSource.find("ResizableSplitController::inflatedHitRect"), std::string::npos);
     EXPECT_NE(resizableSplitControllerSource.find("ResizableSplitGrowthDirection::Positive"), std::string::npos);
     EXPECT_NE(resizableSplitControllerSource.find("effectiveMaxSizeDp"), std::string::npos);
+    EXPECT_NE(uiButtonHeader.find("class UIButtonComponent : public UIComponent"), std::string::npos);
+    EXPECT_NE(uiButtonHeader.find("UIButtonIconPlacement"), std::string::npos);
+    EXPECT_NE(uiChromeButtonHeader.find("class UIChromeButtonComponent final : public UIButtonComponent"),
+            std::string::npos);
+    EXPECT_NE(windowChromeControlsHeader.find("class WindowChromeControlsComponent final : public UIComponent"),
+            std::string::npos);
     EXPECT_NE(mainLayoutSashRegistryHeader.find("class MainLayoutSashRegistry"), std::string::npos);
     EXPECT_NE(mainLayoutSashRegistryHeader.find("MainLayoutSashMeasuredLayout"), std::string::npos);
     EXPECT_NE(mainLayoutSashRegistryHeader.find("bottomDockTrackWidthDp"), std::string::npos);
@@ -2710,9 +2827,9 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(shellRml.find("shell-toolbar h-12 bg-gray-800 border-gray-600"), std::string::npos);
     EXPECT_NE(shellRml.find("id=\"toolbar-content\" class=\"shell-toolbar-content pl-3\""), std::string::npos);
     EXPECT_NE(shellRml.find("id=\"chrome-window-controls\" class=\"chrome-window-controls\""), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"chrome-minimize-button\" class=\"chrome-icon-button chrome-minimize-icon bg-gray-800 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"minimize\""), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"chrome-restore-button\" class=\"chrome-icon-button chrome-restore-icon bg-gray-800 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"restore\""), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"chrome-close-button\" class=\"chrome-icon-button chrome-close-icon bg-gray-800 hover-bg-red-500 active-bg-red-600\" data-chrome-window-action=\"close\""), std::string::npos);
+    EXPECT_EQ(shellRml.find("chrome-minimize-button"), std::string::npos);
+    EXPECT_EQ(shellRml.find("chrome-restore-button"), std::string::npos);
+    EXPECT_EQ(shellRml.find("chrome-close-button"), std::string::npos);
     EXPECT_EQ(shellRml.find("chrome-icon-button-icon"), std::string::npos);
     EXPECT_NE(shellRml.find("shell-statusbar h-10 px-3 bg-gray-900 border-gray-600"), std::string::npos);
     EXPECT_EQ(shellRml.find("id=\"dock-interaction-slot\""), std::string::npos);
@@ -2721,12 +2838,13 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(shellRcss.find(".chrome-window-controls"), std::string::npos);
     EXPECT_NE(shellRcss.find(".chrome-icon-button"), std::string::npos);
     EXPECT_NE(shellRcss.find("width: 40dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find("decorator: image(\"quader://icons/minimize_icon.png\" scale-none)"), std::string::npos);
-    EXPECT_NE(shellRcss.find("decorator: image(\"quader://icons/restore_icon.png\" scale-none)"), std::string::npos);
-    EXPECT_NE(shellRcss.find("decorator: image(\"quader://icons/close_icon.png\" scale-none)"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".ui-icon"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".ui-icon-chrome-minimize"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".ui-icon-chrome-restore"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".ui-icon-chrome-close"), std::string::npos);
     EXPECT_NE(shellRcss.find("image-color: #5B5B5B"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".chrome-icon-button:hover"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".chrome-icon-button:active"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".chrome-icon-button:hover .ui-icon"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".chrome-icon-button:active .ui-icon"), std::string::npos);
     EXPECT_NE(shellRcss.find("image-color: #D8D8D8"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout-main-row"), std::string::npos);

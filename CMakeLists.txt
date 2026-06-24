@@ -162,9 +162,16 @@ add_library(quader_core STATIC
     src/scene/SceneDocument.cpp
     src/ui/ConsoleModel.cpp
     src/ui/backends/rml/MainLayoutRmlBuilder.cpp
+    src/ui/backends/rml/RmlMarkupWriter.cpp
+    src/ui/components/atoms/UIButtonComponent.cpp
+    src/ui/components/atoms/UIChromeButtonComponent.cpp
     src/ui/components/common/DockLayoutModel.cpp
     src/ui/components/common/UITabStripModel.cpp
     src/ui/components/organisms/MainLayoutModel.cpp
+    src/ui/components/organisms/WindowChromeControlsComponent.cpp
+    src/ui/core/UIClassList.cpp
+    src/ui/core/UIElement.cpp
+    src/ui/core/UIIconRegistry.cpp
     src/ui/controllers/MainLayoutController.cpp
     src/ui/controllers/MainLayoutDockDragController.cpp
     src/ui/controllers/MainLayoutSashRegistry.cpp

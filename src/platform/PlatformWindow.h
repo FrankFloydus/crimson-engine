@@ -113,6 +113,7 @@ private:
     [[nodiscard]] SDL_HitTestResult nativeChromeHitTestFromScreenPoint(int screenX, int screenY) const;
 #endif
 
+    /// Tracks the active native chrome drag or resize gesture.
     struct ChromeInteraction {
         bool active = false;
         bool pendingMaximizedRestore = false;
