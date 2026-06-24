@@ -120,9 +120,7 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
 
 ViewportShortcutControllerResult ViewportShortcutController::handleModelingShortcut(
         const ViewportInputResult& inputResult,
-        QuaderEditorApi& editor,
-        ModelingSessionService& modeling) const {
-    (void)modeling;
+        QuaderEditorApi& editor) const {
     if (!inputResult.shortcutHandled) {
         return {};
     }
@@ -141,6 +139,14 @@ ViewportShortcutControllerResult ViewportShortcutController::handleModelingShort
             .invalidateHover = true,
             .markOverlayDirty = true,
     };
+}
+
+ViewportShortcutControllerResult ViewportShortcutController::handleModelingShortcut(
+        const ViewportInputResult& inputResult,
+        QuaderEditorApi& editor,
+        ModelingSessionService& modeling) const {
+    (void)modeling;
+    return handleModelingShortcut(inputResult, editor);
 }
 
 } // namespace quader

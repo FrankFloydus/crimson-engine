@@ -20,6 +20,7 @@ inline constexpr int kMainLayoutOutlinerDefaultHeightDp = 320;
 inline constexpr int kMainLayoutBottomDockDefaultHeightDp = 240;
 inline constexpr int kMainLayoutPanelMinHeightDp = 120;
 inline constexpr int kMainLayoutPanelMaxHeightDp = 900;
+inline constexpr int kMainLayoutBottomSplitPanelMinWidthDp = 120;
 inline constexpr int kMainLayoutViewportMinWidthDp = 160;
 inline constexpr std::string_view kMainLayoutPanelViewport = "viewport";
 inline constexpr std::string_view kMainLayoutPanelOutliner = "outliner";
@@ -37,13 +38,19 @@ struct MainLayoutSideDockModel {
     bool collapsed = false;
 };
 
+/// Stores shared state for the bottom dock surface.
+struct MainLayoutBottomDockModel {
+    int heightDp = kMainLayoutBottomDockDefaultHeightDp;
+    bool collapsed = false;
+};
+
 /// Stores the app UI root layout state used by the RmlUi presentation.
 struct MainLayoutModel {
     MainLayoutSidebarSide sidebarSide = MainLayoutSidebarSide::Right;
     MainLayoutSideDockModel sidebar;
     MainLayoutSideDockModel auxiliarySidebar;
+    MainLayoutBottomDockModel bottomDock;
     int outlinerHeightDp = kMainLayoutOutlinerDefaultHeightDp;
-    int bottomDockHeightDp = kMainLayoutBottomDockDefaultHeightDp;
     bool outlinerVisible = true;
     bool inspectorVisible = true;
     DockLayoutModel dockLayout;
@@ -67,9 +74,12 @@ struct MainLayoutModel {
 [[nodiscard]] MainLayoutSideDockModel& mainLayoutSideDock(MainLayoutModel& model, DockLocation location);
 [[nodiscard]] int mainLayoutSideDockWidthDp(const MainLayoutModel& model, DockLocation location);
 [[nodiscard]] bool mainLayoutSideDockCollapsed(const MainLayoutModel& model, DockLocation location);
+[[nodiscard]] int mainLayoutBottomDockHeightDp(const MainLayoutModel& model);
+[[nodiscard]] bool mainLayoutBottomDockCollapsed(const MainLayoutModel& model);
 [[nodiscard]] int mainLayoutClampedSidebarWidthDp(int widthDp);
 [[nodiscard]] int mainLayoutClampedOutlinerHeightDp(int heightDp);
 [[nodiscard]] int mainLayoutClampedBottomDockHeightDp(int heightDp);
+[[nodiscard]] int mainLayoutClampedBottomSplitPanelWidthDp(int widthDp);
 [[nodiscard]] MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model);
 [[nodiscard]] std::optional<std::string_view> mainLayoutCanonicalPanelId(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsKnown(std::string_view panelId);

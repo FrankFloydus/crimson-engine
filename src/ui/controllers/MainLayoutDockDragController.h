@@ -6,8 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "ui/components/common/ResizableSplit.h"
+#include "ui/components/common/UIGeometry.h"
 #include "ui/components/organisms/MainLayoutModel.h"
+#include "ui/controllers/UIDragDropController.h"
 
 #include <optional>
 #include <string>
@@ -22,24 +23,37 @@ struct MainLayoutDockDragHitRegion {
     UIPixelRect rect;
 };
 
-/// Stores one physical sidebar edge that accepts a MainLayout drag gesture.
-struct MainLayoutSidebarDropZone {
-    MainLayoutSidebarSide side = MainLayoutSidebarSide::Left;
+/// Stores one physical dock edge that accepts a MainLayout drag gesture.
+struct MainLayoutDockDropZone {
+    DockLocation location = DockLocation::Sidebar;
     UIPixelRect rect;
+    UIDropFeedbackKind feedbackKind = UIDropFeedbackKind::Edge;
+};
+
+/// Identifies the layout operation a MainLayout drop target performs.
+enum class MainLayoutDockDropAction {
+    MoveToDock,
+    InsertPanel,
+    SplitPanel,
 };
 
 /// Stores one visible panel surface that accepts before/after panel insertion.
 struct MainLayoutPanelDropZone {
-    MainLayoutSidebarSide side = MainLayoutSidebarSide::Left;
+    DockLocation location = DockLocation::Sidebar;
     std::string panelId;
     UIPixelRect rect;
+    MainLayoutDockDropAction action = MainLayoutDockDropAction::InsertPanel;
+    UIDropPlacementPolicy placementPolicy = UIDropPlacementPolicy::VerticalBeforeAfter;
+    UIDropFeedbackKind feedbackKind = UIDropFeedbackKind::Target;
 };
 
 /// Identifies the active panel-drag drop target.
 struct MainLayoutDockDropTarget {
-    MainLayoutSidebarSide side = MainLayoutSidebarSide::Left;
+    DockLocation location = DockLocation::Sidebar;
     std::string targetPanelId;
     DockPanelInsertPosition position = DockPanelInsertPosition::After;
+    MainLayoutDockDropAction action = MainLayoutDockDropAction::MoveToDock;
+    UIDropFeedbackKind feedbackKind = UIDropFeedbackKind::Target;
 };
 
 /// Carries a completed panel drop onto a sidebar edge or panel insertion target.
@@ -54,10 +68,10 @@ struct MainLayoutDockDropResult {
 class MainLayoutDockDragController {
 public:
     void setHitRegions(std::vector<MainLayoutDockDragHitRegion> regions);
-    void setSidebarDropZones(std::vector<MainLayoutSidebarDropZone> zones);
+    void setDockDropZones(std::vector<MainLayoutDockDropZone> zones);
     void setPanelDropZones(std::vector<MainLayoutPanelDropZone> zones);
     void clearHitRegions();
-    void clearSidebarDropZones();
+    void clearDockDropZones();
     void clearPanelDropZones();
 
     [[nodiscard]] bool beginDragCandidate(float pointerX, float pointerY);
@@ -65,26 +79,35 @@ public:
     [[nodiscard]] std::optional<MainLayoutDockDropResult> endDrag(float pointerX, float pointerY);
     void cancel();
 
-    [[nodiscard]] bool active() const { return active_; }
-    [[nodiscard]] bool dragging() const { return dragging_; }
-    [[nodiscard]] std::string_view activePanelId() const { return activePanelId_; }
-    [[nodiscard]] std::optional<MainLayoutDockDropTarget> target() const { return target_; }
+    [[nodiscard]] bool active() const { return dragDrop_.active(); }
+    [[nodiscard]] bool dragging() const { return dragDrop_.dragging(); }
+    [[nodiscard]] std::string_view activePanelId() const;
+    [[nodiscard]] std::optional<MainLayoutDockDropTarget> target() const;
 
 private:
-    [[nodiscard]] static bool contains(const UIPixelRect& rect, float x, float y);
-    [[nodiscard]] static float distanceSquared(float fromX, float fromY, float toX, float toY);
-    [[nodiscard]] std::optional<MainLayoutDockDragHitRegion> hitTest(float x, float y) const;
-    [[nodiscard]] std::optional<MainLayoutDockDropTarget> dropTargetAt(float x, float y) const;
+    /// Connects a generic drop-zone identity to the dock operation it represents.
+    struct DropTargetBinding {
+        UIDropZoneId id;
+        MainLayoutDockDropTarget target;
+    };
 
-    std::vector<MainLayoutDockDragHitRegion> hitRegions_;
-    std::vector<MainLayoutSidebarDropZone> sidebarDropZones_;
+    void rebuildDropTargets();
+    void appendDropZone(
+            std::vector<UIDropZoneRegion>& zones,
+            MainLayoutDockDropTarget target,
+            UIPixelRect rect,
+            UIDropZoneKind kind,
+            UIDropPlacementPolicy placementPolicy,
+            UIDropFeedbackKind feedbackKind,
+            int priority);
+    [[nodiscard]] std::optional<MainLayoutDockDropTarget> targetForDropTarget(
+            const UIDragDropTarget& target,
+            std::string_view activePanelId) const;
+
+    std::vector<MainLayoutDockDropZone> dockDropZones_;
     std::vector<MainLayoutPanelDropZone> panelDropZones_;
-    std::string activePanelId_;
-    float startPointerX_ = 0.0f;
-    float startPointerY_ = 0.0f;
-    std::optional<MainLayoutDockDropTarget> target_;
-    bool active_ = false;
-    bool dragging_ = false;
+    std::vector<DropTargetBinding> dropTargetBindings_;
+    UIDragDropController dragDrop_;
 };
 
 } // namespace quader

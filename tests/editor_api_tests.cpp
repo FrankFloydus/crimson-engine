@@ -14,6 +14,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -93,11 +95,31 @@ bool knownNonSuccessCommandMessage(std::string_view message) {
             message != "Command tool is not registered.";
 }
 
+std::filesystem::path keybindingTestPath(std::string_view name) {
+    std::filesystem::path path = std::filesystem::temp_directory_path() /
+            ("quader-keybindings-" + std::string(name) + ".json");
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    return path;
+}
+
+std::string readTextFile(const std::filesystem::path& path) {
+    std::ifstream file(path);
+    std::string text;
+    std::string line;
+    while (std::getline(file, line)) {
+        text += line;
+        text += '\n';
+    }
+    return text;
+}
+
 } // namespace
 
 TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(keybindingTestPath("aggregate")).ok());
 
     EXPECT_FALSE(editor.project().dirty());
     EXPECT_EQ(editor.project().metadata().name, "Untitled Project");
@@ -138,6 +160,240 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
     EXPECT_TRUE(undo.ok()) << undo.errorMessage();
     EXPECT_TRUE(undo.changed());
+}
+
+TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
+    const std::filesystem::path path = keybindingTestPath("command");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+    const quader::QuaderApiVoidResult updated =
+            editor.preferences().setShortcut(quader::QuaderCommand::EditUndo.string(), "Ctrl+Alt+Z");
+    ASSERT_TRUE(updated.ok()) << updated.errorMessage();
+    EXPECT_TRUE(updated.changed());
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Alt+Z");
+    EXPECT_EQ(editor.commands().shortcutFor("history.undo"), "Ctrl+Alt+Z");
+    EXPECT_NE(readTextFile(path).find("\"key\": \"Ctrl+Alt+Z\""), std::string::npos);
+
+    quader::ProjectSession reloadedSession;
+    quader::QuaderEditorApi reloaded(reloadedSession);
+    ASSERT_TRUE(reloaded.commands().setKeybindingStoragePath(path).ok());
+    EXPECT_EQ(reloaded.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Alt+Z");
+
+    ASSERT_TRUE(reloaded.preferences().resetShortcut(quader::QuaderCommand::EditUndo.string()).ok());
+    EXPECT_EQ(reloaded.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
+}
+
+TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
+    const std::filesystem::path path = keybindingTestPath("conflicts");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+    ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditUndo.string(), "Ctrl+Alt+Z").ok());
+
+    const std::vector<quader::QuaderKeybindingConflict> conflicts =
+            editor.commands().conflictsForShortcut("Ctrl+Alt+Z");
+    ASSERT_EQ(conflicts.size(), 1u);
+    EXPECT_EQ(conflicts.front().targetId, quader::QuaderCommand::EditUndo.string());
+    EXPECT_EQ(conflicts.front().source, "user");
+
+    ASSERT_TRUE(editor.preferences().removeShortcut(quader::QuaderCommand::EditUndo.string()).ok());
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "");
+    EXPECT_NE(readTextFile(path).find("\"command\": \"-edit.undo\""), std::string::npos);
+}
+
+TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
+    const std::filesystem::path path = keybindingTestPath("viewport");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    quader::ViewportToolState state;
+    quader::ViewportShortcut shortcut;
+    EXPECT_EQ(editor.commands().shortcutFor("viewport.selection_mode.face"), "Keypad3");
+    ASSERT_TRUE(editor.commands().resolveViewportShortcut(
+            quader::ViewportKey::Number3,
+            {},
+            state,
+            true,
+            false,
+            shortcut));
+    EXPECT_EQ(shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
+    EXPECT_EQ(shortcut.selectionMode, quader::ViewportSelectionMode::Face);
+
+    ASSERT_TRUE(editor.preferences().setShortcut("viewport.selection_mode.face", "Ctrl+3").ok());
+    EXPECT_EQ(editor.commands().shortcutFor("viewport.selection_mode.face"), "Ctrl+3");
+    shortcut = {};
+    EXPECT_FALSE(editor.commands().resolveViewportShortcut(
+            quader::ViewportKey::Number3,
+            {},
+            state,
+            true,
+            false,
+            shortcut));
+    ASSERT_TRUE(editor.commands().resolveViewportShortcut(
+            quader::ViewportKey::Number3,
+            {.primary = true},
+            state,
+            true,
+            false,
+            shortcut));
+    EXPECT_EQ(shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
+    EXPECT_EQ(shortcut.selectionMode, quader::ViewportSelectionMode::Face);
+    ASSERT_TRUE(editor.preferences().resetShortcut("viewport.selection_mode.face").ok());
+    EXPECT_EQ(editor.commands().shortcutFor("viewport.selection_mode.face"), "Keypad3");
+
+    ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditUndo.string(), "Ctrl+U").ok());
+    const quader::QuaderViewportKeybindingDispatch dispatch = editor.commands().dispatchViewportKeybinding(
+            quader::ViewportKey::U,
+            {.primary = true},
+            state,
+            true,
+            false);
+    EXPECT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::Undo);
+    EXPECT_EQ(dispatch.shortcut.context, quader::ViewportShortcutContext::Global);
+
+    shortcut = {};
+    EXPECT_FALSE(editor.commands().resolveViewportShortcut(
+            quader::ViewportKey::Number3,
+            {.primary = true},
+            state,
+            true,
+            true,
+            shortcut));
+}
+
+TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
+    const std::filesystem::path path = keybindingTestPath("input-chords");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    quader::ViewportToolState state;
+    ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditUndo.string(), "Ctrl+Comma").ok());
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Comma");
+
+    const quader::QuaderViewportKeybindingDispatch commaDispatch =
+            editor.commands().dispatchViewportInputBinding(
+                    quader::QuaderInputChord{
+                            .primary = true,
+                            .device = quader::QuaderInputDevice::Keyboard,
+                            .key = quader::QuaderKeyCode::Comma,
+                    },
+                    state,
+                    true,
+                    false);
+    EXPECT_EQ(commaDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(commaDispatch.shortcut.kind, quader::ViewportShortcutKind::Undo);
+
+    ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditRedo.string(), "Mouse4").ok());
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditRedo), "Mouse4");
+
+    const quader::QuaderViewportKeybindingDispatch mouseDispatch =
+            editor.commands().dispatchViewportInputBinding(
+                    quader::QuaderInputChord{
+                            .device = quader::QuaderInputDevice::Mouse,
+                            .mouseButton = quader::QuaderMouseButton::Back,
+                    },
+                    state,
+                    true,
+                    false);
+    EXPECT_EQ(mouseDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(mouseDispatch.shortcut.kind, quader::ViewportShortcutKind::Redo);
+}
+
+TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
+    const std::filesystem::path path = keybindingTestPath("navigation-bindings");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    quader::ViewportToolState state;
+    quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+    ASSERT_TRUE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("MiddleMouseDrag"),
+            state,
+            true,
+            false,
+            action));
+    EXPECT_EQ(action, quader::ViewportInputActionKind::Orbit);
+    EXPECT_EQ(editor.commands().shortcutFor("viewport.navigation.pan"), "Shift+MiddleMouseDrag");
+    EXPECT_EQ(editor.commands().shortcutFor("viewport.navigation.reset_fly_speed"), "MiddleMouse");
+
+    action = quader::ViewportInputActionKind::None;
+    ASSERT_TRUE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("MiddleMouse"),
+            state,
+            true,
+            false,
+            action));
+    EXPECT_EQ(action, quader::ViewportInputActionKind::ResetFlySpeed);
+
+    ASSERT_TRUE(editor.preferences().setShortcut("viewport.navigation.orbit", "Alt+LeftMouseDrag").ok());
+    EXPECT_EQ(editor.commands().shortcutFor("viewport.navigation.orbit"), "Alt+LeftMouseDrag");
+
+    action = quader::ViewportInputActionKind::None;
+    EXPECT_FALSE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("MiddleMouseDrag"),
+            state,
+            true,
+            false,
+            action));
+    ASSERT_TRUE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("Alt+LeftMouseDrag"),
+            state,
+            true,
+            false,
+            action));
+    EXPECT_EQ(action, quader::ViewportInputActionKind::Orbit);
+}
+
+TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcuts) {
+    const std::filesystem::path path = keybindingTestPath("navigation-contexts");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    quader::ViewportToolState state;
+    const quader::QuaderViewportKeybindingDispatch toolDispatch =
+            editor.commands().dispatchViewportKeybinding(
+                    quader::ViewportKey::W,
+                    {},
+                    state,
+                    true,
+                    false);
+    ASSERT_EQ(toolDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(toolDispatch.shortcut.kind, quader::ViewportShortcutKind::ActivateTool);
+    EXPECT_EQ(toolDispatch.shortcut.tool, quader::ViewportToolId::Move);
+
+    const quader::QuaderViewportKeybindingDispatch navigationDispatch =
+            editor.commands().dispatchViewportKeybinding(
+                    quader::ViewportKey::W,
+                    {},
+                    state,
+                    true,
+                    false,
+                    quader::QuaderViewportKeybindingContext{
+                            .navigationActive = true,
+                            .flyNavigationActive = true,
+                    });
+    EXPECT_EQ(navigationDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+    quader::ViewportInputActionKind action = quader::ViewportInputActionKind::None;
+    ASSERT_TRUE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("RightMouseDrag"),
+            state,
+            true,
+            false,
+            action,
+            quader::QuaderViewportKeybindingContext{
+                    .navigationActive = true,
+                    .flyNavigationActive = true,
+            }));
+    EXPECT_EQ(action, quader::ViewportInputActionKind::Fly);
 }
 
 TEST(EditorApiTests, ProjectDirtyStateAggregatesProjectSceneAssetAndModelingContentRevisions) {

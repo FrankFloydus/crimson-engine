@@ -36,6 +36,100 @@ bool primaryShiftOnly(ViewportModifiers modifiers) {
     return modifiers.primary && !modifiers.alt && modifiers.shift;
 }
 
+bool usesResolvedInputBindings(const ViewportInputFrame& input) {
+    return input.shortcutResolverActive;
+}
+
+ViewportInputActionKind pressedNavigationAction(const ViewportInputFrame& input) {
+    if (usesResolvedInputBindings(input)) {
+        if (input.navigationBindings.flyPressed) {
+            return ViewportInputActionKind::Fly;
+        }
+        if (input.navigationBindings.panPressed) {
+            return ViewportInputActionKind::Pan;
+        }
+        if (input.navigationBindings.orbitSnapPressed) {
+            return ViewportInputActionKind::OrbitSnap;
+        }
+        if (input.navigationBindings.orbitPressed) {
+            return ViewportInputActionKind::Orbit;
+        }
+        return ViewportInputActionKind::None;
+    }
+
+    if (input.rightPressed &&
+            !input.modifiers.primary &&
+            !input.modifiers.shift &&
+            !input.modifiers.alt) {
+        return ViewportInputActionKind::Fly;
+    }
+    if (!input.middlePressed) {
+        return ViewportInputActionKind::None;
+    }
+    if (input.modifiers.shift) {
+        return ViewportInputActionKind::Pan;
+    }
+    if (input.modifiers.alt) {
+        return ViewportInputActionKind::OrbitSnap;
+    }
+    return ViewportInputActionKind::Orbit;
+}
+
+bool navigationActionDown(const ViewportInputFrame& input, ViewportInputActionKind action, bool legacyRightButton) {
+    if (!usesResolvedInputBindings(input)) {
+        return legacyRightButton ? input.rightDown : input.middleDown;
+    }
+
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        return input.navigationBindings.orbitDown;
+    case ViewportInputActionKind::OrbitSnap:
+        return input.navigationBindings.orbitSnapDown;
+    case ViewportInputActionKind::Pan:
+        return input.navigationBindings.panDown;
+    case ViewportInputActionKind::Fly:
+        return input.navigationBindings.flyDown;
+    default:
+        return false;
+    }
+}
+
+bool navigationActionReleased(const ViewportInputFrame& input, ViewportInputActionKind action, bool legacyRightButton) {
+    if (!usesResolvedInputBindings(input)) {
+        return legacyRightButton ? input.rightReleased : input.middleReleased;
+    }
+
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        return input.navigationBindings.orbitReleased;
+    case ViewportInputActionKind::OrbitSnap:
+        return input.navigationBindings.orbitSnapReleased;
+    case ViewportInputActionKind::Pan:
+        return input.navigationBindings.panReleased;
+    case ViewportInputActionKind::Fly:
+        return input.navigationBindings.flyReleased;
+    default:
+        return false;
+    }
+}
+
+ViewportDragMode navigationModeForAction(ViewportInputActionKind action, const ViewportCameraController& camera) {
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        return ViewportDragMode::Orbit;
+    case ViewportInputActionKind::OrbitSnap:
+        return ViewportDragMode::OrbitSnap;
+    case ViewportInputActionKind::Pan:
+        return ViewportDragMode::Pan;
+    case ViewportInputActionKind::Fly:
+        return camera.state().projection == ViewportProjection::Orthographic
+                ? ViewportDragMode::Pan
+                : ViewportDragMode::Fly;
+    default:
+        return ViewportDragMode::None;
+    }
+}
+
 ViewportShortcut commandShortcut(ViewportShortcutKind kind, ViewportShortcutContext context) {
     return {
         .kind = kind,
@@ -95,15 +189,13 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             std::abs(input.flyLocalDirection.y) > 0.000001f ||
             std::abs(input.flyLocalDirection.z) > 0.000001f;
     bool flyStartedThisFrame = false;
-    if (acceptsMouse &&
-            input.rightPressed &&
-            !input.modifiers.primary &&
-            !input.modifiers.shift &&
-            !input.modifiers.alt) {
-        navigationMode_ = camera.state().projection == ViewportProjection::Orthographic
-                ? ViewportDragMode::Pan
-                : ViewportDragMode::Fly;
-        navigationUsesRightButton_ = true;
+    const ViewportInputActionKind pressedAction = acceptsMouse && !navigating()
+            ? pressedNavigationAction(input)
+            : ViewportInputActionKind::None;
+    if (pressedAction != ViewportInputActionKind::None) {
+        activeNavigationAction_ = pressedAction;
+        navigationMode_ = navigationModeForAction(pressedAction, camera);
+        navigationUsesRightButton_ = !usesResolvedInputBindings(input) && pressedAction == ViewportInputActionKind::Fly;
         flyCursorCaptureActive_ = navigationMode_ == ViewportDragMode::Fly;
         flyHudActive_ = false;
         camera.beginDrag(input.mouseScreen, navigationMode_);
@@ -112,7 +204,10 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     }
 
     if (navigationMode_ == ViewportDragMode::Fly) {
-        if (input.middlePressed) {
+        const bool resetFlySpeedPressed = usesResolvedInputBindings(input)
+                ? input.navigationBindings.resetFlySpeedPressed
+                : input.middlePressed;
+        if (resetFlySpeedPressed) {
             camera.resetFlySpeed();
             result.consumed = true;
             result.flySpeedChanged = true;
@@ -120,7 +215,10 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             result.flySpeed = camera.flySpeed();
         }
 
-        if (input.mouseWheel != 0.0f) {
+        const bool flySpeedWheelActive = !usesResolvedInputBindings(input) ||
+                input.navigationBindings.zoomWheel ||
+                input.navigationBindings.zoomToCursorWheel;
+        if (input.mouseWheel != 0.0f && flySpeedWheelActive) {
             camera.adjustFlySpeed(input.mouseWheel);
             result.consumed = true;
             result.flySpeedChanged = true;
@@ -135,7 +233,8 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             }
         }
 
-        if (input.rightDown && !cancelFly && !flyStartedThisFrame) {
+        const bool flyDown = navigationActionDown(input, activeNavigationAction_, navigationUsesRightButton_);
+        if (flyDown && !cancelFly && !flyStartedThisFrame) {
             if (hasFlyMovementInput) {
                 flyHudActive_ = true;
             }
@@ -145,8 +244,9 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             result.cameraChanged = true;
         }
 
-        if (input.rightReleased || !input.rightDown || cancelFly) {
+        if (navigationActionReleased(input, activeNavigationAction_, navigationUsesRightButton_) || !flyDown || cancelFly) {
             navigationMode_ = ViewportDragMode::None;
+            activeNavigationAction_ = ViewportInputActionKind::None;
             navigationUsesRightButton_ = false;
             flyCursorCaptureActive_ = false;
             flyHudActive_ = false;
@@ -161,20 +261,12 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         return result;
     }
 
-    if (acceptsMouse && input.middlePressed) {
-        navigationMode_ = input.modifiers.shift
-                ? ViewportDragMode::Pan
-                : (input.modifiers.alt ? ViewportDragMode::OrbitSnap : ViewportDragMode::Orbit);
-        navigationUsesRightButton_ = false;
-        camera.beginDrag(input.mouseScreen, navigationMode_);
-        result.consumed = true;
-    }
-
     if (navigating()) {
-        const bool dragDown = navigationUsesRightButton_ ? input.rightDown : input.middleDown;
-        const bool dragReleased = navigationUsesRightButton_ ? input.rightReleased : input.middleReleased;
+        const bool dragDown = navigationActionDown(input, activeNavigationAction_, navigationUsesRightButton_);
+        const bool dragReleased = navigationActionReleased(input, activeNavigationAction_, navigationUsesRightButton_);
         if (dragDown) {
             const ViewportDragMode activeNavigationMode =
+                    !usesResolvedInputBindings(input) &&
                     !navigationUsesRightButton_ &&
                             (navigationMode_ == ViewportDragMode::Orbit || navigationMode_ == ViewportDragMode::OrbitSnap)
                     ? (input.modifiers.alt ? ViewportDragMode::OrbitSnap : ViewportDragMode::Orbit)
@@ -191,6 +283,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         }
         if (dragReleased || !dragDown) {
             navigationMode_ = ViewportDragMode::None;
+            activeNavigationAction_ = ViewportInputActionKind::None;
             navigationUsesRightButton_ = false;
             flyCursorCaptureActive_ = false;
             flyHudActive_ = false;
@@ -199,8 +292,11 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         }
     }
 
-    if (input.viewportHovered && input.mouseWheel != 0.0f) {
-        if (input.modifiers.primary) {
+    const bool wheelZoomActive = usesResolvedInputBindings(input)
+            ? input.navigationBindings.zoomWheel || input.navigationBindings.zoomToCursorWheel
+            : true;
+    if (input.viewportHovered && input.mouseWheel != 0.0f && wheelZoomActive) {
+        if (usesResolvedInputBindings(input) ? input.navigationBindings.zoomToCursorWheel : input.modifiers.primary) {
             camera.scrollToCursor(input.mouseWheel, input.mouseLocal);
             result.zoomedToCursor = true;
         } else {
@@ -212,6 +308,23 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
 
     const bool acceptsShortcuts = input.viewportFocused && !input.textInputActive && !navigating();
     if (acceptsShortcuts) {
+        for (const ViewportShortcut& shortcut : input.resolvedShortcuts) {
+            if (shortcut.kind == ViewportShortcutKind::None) {
+                result.consumed = true;
+                result.shortcutHandled = true;
+                result.shortcut = shortcut;
+                break;
+            }
+            if (handleShortcut(shortcut, camera, result)) {
+                result.consumed = true;
+                result.shortcutHandled = true;
+                result.shortcut = shortcut;
+                break;
+            }
+        }
+    }
+
+    if (acceptsShortcuts && !result.shortcutHandled && !input.shortcutResolverActive) {
         for (ViewportKey key : input.pressedKeys) {
             ViewportShortcut shortcut;
             if (!resolveShortcut(key, input.modifiers, shortcut)) {
@@ -235,6 +348,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
 
 void ViewportInputRouter::reset() {
     navigationMode_ = ViewportDragMode::None;
+    activeNavigationAction_ = ViewportInputActionKind::None;
     navigationUsesRightButton_ = false;
     flyCursorCaptureActive_ = false;
     flyHudActive_ = false;

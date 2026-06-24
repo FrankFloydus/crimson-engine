@@ -95,6 +95,10 @@ std::string EditorCommandRegistry::shortcutFor(std::string_view commandId) const
     return {};
 }
 
+std::string EditorCommandRegistry::canonicalCommandId(std::string_view commandId) const {
+    return std::string(resolveAlias(commandId));
+}
+
 const EditorCommandRegistration* EditorCommandRegistry::find(std::string_view commandId) const {
     commandId = resolveAlias(commandId);
     const auto found = std::find_if(commands_.begin(), commands_.end(), [&](const EditorCommandRegistration& command) {

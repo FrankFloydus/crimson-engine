@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/components/common/UIDragDrop.h"
 #include "ui/components/organisms/MainLayoutModel.h"
 
 #include <optional>
@@ -27,6 +28,8 @@ enum class MainLayoutActiveResizer {
     Sidebar,
     AuxiliarySidebar,
     Panels,
+    BottomDock,
+    BottomSplitPanel,
 };
 
 /// Stores the transient presentation for an active panel drag.
@@ -41,14 +44,17 @@ struct MainLayoutDockDragPresentation {
 
 /// Stores the transient insertion marker for a panel drop over an existing panel.
 struct MainLayoutPanelDropPresentation {
+    DockLocation location = DockLocation::Sidebar;
     std::string panelId;
     DockPanelInsertPosition position = DockPanelInsertPosition::After;
+    UIDropFeedbackKind feedbackKind = UIDropFeedbackKind::Target;
 };
 
 /// Stores transient presentation state for the RmlUi main layout projection.
 struct MainLayoutInteractionState {
     MainLayoutActiveResizer activeResizer = MainLayoutActiveResizer::None;
-    std::optional<MainLayoutSidebarSide> sidebarDropSide;
+    std::string activeBottomSplitPanelId;
+    std::optional<DockLocation> dockDropLocation;
     std::optional<MainLayoutPanelDropPresentation> panelDrop;
     std::optional<MainLayoutDockDragPresentation> dockDrag;
 };
@@ -63,7 +69,14 @@ std::string buildMainLayoutRml(
 
 [[nodiscard]] std::string mainLayoutPanelElementId(std::string_view panelId);
 [[nodiscard]] std::string mainLayoutPanelHeaderElementId(std::string_view panelId);
+[[nodiscard]] std::string mainLayoutPanelTabElementId(std::string_view panelId);
+[[nodiscard]] std::string mainLayoutEditorColumnElementId();
 [[nodiscard]] std::string mainLayoutSideDockElementId(DockLocation location);
 [[nodiscard]] std::string mainLayoutSideDockResizerElementId(DockLocation location);
+[[nodiscard]] std::string mainLayoutBottomDockElementId();
+[[nodiscard]] std::string mainLayoutBottomDockTabStripElementId();
+[[nodiscard]] std::string mainLayoutBottomDockContentElementId();
+[[nodiscard]] std::string mainLayoutBottomDockResizerElementId();
+[[nodiscard]] std::string mainLayoutBottomSplitResizerElementId(std::string_view panelId);
 
 } // namespace quader

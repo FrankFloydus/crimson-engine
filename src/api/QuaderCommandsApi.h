@@ -9,7 +9,9 @@
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApiTypes.h"
 #include "editor/commands/EditorCommandRegistry.h"
+#include "editor/input/QuaderKeybindingService.h"
 
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -20,6 +22,38 @@ namespace quader {
 class QuaderApi;
 class QuaderToolsApi;
 class QuaderViewportApi;
+
+/**
+ * Stores the result of dispatching one viewport-scoped keybinding.
+ */
+struct QuaderViewportKeybindingDispatch {
+    /**
+     * Enumerates viewport keybinding dispatch result kinds used by the public command layer.
+     */
+    enum class Kind {
+        NoMatch,
+        PendingChord,
+        ViewportShortcut,
+        Command,
+    };
+
+    Kind kind = Kind::NoMatch;
+    ViewportShortcut shortcut = {};
+    std::string commandId;
+};
+
+/**
+ * Stores transient viewport state exposed to keybinding when-expressions.
+ */
+struct QuaderViewportKeybindingContext {
+    bool viewportHovered = false;
+    bool navigationActive = false;
+    bool flyNavigationActive = false;
+    bool orbitNavigationActive = false;
+    bool panNavigationActive = false;
+    bool modalToolActive = false;
+    bool activeToolOwnsViewport = false;
+};
 
 /**
  * Exposes Quader Commands API operations through the public Quader API surface.
@@ -37,9 +71,56 @@ public:
     [[nodiscard]] std::string commandIdForToolActivation(std::string_view toolId) const;
     [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
     [[nodiscard]] std::string shortcutFor(QuaderCommandId commandId) const;
+    [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
+    [[nodiscard]] std::vector<QuaderKeybindingConflict> conflictsForShortcut(
+            std::string_view shortcut,
+            std::string_view when = {}) const;
+    [[nodiscard]] bool resolveViewportShortcut(
+            ViewportKey key,
+            ViewportModifiers modifiers,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            ViewportShortcut& shortcut,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] bool resolveViewportShortcut(
+            const QuaderInputChord& chord,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            ViewportShortcut& shortcut,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] bool resolveViewportInputAction(
+            const QuaderInputChord& chord,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            ViewportInputActionKind& action,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] QuaderViewportKeybindingDispatch dispatchViewportKeybinding(
+            ViewportKey key,
+            ViewportModifiers modifiers,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] QuaderViewportKeybindingDispatch dispatchViewportInputBinding(
+            const QuaderInputChord& chord,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            QuaderViewportKeybindingContext inputContext = {});
+    void resetPendingKeybindingChord();
+    [[nodiscard]] bool hasPendingKeybindingChord() const;
+    QuaderApiVoidResult setShortcut(std::string_view commandId, std::string shortcut);
+    QuaderApiVoidResult removeShortcut(std::string_view commandId);
+    QuaderApiVoidResult resetShortcut(std::string_view commandId);
+    QuaderApiVoidResult setKeybindingStoragePath(std::filesystem::path path);
 
 private:
     void registerCommands();
+    void registerDefaultKeybindings();
+    void registerViewportDefaultKeybindings();
     void registerCommand(
             QuaderCommandId id,
             std::string label,
@@ -57,11 +138,13 @@ private:
     void registerAlias(std::string aliasId, QuaderCommandId targetId);
     void registerAlias(std::string aliasId, std::string targetId);
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
+    [[nodiscard]] std::string canonicalTargetId(std::string_view commandId) const;
 
     QuaderApi& api_;
     QuaderViewportApi& viewports_;
     QuaderToolsApi& tools_;
     EditorCommandRegistry registry_;
+    QuaderKeybindingService keybindings_;
 };
 
 } // namespace quader

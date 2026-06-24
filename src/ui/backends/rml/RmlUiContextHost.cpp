@@ -335,8 +335,10 @@ void RmlUiContextHost::shutdown() {
         return;
     }
 
-    if (document_ && debugPaletteCopyListener_) {
-        document_->RemoveEventListener("click", debugPaletteCopyListener_.get());
+    if (document_) {
+        if (debugPaletteCopyListener_) {
+            document_->RemoveEventListener("click", debugPaletteCopyListener_.get());
+        }
     }
     debugPaletteCopyListener_.reset();
     document_ = nullptr;

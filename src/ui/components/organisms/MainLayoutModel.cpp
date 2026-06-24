@@ -86,6 +86,14 @@ bool mainLayoutSideDockCollapsed(const MainLayoutModel& model, DockLocation loca
     return mainLayoutSideDock(model, location).collapsed;
 }
 
+int mainLayoutBottomDockHeightDp(const MainLayoutModel& model) {
+    return model.bottomDock.heightDp;
+}
+
+bool mainLayoutBottomDockCollapsed(const MainLayoutModel& model) {
+    return model.bottomDock.collapsed;
+}
+
 int mainLayoutClampedSidebarWidthDp(int widthDp) {
     return std::max(widthDp, kMainLayoutSidebarMinWidthDp);
 }
@@ -98,15 +106,29 @@ int mainLayoutClampedBottomDockHeightDp(int heightDp) {
     return std::clamp(heightDp, kMainLayoutPanelMinHeightDp, kMainLayoutPanelMaxHeightDp);
 }
 
+int mainLayoutClampedBottomSplitPanelWidthDp(int widthDp) {
+    return std::max(widthDp, kMainLayoutBottomSplitPanelMinWidthDp);
+}
+
 MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model) {
     model.sidebar.widthDp = mainLayoutClampedSidebarWidthDp(model.sidebar.widthDp);
     model.auxiliarySidebar.widthDp = mainLayoutClampedSidebarWidthDp(model.auxiliarySidebar.widthDp);
     model.outlinerHeightDp = mainLayoutClampedOutlinerHeightDp(model.outlinerHeightDp);
-    model.bottomDockHeightDp = mainLayoutClampedBottomDockHeightDp(model.bottomDockHeightDp);
+    model.bottomDock.heightDp = mainLayoutClampedBottomDockHeightDp(model.bottomDock.heightDp);
     model.dockLayout = normalizedDockLayoutModel(
             std::move(model.dockLayout),
             mainLayoutDockablePanelIds(),
             DockLocation::Sidebar);
+    for (DockLocationSplitPanels& splitPanels : model.dockLayout.splitPanels) {
+        if (splitPanels.location != DockLocation::Panel) {
+            continue;
+        }
+        for (int& sizeDp : splitPanels.panelSizesDp) {
+            if (sizeDp > 0) {
+                sizeDp = mainLayoutClampedBottomSplitPanelWidthDp(sizeDp);
+            }
+        }
+    }
     return model;
 }
 

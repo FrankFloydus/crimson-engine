@@ -67,6 +67,18 @@ body {
     overflow: hidden;
 }
 
+.main-layout-editor-column {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0dp;
+    min-width: 1dp;
+    min-height: 1dp;
+    overflow: hidden;
+}
+
 .viewport-host {
     position: relative;
     flex-grow: 1;
@@ -150,20 +162,38 @@ body {
 
 .main-layout-panel-drop-overlay {
     position: absolute;
-    left: 0px;
-    width: 100%;
-    height: 50%;
     min-height: 22dp;
+    min-width: 22dp;
     opacity: 0.32;
     z-index: 12;
 }
 
-.main-layout-panel-drop-overlay-before {
+.main-layout-panel-drop-overlay-vertical {
+    left: 0px;
+    width: 100%;
+    height: 50%;
+}
+
+.main-layout-panel-drop-overlay-vertical-before {
     top: 0px;
 }
 
-.main-layout-panel-drop-overlay-after {
+.main-layout-panel-drop-overlay-vertical-after {
     bottom: 0px;
+}
+
+.main-layout-panel-drop-overlay-horizontal {
+    top: 0px;
+    width: 50%;
+    height: 100%;
+}
+
+.main-layout-panel-drop-overlay-horizontal-before {
+    left: 0px;
+}
+
+.main-layout-panel-drop-overlay-horizontal-after {
+    right: 0px;
 }
 
 .main-layout-panel-flex {
@@ -186,6 +216,98 @@ body {
     overflow: hidden;
 }
 
+.main-layout-tab-strip {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    flex-grow: 0;
+    flex-shrink: 0;
+    height: 32dp;
+    border-bottom-width: 1dp;
+    overflow: hidden;
+}
+
+.main-layout-tab {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-grow: 0;
+    flex-shrink: 1;
+    min-width: 84dp;
+    max-width: 180dp;
+    padding-left: 12dp;
+    padding-right: 12dp;
+    border-right-width: 1dp;
+    overflow: hidden;
+}
+
+.main-layout-tab-active {
+    flex-shrink: 0;
+}
+
+.main-layout-tab-drag-source {
+    opacity: 0.72;
+}
+
+.main-layout-tab-title {
+    flex-grow: 1;
+    flex-shrink: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.main-layout-tab-drop-insertion-line {
+    position: absolute;
+    top: 4dp;
+    width: 2dp;
+    height: 24dp;
+    z-index: 12;
+}
+
+.main-layout-tab-drop-insertion-line-before {
+    left: -1dp;
+}
+
+.main-layout-tab-drop-insertion-line-after {
+    right: -1dp;
+}
+
+.main-layout-bottom-dock-content {
+    display: flex;
+    flex-direction: row;
+    flex-grow: 1;
+    flex-shrink: 1;
+    width: 100%;
+    min-height: 1dp;
+    overflow: hidden;
+}
+
+.main-layout-bottom-panel-pane {
+    min-width: 120dp;
+    border-right-width: 1dp;
+}
+
+.main-layout-bottom-split-resizer {
+    position: relative;
+    width: 0dp;
+    height: 100%;
+    flex-grow: 0;
+    flex-shrink: 0;
+    background-color: transparent;
+    overflow: visible;
+    z-index: 10;
+}
+
+.main-layout-bottom-split-resizer .main-layout-resizer-base-line {
+    opacity: 0;
+}
+
+.main-layout-bottom-split-resizer .main-layout-resizer-drag-line-vertical {
+    left: -1dp;
+}
+
 .main-layout-panel-resizer {
     position: absolute;
     left: 0px;
@@ -193,6 +315,19 @@ body {
     height: 12dp;
     background-color: transparent;
     z-index: 10;
+}
+
+.main-layout-bottom-dock-resizer {
+    position: absolute;
+    left: 0px;
+    width: 100%;
+    height: 12dp;
+    background-color: transparent;
+    z-index: 10;
+}
+
+.main-layout-bottom-dock-resizer-collapsed .main-layout-resizer-base-line {
+    opacity: 0;
 }
 
 .main-layout-resizer-base-line {
@@ -249,6 +384,10 @@ body {
 .main-layout-sidebar-resizer:active .main-layout-resizer-drag-line,
 .main-layout-panel-resizer:hover .main-layout-resizer-drag-line,
 .main-layout-panel-resizer:active .main-layout-resizer-drag-line,
+.main-layout-bottom-dock-resizer:hover .main-layout-resizer-drag-line,
+.main-layout-bottom-dock-resizer:active .main-layout-resizer-drag-line,
+.main-layout-bottom-split-resizer:hover .main-layout-resizer-drag-line,
+.main-layout-bottom-split-resizer:active .main-layout-resizer-drag-line,
 .main-layout-resizer-active .main-layout-resizer-drag-line {
     opacity: 1;
 }
@@ -267,6 +406,15 @@ body {
 
 .main-layout-sidebar-drop-indicator-right {
     right: 0px;
+}
+
+.main-layout-bottom-dock-drop-indicator {
+    position: absolute;
+    left: 0px;
+    bottom: 0px;
+    width: 100%;
+    height: 4dp;
+    z-index: 12;
 }
 
 .main-layout-dock-drag-preview {

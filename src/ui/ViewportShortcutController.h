@@ -37,6 +37,10 @@ public:
 
     [[nodiscard]] ViewportShortcutControllerResult handleModelingShortcut(
             const ViewportInputResult& inputResult,
+            QuaderEditorApi& editor) const;
+
+    [[nodiscard]] ViewportShortcutControllerResult handleModelingShortcut(
+            const ViewportInputResult& inputResult,
             QuaderEditorApi& editor,
             ModelingSessionService& modeling) const;
 };

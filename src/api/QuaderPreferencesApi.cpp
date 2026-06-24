@@ -6,11 +6,20 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderPreferencesApi.h"
 
+#include "api/QuaderCommandsApi.h"
+
 #include <utility>
 
 namespace quader {
 
 QuaderPreferencesApi::QuaderPreferencesApi() = default;
+
+QuaderPreferencesApi::QuaderPreferencesApi(QuaderCommandsApi& commands)
+    : commands_(&commands) {}
+
+void QuaderPreferencesApi::attachCommands(QuaderCommandsApi& commands) {
+    commands_ = &commands;
+}
 
 void QuaderPreferencesApi::setRuntimeHooks(QuaderPreferencesRuntimeHooks hooks) {
     hooks_ = std::move(hooks);
@@ -25,9 +34,21 @@ QuaderApiVoidResult QuaderPreferencesApi::setLocale(std::string locale) {
 }
 
 QuaderApiVoidResult QuaderPreferencesApi::setShortcut(std::string_view commandId, std::string shortcut) {
-    (void)commandId;
-    (void)shortcut;
-    return unavailable("Shortcut persistence is not implemented until the keybind service exists.");
+    return commands_ != nullptr ?
+            commands_->setShortcut(commandId, std::move(shortcut)) :
+            unavailable("Command runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::removeShortcut(std::string_view commandId) {
+    return commands_ != nullptr ?
+            commands_->removeShortcut(commandId) :
+            unavailable("Command runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::resetShortcut(std::string_view commandId) {
+    return commands_ != nullptr ?
+            commands_->resetShortcut(commandId) :
+            unavailable("Command runtime is not attached.");
 }
 
 QuaderApiVoidResult QuaderPreferencesApi::setNavigationGizmoVisible(bool visible) {

@@ -43,6 +43,7 @@ public:
     [[nodiscard]] std::optional<QuaderApiVoidResult> execute(std::string_view commandId) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
+    [[nodiscard]] std::string canonicalCommandId(std::string_view commandId) const;
 
 private:
     /**

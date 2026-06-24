@@ -22,8 +22,16 @@ struct UIUtilityToken {
     std::string value;
 };
 
-std::filesystem::path appUtilityTokenPath(const std::filesystem::path& executableDir);
-std::vector<UIUtilityToken> loadUIUtilityTokens(const std::filesystem::path& utilityFile);
+/**
+ * Carries the single Tailwind-style UI token config used to generate app utility RCSS.
+ */
+struct UITokenConfig {
+    std::vector<DebugPaletteColorToken> colors;
+    std::vector<UIUtilityToken> utilities;
+};
+
+std::filesystem::path appUITokenConfigPath(const std::filesystem::path& executableDir);
+UITokenConfig loadUITokenConfig(const std::filesystem::path& configFile);
 std::string buildUIUtilityRcss(
         const std::vector<UIUtilityToken>& tokens,
         const std::vector<DebugPaletteColorToken>& paletteColors);

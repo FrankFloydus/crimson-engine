@@ -6,29 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/DebugPaletteView.h"
 
-#include "core/Logger.h"
-
-#include <nlohmann/json.hpp>
-
-#include <algorithm>
 #include <cctype>
-#include <fstream>
-#include <iterator>
 #include <sstream>
 #include <string_view>
 
 namespace quader {
 namespace {
-
-bool isHexDigit(char value) {
-    return std::isxdigit(static_cast<unsigned char>(value)) != 0;
-}
-
-bool isHexColor(const std::string& value) {
-    return value.size() == 7u &&
-            value[0] == '#' &&
-            std::all_of(value.begin() + 1, value.end(), isHexDigit);
-}
 
 std::string rmlEscape(std::string_view value) {
     std::string escaped;
@@ -58,36 +41,7 @@ std::string rmlEscape(std::string_view value) {
     return escaped;
 }
 
-void collectColorTokens(
-        const nlohmann::ordered_json& node,
-        const std::string& prefix,
-        std::vector<DebugPaletteColorToken>& colors) {
-    if (!node.is_object()) {
-        return;
-    }
-
-    for (auto iterator = node.begin(); iterator != node.end(); ++iterator) {
-        const std::string name = prefix.empty() ? iterator.key() : prefix + "." + iterator.key();
-        if (iterator->is_string()) {
-            const std::string hex = iterator->get<std::string>();
-            if (isHexColor(hex)) {
-                colors.push_back({
-                        .name = name,
-                        .hex = hex,
-                });
-            }
-            continue;
-        }
-
-        collectColorTokens(*iterator, name, colors);
-    }
-}
-
 } // namespace
-
-std::filesystem::path appPaletteTokenPath(const std::filesystem::path& executableDir) {
-    return executableDir / "ui" / "tokens" / "app-palette.tokens.json";
-}
 
 std::string debugPaletteUtilityClassSuffix(std::string_view tokenName) {
     std::string suffix;
@@ -103,24 +57,6 @@ std::string debugPaletteUtilityClassSuffix(std::string_view tokenName) {
         }
     }
     return suffix;
-}
-
-std::vector<DebugPaletteColorToken> loadDebugPaletteColorTokens(const std::filesystem::path& paletteFile) {
-    std::ifstream file(paletteFile);
-    if (!file.is_open()) {
-        LOG_WARN("Unable to open debug palette token file {}", paletteFile.string());
-        return {};
-    }
-
-    try {
-        const nlohmann::ordered_json palette = nlohmann::ordered_json::parse(file);
-        std::vector<DebugPaletteColorToken> colors;
-        collectColorTokens(palette, {}, colors);
-        return colors;
-    } catch (const std::exception& error) {
-        LOG_WARN("Unable to parse debug palette token file {}: {}", paletteFile.string(), error.what());
-        return {};
-    }
 }
 
 std::string buildDebugPalettePageRml(const std::vector<DebugPaletteColorToken>& colors) {

@@ -16,6 +16,7 @@
 #include "ui/backends/rml/RmlUiContextHost.h"
 #include "ui/controllers/MainLayoutController.h"
 #include "ui/controllers/MainLayoutDockDragController.h"
+#include "ui/controllers/MainLayoutSashRegistry.h"
 #include "ui/controllers/ResizableSplitController.h"
 #include "ui/controllers/ViewportHost.h"
 #include "ui/UISettings.h"
@@ -28,6 +29,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -136,12 +138,13 @@ private:
     int mainLayoutLeftPx_ = 0;
     int mainLayoutTopPx_ = 0;
     int mainLayoutWidthDp_ = 0;
-    int mainLayoutSidebarHeightDp_ = 0;
+    int mainLayoutHeightDp_ = 0;
     std::optional<RmlElementRect> mainViewportFrame_;
     float rmlDpRatio_ = 1.0f;
     bool initialized_ = false;
     bool debugPaletteVisible_ = false;
     bool mainLayoutDirty_ = true;
+    MainLayoutSashRegistry mainLayoutSashRegistry_;
     ResizableSplitController mainLayoutResizeController_;
     MainLayoutDockDragController mainLayoutDockDragController_;
     int mainLayoutDockDragPreviewLeftDp_ = 0;

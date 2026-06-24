@@ -19,6 +19,16 @@
 namespace quader {
 namespace {
 
+bool isHexDigit(char value) {
+    return std::isxdigit(static_cast<unsigned char>(value)) != 0;
+}
+
+bool isHexColor(const std::string& value) {
+    return value.size() == 7u &&
+            value[0] == '#' &&
+            std::all_of(value.begin() + 1, value.end(), isHexDigit);
+}
+
 bool startsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
 }
@@ -57,6 +67,96 @@ std::string jsonValueToTokenString(const nlohmann::ordered_json& value) {
         return stream.str();
     }
     return {};
+}
+
+const nlohmann::ordered_json* objectMember(const nlohmann::ordered_json& object, std::string_view key) {
+    if (!object.is_object()) {
+        return nullptr;
+    }
+
+    const auto iterator = object.find(std::string(key));
+    return iterator == object.end() ? nullptr : &(*iterator);
+}
+
+void collectColorTokens(
+        const nlohmann::ordered_json& node,
+        const std::string& prefix,
+        std::vector<DebugPaletteColorToken>& colors) {
+    if (!node.is_object()) {
+        return;
+    }
+
+    for (auto iterator = node.begin(); iterator != node.end(); ++iterator) {
+        const std::string name = prefix.empty() ? iterator.key() : prefix + "." + iterator.key();
+        if (iterator->is_string()) {
+            const std::string hex = iterator->get<std::string>();
+            if (isHexColor(hex)) {
+                colors.push_back({
+                        .name = name,
+                        .hex = hex,
+                });
+            }
+            continue;
+        }
+
+        collectColorTokens(*iterator, name, colors);
+    }
+}
+
+void appendFlatUtilityTokens(std::vector<UIUtilityToken>& tokens, const nlohmann::ordered_json& node) {
+    if (!node.is_object()) {
+        return;
+    }
+
+    for (auto iterator = node.begin(); iterator != node.end(); ++iterator) {
+        const std::string value = jsonValueToTokenString(*iterator);
+        if (!value.empty()) {
+            tokens.push_back({
+                    .name = iterator.key(),
+                    .value = value,
+            });
+        }
+    }
+}
+
+void appendNamedUtilityGroup(
+        std::vector<UIUtilityToken>& tokens,
+        const nlohmann::ordered_json& theme,
+        std::string_view groupName,
+        std::string_view utilityPrefix) {
+    const nlohmann::ordered_json* group = objectMember(theme, groupName);
+    if (!group || !group->is_object()) {
+        return;
+    }
+
+    for (auto iterator = group->begin(); iterator != group->end(); ++iterator) {
+        const std::string value = jsonValueToTokenString(*iterator);
+        if (!value.empty()) {
+            tokens.push_back({
+                    .name = std::string(utilityPrefix) + iterator.key(),
+                    .value = value,
+            });
+        }
+    }
+}
+
+void appendThemeTokens(UITokenConfig& result, const nlohmann::ordered_json& theme) {
+    if (const nlohmann::ordered_json* colors = objectMember(theme, "colors")) {
+        collectColorTokens(*colors, {}, result.colors);
+    }
+
+    appendNamedUtilityGroup(result.utilities, theme, "fontFamily", "font-");
+    appendNamedUtilityGroup(result.utilities, theme, "fontWeight", "font-");
+    appendNamedUtilityGroup(result.utilities, theme, "fontSize", "text-");
+    appendNamedUtilityGroup(result.utilities, theme, "lineHeight", "leading-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "space-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "size-");
+    appendNamedUtilityGroup(result.utilities, theme, "size", "size-");
+    appendNamedUtilityGroup(result.utilities, theme, "borderWidth", "border-");
+    appendNamedUtilityGroup(result.utilities, theme, "fontKerning", "kerning-");
+    if (const nlohmann::ordered_json* utilities = objectMember(theme, "utilities")) {
+        appendFlatUtilityTokens(result.utilities, *utilities);
+    }
 }
 
 void appendRule(std::ostringstream& rcss, std::string_view className, std::string_view property, std::string_view value) {
@@ -155,37 +255,39 @@ void appendUtilityToken(std::ostringstream& rcss, const UIUtilityToken& token) {
 
 } // namespace
 
-std::filesystem::path appUtilityTokenPath(const std::filesystem::path& executableDir) {
-    return executableDir / "ui" / "tokens" / "app-utility.tokens.json";
+std::filesystem::path appUITokenConfigPath(const std::filesystem::path& executableDir) {
+    return executableDir / "ui" / "tokens" / "app-ui.tokens.json";
 }
 
-std::vector<UIUtilityToken> loadUIUtilityTokens(const std::filesystem::path& utilityFile) {
-    std::ifstream file(utilityFile);
+UITokenConfig loadUITokenConfig(const std::filesystem::path& configFile) {
+    std::ifstream file(configFile);
     if (!file.is_open()) {
-        LOG_WARN("Unable to open UI utility token file {}", utilityFile.string());
+        LOG_WARN("Unable to open UI token config file {}", configFile.string());
         return {};
     }
 
     try {
-        const nlohmann::ordered_json tokens = nlohmann::ordered_json::parse(file);
-        if (!tokens.is_object()) {
-            LOG_WARN("UI utility token file {} must contain a flat object", utilityFile.string());
+        const nlohmann::ordered_json config = nlohmann::ordered_json::parse(file);
+        if (!config.is_object()) {
+            LOG_WARN("UI token config file {} must contain an object", configFile.string());
             return {};
         }
 
-        std::vector<UIUtilityToken> result;
-        for (auto iterator = tokens.begin(); iterator != tokens.end(); ++iterator) {
-            const std::string value = jsonValueToTokenString(*iterator);
-            if (!value.empty()) {
-                result.push_back({
-                        .name = iterator.key(),
-                        .value = value,
-                });
-            }
+        UITokenConfig result;
+        const nlohmann::ordered_json* theme = objectMember(config, "theme");
+        if (!theme || !theme->is_object()) {
+            LOG_WARN("UI token config file {} must contain a theme object", configFile.string());
+            return {};
         }
+
+        appendThemeTokens(result, *theme);
+        if (const nlohmann::ordered_json* extend = objectMember(*theme, "extend")) {
+            appendThemeTokens(result, *extend);
+        }
+
         return result;
     } catch (const std::exception& error) {
-        LOG_WARN("Unable to parse UI utility token file {}: {}", utilityFile.string(), error.what());
+        LOG_WARN("Unable to parse UI token config file {}: {}", configFile.string(), error.what());
         return {};
     }
 }

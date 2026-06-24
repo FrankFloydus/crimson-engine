@@ -22,9 +22,12 @@ public:
     [[nodiscard]] bool resizeSidebar(int widthDp);
     [[nodiscard]] bool resizeSidebar(DockLocation location, int widthDp);
     [[nodiscard]] bool resizeOutlinerPanel(int heightDp);
+    [[nodiscard]] bool resizeBottomDock(int heightDp);
+    [[nodiscard]] bool resizeBottomSplitPanel(std::string_view panelId, int widthDp);
     [[nodiscard]] bool setSidebarSide(MainLayoutSidebarSide side);
     [[nodiscard]] bool setSidebarCollapsed(bool collapsed);
     [[nodiscard]] bool setSidebarCollapsed(DockLocation location, bool collapsed);
+    [[nodiscard]] bool setBottomDockCollapsed(bool collapsed);
     [[nodiscard]] bool setPanelVisible(std::string_view panelId, bool visible);
     [[nodiscard]] bool movePanelToDockLocation(std::string_view panelId, DockLocation location);
     [[nodiscard]] bool movePanelToDockLocation(
@@ -32,6 +35,13 @@ public:
             DockLocation location,
             std::string_view targetPanelId,
             DockPanelInsertPosition position);
+    [[nodiscard]] bool splitPanelWithDockPanel(
+            std::string_view panelId,
+            DockLocation location,
+            std::string_view targetPanelId,
+            DockPanelInsertPosition position);
+    [[nodiscard]] bool setActiveDockPanel(DockLocation location, std::string_view panelId);
+    [[nodiscard]] std::optional<std::string_view> activeDockPanel(DockLocation location) const;
     [[nodiscard]] std::optional<DockLocation> panelDockLocation(std::string_view panelId) const;
     [[nodiscard]] bool isPanelVisible(std::string_view panelId) const;
 

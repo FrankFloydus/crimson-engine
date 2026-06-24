@@ -7,6 +7,7 @@
 #pragma once
 
 #include "math/Types.h"
+#include "editor/input/QuaderInputBinding.h"
 #include "editor/modeling/ModelingTypes.h"
 #include "viewport/ViewportCameraController.h"
 
@@ -75,16 +76,36 @@ enum class ViewportKey {
     C,
     P,
     T,
+    U,
     V,
     X,
     Y,
     Z,
+    E,
+    G,
+    J,
+    K,
+    L,
+    N,
+    O,
+    Number0,
     Number1,
     Number2,
     Number3,
     Number4,
     Number5,
+    Number6,
+    Number7,
+    Number8,
+    Number9,
     Home,
+    End,
+    PageUp,
+    PageDown,
+    Left,
+    Right,
+    Up,
+    Down,
     F,
     Space,
     F1,
@@ -97,9 +118,13 @@ enum class ViewportKey {
     F8,
     F9,
     F10,
+    F11,
+    F12,
     Escape,
     Delete,
     Backspace,
+    Enter,
+    Tab,
 };
 
 /**
@@ -142,6 +167,20 @@ enum class ViewportShortcutKind {
 };
 
 /**
+ * Enumerates semantic viewport input actions resolved from user input bindings.
+ */
+enum class ViewportInputActionKind {
+    None,
+    Orbit,
+    OrbitSnap,
+    Pan,
+    Fly,
+    Zoom,
+    ZoomToCursor,
+    ResetFlySpeed,
+};
+
+/**
  * Represents a Viewport Modifiers value used by the viewport input, layout, and camera layer.
  */
 struct ViewportModifiers {
@@ -163,6 +202,27 @@ struct ViewportShortcut {
 };
 
 /**
+ * Stores per-frame semantic viewport navigation input resolved from raw bindings.
+ */
+struct ViewportNavigationInput {
+    bool orbitPressed = false;
+    bool orbitDown = false;
+    bool orbitReleased = false;
+    bool orbitSnapPressed = false;
+    bool orbitSnapDown = false;
+    bool orbitSnapReleased = false;
+    bool panPressed = false;
+    bool panDown = false;
+    bool panReleased = false;
+    bool flyPressed = false;
+    bool flyDown = false;
+    bool flyReleased = false;
+    bool zoomWheel = false;
+    bool zoomToCursorWheel = false;
+    bool resetFlySpeedPressed = false;
+};
+
+/**
  * Stores the Viewport Tool State data contract used by the viewport input, layout, and camera layer.
  */
 struct ViewportToolState {
@@ -178,6 +238,12 @@ struct ViewportInputFrame {
     bool viewportHovered = false;
     bool viewportFocused = false;
     bool textInputActive = false;
+    bool navigationActive = false;
+    bool flyNavigationActive = false;
+    bool orbitNavigationActive = false;
+    bool panNavigationActive = false;
+    bool modalToolActive = false;
+    bool activeToolOwnsViewport = false;
     bool middlePressed = false;
     bool middleDown = false;
     bool middleReleased = false;
@@ -193,6 +259,13 @@ struct ViewportInputFrame {
     ViewportModifiers modifiers = {};
     QVec3 flyLocalDirection = {};
     std::vector<ViewportKey> pressedKeys;
+    std::vector<QuaderInputChord> pressedInputChords;
+    std::vector<QuaderInputChord> activeInputChords;
+    std::vector<QuaderInputChord> releasedInputChords;
+    std::vector<QuaderInputChord> wheelInputChords;
+    std::vector<ViewportShortcut> resolvedShortcuts;
+    ViewportNavigationInput navigationBindings = {};
+    bool shortcutResolverActive = false;
 };
 
 /**
@@ -246,6 +319,8 @@ public:
     const ViewportToolState& state() const { return state_; }
     bool navigating() const { return navigationMode_ != ViewportDragMode::None; }
     bool flyNavigating() const { return navigationMode_ == ViewportDragMode::Fly; }
+    bool orbitNavigating() const { return navigationMode_ == ViewportDragMode::Orbit || navigationMode_ == ViewportDragMode::OrbitSnap; }
+    bool panNavigating() const { return navigationMode_ == ViewportDragMode::Pan; }
     bool flyCursorCaptureActive() const { return flyCursorCaptureActive_; }
     bool flyHudActive() const { return flyHudActive_; }
     const class ViewportTool* activeTool() const;
@@ -257,6 +332,7 @@ private:
 
     ViewportToolState state_;
     ViewportDragMode navigationMode_ = ViewportDragMode::None;
+    ViewportInputActionKind activeNavigationAction_ = ViewportInputActionKind::None;
     bool navigationUsesRightButton_ = false;
     bool flyCursorCaptureActive_ = false;
     bool flyHudActive_ = false;

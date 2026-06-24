@@ -57,7 +57,7 @@ void ResizableSplitController::beginDrag(
 std::optional<ResizableSplitResizeResult> ResizableSplitController::updateDrag(
         float pointerX,
         float pointerY,
-        float dpRatio) const {
+        float dpRatio) {
     if (!active_) {
         return std::nullopt;
     }
@@ -70,6 +70,12 @@ std::optional<ResizableSplitResizeResult> ResizableSplitController::updateDrag(
     const int nextSizeDp = collapsed ?
             std::max(0, collapse_.collapsedSizeDp) :
             std::clamp(proposedSizeDp, minSizeDp_, maxSizeDp_);
+    const bool waitingForCollapseThreshold =
+            collapse_.enabled && proposedSizeDp < minSizeDp_ && proposedSizeDp >= collapseThresholdDp_;
+    if (!collapsed && proposedSizeDp != nextSizeDp && !waitingForCollapseThreshold) {
+        startPointerDp_ = pointerDp;
+        startSizeDp_ = nextSizeDp;
+    }
 
     return ResizableSplitResizeResult{
             .id = activeHandleId_,

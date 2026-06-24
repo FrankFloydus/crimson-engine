@@ -20,6 +20,7 @@ public:
         , project(session)
         , tools(session)
         , commands(api, viewports, tools)
+        , preferences(commands)
         , render(session, api.query()) {}
 
     QuaderApi api;

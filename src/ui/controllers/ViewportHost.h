@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -87,7 +88,11 @@ private:
     void spawnWindowedViewport();
     void shutdownWindowedViewports();
     bool processWindowedViewportEvent(const SDL_Event& event);
-    void handleWindowedViewportFrames(ViewportWorkspaceService& workspace, SceneDocument& document, const AssetRegistry& assets);
+    void handleWindowedViewportFrames(
+            QuaderEditorApi& editor,
+            ViewportWorkspaceService& workspace,
+            SceneDocument& document,
+            const AssetRegistry& assets);
     void prepareWindowedViewports(ViewportWorkspaceService& workspace);
     ViewportInputFrame buildWindowedViewportInputFrame(const ViewportWindowInstance& instance) const;
     void setWindowedViewportCursorCaptured(ViewportWindowInstance& instance, bool captured);
@@ -119,6 +124,11 @@ private:
     float wheelY_ = 0.0f;
     std::unordered_set<ViewportKey> keysDown_;
     std::vector<ViewportKey> pressedKeys_;
+    std::unordered_set<QuaderMouseButton> mouseButtonsDown_;
+    std::unordered_map<QuaderMouseButton, QuaderInputChord> mouseDragChordsDown_;
+    std::vector<QuaderInputChord> pressedInputChords_;
+    std::vector<QuaderInputChord> activeInputChords_;
+    std::vector<QuaderInputChord> releasedInputChords_;
     bool relativeMouseCaptured_ = false;
     bool relativeMouseCaptureWarningIssued_ = false;
     std::vector<std::unique_ptr<ViewportWindowInstance>> windowedViewports_;

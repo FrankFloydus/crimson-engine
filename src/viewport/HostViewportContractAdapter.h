@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <editor/metadata/host_contract.h>
 
@@ -32,8 +34,75 @@ struct ViewportHostDefaults {
     double selectionBoxDragThresholdPixels = 4.0;
 };
 
+/**
+ * Represents one viewport shortcut binding projected from editor metadata into viewport terms.
+ */
+struct ViewportShortcutBindingDescriptor {
+    std::string targetId;
+    std::string shortcut;
+};
+
+/**
+ * Represents one grid preset shortcut binding projected from editor metadata into viewport terms.
+ */
+struct ViewportGridShortcutBindingDescriptor {
+    int preset = 0;
+    std::string shortcut;
+};
+
 inline bool viewportHostContractAvailable() {
     return true;
+}
+
+inline std::string viewportShortcutLabel(
+        bool primary,
+        bool shift,
+        bool alt,
+        std::string_view key) {
+    std::string shortcut;
+    if (primary) {
+        shortcut += "Ctrl+";
+    }
+    if (shift) {
+        shortcut += "Shift+";
+    }
+    if (alt) {
+        shortcut += "Alt+";
+    }
+    shortcut += key;
+    return shortcut;
+}
+
+inline std::vector<ViewportShortcutBindingDescriptor> viewportShortcutBindingCatalog() {
+    std::vector<ViewportShortcutBindingDescriptor> bindings;
+    for (const quader_host_contract::HostShortcutDescriptor& descriptor :
+            quader_host_contract::shortcut_catalog()) {
+        bindings.push_back({
+                .targetId = std::string(descriptor.target_id),
+                .shortcut = viewportShortcutLabel(
+                        descriptor.primary_modifier,
+                        descriptor.shift,
+                        descriptor.alt,
+                        descriptor.key),
+        });
+    }
+    return bindings;
+}
+
+inline std::vector<ViewportGridShortcutBindingDescriptor> viewportGridShortcutBindingCatalog() {
+    std::vector<ViewportGridShortcutBindingDescriptor> bindings;
+    const auto presets = quader_host_contract::grid_preset_catalog();
+    bindings.reserve(presets.size());
+    for (std::size_t index = 0u; index < presets.size(); ++index) {
+        if (presets[index].shortcut.empty()) {
+            continue;
+        }
+        bindings.push_back({
+                .preset = static_cast<int>(index + 1u),
+                .shortcut = std::string(presets[index].shortcut),
+        });
+    }
+    return bindings;
 }
 
 inline ViewportHostDefaults viewportHostDefaults() {
@@ -154,12 +223,28 @@ inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
         return text == "W";
     case ViewportKey::D:
         return text == "D";
+    case ViewportKey::E:
+        return text == "E";
+    case ViewportKey::F:
+        return text == "F";
+    case ViewportKey::G:
+        return text == "G";
     case ViewportKey::H:
         return text == "H";
     case ViewportKey::I:
         return text == "I";
+    case ViewportKey::J:
+        return text == "J";
+    case ViewportKey::K:
+        return text == "K";
+    case ViewportKey::L:
+        return text == "L";
     case ViewportKey::M:
         return text == "M";
+    case ViewportKey::N:
+        return text == "N";
+    case ViewportKey::O:
+        return text == "O";
     case ViewportKey::R:
         return text == "R";
     case ViewportKey::S:
@@ -172,6 +257,8 @@ inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
         return text == "P";
     case ViewportKey::T:
         return text == "T";
+    case ViewportKey::U:
+        return text == "U";
     case ViewportKey::V:
         return text == "V";
     case ViewportKey::X:
@@ -180,6 +267,8 @@ inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
         return text == "Y";
     case ViewportKey::Z:
         return text == "Z";
+    case ViewportKey::Number0:
+        return text == "0" || text == "Keypad0";
     case ViewportKey::Number1:
         return text == "1" || text == "Keypad1";
     case ViewportKey::Number2:
@@ -190,10 +279,30 @@ inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
         return text == "4" || text == "Keypad4";
     case ViewportKey::Number5:
         return text == "5" || text == "Keypad5";
+    case ViewportKey::Number6:
+        return text == "6" || text == "Keypad6";
+    case ViewportKey::Number7:
+        return text == "7" || text == "Keypad7";
+    case ViewportKey::Number8:
+        return text == "8" || text == "Keypad8";
+    case ViewportKey::Number9:
+        return text == "9" || text == "Keypad9";
     case ViewportKey::Home:
         return text == "Home";
-    case ViewportKey::F:
-        return text == "F";
+    case ViewportKey::End:
+        return text == "End";
+    case ViewportKey::PageUp:
+        return text == "PageUp";
+    case ViewportKey::PageDown:
+        return text == "PageDown";
+    case ViewportKey::Left:
+        return text == "Left";
+    case ViewportKey::Right:
+        return text == "Right";
+    case ViewportKey::Up:
+        return text == "Up";
+    case ViewportKey::Down:
+        return text == "Down";
     case ViewportKey::Space:
         return text == "Space";
     case ViewportKey::F1:
@@ -216,12 +325,20 @@ inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
         return text == "F9";
     case ViewportKey::F10:
         return text == "F10";
+    case ViewportKey::F11:
+        return text == "F11";
+    case ViewportKey::F12:
+        return text == "F12";
     case ViewportKey::Escape:
         return text == "Escape";
     case ViewportKey::Delete:
         return text == "Delete";
     case ViewportKey::Backspace:
         return text == "Backspace";
+    case ViewportKey::Enter:
+        return text == "Enter";
+    case ViewportKey::Tab:
+        return text == "Tab";
     }
     return false;
 }

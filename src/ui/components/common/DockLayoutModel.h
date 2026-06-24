@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/components/common/UITabStripModel.h"
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -32,10 +34,25 @@ struct DockPanelPlacement {
     DockLocation location = DockLocation::Sidebar;
 };
 
+/// Stores the active panel selection for one dock location.
+struct DockLocationActivePanel {
+    DockLocation location = DockLocation::Sidebar;
+    std::string panelId;
+};
+
+/// Stores the visible split panes for one dock location.
+struct DockLocationSplitPanels {
+    DockLocation location = DockLocation::Sidebar;
+    std::string tabPanelId;
+    std::vector<std::string> panelIds;
+    std::vector<int> panelSizesDp;
+};
+
 /// Stores backend-neutral dock placement state for known UI panels.
 struct DockLayoutModel {
     std::vector<DockPanelPlacement> panels;
-    std::string activePanelId;
+    std::vector<DockLocationActivePanel> activePanels;
+    std::vector<DockLocationSplitPanels> splitPanels;
 };
 
 [[nodiscard]] std::string_view dockLocationName(DockLocation location);
@@ -50,6 +67,46 @@ struct DockLayoutModel {
 [[nodiscard]] std::vector<std::string_view> dockPanelsInLocation(
         const DockLayoutModel& model,
         DockLocation location);
+[[nodiscard]] std::vector<std::string_view> dockTabPanelsInLocation(
+        const DockLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] std::optional<std::string_view> dockActivePanelId(
+        const DockLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] UITabStripModel dockTabStripForLocation(
+        const DockLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] std::vector<std::string_view> dockSplitPanelsInLocation(
+        const DockLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] std::optional<int> dockSplitPanelSizeDp(
+        const DockLayoutModel& model,
+        DockLocation location,
+        std::string_view panelId);
+[[nodiscard]] bool dockSetActivePanel(
+        DockLayoutModel& model,
+        DockLocation location,
+        std::string_view panelId);
+[[nodiscard]] bool dockSetSplitPanels(
+        DockLayoutModel& model,
+        DockLocation location,
+        const std::vector<std::string_view>& panelIds);
+[[nodiscard]] bool dockSetSplitPanels(
+        DockLayoutModel& model,
+        DockLocation location,
+        const std::vector<std::string_view>& panelIds,
+        std::string_view tabPanelId);
+[[nodiscard]] bool dockSplitPanelWithPanel(
+        DockLayoutModel& model,
+        std::string_view panelId,
+        DockLocation location,
+        std::string_view targetPanelId,
+        DockPanelInsertPosition position);
+[[nodiscard]] bool dockSetSplitPanelSizeDp(
+        DockLayoutModel& model,
+        DockLocation location,
+        std::string_view panelId,
+        int sizeDp);
 [[nodiscard]] bool dockMovePanelToLocation(
         DockLayoutModel& model,
         std::string_view panelId,

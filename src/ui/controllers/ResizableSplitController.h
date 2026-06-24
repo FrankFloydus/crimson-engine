@@ -27,7 +27,7 @@ public:
     [[nodiscard]] std::optional<ResizableSplitAxis> axisAt(float x, float y) const;
 
     void beginDrag(const ResizableSplitHandle& handle, float pointerX, float pointerY, float dpRatio);
-    [[nodiscard]] std::optional<ResizableSplitResizeResult> updateDrag(float pointerX, float pointerY, float dpRatio) const;
+    [[nodiscard]] std::optional<ResizableSplitResizeResult> updateDrag(float pointerX, float pointerY, float dpRatio);
     void endDrag();
 
     [[nodiscard]] bool active() const { return active_; }

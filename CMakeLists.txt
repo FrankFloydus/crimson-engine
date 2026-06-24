@@ -163,10 +163,13 @@ add_library(quader_core STATIC
     src/ui/ConsoleModel.cpp
     src/ui/backends/rml/MainLayoutRmlBuilder.cpp
     src/ui/components/common/DockLayoutModel.cpp
+    src/ui/components/common/UITabStripModel.cpp
     src/ui/components/organisms/MainLayoutModel.cpp
     src/ui/controllers/MainLayoutController.cpp
     src/ui/controllers/MainLayoutDockDragController.cpp
+    src/ui/controllers/MainLayoutSashRegistry.cpp
     src/ui/controllers/ResizableSplitController.cpp
+    src/ui/controllers/UIDragDropController.cpp
     src/ui/DebugPaletteView.cpp
     src/ui/UIUtilityTokens.cpp
     src/ui/ViewportContextMenuPolicy.cpp
@@ -445,11 +448,8 @@ add_custom_command(TARGET quader POST_BUILD
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/rcss/app-shell.rcss"
             "$<TARGET_FILE_DIR:quader>/ui/rcss/app-shell.rcss"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tokens/app-palette.tokens.json"
-            "$<TARGET_FILE_DIR:quader>/ui/tokens/app-palette.tokens.json"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tokens/app-utility.tokens.json"
-            "$<TARGET_FILE_DIR:quader>/ui/tokens/app-utility.tokens.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ui/tokens/app-ui.tokens.json"
+            "$<TARGET_FILE_DIR:quader>/ui/tokens/app-ui.tokens.json"
     VERBATIM)
 
 if(EXISTS "${QUADER_DEFAULT_ALBEDO_TEXTURE}" AND EXISTS "${QUADER_DEFAULT_ROUGHNESS_TEXTURE}")

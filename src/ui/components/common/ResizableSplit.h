@@ -6,20 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/components/common/UIGeometry.h"
+
 #include <optional>
 #include <string>
 
 namespace quader {
 
 inline constexpr int kResizableSplitDefaultHitThicknessDp = 12;
-
-/// Stores a backend-neutral rectangle in framebuffer pixels.
-struct UIPixelRect {
-    int left = 0;
-    int top = 0;
-    int width = 0;
-    int height = 0;
-};
 
 /// Identifies the pointer axis that changes a resizable split size.
 enum class ResizableSplitAxis {

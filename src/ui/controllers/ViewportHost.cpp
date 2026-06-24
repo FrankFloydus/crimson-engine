@@ -13,6 +13,7 @@
 #include "render/RenderLayers.h"
 #include "render/ViewportOverlayFrame.h"
 #include "scene/SceneBounds.h"
+#include "ui/ViewportShortcutController.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "viewport/ViewportWorkspaceService.h"
 
@@ -27,96 +28,437 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 
 namespace quader {
 namespace {
 
-std::optional<ViewportKey> viewportKeyFromSdlKey(SDL_Keycode key) {
+QuaderInputChord keyboardInputChord(QuaderKeyCode key, ViewportModifiers modifiers) {
+    return {
+            .primary = modifiers.primary,
+            .shift = modifiers.shift,
+            .alt = modifiers.alt,
+            .device = QuaderInputDevice::Keyboard,
+            .key = key,
+    };
+}
+
+QuaderInputChord mouseInputChord(
+        QuaderMouseButton button,
+        QuaderInputGesture gesture,
+        ViewportModifiers modifiers) {
+    return {
+            .primary = modifiers.primary,
+            .shift = modifiers.shift,
+            .alt = modifiers.alt,
+            .device = QuaderInputDevice::Mouse,
+            .mouseButton = button,
+            .gesture = gesture,
+    };
+}
+
+QuaderInputChord wheelInputChord(QuaderInputGesture gesture, ViewportModifiers modifiers) {
+    return {
+            .primary = modifiers.primary,
+            .shift = modifiers.shift,
+            .alt = modifiers.alt,
+            .device = QuaderInputDevice::Mouse,
+            .gesture = gesture,
+    };
+}
+
+std::optional<QuaderKeyCode> quaderKeyCodeFromSdlKey(SDL_Keycode key) {
     switch (key) {
     case SDLK_A:
-        return ViewportKey::A;
+        return QuaderKeyCode::A;
     case SDLK_B:
-        return ViewportKey::B;
+        return QuaderKeyCode::B;
     case SDLK_C:
-        return ViewportKey::C;
+        return QuaderKeyCode::C;
     case SDLK_D:
-        return ViewportKey::D;
+        return QuaderKeyCode::D;
+    case SDLK_E:
+        return QuaderKeyCode::E;
     case SDLK_F:
-        return ViewportKey::F;
+        return QuaderKeyCode::F;
+    case SDLK_G:
+        return QuaderKeyCode::G;
     case SDLK_H:
-        return ViewportKey::H;
+        return QuaderKeyCode::H;
     case SDLK_I:
-        return ViewportKey::I;
+        return QuaderKeyCode::I;
+    case SDLK_J:
+        return QuaderKeyCode::J;
+    case SDLK_K:
+        return QuaderKeyCode::K;
+    case SDLK_L:
+        return QuaderKeyCode::L;
     case SDLK_M:
-        return ViewportKey::M;
+        return QuaderKeyCode::M;
+    case SDLK_N:
+        return QuaderKeyCode::N;
+    case SDLK_O:
+        return QuaderKeyCode::O;
     case SDLK_P:
-        return ViewportKey::P;
+        return QuaderKeyCode::P;
     case SDLK_Q:
-        return ViewportKey::Q;
+        return QuaderKeyCode::Q;
     case SDLK_R:
-        return ViewportKey::R;
+        return QuaderKeyCode::R;
     case SDLK_S:
-        return ViewportKey::S;
+        return QuaderKeyCode::S;
     case SDLK_T:
-        return ViewportKey::T;
+        return QuaderKeyCode::T;
+    case SDLK_U:
+        return QuaderKeyCode::U;
     case SDLK_V:
-        return ViewportKey::V;
+        return QuaderKeyCode::V;
     case SDLK_W:
-        return ViewportKey::W;
+        return QuaderKeyCode::W;
     case SDLK_X:
-        return ViewportKey::X;
+        return QuaderKeyCode::X;
     case SDLK_Y:
-        return ViewportKey::Y;
+        return QuaderKeyCode::Y;
     case SDLK_Z:
-        return ViewportKey::Z;
+        return QuaderKeyCode::Z;
+    case SDLK_0:
+        return QuaderKeyCode::Digit0;
     case SDLK_1:
-    case SDLK_KP_1:
-        return ViewportKey::Number1;
+        return QuaderKeyCode::Digit1;
     case SDLK_2:
-    case SDLK_KP_2:
-        return ViewportKey::Number2;
+        return QuaderKeyCode::Digit2;
     case SDLK_3:
-    case SDLK_KP_3:
-        return ViewportKey::Number3;
+        return QuaderKeyCode::Digit3;
     case SDLK_4:
-    case SDLK_KP_4:
-        return ViewportKey::Number4;
+        return QuaderKeyCode::Digit4;
     case SDLK_5:
+        return QuaderKeyCode::Digit5;
+    case SDLK_6:
+        return QuaderKeyCode::Digit6;
+    case SDLK_7:
+        return QuaderKeyCode::Digit7;
+    case SDLK_8:
+        return QuaderKeyCode::Digit8;
+    case SDLK_9:
+        return QuaderKeyCode::Digit9;
+    case SDLK_KP_0:
+        return QuaderKeyCode::Numpad0;
+    case SDLK_KP_1:
+        return QuaderKeyCode::Numpad1;
+    case SDLK_KP_2:
+        return QuaderKeyCode::Numpad2;
+    case SDLK_KP_3:
+        return QuaderKeyCode::Numpad3;
+    case SDLK_KP_4:
+        return QuaderKeyCode::Numpad4;
     case SDLK_KP_5:
-        return ViewportKey::Number5;
+        return QuaderKeyCode::Numpad5;
+    case SDLK_KP_6:
+        return QuaderKeyCode::Numpad6;
+    case SDLK_KP_7:
+        return QuaderKeyCode::Numpad7;
+    case SDLK_KP_8:
+        return QuaderKeyCode::Numpad8;
+    case SDLK_KP_9:
+        return QuaderKeyCode::Numpad9;
+    case SDLK_KP_PLUS:
+        return QuaderKeyCode::NumpadAdd;
+    case SDLK_KP_MINUS:
+        return QuaderKeyCode::NumpadSubtract;
+    case SDLK_KP_MULTIPLY:
+        return QuaderKeyCode::NumpadMultiply;
+    case SDLK_KP_DIVIDE:
+        return QuaderKeyCode::NumpadDivide;
+    case SDLK_KP_PERIOD:
+        return QuaderKeyCode::NumpadDecimal;
     case SDLK_HOME:
-        return ViewportKey::Home;
+        return QuaderKeyCode::Home;
+    case SDLK_END:
+        return QuaderKeyCode::End;
+    case SDLK_PAGEUP:
+        return QuaderKeyCode::PageUp;
+    case SDLK_PAGEDOWN:
+        return QuaderKeyCode::PageDown;
+    case SDLK_LEFT:
+        return QuaderKeyCode::Left;
+    case SDLK_RIGHT:
+        return QuaderKeyCode::Right;
+    case SDLK_UP:
+        return QuaderKeyCode::Up;
+    case SDLK_DOWN:
+        return QuaderKeyCode::Down;
+    case SDLK_COMMA:
+        return QuaderKeyCode::Comma;
+    case SDLK_PERIOD:
+        return QuaderKeyCode::Period;
+    case SDLK_SLASH:
+        return QuaderKeyCode::Slash;
+    case SDLK_BACKSLASH:
+        return QuaderKeyCode::Backslash;
+    case SDLK_SEMICOLON:
+        return QuaderKeyCode::Semicolon;
+    case SDLK_APOSTROPHE:
+        return QuaderKeyCode::Apostrophe;
+    case SDLK_LEFTBRACKET:
+        return QuaderKeyCode::LeftBracket;
+    case SDLK_RIGHTBRACKET:
+        return QuaderKeyCode::RightBracket;
+    case SDLK_MINUS:
+        return QuaderKeyCode::Minus;
+    case SDLK_EQUALS:
+        return QuaderKeyCode::Equal;
+    case SDLK_GRAVE:
+        return QuaderKeyCode::Grave;
     case SDLK_SPACE:
-        return ViewportKey::Space;
+        return QuaderKeyCode::Space;
+    case SDLK_INSERT:
+        return QuaderKeyCode::Insert;
     case SDLK_F1:
-        return ViewportKey::F1;
+        return QuaderKeyCode::F1;
     case SDLK_F2:
-        return ViewportKey::F2;
+        return QuaderKeyCode::F2;
     case SDLK_F3:
-        return ViewportKey::F3;
+        return QuaderKeyCode::F3;
     case SDLK_F4:
-        return ViewportKey::F4;
+        return QuaderKeyCode::F4;
     case SDLK_F5:
-        return ViewportKey::F5;
+        return QuaderKeyCode::F5;
     case SDLK_F6:
-        return ViewportKey::F6;
+        return QuaderKeyCode::F6;
     case SDLK_F7:
-        return ViewportKey::F7;
+        return QuaderKeyCode::F7;
     case SDLK_F8:
-        return ViewportKey::F8;
+        return QuaderKeyCode::F8;
     case SDLK_F9:
-        return ViewportKey::F9;
+        return QuaderKeyCode::F9;
     case SDLK_F10:
-        return ViewportKey::F10;
+        return QuaderKeyCode::F10;
+    case SDLK_F11:
+        return QuaderKeyCode::F11;
+    case SDLK_F12:
+        return QuaderKeyCode::F12;
+    case SDLK_F13:
+        return QuaderKeyCode::F13;
+    case SDLK_F14:
+        return QuaderKeyCode::F14;
+    case SDLK_F15:
+        return QuaderKeyCode::F15;
+    case SDLK_F16:
+        return QuaderKeyCode::F16;
+    case SDLK_F17:
+        return QuaderKeyCode::F17;
+    case SDLK_F18:
+        return QuaderKeyCode::F18;
+    case SDLK_F19:
+        return QuaderKeyCode::F19;
+    case SDLK_F20:
+        return QuaderKeyCode::F20;
+    case SDLK_F21:
+        return QuaderKeyCode::F21;
+    case SDLK_F22:
+        return QuaderKeyCode::F22;
+    case SDLK_F23:
+        return QuaderKeyCode::F23;
+    case SDLK_F24:
+        return QuaderKeyCode::F24;
     case SDLK_ESCAPE:
-        return ViewportKey::Escape;
+        return QuaderKeyCode::Escape;
     case SDLK_DELETE:
-        return ViewportKey::Delete;
+        return QuaderKeyCode::Delete;
     case SDLK_BACKSPACE:
-        return ViewportKey::Backspace;
+        return QuaderKeyCode::Backspace;
+    case SDLK_RETURN:
+    case SDLK_RETURN2:
+        return QuaderKeyCode::Enter;
+    case SDLK_KP_ENTER:
+        return QuaderKeyCode::NumpadEnter;
+    case SDLK_TAB:
+        return QuaderKeyCode::Tab;
     default:
         return std::nullopt;
     }
+}
+
+std::optional<ViewportKey> viewportKeyFromKeyCode(QuaderKeyCode key) {
+    switch (key) {
+    case QuaderKeyCode::A:
+        return ViewportKey::A;
+    case QuaderKeyCode::B:
+        return ViewportKey::B;
+    case QuaderKeyCode::C:
+        return ViewportKey::C;
+    case QuaderKeyCode::D:
+        return ViewportKey::D;
+    case QuaderKeyCode::E:
+        return ViewportKey::E;
+    case QuaderKeyCode::F:
+        return ViewportKey::F;
+    case QuaderKeyCode::G:
+        return ViewportKey::G;
+    case QuaderKeyCode::H:
+        return ViewportKey::H;
+    case QuaderKeyCode::I:
+        return ViewportKey::I;
+    case QuaderKeyCode::J:
+        return ViewportKey::J;
+    case QuaderKeyCode::K:
+        return ViewportKey::K;
+    case QuaderKeyCode::L:
+        return ViewportKey::L;
+    case QuaderKeyCode::M:
+        return ViewportKey::M;
+    case QuaderKeyCode::N:
+        return ViewportKey::N;
+    case QuaderKeyCode::O:
+        return ViewportKey::O;
+    case QuaderKeyCode::P:
+        return ViewportKey::P;
+    case QuaderKeyCode::Q:
+        return ViewportKey::Q;
+    case QuaderKeyCode::R:
+        return ViewportKey::R;
+    case QuaderKeyCode::S:
+        return ViewportKey::S;
+    case QuaderKeyCode::T:
+        return ViewportKey::T;
+    case QuaderKeyCode::U:
+        return ViewportKey::U;
+    case QuaderKeyCode::V:
+        return ViewportKey::V;
+    case QuaderKeyCode::W:
+        return ViewportKey::W;
+    case QuaderKeyCode::X:
+        return ViewportKey::X;
+    case QuaderKeyCode::Y:
+        return ViewportKey::Y;
+    case QuaderKeyCode::Z:
+        return ViewportKey::Z;
+    case QuaderKeyCode::Digit0:
+    case QuaderKeyCode::Numpad0:
+        return ViewportKey::Number0;
+    case QuaderKeyCode::Digit1:
+    case QuaderKeyCode::Numpad1:
+        return ViewportKey::Number1;
+    case QuaderKeyCode::Digit2:
+    case QuaderKeyCode::Numpad2:
+        return ViewportKey::Number2;
+    case QuaderKeyCode::Digit3:
+    case QuaderKeyCode::Numpad3:
+        return ViewportKey::Number3;
+    case QuaderKeyCode::Digit4:
+    case QuaderKeyCode::Numpad4:
+        return ViewportKey::Number4;
+    case QuaderKeyCode::Digit5:
+    case QuaderKeyCode::Numpad5:
+        return ViewportKey::Number5;
+    case QuaderKeyCode::Digit6:
+    case QuaderKeyCode::Numpad6:
+        return ViewportKey::Number6;
+    case QuaderKeyCode::Digit7:
+    case QuaderKeyCode::Numpad7:
+        return ViewportKey::Number7;
+    case QuaderKeyCode::Digit8:
+    case QuaderKeyCode::Numpad8:
+        return ViewportKey::Number8;
+    case QuaderKeyCode::Digit9:
+    case QuaderKeyCode::Numpad9:
+        return ViewportKey::Number9;
+    case QuaderKeyCode::Home:
+        return ViewportKey::Home;
+    case QuaderKeyCode::End:
+        return ViewportKey::End;
+    case QuaderKeyCode::PageUp:
+        return ViewportKey::PageUp;
+    case QuaderKeyCode::PageDown:
+        return ViewportKey::PageDown;
+    case QuaderKeyCode::Left:
+        return ViewportKey::Left;
+    case QuaderKeyCode::Right:
+        return ViewportKey::Right;
+    case QuaderKeyCode::Up:
+        return ViewportKey::Up;
+    case QuaderKeyCode::Down:
+        return ViewportKey::Down;
+    case QuaderKeyCode::Space:
+        return ViewportKey::Space;
+    case QuaderKeyCode::F1:
+        return ViewportKey::F1;
+    case QuaderKeyCode::F2:
+        return ViewportKey::F2;
+    case QuaderKeyCode::F3:
+        return ViewportKey::F3;
+    case QuaderKeyCode::F4:
+        return ViewportKey::F4;
+    case QuaderKeyCode::F5:
+        return ViewportKey::F5;
+    case QuaderKeyCode::F6:
+        return ViewportKey::F6;
+    case QuaderKeyCode::F7:
+        return ViewportKey::F7;
+    case QuaderKeyCode::F8:
+        return ViewportKey::F8;
+    case QuaderKeyCode::F9:
+        return ViewportKey::F9;
+    case QuaderKeyCode::F10:
+        return ViewportKey::F10;
+    case QuaderKeyCode::F11:
+        return ViewportKey::F11;
+    case QuaderKeyCode::F12:
+        return ViewportKey::F12;
+    case QuaderKeyCode::Escape:
+        return ViewportKey::Escape;
+    case QuaderKeyCode::Delete:
+        return ViewportKey::Delete;
+    case QuaderKeyCode::Backspace:
+        return ViewportKey::Backspace;
+    case QuaderKeyCode::Enter:
+    case QuaderKeyCode::NumpadEnter:
+        return ViewportKey::Enter;
+    case QuaderKeyCode::Tab:
+        return ViewportKey::Tab;
+    default:
+        return std::nullopt;
+    }
+}
+
+std::optional<QuaderMouseButton> mouseButtonFromSdlButton(std::uint8_t button) {
+    switch (button) {
+    case SDL_BUTTON_LEFT:
+        return QuaderMouseButton::Left;
+    case SDL_BUTTON_MIDDLE:
+        return QuaderMouseButton::Middle;
+    case SDL_BUTTON_RIGHT:
+        return QuaderMouseButton::Right;
+    case SDL_BUTTON_X1:
+        return QuaderMouseButton::Back;
+    case SDL_BUTTON_X2:
+        return QuaderMouseButton::Forward;
+    default:
+        return std::nullopt;
+    }
+}
+
+void appendActiveMouseDragChords(
+        const std::unordered_map<QuaderMouseButton, QuaderInputChord>& dragChordsDown,
+        std::vector<QuaderInputChord>& chords) {
+    for (const auto& [button, chord] : dragChordsDown) {
+        (void)button;
+        chords.push_back(chord);
+    }
+}
+
+void appendWheelChords(
+        float wheelY,
+        ViewportModifiers modifiers,
+        std::vector<QuaderInputChord>& chords) {
+    if (wheelY == 0.0f) {
+        return;
+    }
+    chords.push_back(wheelInputChord(QuaderInputGesture::Wheel, modifiers));
+    chords.push_back(wheelInputChord(
+            wheelY > 0.0f ? QuaderInputGesture::WheelUp : QuaderInputGesture::WheelDown,
+            modifiers));
 }
 
 void focusDocument(SceneDocument& document, const AssetRegistry& assets, ViewportCameraController& camera) {
@@ -155,6 +497,211 @@ std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
     }
 }
 
+void logCommandFailure(std::string_view source, const QuaderApiVoidResult& result) {
+    if (result.ok) {
+        return;
+    }
+    LOG_ERROR("{} failed: {}", source, result.message.empty() ? "Command failed." : result.message);
+}
+
+void markNavigationPressed(ViewportNavigationInput& navigation, ViewportInputActionKind action) {
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        navigation.orbitPressed = true;
+        navigation.orbitDown = true;
+        break;
+    case ViewportInputActionKind::OrbitSnap:
+        navigation.orbitSnapPressed = true;
+        navigation.orbitSnapDown = true;
+        break;
+    case ViewportInputActionKind::Pan:
+        navigation.panPressed = true;
+        navigation.panDown = true;
+        break;
+    case ViewportInputActionKind::Fly:
+        navigation.flyPressed = true;
+        navigation.flyDown = true;
+        break;
+    case ViewportInputActionKind::ResetFlySpeed:
+        navigation.resetFlySpeedPressed = true;
+        break;
+    default:
+        break;
+    }
+}
+
+void markNavigationDown(ViewportNavigationInput& navigation, ViewportInputActionKind action) {
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        navigation.orbitDown = true;
+        break;
+    case ViewportInputActionKind::OrbitSnap:
+        navigation.orbitSnapDown = true;
+        break;
+    case ViewportInputActionKind::Pan:
+        navigation.panDown = true;
+        break;
+    case ViewportInputActionKind::Fly:
+        navigation.flyDown = true;
+        break;
+    case ViewportInputActionKind::Zoom:
+        navigation.zoomWheel = true;
+        break;
+    case ViewportInputActionKind::ZoomToCursor:
+        navigation.zoomToCursorWheel = true;
+        break;
+    default:
+        break;
+    }
+}
+
+void markNavigationReleased(ViewportNavigationInput& navigation, ViewportInputActionKind action) {
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        navigation.orbitReleased = true;
+        break;
+    case ViewportInputActionKind::OrbitSnap:
+        navigation.orbitSnapReleased = true;
+        break;
+    case ViewportInputActionKind::Pan:
+        navigation.panReleased = true;
+        break;
+    case ViewportInputActionKind::Fly:
+        navigation.flyReleased = true;
+        break;
+    default:
+        break;
+    }
+}
+
+bool resolveViewportInputActionForChord(
+        QuaderEditorApi& editor,
+        const ViewportToolState& state,
+        const ViewportInputFrame& input,
+        const QuaderInputChord& chord,
+        ViewportInputActionKind& action) {
+    return editor.commands().resolveViewportInputAction(
+            chord,
+            state,
+            input.viewportFocused,
+            input.textInputActive,
+            action,
+            QuaderViewportKeybindingContext{
+                    .viewportHovered = input.viewportHovered,
+                    .navigationActive = input.navigationActive,
+                    .flyNavigationActive = input.flyNavigationActive,
+                    .orbitNavigationActive = input.orbitNavigationActive,
+                    .panNavigationActive = input.panNavigationActive,
+                    .modalToolActive = input.modalToolActive,
+                    .activeToolOwnsViewport = input.activeToolOwnsViewport,
+            });
+}
+
+QuaderViewportKeybindingContext keybindingContextFromInput(const ViewportInputFrame& input) {
+    return {
+            .viewportHovered = input.viewportHovered,
+            .navigationActive = input.navigationActive,
+            .flyNavigationActive = input.flyNavigationActive,
+            .orbitNavigationActive = input.orbitNavigationActive,
+            .panNavigationActive = input.panNavigationActive,
+            .modalToolActive = input.modalToolActive,
+            .activeToolOwnsViewport = input.activeToolOwnsViewport,
+    };
+}
+
+void resolveKeybindingsForFrame(
+        QuaderEditorApi& editor,
+        const ViewportToolState& state,
+        ViewportInputFrame& input) {
+    input.shortcutResolverActive = true;
+    input.resolvedShortcuts.clear();
+    input.navigationBindings = {};
+    if (!input.viewportFocused || input.textInputActive) {
+        editor.commands().resetPendingKeybindingChord();
+        return;
+    }
+
+    for (const QuaderInputChord& chord : input.activeInputChords) {
+        ViewportInputActionKind action = ViewportInputActionKind::None;
+        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
+            markNavigationDown(input.navigationBindings, action);
+        }
+    }
+    for (const QuaderInputChord& chord : input.releasedInputChords) {
+        ViewportInputActionKind action = ViewportInputActionKind::None;
+        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
+            markNavigationReleased(input.navigationBindings, action);
+        }
+    }
+    for (const QuaderInputChord& chord : input.wheelInputChords) {
+        ViewportInputActionKind action = ViewportInputActionKind::None;
+        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
+            markNavigationDown(input.navigationBindings, action);
+        }
+    }
+
+    for (const QuaderInputChord& chord : input.pressedInputChords) {
+        ViewportInputActionKind action = ViewportInputActionKind::None;
+        if (resolveViewportInputActionForChord(editor, state, input, chord, action)) {
+            markNavigationPressed(input.navigationBindings, action);
+            continue;
+        }
+
+        const QuaderViewportKeybindingContext keybindingContext = keybindingContextFromInput(input);
+        const QuaderViewportKeybindingDispatch dispatch = editor.commands().dispatchViewportInputBinding(
+                chord,
+                state,
+                input.viewportFocused,
+                input.textInputActive,
+                keybindingContext);
+        switch (dispatch.kind) {
+        case QuaderViewportKeybindingDispatch::Kind::PendingChord:
+            input.resolvedShortcuts.push_back(ViewportShortcut{});
+            return;
+        case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
+            input.resolvedShortcuts.push_back(dispatch.shortcut);
+            return;
+        case QuaderViewportKeybindingDispatch::Kind::Command:
+            logCommandFailure(
+                    "Keybinding command",
+                    editor.commands().execute(dispatch.commandId));
+            input.resolvedShortcuts.push_back(ViewportShortcut{});
+            return;
+        case QuaderViewportKeybindingDispatch::Kind::NoMatch:
+            break;
+        }
+    }
+
+    if (input.pressedInputChords.empty()) {
+        for (ViewportKey key : input.pressedKeys) {
+            const QuaderViewportKeybindingContext keybindingContext = keybindingContextFromInput(input);
+            const QuaderViewportKeybindingDispatch dispatch = editor.commands().dispatchViewportKeybinding(
+                    key,
+                    input.modifiers,
+                    state,
+                    input.viewportFocused,
+                    input.textInputActive,
+                    keybindingContext);
+            switch (dispatch.kind) {
+            case QuaderViewportKeybindingDispatch::Kind::PendingChord:
+                input.resolvedShortcuts.push_back(ViewportShortcut{});
+                return;
+            case QuaderViewportKeybindingDispatch::Kind::ViewportShortcut:
+                input.resolvedShortcuts.push_back(dispatch.shortcut);
+                return;
+            case QuaderViewportKeybindingDispatch::Kind::Command:
+                logCommandFailure(
+                        "Keybinding command",
+                        editor.commands().execute(dispatch.commandId));
+                input.resolvedShortcuts.push_back(ViewportShortcut{});
+                return;
+            case QuaderViewportKeybindingDispatch::Kind::NoMatch:
+                break;
+            }
+        }
+    }
+}
+
 } // namespace
 
 /**
@@ -185,6 +732,11 @@ struct ViewportHost::ViewportWindowInstance {
     float wheelY = 0.0f;
     std::unordered_set<ViewportKey> keysDown;
     std::vector<ViewportKey> pressedKeys;
+    std::unordered_set<QuaderMouseButton> mouseButtonsDown;
+    std::unordered_map<QuaderMouseButton, QuaderInputChord> mouseDragChordsDown;
+    std::vector<QuaderInputChord> pressedInputChords;
+    std::vector<QuaderInputChord> activeInputChords;
+    std::vector<QuaderInputChord> releasedInputChords;
     bool relativeMouseCaptured = false;
     bool relativeMouseCaptureWarningIssued = false;
 };
@@ -229,7 +781,8 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
 
     if (event.type == SDL_EVENT_KEY_DOWN &&
             event.key.key == SDLK_F12 &&
-            !event.key.repeat) {
+            !event.key.repeat &&
+            (SDL_GetModState() & (SDL_KMOD_CTRL | SDL_KMOD_GUI | SDL_KMOD_SHIFT | SDL_KMOD_ALT)) == 0) {
         spawnWindowedViewport();
         return true;
     }
@@ -253,6 +806,8 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
         mouseWindow_ = {event.button.x, event.button.y};
         const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
         const bool startedInMainViewport = down && mainViewportContainsWindowPoint(event.button.x, event.button.y);
+        const std::optional<QuaderMouseButton> mouseButton = mouseButtonFromSdlButton(event.button.button);
+        const ViewportModifiers modifiers = currentModifiers();
         if (event.button.button == SDL_BUTTON_MIDDLE) {
             if (down) {
                 middleDown_ = startedInMainViewport;
@@ -270,6 +825,25 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
                 rightDown_ = false;
             }
         }
+        if (mouseButton) {
+            if (down && startedInMainViewport) {
+                const QuaderInputChord dragChord = mouseInputChord(*mouseButton, QuaderInputGesture::Drag, modifiers);
+                mouseButtonsDown_.insert(*mouseButton);
+                mouseDragChordsDown_[*mouseButton] = dragChord;
+                pressedInputChords_.push_back(mouseInputChord(*mouseButton, QuaderInputGesture::Press, modifiers));
+                pressedInputChords_.push_back(dragChord);
+            } else if (!down) {
+                const bool wasDown = mouseButtonsDown_.contains(*mouseButton);
+                const auto dragChord = mouseDragChordsDown_.find(*mouseButton);
+                const std::optional<QuaderInputChord> releasedDragChord =
+                        dragChord == mouseDragChordsDown_.end() ? std::nullopt : std::optional<QuaderInputChord>(dragChord->second);
+                mouseButtonsDown_.erase(*mouseButton);
+                mouseDragChordsDown_.erase(*mouseButton);
+                if (wasDown && releasedDragChord) {
+                    releasedInputChords_.push_back(*releasedDragChord);
+                }
+            }
+        }
         break;
     }
     case SDL_EVENT_MOUSE_WHEEL: {
@@ -280,15 +854,23 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
-        const std::optional<ViewportKey> key = viewportKeyFromSdlKey(event.key.key);
-        if (key) {
+        const std::optional<QuaderKeyCode> keyCode = quaderKeyCodeFromSdlKey(event.key.key);
+        if (keyCode) {
+            const std::optional<ViewportKey> key = viewportKeyFromKeyCode(*keyCode);
             if (event.key.down) {
-                keysDown_.insert(*key);
+                if (key) {
+                    keysDown_.insert(*key);
+                }
                 if (!event.key.repeat) {
-                    pressedKeys_.push_back(*key);
+                    if (key) {
+                        pressedKeys_.push_back(*key);
+                    }
+                    pressedInputChords_.push_back(keyboardInputChord(*keyCode, currentModifiers()));
                 }
             } else {
-                keysDown_.erase(*key);
+                if (key) {
+                    keysDown_.erase(*key);
+                }
             }
         }
         break;
@@ -371,22 +953,33 @@ void ViewportHost::handleFrame(
     if (inputSuppressed) {
         setCursorCaptured(false);
         clearTransientInput();
-        handleWindowedViewportFrames(workspace, document, assets);
+        handleWindowedViewportFrames(editor, workspace, document, assets);
         return;
     }
 
     inputRouter_.setGridPreset(workspace.gridPreset());
     ViewportCameraController& camera = workspace.camera(mainViewport_.pane);
-    const ViewportInputResult result = inputRouter_.handleFrame(buildViewportInputFrame(), camera);
+    ViewportInputFrame input = buildViewportInputFrame();
+    resolveKeybindingsForFrame(editor, inputRouter_.state(), input);
+    const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     if (result.gridPresetChanged) {
         workspace.setGridPreset(inputRouter_.state().gridPreset);
     }
     if (result.focusDocumentRequested) {
         focusDocument(document, assets, camera);
     }
+    if (result.maximizedToggleRequested) {
+        (void)workspace.toggleFocusedPaneMaximized();
+    }
+    if (result.cancelRequested) {
+        logCommandFailure("Cancel active tool", editor.tools().cancelModalTool());
+        inputRouter_.clearModalToolState();
+    }
+    const ViewportShortcutController shortcutController;
+    (void)shortcutController.handleModelingShortcut(result, editor);
 
     setCursorCaptured(result.flyCursorCaptureActive);
-    handleWindowedViewportFrames(workspace, document, assets);
+    handleWindowedViewportFrames(editor, workspace, document, assets);
     clearTransientInput();
 }
 
@@ -545,6 +1138,12 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
     input.viewportHovered = hovered || inputRouter_.navigating();
     input.viewportFocused = true;
     input.textInputActive = false;
+    input.navigationActive = inputRouter_.navigating();
+    input.flyNavigationActive = inputRouter_.flyNavigating();
+    input.orbitNavigationActive = inputRouter_.orbitNavigating();
+    input.panNavigationActive = inputRouter_.panNavigating();
+    input.modalToolActive = inputRouter_.hasActiveModalPreview();
+    input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
     input.middlePressed = middlePressed_ && input.viewportHovered;
     input.middleDown = middleDown_;
     input.middleReleased = middleReleased_;
@@ -560,7 +1159,12 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
             static_cast<float>(mainViewportFrame_.width),
             static_cast<float>(mainViewportFrame_.height),
     };
-    input.modifiers = currentModifiers();
+    const ViewportModifiers modifiers = currentModifiers();
+    input.modifiers = modifiers;
+    input.pressedInputChords = pressedInputChords_;
+    input.releasedInputChords = releasedInputChords_;
+    appendActiveMouseDragChords(mouseDragChordsDown_, input.activeInputChords);
+    appendWheelChords(input.mouseWheel, modifiers, input.wheelInputChords);
     if (keysDown_.contains(ViewportKey::W)) {
         input.flyLocalDirection.z += 1.0f;
     }
@@ -594,6 +1198,9 @@ void ViewportHost::clearTransientInput() {
     wheelY_ = 0.0f;
     mouseDeltaWindow_ = {};
     pressedKeys_.clear();
+    pressedInputChords_.clear();
+    activeInputChords_.clear();
+    releasedInputChords_.clear();
 }
 
 void ViewportHost::spawnWindowedViewport() {
@@ -700,6 +1307,8 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_UP: {
         instance.mouseWindow = {event.button.x, event.button.y};
         const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        const std::optional<QuaderMouseButton> mouseButton = mouseButtonFromSdlButton(event.button.button);
+        const ViewportModifiers modifiers = currentModifiers();
         if (event.button.button == SDL_BUTTON_MIDDLE) {
             instance.middleDown = down;
             instance.middlePressed = instance.middlePressed || down;
@@ -708,6 +1317,25 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
             instance.rightDown = down;
             instance.rightPressed = instance.rightPressed || down;
             instance.rightReleased = instance.rightReleased || !down;
+        }
+        if (mouseButton) {
+            if (down) {
+                const QuaderInputChord dragChord = mouseInputChord(*mouseButton, QuaderInputGesture::Drag, modifiers);
+                instance.mouseButtonsDown.insert(*mouseButton);
+                instance.mouseDragChordsDown[*mouseButton] = dragChord;
+                instance.pressedInputChords.push_back(mouseInputChord(*mouseButton, QuaderInputGesture::Press, modifiers));
+                instance.pressedInputChords.push_back(dragChord);
+            } else {
+                const bool wasDown = instance.mouseButtonsDown.contains(*mouseButton);
+                const auto dragChord = instance.mouseDragChordsDown.find(*mouseButton);
+                const std::optional<QuaderInputChord> releasedDragChord =
+                        dragChord == instance.mouseDragChordsDown.end() ? std::nullopt : std::optional<QuaderInputChord>(dragChord->second);
+                instance.mouseButtonsDown.erase(*mouseButton);
+                instance.mouseDragChordsDown.erase(*mouseButton);
+                if (wasDown && releasedDragChord) {
+                    instance.releasedInputChords.push_back(*releasedDragChord);
+                }
+            }
         }
         return true;
     }
@@ -719,15 +1347,23 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
-        const std::optional<ViewportKey> key = viewportKeyFromSdlKey(event.key.key);
-        if (key) {
+        const std::optional<QuaderKeyCode> keyCode = quaderKeyCodeFromSdlKey(event.key.key);
+        if (keyCode) {
+            const std::optional<ViewportKey> key = viewportKeyFromKeyCode(*keyCode);
             if (event.key.down) {
-                instance.keysDown.insert(*key);
+                if (key) {
+                    instance.keysDown.insert(*key);
+                }
                 if (!event.key.repeat) {
-                    instance.pressedKeys.push_back(*key);
+                    if (key) {
+                        instance.pressedKeys.push_back(*key);
+                    }
+                    instance.pressedInputChords.push_back(keyboardInputChord(*keyCode, currentModifiers()));
                 }
             } else {
-                instance.keysDown.erase(*key);
+                if (key) {
+                    instance.keysDown.erase(*key);
+                }
             }
         }
         return true;
@@ -738,20 +1374,31 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
 }
 
 void ViewportHost::handleWindowedViewportFrames(
+        QuaderEditorApi& editor,
         ViewportWorkspaceService& workspace,
         SceneDocument& document,
         const AssetRegistry& assets) {
     for (const std::unique_ptr<ViewportWindowInstance>& viewport : windowedViewports_) {
         ViewportWindowInstance& instance = *viewport;
         instance.inputRouter.setGridPreset(workspace.gridPreset());
-        const ViewportInputResult result =
-                instance.inputRouter.handleFrame(buildWindowedViewportInputFrame(instance), instance.camera);
+        ViewportInputFrame input = buildWindowedViewportInputFrame(instance);
+        resolveKeybindingsForFrame(editor, instance.inputRouter.state(), input);
+        const ViewportInputResult result = instance.inputRouter.handleFrame(input, instance.camera);
         if (result.gridPresetChanged) {
             workspace.setGridPreset(instance.inputRouter.state().gridPreset);
         }
         if (result.focusDocumentRequested) {
             focusDocument(document, assets, instance.camera);
         }
+        if (result.maximizedToggleRequested) {
+            (void)workspace.toggleFocusedPaneMaximized();
+        }
+        if (result.cancelRequested) {
+            logCommandFailure("Cancel active tool", editor.tools().cancelModalTool());
+            instance.inputRouter.clearModalToolState();
+        }
+        const ViewportShortcutController shortcutController;
+        (void)shortcutController.handleModelingShortcut(result, editor);
         setWindowedViewportCursorCaptured(instance, result.flyCursorCaptureActive);
         clearWindowedViewportTransientInput(instance);
     }
@@ -797,6 +1444,12 @@ ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(const ViewportW
     input.viewportHovered = hovered || instance.inputRouter.navigating();
     input.viewportFocused = true;
     input.textInputActive = false;
+    input.navigationActive = instance.inputRouter.navigating();
+    input.flyNavigationActive = instance.inputRouter.flyNavigating();
+    input.orbitNavigationActive = instance.inputRouter.orbitNavigating();
+    input.panNavigationActive = instance.inputRouter.panNavigating();
+    input.modalToolActive = instance.inputRouter.hasActiveModalPreview();
+    input.activeToolOwnsViewport = instance.inputRouter.activeToolOwnsViewport();
     input.middlePressed = instance.middlePressed && input.viewportHovered;
     input.middleDown = instance.middleDown;
     input.middleReleased = instance.middleReleased;
@@ -812,7 +1465,12 @@ ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(const ViewportW
             static_cast<float>(instance.framebufferWidth),
             static_cast<float>(instance.framebufferHeight),
     };
-    input.modifiers = currentModifiers();
+    const ViewportModifiers modifiers = currentModifiers();
+    input.modifiers = modifiers;
+    input.pressedInputChords = instance.pressedInputChords;
+    input.releasedInputChords = instance.releasedInputChords;
+    appendActiveMouseDragChords(instance.mouseDragChordsDown, input.activeInputChords);
+    appendWheelChords(input.mouseWheel, modifiers, input.wheelInputChords);
     if (instance.keysDown.contains(ViewportKey::W)) {
         input.flyLocalDirection.z += 1.0f;
     }
@@ -860,6 +1518,9 @@ void ViewportHost::clearWindowedViewportTransientInput(ViewportWindowInstance& i
     instance.wheelY = 0.0f;
     instance.mouseDeltaWindow = {};
     instance.pressedKeys.clear();
+    instance.pressedInputChords.clear();
+    instance.activeInputChords.clear();
+    instance.releasedInputChords.clear();
 }
 
 std::uint8_t ViewportHost::nextWindowedViewportLayerIndex() const {

@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -21,8 +20,6 @@ struct DebugPaletteColorToken {
     std::string hex;
 };
 
-std::filesystem::path appPaletteTokenPath(const std::filesystem::path& executableDir);
-std::vector<DebugPaletteColorToken> loadDebugPaletteColorTokens(const std::filesystem::path& paletteFile);
 std::string debugPaletteUtilityClassSuffix(std::string_view tokenName);
 std::string buildDebugPalettePageRml(const std::vector<DebugPaletteColorToken>& colors);
 

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/controllers/MainLayoutController.h"
 
+#include <algorithm>
+#include <iterator>
 #include <optional>
 
 namespace quader {
@@ -40,6 +42,40 @@ bool MainLayoutController::resizeOutlinerPanel(int heightDp) {
     return true;
 }
 
+bool MainLayoutController::resizeBottomDock(int heightDp) {
+    const int clamped = mainLayoutClampedBottomDockHeightDp(heightDp);
+    if (model_.bottomDock.heightDp == clamped && !model_.bottomDock.collapsed) {
+        return false;
+    }
+    model_.bottomDock.heightDp = clamped;
+    model_.bottomDock.collapsed = false;
+    return true;
+}
+
+bool MainLayoutController::resizeBottomSplitPanel(std::string_view panelId, int widthDp) {
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+    if (!canonical || *canonical == kMainLayoutPanelViewport) {
+        return false;
+    }
+    const std::optional<DockLocation> location = dockPanelLocation(model_.dockLayout, *canonical);
+    if (!location || *location != DockLocation::Panel) {
+        return false;
+    }
+
+    const std::vector<std::string_view> splitPanels =
+            dockSplitPanelsInLocation(model_.dockLayout, DockLocation::Panel);
+    const auto splitPanel = std::find(splitPanels.begin(), splitPanels.end(), *canonical);
+    if (splitPanel == splitPanels.end() || std::next(splitPanel) == splitPanels.end()) {
+        return false;
+    }
+
+    return dockSetSplitPanelSizeDp(
+            model_.dockLayout,
+            DockLocation::Panel,
+            *canonical,
+            mainLayoutClampedBottomSplitPanelWidthDp(widthDp));
+}
+
 bool MainLayoutController::setSidebarSide(MainLayoutSidebarSide side) {
     if (model_.sidebarSide == side) {
         return false;
@@ -61,6 +97,14 @@ bool MainLayoutController::setSidebarCollapsed(DockLocation location, bool colla
         return false;
     }
     sideDock.collapsed = collapsed;
+    return true;
+}
+
+bool MainLayoutController::setBottomDockCollapsed(bool collapsed) {
+    if (model_.bottomDock.collapsed == collapsed) {
+        return false;
+    }
+    model_.bottomDock.collapsed = collapsed;
     return true;
 }
 
@@ -108,6 +152,34 @@ bool MainLayoutController::movePanelToDockLocation(
         return false;
     }
     return dockMovePanelToLocationAtPanel(model_.dockLayout, *canonical, location, *canonicalTarget, position);
+}
+
+bool MainLayoutController::splitPanelWithDockPanel(
+        std::string_view panelId,
+        DockLocation location,
+        std::string_view targetPanelId,
+        DockPanelInsertPosition position) {
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+    const std::optional<std::string_view> canonicalTarget = mainLayoutCanonicalPanelId(targetPanelId);
+    if (!canonical ||
+            !canonicalTarget ||
+            *canonical == kMainLayoutPanelViewport ||
+            *canonicalTarget == kMainLayoutPanelViewport) {
+        return false;
+    }
+    return dockSplitPanelWithPanel(model_.dockLayout, *canonical, location, *canonicalTarget, position);
+}
+
+bool MainLayoutController::setActiveDockPanel(DockLocation location, std::string_view panelId) {
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+    if (!canonical || *canonical == kMainLayoutPanelViewport) {
+        return false;
+    }
+    return dockSetActivePanel(model_.dockLayout, location, *canonical);
+}
+
+std::optional<std::string_view> MainLayoutController::activeDockPanel(DockLocation location) const {
+    return dockActivePanelId(model_.dockLayout, location);
 }
 
 std::optional<DockLocation> MainLayoutController::panelDockLocation(std::string_view panelId) const {

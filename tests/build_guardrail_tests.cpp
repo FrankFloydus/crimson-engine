@@ -375,31 +375,30 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
     EXPECT_FALSE(readSourceFile("resources/locales/it-IT.lang").empty());
 }
 
-TEST(BuildGuardrailTests, PaletteTokenResourcesArePackagedWithRuntime) {
+TEST(BuildGuardrailTests, UITokenConfigResourceIsPackagedWithRuntime) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
 
     expectContains(rootCMake, "src/ui/DebugPaletteView.cpp");
     expectContains(rootCMake, "src/ui/UIUtilityTokens.cpp");
     expectContains(rootCMake, "src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
+    expectContains(rootCMake, "src/ui/components/common/UITabStripModel.cpp");
     expectContains(rootCMake, "src/ui/components/organisms/MainLayoutModel.cpp");
     expectContains(rootCMake, "src/ui/controllers/MainLayoutController.cpp");
     expectContains(rootCMake, "src/ui/controllers/ResizableSplitController.cpp");
+    expectContains(rootCMake, "src/ui/controllers/UIDragDropController.cpp");
     expectContains(rootCMake, "src/ui/backends/rml/RmlUiContextHost.cpp");
     expectContains(rootCMake, "src/ui/controllers/ViewportHost.cpp");
     expectContains(rootCMake, "resources/ui/rml/viewport-shell.rml");
     expectContains(rootCMake, "resources/ui/rcss/app-shell.rcss");
-    expectContains(rootCMake, "resources/ui/tokens/app-palette.tokens.json");
-    expectContains(rootCMake, "resources/ui/tokens/app-utility.tokens.json");
+    expectContains(rootCMake, "resources/ui/tokens/app-ui.tokens.json");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rml/viewport-shell.rml");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rcss/app-shell.rcss");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-palette.tokens.json");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-utility.tokens.json");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-ui.tokens.json");
     expectContains(rootCMake, "copy_if_different");
 
     EXPECT_FALSE(readSourceFile("resources/ui/rml/viewport-shell.rml").empty());
     EXPECT_FALSE(readSourceFile("resources/ui/rcss/app-shell.rcss").empty());
-    EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-palette.tokens.json").empty());
-    EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-utility.tokens.json").empty());
+    EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-ui.tokens.json").empty());
 }
 
 TEST(BuildGuardrailTests, RuntimeUiDoesNotReintroduceImGui) {

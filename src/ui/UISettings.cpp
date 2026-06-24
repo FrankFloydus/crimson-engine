@@ -8,6 +8,7 @@
 
 #include "core/QStr.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <optional>
@@ -76,6 +77,123 @@ std::vector<std::string> parseDockPanelOrder(std::string_view value) {
     return panelIds;
 }
 
+std::vector<DockLocationActivePanel> parseDockActivePanels(std::string_view value) {
+    std::vector<DockLocationActivePanel> activePanels;
+    while (!value.empty()) {
+        std::string_view token = value;
+        if (const std::optional<QStrSplitOnce> split = QStr::splitOnce(value, ',')) {
+            token = split->before;
+            value = split->after;
+        } else {
+            value = {};
+        }
+
+        const std::string trimmed = QStr::trimAsciiWhitespace(token);
+        const std::optional<QStrSplitOnce> activeSplit = QStr::splitOnce(trimmed, ':');
+        if (!activeSplit) {
+            continue;
+        }
+
+        const std::string locationName = QStr::trimAsciiWhitespace(activeSplit->before);
+        const std::string panelId = QStr::trimAsciiWhitespace(activeSplit->after);
+        const std::optional<DockLocation> location = dockLocationFromName(locationName);
+        const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+        if (location && canonical && *canonical != kMainLayoutPanelViewport) {
+            activePanels.push_back({
+                    .location = *location,
+                    .panelId = std::string(*canonical),
+            });
+        }
+    }
+    return activePanels;
+}
+
+/// Carries persisted split panel ids and optional pane sizes parsed from one dock location entry.
+struct ParsedDockSplitPanelList {
+    std::vector<std::string> panelIds;
+    std::vector<int> panelSizesDp;
+};
+
+ParsedDockSplitPanelList parseDockSplitPanelList(std::string_view value) {
+    ParsedDockSplitPanelList panels;
+    while (!value.empty()) {
+        std::string_view token = value;
+        if (const std::optional<QStrSplitOnce> split = QStr::splitOnce(value, '|')) {
+            token = split->before;
+            value = split->after;
+        } else {
+            value = {};
+        }
+
+        std::string panelId = QStr::trimAsciiWhitespace(token);
+        int sizeDp = 0;
+        if (const std::optional<QStrSplitOnce> sizeSplit = QStr::splitOnce(panelId, '@')) {
+            const std::string sizeText = QStr::trimAsciiWhitespace(sizeSplit->after);
+            panelId = QStr::trimAsciiWhitespace(sizeSplit->before);
+            sizeDp = std::max(0, parseInt(sizeText, 0));
+        }
+
+        const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+        if (canonical && *canonical != kMainLayoutPanelViewport) {
+            panels.panelIds.emplace_back(*canonical);
+            panels.panelSizesDp.push_back(sizeDp);
+        }
+    }
+    return panels;
+}
+
+std::vector<DockLocationSplitPanels> parseDockSplitPanels(std::string_view value) {
+    std::vector<DockLocationSplitPanels> splitPanels;
+    while (!value.empty()) {
+        std::string_view token = value;
+        if (const std::optional<QStrSplitOnce> split = QStr::splitOnce(value, ',')) {
+            token = split->before;
+            value = split->after;
+        } else {
+            value = {};
+        }
+
+        const std::string trimmed = QStr::trimAsciiWhitespace(token);
+        const std::optional<QStrSplitOnce> split = QStr::splitOnce(trimmed, ':');
+        if (!split) {
+            continue;
+        }
+
+        const std::string locationName = QStr::trimAsciiWhitespace(split->before);
+        const std::optional<DockLocation> location = dockLocationFromName(locationName);
+        if (!location) {
+            continue;
+        }
+
+        std::string splitPanelList = QStr::trimAsciiWhitespace(split->after);
+        std::string tabPanelId;
+        if (const std::optional<QStrSplitOnce> tabSplit = QStr::splitOnce(splitPanelList, '=')) {
+            tabPanelId = QStr::trimAsciiWhitespace(tabSplit->before);
+            splitPanelList = QStr::trimAsciiWhitespace(tabSplit->after);
+        }
+
+        ParsedDockSplitPanelList panels = parseDockSplitPanelList(splitPanelList);
+        if (!tabPanelId.empty()) {
+            const std::optional<std::string_view> canonicalTab = mainLayoutCanonicalPanelId(tabPanelId);
+            tabPanelId = canonicalTab && *canonicalTab != kMainLayoutPanelViewport ?
+                    std::string(*canonicalTab) :
+                    std::string{};
+        }
+        if (!panels.panelIds.empty()) {
+            if (tabPanelId.empty()) {
+                tabPanelId = panels.panelIds.front();
+            }
+            splitPanels.push_back({
+                    .location = *location,
+                    .tabPanelId = std::move(tabPanelId),
+                    .panelIds = std::move(panels.panelIds),
+                    .panelSizesDp = std::move(panels.panelSizesDp),
+            });
+        }
+    }
+    return splitPanels;
+}
+
 } // namespace
 
 UISettings UISettings::defaults() {
@@ -92,6 +210,8 @@ UISettings UISettings::load(const std::filesystem::path& path) {
     std::optional<DockLocation> outlinerDockLocation;
     std::optional<DockLocation> inspectorDockLocation;
     std::vector<std::string> dockPanelOrder;
+    std::vector<DockLocationActivePanel> dockActivePanels;
+    std::vector<DockLocationSplitPanels> dockSplitPanels;
     std::string line;
     while (std::getline(file, line)) {
         line = QStr::trimAsciiWhitespace(line);
@@ -127,8 +247,10 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             settings.mainLayout().outlinerHeightDp =
                     mainLayoutClampedOutlinerHeightDp(parseInt(value, settings.mainLayout().outlinerHeightDp));
         } else if (key == "BottomDockHeightDp") {
-            settings.mainLayout().bottomDockHeightDp =
-                    mainLayoutClampedBottomDockHeightDp(parseInt(value, settings.mainLayout().bottomDockHeightDp));
+            settings.mainLayout().bottomDock.heightDp =
+                    mainLayoutClampedBottomDockHeightDp(parseInt(value, settings.mainLayout().bottomDock.heightDp));
+        } else if (key == "BottomDockCollapsed") {
+            settings.mainLayout().bottomDock.collapsed = parseBool(value, settings.mainLayout().bottomDock.collapsed);
         } else if (key == "OutlinerVisible") {
             settings.mainLayout().outlinerVisible = parseBool(value, settings.mainLayout().outlinerVisible);
         } else if (key == "InspectorVisible") {
@@ -143,6 +265,10 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             }
         } else if (key == "DockPanelOrder") {
             dockPanelOrder = parseDockPanelOrder(value);
+        } else if (key == "DockActivePanels") {
+            dockActivePanels = parseDockActivePanels(value);
+        } else if (key == "DockSplitPanels") {
+            dockSplitPanels = parseDockSplitPanels(value);
         }
     }
 
@@ -165,6 +291,40 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         }
         const bool changed = dockReorderPanels(settings.mainLayout().dockLayout, panelOrderViews);
         (void)changed;
+    }
+    for (const DockLocationActivePanel& activePanel : dockActivePanels) {
+        const bool changed = dockSetActivePanel(
+                settings.mainLayout().dockLayout,
+                activePanel.location,
+                activePanel.panelId);
+        (void)changed;
+    }
+    for (const DockLocationSplitPanels& splitPanels : dockSplitPanels) {
+        std::vector<std::string_view> panelIds;
+        panelIds.reserve(splitPanels.panelIds.size());
+        for (const std::string& panelId : splitPanels.panelIds) {
+            panelIds.push_back(panelId);
+        }
+        const bool changed = dockSetSplitPanels(
+                settings.mainLayout().dockLayout,
+                splitPanels.location,
+                panelIds,
+                splitPanels.tabPanelId);
+        (void)changed;
+        for (std::size_t index = 0; index < splitPanels.panelIds.size(); ++index) {
+            if (index >= splitPanels.panelSizesDp.size() || splitPanels.panelSizesDp[index] <= 0) {
+                continue;
+            }
+            const int sizeDp = splitPanels.location == DockLocation::Panel ?
+                    mainLayoutClampedBottomSplitPanelWidthDp(splitPanels.panelSizesDp[index]) :
+                    splitPanels.panelSizesDp[index];
+            const bool resized = dockSetSplitPanelSizeDp(
+                    settings.mainLayout().dockLayout,
+                    splitPanels.location,
+                    splitPanels.panelIds[index],
+                    sizeDp);
+            (void)resized;
+        }
     }
     return settings;
 }
@@ -195,7 +355,8 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "SidebarCollapsed=" << (mainLayout_.sidebar.collapsed ? "true" : "false") << '\n';
     file << "AuxiliarySidebarCollapsed=" << (mainLayout_.auxiliarySidebar.collapsed ? "true" : "false") << '\n';
     file << "OutlinerHeightDp=" << mainLayout_.outlinerHeightDp << '\n';
-    file << "BottomDockHeightDp=" << mainLayout_.bottomDockHeightDp << '\n';
+    file << "BottomDockHeightDp=" << mainLayout_.bottomDock.heightDp << '\n';
+    file << "BottomDockCollapsed=" << (mainLayout_.bottomDock.collapsed ? "true" : "false") << '\n';
     file << "OutlinerVisible=" << (mainLayout_.outlinerVisible ? "true" : "false") << '\n';
     file << "InspectorVisible=" << (mainLayout_.inspectorVisible ? "true" : "false") << '\n';
     file << "OutlinerDockLocation="
@@ -210,6 +371,38 @@ bool UISettings::save(const std::filesystem::path& path) const {
             file << ',';
         }
         file << mainLayout_.dockLayout.panels[index].panelId;
+    }
+    file << '\n';
+    file << "DockActivePanels=";
+    for (std::size_t index = 0; index < mainLayout_.dockLayout.activePanels.size(); ++index) {
+        if (index > 0) {
+            file << ',';
+        }
+        file << dockLocationName(mainLayout_.dockLayout.activePanels[index].location)
+             << ':'
+             << mainLayout_.dockLayout.activePanels[index].panelId;
+    }
+    file << '\n';
+    file << "DockSplitPanels=";
+    for (std::size_t index = 0; index < mainLayout_.dockLayout.splitPanels.size(); ++index) {
+        if (index > 0) {
+            file << ',';
+        }
+        const DockLocationSplitPanels& splitPanels = mainLayout_.dockLayout.splitPanels[index];
+        file << dockLocationName(splitPanels.location) << ':';
+        if (!splitPanels.tabPanelId.empty()) {
+            file << splitPanels.tabPanelId << '=';
+        }
+        for (std::size_t panelIndex = 0; panelIndex < splitPanels.panelIds.size(); ++panelIndex) {
+            if (panelIndex > 0) {
+                file << '|';
+            }
+            file << splitPanels.panelIds[panelIndex];
+            if (panelIndex < splitPanels.panelSizesDp.size() &&
+                    splitPanels.panelSizesDp[panelIndex] > 0) {
+                file << '@' << splitPanels.panelSizesDp[panelIndex];
+            }
+        }
     }
     file << '\n';
     return true;
