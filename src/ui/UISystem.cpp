@@ -76,6 +76,30 @@ QuaderApiVoidResult runtimeFailure(std::string message) {
     };
 }
 
+bool mainLayoutPanelVisibleInSidebar(const MainLayoutModel& model, std::string_view panelId) {
+    const std::optional<DockLocation> location = dockPanelLocation(model.dockLayout, panelId);
+    if (!location || *location != DockLocation::Sidebar) {
+        return false;
+    }
+    if (panelId == kMainLayoutPanelOutliner) {
+        return model.outlinerVisible;
+    }
+    if (panelId == kMainLayoutPanelInspector) {
+        return model.inspectorVisible;
+    }
+    return false;
+}
+
+int mainLayoutVisibleSidebarDockPanelCount(const MainLayoutModel& model) {
+    int count = 0;
+    for (std::string_view panelId : mainLayoutDockablePanelIds()) {
+        if (mainLayoutPanelVisibleInSidebar(model, panelId)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 std::string escapeRmlText(std::string_view text) {
     std::string escaped;
     escaped.reserve(text.size());
@@ -742,7 +766,7 @@ bool UISystem::normalizeMainLayoutForMeasuredBounds() {
         }
     }
 
-    if (mainLayoutSidebarHeightDp_ > 0 && mainLayout_.outlinerVisible && mainLayout_.inspectorVisible) {
+    if (mainLayoutSidebarHeightDp_ > 0 && mainLayoutVisibleSidebarDockPanelCount(mainLayout_) > 1) {
         const int measuredMaxOutlinerHeightDp = std::clamp(
                 mainLayoutSidebarHeightDp_ - kMainLayoutPanelMinHeightDp - kResizableSplitDefaultHitThicknessDp,
                 kMainLayoutPanelMinHeightDp,

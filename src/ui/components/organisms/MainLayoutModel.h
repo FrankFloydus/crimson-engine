@@ -6,14 +6,18 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "ui/components/common/DockLayoutModel.h"
+
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace quader {
 
 inline constexpr int kMainLayoutSidebarDefaultWidthDp = 240;
 inline constexpr int kMainLayoutSidebarMinWidthDp = 160;
 inline constexpr int kMainLayoutOutlinerDefaultHeightDp = 320;
+inline constexpr int kMainLayoutBottomDockDefaultHeightDp = 240;
 inline constexpr int kMainLayoutPanelMinHeightDp = 120;
 inline constexpr int kMainLayoutPanelMaxHeightDp = 900;
 inline constexpr int kMainLayoutViewportMinWidthDp = 160;
@@ -32,9 +36,11 @@ struct MainLayoutModel {
     MainLayoutSidebarSide sidebarSide = MainLayoutSidebarSide::Right;
     int sidebarWidthDp = kMainLayoutSidebarDefaultWidthDp;
     int outlinerHeightDp = kMainLayoutOutlinerDefaultHeightDp;
+    int bottomDockHeightDp = kMainLayoutBottomDockDefaultHeightDp;
     bool sidebarCollapsed = false;
     bool outlinerVisible = true;
     bool inspectorVisible = true;
+    DockLayoutModel dockLayout;
 
     [[nodiscard]] static MainLayoutModel defaults();
 };
@@ -43,9 +49,11 @@ struct MainLayoutModel {
 [[nodiscard]] std::optional<MainLayoutSidebarSide> mainLayoutSidebarSideFromName(std::string_view name);
 [[nodiscard]] int mainLayoutClampedSidebarWidthDp(int widthDp);
 [[nodiscard]] int mainLayoutClampedOutlinerHeightDp(int heightDp);
+[[nodiscard]] int mainLayoutClampedBottomDockHeightDp(int heightDp);
 [[nodiscard]] MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model);
 [[nodiscard]] std::optional<std::string_view> mainLayoutCanonicalPanelId(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsKnown(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsViewport(std::string_view panelId);
+[[nodiscard]] std::vector<std::string_view> mainLayoutDockablePanelIds();
 
 } // namespace quader

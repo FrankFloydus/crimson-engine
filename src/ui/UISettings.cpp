@@ -68,6 +68,8 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         return settings;
     }
 
+    std::optional<DockLocation> outlinerDockLocation;
+    std::optional<DockLocation> inspectorDockLocation;
     std::string line;
     while (std::getline(file, line)) {
         line = QStr::trimAsciiWhitespace(line);
@@ -96,14 +98,35 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         } else if (key == "OutlinerHeightDp") {
             settings.mainLayout().outlinerHeightDp =
                     mainLayoutClampedOutlinerHeightDp(parseInt(value, settings.mainLayout().outlinerHeightDp));
+        } else if (key == "BottomDockHeightDp") {
+            settings.mainLayout().bottomDockHeightDp =
+                    mainLayoutClampedBottomDockHeightDp(parseInt(value, settings.mainLayout().bottomDockHeightDp));
         } else if (key == "OutlinerVisible") {
             settings.mainLayout().outlinerVisible = parseBool(value, settings.mainLayout().outlinerVisible);
         } else if (key == "InspectorVisible") {
             settings.mainLayout().inspectorVisible = parseBool(value, settings.mainLayout().inspectorVisible);
+        } else if (key == "OutlinerDockLocation") {
+            if (const std::optional<DockLocation> location = dockLocationFromName(value)) {
+                outlinerDockLocation = *location;
+            }
+        } else if (key == "InspectorDockLocation") {
+            if (const std::optional<DockLocation> location = dockLocationFromName(value)) {
+                inspectorDockLocation = *location;
+            }
         }
     }
 
     settings.setMainLayout(settings.mainLayout());
+    if (outlinerDockLocation) {
+        const bool changed =
+                dockMovePanelToLocation(settings.mainLayout().dockLayout, kMainLayoutPanelOutliner, *outlinerDockLocation);
+        (void)changed;
+    }
+    if (inspectorDockLocation) {
+        const bool changed =
+                dockMovePanelToLocation(settings.mainLayout().dockLayout, kMainLayoutPanelInspector, *inspectorDockLocation);
+        (void)changed;
+    }
     return settings;
 }
 
@@ -131,8 +154,15 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "SidebarWidthDp=" << mainLayout_.sidebarWidthDp << '\n';
     file << "SidebarCollapsed=" << (mainLayout_.sidebarCollapsed ? "true" : "false") << '\n';
     file << "OutlinerHeightDp=" << mainLayout_.outlinerHeightDp << '\n';
+    file << "BottomDockHeightDp=" << mainLayout_.bottomDockHeightDp << '\n';
     file << "OutlinerVisible=" << (mainLayout_.outlinerVisible ? "true" : "false") << '\n';
     file << "InspectorVisible=" << (mainLayout_.inspectorVisible ? "true" : "false") << '\n';
+    file << "OutlinerDockLocation="
+         << dockLocationName(dockPanelLocation(mainLayout_.dockLayout, kMainLayoutPanelOutliner).value_or(DockLocation::Sidebar))
+         << '\n';
+    file << "InspectorDockLocation="
+         << dockLocationName(dockPanelLocation(mainLayout_.dockLayout, kMainLayoutPanelInspector).value_or(DockLocation::Sidebar))
+         << '\n';
     return true;
 }
 

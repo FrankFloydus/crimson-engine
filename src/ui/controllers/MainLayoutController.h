@@ -24,6 +24,8 @@ public:
     [[nodiscard]] bool setSidebarSide(MainLayoutSidebarSide side);
     [[nodiscard]] bool setSidebarCollapsed(bool collapsed);
     [[nodiscard]] bool setPanelVisible(std::string_view panelId, bool visible);
+    [[nodiscard]] bool movePanelToDockLocation(std::string_view panelId, DockLocation location);
+    [[nodiscard]] std::optional<DockLocation> panelDockLocation(std::string_view panelId) const;
     [[nodiscard]] bool isPanelVisible(std::string_view panelId) const;
 
 private:

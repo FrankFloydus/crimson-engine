@@ -70,6 +70,22 @@ bool MainLayoutController::setPanelVisible(std::string_view panelId, bool visibl
     return false;
 }
 
+bool MainLayoutController::movePanelToDockLocation(std::string_view panelId, DockLocation location) {
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+    if (!canonical || *canonical == kMainLayoutPanelViewport) {
+        return false;
+    }
+    return dockMovePanelToLocation(model_.dockLayout, *canonical, location);
+}
+
+std::optional<DockLocation> MainLayoutController::panelDockLocation(std::string_view panelId) const {
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+    if (!canonical || *canonical == kMainLayoutPanelViewport) {
+        return std::nullopt;
+    }
+    return dockPanelLocation(model_.dockLayout, *canonical);
+}
+
 bool MainLayoutController::isPanelVisible(std::string_view panelId) const {
     const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
     if (!canonical) {

@@ -162,6 +162,7 @@ add_library(quader_core STATIC
     src/scene/SceneDocument.cpp
     src/ui/ConsoleModel.cpp
     src/ui/backends/rml/MainLayoutRmlBuilder.cpp
+    src/ui/components/common/DockLayoutModel.cpp
     src/ui/components/organisms/MainLayoutModel.cpp
     src/ui/controllers/MainLayoutController.cpp
     src/ui/controllers/ResizableSplitController.cpp

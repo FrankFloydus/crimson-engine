@@ -9,8 +9,10 @@
 #include "ui/components/common/ResizableSplit.h"
 #include "ui/components/organisms/ViewportComponent.h"
 
+#include <optional>
 #include <sstream>
 #include <string_view>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -68,26 +70,59 @@ void appendPanel(
         << "</div>";
 }
 
+std::string_view labelForPanel(std::string_view panelId, const MainLayoutLabels& labels) {
+    if (panelId == kMainLayoutPanelOutliner) {
+        return labels.outliner;
+    }
+    if (panelId == kMainLayoutPanelInspector) {
+        return labels.inspector;
+    }
+    return panelId;
+}
+
+std::string panelElementId(std::string_view panelId) {
+    return "main-layout-panel-" + std::string(panelId);
+}
+
+bool panelVisibleInModel(const MainLayoutModel& model, std::string_view panelId) {
+    if (panelId == kMainLayoutPanelOutliner) {
+        return model.outlinerVisible;
+    }
+    if (panelId == kMainLayoutPanelInspector) {
+        return model.inspectorVisible;
+    }
+    return false;
+}
+
+std::vector<std::string_view> visiblePanelsInLocation(const MainLayoutModel& model, DockLocation location) {
+    std::vector<std::string_view> panels;
+    for (std::string_view panelId : dockPanelsInLocation(model.dockLayout, location)) {
+        if (panelVisibleInModel(model, panelId)) {
+            panels.push_back(panelId);
+        }
+    }
+    return panels;
+}
+
 void appendSidebar(
         std::ostringstream& rml,
         const MainLayoutModel& model,
         const MainLayoutLabels& labels,
-        const MainLayoutInteractionState& interaction) {
+        const MainLayoutInteractionState& interaction,
+        const std::vector<std::string_view>& panels) {
     rml << "<div id=\"main-layout-sidebar\" class=\"main-layout-sidebar min-w-40 bg-gray-950 border-gray-600\" style=\"width: "
         << model.sidebarWidthDp
         << "dp; flex-grow: 0; flex-shrink: 0;\">";
 
-    const bool bothPanelsVisible = model.outlinerVisible && model.inspectorVisible;
-    if (model.outlinerVisible) {
+    const bool bothPanelsVisible = panels.size() > 1;
+    for (std::size_t index = 0; index < panels.size(); ++index) {
+        const bool fixed = bothPanelsVisible && index == 0;
         appendPanel(rml,
-                "main-layout-panel-outliner",
-                kMainLayoutPanelOutliner,
-                labels.outliner,
-                bothPanelsVisible,
-                model.outlinerHeightDp);
-    }
-    if (model.inspectorVisible) {
-        appendPanel(rml, "main-layout-panel-inspector", kMainLayoutPanelInspector, labels.inspector, false, 0);
+                panelElementId(panels[index]),
+                panels[index],
+                labelForPanel(panels[index], labels),
+                fixed,
+                fixed ? model.outlinerHeightDp : 0);
     }
     if (bothPanelsVisible) {
         rml << "<div id=\"main-layout-panel-resizer\" class=\"main-layout-panel-resizer";
@@ -100,6 +135,27 @@ void appendSidebar(
             << "<div class=\"main-layout-resizer-base-line main-layout-resizer-base-line-horizontal bg-gray-600\"></div>"
             << "<div class=\"main-layout-resizer-drag-line main-layout-resizer-drag-line-horizontal bg-purple-500\"></div>"
             << "</div>";
+    }
+
+    rml << "</div>";
+}
+
+void appendBottomDock(
+        std::ostringstream& rml,
+        const MainLayoutModel& model,
+        const MainLayoutLabels& labels,
+        const std::vector<std::string_view>& panels) {
+    rml << "<div id=\"main-layout-bottom-dock\" class=\"main-layout-bottom-dock bg-gray-950 border-gray-600\" style=\"height: "
+        << model.bottomDockHeightDp
+        << "dp; flex-grow: 0; flex-shrink: 0;\">";
+
+    for (std::string_view panelId : panels) {
+        appendPanel(rml,
+                panelElementId(panelId),
+                panelId,
+                labelForPanel(panelId, labels),
+                false,
+                0);
     }
 
     rml << "</div>";
@@ -141,23 +197,32 @@ std::string buildMainLayoutRml(
         const MainLayoutLabels& labels,
         const MainLayoutInteractionState& interaction) {
     std::ostringstream rml;
-    const bool sidebarAvailable = model.outlinerVisible || model.inspectorVisible;
+    const std::vector<std::string_view> sidebarPanels = visiblePanelsInLocation(model, DockLocation::Sidebar);
+    const std::vector<std::string_view> bottomPanels = visiblePanelsInLocation(model, DockLocation::Panel);
+    const bool sidebarAvailable = !sidebarPanels.empty();
     const bool sidebarVisible = sidebarAvailable && !model.sidebarCollapsed;
     rml << "<div class=\"main-layout bg-gray-950 "
         << (model.sidebarSide == MainLayoutSidebarSide::Left ? "main-layout-sidebar-left" : "main-layout-sidebar-right")
         << "\">";
 
+    rml << "<div id=\"main-layout-main-row\" class=\"main-layout-main-row bg-gray-950\">";
+
     if (sidebarVisible && model.sidebarSide == MainLayoutSidebarSide::Left) {
-        appendSidebar(rml, model, labels, interaction);
+        appendSidebar(rml, model, labels, interaction, sidebarPanels);
     }
 
     appendViewport(rml);
 
     if (sidebarVisible && model.sidebarSide == MainLayoutSidebarSide::Right) {
-        appendSidebar(rml, model, labels, interaction);
+        appendSidebar(rml, model, labels, interaction, sidebarPanels);
     }
     if (sidebarAvailable) {
         appendSidebarResizer(rml, model, interaction);
+    }
+    rml << "</div>";
+
+    if (!bottomPanels.empty()) {
+        appendBottomDock(rml, model, labels, bottomPanels);
     }
 
     rml << "</div>";

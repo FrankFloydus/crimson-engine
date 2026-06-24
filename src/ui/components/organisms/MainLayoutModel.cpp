@@ -7,11 +7,12 @@
 #include "ui/components/organisms/MainLayoutModel.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace quader {
 
 MainLayoutModel MainLayoutModel::defaults() {
-    return {};
+    return normalizedMainLayoutModel({});
 }
 
 std::string_view mainLayoutSidebarSideName(MainLayoutSidebarSide side) {
@@ -36,9 +37,18 @@ int mainLayoutClampedOutlinerHeightDp(int heightDp) {
     return std::clamp(heightDp, kMainLayoutPanelMinHeightDp, kMainLayoutPanelMaxHeightDp);
 }
 
+int mainLayoutClampedBottomDockHeightDp(int heightDp) {
+    return std::clamp(heightDp, kMainLayoutPanelMinHeightDp, kMainLayoutPanelMaxHeightDp);
+}
+
 MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model) {
     model.sidebarWidthDp = mainLayoutClampedSidebarWidthDp(model.sidebarWidthDp);
     model.outlinerHeightDp = mainLayoutClampedOutlinerHeightDp(model.outlinerHeightDp);
+    model.bottomDockHeightDp = mainLayoutClampedBottomDockHeightDp(model.bottomDockHeightDp);
+    model.dockLayout = normalizedDockLayoutModel(
+            std::move(model.dockLayout),
+            mainLayoutDockablePanelIds(),
+            DockLocation::Sidebar);
     return model;
 }
 
@@ -62,6 +72,13 @@ bool mainLayoutPanelIdIsKnown(std::string_view panelId) {
 bool mainLayoutPanelIdIsViewport(std::string_view panelId) {
     const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
     return canonical && *canonical == kMainLayoutPanelViewport;
+}
+
+std::vector<std::string_view> mainLayoutDockablePanelIds() {
+    return {
+            kMainLayoutPanelOutliner,
+            kMainLayoutPanelInspector,
+    };
 }
 
 } // namespace quader

@@ -46,6 +46,18 @@ body {
 .main-layout {
     position: relative;
     display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0dp;
+    width: 100%;
+    min-height: 1dp;
+    overflow: hidden;
+}
+
+.main-layout-main-row {
+    position: relative;
+    display: flex;
     flex-direction: row;
     flex-grow: 1;
     flex-shrink: 1;
@@ -112,6 +124,14 @@ body {
     flex-grow: 1;
     flex-shrink: 1;
     min-height: 1dp;
+}
+
+.main-layout-bottom-dock {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border-top-width: 1dp;
+    overflow: hidden;
 }
 
 .main-layout-panel-resizer {
