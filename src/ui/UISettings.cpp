@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -55,6 +56,26 @@ int parseInt(std::string_view value, int fallback) {
     }
 }
 
+std::vector<std::string> parseDockPanelOrder(std::string_view value) {
+    std::vector<std::string> panelIds;
+    while (!value.empty()) {
+        std::string_view token = value;
+        if (const std::optional<QStrSplitOnce> split = QStr::splitOnce(value, ',')) {
+            token = split->before;
+            value = split->after;
+        } else {
+            value = {};
+        }
+
+        const std::string trimmed = QStr::trimAsciiWhitespace(token);
+        const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(trimmed);
+        if (canonical && *canonical != kMainLayoutPanelViewport) {
+            panelIds.emplace_back(*canonical);
+        }
+    }
+    return panelIds;
+}
+
 } // namespace
 
 UISettings UISettings::defaults() {
@@ -70,6 +91,7 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
     std::optional<DockLocation> outlinerDockLocation;
     std::optional<DockLocation> inspectorDockLocation;
+    std::vector<std::string> dockPanelOrder;
     std::string line;
     while (std::getline(file, line)) {
         line = QStr::trimAsciiWhitespace(line);
@@ -93,6 +115,9 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         } else if (key == "SidebarWidthDp") {
             settings.mainLayout().sidebarWidthDp =
                     mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().sidebarWidthDp));
+        } else if (key == "AuxiliarySidebarWidthDp") {
+            settings.mainLayout().auxiliarySidebarWidthDp =
+                    mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().auxiliarySidebarWidthDp));
         } else if (key == "SidebarCollapsed") {
             settings.mainLayout().sidebarCollapsed = parseBool(value, settings.mainLayout().sidebarCollapsed);
         } else if (key == "OutlinerHeightDp") {
@@ -113,6 +138,8 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             if (const std::optional<DockLocation> location = dockLocationFromName(value)) {
                 inspectorDockLocation = *location;
             }
+        } else if (key == "DockPanelOrder") {
+            dockPanelOrder = parseDockPanelOrder(value);
         }
     }
 
@@ -125,6 +152,15 @@ UISettings UISettings::load(const std::filesystem::path& path) {
     if (inspectorDockLocation) {
         const bool changed =
                 dockMovePanelToLocation(settings.mainLayout().dockLayout, kMainLayoutPanelInspector, *inspectorDockLocation);
+        (void)changed;
+    }
+    if (!dockPanelOrder.empty()) {
+        std::vector<std::string_view> panelOrderViews;
+        panelOrderViews.reserve(dockPanelOrder.size());
+        for (const std::string& panelId : dockPanelOrder) {
+            panelOrderViews.push_back(panelId);
+        }
+        const bool changed = dockReorderPanels(settings.mainLayout().dockLayout, panelOrderViews);
         (void)changed;
     }
     return settings;
@@ -152,6 +188,7 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "\n[MainLayout]\n";
     file << "SidebarSide=" << mainLayoutSidebarSideName(mainLayout_.sidebarSide) << '\n';
     file << "SidebarWidthDp=" << mainLayout_.sidebarWidthDp << '\n';
+    file << "AuxiliarySidebarWidthDp=" << mainLayout_.auxiliarySidebarWidthDp << '\n';
     file << "SidebarCollapsed=" << (mainLayout_.sidebarCollapsed ? "true" : "false") << '\n';
     file << "OutlinerHeightDp=" << mainLayout_.outlinerHeightDp << '\n';
     file << "BottomDockHeightDp=" << mainLayout_.bottomDockHeightDp << '\n';
@@ -163,6 +200,14 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "InspectorDockLocation="
          << dockLocationName(dockPanelLocation(mainLayout_.dockLayout, kMainLayoutPanelInspector).value_or(DockLocation::Sidebar))
          << '\n';
+    file << "DockPanelOrder=";
+    for (std::size_t index = 0; index < mainLayout_.dockLayout.panels.size(); ++index) {
+        if (index > 0) {
+            file << ',';
+        }
+        file << mainLayout_.dockLayout.panels[index].panelId;
+    }
+    file << '\n';
     return true;
 }
 

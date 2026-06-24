@@ -165,6 +165,7 @@ add_library(quader_core STATIC
     src/ui/components/common/DockLayoutModel.cpp
     src/ui/components/organisms/MainLayoutModel.cpp
     src/ui/controllers/MainLayoutController.cpp
+    src/ui/controllers/MainLayoutDockDragController.cpp
     src/ui/controllers/ResizableSplitController.cpp
     src/ui/DebugPaletteView.cpp
     src/ui/UIUtilityTokens.cpp

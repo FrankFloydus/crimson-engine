@@ -20,6 +20,12 @@ enum class DockLocation {
     AuxiliaryBar,
 };
 
+/// Identifies how a dragged panel should be inserted relative to an existing dock panel.
+enum class DockPanelInsertPosition {
+    Before,
+    After,
+};
+
 /// Stores the logical placement for one dockable UI panel.
 struct DockPanelPlacement {
     std::string panelId;
@@ -48,6 +54,15 @@ struct DockLayoutModel {
         DockLayoutModel& model,
         std::string_view panelId,
         DockLocation location);
+[[nodiscard]] bool dockMovePanelToLocationAtPanel(
+        DockLayoutModel& model,
+        std::string_view panelId,
+        DockLocation location,
+        std::string_view targetPanelId,
+        DockPanelInsertPosition position);
+[[nodiscard]] bool dockReorderPanels(
+        DockLayoutModel& model,
+        const std::vector<std::string_view>& orderedPanelIds);
 [[nodiscard]] bool dockPanelIdIsKnown(
         const DockLayoutModel& model,
         std::string_view panelId);

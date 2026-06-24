@@ -15,6 +15,7 @@
 #include "ui/backends/rml/MainLayoutRmlBuilder.h"
 #include "ui/backends/rml/RmlUiContextHost.h"
 #include "ui/controllers/MainLayoutController.h"
+#include "ui/controllers/MainLayoutDockDragController.h"
 #include "ui/controllers/ResizableSplitController.h"
 #include "ui/controllers/ViewportHost.h"
 #include "ui/UISettings.h"
@@ -73,12 +74,13 @@ public:
 
 private:
     /**
-     * Enumerates OS cursor states owned by the main-layout resize handles.
+     * Enumerates OS cursor states owned by main-layout pointer gestures.
      */
     enum class MainLayoutCursorKind {
         Default,
         ResizeHorizontal,
         ResizeVertical,
+        DropForbidden,
     };
 
     void updateWindowMetrics();
@@ -96,8 +98,13 @@ private:
     void updateMainLayoutResize(float mouseX, float mouseY);
     void endMainLayoutResize(float mouseX, float mouseY);
     void cancelMainLayoutResize();
+    bool beginMainLayoutDockDragCandidate(float mouseX, float mouseY);
+    void updateMainLayoutDockDrag(float mouseX, float mouseY);
+    void endMainLayoutDockDrag(float mouseX, float mouseY);
+    void cancelMainLayoutDockDrag();
+    void updateMainLayoutDockDragPreviewPosition(float mouseX, float mouseY);
     void releaseMainLayoutMouseCapture();
-    [[nodiscard]] bool shouldCancelMainLayoutResize(const SDL_Event& event) const;
+    [[nodiscard]] bool shouldCancelMainLayoutPointerGesture(const SDL_Event& event) const;
     void initializeMainLayoutCursors();
     void shutdownMainLayoutCursors();
     void updateMainLayoutCursor(float mouseX, float mouseY);
@@ -126,6 +133,8 @@ private:
     std::uint32_t framebufferHeight_ = 1u;
     int windowWidth_ = 1;
     int windowHeight_ = 1;
+    int mainLayoutLeftPx_ = 0;
+    int mainLayoutTopPx_ = 0;
     int mainLayoutWidthDp_ = 0;
     int mainLayoutSidebarHeightDp_ = 0;
     std::optional<RmlElementRect> mainViewportFrame_;
@@ -134,9 +143,15 @@ private:
     bool debugPaletteVisible_ = false;
     bool mainLayoutDirty_ = true;
     ResizableSplitController mainLayoutResizeController_;
+    MainLayoutDockDragController mainLayoutDockDragController_;
+    int mainLayoutDockDragPreviewLeftDp_ = 0;
+    int mainLayoutDockDragPreviewTopDp_ = 0;
+    int mainLayoutDockDragPreviewWidthDp_ = 0;
+    int mainLayoutDockDragPreviewHeightDp_ = 0;
     bool mainLayoutMouseCaptured_ = false;
     SDL_Cursor* mainLayoutHorizontalResizeCursor_ = nullptr;
     SDL_Cursor* mainLayoutVerticalResizeCursor_ = nullptr;
+    SDL_Cursor* mainLayoutDropForbiddenCursor_ = nullptr;
     MainLayoutCursorKind activeMainLayoutCursor_ = MainLayoutCursorKind::Default;
 };
 

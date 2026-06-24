@@ -8,7 +8,9 @@
 
 #include "ui/components/organisms/MainLayoutModel.h"
 
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace quader {
 
@@ -23,12 +25,32 @@ struct MainLayoutLabels {
 enum class MainLayoutActiveResizer {
     None,
     Sidebar,
+    AuxiliarySidebar,
     Panels,
+};
+
+/// Stores the transient presentation for an active panel drag.
+struct MainLayoutDockDragPresentation {
+    std::string panelId;
+    int previewLeftDp = 0;
+    int previewTopDp = 0;
+    int previewWidthDp = 0;
+    int previewHeightDp = 0;
+    bool dragging = false;
+};
+
+/// Stores the transient insertion marker for a panel drop over an existing panel.
+struct MainLayoutPanelDropPresentation {
+    std::string panelId;
+    DockPanelInsertPosition position = DockPanelInsertPosition::After;
 };
 
 /// Stores transient presentation state for the RmlUi main layout projection.
 struct MainLayoutInteractionState {
     MainLayoutActiveResizer activeResizer = MainLayoutActiveResizer::None;
+    std::optional<MainLayoutSidebarSide> sidebarDropSide;
+    std::optional<MainLayoutPanelDropPresentation> panelDrop;
+    std::optional<MainLayoutDockDragPresentation> dockDrag;
 };
 
 /**
@@ -38,5 +60,10 @@ std::string buildMainLayoutRml(
         const MainLayoutModel& model,
         const MainLayoutLabels& labels = {},
         const MainLayoutInteractionState& interaction = {});
+
+[[nodiscard]] std::string mainLayoutPanelElementId(std::string_view panelId);
+[[nodiscard]] std::string mainLayoutPanelHeaderElementId(std::string_view panelId);
+[[nodiscard]] std::string mainLayoutSideDockElementId(DockLocation location);
+[[nodiscard]] std::string mainLayoutSideDockResizerElementId(DockLocation location);
 
 } // namespace quader

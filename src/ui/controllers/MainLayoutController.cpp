@@ -14,8 +14,19 @@ MainLayoutController::MainLayoutController(MainLayoutModel& model)
     : model_(model) {}
 
 bool MainLayoutController::resizeSidebar(int widthDp) {
+    return resizeSidebar(DockLocation::Sidebar, widthDp);
+}
+
+bool MainLayoutController::resizeSidebar(DockLocation location, int widthDp) {
     const int clamped = mainLayoutClampedSidebarWidthDp(widthDp);
-    if (model_.sidebarWidthDp == clamped && !model_.sidebarCollapsed) {
+    if (location == DockLocation::AuxiliaryBar) {
+        if (model_.auxiliarySidebarWidthDp == clamped) {
+            return false;
+        }
+        model_.auxiliarySidebarWidthDp = clamped;
+        return true;
+    }
+    if (location != DockLocation::Sidebar || (model_.sidebarWidthDp == clamped && !model_.sidebarCollapsed)) {
         return false;
     }
     model_.sidebarWidthDp = clamped;
@@ -76,6 +87,22 @@ bool MainLayoutController::movePanelToDockLocation(std::string_view panelId, Doc
         return false;
     }
     return dockMovePanelToLocation(model_.dockLayout, *canonical, location);
+}
+
+bool MainLayoutController::movePanelToDockLocation(
+        std::string_view panelId,
+        DockLocation location,
+        std::string_view targetPanelId,
+        DockPanelInsertPosition position) {
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+    const std::optional<std::string_view> canonicalTarget = mainLayoutCanonicalPanelId(targetPanelId);
+    if (!canonical ||
+            !canonicalTarget ||
+            *canonical == kMainLayoutPanelViewport ||
+            *canonicalTarget == kMainLayoutPanelViewport) {
+        return false;
+    }
+    return dockMovePanelToLocationAtPanel(model_.dockLayout, *canonical, location, *canonicalTarget, position);
 }
 
 std::optional<DockLocation> MainLayoutController::panelDockLocation(std::string_view panelId) const {

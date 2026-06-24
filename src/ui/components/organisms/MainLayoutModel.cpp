@@ -29,6 +29,38 @@ std::optional<MainLayoutSidebarSide> mainLayoutSidebarSideFromName(std::string_v
     return std::nullopt;
 }
 
+MainLayoutSidebarSide mainLayoutOppositeSidebarSide(MainLayoutSidebarSide side) {
+    return side == MainLayoutSidebarSide::Left ? MainLayoutSidebarSide::Right : MainLayoutSidebarSide::Left;
+}
+
+std::optional<MainLayoutSidebarSide> mainLayoutSidebarSideForDockLocation(
+        const MainLayoutModel& model,
+        DockLocation location) {
+    if (location == DockLocation::Sidebar) {
+        return model.sidebarSide;
+    }
+    if (location == DockLocation::AuxiliaryBar) {
+        return mainLayoutOppositeSidebarSide(model.sidebarSide);
+    }
+    return std::nullopt;
+}
+
+std::optional<DockLocation> mainLayoutDockLocationForSidebarSide(
+        const MainLayoutModel& model,
+        MainLayoutSidebarSide side) {
+    if (side == model.sidebarSide) {
+        return DockLocation::Sidebar;
+    }
+    if (side == mainLayoutOppositeSidebarSide(model.sidebarSide)) {
+        return DockLocation::AuxiliaryBar;
+    }
+    return std::nullopt;
+}
+
+int mainLayoutSideDockWidthDp(const MainLayoutModel& model, DockLocation location) {
+    return location == DockLocation::AuxiliaryBar ? model.auxiliarySidebarWidthDp : model.sidebarWidthDp;
+}
+
 int mainLayoutClampedSidebarWidthDp(int widthDp) {
     return std::max(widthDp, kMainLayoutSidebarMinWidthDp);
 }
@@ -43,6 +75,7 @@ int mainLayoutClampedBottomDockHeightDp(int heightDp) {
 
 MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model) {
     model.sidebarWidthDp = mainLayoutClampedSidebarWidthDp(model.sidebarWidthDp);
+    model.auxiliarySidebarWidthDp = mainLayoutClampedSidebarWidthDp(model.auxiliarySidebarWidthDp);
     model.outlinerHeightDp = mainLayoutClampedOutlinerHeightDp(model.outlinerHeightDp);
     model.bottomDockHeightDp = mainLayoutClampedBottomDockHeightDp(model.bottomDockHeightDp);
     model.dockLayout = normalizedDockLayoutModel(

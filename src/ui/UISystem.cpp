@@ -30,7 +30,10 @@ namespace quader {
 namespace {
 
 constexpr std::string_view kMainLayoutSidebarResizer = "sidebar";
+constexpr std::string_view kMainLayoutAuxiliarySidebarResizer = "auxiliary-sidebar";
 constexpr std::string_view kMainLayoutPanelResizer = "panels";
+constexpr int kMainLayoutSidebarDropZoneWidthDp = 64;
+constexpr float kMainLayoutDockDragPreviewHotspotOffsetPx = 10.0f;
 
 std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
     switch (event.type) {
@@ -76,9 +79,12 @@ QuaderApiVoidResult runtimeFailure(std::string message) {
     };
 }
 
-bool mainLayoutPanelVisibleInSidebar(const MainLayoutModel& model, std::string_view panelId) {
+bool mainLayoutPanelVisibleInLocation(
+        const MainLayoutModel& model,
+        std::string_view panelId,
+        DockLocation expectedLocation) {
     const std::optional<DockLocation> location = dockPanelLocation(model.dockLayout, panelId);
-    if (!location || *location != DockLocation::Sidebar) {
+    if (!location || *location != expectedLocation) {
         return false;
     }
     if (panelId == kMainLayoutPanelOutliner) {
@@ -90,14 +96,78 @@ bool mainLayoutPanelVisibleInSidebar(const MainLayoutModel& model, std::string_v
     return false;
 }
 
-int mainLayoutVisibleSidebarDockPanelCount(const MainLayoutModel& model) {
+bool mainLayoutPanelVisibleInSideDock(const MainLayoutModel& model, std::string_view panelId) {
+    const std::optional<DockLocation> location = dockPanelLocation(model.dockLayout, panelId);
+    if (!location || (*location != DockLocation::Sidebar && *location != DockLocation::AuxiliaryBar)) {
+        return false;
+    }
+    return mainLayoutPanelVisibleInLocation(model, panelId, *location);
+}
+
+int mainLayoutVisibleDockPanelCount(const MainLayoutModel& model, DockLocation location) {
     int count = 0;
     for (std::string_view panelId : mainLayoutDockablePanelIds()) {
-        if (mainLayoutPanelVisibleInSidebar(model, panelId)) {
+        if (mainLayoutPanelVisibleInLocation(model, panelId, location)) {
             ++count;
         }
     }
     return count;
+}
+
+int mainLayoutVisibleSideDockPanelCountMax(const MainLayoutModel& model) {
+    return std::max(
+            mainLayoutVisibleDockPanelCount(model, DockLocation::Sidebar),
+            mainLayoutVisibleDockPanelCount(model, DockLocation::AuxiliaryBar));
+}
+
+bool mainLayoutSideDockVisibleOnSide(const MainLayoutModel& model, MainLayoutSidebarSide side) {
+    const std::optional<DockLocation> location = mainLayoutDockLocationForSidebarSide(model, side);
+    if (!location) {
+        return false;
+    }
+    if (*location == DockLocation::Sidebar && model.sidebarCollapsed) {
+        return false;
+    }
+    return mainLayoutVisibleDockPanelCount(model, *location) > 0;
+}
+
+bool mainLayoutSideDockVisibleForLocation(const MainLayoutModel& model, DockLocation location) {
+    if (location == DockLocation::Sidebar && model.sidebarCollapsed) {
+        return false;
+    }
+    return mainLayoutVisibleDockPanelCount(model, location) > 0;
+}
+
+int mainLayoutOtherVisibleSideDockWidthDp(const MainLayoutModel& model, DockLocation location) {
+    const DockLocation otherLocation = location == DockLocation::AuxiliaryBar ?
+            DockLocation::Sidebar :
+            DockLocation::AuxiliaryBar;
+    return mainLayoutSideDockVisibleForLocation(model, otherLocation) ?
+            mainLayoutSideDockWidthDp(model, otherLocation) :
+            0;
+}
+
+bool mainLayoutDockDropTargetsEqual(
+        const std::optional<MainLayoutDockDropTarget>& lhs,
+        const std::optional<MainLayoutDockDropTarget>& rhs) {
+    if (lhs.has_value() != rhs.has_value()) {
+        return false;
+    }
+    if (!lhs) {
+        return true;
+    }
+    return lhs->side == rhs->side &&
+            lhs->targetPanelId == rhs->targetPanelId &&
+            lhs->position == rhs->position;
+}
+
+UIPixelRect uiPixelRectFromRmlRect(const RmlElementRect& rect) {
+    return {
+            .left = rect.left,
+            .top = rect.top,
+            .width = rect.width,
+            .height = rect.height,
+    };
 }
 
 std::string escapeRmlText(std::string_view text) {
@@ -183,6 +253,7 @@ void UISystem::shutdown() {
     }
 
     cancelMainLayoutResize();
+    cancelMainLayoutDockDrag();
     viewportHost_.setCursorCaptured(false);
     saveUISettings();
     saveViewportSettings();
@@ -415,8 +486,30 @@ void UISystem::rebuildMainLayout() {
     MainLayoutInteractionState interaction;
     if (mainLayoutResizeController_.activeHandleId() == kMainLayoutSidebarResizer) {
         interaction.activeResizer = MainLayoutActiveResizer::Sidebar;
+    } else if (mainLayoutResizeController_.activeHandleId() == kMainLayoutAuxiliarySidebarResizer) {
+        interaction.activeResizer = MainLayoutActiveResizer::AuxiliarySidebar;
     } else if (mainLayoutResizeController_.activeHandleId() == kMainLayoutPanelResizer) {
         interaction.activeResizer = MainLayoutActiveResizer::Panels;
+    }
+    if (const std::optional<MainLayoutDockDropTarget> target = mainLayoutDockDragController_.target()) {
+        if (target->targetPanelId.empty()) {
+            interaction.sidebarDropSide = target->side;
+        } else {
+            interaction.panelDrop = MainLayoutPanelDropPresentation{
+                    .panelId = target->targetPanelId,
+                    .position = target->position,
+            };
+        }
+    }
+    if (mainLayoutDockDragController_.active() && !mainLayoutDockDragController_.activePanelId().empty()) {
+        interaction.dockDrag = MainLayoutDockDragPresentation{
+                .panelId = std::string(mainLayoutDockDragController_.activePanelId()),
+                .previewLeftDp = mainLayoutDockDragPreviewLeftDp_,
+                .previewTopDp = mainLayoutDockDragPreviewTopDp_,
+                .previewWidthDp = mainLayoutDockDragPreviewWidthDp_,
+                .previewHeightDp = mainLayoutDockDragPreviewHeightDp_,
+                .dragging = mainLayoutDockDragController_.dragging(),
+        };
     }
 
     rmlHost_.setElementInnerRml("toolbar-label", escapeRmlText(localization_.text("ui.shell.toolbar", "Toolbar")));
@@ -427,6 +520,11 @@ void UISystem::rebuildMainLayout() {
 
 void UISystem::rebuildMainLayoutHitRegions() {
     mainLayoutResizeController_.clearHitRegions();
+    mainLayoutDockDragController_.clearHitRegions();
+    mainLayoutDockDragController_.clearSidebarDropZones();
+    mainLayoutDockDragController_.clearPanelDropZones();
+    mainLayoutLeftPx_ = 0;
+    mainLayoutTopPx_ = 0;
     mainLayoutWidthDp_ = 0;
     mainLayoutSidebarHeightDp_ = 0;
     if (!rmlHost_.initialized()) {
@@ -434,32 +532,76 @@ void UISystem::rebuildMainLayoutHitRegions() {
     }
 
     std::vector<ResizableSplitHitRegion> regions;
+    std::vector<MainLayoutDockDragHitRegion> panelDragRegions;
+    std::vector<MainLayoutSidebarDropZone> sidebarDropZones;
+    std::vector<MainLayoutPanelDropZone> panelDropZones;
     const int hitThicknessPx = std::max(
             8,
             static_cast<int>(std::lround(
                     static_cast<float>(kResizableSplitDefaultHitThicknessDp) * rmlDpRatio_)));
     if (const std::optional<RmlElementRect> rect = rmlHost_.measureElementById("main-layout-slot")) {
+        mainLayoutLeftPx_ = rect->left;
+        mainLayoutTopPx_ = rect->top;
         mainLayoutWidthDp_ = static_cast<int>(
                 std::lround(static_cast<float>(std::max(0, rect->width)) / std::max(0.001f, rmlDpRatio_)));
-    }
-    if (const std::optional<RmlElementRect> rect = rmlHost_.measureElementById("main-layout-sidebar")) {
-        mainLayoutSidebarHeightDp_ = static_cast<int>(
-                std::lround(static_cast<float>(std::max(0, rect->height)) / std::max(0.001f, rmlDpRatio_)));
-    }
-    if (const std::optional<RmlElementRect> rect = rmlHost_.measureElementById("main-layout-sidebar-resizer")) {
-        regions.push_back({
-                .id = std::string(kMainLayoutSidebarResizer),
-                .axis = ResizableSplitAxis::Horizontal,
-                .rect = ResizableSplitController::inflatedHitRect(
-                        UIPixelRect{
+        const int dropZoneWidthPx = std::min(
+                std::max(0, rect->width),
+                std::max(48,
+                        static_cast<int>(std::lround(
+                                static_cast<float>(kMainLayoutSidebarDropZoneWidthDp) * rmlDpRatio_))));
+        if (dropZoneWidthPx > 0) {
+            if (!mainLayoutSideDockVisibleOnSide(mainLayout_, MainLayoutSidebarSide::Left)) {
+                sidebarDropZones.push_back({
+                        .side = MainLayoutSidebarSide::Left,
+                        .rect = {
                                 .left = rect->left,
                                 .top = rect->top,
-                                .width = rect->width,
+                                .width = dropZoneWidthPx,
                                 .height = rect->height,
                         },
-                        ResizableSplitAxis::Horizontal,
-                        hitThicknessPx),
-        });
+                });
+            }
+            if (!mainLayoutSideDockVisibleOnSide(mainLayout_, MainLayoutSidebarSide::Right)) {
+                sidebarDropZones.push_back({
+                        .side = MainLayoutSidebarSide::Right,
+                        .rect = {
+                                .left = rect->left + rect->width - dropZoneWidthPx,
+                                .top = rect->top,
+                                .width = dropZoneWidthPx,
+                                .height = rect->height,
+                        },
+                });
+            }
+        }
+    }
+    for (DockLocation location : {DockLocation::Sidebar, DockLocation::AuxiliaryBar}) {
+        if (const std::optional<RmlElementRect> rect =
+                        rmlHost_.measureElementById(mainLayoutSideDockElementId(location))) {
+            mainLayoutSidebarHeightDp_ = std::max(
+                    mainLayoutSidebarHeightDp_,
+                    static_cast<int>(std::lround(
+                            static_cast<float>(std::max(0, rect->height)) / std::max(0.001f, rmlDpRatio_))));
+        }
+    }
+    for (DockLocation location : {DockLocation::Sidebar, DockLocation::AuxiliaryBar}) {
+        if (const std::optional<RmlElementRect> rect =
+                        rmlHost_.measureElementById(mainLayoutSideDockResizerElementId(location))) {
+            regions.push_back({
+                    .id = location == DockLocation::AuxiliaryBar ?
+                            std::string(kMainLayoutAuxiliarySidebarResizer) :
+                            std::string(kMainLayoutSidebarResizer),
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .rect = ResizableSplitController::inflatedHitRect(
+                            UIPixelRect{
+                                    .left = rect->left,
+                                    .top = rect->top,
+                                    .width = rect->width,
+                                    .height = rect->height,
+                            },
+                            ResizableSplitAxis::Horizontal,
+                            hitThicknessPx),
+            });
+        }
     }
     if (const std::optional<RmlElementRect> rect = rmlHost_.measureElementById("main-layout-panel-resizer")) {
         regions.push_back({
@@ -476,18 +618,54 @@ void UISystem::rebuildMainLayoutHitRegions() {
                         hitThicknessPx),
         });
     }
+    for (std::string_view panelId : mainLayoutDockablePanelIds()) {
+        if (!mainLayoutPanelVisibleInSideDock(mainLayout_, panelId)) {
+            continue;
+        }
+        const std::optional<DockLocation> location = dockPanelLocation(mainLayout_.dockLayout, panelId);
+        if (!location) {
+            continue;
+        }
+        const std::optional<MainLayoutSidebarSide> side = mainLayoutSidebarSideForDockLocation(mainLayout_, *location);
+        if (!side) {
+            continue;
+        }
+        if (const std::optional<RmlElementRect> rect =
+                        rmlHost_.measureElementById(mainLayoutPanelHeaderElementId(panelId))) {
+            panelDragRegions.push_back({
+                    .panelId = std::string(panelId),
+                    .rect = uiPixelRectFromRmlRect(*rect),
+            });
+        }
+        if (const std::optional<RmlElementRect> rect =
+                        rmlHost_.measureElementById(mainLayoutPanelElementId(panelId))) {
+            panelDropZones.push_back({
+                    .side = *side,
+                    .panelId = std::string(panelId),
+                    .rect = uiPixelRectFromRmlRect(*rect),
+            });
+        }
+    }
     mainLayoutResizeController_.setHitRegions(std::move(regions));
+    mainLayoutDockDragController_.setHitRegions(std::move(panelDragRegions));
+    mainLayoutDockDragController_.setSidebarDropZones(std::move(sidebarDropZones));
+    mainLayoutDockDragController_.setPanelDropZones(std::move(panelDropZones));
 }
 
 bool UISystem::handleMainLayoutPointerEvent(const SDL_Event& event) {
     if (debugPaletteVisible_) {
+        cancelMainLayoutDockDrag();
         cancelMainLayoutResize();
         setMainLayoutCursor(MainLayoutCursorKind::Default);
         return false;
     }
 
-    if (mainLayoutResizeController_.active() && shouldCancelMainLayoutResize(event)) {
+    if (mainLayoutResizeController_.active() && shouldCancelMainLayoutPointerGesture(event)) {
         cancelMainLayoutResize();
+        return true;
+    }
+    if (mainLayoutDockDragController_.active() && shouldCancelMainLayoutPointerGesture(event)) {
+        cancelMainLayoutDockDrag();
         return true;
     }
 
@@ -518,6 +696,22 @@ bool UISystem::handleMainLayoutPointerEvent(const SDL_Event& event) {
         return event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
     }
 
+    if (mainLayoutDockDragController_.active()) {
+        if (event.type == SDL_EVENT_MOUSE_MOTION) {
+            if ((event.motion.state & SDL_BUTTON_LMASK) == 0u) {
+                cancelMainLayoutDockDrag();
+                return true;
+            }
+            updateMainLayoutDockDrag(mouseX, mouseY);
+            return true;
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button == SDL_BUTTON_LEFT) {
+            endMainLayoutDockDrag(mouseX, mouseY);
+            return true;
+        }
+        return event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP;
+    }
+
     if (event.type == SDL_EVENT_MOUSE_MOTION) {
         updateMainLayoutCursor(mouseX, mouseY);
         return false;
@@ -529,6 +723,9 @@ bool UISystem::handleMainLayoutPointerEvent(const SDL_Event& event) {
 
     if (const std::optional<ResizableSplitHitRegion> region = mainLayoutResizeController_.hitTest(mouseX, mouseY)) {
         beginMainLayoutResize(region->id, mouseX, mouseY);
+        return true;
+    }
+    if (beginMainLayoutDockDragCandidate(mouseX, mouseY)) {
         return true;
     }
 
@@ -569,19 +766,31 @@ std::optional<std::pair<float, float>> UISystem::mainLayoutPointerFramebufferPos
 }
 
 std::optional<ResizableSplitHandle> UISystem::mainLayoutSplitHandle(std::string_view handleId) const {
-    if (handleId == kMainLayoutSidebarResizer) {
+    if (handleId == kMainLayoutSidebarResizer || handleId == kMainLayoutAuxiliarySidebarResizer) {
+        const DockLocation location = handleId == kMainLayoutAuxiliarySidebarResizer ?
+                DockLocation::AuxiliaryBar :
+                DockLocation::Sidebar;
+        const std::optional<MainLayoutSidebarSide> side = mainLayoutSidebarSideForDockLocation(mainLayout_, location);
+        if (!side) {
+            return std::nullopt;
+        }
+        const bool primarySidebar = location == DockLocation::Sidebar;
         return ResizableSplitHandle{
-                .id = std::string(kMainLayoutSidebarResizer),
+                .id = std::string(handleId),
                 .axis = ResizableSplitAxis::Horizontal,
-                .growth = mainLayout_.sidebarSide == MainLayoutSidebarSide::Right ?
+                .growth = *side == MainLayoutSidebarSide::Right ?
                         ResizableSplitGrowthDirection::Negative :
                         ResizableSplitGrowthDirection::Positive,
-                .sizeDp = mainLayout_.sidebarCollapsed ? 0 : mainLayout_.sidebarWidthDp,
+                .sizeDp = primarySidebar && mainLayout_.sidebarCollapsed ?
+                        0 :
+                        mainLayoutSideDockWidthDp(mainLayout_, location),
                 .minSize = ResizableSplitSizeRule::dp(kMainLayoutSidebarMinWidthDp),
-                .oppositeMinSize = ResizableSplitSizeRule::dp(kMainLayoutViewportMinWidthDp),
+                .oppositeMinSize = ResizableSplitSizeRule::dp(
+                        kMainLayoutViewportMinWidthDp +
+                        mainLayoutOtherVisibleSideDockWidthDp(mainLayout_, location)),
                 .containerSizeDp = mainLayoutWidthDp_,
                 .collapse = {
-                        .enabled = true,
+                        .enabled = primarySidebar,
                         .collapsedSizeDp = 0,
                 },
         };
@@ -625,13 +834,16 @@ void UISystem::updateMainLayoutResize(float mouseX, float mouseY) {
         return;
     }
 
-    if (resize->id == kMainLayoutSidebarResizer) {
+    if (resize->id == kMainLayoutSidebarResizer || resize->id == kMainLayoutAuxiliarySidebarResizer) {
+        const bool auxiliarySidebar = resize->id == kMainLayoutAuxiliarySidebarResizer;
         const int restoredSidebarWidthDp = mainLayout_.sidebarCollapsed ?
                 std::max(resize->sizeDp, mainLayout_.sidebarWidthDp) :
                 resize->sizeDp;
-        const bool changed = resize->collapsed ?
+        const bool changed = !auxiliarySidebar && resize->collapsed ?
                 mainLayoutController_.setSidebarCollapsed(true) :
-                mainLayoutController_.resizeSidebar(restoredSidebarWidthDp);
+                mainLayoutController_.resizeSidebar(
+                        auxiliarySidebar ? DockLocation::AuxiliaryBar : DockLocation::Sidebar,
+                        auxiliarySidebar ? resize->sizeDp : restoredSidebarWidthDp);
         if (changed) {
             mainLayoutDirty_ = true;
         }
@@ -666,18 +878,133 @@ void UISystem::cancelMainLayoutResize() {
     setMainLayoutCursor(MainLayoutCursorKind::Default);
 }
 
+bool UISystem::beginMainLayoutDockDragCandidate(float mouseX, float mouseY) {
+    if (!mainLayoutDockDragController_.beginDragCandidate(mouseX, mouseY)) {
+        return false;
+    }
+
+    updateMainLayoutDockDragPreviewPosition(mouseX, mouseY);
+    if (!SDL_CaptureMouse(true)) {
+        LOG_WARN("Unable to capture mouse for main-layout panel drag: {}", SDL_GetError());
+    } else {
+        mainLayoutMouseCaptured_ = true;
+    }
+    viewportHost_.setCursorCaptured(false);
+    setMainLayoutCursor(MainLayoutCursorKind::Default);
+    mainLayoutDirty_ = true;
+    return true;
+}
+
+void UISystem::updateMainLayoutDockDrag(float mouseX, float mouseY) {
+    const bool wasDragging = mainLayoutDockDragController_.dragging();
+    const std::optional<MainLayoutDockDropTarget> previousTarget = mainLayoutDockDragController_.target();
+    const int previousPreviewLeftDp = mainLayoutDockDragPreviewLeftDp_;
+    const int previousPreviewTopDp = mainLayoutDockDragPreviewTopDp_;
+    const int previousPreviewWidthDp = mainLayoutDockDragPreviewWidthDp_;
+    const int previousPreviewHeightDp = mainLayoutDockDragPreviewHeightDp_;
+    updateMainLayoutDockDragPreviewPosition(mouseX, mouseY);
+    const std::optional<MainLayoutDockDropTarget> target =
+            mainLayoutDockDragController_.updateDrag(mouseX, mouseY);
+    if (mainLayoutDockDragController_.dragging()) {
+        setMainLayoutCursor(target ? MainLayoutCursorKind::Default : MainLayoutCursorKind::DropForbidden);
+    }
+    if (wasDragging != mainLayoutDockDragController_.dragging() ||
+            !mainLayoutDockDropTargetsEqual(previousTarget, target) ||
+            (mainLayoutDockDragController_.dragging() &&
+                    (previousPreviewLeftDp != mainLayoutDockDragPreviewLeftDp_ ||
+                            previousPreviewTopDp != mainLayoutDockDragPreviewTopDp_ ||
+                            previousPreviewWidthDp != mainLayoutDockDragPreviewWidthDp_ ||
+                            previousPreviewHeightDp != mainLayoutDockDragPreviewHeightDp_))) {
+        mainLayoutDirty_ = true;
+    }
+}
+
+void UISystem::endMainLayoutDockDrag(float mouseX, float mouseY) {
+    if (!mainLayoutDockDragController_.active()) {
+        return;
+    }
+
+    const bool hadPresentationState = mainLayoutDockDragController_.active();
+    const std::optional<MainLayoutDockDropResult> drop =
+            mainLayoutDockDragController_.endDrag(mouseX, mouseY);
+    mainLayoutDockDragPreviewWidthDp_ = 0;
+    mainLayoutDockDragPreviewHeightDp_ = 0;
+    releaseMainLayoutMouseCapture();
+    if (drop) {
+        const std::optional<DockLocation> targetLocation =
+                mainLayoutDockLocationForSidebarSide(mainLayout_, drop->target.side);
+        if (targetLocation) {
+            const bool moved = drop->target.targetPanelId.empty() ?
+                    mainLayoutController_.movePanelToDockLocation(drop->panelId, *targetLocation) :
+                    mainLayoutController_.movePanelToDockLocation(
+                            drop->panelId,
+                            *targetLocation,
+                            drop->target.targetPanelId,
+                            drop->target.position);
+            const bool expandedPrimarySidebar = *targetLocation == DockLocation::Sidebar &&
+                    mainLayoutController_.setSidebarCollapsed(false);
+            mainLayoutDirty_ = mainLayoutDirty_ || moved || expandedPrimarySidebar;
+        }
+    }
+    if (hadPresentationState) {
+        mainLayoutDirty_ = true;
+    }
+    updateMainLayoutCursor(mouseX, mouseY);
+}
+
+void UISystem::cancelMainLayoutDockDrag() {
+    if (!mainLayoutDockDragController_.active()) {
+        return;
+    }
+
+    const bool hadPresentationState = mainLayoutDockDragController_.active();
+    mainLayoutDockDragController_.cancel();
+    mainLayoutDockDragPreviewWidthDp_ = 0;
+    mainLayoutDockDragPreviewHeightDp_ = 0;
+    releaseMainLayoutMouseCapture();
+    if (hadPresentationState) {
+        mainLayoutDirty_ = true;
+    }
+    setMainLayoutCursor(MainLayoutCursorKind::Default);
+}
+
+void UISystem::updateMainLayoutDockDragPreviewPosition(float mouseX, float mouseY) {
+    const float dpRatio = std::max(0.001f, rmlDpRatio_);
+    mainLayoutDockDragPreviewLeftDp_ = std::max(0,
+            static_cast<int>(std::lround(
+                    (mouseX - static_cast<float>(mainLayoutLeftPx_) + kMainLayoutDockDragPreviewHotspotOffsetPx) /
+                    dpRatio)));
+    mainLayoutDockDragPreviewTopDp_ = std::max(0,
+            static_cast<int>(std::lround(
+                    (mouseY - static_cast<float>(mainLayoutTopPx_) + kMainLayoutDockDragPreviewHotspotOffsetPx) /
+                    dpRatio)));
+
+    if (!mainLayoutDockDragController_.activePanelId().empty()) {
+        if (const std::optional<RmlElementRect> rect =
+                        rmlHost_.measureElementById(
+                                mainLayoutPanelHeaderElementId(mainLayoutDockDragController_.activePanelId()))) {
+            mainLayoutDockDragPreviewWidthDp_ = std::max(1,
+                    static_cast<int>(std::lround(
+                            static_cast<float>(std::max(0, rect->width)) / dpRatio)));
+            mainLayoutDockDragPreviewHeightDp_ = std::max(1,
+                    static_cast<int>(std::lround(
+                            static_cast<float>(std::max(0, rect->height)) / dpRatio)));
+        }
+    }
+}
+
 void UISystem::releaseMainLayoutMouseCapture() {
     if (!mainLayoutMouseCaptured_) {
         return;
     }
 
     if (!SDL_CaptureMouse(false)) {
-        LOG_WARN("Unable to release mouse capture after main-layout resize: {}", SDL_GetError());
+        LOG_WARN("Unable to release mouse capture after main-layout pointer gesture: {}", SDL_GetError());
     }
     mainLayoutMouseCaptured_ = false;
 }
 
-bool UISystem::shouldCancelMainLayoutResize(const SDL_Event& event) const {
+bool UISystem::shouldCancelMainLayoutPointerGesture(const SDL_Event& event) const {
     const std::optional<SDL_WindowID> targetWindow = eventWindowId(event);
     if (targetWindow && window_ && *targetWindow != SDL_GetWindowID(window_)) {
         return false;
@@ -691,6 +1018,7 @@ bool UISystem::shouldCancelMainLayoutResize(const SDL_Event& event) const {
 void UISystem::initializeMainLayoutCursors() {
     mainLayoutHorizontalResizeCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
     mainLayoutVerticalResizeCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+    mainLayoutDropForbiddenCursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NOT_ALLOWED);
 }
 
 void UISystem::shutdownMainLayoutCursors() {
@@ -702,6 +1030,10 @@ void UISystem::shutdownMainLayoutCursors() {
     if (mainLayoutVerticalResizeCursor_) {
         SDL_DestroyCursor(mainLayoutVerticalResizeCursor_);
         mainLayoutVerticalResizeCursor_ = nullptr;
+    }
+    if (mainLayoutDropForbiddenCursor_) {
+        SDL_DestroyCursor(mainLayoutDropForbiddenCursor_);
+        mainLayoutDropForbiddenCursor_ = nullptr;
     }
 }
 
@@ -725,6 +1057,8 @@ void UISystem::setMainLayoutCursor(MainLayoutCursorKind kind) {
         cursor = mainLayoutHorizontalResizeCursor_;
     } else if (kind == MainLayoutCursorKind::ResizeVertical && mainLayoutVerticalResizeCursor_) {
         cursor = mainLayoutVerticalResizeCursor_;
+    } else if (kind == MainLayoutCursorKind::DropForbidden && mainLayoutDropForbiddenCursor_) {
+        cursor = mainLayoutDropForbiddenCursor_;
     }
     if (cursor) {
         SDL_SetCursor(cursor);
@@ -756,17 +1090,32 @@ void UISystem::updateMainViewportFrameFromRml() {
 
 bool UISystem::normalizeMainLayoutForMeasuredBounds() {
     bool changed = false;
-    if (mainLayoutWidthDp_ > 0 && !mainLayout_.sidebarCollapsed) {
+    if (mainLayoutWidthDp_ > 0) {
+        const int auxiliaryWidthForPrimaryClamp =
+                mainLayoutSideDockVisibleForLocation(mainLayout_, DockLocation::AuxiliaryBar) ?
+                mainLayout_.auxiliarySidebarWidthDp :
+                0;
         const int measuredMaxSidebarWidthDp = std::max(
-                mainLayoutWidthDp_ - kMainLayoutViewportMinWidthDp,
+                mainLayoutWidthDp_ - kMainLayoutViewportMinWidthDp - auxiliaryWidthForPrimaryClamp,
                 kMainLayoutSidebarMinWidthDp);
         if (mainLayout_.sidebarWidthDp > measuredMaxSidebarWidthDp) {
             mainLayout_.sidebarWidthDp = measuredMaxSidebarWidthDp;
             changed = true;
         }
+        const int primaryWidthForAuxiliaryClamp =
+                mainLayoutSideDockVisibleForLocation(mainLayout_, DockLocation::Sidebar) ?
+                mainLayout_.sidebarWidthDp :
+                0;
+        const int measuredMaxAuxiliarySidebarWidthDp = std::max(
+                mainLayoutWidthDp_ - kMainLayoutViewportMinWidthDp - primaryWidthForAuxiliaryClamp,
+                kMainLayoutSidebarMinWidthDp);
+        if (mainLayout_.auxiliarySidebarWidthDp > measuredMaxAuxiliarySidebarWidthDp) {
+            mainLayout_.auxiliarySidebarWidthDp = measuredMaxAuxiliarySidebarWidthDp;
+            changed = true;
+        }
     }
 
-    if (mainLayoutSidebarHeightDp_ > 0 && mainLayoutVisibleSidebarDockPanelCount(mainLayout_) > 1) {
+    if (mainLayoutSidebarHeightDp_ > 0 && mainLayoutVisibleSideDockPanelCountMax(mainLayout_) > 1) {
         const int measuredMaxOutlinerHeightDp = std::clamp(
                 mainLayoutSidebarHeightDp_ - kMainLayoutPanelMinHeightDp - kResizableSplitDefaultHitThicknessDp,
                 kMainLayoutPanelMinHeightDp,
@@ -838,6 +1187,7 @@ bool UISystem::setMainLayoutPanelVisible(std::string_view panel, bool visible) {
 
 void UISystem::toggleDebugPalette() {
     debugPaletteVisible_ = !debugPaletteVisible_;
+    cancelMainLayoutDockDrag();
     cancelMainLayoutResize();
     applyDebugPaletteVisibility();
     if (debugPaletteVisible_) {

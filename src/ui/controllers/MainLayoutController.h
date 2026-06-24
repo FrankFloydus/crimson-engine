@@ -20,11 +20,17 @@ public:
     explicit MainLayoutController(MainLayoutModel& model);
 
     [[nodiscard]] bool resizeSidebar(int widthDp);
+    [[nodiscard]] bool resizeSidebar(DockLocation location, int widthDp);
     [[nodiscard]] bool resizeOutlinerPanel(int heightDp);
     [[nodiscard]] bool setSidebarSide(MainLayoutSidebarSide side);
     [[nodiscard]] bool setSidebarCollapsed(bool collapsed);
     [[nodiscard]] bool setPanelVisible(std::string_view panelId, bool visible);
     [[nodiscard]] bool movePanelToDockLocation(std::string_view panelId, DockLocation location);
+    [[nodiscard]] bool movePanelToDockLocation(
+            std::string_view panelId,
+            DockLocation location,
+            std::string_view targetPanelId,
+            DockPanelInsertPosition position);
     [[nodiscard]] std::optional<DockLocation> panelDockLocation(std::string_view panelId) const;
     [[nodiscard]] bool isPanelVisible(std::string_view panelId) const;
 

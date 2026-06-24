@@ -23,6 +23,18 @@ auto findPlacement(const DockLayoutModel& model, std::string_view panelId) {
     });
 }
 
+bool placementsEqual(const std::vector<DockPanelPlacement>& lhs, const std::vector<DockPanelPlacement>& rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < lhs.size(); ++index) {
+        if (lhs[index].panelId != rhs[index].panelId || lhs[index].location != rhs[index].location) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 std::string_view dockLocationName(DockLocation location) {
@@ -57,15 +69,36 @@ DockLayoutModel normalizedDockLayoutModel(
     std::vector<DockPanelPlacement> normalized;
     normalized.reserve(requiredPanelIds.size());
 
+    for (const DockPanelPlacement& placement : model.panels) {
+        if (placement.panelId.empty()) {
+            continue;
+        }
+        const auto required = std::find(requiredPanelIds.begin(), requiredPanelIds.end(), placement.panelId);
+        const auto alreadyInserted =
+                std::find_if(normalized.begin(), normalized.end(), [&placement](const DockPanelPlacement& inserted) {
+                    return inserted.panelId == placement.panelId;
+                });
+        if (required != requiredPanelIds.end() && alreadyInserted == normalized.end()) {
+            normalized.push_back(placement);
+        }
+    }
+
     for (std::string_view panelId : requiredPanelIds) {
         if (panelId.empty()) {
             continue;
         }
-        const auto existing = findPlacement(model, panelId);
-        normalized.push_back({
-                .panelId = std::string(panelId),
-                .location = existing == model.panels.end() ? defaultLocation : existing->location,
-        });
+        const auto existing = std::find_if(
+                normalized.begin(),
+                normalized.end(),
+                [panelId](const DockPanelPlacement& placement) {
+                    return placement.panelId == panelId;
+                });
+        if (existing == normalized.end()) {
+            normalized.push_back({
+                    .panelId = std::string(panelId),
+                    .location = defaultLocation,
+            });
+        }
     }
 
     model.panels = std::move(normalized);
@@ -103,6 +136,89 @@ bool dockMovePanelToLocation(DockLayoutModel& model, std::string_view panelId, D
     }
     placement->location = location;
     model.activePanelId = placement->panelId;
+    return true;
+}
+
+bool dockMovePanelToLocationAtPanel(
+        DockLayoutModel& model,
+        std::string_view panelId,
+        DockLocation location,
+        std::string_view targetPanelId,
+        DockPanelInsertPosition position) {
+    const auto source = findPlacement(model, panelId);
+    const auto target = findPlacement(model, targetPanelId);
+    if (source == model.panels.end() ||
+            target == model.panels.end() ||
+            source->panelId == target->panelId ||
+            target->location != location) {
+        return false;
+    }
+
+    const std::vector<DockPanelPlacement> previous = model.panels;
+    const DockPanelPlacement moved{
+            .panelId = source->panelId,
+            .location = location,
+    };
+    const std::string targetId = target->panelId;
+
+    std::vector<DockPanelPlacement> reordered;
+    reordered.reserve(model.panels.size());
+    bool inserted = false;
+    for (const DockPanelPlacement& placement : model.panels) {
+        if (placement.panelId == moved.panelId) {
+            continue;
+        }
+        if (placement.panelId == targetId && position == DockPanelInsertPosition::Before) {
+            reordered.push_back(moved);
+            inserted = true;
+        }
+        reordered.push_back(placement);
+        if (placement.panelId == targetId && position == DockPanelInsertPosition::After) {
+            reordered.push_back(moved);
+            inserted = true;
+        }
+    }
+
+    if (!inserted || placementsEqual(previous, reordered)) {
+        return false;
+    }
+
+    model.panels = std::move(reordered);
+    model.activePanelId = moved.panelId;
+    return true;
+}
+
+bool dockReorderPanels(DockLayoutModel& model, const std::vector<std::string_view>& orderedPanelIds) {
+    const std::vector<DockPanelPlacement> previous = model.panels;
+    std::vector<DockPanelPlacement> reordered;
+    reordered.reserve(model.panels.size());
+
+    for (std::string_view panelId : orderedPanelIds) {
+        const auto placement = findPlacement(model, panelId);
+        const auto alreadyInserted =
+                std::find_if(reordered.begin(), reordered.end(), [panelId](const DockPanelPlacement& inserted) {
+                    return inserted.panelId == panelId;
+                });
+        if (placement != model.panels.end() && alreadyInserted == reordered.end()) {
+            reordered.push_back(*placement);
+        }
+    }
+
+    for (const DockPanelPlacement& placement : model.panels) {
+        const auto alreadyInserted =
+                std::find_if(reordered.begin(), reordered.end(), [&placement](const DockPanelPlacement& inserted) {
+                    return inserted.panelId == placement.panelId;
+                });
+        if (alreadyInserted == reordered.end()) {
+            reordered.push_back(placement);
+        }
+    }
+
+    if (placementsEqual(previous, reordered)) {
+        return false;
+    }
+
+    model.panels = std::move(reordered);
     return true;
 }
 
