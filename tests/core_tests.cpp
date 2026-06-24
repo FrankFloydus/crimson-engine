@@ -441,7 +441,7 @@ TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
         ASSERT_TRUE(file.is_open());
         file << "[MainLayout]\n";
         file << "SidebarSide=Bottom\n";
-        file << "SidebarWidthDp=9999\n";
+        file << "SidebarWidthDp=12\n";
         file << "SidebarCollapsed=maybe\n";
         file << "OutlinerHeightDp=-42\n";
         file << "OutlinerVisible=what\n";
@@ -451,7 +451,7 @@ TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
     const UISettings loaded = UISettings::load(path);
 
     EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, kMainLayoutSidebarMaxWidthDp);
+    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, kMainLayoutSidebarMinWidthDp);
     EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutPanelMinHeightDp);
     EXPECT_FALSE(loaded.mainLayout().sidebarCollapsed);
     EXPECT_TRUE(loaded.mainLayout().outlinerVisible);
@@ -489,7 +489,7 @@ TEST(MainLayoutControllerTests, ResizesSidebarAndPanelSplitWithClamps) {
     EXPECT_TRUE(controller.resizeSidebar(12));
     EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarMinWidthDp);
     EXPECT_TRUE(controller.resizeSidebar(800));
-    EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarMaxWidthDp);
+    EXPECT_EQ(layout.sidebarWidthDp, 800);
     EXPECT_TRUE(controller.resizeSidebar(280));
     EXPECT_EQ(layout.sidebarWidthDp, 280);
 
@@ -621,6 +621,29 @@ TEST(ResizableSplitControllerTests, ClampsAgainstOppositeMinSizeInsideContainer)
 
     ASSERT_TRUE(resize.has_value());
     EXPECT_EQ(resize->sizeDp, 360);
+    EXPECT_FALSE(resize->collapsed);
+}
+
+TEST(ResizableSplitControllerTests, UsesContainerAndOppositeMinAsEffectiveMaxWhenUnbounded) {
+    ResizableSplitController controller;
+    controller.beginDrag(
+            {
+                    .id = "sidebar",
+                    .axis = ResizableSplitAxis::Horizontal,
+                    .growth = ResizableSplitGrowthDirection::Positive,
+                    .sizeDp = 240,
+                    .minSize = ResizableSplitSizeRule::dp(160),
+                    .oppositeMinSize = ResizableSplitSizeRule::dp(160),
+                    .containerSizeDp = 720,
+            },
+            100.0f,
+            0.0f,
+            1.0f);
+
+    const std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(1000.0f, 0.0f, 1.0f);
+
+    ASSERT_TRUE(resize.has_value());
+    EXPECT_EQ(resize->sizeDp, 560);
     EXPECT_FALSE(resize->collapsed);
 }
 

@@ -29,7 +29,7 @@ std::optional<MainLayoutSidebarSide> mainLayoutSidebarSideFromName(std::string_v
 }
 
 int mainLayoutClampedSidebarWidthDp(int widthDp) {
-    return std::clamp(widthDp, kMainLayoutSidebarMinWidthDp, kMainLayoutSidebarMaxWidthDp);
+    return std::max(widthDp, kMainLayoutSidebarMinWidthDp);
 }
 
 int mainLayoutClampedOutlinerHeightDp(int heightDp) {

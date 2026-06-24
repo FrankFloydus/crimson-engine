@@ -13,7 +13,6 @@ namespace quader {
 
 inline constexpr int kMainLayoutSidebarDefaultWidthDp = 240;
 inline constexpr int kMainLayoutSidebarMinWidthDp = 160;
-inline constexpr int kMainLayoutSidebarMaxWidthDp = 420;
 inline constexpr int kMainLayoutOutlinerDefaultHeightDp = 320;
 inline constexpr int kMainLayoutPanelMinHeightDp = 120;
 inline constexpr int kMainLayoutPanelMaxHeightDp = 900;

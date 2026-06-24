@@ -554,7 +554,7 @@ std::optional<ResizableSplitHandle> UISystem::mainLayoutSplitHandle(std::string_
                         ResizableSplitGrowthDirection::Positive,
                 .sizeDp = mainLayout_.sidebarCollapsed ? 0 : mainLayout_.sidebarWidthDp,
                 .minSize = ResizableSplitSizeRule::dp(kMainLayoutSidebarMinWidthDp),
-                .maxSize = ResizableSplitSizeRule::dp(kMainLayoutSidebarMaxWidthDp),
+                .oppositeMinSize = ResizableSplitSizeRule::dp(kMainLayoutViewportMinWidthDp),
                 .containerSizeDp = mainLayoutWidthDp_,
                 .collapse = {
                         .enabled = true,
@@ -733,10 +733,9 @@ void UISystem::updateMainViewportFrameFromRml() {
 bool UISystem::normalizeMainLayoutForMeasuredBounds() {
     bool changed = false;
     if (mainLayoutWidthDp_ > 0 && !mainLayout_.sidebarCollapsed) {
-        const int measuredMaxSidebarWidthDp = std::clamp(
+        const int measuredMaxSidebarWidthDp = std::max(
                 mainLayoutWidthDp_ - kMainLayoutViewportMinWidthDp,
-                kMainLayoutSidebarMinWidthDp,
-                kMainLayoutSidebarMaxWidthDp);
+                kMainLayoutSidebarMinWidthDp);
         if (mainLayout_.sidebarWidthDp > measuredMaxSidebarWidthDp) {
             mainLayout_.sidebarWidthDp = measuredMaxSidebarWidthDp;
             changed = true;
