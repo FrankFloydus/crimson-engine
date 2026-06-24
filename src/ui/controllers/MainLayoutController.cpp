@@ -18,19 +18,16 @@ bool MainLayoutController::resizeSidebar(int widthDp) {
 }
 
 bool MainLayoutController::resizeSidebar(DockLocation location, int widthDp) {
-    const int clamped = mainLayoutClampedSidebarWidthDp(widthDp);
-    if (location == DockLocation::AuxiliaryBar) {
-        if (model_.auxiliarySidebarWidthDp == clamped) {
-            return false;
-        }
-        model_.auxiliarySidebarWidthDp = clamped;
-        return true;
-    }
-    if (location != DockLocation::Sidebar || (model_.sidebarWidthDp == clamped && !model_.sidebarCollapsed)) {
+    if (!mainLayoutLocationIsSideDock(location)) {
         return false;
     }
-    model_.sidebarWidthDp = clamped;
-    model_.sidebarCollapsed = false;
+    const int clamped = mainLayoutClampedSidebarWidthDp(widthDp);
+    MainLayoutSideDockModel& sideDock = mainLayoutSideDock(model_, location);
+    if (sideDock.widthDp == clamped && !sideDock.collapsed) {
+        return false;
+    }
+    sideDock.widthDp = clamped;
+    sideDock.collapsed = false;
     return true;
 }
 
@@ -52,10 +49,18 @@ bool MainLayoutController::setSidebarSide(MainLayoutSidebarSide side) {
 }
 
 bool MainLayoutController::setSidebarCollapsed(bool collapsed) {
-    if (model_.sidebarCollapsed == collapsed) {
+    return setSidebarCollapsed(DockLocation::Sidebar, collapsed);
+}
+
+bool MainLayoutController::setSidebarCollapsed(DockLocation location, bool collapsed) {
+    if (!mainLayoutLocationIsSideDock(location)) {
         return false;
     }
-    model_.sidebarCollapsed = collapsed;
+    MainLayoutSideDockModel& sideDock = mainLayoutSideDock(model_, location);
+    if (sideDock.collapsed == collapsed) {
+        return false;
+    }
+    sideDock.collapsed = collapsed;
     return true;
 }
 

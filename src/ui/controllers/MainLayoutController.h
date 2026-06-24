@@ -24,6 +24,7 @@ public:
     [[nodiscard]] bool resizeOutlinerPanel(int heightDp);
     [[nodiscard]] bool setSidebarSide(MainLayoutSidebarSide side);
     [[nodiscard]] bool setSidebarCollapsed(bool collapsed);
+    [[nodiscard]] bool setSidebarCollapsed(DockLocation location, bool collapsed);
     [[nodiscard]] bool setPanelVisible(std::string_view panelId, bool visible);
     [[nodiscard]] bool movePanelToDockLocation(std::string_view panelId, DockLocation location);
     [[nodiscard]] bool movePanelToDockLocation(

@@ -113,13 +113,16 @@ UISettings UISettings::load(const std::filesystem::path& path) {
                 settings.mainLayout().sidebarSide = *side;
             }
         } else if (key == "SidebarWidthDp") {
-            settings.mainLayout().sidebarWidthDp =
-                    mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().sidebarWidthDp));
+            settings.mainLayout().sidebar.widthDp =
+                    mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().sidebar.widthDp));
         } else if (key == "AuxiliarySidebarWidthDp") {
-            settings.mainLayout().auxiliarySidebarWidthDp =
-                    mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().auxiliarySidebarWidthDp));
+            settings.mainLayout().auxiliarySidebar.widthDp =
+                    mainLayoutClampedSidebarWidthDp(parseInt(value, settings.mainLayout().auxiliarySidebar.widthDp));
         } else if (key == "SidebarCollapsed") {
-            settings.mainLayout().sidebarCollapsed = parseBool(value, settings.mainLayout().sidebarCollapsed);
+            settings.mainLayout().sidebar.collapsed = parseBool(value, settings.mainLayout().sidebar.collapsed);
+        } else if (key == "AuxiliarySidebarCollapsed") {
+            settings.mainLayout().auxiliarySidebar.collapsed =
+                    parseBool(value, settings.mainLayout().auxiliarySidebar.collapsed);
         } else if (key == "OutlinerHeightDp") {
             settings.mainLayout().outlinerHeightDp =
                     mainLayoutClampedOutlinerHeightDp(parseInt(value, settings.mainLayout().outlinerHeightDp));
@@ -187,9 +190,10 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "Locale=" << locale_ << '\n';
     file << "\n[MainLayout]\n";
     file << "SidebarSide=" << mainLayoutSidebarSideName(mainLayout_.sidebarSide) << '\n';
-    file << "SidebarWidthDp=" << mainLayout_.sidebarWidthDp << '\n';
-    file << "AuxiliarySidebarWidthDp=" << mainLayout_.auxiliarySidebarWidthDp << '\n';
-    file << "SidebarCollapsed=" << (mainLayout_.sidebarCollapsed ? "true" : "false") << '\n';
+    file << "SidebarWidthDp=" << mainLayout_.sidebar.widthDp << '\n';
+    file << "AuxiliarySidebarWidthDp=" << mainLayout_.auxiliarySidebar.widthDp << '\n';
+    file << "SidebarCollapsed=" << (mainLayout_.sidebar.collapsed ? "true" : "false") << '\n';
+    file << "AuxiliarySidebarCollapsed=" << (mainLayout_.auxiliarySidebar.collapsed ? "true" : "false") << '\n';
     file << "OutlinerHeightDp=" << mainLayout_.outlinerHeightDp << '\n';
     file << "BottomDockHeightDp=" << mainLayout_.bottomDockHeightDp << '\n';
     file << "OutlinerVisible=" << (mainLayout_.outlinerVisible ? "true" : "false") << '\n';

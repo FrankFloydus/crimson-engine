@@ -336,8 +336,10 @@ std::string buildMainLayoutRml(
     const std::vector<std::string_view> auxiliaryPanels = visiblePanelsInLocation(model, DockLocation::AuxiliaryBar);
     const std::vector<std::string_view> bottomPanels = visiblePanelsInLocation(model, DockLocation::Panel);
     const bool sidebarAvailable = !sidebarPanels.empty();
-    const bool sidebarVisible = sidebarAvailable && !model.sidebarCollapsed;
-    const bool auxiliaryVisible = !auxiliaryPanels.empty();
+    const bool auxiliaryAvailable = !auxiliaryPanels.empty();
+    const bool sidebarVisible = sidebarAvailable && !mainLayoutSideDockCollapsed(model, DockLocation::Sidebar);
+    const bool auxiliaryVisible =
+            auxiliaryAvailable && !mainLayoutSideDockCollapsed(model, DockLocation::AuxiliaryBar);
     rml << "<div class=\"main-layout bg-gray-950 "
         << (model.sidebarSide == MainLayoutSidebarSide::Left ? "main-layout-sidebar-left" : "main-layout-sidebar-right")
         << "\">";
@@ -346,6 +348,9 @@ std::string buildMainLayoutRml(
 
     const auto sideDockVisible = [&](DockLocation location) {
         return location == DockLocation::Sidebar ? sidebarVisible : auxiliaryVisible;
+    };
+    const auto sideDockAvailable = [&](DockLocation location) {
+        return location == DockLocation::Sidebar ? sidebarAvailable : auxiliaryAvailable;
     };
     const auto panelsForLocation = [&](DockLocation location) -> const std::vector<std::string_view>& {
         return location == DockLocation::Sidebar ? sidebarPanels : auxiliaryPanels;
@@ -385,7 +390,7 @@ std::string buildMainLayoutRml(
         }
         if (sideDockVisible(*location)) {
             appendSideDockResizer(rml, model, interaction, *location, side, false);
-        } else if (*location == DockLocation::Sidebar && sidebarAvailable) {
+        } else if (sideDockAvailable(*location)) {
             appendSideDockResizer(rml, model, interaction, *location, side, true);
         }
     }

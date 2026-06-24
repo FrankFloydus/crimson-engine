@@ -7,6 +7,7 @@
 #include "ui/components/organisms/MainLayoutModel.h"
 
 #include <algorithm>
+#include <cassert>
 #include <utility>
 
 namespace quader {
@@ -57,8 +58,32 @@ std::optional<DockLocation> mainLayoutDockLocationForSidebarSide(
     return std::nullopt;
 }
 
+bool mainLayoutLocationIsSideDock(DockLocation location) {
+    return location == DockLocation::Sidebar || location == DockLocation::AuxiliaryBar;
+}
+
+const MainLayoutSideDockModel& mainLayoutSideDock(const MainLayoutModel& model, DockLocation location) {
+    if (location == DockLocation::AuxiliaryBar) {
+        return model.auxiliarySidebar;
+    }
+    assert(location == DockLocation::Sidebar);
+    return model.sidebar;
+}
+
+MainLayoutSideDockModel& mainLayoutSideDock(MainLayoutModel& model, DockLocation location) {
+    if (location == DockLocation::AuxiliaryBar) {
+        return model.auxiliarySidebar;
+    }
+    assert(location == DockLocation::Sidebar);
+    return model.sidebar;
+}
+
 int mainLayoutSideDockWidthDp(const MainLayoutModel& model, DockLocation location) {
-    return location == DockLocation::AuxiliaryBar ? model.auxiliarySidebarWidthDp : model.sidebarWidthDp;
+    return mainLayoutSideDock(model, location).widthDp;
+}
+
+bool mainLayoutSideDockCollapsed(const MainLayoutModel& model, DockLocation location) {
+    return mainLayoutSideDock(model, location).collapsed;
 }
 
 int mainLayoutClampedSidebarWidthDp(int widthDp) {
@@ -74,8 +99,8 @@ int mainLayoutClampedBottomDockHeightDp(int heightDp) {
 }
 
 MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model) {
-    model.sidebarWidthDp = mainLayoutClampedSidebarWidthDp(model.sidebarWidthDp);
-    model.auxiliarySidebarWidthDp = mainLayoutClampedSidebarWidthDp(model.auxiliarySidebarWidthDp);
+    model.sidebar.widthDp = mainLayoutClampedSidebarWidthDp(model.sidebar.widthDp);
+    model.auxiliarySidebar.widthDp = mainLayoutClampedSidebarWidthDp(model.auxiliarySidebar.widthDp);
     model.outlinerHeightDp = mainLayoutClampedOutlinerHeightDp(model.outlinerHeightDp);
     model.bottomDockHeightDp = mainLayoutClampedBottomDockHeightDp(model.bottomDockHeightDp);
     model.dockLayout = normalizedDockLayoutModel(

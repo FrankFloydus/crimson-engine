@@ -389,11 +389,12 @@ TEST(UISettingsTests, DefaultsKeepViewportShellLocale) {
 
     EXPECT_EQ(settings.locale(), "en-US");
     EXPECT_EQ(settings.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(settings.mainLayout().sidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(settings.mainLayout().auxiliarySidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(settings.mainLayout().sidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(settings.mainLayout().auxiliarySidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
     EXPECT_EQ(settings.mainLayout().outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
     EXPECT_EQ(settings.mainLayout().bottomDockHeightDp, kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(settings.mainLayout().sidebarCollapsed);
+    EXPECT_FALSE(settings.mainLayout().sidebar.collapsed);
+    EXPECT_FALSE(settings.mainLayout().auxiliarySidebar.collapsed);
     EXPECT_TRUE(settings.mainLayout().outlinerVisible);
     EXPECT_TRUE(settings.mainLayout().inspectorVisible);
     ASSERT_TRUE(dockPanelLocation(settings.mainLayout().dockLayout, kMainLayoutPanelOutliner));
@@ -411,11 +412,12 @@ TEST(UISettingsTests, RoundTripsLocaleAndMainLayout) {
     settings.setLocale("it-IT");
     MainLayoutModel layout = settings.mainLayout();
     layout.sidebarSide = MainLayoutSidebarSide::Left;
-    layout.sidebarWidthDp = 333;
-    layout.auxiliarySidebarWidthDp = 277;
+    layout.sidebar.widthDp = 333;
+    layout.auxiliarySidebar.widthDp = 277;
     layout.outlinerHeightDp = 271;
     layout.bottomDockHeightDp = 288;
-    layout.sidebarCollapsed = true;
+    layout.sidebar.collapsed = true;
+    layout.auxiliarySidebar.collapsed = true;
     layout.outlinerVisible = false;
     layout.inspectorVisible = true;
     ASSERT_TRUE(dockMovePanelToLocationAtPanel(
@@ -432,11 +434,12 @@ TEST(UISettingsTests, RoundTripsLocaleAndMainLayout) {
 
     EXPECT_EQ(loaded.locale(), "it-IT");
     EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Left);
-    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, 333);
-    EXPECT_EQ(loaded.mainLayout().auxiliarySidebarWidthDp, 277);
+    EXPECT_EQ(loaded.mainLayout().sidebar.widthDp, 333);
+    EXPECT_EQ(loaded.mainLayout().auxiliarySidebar.widthDp, 277);
     EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, 271);
     EXPECT_EQ(loaded.mainLayout().bottomDockHeightDp, 288);
-    EXPECT_TRUE(loaded.mainLayout().sidebarCollapsed);
+    EXPECT_TRUE(loaded.mainLayout().sidebar.collapsed);
+    EXPECT_TRUE(loaded.mainLayout().auxiliarySidebar.collapsed);
     EXPECT_FALSE(loaded.mainLayout().outlinerVisible);
     EXPECT_TRUE(loaded.mainLayout().inspectorVisible);
     ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector));
@@ -462,11 +465,12 @@ TEST(UISettingsTests, LoadsLegacyLocaleOnlySettingsWithDefaultLayout) {
 
     EXPECT_EQ(loaded.locale(), "it-IT");
     EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(loaded.mainLayout().auxiliarySidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(loaded.mainLayout().sidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(loaded.mainLayout().auxiliarySidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
     EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
     EXPECT_EQ(loaded.mainLayout().bottomDockHeightDp, kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(loaded.mainLayout().sidebarCollapsed);
+    EXPECT_FALSE(loaded.mainLayout().sidebar.collapsed);
+    EXPECT_FALSE(loaded.mainLayout().auxiliarySidebar.collapsed);
     EXPECT_TRUE(loaded.mainLayout().outlinerVisible);
     EXPECT_TRUE(loaded.mainLayout().inspectorVisible);
     ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner));
@@ -488,6 +492,7 @@ TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
         file << "SidebarWidthDp=12\n";
         file << "AuxiliarySidebarWidthDp=24\n";
         file << "SidebarCollapsed=maybe\n";
+        file << "AuxiliarySidebarCollapsed=maybe\n";
         file << "OutlinerHeightDp=-42\n";
         file << "BottomDockHeightDp=-1\n";
         file << "OutlinerVisible=what\n";
@@ -499,11 +504,12 @@ TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
     const UISettings loaded = UISettings::load(path);
 
     EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(loaded.mainLayout().sidebarWidthDp, kMainLayoutSidebarMinWidthDp);
-    EXPECT_EQ(loaded.mainLayout().auxiliarySidebarWidthDp, kMainLayoutSidebarMinWidthDp);
+    EXPECT_EQ(loaded.mainLayout().sidebar.widthDp, kMainLayoutSidebarMinWidthDp);
+    EXPECT_EQ(loaded.mainLayout().auxiliarySidebar.widthDp, kMainLayoutSidebarMinWidthDp);
     EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutPanelMinHeightDp);
     EXPECT_EQ(loaded.mainLayout().bottomDockHeightDp, kMainLayoutPanelMinHeightDp);
-    EXPECT_FALSE(loaded.mainLayout().sidebarCollapsed);
+    EXPECT_FALSE(loaded.mainLayout().sidebar.collapsed);
+    EXPECT_FALSE(loaded.mainLayout().auxiliarySidebar.collapsed);
     EXPECT_TRUE(loaded.mainLayout().outlinerVisible);
     EXPECT_FALSE(loaded.mainLayout().inspectorVisible);
     ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner));
@@ -578,11 +584,12 @@ TEST(MainLayoutModelTests, DefaultLayoutContainsViewportAndRightSidebarPanels) {
     const MainLayoutModel layout = MainLayoutModel::defaults();
 
     EXPECT_EQ(layout.sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(layout.auxiliarySidebarWidthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(layout.sidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(layout.auxiliarySidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
     EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
     EXPECT_EQ(layout.bottomDockHeightDp, kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(layout.sidebarCollapsed);
+    EXPECT_FALSE(layout.sidebar.collapsed);
+    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
     EXPECT_TRUE(layout.outlinerVisible);
     EXPECT_TRUE(layout.inspectorVisible);
     ASSERT_TRUE(dockPanelLocation(layout.dockLayout, kMainLayoutPanelOutliner));
@@ -609,6 +616,13 @@ TEST(MainLayoutModelTests, DefaultLayoutContainsViewportAndRightSidebarPanels) {
     EXPECT_EQ(*mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Left), DockLocation::AuxiliaryBar);
     ASSERT_TRUE(mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Right));
     EXPECT_EQ(*mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Right), DockLocation::Sidebar);
+    EXPECT_TRUE(mainLayoutLocationIsSideDock(DockLocation::Sidebar));
+    EXPECT_TRUE(mainLayoutLocationIsSideDock(DockLocation::AuxiliaryBar));
+    EXPECT_FALSE(mainLayoutLocationIsSideDock(DockLocation::Panel));
+    EXPECT_EQ(mainLayoutSideDockWidthDp(layout, DockLocation::Sidebar), kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_EQ(mainLayoutSideDockWidthDp(layout, DockLocation::AuxiliaryBar), kMainLayoutSidebarDefaultWidthDp);
+    EXPECT_FALSE(mainLayoutSideDockCollapsed(layout, DockLocation::Sidebar));
+    EXPECT_FALSE(mainLayoutSideDockCollapsed(layout, DockLocation::AuxiliaryBar));
 }
 
 TEST(MainLayoutControllerTests, ResizesSidebarAndPanelSplitWithClamps) {
@@ -616,21 +630,29 @@ TEST(MainLayoutControllerTests, ResizesSidebarAndPanelSplitWithClamps) {
     MainLayoutController controller(layout);
 
     EXPECT_TRUE(controller.resizeSidebar(12));
-    EXPECT_EQ(layout.sidebarWidthDp, kMainLayoutSidebarMinWidthDp);
+    EXPECT_EQ(layout.sidebar.widthDp, kMainLayoutSidebarMinWidthDp);
     EXPECT_TRUE(controller.resizeSidebar(800));
-    EXPECT_EQ(layout.sidebarWidthDp, 800);
+    EXPECT_EQ(layout.sidebar.widthDp, 800);
     EXPECT_TRUE(controller.resizeSidebar(280));
-    EXPECT_EQ(layout.sidebarWidthDp, 280);
+    EXPECT_EQ(layout.sidebar.widthDp, 280);
     EXPECT_TRUE(controller.resizeSidebar(DockLocation::AuxiliaryBar, 290));
-    EXPECT_EQ(layout.auxiliarySidebarWidthDp, 290);
-    EXPECT_FALSE(layout.sidebarCollapsed);
+    EXPECT_EQ(layout.auxiliarySidebar.widthDp, 290);
+    EXPECT_FALSE(layout.sidebar.collapsed);
+    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
     EXPECT_FALSE(controller.resizeSidebar(DockLocation::AuxiliaryBar, 290));
 
     EXPECT_TRUE(controller.setSidebarCollapsed(true));
-    EXPECT_TRUE(layout.sidebarCollapsed);
+    EXPECT_TRUE(layout.sidebar.collapsed);
     EXPECT_TRUE(controller.resizeSidebar(300));
-    EXPECT_EQ(layout.sidebarWidthDp, 300);
-    EXPECT_FALSE(layout.sidebarCollapsed);
+    EXPECT_EQ(layout.sidebar.widthDp, 300);
+    EXPECT_FALSE(layout.sidebar.collapsed);
+    EXPECT_TRUE(controller.setSidebarCollapsed(DockLocation::AuxiliaryBar, true));
+    EXPECT_TRUE(layout.auxiliarySidebar.collapsed);
+    EXPECT_TRUE(controller.resizeSidebar(DockLocation::AuxiliaryBar, 310));
+    EXPECT_EQ(layout.auxiliarySidebar.widthDp, 310);
+    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
+    EXPECT_FALSE(controller.setSidebarCollapsed(DockLocation::Panel, true));
+    EXPECT_FALSE(controller.resizeSidebar(DockLocation::Panel, 300));
 
     EXPECT_TRUE(controller.resizeOutlinerPanel(12));
     EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutPanelMinHeightDp);
@@ -1105,7 +1127,7 @@ TEST(MainLayoutRmlBuilderTests, CanProjectLeftSidebarAndHiddenPanels) {
 
 TEST(MainLayoutRmlBuilderTests, ProjectsAuxiliaryBarOnOppositeSideOfPrimarySidebar) {
     MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.auxiliarySidebarWidthDp = 312;
+    layout.auxiliarySidebar.widthDp = 312;
     ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
 
     const std::string rml = buildMainLayoutRml(layout, {.viewport = "Viewport"});
@@ -1155,7 +1177,7 @@ TEST(MainLayoutRmlBuilderTests, ProjectsPanelDockLocationIntoBottomDock) {
 
 TEST(MainLayoutRmlBuilderTests, CollapsedSidebarKeepsEdgeResizerWithoutSidebarSurface) {
     MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.sidebarCollapsed = true;
+    layout.sidebar.collapsed = true;
 
     const std::string rml = buildMainLayoutRml(layout, {.viewport = "Viewport"});
 
@@ -1165,6 +1187,22 @@ TEST(MainLayoutRmlBuilderTests, CollapsedSidebarKeepsEdgeResizerWithoutSidebarSu
     EXPECT_EQ(rml.find("main-layout-panel-inspector"), std::string::npos);
     EXPECT_NE(rml.find("data-main-layout-resizer=\"sidebar\""), std::string::npos);
     EXPECT_NE(rml.find("main-layout-sidebar-resizer-collapsed-right"), std::string::npos);
+}
+
+TEST(MainLayoutRmlBuilderTests, CollapsedAuxiliarySidebarKeepsEdgeResizerWithoutSideDockSurface) {
+    MainLayoutModel layout = MainLayoutModel::defaults();
+    layout.auxiliarySidebar.collapsed = true;
+    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
+
+    const std::string rml = buildMainLayoutRml(layout, {.viewport = "Viewport"});
+
+    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"main-layout-sidebar\""), std::string::npos);
+    EXPECT_EQ(rml.find("id=\"main-layout-auxiliary-sidebar\""), std::string::npos);
+    EXPECT_NE(rml.find("main-layout-panel-outliner"), std::string::npos);
+    EXPECT_EQ(rml.find("main-layout-panel-inspector"), std::string::npos);
+    EXPECT_NE(rml.find("data-main-layout-resizer=\"auxiliary-sidebar\""), std::string::npos);
+    EXPECT_NE(rml.find("main-layout-sidebar-resizer-collapsed-left"), std::string::npos);
 }
 
 TEST(DebugPaletteViewTests, AppPaletteTokenPathUsesRuntimeUiTokenDirectory) {
@@ -1385,7 +1423,7 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(uiSystemSource.find("mouseY - static_cast<float>(mainLayoutTopPx_)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("target ? MainLayoutCursorKind::Default : MainLayoutCursorKind::DropForbidden"),
             std::string::npos);
-    EXPECT_NE(uiSystemSource.find("setSidebarCollapsed(true)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("setSidebarCollapsed(location, true)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportHost_.handleFrame"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("<rml>"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("LoadDocumentFromMemory"), std::string::npos);
@@ -1423,9 +1461,14 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(mainLayoutModelHeader.find("kMainLayoutPanelOutliner = \"outliner\""), std::string::npos);
     EXPECT_NE(mainLayoutModelHeader.find("mainLayoutCanonicalPanelId"), std::string::npos);
     EXPECT_NE(mainLayoutModelHeader.find("bottomDockHeightDp"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("auxiliarySidebarWidthDp"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutSideDockModel"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutSideDockModel sidebar"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutSideDockModel auxiliarySidebar"), std::string::npos);
     EXPECT_NE(mainLayoutModelHeader.find("DockLayoutModel dockLayout"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("sidebarCollapsed"), std::string::npos);
+    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutSideDockCollapsed"), std::string::npos);
+    EXPECT_EQ(mainLayoutModelHeader.find("sidebarWidthDp"), std::string::npos);
+    EXPECT_EQ(mainLayoutModelHeader.find("auxiliarySidebarWidthDp"), std::string::npos);
+    EXPECT_EQ(mainLayoutModelHeader.find("sidebarCollapsed"), std::string::npos);
     EXPECT_NE(mainLayoutModelHeader.find("outlinerVisible"), std::string::npos);
     EXPECT_NE(mainLayoutModelHeader.find("inspectorVisible"), std::string::npos);
     EXPECT_NE(mainLayoutControllerSource.find("resizeSidebar"), std::string::npos);
@@ -2785,6 +2828,7 @@ TEST(UISystemTests, RmlViewportShellLoadsViewportAndMainLayoutSettings) {
     EXPECT_NE(uiSettingsSource.find("SidebarWidthDp="), std::string::npos);
     EXPECT_NE(uiSettingsSource.find("AuxiliarySidebarWidthDp="), std::string::npos);
     EXPECT_NE(uiSettingsSource.find("SidebarCollapsed="), std::string::npos);
+    EXPECT_NE(uiSettingsSource.find("AuxiliarySidebarCollapsed="), std::string::npos);
     EXPECT_NE(uiSettingsSource.find("OutlinerHeightDp="), std::string::npos);
     EXPECT_NE(uiSettingsSource.find("BottomDockHeightDp="), std::string::npos);
     EXPECT_NE(uiSettingsSource.find("OutlinerVisible="), std::string::npos);

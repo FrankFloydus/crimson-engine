@@ -125,14 +125,14 @@ bool mainLayoutSideDockVisibleOnSide(const MainLayoutModel& model, MainLayoutSid
     if (!location) {
         return false;
     }
-    if (*location == DockLocation::Sidebar && model.sidebarCollapsed) {
+    if (mainLayoutSideDockCollapsed(model, *location)) {
         return false;
     }
     return mainLayoutVisibleDockPanelCount(model, *location) > 0;
 }
 
 bool mainLayoutSideDockVisibleForLocation(const MainLayoutModel& model, DockLocation location) {
-    if (location == DockLocation::Sidebar && model.sidebarCollapsed) {
+    if (mainLayoutSideDockCollapsed(model, location)) {
         return false;
     }
     return mainLayoutVisibleDockPanelCount(model, location) > 0;
@@ -774,14 +774,13 @@ std::optional<ResizableSplitHandle> UISystem::mainLayoutSplitHandle(std::string_
         if (!side) {
             return std::nullopt;
         }
-        const bool primarySidebar = location == DockLocation::Sidebar;
         return ResizableSplitHandle{
                 .id = std::string(handleId),
                 .axis = ResizableSplitAxis::Horizontal,
                 .growth = *side == MainLayoutSidebarSide::Right ?
                         ResizableSplitGrowthDirection::Negative :
                         ResizableSplitGrowthDirection::Positive,
-                .sizeDp = primarySidebar && mainLayout_.sidebarCollapsed ?
+                .sizeDp = mainLayoutSideDockCollapsed(mainLayout_, location) ?
                         0 :
                         mainLayoutSideDockWidthDp(mainLayout_, location),
                 .minSize = ResizableSplitSizeRule::dp(kMainLayoutSidebarMinWidthDp),
@@ -790,7 +789,7 @@ std::optional<ResizableSplitHandle> UISystem::mainLayoutSplitHandle(std::string_
                         mainLayoutOtherVisibleSideDockWidthDp(mainLayout_, location)),
                 .containerSizeDp = mainLayoutWidthDp_,
                 .collapse = {
-                        .enabled = primarySidebar,
+                        .enabled = true,
                         .collapsedSizeDp = 0,
                 },
         };
@@ -835,15 +834,15 @@ void UISystem::updateMainLayoutResize(float mouseX, float mouseY) {
     }
 
     if (resize->id == kMainLayoutSidebarResizer || resize->id == kMainLayoutAuxiliarySidebarResizer) {
-        const bool auxiliarySidebar = resize->id == kMainLayoutAuxiliarySidebarResizer;
-        const int restoredSidebarWidthDp = mainLayout_.sidebarCollapsed ?
-                std::max(resize->sizeDp, mainLayout_.sidebarWidthDp) :
+        const DockLocation location = resize->id == kMainLayoutAuxiliarySidebarResizer ?
+                DockLocation::AuxiliaryBar :
+                DockLocation::Sidebar;
+        const int restoredSidebarWidthDp = mainLayoutSideDockCollapsed(mainLayout_, location) ?
+                std::max(resize->sizeDp, mainLayoutSideDockWidthDp(mainLayout_, location)) :
                 resize->sizeDp;
-        const bool changed = !auxiliarySidebar && resize->collapsed ?
-                mainLayoutController_.setSidebarCollapsed(true) :
-                mainLayoutController_.resizeSidebar(
-                        auxiliarySidebar ? DockLocation::AuxiliaryBar : DockLocation::Sidebar,
-                        auxiliarySidebar ? resize->sizeDp : restoredSidebarWidthDp);
+        const bool changed = resize->collapsed ?
+                mainLayoutController_.setSidebarCollapsed(location, true) :
+                mainLayoutController_.resizeSidebar(location, restoredSidebarWidthDp);
         if (changed) {
             mainLayoutDirty_ = true;
         }
@@ -941,9 +940,8 @@ void UISystem::endMainLayoutDockDrag(float mouseX, float mouseY) {
                             *targetLocation,
                             drop->target.targetPanelId,
                             drop->target.position);
-            const bool expandedPrimarySidebar = *targetLocation == DockLocation::Sidebar &&
-                    mainLayoutController_.setSidebarCollapsed(false);
-            mainLayoutDirty_ = mainLayoutDirty_ || moved || expandedPrimarySidebar;
+            const bool expandedSideDock = mainLayoutController_.setSidebarCollapsed(*targetLocation, false);
+            mainLayoutDirty_ = mainLayoutDirty_ || moved || expandedSideDock;
         }
     }
     if (hadPresentationState) {
@@ -1093,24 +1091,24 @@ bool UISystem::normalizeMainLayoutForMeasuredBounds() {
     if (mainLayoutWidthDp_ > 0) {
         const int auxiliaryWidthForPrimaryClamp =
                 mainLayoutSideDockVisibleForLocation(mainLayout_, DockLocation::AuxiliaryBar) ?
-                mainLayout_.auxiliarySidebarWidthDp :
+                mainLayoutSideDockWidthDp(mainLayout_, DockLocation::AuxiliaryBar) :
                 0;
         const int measuredMaxSidebarWidthDp = std::max(
                 mainLayoutWidthDp_ - kMainLayoutViewportMinWidthDp - auxiliaryWidthForPrimaryClamp,
                 kMainLayoutSidebarMinWidthDp);
-        if (mainLayout_.sidebarWidthDp > measuredMaxSidebarWidthDp) {
-            mainLayout_.sidebarWidthDp = measuredMaxSidebarWidthDp;
+        if (mainLayout_.sidebar.widthDp > measuredMaxSidebarWidthDp) {
+            mainLayout_.sidebar.widthDp = measuredMaxSidebarWidthDp;
             changed = true;
         }
         const int primaryWidthForAuxiliaryClamp =
                 mainLayoutSideDockVisibleForLocation(mainLayout_, DockLocation::Sidebar) ?
-                mainLayout_.sidebarWidthDp :
+                mainLayoutSideDockWidthDp(mainLayout_, DockLocation::Sidebar) :
                 0;
         const int measuredMaxAuxiliarySidebarWidthDp = std::max(
                 mainLayoutWidthDp_ - kMainLayoutViewportMinWidthDp - primaryWidthForAuxiliaryClamp,
                 kMainLayoutSidebarMinWidthDp);
-        if (mainLayout_.auxiliarySidebarWidthDp > measuredMaxAuxiliarySidebarWidthDp) {
-            mainLayout_.auxiliarySidebarWidthDp = measuredMaxAuxiliarySidebarWidthDp;
+        if (mainLayout_.auxiliarySidebar.widthDp > measuredMaxAuxiliarySidebarWidthDp) {
+            mainLayout_.auxiliarySidebar.widthDp = measuredMaxAuxiliarySidebarWidthDp;
             changed = true;
         }
     }

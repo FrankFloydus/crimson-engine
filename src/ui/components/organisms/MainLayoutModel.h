@@ -31,14 +31,19 @@ enum class MainLayoutSidebarSide {
     Right,
 };
 
+/// Stores shared state for one side dock, regardless of whether it is primary or auxiliary.
+struct MainLayoutSideDockModel {
+    int widthDp = kMainLayoutSidebarDefaultWidthDp;
+    bool collapsed = false;
+};
+
 /// Stores the app UI root layout state used by the RmlUi presentation.
 struct MainLayoutModel {
     MainLayoutSidebarSide sidebarSide = MainLayoutSidebarSide::Right;
-    int sidebarWidthDp = kMainLayoutSidebarDefaultWidthDp;
-    int auxiliarySidebarWidthDp = kMainLayoutSidebarDefaultWidthDp;
+    MainLayoutSideDockModel sidebar;
+    MainLayoutSideDockModel auxiliarySidebar;
     int outlinerHeightDp = kMainLayoutOutlinerDefaultHeightDp;
     int bottomDockHeightDp = kMainLayoutBottomDockDefaultHeightDp;
-    bool sidebarCollapsed = false;
     bool outlinerVisible = true;
     bool inspectorVisible = true;
     DockLayoutModel dockLayout;
@@ -55,7 +60,13 @@ struct MainLayoutModel {
 [[nodiscard]] std::optional<DockLocation> mainLayoutDockLocationForSidebarSide(
         const MainLayoutModel& model,
         MainLayoutSidebarSide side);
+[[nodiscard]] bool mainLayoutLocationIsSideDock(DockLocation location);
+[[nodiscard]] const MainLayoutSideDockModel& mainLayoutSideDock(
+        const MainLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] MainLayoutSideDockModel& mainLayoutSideDock(MainLayoutModel& model, DockLocation location);
 [[nodiscard]] int mainLayoutSideDockWidthDp(const MainLayoutModel& model, DockLocation location);
+[[nodiscard]] bool mainLayoutSideDockCollapsed(const MainLayoutModel& model, DockLocation location);
 [[nodiscard]] int mainLayoutClampedSidebarWidthDp(int widthDp);
 [[nodiscard]] int mainLayoutClampedOutlinerHeightDp(int heightDp);
 [[nodiscard]] int mainLayoutClampedBottomDockHeightDp(int heightDp);
