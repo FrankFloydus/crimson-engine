@@ -22,6 +22,17 @@ material/overlay changes.
   `build/vs2026/Debug` before assuming the source change failed.
 - Keep static RCSS tied to layout mechanics. Prefer generated utility classes from palette and
   utility tokens for colors, sizing, spacing, borders, and typography.
+- Treat MainLayout RML/RCSS IDs, data attributes, and class names as contracts with
+  `MainLayoutRmlBuilder`, `UISystem` measurement, drag/drop registration, and UI guardrail tests.
+  Update the owner code and tests in the same change when a resource contract changes.
+- Keep the MainLayout bottom dock inside the editor column with the viewport. Resource changes must
+  not make the bottom dock, its tab strip, split panes, drop indicator, or height resizer span under
+  side docks or the status bar.
+- Keep visual feedback separate from behavior. RCSS may style resizer lines, tab insertion lines,
+  dock indicators, overlays, and drag previews, but accepted drop targets, non-droppable state,
+  split constraints, and collapse policy belong in UI controllers/models.
+- Do not encode panel-specific behavior in static resources. Stable panel IDs are data attributes
+  projected by the builder; resources should provide reusable presentation classes and tokens.
 - Material source changes under `resources/materials` must continue to compile through the configured
   Filament `matc.exe` path.
 - Keep default material assets under the app-owned resources tree and preserve post-build copy paths.

@@ -25,6 +25,7 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -80,6 +81,11 @@ private:
 
     void releaseFrameResources();
     void createWhiteTexture();
+    Rml::TextureHandle createOwnedTextureFromRgba(
+            const unsigned char* pixels,
+            std::size_t byteCount,
+            std::uint32_t width,
+            std::uint32_t height);
     void releaseOwnedTextures();
     bool isRegisteredTextureSourceHandle(RenderTextureHandle textureHandle) const;
 

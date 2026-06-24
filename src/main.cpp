@@ -39,7 +39,7 @@ std::filesystem::path executablePath(int argc, char** argv) {
  * Stores the Command Line Options data contract used by the Quader native app.
  */
 struct CommandLineOptions {
-    bool borderlessWindow = false;
+    bool borderlessWindow = true;
 };
 
 CommandLineOptions parseCommandLine(int argc, char** argv) {

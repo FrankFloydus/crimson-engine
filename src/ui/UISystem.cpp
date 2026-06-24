@@ -408,6 +408,10 @@ void UISystem::installRuntimeHooks(QuaderEditorApi& editor) {
     });
 }
 
+std::optional<WindowChromeAction> UISystem::takeWindowChromeAction() {
+    return rmlHost_.takeWindowChromeAction();
+}
+
 void UISystem::updateWindowMetrics() {
     if (!window_) {
         return;

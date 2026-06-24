@@ -17,6 +17,7 @@ over loading every instruction file.
 
 - `project-identity.md`: repository identity, source-of-truth paths, restore rules.
 - `public-api-and-scripting.md`: when to add public API, whole-editor API direction, Lua rules.
+- `../INPUT_KEYBINDINGS.md`: input, mouse/keybinding, context, and future user rebinding rules.
 - `domain-ownership.md`: where behavior belongs across document, modeling, UI, viewport, render,
   SDK, and assets.
 - `oop-architecture.md`: class/interface/service/command refactor rules.

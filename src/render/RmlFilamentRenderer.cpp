@@ -9,10 +9,13 @@
 #include "core/Logger.h"
 #include "render/FilamentBufferDescriptorFactory.h"
 
+#include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/FileInterface.h>
 #include <backend/DriverEnums.h>
 #include <filament/RenderableManager.h>
 #include <filament/TextureSampler.h>
 #include <filament/Viewport.h>
+#include <lodepng.h>
 #include <utils/EntityManager.h>
 
 #include <algorithm>
@@ -58,6 +61,15 @@ RenderTextureHandle toRenderTextureHandle(Rml::TextureHandle texture) {
 
 Rml::TextureHandle toRmlTextureHandle(RenderTextureHandle texture) {
     return static_cast<Rml::TextureHandle>(texture);
+}
+
+void premultiplyRgbaPixels(std::vector<unsigned char>& pixels) {
+    for (std::size_t offset = 0; offset + 3 < pixels.size(); offset += 4) {
+        const unsigned alpha = pixels[offset + 3];
+        pixels[offset] = static_cast<unsigned char>((static_cast<unsigned>(pixels[offset]) * alpha + 127u) / 255u);
+        pixels[offset + 1] = static_cast<unsigned char>((static_cast<unsigned>(pixels[offset + 1]) * alpha + 127u) / 255u);
+        pixels[offset + 2] = static_cast<unsigned char>((static_cast<unsigned>(pixels[offset + 2]) * alpha + 127u) / 255u);
+    }
 }
 
 } // namespace
@@ -354,41 +366,64 @@ void RmlFilamentRenderer::ReleaseGeometry(Rml::CompiledGeometryHandle geometry) 
 
 Rml::TextureHandle RmlFilamentRenderer::LoadTexture(Rml::Vector2i& textureDimensions, const Rml::String& source) {
     const auto iterator = textureSources_.find(source);
-    if (iterator == textureSources_.end() ||
-            iterator->second.textureHandle == InvalidRenderTextureHandle) {
+    if (iterator != textureSources_.end() &&
+            iterator->second.textureHandle != InvalidRenderTextureHandle) {
+        textureDimensions = {
+                static_cast<int>(iterator->second.width),
+                static_cast<int>(iterator->second.height),
+        };
+        return toRmlTextureHandle(iterator->second.textureHandle);
+    }
+
+    Rml::FileInterface* fileInterface = Rml::GetFileInterface();
+    if (!fileInterface) {
         return 0;
     }
 
+    Rml::String encodedTexture;
+    if (!fileInterface->LoadFile(source, encodedTexture)) {
+        LOG_WARN("Unable to load UI texture '{}'", source);
+        return 0;
+    }
+
+    std::vector<unsigned char> pixels;
+    unsigned width = 0;
+    unsigned height = 0;
+    const unsigned error = lodepng::decode(
+            pixels,
+            width,
+            height,
+            reinterpret_cast<const unsigned char*>(encodedTexture.data()),
+            encodedTexture.size());
+    if (error != 0u) {
+        LOG_ERROR("Failed to decode UI texture '{}': {}", source, lodepng_error_text(error));
+        return 0;
+    }
+    premultiplyRgbaPixels(pixels);
+
+    const Rml::TextureHandle texture = createOwnedTextureFromRgba(
+            pixels.data(),
+            pixels.size(),
+            width,
+            height);
+    if (texture == 0) {
+        return 0;
+    }
     textureDimensions = {
-            static_cast<int>(iterator->second.width),
-            static_cast<int>(iterator->second.height),
+            static_cast<int>(width),
+            static_cast<int>(height),
     };
-    return toRmlTextureHandle(iterator->second.textureHandle);
+    return texture;
 }
 
 Rml::TextureHandle RmlFilamentRenderer::GenerateTexture(
         Rml::Span<const Rml::byte> source,
         Rml::Vector2i sourceDimensions) {
-    if (!engine_ || !textures_ || source.empty() || sourceDimensions.x <= 0 || sourceDimensions.y <= 0) {
-        return 0;
-    }
-
-    filament::Texture* texture = filament::Texture::Builder()
-            .width(static_cast<std::uint32_t>(sourceDimensions.x))
-            .height(static_cast<std::uint32_t>(sourceDimensions.y))
-            .levels(1)
-            .format(filament::Texture::InternalFormat::RGBA8)
-            .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
-            .build(*engine_);
-    texture->setImage(*engine_,
-            0,
-            FilamentBufferDescriptorFactory::rgbaPixels(
-                    reinterpret_cast<const unsigned char*>(source.data()),
-                    source.size()));
-
-    const RenderTextureHandle handle = textures_->registerTexture(texture, TextureSampleColorSpace::DisplaySrgb);
-    ownedTextureHandles_.insert(handle);
-    return toRmlTextureHandle(handle);
+    return createOwnedTextureFromRgba(
+            reinterpret_cast<const unsigned char*>(source.data()),
+            source.size(),
+            static_cast<std::uint32_t>(std::max(0, sourceDimensions.x)),
+            static_cast<std::uint32_t>(std::max(0, sourceDimensions.y)));
 }
 
 void RmlFilamentRenderer::ReleaseTexture(Rml::TextureHandle texture) {
@@ -462,6 +497,35 @@ void RmlFilamentRenderer::createWhiteTexture() {
             .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
             .build(*engine_);
     whiteTexture_->setImage(*engine_, 0, FilamentBufferDescriptorFactory::rgbaPixels(whitePixel, sizeof(whitePixel)));
+}
+
+Rml::TextureHandle RmlFilamentRenderer::createOwnedTextureFromRgba(
+        const unsigned char* pixels,
+        std::size_t byteCount,
+        std::uint32_t width,
+        std::uint32_t height) {
+    if (!engine_ || !textures_ || !pixels || byteCount == 0u || width == 0u || height == 0u) {
+        return 0;
+    }
+
+    const std::size_t expectedByteCount =
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u;
+    if (byteCount < expectedByteCount) {
+        return 0;
+    }
+
+    filament::Texture* texture = filament::Texture::Builder()
+            .width(width)
+            .height(height)
+            .levels(1)
+            .format(filament::Texture::InternalFormat::RGBA8)
+            .usage(filament::Texture::Usage::UPLOADABLE | filament::Texture::Usage::SAMPLEABLE)
+            .build(*engine_);
+    texture->setImage(*engine_, 0, FilamentBufferDescriptorFactory::rgbaPixels(pixels, expectedByteCount));
+
+    const RenderTextureHandle handle = textures_->registerTexture(texture, TextureSampleColorSpace::DisplaySrgb);
+    ownedTextureHandles_.insert(handle);
+    return toRmlTextureHandle(handle);
 }
 
 bool RmlFilamentRenderer::isRegisteredTextureSourceHandle(RenderTextureHandle textureHandle) const {

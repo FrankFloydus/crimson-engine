@@ -37,6 +37,7 @@
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 #include "scene/TransformPivot.h"
+#include "platform/PlatformWindow.h"
 #include "api/QuaderEditorApi.h"
 #include "ui/ConsoleModel.h"
 #include "ui/backends/rml/MainLayoutRmlBuilder.h"
@@ -2355,8 +2356,16 @@ TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
     EXPECT_NE(rcss.find(".max-h-60 { max-height: 240dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".border-1 { border-width: 1dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".bg-gray-50 { background-color: #F7F7F7; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".hover-bg-gray-50:hover { background-color: #F7F7F7; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".active-bg-gray-50:active { background-color: #F7F7F7; }"), std::string::npos);
     EXPECT_NE(rcss.find(".text-gray-50 { color: #F7F7F7; }"), std::string::npos);
     EXPECT_NE(rcss.find(".border-gray-500 { border-color: #3C3C3C; }"), std::string::npos);
+
+    const std::size_t hoverGray500 = rcss.find(".hover-bg-gray-500:hover { background-color: #3C3C3C; }");
+    const std::size_t activeGray50 = rcss.find(".active-bg-gray-50:active { background-color: #F7F7F7; }");
+    ASSERT_NE(hoverGray500, std::string::npos);
+    ASSERT_NE(activeGray50, std::string::npos);
+    EXPECT_LT(hoverGray500, activeGray50);
 }
 
 TEST(UIUtilityTokensTests, AppUITokensStayTailwindLikeAndDpBased) {
@@ -2382,6 +2391,77 @@ TEST(UIUtilityTokensTests, AppUITokensStayTailwindLikeAndDpBased) {
     EXPECT_EQ(tokenConfig.find("\"typography\""), std::string::npos);
     EXPECT_EQ(tokenConfig.find("$type"), std::string::npos);
     EXPECT_EQ(tokenConfig.find("$value"), std::string::npos);
+}
+
+TEST(PlatformWindowChromeTests, HitTestSupportsResizeEdgesToolbarDragAndWindowControls) {
+    PlatformWindowChromeHitTest hitTest{
+            .windowWidth = 800,
+            .windowHeight = 600,
+            .resizeBorder = 6,
+            .titleBarHeight = 48,
+            .rightControlsWidth = 120,
+    };
+
+    auto hit = [&](int x, int y) {
+        hitTest.pointX = x;
+        hitTest.pointY = y;
+        return platformWindowChromeHitTestResult(hitTest);
+    };
+
+    EXPECT_EQ(hit(0, 0), SDL_HITTEST_RESIZE_TOPLEFT);
+    EXPECT_EQ(hit(799, 0), SDL_HITTEST_RESIZE_TOPRIGHT);
+    EXPECT_EQ(hit(799, 599), SDL_HITTEST_RESIZE_BOTTOMRIGHT);
+    EXPECT_EQ(hit(0, 599), SDL_HITTEST_RESIZE_BOTTOMLEFT);
+    EXPECT_EQ(hit(400, 0), SDL_HITTEST_RESIZE_TOP);
+    EXPECT_EQ(hit(799, 300), SDL_HITTEST_RESIZE_RIGHT);
+    EXPECT_EQ(hit(400, 599), SDL_HITTEST_RESIZE_BOTTOM);
+    EXPECT_EQ(hit(0, 300), SDL_HITTEST_RESIZE_LEFT);
+    EXPECT_EQ(hit(400, 24), SDL_HITTEST_DRAGGABLE);
+    EXPECT_EQ(hit(700, 24), SDL_HITTEST_NORMAL);
+    EXPECT_EQ(hit(400, 60), SDL_HITTEST_NORMAL);
+
+    hitTest.maximized = true;
+    EXPECT_EQ(hit(0, 0), SDL_HITTEST_DRAGGABLE);
+    EXPECT_EQ(hit(799, 599), SDL_HITTEST_NORMAL);
+}
+
+TEST(PlatformWindowChromeTests, ManualResizeFrameSupportsEdgesAndCorners) {
+    PlatformWindowChromeFrame frame{
+            .x = 100,
+            .y = 80,
+            .width = 800,
+            .height = 600,
+    };
+
+    auto resize = [&](SDL_HitTestResult edge, int dx, int dy) {
+        return platformWindowChromeResizeFrame({
+                .start = frame,
+                .deltaX = dx,
+                .deltaY = dy,
+                .minWidth = 320,
+                .minHeight = 240,
+                .edge = edge,
+        });
+    };
+
+    EXPECT_EQ(resize(SDL_HITTEST_RESIZE_RIGHT, 40, 0).width, 840);
+    EXPECT_EQ(resize(SDL_HITTEST_RESIZE_BOTTOM, 0, 30).height, 630);
+
+    const PlatformWindowChromeFrame left = resize(SDL_HITTEST_RESIZE_LEFT, 50, 0);
+    EXPECT_EQ(left.x, 150);
+    EXPECT_EQ(left.width, 750);
+
+    const PlatformWindowChromeFrame topLeft = resize(SDL_HITTEST_RESIZE_TOPLEFT, -20, -10);
+    EXPECT_EQ(topLeft.x, 80);
+    EXPECT_EQ(topLeft.y, 70);
+    EXPECT_EQ(topLeft.width, 820);
+    EXPECT_EQ(topLeft.height, 610);
+
+    const PlatformWindowChromeFrame clamped = resize(SDL_HITTEST_RESIZE_TOPLEFT, 700, 500);
+    EXPECT_EQ(clamped.x, 580);
+    EXPECT_EQ(clamped.y, 440);
+    EXPECT_EQ(clamped.width, 320);
+    EXPECT_EQ(clamped.height, 240);
 }
 
 TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
@@ -2627,10 +2707,27 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(shellRml.find("id=\"main-layout-slot\""), std::string::npos);
     EXPECT_NE(shellRml.find("id=\"statusbar\""), std::string::npos);
     EXPECT_EQ(shellRml.find("shell-topbar"), std::string::npos);
-    EXPECT_NE(shellRml.find("shell-toolbar h-12 px-3 bg-gray-800 border-gray-600"), std::string::npos);
+    EXPECT_NE(shellRml.find("shell-toolbar h-12 bg-gray-800 border-gray-600"), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"toolbar-content\" class=\"shell-toolbar-content pl-3\""), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"chrome-window-controls\" class=\"chrome-window-controls\""), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"chrome-minimize-button\" class=\"chrome-icon-button chrome-minimize-icon bg-gray-800 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"minimize\""), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"chrome-restore-button\" class=\"chrome-icon-button chrome-restore-icon bg-gray-800 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"restore\""), std::string::npos);
+    EXPECT_NE(shellRml.find("id=\"chrome-close-button\" class=\"chrome-icon-button chrome-close-icon bg-gray-800 hover-bg-red-500 active-bg-red-600\" data-chrome-window-action=\"close\""), std::string::npos);
+    EXPECT_EQ(shellRml.find("chrome-icon-button-icon"), std::string::npos);
     EXPECT_NE(shellRml.find("shell-statusbar h-10 px-3 bg-gray-900 border-gray-600"), std::string::npos);
     EXPECT_EQ(shellRml.find("id=\"dock-interaction-slot\""), std::string::npos);
     EXPECT_NE(shellRml.find("quader://ui/rcss/app-utility.generated.rcss"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".shell-toolbar-content"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".chrome-window-controls"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".chrome-icon-button"), std::string::npos);
+    EXPECT_NE(shellRcss.find("width: 40dp"), std::string::npos);
+    EXPECT_NE(shellRcss.find("decorator: image(\"quader://icons/minimize_icon.png\" scale-none)"), std::string::npos);
+    EXPECT_NE(shellRcss.find("decorator: image(\"quader://icons/restore_icon.png\" scale-none)"), std::string::npos);
+    EXPECT_NE(shellRcss.find("decorator: image(\"quader://icons/close_icon.png\" scale-none)"), std::string::npos);
+    EXPECT_NE(shellRcss.find("image-color: #5B5B5B"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".chrome-icon-button:hover"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".chrome-icon-button:active"), std::string::npos);
+    EXPECT_NE(shellRcss.find("image-color: #D8D8D8"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout-main-row"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout-editor-column"), std::string::npos);
@@ -3862,6 +3959,11 @@ TEST(RmlFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
     EXPECT_NE(rendererSource.find("setParameter(\"encodeToSrgb\", encodeToSrgb)"), std::string::npos);
     EXPECT_NE(rendererSource.find("GenerateTexture("), std::string::npos);
     EXPECT_NE(rendererSource.find("LoadTexture(Rml::Vector2i& textureDimensions"), std::string::npos);
+    EXPECT_NE(rendererSource.find("Rml::GetFileInterface()"), std::string::npos);
+    EXPECT_NE(rendererSource.find("fileInterface->LoadFile(source, encodedTexture)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("lodepng::decode("), std::string::npos);
+    EXPECT_NE(rendererSource.find("premultiplyRgbaPixels(pixels)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("createOwnedTextureFromRgba("), std::string::npos);
 
     const std::filesystem::path materialPath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "materials" / "rmlui.mat";

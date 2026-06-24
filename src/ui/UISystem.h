@@ -72,6 +72,7 @@ public:
     void renderWindowedViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
     void installRuntimeHooks(QuaderEditorApi& editor);
+    [[nodiscard]] std::optional<WindowChromeAction> takeWindowChromeAction();
     const ViewportToolState& viewportToolState() const { return viewportHost_.viewportToolState(); }
 
 private:

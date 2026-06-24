@@ -378,7 +378,7 @@ target_link_libraries(quader_runtime
         lodepng
 )
 if(WIN32)
-    target_link_libraries(quader_runtime PUBLIC Dbghelp)
+    target_link_libraries(quader_runtime PUBLIC Dbghelp Dwmapi Advapi32)
 endif()
 add_dependencies(quader_runtime
     quader_mesh_material

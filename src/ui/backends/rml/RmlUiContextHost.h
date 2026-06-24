@@ -39,6 +39,15 @@ struct RmlElementRect {
 };
 
 /**
+ * Enumerates window chrome actions requested by RmlUi controls.
+ */
+enum class WindowChromeAction {
+    Minimize,
+    RestoreOrMaximize,
+    Close,
+};
+
+/**
  * Owns the active RmlUi context, document, resource loading, and render bridge.
  */
 class RmlUiContextHost {
@@ -74,6 +83,7 @@ public:
     void setElementDisplay(const std::string& elementId, const std::string& display);
     void setElementInnerRml(const std::string& elementId, const std::string& innerRml);
     [[nodiscard]] std::optional<RmlElementRect> measureElementById(const std::string& elementId) const;
+    [[nodiscard]] std::optional<WindowChromeAction> takeWindowChromeAction();
     [[nodiscard]] bool initialized() const { return initialized_; }
 
 private:
@@ -82,8 +92,10 @@ private:
     std::unique_ptr<Rml::SystemInterface> systemInterface_;
     std::unique_ptr<Rml::FileInterface> fileInterface_;
     std::unique_ptr<Rml::EventListener> debugPaletteCopyListener_;
+    std::unique_ptr<Rml::EventListener> windowChromeActionListener_;
     Rml::Context* context_ = nullptr;
     Rml::ElementDocument* document_ = nullptr;
+    std::optional<WindowChromeAction> pendingWindowChromeAction_;
     float dpRatio_ = 1.0f;
     bool initialized_ = false;
     bool rmlInitialized_ = false;

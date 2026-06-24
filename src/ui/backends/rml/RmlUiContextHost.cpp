@@ -40,6 +40,7 @@ namespace quader {
 namespace {
 
 constexpr std::string_view kGeneratedUtilityRcssPath = "quader://ui/rcss/app-utility.generated.rcss";
+constexpr std::string_view kIconResourceScheme = "quader://icons/";
 constexpr std::string_view kUiResourceScheme = "quader://ui/";
 
 bool startsWith(std::string_view value, std::string_view prefix) {
@@ -85,7 +86,9 @@ public:
 
         const std::string_view pathView(path.data(), path.size());
         std::filesystem::path resolvedPath = path;
-        if (startsWith(pathView, kUiResourceScheme)) {
+        if (startsWith(pathView, kIconResourceScheme)) {
+            resolvedPath = executableDir_ / "icons" / std::string(pathView.substr(kIconResourceScheme.size()));
+        } else if (startsWith(pathView, kUiResourceScheme)) {
             resolvedPath = executableDir_ / "ui" / std::string(pathView.substr(kUiResourceScheme.size()));
         }
 
@@ -210,6 +213,40 @@ public:
     }
 };
 
+/**
+ * Captures native window chrome actions from RmlUi controls.
+ */
+class WindowChromeActionListener final : public Rml::EventListener {
+public:
+    explicit WindowChromeActionListener(std::optional<WindowChromeAction>& pendingAction)
+        : pendingAction_(pendingAction) {}
+
+    void ProcessEvent(Rml::Event& event) override {
+        for (Rml::Element* element = event.GetTargetElement(); element != nullptr; element = element->GetParentNode()) {
+            const Rml::String action = element->GetAttribute<Rml::String>("data-chrome-window-action", "");
+            if (action.empty()) {
+                continue;
+            }
+
+            if (action == "minimize") {
+                pendingAction_ = WindowChromeAction::Minimize;
+            } else if (action == "restore") {
+                pendingAction_ = WindowChromeAction::RestoreOrMaximize;
+            } else if (action == "close") {
+                pendingAction_ = WindowChromeAction::Close;
+            } else {
+                return;
+            }
+
+            event.StopPropagation();
+            return;
+        }
+    }
+
+private:
+    std::optional<WindowChromeAction>& pendingAction_;
+};
+
 int rmlModifiersFromSdl() {
     const SDL_Keymod mod = SDL_GetModState();
     int result = 0;
@@ -322,6 +359,8 @@ bool RmlUiContextHost::initialize(
         debugPaletteSlot->SetInnerRML(debugPaletteRml);
     }
 
+    windowChromeActionListener_ = std::make_unique<WindowChromeActionListener>(pendingWindowChromeAction_);
+    document_->AddEventListener("click", windowChromeActionListener_.get());
     debugPaletteCopyListener_ = std::make_unique<DebugPaletteCopyListener>();
     document_->AddEventListener("click", debugPaletteCopyListener_.get());
     document_->Show();
@@ -339,8 +378,13 @@ void RmlUiContextHost::shutdown() {
         if (debugPaletteCopyListener_) {
             document_->RemoveEventListener("click", debugPaletteCopyListener_.get());
         }
+        if (windowChromeActionListener_) {
+            document_->RemoveEventListener("click", windowChromeActionListener_.get());
+        }
     }
     debugPaletteCopyListener_.reset();
+    windowChromeActionListener_.reset();
+    pendingWindowChromeAction_.reset();
     document_ = nullptr;
     context_ = nullptr;
     if (rmlInitialized_) {
@@ -490,6 +534,12 @@ std::optional<RmlElementRect> RmlUiContextHost::measureElementById(const std::st
             .width = width,
             .height = height,
     };
+}
+
+std::optional<WindowChromeAction> RmlUiContextHost::takeWindowChromeAction() {
+    std::optional<WindowChromeAction> action = pendingWindowChromeAction_;
+    pendingWindowChromeAction_.reset();
+    return action;
 }
 
 } // namespace quader

@@ -32,6 +32,37 @@ Use `UI` casing for UI infrastructure types:
 - Stable panel IDs are lowercase backend-neutral identifiers such as `viewport`, `outliner`, and
   `inspector`. Localized labels are display text only and must not become state or routing IDs.
 
+## MainLayout Docking And Resize
+
+- Treat `MainLayoutModel` as the persisted shell state and `DockLayoutModel` as the
+  backend-neutral source of truth for panel location, panel order, active tabs, and split panels.
+  Do not cache those facts again in RML builders, RCSS, `UISystem`, or ad-hoc UI maps.
+- Route layout mutations through `MainLayoutController` or a narrower common model owner. Add new
+  dock, split, tab, collapse, or resize operations there before wiring UI events to them.
+- Keep `MainLayoutRmlBuilder` as a projection of `MainLayoutModel`, localized labels, and transient
+  interaction state. It may choose markup and classes for the current presentation, but it must not
+  decide drop policy, resize clamps, active-tab repair, or persistence defaults.
+- `MainLayoutSashRegistry` owns measured MainLayout sash registrations and converts measured RML
+  rectangles into `ResizableSplitHandle` constraints. `ResizableSplitController` owns the generic
+  drag math. Do not add sidebar-only or bottom-only resize paths outside this measured-sash path.
+- Side docks and the bottom dock must share the same collapse/expand semantics. Preserve collapsed
+  edge resizers, snap-collapse behavior, and measured-bound normalization when changing either one.
+- `MainLayoutDockDragController` owns MainLayout-specific mapping from measured panel, tab, header,
+  and dock-edge regions to dock operations. `UIDragDropController` and `UIDragDrop` remain generic
+  and reusable for outliner trees, asset manager items, viewport drops, and future multi-selection
+  drags; they must not know MainLayout panel IDs or RmlUi class names.
+- Use `UITabStripModel` for tab-strip normalization and active-item repair. Do not hand-roll active
+  tab defaults or duplicate removal in builders, controllers, or settings code.
+- Moving a panel between left/right side docks and the bottom dock must remove it from its previous
+  location, preserve the stable panel ID, repair active tab state, and keep split-panel membership
+  coherent through `DockLayoutModel` helpers.
+- The bottom dock belongs inside `main-layout-editor-column` with the viewport, not full-width under
+  the sidebars or status bar. Its height resizer, tab strip, split panes, and drop indicator must be
+  constrained to that editor-column coordinate space.
+- Keep visual feedback separate from hit testing. RCSS/RML may render lines, overlays, ghost
+  previews, zero-width split visuals, or insertion markers, but measured hit regions, accepted drop
+  targets, non-droppable state, and resize constraints belong in the controllers/models.
+
 ## Localization
 
 Always keep localization in mind when adding/changing user-facing UI text.
@@ -75,3 +106,16 @@ fallback/debug text.
 - Mesh names start as `Mesh`, then `Mesh_1`, `Mesh_2`, etc.
 - Do not show `Runtime Object X`, `Mesh_0`, or `Mesh 0` names.
 - Do not append text suffixes like `[Mesh]` or `[Light]` in the outliner.
+
+## UI Guardrail Tests
+
+- Update focused tests when changing docking, tab strips, sashes, drag/drop, panel placement,
+  collapse behavior, or persisted MainLayout settings.
+- Cover `DockLayoutModel`, `UITabStripModel`, `MainLayoutController`, `MainLayoutSashRegistry`,
+  `ResizableSplitController`, `UIDragDropController`, `MainLayoutDockDragController`, and
+  `MainLayoutRmlBuilder` at the owner that owns the rule being changed.
+- Test bottom-dock placement as part of the editor column, panel moves removing the source
+  placement, tab insertion line feedback, split-panel resizing, collapsed edge resizers, and
+  non-droppable drag targets when those workflows change.
+- Use manual smoke checks only for actual RmlUi rendering, OS cursor appearance, GPU/window output,
+  or visual polish that cannot be asserted headlessly yet.

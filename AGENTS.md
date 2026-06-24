@@ -62,10 +62,15 @@ effects, cache invalidation, and error handling.
   `agents/public-api-and-scripting.md`.
   For RmlUi MainLayout shell work, also read `src/ui/AGENTS.md` and `resources/AGENTS.md` before
   touching generated RML/RCSS, UI settings, viewport frame routing, or runtime UI resources.
+- Input, keybindings, shortcuts, user rebinding, keybinding contexts, mouse gestures, or shortcut
+  persistence:
+  read `INPUT_KEYBINDINGS.md`, `agents/public-api-and-scripting.md`, and the relevant owner
+  domain file. For viewport navigation input, also read `agents/viewport-tools.md`.
 - Modeling tools, Polygon-backed operations, component selection, transform previews:
   read `agents/modeling-tools.md`, `agents/public-api-and-scripting.md`.
 - Viewport tools, camera, navigation, shortcuts, gizmos, modal tool input:
-  read `agents/viewport-tools.md`.
+  read `agents/viewport-tools.md`; if the task touches input routing, shortcut contexts, or user
+  customization, also read `INPUT_KEYBINDINGS.md`.
 - Rendering, overlays, Filament resources, materials, viewport draw behavior:
   read `agents/rendering-overlays.md`.
 - OOP refactors, class boundaries, ownership, command/service extraction:

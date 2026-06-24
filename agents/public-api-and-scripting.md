@@ -12,6 +12,9 @@ file except through prior written authorization from Francesco Di Blasi.
 app. Use `QuaderApi` for document/modeling-only automation, tests, and examples that do not need
 runtime editor domains. Lua scripting, when implemented, must bind only to public API surfaces.
 
+For command shortcuts, input bindings, user rebinding, or context-gated keybinding work, also read
+`../INPUT_KEYBINDINGS.md`.
+
 ## Add To Public API When
 
 Add a capability to the public API when it is:
@@ -20,6 +23,7 @@ Add a capability to the public API when it is:
 - scriptable behavior;
 - test or automation behavior;
 - command palette behavior;
+- command shortcut or user keybinding behavior;
 - undoable/history-visible behavior;
 - public onboarding/example behavior;
 - UI code expressing user intent rather than per-frame mechanics.
@@ -44,6 +48,8 @@ Prefer these public API ergonomics for C++ callers:
 - Convenience selection overloads before manually assembling `std::span` or component requests.
 - `QuaderApiResult` helpers such as `ok()`, `changed()`, `value()`, and `errorMessage()` in public
   examples. Legacy field access can remain in older internal code.
+- `QuaderCommandsApi` and `QuaderPreferencesApi` for keybinding reads, updates, removals, resets,
+  conflicts, and future rebinding UI. Do not let UI code parse or persist shortcut JSON directly.
 
 ## Keep Low-Level When
 
@@ -54,6 +60,7 @@ Keep code in owner services when it owns:
 - storage/revision internals;
 - private modeling, viewport, and render mechanics;
 - private state transitions that must remain behind service/command owners.
+- per-frame physical input capture before it has been translated into public editor intent.
 
 If a new UI/test/script needs behavior that the public API does not expose yet, add the missing
 owner behavior first, then expose it through a public API method. Do not bypass the API from

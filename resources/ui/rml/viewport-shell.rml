@@ -5,8 +5,15 @@
 </head>
 <body class="font-ui text-md leading-md bg-gray-950 text-gray-50">
     <div id="viewport-panel" class="app-shell bg-gray-950">
-        <div id="toolbar" class="shell-bar shell-toolbar h-12 px-3 bg-gray-800 border-gray-600 text-gray-100">
-            <span id="toolbar-label"></span>
+        <div id="toolbar" class="shell-bar shell-toolbar h-12 bg-gray-800 border-gray-600 text-gray-100">
+            <div id="toolbar-content" class="shell-toolbar-content pl-3">
+                <span id="toolbar-label"></span>
+            </div>
+            <div id="chrome-window-controls" class="chrome-window-controls">
+                <button id="chrome-minimize-button" class="chrome-icon-button chrome-minimize-icon bg-gray-800 hover-bg-gray-600 active-bg-gray-400" data-chrome-window-action="minimize"></button>
+                <button id="chrome-restore-button" class="chrome-icon-button chrome-restore-icon bg-gray-800 hover-bg-gray-600 active-bg-gray-400" data-chrome-window-action="restore"></button>
+                <button id="chrome-close-button" class="chrome-icon-button chrome-close-icon bg-gray-800 hover-bg-red-500 active-bg-red-600" data-chrome-window-action="close"></button>
+            </div>
         </div>
         <div id="main-layout-slot" class="main-layout-slot"></div>
         <div id="statusbar" class="shell-bar shell-statusbar h-10 px-3 bg-gray-900 border-gray-600 text-gray-100">

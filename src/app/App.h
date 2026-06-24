@@ -25,7 +25,7 @@ class QuaderEditorApi;
  * Stores the App Options data contract used by the native application shell.
  */
 struct AppOptions {
-    bool borderlessWindow = false;
+    bool borderlessWindow = true;
 };
 
 /**
@@ -42,6 +42,7 @@ public:
 
 private:
     void createStartupScene();
+    void handleWindowChromeAction(WindowChromeAction action);
 
     AppFrameClock frameClock_;
     PlatformWindow window_;

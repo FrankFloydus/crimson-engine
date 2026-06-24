@@ -477,19 +477,70 @@ TEST(DependencyLicenseGuardrailTests, LuaDependenciesRequireExplicitDecision) {
     }
 }
 
-TEST(WindowGuardrailTests, BorderlessWindowModeIsOptIn) {
+TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string mainSource = readSourceFile("src/main.cpp");
     const std::string appHeader = readSourceFile("src/app/App.h");
     const std::string appSource = readSourceFile("src/app/App.cpp");
     const std::string platformHeader = readSourceFile("src/platform/PlatformWindow.h");
     const std::string platformSource = readSourceFile("src/platform/PlatformWindow.cpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
+    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
+    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
+    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
 
+    expectContains(mainSource, "bool borderlessWindow = true");
     expectContains(mainSource, "--borderless-window");
     expectContains(mainSource, "commandLine.borderlessWindow");
     expectContains(appHeader, "struct AppOptions");
+    expectContains(appHeader, "bool borderlessWindow = true");
+    expectContains(appHeader, "handleWindowChromeAction(WindowChromeAction action)");
     expectContains(appSource, ".borderless = options.borderlessWindow");
+    expectContains(appSource, "window_.processChromeEvent(event)");
+    expectContains(appSource, "ui_.takeWindowChromeAction()");
+    expectContains(appSource, "window_.refreshNativeChrome()");
+    expectContains(appSource, "window_.minimize()");
+    expectContains(appSource, "window_.toggleMaximizeRestore()");
     expectContains(platformHeader, "struct PlatformWindowOptions");
+    expectContains(platformHeader, "refreshNativeChrome()");
+    expectContains(platformHeader, "PlatformWindowChromeHitTest");
+    expectContains(platformHeader, "platformWindowChromeHitTestResult");
+    expectContains(platformHeader, "PlatformWindowChromeResizeDrag");
+    expectContains(platformHeader, "processChromeEvent");
+    expectContains(platformHeader, "releaseChromeResizeCursor");
     expectContains(platformSource, "SDL_WINDOW_BORDERLESS");
+    expectContains(platformSource, "SDL_WINDOW_INPUT_FOCUS");
+    expectContains(platformSource, "SDL_HITTEST_DRAGGABLE");
+    expectContains(platformSource, "SDL_HITTEST_RESIZE_TOPLEFT");
+    expectContains(platformSource, "SDL_CaptureMouse");
+    expectContains(platformSource, "SDL_GetGlobalMouseState");
+    expectContains(platformSource, "SDL_SetWindowPosition");
+    expectContains(platformSource, "SDL_SetWindowSize");
+    expectContains(platformSource, "SDL_MinimizeWindow");
+    expectContains(platformSource, "SDL_MaximizeWindow");
+    expectContains(platformSource, "SDL_RestoreWindow");
+    expectContains(platformSource, "HTLEFT");
+    expectContains(platformSource, "HTTOPRIGHT");
+    expectContains(platformSource, "WM_SETCURSOR");
+    expectContains(platformSource, "chromeResizeCursorActive_");
+    expectContains(platformSource, "SetWindowLongPtrW");
+    expectContains(platformSource, "GWLP_WNDPROC");
+    expectContains(platformSource, "IDC_SIZEWE");
+    expectContains(platformSource, "DWMWA_WINDOW_CORNER_PREFERENCE");
+    expectContains(platformSource, "DWMWA_BORDER_COLOR");
+    expectContains(platformSource, "DWMWA_COLOR_DEFAULT");
+    expectContains(platformSource, "RegGetValueW");
+    expectContains(platformSource, "ColorPrevalence");
+    expectContains(platformSource, "AccentColor");
+    expectMissing(platformSource, "SDL_SetWindowHitTest");
+    expectMissing(platformSource, "WM_NCLBUTTONDOWN");
+    expectContains(rootCMake, "Dwmapi");
+    expectContains(rootCMake, "Advapi32");
+    expectContains(uiSystemHeader, "takeWindowChromeAction()");
+    expectContains(uiSystemSource, "rmlHost_.takeWindowChromeAction()");
+    expectContains(rmlHostHeader, "enum class WindowChromeAction");
+    expectContains(rmlHostSource, "WindowChromeActionListener");
+    expectContains(rmlHostSource, "data-chrome-window-action");
 }
 
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {

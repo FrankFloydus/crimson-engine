@@ -28,6 +28,54 @@ body {
     border-bottom-width: 1dp;
 }
 
+.shell-toolbar-content {
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-width: 1dp;
+}
+
+.chrome-window-controls {
+    display: flex;
+    flex-direction: row;
+    flex-grow: 0;
+    flex-shrink: 0;
+    height: 100%;
+}
+
+.chrome-icon-button {
+    width: 40dp;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 0;
+    flex-shrink: 0;
+    margin: 0dp;
+    padding: 0dp;
+    border-width: 0dp;
+    image-color: #5B5B5B;
+}
+
+.chrome-minimize-icon {
+    decorator: image("quader://icons/minimize_icon.png" scale-none);
+}
+
+.chrome-restore-icon {
+    decorator: image("quader://icons/restore_icon.png" scale-none);
+}
+
+.chrome-close-icon {
+    decorator: image("quader://icons/close_icon.png" scale-none);
+}
+
+.chrome-icon-button:hover {
+    image-color: #D8D8D8;
+}
+
+.chrome-icon-button:active {
+    image-color: #D8D8D8;
+}
+
 .shell-statusbar {
     border-top-width: 1dp;
 }

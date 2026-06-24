@@ -11,6 +11,9 @@ file except through prior written authorization from Francesco Di Blasi.
 `Tool` and `ViewportTool` are the base viewport contracts. New viewport tools communicate through
 `ViewportToolEvent`, `ViewportToolContext`, and `ViewportToolResult`.
 
+For viewport keyboard, mouse, shortcut, user rebinding, or context work, also read
+`../INPUT_KEYBINDINGS.md` before editing code.
+
 ## Tool Families
 
 - Selection/activation tools derive from `ViewportTool` or `InteractiveViewportTool` when they only
@@ -39,3 +42,12 @@ file except through prior written authorization from Francesco Di Blasi.
 - `QuaderViewportApi` should expose user/editor viewport intent through the workspace service.
   Runtime hooks are for host/render actions that cannot be represented as core viewport state,
   such as future screenshot/readback integrations.
+- Viewport input should flow through canonical keybinding owners: platform events become
+  `ViewportInputFrame` in `ViewportHost`, keybindings resolve through `QuaderCommandsApi` and
+  `QuaderKeybindingService`, and `ViewportInputRouter` consumes semantic actions such as orbit,
+  pan, fly, zoom, and reset fly speed. Do not add hardcoded key/button collisions in viewport tools.
+- Use keybinding `when` contexts for same-key behavior. For example, tool hotkeys can use
+  `!navigation.active`, while navigation-specific bindings remain active during fly/orbit/pan.
+- Active mouse drags must keep the chord captured at drag start. Do not recompute drag modifiers
+  every frame; pressing Shift during `RightMouseDrag` fly navigation must not cancel or reclassify
+  the active drag.

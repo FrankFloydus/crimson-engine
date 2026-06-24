@@ -12,6 +12,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <optional>
 #include <utility>
 
 namespace quader {
@@ -67,7 +68,16 @@ int App::run() {
         SDL_Event event;
         const SDL_WindowID mainWindowId = SDL_GetWindowID(window_.sdlWindow());
         while (SDL_PollEvent(&event)) {
-            ui_.processEvent(event);
+            const bool chromeConsumed = window_.processChromeEvent(event);
+            if (!chromeConsumed) {
+                ui_.processEvent(event);
+                if (const std::optional<WindowChromeAction> action = ui_.takeWindowChromeAction()) {
+                    handleWindowChromeAction(*action);
+                }
+                if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                    (void)window_.processChromeEvent(event);
+                }
+            }
             if (event.type == SDL_EVENT_QUIT ||
                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
                             event.window.windowID == mainWindowId)) {
@@ -77,6 +87,11 @@ int App::run() {
                         event.type == SDL_EVENT_WINDOW_RESIZED) &&
                     event.window.windowID == mainWindowId) {
                 window_.refreshPixelSize();
+            }
+            if ((event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
+                        event.type == SDL_EVENT_WINDOW_FOCUS_LOST) &&
+                    event.window.windowID == mainWindowId) {
+                window_.refreshNativeChrome();
             }
         }
         if (!running_) {
@@ -148,6 +163,20 @@ void App::createStartupScene() {
 
     MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader", albedoTexture, roughnessTexture);
     defaultMaterial_ = projectSession_.assets().addMaterial(std::move(defaultMaterial));
+}
+
+void App::handleWindowChromeAction(WindowChromeAction action) {
+    switch (action) {
+    case WindowChromeAction::Minimize:
+        window_.minimize();
+        break;
+    case WindowChromeAction::RestoreOrMaximize:
+        window_.toggleMaximizeRestore();
+        break;
+    case WindowChromeAction::Close:
+        running_ = false;
+        break;
+    }
 }
 
 } // namespace quader
