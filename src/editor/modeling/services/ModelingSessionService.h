@@ -22,6 +22,7 @@ namespace quader {
 
 class AssetRegistry;
 class DocumentCommandService;
+class EditorHistoryService;
 class IUndoableCommand;
 class SceneDocument;
 
@@ -114,6 +115,7 @@ public:
     ModelingTransformDragPreview beginTransformDrag(const ModelingTransformDragBeginRequest& request);
     ModelingTransformDragPreview updateTransformDrag(const ModelingTransformDragUpdateRequest& request);
     ModelingTransformDragPreview commitTransformDrag();
+    ModelingTransformDragPreview commitTransformDrag(EditorHistoryService& history);
     ModelingCommandResult cancelTransformDrag();
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request);

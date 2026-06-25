@@ -28,9 +28,9 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     EXPECT_NE(created.value.mesh, quader::InvalidAssetId);
 
     const quader::ModelingSelectionSummary selection = api.selection().summary();
-    EXPECT_EQ(session.scene().entities().size(), 1u);
+    EXPECT_EQ(api.query().entities().size(), 1u);
     EXPECT_EQ(api.modeling().objects().size(), 1u);
-    EXPECT_EQ(session.assets().meshCount(), 1u);
+    EXPECT_EQ(api.query().assets().meshCount, 1u);
     EXPECT_TRUE(selection.hasSelection);
     EXPECT_EQ(selection.selectedObjectCount, 1u);
     EXPECT_EQ(selection.activeObjectId, created.value.modelingObjectId);

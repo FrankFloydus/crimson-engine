@@ -125,6 +125,23 @@ public:
         return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
     }
 
+    DocumentCommandResult accept() {
+        if (!active_) {
+            return documentCommandInvalidRequestResult("Transform preview is not active");
+        }
+
+        bool changed = false;
+        for (const DocumentTransformEdit& edit : edits_) {
+            if (!scene_.exists(edit.entity) || scene_.isEffectivelyLocked(edit.entity)) {
+                continue;
+            }
+            scene_.setTransform(edit.entity, edit.after);
+            changed = changed || !documentCommandSameTransform(edit.before, edit.after);
+        }
+        active_ = false;
+        return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+    }
+
     DocumentCommandResult commit(EditorHistoryService& history) {
         if (!active_) {
             return documentCommandInvalidRequestResult("Transform preview is not active");

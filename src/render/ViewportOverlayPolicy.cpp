@@ -114,30 +114,31 @@ float viewportOverlayLineWidthPixels(ViewportOverlayLayer layer, float nativeWid
     }
     switch (layer) {
     case ViewportOverlayLayer::WireframeBase:
-        return 1.0f;
+        return kOverlayWireframeBaseLineWidthPixels;
     case ViewportOverlayLayer::SourceWire:
-        return 1.5f;
+        return kOverlaySourceWireLineWidthPixels;
     case ViewportOverlayLayer::SelectedFaceEdge:
     case ViewportOverlayLayer::SelectedEdge:
+        return kOverlaySelectionWireLineWidthPixels;
     case ViewportOverlayLayer::HoverFaceEdge:
     case ViewportOverlayLayer::HoverEdge:
-        return 2.5f;
+        return kOverlayHoverWireLineWidthPixels;
     case ViewportOverlayLayer::OpenEdge:
-        return 1.0f;
+        return kOverlayOpenEdgeLineWidthPixels;
     case ViewportOverlayLayer::DiagnosticEdge:
-        return 4.0f;
+        return kOverlayDiagnosticEdgeLineWidthPixels;
     case ViewportOverlayLayer::GroupBounds:
-        return 1.5f;
+        return kOverlayGroupBoundsLineWidthPixels;
     case ViewportOverlayLayer::ToolPlaneLine:
-        return 1.0f;
+        return kOverlayToolPlaneLineWidthPixels;
     case ViewportOverlayLayer::ToolPreviewLine:
-        return 1.15f;
+        return kOverlayToolPreviewLineWidthPixels;
     case ViewportOverlayLayer::ToolPreviewSeam:
-        return 2.25f;
+        return kOverlayToolPreviewSeamLineWidthPixels;
     case ViewportOverlayLayer::ToolHandle:
-        return 2.0f;
+        return kOverlayToolHandleLineWidthPixels;
     default:
-        return 1.0f;
+        return kOverlayWireframeBaseLineWidthPixels;
     }
 }
 

@@ -10,11 +10,14 @@
 #include "ModelingTestEvents.h"
 
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
+#include "api/QuaderCommandIds.h"
+#include "api/QuaderEditorApi.h"
 #include "scene/document/ProjectSession.h"
 #include "scene/Components.h"
 
 #include <mesh/polygon/document.h>
 
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -33,6 +36,7 @@ class OverlayExpect;
 class SceneExpect;
 class SelectionExpect;
 class SnapshotExpect;
+class AssetExpect;
 class ToolStatusExpect;
 class UndoRedoExpect;
 
@@ -54,14 +58,19 @@ public:
 
     [[nodiscard]] ProjectSession& session() { return session_; }
     [[nodiscard]] const ProjectSession& session() const { return session_; }
-    [[nodiscard]] QuaderApi& api() { return api_; }
-    [[nodiscard]] const QuaderApi& api() const { return api_; }
+    [[nodiscard]] QuaderEditorApi& editor() { return editor_; }
+    [[nodiscard]] const QuaderEditorApi& editor() const { return editor_; }
+    [[nodiscard]] QuaderApi& api() { return editor_.api(); }
+    [[nodiscard]] const QuaderApi& api() const { return editor_.api(); }
 
     [[nodiscard]] EntityId entity(std::string_view alias) const;
     [[nodiscard]] QuaderModelingObjectRef object(std::string_view alias) const;
     [[nodiscard]] ModelingObjectId modelingObject(std::string_view alias) const;
     [[nodiscard]] BehaviorSnapshot snapshot(std::string label = {}) const;
     void remember(std::string_view alias, QuaderModelingObjectRef object);
+    void remember(std::string_view alias, QuaderEntityRef entity);
+    void remember(std::string_view alias, EntityId entity);
+    void rememberEntityNamed(std::string_view alias, std::string_view name);
 
 private:
     BehaviorScenario();
@@ -73,6 +82,7 @@ private:
     friend class SelectionExpect;
     friend class MeshExpect;
     friend class OverlayExpect;
+    friend class AssetExpect;
     friend class ToolStatusExpect;
     friend class UndoRedoExpect;
 
@@ -83,7 +93,7 @@ private:
     [[nodiscard]] QuaderModelingObjectRef objectForEntity(EntityId entity) const;
 
     ProjectSession session_;
-    QuaderApi api_;
+    QuaderEditorApi editor_;
     std::unordered_map<std::string, QuaderModelingObjectRef> aliases_;
     QuaderApiStatus lastStatus_;
     ModelingSelectionSummary lastSelection_;
@@ -100,6 +110,13 @@ public:
     BehaviorGiven& unitBox(std::string_view alias, std::string name = "Box");
     BehaviorGiven& box(std::string_view alias, ModelingBounds bounds, std::string name = "Box");
     BehaviorGiven& mesh(std::string_view alias, QuaderPolygonDocument document, std::string name = "Mesh");
+    BehaviorGiven& entity(
+            std::string_view alias,
+            std::string name,
+            QuaderEntityKind kind = QuaderEntityKind::Generic,
+            QuaderTransform transform = {},
+            std::string_view parentAlias = {});
+    BehaviorGiven& selectedAliases(std::initializer_list<std::string_view> aliases, std::string_view activeAlias);
     BehaviorGiven& selected(std::string_view alias);
     BehaviorGiven& selectionMode(ModelingSelectionMode mode);
     BehaviorGiven& vertexSelected(std::string_view alias, int vertex);
@@ -141,7 +158,20 @@ public:
     BehaviorWhen& cancelDrag();
 
     BehaviorWhen& executeTool(std::string_view toolId);
+    BehaviorWhen& execute(QuaderCommandId command);
+    BehaviorWhen& execute(std::string_view commandId);
     BehaviorWhen& assignMaterialSlot(std::uint32_t materialSlot);
+    BehaviorWhen& clearSceneSelection();
+    BehaviorWhen& groupSelection(std::string_view alias, std::string name, TransformComponent transform = {});
+    BehaviorWhen& ungroupSelection();
+    BehaviorWhen& duplicateSelectedHierarchy(std::string_view rootAlias);
+    BehaviorWhen& destroy(std::string_view alias);
+    BehaviorWhen& rename(std::string_view alias, std::string name);
+    BehaviorWhen& reparent(std::string_view alias, std::string_view parentAlias, bool preserveWorldTransform = true);
+    BehaviorWhen& setTransform(std::string_view alias, TransformComponent transform);
+    BehaviorWhen& setVisible(std::string_view alias, bool visible);
+    BehaviorWhen& setLocked(std::string_view alias, bool locked);
+    BehaviorWhen& setGroupFlags(std::string_view alias, TransformComponent transform, bool visible, bool locked);
     BehaviorWhen& undo();
     BehaviorWhen& redo();
 
@@ -165,6 +195,7 @@ public:
     [[nodiscard]] SelectionExpect selection() const;
     [[nodiscard]] MeshExpect mesh(std::string_view alias) const;
     [[nodiscard]] OverlayExpect overlay() const;
+    [[nodiscard]] AssetExpect assets() const;
     [[nodiscard]] ToolStatusExpect tool() const;
     [[nodiscard]] UndoRedoExpect history() const;
     [[nodiscard]] SnapshotExpect snapshot(const BehaviorSnapshot& snapshot) const;

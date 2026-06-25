@@ -44,11 +44,13 @@
 #include "ui/backends/rml/RmlMarkupWriter.h"
 #include "ui/components/atoms/UIButtonComponent.h"
 #include "ui/components/atoms/UIChromeButtonComponent.h"
+#include "ui/components/atoms/UIToolbarButtonComponent.h"
 #include "ui/components/common/DockLayoutModel.h"
 #include "ui/components/common/ResizableSplit.h"
 #include "ui/components/common/UIDragDrop.h"
 #include "ui/components/common/UITabStripModel.h"
 #include "ui/components/organisms/MainLayoutModel.h"
+#include "ui/components/organisms/ModelingModeShelfComponent.h"
 #include "ui/components/organisms/WindowChromeControlsComponent.h"
 #include "ui/core/UIClassList.h"
 #include "ui/core/UIElement.h"
@@ -78,6 +80,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -210,6 +213,15 @@ void expectColorNear(ViewportSettingColor actual, ViewportSettingColor expected)
     EXPECT_NEAR(actual.g, expected.g, 0.001f);
     EXPECT_NEAR(actual.b, expected.b, 0.001f);
     EXPECT_NEAR(actual.a, expected.a, 0.001f);
+}
+
+ViewportSettingColor overlayPolicySettingColor(std::uint32_t abgr) {
+    return {
+            static_cast<float>(abgr & 0xffu) / 255.0f,
+            static_cast<float>((abgr >> 8) & 0xffu) / 255.0f,
+            static_cast<float>((abgr >> 16) & 0xffu) / 255.0f,
+            static_cast<float>((abgr >> 24) & 0xffu) / 255.0f,
+    };
 }
 
 void expectVec3Near(QVec3 actual, QVec3 expected) {
@@ -585,6 +597,58 @@ TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
     std::filesystem::remove(path);
 }
 
+TEST(UISettingsTests, MigratesLegacyDisplayPanelNamesOnlyWhenLoadingSettings) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_ui_settings_legacy_panel_labels.ini";
+    {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[MainLayout]\n";
+        file << "DockPanelOrder=Inspector,Outliner,Viewport\n";
+        file << "DockActivePanels=Panel:Inspector,Sidebar:Outliner\n";
+        file << "DockSplitPanels=Panel:Inspector=Inspector@268|Outliner\n";
+        file << "InspectorDockLocation=Panel\n";
+        file << "OutlinerDockLocation=Panel\n";
+    }
+
+    UISettings loaded = UISettings::load(path);
+
+    ASSERT_GE(loaded.mainLayout().dockLayout.panels.size(), 2u);
+    EXPECT_EQ(loaded.mainLayout().dockLayout.panels[0].panelId, kMainLayoutPanelInspector);
+    EXPECT_EQ(loaded.mainLayout().dockLayout.panels[1].panelId, kMainLayoutPanelOutliner);
+    ASSERT_TRUE(dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel));
+    EXPECT_EQ(*dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel), kMainLayoutPanelInspector);
+    const std::vector<std::string_view> splitPanels =
+            dockSplitPanelsInLocation(loaded.mainLayout().dockLayout, DockLocation::Panel);
+    ASSERT_EQ(splitPanels.size(), 2u);
+    EXPECT_EQ(splitPanels[0], kMainLayoutPanelInspector);
+    EXPECT_EQ(splitPanels[1], kMainLayoutPanelOutliner);
+    ASSERT_TRUE(dockSplitPanelSizeDp(
+            loaded.mainLayout().dockLayout,
+            DockLocation::Panel,
+            kMainLayoutPanelInspector));
+    EXPECT_EQ(
+            *dockSplitPanelSizeDp(
+                    loaded.mainLayout().dockLayout,
+                    DockLocation::Panel,
+                    kMainLayoutPanelInspector),
+            268);
+
+    ASSERT_TRUE(loaded.save(path));
+    const std::string savedText = readSourceFile(path);
+    EXPECT_NE(savedText.find("DockPanelOrder=inspector,outliner"), std::string::npos);
+    EXPECT_NE(savedText.find("DockActivePanels=Panel:inspector"), std::string::npos);
+    EXPECT_NE(savedText.find("DockSplitPanels=Panel:inspector=inspector@268|outliner"), std::string::npos);
+    EXPECT_EQ(savedText.find("DockPanelOrder=Inspector"), std::string::npos);
+    EXPECT_EQ(savedText.find("DockPanelOrder=Outliner"), std::string::npos);
+    EXPECT_EQ(savedText.find("Panel:Inspector"), std::string::npos);
+    EXPECT_EQ(savedText.find("Sidebar:Outliner"), std::string::npos);
+    EXPECT_EQ(savedText.find("=Inspector@"), std::string::npos);
+    EXPECT_EQ(savedText.find("|Outliner"), std::string::npos);
+
+    std::filesystem::remove(path);
+}
+
 TEST(UITabStripModelTests, NormalizesItemsAndKeepsActiveItemValid) {
     UITabStripModel tabs = UITabStripModel::fromItems({"outliner", "inspector", "outliner"}, "inspector");
 
@@ -764,8 +828,13 @@ TEST(MainLayoutModelTests, DefaultLayoutContainsViewportAndRightSidebarPanels) {
     EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelViewport));
     EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelOutliner));
     EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelInspector));
-    const std::optional<std::string_view> legacyOutliner = mainLayoutCanonicalPanelId("Outliner");
-    const std::optional<std::string_view> legacyInspector = mainLayoutCanonicalPanelId("Inspector");
+    EXPECT_FALSE(mainLayoutPanelIdIsViewport("Viewport"));
+    EXPECT_FALSE(mainLayoutPanelIdIsKnown("Outliner"));
+    EXPECT_FALSE(mainLayoutPanelIdIsKnown("Inspector"));
+    EXPECT_FALSE(mainLayoutCanonicalPanelId("Outliner"));
+    EXPECT_FALSE(mainLayoutCanonicalPanelId("Inspector"));
+    const std::optional<std::string_view> legacyOutliner = mainLayoutPanelIdFromLegacySettings("Outliner");
+    const std::optional<std::string_view> legacyInspector = mainLayoutPanelIdFromLegacySettings("Inspector");
     ASSERT_TRUE(legacyOutliner);
     ASSERT_TRUE(legacyInspector);
     EXPECT_EQ(*legacyOutliner, kMainLayoutPanelOutliner);
@@ -848,8 +917,7 @@ TEST(MainLayoutControllerTests, TogglesFixedPanelsAndPreparesSidebarFlip) {
     EXPECT_EQ(layout.sidebarSide, MainLayoutSidebarSide::Left);
     EXPECT_FALSE(controller.setSidebarSide(MainLayoutSidebarSide::Left));
 
-    ASSERT_TRUE(controller.panelDockLocation("Inspector"));
-    EXPECT_EQ(*controller.panelDockLocation("Inspector"), DockLocation::Sidebar);
+    EXPECT_FALSE(controller.panelDockLocation("Inspector"));
     EXPECT_TRUE(controller.movePanelToDockLocation(
             kMainLayoutPanelInspector,
             DockLocation::Sidebar,
@@ -870,7 +938,8 @@ TEST(MainLayoutControllerTests, TogglesFixedPanelsAndPreparesSidebarFlip) {
             DockLocation::Sidebar,
             kMainLayoutPanelOutliner,
             DockPanelInsertPosition::Before));
-    EXPECT_TRUE(controller.movePanelToDockLocation("Inspector", DockLocation::Panel));
+    EXPECT_FALSE(controller.movePanelToDockLocation("Inspector", DockLocation::Panel));
+    EXPECT_TRUE(controller.movePanelToDockLocation(kMainLayoutPanelInspector, DockLocation::Panel));
     ASSERT_TRUE(controller.panelDockLocation(kMainLayoutPanelInspector));
     EXPECT_EQ(*controller.panelDockLocation(kMainLayoutPanelInspector), DockLocation::Panel);
     ASSERT_TRUE(controller.activeDockPanel(DockLocation::Panel));
@@ -1809,6 +1878,7 @@ TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
 
     EXPECT_NE(rml.find("class=\"main-layout bg-gray-950 main-layout-sidebar-right\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-layout-editor-column\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-slot\" class=\"modeling-mode-shelf-slot\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-viewport\""), std::string::npos);
     EXPECT_NE(rml.find("src=\"quader://viewport/main\""), std::string::npos);
@@ -1829,6 +1899,8 @@ TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
     EXPECT_EQ(rml.find("main-layout-panel-tabbar"), std::string::npos);
     EXPECT_EQ(rml.find("viewport-label"), std::string::npos);
     EXPECT_EQ(rml.find("<rml>"), std::string::npos);
+    EXPECT_LT(rml.find("id=\"main-layout-editor-column\""), rml.find("id=\"modeling-mode-shelf-slot\""));
+    EXPECT_LT(rml.find("id=\"modeling-mode-shelf-slot\""), rml.find("id=\"viewport-host\""));
 }
 
 TEST(MainLayoutRmlBuilderTests, MarksActiveResizerDuringDrag) {
@@ -2267,6 +2339,9 @@ TEST(UIUtilityTokensTests, LoadsTailwindStyleTokenConfigInAuthorOrder) {
     "spacing": {
       "3": "12dp"
     },
+    "borderRadius": {
+      "6": "6dp"
+    },
     "extend": {
       "colors": {
         "accent": {
@@ -2292,7 +2367,7 @@ TEST(UIUtilityTokensTests, LoadsTailwindStyleTokenConfigInAuthorOrder) {
     EXPECT_EQ(tokens.colors[2].hex, "#B78BE9");
     EXPECT_EQ(tokens.colors[3].name, "accent.500");
     EXPECT_EQ(tokens.colors[3].hex, "#ABCDEF");
-    ASSERT_EQ(tokens.utilities.size(), 7u);
+    ASSERT_EQ(tokens.utilities.size(), 8u);
     EXPECT_EQ(tokens.utilities[0].name, "font-ui");
     EXPECT_EQ(tokens.utilities[0].value, "Inter");
     EXPECT_EQ(tokens.utilities[1].name, "font-medium");
@@ -2303,10 +2378,12 @@ TEST(UIUtilityTokensTests, LoadsTailwindStyleTokenConfigInAuthorOrder) {
     EXPECT_EQ(tokens.utilities[3].value, "12dp");
     EXPECT_EQ(tokens.utilities[4].name, "size-3");
     EXPECT_EQ(tokens.utilities[4].value, "12dp");
-    EXPECT_EQ(tokens.utilities[5].name, "space-4");
-    EXPECT_EQ(tokens.utilities[5].value, "16dp");
-    EXPECT_EQ(tokens.utilities[6].name, "size-4");
+    EXPECT_EQ(tokens.utilities[5].name, "rounded-6");
+    EXPECT_EQ(tokens.utilities[5].value, "6dp");
+    EXPECT_EQ(tokens.utilities[6].name, "space-4");
     EXPECT_EQ(tokens.utilities[6].value, "16dp");
+    EXPECT_EQ(tokens.utilities[7].name, "size-4");
+    EXPECT_EQ(tokens.utilities[7].value, "16dp");
 
     std::filesystem::remove(path);
 }
@@ -2337,12 +2414,17 @@ TEST(RmlMarkupWriterTests, EscapesAttributesTextAndStyles) {
 TEST(UIIconRegistryTests, RendersSemanticIconsThroughCurrentResourceProvider) {
     const UIIconRegistry& registry = UIIconRegistry::instance();
     const UIIconDefinition* closeIcon = registry.find(UIIconId::ChromeClose);
+    const UIIconDefinition* meshIcon = registry.find(UIIconId::Mesh);
 
     ASSERT_NE(closeIcon, nullptr);
+    ASSERT_NE(meshIcon, nullptr);
     EXPECT_EQ(closeIcon->name, "chrome-close");
     EXPECT_EQ(closeIcon->className, "ui-icon-chrome-close");
     EXPECT_EQ(closeIcon->provider, UIIconProvider::ImageResource);
     EXPECT_EQ(closeIcon->resourcePath, "quader://icons/close_icon.png");
+    EXPECT_EQ(meshIcon->name, "mesh");
+    EXPECT_EQ(meshIcon->className, "ui-icon-mesh");
+    EXPECT_EQ(meshIcon->resourcePath, "quader://icons/mesh_icon.png");
     EXPECT_EQ(uiIconProviderClass(closeIcon->provider), "ui-icon-resource-image");
 
     EXPECT_EQ(
@@ -2385,6 +2467,32 @@ TEST(UIButtonComponentTests, RendersStatefulLabeledIconButtonsThroughBaseClass) 
             "class=\"ui-button-label\">Run</span></button>");
 }
 
+TEST(UIToolbarButtonComponentTests, RendersIconLabelAndSecondaryText) {
+    const UIToolbarButtonComponent button(UIToolbarButtonModel{
+            .elementId = "toolbar-vertices",
+            .icon = UIIconId::Mesh,
+            .label = "Vertices",
+            .secondaryText = "Shift+Z",
+    });
+
+    const std::string rml = writeRmlMarkup(button.render());
+
+    EXPECT_NE(rml.find("id=\"toolbar-vertices\" class=\"toolbar-button bg-gray-950 border-1 border-gray-700 rounded-6 min-w-8 h-8\""),
+            std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-mesh toolbar-button-icon\" data-ui-icon=\"mesh\""),
+            std::string::npos);
+    EXPECT_NE(rml.find("class=\"toolbar-button-label text-sm text-gray-100\">Vertices</span>"),
+            std::string::npos);
+    EXPECT_NE(rml.find("class=\"toolbar-button-secondary font-alt text-xxs text-gray-300\">SHIFT+Z</span>"),
+            std::string::npos);
+
+    const UIToolbarButtonComponent iconButton(UIToolbarButtonModel{
+            .elementId = "toolbar-icon",
+            .icon = UIIconId::Mesh,
+    });
+    EXPECT_NE(writeRmlMarkup(iconButton.render()).find("toolbar-button-icon-only"), std::string::npos);
+}
+
 TEST(UIChromeButtonComponentTests, BuildsCurrentWindowChromeButtonsFromComponents) {
     EXPECT_EQ(chromeButtonElementId(UIChromeButtonKind::Minimize), "chrome-minimize-button");
     EXPECT_EQ(chromeButtonActionName(UIChromeButtonKind::Restore), "restore");
@@ -2404,6 +2512,163 @@ TEST(UIChromeButtonComponentTests, BuildsCurrentWindowChromeButtonsFromComponent
     EXPECT_EQ(countOccurrences(rml, "data-ui-icon"), 3u);
     EXPECT_EQ(innerRml.find("id=\"chrome-window-controls\""), std::string::npos);
     EXPECT_EQ(countOccurrences(innerRml, "data-chrome-window-action"), 3u);
+}
+
+TEST(ModelingModeShelfComponentTests, BuildsTabbedShelfShellOnly) {
+    const std::vector<ModelingModeShelfControl> controls = {
+            {
+                    .id = "object",
+                    .label = "Object",
+                    .icon = UIIconId::Mesh,
+                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+            {
+                    .id = "vertex",
+                    .label = "Vertices",
+                    .icon = UIIconId::Mesh,
+                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+            {
+                    .id = "edge",
+                    .label = "Edges",
+                    .icon = UIIconId::Mesh,
+                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+            {
+                    .id = "face",
+                    .label = "Faces",
+                    .icon = UIIconId::Mesh,
+                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+    };
+    const std::vector<ModelingModeShelfCommand> commands = {
+            {.id = "bridge", .label = "Bridge"},
+            {.id = "collapse", .label = "Collapse", .secondaryText = "Shift+Z"},
+            {.id = "thicken", .label = "Thicken", .secondaryText = "T"},
+            {.id = "flip-normal", .label = "Flip Normal", .secondaryText = "F"},
+    };
+
+    for (const ModelingModeShelfControl& control : controls) {
+        EXPECT_TRUE(modelingModeShelfControlOpensTabContent(control));
+    }
+    EXPECT_EQ(modelingModeShelfControlButtonElementId("face"), "modeling-mode-shelf-control-face");
+    EXPECT_EQ(modelingModeShelfControlMeasureElementId("face"), "modeling-mode-shelf-measure-control-face");
+    EXPECT_EQ(modelingModeShelfOverflowToggleControlId(), "__modeling-mode-shelf-overflow-toggle");
+    EXPECT_EQ(modelingModeShelfOverflowButtonElementId(), "modeling-mode-shelf-overflow-button");
+
+    const std::string toolbarRml = writeRmlMarkup(ModelingModeShelfToolbarComponent(ModelingModeShelfState{
+            .controls = controls,
+            .activeTabControlId = std::string("face"),
+    }).render());
+    EXPECT_EQ(countOccurrences(toolbarRml, "data-modeling-mode-shelf-control="), 4u);
+    EXPECT_EQ(countOccurrences(toolbarRml, "data-modeling-mode-shelf-control-behavior=\"opens-tab-content\""), 4u);
+    EXPECT_EQ(countOccurrences(toolbarRml, "data-modeling-mode-shelf-control-behavior=\"action\""), 0u);
+    EXPECT_EQ(countOccurrences(toolbarRml, "data-ui-icon=\"mesh\""), 8u);
+    EXPECT_EQ(toolbarRml.find(">Object</span>"), std::string::npos);
+    EXPECT_NE(toolbarRml.find(">Faces</span>"), std::string::npos);
+
+    const std::string rml = buildModelingModeShelfRml(ModelingModeShelfState{
+            .controls = controls,
+            .activeStripCommands = commands,
+            .activeTabControlId = std::string("face"),
+    });
+
+    EXPECT_NE(rml.find("<div id=\"modeling-mode-shelf\" class=\"modeling-mode-shelf bg-gray-950\">"),
+            std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-toolbar\" class=\"modeling-mode-shelf-toolbar h-13\""),
+            std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-strip\" class=\"modeling-mode-shelf-measure-strip h-13\""),
+            std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-control-face\""),
+            std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-content\" class=\"modeling-mode-shelf-content h-11 bg-gray-800\" "
+                       "data-modeling-mode-shelf-active-control=\"face\""),
+            std::string::npos);
+    EXPECT_EQ(countOccurrences(rml, "data-modeling-mode-shelf-command="), 4u);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-command-bridge\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"toolbar-button-secondary font-alt text-xxs text-gray-300\">SHIFT+Z</span>"),
+            std::string::npos);
+    EXPECT_EQ(countOccurrences(rml, "data-modeling-mode-shelf-control="), 4u);
+    EXPECT_EQ(countOccurrences(rml, "aria-pressed=\"true\""), 1u);
+    const std::size_t activeFace = rml.find("id=\"modeling-mode-shelf-control-face\"");
+    ASSERT_NE(activeFace, std::string::npos);
+    EXPECT_NE(rml.find("modeling-mode-shelf-tab-button-active", activeFace), std::string::npos);
+    EXPECT_EQ(rml.find(">Object</span>"), std::string::npos);
+    EXPECT_EQ(countOccurrences(rml, ">Faces</span>"), 2u);
+
+    const std::string closedRml = buildModelingModeShelfRml(ModelingModeShelfState{
+            .controls = controls,
+            .activeStripCommands = commands,
+            .activeTabControlId = std::nullopt,
+    });
+    EXPECT_EQ(closedRml.find("modeling-mode-shelf-content"), std::string::npos);
+    EXPECT_EQ(closedRml.find("data-modeling-mode-shelf-command="), std::string::npos);
+    EXPECT_EQ(countOccurrences(closedRml, "data-modeling-mode-shelf-control="), 4u);
+}
+
+TEST(ModelingModeShelfComponentTests, RendersOverflowToggleAndMenuFromState) {
+    const std::vector<ModelingModeShelfControl> controls = {
+            {
+                    .id = "object",
+                    .label = "Object",
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+            {
+                    .id = "vertex",
+                    .label = "Vertices",
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+            {
+                    .id = "edge",
+                    .label = "Edges",
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+            {
+                    .id = "face",
+                    .label = "Faces",
+                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
+            },
+    };
+
+    const ModelingModeShelfState closedState{
+            .controls = controls,
+            .overflowControlIds = {"edge", "face"},
+            .activeTabControlId = std::string("face"),
+            .overflowButtonLabel = "More",
+            .overflowMenuOpen = false,
+    };
+    const std::string closedRml = buildModelingModeShelfRml(closedState);
+
+    EXPECT_NE(closedRml.find("id=\"modeling-mode-shelf-overflow-button\""),
+            std::string::npos);
+    EXPECT_NE(closedRml.find("data-modeling-mode-shelf-overflow-toggle=\"true\""),
+            std::string::npos);
+    EXPECT_NE(closedRml.find("aria-expanded=\"false\""),
+            std::string::npos);
+    EXPECT_EQ(closedRml.find("id=\"modeling-mode-shelf-control-edge\""),
+            std::string::npos);
+    EXPECT_EQ(closedRml.find("id=\"modeling-mode-shelf-overflow-menu\""),
+            std::string::npos);
+    EXPECT_EQ(countOccurrences(closedRml, "data-modeling-mode-shelf-control="), 2u);
+
+    ModelingModeShelfState openState = closedState;
+    openState.overflowMenuOpen = true;
+    const std::string openRml = buildModelingModeShelfRml(openState);
+
+    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-overflow-menu\" class=\"modeling-mode-shelf-overflow-menu bg-gray-950\""),
+            std::string::npos);
+    EXPECT_NE(openRml.find("aria-expanded=\"true\""),
+            std::string::npos);
+    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-control-edge\""),
+            std::string::npos);
+    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-control-face\""),
+            std::string::npos);
+    EXPECT_EQ(countOccurrences(openRml, "data-modeling-mode-shelf-control="), 4u);
+    EXPECT_EQ(countOccurrences(openRml, "data-modeling-mode-shelf-overflow-toggle=\"true\""), 1u);
 }
 
 TEST(DebugPaletteViewTests, BuildsCopyablePaletteSwatchRml) {
@@ -2430,6 +2695,7 @@ TEST(DebugPaletteViewTests, BuildsCopyablePaletteSwatchRml) {
 TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
     const std::vector<UIUtilityToken> utilityTokens = {
             {.name = "font-ui", .value = "Inter"},
+            {.name = "font-alt", .value = "NovaMono"},
             {.name = "font-medium", .value = "500"},
             {.name = "text-sm", .value = "14dp"},
             {.name = "leading-sm", .value = "18dp"},
@@ -2437,6 +2703,7 @@ TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
             {.name = "size-8", .value = "32dp"},
             {.name = "size-60", .value = "240dp"},
             {.name = "border-1", .value = "1dp"},
+            {.name = "rounded-6", .value = "6dp"},
     };
     const std::vector<DebugPaletteColorToken> paletteColors = {
             {.name = "gray.50", .hex = "#F7F7F7"},
@@ -2446,6 +2713,7 @@ TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
     const std::string rcss = buildUIUtilityRcss(utilityTokens, paletteColors);
 
     EXPECT_NE(rcss.find(".font-ui { font-family: Inter; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".font-alt { font-family: NovaMono; }"), std::string::npos);
     EXPECT_NE(rcss.find(".font-medium { font-weight: 500; }"), std::string::npos);
     EXPECT_NE(rcss.find(".text-sm { font-size: 14dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".leading-sm { line-height: 18dp; }"), std::string::npos);
@@ -2457,6 +2725,7 @@ TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
     EXPECT_NE(rcss.find(".min-w-60 { min-width: 240dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".max-h-60 { max-height: 240dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".border-1 { border-width: 1dp; }"), std::string::npos);
+    EXPECT_NE(rcss.find(".rounded-6 { border-radius: 6dp; }"), std::string::npos);
     EXPECT_NE(rcss.find(".bg-gray-50 { background-color: #F7F7F7; }"), std::string::npos);
     EXPECT_NE(rcss.find(".hover-bg-gray-50:hover { background-color: #F7F7F7; }"), std::string::npos);
     EXPECT_NE(rcss.find(".active-bg-gray-50:active { background-color: #F7F7F7; }"), std::string::npos);
@@ -2483,10 +2752,15 @@ TEST(UIUtilityTokensTests, AppUITokensStayTailwindLikeAndDpBased) {
     EXPECT_NE(tokenConfig.find("\"fontSize\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"lineHeight\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"spacing\""), std::string::npos);
+    EXPECT_NE(tokenConfig.find("\"borderRadius\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"sm\": \"14dp\""), std::string::npos);
+    EXPECT_NE(tokenConfig.find("\"xxs\": \"10dp\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"3\": \"12dp\""), std::string::npos);
+    EXPECT_NE(tokenConfig.find("\"11\": \"45dp\""), std::string::npos);
+    EXPECT_NE(tokenConfig.find("\"13\": \"50dp\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"px\": \"1dp\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"60\": \"240dp\""), std::string::npos);
+    EXPECT_NE(tokenConfig.find("\"6\": \"6dp\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"medium\": 500"), std::string::npos);
     EXPECT_EQ(tokenConfig.find("\"w-24\""), std::string::npos);
     EXPECT_EQ(tokenConfig.find("\"h-6\""), std::string::npos);
@@ -2566,6 +2840,30 @@ TEST(PlatformWindowChromeTests, ManualResizeFrameSupportsEdgesAndCorners) {
     EXPECT_EQ(clamped.height, 240);
 }
 
+TEST(PlatformWindowChromeTests, ManualResizeFrameDefaultsToApplicationMinimumSize) {
+    EXPECT_EQ(kPlatformWindowMinimumWidth, 800);
+    EXPECT_EQ(kPlatformWindowMinimumHeight, 600);
+
+    const PlatformWindowChromeFrame frame{
+            .x = 100,
+            .y = 80,
+            .width = 1200,
+            .height = 900,
+    };
+
+    const PlatformWindowChromeFrame clamped = platformWindowChromeResizeFrame({
+            .start = frame,
+            .deltaX = 1000,
+            .deltaY = 800,
+            .edge = SDL_HITTEST_RESIZE_TOPLEFT,
+    });
+
+    EXPECT_EQ(clamped.x, 500);
+    EXPECT_EQ(clamped.y, 380);
+    EXPECT_EQ(clamped.width, 800);
+    EXPECT_EQ(clamped.height, 600);
+}
+
 TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
@@ -2593,8 +2891,11 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     const std::string resizableSplitControllerSource = readSourceFile("src/ui/controllers/ResizableSplitController.cpp");
     const std::string uiButtonHeader = readSourceFile("src/ui/components/atoms/UIButtonComponent.h");
     const std::string uiChromeButtonHeader = readSourceFile("src/ui/components/atoms/UIChromeButtonComponent.h");
+    const std::string uiToolbarButtonHeader = readSourceFile("src/ui/components/atoms/UIToolbarButtonComponent.h");
     const std::string windowChromeControlsHeader =
             readSourceFile("src/ui/components/organisms/WindowChromeControlsComponent.h");
+    const std::string modelingModeShelfHeader =
+            readSourceFile("src/ui/components/organisms/ModelingModeShelfComponent.h");
     const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
     const std::string shellRml = readSourceFile("resources/ui/rml/viewport-shell.rml");
     const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
@@ -2615,6 +2916,20 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(uiSystemHeader.find("ViewportHost viewportHost_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("rmlHost_.initialize"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("buildWindowChromeControlsInnerRml()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("buildModelingModeShelfRml"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("updateModelingModeShelfOverflowFromRml"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modelingModeShelfControlMeasureElementId"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modelingModeShelfOverflowToggleControlId()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modelingModeShelfSelectionModeForControlId"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("pendingModelingModeShelfSelectionMode_"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("editor.selection().setMode(mode)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("editor.modeling().selectionSummary().mode"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("projectedModelingModeShelfSelectionMode_"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("modelingModeShelfTabs_"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("modelingModeShelfContentOpen_"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("kModelingModeShelfButtonControlId"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("ui.modeling_shelf.button"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("modelingModeShelfTabControlIds"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("buildMainLayoutRml(mainLayout_"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("measureElementById(\"main-layout-slot\")"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("mainLayoutEditorColumnElementId()"), std::string::npos);
@@ -2655,15 +2970,19 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(rmlHostSource.find("Rml::SetFileInterface(fileInterface_.get())"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("context_->LoadDocument(documentPath.string())"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("debugPaletteSlot->SetInnerRML(debugPaletteRml)"), std::string::npos);
+    EXPECT_NE(rmlHostSource.find("NovaMono.ttf"), std::string::npos);
+    EXPECT_NE(rmlHostSource.find("data-modeling-mode-shelf-control"), std::string::npos);
+    EXPECT_NE(rmlHostSource.find("data-modeling-mode-shelf-overflow-toggle"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("quader://ui/rcss/app-utility.generated.rcss"), std::string::npos);
     EXPECT_NE(rmlHostHeader.find("measureElementById"), std::string::npos);
     EXPECT_NE(rmlHostHeader.find("setElementInnerRml"), std::string::npos);
+    EXPECT_NE(rmlHostHeader.find("takeModelingModeShelfControlSelection"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("SDL_GetWindowID(window_)"), std::string::npos);
     EXPECT_EQ(rmlHostHeader.find("RmlMainLayoutEvent"), std::string::npos);
     EXPECT_EQ(rmlHostSource.find("MainLayoutEventListener"), std::string::npos);
 
-    EXPECT_NE(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("mousePixel.x - static_cast<float>(mainViewportFrame_.left)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.setSceneVisible(true)"), std::string::npos);
@@ -2735,7 +3054,9 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(cmakeSource.find("src/ui/controllers/UIDragDropController.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIButtonComponent.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIChromeButtonComponent.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIToolbarButtonComponent.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/components/common/UITabStripModel.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/ModelingModeShelfComponent.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/components/organisms/WindowChromeControlsComponent.cpp"), std::string::npos);
     EXPECT_NE(cmakeSource.find("src/ui/core/UIIconRegistry.cpp"), std::string::npos);
     EXPECT_NE(uiGeometryHeader.find("struct UIPixelPoint"), std::string::npos);
@@ -2768,6 +3089,19 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(uiButtonHeader.find("UIButtonIconPlacement"), std::string::npos);
     EXPECT_NE(uiChromeButtonHeader.find("class UIChromeButtonComponent final : public UIButtonComponent"),
             std::string::npos);
+    EXPECT_NE(uiToolbarButtonHeader.find("class UIToolbarButtonComponent : public UIButtonComponent"),
+            std::string::npos);
+    EXPECT_NE(uiToolbarButtonHeader.find("struct UIToolbarButtonModel"), std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("class ModelingModeShelfComponent final : public UIComponent"),
+            std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("class ModelingModeShelfToolbarComponent final : public UIComponent"),
+            std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("struct ModelingModeShelfControl"), std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("struct ModelingModeShelfCommand"), std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("std::optional<UIIconId> icon"), std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("ModelingModeShelfControlLabelVisibility"), std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("overflowControlIds"), std::string::npos);
+    EXPECT_NE(modelingModeShelfHeader.find("modelingModeShelfOverflowButtonElementId"), std::string::npos);
     EXPECT_NE(windowChromeControlsHeader.find("class WindowChromeControlsComponent final : public UIComponent"),
             std::string::npos);
     EXPECT_NE(mainLayoutSashRegistryHeader.find("class MainLayoutSashRegistry"), std::string::npos);
@@ -2786,6 +3120,7 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_EQ(uiSystemSource.find("verticalHitRect"), std::string::npos);
     EXPECT_NE(mainLayoutBuilderSource.find("buildMainLayoutRml"), std::string::npos);
     EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutEditorColumnElementId"), std::string::npos);
+    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutModelingModeShelfSlotElementId"), std::string::npos);
     EXPECT_NE(mainLayoutBuilderSource.find("main-layout-editor-column"), std::string::npos);
     EXPECT_NE(mainLayoutBuilderSource.find("DockLocation::Panel"), std::string::npos);
     EXPECT_NE(mainLayoutBuilderSource.find("DockLocation::AuxiliaryBar"), std::string::npos);
@@ -2821,6 +3156,7 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_EQ(shellRml.find("id=\"topbar\""), std::string::npos);
     EXPECT_EQ(shellRml.find("topbar-label"), std::string::npos);
     EXPECT_NE(shellRml.find("id=\"toolbar\""), std::string::npos);
+    EXPECT_EQ(shellRml.find("id=\"modeling-mode-shelf-slot\""), std::string::npos);
     EXPECT_NE(shellRml.find("id=\"main-layout-slot\""), std::string::npos);
     EXPECT_NE(shellRml.find("id=\"statusbar\""), std::string::npos);
     EXPECT_EQ(shellRml.find("shell-topbar"), std::string::npos);
@@ -2845,6 +3181,21 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(shellRcss.find("image-color: #5B5B5B"), std::string::npos);
     EXPECT_NE(shellRcss.find(".chrome-icon-button:hover .ui-icon"), std::string::npos);
     EXPECT_NE(shellRcss.find(".chrome-icon-button:active .ui-icon"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".toolbar-button"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".toolbar-button-secondary"), std::string::npos);
+    EXPECT_NE(shellRcss.find("line-height: 30dp"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".ui-icon-mesh"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-slot"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-toolbar"), std::string::npos);
+    EXPECT_EQ(shellRcss.find("height: 50dp"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-tab-button"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-tab-button-active"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-measure-strip"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-overflow-button"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-overflow-menu"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-content"), std::string::npos);
+    EXPECT_EQ(shellRcss.find("height: 45dp"), std::string::npos);
+    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-command-button"), std::string::npos);
     EXPECT_NE(shellRcss.find("image-color: #D8D8D8"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout-main-row"), std::string::npos);
@@ -2995,13 +3346,64 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     EXPECT_EQ(viewportSettingsSections()[6].label, "Gizmo");
 
     expectColorNear(settings.color(ViewportColorSettingId::Background), {0.0509804f, 0.0509804f, 0.0509804f, 1.0f});
-    expectColorNear(settings.color(ViewportColorSettingId::SelectionWire), {1.0f, 0.827451f, 0.121569f, 1.0f});
-    expectColorNear(settings.color(ViewportColorSettingId::SourceWire), {0.360784f, 0.878431f, 1.0f, 0.921569f});
+    expectColorNear(settings.color(ViewportColorSettingId::SelectionWire), overlayPolicySettingColor(kOverlaySelectionWireColor));
+    expectColorNear(settings.color(ViewportColorSettingId::SourceWire), overlayPolicySettingColor(kOverlaySourceWireColor));
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GridMinorLineSize), 0.32f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::SelectionEdgeLineSize), 2.5f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::PickVertexRadius), 0.3f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GizmoSize), 1.0f);
     EXPECT_TRUE(viewportBoolSettings().empty());
+}
+
+TEST(ViewportSettingsTests, OverlayDefaultsComeFromRenderOverlayPolicy) {
+    const ViewportSettings settings = ViewportSettings::defaults();
+    const auto& colorSettings = viewportColorSettings();
+    const auto& floatSettings = viewportFloatSettings();
+
+    const auto colorDefault = [&](ViewportColorSettingId id) {
+        const std::size_t idx = static_cast<std::size_t>(id);
+        EXPECT_EQ(colorSettings[idx].id, id);
+        return colorSettings[idx].defaultValue;
+    };
+    const auto floatDefault = [&](ViewportFloatSettingId id) {
+        const std::size_t idx = static_cast<std::size_t>(id);
+        EXPECT_EQ(floatSettings[idx].id, id);
+        return floatSettings[idx].defaultValue;
+    };
+    const auto expectOverlayColorDefault = [&](ViewportColorSettingId id, std::uint32_t policyColor) {
+        const ViewportSettingColor expected = overlayPolicySettingColor(policyColor);
+        expectColorNear(colorDefault(id), expected);
+        expectColorNear(settings.color(id), expected);
+    };
+    const auto expectOverlayFloatDefault = [&](ViewportFloatSettingId id, float policyValue) {
+        EXPECT_FLOAT_EQ(floatDefault(id), policyValue);
+        EXPECT_FLOAT_EQ(settings.floatValue(id), policyValue);
+    };
+
+    expectOverlayColorDefault(ViewportColorSettingId::SelectionFace, kOverlaySelectionFaceColor);
+    expectOverlayColorDefault(ViewportColorSettingId::SelectionWire, kOverlaySelectionWireColor);
+    expectOverlayColorDefault(ViewportColorSettingId::SourceWire, kOverlaySourceWireColor);
+    expectOverlayColorDefault(ViewportColorSettingId::OpenEdge, kOverlayOpenEdgeColor);
+    expectOverlayColorDefault(ViewportColorSettingId::DiagnosticEdge, kOverlayDiagnosticEdgeColor);
+    expectOverlayColorDefault(ViewportColorSettingId::HoverFace, kOverlayHoverFaceColor);
+    expectOverlayColorDefault(ViewportColorSettingId::HoverWire, kOverlayHoverWireColor);
+    expectOverlayColorDefault(ViewportColorSettingId::RemoveSelectionFace, kOverlayRemoveFaceColor);
+    expectOverlayColorDefault(ViewportColorSettingId::RemoveSelectionWire, kOverlayRemoveWireColor);
+    expectOverlayColorDefault(ViewportColorSettingId::Vertex, kOverlayVertexColor);
+    expectOverlayColorDefault(ViewportColorSettingId::SelectedVertex, kOverlaySelectedVertexColor);
+    expectOverlayColorDefault(ViewportColorSettingId::HoverVertex, kOverlayHoverVertexColor);
+    expectOverlayColorDefault(ViewportColorSettingId::RemoveSelectionVertex, kOverlayRemoveWireColor);
+
+    expectOverlayFloatDefault(ViewportFloatSettingId::SourceWireLineSize, kOverlaySourceWireLineWidthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::SelectionFaceWireLineSize, kOverlaySelectionWireLineWidthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::SelectionEdgeLineSize, kOverlaySelectionWireLineWidthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::HoverWireLineSize, kOverlayHoverWireLineWidthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::OpenEdgeLineSize, kOverlayOpenEdgeLineWidthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::DiagnosticEdgeLineSize, kOverlayDiagnosticEdgeLineWidthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::VertexSize, kOverlayVertexSizePixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::SelectedVertexGrowth, kOverlaySelectedVertexGrowthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::HoverVertexGrowth, kOverlayHoverVertexGrowthPixels);
+    expectOverlayFloatDefault(ViewportFloatSettingId::VertexOutlineSize, kOverlayVertexOutlineSizePixels);
 }
 
 TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
@@ -3841,10 +4243,8 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
     EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::layerSignature"), std::string::npos);
     EXPECT_NE(cacheHeader.find("std::array<OverlaySlot, kMaxViewportOverlaySlots> slots_"), std::string::npos);
     EXPECT_NE(cacheSource.find("slot.proxyGroups"), std::string::npos);
-    EXPECT_NE(builderSource.find("frame.lines.size()"), std::string::npos);
-    EXPECT_NE(builderSource.find("frame.points.size()"), std::string::npos);
-    EXPECT_NE(builderSource.find("hashFloat(hash, line.widthPixels)"), std::string::npos);
-    EXPECT_NE(builderSource.find("hashFloat(hash, point.sizePixels)"), std::string::npos);
+    EXPECT_NE(builderSource.find("RenderSignatureBuilder::overlayFrameSignature(frame)"), std::string::npos);
+    EXPECT_NE(builderSource.find("RenderSignatureBuilder::overlayLayerSignature(frame, layer)"), std::string::npos);
     EXPECT_NE(cacheSource.find("slot.frameSignature"), std::string::npos);
     EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::cameraSignature"), std::string::npos);
     EXPECT_NE(cacheSource.find("const bool cameraChanged = cameraSignature != slot.cameraSignature"), std::string::npos);
@@ -4050,8 +4450,12 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(viewportHostSource.find("const AssetRegistry& assets"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.setSceneVisible(true)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.setOverlayVisible(false)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
+    EXPECT_NE(
+            viewportHostSource.find("renderer_.setOverlayVisible(overlaySubmission.ok && overlaySubmission.value.visible)"),
+            std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("editor.render().syncToolPreviews(renderBridge)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("editor.render().syncSelectionOverlay("), std::string::npos);
     EXPECT_NE(viewportHostSource.find("viewportGridLayerMask(mainViewport_.layerIndex)"), std::string::npos);
     EXPECT_NE(overlayProxyFactorySource.find(".layerMask(kViewportAllLayerMask, layerMask)"), std::string::npos);
     EXPECT_NE(overlayCacheSource.find("void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot)"), std::string::npos);
@@ -4174,11 +4578,11 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(uiSystemSource.find("rmlHost_.registerTextureSource("), std::string::npos);
 }
 
-TEST(UISystemTests, RmlViewportShellForcesSingleLayoutForV1) {
+TEST(UISystemTests, RmlViewportShellUsesWorkspaceSinglePanePolicyForV1) {
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
 
-    EXPECT_NE(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("workspace.focusPane(mainViewport_.pane)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("workspace.clearPaneVisibility()"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("workspace.setPaneVisible(mainViewport_.pane, true)"), std::string::npos);
@@ -4217,7 +4621,9 @@ TEST(UISystemTests, RmlViewportShellLoadsViewportAndMainLayoutSettings) {
     EXPECT_NE(uiSettingsSource.find("mainLayoutClampedBottomDockHeightDp"), std::string::npos);
     EXPECT_NE(uiSettingsSource.find("normalizedMainLayoutModel(std::move(layout))"), std::string::npos);
     EXPECT_EQ(uiSettingsSource.find("DockLayoutJson"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("editor.render().syncToolPreviews(renderBridge)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("editor.render().syncSelectionOverlay("), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("toolSettingsPanelOpen_"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("viewportSettingsPanel_.draw"), std::string::npos);
@@ -4784,8 +5190,22 @@ TEST(ViewportLayoutTests, SplitStateDefaultsAndClamps) {
     EXPECT_FLOAT_EQ(state.fourHorizontalSplit(), 0.65f);
 }
 
+TEST(ViewportWorkspaceServiceTests, EmbeddedSinglePanePolicyRejectsMultiPaneLayouts) {
+    ViewportWorkspaceService workspace(ViewportWorkspaceLayoutPolicy::SinglePaneOnly);
+
+    EXPECT_EQ(workspace.layoutPolicy(), ViewportWorkspaceLayoutPolicy::SinglePaneOnly);
+    EXPECT_TRUE(workspace.supportsLayout(ViewportLayoutId::Single));
+    EXPECT_FALSE(workspace.supportsLayout(ViewportLayoutId::FourQuad));
+    EXPECT_FALSE(workspace.setLayout(ViewportLayoutId::FourQuad));
+    EXPECT_EQ(workspace.layout(), ViewportLayoutId::Single);
+
+    std::vector<ViewportPanePlacement> placements = workspace.activePanePlacements();
+    ASSERT_EQ(placements.size(), 1u);
+    expectViewportPlacement(placements[0], ViewportPaneId::Perspective, 0.0f, 0.0f, 1.0f, 1.0f);
+}
+
 TEST(ViewportWorkspaceServiceTests, MaximizedPaneStateOwnsActiveLayout) {
-    ViewportWorkspaceService workspace;
+    ViewportWorkspaceService workspace(ViewportWorkspaceLayoutPolicy::MultiPane);
     EXPECT_EQ(workspace.gridPreset(), viewportDefaultGridPreset());
     ASSERT_TRUE(workspace.setLayout(ViewportLayoutId::FourQuad));
     ASSERT_TRUE(workspace.focusPane(ViewportPaneId::Side));
@@ -4810,7 +5230,7 @@ TEST(ViewportWorkspaceServiceTests, MaximizedPaneStateOwnsActiveLayout) {
 }
 
 TEST(ViewportWorkspaceServiceTests, LayoutChangeClearsMaximizedPaneState) {
-    ViewportWorkspaceService workspace;
+    ViewportWorkspaceService workspace(ViewportWorkspaceLayoutPolicy::MultiPane);
     ASSERT_TRUE(workspace.setLayout(ViewportLayoutId::FourQuad));
     ASSERT_TRUE(workspace.focusPane(ViewportPaneId::Side));
     ASSERT_TRUE(workspace.setFocusedPaneMaximized(true));
@@ -4825,15 +5245,25 @@ TEST(ViewportWorkspaceServiceTests, LayoutChangeClearsMaximizedPaneState) {
     EXPECT_TRUE(workspace.activeSplitHandles().empty());
 }
 
-TEST(ViewportWorkspaceServiceTests, ViewReflectsCameraMutationsOutsideSetView) {
+TEST(ViewportWorkspaceServiceTests, ViewReflectsCameraMutationsOutsideSetViewForConstPaneState) {
     ViewportWorkspaceService workspace;
     ASSERT_TRUE(workspace.setView(ViewportPaneId::Perspective, ViewportView::Top));
     ASSERT_EQ(workspace.view(ViewportPaneId::Perspective), ViewportView::Top);
 
     resetViewportCameraForView(workspace.camera(ViewportPaneId::Perspective), ViewportView::Front);
+    const ViewportWorkspaceService& constWorkspace = workspace;
+    const ViewportWorkspacePaneState& constPane = constWorkspace.pane(ViewportPaneId::Perspective);
 
-    EXPECT_EQ(workspace.view(ViewportPaneId::Perspective), ViewportView::Front);
-    EXPECT_EQ(workspace.pane(ViewportPaneId::Perspective).view, ViewportView::Front);
+    EXPECT_EQ(constWorkspace.view(ViewportPaneId::Perspective), ViewportView::Front);
+    EXPECT_EQ(viewportViewForCamera(constPane.camera), ViewportView::Front);
+}
+
+TEST(ViewportWorkspaceServiceTests, PaneStateDoesNotStoreDuplicateView) {
+    const std::string header = readSourceFile("src/viewport/ViewportWorkspaceService.h");
+    const std::string source = readSourceFile("src/viewport/ViewportWorkspaceService.cpp");
+
+    EXPECT_EQ(header.find("ViewportView view ="), std::string::npos);
+    EXPECT_EQ(source.find("paneState.view"), std::string::npos);
 }
 
 TEST(ViewportCameraTests, OrbitPanAndZoomChangePose) {
@@ -9552,13 +9982,55 @@ TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransform
     EXPECT_TRUE(update.hasScenePreviewTransform);
     EXPECT_NEAR(update.moveDelta.x, 2.0f, 0.001f);
     EXPECT_NEAR(update.scenePreviewTransform.origin.x, 2.0f, 0.001f);
+    ASSERT_NE(scene.transform(box.object.entity), nullptr);
+    EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
 
     ModelingTransformDragPreview commit = service.commitTransformDrag();
     ASSERT_TRUE(commit.ok) << commit.message;
     EXPECT_FALSE(commit.previewDriven);
+    EXPECT_TRUE(commit.changed);
+    ASSERT_NE(scene.transform(box.object.entity), nullptr);
+    EXPECT_NEAR(scene.transform(box.object.entity)->position.x, 2.0f, 0.001f);
     const ModelingTransformDragPreview afterCommitUpdate = service.updateTransformDrag(testXMoveDragUpdateRequest(3.0f));
     EXPECT_TRUE(afterCommitUpdate.ok);
     EXPECT_FALSE(afterCommitUpdate.active);
+}
+
+TEST(ModelingSessionServiceTests, PublicTransformDragObjectSelectionRecordsSceneTransformHistory) {
+    ProjectSession session;
+    QuaderEditorApi editor(session);
+
+    const QuaderApiResult<QuaderModelingObjectRef> box = editor.modeling().createBox({
+            .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+            .name = "History Object Drag Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_EQ(session.modeling().selectionMode(), ModelingSelectionMode::Object);
+
+    QuaderApiResult<ModelingTransformDragPreview> begin =
+            editor.modeling().beginTransformDrag(testXMoveDragBeginRequest());
+    ASSERT_TRUE(begin.ok) << begin.message;
+    EXPECT_TRUE(begin.value.active);
+    EXPECT_TRUE(begin.value.sceneTransform);
+
+    QuaderApiResult<ModelingTransformDragPreview> update =
+            editor.modeling().updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_TRUE(update.value.hasScenePreviewTransform);
+    ASSERT_NE(session.scene().transform(box.value.entity), nullptr);
+    EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 2.0f, 0.001f);
+
+    QuaderApiResult<ModelingTransformDragPreview> commit = editor.modeling().commitTransformDrag();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    EXPECT_TRUE(commit.changed);
+    ASSERT_NE(session.scene().transform(box.value.entity), nullptr);
+    EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 2.0f, 0.001f);
+    EXPECT_TRUE(editor.history().canUndo());
+
+    const QuaderApiVoidResult undo = editor.history().undo();
+    ASSERT_TRUE(undo.ok) << undo.message;
+    ASSERT_NE(session.scene().transform(box.value.entity), nullptr);
+    EXPECT_NEAR(session.scene().transform(box.value.entity)->position.x, 0.0f, 0.001f);
 }
 
 TEST(ModelingSessionServiceTests, TransformDragShiftDuplicateUsesScenePreviewForRotatedObject) {

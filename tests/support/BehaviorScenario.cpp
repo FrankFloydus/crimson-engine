@@ -16,7 +16,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <span>
 #include <utility>
+#include <vector>
 
 namespace quader::test {
 namespace {
@@ -56,7 +58,7 @@ void addOverlayStats(BehaviorSnapshot& snapshot, const ViewportOverlayFrame& fra
 
 BehaviorScenario::BehaviorScenario()
     : session_()
-    , api_(session_) {
+    , editor_(session_) {
     lastStatus_.ok = true;
 }
 
@@ -147,6 +149,24 @@ void BehaviorScenario::remember(std::string_view alias, QuaderModelingObjectRef 
     aliases_.insert_or_assign(std::string(alias), object);
 }
 
+void BehaviorScenario::remember(std::string_view alias, QuaderEntityRef entity) {
+    remember(alias, entity.id);
+}
+
+void BehaviorScenario::remember(std::string_view alias, EntityId entity) {
+    aliases_.insert_or_assign(std::string(alias), objectForEntity(entity));
+}
+
+void BehaviorScenario::rememberEntityNamed(std::string_view alias, std::string_view name) {
+    for (const QuaderEntitySnapshot& snapshot : api().query().entities()) {
+        if (snapshot.name == name) {
+            remember(alias, snapshot.id);
+            return;
+        }
+    }
+    ADD_FAILURE() << "Missing entity named " << name;
+}
+
 void BehaviorScenario::recordStatus(const QuaderApiStatus& status) {
     lastStatus_ = status;
 }
@@ -165,7 +185,7 @@ void BehaviorScenario::recordDrag(const ModelingTransformDragPreview& drag) {
             .changed = drag.changed,
             .message = drag.message,
             .mutationKind = QuaderMutationKind::Modeling,
-            .revisions = api_.revisions(),
+            .revisions = api().revisions(),
     };
 }
 
@@ -241,6 +261,47 @@ BehaviorGiven& BehaviorGiven::mesh(std::string_view alias, QuaderPolygonDocument
         scenario_.remember(alias, result.value);
     } else {
         ADD_FAILURE() << result.message;
+    }
+    return *this;
+}
+
+BehaviorGiven& BehaviorGiven::entity(
+        std::string_view alias,
+        std::string name,
+        QuaderEntityKind kind,
+        QuaderTransform transform,
+        std::string_view parentAlias) {
+    QuaderCreateEntityArgs args;
+    args.name = std::move(name);
+    args.kind = kind;
+    args.transform = transform;
+    if (!parentAlias.empty()) {
+        args.parent = scenario_.entity(parentAlias);
+    }
+    const QuaderApiResult<QuaderEntityRef> result = scenario_.api().scene().createEntity(args);
+    scenario_.recordStatus(result);
+    if (result.ok) {
+        scenario_.remember(alias, result.value);
+    } else {
+        ADD_FAILURE() << result.message;
+    }
+    return *this;
+}
+
+BehaviorGiven& BehaviorGiven::selectedAliases(
+        std::initializer_list<std::string_view> aliases,
+        std::string_view activeAlias) {
+    std::vector<EntityId> entities;
+    entities.reserve(aliases.size());
+    for (const std::string_view alias : aliases) {
+        entities.push_back(scenario_.entity(alias));
+    }
+    const QuaderApiStatus status = scenario_.api().selection().selectObjects(
+            std::span<const EntityId>(entities.data(), entities.size()),
+            scenario_.entity(activeAlias));
+    scenario_.recordStatus(status);
+    if (!status.ok) {
+        ADD_FAILURE() << status.message;
     }
     return *this;
 }
@@ -439,8 +500,113 @@ BehaviorWhen& BehaviorWhen::executeTool(std::string_view toolId) {
     return *this;
 }
 
+BehaviorWhen& BehaviorWhen::execute(QuaderCommandId command) {
+    const QuaderApiStatus status = scenario_.editor().commands().execute(command);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::execute(std::string_view commandId) {
+    const QuaderApiStatus status = scenario_.editor().commands().execute(commandId);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
 BehaviorWhen& BehaviorWhen::assignMaterialSlot(std::uint32_t materialSlot) {
     const QuaderApiStatus status = scenario_.api().modeling().assignMaterialSlotToSelection(materialSlot);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::clearSceneSelection() {
+    const QuaderApiStatus status = scenario_.api().selection().selectObjects(std::span<const EntityId>());
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::groupSelection(std::string_view alias, std::string name, TransformComponent transform) {
+    const QuaderApiResult<QuaderEntityRef> result = scenario_.api().scene().groupSelection(std::move(name), transform);
+    scenario_.recordStatus(result);
+    if (result.ok) {
+        scenario_.remember(alias, result.value);
+    } else {
+        ADD_FAILURE() << result.message;
+    }
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::ungroupSelection() {
+    const QuaderApiStatus status = scenario_.api().scene().ungroupSelection();
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::duplicateSelectedHierarchy(std::string_view rootAlias) {
+    const QuaderApiResult<QuaderDuplicateHierarchyResult> result = scenario_.api().scene().duplicateSelectedHierarchy();
+    scenario_.recordStatus(result);
+    if (result.ok && result.value.rootEntities.size() == 1u) {
+        scenario_.remember(rootAlias, result.value.rootEntities.front());
+    } else if (result.ok) {
+        ADD_FAILURE() << "Expected exactly one duplicated root, got " << result.value.rootEntities.size();
+    } else {
+        ADD_FAILURE() << result.message;
+    }
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::destroy(std::string_view alias) {
+    const QuaderApiStatus status = scenario_.api().scene().destroy(scenario_.entity(alias));
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::rename(std::string_view alias, std::string name) {
+    const QuaderApiStatus status = scenario_.api().scene().rename(scenario_.entity(alias), std::move(name));
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::reparent(
+        std::string_view alias,
+        std::string_view parentAlias,
+        bool preserveWorldTransform) {
+    const QuaderApiStatus status = scenario_.api().scene().reparent(
+            scenario_.entity(alias),
+            scenario_.entity(parentAlias),
+            preserveWorldTransform);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::setTransform(std::string_view alias, TransformComponent transform) {
+    const QuaderApiStatus status = scenario_.api().scene().setTransform(scenario_.entity(alias), transform);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::setVisible(std::string_view alias, bool visible) {
+    const QuaderApiStatus status = scenario_.api().scene().setVisible(scenario_.entity(alias), visible);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::setLocked(std::string_view alias, bool locked) {
+    const QuaderApiStatus status = scenario_.api().scene().setLocked(scenario_.entity(alias), locked);
+    scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::setGroupFlags(
+        std::string_view alias,
+        TransformComponent transform,
+        bool visible,
+        bool locked) {
+    const EntityId entity = scenario_.entity(alias);
+    const QuaderApiStatus status = scenario_.api().scene().batch("Group Flags")
+            .setTransform(entity, transform)
+            .setVisible(entity, visible)
+            .setLocked(entity, locked)
+            .commit();
     scenario_.recordStatus(status);
     return *this;
 }
@@ -473,6 +639,10 @@ MeshExpect BehaviorThen::mesh(std::string_view alias) const {
 
 OverlayExpect BehaviorThen::overlay() const {
     return OverlayExpect(scenario_);
+}
+
+AssetExpect BehaviorThen::assets() const {
+    return AssetExpect(scenario_);
 }
 
 ToolStatusExpect BehaviorThen::tool() const {

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "core/LocalizationService.h"
+#include "editor/tools/ViewportToolDescriptorCatalog.h"
 
 #include <gtest/gtest.h>
 
@@ -70,6 +71,16 @@ std::vector<std::pair<std::string, LocalizationService::Catalog>> loadResourceLo
         return lhs.first < rhs.first;
     });
     return catalogs;
+}
+
+std::set<std::string> localizationPlaceholderTokens(std::string_view text) {
+    const std::regex tokenPattern(R"regex(\{([A-Za-z_][A-Za-z0-9_]*)\})regex");
+    const std::string source(text);
+    std::set<std::string> tokens;
+    for (std::sregex_iterator it(source.begin(), source.end(), tokenPattern), end; it != end; ++it) {
+        tokens.insert((*it)[1].str());
+    }
+    return tokens;
 }
 
 std::set<std::string> literalLocalizationKeysReferencedByUISource() {
@@ -170,6 +181,30 @@ TEST(LocalizationServiceTests, MissingSelectedLocaleFallsBackToEnglish) {
     std::filesystem::remove_all(root);
 }
 
+TEST(LocalizationServiceTests, FormatterReplacesRepeatedTokensAndLeavesUnknownTokens) {
+    const std::filesystem::path root = tempLocaleRoot("quader_localization_placeholder_format_test");
+    writeTextFile(
+            root / "en-US.lang",
+            "locale.name=English\n"
+            "debug.message=Hello {name}, {name}. Missing {missing}\n"
+            "message=Selected {count} of {count}; missing {unknown}\n");
+
+    LocalizationService localization;
+    ASSERT_TRUE(localization.load(root, "en-US"));
+
+    EXPECT_EQ(
+            localization.format("debug.message", "", {{"name", "Quader"}}),
+            "Hello Quader, Quader. Missing {missing}");
+    EXPECT_EQ(
+            localization.format("message", "", {{"count", "3"}}),
+            "Selected 3 of 3; missing {unknown}");
+    EXPECT_EQ(
+            localization.format("missing", "Speed {speed} {speed} {unit}", {{"speed", "8"}}),
+            "Speed 8 8 {unit}");
+
+    std::filesystem::remove_all(root);
+}
+
 TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales";
 
@@ -184,6 +219,24 @@ TEST(LocalizationResourceTests, ShipsEnglishAndItalianCatalogs) {
     EXPECT_TRUE(localization.selectLocale("en-US"));
     EXPECT_EQ(localization.text("ui.menu.edit", "Edit"), "Edit");
     EXPECT_EQ(localization.text("ui.viewport.delete_popup.window_title", "Delete"), "Delete");
+}
+
+TEST(LocalizationResourceTests, ViewportToolCatalogHasLocaleKeys) {
+    const std::vector<std::pair<std::string, LocalizationService::Catalog>> catalogs = loadResourceLocaleCatalogs();
+
+    ASSERT_GE(catalogs.size(), 2u);
+    for (const ToolDescriptor& tool : viewportToolDescriptors()) {
+        std::string key("viewport.tool.");
+        key += tool.id;
+        key += ".label";
+        for (const auto& [locale, catalog] : catalogs) {
+            const auto found = catalog.find(key);
+            ASSERT_NE(found, catalog.end()) << locale << " missing " << key;
+            if (locale == LocalizationService::DefaultLocale) {
+                EXPECT_EQ(found->second, tool.label) << key;
+            }
+        }
+    }
 }
 
 TEST(LocalizationResourceTests, ResourceLocaleCatalogsExposeTheSameKeys) {
@@ -203,6 +256,27 @@ TEST(LocalizationResourceTests, ResourceLocaleCatalogsExposeTheSameKeys) {
         for (const auto& [key, value] : catalog) {
             (void)value;
             EXPECT_NE(reference.find(key), reference.end()) << locale << " adds unmatched key " << key;
+        }
+    }
+}
+
+TEST(LocalizationResourceTests, ResourceLocaleCatalogsKeepPlaceholderSetsInSync) {
+    const std::vector<std::pair<std::string, LocalizationService::Catalog>> catalogs = loadResourceLocaleCatalogs();
+
+    ASSERT_GE(catalogs.size(), 2u);
+    const auto referenceIt = std::find_if(catalogs.begin(), catalogs.end(), [](const auto& entry) {
+        return entry.first == LocalizationService::DefaultLocale;
+    });
+    ASSERT_NE(referenceIt, catalogs.end());
+    const LocalizationService::Catalog& reference = referenceIt->second;
+
+    for (const auto& [key, referenceValue] : reference) {
+        const std::set<std::string> expectedTokens = localizationPlaceholderTokens(referenceValue);
+        for (const auto& [locale, catalog] : catalogs) {
+            const auto localized = catalog.find(key);
+            ASSERT_NE(localized, catalog.end()) << locale << " missing " << key;
+            EXPECT_EQ(localizationPlaceholderTokens(localized->second), expectedTokens)
+                    << locale << " placeholder mismatch for " << key;
         }
     }
 }

@@ -25,11 +25,19 @@ enum class ViewportShadingMode {
 };
 
 /**
+ * Enumerates Viewport Workspace Layout Policy values used by the viewport layer.
+ */
+enum class ViewportWorkspaceLayoutPolicy {
+    // Current embedded Rml host policy; separate OS windowed viewports remain runtime-only.
+    SinglePaneOnly,
+    MultiPane,
+};
+
+/**
  * Stores the Viewport Workspace Pane State data contract used by the viewport input, layout, and camera layer.
  */
 struct ViewportWorkspacePaneState {
     ViewportPaneId id = ViewportPaneId::Perspective;
-    ViewportView view = ViewportView::Perspective;
     ViewportShadingMode shading = ViewportShadingMode::Shaded;
     ViewportCameraController camera;
     QVec2 renderSize = {1.0f, 1.0f};
@@ -44,10 +52,14 @@ void resetViewportCameraForView(ViewportCameraController& camera, ViewportView v
  */
 class ViewportWorkspaceService final {
 public:
-    ViewportWorkspaceService();
+    explicit ViewportWorkspaceService(
+            ViewportWorkspaceLayoutPolicy layoutPolicy = ViewportWorkspaceLayoutPolicy::MultiPane);
 
     [[nodiscard]] ViewportLayoutId layout() const { return layout_; }
     bool setLayout(ViewportLayoutId layout);
+    [[nodiscard]] ViewportWorkspaceLayoutPolicy layoutPolicy() const { return layoutPolicy_; }
+    bool setLayoutPolicy(ViewportWorkspaceLayoutPolicy policy);
+    [[nodiscard]] bool supportsLayout(ViewportLayoutId layout) const;
 
     [[nodiscard]] ViewportPaneId focusedPane() const { return focusedPane_; }
     bool focusPane(ViewportPaneId pane);
@@ -63,7 +75,6 @@ public:
 
     [[nodiscard]] ViewportView view(ViewportPaneId pane) const;
     bool setView(ViewportPaneId pane, ViewportView view);
-    void syncViewFromCamera(ViewportPaneId pane);
 
     [[nodiscard]] ViewportCameraController& camera(ViewportPaneId pane);
     [[nodiscard]] const ViewportCameraController& camera(ViewportPaneId pane) const;
@@ -89,6 +100,7 @@ private:
     std::array<ViewportWorkspacePaneState, kViewportPaneCount> panes_;
     ViewportLayoutState layoutState_;
     ViewportLayoutId layout_ = ViewportLayoutId::Single;
+    ViewportWorkspaceLayoutPolicy layoutPolicy_ = ViewportWorkspaceLayoutPolicy::MultiPane;
     ViewportPaneId focusedPane_ = ViewportPaneId::Perspective;
     bool focusedPaneMaximized_ = false;
     int gridPreset_ = 0;

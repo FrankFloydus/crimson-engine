@@ -14,6 +14,13 @@
 #include <utility>
 
 namespace quader {
+namespace {
+
+bool viewportOverlayFrameVisible(const ViewportOverlayFrame& frame) {
+    return !frame.lines.empty() || !frame.triangles.empty() || !frame.points.empty();
+}
+
+} // namespace
 
 QuaderRenderApi::QuaderRenderApi(ProjectSession& session, QuaderQueryApi& query)
     : session_(session)
@@ -41,13 +48,40 @@ QuaderApiVoidResult QuaderRenderApi::syncToolPreviews(SceneRenderBridge& bridge)
     return runtimeStatus("Render tool previews synchronized.");
 }
 
+QuaderApiResult<QuaderRenderOverlaySubmission> QuaderRenderApi::syncSelectionOverlay(
+        SceneRenderBridge& bridge,
+        std::size_t viewportIndex,
+        std::uint8_t layerMask,
+        ViewportOverlayCamera camera) {
+    ViewportOverlayFrame frame = selectionOverlayFrame();
+    const bool visible = viewportOverlayFrameVisible(frame);
+    bridge.setOverlayFrame(viewportIndex, layerMask, std::move(frame), camera);
+
+    QuaderApiVoidResult status = runtimeStatus("Render selection overlay synchronized.");
+    QuaderApiResult<QuaderRenderOverlaySubmission> result;
+    result.ok = status.ok;
+    result.changed = status.changed;
+    result.message = std::move(status.message);
+    result.mutationKind = status.mutationKind;
+    result.revisions = status.revisions;
+    result.value = QuaderRenderOverlaySubmission{.visible = visible};
+    return result;
+}
+
 QuaderApiVoidResult QuaderRenderApi::setSelectionOverlay(
         SceneRenderBridge& bridge,
         std::size_t viewportIndex,
         std::uint8_t layerMask,
         ViewportOverlayCamera camera) {
-    bridge.setOverlayFrame(viewportIndex, layerMask, selectionOverlayFrame(), camera);
-    return runtimeStatus("Render selection overlay synchronized.");
+    const QuaderApiResult<QuaderRenderOverlaySubmission> result =
+            syncSelectionOverlay(bridge, viewportIndex, layerMask, camera);
+    return {
+            .ok = result.ok,
+            .changed = result.changed,
+            .message = result.message,
+            .mutationKind = result.mutationKind,
+            .revisions = result.revisions,
+    };
 }
 
 ViewportOverlayFrame QuaderRenderApi::selectionOverlayFrame() const {

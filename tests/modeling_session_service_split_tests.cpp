@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -133,6 +134,90 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapKeepsDestroyedSceneIdenti
     EXPECT_EQ(objectMap.sceneIdentityForModelingObject(300)->entity, entity);
 }
 
+TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapCapturesSceneIdentitiesInRequestedOrder) {
+    SceneDocument scene;
+    const EntityId first = scene.createEntity("First", EntityKind::Mesh);
+    const EntityId second = scene.createEntity("Second", EntityKind::Mesh);
+    TransformComponent firstTransform;
+    firstTransform.position = {1.0f, 0.0f, 0.0f};
+    TransformComponent secondTransform;
+    secondTransform.position = {2.0f, 0.0f, 0.0f};
+    scene.setTransform(first, firstTransform);
+    scene.setTransform(second, secondTransform);
+
+    ModelingObjectRuntimeMap objectMap;
+    objectMap.bind(100, first);
+    objectMap.bind(200, second);
+
+    const std::array<int, 2> requested{200, 100};
+    const std::vector<ModelingObjectSceneIdentity> identities =
+            objectMap.captureSceneIdentitiesForModelingObjects(scene, requested);
+
+    ASSERT_EQ(identities.size(), 2U);
+    EXPECT_EQ(identities[0].entity, second);
+    EXPECT_EQ(identities[0].transform.position.x, secondTransform.position.x);
+    EXPECT_EQ(identities[1].entity, first);
+    EXPECT_EQ(identities[1].transform.position.x, firstTransform.position.x);
+}
+
+TEST(ModelingSessionServiceSplitTests, MeshSyncServiceAppliesDuplicateSceneIdentityPreservingMeshAsset) {
+    SceneDocument scene;
+    const EntityId parent = scene.createEntity("Parent", EntityKind::Empty);
+    const EntityId source = scene.createEntity("Source", EntityKind::Mesh);
+    const EntityId duplicate = scene.createEntity("Duplicate", EntityKind::Mesh);
+
+    TransformComponent transform;
+    transform.position = {3.0f, 4.0f, 5.0f};
+    scene.setTransform(source, transform);
+    ASSERT_TRUE(scene.setParent(source, parent, false));
+    scene.setVisible(source, false);
+    scene.setLocked(source, true);
+    scene.setMesh(source, MeshComponent{
+            .mesh = 11,
+            .editorOnly = true,
+            .castShadows = false,
+            .doubleSided = false,
+            .generateCollisions = false,
+            .collisionType = MeshCollisionType::Mesh,
+            .displayCollision = true,
+            .bodyType = MeshPhysicsBodyType::RigidBody,
+    });
+    scene.setMaterial(source, MaterialComponent{.material = 44});
+    scene.setMesh(duplicate, MeshComponent{.mesh = 99});
+    scene.setMaterial(duplicate, MaterialComponent{.material = 55});
+
+    ModelingObjectRuntimeMap objectMap;
+    objectMap.bind(100, source);
+    const std::array<int, 1> requested{100};
+    const std::vector<ModelingObjectSceneIdentity> identities =
+            objectMap.captureSceneIdentitiesForModelingObjects(scene, requested);
+    ASSERT_EQ(identities.size(), 1U);
+
+    ModelingMeshSyncService meshSync;
+    meshSync.applySceneIdentityToDuplicateEntity(scene, duplicate, identities.front());
+
+    const TransformComponent* duplicateTransform = scene.transform(duplicate);
+    ASSERT_NE(duplicateTransform, nullptr);
+    EXPECT_EQ(duplicateTransform->position.x, transform.position.x);
+    EXPECT_EQ(scene.parent(duplicate), parent);
+    ASSERT_NE(scene.visibility(duplicate), nullptr);
+    EXPECT_FALSE(scene.visibility(duplicate)->visible);
+    ASSERT_NE(scene.lock(duplicate), nullptr);
+    EXPECT_TRUE(scene.lock(duplicate)->locked);
+    const MeshComponent* duplicateMesh = scene.mesh(duplicate);
+    ASSERT_NE(duplicateMesh, nullptr);
+    EXPECT_EQ(duplicateMesh->mesh, 99);
+    EXPECT_TRUE(duplicateMesh->editorOnly);
+    EXPECT_FALSE(duplicateMesh->castShadows);
+    EXPECT_FALSE(duplicateMesh->doubleSided);
+    EXPECT_FALSE(duplicateMesh->generateCollisions);
+    EXPECT_EQ(duplicateMesh->collisionType, MeshCollisionType::Mesh);
+    EXPECT_TRUE(duplicateMesh->displayCollision);
+    EXPECT_EQ(duplicateMesh->bodyType, MeshPhysicsBodyType::RigidBody);
+    ASSERT_NE(scene.material(duplicate), nullptr);
+    EXPECT_EQ(scene.material(duplicate)->material, 44);
+}
+
 TEST(ModelingSessionServiceSplitTests, SelectionProjectionServiceProjectsSceneSelectionIntoModelingOnly) {
     SceneDocument scene;
     const EntityId group = scene.createEntity("Group", EntityKind::Empty);
@@ -193,6 +278,52 @@ TEST(ModelingSessionServiceSplitTests, SelectionProjectionServiceProjectsModelin
     EXPECT_EQ(scene.primarySelection(), second);
 }
 
+TEST(ModelingSessionServiceSplitTests, SelectionProjectionServiceProjectsExplicitObjectSelection) {
+    SceneDocument scene;
+    const EntityId group = scene.createEntity("Group", EntityKind::Empty);
+    const EntityId first = scene.createEntity("First", EntityKind::Mesh);
+    const EntityId second = scene.createEntity("Second", EntityKind::Mesh);
+
+    ModelingObjectRuntimeMap objectMap;
+    objectMap.bind(100, first);
+    objectMap.bind(200, second);
+
+    quader_editor_core::EditorSession session({
+            quader_editor_core::PolygonObject{.id = 100},
+            quader_editor_core::PolygonObject{.id = 200},
+    });
+
+    const SelectionProjectionService projection;
+    const std::array<EntityId, 2> selected{first, second};
+    RuntimeObjectSelectionProjectionResult result =
+            projection.projectObjectSelectionForSceneEntities(session, selected, InvalidEntityId, objectMap);
+    EXPECT_TRUE(result.ok);
+    EXPECT_TRUE(result.changed);
+    EXPECT_TRUE(result.hasModelingObjects);
+
+    std::vector<int> selectedObjectIds = session.selected_object_ids();
+    std::sort(selectedObjectIds.begin(), selectedObjectIds.end());
+    EXPECT_EQ(selectedObjectIds, (std::vector<int>{100, 200}));
+    EXPECT_EQ(session.active_object_id(), 200);
+
+    result = projection.projectObjectSelectionForSceneEntities(session, selected, second, objectMap);
+    EXPECT_TRUE(result.ok);
+    EXPECT_FALSE(result.changed);
+    EXPECT_TRUE(result.hasModelingObjects);
+
+    result = projection.projectObjectSelectionForSceneEntities(session, selected, first, objectMap);
+    EXPECT_TRUE(result.ok);
+    EXPECT_TRUE(result.changed);
+    EXPECT_EQ(session.active_object_id(), 100);
+
+    const std::array<EntityId, 1> nonModeling{group};
+    result = projection.projectObjectSelectionForSceneEntities(session, nonModeling, group, objectMap);
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.changed);
+    EXPECT_FALSE(result.hasModelingObjects);
+    EXPECT_EQ(session.active_object_id(), 100);
+}
+
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
     const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
@@ -203,6 +334,66 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) 
     EXPECT_EQ(cmake.find("src/editor/modeling/services/ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(serviceAggregate.find("ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(services.find("ModelingObjectRuntimeMap::"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, ObjectSelectionMappingLivesInSelectionProjectionService) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
+    const std::string projection = readSourceFile("src/editor/selection/SelectionProjectionService.cpp");
+
+    EXPECT_NE(facade.find("selectionProjectionService_.projectObjectSelectionForSceneEntities("), std::string::npos);
+    EXPECT_EQ(facade.find("const auto object = objectRegistry_.modelingObjectForEntity(entity);"), std::string::npos);
+    EXPECT_EQ(facade.find("const auto object = objectRegistry_.modelingObjectForEntity(active);"), std::string::npos);
+    EXPECT_NE(projection.find("projectObjectSelectionForSceneEntities("), std::string::npos);
+    EXPECT_NE(projection.find("objectRegistry.modelingObjectForEntity(entity)"), std::string::npos);
+    EXPECT_NE(projection.find("objectRegistry.modelingObjectForEntity(active)"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, DuplicateSceneIdentityLivesInRuntimeMapAndMeshSync) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
+    const std::string runtimeMap = readSourceFile("src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp");
+    const std::string meshSync = readSourceFile("src/editor/modeling/services/ModelingMeshSyncService.cpp");
+
+    EXPECT_EQ(facade.find("DuplicateSceneState"), std::string::npos);
+    EXPECT_EQ(facade.find("scene_.setTransform(*duplicate"), std::string::npos);
+    EXPECT_EQ(facade.find("scene_.setMaterial(*duplicate"), std::string::npos);
+    EXPECT_NE(facade.find("captureSelectedDuplicateSceneIdentities()"), std::string::npos);
+    EXPECT_NE(facade.find("meshSyncService_.applySceneIdentityToDuplicateEntity("), std::string::npos);
+    EXPECT_NE(runtimeMap.find("captureSceneIdentitiesForModelingObjects("), std::string::npos);
+    EXPECT_NE(meshSync.find("applySceneIdentityToDuplicateEntity("), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, TransformDragPreviewRoutingLivesInController) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
+    const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
+
+    EXPECT_NE(facade.find("TransformDragController::previewRouting("), std::string::npos);
+    EXPECT_EQ(facade.find("duplicateSceneTransformPreview"), std::string::npos);
+    EXPECT_EQ(facade.find("needsRuntimePreviewTransaction ="), std::string::npos);
+    EXPECT_NE(services.find("TransformDragController::previewRouting("), std::string::npos);
+    EXPECT_NE(services.find("sceneTransformPreviewEligible"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, PickingAndOverlayProjectionHelpersStayOutOfFacade) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
+    const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
+    const std::string pickingProjection = readSourceFile("src/editor/projection/PickingCacheProjection.cpp");
+
+    EXPECT_EQ(facade.find("objectPickFaceGeometrySignature("), std::string::npos);
+    EXPECT_EQ(facade.find("mixPickGeometryHash("), std::string::npos);
+    EXPECT_EQ(facade.find("buildObjectPickBounds("), std::string::npos);
+    EXPECT_EQ(facade.find("includePickBoundsPoint("), std::string::npos);
+    EXPECT_EQ(facade.find("appendSelectedHoverFilteredBaseFrame("), std::string::npos);
+    EXPECT_EQ(facade.find("hoverFrameSuppressesTriangle("), std::string::npos);
+    EXPECT_EQ(facade.find("hoverFrameSuppressesLine("), std::string::npos);
+    EXPECT_EQ(facade.find("hoverFrameSuppressesPoint("), std::string::npos);
+    EXPECT_EQ(facade.find("appendOverlayFrame("), std::string::npos);
+
+    EXPECT_NE(services.find("appendSelectedHoverFilteredBaseFrame("), std::string::npos);
+    EXPECT_NE(services.find("appendOverlayFrame("), std::string::npos);
+    EXPECT_NE(services.find("PickingCacheProjection::buildObjectPickBounds("), std::string::npos);
+    EXPECT_NE(services.find("PickingCacheProjection::objectFaceGeometrySignature("), std::string::npos);
+    EXPECT_NE(pickingProjection.find("objectFaceGeometrySignature("), std::string::npos);
+    EXPECT_NE(pickingProjection.find("buildObjectPickBounds("), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInFocusedService) {
@@ -250,6 +441,26 @@ TEST(ModelingSessionServiceSplitTests, ServicesOwnIndependentModelingState) {
     EXPECT_TRUE(drag.duplicateSelected());
     drag.clear();
     EXPECT_FALSE(drag.previewDriven());
+    const TransformDragPreviewRouting objectTransform =
+            TransformDragController::previewRouting(false, true, true);
+    EXPECT_FALSE(objectTransform.previewDriven);
+    EXPECT_FALSE(objectTransform.needsRuntimePreviewTransaction);
+    EXPECT_TRUE(objectTransform.sceneTransformPreviewEligible);
+    const TransformDragPreviewRouting duplicateObjectTransform =
+            TransformDragController::previewRouting(true, true, true);
+    EXPECT_FALSE(duplicateObjectTransform.previewDriven);
+    EXPECT_TRUE(duplicateObjectTransform.needsRuntimePreviewTransaction);
+    EXPECT_TRUE(duplicateObjectTransform.sceneTransformPreviewEligible);
+    const TransformDragPreviewRouting componentTransform =
+            TransformDragController::previewRouting(false, false, true);
+    EXPECT_TRUE(componentTransform.previewDriven);
+    EXPECT_TRUE(componentTransform.needsRuntimePreviewTransaction);
+    EXPECT_FALSE(componentTransform.sceneTransformPreviewEligible);
+    const TransformDragPreviewRouting objectExtrude =
+            TransformDragController::previewRouting(false, true, false);
+    EXPECT_FALSE(objectExtrude.previewDriven);
+    EXPECT_FALSE(objectExtrude.needsRuntimePreviewTransaction);
+    EXPECT_FALSE(objectExtrude.sceneTransformPreviewEligible);
 
     ModelingToolSettingsService toolSettings;
     toolSettings.setPreviewMetadata("edge_bevel", "edge_bevel", "Edge Bevel");

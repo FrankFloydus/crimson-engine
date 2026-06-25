@@ -9,14 +9,17 @@
 #include "assets/AssetRegistry.h"
 #include "core/FrameTiming.h"
 #include "core/LocalizationService.h"
+#include "editor/modeling/ModelingTypes.h"
 #include "render/RenderSystem.h"
 #include "render/SceneRenderBridge.h"
 #include "scene/SceneDocument.h"
 #include "ui/backends/rml/MainLayoutRmlBuilder.h"
 #include "ui/backends/rml/RmlUiContextHost.h"
+#include "ui/components/organisms/ModelingModeShelfComponent.h"
 #include "ui/controllers/MainLayoutController.h"
 #include "ui/controllers/MainLayoutDockDragController.h"
 #include "ui/controllers/MainLayoutSashRegistry.h"
+#include "ui/controllers/ModelingModeShelfController.h"
 #include "ui/controllers/ResizableSplitController.h"
 #include "ui/controllers/ViewportHost.h"
 #include "ui/UISettings.h"
@@ -93,7 +96,11 @@ private:
     void loadLocalization(const std::filesystem::path& executableDir);
     void applyLocalizedMainLayoutLabels();
     void rebuildMainLayout();
+    void rebuildModelingModeShelf();
+    bool updateModelingModeShelfOverflowFromRml();
     void rebuildMainLayoutHitRegions();
+    bool activateModelingModeShelfControl(std::string_view controlId);
+    void applyPendingModelingModeShelfIntents(QuaderEditorApi& editor);
     bool handleMainLayoutPointerEvent(const SDL_Event& event);
     std::optional<std::pair<float, float>> mainLayoutPointerFramebufferPosition(const SDL_Event& event) const;
     std::optional<ResizableSplitHandle> mainLayoutSplitHandle(std::string_view handleId) const;
@@ -126,6 +133,7 @@ private:
     RmlUiContextHost rmlHost_;
     MainLayoutModel mainLayout_ = MainLayoutModel::defaults();
     MainLayoutController mainLayoutController_;
+    ModelingModeShelfController modelingModeShelfController_;
     MainLayoutLabels mainLayoutLabels_;
     ViewportHost viewportHost_;
     UISettingsPaths settingsPaths_;

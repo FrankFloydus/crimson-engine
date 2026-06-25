@@ -90,6 +90,53 @@ bool SelectionProjectionService::projectObjectSelectionFromScene(
     return true;
 }
 
+RuntimeObjectSelectionProjectionResult SelectionProjectionService::projectObjectSelectionForSceneEntities(
+        quader_editor_core::EditorSession& session,
+        std::span<const EntityId> entities,
+        EntityId active,
+        const ModelingObjectRuntimeMap& objectRegistry) const {
+    RuntimeObjectSelectionProjectionResult result;
+
+    std::vector<int> objectIds;
+    objectIds.reserve(entities.size());
+    for (const EntityId entity : entities) {
+        const auto object = objectRegistry.modelingObjectForEntity(entity);
+        if (object.has_value()) {
+            objectIds.push_back(*object);
+        }
+    }
+    result.hasModelingObjects = !objectIds.empty();
+    if (!entities.empty() && objectIds.empty()) {
+        result.ok = false;
+        return result;
+    }
+
+    int activeObjectId = -1;
+    if (active != InvalidEntityId) {
+        const auto object = objectRegistry.modelingObjectForEntity(active);
+        if (object.has_value()) {
+            activeObjectId = *object;
+        }
+    }
+    if (activeObjectId <= 0 && !objectIds.empty()) {
+        activeObjectId = objectIds.back();
+    }
+
+    std::vector<int> currentObjectIds = session.selected_object_ids();
+    std::sort(currentObjectIds.begin(), currentObjectIds.end());
+    std::vector<int> desiredObjectIds = objectIds;
+    std::sort(desiredObjectIds.begin(), desiredObjectIds.end());
+    if (session.selection_mode() == quader_editor_core::SelectionMode::object &&
+            currentObjectIds == desiredObjectIds &&
+            session.active_object_id() == activeObjectId) {
+        return result;
+    }
+
+    session.set_selected_object_ids(objectIds, activeObjectId);
+    result.changed = true;
+    return result;
+}
+
 bool SelectionProjectionService::projectSceneSelectionFromModeling(
         const quader_editor_core::EditorSession& session,
         SceneDocument& scene,

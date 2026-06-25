@@ -32,6 +32,15 @@ ui.panel.tool_settings=Impostazioni strumento
 ui.panel.unknown=Pannello
 ui.shell.toolbar=Barra strumenti
 ui.shell.status=Stato
+ui.modeling_shelf.tab.object=Mesh
+ui.modeling_shelf.tab.vertex=Vertici
+ui.modeling_shelf.tab.edge=Spigoli
+ui.modeling_shelf.tab.face=Facce
+ui.modeling_shelf.more=Altro
+ui.modeling_shelf.command.bridge=Bridge
+ui.modeling_shelf.command.collapse=Collassa
+ui.modeling_shelf.command.thicken=Spessore
+ui.modeling_shelf.command.flip_normal=Inverti normale
 
 ui.settings.interface=Interfaccia
 ui.settings.locale=Lingua

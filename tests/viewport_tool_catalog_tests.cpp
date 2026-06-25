@@ -7,6 +7,7 @@
 #include "api/QuaderEditorApi.h"
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/metadata/host_contract.h"
 #include "scene/SceneDocument.h"
 #include "scene/document/ProjectSession.h"
 #include "editor/tools/ViewportToolCatalog.h"
@@ -74,8 +75,21 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
             {ViewportToolId::Mirror, ModelingViewportTool::Mirror, "mirror", "Mirror", ToolKind::Modal, ToolMenuGroup::Modeling, true, true},
     }};
 
+    ASSERT_EQ(viewportToolDescriptors().size(), expected.size());
     ASSERT_EQ(viewportToolCatalog().size(), expected.size());
     for (const ExpectedTool& item : expected) {
+        const ToolDescriptor* descriptor = findViewportToolDescriptor(item.tool);
+        ASSERT_NE(descriptor, nullptr) << static_cast<int>(item.tool);
+        EXPECT_EQ(findViewportToolDescriptor(item.id), descriptor);
+        EXPECT_EQ(descriptor->tool, item.tool);
+        EXPECT_EQ(descriptor->modelingTool, item.modelingTool);
+        EXPECT_EQ(descriptor->id, item.id);
+        EXPECT_EQ(descriptor->label, item.label);
+        EXPECT_EQ(descriptor->kind, item.kind);
+        EXPECT_EQ(descriptor->menuGroup, item.menuGroup);
+        EXPECT_EQ(descriptor->ownsViewport, item.ownsViewport);
+        EXPECT_EQ(descriptor->blocksViewportFocusShortcuts, item.blocksFocusShortcuts);
+
         const ViewportTool* tool = findViewportTool(item.tool);
         ASSERT_NE(tool, nullptr) << static_cast<int>(item.tool);
         EXPECT_EQ(findViewportTool(item.id), tool);
@@ -112,6 +126,41 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
     EXPECT_EQ(viewportToolForModeling(ModelingViewportTool::Mirror), ViewportToolId::Mirror);
     EXPECT_TRUE(viewportToolBlocksFocusShortcuts(ViewportToolId::Cut));
     EXPECT_TRUE(viewportToolOwnsViewport(ViewportToolId::InsertEdgeLoop));
+}
+
+TEST(ViewportToolCatalogTests, HostToolMetadataDerivesFromViewportToolCatalog) {
+    ASSERT_EQ(quader_host_contract::tool_catalog().size(), viewportToolDescriptors().size());
+    for (const ToolDescriptor& tool : viewportToolDescriptors()) {
+        const quader_host_contract::HostToolDescriptor* descriptor =
+                quader_host_contract::find_tool_descriptor(tool.id);
+        ASSERT_NE(descriptor, nullptr) << tool.id;
+        EXPECT_EQ(descriptor->label, tool.label);
+        EXPECT_EQ(descriptor->primary_shortcut, tool.shortcut);
+        EXPECT_EQ(descriptor->transform_tool, tool.kind == ToolKind::Transform);
+        EXPECT_EQ(descriptor->modal_tool, tool.kind == ToolKind::Modal);
+    }
+
+    for (const quader_host_contract::HostToolDescriptor& descriptor : quader_host_contract::tool_catalog()) {
+        EXPECT_NE(findViewportToolDescriptor(descriptor.id), nullptr) << descriptor.id;
+    }
+}
+
+TEST(ViewportToolCatalogTests, HostToolPlacementsAndGroupsResolveToViewportCatalog) {
+    for (const quader_host_contract::HostToolGroupDescriptor& group : quader_host_contract::tool_group_catalog()) {
+        for (std::string_view toolId : group.tool_ids) {
+            EXPECT_NE(findViewportToolDescriptor(toolId), nullptr) << group.id << " references " << toolId;
+        }
+    }
+
+    for (const quader_host_contract::HostUiPlacementDescriptor& placement : quader_host_contract::ui_placement_catalog()) {
+        if (placement.target_kind != quader_host_contract::HostUiPlacementTargetKind::tool) {
+            continue;
+        }
+        const ToolDescriptor* tool = findViewportToolDescriptor(placement.target_id);
+        ASSERT_NE(tool, nullptr) << placement.id << " targets " << placement.target_id;
+        EXPECT_NE(quader_host_contract::find_tool_descriptor(placement.target_id), nullptr) << placement.target_id;
+        EXPECT_EQ(placement.label, tool->label) << placement.id;
+    }
 }
 
 TEST(ViewportToolRuntimeTests, RegistryFindsConcreteToolObjects) {

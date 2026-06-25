@@ -16,16 +16,7 @@ namespace quader {
 class ScaleTool final : public TransformViewportTool {
 public:
     ScaleTool()
-        : TransformViewportTool({
-                  .tool = ViewportToolId::Scale,
-                  .modelingTool = ModelingViewportTool::Scale,
-                  .id = "scale",
-                  .label = "Scale",
-                  .shortcut = "S",
-                  .kind = ToolKind::Transform,
-                  .menuGroup = ToolMenuGroup::Navigation,
-          },
-                  ModelingTransformTool::Scale) {}
+        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Scale)) {}
 };
 
 } // namespace quader

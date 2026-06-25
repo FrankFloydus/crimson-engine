@@ -18,6 +18,7 @@ enum class UIIconId {
     ChromeMinimize,
     ChromeRestore,
     ChromeClose,
+    Mesh,
 };
 
 /// Identifies the concrete asset provider behind a semantic icon.

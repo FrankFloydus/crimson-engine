@@ -9,16 +9,19 @@
 #include "api/QuaderApi.h"
 #include "api/QuaderToolsApi.h"
 #include "api/QuaderViewportApi.h"
+#include "editor/commands/EditorCommandRegistry.h"
 #include "editor/commands/ModelingCommandToolCatalog.h"
+#include "editor/input/QuaderKeybindingService.h"
 #include "editor/tools/ViewportToolCatalog.h"
 #include "viewport/HostViewportContractAdapter.h"
 
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
-#include <unordered_set>
 #include <utility>
 
 namespace quader {
@@ -30,68 +33,60 @@ std::string prefixedCommandId(std::string_view prefix, std::string_view suffix) 
     return commandId;
 }
 
+/**
+ * Stores the command bridge contract for modeling action IDs exposed through the public command API.
+ */
+struct ModelingActionCommandBridgeDescriptor {
+    std::string_view actionId;
+    QuaderCommandId commandId;
+    bool registersDedicatedCommand = true;
+    std::string_view compatibilityAlias;
+};
+
+std::span<const ModelingActionCommandBridgeDescriptor> modelingActionCommandBridgeCatalog() {
+    static constexpr std::array<ModelingActionCommandBridgeDescriptor, 21> descriptors{{
+            {"delete_selection", QuaderCommand::DeleteSelection, false, "modeling.delete_selection"},
+            {"clear_selection", QuaderCommand::EditClearSelection, false, {}},
+            {"select_all", QuaderCommand::EditSelectAll, false, {}},
+            {"invert_selection", QuaderCommand::EditInvertSelection, false, {}},
+            {"copy_selection", QuaderCommand::CopySelection, false, "modeling.copy_selection"},
+            {"paste_selection", QuaderCommand::PasteSelection, false, "modeling.paste_selection"},
+            {"duplicate_meshes", QuaderCommand::DuplicateSelection, false, "modeling.duplicate_meshes"},
+            {"repeat_last_action", QuaderCommand::EditRepeatLastAction, false, "modeling.repeat_last_action"},
+            {"assign_material", QuaderCommand::ApplyMaterial, false, "modeling.assign_material"},
+            {"apply_active_material", QuaderCommand::ApplyMaterial, false, "modeling.apply_active_material"},
+            {"dissolve_edges", QuaderCommand::ModelingDissolveEdges, true, {}},
+            {"dissolve_vertices", QuaderCommand::ModelingDissolveVertices, true, {}},
+            {"combine_meshes", QuaderCommand::ModelingCombineMeshes, true, {}},
+            {"merge_vertices_to_active", QuaderCommand::ModelingMergeVerticesToActive, true, {}},
+            {"merge_vertices_to_center", QuaderCommand::ModelingMergeVerticesToCenter, true, {}},
+            {"mirror_selection_x", QuaderCommand::ModelingMirrorSelectionX, true, {}},
+            {"mirror_selection_y", QuaderCommand::ModelingMirrorSelectionY, true, {}},
+            {"mirror_selection_z", QuaderCommand::ModelingMirrorSelectionZ, true, {}},
+            {"invert_mesh", QuaderCommand::ModelingInvertMesh, true, {}},
+            {"flip_horizontal", QuaderCommand::ModelingFlipHorizontal, true, {}},
+            {"flip_vertical", QuaderCommand::ModelingFlipVertical, true, {}},
+    }};
+    return descriptors;
+}
+
+const ModelingActionCommandBridgeDescriptor* modelingActionCommandBridge(std::string_view actionId) {
+    for (const ModelingActionCommandBridgeDescriptor& descriptor : modelingActionCommandBridgeCatalog()) {
+        if (descriptor.actionId == actionId) {
+            return &descriptor;
+        }
+    }
+    return nullptr;
+}
+
 std::optional<QuaderCommandId> fixedCommandIdForModelingAction(std::string_view actionId) {
-    if (actionId == "delete_selection") {
-        return QuaderCommand::DeleteSelection;
-    }
-    if (actionId == "clear_selection") {
-        return QuaderCommand::EditClearSelection;
-    }
-    if (actionId == "select_all") {
-        return QuaderCommand::EditSelectAll;
-    }
-    if (actionId == "invert_selection") {
-        return QuaderCommand::EditInvertSelection;
-    }
-    if (actionId == "copy_selection") {
-        return QuaderCommand::CopySelection;
-    }
-    if (actionId == "paste_selection") {
-        return QuaderCommand::PasteSelection;
-    }
-    if (actionId == "duplicate_meshes") {
-        return QuaderCommand::DuplicateSelection;
-    }
-    if (actionId == "repeat_last_action") {
-        return QuaderCommand::EditRepeatLastAction;
-    }
-    if (actionId == "assign_material" || actionId == "apply_active_material") {
-        return QuaderCommand::ApplyMaterial;
-    }
-    if (actionId == "dissolve_edges") {
-        return QuaderCommand::ModelingDissolveEdges;
-    }
-    if (actionId == "dissolve_vertices") {
-        return QuaderCommand::ModelingDissolveVertices;
-    }
-    if (actionId == "combine_meshes") {
-        return QuaderCommand::ModelingCombineMeshes;
-    }
-    if (actionId == "merge_vertices_to_active") {
-        return QuaderCommand::ModelingMergeVerticesToActive;
-    }
-    if (actionId == "merge_vertices_to_center") {
-        return QuaderCommand::ModelingMergeVerticesToCenter;
-    }
-    if (actionId == "mirror_selection_x") {
-        return QuaderCommand::ModelingMirrorSelectionX;
-    }
-    if (actionId == "mirror_selection_y") {
-        return QuaderCommand::ModelingMirrorSelectionY;
-    }
-    if (actionId == "mirror_selection_z") {
-        return QuaderCommand::ModelingMirrorSelectionZ;
-    }
-    if (actionId == "invert_mesh") {
-        return QuaderCommand::ModelingInvertMesh;
-    }
-    if (actionId == "flip_horizontal") {
-        return QuaderCommand::ModelingFlipHorizontal;
-    }
-    if (actionId == "flip_vertical") {
-        return QuaderCommand::ModelingFlipVertical;
-    }
-    return std::nullopt;
+    const ModelingActionCommandBridgeDescriptor* descriptor = modelingActionCommandBridge(actionId);
+    return descriptor == nullptr ? std::nullopt : std::optional<QuaderCommandId>(descriptor->commandId);
+}
+
+bool modelingActionRegistersDedicatedCommand(std::string_view actionId) {
+    const ModelingActionCommandBridgeDescriptor* descriptor = modelingActionCommandBridge(actionId);
+    return descriptor == nullptr || descriptor->registersDedicatedCommand;
 }
 
 std::string commandIdForModelingAction(std::string_view actionId) {
@@ -115,93 +110,6 @@ std::filesystem::path defaultKeybindingsPath() {
         return std::filesystem::path(localAppData) / "Quader" / "keybindings.json";
     }
     return std::filesystem::path("keybindings.json");
-}
-
-std::string viewportActionTargetId(std::string_view suffix) {
-    return prefixedCommandId("viewport.", suffix);
-}
-
-std::string selectionModeTargetId(std::string_view mode) {
-    return prefixedCommandId("viewport.selection_mode.", mode);
-}
-
-std::string gridPresetTargetId(int preset) {
-    return prefixedCommandId("viewport.grid_preset.", std::to_string(preset));
-}
-
-std::optional<std::string> targetIdForViewportShortcutTarget(std::string_view targetId) {
-    if (targetId == "select_all") {
-        return std::string(QuaderCommand::EditSelectAll.string());
-    }
-    if (targetId == "copy_meshes") {
-        return std::string(QuaderCommand::CopySelection.string());
-    }
-    if (targetId == "duplicate_meshes") {
-        return std::string(QuaderCommand::DuplicateSelection.string());
-    }
-    if (targetId == "invert_selection") {
-        return std::string(QuaderCommand::EditInvertSelection.string());
-    }
-    if (targetId == "repeat_last_action") {
-        return std::string(QuaderCommand::EditRepeatLastAction.string());
-    }
-    if (targetId == "paste_meshes") {
-        return std::string(QuaderCommand::PasteSelection.string());
-    }
-    if (targetId == "undo") {
-        return std::string(QuaderCommand::EditUndo.string());
-    }
-    if (targetId == "redo") {
-        return std::string(QuaderCommand::EditRedo.string());
-    }
-    if (targetId == "delete") {
-        return std::string(QuaderCommand::DeleteSelection.string());
-    }
-    if (targetId == "merge_vertices") {
-        return std::string(QuaderCommand::ModelingMergeVerticesToActive.string());
-    }
-    if (targetId == "merge_vertices_at_center") {
-        return std::string(QuaderCommand::ModelingMergeVerticesToCenter.string());
-    }
-    if (targetId == "apply_active_material") {
-        return std::string(QuaderCommand::ApplyMaterial.string());
-    }
-    if (targetId == "invert_mesh") {
-        return std::string(QuaderCommand::ModelingInvertMesh.string());
-    }
-    if (targetId == "focus_all") {
-        return std::string(QuaderCommand::ViewportFrameSelection.string());
-    }
-    if (targetId == "focus_origin") {
-        return std::string(QuaderCommand::ViewportFocusOrigin.string());
-    }
-    if (targetId == "mirror_axis_x") {
-        return std::string(QuaderCommand::ModelingMirrorSelectionX.string());
-    }
-    if (targetId == "mirror_axis_y") {
-        return std::string(QuaderCommand::ModelingMirrorSelectionY.string());
-    }
-    if (targetId == "mirror_axis_z") {
-        return std::string(QuaderCommand::ModelingMirrorSelectionZ.string());
-    }
-    if (targetId == "flip_horizontal") {
-        return std::string(QuaderCommand::ModelingFlipHorizontal.string());
-    }
-    if (targetId == "flip_vertical") {
-        return std::string(QuaderCommand::ModelingFlipVertical.string());
-    }
-
-    ViewportToolId tool = ViewportToolId::Select;
-    if (viewportToolFromContractId(targetId, tool)) {
-        return commandIdForToolActivation(viewportToolCatalogId(tool));
-    }
-
-    ViewportSelectionMode mode = ViewportSelectionMode::Object;
-    if (viewportSelectionModeFromContractId(targetId, mode)) {
-        return selectionModeTargetId(viewportSelectionModeId(mode));
-    }
-
-    return std::nullopt;
 }
 
 std::optional<QuaderKeyCode> keyCodeForViewportKey(ViewportKey key) {
@@ -349,38 +257,6 @@ std::optional<QuaderInputChord> inputChordForViewportKey(ViewportKey key, Viewpo
     };
 }
 
-bool viewportInputActionForTargetId(std::string_view targetId, ViewportInputActionKind& action) {
-    if (targetId == viewportActionTargetId("navigation.orbit")) {
-        action = ViewportInputActionKind::Orbit;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("navigation.orbit_snap")) {
-        action = ViewportInputActionKind::OrbitSnap;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("navigation.pan")) {
-        action = ViewportInputActionKind::Pan;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("navigation.fly")) {
-        action = ViewportInputActionKind::Fly;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("navigation.zoom")) {
-        action = ViewportInputActionKind::Zoom;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("navigation.zoom_to_cursor")) {
-        action = ViewportInputActionKind::ZoomToCursor;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("navigation.reset_fly_speed")) {
-        action = ViewportInputActionKind::ResetFlySpeed;
-        return true;
-    }
-    return false;
-}
-
 QuaderKeybindingContext viewportKeybindingContext(
         const ViewportToolState& state,
         bool viewportFocused,
@@ -406,170 +282,101 @@ QuaderKeybindingContext viewportKeybindingContext(
     return context;
 }
 
-bool viewportShortcutForTargetId(std::string_view targetId, ViewportShortcut& shortcut) {
-    if (targetId == QuaderCommand::EditSelectAll.string()) {
-        shortcut.kind = ViewportShortcutKind::SelectAll;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::CopySelection.string()) {
-        shortcut.kind = ViewportShortcutKind::Copy;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::DuplicateSelection.string()) {
-        shortcut.kind = ViewportShortcutKind::Duplicate;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::EditInvertSelection.string()) {
-        shortcut.kind = ViewportShortcutKind::InvertSelection;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::EditRepeatLastAction.string()) {
-        shortcut.kind = ViewportShortcutKind::RepeatLastAction;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::PasteSelection.string()) {
-        shortcut.kind = ViewportShortcutKind::Paste;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::EditUndo.string()) {
-        shortcut.kind = ViewportShortcutKind::Undo;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::EditRedo.string()) {
-        shortcut.kind = ViewportShortcutKind::Redo;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::DeleteSelection.string()) {
-        shortcut.kind = ViewportShortcutKind::DeleteSelection;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingMergeVerticesToActive.string()) {
-        shortcut.kind = ViewportShortcutKind::MergeActive;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingMergeVerticesToCenter.string()) {
-        shortcut.kind = ViewportShortcutKind::MergeCenter;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingMirrorSelectionX.string()) {
-        shortcut.kind = ViewportShortcutKind::MirrorAxis;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.mirrorAxis = ViewportMirrorAxis::X;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingMirrorSelectionY.string()) {
-        shortcut.kind = ViewportShortcutKind::MirrorAxis;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.mirrorAxis = ViewportMirrorAxis::Y;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingMirrorSelectionZ.string()) {
-        shortcut.kind = ViewportShortcutKind::MirrorAxis;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.mirrorAxis = ViewportMirrorAxis::Z;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingInvertMesh.string()) {
-        shortcut.kind = ViewportShortcutKind::FlipMeshNormals;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingFlipHorizontal.string()) {
-        shortcut.kind = ViewportShortcutKind::FlipHorizontal;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ModelingFlipVertical.string()) {
-        shortcut.kind = ViewportShortcutKind::FlipVertical;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ApplyMaterial.string()) {
-        shortcut.kind = ViewportShortcutKind::ApplyMaterial;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ViewportFrameSelection.string()) {
-        shortcut.kind = ViewportShortcutKind::FocusDocument;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == QuaderCommand::ViewportFocusOrigin.string()) {
-        shortcut.kind = ViewportShortcutKind::FocusOrigin;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("cancel_active_tool")) {
-        shortcut.kind = ViewportShortcutKind::CancelActiveTool;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("toggle_maximized")) {
-        shortcut.kind = ViewportShortcutKind::ToggleMaximized;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == viewportActionTargetId("delete_popup")) {
-        shortcut.kind = ViewportShortcutKind::DeletePopup;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-
-    constexpr std::string_view toolPrefix = "tools.activate.";
-    if (targetId.starts_with(toolPrefix)) {
-        ViewportToolId tool = ViewportToolId::Select;
-        if (!viewportToolFromContractId(targetId.substr(toolPrefix.size()), tool)) {
-            return false;
-        }
-        shortcut.kind = ViewportShortcutKind::ActivateTool;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.tool = tool;
-        return true;
-    }
-
-    constexpr std::string_view selectionModePrefix = "viewport.selection_mode.";
-    if (targetId.starts_with(selectionModePrefix)) {
-        ViewportSelectionMode mode = ViewportSelectionMode::Object;
-        if (!viewportSelectionModeFromContractId(targetId.substr(selectionModePrefix.size()), mode)) {
-            return false;
-        }
-        shortcut.kind = ViewportShortcutKind::SetSelectionMode;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.selectionMode = mode;
-        return true;
-    }
-
-    constexpr std::string_view gridPresetPrefix = "viewport.grid_preset.";
-    if (targetId.starts_with(gridPresetPrefix)) {
-        const std::string presetText(targetId.substr(gridPresetPrefix.size()));
-        try {
-            const int preset = std::stoi(presetText);
-            shortcut.kind = ViewportShortcutKind::SetGridPreset;
-            shortcut.context = ViewportShortcutContext::Viewport;
-            shortcut.gridPreset = preset;
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
-
-    return false;
-}
-
 } // namespace
 
-QuaderCommandsApi::QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools)
+/**
+ * Owns command registration, dispatch, and keybinding adaptation for QuaderCommandsApi.
+ */
+class QuaderCommandsApi::Impl final {
+public:
+    Impl(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+
+    QuaderApiVoidResult execute(std::string_view commandId);
+    QuaderApiVoidResult execute(QuaderCommandId commandId);
+    QuaderApiVoidResult executeModelingAction(std::string_view actionId);
+    QuaderApiVoidResult executeToolActivation(std::string_view toolId);
+    [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
+    [[nodiscard]] std::string commandIdForModelingAction(std::string_view actionId) const;
+    [[nodiscard]] std::string commandIdForToolActivation(std::string_view toolId) const;
+    [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
+    [[nodiscard]] std::string shortcutFor(QuaderCommandId commandId) const;
+    [[nodiscard]] std::vector<QuaderKeybindingRule> keybindings() const;
+    [[nodiscard]] std::vector<QuaderKeybindingConflict> conflictsForShortcut(
+            std::string_view shortcut,
+            std::string_view when = {}) const;
+    [[nodiscard]] bool resolveViewportShortcut(
+            ViewportKey key,
+            ViewportModifiers modifiers,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            ViewportShortcut& shortcut,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] bool resolveViewportShortcut(
+            const QuaderInputChord& chord,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            ViewportShortcut& shortcut,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] bool resolveViewportInputAction(
+            const QuaderInputChord& chord,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            ViewportInputActionKind& action,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] QuaderViewportKeybindingDispatch dispatchViewportKeybinding(
+            ViewportKey key,
+            ViewportModifiers modifiers,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            QuaderViewportKeybindingContext inputContext = {});
+    [[nodiscard]] QuaderViewportKeybindingDispatch dispatchViewportInputBinding(
+            const QuaderInputChord& chord,
+            const ViewportToolState& state,
+            bool viewportFocused,
+            bool textInputActive,
+            QuaderViewportKeybindingContext inputContext = {});
+    void resetPendingKeybindingChord();
+    [[nodiscard]] bool hasPendingKeybindingChord() const;
+    QuaderApiVoidResult setShortcut(std::string_view commandId, std::string shortcut);
+    QuaderApiVoidResult removeShortcut(std::string_view commandId);
+    QuaderApiVoidResult resetShortcut(std::string_view commandId);
+    QuaderApiVoidResult setKeybindingStoragePath(std::filesystem::path path);
+
+private:
+    void registerCommands();
+    void registerDefaultKeybindings();
+    void registerViewportDefaultKeybindings();
+    void registerCommand(
+            QuaderCommandId id,
+            std::string label,
+            std::function<QuaderApiVoidResult()> execute,
+            std::string shortcut = {},
+            std::function<bool()> enabled = {},
+            bool visible = true);
+    void registerCommand(
+            std::string id,
+            std::string label,
+            std::function<QuaderApiVoidResult()> execute,
+            std::string shortcut = {},
+            std::function<bool()> enabled = {},
+            bool visible = true);
+    void registerAlias(std::string aliasId, QuaderCommandId targetId);
+    void registerAlias(std::string aliasId, std::string targetId);
+    [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
+    [[nodiscard]] std::string canonicalTargetId(std::string_view commandId) const;
+
+    QuaderApi& api_;
+    QuaderViewportApi& viewports_;
+    QuaderToolsApi& tools_;
+    EditorCommandRegistry registry_;
+    QuaderKeybindingService keybindings_;
+};
+
+QuaderCommandsApi::Impl::Impl(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools)
     : api_(api)
     , viewports_(viewports)
     , tools_(tools) {
@@ -579,19 +386,19 @@ QuaderCommandsApi::QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewport
     (void)keybindings_.loadUserKeybindings();
 }
 
-QuaderApiVoidResult QuaderCommandsApi::execute(QuaderCommandId commandId) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::execute(QuaderCommandId commandId) {
     return execute(commandId.string());
 }
 
-QuaderApiVoidResult QuaderCommandsApi::executeModelingAction(std::string_view actionId) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::executeModelingAction(std::string_view actionId) {
     return execute(commandIdForModelingAction(actionId));
 }
 
-QuaderApiVoidResult QuaderCommandsApi::executeToolActivation(std::string_view toolId) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::executeToolActivation(std::string_view toolId) {
     return execute(commandIdForToolActivation(toolId));
 }
 
-QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::execute(std::string_view commandId) {
     if (std::optional<QuaderApiVoidResult> result = registry_.execute(commandId)) {
         result->revisions = api_.revisions();
         return *result;
@@ -599,7 +406,7 @@ QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
     return failure("Unknown command id.");
 }
 
-std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {
+std::vector<QuaderCommandDescriptor> QuaderCommandsApi::Impl::available() const {
     std::vector<QuaderCommandDescriptor> commands = registry_.available();
     for (QuaderCommandDescriptor& command : commands) {
         command.shortcut = keybindings_.shortcutFor(command.id);
@@ -607,15 +414,15 @@ std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {
     return commands;
 }
 
-std::string QuaderCommandsApi::commandIdForModelingAction(std::string_view actionId) const {
+std::string QuaderCommandsApi::Impl::commandIdForModelingAction(std::string_view actionId) const {
     return quader::commandIdForModelingAction(actionId);
 }
 
-std::string QuaderCommandsApi::commandIdForToolActivation(std::string_view toolId) const {
+std::string QuaderCommandsApi::Impl::commandIdForToolActivation(std::string_view toolId) const {
     return quader::commandIdForToolActivation(toolId);
 }
 
-std::string QuaderCommandsApi::shortcutFor(std::string_view commandId) const {
+std::string QuaderCommandsApi::Impl::shortcutFor(std::string_view commandId) const {
     if (registry_.contains(commandId) &&
             registry_.canonicalCommandId(commandId) != commandId &&
             registry_.shortcutFor(commandId).empty()) {
@@ -624,21 +431,21 @@ std::string QuaderCommandsApi::shortcutFor(std::string_view commandId) const {
     return keybindings_.shortcutFor(canonicalTargetId(commandId));
 }
 
-std::string QuaderCommandsApi::shortcutFor(QuaderCommandId commandId) const {
+std::string QuaderCommandsApi::Impl::shortcutFor(QuaderCommandId commandId) const {
     return shortcutFor(commandId.string());
 }
 
-std::vector<QuaderKeybindingRule> QuaderCommandsApi::keybindings() const {
+std::vector<QuaderKeybindingRule> QuaderCommandsApi::Impl::keybindings() const {
     return keybindings_.keybindings();
 }
 
-std::vector<QuaderKeybindingConflict> QuaderCommandsApi::conflictsForShortcut(
+std::vector<QuaderKeybindingConflict> QuaderCommandsApi::Impl::conflictsForShortcut(
         std::string_view shortcut,
         std::string_view when) const {
     return keybindings_.conflictsFor(shortcut, when);
 }
 
-bool QuaderCommandsApi::resolveViewportShortcut(
+bool QuaderCommandsApi::Impl::resolveViewportShortcut(
         ViewportKey key,
         ViewportModifiers modifiers,
         const ViewportToolState& state,
@@ -650,7 +457,7 @@ bool QuaderCommandsApi::resolveViewportShortcut(
     return chord ? resolveViewportShortcut(*chord, state, viewportFocused, textInputActive, shortcut, inputContext) : false;
 }
 
-bool QuaderCommandsApi::resolveViewportShortcut(
+bool QuaderCommandsApi::Impl::resolveViewportShortcut(
         const QuaderInputChord& chord,
         const ViewportToolState& state,
         bool viewportFocused,
@@ -670,7 +477,7 @@ bool QuaderCommandsApi::resolveViewportShortcut(
     return true;
 }
 
-bool QuaderCommandsApi::resolveViewportInputAction(
+bool QuaderCommandsApi::Impl::resolveViewportInputAction(
         const QuaderInputChord& chord,
         const ViewportToolState& state,
         bool viewportFocused,
@@ -694,7 +501,7 @@ bool QuaderCommandsApi::resolveViewportInputAction(
             viewportInputActionForTargetId(dispatch.targetId, action);
 }
 
-QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportKeybinding(
+QuaderViewportKeybindingDispatch QuaderCommandsApi::Impl::dispatchViewportKeybinding(
         ViewportKey key,
         ViewportModifiers modifiers,
         const ViewportToolState& state,
@@ -705,7 +512,7 @@ QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportKeybinding(
     return chord ? dispatchViewportInputBinding(*chord, state, viewportFocused, textInputActive, inputContext) : QuaderViewportKeybindingDispatch{};
 }
 
-QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportInputBinding(
+QuaderViewportKeybindingDispatch QuaderCommandsApi::Impl::dispatchViewportInputBinding(
         const QuaderInputChord& chord,
         const ViewportToolState& state,
         bool viewportFocused,
@@ -734,7 +541,7 @@ QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportInputBinding
     }
 
     ViewportShortcut shortcut;
-    if (viewportShortcutForTargetId(dispatch.targetId, shortcut)) {
+    if (viewportShortcutForCommandTargetId(dispatch.targetId, shortcut)) {
         return {
                 .kind = QuaderViewportKeybindingDispatch::Kind::ViewportShortcut,
                 .shortcut = shortcut,
@@ -751,15 +558,15 @@ QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportInputBinding
     return {};
 }
 
-void QuaderCommandsApi::resetPendingKeybindingChord() {
+void QuaderCommandsApi::Impl::resetPendingKeybindingChord() {
     keybindings_.resetPendingChord();
 }
 
-bool QuaderCommandsApi::hasPendingKeybindingChord() const {
+bool QuaderCommandsApi::Impl::hasPendingKeybindingChord() const {
     return keybindings_.hasPendingChord();
 }
 
-QuaderApiVoidResult QuaderCommandsApi::setShortcut(std::string_view commandId, std::string shortcut) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::setShortcut(std::string_view commandId, std::string shortcut) {
     const std::string targetId = canonicalTargetId(commandId);
     std::string when;
     for (const QuaderKeybindingRule& rule : keybindings_.keybindings()) {
@@ -780,7 +587,7 @@ QuaderApiVoidResult QuaderCommandsApi::setShortcut(std::string_view commandId, s
     };
 }
 
-QuaderApiVoidResult QuaderCommandsApi::removeShortcut(std::string_view commandId) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::removeShortcut(std::string_view commandId) {
     const std::string targetId = canonicalTargetId(commandId);
     if (const std::optional<std::string> error = keybindings_.removeUserShortcut(targetId)) {
         return failure(*error);
@@ -794,7 +601,7 @@ QuaderApiVoidResult QuaderCommandsApi::removeShortcut(std::string_view commandId
     };
 }
 
-QuaderApiVoidResult QuaderCommandsApi::resetShortcut(std::string_view commandId) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::resetShortcut(std::string_view commandId) {
     const std::string targetId = canonicalTargetId(commandId);
     if (const std::optional<std::string> error = keybindings_.resetUserShortcut(targetId)) {
         return failure(*error);
@@ -808,7 +615,7 @@ QuaderApiVoidResult QuaderCommandsApi::resetShortcut(std::string_view commandId)
     };
 }
 
-QuaderApiVoidResult QuaderCommandsApi::setKeybindingStoragePath(std::filesystem::path path) {
+QuaderApiVoidResult QuaderCommandsApi::Impl::setKeybindingStoragePath(std::filesystem::path path) {
     keybindings_.setStoragePath(std::move(path));
     keybindings_.clearUserKeybindings();
     if (const std::optional<std::string> error = keybindings_.loadUserKeybindings()) {
@@ -823,7 +630,7 @@ QuaderApiVoidResult QuaderCommandsApi::setKeybindingStoragePath(std::filesystem:
     };
 }
 
-void QuaderCommandsApi::registerCommands() {
+void QuaderCommandsApi::Impl::registerCommands() {
     registerCommand(
             QuaderCommand::EditUndo,
             "Undo",
@@ -914,34 +721,20 @@ void QuaderCommandsApi::registerCommands() {
     registerAlias("selection.clear", QuaderCommand::EditClearSelection);
     registerAlias("selection.select_all", QuaderCommand::EditSelectAll);
     registerAlias("selection.invert", QuaderCommand::EditInvertSelection);
-    registerAlias("modeling.delete_selection", QuaderCommand::DeleteSelection);
-    registerAlias("modeling.copy_selection", QuaderCommand::CopySelection);
-    registerAlias("modeling.paste_selection", QuaderCommand::PasteSelection);
-    registerAlias("modeling.duplicate_meshes", QuaderCommand::DuplicateSelection);
     registerAlias("scene.group_selection", QuaderCommand::GroupSelection);
     registerAlias("scene.ungroup_selection", QuaderCommand::UngroupSelection);
-    registerAlias("modeling.repeat_last_action", QuaderCommand::EditRepeatLastAction);
-    registerAlias("modeling.assign_material", QuaderCommand::ApplyMaterial);
-    registerAlias("modeling.apply_active_material", QuaderCommand::ApplyMaterial);
+    for (const ModelingActionCommandBridgeDescriptor& descriptor : modelingActionCommandBridgeCatalog()) {
+        if (!descriptor.compatibilityAlias.empty()) {
+            registerAlias(std::string(descriptor.compatibilityAlias), descriptor.commandId);
+        }
+    }
 
-    const std::unordered_set<std::string_view> neutralModelingTools{
-            "delete_selection",
-            "clear_selection",
-            "select_all",
-            "invert_selection",
-            "copy_selection",
-            "paste_selection",
-            "duplicate_meshes",
-            "repeat_last_action",
-            "assign_material",
-            "apply_active_material",
-    };
     for (const CommandTool* tool : modelingCommandTools()) {
         if (tool == nullptr) {
             continue;
         }
         registerAlias(legacyActionAlias(tool->id()), commandIdForModelingAction(tool->id()));
-        if (neutralModelingTools.contains(tool->id())) {
+        if (!modelingActionRegistersDedicatedCommand(tool->id())) {
             continue;
         }
         std::string id = commandIdForModelingAction(tool->id());
@@ -973,7 +766,7 @@ void QuaderCommandsApi::registerCommands() {
     });
 }
 
-void QuaderCommandsApi::registerDefaultKeybindings() {
+void QuaderCommandsApi::Impl::registerDefaultKeybindings() {
     constexpr std::string_view editableContext = "viewportFocus && !textInputActive && !navigation.active";
     for (const QuaderCommandDescriptor& command : registry_.available()) {
         keybindings_.registerTarget(command.id);
@@ -985,63 +778,35 @@ void QuaderCommandsApi::registerDefaultKeybindings() {
     registerViewportDefaultKeybindings();
 }
 
-void QuaderCommandsApi::registerViewportDefaultKeybindings() {
+void QuaderCommandsApi::Impl::registerViewportDefaultKeybindings() {
     constexpr std::string_view viewportContext = "viewportFocus && !textInputActive";
     constexpr std::string_view viewportShortcutContext = "viewportFocus && !textInputActive && !navigation.active";
 
     keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("cancel_active_tool"),
+            viewportInputActionTargetId("cancel_active_tool"),
             "Escape",
             std::string(viewportShortcutContext),
             10);
     keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("toggle_maximized"),
+            viewportInputActionTargetId("toggle_maximized"),
             "Space",
             std::string(viewportShortcutContext),
             10);
     keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("delete_popup"),
+            viewportInputActionTargetId("delete_popup"),
             "X",
             std::string(viewportShortcutContext),
             10);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.orbit"),
-            "MiddleMouseDrag",
-            std::string(viewportContext),
-            20);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.orbit_snap"),
-            "Alt+MiddleMouseDrag",
-            std::string(viewportContext),
-            20);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.pan"),
-            "Shift+MiddleMouseDrag",
-            std::string(viewportContext),
-            20);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.fly"),
-            "RightMouseDrag",
-            std::string(viewportContext),
-            20);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.reset_fly_speed"),
-            "MiddleMouse",
-            std::string(viewportContext),
-            20);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.zoom"),
-            "Wheel",
-            std::string(viewportContext),
-            20);
-    keybindings_.addDefaultKeybinding(
-            viewportActionTargetId("navigation.zoom_to_cursor"),
-            "Ctrl+Wheel",
-            std::string(viewportContext),
-            20);
+    for (const ViewportInputActionBindingDescriptor& descriptor : viewportInputActionBindingCatalog()) {
+        keybindings_.addDefaultKeybinding(
+                descriptor.targetId,
+                descriptor.shortcut,
+                std::string(viewportContext),
+                20);
+    }
 
     for (const ViewportShortcutBindingDescriptor& descriptor : viewportShortcutBindingCatalog()) {
-        const std::optional<std::string> targetId = targetIdForViewportShortcutTarget(descriptor.targetId);
+        const std::optional<std::string> targetId = viewportCommandTargetIdForContractTarget(descriptor.targetId);
         if (!targetId) {
             continue;
         }
@@ -1052,16 +817,16 @@ void QuaderCommandsApi::registerViewportDefaultKeybindings() {
                 10);
     }
 
-    keybindings_.addDefaultKeybinding(selectionModeTargetId("vertex"), "1", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(selectionModeTargetId("edge"), "2", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(selectionModeTargetId("face"), "3", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(selectionModeTargetId("object"), "4", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(selectionModeTargetId("group"), "5", std::string(viewportShortcutContext), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("vertex"), "1", std::string(viewportShortcutContext), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("edge"), "2", std::string(viewportShortcutContext), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("face"), "3", std::string(viewportShortcutContext), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("object"), "4", std::string(viewportShortcutContext), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("group"), "5", std::string(viewportShortcutContext), 5);
 
     const std::vector<ViewportGridShortcutBindingDescriptor> presets = viewportGridShortcutBindingCatalog();
     for (const ViewportGridShortcutBindingDescriptor& preset : presets) {
         keybindings_.addDefaultKeybinding(
-                gridPresetTargetId(preset.preset),
+                viewportGridPresetTargetId(preset.preset),
                 preset.shortcut,
                 std::string(viewportShortcutContext),
                 10);
@@ -1070,7 +835,7 @@ void QuaderCommandsApi::registerViewportDefaultKeybindings() {
     if (presets.empty()) {
         for (int preset = 1; preset <= 10; ++preset) {
             keybindings_.addDefaultKeybinding(
-                    gridPresetTargetId(preset),
+                    viewportGridPresetTargetId(preset),
                     "F" + std::to_string(preset),
                     std::string(viewportShortcutContext),
                     10);
@@ -1078,7 +843,7 @@ void QuaderCommandsApi::registerViewportDefaultKeybindings() {
     }
 }
 
-void QuaderCommandsApi::registerCommand(
+void QuaderCommandsApi::Impl::registerCommand(
         QuaderCommandId id,
         std::string label,
         std::function<QuaderApiVoidResult()> execute,
@@ -1094,7 +859,7 @@ void QuaderCommandsApi::registerCommand(
             visible);
 }
 
-void QuaderCommandsApi::registerCommand(
+void QuaderCommandsApi::Impl::registerCommand(
         std::string id,
         std::string label,
         std::function<QuaderApiVoidResult()> execute,
@@ -1111,15 +876,15 @@ void QuaderCommandsApi::registerCommand(
     });
 }
 
-void QuaderCommandsApi::registerAlias(std::string aliasId, QuaderCommandId targetId) {
+void QuaderCommandsApi::Impl::registerAlias(std::string aliasId, QuaderCommandId targetId) {
     registerAlias(std::move(aliasId), std::string(targetId.string()));
 }
 
-void QuaderCommandsApi::registerAlias(std::string aliasId, std::string targetId) {
+void QuaderCommandsApi::Impl::registerAlias(std::string aliasId, std::string targetId) {
     registry_.registerAlias(std::move(aliasId), std::move(targetId));
 }
 
-QuaderApiVoidResult QuaderCommandsApi::failure(std::string message) const {
+QuaderApiVoidResult QuaderCommandsApi::Impl::failure(std::string message) const {
     return {
             .ok = false,
             .changed = false,
@@ -1129,11 +894,136 @@ QuaderApiVoidResult QuaderCommandsApi::failure(std::string message) const {
     };
 }
 
-std::string QuaderCommandsApi::canonicalTargetId(std::string_view commandId) const {
+std::string QuaderCommandsApi::Impl::canonicalTargetId(std::string_view commandId) const {
     if (registry_.contains(commandId)) {
         return registry_.canonicalCommandId(commandId);
     }
     return std::string(commandId);
+}
+
+QuaderCommandsApi::QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools)
+    : impl_(std::make_unique<Impl>(api, viewports, tools)) {}
+
+QuaderCommandsApi::~QuaderCommandsApi() = default;
+
+QuaderApiVoidResult QuaderCommandsApi::execute(QuaderCommandId commandId) {
+    return impl_->execute(commandId);
+}
+
+QuaderApiVoidResult QuaderCommandsApi::executeModelingAction(std::string_view actionId) {
+    return impl_->executeModelingAction(actionId);
+}
+
+QuaderApiVoidResult QuaderCommandsApi::executeToolActivation(std::string_view toolId) {
+    return impl_->executeToolActivation(toolId);
+}
+
+QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {
+    return impl_->execute(commandId);
+}
+
+std::vector<QuaderCommandDescriptor> QuaderCommandsApi::available() const {
+    return impl_->available();
+}
+
+std::string QuaderCommandsApi::commandIdForModelingAction(std::string_view actionId) const {
+    return impl_->commandIdForModelingAction(actionId);
+}
+
+std::string QuaderCommandsApi::commandIdForToolActivation(std::string_view toolId) const {
+    return impl_->commandIdForToolActivation(toolId);
+}
+
+std::string QuaderCommandsApi::shortcutFor(std::string_view commandId) const {
+    return impl_->shortcutFor(commandId);
+}
+
+std::string QuaderCommandsApi::shortcutFor(QuaderCommandId commandId) const {
+    return impl_->shortcutFor(commandId);
+}
+
+std::vector<QuaderKeybindingRule> QuaderCommandsApi::keybindings() const {
+    return impl_->keybindings();
+}
+
+std::vector<QuaderKeybindingConflict> QuaderCommandsApi::conflictsForShortcut(
+        std::string_view shortcut,
+        std::string_view when) const {
+    return impl_->conflictsForShortcut(shortcut, when);
+}
+
+bool QuaderCommandsApi::resolveViewportShortcut(
+        ViewportKey key,
+        ViewportModifiers modifiers,
+        const ViewportToolState& state,
+        bool viewportFocused,
+        bool textInputActive,
+        ViewportShortcut& shortcut,
+        QuaderViewportKeybindingContext inputContext) {
+    return impl_->resolveViewportShortcut(key, modifiers, state, viewportFocused, textInputActive, shortcut, inputContext);
+}
+
+bool QuaderCommandsApi::resolveViewportShortcut(
+        const QuaderInputChord& chord,
+        const ViewportToolState& state,
+        bool viewportFocused,
+        bool textInputActive,
+        ViewportShortcut& shortcut,
+        QuaderViewportKeybindingContext inputContext) {
+    return impl_->resolveViewportShortcut(chord, state, viewportFocused, textInputActive, shortcut, inputContext);
+}
+
+bool QuaderCommandsApi::resolveViewportInputAction(
+        const QuaderInputChord& chord,
+        const ViewportToolState& state,
+        bool viewportFocused,
+        bool textInputActive,
+        ViewportInputActionKind& action,
+        QuaderViewportKeybindingContext inputContext) {
+    return impl_->resolveViewportInputAction(chord, state, viewportFocused, textInputActive, action, inputContext);
+}
+
+QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportKeybinding(
+        ViewportKey key,
+        ViewportModifiers modifiers,
+        const ViewportToolState& state,
+        bool viewportFocused,
+        bool textInputActive,
+        QuaderViewportKeybindingContext inputContext) {
+    return impl_->dispatchViewportKeybinding(key, modifiers, state, viewportFocused, textInputActive, inputContext);
+}
+
+QuaderViewportKeybindingDispatch QuaderCommandsApi::dispatchViewportInputBinding(
+        const QuaderInputChord& chord,
+        const ViewportToolState& state,
+        bool viewportFocused,
+        bool textInputActive,
+        QuaderViewportKeybindingContext inputContext) {
+    return impl_->dispatchViewportInputBinding(chord, state, viewportFocused, textInputActive, inputContext);
+}
+
+void QuaderCommandsApi::resetPendingKeybindingChord() {
+    impl_->resetPendingKeybindingChord();
+}
+
+bool QuaderCommandsApi::hasPendingKeybindingChord() const {
+    return impl_->hasPendingKeybindingChord();
+}
+
+QuaderApiVoidResult QuaderCommandsApi::setShortcut(std::string_view commandId, std::string shortcut) {
+    return impl_->setShortcut(commandId, std::move(shortcut));
+}
+
+QuaderApiVoidResult QuaderCommandsApi::removeShortcut(std::string_view commandId) {
+    return impl_->removeShortcut(commandId);
+}
+
+QuaderApiVoidResult QuaderCommandsApi::resetShortcut(std::string_view commandId) {
+    return impl_->resetShortcut(commandId);
+}
+
+QuaderApiVoidResult QuaderCommandsApi::setKeybindingStoragePath(std::filesystem::path path) {
+    return impl_->setKeybindingStoragePath(std::move(path));
 }
 
 } // namespace quader

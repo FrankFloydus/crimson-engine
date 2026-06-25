@@ -9,6 +9,7 @@
 #include "assets/AssetRegistry.h"
 #include "core/IUndoableCommand.h"
 #include "editor/commands/DocumentCommandService.h"
+#include "editor/history/EditorHistoryService.h"
 #include "editor/commands/modeling/SceneAwareDeleteSelectionCommand.h"
 #include "editor/projection/MeshProjectionService.h"
 #include "editor/projection/SelectionOverlayProjection.h"
@@ -18,6 +19,7 @@
 #include "editor/modeling/services/SelectionModeAdapter.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
 #include "editor/selection/SelectionProjectionService.h"
+#include "editor/transform/SceneTransformDragService.h"
 #include "math/GlmBridge.h"
 #include "render/ViewportOverlayPolicy.h"
 #include "scene/SceneBounds.h"
@@ -101,6 +103,15 @@ quader_poly::Transform3 toRuntime(const ModelingTransform3& transform) {
             .z_axis = toRuntime(transform.zAxis),
             .origin = toRuntime(transform.origin),
     };
+}
+
+QMat4 matrixFromRuntimeTransform(const quader_poly::Transform3& transform) {
+    glm::mat4 matrix{1.0f};
+    matrix[0] = glm::vec4{toGlm(transform.x_axis), 0.0f};
+    matrix[1] = glm::vec4{toGlm(transform.y_axis), 0.0f};
+    matrix[2] = glm::vec4{toGlm(transform.z_axis), 0.0f};
+    matrix[3] = glm::vec4{toGlm(transform.origin), 1.0f};
+    return fromGlm(matrix);
 }
 
 quader_editor_core::ViewportInteractionTool toRuntime(ModelingViewportTool tool) {
@@ -966,194 +977,6 @@ bool runtimeSelectionMatches(const quader_poly::Selection& left, const quader_po
             left.active_face == right.active_face;
 }
 
-constexpr std::uint64_t kPickGeometryHashSeed = 1469598103934665603ull;
-constexpr std::uint64_t kPickGeometryHashPrime = 1099511628211ull;
-
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, std::uint64_t value) {
-    return (hash ^ value) * kPickGeometryHashPrime;
-}
-
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, int value) {
-    return mixPickGeometryHash(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
-}
-
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, std::uint32_t value) {
-    return mixPickGeometryHash(hash, static_cast<std::uint64_t>(value));
-}
-
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, bool value) {
-    return mixPickGeometryHash(hash, value ? 1ull : 0ull);
-}
-
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, float value) {
-    std::uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return mixPickGeometryHash(hash, bits);
-}
-
-std::uint64_t mixPickGeometryHash(std::uint64_t hash, quader::QVec3 value) {
-    hash = mixPickGeometryHash(hash, value.x);
-    hash = mixPickGeometryHash(hash, value.y);
-    hash = mixPickGeometryHash(hash, value.z);
-    return hash;
-}
-
-std::uint64_t objectPickFaceGeometrySignature(
-        const quader_editor_core::PolygonObject& object,
-        quader_poly::PickOptions pickOptions = {}) {
-    std::uint64_t hash = mixPickGeometryHash(kPickGeometryHashSeed, object.id);
-    hash = mixPickGeometryHash(hash, static_cast<int>(pickOptions.mode));
-    hash = mixPickGeometryHash(hash, pickOptions.vertex_radius);
-    hash = mixPickGeometryHash(hash, pickOptions.edge_radius);
-    hash = mixPickGeometryHash(hash, pickOptions.has_hidden_material_slot);
-    hash = mixPickGeometryHash(hash, pickOptions.hidden_material_slot);
-    hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
-    hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.faces.size()));
-    for (const quader_poly::Vertex& vertex : object.document.vertices) {
-        hash = mixPickGeometryHash(hash, vertex.id);
-        hash = mixPickGeometryHash(hash, vertex.position);
-    }
-    for (const quader_poly::Face& face : object.document.faces) {
-        hash = mixPickGeometryHash(hash, face.id);
-        hash = mixPickGeometryHash(hash, face.material_slot);
-        hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(face.vertices.size()));
-        for (const quader_poly::ElementId vertexId : face.vertices) {
-            hash = mixPickGeometryHash(hash, vertexId);
-        }
-    }
-    return hash;
-}
-
-void includePickBoundsPoint(quader_editor_core::PickObjectBounds& bounds, quader::QVec3 point) {
-    if (bounds.empty) {
-        bounds.min = point;
-        bounds.max = point;
-        bounds.empty = false;
-        return;
-    }
-    bounds.min.x = std::min(bounds.min.x, point.x);
-    bounds.min.y = std::min(bounds.min.y, point.y);
-    bounds.min.z = std::min(bounds.min.z, point.z);
-    bounds.max.x = std::max(bounds.max.x, point.x);
-    bounds.max.y = std::max(bounds.max.y, point.y);
-    bounds.max.z = std::max(bounds.max.z, point.z);
-}
-
-quader_editor_core::PickObjectBounds buildObjectPickBounds(const quader_editor_core::PolygonObject& object) {
-    quader_editor_core::PickObjectBounds bounds;
-    bounds.object_id = object.id;
-    for (const quader_poly::Vertex& vertex : object.document.vertices) {
-        includePickBoundsPoint(bounds, vertex.position);
-    }
-    return bounds;
-}
-
-void appendOverlayFrame(
-        quader_editor_core::SelectionOverlayFrame& target,
-        const quader_editor_core::SelectionOverlayFrame& source) {
-    target.triangles.reserve(target.triangles.size() + source.triangles.size());
-    target.lines.reserve(target.lines.size() + source.lines.size());
-    target.points.reserve(target.points.size() + source.points.size());
-    target.triangles.insert(target.triangles.end(), source.triangles.begin(), source.triangles.end());
-    target.lines.insert(target.lines.end(), source.lines.begin(), source.lines.end());
-    target.points.insert(target.points.end(), source.points.begin(), source.points.end());
-    target.hover_target_selected = target.hover_target_selected || source.hover_target_selected;
-}
-
-bool edgesMatchUnordered(quader_poly::Edge left, quader_poly::Edge right) {
-    return (left.a == right.a && left.b == right.b) || (left.a == right.b && left.b == right.a);
-}
-
-bool hoverFrameSuppressesTriangle(
-        bool suppressBaseUnderHover,
-        const quader_editor_core::SelectionOverlayFrame& hoverFrame,
-        const quader_editor_core::SelectionOverlayTriangle& triangle) {
-    if (!suppressBaseUnderHover) {
-        return false;
-    }
-    if (triangle.layer != quader_editor_core::SelectionOverlayLayer::selected_visible_face &&
-            triangle.layer != quader_editor_core::SelectionOverlayLayer::selected_xray_face &&
-            triangle.layer != quader_editor_core::SelectionOverlayLayer::selected_face_mask) {
-        return false;
-    }
-    return std::any_of(
-            hoverFrame.triangles.begin(),
-            hoverFrame.triangles.end(),
-            [&](const quader_editor_core::SelectionOverlayTriangle& hoverTriangle) {
-                return hoverTriangle.layer == quader_editor_core::SelectionOverlayLayer::hover_face &&
-                        hoverTriangle.object_id == triangle.object_id &&
-                        hoverTriangle.face_id == triangle.face_id;
-            });
-}
-
-bool hoverFrameSuppressesLine(
-        bool suppressBaseUnderHover,
-        const quader_editor_core::SelectionOverlayFrame& hoverFrame,
-        const quader_editor_core::SelectionOverlayLine& line) {
-    if (!suppressBaseUnderHover) {
-        return false;
-    }
-    if (line.layer != quader_editor_core::SelectionOverlayLayer::selected_face_edge &&
-            line.layer != quader_editor_core::SelectionOverlayLayer::selected_edge) {
-        return false;
-    }
-    return std::any_of(
-            hoverFrame.lines.begin(),
-            hoverFrame.lines.end(),
-            [&](const quader_editor_core::SelectionOverlayLine& hoverLine) {
-                if (hoverLine.object_id != line.object_id) {
-                    return false;
-                }
-                if (hoverLine.layer == quader_editor_core::SelectionOverlayLayer::hover_face_edge) {
-                    return line.face_id == hoverLine.face_id && edgesMatchUnordered(line.edge, hoverLine.edge);
-                }
-                return hoverLine.layer == quader_editor_core::SelectionOverlayLayer::hover_edge &&
-                        edgesMatchUnordered(line.edge, hoverLine.edge);
-            });
-}
-
-bool hoverFrameSuppressesPoint(
-        bool suppressBaseUnderHover,
-        const quader_editor_core::SelectionOverlayFrame& hoverFrame,
-        const quader_editor_core::SelectionOverlayPoint& point) {
-    if (!suppressBaseUnderHover || point.layer != quader_editor_core::SelectionOverlayLayer::selected_vertex) {
-        return false;
-    }
-    return std::any_of(
-            hoverFrame.points.begin(),
-            hoverFrame.points.end(),
-            [&](const quader_editor_core::SelectionOverlayPoint& hoverPoint) {
-                return hoverPoint.layer == quader_editor_core::SelectionOverlayLayer::hover_vertex &&
-                        hoverPoint.object_id == point.object_id &&
-                        hoverPoint.vertex_id == point.vertex_id;
-            });
-}
-
-void appendSelectedHoverFilteredBaseFrame(
-        quader_editor_core::SelectionOverlayFrame& target,
-        const quader_editor_core::SelectionOverlayFrame& base,
-        const quader_editor_core::SelectionOverlayFrame& hoverFrame,
-        bool suppressBaseUnderHover) {
-    target.triangles.reserve(target.triangles.size() + base.triangles.size());
-    target.lines.reserve(target.lines.size() + base.lines.size());
-    target.points.reserve(target.points.size() + base.points.size());
-    for (const quader_editor_core::SelectionOverlayTriangle& triangle : base.triangles) {
-        if (!hoverFrameSuppressesTriangle(suppressBaseUnderHover, hoverFrame, triangle)) {
-            target.triangles.push_back(triangle);
-        }
-    }
-    for (const quader_editor_core::SelectionOverlayLine& line : base.lines) {
-        if (!hoverFrameSuppressesLine(suppressBaseUnderHover, hoverFrame, line)) {
-            target.lines.push_back(line);
-        }
-    }
-    for (const quader_editor_core::SelectionOverlayPoint& point : base.points) {
-        if (!hoverFrameSuppressesPoint(suppressBaseUnderHover, hoverFrame, point)) {
-            target.points.push_back(point);
-        }
-    }
-}
-
 quader_poly::PickOptions pickOptionsFromRequest(const ModelingPickSelectRequest& request) {
     return quader_editor_core::selection_pick_options_from_radii(request.vertexRadius, request.edgeRadius);
 }
@@ -1682,65 +1505,20 @@ public:
         selectionProjectionService_.restoreSceneSelection(scene_, selected, active);
     }
 
-    /**
-     * Stores the Duplicate Scene State data contract used by the modeling application service layer.
-     */
-    struct DuplicateSceneState {
-        EntityId source = InvalidEntityId;
-        EntityId parent = InvalidEntityId;
-        TransformComponent transform;
-        VisibilityComponent visibility;
-        LockComponent lock;
-        std::optional<MeshComponent> mesh;
-        std::optional<MaterialComponent> material;
-    };
-
-    [[nodiscard]] std::vector<DuplicateSceneState> captureSelectedDuplicateSceneState() const {
-        std::vector<int> selectedObjectIds = session_.selected_object_ids();
-        std::unordered_set<int> selectedObjectSet(selectedObjectIds.begin(), selectedObjectIds.end());
-        std::vector<DuplicateSceneState> states;
-        states.reserve(selectedObjectIds.size());
-
-        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-            if (!selectedObjectSet.contains(object.id)) {
-                continue;
-            }
-            const std::optional<EntityId> entity = objectRegistry_.entityForModelingObject(object.id);
-            if (!entity.has_value() || !scene_.exists(*entity)) {
-                continue;
-            }
-            const TransformComponent* transform = scene_.transform(*entity);
-            if (transform == nullptr) {
-                continue;
-            }
-            DuplicateSceneState state;
-            state.source = *entity;
-            state.parent = scene_.parent(*entity);
-            state.transform = *transform;
-            if (const VisibilityComponent* visibility = scene_.visibility(*entity)) {
-                state.visibility = *visibility;
-            }
-            if (const LockComponent* lock = scene_.lock(*entity)) {
-                state.lock = *lock;
-            }
-            if (const MeshComponent* mesh = scene_.mesh(*entity)) {
-                state.mesh = *mesh;
-            }
-            if (const MaterialComponent* material = scene_.material(*entity)) {
-                state.material = *material;
-            }
-            states.push_back(state);
-        }
-        return states;
+    [[nodiscard]] std::vector<ModelingObjectSceneIdentity> captureSelectedDuplicateSceneIdentities() const {
+        const std::vector<int> selectedObjectIds = session_.selected_object_ids();
+        return objectRegistry_.captureSceneIdentitiesForModelingObjects(
+                scene_,
+                std::span<const int>(selectedObjectIds.data(), selectedObjectIds.size()));
     }
 
-    void applySceneStateToSelectedDuplicates(const std::vector<DuplicateSceneState>& sourceStates) {
-        if (sourceStates.empty()) {
+    void applySceneIdentitiesToSelectedDuplicates(const std::vector<ModelingObjectSceneIdentity>& sourceIdentities) {
+        if (sourceIdentities.empty()) {
             return;
         }
 
         const std::vector<int> selectedDuplicateObjectIds = session_.selected_object_ids();
-        if (selectedDuplicateObjectIds.size() != sourceStates.size()) {
+        if (selectedDuplicateObjectIds.size() != sourceIdentities.size()) {
             return;
         }
         const std::unordered_set<int> duplicateObjectSet(
@@ -1753,35 +1531,17 @@ public:
                 duplicateObjectIds.push_back(object.id);
             }
         }
-        if (duplicateObjectIds.size() != sourceStates.size()) {
+        if (duplicateObjectIds.size() != sourceIdentities.size()) {
             return;
         }
 
-        for (std::size_t index = 0; index < sourceStates.size(); ++index) {
+        for (std::size_t index = 0; index < sourceIdentities.size(); ++index) {
             const std::optional<EntityId> duplicate = objectRegistry_.entityForModelingObject(duplicateObjectIds[index]);
             if (!duplicate.has_value() || !scene_.exists(*duplicate)) {
                 continue;
             }
 
-            const DuplicateSceneState& source = sourceStates[index];
-            scene_.setTransform(*duplicate, source.transform);
-            if (source.parent != InvalidEntityId && scene_.exists(source.parent)) {
-                (void)scene_.setParent(*duplicate, source.parent, false);
-            }
-            scene_.setVisible(*duplicate, source.visibility.visible);
-            scene_.setLocked(*duplicate, source.lock.locked);
-            if (source.mesh.has_value()) {
-                if (const MeshComponent* duplicateMesh = scene_.mesh(*duplicate)) {
-                    MeshComponent nextMesh = *source.mesh;
-                    nextMesh.mesh = duplicateMesh->mesh;
-                    scene_.setMesh(*duplicate, nextMesh);
-                }
-            }
-            if (source.material.has_value()) {
-                scene_.setMaterial(*duplicate, *source.material);
-            } else {
-                scene_.clearMaterial(*duplicate);
-            }
+            meshSyncService_.applySceneIdentityToDuplicateEntity(scene_, *duplicate, sourceIdentities[index]);
             objectRegistry_.rememberSceneEntity(duplicateObjectIds[index], scene_, *duplicate);
         }
     }
@@ -2306,15 +2066,15 @@ public:
 
     ModelingCommandResult executeInstantOperation(
             ModelingInstantOperationId operation,
-            bool preserveDuplicateSceneState = true) {
+            bool preserveDuplicateSceneIdentity = true) {
         if (operation == ModelingInstantOperationId::DeleteSelection) {
             return deleteSelection();
         }
 
-        const std::vector<DuplicateSceneState> duplicateSceneState =
-                operation == ModelingInstantOperationId::DuplicateMeshes && preserveDuplicateSceneState
-                ? captureSelectedDuplicateSceneState()
-                : std::vector<DuplicateSceneState>{};
+        const std::vector<ModelingObjectSceneIdentity> duplicateSceneIdentities =
+                operation == ModelingInstantOperationId::DuplicateMeshes && preserveDuplicateSceneIdentity
+                ? captureSelectedDuplicateSceneIdentities()
+                : std::vector<ModelingObjectSceneIdentity>{};
 
         const std::optional<RuntimeOperationExecutor::OperationCommand> command =
                 runtimeOperationExecutor_.operationForInstantCommand(
@@ -2326,14 +2086,14 @@ public:
 
         ModelingCommandResult result = executeRuntimeOperation(command->operation, command->settings);
         if (result.ok && result.changed && operation == ModelingInstantOperationId::DuplicateMeshes) {
-            applySceneStateToSelectedDuplicates(duplicateSceneState);
+            applySceneIdentitiesToSelectedDuplicates(duplicateSceneIdentities);
         }
         return result;
     }
 
     ModelingCommandResult beginTransformPreview(bool duplicateSelected) {
-        const std::vector<DuplicateSceneState> duplicateSceneState =
-                duplicateSelected ? captureSelectedDuplicateSceneState() : std::vector<DuplicateSceneState>{};
+        const std::vector<ModelingObjectSceneIdentity> duplicateSceneIdentities =
+                duplicateSelected ? captureSelectedDuplicateSceneIdentities() : std::vector<ModelingObjectSceneIdentity>{};
         const quader_editor_core::CommandResult result = session_.begin_transform_preview(duplicateSelected);
         if (result.ok) {
             invalidateSelectionOverlayCaches();
@@ -2342,7 +2102,7 @@ public:
             syncSceneObjectsFromModeling(true);
             syncSceneSelectionFromModeling();
             if (duplicateSelected) {
-                applySceneStateToSelectedDuplicates(duplicateSceneState);
+                applySceneIdentitiesToSelectedDuplicates(duplicateSceneIdentities);
             }
         }
         return {
@@ -2434,29 +2194,24 @@ public:
                         session_.selection_mode());
         const quader_editor_core::TransformAxis axis = toRuntime(request.axis);
         const quader::QVec3 pivot = toRuntime(request.pivot);
-        const bool duplicateSceneTransformPreview =
-                request.duplicateSelected &&
-                session_.selection_mode() == quader_editor_core::SelectionMode::object &&
-                operation == quader_editor_core::TransformDragOperation::transform;
-        const bool previewDriven =
-                !duplicateSceneTransformPreview &&
-                (request.duplicateSelected ||
-                session_.selection_mode() != quader_editor_core::SelectionMode::object);
-        const bool needsRuntimePreviewTransaction = previewDriven || request.duplicateSelected;
+        const TransformDragPreviewRouting previewRouting = TransformDragController::previewRouting(
+                request.duplicateSelected,
+                session_.selection_mode() == quader_editor_core::SelectionMode::object,
+                operation == quader_editor_core::TransformDragOperation::transform);
 
         runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
         {
             quader_editor_core::TransformDragState drag = runtime_.transform_drag_state();
-            drag.scene_transform_preview_eligible =
-                    (duplicateSceneTransformPreview || !previewDriven) &&
-                    operation == quader_editor_core::TransformDragOperation::transform;
+            drag.scene_transform_preview_eligible = previewRouting.sceneTransformPreviewEligible;
             runtime_.set_transform_drag_state(drag);
         }
-        transformDragController_.setPreviewDriven(previewDriven, request.duplicateSelected);
+        transformDragController_.setPreviewDriven(previewRouting.previewDriven, request.duplicateSelected);
 
-        if (needsRuntimePreviewTransaction) {
-            const std::vector<DuplicateSceneState> duplicateSceneState =
-                    request.duplicateSelected ? captureSelectedDuplicateSceneState() : std::vector<DuplicateSceneState>{};
+        if (previewRouting.needsRuntimePreviewTransaction) {
+            const std::vector<ModelingObjectSceneIdentity> duplicateSceneIdentities =
+                    request.duplicateSelected
+                    ? captureSelectedDuplicateSceneIdentities()
+                    : std::vector<ModelingObjectSceneIdentity>{};
             const quader_editor_core::CommandResult beginPreview =
                     session_.begin_transform_preview(request.duplicateSelected);
             if (!beginPreview.ok) {
@@ -2473,9 +2228,18 @@ public:
                 syncSceneObjectsFromModeling(true);
                 syncSceneSelectionFromModeling();
                 if (request.duplicateSelected) {
-                    applySceneStateToSelectedDuplicates(duplicateSceneState);
+                    applySceneIdentitiesToSelectedDuplicates(duplicateSceneIdentities);
                 }
             }
+        }
+
+        if (previewRouting.sceneTransformPreviewEligible &&
+                !sceneTransformDragService_.begin(scene_, request.pivot, true, "Transform Selection")) {
+            (void)cancelTransformDrag();
+            return {
+                    .ok = false,
+                    .message = "Could not start scene transform preview.",
+            };
         }
 
         const quader_editor_core::ViewportCameraState camera = toRuntime(request.camera);
@@ -2572,7 +2336,7 @@ public:
         return applyTransformDragPreview(request);
     }
 
-    ModelingTransformDragPreview commitTransformDrag() {
+    ModelingTransformDragPreview commitTransformDrag(EditorHistoryService* history = nullptr) {
         const bool previewDriven = transformDragController_.previewDriven();
         const bool finishPreviewTransaction = previewDriven || transformDragController_.duplicateSelected();
         const quader_editor_core::TransformDragState repeatDrag = runtime_.transform_drag_state();
@@ -2606,6 +2370,26 @@ public:
             }
         }
 
+        if (sceneTransformDragService_.previewActive()) {
+            const DocumentCommandResult sceneCommit = history != nullptr
+                    ? sceneTransformDragService_.commit(*history)
+                    : sceneTransformDragService_.accept();
+            if (!sceneCommit.ok) {
+                clearTransformDragRuntimeState();
+                return {
+                        .ok = false,
+                        .previewDriven = previewDriven,
+                        .message = sceneCommit.message.empty()
+                                ? "Could not commit scene transform preview."
+                                : sceneCommit.message,
+                };
+            }
+            changed = changed || sceneCommit.changed;
+            if (sceneCommit.changed) {
+                invalidateSelectionOverlayCaches();
+            }
+        }
+
         ModelingTransformDragPreview preview = transformDragPreview(changed);
         preview.previewDriven = previewDriven;
         clearTransformDragRuntimeState();
@@ -2614,6 +2398,21 @@ public:
 
     ModelingCommandResult cancelTransformDrag() {
         const bool activeBefore = runtime_.transform_drag_active() || hasTransformPreview();
+        const bool scenePreviewActive = sceneTransformDragService_.previewActive();
+        if (scenePreviewActive) {
+            const DocumentCommandResult sceneCancel = sceneTransformDragService_.cancel();
+            if (!sceneCancel.ok) {
+                clearTransformDragRuntimeState();
+                return {
+                        .ok = false,
+                        .changed = false,
+                        .message = sceneCancel.message,
+                };
+            }
+            if (sceneCancel.changed) {
+                invalidateSelectionOverlayCaches();
+            }
+        }
         const quader_editor_core::PreviewTransactionFinishResult finish =
                 runtime_.cancel_transform_preview_state(session_);
         if (finish.before.active) {
@@ -2624,7 +2423,7 @@ public:
         clearTransformDragRuntimeState();
         return {
                 .ok = true,
-                .changed = activeBefore && finish.restored,
+                .changed = (activeBefore && finish.restored) || scenePreviewActive,
         };
     }
 
@@ -3300,41 +3099,21 @@ public:
             syncSceneObjectsFromModeling();
         }
 
-        std::vector<int> objectIds;
-        objectIds.reserve(entities.size());
-        for (const EntityId entity : entities) {
-            const auto object = objectRegistry_.modelingObjectForEntity(entity);
-            if (object.has_value()) {
-                objectIds.push_back(*object);
-            }
-        }
-        if (!entities.empty() && objectIds.empty()) {
+        const RuntimeObjectSelectionProjectionResult projection =
+                selectionProjectionService_.projectObjectSelectionForSceneEntities(
+                        session_,
+                        entities,
+                        active,
+                        objectRegistry_);
+        if (!projection.ok) {
             return {.ok = false, .message = "Selection does not contain modeling objects."};
         }
 
-        int activeObjectId = -1;
-        if (active != InvalidEntityId) {
-            const auto object = objectRegistry_.modelingObjectForEntity(active);
-            if (object.has_value()) {
-                activeObjectId = *object;
-            }
-        }
-        if (activeObjectId <= 0 && !objectIds.empty()) {
-            activeObjectId = objectIds.back();
-        }
-
-        std::vector<int> currentObjectIds = session_.selected_object_ids();
-        std::sort(currentObjectIds.begin(), currentObjectIds.end());
-        std::vector<int> desiredObjectIds = objectIds;
-        std::sort(desiredObjectIds.begin(), desiredObjectIds.end());
-        if (session_.selection_mode() == quader_editor_core::SelectionMode::object &&
-                currentObjectIds == desiredObjectIds &&
-                session_.active_object_id() == activeObjectId) {
+        if (!projection.changed) {
             syncSceneSelectionFromModeling();
             return {.ok = true, .changed = false};
         }
 
-        session_.set_selected_object_ids(objectIds, activeObjectId);
         syncSceneSelectionFromModeling();
         invalidateSelectionOverlayCaches();
         return {.ok = true, .changed = true};
@@ -3633,6 +3412,7 @@ private:
         runtime_.clear_transform_drag_state();
         runtime_.clear_gizmo_hover();
         transformDragController_.clear();
+        sceneTransformDragService_.reset();
     }
 
     [[nodiscard]] bool scenePreviewTransformForDrag(
@@ -3727,12 +3507,35 @@ private:
             };
         }
 
+        bool changed = result.changed;
+        if (sceneTransformDragService_.previewActive()) {
+            quader_poly::Transform3 sceneTransform;
+            if (scenePreviewTransformForDrag(runtime_.transform_drag_state(), sceneTransform)) {
+                const DocumentCommandResult scenePreview =
+                        sceneTransformDragService_.previewWorldTransformDelta(
+                                scene_,
+                                matrixFromRuntimeTransform(sceneTransform));
+                if (!scenePreview.ok) {
+                    const bool previewDriven = transformDragController_.previewDriven();
+                    (void)cancelTransformDrag();
+                    return {
+                            .ok = false,
+                            .previewDriven = previewDriven,
+                            .message = scenePreview.message.empty()
+                                    ? "Could not update scene transform preview."
+                                    : scenePreview.message,
+                    };
+                }
+                changed = changed || scenePreview.changed;
+            }
+        }
+
         invalidateSelectionOverlayCaches();
         if (transformDragController_.previewDriven()) {
             syncSceneObjectsFromModeling(true);
             syncSceneSelectionFromModeling();
         }
-        return transformDragPreview(result.changed);
+        return transformDragPreview(changed);
     }
 
     void syncSceneObjectsFromModeling(bool force = false) {
@@ -3847,6 +3650,7 @@ private:
     ModelingInteractionSettingsService interactionSettingsService_;
     ModelingToolSettingsService toolSettingsService_;
     TransformDragController transformDragController_;
+    SceneTransformDragService sceneTransformDragService_;
     ModalToolRuntime modalToolRuntime_;
     ModelingClipboardService clipboardService_;
     ModelingHistoryBridge historyBridge_;
@@ -4073,6 +3877,10 @@ ModelingTransformDragPreview ModelingSessionService::updateTransformDrag(const M
 
 ModelingTransformDragPreview ModelingSessionService::commitTransformDrag() {
     return impl_->commitTransformDrag();
+}
+
+ModelingTransformDragPreview ModelingSessionService::commitTransformDrag(EditorHistoryService& history) {
+    return impl_->commitTransformDrag(&history);
 }
 
 ModelingCommandResult ModelingSessionService::cancelTransformDrag() {

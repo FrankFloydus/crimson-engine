@@ -13,15 +13,6 @@
 
 namespace {
 
-const quader_editor_core::PolygonObject* find_object(const quader_editor_core::EditorSession& session, int object_id)
-{
-	const auto& objects = session.objects();
-	const auto it = std::find_if(objects.begin(), objects.end(), [object_id](const quader_editor_core::PolygonObject& object) {
-		return object.id == object_id;
-	});
-	return it == objects.end() ? nullptr : &*it;
-}
-
 quader::QVec3 first_vertex_position(const quader_poly::Document& document)
 {
 	REQUIRE_FALSE(document.vertices.empty());
@@ -53,6 +44,8 @@ quader::QVec3 averaged_face_normal_for_vertex(const quader_poly::Document& docum
 }
 
 } // namespace
+
+using qdr_test::find_object;
 
 TEST_CASE("thicken operation schema keeps soft thickness limits and hidden center toggle", "[operation][thicken]")
 {

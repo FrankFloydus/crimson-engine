@@ -68,19 +68,22 @@ ViewportView viewportViewForCamera(const ViewportCameraController& camera) {
     return ViewportView::Perspective;
 }
 
-ViewportWorkspaceService::ViewportWorkspaceService() {
+ViewportWorkspaceService::ViewportWorkspaceService(ViewportWorkspaceLayoutPolicy layoutPolicy)
+    : layoutPolicy_(layoutPolicy) {
     gridPreset_ = viewportDefaultGridPreset();
     panes_[viewportPaneIndex(ViewportPaneId::Perspective)].id = ViewportPaneId::Perspective;
     panes_[viewportPaneIndex(ViewportPaneId::Top)].id = ViewportPaneId::Top;
     panes_[viewportPaneIndex(ViewportPaneId::Front)].id = ViewportPaneId::Front;
     panes_[viewportPaneIndex(ViewportPaneId::Side)].id = ViewportPaneId::Side;
     for (ViewportWorkspacePaneState& paneState : panes_) {
-        paneState.view = viewportViewForPane(paneState.id);
-        resetViewportCameraForView(paneState.camera, paneState.view);
+        resetViewportCameraForView(paneState.camera, viewportViewForPane(paneState.id));
     }
 }
 
 bool ViewportWorkspaceService::setLayout(ViewportLayoutId layout) {
+    if (!supportsLayout(layout)) {
+        return false;
+    }
     const bool layoutChanged = layout_ != layout;
     const bool maximizedChanged = focusedPaneMaximized_;
     if (!layoutChanged && !maximizedChanged) {
@@ -90,6 +93,26 @@ bool ViewportWorkspaceService::setLayout(ViewportLayoutId layout) {
     focusedPaneMaximized_ = false;
     if (!focusedPaneIsVisible()) {
         focusedPane_ = ViewportPaneId::Perspective;
+    }
+    return true;
+}
+
+bool ViewportWorkspaceService::setLayoutPolicy(ViewportWorkspaceLayoutPolicy policy) {
+    if (layoutPolicy_ == policy) {
+        return false;
+    }
+    layoutPolicy_ = policy;
+    if (!supportsLayout(layout_)) {
+        layout_ = ViewportLayoutId::Single;
+        focusedPaneMaximized_ = false;
+        focusedPane_ = ViewportPaneId::Perspective;
+    }
+    return true;
+}
+
+bool ViewportWorkspaceService::supportsLayout(ViewportLayoutId layout) const {
+    if (layoutPolicy_ == ViewportWorkspaceLayoutPolicy::SinglePaneOnly) {
+        return layout == ViewportLayoutId::Single;
     }
     return true;
 }
@@ -142,18 +165,11 @@ ViewportView ViewportWorkspaceService::view(ViewportPaneId paneId) const {
 
 bool ViewportWorkspaceService::setView(ViewportPaneId paneId, ViewportView view) {
     ViewportWorkspacePaneState& paneState = pane(paneId);
-    const bool changed = paneState.view != view || viewportViewForCamera(paneState.camera) != view;
-    if (!changed) {
+    if (viewportViewForCamera(paneState.camera) == view) {
         return false;
     }
-    paneState.view = view;
     resetViewportCameraForView(paneState.camera, view);
     return true;
-}
-
-void ViewportWorkspaceService::syncViewFromCamera(ViewportPaneId paneId) {
-    ViewportWorkspacePaneState& paneState = pane(paneId);
-    paneState.view = viewportViewForCamera(paneState.camera);
 }
 
 ViewportCameraController& ViewportWorkspaceService::camera(ViewportPaneId paneId) {
@@ -166,14 +182,11 @@ const ViewportCameraController& ViewportWorkspaceService::camera(ViewportPaneId 
 
 bool ViewportWorkspaceService::focusOrigin(ViewportPaneId paneId, float distance) {
     camera(paneId).focusOrigin(distance);
-    syncViewFromCamera(paneId);
     return true;
 }
 
 ViewportWorkspacePaneState& ViewportWorkspaceService::pane(ViewportPaneId paneId) {
-    ViewportWorkspacePaneState& paneState = panes_[viewportPaneIndex(paneId)];
-    paneState.view = viewportViewForCamera(paneState.camera);
-    return paneState;
+    return panes_[viewportPaneIndex(paneId)];
 }
 
 const ViewportWorkspacePaneState& ViewportWorkspaceService::pane(ViewportPaneId paneId) const {

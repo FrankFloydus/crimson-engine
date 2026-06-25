@@ -69,7 +69,7 @@ std::vector<std::string> parseDockPanelOrder(std::string_view value) {
         }
 
         const std::string trimmed = QStr::trimAsciiWhitespace(token);
-        const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(trimmed);
+        const std::optional<std::string_view> canonical = mainLayoutPanelIdFromLegacySettings(trimmed);
         if (canonical && *canonical != kMainLayoutPanelViewport) {
             panelIds.emplace_back(*canonical);
         }
@@ -97,7 +97,7 @@ std::vector<DockLocationActivePanel> parseDockActivePanels(std::string_view valu
         const std::string locationName = QStr::trimAsciiWhitespace(activeSplit->before);
         const std::string panelId = QStr::trimAsciiWhitespace(activeSplit->after);
         const std::optional<DockLocation> location = dockLocationFromName(locationName);
-        const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+        const std::optional<std::string_view> canonical = mainLayoutPanelIdFromLegacySettings(panelId);
         if (location && canonical && *canonical != kMainLayoutPanelViewport) {
             activePanels.push_back({
                     .location = *location,
@@ -133,7 +133,7 @@ ParsedDockSplitPanelList parseDockSplitPanelList(std::string_view value) {
             sizeDp = std::max(0, parseInt(sizeText, 0));
         }
 
-        const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId);
+        const std::optional<std::string_view> canonical = mainLayoutPanelIdFromLegacySettings(panelId);
         if (canonical && *canonical != kMainLayoutPanelViewport) {
             panels.panelIds.emplace_back(*canonical);
             panels.panelSizesDp.push_back(sizeDp);
@@ -174,7 +174,7 @@ std::vector<DockLocationSplitPanels> parseDockSplitPanels(std::string_view value
 
         ParsedDockSplitPanelList panels = parseDockSplitPanelList(splitPanelList);
         if (!tabPanelId.empty()) {
-            const std::optional<std::string_view> canonicalTab = mainLayoutCanonicalPanelId(tabPanelId);
+            const std::optional<std::string_view> canonicalTab = mainLayoutPanelIdFromLegacySettings(tabPanelId);
             tabPanelId = canonicalTab && *canonicalTab != kMainLayoutPanelViewport ?
                     std::string(*canonicalTab) :
                     std::string{};

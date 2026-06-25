@@ -8,6 +8,7 @@
 
 #include "core/Logger.h"
 #include "render/RenderSystem.h"
+#include "ui/components/organisms/ModelingModeShelfComponent.h"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -35,6 +36,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -45,6 +47,33 @@ constexpr std::string_view kUiResourceScheme = "quader://ui/";
 
 bool startsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
+}
+
+bool loadFontFaceFromMemory(
+        const std::filesystem::path& fontPath,
+        std::string_view family,
+        Rml::Style::FontStyle style = Rml::Style::FontStyle::Normal,
+        Rml::Style::FontWeight weight = Rml::Style::FontWeight::Auto) {
+    static std::unordered_map<std::string, std::vector<Rml::byte>> fontDataByPath;
+
+    const std::string fontPathString = fontPath.string();
+    std::vector<Rml::byte>& fontData = fontDataByPath[fontPathString];
+    if (fontData.empty()) {
+        std::ifstream file(fontPath, std::ios::binary);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        fontData.assign(
+                std::istreambuf_iterator<char>(file),
+                std::istreambuf_iterator<char>());
+    }
+
+    return Rml::LoadFontFace(
+            Rml::Span<const Rml::byte>(fontData.data(), fontData.size()),
+            std::string(family),
+            style,
+            weight);
 }
 
 /**
@@ -247,6 +276,48 @@ private:
     std::optional<WindowChromeAction>& pendingAction_;
 };
 
+/**
+ * Captures modeling shelf toolbar selections from RmlUi controls.
+ */
+class ModelingModeShelfControlSelectionListener final : public Rml::EventListener {
+public:
+    ModelingModeShelfControlSelectionListener(
+            std::optional<std::string>& pendingControl,
+            std::optional<std::string>& pendingCommand)
+        : pendingControl_(pendingControl)
+        , pendingCommand_(pendingCommand) {}
+
+    void ProcessEvent(Rml::Event& event) override {
+        for (Rml::Element* element = event.GetTargetElement(); element != nullptr; element = element->GetParentNode()) {
+            const Rml::String command = element->GetAttribute<Rml::String>("data-modeling-mode-shelf-command", "");
+            if (!command.empty()) {
+                pendingCommand_ = command;
+                event.StopPropagation();
+                return;
+            }
+
+            const Rml::String overflowToggle =
+                    element->GetAttribute<Rml::String>("data-modeling-mode-shelf-overflow-toggle", "");
+            if (!overflowToggle.empty()) {
+                pendingControl_ = std::string(modelingModeShelfOverflowToggleControlId());
+                event.StopPropagation();
+                return;
+            }
+
+            const Rml::String control = element->GetAttribute<Rml::String>("data-modeling-mode-shelf-control", "");
+            if (!control.empty()) {
+                pendingControl_ = control;
+                event.StopPropagation();
+                return;
+            }
+        }
+    }
+
+private:
+    std::optional<std::string>& pendingControl_;
+    std::optional<std::string>& pendingCommand_;
+};
+
 int rmlModifiersFromSdl() {
     const SDL_Keymod mod = SDL_GetModState();
     int result = 0;
@@ -335,9 +406,14 @@ bool RmlUiContextHost::initialize(
     }
     rmlInitialized_ = true;
 
-    const std::filesystem::path fontPath = executableDir / "fonts" / "Inter.ttf";
-    if (!Rml::LoadFontFace(fontPath.string())) {
-        LOG_WARN("Unable to load RmlUi font face {}", fontPath.string());
+    const std::filesystem::path interFontPath = executableDir / "fonts" / "Inter.ttf";
+    if (!Rml::LoadFontFace(interFontPath.string())) {
+        LOG_WARN("Unable to load RmlUi font face {}", interFontPath.string());
+    }
+
+    const std::filesystem::path novaMonoFontPath = executableDir / "fonts" / "NovaMono.ttf";
+    if (!loadFontFaceFromMemory(novaMonoFontPath, "NovaMono")) {
+        LOG_WARN("Unable to load RmlUi font face {}", novaMonoFontPath.string());
     }
 
     context_ = Rml::CreateContext("quader-main", Rml::Vector2i(1, 1));
@@ -361,6 +437,11 @@ bool RmlUiContextHost::initialize(
 
     windowChromeActionListener_ = std::make_unique<WindowChromeActionListener>(pendingWindowChromeAction_);
     document_->AddEventListener("click", windowChromeActionListener_.get());
+    modelingModeShelfControlSelectionListener_ =
+            std::make_unique<ModelingModeShelfControlSelectionListener>(
+                    pendingModelingModeShelfControlSelection_,
+                    pendingModelingModeShelfCommand_);
+    document_->AddEventListener("click", modelingModeShelfControlSelectionListener_.get());
     debugPaletteCopyListener_ = std::make_unique<DebugPaletteCopyListener>();
     document_->AddEventListener("click", debugPaletteCopyListener_.get());
     document_->Show();
@@ -381,10 +462,16 @@ void RmlUiContextHost::shutdown() {
         if (windowChromeActionListener_) {
             document_->RemoveEventListener("click", windowChromeActionListener_.get());
         }
+        if (modelingModeShelfControlSelectionListener_) {
+            document_->RemoveEventListener("click", modelingModeShelfControlSelectionListener_.get());
+        }
     }
     debugPaletteCopyListener_.reset();
     windowChromeActionListener_.reset();
+    modelingModeShelfControlSelectionListener_.reset();
     pendingWindowChromeAction_.reset();
+    pendingModelingModeShelfControlSelection_.reset();
+    pendingModelingModeShelfCommand_.reset();
     document_ = nullptr;
     context_ = nullptr;
     if (rmlInitialized_) {
@@ -540,6 +627,18 @@ std::optional<WindowChromeAction> RmlUiContextHost::takeWindowChromeAction() {
     std::optional<WindowChromeAction> action = pendingWindowChromeAction_;
     pendingWindowChromeAction_.reset();
     return action;
+}
+
+std::optional<std::string> RmlUiContextHost::takeModelingModeShelfControlSelection() {
+    std::optional<std::string> control = std::move(pendingModelingModeShelfControlSelection_);
+    pendingModelingModeShelfControlSelection_.reset();
+    return control;
+}
+
+std::optional<std::string> RmlUiContextHost::takeModelingModeShelfCommand() {
+    std::optional<std::string> command = std::move(pendingModelingModeShelfCommand_);
+    pendingModelingModeShelfCommand_.reset();
+    return command;
 }
 
 } // namespace quader

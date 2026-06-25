@@ -941,7 +941,6 @@ void ViewportHost::handleFrame(
         const AssetRegistry& assets,
         bool inputSuppressed) {
     ViewportWorkspaceService& workspace = QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
-    workspace.setLayout(ViewportLayoutId::Single);
     workspace.focusPane(mainViewport_.pane);
     workspace.clearPaneVisibility();
     workspace.setPaneVisible(mainViewport_.pane, true);
@@ -1006,12 +1005,15 @@ void ViewportHost::prepareViewports(
             settings_,
             true);
     renderer_.setSceneVisible(true);
-    renderer_.setOverlayVisible(false);
-    renderBridge.setOverlayFrame(
-            viewportPaneIndex(mainViewport_.pane),
-            viewportGridLayerMask(mainViewport_.layerIndex),
-            ViewportOverlayFrame{},
-            ViewportCameraAdapter::overlayCamera(pane.camera, pane.renderSize));
+    logCommandFailure("Sync tool previews", editor.render().syncToolPreviews(renderBridge));
+    const QuaderApiResult<QuaderRenderOverlaySubmission> overlaySubmission =
+            editor.render().syncSelectionOverlay(
+                    renderBridge,
+                    viewportPaneIndex(mainViewport_.pane),
+                    viewportGridLayerMask(mainViewport_.layerIndex),
+                    ViewportCameraAdapter::overlayCamera(pane.camera, pane.renderSize));
+    logCommandFailure("Sync selection overlay", overlaySubmission);
+    renderer_.setOverlayVisible(overlaySubmission.ok && overlaySubmission.value.visible);
     prepareWindowedViewports(workspace);
 }
 

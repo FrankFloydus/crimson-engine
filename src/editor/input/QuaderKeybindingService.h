@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/QuaderKeybindingTypes.h"
 #include "editor/input/QuaderInputBinding.h"
 
 #include <algorithm>
@@ -38,30 +39,6 @@ struct QuaderKeybindingContext {
         const auto found = values.find(std::string(key));
         return found != values.end() && found->second;
     }
-};
-
-/**
- * Stores a keybinding rule as loaded from defaults or user settings.
- */
-struct QuaderKeybindingRule {
-    std::string targetId;
-    std::vector<QuaderInputChord> sequence;
-    std::string shortcut;
-    std::string when;
-    std::string source = "default";
-    int weight = 0;
-    bool removal = false;
-    std::size_t order = 0u;
-};
-
-/**
- * Stores keybinding conflict information for rebinding UI and tests.
- */
-struct QuaderKeybindingConflict {
-    std::string targetId;
-    std::string shortcut;
-    std::string when;
-    std::string source;
 };
 
 /**

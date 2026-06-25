@@ -14,6 +14,7 @@
 #include <filament/Scene.h>
 #include <utils/Entity.h>
 
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -33,9 +34,15 @@ public:
         return engine_ != nullptr && scene_ != nullptr;
     }
 
+    bool contains(EntityId entityId) const;
+    bool needsRebuild(EntityId entityId, const LightComponent& light) const;
+
     void syncLight(EntityId entityId, const LightComponent& light, const QMat4& worldTransform);
     void remove(EntityId entityId);
     void removeExcept(const std::unordered_set<EntityId>& liveLightEntities);
+
+    [[nodiscard]] static std::uint64_t lightSignature(const LightComponent& light);
+    [[nodiscard]] static std::uint64_t lightTransformSignature(const QMat4& worldTransform);
 
 private:
     /**
@@ -44,8 +51,17 @@ private:
     struct LightProxy {
         utils::Entity entity;
         EntityId sourceEntity = InvalidEntityId;
+        std::uint64_t rebuildSignature = 0;
+        std::uint64_t transformSignature = 0;
     };
 
+    [[nodiscard]] LightProxy createLightProxy(
+            EntityId entityId,
+            const LightComponent& light,
+            const QMat4& worldTransform,
+            std::uint64_t rebuildSignature,
+            std::uint64_t transformSignature);
+    void updateLightTransform(const LightProxy& proxy, const QMat4& worldTransform);
     void destroyLightProxy(LightProxy& proxy);
 
     filament::Engine* engine_ = nullptr;

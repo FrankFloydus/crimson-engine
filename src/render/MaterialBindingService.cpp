@@ -6,29 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/MaterialBindingService.h"
 
+#include "render/RenderSignatureBuilder.h"
 #include "render/TextureBindingService.h"
 
 #include <filament/TextureSampler.h>
 #include <math/vec4.h>
 
-#include <algorithm>
-#include <bit>
-#include <functional>
-#include <string>
-#include <vector>
-
 namespace quader {
 namespace {
 
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
-constexpr std::uint64_t kFnvPrime = 1099511628211ull;
 constexpr float kMeshTextureAnisotropy = 8.0f;
-
-std::uint64_t hashCombine(std::uint64_t hash, std::uint64_t value) {
-    hash ^= value;
-    hash *= kFnvPrime;
-    return hash;
-}
 
 } // namespace
 
@@ -43,24 +30,7 @@ void MaterialBindingService::shutdown() {
 }
 
 std::uint64_t MaterialBindingService::materialRevision(const AssetRegistry& assets, const MaterialDocument* material) const {
-    if (!material) {
-        return 0;
-    }
-
-    std::uint64_t hash = hashCombine(kFnvOffset, material->revision.value);
-    std::vector<std::string> textureSlots;
-    textureSlots.reserve(material->textureSlots.size());
-    for (const auto& [slot, texture] : material->textureSlots) {
-        textureSlots.push_back(slot);
-    }
-    std::sort(textureSlots.begin(), textureSlots.end());
-    for (const std::string& slot : textureSlots) {
-        const AssetId textureId = material->textureSlots.at(slot);
-        hash = hashCombine(hash, std::hash<std::string>{}(slot));
-        hash = hashCombine(hash, textureId);
-        hash = hashCombine(hash, assets.textureRevision(textureId).value);
-    }
-    return hash;
+    return RenderSignatureBuilder::materialSignature(assets, material);
 }
 
 filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(

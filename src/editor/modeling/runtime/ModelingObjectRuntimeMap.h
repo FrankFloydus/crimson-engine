@@ -11,6 +11,7 @@
 #include "scene/Components.h"
 
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -52,6 +53,9 @@ public:
     [[nodiscard]] std::unordered_map<int, ModelingObjectSceneIdentity> captureSceneIdentitiesForModelingObjects(
             const SceneDocument& scene,
             const std::unordered_set<int>& modelingObjectIds) const;
+    [[nodiscard]] std::vector<ModelingObjectSceneIdentity> captureSceneIdentitiesForModelingObjects(
+            const SceneDocument& scene,
+            std::span<const int> modelingObjectIds) const;
     [[nodiscard]] std::vector<ModelingObjectRecord> records(const SceneDocument& scene) const;
 
     void bind(int modelingObjectId, EntityId entity);

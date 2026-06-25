@@ -499,6 +499,10 @@ std::string mainLayoutEditorColumnElementId() {
     return "main-layout-editor-column";
 }
 
+std::string mainLayoutModelingModeShelfSlotElementId() {
+    return "modeling-mode-shelf-slot";
+}
+
 std::string mainLayoutSideDockElementId(DockLocation location) {
     if (location == DockLocation::AuxiliaryBar) {
         return "main-layout-auxiliary-sidebar";
@@ -579,6 +583,8 @@ std::string buildMainLayoutRml(
 
     rml << "<div id=\"" << mainLayoutEditorColumnElementId()
         << "\" class=\"main-layout-editor-column bg-gray-950\">";
+    rml << "<div id=\"" << mainLayoutModelingModeShelfSlotElementId()
+        << "\" class=\"modeling-mode-shelf-slot\"></div>";
     appendViewport(rml);
     if (bottomVisible) {
         appendBottomDock(rml, model, labels, interaction, bottomPanels);

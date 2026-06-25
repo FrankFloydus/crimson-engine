@@ -9,10 +9,10 @@
 #include <editor/modeling/operations/operation_registry.h>
 #include <editor/modeling/operations/operation_schema.h>
 #include <editor/modeling/runtime/session.h>
+#include <editor/tools/ViewportToolDescriptorCatalog.h>
 #include <editor/interactions/cut_tool.h>
 #include <editor/interactions/tool_identity.h>
 #include <editor/modeling/runtime/tool_constants.h>
-#include <editor/modeling/runtime/tool_registry.h>
 
 #include <array>
 #include <vector>
@@ -352,9 +352,33 @@ std::span<const HostUiGroupDescriptor> ui_group_descriptors()
 	return descriptors;
 }
 
+std::string_view label_for_viewport_tool(std::string_view tool_id)
+{
+	const quader::ToolDescriptor *tool = quader::findViewportToolDescriptor(tool_id);
+	return tool != nullptr ? tool->label : tool_id;
+}
+
+HostUiPlacementDescriptor viewport_tool_placement(
+		std::string_view id,
+		std::string_view group_id,
+		std::string_view tool_id,
+		std::uint32_t order)
+{
+	return {
+		id,
+		"viewport_tool_toolbar",
+		group_id,
+		label_for_viewport_tool(tool_id),
+		HostUiPlacementTargetKind::tool,
+		tool_id,
+		order,
+		false,
+	};
+}
+
 std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 {
-	static constexpr std::array<HostUiPlacementDescriptor, 31> descriptors {{
+	static const std::array<HostUiPlacementDescriptor, 31> descriptors {{
 		{ "menu_open_editor", "main_menu", "editor", "Open Editor", HostUiPlacementTargetKind::editor_action, "open_editor", 0, false },
 		{ "menu_new_document", "main_menu", "file", "New Document", HostUiPlacementTargetKind::editor_action, "new_document", 100, false },
 		{ "menu_open_document", "main_menu", "file", "Open...", HostUiPlacementTargetKind::editor_action, "open_document", 110, false },
@@ -373,13 +397,13 @@ std::span<const HostUiPlacementDescriptor> ui_placement_descriptors()
 		{ "operations_vertex_panel", "operations_top_bar", "selection_operations", "Vertex Operations", HostUiPlacementTargetKind::panel, "vertex_operations", 10, false },
 		{ "operations_edge_panel", "operations_top_bar", "selection_operations", "Edge Operations", HostUiPlacementTargetKind::panel, "edge_operations", 20, false },
 		{ "operations_face_panel", "operations_top_bar", "selection_operations", "Face Operations", HostUiPlacementTargetKind::panel, "face_operations", 30, false },
-		{ "toolbar_move_tool", "viewport_tool_toolbar", "transform_tools", "Move", HostUiPlacementTargetKind::tool, "move", 0, false },
-		{ "toolbar_rotate_tool", "viewport_tool_toolbar", "transform_tools", "Rotate", HostUiPlacementTargetKind::tool, "rotate", 10, false },
-		{ "toolbar_scale_tool", "viewport_tool_toolbar", "transform_tools", "Scale", HostUiPlacementTargetKind::tool, "scale", 20, false },
-		{ "toolbar_knife_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Knife", HostUiPlacementTargetKind::tool, "knife", 30, false },
-		{ "toolbar_cut_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Cut", HostUiPlacementTargetKind::tool, "cut", 40, false },
-		{ "toolbar_mirror_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Mirror", HostUiPlacementTargetKind::tool, "mirror", 50, false },
-		{ "toolbar_poly_tool", "viewport_tool_toolbar", "modal_modeling_tools", "Poly", HostUiPlacementTargetKind::tool, "poly", 60, false },
+		viewport_tool_placement("toolbar_move_tool", "transform_tools", "move", 0),
+		viewport_tool_placement("toolbar_rotate_tool", "transform_tools", "rotate", 10),
+		viewport_tool_placement("toolbar_scale_tool", "transform_tools", "scale", 20),
+		viewport_tool_placement("toolbar_knife_tool", "modal_modeling_tools", "knife", 30),
+		viewport_tool_placement("toolbar_cut_tool", "modal_modeling_tools", "cut", 40),
+		viewport_tool_placement("toolbar_mirror_tool", "modal_modeling_tools", "mirror", 50),
+		viewport_tool_placement("toolbar_poly_tool", "modal_modeling_tools", "poly", 60),
 		{ "settings_interpolated_bridge", "tool_settings_panel", "operation_settings", "Interpolated Bridge", HostUiPlacementTargetKind::preference_group, "operation.bridge", 0, false, HostUiVisibilityCondition::bridge_preview_active },
 		{ "settings_edge_bevel", "tool_settings_panel", "operation_settings", "Bevel Edges", HostUiPlacementTargetKind::preference_group, "operation.edge_bevel", 10, false, HostUiVisibilityCondition::edge_bevel_preview_active },
 		{ "settings_thicken", "tool_settings_panel", "operation_settings", "Thicken", HostUiPlacementTargetKind::preference_group, "operation.thicken", 20, false, HostUiVisibilityCondition::thicken_preview_active },
@@ -474,73 +498,28 @@ std::span<const HostPanelDescriptor> panel_descriptors()
 	return descriptors;
 }
 
-std::string_view shortcut_for_tool(std::string_view id)
+bool is_transform_tool(const quader::ToolDescriptor& tool)
 {
-	if (id == "select") {
-		return "Q";
-	}
-	if (id == "move") {
-		return "W";
-	}
-	if (id == "rotate") {
-		return "R";
-	}
-	if (id == "scale") {
-		return "S";
-	}
-	if (id == "box") {
-		return "B";
-	}
-	if (id == "insert_edge_loop") {
-		return "Shift+R";
-	}
-	if (id == "knife") {
-		return "C";
-	}
-	if (id == "cut") {
-		return "Shift+C";
-	}
-	if (id == "poly") {
-		return "P";
-	}
-	return {};
+	return tool.kind == quader::ToolKind::Transform;
 }
 
-bool is_transform_tool(quader_editor_core::ViewportInteractionTool tool)
+bool is_modal_tool(const quader::ToolDescriptor& tool)
 {
-	return tool == quader_editor_core::ViewportInteractionTool::move ||
-		tool == quader_editor_core::ViewportInteractionTool::extend ||
-		tool == quader_editor_core::ViewportInteractionTool::extrude ||
-		tool == quader_editor_core::ViewportInteractionTool::rotate ||
-		tool == quader_editor_core::ViewportInteractionTool::scale;
-}
-
-bool is_modal_tool(quader_editor_core::ViewportInteractionTool tool)
-{
-	return tool == quader_editor_core::ViewportInteractionTool::box ||
-		tool == quader_editor_core::ViewportInteractionTool::insert_edge_loop ||
-		tool == quader_editor_core::ViewportInteractionTool::knife ||
-		tool == quader_editor_core::ViewportInteractionTool::cut ||
-		tool == quader_editor_core::ViewportInteractionTool::mirror ||
-		tool == quader_editor_core::ViewportInteractionTool::poly;
+	return tool.kind == quader::ToolKind::Modal;
 }
 
 std::vector<HostToolDescriptor> build_tool_catalog()
 {
 	std::vector<HostToolDescriptor> descriptors;
-	const std::span<const quader_editor_core::EditorTool* const> tools =
-		quader_editor_core::tool_registry().tools();
+	const std::span<const quader::ToolDescriptor> tools = quader::viewportToolDescriptors();
 	descriptors.reserve(tools.size());
-	for (const quader_editor_core::EditorTool *tool : tools) {
-		if (tool == nullptr) {
-			continue;
-		}
+	for (const quader::ToolDescriptor& tool : tools) {
 		descriptors.push_back({
-			tool->id(),
-			tool->label(),
-			shortcut_for_tool(tool->id()),
-			is_transform_tool(tool->tool_id()),
-			is_modal_tool(tool->tool_id()),
+			tool.id,
+			tool.label,
+			tool.shortcut,
+			is_transform_tool(tool),
+			is_modal_tool(tool),
 		});
 	}
 	return descriptors;

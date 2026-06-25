@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace quader::test {
 namespace {
@@ -32,6 +33,12 @@ void expectVec3Near(QVec3 actual, QVec3 expected, float epsilon) {
 }
 
 void expectTransformNear(const TransformComponent& actual, const TransformComponent& expected, float epsilon) {
+    expectVec3Near(actual.position, expected.position, epsilon);
+    expectVec3Near(actual.rotationEuler, expected.rotationEuler, epsilon);
+    expectVec3Near(actual.scale, expected.scale, epsilon);
+}
+
+void expectTransformNear(const QuaderTransform& actual, const TransformComponent& expected, float epsilon) {
     expectVec3Near(actual.position, expected.position, epsilon);
     expectVec3Near(actual.rotationEuler, expected.rotationEuler, epsilon);
     expectVec3Near(actual.scale, expected.scale, epsilon);
@@ -60,6 +67,36 @@ std::optional<EntitySnapshot> findEntitySnapshot(const BehaviorSnapshot& snapsho
         return std::nullopt;
     }
     return *found;
+}
+
+std::optional<QuaderEntitySnapshot> findEntityNamed(const BehaviorScenario& scenario, std::string_view name) {
+    const std::vector<QuaderEntitySnapshot> entities = scenario.api().query().entities();
+    const auto found = std::find_if(entities.begin(), entities.end(), [&](const QuaderEntitySnapshot& value) {
+        return value.name == name;
+    });
+    if (found == entities.end()) {
+        return std::nullopt;
+    }
+    return *found;
+}
+
+std::optional<QuaderEntitySnapshot> findEntityAlias(const BehaviorScenario& scenario, std::string_view alias) {
+    return scenario.api().query().entity(scenario.entity(alias));
+}
+
+QVec3 worldPosition(const BehaviorScenario& scenario, EntityId entity) {
+    QVec3 position;
+    EntityId current = entity;
+    int guard = 0;
+    while (current != InvalidEntityId && guard++ < 64) {
+        const std::optional<QuaderEntitySnapshot> snapshot = scenario.api().query().entity(current);
+        if (!snapshot.has_value()) {
+            break;
+        }
+        position += snapshot->transform.position;
+        current = snapshot->parent;
+    }
+    return position;
 }
 
 void includePoint(BehaviorBounds& bounds, QVec3 point) {
@@ -106,12 +143,157 @@ SceneExpect& SceneExpect::entityCount(std::size_t count) {
 }
 
 SceneExpect& SceneExpect::hasAlias(std::string_view alias) {
-    EXPECT_NE(scenario_.entity(alias), InvalidEntityId);
+    EXPECT_TRUE(findEntityAlias(scenario_, alias).has_value()) << alias;
+    return *this;
+}
+
+SceneExpect& SceneExpect::missingAlias(std::string_view alias) {
+    EXPECT_FALSE(findEntityAlias(scenario_, alias).has_value()) << alias;
+    return *this;
+}
+
+SceneExpect& SceneExpect::namedExists(std::string_view name) {
+    EXPECT_TRUE(findEntityNamed(scenario_, name).has_value()) << name;
+    return *this;
+}
+
+SceneExpect& SceneExpect::namedMissing(std::string_view name) {
+    EXPECT_FALSE(findEntityNamed(scenario_, name).has_value()) << name;
+    return *this;
+}
+
+SceneExpect& SceneExpect::aliasName(std::string_view alias, std::string_view name) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_EQ(snapshot->name, name);
+    return *this;
+}
+
+SceneExpect& SceneExpect::aliasKind(std::string_view alias, QuaderEntityKind kind) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_EQ(snapshot->kind, kind);
+    return *this;
+}
+
+SceneExpect& SceneExpect::parent(std::string_view alias, std::string_view parentAlias) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_EQ(snapshot->parent, scenario_.entity(parentAlias));
+    return *this;
+}
+
+SceneExpect& SceneExpect::noParent(std::string_view alias) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_EQ(snapshot->parent, InvalidEntityId);
+    return *this;
+}
+
+SceneExpect& SceneExpect::childCount(std::string_view alias, std::size_t count) {
+    const EntityId parent = scenario_.entity(alias);
+    std::size_t actual = 0;
+    for (const QuaderEntitySnapshot& snapshot : scenario_.api().query().entities()) {
+        if (snapshot.parent == parent) {
+            ++actual;
+        }
+    }
+    EXPECT_EQ(actual, count) << alias;
+    return *this;
+}
+
+SceneExpect& SceneExpect::selectedAliases(std::initializer_list<std::string_view> aliases) {
+    std::vector<EntityId> expected;
+    expected.reserve(aliases.size());
+    for (const std::string_view alias : aliases) {
+        expected.push_back(scenario_.entity(alias));
+    }
+    std::sort(expected.begin(), expected.end());
+
+    std::vector<EntityId> actual;
+    for (const QuaderEntitySnapshot& snapshot : scenario_.api().query().entities()) {
+        if (snapshot.selected) {
+            actual.push_back(snapshot.id);
+        }
+    }
+    std::sort(actual.begin(), actual.end());
+    EXPECT_EQ(actual, expected);
+    return *this;
+}
+
+SceneExpect& SceneExpect::activeAlias(std::string_view alias) {
+    const EntityId expected = scenario_.entity(alias);
+    bool found = false;
+    for (const QuaderEntitySnapshot& snapshot : scenario_.api().query().entities()) {
+        if (snapshot.active) {
+            found = true;
+            EXPECT_EQ(snapshot.id, expected);
+        }
+    }
+    EXPECT_TRUE(found) << alias;
     return *this;
 }
 
 SceneExpect& SceneExpect::selectedAliasIs(std::string_view alias) {
-    EXPECT_EQ(scenario_.session().scene().primarySelection(), scenario_.entity(alias));
+    return activeAlias(alias);
+}
+
+SceneExpect& SceneExpect::visible(std::string_view alias, bool expected) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_EQ(snapshot->visible, expected);
+    return *this;
+}
+
+SceneExpect& SceneExpect::locked(std::string_view alias, bool expected) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_EQ(snapshot->locked, expected);
+    return *this;
+}
+
+SceneExpect& SceneExpect::hasMesh(std::string_view alias, AssetId mesh) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_TRUE(snapshot->hasMesh) << alias;
+    EXPECT_EQ(snapshot->mesh, mesh) << alias;
+    return *this;
+}
+
+SceneExpect& SceneExpect::hasMaterial(std::string_view alias, AssetId material) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    EXPECT_TRUE(snapshot->hasMaterial) << alias;
+    EXPECT_EQ(snapshot->material, material) << alias;
+    return *this;
+}
+
+SceneExpect& SceneExpect::worldPositionNear(std::string_view alias, QVec3 expected, float epsilon) {
+    expectVec3Near(worldPosition(scenario_, scenario_.entity(alias)), expected, epsilon);
     return *this;
 }
 
@@ -125,11 +307,17 @@ SceneExpect& SceneExpect::selectedBoundsCenterNear(QVec3 expected, float epsilon
 }
 
 SceneExpect& SceneExpect::entityTransformNear(std::string_view alias, TransformComponent expected, float epsilon) {
-    const TransformComponent* transform = scenario_.session().scene().transform(scenario_.entity(alias));
-    EXPECT_NE(transform, nullptr);
-    if (transform != nullptr) {
-        expectTransformNear(*transform, expected, epsilon);
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
     }
+    expectTransformNear(snapshot->transform, expected, epsilon);
+    return *this;
+}
+
+AssetExpect& AssetExpect::textureCount(std::size_t count) {
+    EXPECT_EQ(scenario_.api().query().assets().textureCount, count);
     return *this;
 }
 
@@ -415,6 +603,16 @@ UndoRedoExpect& UndoRedoExpect::canUndo(bool expected) {
 
 UndoRedoExpect& UndoRedoExpect::canRedo(bool expected) {
     EXPECT_EQ(scenario_.api().history().canRedo(), expected);
+    return *this;
+}
+
+UndoRedoExpect& UndoRedoExpect::undoLabel(std::string_view expected) {
+    EXPECT_EQ(scenario_.api().query().history().undoLabel, expected);
+    return *this;
+}
+
+UndoRedoExpect& UndoRedoExpect::redoLabel(std::string_view expected) {
+    EXPECT_EQ(scenario_.api().query().history().redoLabel, expected);
     return *this;
 }
 

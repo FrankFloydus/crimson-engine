@@ -16,16 +16,7 @@ namespace quader {
 class MoveTool final : public TransformViewportTool {
 public:
     MoveTool()
-        : TransformViewportTool({
-                  .tool = ViewportToolId::Move,
-                  .modelingTool = ModelingViewportTool::Move,
-                  .id = "move",
-                  .label = "Move",
-                  .shortcut = "W",
-                  .kind = ToolKind::Transform,
-                  .menuGroup = ToolMenuGroup::Navigation,
-          },
-                  ModelingTransformTool::Move) {}
+        : TransformViewportTool(viewportToolDescriptor(ViewportToolId::Move)) {}
 };
 
 } // namespace quader

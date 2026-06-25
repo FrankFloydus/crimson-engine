@@ -109,33 +109,6 @@ quader_poly::Ray front_right_top_vertex_ray()
 	return { { 1.0F, 1.0F, 5.0F }, { 0.0F, 0.0F, -1.0F } };
 }
 
-std::size_t selected_face_count(const qec::EditorSession& session)
-{
-	std::size_t count = 0;
-	for (const qec::PolygonObject& object : session.objects()) {
-		count += object.selection.faces.size();
-	}
-	return count;
-}
-
-std::size_t selected_vertex_count(const qec::EditorSession& session)
-{
-	std::size_t count = 0;
-	for (const qec::PolygonObject& object : session.objects()) {
-		count += object.selection.vertices.size();
-	}
-	return count;
-}
-
-std::size_t selected_edge_count(const qec::EditorSession& session)
-{
-	std::size_t count = 0;
-	for (const qec::PolygonObject& object : session.objects()) {
-		count += object.selection.edges.size();
-	}
-	return count;
-}
-
 qec::EditorRuntimeCommand insert_edge_loop_pick_command(
 		qec::EditorRuntimeCommandId command_id,
 		quader_poly::Ray ray = front_right_edge_ray(),
@@ -303,6 +276,10 @@ qec::EditorRuntimeCommand flip_view_command(qec::ViewportFlipOrientation orienta
 }
 
 } // namespace
+
+using qdr_test::selected_edge_count;
+using qdr_test::selected_face_count;
+using qdr_test::selected_vertex_count;
 
 TEST_CASE("editor runtime command facade copies selected meshes without history", "[operation][runtime-command]")
 {

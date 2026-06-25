@@ -638,6 +638,22 @@ ModelingCommandResult TransformPreviewService::finishResult(
     };
 }
 
+TransformDragPreviewRouting TransformDragController::previewRouting(
+        bool duplicateSelected,
+        bool objectSelectionMode,
+        bool transformOperation) {
+    const bool duplicateSceneTransformPreview =
+            duplicateSelected &&
+            objectSelectionMode &&
+            transformOperation;
+    TransformDragPreviewRouting routing;
+    routing.previewDriven = !duplicateSceneTransformPreview && (duplicateSelected || !objectSelectionMode);
+    routing.needsRuntimePreviewTransaction = routing.previewDriven || duplicateSelected;
+    routing.sceneTransformPreviewEligible =
+            (duplicateSceneTransformPreview || !routing.previewDriven) && transformOperation;
+    return routing;
+}
+
 void TransformDragController::setPreviewDriven(bool previewDriven, bool duplicateSelected) {
     previewDriven_ = previewDriven;
     duplicateSelected_ = duplicateSelected;

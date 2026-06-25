@@ -9,8 +9,10 @@
 #include "api/QuaderEditorApi.h"
 #include "api/QuaderSceneApi.h"
 #include "editor/commands/document/DocumentCommandEdits.h"
+#include "editor/history/EditorHistoryService.h"
 #include "math/GlmBridge.h"
 #include "scene/SceneDocument.h"
+#include "scene/SceneTransform.h"
 
 #include <algorithm>
 #include <utility>
@@ -159,6 +161,59 @@ DocumentCommandResult SceneTransformDragService::previewTransform(EntityId entit
         return documentCommandInvalidRequestResult("Transform preview is not active");
     }
     return preview_->previewTransform(entity, transform);
+}
+
+DocumentCommandResult SceneTransformDragService::previewWorldTransformDelta(
+        SceneDocument& document,
+        const QMat4& worldTransformDelta) {
+    if (!preview_) {
+        return documentCommandInvalidRequestResult("Transform preview is not active");
+    }
+
+    bool changed = false;
+    for (const SceneTransformDragTarget& target : targets_) {
+        if (!document.exists(target.entity)) {
+            continue;
+        }
+        const QMat4 previewWorldTransform = sceneTransformMultiply(worldTransformDelta, target.worldTransform);
+        const EntityId parent = document.parent(target.entity);
+        const QMat4 parentWorldTransform = parent == InvalidEntityId
+                ? sceneTransformIdentityMatrix()
+                : document.worldTransformMatrix(parent);
+        const TransformComponent previewTransform = transformComponentFromMatrix(
+                sceneLocalMatrixFromWorldMatrix(parentWorldTransform, previewWorldTransform),
+                target.transform.rotationEuler);
+        const DocumentCommandResult result = preview_->previewTransform(target.entity, previewTransform);
+        if (!result.ok) {
+            return result;
+        }
+        changed = changed || result.changed;
+    }
+    return changed ? documentCommandChangedResult() : documentCommandUnchangedResult();
+}
+
+DocumentCommandResult SceneTransformDragService::accept() {
+    if (!preview_) {
+        targets_.clear();
+        return documentCommandInvalidRequestResult("Transform preview is not active");
+    }
+
+    DocumentCommandResult result = preview_->accept();
+    preview_.reset();
+    targets_.clear();
+    return result;
+}
+
+DocumentCommandResult SceneTransformDragService::commit(EditorHistoryService& history) {
+    if (!preview_) {
+        targets_.clear();
+        return documentCommandInvalidRequestResult("Transform preview is not active");
+    }
+
+    DocumentCommandResult result = preview_->commit(history);
+    preview_.reset();
+    targets_.clear();
+    return result;
 }
 
 QuaderApiVoidResult SceneTransformDragService::commit(QuaderEditorApi& editor) {

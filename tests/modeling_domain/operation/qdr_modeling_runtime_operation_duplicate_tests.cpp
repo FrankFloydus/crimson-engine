@@ -8,20 +8,7 @@
 
 #include <catch2/catch_approx.hpp>
 
-#include <algorithm>
-
-namespace {
-
-const quader_editor_core::PolygonObject* find_object(const quader_editor_core::EditorSession& session, int object_id)
-{
-	const auto& objects = session.objects();
-	const auto it = std::find_if(objects.begin(), objects.end(), [object_id](const quader_editor_core::PolygonObject& object) {
-		return object.id == object_id;
-	});
-	return it == objects.end() ? nullptr : &*it;
-}
-
-} // namespace
+using qdr_test::find_object;
 
 TEST_CASE("duplicate operation creates fresh selected object ids", "[operation][duplicate]")
 {

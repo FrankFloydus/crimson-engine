@@ -6,12 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/QuaderCommandIds.h"
 #include "viewport/ViewportInputRouter.h"
 #include "editor/tools/ViewportTool.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -50,6 +54,24 @@ struct ViewportGridShortcutBindingDescriptor {
     std::string shortcut;
 };
 
+/**
+ * Represents one semantic viewport input action binding target.
+ */
+struct ViewportInputActionBindingDescriptor {
+    std::string targetId;
+    std::string shortcut;
+    ViewportInputActionKind action = ViewportInputActionKind::None;
+};
+
+/**
+ * Represents one host shortcut target mapped to command and viewport execution terms.
+ */
+struct ViewportShortcutTargetDescriptor {
+    std::string_view contractTargetId;
+    std::string_view commandTargetId;
+    ViewportShortcut shortcut;
+};
+
 inline bool viewportHostContractAvailable() {
     return true;
 }
@@ -71,6 +93,138 @@ inline std::string viewportShortcutLabel(
     }
     shortcut += key;
     return shortcut;
+}
+
+inline std::string viewportInputActionTargetId(std::string_view suffix) {
+    std::string targetId("viewport.");
+    targetId.append(suffix);
+    return targetId;
+}
+
+inline std::string viewportSelectionModeTargetId(std::string_view mode) {
+    std::string targetId("viewport.selection_mode.");
+    targetId.append(mode);
+    return targetId;
+}
+
+inline std::string viewportGridPresetTargetId(int preset) {
+    return "viewport.grid_preset." + std::to_string(preset);
+}
+
+inline ViewportShortcut viewportTargetShortcut(
+        ViewportShortcutKind kind,
+        ViewportShortcutContext context = ViewportShortcutContext::Viewport) {
+    return {
+            .kind = kind,
+            .context = context,
+    };
+}
+
+inline ViewportShortcut viewportMirrorTargetShortcut(ViewportMirrorAxis axis) {
+    return {
+            .kind = ViewportShortcutKind::MirrorAxis,
+            .context = ViewportShortcutContext::Viewport,
+            .mirrorAxis = axis,
+    };
+}
+
+inline std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog() {
+    static const std::array<ViewportShortcutTargetDescriptor, 23> descriptors{{
+            {"select_all", QuaderCommand::EditSelectAll.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global)},
+            {"copy_meshes", QuaderCommand::CopySelection.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::Copy, ViewportShortcutContext::Global)},
+            {"duplicate_meshes", QuaderCommand::DuplicateSelection.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::Duplicate, ViewportShortcutContext::Global)},
+            {"invert_selection", QuaderCommand::EditInvertSelection.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global)},
+            {"repeat_last_action", QuaderCommand::EditRepeatLastAction.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::RepeatLastAction, ViewportShortcutContext::Global)},
+            {"paste_meshes", QuaderCommand::PasteSelection.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::Paste, ViewportShortcutContext::Global)},
+            {"undo", QuaderCommand::EditUndo.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::Undo, ViewportShortcutContext::Global)},
+            {"redo", QuaderCommand::EditRedo.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::Redo, ViewportShortcutContext::Global)},
+            {"delete", QuaderCommand::DeleteSelection.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global)},
+            {"merge_vertices", QuaderCommand::ModelingMergeVerticesToActive.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::MergeActive)},
+            {"merge_vertices_at_center", QuaderCommand::ModelingMergeVerticesToCenter.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::MergeCenter)},
+            {"apply_active_material", QuaderCommand::ApplyMaterial.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::ApplyMaterial)},
+            {"invert_mesh", QuaderCommand::ModelingInvertMesh.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::FlipMeshNormals)},
+            {"focus_all", QuaderCommand::ViewportFrameSelection.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::FocusDocument)},
+            {"focus_origin", QuaderCommand::ViewportFocusOrigin.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::FocusOrigin)},
+            {"mirror_axis_x", QuaderCommand::ModelingMirrorSelectionX.string(),
+                    viewportMirrorTargetShortcut(ViewportMirrorAxis::X)},
+            {"mirror_axis_y", QuaderCommand::ModelingMirrorSelectionY.string(),
+                    viewportMirrorTargetShortcut(ViewportMirrorAxis::Y)},
+            {"mirror_axis_z", QuaderCommand::ModelingMirrorSelectionZ.string(),
+                    viewportMirrorTargetShortcut(ViewportMirrorAxis::Z)},
+            {"flip_horizontal", QuaderCommand::ModelingFlipHorizontal.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::FlipHorizontal)},
+            {"flip_vertical", QuaderCommand::ModelingFlipVertical.string(),
+                    viewportTargetShortcut(ViewportShortcutKind::FlipVertical)},
+            {"", "viewport.cancel_active_tool", viewportTargetShortcut(ViewportShortcutKind::CancelActiveTool)},
+            {"", "viewport.toggle_maximized", viewportTargetShortcut(ViewportShortcutKind::ToggleMaximized)},
+            {"", "viewport.delete_popup", viewportTargetShortcut(ViewportShortcutKind::DeletePopup)},
+    }};
+    return descriptors;
+}
+
+inline std::vector<ViewportInputActionBindingDescriptor> viewportInputActionBindingCatalog() {
+    return {
+            {
+                    .targetId = viewportInputActionTargetId("navigation.orbit"),
+                    .shortcut = "MiddleMouseDrag",
+                    .action = ViewportInputActionKind::Orbit,
+            },
+            {
+                    .targetId = viewportInputActionTargetId("navigation.orbit_snap"),
+                    .shortcut = "Alt+MiddleMouseDrag",
+                    .action = ViewportInputActionKind::OrbitSnap,
+            },
+            {
+                    .targetId = viewportInputActionTargetId("navigation.pan"),
+                    .shortcut = "Shift+MiddleMouseDrag",
+                    .action = ViewportInputActionKind::Pan,
+            },
+            {
+                    .targetId = viewportInputActionTargetId("navigation.fly"),
+                    .shortcut = "RightMouseDrag",
+                    .action = ViewportInputActionKind::Fly,
+            },
+            {
+                    .targetId = viewportInputActionTargetId("navigation.reset_fly_speed"),
+                    .shortcut = "MiddleMouse",
+                    .action = ViewportInputActionKind::ResetFlySpeed,
+            },
+            {
+                    .targetId = viewportInputActionTargetId("navigation.zoom"),
+                    .shortcut = "Wheel",
+                    .action = ViewportInputActionKind::Zoom,
+            },
+            {
+                    .targetId = viewportInputActionTargetId("navigation.zoom_to_cursor"),
+                    .shortcut = "Ctrl+Wheel",
+                    .action = ViewportInputActionKind::ZoomToCursor,
+            },
+    };
+}
+
+inline bool viewportInputActionForTargetId(std::string_view targetId, ViewportInputActionKind& action) {
+    for (const ViewportInputActionBindingDescriptor& descriptor : viewportInputActionBindingCatalog()) {
+        if (descriptor.targetId == targetId) {
+            action = descriptor.action;
+            return true;
+        }
+    }
+    return false;
 }
 
 inline std::vector<ViewportShortcutBindingDescriptor> viewportShortcutBindingCatalog() {
@@ -427,111 +581,36 @@ inline bool viewportSelectionModeFromContractId(std::string_view id, ViewportSel
     return false;
 }
 
+inline std::optional<std::string> viewportCommandTargetIdForContractTarget(std::string_view targetId) {
+    for (const ViewportShortcutTargetDescriptor& descriptor : viewportShortcutTargetCatalog()) {
+        if (!descriptor.contractTargetId.empty() && descriptor.contractTargetId == targetId) {
+            return std::string(descriptor.commandTargetId);
+        }
+    }
+
+    ViewportToolId tool = ViewportToolId::Select;
+    if (viewportToolFromContractId(targetId, tool)) {
+        std::string commandId("tools.activate.");
+        commandId.append(viewportToolContractId(tool));
+        return commandId;
+    }
+
+    ViewportSelectionMode mode = ViewportSelectionMode::Object;
+    if (viewportSelectionModeFromContractId(targetId, mode)) {
+        return viewportSelectionModeTargetId(viewportSelectionModeId(mode));
+    }
+
+    return std::nullopt;
+}
+
 inline bool viewportShortcutFromContractTarget(
         std::string_view targetId,
         ViewportShortcut& shortcut) {
-    if (targetId == "select_all") {
-        shortcut.kind = ViewportShortcutKind::SelectAll;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "copy_meshes") {
-        shortcut.kind = ViewportShortcutKind::Copy;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "duplicate_meshes") {
-        shortcut.kind = ViewportShortcutKind::Duplicate;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "invert_selection") {
-        shortcut.kind = ViewportShortcutKind::InvertSelection;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "repeat_last_action") {
-        shortcut.kind = ViewportShortcutKind::RepeatLastAction;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "paste_meshes") {
-        shortcut.kind = ViewportShortcutKind::Paste;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "undo") {
-        shortcut.kind = ViewportShortcutKind::Undo;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "redo") {
-        shortcut.kind = ViewportShortcutKind::Redo;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "delete") {
-        shortcut.kind = ViewportShortcutKind::DeleteSelection;
-        shortcut.context = ViewportShortcutContext::Global;
-        return true;
-    }
-    if (targetId == "merge_vertices") {
-        shortcut.kind = ViewportShortcutKind::MergeActive;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "merge_vertices_at_center") {
-        shortcut.kind = ViewportShortcutKind::MergeCenter;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "apply_active_material") {
-        shortcut.kind = ViewportShortcutKind::ApplyMaterial;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "invert_mesh") {
-        shortcut.kind = ViewportShortcutKind::FlipMeshNormals;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "focus_all") {
-        shortcut.kind = ViewportShortcutKind::FocusDocument;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "focus_origin") {
-        shortcut.kind = ViewportShortcutKind::FocusOrigin;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "mirror_axis_x") {
-        shortcut.kind = ViewportShortcutKind::MirrorAxis;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.mirrorAxis = ViewportMirrorAxis::X;
-        return true;
-    }
-    if (targetId == "mirror_axis_y") {
-        shortcut.kind = ViewportShortcutKind::MirrorAxis;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.mirrorAxis = ViewportMirrorAxis::Y;
-        return true;
-    }
-    if (targetId == "mirror_axis_z") {
-        shortcut.kind = ViewportShortcutKind::MirrorAxis;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        shortcut.mirrorAxis = ViewportMirrorAxis::Z;
-        return true;
-    }
-    if (targetId == "flip_horizontal") {
-        shortcut.kind = ViewportShortcutKind::FlipHorizontal;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
-    }
-    if (targetId == "flip_vertical") {
-        shortcut.kind = ViewportShortcutKind::FlipVertical;
-        shortcut.context = ViewportShortcutContext::Viewport;
-        return true;
+    for (const ViewportShortcutTargetDescriptor& descriptor : viewportShortcutTargetCatalog()) {
+        if (!descriptor.contractTargetId.empty() && descriptor.contractTargetId == targetId) {
+            shortcut = descriptor.shortcut;
+            return true;
+        }
     }
 
     ViewportToolId tool = ViewportToolId::Select;
@@ -548,6 +627,56 @@ inline bool viewportShortcutFromContractTarget(
         shortcut.context = ViewportShortcutContext::Viewport;
         shortcut.selectionMode = mode;
         return true;
+    }
+
+    return false;
+}
+
+inline bool viewportShortcutForCommandTargetId(
+        std::string_view targetId,
+        ViewportShortcut& shortcut) {
+    for (const ViewportShortcutTargetDescriptor& descriptor : viewportShortcutTargetCatalog()) {
+        if (descriptor.commandTargetId == targetId) {
+            shortcut = descriptor.shortcut;
+            return true;
+        }
+    }
+
+    constexpr std::string_view toolPrefix = "tools.activate.";
+    if (targetId.starts_with(toolPrefix)) {
+        ViewportToolId tool = ViewportToolId::Select;
+        if (!viewportToolFromContractId(targetId.substr(toolPrefix.size()), tool)) {
+            return false;
+        }
+        shortcut.kind = ViewportShortcutKind::ActivateTool;
+        shortcut.context = ViewportShortcutContext::Viewport;
+        shortcut.tool = tool;
+        return true;
+    }
+
+    constexpr std::string_view selectionModePrefix = "viewport.selection_mode.";
+    if (targetId.starts_with(selectionModePrefix)) {
+        ViewportSelectionMode mode = ViewportSelectionMode::Object;
+        if (!viewportSelectionModeFromContractId(targetId.substr(selectionModePrefix.size()), mode)) {
+            return false;
+        }
+        shortcut.kind = ViewportShortcutKind::SetSelectionMode;
+        shortcut.context = ViewportShortcutContext::Viewport;
+        shortcut.selectionMode = mode;
+        return true;
+    }
+
+    constexpr std::string_view gridPresetPrefix = "viewport.grid_preset.";
+    if (targetId.starts_with(gridPresetPrefix)) {
+        const std::string presetText(targetId.substr(gridPresetPrefix.size()));
+        try {
+            shortcut.kind = ViewportShortcutKind::SetGridPreset;
+            shortcut.context = ViewportShortcutContext::Viewport;
+            shortcut.gridPreset = std::stoi(presetText);
+            return true;
+        } catch (...) {
+            return false;
+        }
     }
 
     return false;

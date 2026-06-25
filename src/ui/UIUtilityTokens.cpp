@@ -51,6 +51,15 @@ bool isNumericValue(std::string_view value) {
     });
 }
 
+std::string negativeRcssValue(std::string_view value) {
+    if (value.empty() || value.front() == '-') {
+        return std::string(value);
+    }
+    std::string negativeValue("-");
+    negativeValue += value;
+    return negativeValue;
+}
+
 std::string jsonValueToTokenString(const nlohmann::ordered_json& value) {
     if (value.is_string()) {
         return value.get<std::string>();
@@ -150,9 +159,19 @@ void appendThemeTokens(UITokenConfig& result, const nlohmann::ordered_json& them
     appendNamedUtilityGroup(result.utilities, theme, "fontSize", "text-");
     appendNamedUtilityGroup(result.utilities, theme, "lineHeight", "leading-");
     appendNamedUtilityGroup(result.utilities, theme, "spacing", "space-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "-space-");
     appendNamedUtilityGroup(result.utilities, theme, "spacing", "size-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "top-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "right-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "bottom-");
+    appendNamedUtilityGroup(result.utilities, theme, "spacing", "left-");
     appendNamedUtilityGroup(result.utilities, theme, "size", "size-");
     appendNamedUtilityGroup(result.utilities, theme, "borderWidth", "border-");
+    appendNamedUtilityGroup(result.utilities, theme, "borderWidth", "border-t-");
+    appendNamedUtilityGroup(result.utilities, theme, "borderWidth", "border-r-");
+    appendNamedUtilityGroup(result.utilities, theme, "borderWidth", "border-b-");
+    appendNamedUtilityGroup(result.utilities, theme, "borderWidth", "border-l-");
+    appendNamedUtilityGroup(result.utilities, theme, "borderRadius", "rounded-");
     appendNamedUtilityGroup(result.utilities, theme, "fontKerning", "kerning-");
     if (const nlohmann::ordered_json* utilities = objectMember(theme, "utilities")) {
         appendFlatUtilityTokens(result.utilities, *utilities);
@@ -219,6 +238,22 @@ void appendSpacingUtilities(std::ostringstream& rcss, std::string_view suffix, s
     appendRule(rcss, std::string("ml-") + std::string(suffix), "margin-left", value);
 }
 
+void appendNegativeSpacingUtilities(std::ostringstream& rcss, std::string_view suffix, std::string_view value) {
+    const std::string negativeValue = negativeRcssValue(value);
+    if (!isSafeUtilityName(suffix) || !isSafeRcssValue(negativeValue)) {
+        return;
+    }
+
+    appendRule(rcss, std::string("-mt-") + std::string(suffix), "margin-top", negativeValue);
+    appendRule(rcss, std::string("-mr-") + std::string(suffix), "margin-right", negativeValue);
+    appendRule(rcss, std::string("-mb-") + std::string(suffix), "margin-bottom", negativeValue);
+    appendRule(rcss, std::string("-ml-") + std::string(suffix), "margin-left", negativeValue);
+    appendRule(rcss, std::string("neg-mt-") + std::string(suffix), "margin-top", negativeValue);
+    appendRule(rcss, std::string("neg-mr-") + std::string(suffix), "margin-right", negativeValue);
+    appendRule(rcss, std::string("neg-mb-") + std::string(suffix), "margin-bottom", negativeValue);
+    appendRule(rcss, std::string("neg-ml-") + std::string(suffix), "margin-left", negativeValue);
+}
+
 void appendSizingUtilities(std::ostringstream& rcss, std::string_view suffix, std::string_view value) {
     if (!isSafeUtilityName(suffix) || !isSafeRcssValue(value)) {
         return;
@@ -246,6 +281,8 @@ void appendUtilityToken(std::ostringstream& rcss, const UIUtilityToken& token) {
         appendRule(rcss, name, "line-height", value);
     } else if (startsWith(name, "font-")) {
         appendRule(rcss, name, isNumericValue(value) ? "font-weight" : "font-family", value);
+    } else if (startsWith(name, "-space-")) {
+        appendNegativeSpacingUtilities(rcss, name.substr(7), value);
     } else if (startsWith(name, "space-")) {
         appendSpacingUtilities(rcss, name.substr(6), value);
     } else if (startsWith(name, "size-")) {
@@ -262,8 +299,26 @@ void appendUtilityToken(std::ostringstream& rcss, const UIUtilityToken& token) {
         appendRule(rcss, name, "min-height", value);
     } else if (startsWith(name, "max-h-")) {
         appendRule(rcss, name, "max-height", value);
+    } else if (startsWith(name, "top-")) {
+        appendRule(rcss, name, "top", value);
+    } else if (startsWith(name, "right-")) {
+        appendRule(rcss, name, "right", value);
+    } else if (startsWith(name, "bottom-")) {
+        appendRule(rcss, name, "bottom", value);
+    } else if (startsWith(name, "left-")) {
+        appendRule(rcss, name, "left", value);
+    } else if (startsWith(name, "border-t-")) {
+        appendRule(rcss, name, "border-top-width", value);
+    } else if (startsWith(name, "border-r-")) {
+        appendRule(rcss, name, "border-right-width", value);
+    } else if (startsWith(name, "border-b-")) {
+        appendRule(rcss, name, "border-bottom-width", value);
+    } else if (startsWith(name, "border-l-")) {
+        appendRule(rcss, name, "border-left-width", value);
     } else if (startsWith(name, "border-")) {
         appendRule(rcss, name, "border-width", value);
+    } else if (startsWith(name, "rounded-")) {
+        appendRule(rcss, name, "border-radius", value);
     } else if (startsWith(name, "kerning-")) {
         appendRule(rcss, name, "font-kerning", value);
     }
@@ -325,6 +380,11 @@ std::string buildUIUtilityRcss(
         appendRule(rcss, "bg-" + suffix, "background-color", color.hex);
         appendRule(rcss, "text-" + suffix, "color", color.hex);
         appendRule(rcss, "border-" + suffix, "border-color", color.hex);
+        appendRule(rcss, "border-t-" + suffix, "border-top-color", color.hex);
+        appendRule(rcss, "border-r-" + suffix, "border-right-color", color.hex);
+        appendRule(rcss, "border-b-" + suffix, "border-bottom-color", color.hex);
+        appendRule(rcss, "border-l-" + suffix, "border-left-color", color.hex);
+        appendRule(rcss, "icon-" + suffix, "image-color", color.hex);
     }
     for (const DebugPaletteColorToken& color : paletteColors) {
         const std::string suffix = debugPaletteUtilityClassSuffix(color.name);
@@ -333,6 +393,7 @@ std::string buildUIUtilityRcss(
         }
 
         appendPseudoRule(rcss, "hover-bg-" + suffix, ":hover", "background-color", color.hex);
+        appendPseudoRule(rcss, "hover-border-" + suffix, ":hover", "border-color", color.hex);
     }
     for (const DebugPaletteColorToken& color : paletteColors) {
         const std::string suffix = debugPaletteUtilityClassSuffix(color.name);
@@ -341,6 +402,7 @@ std::string buildUIUtilityRcss(
         }
 
         appendPseudoRule(rcss, "active-bg-" + suffix, ":active", "background-color", color.hex);
+        appendPseudoRule(rcss, "active-border-" + suffix, ":active", "border-color", color.hex);
     }
     return rcss.str();
 }

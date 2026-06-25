@@ -71,6 +71,7 @@ std::string buildMainLayoutRml(
 [[nodiscard]] std::string mainLayoutPanelHeaderElementId(std::string_view panelId);
 [[nodiscard]] std::string mainLayoutPanelTabElementId(std::string_view panelId);
 [[nodiscard]] std::string mainLayoutEditorColumnElementId();
+[[nodiscard]] std::string mainLayoutModelingModeShelfSlotElementId();
 [[nodiscard]] std::string mainLayoutSideDockElementId(DockLocation location);
 [[nodiscard]] std::string mainLayoutSideDockResizerElementId(DockLocation location);
 [[nodiscard]] std::string mainLayoutBottomDockElementId();

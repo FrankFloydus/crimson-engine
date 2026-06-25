@@ -16,17 +16,7 @@ namespace quader {
 class KnifeTool final : public PointSequenceTool {
 public:
     KnifeTool()
-        : PointSequenceTool({
-                  .tool = ViewportToolId::Knife,
-                  .modelingTool = ModelingViewportTool::Knife,
-                  .id = "knife",
-                  .label = "Knife",
-                  .shortcut = "C",
-                  .kind = ToolKind::Modal,
-                  .menuGroup = ToolMenuGroup::Modeling,
-                  .ownsViewport = true,
-                  .blocksViewportFocusShortcuts = true,
-          }) {}
+        : PointSequenceTool(viewportToolDescriptor(ViewportToolId::Knife)) {}
 };
 
 } // namespace quader

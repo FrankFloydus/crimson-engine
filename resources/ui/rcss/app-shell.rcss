@@ -39,11 +39,15 @@ body {
     flex-direction: row;
     flex-grow: 0;
     flex-shrink: 0;
+    width: 120dp;
+    min-width: 120dp;
     height: 100%;
 }
 
 .chrome-icon-button {
     width: 40dp;
+    min-width: 40dp;
+    max-width: 40dp;
     height: 100%;
     display: flex;
     align-items: center;
@@ -76,12 +80,132 @@ body {
     decorator: image("quader://icons/close_icon.png" scale-none);
 }
 
+.ui-icon-mesh {
+    decorator: image("quader://icons/mesh_icon.png" scale-none);
+}
+
 .chrome-icon-button:hover .ui-icon {
     image-color: #D8D8D8;
 }
 
 .chrome-icon-button:active .ui-icon {
     image-color: #D8D8D8;
+}
+
+.toolbar-button {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 0;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+
+.toolbar-button-icon {
+    flex-grow: 0;
+    flex-shrink: 0;
+}
+
+.toolbar-button-label {
+    flex-grow: 0;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.toolbar-button-secondary {
+    flex-grow: 0;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.modeling-mode-shelf-slot {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 100%;
+    overflow: visible;
+}
+
+.modeling-mode-shelf {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 100%;
+    overflow: visible;
+    z-index: 5;
+}
+
+.ui-tab-rail {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    flex-grow: 0;
+    flex-shrink: 0;
+    overflow: visible;
+}
+
+.modeling-mode-shelf-tab-rail {
+    z-index: 2;
+}
+
+.modeling-mode-shelf-measure-strip {
+    position: absolute;
+    left: -10000dp;
+    top: 0dp;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    opacity: 0;
+}
+
+.ui-tab-rail-cell {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-grow: 0;
+    flex-shrink: 0;
+    height: 100%;
+}
+
+.ui-tab-rail-cell-active {
+    z-index: 2;
+}
+
+.modeling-mode-shelf-overflow-menu {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    z-index: 20;
+}
+
+.modeling-mode-shelf-overflow-menu .modeling-mode-shelf-tab-button {
+    width: 100%;
+    justify-content: flex-start;
+}
+
+.modeling-mode-shelf-content {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 100%;
+    overflow: hidden;
+    z-index: 1;
+}
+
+.modeling-mode-shelf-content-fill {
+    flex-grow: 1;
+    flex-shrink: 1;
+    height: 100%;
 }
 
 .shell-statusbar {

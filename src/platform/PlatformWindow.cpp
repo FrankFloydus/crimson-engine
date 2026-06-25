@@ -277,6 +277,9 @@ bool PlatformWindow::create(const char* title, int width, int height, PlatformWi
         releaseSdlVideo();
         return false;
     }
+    if (!SDL_SetWindowMinimumSize(window_, kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight)) {
+        LOG_WARN("SDL_SetWindowMinimumSize failed: {}", SDL_GetError());
+    }
 
     refreshPixelSize();
     if (options.borderless) {
@@ -464,9 +467,6 @@ void PlatformWindow::installBorderlessChrome() {
 
     borderlessChrome_ = true;
     installNativeChromeCursorHook();
-    if (!SDL_SetWindowMinimumSize(window_, 640, 360)) {
-        LOG_WARN("SDL_SetWindowMinimumSize failed: {}", SDL_GetError());
-    }
 }
 
 void PlatformWindow::installNativeChromeCursorHook() {

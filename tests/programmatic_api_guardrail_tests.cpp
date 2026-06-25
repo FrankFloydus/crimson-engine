@@ -122,6 +122,43 @@ bool allowedRawModelingMutation(std::string_view relative, std::string_view line
     return false;
 }
 
+bool endsWith(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() &&
+            value.substr(value.size() - suffix.size()) == suffix;
+}
+
+bool isPublicBehaviorTestName(std::string_view filename) {
+    return endsWith(filename, "_api_tests.cpp") ||
+            endsWith(filename, "_public_api_tests.cpp") ||
+            (filename.find("_behavior") != std::string_view::npos && endsWith(filename, "_tests.cpp"));
+}
+
+bool isWhitelistedDomainApiTest(std::string_view relative) {
+    return relative == "tests/modeling_domain/qdr_document_model_api_tests.cpp";
+}
+
+std::vector<std::filesystem::path> publicBehaviorTestFiles() {
+    std::vector<std::filesystem::path> files;
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
+        const std::string relative = normalizedRelative(file);
+        if (isPublicBehaviorTestName(file.filename().generic_string()) && !isWhitelistedDomainApiTest(relative)) {
+            files.push_back(file);
+        }
+    }
+    return files;
+}
+
+bool allowedPublicBehaviorHarnessUse(std::string_view relative, std::string_view line) {
+    if (relative == "tests/editor_api_tests.cpp") {
+        return line.find("\"scene/document/ProjectSession.h\"") != std::string_view::npos ||
+                line.find("\"editor/modeling/services/ModelingSessionService.h\"") != std::string_view::npos ||
+                line.find("session.document().rename(") != std::string_view::npos ||
+                line.find("session.markClean(") != std::string_view::npos ||
+                line.find("session.modeling().createBoxFromBounds(") != std::string_view::npos;
+    }
+    return false;
+}
+
 } // namespace
 
 TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals) {
@@ -189,6 +226,10 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOw
                      "TextureAsset*",
                      "entt::registry&",
                      "EditorSession&",
+                     "EditorCommandRegistry",
+                     "QuaderKeybindingService",
+                     "\"editor/commands/EditorCommandRegistry.h\"",
+                     "\"editor/input/QuaderKeybindingService.h\"",
              }) {
             EXPECT_EQ(source.find(forbidden), std::string::npos) << relative << " exposes " << forbidden;
         }
@@ -562,24 +603,51 @@ TEST(ProgrammaticApiGuardrailTests, EditorHistoryBoundaryHidesCoreUndoRedoManage
     EXPECT_NE(historySource.find("core/UndoRedoManager.h"), std::string::npos);
 }
 
-TEST(ProgrammaticApiGuardrailTests, ProgrammaticBehaviorTestsUseApiOrScenarioDsl) {
-    for (const std::filesystem::path& file : {
-                 sourceRoot() / "tests/programmatic_api_tests.cpp",
-                 sourceRoot() / "tests/programmatic_behavior_scenario_tests.cpp",
-         }) {
+TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
+    const std::vector<std::string_view> forbidden = {
+            "\"editor/commands/",
+            "\"editor/modeling/services/ModelingSessionService.h\"",
+            "\"editor/selection/",
+            "\"editor/tools/",
+            "\"scene/SceneDocument.h\"",
+            "\"scene/document/ProjectSession.h\"",
+            "ModelingSessionService",
+            "DocumentCommandService",
+            "SceneDocument",
+            "AssetRegistry",
+            "session.scene().",
+            "session.selection().",
+            "session.modeling().",
+            "createBoxFromBounds(",
+            "executeInstantOperation",
+            "executeContextAction",
+    };
+
+    for (const std::filesystem::path& file : publicBehaviorTestFiles()) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
 
-        EXPECT_FALSE(containsAny(source, {
-                             "ModelingSessionService",
-                             "DocumentCommandService",
-                             "SceneDocument",
-                             "AssetRegistry",
-                             "createBoxFromBounds",
-                             "executeInstantOperation",
-                             "pickSelect(",
-                     }))
-                << relative;
+        for (const std::string& line : linesContaining(source, forbidden)) {
+            EXPECT_TRUE(allowedPublicBehaviorHarnessUse(relative, line)) << relative << ": " << line;
+        }
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, ModelingOperationTestsUseSharedRuntimeHelpers) {
+    const std::vector<std::string_view> duplicatedHelpers = {
+            "find_object(const quader_editor_core::EditorSession&",
+            "require_object(const quader_editor_core::EditorSession&",
+            "selected_face_count(const",
+            "selected_vertex_count(const",
+            "selected_edge_count(const",
+    };
+
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests/modeling_domain/operation", ".cpp")) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+        for (const std::string& line : linesContaining(source, duplicatedHelpers)) {
+            ADD_FAILURE() << relative << ": move duplicated runtime test helper to editor_operation_test_helpers.h: " << line;
+        }
     }
 }
 

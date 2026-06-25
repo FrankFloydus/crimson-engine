@@ -124,10 +124,6 @@ private:
         float widthPixels = 0.0f;
     };
 
-    static std::uint64_t hashCombine(std::uint64_t hash, std::uint64_t value);
-    static std::uint64_t hashFloat(std::uint64_t hash, float value);
-    static std::uint64_t hashVec3(std::uint64_t hash, QVec3 value);
-
     static std::vector<const ViewportOverlayLine*> linesForLayer(
             const ViewportOverlayFrame& frame,
             ViewportOverlayLayer layer);

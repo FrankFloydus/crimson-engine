@@ -82,6 +82,7 @@ struct MainLayoutModel {
 [[nodiscard]] int mainLayoutClampedBottomSplitPanelWidthDp(int widthDp);
 [[nodiscard]] MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model);
 [[nodiscard]] std::optional<std::string_view> mainLayoutCanonicalPanelId(std::string_view panelId);
+[[nodiscard]] std::optional<std::string_view> mainLayoutPanelIdFromLegacySettings(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsKnown(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsViewport(std::string_view panelId);
 [[nodiscard]] std::vector<std::string_view> mainLayoutDockablePanelIds();

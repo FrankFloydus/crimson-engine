@@ -47,7 +47,7 @@ std::unordered_map<std::uint32_t, AssetId> materialSlotsForLiveModelingNodes(
     return materialBySlot;
 }
 
-void applySceneIdentityToEntity(
+void applyDurableSceneIdentityToEntity(
         SceneDocument& scene,
         EntityId entity,
         const ModelingObjectSceneIdentity& identity) {
@@ -95,7 +95,7 @@ void reconcileModelingObjectSceneNodes(
                 .materialSlot = materialSlot,
         });
         if (identity.has_value()) {
-            applySceneIdentityToEntity(scene, entity, *identity);
+            applyDurableSceneIdentityToEntity(scene, entity, *identity);
         }
         const auto material = materialBySlot.find(materialSlot);
         if (material != materialBySlot.end()) {
@@ -204,6 +204,32 @@ bool ModelingMeshSyncService::shouldForceRefresh(bool previewActive, bool previe
 std::optional<MeshAsset> ModelingMeshSyncService::compileObjectMesh(
         const quader_editor_core::PolygonObject& object) const {
     return MeshProjectionService::compileObjectMesh(object);
+}
+
+void ModelingMeshSyncService::applySceneIdentityToEntity(
+        SceneDocument& scene,
+        EntityId entity,
+        const ModelingObjectSceneIdentity& identity) const {
+    applyDurableSceneIdentityToEntity(scene, entity, identity);
+}
+
+void ModelingMeshSyncService::applySceneIdentityToDuplicateEntity(
+        SceneDocument& scene,
+        EntityId entity,
+        const ModelingObjectSceneIdentity& identity) const {
+    applyDurableSceneIdentityToEntity(scene, entity, identity);
+    if (identity.mesh.has_value()) {
+        if (const MeshComponent* duplicateMesh = scene.mesh(entity)) {
+            MeshComponent nextMesh = *identity.mesh;
+            nextMesh.mesh = duplicateMesh->mesh;
+            scene.setMesh(entity, nextMesh);
+        }
+    }
+    if (identity.material.has_value()) {
+        scene.setMaterial(entity, *identity.material);
+    } else {
+        scene.clearMaterial(entity);
+    }
 }
 
 void ModelingMeshSyncService::syncSceneObjectsFromModeling(

@@ -7,26 +7,9 @@
 #include "render/ToolPreviewRenderableCache.h"
 
 #include "render/MaterialBindingService.h"
-
-#include <bit>
+#include "render/RenderSignatureBuilder.h"
 
 namespace quader {
-namespace {
-
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
-constexpr std::uint64_t kFnvPrime = 1099511628211ull;
-
-std::uint64_t hashCombine(std::uint64_t hash, std::uint64_t value) {
-    hash ^= value;
-    hash *= kFnvPrime;
-    return hash;
-}
-
-std::uint64_t hashFloat(std::uint64_t hash, float value) {
-    return hashCombine(hash, std::bit_cast<std::uint32_t>(value));
-}
-
-} // namespace
 
 ToolPreviewRenderableCache::~ToolPreviewRenderableCache() {
     shutdown();
@@ -95,24 +78,24 @@ std::uint64_t ToolPreviewRenderableCache::previewMeshSignature(
         const AssetRegistry& assets,
         const MaterialBindingService& materialBinding) {
     const MaterialDocument* material = assets.material(previewMesh.material);
-    std::uint64_t hash = hashCombine(kFnvOffset, previewMesh.sourceEntity);
-    hash = hashCombine(hash, previewMesh.material);
-    hash = hashCombine(hash, materialBinding.materialRevision(assets, material));
-    for (const float value : previewMesh.transform.values) {
-        hash = hashFloat(hash, value);
-    }
-    return MeshRenderableFactory::meshAssetSignature(hash, previewMesh.mesh);
+    RenderSignatureBuilder signature;
+    signature.addValue(previewMesh.sourceEntity)
+            .addValue(previewMesh.material)
+            .addValue(materialBinding.materialRevision(assets, material))
+            .addMat4(previewMesh.transform);
+    return MeshRenderableFactory::meshAssetSignature(signature.value(), previewMesh.mesh);
 }
 
 std::uint64_t ToolPreviewRenderableCache::previewMeshesSignature(
         const std::vector<ToolPreviewMesh>& previewMeshes,
         const AssetRegistry& assets,
         const MaterialBindingService& materialBinding) {
-    std::uint64_t hash = hashCombine(kFnvOffset, previewMeshes.size());
+    RenderSignatureBuilder signature;
+    signature.addSize(previewMeshes.size());
     for (const ToolPreviewMesh& previewMesh : previewMeshes) {
-        hash = hashCombine(hash, previewMeshSignature(previewMesh, assets, materialBinding));
+        signature.addValue(previewMeshSignature(previewMesh, assets, materialBinding));
     }
-    return hash;
+    return signature.value();
 }
 
 } // namespace quader

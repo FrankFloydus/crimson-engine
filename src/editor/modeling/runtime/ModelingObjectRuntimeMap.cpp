@@ -110,6 +110,25 @@ std::unordered_map<int, ModelingObjectSceneIdentity> ModelingObjectRuntimeMap::c
     return identities;
 }
 
+std::vector<ModelingObjectSceneIdentity> ModelingObjectRuntimeMap::captureSceneIdentitiesForModelingObjects(
+        const SceneDocument& scene,
+        std::span<const int> modelingObjectIds) const {
+    std::vector<ModelingObjectSceneIdentity> identities;
+    identities.reserve(modelingObjectIds.size());
+    for (const int modelingObjectId : modelingObjectIds) {
+        const auto entity = entitiesByObject_.find(modelingObjectId);
+        if (entity != entitiesByObject_.end() && scene.exists(entity->second)) {
+            identities.push_back(captureSceneIdentity(scene, entity->second));
+            continue;
+        }
+        const auto identity = sceneIdentityByObject_.find(modelingObjectId);
+        if (identity != sceneIdentityByObject_.end()) {
+            identities.push_back(identity->second);
+        }
+    }
+    return identities;
+}
+
 std::vector<ModelingObjectRecord> ModelingObjectRuntimeMap::records(const SceneDocument& scene) const {
     std::vector<ModelingObjectRecord> records;
     records.reserve(entitiesByObject_.size());

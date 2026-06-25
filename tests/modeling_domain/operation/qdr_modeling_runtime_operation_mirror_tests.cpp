@@ -14,15 +14,6 @@
 
 namespace {
 
-const quader_editor_core::PolygonObject* find_object(const quader_editor_core::EditorSession& session, int object_id)
-{
-	const auto& objects = session.objects();
-	const auto it = std::find_if(objects.begin(), objects.end(), [object_id](const quader_editor_core::PolygonObject& object) {
-		return object.id == object_id;
-	});
-	return it == objects.end() ? nullptr : &*it;
-}
-
 quader_editor_core::EditorSession selected_offset_cube_session()
 {
 	quader_editor_core::EditorSession session;
@@ -68,6 +59,8 @@ std::vector<quader::QVec3> yz_mirror_plane_points()
 }
 
 } // namespace
+
+using qdr_test::find_object;
 
 TEST_CASE("mirror operation creates fresh selected mirrored object ids", "[operation][mirror]")
 {

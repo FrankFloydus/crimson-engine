@@ -8,6 +8,7 @@
 
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/ModelingTypes.h"
+#include "editor/tools/ViewportToolDescriptorCatalog.h"
 #include "scene/SceneDocument.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportSettings.h"
@@ -21,23 +22,6 @@
 namespace quader {
 
 class ModelingSessionService;
-
-/**
- * Enumerates ToolKind values used by editor-owned viewport tool interactions.
- */
-enum class ToolKind {
-    Selection,
-    Transform,
-    Modal,
-};
-
-/**
- * Enumerates ToolMenuGroup values used by editor-owned viewport tool interactions.
- */
-enum class ToolMenuGroup {
-    Navigation,
-    Modeling,
-};
 
 /**
  * Enumerates ViewportToolEventKind values used by editor-owned viewport tool interactions.
@@ -142,21 +126,6 @@ struct ViewportToolContext {
     std::function<void(ViewportSelectionMode)> setSelectionMode;
     std::function<void(ModelingSelectionMode)> setAppSelectionMode;
     std::function<void(std::string_view, const ModelingCommandResult&)> handleToolCommandResult;
-};
-
-/**
- * Stores the Tool Descriptor data contract used by editor-owned viewport tool interactions.
- */
-struct ToolDescriptor {
-    ViewportToolId tool = ViewportToolId::Select;
-    ModelingViewportTool modelingTool = ModelingViewportTool::Select;
-    std::string_view id = "select";
-    std::string_view label = "Select";
-    std::string_view shortcut;
-    ToolKind kind = ToolKind::Selection;
-    ToolMenuGroup menuGroup = ToolMenuGroup::Navigation;
-    bool ownsViewport = false;
-    bool blocksViewportFocusShortcuts = false;
 };
 
 /**

@@ -244,6 +244,7 @@ TEST(OopArchitectureGuardrailTests, ToolCatalogHeadersAreDeclarationsOnly) {
     for (const std::filesystem::path& file : {
                  sourceRoot() / "src/editor/commands/ModelingCommandToolCatalog.h",
                  sourceRoot() / "src/editor/tools/ViewportToolCatalog.h",
+                 sourceRoot() / "src/editor/tools/ViewportToolDescriptorCatalog.h",
          }) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
@@ -327,7 +328,8 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
     EXPECT_NE(builder.find("appendGroupSelectionCages"), std::string::npos);
     EXPECT_NE(builder.find("appendSceneWireframeOverlay"), std::string::npos);
     EXPECT_NE(builder.find("stripWireframeObjectFaceFills"), std::string::npos);
-    EXPECT_NE(viewportHost.find("ViewportOverlayFrame{}"), std::string::npos);
+    EXPECT_NE(viewportHost.find("editor.render().syncSelectionOverlay("), std::string::npos);
+    EXPECT_NE(viewportHost.find("overlaySubmission.value.visible"), std::string::npos);
 
     for (std::string_view forbidden : {
                  "ViewportSceneOverlayBuilder::buildSelectionFrame(",
@@ -375,11 +377,16 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
 
     const std::string serviceSource =
             readFile(sourceRoot() / "src/editor/transform/SceneTransformDragService.cpp");
+    const std::string modelingSource =
+            readFile(sourceRoot() / "src/editor/modeling/services/ModelingSessionService.cpp");
 
     EXPECT_NE(serviceSource.find("SceneTransformPreviewTransaction"), std::string::npos);
     EXPECT_NE(serviceSource.find("hasSelectedAncestor(document, entity)"), std::string::npos);
     EXPECT_NE(serviceSource.find("documentLocalPivotForWorldPoint(document, entity, worldPivot)"), std::string::npos);
     EXPECT_NE(serviceSource.find("editor.scene().batch(label)"), std::string::npos);
+    EXPECT_NE(modelingSource.find("sceneTransformDragService_.begin("), std::string::npos);
+    EXPECT_NE(modelingSource.find("sceneTransformDragService_.previewWorldTransformDelta("), std::string::npos);
+    EXPECT_NE(modelingSource.find("sceneTransformDragService_.commit(*history)"), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals) {

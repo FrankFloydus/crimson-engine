@@ -133,13 +133,29 @@ MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model) {
 }
 
 std::optional<std::string_view> mainLayoutCanonicalPanelId(std::string_view panelId) {
-    if (panelId == kMainLayoutPanelViewport || panelId == "Viewport") {
+    if (panelId == kMainLayoutPanelViewport) {
         return kMainLayoutPanelViewport;
     }
-    if (panelId == kMainLayoutPanelOutliner || panelId == "Outliner") {
+    if (panelId == kMainLayoutPanelOutliner) {
         return kMainLayoutPanelOutliner;
     }
-    if (panelId == kMainLayoutPanelInspector || panelId == "Inspector") {
+    if (panelId == kMainLayoutPanelInspector) {
+        return kMainLayoutPanelInspector;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string_view> mainLayoutPanelIdFromLegacySettings(std::string_view panelId) {
+    if (const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(panelId)) {
+        return canonical;
+    }
+    if (panelId == "Viewport") {
+        return kMainLayoutPanelViewport;
+    }
+    if (panelId == "Outliner") {
+        return kMainLayoutPanelOutliner;
+    }
+    if (panelId == "Inspector") {
         return kMainLayoutPanelInspector;
     }
     return std::nullopt;

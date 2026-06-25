@@ -10,6 +10,7 @@
 #include "core/Logger.h"
 #include "ui/DebugPaletteView.h"
 #include "ui/UIUtilityTokens.h"
+#include "ui/components/organisms/ModelingModeShelfComponent.h"
 #include "ui/components/organisms/WindowChromeControlsComponent.h"
 
 #include <SDL3/SDL_error.h>
@@ -33,6 +34,10 @@ namespace {
 constexpr int kMainLayoutSidebarDropZoneWidthDp = 64;
 constexpr int kMainLayoutBottomDockDropZoneHeightDp = 64;
 constexpr float kMainLayoutDockDragPreviewHotspotOffsetPx = 10.0f;
+
+bool stringListContains(const std::vector<std::string>& values, std::string_view value) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
 
 std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
     switch (event.type) {
@@ -279,6 +284,15 @@ bool UISystem::processEvent(const SDL_Event& event) {
     const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
     const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
     const bool rmlConsumed = rmlHost_.processEvent(event, scaleX, scaleY);
+    if (const std::optional<std::string> selectedControl = rmlHost_.takeModelingModeShelfControlSelection()) {
+        activateModelingModeShelfControl(*selectedControl);
+        return true;
+    }
+    if (const std::optional<std::string> selectedCommand = rmlHost_.takeModelingModeShelfCommand()) {
+        modelingModeShelfController_.activateCommand(*selectedCommand);
+        rebuildModelingModeShelf();
+        return true;
+    }
     if (rmlConsumed && rmlConsumedEventBlocksViewport(event)) {
         return true;
     }
@@ -310,6 +324,10 @@ void UISystem::draw(QuaderEditorApi& editor,
     (void)defaultMaterial;
     (void)quitRequested;
 
+    applyPendingModelingModeShelfIntents(editor);
+    if (modelingModeShelfController_.syncEditorState(editor, localization_)) {
+        rebuildModelingModeShelf();
+    }
     viewportHost_.handleFrame(editor, document, assets, debugPaletteVisible_);
 }
 
@@ -320,12 +338,19 @@ void UISystem::prepareLayout(std::uint32_t framebufferWidth, std::uint32_t frame
     if (mainLayoutDirty_) {
         rebuildMainLayout();
     }
-    rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+    auto updateRmlLayoutAndShelfOverflow = [&]() {
+        rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+        if (updateModelingModeShelfOverflowFromRml()) {
+            rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+        }
+    };
+
+    updateRmlLayoutAndShelfOverflow();
     updateMainViewportFrameFromRml();
     rebuildMainLayoutHitRegions();
     if (normalizeMainLayoutForMeasuredBounds()) {
         rebuildMainLayout();
-        rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+        updateRmlLayoutAndShelfOverflow();
         updateMainViewportFrameFromRml();
         rebuildMainLayoutHitRegions();
     }
@@ -530,7 +555,170 @@ void UISystem::rebuildMainLayout() {
     rmlHost_.setElementInnerRml("toolbar-label", escapeRmlText(localization_.text("ui.shell.toolbar", "Toolbar")));
     rmlHost_.setElementInnerRml("statusbar-label", escapeRmlText(localization_.text("ui.shell.status", "Status")));
     rmlHost_.setElementInnerRml("main-layout-slot", buildMainLayoutRml(mainLayout_, mainLayoutLabels_, interaction));
+    rebuildModelingModeShelf();
     mainLayoutDirty_ = false;
+}
+
+void UISystem::rebuildModelingModeShelf() {
+    rmlHost_.setElementInnerRml(
+            mainLayoutModelingModeShelfSlotElementId(),
+            buildModelingModeShelfRml(modelingModeShelfController_.buildState(localization_)));
+}
+
+bool UISystem::updateModelingModeShelfOverflowFromRml() {
+    std::vector<ModelingModeShelfControl> controls = modelingModeShelfController_.controls(localization_);
+    if (controls.empty()) {
+        if (modelingModeShelfController_.setOverflowControlIds({})) {
+            rebuildModelingModeShelf();
+            return true;
+        }
+        return false;
+    }
+
+    const std::optional<RmlElementRect> toolbarRect = rmlHost_.measureElementById("modeling-mode-shelf-toolbar");
+    const std::optional<RmlElementRect> moreRect =
+            rmlHost_.measureElementById(std::string(modelingModeShelfOverflowMeasureElementId()));
+    if (!toolbarRect || !moreRect) {
+        return false;
+    }
+
+    /**
+     * Stores one measured toolbar control and its layout advance, including
+     * the horizontal gap before the next measured item.
+     */
+    struct ControlMeasurement {
+        std::string id;
+        int left = 0;
+        int width = 0;
+        int advanceWidth = 0;
+    };
+
+    std::vector<ControlMeasurement> measurements;
+    measurements.reserve(controls.size());
+    for (const ModelingModeShelfControl& control : controls) {
+        const std::optional<RmlElementRect> rect =
+                rmlHost_.measureElementById(modelingModeShelfControlMeasureElementId(control.id));
+        if (!rect) {
+            return false;
+        }
+        measurements.push_back(ControlMeasurement{
+                .id = control.id,
+                .left = rect->left,
+                .width = rect->width,
+                .advanceWidth = rect->width,
+        });
+    }
+
+    for (std::size_t index = 0; index < measurements.size(); ++index) {
+        const int nextLeft = index + 1u < measurements.size() ?
+                measurements[index + 1u].left :
+                moreRect->left;
+        measurements[index].advanceWidth = std::max(
+                measurements[index].width,
+                nextLeft - measurements[index].left);
+    }
+
+    int leadingInset = 0;
+    for (const ModelingModeShelfControl& control : controls) {
+        if (stringListContains(modelingModeShelfController_.overflowControlIds(), control.id)) {
+            continue;
+        }
+        if (const std::optional<RmlElementRect> rect =
+                    rmlHost_.measureElementById(modelingModeShelfControlButtonElementId(control.id))) {
+            leadingInset = std::max(0, rect->left - toolbarRect->left);
+            break;
+        }
+    }
+    if (leadingInset == 0) {
+        if (const std::optional<RmlElementRect> rect =
+                    rmlHost_.measureElementById(std::string(modelingModeShelfOverflowButtonElementId()))) {
+            leadingInset = std::max(0, rect->left - toolbarRect->left);
+        }
+    }
+
+    const int availableWidth = std::max(0, toolbarRect->width - leadingInset);
+    std::vector<bool> visible(measurements.size(), true);
+    const std::optional<std::string> activeTabId = modelingModeShelfController_.activeControlId();
+
+    auto hiddenCount = [&]() {
+        return static_cast<std::size_t>(std::count(visible.begin(), visible.end(), false));
+    };
+    auto totalVisibleWidth = [&]() {
+        int width = 0;
+        for (std::size_t index = 0; index < measurements.size(); ++index) {
+            if (visible[index]) {
+                width += measurements[index].advanceWidth;
+            }
+        }
+        if (hiddenCount() > 0u) {
+            width += moreRect->width;
+        }
+        return width;
+    };
+    auto nextHideCandidate = [&]() -> std::optional<std::size_t> {
+        for (std::size_t reverseIndex = measurements.size(); reverseIndex > 0u; --reverseIndex) {
+            const std::size_t index = reverseIndex - 1u;
+            if (!visible[index]) {
+                continue;
+            }
+            if (activeTabId && measurements[index].id == *activeTabId) {
+                continue;
+            }
+            return index;
+        }
+        for (std::size_t reverseIndex = measurements.size(); reverseIndex > 0u; --reverseIndex) {
+            const std::size_t index = reverseIndex - 1u;
+            if (visible[index]) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    };
+
+    while (totalVisibleWidth() > availableWidth) {
+        const std::optional<std::size_t> index = nextHideCandidate();
+        if (!index) {
+            break;
+        }
+        visible[*index] = false;
+    }
+
+    std::vector<std::string> overflowControlIds;
+    for (std::size_t index = 0; index < measurements.size(); ++index) {
+        if (!visible[index]) {
+            overflowControlIds.push_back(measurements[index].id);
+        }
+    }
+
+    if (!modelingModeShelfController_.setOverflowControlIds(std::move(overflowControlIds))) {
+        return false;
+    }
+    rebuildModelingModeShelf();
+    return true;
+}
+
+bool UISystem::activateModelingModeShelfControl(std::string_view controlId) {
+    if (!modelingModeShelfController_.activateControl(controlId)) {
+        return false;
+    }
+    rebuildModelingModeShelf();
+    return true;
+}
+
+void UISystem::applyPendingModelingModeShelfIntents(QuaderEditorApi& editor) {
+    if (const std::optional<ModelingSelectionMode> selectionMode =
+                modelingModeShelfController_.takePendingSelectionMode()) {
+        const QuaderApiVoidResult result = editor.selection().setMode(*selectionMode);
+        if (!result.ok()) {
+            LOG_WARN("Unable to apply modeling shelf selection mode: {}", result.errorMessage());
+        }
+    }
+    if (const std::optional<std::string> commandId = modelingModeShelfController_.takePendingCommandId()) {
+        const QuaderApiVoidResult result = editor.commands().execute(*commandId);
+        if (!result.ok()) {
+            LOG_WARN("Unable to execute modeling shelf command {}: {}", *commandId, result.errorMessage());
+        }
+    }
 }
 
 void UISystem::rebuildMainLayoutHitRegions() {

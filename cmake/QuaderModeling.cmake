@@ -214,7 +214,8 @@ target_link_libraries(quader_modeling_runtime
         quader_modeling_profile)
 
 add_library(quader_editor_metadata STATIC
-    src/editor/metadata/host_contract.cpp)
+    src/editor/metadata/host_contract.cpp
+    src/editor/tools/base/ViewportToolDescriptorCatalog.cpp)
 add_library(quader::editor_metadata ALIAS quader_editor_metadata)
 target_compile_features(quader_editor_metadata PUBLIC cxx_std_20)
 target_include_directories(quader_editor_metadata

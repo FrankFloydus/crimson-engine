@@ -165,9 +165,12 @@ add_library(quader_core STATIC
     src/ui/backends/rml/RmlMarkupWriter.cpp
     src/ui/components/atoms/UIButtonComponent.cpp
     src/ui/components/atoms/UIChromeButtonComponent.cpp
+    src/ui/components/atoms/UIToolbarButtonComponent.cpp
     src/ui/components/common/DockLayoutModel.cpp
+    src/ui/components/common/UITabRailComponent.cpp
     src/ui/components/common/UITabStripModel.cpp
     src/ui/components/organisms/MainLayoutModel.cpp
+    src/ui/components/organisms/ModelingModeShelfComponent.cpp
     src/ui/components/organisms/WindowChromeControlsComponent.cpp
     src/ui/core/UIClassList.cpp
     src/ui/core/UIElement.cpp
@@ -355,6 +358,7 @@ add_library(quader_runtime STATIC
     src/render/overlay/ViewportSceneOverlayBuilder.cpp
     src/render/overlay/ViewportOverlayStyleResolver.cpp
     src/render/RenderSystem.cpp
+    src/render/RenderSignatureBuilder.cpp
     src/render/SceneRenderBridge.cpp
     src/render/SceneRenderSyncService.cpp
     src/render/TextureBindingService.cpp
@@ -366,6 +370,7 @@ add_library(quader_runtime STATIC
     src/render/ViewportRenderTarget.cpp
     src/render/ViewportRenderer.cpp
     src/ui/backends/rml/RmlUiContextHost.cpp
+    src/ui/controllers/ModelingModeShelfController.cpp
     src/ui/controllers/ViewportHost.cpp
     src/ui/ViewportShortcutController.cpp
     src/ui/UISystem.cpp
@@ -439,6 +444,9 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/Inter.ttf"
             "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/NovaMono.ttf"
+            "$<TARGET_FILE_DIR:quader>/fonts/NovaMono.ttf"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/OFL.txt"
             "$<TARGET_FILE_DIR:quader>/fonts/OFL.txt"

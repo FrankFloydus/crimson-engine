@@ -16,6 +16,7 @@
 namespace quader {
 
 class AssetRegistry;
+struct ModelingObjectSceneIdentity;
 class SceneDocument;
 class SceneModelingSyncService;
 
@@ -28,6 +29,14 @@ public:
 
     [[nodiscard]] std::optional<MeshAsset> compileObjectMesh(
             const quader_editor_core::PolygonObject& object) const;
+    void applySceneIdentityToEntity(
+            SceneDocument& scene,
+            EntityId entity,
+            const ModelingObjectSceneIdentity& identity) const;
+    void applySceneIdentityToDuplicateEntity(
+            SceneDocument& scene,
+            EntityId entity,
+            const ModelingObjectSceneIdentity& identity) const;
     void syncSceneObjectsFromModeling(
             const quader_editor_core::EditorSession& session,
             SceneDocument& scene,

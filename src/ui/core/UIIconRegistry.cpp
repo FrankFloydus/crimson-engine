@@ -11,7 +11,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<UIIconDefinition, 3> kIconDefinitions = {
+constexpr std::array<UIIconDefinition, 4> kIconDefinitions = {
         UIIconDefinition{
                 .id = UIIconId::ChromeMinimize,
                 .name = "chrome-minimize",
@@ -32,6 +32,13 @@ constexpr std::array<UIIconDefinition, 3> kIconDefinitions = {
                 .className = "ui-icon-chrome-close",
                 .provider = UIIconProvider::ImageResource,
                 .resourcePath = "quader://icons/close_icon.png",
+        },
+        UIIconDefinition{
+                .id = UIIconId::Mesh,
+                .name = "mesh",
+                .className = "ui-icon-mesh",
+                .provider = UIIconProvider::ImageResource,
+                .resourcePath = "quader://icons/mesh_icon.png",
         },
 };
 

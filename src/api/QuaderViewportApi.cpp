@@ -18,7 +18,7 @@ namespace quader {
  */
 class QuaderViewportApi::Impl final {
 public:
-    ViewportWorkspaceService workspace;
+    ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly};
     QuaderViewportRuntimeHooks hooks;
 };
 
@@ -76,6 +76,9 @@ ViewportLayoutId QuaderViewportApi::layout() const {
 }
 
 QuaderApiVoidResult QuaderViewportApi::setLayout(ViewportLayoutId layout) {
+    if (!impl_->workspace.supportsLayout(layout)) {
+        return unavailable("The embedded viewport host currently supports only the single-pane layout.");
+    }
     return runtimeStatus(impl_->workspace.setLayout(layout));
 }
 

@@ -6,105 +6,27 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/OverlayRenderableBuilder.h"
 
+#include "render/RenderSignatureBuilder.h"
 #include "render/overlay/OverlayFaceFillBuilder.h"
 #include "render/overlay/OverlayLineMeshBuilder.h"
 #include "render/overlay/OverlayPointMeshBuilder.h"
 
 #include <algorithm>
-#include <bit>
 #include <cstdint>
 #include <utility>
 
 namespace quader {
-namespace {
-
-constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
-constexpr std::uint64_t kFnvPrime = 1099511628211ull;
-
-} // namespace
 
 std::uint64_t OverlayRenderableBuilder::frameSignature(const ViewportOverlayFrame& frame) {
-    std::uint64_t hash = hashCombine(kFnvOffset, frame.triangles.size());
-    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
-        hash = hashCombine(hash, static_cast<std::uint32_t>(triangle.layer));
-        hash = hashCombine(hash, triangle.color);
-        hash = hashVec3(hash, triangle.a);
-        hash = hashVec3(hash, triangle.b);
-        hash = hashVec3(hash, triangle.c);
-    }
-    hash = hashCombine(hash, frame.lines.size());
-    for (const ViewportOverlayLine& line : frame.lines) {
-        hash = hashCombine(hash, static_cast<std::uint32_t>(line.layer));
-        hash = hashCombine(hash, line.color);
-        hash = hashFloat(hash, line.widthPixels);
-        hash = hashVec3(hash, line.start);
-        hash = hashVec3(hash, line.end);
-    }
-    hash = hashCombine(hash, frame.points.size());
-    for (const ViewportOverlayPoint& point : frame.points) {
-        hash = hashCombine(hash, static_cast<std::uint32_t>(point.layer));
-        hash = hashCombine(hash, point.color);
-        hash = hashFloat(hash, point.sizePixels);
-        hash = hashCombine(hash, point.outlineGrowthPixels.has_value() ? 1u : 0u);
-        if (point.outlineGrowthPixels.has_value()) {
-            hash = hashFloat(hash, *point.outlineGrowthPixels);
-        }
-        hash = hashVec3(hash, point.position);
-    }
-    return hash;
+    return RenderSignatureBuilder::overlayFrameSignature(frame);
 }
 
 std::uint64_t OverlayRenderableBuilder::cameraSignature(const ViewportOverlayCamera& camera) {
-    std::uint64_t hash = hashCombine(kFnvOffset, static_cast<std::uint32_t>(camera.projection));
-    hash = hashVec3(hash, camera.eye);
-    hash = hashVec3(hash, camera.forward);
-    hash = hashVec3(hash, camera.right);
-    hash = hashVec3(hash, camera.up);
-    hash = hashFloat(hash, camera.viewportSize.x);
-    hash = hashFloat(hash, camera.viewportSize.y);
-    hash = hashFloat(hash, camera.orthographicSize);
-    hash = hashFloat(hash, camera.fovDegrees);
-    hash = hashFloat(hash, camera.nearPlane);
-    hash = hashFloat(hash, camera.farPlane);
-    return hash;
+    return RenderSignatureBuilder::overlayCameraSignature(camera);
 }
 
 std::uint64_t OverlayRenderableBuilder::layerSignature(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
-    std::uint64_t hash = hashCombine(kFnvOffset, static_cast<std::uint32_t>(layer));
-    for (const ViewportOverlayTriangle& triangle : frame.triangles) {
-        if (triangle.layer != layer) {
-            continue;
-        }
-        hash = hashCombine(hash, static_cast<std::uint32_t>(triangle.layer));
-        hash = hashCombine(hash, triangle.color);
-        hash = hashVec3(hash, triangle.a);
-        hash = hashVec3(hash, triangle.b);
-        hash = hashVec3(hash, triangle.c);
-    }
-    for (const ViewportOverlayLine& line : frame.lines) {
-        if (line.layer != layer) {
-            continue;
-        }
-        hash = hashCombine(hash, static_cast<std::uint32_t>(line.layer));
-        hash = hashCombine(hash, line.color);
-        hash = hashFloat(hash, line.widthPixels);
-        hash = hashVec3(hash, line.start);
-        hash = hashVec3(hash, line.end);
-    }
-    for (const ViewportOverlayPoint& point : frame.points) {
-        if (point.layer != layer) {
-            continue;
-        }
-        hash = hashCombine(hash, static_cast<std::uint32_t>(point.layer));
-        hash = hashCombine(hash, point.color);
-        hash = hashFloat(hash, point.sizePixels);
-        hash = hashCombine(hash, point.outlineGrowthPixels.has_value() ? 1u : 0u);
-        if (point.outlineGrowthPixels.has_value()) {
-            hash = hashFloat(hash, *point.outlineGrowthPixels);
-        }
-        hash = hashVec3(hash, point.position);
-    }
-    return hash;
+    return RenderSignatureBuilder::overlayLayerSignature(frame, layer);
 }
 
 OverlayRenderState OverlayRenderableBuilder::makeState(
@@ -193,22 +115,6 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
     appendPointPass(plan, points, camera, layer, blendOrder, true);
     appendPointPass(plan, points, camera, layer, blendOrder, false);
     return plan;
-}
-
-std::uint64_t OverlayRenderableBuilder::hashCombine(std::uint64_t hash, std::uint64_t value) {
-    hash ^= value;
-    hash *= kFnvPrime;
-    return hash;
-}
-
-std::uint64_t OverlayRenderableBuilder::hashFloat(std::uint64_t hash, float value) {
-    return hashCombine(hash, std::bit_cast<std::uint32_t>(value));
-}
-
-std::uint64_t OverlayRenderableBuilder::hashVec3(std::uint64_t hash, QVec3 value) {
-    hash = hashFloat(hash, value.x);
-    hash = hashFloat(hash, value.y);
-    return hashFloat(hash, value.z);
 }
 
 std::vector<const ViewportOverlayLine*> OverlayRenderableBuilder::linesForLayer(

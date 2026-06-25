@@ -17,6 +17,7 @@
 
 namespace quader {
 
+class EditorHistoryService;
 class QuaderEditorApi;
 class SceneDocument;
 
@@ -52,6 +53,9 @@ public:
     [[nodiscard]] const std::vector<SceneTransformDragTarget>& targets() const;
 
     DocumentCommandResult previewTransform(EntityId entity, TransformComponent transform);
+    DocumentCommandResult previewWorldTransformDelta(SceneDocument& document, const QMat4& worldTransformDelta);
+    DocumentCommandResult accept();
+    DocumentCommandResult commit(EditorHistoryService& history);
     QuaderApiVoidResult commit(QuaderEditorApi& editor);
     DocumentCommandResult cancel();
     void reset();

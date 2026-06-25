@@ -6,46 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/SceneDocument.h"
 
-#include "math/GlmBridge.h"
+#include "scene/SceneTransform.h"
 
 #include <algorithm>
 #include <utility>
-
-#include <glm/gtx/matrix_decompose.hpp>
-#include <glm/gtx/quaternion.hpp>
 
 namespace quader {
 namespace {
 
 std::uint32_t entityKey(entt::entity entity) {
     return static_cast<std::uint32_t>(entt::to_integral(entity));
-}
-
-QMat4 identityMatrix() {
-    return QMat4{};
-}
-
-QMat4 multiply(const QMat4& left, const QMat4& right) {
-    return fromGlm(toGlm(left) * toGlm(right));
-}
-
-TransformComponent transformFromMatrix(const QMat4& matrix) {
-    glm::vec3 scale{1.0f};
-    glm::quat orientation{1.0f, 0.0f, 0.0f, 0.0f};
-    glm::vec3 translation{0.0f};
-    glm::vec3 skew{0.0f};
-    glm::vec4 perspective{0.0f};
-    if (!glm::decompose(toGlm(matrix), scale, orientation, translation, skew, perspective)) {
-        return TransformComponent{};
-    }
-
-    orientation = glm::normalize(orientation);
-    const glm::vec3 euler = glm::eulerAngles(orientation);
-    return TransformComponent{
-            .position = fromGlm(translation),
-            .rotationEuler = fromGlm(euler),
-            .scale = fromGlm(scale),
-    };
 }
 
 void removeChild(std::vector<EntityId>& children, EntityId child) {
@@ -307,9 +277,13 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
     }
 
     if (preserveWorldTransform) {
-        const QMat4 parentWorld = newParent == InvalidEntityId ? identityMatrix() : worldTransformMatrix(newParent);
+        const QMat4 parentWorld = newParent == InvalidEntityId
+                ? sceneTransformIdentityMatrix()
+                : worldTransformMatrix(newParent);
         if (TransformComponent* localTransform = transform(child)) {
-            *localTransform = transformFromMatrix(multiply(inverse(parentWorld), childWorld));
+            *localTransform = transformComponentFromMatrix(
+                    sceneLocalMatrixFromWorldMatrix(parentWorld, childWorld),
+                    localTransform->rotationEuler);
         }
     }
 
@@ -677,18 +651,18 @@ QMat4 SceneDocument::localTransformMatrix(EntityId id) const {
     if (const TransformComponent* component = transform(id)) {
         return composeTransform(component->spatialTransform());
     }
-    return identityMatrix();
+    return sceneTransformIdentityMatrix();
 }
 
 QMat4 SceneDocument::worldTransformMatrix(EntityId id) const {
     if (requireEntity(id) == entt::null) {
-        return identityMatrix();
+        return sceneTransformIdentityMatrix();
     }
     const EntityId parentId = parent(id);
     if (parentId == InvalidEntityId) {
         return localTransformMatrix(id);
     }
-    return multiply(worldTransformMatrix(parentId), localTransformMatrix(id));
+    return sceneTransformMultiply(worldTransformMatrix(parentId), localTransformMatrix(id));
 }
 
 entt::entity SceneDocument::enttEntity(EntityId id) const {

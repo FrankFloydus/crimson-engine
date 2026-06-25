@@ -51,10 +51,9 @@ protected:
 
     virtual void appendButtonClasses(UIElement& button) const = 0;
     virtual void appendButtonAttributes(UIElement& button) const;
+    virtual void appendButtonContent(UIElement& button) const;
 
 private:
-    void appendButtonContent(UIElement& button) const;
-
     std::string elementId_;
     std::string label_;
     std::optional<UIIconId> icon_;

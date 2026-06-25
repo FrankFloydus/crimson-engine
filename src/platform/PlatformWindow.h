@@ -14,6 +14,9 @@
 
 namespace quader {
 
+inline constexpr int kPlatformWindowMinimumWidth = 800;
+inline constexpr int kPlatformWindowMinimumHeight = 600;
+
 /**
  * Stores the Platform Window Options data contract used by the platform integration layer.
  */
@@ -52,8 +55,8 @@ struct PlatformWindowChromeResizeDrag {
     PlatformWindowChromeFrame start;
     int deltaX = 0;
     int deltaY = 0;
-    int minWidth = 640;
-    int minHeight = 360;
+    int minWidth = kPlatformWindowMinimumWidth;
+    int minHeight = kPlatformWindowMinimumHeight;
     SDL_HitTestResult edge = SDL_HITTEST_NORMAL;
 };
 

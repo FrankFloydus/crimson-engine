@@ -8,11 +8,10 @@
 
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApiTypes.h"
-#include "editor/commands/EditorCommandRegistry.h"
-#include "editor/input/QuaderKeybindingService.h"
+#include "api/QuaderKeybindingTypes.h"
 
 #include <filesystem>
-#include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,6 +60,10 @@ struct QuaderViewportKeybindingContext {
 class QuaderCommandsApi final {
 public:
     QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+    ~QuaderCommandsApi();
+
+    QuaderCommandsApi(const QuaderCommandsApi&) = delete;
+    QuaderCommandsApi& operator=(const QuaderCommandsApi&) = delete;
 
     QuaderApiVoidResult execute(std::string_view commandId);
     QuaderApiVoidResult execute(QuaderCommandId commandId);
@@ -118,33 +121,8 @@ public:
     QuaderApiVoidResult setKeybindingStoragePath(std::filesystem::path path);
 
 private:
-    void registerCommands();
-    void registerDefaultKeybindings();
-    void registerViewportDefaultKeybindings();
-    void registerCommand(
-            QuaderCommandId id,
-            std::string label,
-            std::function<QuaderApiVoidResult()> execute,
-            std::string shortcut = {},
-            std::function<bool()> enabled = {},
-            bool visible = true);
-    void registerCommand(
-            std::string id,
-            std::string label,
-            std::function<QuaderApiVoidResult()> execute,
-            std::string shortcut = {},
-            std::function<bool()> enabled = {},
-            bool visible = true);
-    void registerAlias(std::string aliasId, QuaderCommandId targetId);
-    void registerAlias(std::string aliasId, std::string targetId);
-    [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
-    [[nodiscard]] std::string canonicalTargetId(std::string_view commandId) const;
-
-    QuaderApi& api_;
-    QuaderViewportApi& viewports_;
-    QuaderToolsApi& tools_;
-    EditorCommandRegistry registry_;
-    QuaderKeybindingService keybindings_;
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace quader

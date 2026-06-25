@@ -10,6 +10,9 @@
 
 #include <editor/modeling/runtime/session.h>
 
+#include <algorithm>
+#include <cstddef>
+
 namespace qdr_test {
 
 inline quader_editor_core::PolygonObject make_object(int id, quader_poly::Document document, bool selected = true)
@@ -30,6 +33,49 @@ inline quader_editor_core::EditorSession selected_cube_session()
 	REQUIRE(result.changed);
 	REQUIRE(session.objects().size() == 1U);
 	return session;
+}
+
+inline const quader_editor_core::PolygonObject* find_object(const quader_editor_core::EditorSession& session, int object_id)
+{
+	const auto& objects = session.objects();
+	const auto it = std::find_if(objects.begin(), objects.end(), [object_id](const quader_editor_core::PolygonObject& object) {
+		return object.id == object_id;
+	});
+	return it == objects.end() ? nullptr : &*it;
+}
+
+inline const quader_editor_core::PolygonObject& require_object(const quader_editor_core::EditorSession& session, int object_id)
+{
+	const quader_editor_core::PolygonObject* object = find_object(session, object_id);
+	REQUIRE(object != nullptr);
+	return *object;
+}
+
+inline std::size_t selected_face_count(const quader_editor_core::EditorSession& session)
+{
+	std::size_t count = 0;
+	for (const quader_editor_core::PolygonObject& object : session.objects()) {
+		count += object.selection.faces.size();
+	}
+	return count;
+}
+
+inline std::size_t selected_vertex_count(const quader_editor_core::EditorSession& session)
+{
+	std::size_t count = 0;
+	for (const quader_editor_core::PolygonObject& object : session.objects()) {
+		count += object.selection.vertices.size();
+	}
+	return count;
+}
+
+inline std::size_t selected_edge_count(const quader_editor_core::EditorSession& session)
+{
+	std::size_t count = 0;
+	for (const quader_editor_core::PolygonObject& object : session.objects()) {
+		count += object.selection.edges.size();
+	}
+	return count;
 }
 
 } // namespace qdr_test

@@ -18,6 +18,7 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | libpng | http://www.libpng.org/pub/png/libpng.html | vcpkg `1.6.58` | libpng license, see `licenses/libpng-Libpng-2.0.txt` | FreeType transitive image dependency. |
 | zlib | https://zlib.net/ | vcpkg `1.3.2` | zlib license, see `licenses/zlib-Zlib.txt` | libpng/FreeType transitive compression dependency. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
+| Nova Mono | https://github.com/google/fonts/tree/main/ofl/novamono | Google Fonts commit `e2ff3c28d1ce433a95ee071a0861b2a75235ef9b`, font copied to `resources/fonts/NovaMono.ttf` | SIL Open Font License 1.1, see `licenses/google-fonts-nova-mono-OFL-1.1.txt` | Secondary text in compact toolbar buttons. |
 | Tracy Profiler | https://github.com/wolfpld/tracy | external checkout when `QUADER_ENABLE_TRACY=ON` | BSD 3-Clause, see the external checkout `LICENSE` | Optional diagnostic instrumentation for local performance captures. |
 
 ## OpenMesh Source Policy

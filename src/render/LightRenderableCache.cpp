@@ -8,6 +8,7 @@
 
 #include "math/GlmBridge.h"
 #include "render/FilamentUtils.h"
+#include "render/RenderSignatureBuilder.h"
 
 #include <filament/LightManager.h>
 #include <utils/EntityManager.h>
@@ -55,25 +56,40 @@ void LightRenderableCache::shutdown() {
     scene_ = nullptr;
 }
 
+bool LightRenderableCache::contains(EntityId entityId) const {
+    return lightProxies_.contains(entityId);
+}
+
+bool LightRenderableCache::needsRebuild(EntityId entityId, const LightComponent& light) const {
+    const auto existing = lightProxies_.find(entityId);
+    return existing == lightProxies_.end() ||
+            existing->second.rebuildSignature != lightSignature(light);
+}
+
 void LightRenderableCache::syncLight(EntityId entityId, const LightComponent& light, const QMat4& worldTransform) {
     if (!engine_ || !scene_) {
         return;
     }
 
-    remove(entityId);
+    const std::uint64_t nextRebuildSignature = lightSignature(light);
+    const std::uint64_t nextTransformSignature = lightTransformSignature(worldTransform);
+    if (needsRebuild(entityId, light)) {
+        remove(entityId);
+        LightProxy proxy = createLightProxy(
+                entityId,
+                light,
+                worldTransform,
+                nextRebuildSignature,
+                nextTransformSignature);
+        lightProxies_.emplace(entityId, proxy);
+        return;
+    }
 
-    LightProxy proxy;
-    proxy.entity = utils::EntityManager::get().create();
-    proxy.sourceEntity = entityId;
-
-    filament::LightManager::Builder(toFilamentLightType(light.type))
-            .color({light.color.x, light.color.y, light.color.z})
-            .intensity(light.intensity)
-            .direction(directionFromMatrix(worldTransform))
-            .castShadows(light.castsShadows)
-            .build(*engine_, proxy.entity);
-    scene_->addEntity(proxy.entity);
-    lightProxies_.emplace(entityId, proxy);
+    auto existing = lightProxies_.find(entityId);
+    if (existing != lightProxies_.end() && existing->second.transformSignature != nextTransformSignature) {
+        updateLightTransform(existing->second, worldTransform);
+        existing->second.transformSignature = nextTransformSignature;
+    }
 }
 
 void LightRenderableCache::remove(EntityId entityId) {
@@ -95,6 +111,49 @@ void LightRenderableCache::removeExcept(const std::unordered_set<EntityId>& live
             ++it;
         }
     }
+}
+
+std::uint64_t LightRenderableCache::lightSignature(const LightComponent& light) {
+    return RenderSignatureBuilder::lightSignature(light);
+}
+
+std::uint64_t LightRenderableCache::lightTransformSignature(const QMat4& worldTransform) {
+    return RenderSignatureBuilder::lightTransformSignature(worldTransform);
+}
+
+LightRenderableCache::LightProxy LightRenderableCache::createLightProxy(
+        EntityId entityId,
+        const LightComponent& light,
+        const QMat4& worldTransform,
+        std::uint64_t rebuildSignature,
+        std::uint64_t transformSignature) {
+    LightProxy proxy;
+    proxy.entity = utils::EntityManager::get().create();
+    proxy.sourceEntity = entityId;
+    proxy.rebuildSignature = rebuildSignature;
+    proxy.transformSignature = transformSignature;
+
+    filament::LightManager::Builder(toFilamentLightType(light.type))
+            .color({light.color.x, light.color.y, light.color.z})
+            .intensity(light.intensity)
+            .direction(directionFromMatrix(worldTransform))
+            .castShadows(light.castsShadows)
+            .build(*engine_, proxy.entity);
+    scene_->addEntity(proxy.entity);
+    return proxy;
+}
+
+void LightRenderableCache::updateLightTransform(const LightProxy& proxy, const QMat4& worldTransform) {
+    if (!engine_ || !proxy.entity) {
+        return;
+    }
+
+    auto& lightManager = engine_->getLightManager();
+    const filament::LightManager::Instance instance = lightManager.getInstance(proxy.entity);
+    if (!instance) {
+        return;
+    }
+    lightManager.setDirection(instance, directionFromMatrix(worldTransform));
 }
 
 void LightRenderableCache::destroyLightProxy(LightProxy& proxy) {

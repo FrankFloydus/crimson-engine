@@ -6,7 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "assets/AssetRegistry.h"
 #include "assets/MeshAsset.h"
+#include "assets/TextureAsset.h"
 #include "core/ColorSpace.h"
+#include "render/LightRenderableCache.h"
+#include "render/MaterialBindingService.h"
+#include "render/MeshRenderableFactory.h"
+#include "render/RenderSignatureBuilder.h"
 #include "render/RenderLayers.h"
 #include "render/ViewportRenderPassCoordinator.h"
 #include "render/ViewportOverlayFrame.h"
@@ -21,11 +26,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include <utility>
 
 using namespace quader;
@@ -80,7 +88,112 @@ std::size_t triangleCountFor(const ViewportOverlayFrame& frame, ViewportOverlayL
             }));
 }
 
+std::string readSourceFile(std::initializer_list<std::string_view> parts) {
+    std::filesystem::path path = QUADER_SOURCE_DIR;
+    for (std::string_view part : parts) {
+        path /= std::string(part);
+    }
+    std::ifstream file(path);
+    EXPECT_TRUE(file.is_open()) << path.string();
+    return {
+            std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>()};
+}
+
 } // namespace
+
+TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
+    AssetRegistry assets;
+    TextureAsset baseColor;
+    baseColor.name = "Base Color";
+    const AssetId baseColorTexture = assets.addTexture(baseColor);
+    TextureAsset roughness;
+    roughness.name = "Roughness";
+    const AssetId roughnessTexture = assets.addTexture(roughness);
+
+    MaterialDocument material;
+    material.revision.value = 7u;
+    material.textureSlots.emplace(MaterialTextureSlot::Roughness, roughnessTexture);
+    material.textureSlots.emplace(MaterialTextureSlot::BaseColor, baseColorTexture);
+    MaterialDocument reorderedMaterial = material;
+    reorderedMaterial.textureSlots.clear();
+    reorderedMaterial.textureSlots.emplace(MaterialTextureSlot::BaseColor, baseColorTexture);
+    reorderedMaterial.textureSlots.emplace(MaterialTextureSlot::Roughness, roughnessTexture);
+
+    MaterialBindingService materialBinding;
+    EXPECT_EQ(materialBinding.materialRevision(assets, &material),
+            RenderSignatureBuilder::materialSignature(assets, &material));
+    EXPECT_EQ(RenderSignatureBuilder::materialSignature(assets, &material),
+            RenderSignatureBuilder::materialSignature(assets, &reorderedMaterial));
+
+    MeshAsset mesh = makeOverlayTriangleMesh();
+    RenderSignatureBuilder meshSeed;
+    meshSeed.addValue(42u).addVec3({1.0f, 2.0f, 3.0f});
+    EXPECT_EQ(MeshRenderableFactory::meshAssetSignature(meshSeed.value(), mesh),
+            RenderSignatureBuilder::meshAssetSignature(meshSeed.value(), mesh));
+
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = rgba8(255, 128, 64, 255),
+            .widthPixels = 2.0f,
+    });
+    EXPECT_EQ(OverlayRenderableBuilder::frameSignature(frame),
+            RenderSignatureBuilder::overlayFrameSignature(frame));
+    EXPECT_EQ(OverlayRenderableBuilder::cameraSignature(testOverlayCamera()),
+            RenderSignatureBuilder::overlayCameraSignature(testOverlayCamera()));
+    EXPECT_EQ(OverlayRenderableBuilder::layerSignature(frame, ViewportOverlayLayer::SourceWire),
+            RenderSignatureBuilder::overlayLayerSignature(frame, ViewportOverlayLayer::SourceWire));
+}
+
+TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {
+    const std::array<std::string_view, 4u> cacheSources = {
+            "src/render/MaterialBindingService.cpp",
+            "src/render/MeshRenderableFactory.cpp",
+            "src/render/ToolPreviewRenderableCache.cpp",
+            "src/render/overlay/OverlayRenderableBuilder.cpp",
+    };
+    for (const std::string_view source : cacheSources) {
+        const std::string text = readSourceFile({source});
+        EXPECT_EQ(text.find("kFnv"), std::string::npos);
+        EXPECT_EQ(text.find("hashCombine"), std::string::npos);
+        EXPECT_EQ(text.find("hashFloat"), std::string::npos);
+        EXPECT_EQ(text.find("hashVec3"), std::string::npos);
+        EXPECT_NE(text.find("RenderSignatureBuilder"), std::string::npos);
+    }
+}
+
+TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
+    LightComponent light;
+    QMat4 transform;
+    const std::uint64_t rebuildSignature = LightRenderableCache::lightSignature(light);
+    const std::uint64_t transformSignature = LightRenderableCache::lightTransformSignature(transform);
+
+    QMat4 movedTransform = transform;
+    movedTransform.values[12] = 5.0f;
+    EXPECT_EQ(LightRenderableCache::lightSignature(light), rebuildSignature);
+    EXPECT_NE(LightRenderableCache::lightTransformSignature(movedTransform), transformSignature);
+
+    LightComponent recoloredLight = light;
+    recoloredLight.color.x = 0.25f;
+    EXPECT_NE(LightRenderableCache::lightSignature(recoloredLight), rebuildSignature);
+}
+
+TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
+    const std::string header = readSourceFile({"src", "render", "LightRenderableCache.h"});
+    const std::string source = readSourceFile({"src", "render", "LightRenderableCache.cpp"});
+    const std::string syncSource = readSourceFile({"src", "render", "SceneRenderSyncService.cpp"});
+
+    EXPECT_NE(header.find("rebuildSignature"), std::string::npos);
+    EXPECT_NE(header.find("transformSignature"), std::string::npos);
+    EXPECT_NE(source.find("needsRebuild(entityId, light)"), std::string::npos);
+    EXPECT_NE(source.find("updateLightTransform(existing->second, worldTransform)"), std::string::npos);
+    EXPECT_NE(syncSource.find("lightCache_.syncLight"), std::string::npos);
+    EXPECT_EQ(syncSource.find("lightSignature"), std::string::npos);
+    EXPECT_EQ(syncSource.find("updateLightTransform"), std::string::npos);
+}
 
 TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds) {
     SceneDocument document;

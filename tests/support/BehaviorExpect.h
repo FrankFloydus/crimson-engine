@@ -11,6 +11,7 @@
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
 
 #include <cstddef>
+#include <initializer_list>
 #include <optional>
 #include <string_view>
 
@@ -42,9 +43,37 @@ public:
 
     SceneExpect& entityCount(std::size_t count);
     SceneExpect& hasAlias(std::string_view alias);
+    SceneExpect& missingAlias(std::string_view alias);
+    SceneExpect& namedExists(std::string_view name);
+    SceneExpect& namedMissing(std::string_view name);
+    SceneExpect& aliasName(std::string_view alias, std::string_view name);
+    SceneExpect& aliasKind(std::string_view alias, QuaderEntityKind kind);
+    SceneExpect& parent(std::string_view alias, std::string_view parentAlias);
+    SceneExpect& noParent(std::string_view alias);
+    SceneExpect& childCount(std::string_view alias, std::size_t count);
+    SceneExpect& selectedAliases(std::initializer_list<std::string_view> aliases);
+    SceneExpect& activeAlias(std::string_view alias);
     SceneExpect& selectedAliasIs(std::string_view alias);
+    SceneExpect& visible(std::string_view alias, bool expected);
+    SceneExpect& locked(std::string_view alias, bool expected);
+    SceneExpect& hasMesh(std::string_view alias, AssetId mesh);
+    SceneExpect& hasMaterial(std::string_view alias, AssetId material);
+    SceneExpect& worldPositionNear(std::string_view alias, QVec3 expected, float epsilon = 0.001f);
     SceneExpect& selectedBoundsCenterNear(QVec3 expected, float epsilon = 0.001f);
     SceneExpect& entityTransformNear(std::string_view alias, TransformComponent expected, float epsilon = 0.001f);
+
+private:
+    const BehaviorScenario& scenario_;
+};
+
+/**
+ * Owns Asset Expect behavior within the behavior test DSL.
+ */
+class AssetExpect final {
+public:
+    explicit AssetExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
+
+    AssetExpect& textureCount(std::size_t count);
 
 private:
     const BehaviorScenario& scenario_;
@@ -140,6 +169,8 @@ public:
 
     UndoRedoExpect& canUndo(bool expected = true);
     UndoRedoExpect& canRedo(bool expected = true);
+    UndoRedoExpect& undoLabel(std::string_view expected);
+    UndoRedoExpect& redoLabel(std::string_view expected);
 
 private:
     const BehaviorScenario& scenario_;

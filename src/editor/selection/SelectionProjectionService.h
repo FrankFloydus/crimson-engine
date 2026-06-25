@@ -26,6 +26,15 @@ class EditorSession;
 namespace quader {
 
 /**
+ * Stores the outcome of projecting scene object selection into the modeling runtime.
+ */
+struct RuntimeObjectSelectionProjectionResult {
+    bool ok = true;
+    bool changed = false;
+    bool hasModelingObjects = false;
+};
+
+/**
  * Owns projection policy between scene selection state and runtime modeling selection state.
  */
 class SelectionProjectionService final {
@@ -39,6 +48,12 @@ public:
             const SceneDocument& scene,
             const ModelingObjectRuntimeMap& objectRegistry,
             bool forceObjectMode = false) const;
+
+    RuntimeObjectSelectionProjectionResult projectObjectSelectionForSceneEntities(
+            quader_editor_core::EditorSession& session,
+            std::span<const EntityId> entities,
+            EntityId active,
+            const ModelingObjectRuntimeMap& objectRegistry) const;
 
     bool projectSceneSelectionFromModeling(
             const quader_editor_core::EditorSession& session,

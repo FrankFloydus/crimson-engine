@@ -394,6 +394,8 @@ TEST(BuildGuardrailTests, UITokenConfigResourceIsPackagedWithRuntime) {
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rml/viewport-shell.rml");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rcss/app-shell.rcss");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-ui.tokens.json");
+    expectContains(rootCMake, "resources/fonts/NovaMono.ttf");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/NovaMono.ttf");
     expectContains(rootCMake, "copy_if_different");
 
     EXPECT_FALSE(readSourceFile("resources/ui/rml/viewport-shell.rml").empty());
@@ -502,6 +504,8 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(appSource, "window_.minimize()");
     expectContains(appSource, "window_.toggleMaximizeRestore()");
     expectContains(platformHeader, "struct PlatformWindowOptions");
+    expectContains(platformHeader, "kPlatformWindowMinimumWidth = 800");
+    expectContains(platformHeader, "kPlatformWindowMinimumHeight = 600");
     expectContains(platformHeader, "refreshNativeChrome()");
     expectContains(platformHeader, "PlatformWindowChromeHitTest");
     expectContains(platformHeader, "platformWindowChromeHitTestResult");
@@ -509,6 +513,7 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(platformHeader, "processChromeEvent");
     expectContains(platformHeader, "releaseChromeResizeCursor");
     expectContains(platformSource, "SDL_WINDOW_BORDERLESS");
+    expectContains(platformSource, "SDL_SetWindowMinimumSize(window_, kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight)");
     expectContains(platformSource, "SDL_WINDOW_INPUT_FOCUS");
     expectContains(platformSource, "SDL_HITTEST_DRAGGABLE");
     expectContains(platformSource, "SDL_HITTEST_RESIZE_TOPLEFT");
@@ -566,6 +571,8 @@ TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
     expectContains(manifest, "licenses/libpng-Libpng-2.0.txt");
     expectContains(manifest, "licenses/zlib-Zlib.txt");
     expectContains(manifest, "licenses/lodepng-Zlib.txt");
+    expectContains(manifest, "Nova Mono");
+    expectContains(manifest, "licenses/google-fonts-nova-mono-OFL-1.1.txt");
 
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/catch2-BSL-1.0.txt").empty());
@@ -581,4 +588,5 @@ TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/libpng-Libpng-2.0.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/zlib-Zlib.txt").empty());
     EXPECT_FALSE(readSourceFile("thirdparty/licenses/lodepng-Zlib.txt").empty());
+    EXPECT_FALSE(readSourceFile("thirdparty/licenses/google-fonts-nova-mono-OFL-1.1.txt").empty());
 }

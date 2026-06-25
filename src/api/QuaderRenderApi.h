@@ -22,6 +22,13 @@ class QuaderQueryApi;
 class SceneRenderBridge;
 
 /**
+ * Stores the result of submitting editor-owned viewport overlay payloads to the render bridge.
+ */
+struct QuaderRenderOverlaySubmission {
+    bool visible = false;
+};
+
+/**
  * Exposes Quader Render API operations through the public Quader API surface.
  */
 class QuaderRenderApi final {
@@ -30,6 +37,11 @@ public:
 
     QuaderApiVoidResult syncScene(SceneRenderBridge& bridge);
     QuaderApiVoidResult syncToolPreviews(SceneRenderBridge& bridge);
+    QuaderApiResult<QuaderRenderOverlaySubmission> syncSelectionOverlay(
+            SceneRenderBridge& bridge,
+            std::size_t viewportIndex,
+            std::uint8_t layerMask,
+            ViewportOverlayCamera camera);
     QuaderApiVoidResult setSelectionOverlay(
             SceneRenderBridge& bridge,
             std::size_t viewportIndex,

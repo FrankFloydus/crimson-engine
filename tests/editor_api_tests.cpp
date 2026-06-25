@@ -5,11 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
-#include "scene/document/ProjectSession.h"
-#include "editor/commands/ModelingCommandToolCatalog.h"
-#include "editor/selection/EditorSelectionService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
-#include "editor/tools/ViewportToolCatalog.h"
+#include "scene/document/ProjectSession.h"
+#include "viewport/HostViewportContractAdapter.h"
 
 #include <gtest/gtest.h>
 
@@ -20,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 namespace {
 
@@ -32,6 +31,23 @@ std::optional<quader::QuaderEntitySnapshot> entityNamed(
         }
     }
     return std::nullopt;
+}
+
+std::optional<quader::QuaderEntitySnapshot> entityById(
+        const quader::QuaderEditorApi& editor,
+        quader::EntityId id) {
+    return editor.query().entity(id);
+}
+
+std::vector<quader::EntityId> selectedEntities(const quader::QuaderEditorApi& editor) {
+    std::vector<quader::EntityId> selected;
+    for (const quader::QuaderEntitySnapshot& snapshot : editor.query().entities()) {
+        if (snapshot.selected) {
+            selected.push_back(snapshot.id);
+        }
+    }
+    std::sort(selected.begin(), selected.end());
+    return selected;
 }
 
 std::unordered_set<std::string> availableCommandIds(const quader::QuaderEditorApi& editor) {
@@ -112,6 +128,24 @@ std::string readTextFile(const std::filesystem::path& path) {
         text += '\n';
     }
     return text;
+}
+
+bool sameViewportShortcut(const quader::ViewportShortcut& left, const quader::ViewportShortcut& right) {
+    return left.kind == right.kind &&
+            left.context == right.context &&
+            left.tool == right.tool &&
+            left.selectionMode == right.selectionMode &&
+            left.mirrorAxis == right.mirrorAxis &&
+            left.gridPreset == right.gridPreset;
+}
+
+bool hasKeybinding(
+        const std::vector<quader::QuaderKeybindingRule>& rules,
+        std::string_view targetId,
+        std::string_view shortcut) {
+    return std::any_of(rules.begin(), rules.end(), [&](const quader::QuaderKeybindingRule& rule) {
+        return rule.targetId == targetId && rule.shortcut == shortcut;
+    });
 }
 
 } // namespace
@@ -351,6 +385,71 @@ TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
     EXPECT_EQ(action, quader::ViewportInputActionKind::Orbit);
 }
 
+TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
+    const std::filesystem::path path = keybindingTestPath("viewport-host-catalog");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    const std::vector<quader::QuaderKeybindingRule> rules = editor.commands().keybindings();
+    int checked = 0;
+    for (const quader::ViewportShortcutBindingDescriptor& descriptor : quader::viewportShortcutBindingCatalog()) {
+        quader::ViewportShortcut contractShortcut;
+        if (!quader::viewportShortcutFromContractTarget(descriptor.targetId, contractShortcut)) {
+            continue;
+        }
+
+        const std::optional<std::string> commandTarget =
+                quader::viewportCommandTargetIdForContractTarget(descriptor.targetId);
+        ASSERT_TRUE(commandTarget.has_value()) << descriptor.targetId;
+        EXPECT_TRUE(hasKeybinding(rules, *commandTarget, descriptor.shortcut))
+                << descriptor.targetId << " -> " << *commandTarget << " / " << descriptor.shortcut;
+
+        quader::ViewportShortcut commandShortcut;
+        ASSERT_TRUE(quader::viewportShortcutForCommandTargetId(*commandTarget, commandShortcut))
+                << *commandTarget;
+        EXPECT_TRUE(sameViewportShortcut(contractShortcut, commandShortcut))
+                << descriptor.targetId << " -> " << *commandTarget;
+        ++checked;
+    }
+
+    EXPECT_GT(checked, 0);
+}
+
+TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution) {
+    const std::filesystem::path path = keybindingTestPath("viewport-action-catalog");
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    const std::vector<quader::QuaderKeybindingRule> rules = editor.commands().keybindings();
+    quader::ViewportToolState state;
+    for (const quader::ViewportInputActionBindingDescriptor& descriptor : quader::viewportInputActionBindingCatalog()) {
+        EXPECT_TRUE(hasKeybinding(rules, descriptor.targetId, descriptor.shortcut))
+                << descriptor.targetId << " / " << descriptor.shortcut;
+
+        quader::ViewportInputActionKind catalogAction = quader::ViewportInputActionKind::None;
+        ASSERT_TRUE(quader::viewportInputActionForTargetId(descriptor.targetId, catalogAction))
+                << descriptor.targetId;
+        EXPECT_EQ(catalogAction, descriptor.action);
+
+        const std::optional<std::vector<quader::QuaderInputChord>> parsed =
+                quader::quaderInputParseShortcut(descriptor.shortcut);
+        ASSERT_TRUE(parsed.has_value()) << descriptor.shortcut;
+        ASSERT_EQ(parsed->size(), 1u) << descriptor.shortcut;
+
+        quader::ViewportInputActionKind resolvedAction = quader::ViewportInputActionKind::None;
+        ASSERT_TRUE(editor.commands().resolveViewportInputAction(
+                parsed->front(),
+                state,
+                true,
+                false,
+                resolvedAction))
+                << descriptor.targetId;
+        EXPECT_EQ(resolvedAction, descriptor.action) << descriptor.targetId;
+    }
+}
+
 TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcuts) {
     const std::filesystem::path path = keybindingTestPath("navigation-contexts");
     quader::ProjectSession session;
@@ -543,39 +642,49 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
                  quader::QuaderCommand::ModelingInvertMesh.string(),
                  quader::QuaderCommand::ModelingFlipHorizontal.string(),
                  quader::QuaderCommand::ModelingFlipVertical.string(),
+                  quader::QuaderCommand::ToolsActivateSelect.string(),
+                  quader::QuaderCommand::ToolsActivateMove.string(),
                  quader::QuaderCommand::ToolsActivateExtend.string(),
+                  quader::QuaderCommand::ToolsActivateRotate.string(),
+                  quader::QuaderCommand::ToolsActivateScale.string(),
+                  quader::QuaderCommand::ToolsActivateBox.string(),
+                  quader::QuaderCommand::ToolsActivateExtrude.string(),
+                  quader::QuaderCommand::ToolsActivateInsertEdgeLoop.string(),
+                  quader::QuaderCommand::ToolsActivateKnife.string(),
+                  quader::QuaderCommand::ToolsActivateCut.string(),
+                  quader::QuaderCommand::ToolsActivatePoly.string(),
+                  quader::QuaderCommand::ToolsActivateMirror.string(),
          }) {
         EXPECT_TRUE(ids.contains(std::string(neutral))) << neutral;
     }
 
-    const std::unordered_set<std::string_view> neutralModelingTools{
-            "delete_selection",
-            "clear_selection",
-            "select_all",
-            "invert_selection",
-            "copy_selection",
-            "paste_selection",
-            "duplicate_meshes",
-            "repeat_last_action",
-            "assign_material",
-            "apply_active_material",
-    };
-    for (const quader::CommandTool* tool : quader::modelingCommandTools()) {
-        ASSERT_NE(tool, nullptr);
-        const std::string legacy = "modeling.action." + std::string(tool->id());
-        EXPECT_NE(editor.commands().execute(legacy).errorMessage(), "Unknown command id.") << legacy;
-        if (!neutralModelingTools.contains(tool->id())) {
-            const std::string command = "modeling." + std::string(tool->id());
-            EXPECT_TRUE(ids.contains(command)) << command;
-            EXPECT_NE(editor.commands().execute(command).errorMessage(), "Unknown command id.") << command;
+    for (const quader::ModelingSelectionMode mode : {
+                 quader::ModelingSelectionMode::Object,
+                 quader::ModelingSelectionMode::Vertex,
+                 quader::ModelingSelectionMode::Edge,
+                 quader::ModelingSelectionMode::Face,
+         }) {
+        CommandTestHarness harness;
+        setupSelectionForMode(harness.editor, mode);
+        for (const quader::ModelingActionSurface surface : {
+                     quader::ModelingActionSurface::OperationsPanel,
+                     quader::ModelingActionSurface::ViewportContextMenu,
+             }) {
+            const std::vector<quader::ModelingActionItem> actions =
+                    harness.editor.modeling().availableActions({
+                            .surface = surface,
+                            .includeDisabled = true,
+                            .includeHidden = true,
+                    });
+            for (const quader::ModelingActionItem& action : actions) {
+                SCOPED_TRACE(action.actionId);
+                const std::string legacy = "modeling.action." + action.actionId;
+                EXPECT_NE(harness.editor.commands().execute(legacy).errorMessage(), "Unknown command id.") << legacy;
+                const std::string command = commandIdForContextAction(harness.editor, action);
+                EXPECT_FALSE(command.empty()) << action.actionId;
+                EXPECT_NE(harness.editor.commands().execute(command).errorMessage(), "Unknown command id.") << command;
+            }
         }
-    }
-
-    for (const quader::ViewportTool* tool : quader::viewportToolCatalog()) {
-        ASSERT_NE(tool, nullptr);
-        const std::string command = "tools.activate." + std::string(tool->id());
-        EXPECT_TRUE(ids.contains(command)) << command;
-        EXPECT_NE(editor.commands().execute(command).errorMessage(), "Unknown command id.") << command;
     }
 }
 
@@ -743,9 +852,10 @@ TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
     const quader::QuaderApiResult<quader::ModelingSelectionSummary> picked =
             harness.editor.selection().pickSelect(rightClickPick);
     ASSERT_TRUE(picked.ok()) << picked.errorMessage();
-    const quader::EditorSelectionState pickedState = harness.session.selection().state();
-    EXPECT_EQ(pickedState.target.kind, quader::EditorSelectionTargetKind::Group);
-    EXPECT_EQ(pickedState.target.entity, rightGroup.value().id);
+    const std::optional<quader::QuaderEntitySnapshot> pickedGroup =
+            entityById(harness.editor, rightGroup.value().id);
+    ASSERT_TRUE(pickedGroup.has_value());
+    EXPECT_TRUE(pickedGroup->active);
 
     const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(quader::QuaderCommand::DeleteSelection);
     ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
@@ -759,9 +869,11 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(session);
 
-    EXPECT_TRUE(editor.viewports().setLayout(quader::ViewportLayoutId::FourQuad).ok());
-    EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::FourQuad);
-    EXPECT_EQ(editor.viewports().activePaneCount(), 4u);
+    const quader::QuaderApiVoidResult unsupportedLayout =
+            editor.viewports().setLayout(quader::ViewportLayoutId::FourQuad);
+    EXPECT_FALSE(unsupportedLayout.ok());
+    EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::Single);
+    EXPECT_EQ(editor.viewports().activePaneCount(), 1u);
 
     EXPECT_TRUE(editor.viewports().setGridPreset(4).ok());
     EXPECT_EQ(editor.viewports().gridPreset(), 4);
@@ -825,19 +937,23 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
     ASSERT_TRUE(batch.ok()) << batch.errorMessage();
     EXPECT_TRUE(batch.changed());
 
-    ASSERT_NE(session.scene().name(first.value().id), nullptr);
-    EXPECT_EQ(session.scene().name(first.value().id)->name, "Renamed First");
-    ASSERT_NE(session.scene().transform(first.value().id), nullptr);
-    EXPECT_EQ(session.scene().transform(first.value().id)->position.x, 3.0f);
-    ASSERT_NE(session.scene().visibility(second.value().id), nullptr);
-    EXPECT_FALSE(session.scene().visibility(second.value().id)->visible);
-    ASSERT_NE(session.scene().lock(second.value().id), nullptr);
-    EXPECT_TRUE(session.scene().lock(second.value().id)->locked);
+    std::optional<quader::QuaderEntitySnapshot> firstAfterBatch = entityById(editor, first.value().id);
+    ASSERT_TRUE(firstAfterBatch.has_value());
+    EXPECT_EQ(firstAfterBatch->name, "Renamed First");
+    EXPECT_EQ(firstAfterBatch->transform.position.x, 3.0f);
+    std::optional<quader::QuaderEntitySnapshot> secondAfterBatch = entityById(editor, second.value().id);
+    ASSERT_TRUE(secondAfterBatch.has_value());
+    EXPECT_FALSE(secondAfterBatch->visible);
+    EXPECT_TRUE(secondAfterBatch->locked);
 
     EXPECT_TRUE(editor.history().undo().ok());
-    EXPECT_EQ(session.scene().name(first.value().id)->name, "First");
-    EXPECT_TRUE(session.scene().visibility(second.value().id)->visible);
-    EXPECT_FALSE(session.scene().lock(second.value().id)->locked);
+    firstAfterBatch = entityById(editor, first.value().id);
+    ASSERT_TRUE(firstAfterBatch.has_value());
+    EXPECT_EQ(firstAfterBatch->name, "First");
+    secondAfterBatch = entityById(editor, second.value().id);
+    ASSERT_TRUE(secondAfterBatch.has_value());
+    EXPECT_TRUE(secondAfterBatch->visible);
+    EXPECT_FALSE(secondAfterBatch->locked);
 }
 
 TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
@@ -865,25 +981,28 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
     ASSERT_TRUE(batch.ok()) << batch.errorMessage();
     EXPECT_TRUE(batch.changed());
 
-    ASSERT_NE(session.scene().visibility(entity.value().id), nullptr);
-    EXPECT_TRUE(session.scene().visibility(entity.value().id)->visible);
-    ASSERT_NE(session.scene().lock(entity.value().id), nullptr);
-    EXPECT_FALSE(session.scene().lock(entity.value().id)->locked);
-    ASSERT_NE(session.scene().transform(entity.value().id), nullptr);
-    EXPECT_EQ(session.scene().transform(entity.value().id)->position.x, 2.0f);
+    std::optional<quader::QuaderEntitySnapshot> snapshot = entityById(editor, entity.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_TRUE(snapshot->visible);
+    EXPECT_FALSE(snapshot->locked);
+    EXPECT_EQ(snapshot->transform.position.x, 2.0f);
 
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_TRUE(session.scene().visibility(entity.value().id)->visible);
-    EXPECT_FALSE(session.scene().lock(entity.value().id)->locked);
-    EXPECT_EQ(session.scene().transform(entity.value().id)->position.x, 0.0f);
+    snapshot = entityById(editor, entity.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_TRUE(snapshot->visible);
+    EXPECT_FALSE(snapshot->locked);
+    EXPECT_EQ(snapshot->transform.position.x, 0.0f);
 
     ASSERT_TRUE(editor.history().redo().ok());
-    EXPECT_TRUE(session.scene().visibility(entity.value().id)->visible);
-    EXPECT_FALSE(session.scene().lock(entity.value().id)->locked);
-    EXPECT_EQ(session.scene().transform(entity.value().id)->position.x, 2.0f);
+    snapshot = entityById(editor, entity.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_TRUE(snapshot->visible);
+    EXPECT_FALSE(snapshot->locked);
+    EXPECT_EQ(snapshot->transform.position.x, 2.0f);
 }
 
-TEST(EditorApiTests, SelectionApiDelegatesTypedTargetsToEditorSelectionService) {
+TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(session);
 
@@ -899,26 +1018,31 @@ TEST(EditorApiTests, SelectionApiDelegatesTypedTargetsToEditorSelectionService) 
     ASSERT_TRUE(second.ok()) << second.errorMessage();
 
     ASSERT_TRUE(editor.selection().selectObject(first.value()).ok());
-    quader::EditorSelectionState state = session.selection().state();
-    EXPECT_EQ(state.target.kind, quader::EditorSelectionTargetKind::Object);
-    EXPECT_EQ(state.target.entity, first.value().entity);
-    EXPECT_EQ(state.target.modelingObjectId, first.value().modelingObjectId);
+    quader::ModelingSelectionSummary summary = editor.modeling().selectionSummary();
+    EXPECT_EQ(summary.mode, quader::ModelingSelectionMode::Object);
+    EXPECT_EQ(summary.activeObjectId, first.value().modelingObjectId);
+    const std::optional<quader::QuaderEntitySnapshot> firstSnapshot = entityById(editor, first.value().entity);
+    ASSERT_TRUE(firstSnapshot.has_value());
+    EXPECT_TRUE(firstSnapshot->active);
 
     ASSERT_TRUE(editor.selection().selectFace(first.value(), 1).ok());
-    state = session.selection().state();
-    EXPECT_EQ(state.target.kind, quader::EditorSelectionTargetKind::Face);
-    EXPECT_EQ(state.target.entity, first.value().entity);
-    EXPECT_EQ(state.target.face, 1);
+    summary = editor.modeling().selectionSummary();
+    EXPECT_EQ(summary.mode, quader::ModelingSelectionMode::Face);
+    EXPECT_EQ(summary.activeObjectId, first.value().modelingObjectId);
+    EXPECT_EQ(summary.activeFaceId, 1);
+    EXPECT_EQ(summary.selectedFaceCount, 1u);
 
     ASSERT_TRUE(editor.selection().setMode(quader::ModelingSelectionMode::Object).ok());
     ASSERT_TRUE(editor.selection().selectObjects({first.value().entity, second.value().entity}, second.value().entity).ok());
     const quader::QuaderApiResult<quader::QuaderEntityRef> group = editor.scene().groupSelection("Selection Group");
     ASSERT_TRUE(group.ok()) << group.errorMessage();
     ASSERT_TRUE(editor.selection().setMode(quader::ModelingSelectionMode::Group).ok());
-    state = session.selection().state();
-    EXPECT_EQ(state.target.kind, quader::EditorSelectionTargetKind::Group);
-    EXPECT_EQ(state.target.entity, group.value().id);
-    EXPECT_EQ(state.mode, quader::ModelingSelectionMode::Group);
+    summary = editor.modeling().selectionSummary();
+    EXPECT_EQ(summary.mode, quader::ModelingSelectionMode::Group);
+    const std::optional<quader::QuaderEntitySnapshot> groupSnapshot = entityById(editor, group.value().id);
+    ASSERT_TRUE(groupSnapshot.has_value());
+    EXPECT_TRUE(groupSnapshot->active);
+    EXPECT_TRUE(groupSnapshot->selected);
 }
 
 TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPublicHistory) {
@@ -968,11 +1092,12 @@ TEST(EditorApiTests, AppCommandAliasesAndDirectOperationsShareChronologicalUndoS
     moved.position = {3.0f, 0.0f, 0.0f};
     const quader::QuaderApiVoidResult transformed = editor.scene().setTransform(original.entity, moved);
     ASSERT_TRUE(transformed.ok()) << transformed.errorMessage();
-    ASSERT_NE(session.scene().transform(original.entity), nullptr);
-    EXPECT_NEAR(session.scene().transform(original.entity)->position.x, 3.0f, 0.001f);
+    std::optional<quader::QuaderEntitySnapshot> originalSnapshot = entityById(editor, original.entity);
+    ASSERT_TRUE(originalSnapshot.has_value());
+    EXPECT_NEAR(originalSnapshot->transform.position.x, 3.0f, 0.001f);
     EXPECT_EQ(editor.query().history().undoLabel, "Set Transform");
 
-    const std::vector<quader::EntityId> selectedBeforeDelete = session.scene().selectedEntities();
+    const std::vector<quader::EntityId> selectedBeforeDelete = selectedEntities(editor);
     ASSERT_FALSE(selectedBeforeDelete.empty());
     const quader::QuaderApiVoidResult deleted = editor.commands().execute(quader::QuaderCommand::DeleteSelection);
     ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
@@ -983,8 +1108,9 @@ TEST(EditorApiTests, AppCommandAliasesAndDirectOperationsShareChronologicalUndoS
     EXPECT_EQ(editor.query().history().redoLabel, "Delete Selection");
 
     ASSERT_TRUE(editor.history().undo().ok());
-    ASSERT_NE(session.scene().transform(original.entity), nullptr);
-    EXPECT_NEAR(session.scene().transform(original.entity)->position.x, 0.0f, 0.001f);
+    originalSnapshot = entityById(editor, original.entity);
+    ASSERT_TRUE(originalSnapshot.has_value());
+    EXPECT_NEAR(originalSnapshot->transform.position.x, 0.0f, 0.001f);
     EXPECT_EQ(editor.query().history().redoLabel, "Set Transform");
 
     ASSERT_TRUE(editor.history().undo().ok());
@@ -994,8 +1120,9 @@ TEST(EditorApiTests, AppCommandAliasesAndDirectOperationsShareChronologicalUndoS
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_EQ(editor.query().entities().size(), 2u);
     ASSERT_TRUE(editor.history().redo().ok());
-    ASSERT_NE(session.scene().transform(original.entity), nullptr);
-    EXPECT_NEAR(session.scene().transform(original.entity)->position.x, 3.0f, 0.001f);
+    originalSnapshot = entityById(editor, original.entity);
+    ASSERT_TRUE(originalSnapshot.has_value());
+    EXPECT_NEAR(originalSnapshot->transform.position.x, 3.0f, 0.001f);
     ASSERT_TRUE(editor.history().redo().ok());
     EXPECT_LT(editor.query().entities().size(), 2u);
 }
@@ -1025,56 +1152,42 @@ TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
     ASSERT_TRUE(material.ok()) << material.errorMessage();
     ASSERT_TRUE(editor.assets().assignMaterialToEntity(source.entity, material.value().id).ok());
 
-    const quader::MeshComponent* sourceMesh = session.scene().mesh(source.entity);
-    ASSERT_NE(sourceMesh, nullptr);
-    quader::MeshComponent meshSettings = *sourceMesh;
-    meshSettings.castShadows = false;
-    meshSettings.doubleSided = false;
-    meshSettings.displayCollision = true;
-    ASSERT_TRUE(editor.scene().setMeshComponent(source.entity, meshSettings).ok());
-
     ASSERT_TRUE(editor.selection().selectObject(source).ok());
     const quader::QuaderApiVoidResult duplicated =
             editor.commands().execute(quader::QuaderCommand::DuplicateSelection);
     ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
 
-    ASSERT_EQ(session.scene().selectedEntities().size(), 1u);
-    const quader::EntityId duplicateEntity = session.scene().selectedEntities().front();
+    std::vector<quader::EntityId> selected = selectedEntities(editor);
+    ASSERT_EQ(selected.size(), 1u);
+    const quader::EntityId duplicateEntity = selected.front();
     EXPECT_NE(duplicateEntity, source.entity);
-    EXPECT_EQ(session.scene().parent(duplicateEntity), parent.value().id);
-    ASSERT_NE(session.scene().transform(duplicateEntity), nullptr);
-    EXPECT_NEAR(session.scene().transform(duplicateEntity)->position.x, 2.0f, 0.001f);
-    EXPECT_NEAR(session.scene().transform(duplicateEntity)->rotationEuler.z, 0.75f, 0.001f);
-    ASSERT_NE(session.scene().visibility(duplicateEntity), nullptr);
-    EXPECT_FALSE(session.scene().visibility(duplicateEntity)->visible);
-    ASSERT_NE(session.scene().lock(duplicateEntity), nullptr);
-    EXPECT_TRUE(session.scene().lock(duplicateEntity)->locked);
-    ASSERT_NE(session.scene().material(duplicateEntity), nullptr);
-    EXPECT_EQ(session.scene().material(duplicateEntity)->material, material.value().id);
-    ASSERT_NE(session.scene().mesh(duplicateEntity), nullptr);
-    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->castShadows);
-    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->doubleSided);
-    EXPECT_TRUE(session.scene().mesh(duplicateEntity)->displayCollision);
+    std::optional<quader::QuaderEntitySnapshot> duplicateSnapshot = entityById(editor, duplicateEntity);
+    ASSERT_TRUE(duplicateSnapshot.has_value());
+    EXPECT_EQ(duplicateSnapshot->parent, parent.value().id);
+    EXPECT_NEAR(duplicateSnapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(duplicateSnapshot->transform.rotationEuler.z, 0.75f, 0.001f);
+    EXPECT_FALSE(duplicateSnapshot->visible);
+    EXPECT_TRUE(duplicateSnapshot->locked);
+    EXPECT_TRUE(duplicateSnapshot->hasMaterial);
+    EXPECT_EQ(duplicateSnapshot->material, material.value().id);
+    EXPECT_TRUE(duplicateSnapshot->hasMesh);
+    EXPECT_NE(duplicateSnapshot->mesh, source.mesh);
 
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_FALSE(session.scene().exists(duplicateEntity));
+    EXPECT_FALSE(entityById(editor, duplicateEntity).has_value());
 
     ASSERT_TRUE(editor.history().redo().ok());
-    ASSERT_TRUE(session.scene().exists(duplicateEntity));
-    EXPECT_EQ(session.scene().parent(duplicateEntity), parent.value().id);
-    ASSERT_NE(session.scene().transform(duplicateEntity), nullptr);
-    EXPECT_NEAR(session.scene().transform(duplicateEntity)->position.x, 2.0f, 0.001f);
-    EXPECT_NEAR(session.scene().transform(duplicateEntity)->rotationEuler.z, 0.75f, 0.001f);
-    ASSERT_NE(session.scene().visibility(duplicateEntity), nullptr);
-    EXPECT_FALSE(session.scene().visibility(duplicateEntity)->visible);
-    ASSERT_NE(session.scene().lock(duplicateEntity), nullptr);
-    EXPECT_TRUE(session.scene().lock(duplicateEntity)->locked);
-    ASSERT_NE(session.scene().material(duplicateEntity), nullptr);
-    EXPECT_EQ(session.scene().material(duplicateEntity)->material, material.value().id);
-    ASSERT_NE(session.scene().mesh(duplicateEntity), nullptr);
-    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->castShadows);
-    EXPECT_FALSE(session.scene().mesh(duplicateEntity)->doubleSided);
-    EXPECT_TRUE(session.scene().mesh(duplicateEntity)->displayCollision);
+    duplicateSnapshot = entityById(editor, duplicateEntity);
+    ASSERT_TRUE(duplicateSnapshot.has_value());
+    EXPECT_EQ(duplicateSnapshot->parent, parent.value().id);
+    EXPECT_NEAR(duplicateSnapshot->transform.position.x, 2.0f, 0.001f);
+    EXPECT_NEAR(duplicateSnapshot->transform.rotationEuler.z, 0.75f, 0.001f);
+    EXPECT_FALSE(duplicateSnapshot->visible);
+    EXPECT_TRUE(duplicateSnapshot->locked);
+    EXPECT_TRUE(duplicateSnapshot->hasMaterial);
+    EXPECT_EQ(duplicateSnapshot->material, material.value().id);
+    EXPECT_TRUE(duplicateSnapshot->hasMesh);
+    EXPECT_NE(duplicateSnapshot->mesh, source.mesh);
 }
 
 TEST(EditorApiTests, PublicNoopOperationsPreserveRedoUntilChangedAppCommand) {
@@ -1120,9 +1233,7 @@ TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
     EXPECT_EQ(replaced.errorMessage(), "Texture asset does not exist");
 
     const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Dangling Mesh Component Box");
-    const quader::MeshComponent* currentMesh = session.scene().mesh(box.entity);
-    ASSERT_NE(currentMesh, nullptr);
-    quader::MeshComponent invalidMesh = *currentMesh;
+    quader::MeshComponent invalidMesh;
     invalidMesh.mesh = 9100u;
     const quader::QuaderApiVoidResult meshResult =
             editor.scene().setMeshComponent(box.entity, invalidMesh);

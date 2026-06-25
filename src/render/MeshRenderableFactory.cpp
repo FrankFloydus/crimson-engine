@@ -10,6 +10,7 @@
 #include "render/FilamentBufferDescriptorFactory.h"
 #include "render/FilamentUtils.h"
 #include "render/MaterialBindingService.h"
+#include "render/RenderSignatureBuilder.h"
 
 #include <backend/DriverEnums.h>
 #include <filament/RenderableManager.h>
@@ -18,7 +19,6 @@
 #include <math/mat4.h>
 #include <utils/EntityManager.h>
 
-#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -29,8 +29,6 @@ namespace {
 
 using AttributeType = filament::backend::ElementType;
 
-constexpr std::uint64_t kFnvPrime = 1099511628211ull;
-
 /**
  * Represents a Render Vertex value used by the render extraction and Filament resource layer.
  */
@@ -40,22 +38,6 @@ struct RenderVertex {
     filament::math::float2 uv;
     std::uint32_t color;
 };
-
-std::uint64_t hashCombine(std::uint64_t hash, std::uint64_t value) {
-    hash ^= value;
-    hash *= kFnvPrime;
-    return hash;
-}
-
-std::uint64_t hashFloat(std::uint64_t hash, float value) {
-    return hashCombine(hash, std::bit_cast<std::uint32_t>(value));
-}
-
-std::uint64_t hashVec3(std::uint64_t hash, QVec3 value) {
-    hash = hashFloat(hash, value.x);
-    hash = hashFloat(hash, value.y);
-    return hashFloat(hash, value.z);
-}
 
 filament::math::mat4f makeTransform(const QMat4& transform) {
     const glm::mat4 glmTransform = toGlm(transform);
@@ -253,25 +235,7 @@ void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {
 }
 
 std::uint64_t MeshRenderableFactory::meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh) {
-    hash = hashCombine(hash, mesh.vertices.size());
-    for (const MeshVertex& vertex : mesh.vertices) {
-        hash = hashVec3(hash, vertex.position);
-        hash = hashVec3(hash, vertex.normal);
-        hash = hashFloat(hash, vertex.uv.x);
-        hash = hashFloat(hash, vertex.uv.y);
-        hash = hashCombine(hash, vertex.rgba);
-    }
-    hash = hashCombine(hash, mesh.indices.size());
-    for (const std::uint32_t index : mesh.indices) {
-        hash = hashCombine(hash, index);
-    }
-    hash = hashCombine(hash, mesh.primitives.size());
-    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
-        hash = hashCombine(hash, primitive.indexOffset);
-        hash = hashCombine(hash, primitive.indexCount);
-        hash = hashCombine(hash, primitive.materialSlot);
-    }
-    return hash;
+    return RenderSignatureBuilder::meshAssetSignature(hash, mesh);
 }
 
 } // namespace quader

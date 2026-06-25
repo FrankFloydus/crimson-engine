@@ -236,7 +236,7 @@ QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::updateTransform
 QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::commitTransformDrag() {
     return resultFromTransformDragPreview(
             session_,
-            session_.modeling().commitTransformDrag());
+            session_.modeling().commitTransformDrag(session_.history()));
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancelTransformDrag() {
