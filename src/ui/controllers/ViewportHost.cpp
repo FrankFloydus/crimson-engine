@@ -8,11 +8,17 @@
 
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
+#include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/modeling/services/SelectionModeAdapter.h"
+#include "editor/tools/ViewportToolCatalog.h"
 #include "editor/viewport/QuaderViewportApiRuntimeAccess.h"
 #include "platform/PlatformWindow.h"
 #include "render/RenderLayers.h"
 #include "render/ViewportOverlayFrame.h"
+#include "render/overlay/ViewportBoxOverlayBuilder.h"
+#include "render/overlay/ViewportTransformGizmoOverlayBuilder.h"
 #include "scene/SceneBounds.h"
+#include "scene/SceneEntityNaming.h"
 #include "ui/ViewportShortcutController.h"
 #include "viewport/ViewportCameraAdapter.h"
 #include "viewport/ViewportWorkspaceService.h"
@@ -27,9 +33,12 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -473,6 +482,192 @@ void focusDocument(SceneDocument& document, const AssetRegistry& assets, Viewpor
     }
 }
 
+bool inputKeyPressed(const ViewportInputFrame& input, ViewportKey key) {
+    return std::find(input.pressedKeys.begin(), input.pressedKeys.end(), key) != input.pressedKeys.end();
+}
+
+bool viewportOverlayFrameVisible(const ViewportOverlayFrame& frame) {
+    return !frame.lines.empty() || !frame.triangles.empty() || !frame.points.empty();
+}
+
+ModelingBoxToolEvent modelingBoxEvent(
+        const ViewportCameraController& camera,
+        const ViewportInputFrame& input,
+        float gridSize) {
+    const ViewportRay ray = camera.rayFromViewportPoint(input.mouseLocal);
+    return {
+            .screenPosition = input.mouseLocal,
+            .ray = {
+                    .origin = ray.origin,
+                    .direction = ray.direction,
+            },
+            .gridSize = gridSize,
+            .hasCamera = true,
+            .camera = ViewportCameraAdapter::modelingCamera(camera, input.viewportSize),
+    };
+}
+
+void syncInputRouterFromEditorState(
+        ViewportInputRouter& inputRouter,
+        QuaderEditorApi& editor,
+        ModelingSessionService& modeling) {
+    const ViewportToolId activeTool = viewportToolForModeling(modeling.toolStatus().activeTool);
+    if (inputRouter.state().activeTool != activeTool) {
+        inputRouter.setActiveTool(activeTool);
+        inputRouter.clearModalToolState();
+    }
+    inputRouter.setSelectionMode(appSelectionModeToViewport(editor.selection().summary().mode));
+}
+
+void activateViewportToolFromRouter(
+        QuaderEditorApi& editor,
+        SceneDocument& document,
+        ViewportInputRouter& inputRouter) {
+    LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter.state().activeTool));
+    const bool preserveGroupSelection =
+            inputRouter.state().selectionMode == ViewportSelectionMode::Group ||
+            editor.selection().summary().mode == ModelingSelectionMode::Group;
+    const std::vector<EntityId> selectedBeforeToolActivation = preserveGroupSelection
+            ? document.selectedEntities()
+            : std::vector<EntityId>{};
+    const EntityId activeBeforeToolActivation = preserveGroupSelection
+            ? document.primarySelection()
+            : InvalidEntityId;
+    inputRouter.clearModalDragState();
+    const ViewportTool* activeTool = inputRouter.activeTool();
+    const QuaderApiVoidResult command = activeTool != nullptr ?
+            editor.tools().activate(inputRouter.state().activeTool) :
+            QuaderApiVoidResult{
+                    .ok = false,
+                    .changed = false,
+                    .message = "No active viewport tool.",
+            };
+    if (!command.ok) {
+        LOG_ERROR("Viewport tool activation failed: {}", command.message.empty() ? "Command failed." : command.message);
+        inputRouter.setActiveTool(ViewportToolId::Select);
+        (void)editor.tools().activate(ViewportToolId::Select);
+    } else if (preserveGroupSelection) {
+        const QuaderApiVoidResult restoreSelection =
+                editor.selection().selectObjects(
+                        std::span<const EntityId>(
+                                selectedBeforeToolActivation.data(),
+                                selectedBeforeToolActivation.size()),
+                        activeBeforeToolActivation);
+        if (!restoreSelection.ok) {
+            LOG_ERROR("Group selection restore after tool activation failed: {}", restoreSelection.message);
+        }
+        (void)editor.selection().setMode(ModelingSelectionMode::Group);
+        inputRouter.setSelectionMode(ViewportSelectionMode::Group);
+    } else {
+        inputRouter.setSelectionMode(appSelectionModeToViewport(editor.selection().summary().mode));
+    }
+    inputRouter.clearModalToolState();
+}
+
+ViewportToolResult dispatchActiveViewportToolFrame(
+        QuaderEditorApi& editor,
+        ModelingSessionService& modeling,
+        SceneDocument& document,
+        ViewportInputRouter& inputRouter,
+        ViewportCameraController& camera,
+        const ViewportInputFrame& input,
+        const ViewportInputResult& result,
+        const ViewportSettings& settings,
+        AssetId defaultMaterial,
+        bool leftPressed,
+        bool leftDown,
+        bool leftReleased,
+        bool gizmoConsumed,
+        QVec2 leftClickLocal) {
+    ViewportBoxToolContext boxToolContext{
+            .defaultMaterial = defaultMaterial,
+    };
+    boxToolContext.makeEvent = [&]() {
+        return modelingBoxEvent(
+                camera,
+                input,
+                viewportGridWorldSizeForPreset(inputRouter.state().gridPreset));
+    };
+    boxToolContext.commitPreview = [&](std::string name, AssetId material) {
+        const QuaderApiResult<QuaderModelingObjectRef> command =
+                editor.modeling().commitBoxPreview(std::move(name), material);
+        ModelingCreateBoxResult committed{
+                .ok = command.ok,
+                .changed = command.changed,
+                .message = command.message,
+        };
+        if (command.ok && command.changed) {
+            committed.object = {
+                    .modelingObjectId = command.value().modelingObjectId,
+                    .entity = command.value().entity,
+                    .mesh = command.value().mesh,
+            };
+        }
+        return committed;
+    };
+    boxToolContext.nextMeshName = [&]() {
+        return SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
+    };
+
+    ViewportToolContext toolContext{
+            .state = const_cast<ViewportToolState&>(inputRouter.state()),
+            .camera = camera,
+            .modeling = modeling,
+            .document = &document,
+            .settings = &settings,
+            .box = &boxToolContext,
+    };
+    toolContext.claimHover = [](ModelingBoxDragState) {
+        return true;
+    };
+    toolContext.invalidateHover = []() {};
+    toolContext.markOverlayDirty = []() {};
+    toolContext.setActiveTool = [&](ViewportToolId tool) {
+        inputRouter.setActiveTool(tool);
+    };
+    toolContext.setSelectionMode = [&](ViewportSelectionMode mode) {
+        inputRouter.setSelectionMode(mode);
+    };
+    toolContext.setAppSelectionMode = [&](ModelingSelectionMode mode) {
+        const QuaderApiVoidResult command = editor.selection().setMode(mode);
+        if (!command.ok) {
+            LOG_ERROR("Selection mode change failed: {}", command.message.empty() ? "Command failed." : command.message);
+        }
+        inputRouter.setSelectionMode(appSelectionModeToViewport(editor.selection().summary().mode));
+    };
+    toolContext.handleToolCommandResult = [](std::string_view label, const ModelingCommandResult& command) {
+        if (!command.ok) {
+            LOG_ERROR("{} failed: {}", label, command.message.empty() ? "Command failed." : command.message);
+        }
+    };
+
+    const bool suppressHoverWork = result.navigationActive || result.cameraChanged;
+    const bool canInteractWithActiveTool = input.viewportHovered && !result.navigationActive && !gizmoConsumed;
+    return inputRouter.handleActiveToolEvent(toolContext, ViewportToolEvent{
+            .kind = ViewportToolEventKind::Frame,
+            .tool = inputRouter.state().activeTool,
+            .pointer = {
+                    .hovered = input.viewportHovered,
+                    .leftClicked = leftPressed && input.viewportHovered,
+                    .leftDown = leftDown,
+                    .leftReleased = leftReleased,
+                    .canInteract = canInteractWithActiveTool,
+                    .finalizePressed =
+                            inputKeyPressed(input, ViewportKey::Space) ||
+                            inputKeyPressed(input, ViewportKey::Enter),
+                    .modeCyclePressed = inputKeyPressed(input, ViewportKey::F),
+                    .suppressHoverWork = suppressHoverWork,
+                    .gizmoConsumed = gizmoConsumed,
+                    .navigationActive = result.navigationActive,
+                    .textInputActive = input.textInputActive,
+                    .mouseLocal = input.mouseLocal,
+                    .leftClickLocal = leftClickLocal,
+                    .viewportSize = input.viewportSize,
+                    .modifiers = input.modifiers,
+            },
+    });
+}
+
 std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -726,6 +921,11 @@ struct ViewportHost::ViewportWindowInstance {
     bool middleDown = false;
     bool middlePressed = false;
     bool middleReleased = false;
+    bool leftDown = false;
+    bool leftPressed = false;
+    bool leftReleased = false;
+    QVec2 leftClickWindow = {};
+    int leftClickCount = 1;
     bool rightDown = false;
     bool rightPressed = false;
     bool rightReleased = false;
@@ -737,6 +937,7 @@ struct ViewportHost::ViewportWindowInstance {
     std::vector<QuaderInputChord> pressedInputChords;
     std::vector<QuaderInputChord> activeInputChords;
     std::vector<QuaderInputChord> releasedInputChords;
+    ViewportInteractionController interactions;
     bool relativeMouseCaptured = false;
     bool relativeMouseCaptureWarningIssued = false;
 };
@@ -815,6 +1016,18 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
             } else {
                 middleReleased_ = middleReleased_ || middleDown_;
                 middleDown_ = false;
+            }
+        } else if (event.button.button == SDL_BUTTON_LEFT) {
+            if (down) {
+                leftDown_ = startedInMainViewport;
+                leftPressed_ = leftPressed_ || startedInMainViewport;
+                if (startedInMainViewport) {
+                    leftClickWindow_ = {event.button.x, event.button.y};
+                    leftClickCount_ = std::max(1, static_cast<int>(event.button.clicks));
+                }
+            } else {
+                leftReleased_ = leftReleased_ || leftDown_;
+                leftDown_ = false;
             }
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
             if (down) {
@@ -939,6 +1152,8 @@ void ViewportHost::handleFrame(
         QuaderEditorApi& editor,
         SceneDocument& document,
         const AssetRegistry& assets,
+        ModelingSessionService& modeling,
+        AssetId defaultMaterial,
         bool inputSuppressed) {
     ViewportWorkspaceService& workspace = QuaderViewportApiRuntimeAccess::workspace(editor.viewports());
     workspace.focusPane(mainViewport_.pane);
@@ -951,16 +1166,23 @@ void ViewportHost::handleFrame(
 
     if (inputSuppressed) {
         setCursorCaptured(false);
+        (void)viewportInteractions_.cancelActiveDrag(editor);
+        viewportInteractions_.reset();
         clearTransientInput();
-        handleWindowedViewportFrames(editor, workspace, document, assets);
+        handleWindowedViewportFrames(editor, workspace, document, assets, modeling, defaultMaterial);
         return;
     }
 
+    syncInputRouterFromEditorState(inputRouter_, editor, modeling);
     inputRouter_.setGridPreset(workspace.gridPreset());
     ViewportCameraController& camera = workspace.camera(mainViewport_.pane);
     ViewportInputFrame input = buildViewportInputFrame();
     resolveKeybindingsForFrame(editor, inputRouter_.state(), input);
+    syncInputRouterFromEditorState(inputRouter_, editor, modeling);
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
+    if (result.toolChanged) {
+        activateViewportToolFromRouter(editor, document, inputRouter_);
+    }
     if (result.gridPresetChanged) {
         workspace.setGridPreset(inputRouter_.state().gridPreset);
     }
@@ -971,14 +1193,45 @@ void ViewportHost::handleFrame(
         (void)workspace.toggleFocusedPaneMaximized();
     }
     if (result.cancelRequested) {
+        (void)viewportInteractions_.cancelActiveDrag(editor);
         logCommandFailure("Cancel active tool", editor.tools().cancelModalTool());
         inputRouter_.clearModalToolState();
     }
     const ViewportShortcutController shortcutController;
     (void)shortcutController.handleModelingShortcut(result, editor);
+    ViewportInteractionFrame interactionFrame{
+            .inputRouter = inputRouter_,
+            .camera = camera,
+            .settings = settings_,
+            .input = input,
+            .inputResult = result,
+            .leftClickLocal = mainViewportWindowPointToLocal(leftClickWindow_),
+            .leftClickCount = leftClickCount_,
+            .leftPressed = leftPressed_,
+            .leftDown = leftDown_,
+            .leftReleased = leftReleased_,
+    };
+    const ViewportBeforeToolInteractionResult beforeTool =
+            viewportInteractions_.handleBeforeActiveTool(editor, interactionFrame);
+    const ViewportToolResult toolResult = dispatchActiveViewportToolFrame(
+            editor,
+            modeling,
+            document,
+            inputRouter_,
+            camera,
+            input,
+            result,
+            settings_,
+            defaultMaterial,
+            leftPressed_,
+            leftDown_,
+            leftReleased_,
+            beforeTool.gizmoConsumed,
+            interactionFrame.leftClickLocal);
+    viewportInteractions_.handleAfterActiveTool(editor, interactionFrame, toolResult, beforeTool);
 
     setCursorCaptured(result.flyCursorCaptureActive);
-    handleWindowedViewportFrames(editor, workspace, document, assets);
+    handleWindowedViewportFrames(editor, workspace, document, assets, modeling, defaultMaterial);
     clearTransientInput();
 }
 
@@ -1006,12 +1259,25 @@ void ViewportHost::prepareViewports(
             true);
     renderer_.setSceneVisible(true);
     logCommandFailure("Sync tool previews", editor.render().syncToolPreviews(renderBridge));
+    ViewportOverlayFrame toolOverlayFrame;
+    const ModelingBoxPreview& boxPreview = inputRouter_.boxPreview();
+    if (boxPreview.dragState != ModelingBoxDragState::Height) {
+        ViewportBoxOverlayBuilder::append(toolOverlayFrame, boxPreview);
+    }
+    const quader_editor_core::TransformGizmoFrame* transformGizmoFrame =
+            viewportInteractions_.transformGizmoFrame();
+    const ViewportOverlayCamera overlayCamera = ViewportCameraAdapter::overlayCamera(pane.camera, pane.renderSize);
+    if (transformGizmoFrame != nullptr) {
+        ViewportTransformGizmoOverlayBuilder::append(toolOverlayFrame, *transformGizmoFrame, overlayCamera);
+    }
+    const bool hasToolOverlay = viewportOverlayFrameVisible(toolOverlayFrame);
     const QuaderApiResult<QuaderRenderOverlaySubmission> overlaySubmission =
             editor.render().syncSelectionOverlay(
                     renderBridge,
                     viewportPaneIndex(mainViewport_.pane),
                     viewportGridLayerMask(mainViewport_.layerIndex),
-                    ViewportCameraAdapter::overlayCamera(pane.camera, pane.renderSize));
+                    overlayCamera,
+                    hasToolOverlay ? &toolOverlayFrame : nullptr);
     logCommandFailure("Sync selection overlay", overlaySubmission);
     renderer_.setOverlayVisible(overlaySubmission.ok && overlaySubmission.value.visible);
     prepareWindowedViewports(workspace);
@@ -1096,6 +1362,9 @@ void ViewportHost::updateWindowMetrics() {
     if ((buttons & SDL_BUTTON_MMASK) == 0u) {
         middleDown_ = false;
     }
+    if ((buttons & SDL_BUTTON_LMASK) == 0u) {
+        leftDown_ = false;
+    }
     if ((buttons & SDL_BUTTON_RMASK) == 0u) {
         rightDown_ = false;
     }
@@ -1116,6 +1385,19 @@ bool ViewportHost::mainViewportContainsWindowPoint(float windowX, float windowY)
             mouseLocal.y >= 0.0f &&
             mouseLocal.x <= static_cast<float>(mainViewportFrame_.width) &&
             mouseLocal.y <= static_cast<float>(mainViewportFrame_.height);
+}
+
+QVec2 ViewportHost::mainViewportWindowPointToLocal(QVec2 windowPoint) const {
+    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
+    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
+    const QVec2 mousePixel = {
+            windowPoint.x * scaleX,
+            windowPoint.y * scaleY,
+    };
+    return {
+            mousePixel.x - static_cast<float>(mainViewportFrame_.left),
+            mousePixel.y - static_cast<float>(mainViewportFrame_.top),
+    };
 }
 
 ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
@@ -1195,6 +1477,8 @@ ViewportModifiers ViewportHost::currentModifiers() const {
 void ViewportHost::clearTransientInput() {
     middlePressed_ = false;
     middleReleased_ = false;
+    leftPressed_ = false;
+    leftReleased_ = false;
     rightPressed_ = false;
     rightReleased_ = false;
     wheelY_ = 0.0f;
@@ -1315,6 +1599,14 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
             instance.middleDown = down;
             instance.middlePressed = instance.middlePressed || down;
             instance.middleReleased = instance.middleReleased || !down;
+        } else if (event.button.button == SDL_BUTTON_LEFT) {
+            instance.leftDown = down;
+            instance.leftPressed = instance.leftPressed || down;
+            instance.leftReleased = instance.leftReleased || !down;
+            if (down) {
+                instance.leftClickWindow = {event.button.x, event.button.y};
+                instance.leftClickCount = std::max(1, static_cast<int>(event.button.clicks));
+            }
         } else if (event.button.button == SDL_BUTTON_RIGHT) {
             instance.rightDown = down;
             instance.rightPressed = instance.rightPressed || down;
@@ -1379,13 +1671,20 @@ void ViewportHost::handleWindowedViewportFrames(
         QuaderEditorApi& editor,
         ViewportWorkspaceService& workspace,
         SceneDocument& document,
-        const AssetRegistry& assets) {
+        const AssetRegistry& assets,
+        ModelingSessionService& modeling,
+        AssetId defaultMaterial) {
     for (const std::unique_ptr<ViewportWindowInstance>& viewport : windowedViewports_) {
         ViewportWindowInstance& instance = *viewport;
+        syncInputRouterFromEditorState(instance.inputRouter, editor, modeling);
         instance.inputRouter.setGridPreset(workspace.gridPreset());
         ViewportInputFrame input = buildWindowedViewportInputFrame(instance);
         resolveKeybindingsForFrame(editor, instance.inputRouter.state(), input);
+        syncInputRouterFromEditorState(instance.inputRouter, editor, modeling);
         const ViewportInputResult result = instance.inputRouter.handleFrame(input, instance.camera);
+        if (result.toolChanged) {
+            activateViewportToolFromRouter(editor, document, instance.inputRouter);
+        }
         if (result.gridPresetChanged) {
             workspace.setGridPreset(instance.inputRouter.state().gridPreset);
         }
@@ -1396,11 +1695,52 @@ void ViewportHost::handleWindowedViewportFrames(
             (void)workspace.toggleFocusedPaneMaximized();
         }
         if (result.cancelRequested) {
+            (void)instance.interactions.cancelActiveDrag(editor);
             logCommandFailure("Cancel active tool", editor.tools().cancelModalTool());
             instance.inputRouter.clearModalToolState();
         }
         const ViewportShortcutController shortcutController;
         (void)shortcutController.handleModelingShortcut(result, editor);
+        const float scaleX = instance.windowWidth > 0
+                ? static_cast<float>(instance.framebufferWidth) / static_cast<float>(instance.windowWidth)
+                : 1.0f;
+        const float scaleY = instance.windowHeight > 0
+                ? static_cast<float>(instance.framebufferHeight) / static_cast<float>(instance.windowHeight)
+                : 1.0f;
+        const QVec2 leftClickLocal = {
+                instance.leftClickWindow.x * scaleX,
+                instance.leftClickWindow.y * scaleY,
+        };
+        ViewportInteractionFrame interactionFrame{
+                .inputRouter = instance.inputRouter,
+                .camera = instance.camera,
+                .settings = settings_,
+                .input = input,
+                .inputResult = result,
+                .leftClickLocal = leftClickLocal,
+                .leftClickCount = instance.leftClickCount,
+                .leftPressed = instance.leftPressed,
+                .leftDown = instance.leftDown,
+                .leftReleased = instance.leftReleased,
+        };
+        const ViewportBeforeToolInteractionResult beforeTool =
+                instance.interactions.handleBeforeActiveTool(editor, interactionFrame);
+        const ViewportToolResult toolResult = dispatchActiveViewportToolFrame(
+                editor,
+                modeling,
+                document,
+                instance.inputRouter,
+                instance.camera,
+                input,
+                result,
+                settings_,
+                defaultMaterial,
+                instance.leftPressed,
+                instance.leftDown,
+                instance.leftReleased,
+                beforeTool.gizmoConsumed,
+                interactionFrame.leftClickLocal);
+        instance.interactions.handleAfterActiveTool(editor, interactionFrame, toolResult, beforeTool);
         setWindowedViewportCursorCaptured(instance, result.flyCursorCaptureActive);
         clearWindowedViewportTransientInput(instance);
     }
@@ -1515,6 +1855,8 @@ void ViewportHost::setWindowedViewportCursorCaptured(ViewportWindowInstance& ins
 void ViewportHost::clearWindowedViewportTransientInput(ViewportWindowInstance& instance) {
     instance.middlePressed = false;
     instance.middleReleased = false;
+    instance.leftPressed = false;
+    instance.leftReleased = false;
     instance.rightPressed = false;
     instance.rightReleased = false;
     instance.wheelY = 0.0f;

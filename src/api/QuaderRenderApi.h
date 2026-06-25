@@ -41,7 +41,8 @@ public:
             SceneRenderBridge& bridge,
             std::size_t viewportIndex,
             std::uint8_t layerMask,
-            ViewportOverlayCamera camera);
+            ViewportOverlayCamera camera,
+            const ViewportOverlayFrame* toolOverlayFrame = nullptr);
     QuaderApiVoidResult setSelectionOverlay(
             SceneRenderBridge& bridge,
             std::size_t viewportIndex,

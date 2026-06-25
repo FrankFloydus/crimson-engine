@@ -60,6 +60,7 @@ public:
             RenderSystem& renderSystem,
             const std::filesystem::path& executableDir,
             std::string utilityRcss,
+            std::string iconRcss,
             std::string debugPaletteRml,
             std::string initialTextureSource,
             RenderTextureHandle initialTextureHandle,
@@ -87,6 +88,7 @@ public:
     [[nodiscard]] std::optional<std::string> takeModelingModeShelfControlSelection();
     [[nodiscard]] std::optional<std::string> takeModelingModeShelfCommand();
     [[nodiscard]] bool initialized() const { return initialized_; }
+    [[nodiscard]] bool debuggerVisible() const;
 
 private:
     SDL_Window* window_ = nullptr;
@@ -97,6 +99,7 @@ private:
     std::unique_ptr<Rml::EventListener> windowChromeActionListener_;
     std::unique_ptr<Rml::EventListener> modelingModeShelfControlSelectionListener_;
     Rml::Context* context_ = nullptr;
+    Rml::Context* debuggerContext_ = nullptr;
     Rml::ElementDocument* document_ = nullptr;
     std::optional<WindowChromeAction> pendingWindowChromeAction_;
     std::optional<std::string> pendingModelingModeShelfControlSelection_;
@@ -104,6 +107,7 @@ private:
     float dpRatio_ = 1.0f;
     bool initialized_ = false;
     bool rmlInitialized_ = false;
+    bool rmlDebuggerInitialized_ = false;
 };
 
 } // namespace quader

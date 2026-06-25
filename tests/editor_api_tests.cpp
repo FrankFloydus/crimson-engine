@@ -7,11 +7,13 @@
 #include "api/QuaderEditorApi.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/document/ProjectSession.h"
+#include "ui/ViewportShortcutController.h"
 #include "viewport/HostViewportContractAdapter.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -65,6 +67,24 @@ std::string commandIdForContextAction(
         return editor.commands().commandIdForToolActivation(action.toolId);
     }
     return editor.commands().commandIdForModelingAction(action.actionId);
+}
+
+const quader::ModelingActionPanel* findActionPanel(
+        const quader::ModelingActionSet& actionSet,
+        std::string_view panelId) {
+    const auto found = std::find_if(actionSet.panels.begin(), actionSet.panels.end(), [&](const auto& panel) {
+        return panel.panelId == panelId;
+    });
+    return found == actionSet.panels.end() ? nullptr : &(*found);
+}
+
+const quader::ModelingActionItem* findActionItem(
+        const quader::ModelingActionPanel& panel,
+        std::string_view actionId) {
+    const auto found = std::find_if(panel.actions.begin(), panel.actions.end(), [&](const auto& action) {
+        return action.actionId == actionId;
+    });
+    return found == panel.actions.end() ? nullptr : &(*found);
 }
 
 /// Owns an isolated editor session for command routing tests that need fresh
@@ -298,6 +318,41 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
             true,
             true,
             shortcut));
+}
+
+TEST(EditorApiTests, ViewportSelectionModeShortcutsApplyThroughPublicSelectionApi) {
+    struct ModeCase {
+        quader::ViewportSelectionMode viewportMode;
+        quader::ModelingSelectionMode modelingMode;
+    };
+    constexpr std::array cases{
+            ModeCase{quader::ViewportSelectionMode::Vertex, quader::ModelingSelectionMode::Vertex},
+            ModeCase{quader::ViewportSelectionMode::Edge, quader::ModelingSelectionMode::Edge},
+            ModeCase{quader::ViewportSelectionMode::Face, quader::ModelingSelectionMode::Face},
+            ModeCase{quader::ViewportSelectionMode::Object, quader::ModelingSelectionMode::Object},
+            ModeCase{quader::ViewportSelectionMode::Group, quader::ModelingSelectionMode::Group},
+    };
+
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+    const quader::ViewportShortcutController controller;
+
+    for (const ModeCase& mode : cases) {
+        SCOPED_TRACE(static_cast<int>(mode.viewportMode));
+        quader::ViewportInputResult input;
+        input.shortcutHandled = true;
+        input.selectionModeChanged = true;
+        input.shortcut.kind = quader::ViewportShortcutKind::SetSelectionMode;
+        input.shortcut.selectionMode = mode.viewportMode;
+
+        const quader::ViewportShortcutControllerResult result =
+                controller.handleModelingShortcut(input, editor);
+
+        EXPECT_TRUE(result.commandExecuted);
+        EXPECT_TRUE(result.invalidateHover);
+        EXPECT_TRUE(result.markOverlayDirty);
+        EXPECT_EQ(editor.selection().summary().mode, mode.modelingMode);
+    }
 }
 
 TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
@@ -686,6 +741,45 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
             }
         }
     }
+}
+
+TEST(EditorApiTests, ModelingActionSetExposesActiveOperationPanelForSelectionModeShelf) {
+    const quader::ModelingActionQuery query{
+            .surface = quader::ModelingActionSurface::OperationsPanel,
+            .includeDisabled = true,
+            .includeHidden = false,
+    };
+
+    CommandTestHarness objectHarness;
+    setupSelectionForMode(objectHarness.editor, quader::ModelingSelectionMode::Object);
+    const quader::ModelingActionSet objectActions = objectHarness.editor.modeling().availableActionSet(query);
+    ASSERT_EQ(objectActions.panels.size(), 1u);
+    const quader::ModelingActionPanel* objectPanel = findActionPanel(objectActions, "object_operations");
+    ASSERT_NE(objectPanel, nullptr);
+    EXPECT_EQ(objectPanel->visibility, quader::ModelingActionVisibility::Enabled);
+    ASSERT_FALSE(objectPanel->actions.empty());
+    EXPECT_EQ(objectPanel->actions.front().actionId, "invert_mesh");
+    const quader::ModelingActionItem* combine = findActionItem(*objectPanel, "combine_mesh");
+    ASSERT_NE(combine, nullptr);
+    EXPECT_EQ(combine->visibility, quader::ModelingActionVisibility::Disabled);
+
+    CommandTestHarness faceHarness;
+    setupSelectionForMode(faceHarness.editor, quader::ModelingSelectionMode::Face);
+    const quader::ModelingActionSet faceActions = faceHarness.editor.modeling().availableActionSet(query);
+    ASSERT_EQ(faceActions.panels.size(), 1u);
+    const quader::ModelingActionPanel* facePanel = findActionPanel(faceActions, "face_operations");
+    ASSERT_NE(facePanel, nullptr);
+    EXPECT_EQ(facePanel->visibility, quader::ModelingActionVisibility::Enabled);
+    ASSERT_FALSE(facePanel->actions.empty());
+    EXPECT_EQ(facePanel->actions.front().actionId, "bridge_faces");
+    const quader::ModelingActionItem* thicken = findActionItem(*facePanel, "thicken_faces");
+    ASSERT_NE(thicken, nullptr);
+    EXPECT_EQ(thicken->operationId, "thicken");
+
+    CommandTestHarness groupHarness;
+    createSelectedBox(groupHarness.editor);
+    ASSERT_TRUE(groupHarness.editor.selection().setMode(quader::ModelingSelectionMode::Group).ok());
+    EXPECT_TRUE(groupHarness.editor.modeling().availableActionSet(query).panels.empty());
 }
 
 TEST(EditorApiTests, EnabledContextMenuOperationsExecuteThroughCommandRegistry) {

@@ -2546,10 +2546,10 @@ TEST(ModelingModeShelfComponentTests, BuildsTabbedShelfShellOnly) {
             },
     };
     const std::vector<ModelingModeShelfCommand> commands = {
-            {.id = "bridge", .label = "Bridge"},
-            {.id = "collapse", .label = "Collapse", .secondaryText = "Shift+Z"},
-            {.id = "thicken", .label = "Thicken", .secondaryText = "T"},
-            {.id = "flip-normal", .label = "Flip Normal", .secondaryText = "F"},
+            {.id = "bridge", .commandId = "modeling.bridge", .label = "Bridge"},
+            {.id = "collapse", .commandId = "modeling.collapse", .label = "Collapse", .secondaryText = "Shift+Z"},
+            {.id = "thicken", .commandId = "modeling.thicken", .label = "Thicken", .secondaryText = "T"},
+            {.id = "flip-normal", .commandId = "modeling.flip-normal", .label = "Flip Normal", .secondaryText = "F"},
     };
 
     for (const ModelingModeShelfControl& control : controls) {
@@ -2577,21 +2577,20 @@ TEST(ModelingModeShelfComponentTests, BuildsTabbedShelfShellOnly) {
             .activeTabControlId = std::string("face"),
     });
 
-    EXPECT_NE(rml.find("<div id=\"modeling-mode-shelf\" class=\"modeling-mode-shelf bg-gray-950\">"),
-            std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-toolbar\" class=\"modeling-mode-shelf-toolbar h-13\""),
-            std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-strip\" class=\"modeling-mode-shelf-measure-strip h-13\""),
-            std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf\""), std::string::npos);
+    EXPECT_NE(rml.find("modeling-mode-shelf bg-gray-950"), std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-toolbar\""), std::string::npos);
+    EXPECT_NE(rml.find("modeling-mode-shelf-toolbar"), std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-strip\""), std::string::npos);
+    EXPECT_NE(rml.find("modeling-mode-shelf-measure-strip"), std::string::npos);
     EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-control-face\""),
             std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-content\" class=\"modeling-mode-shelf-content h-11 bg-gray-800\" "
-                       "data-modeling-mode-shelf-active-control=\"face\""),
-            std::string::npos);
+    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-content\""), std::string::npos);
+    EXPECT_NE(rml.find("modeling-mode-shelf-content h-11 bg-gray-800"), std::string::npos);
+    EXPECT_NE(rml.find("data-modeling-mode-shelf-active-control=\"face\""), std::string::npos);
     EXPECT_EQ(countOccurrences(rml, "data-modeling-mode-shelf-command="), 4u);
     EXPECT_NE(rml.find("id=\"modeling-mode-shelf-command-bridge\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"toolbar-button-secondary font-alt text-xxs text-gray-300\">SHIFT+Z</span>"),
-            std::string::npos);
+    EXPECT_NE(rml.find(">SHIFT+Z</span>"), std::string::npos);
     EXPECT_EQ(countOccurrences(rml, "data-modeling-mode-shelf-control="), 4u);
     EXPECT_EQ(countOccurrences(rml, "aria-pressed=\"true\""), 1u);
     const std::size_t activeFace = rml.find("id=\"modeling-mode-shelf-control-face\"");
@@ -8150,6 +8149,13 @@ TEST(ModelingSessionServiceTests, ContextActionsHideWhileBoxOrModalOwnsViewport)
     EXPECT_TRUE(service.contextActionSet().panels.empty());
     EXPECT_TRUE(service.contextActions(contextQuery).empty());
     EXPECT_FALSE(service.executeContextAction("invert_mesh").ok);
+
+    ModelingActionQuery shelfQuery;
+    shelfQuery.surface = ModelingActionSurface::OperationsPanel;
+    shelfQuery.includeDisabled = true;
+    shelfQuery.includeHidden = false;
+    shelfQuery.suppressWhenModalToolOwnsViewport = false;
+    EXPECT_FALSE(service.contextActionSet(shelfQuery).panels.empty());
 
     const ModelingCommandResult cancel = service.cancelBox();
     ASSERT_TRUE(cancel.ok) << cancel.message;

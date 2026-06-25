@@ -14,6 +14,7 @@
 #include "render/TextureRegistry.h"
 #include "render/ViewportRenderer.h"
 #include "scene/SceneDocument.h"
+#include "editor/viewport/ViewportInteractionController.h"
 #include "ui/components/organisms/ViewportComponent.h"
 #include "viewport/ViewportInputRouter.h"
 #include "viewport/ViewportSettings.h"
@@ -31,6 +32,7 @@
 namespace quader {
 
 class QuaderEditorApi;
+class ModelingSessionService;
 class ViewportWorkspaceService;
 
 /// Stores the measured viewport frame in framebuffer pixels.
@@ -56,7 +58,13 @@ public:
     void beginFrame(const FrameTiming& frameTiming);
     void resize(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight);
     void setMainViewportFrame(int left, int top, std::uint32_t width, std::uint32_t height);
-    void handleFrame(QuaderEditorApi& editor, SceneDocument& document, const AssetRegistry& assets, bool inputSuppressed);
+    void handleFrame(
+            QuaderEditorApi& editor,
+            SceneDocument& document,
+            const AssetRegistry& assets,
+            ModelingSessionService& modeling,
+            AssetId defaultMaterial,
+            bool inputSuppressed);
     void prepareViewports(
             QuaderEditorApi& editor,
             SceneRenderBridge& renderBridge,
@@ -82,6 +90,7 @@ private:
 
     void updateWindowMetrics();
     [[nodiscard]] bool mainViewportContainsWindowPoint(float windowX, float windowY) const;
+    [[nodiscard]] QVec2 mainViewportWindowPointToLocal(QVec2 windowPoint) const;
     ViewportInputFrame buildViewportInputFrame() const;
     ViewportModifiers currentModifiers() const;
     void clearTransientInput();
@@ -92,7 +101,9 @@ private:
             QuaderEditorApi& editor,
             ViewportWorkspaceService& workspace,
             SceneDocument& document,
-            const AssetRegistry& assets);
+            const AssetRegistry& assets,
+            ModelingSessionService& modeling,
+            AssetId defaultMaterial);
     void prepareWindowedViewports(ViewportWorkspaceService& workspace);
     ViewportInputFrame buildWindowedViewportInputFrame(const ViewportWindowInstance& instance) const;
     void setWindowedViewportCursorCaptured(ViewportWindowInstance& instance, bool captured);
@@ -118,6 +129,11 @@ private:
     bool middleDown_ = false;
     bool middlePressed_ = false;
     bool middleReleased_ = false;
+    bool leftDown_ = false;
+    bool leftPressed_ = false;
+    bool leftReleased_ = false;
+    QVec2 leftClickWindow_ = {};
+    int leftClickCount_ = 1;
     bool rightDown_ = false;
     bool rightPressed_ = false;
     bool rightReleased_ = false;
@@ -129,6 +145,7 @@ private:
     std::vector<QuaderInputChord> pressedInputChords_;
     std::vector<QuaderInputChord> activeInputChords_;
     std::vector<QuaderInputChord> releasedInputChords_;
+    ViewportInteractionController viewportInteractions_;
     bool relativeMouseCaptured_ = false;
     bool relativeMouseCaptureWarningIssued_ = false;
     std::vector<std::unique_ptr<ViewportWindowInstance>> windowedViewports_;

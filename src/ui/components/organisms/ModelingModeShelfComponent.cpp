@@ -415,9 +415,9 @@ UIElement ModelingModeShelfComponent::render() const {
     }
 
     if (state_.activeTabControlId) {
-        if (const ModelingModeShelfControl* activeControl = findControl(state_.controls, *state_.activeTabControlId);
-                activeControl && modelingModeShelfControlOpensTabContent(*activeControl)) {
-            shelf.child(renderContentStrip(state_, *activeControl));
+        const ModelingModeShelfControl* control = findControl(state_.controls, *state_.activeTabControlId);
+        if (control && modelingModeShelfControlOpensTabContent(*control)) {
+            shelf.child(renderContentStrip(state_, *control));
         }
     }
 

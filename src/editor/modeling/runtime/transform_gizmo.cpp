@@ -309,6 +309,8 @@ void add_gizmo_trackball_ring(TransformGizmoFrame& frame, const ViewportCameraSt
 			continue;
 		}
 		TransformGizmoTrackballSegmentPrimitive segment;
+		segment.world_start = p0;
+		segment.world_end = p1;
 		segment.screen_start = screen0;
 		segment.screen_end = screen1;
 		frame.trackball_segments.push_back(segment);

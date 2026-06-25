@@ -92,8 +92,8 @@ void UIToolbarButtonComponent::appendButtonContent(UIElement& button) const {
         button.child(UIElement::span()
                         .addClass("toolbar-button-secondary")
                         .addClass("font-alt")
-                        .addClass("text-sm")
-                        .addClass("leading-sm")
+                        .addClass("text-md")
+                        .addClass("leading-md")
                         .addClass("ml-3_5")
                         .addClass("text-gray-300")
                         .text(uppercaseAscii(model_.secondaryText)));

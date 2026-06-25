@@ -296,6 +296,10 @@ QuaderApiVoidResult QuaderModelingApi::assignMaterialSlotToFace(
             "Assign Face Material Slot");
 }
 
+ModelingActionSet QuaderModelingApi::availableActionSet(const ModelingActionQuery& query) const {
+    return session_.modeling().contextActionSet(query);
+}
+
 std::vector<ModelingActionItem> QuaderModelingApi::availableActions(const ModelingActionQuery& query) const {
     return session_.modeling().contextActions(query);
 }

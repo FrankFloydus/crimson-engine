@@ -2,6 +2,7 @@
 <head>
     <link type="text/rcss" href="quader://ui/rcss/app-utility.generated.rcss"/>
     <link type="text/rcss" href="quader://ui/rcss/app-shell.rcss"/>
+    <link type="text/rcss" href="quader://ui/rcss/app-icons.generated.rcss"/>
 </head>
 <body class="font-ui text-md leading-md bg-gray-950 text-gray-50">
     <div id="viewport-panel" class="app-shell bg-gray-950">

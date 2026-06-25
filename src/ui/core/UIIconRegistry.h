@@ -19,6 +19,10 @@ enum class UIIconId {
     ChromeRestore,
     ChromeClose,
     Mesh,
+    VertexSelection,
+    EdgeSelection,
+    FaceSelection,
+    MeshSelection,
 };
 
 /// Identifies the concrete asset provider behind a semantic icon.
@@ -35,6 +39,10 @@ struct UIIconDefinition {
     std::string_view className;
     UIIconProvider provider;
     std::string_view resourcePath;
+    std::string_view hoverResourcePath;
+    std::string_view width;
+    std::string_view height;
+    bool preserveResourceColor = false;
 };
 
 /**
@@ -46,6 +54,7 @@ public:
 
     [[nodiscard]] const UIIconDefinition* find(UIIconId id) const;
     [[nodiscard]] UIElement renderIcon(UIIconId id, std::string_view extraClass = {}) const;
+    [[nodiscard]] std::string buildRcss() const;
 };
 
 [[nodiscard]] std::string_view uiIconProviderClass(UIIconProvider provider);

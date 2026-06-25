@@ -75,6 +75,7 @@ public:
     void renderWindowedViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
     void installRuntimeHooks(QuaderEditorApi& editor);
+    [[nodiscard]] bool shouldBypassPlatformChrome(const SDL_Event& event) const;
     [[nodiscard]] std::optional<WindowChromeAction> takeWindowChromeAction();
     const ViewportToolState& viewportToolState() const { return viewportHost_.viewportToolState(); }
 

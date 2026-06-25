@@ -20,6 +20,12 @@ bool viewportOverlayFrameVisible(const ViewportOverlayFrame& frame) {
     return !frame.lines.empty() || !frame.triangles.empty() || !frame.points.empty();
 }
 
+void appendOverlayFrame(ViewportOverlayFrame& frame, const ViewportOverlayFrame& appendedFrame) {
+    frame.lines.insert(frame.lines.end(), appendedFrame.lines.begin(), appendedFrame.lines.end());
+    frame.triangles.insert(frame.triangles.end(), appendedFrame.triangles.begin(), appendedFrame.triangles.end());
+    frame.points.insert(frame.points.end(), appendedFrame.points.begin(), appendedFrame.points.end());
+}
+
 } // namespace
 
 QuaderRenderApi::QuaderRenderApi(ProjectSession& session, QuaderQueryApi& query)
@@ -52,8 +58,12 @@ QuaderApiResult<QuaderRenderOverlaySubmission> QuaderRenderApi::syncSelectionOve
         SceneRenderBridge& bridge,
         std::size_t viewportIndex,
         std::uint8_t layerMask,
-        ViewportOverlayCamera camera) {
+        ViewportOverlayCamera camera,
+        const ViewportOverlayFrame* toolOverlayFrame) {
     ViewportOverlayFrame frame = selectionOverlayFrame();
+    if (toolOverlayFrame != nullptr) {
+        appendOverlayFrame(frame, *toolOverlayFrame);
+    }
     const bool visible = viewportOverlayFrameVisible(frame);
     bridge.setOverlayFrame(viewportIndex, layerMask, std::move(frame), camera);
 

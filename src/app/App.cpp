@@ -68,13 +68,14 @@ int App::run() {
         SDL_Event event;
         const SDL_WindowID mainWindowId = SDL_GetWindowID(window_.sdlWindow());
         while (SDL_PollEvent(&event)) {
-            const bool chromeConsumed = window_.processChromeEvent(event);
+            const bool bypassChrome = ui_.shouldBypassPlatformChrome(event);
+            const bool chromeConsumed = !bypassChrome && window_.processChromeEvent(event);
             if (!chromeConsumed) {
                 ui_.processEvent(event);
                 if (const std::optional<WindowChromeAction> action = ui_.takeWindowChromeAction()) {
                     handleWindowChromeAction(*action);
                 }
-                if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                if (!bypassChrome && event.type == SDL_EVENT_MOUSE_MOTION) {
                     (void)window_.processChromeEvent(event);
                 }
             }

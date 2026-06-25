@@ -544,6 +544,10 @@ TEST(ModelingSessionServiceSplitTests, ContextActionServiceAppliesModalQueryStat
     const ModelingActionQuery effective = service.effectiveActionQuery(query, true);
     EXPECT_TRUE(effective.modalToolOwnsViewport);
 
+    query.suppressWhenModalToolOwnsViewport = false;
+    const ModelingActionQuery unsuppressed = service.effectiveActionQuery(query, true);
+    EXPECT_FALSE(unsuppressed.modalToolOwnsViewport);
+
     ModelingSelectionSummary summary;
     summary.mode = ModelingSelectionMode::Object;
     summary.hasSelection = true;

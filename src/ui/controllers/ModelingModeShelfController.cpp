@@ -32,24 +32,28 @@ std::span<const ModelingModeShelfModeDescriptor> modelingModeShelfModeDescriptor
                     .selectionMode = ModelingSelectionMode::Vertex,
                     .labelKey = "ui.modeling_shelf.tab.vertex",
                     .fallbackLabel = "Vertices",
+                    .icon = UIIconId::VertexSelection,
             },
             ModelingModeShelfModeDescriptor{
                     .controlId = "edge",
                     .selectionMode = ModelingSelectionMode::Edge,
                     .labelKey = "ui.modeling_shelf.tab.edge",
                     .fallbackLabel = "Edges",
+                    .icon = UIIconId::EdgeSelection,
             },
             ModelingModeShelfModeDescriptor{
                     .controlId = "face",
                     .selectionMode = ModelingSelectionMode::Face,
                     .labelKey = "ui.modeling_shelf.tab.face",
                     .fallbackLabel = "Faces",
+                    .icon = UIIconId::FaceSelection,
             },
             ModelingModeShelfModeDescriptor{
                     .controlId = "object",
                     .selectionMode = ModelingSelectionMode::Object,
                     .labelKey = "ui.modeling_shelf.tab.object",
                     .fallbackLabel = "Mesh",
+                    .icon = UIIconId::MeshSelection,
             },
     };
     return descriptors;
@@ -120,16 +124,23 @@ std::string commandIdForAction(const QuaderEditorApi& editor, const ModelingActi
 ModelingModeShelfCommand commandFromAction(
         const QuaderEditorApi& editor,
         const LocalizationService& localization,
-        const ModelingActionItem& action) {
+        const ModelingActionItem& action,
+        bool modalToolOwnsViewport) {
     const std::string commandId = commandIdForAction(editor, action);
+    const bool actionDisabled = action.visibility != ModelingActionVisibility::Enabled;
+    const bool disabled = actionDisabled || modalToolOwnsViewport;
     return ModelingModeShelfCommand{
             .id = action.actionId,
             .actionId = action.actionId,
             .commandId = commandId,
             .label = localization.text(modelingActionLabelKey(action.actionId), action.label),
             .secondaryText = editor.commands().shortcutFor(commandId),
-            .disabledReason = action.disabledReason,
-            .disabled = action.visibility != ModelingActionVisibility::Enabled,
+            .disabledReason = actionDisabled ? action.disabledReason : modalToolOwnsViewport
+                    ? localization.text(
+                            "ui.modeling_shelf.command.disabled.modal_tool",
+                            "Finish active tool before running this command.")
+                    : std::string(),
+            .disabled = disabled,
     };
 }
 
@@ -138,25 +149,31 @@ std::vector<ModelingModeShelfCommand> commandsFromEditor(
         const LocalizationService& localization) {
     ModelingActionQuery query{
             .surface = ModelingActionSurface::OperationsPanel,
+            .suppressWhenModalToolOwnsViewport = false,
             .includeDisabled = true,
             .includeHidden = false,
     };
+    const bool modalToolOwnsViewport = editor.query().toolStatus().modalToolOwnsViewport;
+
+    const ModelingActionSet actionSet = editor.modeling().availableActionSet(query);
+    const auto activePanel = std::find_if(
+            actionSet.panels.begin(),
+            actionSet.panels.end(),
+            [](const ModelingActionPanel& panel) {
+                return panel.visibility == ModelingActionVisibility::Enabled;
+            });
+    if (activePanel == actionSet.panels.end()) {
+        return {};
+    }
 
     std::vector<ModelingModeShelfCommand> activeStripCommands;
-    const std::vector<ModelingActionItem> actions = editor.modeling().availableActions(query);
-    activeStripCommands.reserve(actions.size());
-    for (const ModelingActionItem& action : actions) {
+    activeStripCommands.reserve(activePanel->actions.size());
+    for (const ModelingActionItem& action : activePanel->actions) {
         if (action.visibility == ModelingActionVisibility::Hidden) {
             continue;
         }
-        activeStripCommands.push_back(commandFromAction(editor, localization, action));
+        activeStripCommands.push_back(commandFromAction(editor, localization, action, modalToolOwnsViewport));
     }
-    std::sort(activeStripCommands.begin(), activeStripCommands.end(), [](const auto& left, const auto& right) {
-        if (left.label == right.label) {
-            return left.id < right.id;
-        }
-        return left.label < right.label;
-    });
     return activeStripCommands;
 }
 

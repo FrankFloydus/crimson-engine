@@ -57,6 +57,7 @@ enum class ModelingActionPreviewKind {
 struct ModelingActionQuery {
     ModelingActionSurface surface = ModelingActionSurface::OperationsPanel;
     bool modalToolOwnsViewport = false;
+    bool suppressWhenModalToolOwnsViewport = true;
     bool includeDisabled = true;
     bool includeHidden = false;
 };

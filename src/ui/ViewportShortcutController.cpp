@@ -9,6 +9,7 @@
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
+#include "editor/modeling/services/SelectionModeAdapter.h"
 
 #include <optional>
 
@@ -65,7 +66,6 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
         return editor.commands().execute(QuaderCommand::ApplyMaterial);
     case ViewportShortcutKind::None:
     case ViewportShortcutKind::ActivateTool:
-    case ViewportShortcutKind::SetSelectionMode:
     case ViewportShortcutKind::FocusDocument:
     case ViewportShortcutKind::FocusOrigin:
     case ViewportShortcutKind::ToggleMaximized:
@@ -75,6 +75,12 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
         return std::nullopt;
     }
     return std::nullopt;
+}
+
+QuaderApiVoidResult applySelectionModeShortcut(
+        QuaderEditorApi& editor,
+        ViewportSelectionMode mode) {
+    return editor.selection().setMode(viewportSelectionModeToApp(mode));
 }
 
 } // namespace
@@ -123,6 +129,19 @@ ViewportShortcutControllerResult ViewportShortcutController::handleModelingShort
         QuaderEditorApi& editor) const {
     if (!inputResult.shortcutHandled) {
         return {};
+    }
+
+    if (inputResult.shortcut.kind == ViewportShortcutKind::SetSelectionMode) {
+        const QuaderApiVoidResult command = applySelectionModeShortcut(editor, inputResult.shortcut.selectionMode);
+        if (!command.ok) {
+            LOG_ERROR("Viewport selection mode shortcut failed: {}",
+                    command.message.empty() ? "Command failed." : command.message);
+        }
+        return {
+                .commandExecuted = true,
+                .invalidateHover = true,
+                .markOverlayDirty = true,
+        };
     }
 
     const std::optional<QuaderApiVoidResult> command =

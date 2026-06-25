@@ -68,22 +68,6 @@ body {
     image-color: #5B5B5B;
 }
 
-.ui-icon-chrome-minimize {
-    decorator: image("quader://icons/minimize_icon.png" scale-none);
-}
-
-.ui-icon-chrome-restore {
-    decorator: image("quader://icons/restore_icon.png" scale-none);
-}
-
-.ui-icon-chrome-close {
-    decorator: image("quader://icons/close_icon.png" scale-none);
-}
-
-.ui-icon-mesh {
-    decorator: image("quader://icons/mesh_icon.png" scale-none);
-}
-
 .chrome-icon-button:hover .ui-icon {
     image-color: #D8D8D8;
 }
@@ -191,13 +175,15 @@ body {
 }
 
 .modeling-mode-shelf-content {
-    position: relative;
+    position: absolute;
+    left: 0dp;
+    right: 0dp;
+    top: 100%;
     display: flex;
     flex-direction: row;
     align-items: center;
     flex-grow: 0;
     flex-shrink: 0;
-    width: 100%;
     overflow: hidden;
     z-index: 1;
 }

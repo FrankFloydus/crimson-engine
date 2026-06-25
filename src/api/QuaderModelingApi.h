@@ -73,6 +73,7 @@ public:
             QuaderElementId face,
             std::uint32_t materialSlot);
 
+    [[nodiscard]] ModelingActionSet availableActionSet(const ModelingActionQuery& query = {}) const;
     [[nodiscard]] std::vector<ModelingActionItem> availableActions(const ModelingActionQuery& query = {}) const;
     [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const;
     [[nodiscard]] ModelingSelectionSummary selectionSummary() const;

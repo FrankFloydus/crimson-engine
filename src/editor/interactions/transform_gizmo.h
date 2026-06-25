@@ -103,6 +103,8 @@ struct TransformGizmoRingSegmentPrimitive {
  * Represents a Transform Gizmo Trackball Ring Segment value used by the modal modeling interaction layer.
  */
 struct TransformGizmoTrackballSegmentPrimitive {
+	quader::QVec3 world_start;
+	quader::QVec3 world_end;
 	quader::QVec2 screen_start;
 	quader::QVec2 screen_end;
 };

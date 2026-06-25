@@ -12,6 +12,7 @@
 #include "ui/UIUtilityTokens.h"
 #include "ui/components/organisms/ModelingModeShelfComponent.h"
 #include "ui/components/organisms/WindowChromeControlsComponent.h"
+#include "ui/core/UIIconRegistry.h"
 
 #include <SDL3/SDL_error.h>
 #include <SDL3/SDL_keyboard.h>
@@ -225,12 +226,14 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
 
     const UITokenConfig uiTokens = loadUITokenConfig(appUITokenConfigPath(executableDir));
     const std::string utilityRcss = buildUIUtilityRcss(uiTokens.utilities, uiTokens.colors);
+    const std::string iconRcss = UIIconRegistry::instance().buildRcss();
     const std::string debugPaletteRml = buildDebugPalettePageRml(uiTokens.colors);
 
     if (!rmlHost_.initialize(window_,
                 renderSystem,
                 executableDir,
                 utilityRcss,
+                iconRcss,
                 debugPaletteRml,
                 viewportHost_.textureSource(),
                 viewportHost_.textureHandle(),
@@ -277,12 +280,17 @@ bool UISystem::processEvent(const SDL_Event& event) {
         toggleDebugPalette();
         return true;
     }
+    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
+    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
+    if (rmlHost_.debuggerVisible()) {
+        const bool rmlConsumed = rmlHost_.processEvent(event, scaleX, scaleY);
+        return rmlConsumed || rmlConsumedEventBlocksViewport(event);
+    }
+
     if (handleMainLayoutPointerEvent(event)) {
         return true;
     }
 
-    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
-    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
     const bool rmlConsumed = rmlHost_.processEvent(event, scaleX, scaleY);
     if (const std::optional<std::string> selectedControl = rmlHost_.takeModelingModeShelfControlSelection()) {
         activateModelingModeShelfControl(*selectedControl);
@@ -302,6 +310,27 @@ bool UISystem::processEvent(const SDL_Event& event) {
     return rmlConsumed;
 }
 
+bool UISystem::shouldBypassPlatformChrome(const SDL_Event& event) const {
+    if (!window_ || !rmlHost_.debuggerVisible()) {
+        return false;
+    }
+
+    const SDL_WindowID windowId = SDL_GetWindowID(window_);
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+        return event.motion.windowID == windowId;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return event.button.windowID == windowId;
+    case SDL_EVENT_MOUSE_WHEEL:
+        return event.wheel.windowID == windowId;
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        return event.window.windowID == windowId;
+    default:
+        return false;
+    }
+}
+
 void UISystem::beginFrame(const FrameTiming& frameTiming) {
     updateWindowMetrics();
     if (mainLayoutDirty_) {
@@ -319,16 +348,14 @@ void UISystem::draw(QuaderEditorApi& editor,
         AssetId defaultMaterial,
         bool& quitRequested) {
     (void)renderBridge;
-    (void)modeling;
     (void)selection;
-    (void)defaultMaterial;
     (void)quitRequested;
 
     applyPendingModelingModeShelfIntents(editor);
     if (modelingModeShelfController_.syncEditorState(editor, localization_)) {
         rebuildModelingModeShelf();
     }
-    viewportHost_.handleFrame(editor, document, assets, debugPaletteVisible_);
+    viewportHost_.handleFrame(editor, document, assets, modeling, defaultMaterial, debugPaletteVisible_);
 }
 
 void UISystem::prepareLayout(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
@@ -563,6 +590,9 @@ void UISystem::rebuildModelingModeShelf() {
     rmlHost_.setElementInnerRml(
             mainLayoutModelingModeShelfSlotElementId(),
             buildModelingModeShelfRml(modelingModeShelfController_.buildState(localization_)));
+    if (framebufferWidth_ > 0 && framebufferHeight_ > 0) {
+        rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+    }
 }
 
 bool UISystem::updateModelingModeShelfOverflowFromRml() {
@@ -700,6 +730,9 @@ bool UISystem::updateModelingModeShelfOverflowFromRml() {
 bool UISystem::activateModelingModeShelfControl(std::string_view controlId) {
     if (!modelingModeShelfController_.activateControl(controlId)) {
         return false;
+    }
+    if (controlId != modelingModeShelfOverflowToggleControlId()) {
+        return true;
     }
     rebuildModelingModeShelf();
     return true;

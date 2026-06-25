@@ -12,6 +12,8 @@
 
 #include <algorithm>
 
+#include <editor/interactions/viewport_projection.h>
+
 namespace quader {
 
 /**
@@ -86,6 +88,23 @@ public:
                 .orthographicSize = state.orthographicSize,
                 .fovDegrees = state.fovDegrees,
         };
+    }
+
+    static quader_editor_core::ViewportCameraState runtimeCamera(const ViewportCameraController& camera, QVec2 viewportSize) {
+        const ViewportCameraBasis cameraBasis = basis(camera);
+        const ViewportCameraState& state = camera.state();
+        quader_editor_core::ViewportCameraState runtimeCamera;
+        runtimeCamera.projection = state.projection == ViewportProjection::Orthographic
+                ? quader_editor_core::CameraProjection::orthographic
+                : quader_editor_core::CameraProjection::perspective;
+        runtimeCamera.transform.origin = cameraBasis.eye;
+        runtimeCamera.transform.x_axis = cameraBasis.right;
+        runtimeCamera.transform.y_axis = cameraBasis.up;
+        runtimeCamera.transform.z_axis = cameraBasis.forward * -1.0f;
+        runtimeCamera.viewport_size = {std::max(viewportSize.x, 1.0f), std::max(viewportSize.y, 1.0f)};
+        runtimeCamera.orthographic_size = std::max(state.orthographicSize, 0.0001f);
+        runtimeCamera.fov_degrees = state.fovDegrees;
+        return runtimeCamera;
     }
 };
 

@@ -28,6 +28,7 @@ bool viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer layer) {
 
 bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::ToolPlane ||
+            layer == ViewportOverlayLayer::ToolHandle ||
             layer == ViewportOverlayLayer::ToolPreviewFill;
 }
 
@@ -51,6 +52,7 @@ bool viewportOverlayPointDrawsOnTop(ViewportOverlayLayer layer) {
 
 ViewportOverlayDepthMode viewportOverlayDepthMode(ViewportOverlayLayer layer, ViewportOverlayGeometryKind kind) {
     if (layer == ViewportOverlayLayer::ToolPlane ||
+            layer == ViewportOverlayLayer::ToolHandle ||
             layer == ViewportOverlayLayer::ToolPreviewFill) {
         return ViewportOverlayDepthMode::DrawOnTop;
     }

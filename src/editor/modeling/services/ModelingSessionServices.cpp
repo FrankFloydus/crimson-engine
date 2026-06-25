@@ -917,7 +917,9 @@ ModelingToolSettingsTarget ModelingToolSettingsService::activeRuntimeToolTarget(
 ModelingActionQuery ModelingContextActionService::effectiveActionQuery(
         ModelingActionQuery query,
         bool modalToolOwnsViewport) const {
-    query.modalToolOwnsViewport = query.modalToolOwnsViewport || modalToolOwnsViewport;
+    if (query.suppressWhenModalToolOwnsViewport) {
+        query.modalToolOwnsViewport = query.modalToolOwnsViewport || modalToolOwnsViewport;
+    }
     return query;
 }
 

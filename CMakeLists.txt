@@ -334,6 +334,9 @@ quader_compile_material(ground_grid_material resources/materials/ground_grid.mat
 add_library(quader_runtime STATIC
     src/app/AppFrameClock.cpp
     src/app/App.cpp
+    src/editor/viewport/TransformGizmoInteraction.cpp
+    src/editor/viewport/ViewportInteractionController.cpp
+    src/editor/viewport/ViewportSelectionInteraction.cpp
     src/editor/transform/SceneTransformDragService.cpp
     src/platform/FatalErrorHandler.cpp
     src/platform/PlatformWindow.cpp
@@ -355,6 +358,8 @@ add_library(quader_runtime STATIC
     src/render/overlay/OverlayProxyFactory.cpp
     src/render/overlay/OverlayRenderableBuilder.cpp
     src/render/overlay/OverlayRenderableCache.cpp
+    src/render/overlay/ViewportBoxOverlayBuilder.cpp
+    src/render/overlay/ViewportTransformGizmoOverlayBuilder.cpp
     src/render/overlay/ViewportSceneOverlayBuilder.cpp
     src/render/overlay/ViewportOverlayStyleResolver.cpp
     src/render/RenderSystem.cpp
@@ -500,6 +505,7 @@ if(QUADER_BUILD_TESTS)
         tests/modeling_tool_catalog_tests.cpp
         tests/render_extraction_tests.cpp
         tests/selection_mode_adapter_tests.cpp
+        tests/viewport_interaction_controller_tests.cpp
         tests/viewport_tool_catalog_tests.cpp
         tests/support/BehaviorExpect.cpp
         tests/support/BehaviorScenario.cpp

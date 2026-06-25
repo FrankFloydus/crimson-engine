@@ -7,11 +7,12 @@
 #include "ui/core/UIIconRegistry.h"
 
 #include <array>
+#include <sstream>
 
 namespace quader {
 namespace {
 
-constexpr std::array<UIIconDefinition, 4> kIconDefinitions = {
+constexpr std::array<UIIconDefinition, 8> kIconDefinitions = {
         UIIconDefinition{
                 .id = UIIconId::ChromeMinimize,
                 .name = "chrome-minimize",
@@ -40,7 +41,86 @@ constexpr std::array<UIIconDefinition, 4> kIconDefinitions = {
                 .provider = UIIconProvider::ImageResource,
                 .resourcePath = "quader://icons/mesh_icon.png",
         },
+        UIIconDefinition{
+                .id = UIIconId::VertexSelection,
+                .name = "vertex-selection",
+                .className = "ui-icon-vertex-selection",
+                .provider = UIIconProvider::ImageResource,
+                .resourcePath = "quader://icons/vertex_sel_icon.png",
+                .hoverResourcePath = "quader://icons/vertex_sel_icon_hover.png",
+                .width = "24dp",
+                .height = "24dp",
+                .preserveResourceColor = true,
+        },
+        UIIconDefinition{
+                .id = UIIconId::EdgeSelection,
+                .name = "edge-selection",
+                .className = "ui-icon-edge-selection",
+                .provider = UIIconProvider::ImageResource,
+                .resourcePath = "quader://icons/edge_sel_icon.png",
+                .hoverResourcePath = "quader://icons/edge_sel_icon_hover.png",
+                .width = "24dp",
+                .height = "24dp",
+                .preserveResourceColor = true,
+        },
+        UIIconDefinition{
+                .id = UIIconId::FaceSelection,
+                .name = "face-selection",
+                .className = "ui-icon-face-selection",
+                .provider = UIIconProvider::ImageResource,
+                .resourcePath = "quader://icons/face_sel_icon.png",
+                .hoverResourcePath = "quader://icons/face_sel_icon_hover.png",
+                .width = "24dp",
+                .height = "24dp",
+                .preserveResourceColor = true,
+        },
+        UIIconDefinition{
+                .id = UIIconId::MeshSelection,
+                .name = "mesh-selection",
+                .className = "ui-icon-mesh-selection",
+                .provider = UIIconProvider::ImageResource,
+                .resourcePath = "quader://icons/mesh_sel_icon.png",
+                .hoverResourcePath = "quader://icons/mesh_sel_icon_hover.png",
+                .width = "24dp",
+                .height = "25dp",
+                .preserveResourceColor = true,
+        },
 };
+
+void appendIconResourceRule(
+        std::ostringstream& rcss,
+        std::string_view className,
+        std::string_view resourcePath,
+        std::string_view width,
+        std::string_view height,
+        bool preserveResourceColor) {
+    rcss << "." << className << " {\n";
+    if (!width.empty()) {
+        rcss << "    width: " << width << ";\n";
+    }
+    if (!height.empty()) {
+        rcss << "    height: " << height << ";\n";
+    }
+    if (preserveResourceColor) {
+        rcss << "    image-color: #FFFFFF;\n";
+    }
+    rcss << "    decorator: image(\"" << resourcePath << "\" scale-none);\n";
+    rcss << "}\n\n";
+}
+
+void appendIconStateResourceRule(
+        std::ostringstream& rcss,
+        std::string_view parentSelector,
+        std::string_view className,
+        std::string_view resourcePath,
+        bool preserveResourceColor) {
+    rcss << parentSelector << " ." << className << " {\n";
+    if (preserveResourceColor) {
+        rcss << "    image-color: #FFFFFF;\n";
+    }
+    rcss << "    decorator: image(\"" << resourcePath << "\" scale-none);\n";
+    rcss << "}\n\n";
+}
 
 } // namespace
 
@@ -67,6 +147,47 @@ UIElement UIIconRegistry::renderIcon(UIIconId id, std::string_view extraClass) c
     }
     icon.addClassIf(!extraClass.empty(), extraClass);
     return icon;
+}
+
+std::string UIIconRegistry::buildRcss() const {
+    std::ostringstream rcss;
+    for (const UIIconDefinition& definition : kIconDefinitions) {
+        if (definition.className.empty() || definition.resourcePath.empty()) {
+            continue;
+        }
+
+        appendIconResourceRule(
+                rcss,
+                definition.className,
+                definition.resourcePath,
+                definition.width,
+                definition.height,
+                definition.preserveResourceColor);
+
+        if (definition.hoverResourcePath.empty()) {
+            continue;
+        }
+
+        appendIconStateResourceRule(
+                rcss,
+                ".toolbar-button:hover",
+                definition.className,
+                definition.hoverResourcePath,
+                definition.preserveResourceColor);
+        appendIconStateResourceRule(
+                rcss,
+                ".toolbar-button:active",
+                definition.className,
+                definition.hoverResourcePath,
+                definition.preserveResourceColor);
+        appendIconStateResourceRule(
+                rcss,
+                ".toolbar-button-active",
+                definition.className,
+                definition.hoverResourcePath,
+                definition.preserveResourceColor);
+    }
+    return rcss.str();
 }
 
 std::string_view uiIconProviderClass(UIIconProvider provider) {

@@ -18,6 +18,7 @@
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/Log.h>
 #include <RmlUi/Core/SystemInterface.h>
+#include <RmlUi/Debugger.h>
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_error.h>
@@ -42,6 +43,7 @@ namespace quader {
 namespace {
 
 constexpr std::string_view kGeneratedUtilityRcssPath = "quader://ui/rcss/app-utility.generated.rcss";
+constexpr std::string_view kGeneratedIconRcssPath = "quader://ui/rcss/app-icons.generated.rcss";
 constexpr std::string_view kIconResourceScheme = "quader://icons/";
 constexpr std::string_view kUiResourceScheme = "quader://ui/";
 
@@ -346,12 +348,26 @@ int rmlMouseButtonIndex(Uint8 button) {
     return static_cast<int>(button);
 }
 
+bool isRmlDebuggerToggleShortcut(const SDL_Event& event) {
+    if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat || event.key.key != SDLK_I) {
+        return false;
+    }
+
+    const SDL_Keymod mod = SDL_GetModState();
+    return (mod & SDL_KMOD_CTRL) != 0 &&
+            (mod & SDL_KMOD_SHIFT) != 0 &&
+            (mod & (SDL_KMOD_ALT | SDL_KMOD_GUI)) == 0;
+}
+
 std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
     case SDL_EVENT_WINDOW_FOCUS_GAINED:
     case SDL_EVENT_WINDOW_FOCUS_LOST:
         return event.window.windowID;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        return event.key.windowID;
     case SDL_EVENT_MOUSE_MOTION:
         return event.motion.windowID;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -364,6 +380,45 @@ std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
     default:
         return std::nullopt;
     }
+}
+
+bool processRmlContextEventConsumed(
+        Rml::Context& context,
+        const SDL_Event& event,
+        float windowToFramebufferScaleX,
+        float windowToFramebufferScaleY) {
+    auto mousePixelX = [&](float x) {
+        return static_cast<int>(std::lround(x * windowToFramebufferScaleX));
+    };
+    auto mousePixelY = [&](float y) {
+        return static_cast<int>(std::lround(y * windowToFramebufferScaleY));
+    };
+
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+        return !context.ProcessMouseMove(mousePixelX(event.motion.x), mousePixelY(event.motion.y), rmlModifiersFromSdl());
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        context.ProcessMouseMove(mousePixelX(event.button.x), mousePixelY(event.button.y), rmlModifiersFromSdl());
+        return !context.ProcessMouseButtonDown(rmlMouseButtonIndex(event.button.button), rmlModifiersFromSdl());
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        context.ProcessMouseMove(mousePixelX(event.button.x), mousePixelY(event.button.y), rmlModifiersFromSdl());
+        return !context.ProcessMouseButtonUp(rmlMouseButtonIndex(event.button.button), rmlModifiersFromSdl());
+    case SDL_EVENT_MOUSE_WHEEL: {
+        const float direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0f : 1.0f;
+        context.ProcessMouseMove(mousePixelX(event.wheel.mouse_x), mousePixelY(event.wheel.mouse_y), rmlModifiersFromSdl());
+        return !context.ProcessMouseWheel(event.wheel.y * direction, rmlModifiersFromSdl());
+    }
+    case SDL_EVENT_TEXT_INPUT:
+        if (event.text.text != nullptr) {
+            return !context.ProcessTextInput(Rml::String(event.text.text));
+        }
+        break;
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        return !context.ProcessMouseLeave();
+    default:
+        break;
+    }
+    return false;
 }
 
 } // namespace
@@ -379,6 +434,7 @@ bool RmlUiContextHost::initialize(
         RenderSystem& renderSystem,
         const std::filesystem::path& executableDir,
         std::string utilityRcss,
+        std::string iconRcss,
         std::string debugPaletteRml,
         std::string initialTextureSource,
         RenderTextureHandle initialTextureHandle,
@@ -395,6 +451,7 @@ bool RmlUiContextHost::initialize(
     systemInterface_ = std::make_unique<RmlSystemInterface>();
     auto fileInterface = std::make_unique<RmlFileInterface>(executableDir);
     fileInterface->setVirtualFile(std::string(kGeneratedUtilityRcssPath), std::move(utilityRcss));
+    fileInterface->setVirtualFile(std::string(kGeneratedIconRcssPath), std::move(iconRcss));
     fileInterface_ = std::move(fileInterface);
 
     Rml::SetSystemInterface(systemInterface_.get());
@@ -446,6 +503,17 @@ bool RmlUiContextHost::initialize(
     document_->AddEventListener("click", debugPaletteCopyListener_.get());
     document_->Show();
 
+    debuggerContext_ = Rml::CreateContext("quader-debugger", Rml::Vector2i(1, 1));
+    if (!debuggerContext_) {
+        LOG_WARN("RmlUi debugger context creation failed");
+    } else if (!Rml::Debugger::Initialise(debuggerContext_)) {
+        LOG_WARN("RmlUi debugger initialization failed");
+    } else {
+        rmlDebuggerInitialized_ = true;
+        Rml::Debugger::SetContext(context_);
+        Rml::Debugger::SetVisible(false);
+    }
+
     initialized_ = true;
     return true;
 }
@@ -473,6 +541,11 @@ void RmlUiContextHost::shutdown() {
     pendingModelingModeShelfControlSelection_.reset();
     pendingModelingModeShelfCommand_.reset();
     document_ = nullptr;
+    if (rmlDebuggerInitialized_) {
+        Rml::Debugger::Shutdown();
+        rmlDebuggerInitialized_ = false;
+    }
+    debuggerContext_ = nullptr;
     context_ = nullptr;
     if (rmlInitialized_) {
         Rml::Shutdown();
@@ -499,39 +572,26 @@ bool RmlUiContextHost::processEvent(
     if (targetWindow && window_ && *targetWindow != SDL_GetWindowID(window_)) {
         return false;
     }
-
-    auto mousePixelX = [&](float x) {
-        return static_cast<int>(std::lround(x * windowToFramebufferScaleX));
-    };
-    auto mousePixelY = [&](float y) {
-        return static_cast<int>(std::lround(y * windowToFramebufferScaleY));
-    };
-
-    switch (event.type) {
-    case SDL_EVENT_MOUSE_MOTION:
-        return context_->ProcessMouseMove(mousePixelX(event.motion.x), mousePixelY(event.motion.y), rmlModifiersFromSdl());
-    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        context_->ProcessMouseMove(mousePixelX(event.button.x), mousePixelY(event.button.y), rmlModifiersFromSdl());
-        return context_->ProcessMouseButtonDown(rmlMouseButtonIndex(event.button.button), rmlModifiersFromSdl());
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        context_->ProcessMouseMove(mousePixelX(event.button.x), mousePixelY(event.button.y), rmlModifiersFromSdl());
-        return context_->ProcessMouseButtonUp(rmlMouseButtonIndex(event.button.button), rmlModifiersFromSdl());
-    case SDL_EVENT_MOUSE_WHEEL: {
-        const float direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0f : 1.0f;
-        context_->ProcessMouseMove(mousePixelX(event.wheel.mouse_x), mousePixelY(event.wheel.mouse_y), rmlModifiersFromSdl());
-        return context_->ProcessMouseWheel(event.wheel.y * direction, rmlModifiersFromSdl());
-    }
-    case SDL_EVENT_TEXT_INPUT:
-        if (event.text.text != nullptr) {
-            return context_->ProcessTextInput(Rml::String(event.text.text));
+    if (isRmlDebuggerToggleShortcut(event)) {
+        if (rmlDebuggerInitialized_) {
+            Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible());
+            context_->Update();
+            if (debuggerContext_) {
+                debuggerContext_->Update();
+            }
         }
-        break;
-    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-        return context_->ProcessMouseLeave();
-    default:
-        break;
+        return true;
     }
-    return false;
+
+    if (debuggerVisible() && debuggerContext_ &&
+            processRmlContextEventConsumed(*debuggerContext_, event, windowToFramebufferScaleX, windowToFramebufferScaleY)) {
+        return true;
+    }
+    return processRmlContextEventConsumed(*context_, event, windowToFramebufferScaleX, windowToFramebufferScaleY);
+}
+
+bool RmlUiContextHost::debuggerVisible() const {
+    return rmlDebuggerInitialized_ && Rml::Debugger::IsVisible();
 }
 
 void RmlUiContextHost::setDensityIndependentPixelRatio(float dpRatio) {
@@ -541,6 +601,9 @@ void RmlUiContextHost::setDensityIndependentPixelRatio(float dpRatio) {
 
     dpRatio_ = dpRatio;
     context_->SetDensityIndependentPixelRatio(dpRatio_);
+    if (debuggerContext_) {
+        debuggerContext_->SetDensityIndependentPixelRatio(dpRatio_);
+    }
 }
 
 void RmlUiContextHost::updateLayout(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
@@ -548,10 +611,18 @@ void RmlUiContextHost::updateLayout(std::uint32_t framebufferWidth, std::uint32_
         return;
     }
 
+    const std::uint32_t width = std::max(1u, framebufferWidth);
+    const std::uint32_t height = std::max(1u, framebufferHeight);
     context_->SetDimensions(Rml::Vector2i(
-            static_cast<int>(std::max(1u, framebufferWidth)),
-            static_cast<int>(std::max(1u, framebufferHeight))));
+            static_cast<int>(width),
+            static_cast<int>(height)));
     context_->Update();
+    if (debuggerContext_) {
+        debuggerContext_->SetDimensions(Rml::Vector2i(
+                static_cast<int>(width),
+                static_cast<int>(height)));
+        debuggerContext_->Update();
+    }
 }
 
 void RmlUiContextHost::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
@@ -561,6 +632,9 @@ void RmlUiContextHost::prepareRenderData(std::uint32_t framebufferWidth, std::ui
 
     renderer_.beginFrame(framebufferWidth, framebufferHeight);
     context_->Render();
+    if (debuggerVisible() && debuggerContext_) {
+        debuggerContext_->Render();
+    }
 }
 
 void RmlUiContextHost::render(RenderSystem& renderSystem) {
