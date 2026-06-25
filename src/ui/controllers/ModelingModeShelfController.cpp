@@ -17,6 +17,9 @@
 namespace quader {
 namespace {
 
+/**
+ * Describes one selection mode tab exposed by the modeling shelf.
+ */
 struct ModelingModeShelfModeDescriptor {
     std::string_view controlId;
     ModelingSelectionMode selectionMode = ModelingSelectionMode::Object;

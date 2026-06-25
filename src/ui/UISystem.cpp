@@ -301,6 +301,9 @@ bool UISystem::processEvent(const SDL_Event& event) {
         rebuildModelingModeShelf();
         return true;
     }
+    if (pointerEventShouldBypassViewport(event)) {
+        return true;
+    }
     if (rmlConsumed && rmlConsumedEventBlocksViewport(event)) {
         return true;
     }
@@ -1150,6 +1153,13 @@ std::optional<std::pair<float, float>> UISystem::mainLayoutPointerFramebufferPos
         windowX = event.button.x;
         windowY = event.button.y;
         break;
+    case SDL_EVENT_MOUSE_WHEEL:
+        if (event.wheel.windowID != windowId) {
+            return std::nullopt;
+        }
+        windowX = event.wheel.mouse_x;
+        windowY = event.wheel.mouse_y;
+        break;
     default:
         return std::nullopt;
     }
@@ -1468,30 +1478,58 @@ bool UISystem::pointerEventInsideMainViewport(const SDL_Event& event) const {
         return true;
     }
 
-    float windowX = 0.0f;
-    float windowY = 0.0f;
-    switch (event.type) {
-    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        windowX = event.button.x;
-        windowY = event.button.y;
-        break;
-    case SDL_EVENT_MOUSE_WHEEL:
-        windowX = event.wheel.mouse_x;
-        windowY = event.wheel.mouse_y;
-        break;
-    default:
+    const std::optional<std::pair<float, float>> pointer = mainLayoutPointerFramebufferPosition(event);
+    if (!pointer) {
         return true;
     }
 
-    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
-    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
-    const float x = windowX * scaleX;
-    const float y = windowY * scaleY;
+    const float x = pointer->first;
+    const float y = pointer->second;
     return x >= static_cast<float>(mainViewportFrame_->left) &&
             y >= static_cast<float>(mainViewportFrame_->top) &&
             x < static_cast<float>(mainViewportFrame_->left + mainViewportFrame_->width) &&
             y < static_cast<float>(mainViewportFrame_->top + mainViewportFrame_->height);
+}
+
+bool UISystem::pointerEventInsideRmlElement(const SDL_Event& event, const std::string& elementId) const {
+    const std::optional<std::pair<float, float>> pointer = mainLayoutPointerFramebufferPosition(event);
+    if (!pointer) {
+        return false;
+    }
+    const std::optional<RmlElementRect> rect = rmlHost_.measureElementById(elementId);
+    if (!rect) {
+        return false;
+    }
+
+    const float x = pointer->first;
+    const float y = pointer->second;
+    return x >= static_cast<float>(rect->left) &&
+            y >= static_cast<float>(rect->top) &&
+            x < static_cast<float>(rect->left + rect->width) &&
+            y < static_cast<float>(rect->top + rect->height);
+}
+
+bool UISystem::pointerEventInsideModelingModeShelf(const SDL_Event& event) const {
+    return pointerEventInsideRmlElement(event, "modeling-mode-shelf") ||
+            pointerEventInsideRmlElement(event, "modeling-mode-shelf-toolbar") ||
+            pointerEventInsideRmlElement(event, "modeling-mode-shelf-content") ||
+            pointerEventInsideRmlElement(event, "modeling-mode-shelf-overflow-menu");
+}
+
+bool UISystem::pointerEventShouldBypassViewport(const SDL_Event& event) const {
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (viewportHost_.hasActivePointerGesture()) {
+            return false;
+        }
+        return pointerEventInsideModelingModeShelf(event) || !pointerEventInsideMainViewport(event);
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_WHEEL:
+        return pointerEventInsideModelingModeShelf(event) || !pointerEventInsideMainViewport(event);
+    default:
+        return false;
+    }
 }
 
 bool UISystem::isMainLayoutPanelVisible(std::string_view panel) const {

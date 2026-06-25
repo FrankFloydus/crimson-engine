@@ -84,6 +84,7 @@ public:
     [[nodiscard]] std::uint32_t framebufferHeight() const { return framebufferHeight_; }
     [[nodiscard]] int windowWidth() const { return windowWidth_; }
     [[nodiscard]] int windowHeight() const { return windowHeight_; }
+    [[nodiscard]] bool hasActivePointerGesture() const;
 
 private:
     struct ViewportWindowInstance;

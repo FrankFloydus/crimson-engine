@@ -321,6 +321,7 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
 }
 
 TEST(EditorApiTests, ViewportSelectionModeShortcutsApplyThroughPublicSelectionApi) {
+    /// Maps one viewport shortcut mode to the public modeling selection mode it should apply.
     struct ModeCase {
         quader::ViewportSelectionMode viewportMode;
         quader::ModelingSelectionMode modelingMode;
@@ -1094,6 +1095,108 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
     EXPECT_TRUE(snapshot->visible);
     EXPECT_FALSE(snapshot->locked);
     EXPECT_EQ(snapshot->transform.position.x, 2.0f);
+}
+
+TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingParentTransform) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::QuaderCreateEntityArgs parentArgs;
+    parentArgs.name = "Batch Reparent Parent";
+    const quader::QuaderApiResult<quader::QuaderEntityRef> parent = editor.scene().createEntity(parentArgs);
+    ASSERT_TRUE(parent.ok()) << parent.errorMessage();
+
+    quader::QuaderCreateEntityArgs childArgs;
+    childArgs.name = "Batch Reparent Child";
+    childArgs.transform.position = {2.0f, 0.0f, 0.0f};
+    const quader::QuaderApiResult<quader::QuaderEntityRef> child = editor.scene().createEntity(childArgs);
+    ASSERT_TRUE(child.ok()) << child.errorMessage();
+
+    quader::TransformComponent parentMove;
+    parentMove.position = {10.0f, 0.0f, 0.0f};
+    const quader::QuaderApiVoidResult batch = editor.scene().batch("Batch Reparent Preserve")
+            .setTransform(parent.value().id, parentMove)
+            .reparent(child.value().id, parent.value().id, true)
+            .commit();
+    ASSERT_TRUE(batch.ok()) << batch.errorMessage();
+    EXPECT_TRUE(batch.changed());
+
+    std::optional<quader::QuaderEntitySnapshot> parentSnapshot = entityById(editor, parent.value().id);
+    std::optional<quader::QuaderEntitySnapshot> childSnapshot = entityById(editor, child.value().id);
+    ASSERT_TRUE(parentSnapshot.has_value());
+    ASSERT_TRUE(childSnapshot.has_value());
+    EXPECT_EQ(childSnapshot->parent, parent.value().id);
+    EXPECT_NEAR(parentSnapshot->transform.position.x, 10.0f, 0.001f);
+    EXPECT_NEAR(childSnapshot->transform.position.x, -8.0f, 0.001f);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    parentSnapshot = entityById(editor, parent.value().id);
+    childSnapshot = entityById(editor, child.value().id);
+    ASSERT_TRUE(parentSnapshot.has_value());
+    ASSERT_TRUE(childSnapshot.has_value());
+    EXPECT_EQ(childSnapshot->parent, quader::InvalidEntityId);
+    EXPECT_NEAR(parentSnapshot->transform.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(childSnapshot->transform.position.x, 2.0f, 0.001f);
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    parentSnapshot = entityById(editor, parent.value().id);
+    childSnapshot = entityById(editor, child.value().id);
+    ASSERT_TRUE(parentSnapshot.has_value());
+    ASSERT_TRUE(childSnapshot.has_value());
+    EXPECT_EQ(childSnapshot->parent, parent.value().id);
+    EXPECT_NEAR(parentSnapshot->transform.position.x, 10.0f, 0.001f);
+    EXPECT_NEAR(childSnapshot->transform.position.x, -8.0f, 0.001f);
+}
+
+TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParentTransform) {
+    quader::ProjectSession session;
+    quader::QuaderEditorApi editor(session);
+
+    quader::QuaderCreateEntityArgs parentArgs;
+    parentArgs.name = "Batch Reparent Local Parent";
+    const quader::QuaderApiResult<quader::QuaderEntityRef> parent = editor.scene().createEntity(parentArgs);
+    ASSERT_TRUE(parent.ok()) << parent.errorMessage();
+
+    quader::QuaderCreateEntityArgs childArgs;
+    childArgs.name = "Batch Reparent Local Child";
+    childArgs.transform.position = {2.0f, 0.0f, 0.0f};
+    const quader::QuaderApiResult<quader::QuaderEntityRef> child = editor.scene().createEntity(childArgs);
+    ASSERT_TRUE(child.ok()) << child.errorMessage();
+
+    quader::TransformComponent parentMove;
+    parentMove.position = {10.0f, 0.0f, 0.0f};
+    const quader::QuaderApiVoidResult batch = editor.scene().batch("Batch Reparent Local")
+            .setTransform(parent.value().id, parentMove)
+            .reparent(child.value().id, parent.value().id, false)
+            .commit();
+    ASSERT_TRUE(batch.ok()) << batch.errorMessage();
+    EXPECT_TRUE(batch.changed());
+
+    std::optional<quader::QuaderEntitySnapshot> parentSnapshot = entityById(editor, parent.value().id);
+    std::optional<quader::QuaderEntitySnapshot> childSnapshot = entityById(editor, child.value().id);
+    ASSERT_TRUE(parentSnapshot.has_value());
+    ASSERT_TRUE(childSnapshot.has_value());
+    EXPECT_EQ(childSnapshot->parent, parent.value().id);
+    EXPECT_NEAR(parentSnapshot->transform.position.x, 10.0f, 0.001f);
+    EXPECT_NEAR(childSnapshot->transform.position.x, 2.0f, 0.001f);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    parentSnapshot = entityById(editor, parent.value().id);
+    childSnapshot = entityById(editor, child.value().id);
+    ASSERT_TRUE(parentSnapshot.has_value());
+    ASSERT_TRUE(childSnapshot.has_value());
+    EXPECT_EQ(childSnapshot->parent, quader::InvalidEntityId);
+    EXPECT_NEAR(parentSnapshot->transform.position.x, 0.0f, 0.001f);
+    EXPECT_NEAR(childSnapshot->transform.position.x, 2.0f, 0.001f);
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    parentSnapshot = entityById(editor, parent.value().id);
+    childSnapshot = entityById(editor, child.value().id);
+    ASSERT_TRUE(parentSnapshot.has_value());
+    ASSERT_TRUE(childSnapshot.has_value());
+    EXPECT_EQ(childSnapshot->parent, parent.value().id);
+    EXPECT_NEAR(parentSnapshot->transform.position.x, 10.0f, 0.001f);
+    EXPECT_NEAR(childSnapshot->transform.position.x, 2.0f, 0.001f);
 }
 
 TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {

@@ -267,6 +267,36 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
     return result;
 }
 
+void SelectionOverlayProjection::appendProjectedOverlayLines(
+        ViewportOverlayFrame& frame,
+        const std::vector<quader_editor_core::SelectionOverlayLine>& lines,
+        const std::unordered_map<int, EntityId>& entityByObject,
+        const SceneDocument& scene,
+        ViewportOverlayLayer layer,
+        ViewportOverlayStyleRole styleRole,
+        ViewportOverlaySource source) {
+    frame.lines.reserve(frame.lines.size() + lines.size());
+    for (const quader_editor_core::SelectionOverlayLine& line : lines) {
+        if (!objectEffectivelyVisible(line.object_id, entityByObject, scene)) {
+            continue;
+        }
+        frame.lines.push_back(ViewportOverlayLine{
+                .layer = layer,
+                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), entityByObject, scene),
+                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), entityByObject, scene),
+                .color = viewportOverlayColorFor(layer, line.color_abgr),
+                .widthPixels = line.width_pixels,
+                .styleRole = styleRole,
+                .source = source,
+                .element = runtimeElementRef(
+                        line.object_id,
+                        quader_poly::invalid_element_id,
+                        line.edge,
+                        line.face_id),
+        });
+    }
+}
+
 void SelectionOverlayProjection::appendWorldSpaceOverlayPoints(
         ViewportOverlayFrame& frame,
         const std::vector<quader_editor_core::SelectionOverlayPoint>& points) {

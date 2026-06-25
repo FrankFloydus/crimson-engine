@@ -452,6 +452,21 @@ TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBa
     EXPECT_NE(drawnPlaneToolSource.find("ViewportPointToolContext& pointContext = *context.point"), std::string::npos);
 }
 
+TEST(ViewportToolGuardrailTests, RmlViewportHostProvidesPointToolContextToModalTools) {
+    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::string viewportHost =
+            readSourceFile(root / "src" / "ui" / "controllers" / "ViewportHost.cpp");
+
+    EXPECT_NE(viewportHost.find("ViewportPointToolContext pointToolContext"), std::string::npos);
+    EXPECT_NE(viewportHost.find("pointToolContext.makeEventAt"), std::string::npos);
+    EXPECT_NE(viewportHost.find("pointToolContext.hitDrawnPlaneCapturedPoint"), std::string::npos);
+    EXPECT_NE(viewportHost.find("pointToolContext.hitDrawnPlaneLine"), std::string::npos);
+    EXPECT_NE(viewportHost.find(".point = &pointToolContext"), std::string::npos);
+    EXPECT_NE(viewportHost.find("modelingToolRayEvent("), std::string::npos);
+    EXPECT_NE(viewportHost.find("snapEnabled = !modifiers.primary"), std::string::npos);
+    EXPECT_NE(viewportHost.find("constrainAxis = modifiers.shift"), std::string::npos);
+}
+
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
     const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
     EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "ViewportToolRuntime.h"));

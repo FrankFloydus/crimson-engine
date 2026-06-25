@@ -27,6 +27,14 @@ public:
             const quader_editor_core::SelectionOverlayFrame& frame,
             const std::unordered_map<int, EntityId>& entityByObject,
             const SceneDocument& scene);
+    static void appendProjectedOverlayLines(
+            ViewportOverlayFrame& frame,
+            const std::vector<quader_editor_core::SelectionOverlayLine>& lines,
+            const std::unordered_map<int, EntityId>& entityByObject,
+            const SceneDocument& scene,
+            ViewportOverlayLayer layer,
+            ViewportOverlayStyleRole styleRole,
+            ViewportOverlaySource source);
     static void appendWorldSpaceOverlayPoints(
             ViewportOverlayFrame& frame,
             const std::vector<quader_editor_core::SelectionOverlayPoint>& points);

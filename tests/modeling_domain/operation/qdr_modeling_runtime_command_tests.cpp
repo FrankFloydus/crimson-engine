@@ -793,10 +793,11 @@ TEST_CASE("editor runtime command facade drives insert edge loop preview and com
 			no_settings_command(qec::EditorRuntimeCommandId::commit_insert_edge_loop_drag));
 	REQUIRE(commit_result.command.ok);
 	REQUIRE(commit_result.command.changed);
-	REQUIRE(runtime.active_tool() == qec::ViewportInteractionTool::insert_edge_loop);
-	REQUIRE(runtime.insert_edge_loop_state().active);
+	REQUIRE(runtime.active_tool() == qec::ViewportInteractionTool::select);
+	REQUIRE_FALSE(runtime.insert_edge_loop_state().active);
 	REQUIRE_FALSE(runtime.insert_edge_loop_state().dragging);
 	REQUIRE(runtime.insert_edge_loop_state().preview_lines.empty());
+	REQUIRE(session.selection_mode() == qec::SelectionMode::edge);
 	REQUIRE(session.state().content_revision != content_revision_before);
 	REQUIRE(session.history_status().can_undo);
 }

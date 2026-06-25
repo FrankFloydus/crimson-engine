@@ -58,6 +58,7 @@ public:
     DocumentCommandResult setMeshComponent(EntityId entity, MeshComponent mesh);
     DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult setTransforms(std::vector<DocumentTransformEdit> edits);
+    DocumentCommandResult applySceneBatch(std::string label, std::vector<DocumentSceneBatchOperation> operations);
 
 private:
     SceneDocument& scene_;

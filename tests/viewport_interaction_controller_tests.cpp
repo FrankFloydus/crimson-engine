@@ -24,6 +24,7 @@
 
 namespace {
 
+/// Owns a complete viewport interaction harness for one synthetic controller scenario.
 struct ViewportInteractionHarness {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor;
@@ -168,6 +169,7 @@ TEST(ViewportInteractionControllerTests, ClickFrameSelectsComponentThroughViewpo
 }
 
 TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames) {
+    /// Names one transform tool case covered by the shared gizmo drag assertions.
     struct ToolCase {
         quader::ViewportToolId tool = quader::ViewportToolId::Move;
         const char* label = "";

@@ -269,6 +269,34 @@ TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotBypassCommandExecuti
     }
 }
 
+TEST(ProgrammaticApiGuardrailTests, ApiImplementationDoesNotIncludeConcreteDocumentCommands) {
+    const std::vector<std::string_view> concreteDocumentCommandHeaders = {
+            "\"editor/commands/document/ApplyEntityTransformCommand.h\"",
+            "\"editor/commands/document/BatchDocumentCommand.h\"",
+            "\"editor/commands/document/CreateEntityCommand.h\"",
+            "\"editor/commands/document/DestroyEntityCommand.h\"",
+            "\"editor/commands/document/DuplicateEntityCommand.h\"",
+            "\"editor/commands/document/DuplicateSelectedHierarchyCommand.h\"",
+            "\"editor/commands/document/GroupSelectionCommand.h\"",
+            "\"editor/commands/document/RenameEntityCommand.h\"",
+            "\"editor/commands/document/ReparentEntityCommand.h\"",
+            "\"editor/commands/document/SelectEntitiesCommand.h\"",
+            "\"editor/commands/document/SetLockCommand.h\"",
+            "\"editor/commands/document/SetMaterialCommand.h\"",
+            "\"editor/commands/document/SetMeshComponentCommand.h\"",
+            "\"editor/commands/document/SetVisibilityCommand.h\"",
+            "\"editor/commands/document/UngroupSelectionCommand.h\"",
+    };
+
+    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+        for (std::string_view header : concreteDocumentCommandHeaders) {
+            EXPECT_EQ(source.find(header), std::string::npos) << relative << " includes " << header;
+        }
+    }
+}
+
 TEST(ProgrammaticApiGuardrailTests, PublicApiAndBehaviorDslDoNotExposeModelingActionCompatibilityRoute) {
     for (const std::filesystem::path& root : {
                  sourceRoot() / "src/api",

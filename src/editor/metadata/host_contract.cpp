@@ -834,7 +834,7 @@ std::span<const HostGestureDescriptor> gesture_descriptors()
 			box_tool, hover_primary_drag, cancel_escape, {}, true, false, false, false, true, true, false, false, true),
 		gesture("insert_edge_loop_gesture", "Insert Edge Loop Gesture",
 			HostGestureTargetKind::tool, "insert_edge_loop", 20,
-			insert_edge_loop_tool, hover_primary_drag, cancel_escape, bypass_snap_modifier, true, false, false, false, true, true, true, false, true),
+			insert_edge_loop_tool, hover_primary_drag, cancel_escape, bypass_snap_modifier, true, false, false, false, true, true, true, true, true),
 		gesture("knife_tool_gesture", "Knife Tool Gesture",
 			HostGestureTargetKind::tool, "knife", 30,
 			knife_tool, hover_primary_drag, knife_keys, knife_meanings, true, false, false, false, true, true, true, true, true),

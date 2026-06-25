@@ -255,54 +255,6 @@ std::optional<quader::QVec3> project_point_to_face_plane(
 	return project_point_to_plane(point, origin->position, normal);
 }
 
-quader_poly::Ray projection_ray_through_grid_point(
-		const ViewportCameraState& camera,
-		const quader_poly::Ray& pick_ray,
-		quader::QVec3 grid_point)
-{
-	const quader::QVec3 fallback_direction = normalize_or(pick_ray.direction, { 0.0F, -1.0F, 0.0F });
-	if (camera.projection == CameraProjection::perspective) {
-		const quader::QVec3 camera_delta = grid_point - camera.transform.origin;
-		return {
-			camera.transform.origin,
-			normalize_or(camera_delta, fallback_direction),
-		};
-	}
-
-	const float guide_distance = std::abs(quader::dot(grid_point - pick_ray.origin, fallback_direction));
-	const float origin_distance = std::max(1.0F, std::isfinite(guide_distance) ? guide_distance : 1.0F);
-	return {
-		grid_point - (fallback_direction * origin_distance),
-		fallback_direction,
-	};
-}
-
-std::optional<PickHitRecord> pick_snapped_knife_surface_hit(
-		EditorSession& session,
-		const KnifeToolState& state,
-		const PickHitRecord& original_hit,
-		const quader_poly::Ray& ray,
-		const ViewportCameraState& camera,
-		double grid_size)
-{
-	const CutGridPointResult grid_point = viewport_grid_point_from_ray(camera, ray, grid_size, true);
-	if (!grid_point.ok) {
-		return std::nullopt;
-	}
-
-	quader_poly::PickOptions options;
-	options.mode = quader_poly::SelectionMode::face;
-	const quader_poly::Ray projected_ray = projection_ray_through_grid_point(camera, ray, grid_point.position);
-	const std::optional<PickHitRecord> projected_hit = session.pick_nearest({ projected_ray, options });
-	if (!projected_hit.has_value() ||
-		projected_hit->kind != quader_poly::ElementKind::face ||
-		projected_hit->object_id != original_hit.object_id ||
-		!knife_object_allowed(state, projected_hit->object_id)) {
-		return std::nullopt;
-	}
-	return projected_hit;
-}
-
 /**
  * Represents a Knife Resolved Point value used by the modal modeling interaction layer.
  */
@@ -399,7 +351,6 @@ bool fill_knife_face_point(
 		EditorSession& session,
 		KnifeToolState& state,
 		const quader_poly::Ray& ray,
-		const ViewportCameraState& camera,
 		double grid_size,
 		bool snap_enabled,
 		bool constrain_axis,
@@ -412,17 +363,7 @@ bool fill_knife_face_point(
 		return false;
 	}
 
-	PickHitRecord surface_hit = *hit;
-	bool used_projected_surface_hit = false;
-	if (snap_enabled && !(state.has_active_stroke && constrain_axis && state.previous_point_index < state.point_positions.size())) {
-		const std::optional<PickHitRecord> projected_hit =
-			pick_snapped_knife_surface_hit(session, state, *hit, ray, camera, grid_size);
-		if (projected_hit.has_value()) {
-			surface_hit = *projected_hit;
-			used_projected_surface_hit = true;
-		}
-	}
-
+	const PickHitRecord surface_hit = *hit;
 	const PolygonObject *object = object_by_id(session.objects(), surface_hit.object_id);
 	quader::QVec3 point = surface_hit.local_position;
 	if (state.has_active_stroke && constrain_axis && state.previous_point_index < state.point_positions.size()) {
@@ -433,9 +374,7 @@ bool fill_knife_face_point(
 			grid_size,
 			snap_enabled);
 	} else {
-		if (!used_projected_surface_hit) {
-			point = snap_knife_point_to_grid(point, grid_size, snap_enabled);
-		}
+		point = snap_knife_point_to_grid(point, grid_size, snap_enabled);
 	}
 	if (object != nullptr) {
 		const std::optional<quader::QVec3> face_point =
@@ -461,7 +400,6 @@ KnifeResolvedPoint resolve_knife_point_from_pick(
 		EditorSession& session,
 		KnifeToolState& state,
 		const quader_poly::Ray& ray,
-		const ViewportCameraState& camera,
 		double grid_size,
 		bool snap_enabled,
 		bool constrain_axis)
@@ -473,7 +411,7 @@ KnifeResolvedPoint resolve_knife_point_from_pick(
 	if (fill_knife_edge_target(session, state, ray, grid_size, snap_enabled, point)) {
 		return point;
 	}
-	(void)fill_knife_face_point(session, state, ray, camera, grid_size, snap_enabled, constrain_axis, point);
+	(void)fill_knife_face_point(session, state, ray, grid_size, snap_enabled, constrain_axis, point);
 	return point;
 }
 
@@ -882,6 +820,8 @@ std::optional<std::uint32_t> append_knife_boundary_crossing_point(EditorSession&
 	return crossing_index;
 }
 
+void refresh_knife_intersection_preview(EditorSession& session, KnifeToolState& state, const ViewportCameraState& camera);
+
 bool update_knife_preview_from_pick(
 		EditorSession& session,
 		KnifeToolState& state,
@@ -893,7 +833,7 @@ bool update_knife_preview_from_pick(
 		bool constrain_axis)
 {
 	state.active = true;
-	const KnifeResolvedPoint point = resolve_knife_point_from_pick(session, state, ray, camera, grid_size, snap_enabled, constrain_axis);
+	const KnifeResolvedPoint point = resolve_knife_point_from_pick(session, state, ray, grid_size, snap_enabled, constrain_axis);
 	if (!point.has_point) {
 		state.has_current = false;
 		state.current_target_valid = false;
@@ -938,7 +878,7 @@ bool update_knife_preview_from_pick(
 		hover.candidate_object_id = point.object_id;
 	}
 	hover.selected_modifier_pressed = false;
-	rebuild_knife_overlay(state);
+	refresh_knife_intersection_preview(session, state, camera);
 	return target_valid;
 }
 

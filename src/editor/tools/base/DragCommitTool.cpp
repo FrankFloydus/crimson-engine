@@ -50,10 +50,24 @@ ViewportToolResult DragCommitTool::handleEvent(
     }
 
     if (pointer.canInteract && pointer.leftClicked) {
-        const ModelingCommandResult command =
+        const ModelingCommandResult beginCommand =
                 context.modeling.beginInsertEdgeLoopDrag(pointContext.makeEventAt(pointer.mouseLocal, true));
-        handleResult(context, "Insert edge loop drag begin", command);
-        context.modalState->insertEdgeLoopDragActive = command.ok && context.modeling.toolStatus().insertEdgeLoopDragging;
+        handleResult(context, "Insert edge loop begin", beginCommand);
+        const bool canCommit = beginCommand.ok && context.modeling.toolStatus().insertEdgeLoopDragging;
+        context.modalState->insertEdgeLoopDragActive = false;
+        if (canCommit) {
+            const ModelingCommandResult commitCommand = context.modeling.commitInsertEdgeLoopDrag();
+            handleResult(context, "Insert edge loop commit", commitCommand);
+            if (context.setSelectionMode) {
+                context.setSelectionMode(appSelectionModeToViewport(context.modeling.selectionSummary().mode));
+            }
+            return {
+                    .handled = true,
+                    .modalStateChanged = true,
+                    .activeToolChanged = commitCommand.ok,
+                    .syncActiveToolFromModeling = commitCommand.ok,
+            };
+        }
     } else if (pointer.canInteract && pointer.leftDown && dragging) {
         handleResult(context,
                 "Insert edge loop drag update",

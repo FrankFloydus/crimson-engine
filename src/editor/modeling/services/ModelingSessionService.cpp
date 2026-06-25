@@ -1260,6 +1260,14 @@ public:
                 overlayService_.selectionOverlayCurrentFrame(session_, runtime_, hover),
                 objectRegistry_.entitiesByObject(),
                 scene_);
+        SelectionOverlayProjection::appendProjectedOverlayLines(
+                frame,
+                runtime_.knife_state().preview_lines,
+                objectRegistry_.entitiesByObject(),
+                scene_,
+                ViewportOverlayLayer::ToolPreviewLine,
+                ViewportOverlayStyleRole::ToolPreviewLine,
+                ViewportOverlaySource::Tool);
         if (runtime_.transform_drag_active()) {
             SelectionOverlayProjection::appendWorldSpaceOverlayPoints(frame,
                     quader_editor_core::transform_drag_snap_overlay_points(runtime_.transform_drag_state()));

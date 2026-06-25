@@ -163,7 +163,7 @@ TEST_CASE("host contract gesture catalog describes modal tool pointer phases and
 
 	const qhc::HostGestureDescriptor& insert_edge_loop = require_gesture("insert_edge_loop_gesture");
 	CHECK(insert_edge_loop.returns_to_select_on_cancel);
-	CHECK_FALSE(insert_edge_loop.returns_to_select_on_success);
+	CHECK(insert_edge_loop.returns_to_select_on_success);
 	CHECK(has_modifier_meaning(insert_edge_loop, "primary_modifier:bypass_snap"));
 
 	const qhc::HostGestureDescriptor& knife = require_gesture("knife_tool_gesture");

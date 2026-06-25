@@ -9,6 +9,8 @@
 #include "core/Types.h"
 #include "scene/Components.h"
 
+#include <string>
+
 namespace quader {
 
 /**
@@ -36,6 +38,30 @@ struct DocumentLockEdit {
     EntityId entity = InvalidEntityId;
     bool before = false;
     bool after = false;
+};
+
+/**
+ * Enumerates Document Scene Batch Operation Kind values used by the document command layer.
+ */
+enum class DocumentSceneBatchOperationKind {
+    Rename,
+    Reparent,
+    SetTransform,
+    SetVisible,
+    SetLocked,
+};
+
+/**
+ * Represents a Document Scene Batch Operation value used by the document command layer.
+ */
+struct DocumentSceneBatchOperation {
+    DocumentSceneBatchOperationKind kind = DocumentSceneBatchOperationKind::Rename;
+    EntityId entity = InvalidEntityId;
+    EntityId parent = InvalidEntityId;
+    bool preserveWorldTransform = true;
+    bool flag = false;
+    TransformComponent transform;
+    std::string name;
 };
 
 inline bool documentCommandSameTransform(const TransformComponent& left, const TransformComponent& right) {

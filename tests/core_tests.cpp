@@ -2367,23 +2367,31 @@ TEST(UIUtilityTokensTests, LoadsTailwindStyleTokenConfigInAuthorOrder) {
     EXPECT_EQ(tokens.colors[2].hex, "#B78BE9");
     EXPECT_EQ(tokens.colors[3].name, "accent.500");
     EXPECT_EQ(tokens.colors[3].hex, "#ABCDEF");
-    ASSERT_EQ(tokens.utilities.size(), 8u);
-    EXPECT_EQ(tokens.utilities[0].name, "font-ui");
-    EXPECT_EQ(tokens.utilities[0].value, "Inter");
-    EXPECT_EQ(tokens.utilities[1].name, "font-medium");
-    EXPECT_EQ(tokens.utilities[1].value, "500");
-    EXPECT_EQ(tokens.utilities[2].name, "text-sm");
-    EXPECT_EQ(tokens.utilities[2].value, "14dp");
-    EXPECT_EQ(tokens.utilities[3].name, "space-3");
-    EXPECT_EQ(tokens.utilities[3].value, "12dp");
-    EXPECT_EQ(tokens.utilities[4].name, "size-3");
-    EXPECT_EQ(tokens.utilities[4].value, "12dp");
-    EXPECT_EQ(tokens.utilities[5].name, "rounded-6");
-    EXPECT_EQ(tokens.utilities[5].value, "6dp");
-    EXPECT_EQ(tokens.utilities[6].name, "space-4");
-    EXPECT_EQ(tokens.utilities[6].value, "16dp");
-    EXPECT_EQ(tokens.utilities[7].name, "size-4");
-    EXPECT_EQ(tokens.utilities[7].value, "16dp");
+    const std::vector<UIUtilityToken> expectedUtilities{
+            {.name = "font-ui", .value = "Inter"},
+            {.name = "font-medium", .value = "500"},
+            {.name = "text-sm", .value = "14dp"},
+            {.name = "space-3", .value = "12dp"},
+            {.name = "-space-3", .value = "12dp"},
+            {.name = "size-3", .value = "12dp"},
+            {.name = "top-3", .value = "12dp"},
+            {.name = "right-3", .value = "12dp"},
+            {.name = "bottom-3", .value = "12dp"},
+            {.name = "left-3", .value = "12dp"},
+            {.name = "rounded-6", .value = "6dp"},
+            {.name = "space-4", .value = "16dp"},
+            {.name = "-space-4", .value = "16dp"},
+            {.name = "size-4", .value = "16dp"},
+            {.name = "top-4", .value = "16dp"},
+            {.name = "right-4", .value = "16dp"},
+            {.name = "bottom-4", .value = "16dp"},
+            {.name = "left-4", .value = "16dp"},
+    };
+    ASSERT_EQ(tokens.utilities.size(), expectedUtilities.size());
+    for (std::size_t index = 0; index < expectedUtilities.size(); ++index) {
+        EXPECT_EQ(tokens.utilities[index].name, expectedUtilities[index].name);
+        EXPECT_EQ(tokens.utilities[index].value, expectedUtilities[index].value);
+    }
 
     std::filesystem::remove(path);
 }
@@ -2477,13 +2485,13 @@ TEST(UIToolbarButtonComponentTests, RendersIconLabelAndSecondaryText) {
 
     const std::string rml = writeRmlMarkup(button.render());
 
-    EXPECT_NE(rml.find("id=\"toolbar-vertices\" class=\"toolbar-button bg-gray-950 border-1 border-gray-700 rounded-6 min-w-8 h-8\""),
+    EXPECT_NE(rml.find("id=\"toolbar-vertices\" class=\"toolbar-button bg-gray-950 border-1 border-gray-700 rounded-6 min-w-8 h-8 m-0 text-gray-100 hover-bg-purple-900 active-bg-purple-900 hover-border-purple-700 active-border-purple-700 px-3\""),
             std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-mesh toolbar-button-icon\" data-ui-icon=\"mesh\""),
+    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-mesh toolbar-button-icon mr-2\" data-ui-icon=\"mesh\""),
             std::string::npos);
-    EXPECT_NE(rml.find("class=\"toolbar-button-label text-sm text-gray-100\">Vertices</span>"),
+    EXPECT_NE(rml.find("class=\"toolbar-button-label text-md leading-md text-gray-100\">Vertices</span>"),
             std::string::npos);
-    EXPECT_NE(rml.find("class=\"toolbar-button-secondary font-alt text-xxs text-gray-300\">SHIFT+Z</span>"),
+    EXPECT_NE(rml.find("class=\"toolbar-button-secondary font-alt text-md leading-md ml-3_5 text-gray-300\">SHIFT+Z</span>"),
             std::string::npos);
 
     const UIToolbarButtonComponent iconButton(UIToolbarButtonModel{
@@ -2658,7 +2666,7 @@ TEST(ModelingModeShelfComponentTests, RendersOverflowToggleAndMenuFromState) {
     openState.overflowMenuOpen = true;
     const std::string openRml = buildModelingModeShelfRml(openState);
 
-    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-overflow-menu\" class=\"modeling-mode-shelf-overflow-menu bg-gray-950\""),
+    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-overflow-menu\" class=\"modeling-mode-shelf-overflow-menu bg-gray-950 p-1_5 border-1 border-gray-700 min-w-40 right-2 top-12\""),
             std::string::npos);
     EXPECT_NE(openRml.find("aria-expanded=\"true\""),
             std::string::npos);
@@ -2895,6 +2903,11 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
             readSourceFile("src/ui/components/organisms/WindowChromeControlsComponent.h");
     const std::string modelingModeShelfHeader =
             readSourceFile("src/ui/components/organisms/ModelingModeShelfComponent.h");
+    const std::string uiIconRegistrySource = readSourceFile("src/ui/core/UIIconRegistry.cpp");
+    const std::string modelingModeShelfSource =
+            readSourceFile("src/ui/components/organisms/ModelingModeShelfComponent.cpp");
+    const std::string modelingModeShelfControllerSource =
+            readSourceFile("src/ui/controllers/ModelingModeShelfController.cpp");
     const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
     const std::string shellRml = readSourceFile("resources/ui/rml/viewport-shell.rml");
     const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
@@ -2919,11 +2932,14 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(uiSystemSource.find("updateModelingModeShelfOverflowFromRml"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("modelingModeShelfControlMeasureElementId"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("modelingModeShelfOverflowToggleControlId()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfSelectionModeForControlId"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("pendingModelingModeShelfSelectionMode_"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("editor.selection().setMode(mode)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("editor.modeling().selectionSummary().mode"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("projectedModelingModeShelfSelectionMode_"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modelingModeShelfController_.activateControl"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modelingModeShelfController_.takePendingSelectionMode()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("editor.selection().setMode(*selectionMode)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("modelingModeShelfController_.syncEditorState(editor, localization_)"), std::string::npos);
+    EXPECT_NE(modelingModeShelfControllerSource.find("selectionModeForControlId"), std::string::npos);
+    EXPECT_NE(modelingModeShelfControllerSource.find("pendingSelectionMode_"), std::string::npos);
+    EXPECT_NE(modelingModeShelfControllerSource.find("editor.modeling().selectionSummary()"), std::string::npos);
+    EXPECT_NE(modelingModeShelfControllerSource.find("selectionSummary_.mode"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("modelingModeShelfTabs_"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("modelingModeShelfContentOpen_"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("kModelingModeShelfButtonControlId"), std::string::npos);
@@ -3174,27 +3190,26 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(shellRcss.find(".chrome-icon-button"), std::string::npos);
     EXPECT_NE(shellRcss.find("width: 40dp"), std::string::npos);
     EXPECT_NE(shellRcss.find(".ui-icon"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".ui-icon-chrome-minimize"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".ui-icon-chrome-restore"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".ui-icon-chrome-close"), std::string::npos);
+    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-chrome-minimize\""), std::string::npos);
+    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-chrome-restore\""), std::string::npos);
+    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-chrome-close\""), std::string::npos);
     EXPECT_NE(shellRcss.find("image-color: #5B5B5B"), std::string::npos);
     EXPECT_NE(shellRcss.find(".chrome-icon-button:hover .ui-icon"), std::string::npos);
     EXPECT_NE(shellRcss.find(".chrome-icon-button:active .ui-icon"), std::string::npos);
     EXPECT_NE(shellRcss.find(".toolbar-button"), std::string::npos);
     EXPECT_NE(shellRcss.find(".toolbar-button-secondary"), std::string::npos);
-    EXPECT_NE(shellRcss.find("line-height: 30dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".ui-icon-mesh"), std::string::npos);
+    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-mesh\""), std::string::npos);
     EXPECT_NE(shellRcss.find(".modeling-mode-shelf-slot"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-toolbar"), std::string::npos);
+    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-toolbar\""), std::string::npos);
     EXPECT_EQ(shellRcss.find("height: 50dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-tab-button"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-tab-button-active"), std::string::npos);
+    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-tab-button\""), std::string::npos);
+    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-tab-button-active\""), std::string::npos);
     EXPECT_NE(shellRcss.find(".modeling-mode-shelf-measure-strip"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-overflow-button"), std::string::npos);
+    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-overflow-button\""), std::string::npos);
     EXPECT_NE(shellRcss.find(".modeling-mode-shelf-overflow-menu"), std::string::npos);
     EXPECT_NE(shellRcss.find(".modeling-mode-shelf-content"), std::string::npos);
     EXPECT_EQ(shellRcss.find("height: 45dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-command-button"), std::string::npos);
+    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-command-button\""), std::string::npos);
     EXPECT_NE(shellRcss.find("image-color: #D8D8D8"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout"), std::string::npos);
     EXPECT_NE(shellRcss.find(".main-layout-main-row"), std::string::npos);
@@ -3272,6 +3287,23 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(uiSystemSource.find("setElementDisplay(\"viewport-panel\", debugPaletteVisible_ ? \"none\" : \"flex\")"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("Only the viewport panel is available in the RmlUi shell."), std::string::npos);
     EXPECT_NE(uiSystemSource.find("QuaderPreferencesRuntimeHooks"), std::string::npos);
+}
+
+TEST(UISystemTests, ModelingShelfPointerEventsDoNotFallThroughToViewport) {
+    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
+
+    EXPECT_NE(uiSystemHeader.find("pointerEventInsideRmlElement"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("pointerEventInsideModelingModeShelf"), std::string::npos);
+    EXPECT_NE(uiSystemHeader.find("pointerEventShouldBypassViewport"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("pointerEventShouldBypassViewport(event)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("pointerEventInsideRmlElement(event, \"modeling-mode-shelf\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("pointerEventInsideRmlElement(event, \"modeling-mode-shelf-content\")"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportHost_.hasActivePointerGesture()"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("!pointerEventInsideMainViewport(event)"), std::string::npos);
+    EXPECT_LT(
+            uiSystemSource.find("pointerEventShouldBypassViewport(event)"),
+            uiSystemSource.find("viewportHost_.processEvent(event)"));
 }
 
 TEST(UISystemTests, WindowedViewportComponentsAreBoundedAndNonExperimental) {
@@ -3802,11 +3834,25 @@ TEST(ViewportOverlayStyleResolverTests, PrioritizesDiagnosticsThenExternalOverri
 TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     const std::filesystem::path sourcePath =
             std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "projection" / "SelectionOverlayProjection.cpp";
+    const std::filesystem::path modelingServicePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionService.cpp";
+    const std::filesystem::path overlayServicePath =
+            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionServices.cpp";
     std::ifstream sourceFile(sourcePath);
+    std::ifstream modelingServiceFile(modelingServicePath);
+    std::ifstream overlayServiceFile(overlayServicePath);
     ASSERT_TRUE(sourceFile.is_open()) << sourcePath.string();
+    ASSERT_TRUE(modelingServiceFile.is_open()) << modelingServicePath.string();
+    ASSERT_TRUE(overlayServiceFile.is_open()) << overlayServicePath.string();
 
     const std::string source{
             std::istreambuf_iterator<char>(sourceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string modelingService{
+            std::istreambuf_iterator<char>(modelingServiceFile),
+            std::istreambuf_iterator<char>()};
+    const std::string overlayService{
+            std::istreambuf_iterator<char>(overlayServiceFile),
             std::istreambuf_iterator<char>()};
 
     EXPECT_EQ(source.find("static_cast<ViewportOverlayLayer>(static_cast<int>(layer))"), std::string::npos);
@@ -3815,6 +3861,10 @@ TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:"), std::string::npos);
     EXPECT_NE(source.find("lineStyleRole"), std::string::npos);
     EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"), std::string::npos);
+    EXPECT_NE(source.find("appendProjectedOverlayLines"), std::string::npos);
+    EXPECT_NE(modelingService.find("runtime_.knife_state().preview_lines"), std::string::npos);
+    EXPECT_NE(modelingService.find("ViewportOverlayLayer::ToolPreviewLine"), std::string::npos);
+    EXPECT_EQ(overlayService.find("knife.preview_lines.begin()"), std::string::npos);
 }
 
 TEST(ViewportCameraAdapterTests, BuildsOverlayAndModelingCamerasFromSharedBasis) {
@@ -8227,9 +8277,10 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopDragCommitsMesh) {
     command = service.commitInsertEdgeLoopDrag();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
-    EXPECT_TRUE(service.toolStatus().insertEdgeLoopActive);
+    EXPECT_FALSE(service.toolStatus().insertEdgeLoopActive);
     EXPECT_FALSE(service.toolStatus().insertEdgeLoopDragging);
     EXPECT_FALSE(service.toolStatus().insertEdgeLoopHasPreview);
+    EXPECT_EQ(service.selectionSummary().mode, ModelingSelectionMode::Edge);
 
     const std::optional<MeshAsset> after = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(after.has_value());
@@ -8264,6 +8315,7 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopCommitSurvivesReleaseFrameHover)
     command = service.commitInsertEdgeLoopDrag();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
+    EXPECT_FALSE(service.toolStatus().insertEdgeLoopActive);
 
     std::optional<MeshAsset> after = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(after.has_value());
@@ -8294,6 +8346,7 @@ TEST(ModelingSessionServiceTests, InsertEdgeLoopUsesViewportPickRadius) {
     command = service.commitInsertEdgeLoopDrag();
     ASSERT_TRUE(command.ok) << command.message;
     EXPECT_TRUE(command.changed);
+    EXPECT_FALSE(service.toolStatus().insertEdgeLoopActive);
 }
 
 TEST(ModelingSessionServiceTests, CutAndMirrorEmitDrawnPlaneOverlay) {

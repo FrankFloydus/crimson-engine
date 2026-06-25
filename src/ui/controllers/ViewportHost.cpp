@@ -490,6 +490,67 @@ bool viewportOverlayFrameVisible(const ViewportOverlayFrame& frame) {
     return !frame.lines.empty() || !frame.triangles.empty() || !frame.points.empty();
 }
 
+float distanceSquared(QVec2 from, QVec2 to) {
+    const QVec2 delta = to - from;
+    return delta.x * delta.x + delta.y * delta.y;
+}
+
+float distanceToSegmentSquared(QVec2 point, QVec2 start, QVec2 end) {
+    const QVec2 segment = end - start;
+    const float lengthSquared = segment.x * segment.x + segment.y * segment.y;
+    if (lengthSquared <= 0.000001f) {
+        return distanceSquared(point, start);
+    }
+
+    const QVec2 relative = point - start;
+    const float t = std::clamp(
+            (relative.x * segment.x + relative.y * segment.y) / lengthSquared,
+            0.0f,
+            1.0f);
+    return distanceSquared(point, start + segment * t);
+}
+
+std::optional<int> hitDrawnPlaneCapturedPoint(
+        const std::array<QVec3, 3>& points,
+        int capturedPointCount,
+        QVec2 mouseLocal,
+        const ViewportCameraController& camera) {
+    constexpr float kPointHitRadiusPixels = 10.0f;
+    const int count = std::min(capturedPointCount, 2);
+    for (int index = count - 1; index >= 0; --index) {
+        const ViewportScreenPoint screen =
+                camera.projectWorldPoint(points[static_cast<std::size_t>(index)]);
+        if (!screen.visible) {
+            continue;
+        }
+        if (distanceSquared(mouseLocal, screen.position) <= kPointHitRadiusPixels * kPointHitRadiusPixels) {
+            return index;
+        }
+    }
+    return std::nullopt;
+}
+
+bool hitDrawnPlaneLine(
+        const std::array<QVec3, 3>& points,
+        int capturedPointCount,
+        bool hasLine,
+        QVec2 mouseLocal,
+        const ViewportCameraController& camera) {
+    constexpr float kLineHitRadiusPixels = 10.0f;
+    if (!hasLine || capturedPointCount < 2) {
+        return false;
+    }
+
+    const ViewportScreenPoint start = camera.projectWorldPoint(points[0]);
+    const ViewportScreenPoint end = camera.projectWorldPoint(points[1]);
+    if (!start.visible || !end.visible) {
+        return false;
+    }
+
+    return distanceToSegmentSquared(mouseLocal, start.position, end.position) <=
+            kLineHitRadiusPixels * kLineHitRadiusPixels;
+}
+
 ModelingBoxToolEvent modelingBoxEvent(
         const ViewportCameraController& camera,
         const ViewportInputFrame& input,
@@ -504,6 +565,31 @@ ModelingBoxToolEvent modelingBoxEvent(
             .gridSize = gridSize,
             .hasCamera = true,
             .camera = ViewportCameraAdapter::modelingCamera(camera, input.viewportSize),
+    };
+}
+
+ModelingToolRayEvent modelingToolRayEvent(
+        const ViewportCameraController& camera,
+        const ViewportSettings& settings,
+        QVec2 localMouse,
+        QVec2 viewportSize,
+        float gridSize,
+        ViewportModifiers modifiers,
+        bool dragging) {
+    const ViewportRay ray = camera.rayFromViewportPoint(localMouse);
+    return {
+            .screenPosition = localMouse,
+            .ray = {
+                    .origin = ray.origin,
+                    .direction = ray.direction,
+            },
+            .camera = ViewportCameraAdapter::modelingCamera(camera, viewportSize),
+            .gridSize = std::max(static_cast<double>(gridSize), 0.0001),
+            .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+            .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
+            .snapEnabled = !modifiers.primary,
+            .constrainAxis = modifiers.shift,
+            .dragging = dragging,
     };
 }
 
@@ -609,6 +695,26 @@ ViewportToolResult dispatchActiveViewportToolFrame(
         return SceneEntityNaming::nextNameForKind(document, SceneEntityKind::Mesh);
     };
 
+    ViewportPointToolContext pointToolContext;
+    pointToolContext.makeEventAt = [&](QVec2 localMouse, bool dragging) {
+        return modelingToolRayEvent(
+                camera,
+                settings,
+                localMouse,
+                input.viewportSize,
+                viewportGridWorldSizeForPreset(inputRouter.state().gridPreset),
+                input.modifiers,
+                dragging);
+    };
+    pointToolContext.hitDrawnPlaneCapturedPoint =
+            [&](const std::array<QVec3, 3>& points, int capturedPointCount) {
+                return hitDrawnPlaneCapturedPoint(points, capturedPointCount, leftClickLocal, camera);
+            };
+    pointToolContext.hitDrawnPlaneLine =
+            [&](const std::array<QVec3, 3>& points, int capturedPointCount, bool hasLine) {
+                return hitDrawnPlaneLine(points, capturedPointCount, hasLine, leftClickLocal, camera);
+            };
+
     ViewportToolContext toolContext{
             .state = const_cast<ViewportToolState&>(inputRouter.state()),
             .camera = camera,
@@ -616,11 +722,17 @@ ViewportToolResult dispatchActiveViewportToolFrame(
             .document = &document,
             .settings = &settings,
             .box = &boxToolContext,
+            .point = &pointToolContext,
     };
     toolContext.claimHover = [](ModelingBoxDragState) {
         return true;
     };
-    toolContext.invalidateHover = []() {};
+    toolContext.invalidateHover = [&]() {
+        const QuaderApiVoidResult result = editor.selection().clearHover();
+        if (!result.ok) {
+            LOG_ERROR("Clear hover failed: {}", result.message.empty() ? "Command failed." : result.message);
+        }
+    };
     toolContext.markOverlayDirty = []() {};
     toolContext.setActiveTool = [&](ViewportToolId tool) {
         inputRouter.setActiveTool(tool);
@@ -1385,6 +1497,10 @@ bool ViewportHost::mainViewportContainsWindowPoint(float windowX, float windowY)
             mouseLocal.y >= 0.0f &&
             mouseLocal.x <= static_cast<float>(mainViewportFrame_.width) &&
             mouseLocal.y <= static_cast<float>(mainViewportFrame_.height);
+}
+
+bool ViewportHost::hasActivePointerGesture() const {
+    return leftDown_ || middleDown_ || rightDown_ || !mouseButtonsDown_.empty();
 }
 
 QVec2 ViewportHost::mainViewportWindowPointToLocal(QVec2 windowPoint) const {

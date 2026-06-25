@@ -450,15 +450,16 @@ CommandResult commit_insert_edge_loop_drag(EditorSession& session, EditorRuntime
 	if (!result.ok && result.message.empty()) {
 		result.message = "Could not insert edge loop.";
 	}
+	if (!result.ok) {
+		runtime.set_insert_edge_loop_dragging(false);
+		return result;
+	}
 
 	runtime.reset_insert_edge_loop_state();
-	runtime.set_insert_edge_loop_active(true);
-	(void)runtime.set_active_tool(session, ViewportInteractionTool::insert_edge_loop);
-	if (result.ok) {
-		runtime.clear_hover();
-		runtime.clear_gizmo_hover();
-		runtime.clear_transform_drag_state();
-	}
+	(void)runtime.set_active_tool(session, ViewportInteractionTool::select);
+	runtime.clear_hover();
+	runtime.clear_gizmo_hover();
+	runtime.clear_transform_drag_state();
 	return result;
 }
 

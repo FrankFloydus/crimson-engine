@@ -41,6 +41,7 @@ ui.modeling_shelf.command.bridge=Bridge
 ui.modeling_shelf.command.collapse=Collassa
 ui.modeling_shelf.command.thicken=Spessore
 ui.modeling_shelf.command.flip_normal=Inverti normale
+ui.modeling_shelf.command.disabled.modal_tool=Completa lo strumento attivo prima di eseguire questo comando.
 
 ui.settings.interface=Interfaccia
 ui.settings.locale=Lingua

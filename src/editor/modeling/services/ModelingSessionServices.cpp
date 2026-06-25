@@ -504,7 +504,6 @@ quader_editor_core::SelectionOverlayFrame ModelingOverlayService::selectionOverl
         frame.lines.insert(frame.lines.end(), insertLoop.preview_lines.begin(), insertLoop.preview_lines.end());
 
         const quader_editor_core::KnifeToolState& knife = runtime.knife_state();
-        frame.lines.insert(frame.lines.end(), knife.preview_lines.begin(), knife.preview_lines.end());
         frame.points.insert(frame.points.end(), knife.preview_points.begin(), knife.preview_points.end());
 
         const quader_editor_core::PolyToolState& poly = runtime.poly_state();
