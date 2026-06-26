@@ -6,28 +6,21 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <io/qdr/qdr_document.h>
 
+#include "io/qdr/QdrAtomicWrite.h"
+#include "io/qdr/QdrPolygonDocumentCodec.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <filesystem>
-#include <fstream>
+#include <cmath>
+#include <cstdint>
 #include <limits>
-#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <system_error>
+#include <string_view>
 #include <utility>
 #include <vector>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace quader_io {
 namespace {
@@ -154,19 +147,6 @@ std::string element_kind_name(quader_poly::ElementKind kind)
 	return "vertex";
 }
 
-std::string surface_shading_name(quader_poly::SurfaceShading shading)
-{
-	switch (shading) {
-	case quader_poly::SurfaceShading::flat:
-		return "flat";
-	case quader_poly::SurfaceShading::smooth:
-		return "smooth";
-	case quader_poly::SurfaceShading::authored:
-		break;
-	}
-	return "flat";
-}
-
 QdrSelectionMode parse_selection_mode(const std::string& value)
 {
 	if (value == "vertex") {
@@ -240,25 +220,6 @@ quader_poly::ElementKind parse_element_kind(const std::string& value)
 	throw std::runtime_error("Unknown active element kind: " + value);
 }
 
-quader_poly::SurfaceShading parse_surface_shading(const std::string& value)
-{
-	if (value == "flat") {
-		return quader_poly::SurfaceShading::flat;
-	}
-	if (value == "smooth") {
-		return quader_poly::SurfaceShading::smooth;
-	}
-	throw std::runtime_error("Unknown face normal shading: " + value);
-}
-
-json to_json(quader::QVec2 value)
-{
-	return json {
-		{ "x", value.x },
-		{ "y", value.y },
-	};
-}
-
 json to_json(quader::QVec3 value)
 {
 	return json {
@@ -301,14 +262,6 @@ json to_json(quader_poly::Edge edge)
 	};
 }
 
-quader::QVec2 vec2_from_json(const json& value)
-{
-	return {
-		value.at("x").get<float>(),
-		value.at("y").get<float>(),
-	};
-}
-
 quader::QVec3 vec3_from_json(const json& value)
 {
 	return {
@@ -340,55 +293,6 @@ bool contains_duplicate_ids(std::vector<quader_poly::ElementId> ids)
 	return std::adjacent_find(ids.begin(), ids.end()) != ids.end();
 }
 
-json document_to_json(const quader_poly::Document& document)
-{
-	json vertices = json::array();
-	for (const quader_poly::Vertex& vertex : document.vertices) {
-		vertices.push_back({
-			{ "id", vertex.id },
-			{ "position", to_json(vertex.position) },
-		});
-	}
-
-	json faces = json::array();
-	for (const quader_poly::Face& face : document.faces) {
-		json uvs = json::array();
-		for (quader::QVec2 uv : face.uvs) {
-			uvs.push_back(to_json(uv));
-		}
-
-		faces.push_back({
-			{ "id", face.id },
-			{ "vertices", face.vertices },
-			{ "uvs", uvs },
-			{ "materialSlot", face.material_slot },
-			{ "normalShading", surface_shading_name(face.normal_shading) },
-		});
-	}
-
-	const std::vector<quader_poly::Edge> document_edges = quader_poly::document_edges(document);
-	json hard_normal_edges = json::array();
-	std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>> serialized_hard_edges;
-	for (quader_poly::Edge edge : document.hard_normal_edges) {
-		edge = quader_poly::make_edge(edge.a, edge.b);
-		if (std::find(document_edges.begin(), document_edges.end(), edge) == document_edges.end()) {
-			continue;
-		}
-		if (!serialized_hard_edges.insert({ edge.a, edge.b }).second) {
-			continue;
-		}
-		hard_normal_edges.push_back(to_json(edge));
-	}
-
-	return {
-		{ "nextVertexId", document.next_vertex_id },
-		{ "nextFaceId", document.next_face_id },
-		{ "vertices", vertices },
-		{ "faces", faces },
-		{ "hardNormalEdges", hard_normal_edges },
-	};
-}
-
 json selection_to_json(const quader_poly::Selection& selection)
 {
 	json edges = json::array();
@@ -417,7 +321,7 @@ json object_to_json(const QdrObject& object)
 		{ "id", object.id },
 		{ "materialId", object.material_id },
 		{ "selected", object.selected },
-		{ "document", document_to_json(object.document) },
+		{ "document", qdr_polygon_document_to_json(object.document) },
 		{ "selection", selection_to_json(object.selection) },
 	};
 }
@@ -443,85 +347,6 @@ json light_to_json(const QdrLight& light)
 		{ "spotAngle", light.spot_angle },
 		{ "innerSpotAngle", light.inner_spot_angle },
 	};
-}
-
-bool face_references_existing_vertices(const quader_poly::Document& document, const quader_poly::Face& face)
-{
-	return std::all_of(face.vertices.begin(), face.vertices.end(), [&document](quader_poly::ElementId id) {
-		return quader_poly::find_vertex(document, id) != nullptr;
-	});
-}
-
-quader_poly::Document document_from_json(const json& value)
-{
-	quader_poly::Document document;
-	document.next_vertex_id = value.at("nextVertexId").get<quader_poly::ElementId>();
-	document.next_face_id = value.at("nextFaceId").get<quader_poly::ElementId>();
-
-	std::set<quader_poly::ElementId> vertex_ids;
-	quader_poly::ElementId max_vertex_id = 0;
-	for (const json& vertex_json : value.at("vertices")) {
-		quader_poly::Vertex vertex;
-		vertex.id = vertex_json.at("id").get<quader_poly::ElementId>();
-		vertex.position = vec3_from_json(vertex_json.at("position"));
-		if (vertex.id == quader_poly::invalid_element_id || !vertex_ids.insert(vertex.id).second) {
-			throw std::runtime_error("Document contains an invalid or duplicate vertex id.");
-		}
-		max_vertex_id = std::max(max_vertex_id, vertex.id);
-		document.vertices.push_back(vertex);
-	}
-
-	std::set<quader_poly::ElementId> face_ids;
-	quader_poly::ElementId max_face_id = 0;
-	for (const json& face_json : value.at("faces")) {
-		quader_poly::Face face;
-		face.id = face_json.at("id").get<quader_poly::ElementId>();
-		face.vertices = face_json.at("vertices").get<std::vector<quader_poly::ElementId>>();
-		face.material_slot = face_json.value("materialSlot", 0U);
-		face.normal_shading = parse_surface_shading(face_json.value("normalShading", std::string("flat")));
-		for (const json& uv_json : face_json.at("uvs")) {
-			face.uvs.push_back(vec2_from_json(uv_json));
-		}
-		if (face.id == quader_poly::invalid_element_id || !face_ids.insert(face.id).second) {
-			throw std::runtime_error("Document contains an invalid or duplicate face id.");
-		}
-		if (face.vertices.size() < 3U) {
-			throw std::runtime_error("Document contains a face with fewer than three vertices.");
-		}
-		if (contains_duplicate_ids(face.vertices)) {
-			throw std::runtime_error("Document contains a face with duplicate vertex ids.");
-		}
-		if (!face.uvs.empty() && face.uvs.size() != face.vertices.size()) {
-			throw std::runtime_error("Document contains a face whose UV count does not match its vertex count.");
-		}
-		document.faces.push_back(std::move(face));
-		max_face_id = std::max(max_face_id, document.faces.back().id);
-	}
-
-	for (const quader_poly::Face& face : document.faces) {
-		if (!face_references_existing_vertices(document, face)) {
-			throw std::runtime_error("Document contains a face that references a missing vertex.");
-		}
-	}
-
-	std::set<std::pair<quader_poly::ElementId, quader_poly::ElementId>> hard_normal_edges;
-	if (const auto hard_edges_json = value.find("hardNormalEdges"); hard_edges_json != value.end()) {
-		const std::vector<quader_poly::Edge> valid_edges = quader_poly::document_edges(document);
-		for (const json& edge_json : *hard_edges_json) {
-			quader_poly::Edge edge = edge_from_json(edge_json);
-			if (std::find(valid_edges.begin(), valid_edges.end(), edge) == valid_edges.end()) {
-				throw std::runtime_error("Document contains a hard normal edge that is not part of the mesh.");
-			}
-			if (!hard_normal_edges.insert({ edge.a, edge.b }).second) {
-				throw std::runtime_error("Document contains duplicate hard normal edges.");
-			}
-			document.hard_normal_edges.push_back(edge);
-		}
-	}
-
-	document.next_vertex_id = std::max(document.next_vertex_id, max_vertex_id + 1U);
-	document.next_face_id = std::max(document.next_face_id, max_face_id + 1U);
-	return document;
 }
 
 quader_poly::Selection selection_from_json(const json& value)
@@ -607,7 +432,7 @@ QdrObject object_from_json(const json& value)
 	object.id = value.at("id").get<int>();
 	object.material_id = value.at("materialId").get<int>();
 	object.selected = value.at("selected").get<bool>();
-	object.document = document_from_json(value.at("document"));
+	object.document = qdr_polygon_document_from_json(value.at("document"));
 	object.selection = selection_from_json(value.at("selection"));
 	if (object.id <= 0) {
 		throw std::runtime_error("QDR document contains an invalid object id.");
@@ -737,137 +562,6 @@ const json& migrate_document_payload_to_current(const json& root, int version)
 	}
 }
 
-std::string system_error_message(const std::string& action, const std::error_code& error)
-{
-	if (!error) {
-		return action;
-	}
-	return action + ": " + error.message();
-}
-
-std::string windows_error_message(const std::string& action, unsigned long error_code)
-{
-	std::error_code error(static_cast<int>(error_code), std::system_category());
-	return system_error_message(action, error);
-}
-
-std::string unique_temp_suffix(std::uint64_t attempt)
-{
-	static std::atomic_uint64_t counter { 0 };
-	const std::uint64_t tick =
-		static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-	const std::uint64_t value = counter.fetch_add(1, std::memory_order_relaxed) ^ tick;
-	std::ostringstream stream;
-	stream << std::hex << value << "-" << attempt;
-	return stream.str();
-}
-
-std::filesystem::path target_directory_for_atomic_write(const std::filesystem::path& target)
-{
-	const std::filesystem::path directory = target.parent_path();
-	return directory.empty() ? std::filesystem::path(".") : directory;
-}
-
-std::filesystem::path make_temp_path_for_atomic_write(
-	const std::filesystem::path& target,
-	const std::filesystem::path& directory,
-	std::uint64_t attempt)
-{
-	const std::string file_name = target.filename().string();
-	return directory / ("." + file_name + "." + unique_temp_suffix(attempt) + ".tmp");
-}
-
-QdrWriteResult write_text_file(const std::filesystem::path& temp_path, std::string_view text)
-{
-	std::ofstream stream(temp_path, std::ios::out | std::ios::binary | std::ios::trunc);
-	if (!stream.is_open()) {
-		return { false, "Could not create temporary QDR file: " + temp_path.string() };
-	}
-
-	stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-	if (!stream.good()) {
-		return { false, "Could not write temporary QDR file: " + temp_path.string() };
-	}
-
-	stream.flush();
-	if (!stream.good()) {
-		return { false, "Could not flush temporary QDR file: " + temp_path.string() };
-	}
-
-	stream.close();
-	if (!stream.good()) {
-		return { false, "Could not close temporary QDR file: " + temp_path.string() };
-	}
-
-	return { true, {} };
-}
-
-QdrWriteResult replace_with_temp_file(const std::filesystem::path& temp_path, const std::filesystem::path& target)
-{
-#ifdef _WIN32
-	if (::MoveFileExW(
-			temp_path.c_str(),
-			target.c_str(),
-			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
-		return { false, windows_error_message("Could not replace QDR file", ::GetLastError()) };
-	}
-	return { true, {} };
-#else
-	std::error_code error;
-	std::filesystem::rename(temp_path, target, error);
-	if (error) {
-		return { false, system_error_message("Could not replace QDR file", error) };
-	}
-	return { true, {} };
-#endif
-}
-
-void delete_temp_file_best_effort(const std::filesystem::path& temp_path)
-{
-	std::error_code ignored;
-	std::filesystem::remove(temp_path, ignored);
-}
-
-QdrWriteResult write_text_atomic(const std::filesystem::path& target, std::string_view text)
-{
-	if (target.empty() || target.filename().empty()) {
-		return { false, "QDR file path is empty." };
-	}
-
-	const std::filesystem::path directory = target_directory_for_atomic_write(target);
-	std::error_code error;
-	if (!std::filesystem::is_directory(directory, error)) {
-		return { false, system_error_message("QDR output directory does not exist", error) };
-	}
-
-	constexpr std::uint64_t max_attempts = 32;
-	for (std::uint64_t attempt = 0; attempt < max_attempts; ++attempt) {
-		const std::filesystem::path temp_path = make_temp_path_for_atomic_write(target, directory, attempt);
-		if (std::filesystem::exists(temp_path, error)) {
-			continue;
-		}
-		if (error) {
-			return { false, system_error_message("Could not inspect temporary QDR file path", error) };
-		}
-
-		QdrWriteResult write_result = write_text_file(temp_path, text);
-		if (!write_result.ok) {
-			delete_temp_file_best_effort(temp_path);
-			return write_result;
-		}
-
-		QdrWriteResult replace_result = replace_with_temp_file(temp_path, target);
-		if (!replace_result.ok) {
-			delete_temp_file_best_effort(temp_path);
-			return replace_result;
-		}
-
-		return { true, {} };
-	}
-
-	return { false, "Could not allocate a unique temporary QDR file path." };
-}
-
 } // namespace
 
 bool is_supported_document_version(int version)
@@ -936,7 +630,8 @@ QdrWriteResult write_document_atomic(const std::filesystem::path& path, const Qd
 	if (!validation.ok) {
 		return { false, validation.message.empty() ? "Serialized QDR document failed validation." : validation.message };
 	}
-	return write_text_atomic(path, serialize_document(validation.document));
+	const QdrAtomicWriteResult result = write_qdr_text_atomic(path, serialize_document(validation.document));
+	return { result.ok, result.message };
 }
 
 } // namespace quader_io

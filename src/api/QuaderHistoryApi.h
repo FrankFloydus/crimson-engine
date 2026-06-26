@@ -7,12 +7,11 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
+#include "api/QuaderApiSession.h"
 #include "api/QuaderApiSnapshot.h"
 
 namespace quader {
 
-class ProjectSession;
-class EditorHistoryService;
 class QuaderApiMutationRunner;
 
 /**
@@ -20,7 +19,7 @@ class QuaderApiMutationRunner;
  */
 class QuaderHistoryApi final {
 public:
-    QuaderHistoryApi(EditorHistoryService& history, QuaderApiMutationRunner& mutations);
+    QuaderHistoryApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     QuaderApiVoidResult undo();
     QuaderApiVoidResult redo();
@@ -31,7 +30,7 @@ public:
     [[nodiscard]] QuaderHistorySnapshot snapshot() const;
 
 private:
-    EditorHistoryService& history_;
+    QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;
 };
 

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/modeling/ModelingTypes.h"
+#include "editor/modeling/services/ModelingActionCatalog.h"
 
 #include <optional>
 #include <span>
@@ -17,35 +18,6 @@
 namespace quader {
 
 /**
- * Enumerates Modeling Instant Operation Enablement policies owned by the modeling operation catalog.
- */
-enum class ModelingInstantOperationEnablement {
-    AnySelection,
-    ObjectSelection,
-    MultipleObjects,
-    FaceSelection,
-    EdgeOrFaceSelection,
-    ActiveVertexSelection,
-    VertexSelection,
-    MultipleVertices,
-    ActiveEdgeSelection,
-    EdgeSelection,
-    NonObjectSelection,
-    ObjectOrFaceSelection,
-};
-
-/**
- * Enumerates Runtime Operation Settings Kind values used by instant operation catalog entries.
- */
-enum class RuntimeOperationSettingsKind {
-    Selection,
-    DuplicateMeshes,
-    Bridge,
-    BevelVertices,
-    RecalculateFaceNormals,
-};
-
-/**
  * Stores one catalog-owned instant modeling operation contract shared by command routing and runtime execution.
  */
 struct ModelingInstantOperationCatalogEntry {
@@ -54,10 +26,12 @@ struct ModelingInstantOperationCatalogEntry {
     std::string_view operationId;
     std::string_view commandLabel;
     std::string_view liveLabel;
-    ModelingInstantOperationEnablement enablement = ModelingInstantOperationEnablement::AnySelection;
+    ModelingActionAvailabilityRule availability;
     std::optional<quader_editor_core::EditorOperationId> runtimeOperation;
-    RuntimeOperationSettingsKind settingsKind = RuntimeOperationSettingsKind::Selection;
     bool rebuildsMeshOnSuccess = true;
+    std::string_view publicCommandId;
+    bool registersPublicCommand = true;
+    std::string_view publicCompatibilityAlias;
 };
 
 [[nodiscard]] std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCatalog();

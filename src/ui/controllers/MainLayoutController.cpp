@@ -42,6 +42,41 @@ bool MainLayoutController::resizeOutlinerPanel(int heightDp) {
     return true;
 }
 
+bool MainLayoutController::resizeSidePanelStack(
+        DockLocation location,
+        std::string_view leadingPanelId,
+        int heightDp) {
+    if (!mainLayoutLocationIsSideDock(location)) {
+        return false;
+    }
+    const std::optional<std::string_view> canonical = mainLayoutCanonicalPanelId(leadingPanelId);
+    const std::optional<std::string_view> leading =
+            mainLayoutLeadingSidePanelStackPanelId(model_, location);
+    if (!canonical ||
+            *canonical == kMainLayoutPanelViewport ||
+            !leading ||
+            *leading != *canonical) {
+        return false;
+    }
+
+    const std::vector<std::string_view> panels = mainLayoutVisiblePanelsInLocation(model_, location);
+    if (panels.size() < 2) {
+        return false;
+    }
+
+    const int clamped = mainLayoutClampedSidePanelStackHeightDp(heightDp);
+    const std::optional<int> currentSize =
+            dockSplitPanelSizeDp(model_.dockLayout, location, *canonical);
+    const bool splitChanged =
+            dockSetSplitPanels(model_.dockLayout, location, panels, *canonical);
+    if (currentSize && *currentSize == clamped && !splitChanged) {
+        return false;
+    }
+    const bool sizeChanged =
+            dockSetSplitPanelSizeDp(model_.dockLayout, location, *canonical, clamped);
+    return splitChanged || sizeChanged;
+}
+
 bool MainLayoutController::resizeBottomDock(int heightDp) {
     const int clamped = mainLayoutClampedBottomDockHeightDp(heightDp);
     if (model_.bottomDock.heightDp == clamped && !model_.bottomDock.collapsed) {
@@ -113,21 +148,7 @@ bool MainLayoutController::setPanelVisible(std::string_view panelId, bool visibl
     if (!canonical || *canonical == kMainLayoutPanelViewport) {
         return false;
     }
-    if (*canonical == kMainLayoutPanelOutliner) {
-        if (model_.outlinerVisible == visible) {
-            return false;
-        }
-        model_.outlinerVisible = visible;
-        return true;
-    }
-    if (*canonical == kMainLayoutPanelInspector) {
-        if (model_.inspectorVisible == visible) {
-            return false;
-        }
-        model_.inspectorVisible = visible;
-        return true;
-    }
-    return false;
+    return mainLayoutSetPanelVisible(model_, *canonical, visible);
 }
 
 bool MainLayoutController::movePanelToDockLocation(std::string_view panelId, DockLocation location) {
@@ -195,16 +216,7 @@ bool MainLayoutController::isPanelVisible(std::string_view panelId) const {
     if (!canonical) {
         return false;
     }
-    if (*canonical == kMainLayoutPanelViewport) {
-        return true;
-    }
-    if (*canonical == kMainLayoutPanelOutliner) {
-        return model_.outlinerVisible;
-    }
-    if (*canonical == kMainLayoutPanelInspector) {
-        return model_.inspectorVisible;
-    }
-    return false;
+    return mainLayoutPanelVisible(model_, *canonical);
 }
 
 } // namespace quader

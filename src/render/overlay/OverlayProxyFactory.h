@@ -27,6 +27,12 @@ namespace quader {
  */
 class OverlayProxyFactory {
 public:
+    OverlayProxyFactory() = default;
+    OverlayProxyFactory(const OverlayProxyFactory&) = delete;
+    OverlayProxyFactory& operator=(const OverlayProxyFactory&) = delete;
+    OverlayProxyFactory(OverlayProxyFactory&&) = delete;
+    OverlayProxyFactory& operator=(OverlayProxyFactory&&) = delete;
+
     void initialize(filament::Engine& engine,
             filament::Scene& scene,
             filament::Material& overlayMaterial,

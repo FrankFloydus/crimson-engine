@@ -22,6 +22,9 @@ AssetId AssetRegistry::addMesh(AssetId id, MeshAsset mesh) {
     if (id == InvalidAssetId) {
         return addMesh(std::move(mesh));
     }
+    if (meshes_.contains(id)) {
+        return InvalidAssetId;
+    }
     nextId_ = std::max(nextId_, id + 1u);
     meshes_.add(id, std::move(mesh));
     markDirty();
@@ -29,7 +32,11 @@ AssetId AssetRegistry::addMesh(AssetId id, MeshAsset mesh) {
 }
 
 AssetId AssetRegistry::addMaterial(MaterialDocument material) {
+    if (!validateMaterial(material).ok) {
+        return InvalidAssetId;
+    }
     const AssetId id = nextId_++;
+    normalizeMaterialTextureSlots(material);
     materials_.add(id, std::move(material));
     markDirty();
     return id;
@@ -39,7 +46,11 @@ AssetId AssetRegistry::addMaterial(AssetId id, MaterialDocument material) {
     if (id == InvalidAssetId) {
         return addMaterial(std::move(material));
     }
+    if (materials_.contains(id) || !validateMaterial(material).ok) {
+        return InvalidAssetId;
+    }
     nextId_ = std::max(nextId_, id + 1u);
+    normalizeMaterialTextureSlots(material);
     materials_.add(id, std::move(material));
     markDirty();
     return id;
@@ -56,6 +67,9 @@ AssetId AssetRegistry::addTexture(AssetId id, TextureAsset texture) {
     if (id == InvalidAssetId) {
         return addTexture(std::move(texture));
     }
+    if (textures_.contains(id)) {
+        return InvalidAssetId;
+    }
     nextId_ = std::max(nextId_, id + 1u);
     textures_.add(id, std::move(texture));
     markDirty();
@@ -71,6 +85,10 @@ bool AssetRegistry::replaceMesh(AssetId id, MeshAsset mesh) {
 }
 
 bool AssetRegistry::replaceMaterial(AssetId id, MaterialDocument material) {
+    if (!validateMaterial(material).ok) {
+        return false;
+    }
+    normalizeMaterialTextureSlots(material);
     if (!materials_.replace(id, std::move(material))) {
         return false;
     }
@@ -95,11 +113,36 @@ bool AssetRegistry::updateMesh(AssetId id, const std::function<void(MeshAsset&)>
 }
 
 bool AssetRegistry::updateMaterial(AssetId id, const std::function<void(MaterialDocument&)>& update) {
-    if (!materials_.update(id, update)) {
+    const MaterialDocument* existing = materials_.get(id);
+    if (existing == nullptr) {
+        return false;
+    }
+    MaterialDocument updated = *existing;
+    update(updated);
+    if (!validateMaterial(updated).ok) {
+        return false;
+    }
+    normalizeMaterialTextureSlots(updated);
+    if (!materials_.replace(id, std::move(updated))) {
         return false;
     }
     markDirty();
     return true;
+}
+
+AssetRegistryValidationResult AssetRegistry::validateMaterial(const MaterialDocument& material) const {
+    for (const auto& [slot, texture] : material.textureSlots) {
+        if (slot.empty()) {
+            return {.ok = false, .message = "Material texture slot is empty"};
+        }
+        if (!materialTextureSlotSupported(slot)) {
+            return {.ok = false, .message = "Unsupported material texture slot"};
+        }
+        if (texture == InvalidAssetId || textures_.get(texture) == nullptr) {
+            return {.ok = false, .message = "Texture asset does not exist"};
+        }
+    }
+    return {};
 }
 
 bool AssetRegistry::updateTexture(AssetId id, const std::function<void(TextureAsset&)>& update) {
@@ -108,18 +151,6 @@ bool AssetRegistry::updateTexture(AssetId id, const std::function<void(TextureAs
     }
     markDirty();
     return true;
-}
-
-MeshAsset* AssetRegistry::mesh(AssetId id) {
-    return meshes_.get(id);
-}
-
-MaterialDocument* AssetRegistry::material(AssetId id) {
-    return materials_.get(id);
-}
-
-TextureAsset* AssetRegistry::texture(AssetId id) {
-    return textures_.get(id);
 }
 
 const MeshAsset* AssetRegistry::mesh(AssetId id) const {

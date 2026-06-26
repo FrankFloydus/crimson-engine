@@ -42,7 +42,7 @@ public:
 
     [[nodiscard]] static std::uint64_t materialSignature(
             const AssetRegistry& assets,
-            const MaterialDocument* material);
+            const MaterialComponent* material);
     [[nodiscard]] static std::uint64_t meshAssetSignature(
             std::uint64_t seed,
             const MeshAsset& mesh);

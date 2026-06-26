@@ -21,9 +21,13 @@
 #include "editor/commands/PreviewOperationCommandTool.h"
 #include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 
+#include <editor/metadata/host_contract.h>
+
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -95,45 +99,91 @@ private:
 };
 
 [[nodiscard]] CommandToolDescriptor instantDescriptor(const ModelingInstantOperationCatalogEntry& entry) {
+    const quader_host_contract::HostActionDescriptor* action =
+            quader_host_contract::find_action_descriptor(entry.id);
     return {
             .id = entry.id,
-            .operationId = entry.operationId,
-            .label = entry.commandLabel,
+            .operationId = action == nullptr ? entry.operationId : action->operation_id,
+            .label = action == nullptr ? entry.commandLabel : action->label,
             .kind = CommandToolKind::Instant,
             .previewKind = ModelingActionPreviewKind::None,
             .rebuildsMeshOnSuccess = entry.rebuildsMeshOnSuccess,
+            .publicCommandId = entry.publicCommandId,
+            .registersPublicCommand = entry.registersPublicCommand,
+            .publicCompatibilityAlias = entry.publicCompatibilityAlias,
     };
 }
 
 [[nodiscard]] CommandToolDescriptor contextDescriptor(
-        std::string_view id,
-        std::string_view operationId,
-        std::string_view label,
-        bool rebuildsMeshOnSuccess = true) {
+        const quader_host_contract::HostActionDescriptor& action,
+        bool rebuildsMeshOnSuccess = true,
+        std::string_view publicCommandId = {},
+        bool registersPublicCommand = true,
+        std::string_view publicCompatibilityAlias = {}) {
+    assert(action.kind == quader_host_contract::HostActionKind::operation);
     return {
-            .id = id,
-            .operationId = operationId,
-            .label = label,
+            .id = action.id,
+            .operationId = action.operation_id,
+            .label = action.label,
             .kind = CommandToolKind::ContextAction,
             .previewKind = ModelingActionPreviewKind::None,
+            .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
+            .publicCommandId = publicCommandId,
+            .registersPublicCommand = registersPublicCommand,
+            .publicCompatibilityAlias = publicCompatibilityAlias,
+    };
+}
+
+[[nodiscard]] ModelingActionPreviewKind previewKindFromHostAction(quader_host_contract::HostPreviewKind kind) {
+    switch (kind) {
+    case quader_host_contract::HostPreviewKind::none:
+        return ModelingActionPreviewKind::None;
+    case quader_host_contract::HostPreviewKind::bridge:
+        return ModelingActionPreviewKind::Bridge;
+    case quader_host_contract::HostPreviewKind::edge_bevel:
+        return ModelingActionPreviewKind::EdgeBevel;
+    case quader_host_contract::HostPreviewKind::thicken:
+        return ModelingActionPreviewKind::Thicken;
+    case quader_host_contract::HostPreviewKind::slice_quad:
+        return ModelingActionPreviewKind::SliceQuad;
+    case quader_host_contract::HostPreviewKind::merge_by_distance:
+        return ModelingActionPreviewKind::MergeByDistance;
+    }
+    return ModelingActionPreviewKind::None;
+}
+
+[[nodiscard]] CommandToolDescriptor previewDescriptor(
+        const quader_host_contract::HostActionDescriptor& action,
+        bool rebuildsMeshOnSuccess = true) {
+    assert(action.kind == quader_host_contract::HostActionKind::operation);
+    return {
+            .id = action.id,
+            .operationId = action.operation_id,
+            .label = action.label,
+            .kind = CommandToolKind::Preview,
+            .previewKind = previewKindFromHostAction(action.preview_kind),
             .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
     };
 }
 
-[[nodiscard]] CommandToolDescriptor previewDescriptor(
-        std::string_view id,
-        std::string_view operationId,
-        std::string_view label,
-        ModelingActionPreviewKind previewKind,
-        bool rebuildsMeshOnSuccess = true) {
-    return {
-            .id = id,
-            .operationId = operationId,
-            .label = label,
-            .kind = CommandToolKind::Preview,
-            .previewKind = previewKind,
-            .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
-    };
+[[nodiscard]] bool instantOperationCatalogOwnsActionId(std::string_view actionId) {
+    const std::span<const ModelingInstantOperationCatalogEntry> entries = modelingInstantOperationCatalog();
+    return std::any_of(entries.begin(), entries.end(), [&](const ModelingInstantOperationCatalogEntry& entry) {
+        return entry.id == actionId;
+    });
+}
+
+[[nodiscard]] CommandToolDescriptor contextDescriptorFromHostAction(
+        const quader_host_contract::HostActionDescriptor& action) {
+    if (action.id == std::string_view("apply_active_material")) {
+        return contextDescriptor(
+                action,
+                true,
+                "edit.apply_material",
+                false,
+                "modeling.apply_active_material");
+    }
+    return contextDescriptor(action);
 }
 
 } // namespace
@@ -206,76 +256,52 @@ std::span<const InstantCommandTool* const> modelingInstantCommandTools() {
 }
 
 std::span<const ContextActionTool* const> modelingContextActionTools() {
-    static CatalogContextActionTool invertMesh{
-            contextDescriptor("invert_mesh", "flip_face_normals", "Invert Mesh")};
-    static CatalogContextActionTool shadeSmoothMesh{
-            contextDescriptor("shade_smooth_mesh", "shade_faces_smooth", "Shade Smooth Mesh")};
-    static CatalogContextActionTool shadeFlatMesh{
-            contextDescriptor("shade_flat_mesh", "shade_faces_flat", "Shade Flat Mesh")};
-    static CatalogContextActionTool combineMesh{
-            contextDescriptor("combine_mesh", "combine_meshes", "Combine Mesh")};
-    static CatalogContextActionTool mergeVertices{
-            contextDescriptor("merge_vertices", "merge_vertices_to_active", "Merge Vertices")};
-    static CatalogContextActionTool mergeVerticesAtCenter{
-            contextDescriptor("merge_vertices_at_center", "merge_vertices_to_center", "Merge Vertices at Center")};
-    static CatalogContextActionTool radialAlignVertices{
-            contextDescriptor("radial_align_vertices", "radial_align", "Radial Align")};
-    static CatalogContextActionTool bridgeEdges{
-            contextDescriptor("bridge_edges", "bridge", "Bridge")};
-    static CatalogContextActionTool radialAlignEdges{
-            contextDescriptor("radial_align_edges", "radial_align", "Radial Align")};
-    static CatalogContextActionTool invertFaces{
-            contextDescriptor("invert_faces", "flip_face_normals", "Invert Faces")};
-    static CatalogContextActionTool bridgeFaces{
-            contextDescriptor("bridge_faces", "bridge", "Bridge")};
-    static CatalogContextActionTool radialAlignFaces{
-            contextDescriptor("radial_align_faces", "radial_align", "Radial Align")};
-    static CatalogContextActionTool applyActiveMaterial{
-            contextDescriptor("apply_active_material", "assign_material", "Apply Active Material")};
+    static const std::vector<std::unique_ptr<CatalogContextActionTool>> ownedTools = [] {
+        std::vector<std::unique_ptr<CatalogContextActionTool>> result;
+        for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
+            if (action.kind != quader_host_contract::HostActionKind::operation ||
+                    action.preview_kind != quader_host_contract::HostPreviewKind::none ||
+                    instantOperationCatalogOwnsActionId(action.id)) {
+                continue;
+            }
+            result.push_back(std::make_unique<CatalogContextActionTool>(
+                    contextDescriptorFromHostAction(action)));
+        }
+        return result;
+    }();
 
-    static const std::array<const ContextActionTool*, 13> tools{{
-            &invertMesh,
-            &shadeSmoothMesh,
-            &shadeFlatMesh,
-            &combineMesh,
-            &mergeVertices,
-            &mergeVerticesAtCenter,
-            &radialAlignVertices,
-            &bridgeEdges,
-            &radialAlignEdges,
-            &invertFaces,
-            &bridgeFaces,
-            &radialAlignFaces,
-            &applyActiveMaterial,
-    }};
+    static const std::vector<const ContextActionTool*> tools = [] {
+        std::vector<const ContextActionTool*> result;
+        result.reserve(ownedTools.size());
+        for (const std::unique_ptr<CatalogContextActionTool>& tool : ownedTools) {
+            result.push_back(tool.get());
+        }
+        return result;
+    }();
     return {tools.data(), tools.size()};
 }
 
 std::span<const PreviewCommandTool* const> modelingPreviewCommandTools() {
-    static CatalogPreviewActionTool edgeBevel{
-            previewDescriptor("bevel_edges", "edge_bevel", "Bevel Edges", ModelingActionPreviewKind::EdgeBevel)};
-    static CatalogPreviewActionTool interpolatedBridgeEdges{
-            previewDescriptor("interpolated_bridge_edges", "bridge", "Interpolated Bridge Edges", ModelingActionPreviewKind::Bridge)};
-    static CatalogPreviewActionTool interpolatedBridgeFaces{
-            previewDescriptor("interpolated_bridge_faces", "bridge", "Interpolated Bridge Faces", ModelingActionPreviewKind::Bridge)};
-    static CatalogPreviewActionTool thicken{
-            previewDescriptor("thicken_faces", "thicken", "Thicken Faces", ModelingActionPreviewKind::Thicken)};
-    static CatalogPreviewActionTool createOuterHull{
-            previewDescriptor("create_outer_hull", "thicken", "Create Outer Hull", ModelingActionPreviewKind::Thicken)};
-    static CatalogPreviewActionTool sliceQuad{
-            previewDescriptor("slice_quad", "slice_quad", "Slice Quad", ModelingActionPreviewKind::SliceQuad)};
-    static CatalogPreviewActionTool mergeByDistance{
-            previewDescriptor("merge_by_distance", "merge_by_distance", "Merge by Distance", ModelingActionPreviewKind::MergeByDistance)};
+    static const std::vector<std::unique_ptr<CatalogPreviewActionTool>> ownedTools = [] {
+        std::vector<std::unique_ptr<CatalogPreviewActionTool>> result;
+        for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
+            if (action.kind != quader_host_contract::HostActionKind::operation ||
+                    action.preview_kind == quader_host_contract::HostPreviewKind::none) {
+                continue;
+            }
+            result.push_back(std::make_unique<CatalogPreviewActionTool>(previewDescriptor(action)));
+        }
+        return result;
+    }();
 
-    static const std::array<const PreviewCommandTool*, 7> tools{{
-            &edgeBevel,
-            &interpolatedBridgeEdges,
-            &interpolatedBridgeFaces,
-            &thicken,
-            &createOuterHull,
-            &sliceQuad,
-            &mergeByDistance,
-    }};
+    static const std::vector<const PreviewCommandTool*> tools = [] {
+        std::vector<const PreviewCommandTool*> result;
+        result.reserve(ownedTools.size());
+        for (const std::unique_ptr<CatalogPreviewActionTool>& tool : ownedTools) {
+            result.push_back(tool.get());
+        }
+        return result;
+    }();
     return {tools.data(), tools.size()};
 }
 

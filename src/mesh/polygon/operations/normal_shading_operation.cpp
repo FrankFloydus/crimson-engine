@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <diagnostics/profile.h>
 
@@ -39,12 +40,25 @@ public:
 
     [[nodiscard]] std::string_view id() const override
     {
-        return shading_ == SurfaceShading::smooth ? "shade_selected_faces_smooth" : "shade_selected_faces_flat";
+        return metadata().id;
+    }
+
+    [[nodiscard]] std::string_view label() const override
+    {
+        return metadata().label;
     }
 
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:
+    [[nodiscard]] const PolyOperationMetadata& metadata() const
+    {
+        return poly_operation_descriptor(
+                shading_ == SurfaceShading::smooth ?
+                        PolyOperationKey::ShadeSelectedFacesSmooth :
+                        PolyOperationKey::ShadeSelectedFacesFlat);
+    }
+
     SurfaceShading shading_ = SurfaceShading::flat;
 };
 
@@ -57,12 +71,23 @@ public:
 
     [[nodiscard]] std::string_view id() const override
     {
-        return hard_ ? "harden_selected_edge_normals" : "soften_selected_edge_normals";
+        return metadata().id;
+    }
+
+    [[nodiscard]] std::string_view label() const override
+    {
+        return metadata().label;
     }
 
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:
+    [[nodiscard]] const PolyOperationMetadata& metadata() const
+    {
+        return poly_operation_descriptor(
+                hard_ ? PolyOperationKey::HardenSelectedEdgeNormals : PolyOperationKey::SoftenSelectedEdgeNormals);
+    }
+
     bool hard_ = false;
 };
 

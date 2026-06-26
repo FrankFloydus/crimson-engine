@@ -24,6 +24,31 @@ enum class EditorOperationCommandPhase {
 };
 
 /**
+ * Enumerates EditorOperationSettingsKind values used by operation command validation.
+ */
+enum class EditorOperationSettingsKind {
+	selection,
+	bridge,
+	edge_bevel,
+	thicken,
+	slice_quad,
+	merge_by_distance,
+	bevel_vertices,
+	duplicate_meshes,
+	recalculate_face_normals,
+	assign_material,
+};
+
+/**
+ * Stores the command-schema metadata for an editor operation.
+ */
+struct EditorOperationCommandSchema {
+	EditorOperationId operation_id = EditorOperationId::bridge;
+	EditorOperationSettingsKind settings_kind = EditorOperationSettingsKind::selection;
+	std::optional<PreviewTransactionKind> preview_transaction_kind;
+};
+
+/**
  * Represents an Editor Operation Command value used by the modeling runtime domain.
  */
 struct EditorOperationCommand {
@@ -40,7 +65,10 @@ struct EditorOperationCommandResult {
 	std::optional<PreviewTransactionFinishResult> preview_finish;
 };
 
+[[nodiscard]] std::optional<EditorOperationCommandSchema> command_schema_for_operation(EditorOperationId operation_id);
+[[nodiscard]] bool command_settings_match_operation(EditorOperationId operation_id, const EditorOperationSettings& settings);
 [[nodiscard]] std::optional<PreviewTransactionKind> preview_transaction_kind_for_operation(EditorOperationId operation_id);
+[[nodiscard]] std::optional<EditorOperationId> operation_for_preview_transaction_kind(PreviewTransactionKind kind);
 [[nodiscard]] EditorOperationCommandResult execute_command(
 		EditorSession& session,
 		const EditorOperationCommand& command);

@@ -39,8 +39,9 @@ ViewportShadingMode toViewportShadingMode(QuaderShadingMode mode) {
     case QuaderShadingMode::Material:
         return ViewportShadingMode::Rendered;
     case QuaderShadingMode::Solid:
-    case QuaderShadingMode::XRay:
         return ViewportShadingMode::Shaded;
+    case QuaderShadingMode::XRay:
+        break;
     }
     return ViewportShadingMode::Shaded;
 }
@@ -99,6 +100,9 @@ QuaderShadingMode QuaderViewportApi::shadingMode(ViewportPaneId pane) const {
 }
 
 QuaderApiVoidResult QuaderViewportApi::setShadingMode(ViewportPaneId pane, QuaderShadingMode mode) {
+    if (mode == QuaderShadingMode::XRay) {
+        return unavailable("XRay shading mode is not supported by the native viewport.");
+    }
     return runtimeStatus(impl_->workspace.setShadingMode(pane, toViewportShadingMode(mode)));
 }
 
@@ -119,6 +123,10 @@ QuaderApiVoidResult QuaderViewportApi::focusOrigin(ViewportPaneId pane) {
         return impl_->hooks.focusOrigin(pane);
     }
     return runtimeStatus(impl_->workspace.focusOrigin(pane));
+}
+
+QuaderApiVoidResult QuaderViewportApi::spawnWindow() {
+    return impl_->hooks.spawnWindow ? impl_->hooks.spawnWindow() : unavailable("Viewport window runtime is not attached.");
 }
 
 QuaderApiVoidResult QuaderViewportApi::captureScreenshot(const std::filesystem::path& path, ViewportPaneId pane) {

@@ -21,7 +21,57 @@ qec::EditorOperationCommand selection_execute_command(qec::EditorOperationId ope
 	return command;
 }
 
+qec::EditorOperationSettings matching_settings(qec::EditorOperationSettingsKind kind)
+{
+	switch (kind) {
+	case qec::EditorOperationSettingsKind::selection:
+		return qec::SelectionOperationSettings {};
+	case qec::EditorOperationSettingsKind::bridge:
+		return qec::BridgeOperationSettings {};
+	case qec::EditorOperationSettingsKind::edge_bevel:
+		return qec::EdgeBevelOperationSettings {};
+	case qec::EditorOperationSettingsKind::thicken:
+		return qec::ThickenOperationSettings {};
+	case qec::EditorOperationSettingsKind::slice_quad:
+		return qec::SliceQuadOperationSettings {};
+	case qec::EditorOperationSettingsKind::merge_by_distance:
+		return qec::MergeByDistanceOperationSettings {};
+	case qec::EditorOperationSettingsKind::bevel_vertices:
+		return qec::BevelVerticesOperationSettings {};
+	case qec::EditorOperationSettingsKind::duplicate_meshes:
+		return qec::DuplicateMeshesOperationSettings {};
+	case qec::EditorOperationSettingsKind::recalculate_face_normals:
+		return qec::RecalculateFaceNormalsOperationSettings {};
+	case qec::EditorOperationSettingsKind::assign_material:
+		return qec::AssignMaterialOperationSettings {};
+	}
+	return qec::SelectionOperationSettings {};
+}
+
 } // namespace
+
+TEST_CASE("editor operation command schema owns settings and preview mappings", "[operation][command]")
+{
+	for (const qec::EditorOperationRegistryEntry& entry : qec::operation_registry().entries()) {
+		const std::optional<qec::EditorOperationCommandSchema> schema =
+			qec::command_schema_for_operation(entry.operation_id);
+		REQUIRE(schema.has_value());
+		CHECK(schema->operation_id == entry.operation_id);
+		CHECK(qec::command_settings_match_operation(entry.operation_id, matching_settings(schema->settings_kind)));
+		const bool accepts_wrong_bridge_settings =
+			qec::command_settings_match_operation(entry.operation_id, qec::BridgeOperationSettings {}) &&
+			schema->settings_kind != qec::EditorOperationSettingsKind::bridge;
+		CHECK_FALSE(accepts_wrong_bridge_settings);
+		CHECK(qec::preview_transaction_kind_for_operation(entry.operation_id) == schema->preview_transaction_kind);
+		CHECK(entry.operation->supports_preview() == schema->preview_transaction_kind.has_value());
+		if (schema->preview_transaction_kind.has_value()) {
+			CHECK(qec::operation_for_preview_transaction_kind(*schema->preview_transaction_kind) == entry.operation_id);
+		}
+	}
+
+	CHECK_FALSE(qec::operation_for_preview_transaction_kind(qec::PreviewTransactionKind::transform).has_value());
+	CHECK_FALSE(qec::operation_for_preview_transaction_kind(qec::PreviewTransactionKind::none).has_value());
+}
 
 TEST_CASE("editor operation command facade executes operations through history", "[operation][command]")
 {

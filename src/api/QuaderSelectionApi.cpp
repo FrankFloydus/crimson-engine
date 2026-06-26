@@ -5,58 +5,72 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderSelectionApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderApiMutationRunner.h"
 #include "scene/document/ProjectSession.h"
 #include "editor/selection/EditorSelectionService.h"
 
-#include <algorithm>
 #include <utility>
 
 namespace quader {
 namespace {
 
-QuaderApiResult<ModelingSelectionSummary> selectionResultFromStatus(
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
+}
+
+
+QuaderApiResult<QuaderSelectionSummary> selectionResultFromStatus(
         QuaderApiVoidResult status,
         ModelingSelectionSummary value) {
-    QuaderApiResult<ModelingSelectionSummary> result;
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = std::move(status.message);
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
-    result.value = value;
-    return result;
+    return quaderApiResultFromStatus(status, toApiSelectionSummary(value));
 }
 
-QuaderApiResult<ModelingHoverSummary> hoverResultFromStatus(
+QuaderApiResult<QuaderHoverSummary> hoverResultFromStatus(
         QuaderApiVoidResult status,
         ModelingHoverSummary value) {
-    QuaderApiResult<ModelingHoverSummary> result;
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = std::move(status.message);
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
-    result.value = value;
-    return result;
+    return quaderApiResultFromStatus(status, toApiHoverSummary(value));
 }
 
-void appendUnique(std::vector<EntityId>& entities, EntityId entity) {
-    if (entity != InvalidEntityId && std::find(entities.begin(), entities.end(), entity) == entities.end()) {
-        entities.push_back(entity);
+EditorSelectionEdit toEditorSelectionEdit(QuaderSelectionEdit edit) {
+    switch (edit) {
+    case QuaderSelectionEdit::Add:
+        return EditorSelectionEdit::Add;
+    case QuaderSelectionEdit::Remove:
+        return EditorSelectionEdit::Remove;
+    case QuaderSelectionEdit::Toggle:
+        return EditorSelectionEdit::Toggle;
+    case QuaderSelectionEdit::Replace:
+        return EditorSelectionEdit::Replace;
     }
+    return EditorSelectionEdit::Replace;
+}
+
+ModelingSelectionEdit toModelingEdit(QuaderSelectionEdit edit) {
+    switch (edit) {
+    case QuaderSelectionEdit::Add:
+        return ModelingSelectionEdit::Add;
+    case QuaderSelectionEdit::Remove:
+        return ModelingSelectionEdit::Remove;
+    case QuaderSelectionEdit::Toggle:
+        return ModelingSelectionEdit::Toggle;
+    case QuaderSelectionEdit::Replace:
+        return ModelingSelectionEdit::Replace;
+    }
+    return ModelingSelectionEdit::Replace;
 }
 
 } // namespace
 
-QuaderSelectionApi::QuaderSelectionApi(ProjectSession& session, QuaderApiMutationRunner& mutations)
+QuaderSelectionApi::QuaderSelectionApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
     : session_(session)
     , mutations_(mutations) {}
 
 QuaderApiVoidResult QuaderSelectionApi::selectObjects(std::span<const EntityId> entities, EntityId active) {
     return mutations_.runDocumentResult(
-            session_.selection().setSceneSelection(entities, active),
+            projectSession(session_).selection().setSceneSelection(entities, active),
             "Select Objects");
 }
 
@@ -65,45 +79,26 @@ QuaderApiVoidResult QuaderSelectionApi::selectObjects(std::initializer_list<Enti
 }
 
 QuaderApiVoidResult QuaderSelectionApi::selectObject(EntityId entity, QuaderSelectionEdit edit) {
-    std::vector<EntityId> entities = editedEntitySelection(entity, edit);
-    const EntityId active = entities.empty() ? InvalidEntityId : entity;
-    return selectObjects(entities, active);
+    return mutations_.runDocumentResult(
+            projectSession(session_).selection().editSceneSelection(entity, toEditorSelectionEdit(edit)),
+            "Select Objects");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::selectObject(QuaderModelingObjectRef object, QuaderSelectionEdit edit) {
-    std::vector<EntityId> entities = editedObjectSelection(object, edit);
-    const EntityId active = entities.empty() ? InvalidEntityId : object.entity;
-    return selectObjects(entities, active);
+    return selectObject(object.entity, edit);
 }
 
 QuaderApiVoidResult QuaderSelectionApi::selectObjects(
         std::initializer_list<QuaderModelingObjectRef> objects,
         QuaderSelectionEdit edit) {
-    if (edit == QuaderSelectionEdit::Replace) {
-        std::vector<EntityId> entities;
-        entities.reserve(objects.size());
-        EntityId active = InvalidEntityId;
-        for (const QuaderModelingObjectRef& object : objects) {
-            appendUnique(entities, object.entity);
-            active = object.entity;
-        }
-        return selectObjects(entities, active);
-    }
-
-    std::vector<EntityId> entities = session_.scene().selectedEntities();
-    EntityId active = entities.empty() ? InvalidEntityId : entities.back();
+    std::vector<EntityId> entities;
+    entities.reserve(objects.size());
     for (const QuaderModelingObjectRef& object : objects) {
-        const auto found = std::find(entities.begin(), entities.end(), object.entity);
-        const bool selected = found != entities.end();
-        if (edit == QuaderSelectionEdit::Add || (edit == QuaderSelectionEdit::Toggle && !selected)) {
-            appendUnique(entities, object.entity);
-            active = object.entity;
-        } else if ((edit == QuaderSelectionEdit::Remove || edit == QuaderSelectionEdit::Toggle) && selected) {
-            entities.erase(found);
-            active = entities.empty() ? InvalidEntityId : entities.back();
-        }
+        entities.push_back(object.entity);
     }
-    return selectObjects(entities, active);
+    return mutations_.runDocumentResult(
+            projectSession(session_).selection().editSceneSelection(entities, toEditorSelectionEdit(edit)),
+            "Select Objects");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::selectComponents(const QuaderComponentSelectionArgs& args) {
@@ -149,7 +144,7 @@ QuaderApiVoidResult QuaderSelectionApi::selectComponents(const QuaderComponentSe
     }
 
     return mutations_.runModelingResult(
-            session_.selection().setComponentSelection(request),
+            projectSession(session_).selection().setComponentSelection(request),
             "Select Components");
 }
 
@@ -228,25 +223,27 @@ QuaderApiVoidResult QuaderSelectionApi::selectFaces(
 }
 
 QuaderApiVoidResult QuaderSelectionApi::clear() {
-    return mutations_.runModelingResult(session_.selection().clear(), "Clear Selection");
+    return mutations_.runModelingResult(projectSession(session_).selection().clear(), "Clear Selection");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::selectAll() {
-    return mutations_.runModelingResult(session_.selection().selectAll(), "Select All");
+    return mutations_.runModelingResult(projectSession(session_).selection().selectAll(), "Select All");
 }
 
 QuaderApiVoidResult QuaderSelectionApi::invert() {
-    return mutations_.runModelingResult(session_.selection().invert(), "Invert Selection");
+    return mutations_.runModelingResult(projectSession(session_).selection().invert(), "Invert Selection");
 }
 
-QuaderApiVoidResult QuaderSelectionApi::setMode(ModelingSelectionMode mode) {
-    return mutations_.runModelingResult(session_.selection().setMode(mode), "Set Selection Mode");
+QuaderApiVoidResult QuaderSelectionApi::setMode(QuaderSelectionMode mode) {
+    return mutations_.runModelingResult(
+            projectSession(session_).selection().setMode(toModelingSelectionMode(mode)),
+            "Set Selection Mode");
 }
 
-QuaderApiResult<ModelingSelectionSummary> QuaderSelectionApi::pickSelect(const ModelingPickSelectRequest& request) {
-    const ModelingSelectionSummary before = session_.selection().summary();
-    const ModelingSelectionSummary picked = session_.selection().pickSelect(request);
-    const ModelingSelectionSummary after = session_.selection().summary();
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pickSelect(const QuaderPickSelectRequest& request) {
+    const ModelingSelectionSummary before = projectSession(session_).selection().summary();
+    const ModelingSelectionSummary picked = projectSession(session_).selection().pickSelect(toModelingPickSelectRequest(request));
+    const ModelingSelectionSummary after = projectSession(session_).selection().summary();
     const bool changed = before.contentRevision != after.contentRevision ||
             before.selectionRevision != after.selectionRevision;
     QuaderApiVoidResult status = mutations_.runModelingResult(
@@ -255,104 +252,80 @@ QuaderApiResult<ModelingSelectionSummary> QuaderSelectionApi::pickSelect(const M
     return selectionResultFromStatus(std::move(status), picked);
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderSelectionApi::hover(const ModelingHoverRequest& request) {
+QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hover(const QuaderHoverRequest& request) {
     QuaderApiVoidResult status = mutations_.runModelingResult(
-            session_.selection().updateHover(request),
+            projectSession(session_).selection().updateHover(toModelingHoverRequest(request)),
             "Update Hover");
-    return hoverResultFromStatus(std::move(status), session_.selection().hoverSummary());
+    return hoverResultFromStatus(std::move(status), projectSession(session_).selection().hoverSummary());
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderSelectionApi::hoverVertex(
+QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hoverVertex(
         QuaderModelingObjectRef object,
         QuaderElementId vertex) {
-    return directHover(ModelingDirectHoverRequest{
-            .modelingObjectId = object.modelingObjectId,
-            .kind = ModelingActiveSelectionKind::Vertex,
-            .vertexId = vertex,
-    });
+    return directHover(object, QuaderActiveSelectionKind::Vertex, vertex, -1, -1, -1);
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderSelectionApi::hoverEdge(
+QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hoverEdge(
         QuaderModelingObjectRef object,
         QuaderElementId a,
         QuaderElementId b) {
-    return directHover(ModelingDirectHoverRequest{
-            .modelingObjectId = object.modelingObjectId,
-            .kind = ModelingActiveSelectionKind::Edge,
-            .edge = {a, b},
-    });
+    return directHover(object, QuaderActiveSelectionKind::Edge, -1, a, b, -1);
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderSelectionApi::hoverFace(
+QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hoverFace(
         QuaderModelingObjectRef object,
         QuaderElementId face) {
-    return directHover(ModelingDirectHoverRequest{
-            .modelingObjectId = object.modelingObjectId,
-            .kind = ModelingActiveSelectionKind::Face,
-            .faceId = face,
-    });
+    return directHover(object, QuaderActiveSelectionKind::Face, -1, -1, -1, face);
 }
 
 QuaderApiVoidResult QuaderSelectionApi::clearHover() {
-    return mutations_.runModelingResult(session_.selection().clearHover(), "Clear Hover");
+    return mutations_.runModelingResult(projectSession(session_).selection().clearHover(), "Clear Hover");
 }
 
-ModelingSelectionSummary QuaderSelectionApi::summary() const {
-    return session_.selection().summary();
+QuaderSelectionSummary QuaderSelectionApi::summary() const {
+    return toApiSelectionSummary(projectSession(session_).selection().summary());
 }
 
-ModelingHoverSummary QuaderSelectionApi::hoverSummary() const {
-    return session_.selection().hoverSummary();
+QuaderHoverSummary QuaderSelectionApi::hoverSummary() const {
+    return toApiHoverSummary(projectSession(session_).selection().hoverSummary());
 }
 
-ModelingHoverSummary QuaderSelectionApi::previewHover(const ModelingHoverRequest& request) const {
-    return session_.selection().previewHover(request);
+QuaderHoverSummary QuaderSelectionApi::previewHover(const QuaderHoverRequest& request) const {
+    return toApiHoverSummary(projectSession(session_).selection().previewHover(toModelingHoverRequest(request)));
 }
 
-std::vector<EntityId> QuaderSelectionApi::editedEntitySelection(EntityId entity, QuaderSelectionEdit edit) const {
-    std::vector<EntityId> entities = session_.scene().selectedEntities();
-    const auto found = std::find(entities.begin(), entities.end(), entity);
-    const bool selected = found != entities.end();
-    if (edit == QuaderSelectionEdit::Replace) {
-        entities.clear();
-        appendUnique(entities, entity);
-        return entities;
-    }
-    if (edit == QuaderSelectionEdit::Add || (edit == QuaderSelectionEdit::Toggle && !selected)) {
-        appendUnique(entities, entity);
-        return entities;
-    }
-    if ((edit == QuaderSelectionEdit::Remove || edit == QuaderSelectionEdit::Toggle) && selected) {
-        entities.erase(found);
-    }
-    return entities;
-}
-
-std::vector<EntityId> QuaderSelectionApi::editedObjectSelection(
+QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::directHover(
         QuaderModelingObjectRef object,
-        QuaderSelectionEdit edit) const {
-    return editedEntitySelection(object.entity, edit);
-}
-
-ModelingSelectionEdit QuaderSelectionApi::toModelingEdit(QuaderSelectionEdit edit) {
-    switch (edit) {
-    case QuaderSelectionEdit::Add:
-        return ModelingSelectionEdit::Add;
-    case QuaderSelectionEdit::Remove:
-        return ModelingSelectionEdit::Remove;
-    case QuaderSelectionEdit::Toggle:
-        return ModelingSelectionEdit::Toggle;
-    case QuaderSelectionEdit::Replace:
-        return ModelingSelectionEdit::Replace;
+        QuaderActiveSelectionKind kind,
+        QuaderElementId vertex,
+        QuaderElementId edgeA,
+        QuaderElementId edgeB,
+        QuaderElementId face) {
+    ModelingDirectHoverRequest request;
+    request.modelingObjectId = object.modelingObjectId;
+    request.vertexId = vertex;
+    request.edge = {edgeA, edgeB};
+    request.faceId = face;
+    switch (kind) {
+    case QuaderActiveSelectionKind::Vertex:
+        request.kind = ModelingActiveSelectionKind::Vertex;
+        break;
+    case QuaderActiveSelectionKind::Edge:
+        request.kind = ModelingActiveSelectionKind::Edge;
+        break;
+    case QuaderActiveSelectionKind::Face:
+        request.kind = ModelingActiveSelectionKind::Face;
+        break;
+    case QuaderActiveSelectionKind::None:
+    case QuaderActiveSelectionKind::Object:
+    case QuaderActiveSelectionKind::Light:
+        request.kind = ModelingActiveSelectionKind::None;
+        break;
     }
-    return ModelingSelectionEdit::Replace;
-}
-
-QuaderApiResult<ModelingHoverSummary> QuaderSelectionApi::directHover(const ModelingDirectHoverRequest& request) {
     QuaderApiVoidResult status = mutations_.runModelingResult(
-            session_.selection().setHover(request),
+            projectSession(session_).selection().setHover(request),
             "Update Hover");
-    return hoverResultFromStatus(std::move(status), session_.selection().hoverSummary());
+    return hoverResultFromStatus(std::move(status), projectSession(session_).selection().hoverSummary());
 }
 
 } // namespace quader

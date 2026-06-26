@@ -44,15 +44,16 @@ The modeling-domain CMake targets are:
 - `quader_qdr_document_io`
 - `quader_qdr_runtime_io`
 - `quader_editor_metadata`
-- `qdr_modeling_domain_smoke`
+- `quader_modeling_domain_tests`
 
 `quader_modeling_polygon` can use OpenMesh-backed topology operations when
 `QUADER_USE_OPENMESH_TOPOLOGY=ON` is set, which is the default. Builds should provide a local
-OpenMesh checkout with `-DQUADER_OPENMESH_SOURCE_DIR=<path>` or place the pinned source at
-`thirdparty/openmesh/openmesh-5f016723f9f183770cffe5787a6f9f628e2914d8`. CMake only downloads
-OpenMesh when `-DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=ON` is explicitly set.
+OpenMesh checkout with `-DQUADER_OPENMESH_SOURCE_DIR=<path>` or place the pinned source under the
+`thirdparty/openmesh` path named by the dependency owner. CMake only downloads OpenMesh when
+`-DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=ON` is explicitly set.
 
-Third-party dependency versions and license evidence are tracked in `thirdparty/THIRD_PARTY_MANIFEST.md`.
+Third-party dependency versions and license evidence are tracked in `thirdparty/THIRD_PARTY_MANIFEST.md`;
+CMake commit pins are owned by `cmake/QuaderBuildOptions.cmake`.
 
 ## Boundaries
 

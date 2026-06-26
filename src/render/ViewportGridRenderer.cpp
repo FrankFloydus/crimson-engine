@@ -79,6 +79,7 @@ void ViewportGridRenderer::initialize(filament::Engine& engine,
         filament::Scene& scene,
         filament::Material& groundGridMaterial,
         std::uint8_t gridLayerMask) {
+    shutdown();
     engine_ = &engine;
     scene_ = &scene;
     groundGridMaterial_ = &groundGridMaterial;

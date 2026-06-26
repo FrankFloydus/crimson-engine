@@ -23,6 +23,10 @@ public:
                 .kind = CommandToolKind::Instant,
                 .previewKind = ModelingActionPreviewKind::None,
                 .rebuildsMeshOnSuccess = true,
+                .publicCommandId = "edit.paste",
+                .registersPublicCommand = false,
+                .publicCompatibilityAlias = "modeling.paste_selection",
+                .hostShortcutTargetId = "paste_meshes",
         };
     }
 

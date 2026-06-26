@@ -6,12 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/UISystem.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
+#include "platform/SdlEventUtils.h"
 #include "ui/DebugPaletteView.h"
 #include "ui/UIUtilityTokens.h"
+#include "ui/backends/rml/RmlMarkupWriter.h"
 #include "ui/components/organisms/ModelingModeShelfComponent.h"
 #include "ui/components/organisms/WindowChromeControlsComponent.h"
+#include "ui/controllers/MainLayoutDockHitRegionBuilder.h"
 #include "ui/core/UIIconRegistry.h"
 
 #include <SDL3/SDL_error.h>
@@ -32,110 +36,49 @@
 namespace quader {
 namespace {
 
-constexpr int kMainLayoutSidebarDropZoneWidthDp = 64;
-constexpr int kMainLayoutBottomDockDropZoneHeightDp = 64;
 constexpr float kMainLayoutDockDragPreviewHotspotOffsetPx = 10.0f;
 
 bool stringListContains(const std::vector<std::string>& values, std::string_view value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
-    switch (event.type) {
-    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-    case SDL_EVENT_WINDOW_RESIZED:
-    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-    case SDL_EVENT_WINDOW_FOCUS_GAINED:
-    case SDL_EVENT_WINDOW_FOCUS_LOST:
-        return event.window.windowID;
-    case SDL_EVENT_MOUSE_MOTION:
-        return event.motion.windowID;
-    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        return event.button.windowID;
-    case SDL_EVENT_MOUSE_WHEEL:
-        return event.wheel.windowID;
-    case SDL_EVENT_KEY_DOWN:
-    case SDL_EVENT_KEY_UP:
-        return event.key.windowID;
-    case SDL_EVENT_TEXT_INPUT:
-        return event.text.windowID;
-    default:
-        return std::nullopt;
-    }
-}
-
-QuaderApiVoidResult runtimeStatus(bool changed, std::string message = {}) {
+QuaderApiVoidResult uiRuntimeResult(bool ok, bool changed, std::string message) {
     return {
-            .ok = true,
+            .ok = ok,
             .changed = changed,
             .message = std::move(message),
-            .mutationKind = changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
+            .mutationKind = ok && changed ? QuaderMutationKind::Runtime : QuaderMutationKind::None,
     };
 }
 
-QuaderApiVoidResult runtimeFailure(std::string message) {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-    };
+QuaderApiVoidResult uiRuntimeStatus(bool changed, std::string message = {}) {
+    return uiRuntimeResult(true, changed, std::move(message));
 }
 
-bool mainLayoutPanelVisibleInLocation(
-        const MainLayoutModel& model,
-        std::string_view panelId,
-        DockLocation expectedLocation) {
-    const std::optional<DockLocation> location = dockPanelLocation(model.dockLayout, panelId);
-    if (!location || *location != expectedLocation) {
-        return false;
-    }
-    if (panelId == kMainLayoutPanelOutliner) {
-        return model.outlinerVisible;
-    }
-    if (panelId == kMainLayoutPanelInspector) {
-        return model.inspectorVisible;
-    }
-    return false;
+QuaderApiVoidResult uiRuntimeFailure(std::string message) {
+    return uiRuntimeResult(false, false, std::move(message));
 }
 
-bool mainLayoutPanelVisibleInRenderedDock(const MainLayoutModel& model, std::string_view panelId) {
-    const std::optional<DockLocation> location = dockPanelLocation(model.dockLayout, panelId);
-    if (!location || !mainLayoutPanelVisibleInLocation(model, panelId, *location)) {
-        return false;
-    }
-    if (*location == DockLocation::Panel) {
-        return !mainLayoutBottomDockCollapsed(model);
-    }
-    return !mainLayoutSideDockCollapsed(model, *location);
+std::string uiRuntimeMessage(
+        const LocalizationService& localization,
+        std::string_view key,
+        std::string_view fallback) {
+    return localization.text(key, fallback);
 }
 
-int mainLayoutVisibleDockPanelCount(const MainLayoutModel& model, DockLocation location) {
-    int count = 0;
-    for (std::string_view panelId : mainLayoutDockablePanelIds()) {
-        if (mainLayoutPanelVisibleInLocation(model, panelId, location)) {
-            ++count;
-        }
-    }
-    return count;
+QuaderApiVoidResult uiRuntimeStatus(
+        const LocalizationService& localization,
+        bool changed,
+        std::string_view key,
+        std::string_view fallback) {
+    return uiRuntimeStatus(changed, uiRuntimeMessage(localization, key, fallback));
 }
 
-bool mainLayoutSideDockVisibleOnSide(const MainLayoutModel& model, MainLayoutSidebarSide side) {
-    const std::optional<DockLocation> location = mainLayoutDockLocationForSidebarSide(model, side);
-    if (!location) {
-        return false;
-    }
-    if (mainLayoutSideDockCollapsed(model, *location)) {
-        return false;
-    }
-    return mainLayoutVisibleDockPanelCount(model, *location) > 0;
-}
-
-bool mainLayoutBottomDockVisibleForLocation(const MainLayoutModel& model) {
-    return !mainLayoutBottomDockCollapsed(model) &&
-            mainLayoutVisibleDockPanelCount(model, DockLocation::Panel) > 0;
+QuaderApiVoidResult uiRuntimeFailure(
+        const LocalizationService& localization,
+        std::string_view key,
+        std::string_view fallback) {
+    return uiRuntimeFailure(uiRuntimeMessage(localization, key, fallback));
 }
 
 bool mainLayoutDockDropTargetsEqual(
@@ -174,31 +117,6 @@ UIPixelRect bottomSplitResizerHitRectFromPane(
     };
 }
 
-std::string escapeRmlText(std::string_view text) {
-    std::string escaped;
-    escaped.reserve(text.size());
-    for (const char character : text) {
-        switch (character) {
-        case '&':
-            escaped += "&amp;";
-            break;
-        case '<':
-            escaped += "&lt;";
-            break;
-        case '>':
-            escaped += "&gt;";
-            break;
-        case '"':
-            escaped += "&quot;";
-            break;
-        default:
-            escaped.push_back(character);
-            break;
-        }
-    }
-    return escaped;
-}
-
 } // namespace
 
 UISystem::UISystem()
@@ -218,6 +136,8 @@ void UISystem::initialize(SDL_Window* window, RenderSystem& renderSystem, const 
     uiSettings_ = UISettings::load(settingsPaths_.settingsFile);
     mainLayout_ = uiSettings_.mainLayout();
     loadLocalization(executableDir);
+    viewportHost_.setWindowedViewportTitleFormat(
+            localization_.text("ui.viewport.window.title", "Quader Viewport {index}"));
     applyLocalizedMainLayoutLabels();
     viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile);
 
@@ -321,14 +241,14 @@ bool UISystem::shouldBypassPlatformChrome(const SDL_Event& event) const {
     const SDL_WindowID windowId = SDL_GetWindowID(window_);
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
-        return event.motion.windowID == windowId;
+        return sdlEventTargetsWindow(event, windowId);
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        return event.button.windowID == windowId;
+        return sdlEventTargetsWindow(event, windowId);
     case SDL_EVENT_MOUSE_WHEEL:
-        return event.wheel.windowID == windowId;
+        return sdlEventTargetsWindow(event, windowId);
     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-        return event.window.windowID == windowId;
+        return sdlEventTargetsWindow(event, windowId);
     default:
         return false;
     }
@@ -358,6 +278,7 @@ void UISystem::draw(QuaderEditorApi& editor,
     if (modelingModeShelfController_.syncEditorState(editor, localization_)) {
         rebuildModelingModeShelf();
     }
+    viewportHost_.setTextInputActive(rmlHost_.textInputActive());
     viewportHost_.handleFrame(editor, document, assets, modeling, defaultMaterial, debugPaletteVisible_);
 }
 
@@ -425,41 +346,67 @@ void UISystem::installRuntimeHooks(QuaderEditorApi& editor) {
             },
             .setPanelVisible = [this](std::string_view panel, bool visible) {
                 if (mainLayoutPanelIdIsViewport(panel)) {
-                    return runtimeStatus(false, visible ? "Viewport is always visible." : "Viewport cannot be hidden.");
+                    return visible ?
+                            uiRuntimeStatus(
+                                    localization_,
+                                    false,
+                                    "ui.runtime.viewport_always_visible",
+                                    "Viewport is always visible.") :
+                            uiRuntimeStatus(
+                                    localization_,
+                                    false,
+                                    "ui.runtime.viewport_cannot_hide",
+                                    "Viewport cannot be hidden.");
                 }
                 const bool changed = setMainLayoutPanelVisible(panel, visible);
                 if (!mainLayoutPanelIdIsKnown(panel)) {
-                    return runtimeFailure("Panel is not registered in the main layout.");
+                    return uiRuntimeFailure(
+                            localization_,
+                            "ui.runtime.panel_not_registered",
+                            "Panel is not registered in the main layout.");
                 }
-                return runtimeStatus(changed);
+                return uiRuntimeStatus(changed);
             },
             .focusPanel = [this](std::string_view panel) {
                 if (!isMainLayoutPanelVisible(panel)) {
-                    return runtimeFailure("Panel is not visible in the main layout.");
+                    return uiRuntimeFailure(
+                            localization_,
+                            "ui.runtime.panel_not_visible",
+                            "Panel is not visible in the main layout.");
                 }
-                return runtimeStatus(false);
+                return uiRuntimeStatus(false);
             },
             .notify = [](QuaderNotification) {
-                return runtimeStatus(false);
+                return uiRuntimeStatus(false);
             },
     });
     editor.preferences().setRuntimeHooks(QuaderPreferencesRuntimeHooks{
             .locale = [this]() {
                 return localization_.currentLocale();
             },
-            .setLocale = [](std::string) {
-                return runtimeFailure("Locale selection is not exposed in the RmlUi app shell yet.");
+            .setLocale = [this](std::string) {
+                return uiRuntimeFailure(
+                        localization_,
+                        "ui.runtime.locale_selection_unavailable",
+                        "Locale selection is not exposed in the RmlUi app shell yet.");
             },
             .save = [this]() {
                 saveUISettings();
                 saveViewportSettings();
-                return runtimeStatus(false, "Preferences saved.");
+                return uiRuntimeStatus(
+                        localization_,
+                        false,
+                        "ui.runtime.preferences_saved",
+                        "Preferences saved.");
             },
             .navigationGizmoVisible = []() {
                 return false;
             },
-            .setNavigationGizmoVisible = [](bool) {
-                return runtimeFailure("Navigation gizmo is not available in the RmlUi app shell yet.");
+            .setNavigationGizmoVisible = [this](bool) {
+                return uiRuntimeFailure(
+                        localization_,
+                        "ui.runtime.navigation_gizmo_unavailable",
+                        "Navigation gizmo is not available in the RmlUi app shell yet.");
             },
     });
 }
@@ -531,9 +478,15 @@ void UISystem::loadLocalization(const std::filesystem::path& executableDir) {
 }
 
 void UISystem::applyLocalizedMainLayoutLabels() {
-    mainLayoutLabels_.viewport = localization_.text("ui.panel.viewport", "Viewport");
-    mainLayoutLabels_.outliner = localization_.text("ui.panel.outliner", "Outliner");
-    mainLayoutLabels_.inspector = localization_.text("ui.panel.inspector", "Inspector");
+    MainLayoutLabels labels;
+    labels.panels.reserve(mainLayoutPanelDescriptors().size());
+    for (const MainLayoutPanelDescriptor& descriptor : mainLayoutPanelDescriptors()) {
+        labels.panels.push_back({
+                .panelId = std::string(descriptor.id),
+                .label = localization_.text(descriptor.localeKey, descriptor.fallbackLabel),
+        });
+    }
+    mainLayoutLabels_ = std::move(labels);
 }
 
 void UISystem::rebuildMainLayout() {
@@ -744,7 +697,7 @@ bool UISystem::activateModelingModeShelfControl(std::string_view controlId) {
 void UISystem::applyPendingModelingModeShelfIntents(QuaderEditorApi& editor) {
     if (const std::optional<ModelingSelectionMode> selectionMode =
                 modelingModeShelfController_.takePendingSelectionMode()) {
-        const QuaderApiVoidResult result = editor.selection().setMode(*selectionMode);
+        const QuaderApiVoidResult result = editor.selection().setMode(toApiSelectionMode(*selectionMode));
         if (!result.ok()) {
             LOG_WARN("Unable to apply modeling shelf selection mode: {}", result.errorMessage());
         }
@@ -771,15 +724,15 @@ void UISystem::rebuildMainLayoutHitRegions() {
         return;
     }
 
+    const auto measureMainLayoutRect = [&](std::string_view elementId) -> std::optional<UIPixelRect> {
+        const std::optional<RmlElementRect> rect = rmlHost_.measureElementById(std::string(elementId));
+        if (!rect) {
+            return std::nullopt;
+        }
+        return uiPixelRectFromRmlRect(*rect);
+    };
+
     MainLayoutSashMeasuredLayout measuredLayout;
-    std::vector<MainLayoutDockDragHitRegion> panelDragRegions;
-    std::vector<MainLayoutDockDropZone> dockDropZones;
-    std::vector<MainLayoutPanelDropZone> panelDropZones;
-    std::optional<RmlElementRect> mainLayoutSlotRect;
-    std::optional<RmlElementRect> editorColumnRect;
-    std::optional<RmlElementRect> bottomDockContentRect;
-    int bottomDockContentWidthDp = 0;
-    bool bottomPanelBodySplitDropZoneAdded = false;
     const int hitThicknessPx = std::max(
             8,
             static_cast<int>(std::lround(
@@ -793,64 +746,11 @@ void UISystem::rebuildMainLayoutHitRegions() {
                 std::lround(static_cast<float>(std::max(0, rect->height)) / std::max(0.001f, rmlDpRatio_)));
         measuredLayout.mainWidthDp = mainLayoutWidthDp_;
         measuredLayout.mainHeightDp = mainLayoutHeightDp_;
-        const int dropZoneWidthPx = std::min(
-                std::max(0, rect->width),
-                std::max(48,
-                        static_cast<int>(std::lround(
-                                static_cast<float>(kMainLayoutSidebarDropZoneWidthDp) * rmlDpRatio_))));
-        if (dropZoneWidthPx > 0) {
-            if (!mainLayoutSideDockVisibleOnSide(mainLayout_, MainLayoutSidebarSide::Left)) {
-                dockDropZones.push_back({
-                        .location = mainLayoutDockLocationForSidebarSide(
-                                mainLayout_,
-                                MainLayoutSidebarSide::Left).value_or(DockLocation::AuxiliaryBar),
-                        .rect = {
-                                .left = rect->left,
-                                .top = rect->top,
-                                .width = dropZoneWidthPx,
-                                .height = rect->height,
-                        },
-                });
-            }
-            if (!mainLayoutSideDockVisibleOnSide(mainLayout_, MainLayoutSidebarSide::Right)) {
-                dockDropZones.push_back({
-                        .location = mainLayoutDockLocationForSidebarSide(
-                                mainLayout_,
-                                MainLayoutSidebarSide::Right).value_or(DockLocation::Sidebar),
-                        .rect = {
-                                .left = rect->left + rect->width - dropZoneWidthPx,
-                                .top = rect->top,
-                                .width = dropZoneWidthPx,
-                                .height = rect->height,
-                        },
-                });
-            }
-        }
-        mainLayoutSlotRect = rect;
     }
-    editorColumnRect = rmlHost_.measureElementById(mainLayoutEditorColumnElementId());
-    if (editorColumnRect) {
+    if (const std::optional<RmlElementRect> editorColumnRect =
+                rmlHost_.measureElementById(mainLayoutEditorColumnElementId())) {
         measuredLayout.bottomDockTrackWidthDp = static_cast<int>(std::lround(
                 static_cast<float>(std::max(0, editorColumnRect->width)) / std::max(0.001f, rmlDpRatio_)));
-    }
-    const std::optional<RmlElementRect>& bottomDropRect = editorColumnRect ? editorColumnRect : mainLayoutSlotRect;
-    if (bottomDropRect && !mainLayoutBottomDockVisibleForLocation(mainLayout_)) {
-        const int dropZoneHeightPx = std::min(
-                std::max(0, bottomDropRect->height),
-                std::max(48,
-                        static_cast<int>(std::lround(
-                                static_cast<float>(kMainLayoutBottomDockDropZoneHeightDp) * rmlDpRatio_))));
-        if (dropZoneHeightPx > 0) {
-            dockDropZones.push_back({
-                    .location = DockLocation::Panel,
-                    .rect = {
-                            .left = bottomDropRect->left,
-                            .top = bottomDropRect->top + bottomDropRect->height - dropZoneHeightPx,
-                            .width = bottomDropRect->width,
-                            .height = dropZoneHeightPx,
-                    },
-            });
-        }
     }
     for (DockLocation location : {DockLocation::Sidebar, DockLocation::AuxiliaryBar}) {
         if (const std::optional<RmlElementRect> rect =
@@ -904,9 +804,8 @@ void UISystem::rebuildMainLayoutHitRegions() {
     if (mainLayoutBottomDockVisibleForLocation(mainLayout_)) {
         const std::optional<RmlElementRect> contentRect =
                 rmlHost_.measureElementById(mainLayoutBottomDockContentElementId());
-        bottomDockContentRect = contentRect;
         if (contentRect) {
-            bottomDockContentWidthDp = static_cast<int>(std::lround(
+            const int bottomDockContentWidthDp = static_cast<int>(std::lround(
                     static_cast<float>(std::max(0, contentRect->width)) / std::max(0.001f, rmlDpRatio_)));
             const int bottomSplitTrackWidthDp = std::max(
                     bottomDockContentWidthDp,
@@ -947,106 +846,12 @@ void UISystem::rebuildMainLayoutHitRegions() {
             }
         }
     }
-    for (std::string_view panelId : mainLayoutDockablePanelIds()) {
-        if (!mainLayoutPanelVisibleInRenderedDock(mainLayout_, panelId)) {
-            continue;
-        }
-        const std::optional<DockLocation> location = dockPanelLocation(mainLayout_.dockLayout, panelId);
-        if (!location) {
-            continue;
-        }
-        const std::string dragElementId = *location == DockLocation::Panel ?
-                mainLayoutPanelTabElementId(panelId) :
-                mainLayoutPanelHeaderElementId(panelId);
-        if (const std::optional<RmlElementRect> rect = rmlHost_.measureElementById(dragElementId)) {
-            const UIPixelRect hitRect = uiPixelRectFromRmlRect(*rect);
-            panelDragRegions.push_back({
-                    .panelId = std::string(panelId),
-                    .rect = hitRect,
-            });
-            if (*location == DockLocation::Panel) {
-                panelDropZones.push_back({
-                        .location = *location,
-                        .panelId = std::string(panelId),
-                        .rect = hitRect,
-                        .action = MainLayoutDockDropAction::InsertPanel,
-                        .placementPolicy = UIDropPlacementPolicy::HorizontalBeforeAfter,
-                        .feedbackKind = UIDropFeedbackKind::Insertion,
-                });
-            }
-        }
-        if (const std::optional<RmlElementRect> rect =
-                        rmlHost_.measureElementById(mainLayoutPanelElementId(panelId))) {
-            panelDropZones.push_back({
-                    .location = *location,
-                    .panelId = std::string(panelId),
-                    .rect = uiPixelRectFromRmlRect(*rect),
-                    .action = *location == DockLocation::Panel ?
-                            MainLayoutDockDropAction::SplitPanel :
-                            MainLayoutDockDropAction::InsertPanel,
-                    .placementPolicy = *location == DockLocation::Panel ?
-                            UIDropPlacementPolicy::HorizontalBeforeAfter :
-                            UIDropPlacementPolicy::VerticalBeforeAfter,
-                    .feedbackKind = UIDropFeedbackKind::Target,
-            });
-            if (*location == DockLocation::Panel) {
-                bottomPanelBodySplitDropZoneAdded = true;
-            }
-        }
-    }
-    if (mainLayoutBottomDockVisibleForLocation(mainLayout_) &&
-            !bottomPanelBodySplitDropZoneAdded &&
-            bottomDockContentRect) {
-        if (const std::optional<std::string_view> activePanelId =
-                    dockActivePanelId(mainLayout_.dockLayout, DockLocation::Panel);
-                activePanelId && mainLayoutPanelVisibleInLocation(mainLayout_, *activePanelId, DockLocation::Panel)) {
-            panelDropZones.push_back({
-                    .location = DockLocation::Panel,
-                    .panelId = std::string(*activePanelId),
-                    .rect = uiPixelRectFromRmlRect(*bottomDockContentRect),
-                    .action = MainLayoutDockDropAction::SplitPanel,
-                    .placementPolicy = UIDropPlacementPolicy::HorizontalBeforeAfter,
-                    .feedbackKind = UIDropFeedbackKind::Target,
-            });
-        }
-    }
-    if (mainLayoutBottomDockVisibleForLocation(mainLayout_)) {
-        std::string_view trailingTargetPanelId;
-        for (std::string_view panelId : dockTabPanelsInLocation(mainLayout_.dockLayout, DockLocation::Panel)) {
-            if (mainLayoutPanelVisibleInLocation(mainLayout_, panelId, DockLocation::Panel)) {
-                trailingTargetPanelId = panelId;
-            }
-        }
-        if (!trailingTargetPanelId.empty()) {
-            const std::optional<RmlElementRect> stripRect =
-                    rmlHost_.measureElementById(mainLayoutBottomDockTabStripElementId());
-            const std::optional<RmlElementRect> lastTabRect =
-                    rmlHost_.measureElementById(mainLayoutPanelTabElementId(trailingTargetPanelId));
-            if (stripRect && lastTabRect) {
-                const int trailingLeft = lastTabRect->left + lastTabRect->width;
-                const int trailingWidth = stripRect->left + stripRect->width - trailingLeft;
-                if (trailingWidth > 0) {
-                    panelDropZones.push_back({
-                            .location = DockLocation::Panel,
-                            .panelId = std::string(trailingTargetPanelId),
-                            .rect = {
-                                    .left = trailingLeft,
-                                    .top = stripRect->top,
-                                    .width = trailingWidth,
-                                    .height = stripRect->height,
-                            },
-                            .action = MainLayoutDockDropAction::InsertPanel,
-                            .placementPolicy = UIDropPlacementPolicy::WholeRect,
-                            .feedbackKind = UIDropFeedbackKind::Insertion,
-                    });
-                }
-            }
-        }
-    }
+    MainLayoutDockHitRegions dockHitRegions =
+            buildMainLayoutDockHitRegions(mainLayout_, measureMainLayoutRect, rmlDpRatio_);
     mainLayoutResizeController_.setHitRegions(mainLayoutSashRegistry_.hitRegions());
-    mainLayoutDockDragController_.setHitRegions(std::move(panelDragRegions));
-    mainLayoutDockDragController_.setDockDropZones(std::move(dockDropZones));
-    mainLayoutDockDragController_.setPanelDropZones(std::move(panelDropZones));
+    mainLayoutDockDragController_.setHitRegions(std::move(dockHitRegions.panelDragRegions));
+    mainLayoutDockDragController_.setDockDropZones(std::move(dockHitRegions.dockDropZones));
+    mainLayoutDockDragController_.setPanelDropZones(std::move(dockHitRegions.panelDropZones));
 }
 
 bool UISystem::handleMainLayoutPointerEvent(const SDL_Event& event) {
@@ -1139,7 +944,7 @@ std::optional<std::pair<float, float>> UISystem::mainLayoutPointerFramebufferPos
     float windowY = 0.0f;
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
-        if (event.motion.windowID != windowId) {
+        if (!sdlEventTargetsWindow(event, windowId)) {
             return std::nullopt;
         }
         windowX = event.motion.x;
@@ -1147,14 +952,14 @@ std::optional<std::pair<float, float>> UISystem::mainLayoutPointerFramebufferPos
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (event.button.windowID != windowId) {
+        if (!sdlEventTargetsWindow(event, windowId)) {
             return std::nullopt;
         }
         windowX = event.button.x;
         windowY = event.button.y;
         break;
     case SDL_EVENT_MOUSE_WHEEL:
-        if (event.wheel.windowID != windowId) {
+        if (!sdlEventTargetsWindow(event, windowId)) {
             return std::nullopt;
         }
         windowX = event.wheel.mouse_x;
@@ -1373,7 +1178,7 @@ void UISystem::releaseMainLayoutMouseCapture() {
 }
 
 bool UISystem::shouldCancelMainLayoutPointerGesture(const SDL_Event& event) const {
-    const std::optional<SDL_WindowID> targetWindow = eventWindowId(event);
+    const std::optional<SDL_WindowID> targetWindow = sdlEventWindowId(event);
     if (targetWindow && window_ && *targetWindow != SDL_GetWindowID(window_)) {
         return false;
     }
@@ -1491,12 +1296,12 @@ bool UISystem::pointerEventInsideMainViewport(const SDL_Event& event) const {
             y < static_cast<float>(mainViewportFrame_->top + mainViewportFrame_->height);
 }
 
-bool UISystem::pointerEventInsideRmlElement(const SDL_Event& event, const std::string& elementId) const {
+bool UISystem::pointerEventInsideRmlElement(const SDL_Event& event, std::string_view elementId) const {
     const std::optional<std::pair<float, float>> pointer = mainLayoutPointerFramebufferPosition(event);
     if (!pointer) {
         return false;
     }
-    const std::optional<RmlElementRect> rect = rmlHost_.measureElementById(elementId);
+    const std::optional<RmlElementRect> rect = rmlHost_.measureElementById(std::string(elementId));
     if (!rect) {
         return false;
     }
@@ -1510,10 +1315,12 @@ bool UISystem::pointerEventInsideRmlElement(const SDL_Event& event, const std::s
 }
 
 bool UISystem::pointerEventInsideModelingModeShelf(const SDL_Event& event) const {
-    return pointerEventInsideRmlElement(event, "modeling-mode-shelf") ||
-            pointerEventInsideRmlElement(event, "modeling-mode-shelf-toolbar") ||
-            pointerEventInsideRmlElement(event, "modeling-mode-shelf-content") ||
-            pointerEventInsideRmlElement(event, "modeling-mode-shelf-overflow-menu");
+    for (const std::string_view elementId : modelingModeShelfPointerBypassElementIds()) {
+        if (pointerEventInsideRmlElement(event, elementId)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool UISystem::pointerEventShouldBypassViewport(const SDL_Event& event) const {

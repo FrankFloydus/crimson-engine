@@ -34,6 +34,7 @@ public:
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
     CommandResult commit();
     CommandResult cancel();
+    CommandResult discard();
 
     [[nodiscard]] bool active() const { return history_ != nullptr; }
     [[nodiscard]] bool empty() const { return commands_.empty(); }
@@ -79,6 +80,7 @@ private:
             std::vector<std::unique_ptr<IUndoableCommand>> commands);
 
     std::unique_ptr<UndoRedoManager> undoRedo_;
+    EditorTransaction* activeTransaction_ = nullptr;
 };
 
 } // namespace quader

@@ -9,6 +9,7 @@
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApiTypes.h"
 #include "api/QuaderKeybindingTypes.h"
+#include "api/QuaderViewportInputTypes.h"
 
 #include <filesystem>
 #include <memory>
@@ -19,6 +20,7 @@
 namespace quader {
 
 class QuaderApi;
+class QuaderProjectApi;
 class QuaderToolsApi;
 class QuaderViewportApi;
 
@@ -59,7 +61,7 @@ struct QuaderViewportKeybindingContext {
  */
 class QuaderCommandsApi final {
 public:
-    QuaderCommandsApi(QuaderApi& api, QuaderViewportApi& viewports, QuaderToolsApi& tools);
+    QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools);
     ~QuaderCommandsApi();
 
     QuaderCommandsApi(const QuaderCommandsApi&) = delete;
@@ -116,8 +118,11 @@ public:
     void resetPendingKeybindingChord();
     [[nodiscard]] bool hasPendingKeybindingChord() const;
     QuaderApiVoidResult setShortcut(std::string_view commandId, std::string shortcut);
+    QuaderApiVoidResult setShortcut(QuaderCommandId commandId, std::string shortcut);
     QuaderApiVoidResult removeShortcut(std::string_view commandId);
+    QuaderApiVoidResult removeShortcut(QuaderCommandId commandId);
     QuaderApiVoidResult resetShortcut(std::string_view commandId);
+    QuaderApiVoidResult resetShortcut(QuaderCommandId commandId);
     QuaderApiVoidResult setKeybindingStoragePath(std::filesystem::path path);
 
 private:

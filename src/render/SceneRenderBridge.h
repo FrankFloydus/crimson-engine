@@ -37,6 +37,11 @@ class SceneRenderBridge {
 public:
     using PreviewMesh = ToolPreviewMesh;
 
+    SceneRenderBridge() = default;
+    SceneRenderBridge(const SceneRenderBridge&) = delete;
+    SceneRenderBridge& operator=(const SceneRenderBridge&) = delete;
+    SceneRenderBridge(SceneRenderBridge&&) = delete;
+    SceneRenderBridge& operator=(SceneRenderBridge&&) = delete;
     ~SceneRenderBridge();
 
     void initialize(filament::Engine& engine,

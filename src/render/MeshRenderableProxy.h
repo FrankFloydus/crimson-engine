@@ -14,6 +14,7 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -22,6 +23,14 @@ namespace quader {
  * Represents a Mesh Renderable Proxy value used by the render extraction and Filament resource layer.
  */
 struct MeshRenderableProxy {
+    MeshRenderableProxy() = default;
+    MeshRenderableProxy(const MeshRenderableProxy&) = delete;
+    MeshRenderableProxy& operator=(const MeshRenderableProxy&) = delete;
+    MeshRenderableProxy(MeshRenderableProxy&& other) noexcept {
+        moveFrom(std::move(other));
+    }
+    MeshRenderableProxy& operator=(MeshRenderableProxy&&) noexcept = delete;
+
     utils::Entity entity;
     EntityId sourceEntity = InvalidEntityId;
     AssetId mesh = InvalidAssetId;
@@ -34,6 +43,23 @@ struct MeshRenderableProxy {
     filament::IndexBuffer* indexBuffer = nullptr;
     std::vector<std::uint32_t> materialSlots;
     std::vector<filament::MaterialInstance*> materialInstances;
+
+private:
+    void moveFrom(MeshRenderableProxy&& other) noexcept {
+        entity = other.entity;
+        other.entity.clear();
+        sourceEntity = std::exchange(other.sourceEntity, InvalidEntityId);
+        mesh = std::exchange(other.mesh, InvalidAssetId);
+        material = std::exchange(other.material, InvalidAssetId);
+        meshRevision = std::exchange(other.meshRevision, 0);
+        materialRevision = std::exchange(other.materialRevision, 0);
+        castShadows = std::exchange(other.castShadows, false);
+        doubleSided = std::exchange(other.doubleSided, false);
+        vertexBuffer = std::exchange(other.vertexBuffer, nullptr);
+        indexBuffer = std::exchange(other.indexBuffer, nullptr);
+        materialSlots = std::move(other.materialSlots);
+        materialInstances = std::move(other.materialInstances);
+    }
 };
 
 } // namespace quader

@@ -15,6 +15,7 @@
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -69,6 +70,50 @@ DocumentCommandResult mergeModelingSelectionChange(
     return result;
 }
 
+/**
+ * Stores normalized scene selection contents after applying an add/remove/toggle/replace edit.
+ */
+struct ResolvedSceneSelectionEdit {
+    std::vector<EntityId> selected;
+    EntityId active = InvalidEntityId;
+};
+
+ResolvedSceneSelectionEdit resolveSceneSelectionEdit(
+        std::span<const EntityId> currentSelection,
+        std::span<const EntityId> editedEntities,
+        EditorSelectionEdit edit) {
+    ResolvedSceneSelectionEdit result;
+    if (edit == EditorSelectionEdit::Replace) {
+        result.selected.reserve(editedEntities.size());
+        for (const EntityId entity : editedEntities) {
+            if (entity == InvalidEntityId ||
+                    std::find(result.selected.begin(), result.selected.end(), entity) != result.selected.end()) {
+                continue;
+            }
+            result.selected.push_back(entity);
+            result.active = entity;
+        }
+        return result;
+    }
+
+    result.selected.assign(currentSelection.begin(), currentSelection.end());
+    result.active = result.selected.empty() ? InvalidEntityId : result.selected.back();
+    for (const EntityId entity : editedEntities) {
+        const auto found = std::find(result.selected.begin(), result.selected.end(), entity);
+        const bool alreadySelected = found != result.selected.end();
+        if (edit == EditorSelectionEdit::Add || (edit == EditorSelectionEdit::Toggle && !alreadySelected)) {
+            if (entity != InvalidEntityId && !alreadySelected) {
+                result.selected.push_back(entity);
+                result.active = entity;
+            }
+        } else if ((edit == EditorSelectionEdit::Remove || edit == EditorSelectionEdit::Toggle) && alreadySelected) {
+            result.selected.erase(found);
+            result.active = result.selected.empty() ? InvalidEntityId : result.selected.back();
+        }
+    }
+    return result;
+}
+
 } // namespace
 
 EditorSelectionService::EditorSelectionService(
@@ -116,6 +161,19 @@ DocumentCommandResult EditorSelectionService::setSceneSelection(std::span<const 
         modeling_.projectObjectSelectionFromScene();
     }
     return mergeModelingSelectionChange(result, before, modeling_.selectionSummary());
+}
+
+DocumentCommandResult EditorSelectionService::editSceneSelection(EntityId entity, EditorSelectionEdit edit) {
+    const std::array<EntityId, 1> entities{{entity}};
+    return editSceneSelection(entities, edit);
+}
+
+DocumentCommandResult EditorSelectionService::editSceneSelection(
+        std::span<const EntityId> entities,
+        EditorSelectionEdit edit) {
+    const std::vector<EntityId> current = scene_.selectedEntities();
+    const ResolvedSceneSelectionEdit resolved = resolveSceneSelectionEdit(current, entities, edit);
+    return setSceneSelection(resolved.selected, resolved.active);
 }
 
 ModelingCommandResult EditorSelectionService::setObjectSelection(std::span<const EntityId> entities, EntityId active) {

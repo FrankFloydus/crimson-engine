@@ -13,6 +13,8 @@
 #include <filament/LightManager.h>
 #include <utils/EntityManager.h>
 
+#include <utility>
+
 namespace quader {
 namespace {
 
@@ -81,7 +83,7 @@ void LightRenderableCache::syncLight(EntityId entityId, const LightComponent& li
                 worldTransform,
                 nextRebuildSignature,
                 nextTransformSignature);
-        lightProxies_.emplace(entityId, proxy);
+        lightProxies_.emplace(entityId, std::move(proxy));
         return;
     }
 

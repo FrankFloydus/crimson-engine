@@ -8,12 +8,13 @@ file except through prior written authorization from Francesco Di Blasi.
 -->
 # Quader Public Editor API
 
-Quader editor automation should start from `QuaderEditorApi` in the native app runtime, or from
-`QuaderApi` for document/modeling-only behavior tests and examples.
+Quader editor automation should start from `createStandaloneEditor()` in small standalone programs,
+from `QuaderEditorApi` in the native app runtime, or from `QuaderApi` for document/modeling-only
+behavior tests and examples.
 
 ```cpp
-quader::ProjectSession session;
-quader::QuaderEditorApi editor(session);
+quader::QuaderStandaloneEditor standalone = quader::createStandaloneEditor();
+quader::QuaderEditorApi& editor = standalone.editor();
 
 auto created = editor.modeling().createBox({
         .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},

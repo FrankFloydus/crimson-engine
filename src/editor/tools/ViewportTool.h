@@ -10,7 +10,8 @@
 #include "editor/modeling/ModelingTypes.h"
 #include "editor/tools/ViewportToolDescriptorCatalog.h"
 #include "scene/SceneDocument.h"
-#include "viewport/ViewportInputRouter.h"
+#include "viewport/ViewportCameraController.h"
+#include "viewport/ViewportInputTypes.h"
 #include "viewport/ViewportSettings.h"
 
 #include <array>
@@ -153,6 +154,7 @@ public:
     [[nodiscard]] virtual bool ownsViewport() const;
     [[nodiscard]] virtual bool blocksViewportFocusShortcuts() const;
     [[nodiscard]] virtual ModelingTransformTool transformTool() const;
+    [[nodiscard]] virtual bool supportsTransformGizmo() const;
 
     virtual ModelingCommandResult activate(ModelingSessionService& modeling) const;
 

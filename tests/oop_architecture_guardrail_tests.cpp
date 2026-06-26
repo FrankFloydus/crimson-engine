@@ -6,63 +6,25 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "support/GuardrailFileScan.h"
+
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <regex>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
-
 namespace {
 
-std::filesystem::path sourceRoot() {
-    return std::filesystem::path(QUADER_SOURCE_DIR);
-}
-
-std::string readFile(const std::filesystem::path& path) {
-    std::ifstream file(path);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    if (!file.is_open()) {
-        return {};
-    }
-    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-}
-
-std::vector<std::filesystem::path> filesWithExtension(const std::filesystem::path& root, std::string_view extension) {
-    std::vector<std::filesystem::path> files;
-    if (!std::filesystem::exists(root)) {
-        return files;
-    }
-
-    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file() && entry.path().extension() == extension) {
-            files.push_back(entry.path());
-        }
-    }
-    std::sort(files.begin(), files.end());
-    return files;
-}
-
-std::string normalizedRelative(const std::filesystem::path& path) {
-    return std::filesystem::relative(path, sourceRoot()).generic_string();
-}
-
-bool containsAny(const std::string& source, const std::vector<std::string_view>& needles) {
-    return std::any_of(needles.begin(), needles.end(), [&](std::string_view needle) {
-        return source.find(needle) != std::string::npos;
-    });
-}
-
-bool startsWith(std::string_view value, std::string_view prefix) {
-    return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
-}
+using quader::test::guardrail::containsAny;
+using quader::test::guardrail::filesWithExtension;
+using quader::test::guardrail::normalizedRelative;
+using quader::test::guardrail::readFile;
+using quader::test::guardrail::sourceRoot;
+using quader::test::guardrail::splitLines;
+using quader::test::guardrail::startsWith;
 
 std::string cmakeSourceTruth() {
     std::string source = readFile(sourceRoot() / "CMakeLists.txt");
@@ -93,26 +55,6 @@ bool looksConstructorOnlyCpp(const std::string& source) {
     return std::regex_search(source, constructorOnly) && std::distance(begin, end) <= 1;
 }
 
-std::vector<std::string> lines(const std::string& source) {
-    std::vector<std::string> result;
-    std::string line;
-    for (const char ch : source) {
-        if (ch == '\n') {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            result.push_back(line);
-            line.clear();
-        } else {
-            line.push_back(ch);
-        }
-    }
-    if (!line.empty()) {
-        result.push_back(line);
-    }
-    return result;
-}
-
 std::string trim(std::string value) {
     const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
         return std::isspace(ch) != 0;
@@ -127,13 +69,23 @@ std::string trim(std::string value) {
 }
 
 std::string firstIncludeLine(const std::string& source) {
-    for (const std::string& line : lines(source)) {
+    for (const std::string& line : splitLines(source)) {
         const std::string trimmed = trim(line);
         if (startsWith(trimmed, "#include ")) {
             return trimmed;
         }
     }
     return {};
+}
+
+std::size_t countOccurrences(std::string_view haystack, std::string_view needle) {
+    std::size_t count = 0;
+    std::size_t position = haystack.find(needle);
+    while (position != std::string_view::npos) {
+        ++count;
+        position = haystack.find(needle, position + needle.size());
+    }
+    return count;
 }
 
 bool hasNearbyDeclarationDoc(const std::vector<std::string>& fileLines, std::size_t declarationLine) {
@@ -166,7 +118,7 @@ TEST(OopArchitectureGuardrailTests, TypeDeclarationsHaveMeaningfulDocumentation)
         for (const std::string_view extension : {std::string_view{".h"}, std::string_view{".hpp"}, std::string_view{".cpp"}}) {
             for (const std::filesystem::path& file : filesWithExtension(root, extension)) {
                 const std::string source = readFile(file);
-                const std::vector<std::string> fileLines = lines(source);
+                const std::vector<std::string> fileLines = splitLines(source);
                 const std::string relative = normalizedRelative(file);
 
                 for (std::size_t index = 0; index < fileLines.size(); ++index) {
@@ -328,7 +280,7 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
     EXPECT_NE(builder.find("appendGroupSelectionCages"), std::string::npos);
     EXPECT_NE(builder.find("appendSceneWireframeOverlay"), std::string::npos);
     EXPECT_NE(builder.find("stripWireframeObjectFaceFills"), std::string::npos);
-    EXPECT_NE(viewportHost.find("editor.render().syncSelectionOverlay("), std::string::npos);
+    EXPECT_NE(viewportHost.find("QuaderRenderApiRuntimeAccess::syncSelectionOverlay("), std::string::npos);
     EXPECT_NE(viewportHost.find("overlaySubmission.value.visible"), std::string::npos);
 
     for (std::string_view forbidden : {
@@ -346,17 +298,18 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
 }
 
 TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceService) {
-    const std::string inputHeader = readFile(sourceRoot() / "src/viewport/ViewportInputRouter.h");
+    const std::string inputHeader = readFile(sourceRoot() / "src/viewport/ViewportInputTypes.h");
+    const std::string apiInputHeader = readFile(sourceRoot() / "src/api/QuaderViewportInputTypes.h");
     const std::string inputSource = readFile(sourceRoot() / "src/viewport/ViewportInputRouter.cpp");
     const std::string runtimeSource = readFile(sourceRoot() / "src/editor/tools/ViewportToolRuntime.cpp");
     const std::string workspaceHeader = readFile(sourceRoot() / "src/viewport/ViewportWorkspaceService.h");
     const std::string workspaceSource = readFile(sourceRoot() / "src/viewport/ViewportWorkspaceService.cpp");
 
-    const std::size_t stateStart = inputHeader.find("struct ViewportToolState");
+    const std::size_t stateStart = apiInputHeader.find("struct ViewportToolState");
     ASSERT_NE(stateStart, std::string::npos);
-    const std::size_t stateEnd = inputHeader.find("};", stateStart);
+    const std::size_t stateEnd = apiInputHeader.find("};", stateStart);
     ASSERT_NE(stateEnd, std::string::npos);
-    const std::string stateBody = inputHeader.substr(stateStart, stateEnd - stateStart);
+    const std::string stateBody = apiInputHeader.substr(stateStart, stateEnd - stateStart);
 
     EXPECT_EQ(stateBody.find("maximized"), std::string::npos);
     EXPECT_EQ(inputHeader.find("setMaximized"), std::string::npos);
@@ -387,6 +340,26 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
     EXPECT_NE(modelingSource.find("sceneTransformDragService_.begin("), std::string::npos);
     EXPECT_NE(modelingSource.find("sceneTransformDragService_.previewWorldTransformDelta("), std::string::npos);
     EXPECT_NE(modelingSource.find("sceneTransformDragService_.commit(*history)"), std::string::npos);
+}
+
+TEST(OopArchitectureGuardrailTests, EditorSessionOwnsSharedPreviewTransactionLifecycle) {
+    const std::string sessionHeader = readFile(sourceRoot() / "src/editor/modeling/runtime/session.h");
+    const std::string previewSource =
+            readFile(sourceRoot() / "src/editor/modeling/runtime/session_preview_transactions.cpp");
+    const std::string bridgeSource =
+            readFile(sourceRoot() / "src/editor/modeling/operations/bridge_operation.cpp");
+    const std::string combined = previewSource + "\n" + bridgeSource;
+
+    EXPECT_NE(sessionHeader.find("begin_preview_transaction(PreviewTransactionKind kind)"), std::string::npos);
+    EXPECT_NE(sessionHeader.find("finish_preview_update_from_base("), std::string::npos);
+    EXPECT_NE(previewSource.find("EditorSession::begin_preview_transaction("), std::string::npos);
+    EXPECT_NE(previewSource.find("EditorSession::finish_preview_update_from_base("), std::string::npos);
+    EXPECT_NE(bridgeSource.find("begin_preview_transaction(PreviewTransactionKind::bridge)"), std::string::npos);
+
+    EXPECT_EQ(combined.find("preview_transaction_.kind = PreviewTransactionKind::"), std::string::npos);
+    EXPECT_EQ(countOccurrences(combined, "preview_transaction_.active = true"), 1U);
+    EXPECT_EQ(countOccurrences(combined, "preview_transaction_.history_state = preview_transaction_.base_state"), 1U);
+    EXPECT_EQ(combined.find("if (!result.ok || !result.changed)"), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals) {

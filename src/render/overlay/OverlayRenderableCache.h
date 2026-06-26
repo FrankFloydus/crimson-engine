@@ -34,6 +34,11 @@ class OverlayRenderableCache {
 public:
     static constexpr std::size_t kMaxViewportOverlaySlots = 4u;
 
+    OverlayRenderableCache() = default;
+    OverlayRenderableCache(const OverlayRenderableCache&) = delete;
+    OverlayRenderableCache& operator=(const OverlayRenderableCache&) = delete;
+    OverlayRenderableCache(OverlayRenderableCache&&) = delete;
+    OverlayRenderableCache& operator=(OverlayRenderableCache&&) = delete;
     ~OverlayRenderableCache();
 
     void initialize(OverlayProxyFactory& factory);

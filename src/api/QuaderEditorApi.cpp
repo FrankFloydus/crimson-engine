@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
 
+#include "api/QuaderApiSessionInternalAccess.h"
 #include "scene/document/ProjectSession.h"
 
 namespace quader {
@@ -15,11 +16,11 @@ namespace quader {
  */
 class QuaderEditorApi::Impl final {
 public:
-    explicit Impl(ProjectSession& session)
+    explicit Impl(QuaderApiSession session)
         : api(session)
         , project(session)
         , tools(session)
-        , commands(api, viewports, tools)
+        , commands(api, project, viewports, tools)
         , preferences(commands)
         , render(session, api.query()) {}
 
@@ -34,7 +35,7 @@ public:
     QuaderRenderApi render;
 };
 
-QuaderEditorApi::QuaderEditorApi(ProjectSession& session)
+QuaderEditorApi::QuaderEditorApi(QuaderApiSession session)
     : impl_(std::make_unique<Impl>(session)) {}
 
 QuaderEditorApi::~QuaderEditorApi() = default;
@@ -184,6 +185,39 @@ QuaderApiSnapshot QuaderEditorApi::snapshot() const {
 
 QuaderRevisionStamp QuaderEditorApi::revisions() const {
     return impl_->api.revisions();
+}
+
+/**
+ * Owns Impl behavior for the public standalone editor bootstrap.
+ */
+class QuaderStandaloneEditor::Impl final {
+public:
+    Impl()
+        : session()
+        , editor(QuaderApiSessionInternalAccess::fromProjectSession(session)) {}
+
+    ProjectSession session;
+    QuaderEditorApi editor;
+};
+
+QuaderStandaloneEditor::QuaderStandaloneEditor()
+    : impl_(std::make_unique<Impl>()) {}
+
+QuaderStandaloneEditor::~QuaderStandaloneEditor() = default;
+
+QuaderStandaloneEditor::QuaderStandaloneEditor(QuaderStandaloneEditor&&) noexcept = default;
+QuaderStandaloneEditor& QuaderStandaloneEditor::operator=(QuaderStandaloneEditor&&) noexcept = default;
+
+QuaderEditorApi& QuaderStandaloneEditor::editor() {
+    return impl_->editor;
+}
+
+const QuaderEditorApi& QuaderStandaloneEditor::editor() const {
+    return impl_->editor;
+}
+
+QuaderStandaloneEditor createStandaloneEditor() {
+    return QuaderStandaloneEditor();
 }
 
 } // namespace quader

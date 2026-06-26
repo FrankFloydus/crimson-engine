@@ -26,6 +26,11 @@ class MeshRenderableCache;
  */
 class SceneRenderSyncService {
 public:
+    SceneRenderSyncService() = default;
+    SceneRenderSyncService(const SceneRenderSyncService&) = delete;
+    SceneRenderSyncService& operator=(const SceneRenderSyncService&) = delete;
+    SceneRenderSyncService(SceneRenderSyncService&&) = delete;
+    SceneRenderSyncService& operator=(SceneRenderSyncService&&) = delete;
     ~SceneRenderSyncService();
 
     void initialize(filament::Engine& engine,

@@ -5,7 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "core/LocalizationService.h"
+#include "editor/metadata/host_contract.h"
 #include "editor/tools/ViewportToolDescriptorCatalog.h"
+#include "support/GuardrailFileScan.h"
 
 #include <gtest/gtest.h>
 
@@ -13,7 +15,6 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <regex>
 #include <set>
 #include <string>
@@ -22,21 +23,12 @@
 
 using namespace quader;
 
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
-
 namespace {
 
-std::string readTextFile(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    if (!file.is_open()) {
-        return {};
-    }
-
-    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-}
+using quader::test::guardrail::filesWithExtension;
+using quader::test::guardrail::readFile;
+using quader::test::guardrail::sourceFilesUnder;
+using quader::test::guardrail::sourcePath;
 
 void writeTextFile(const std::filesystem::path& path, std::string_view text) {
     std::filesystem::create_directories(path.parent_path());
@@ -54,17 +46,13 @@ std::filesystem::path tempLocaleRoot(std::string_view name) {
 }
 
 std::vector<std::pair<std::string, LocalizationService::Catalog>> loadResourceLocaleCatalogs() {
-    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales";
+    const std::filesystem::path root = sourcePath({"resources", "locales"});
     std::vector<std::pair<std::string, LocalizationService::Catalog>> catalogs;
 
-    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(root)) {
-        if (!entry.is_regular_file() || entry.path().extension() != ".lang") {
-            continue;
-        }
-
+    for (const std::filesystem::path& file : filesWithExtension(root, ".lang")) {
         catalogs.emplace_back(
-                entry.path().stem().string(),
-                LocalizationService::parseLangText(readTextFile(entry.path())));
+                file.stem().string(),
+                LocalizationService::parseLangText(readFile(file)));
     }
 
     std::sort(catalogs.begin(), catalogs.end(), [](const auto& lhs, const auto& rhs) {
@@ -84,22 +72,13 @@ std::set<std::string> localizationPlaceholderTokens(std::string_view text) {
 }
 
 std::set<std::string> literalLocalizationKeysReferencedByUISource() {
-    const std::filesystem::path uiRoot = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "ui";
+    const std::filesystem::path uiRoot = sourcePath({"src", "ui"});
     const std::regex directLocalizationCall(
             R"regex(localization\.(?:text|format)\(\s*"([^"]+)")regex");
     std::set<std::string> keys;
 
-    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(uiRoot)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-
-        const std::string extension = entry.path().extension().string();
-        if (extension != ".cpp" && extension != ".h" && extension != ".hpp") {
-            continue;
-        }
-
-        const std::string source = readTextFile(entry.path());
+    for (const std::filesystem::path& file : sourceFilesUnder(uiRoot)) {
+        const std::string source = readFile(file);
         for (std::sregex_iterator it(source.begin(), source.end(), directLocalizationCall), end; it != end; ++it) {
             std::size_t next = static_cast<std::size_t>(it->position() + it->length());
             while (next < source.size() && std::isspace(static_cast<unsigned char>(source[next])) != 0) {
@@ -237,6 +216,73 @@ TEST(LocalizationResourceTests, ViewportToolCatalogHasLocaleKeys) {
             }
         }
     }
+}
+
+TEST(LocalizationResourceTests, ModelingActionCatalogHasLocaleKeys) {
+    const std::vector<std::pair<std::string, LocalizationService::Catalog>> catalogs = loadResourceLocaleCatalogs();
+
+    ASSERT_GE(catalogs.size(), 2u);
+    for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
+        std::string key("modeling.action.");
+        key += action.id;
+        key += ".label";
+        for (const auto& [locale, catalog] : catalogs) {
+            const auto found = catalog.find(key);
+            ASSERT_NE(found, catalog.end()) << locale << " missing " << key;
+            if (locale == LocalizationService::DefaultLocale) {
+                EXPECT_EQ(found->second, action.label) << key;
+            }
+        }
+    }
+}
+
+TEST(LocalizationResourceTests, ModelingShelfLocaleKeysDoNotMirrorActionLabels) {
+    const std::vector<std::pair<std::string, LocalizationService::Catalog>> catalogs = loadResourceLocaleCatalogs();
+    constexpr std::string_view stalePrefix = "ui.modeling_shelf.command.";
+    constexpr std::string_view allowedKey = "ui.modeling_shelf.command.disabled.modal_tool";
+
+    ASSERT_GE(catalogs.size(), 2u);
+    for (const auto& [locale, catalog] : catalogs) {
+        for (const auto& [key, value] : catalog) {
+            (void)value;
+            if (key.rfind(stalePrefix, 0) == 0) {
+                EXPECT_EQ(key, allowedKey) << locale << " has stale modeling shelf command label " << key;
+            }
+        }
+    }
+}
+
+TEST(LocalizationResourceTests, ModelingActionDisabledReasonsUseLocaleKeys) {
+    const std::vector<std::pair<std::string, LocalizationService::Catalog>> catalogs = loadResourceLocaleCatalogs();
+    const std::vector<std::string_view> disabledReasonKeys = {
+            "modeling.action.disabled.any_selection",
+            "modeling.action.disabled.delete_selection",
+            "modeling.action.disabled.minimum_vertex",
+            "modeling.action.disabled.minimum_vertices",
+            "modeling.action.disabled.minimum_edge",
+            "modeling.action.disabled.minimum_edges",
+            "modeling.action.disabled.exact_edges",
+            "modeling.action.disabled.minimum_face",
+            "modeling.action.disabled.minimum_faces",
+            "modeling.action.disabled.minimum_object",
+            "modeling.action.disabled.minimum_objects",
+            "modeling.action.disabled.active_element",
+            "modeling.action.disabled.single_object",
+    };
+
+    ASSERT_GE(catalogs.size(), 2u);
+    for (const auto& [locale, catalog] : catalogs) {
+        for (std::string_view key : disabledReasonKeys) {
+            EXPECT_NE(catalog.find(std::string(key)), catalog.end()) << locale << " missing " << key;
+        }
+    }
+
+    const std::string source = readFile(sourcePath("src/editor/modeling/services/ModelingActionCatalog.cpp"));
+    EXPECT_EQ(source.find("Select something to delete."), std::string::npos);
+    EXPECT_EQ(source.find("Select something to use this action."), std::string::npos);
+    EXPECT_EQ(source.find("Set an active selection element."), std::string::npos);
+    EXPECT_EQ(source.find("Select elements from one object."), std::string::npos);
+    EXPECT_NE(source.find("disabledReasonKey"), std::string::npos);
 }
 
 TEST(LocalizationResourceTests, ResourceLocaleCatalogsExposeTheSameKeys) {

@@ -8,6 +8,9 @@
 
 #include "ui/components/atoms/UIButtonComponent.h"
 
+#include <optional>
+#include <string_view>
+
 namespace quader {
 
 /// Enumerates the native window chrome buttons currently shown by the shell.
@@ -17,8 +20,12 @@ enum class UIChromeButtonKind {
     Close,
 };
 
+inline constexpr std::string_view kChromeWindowActionDataKey = "chrome-window-action";
+inline constexpr std::string_view kChromeWindowActionAttribute = "data-chrome-window-action";
+
 [[nodiscard]] std::string_view chromeButtonElementId(UIChromeButtonKind kind);
 [[nodiscard]] std::string_view chromeButtonActionName(UIChromeButtonKind kind);
+[[nodiscard]] std::optional<UIChromeButtonKind> chromeButtonKindForActionName(std::string_view action);
 [[nodiscard]] UIIconId chromeButtonIconId(UIChromeButtonKind kind);
 
 /**
@@ -31,6 +38,7 @@ public:
 protected:
     void appendButtonClasses(UIElement& button) const override;
     void appendButtonAttributes(UIElement& button) const override;
+    void appendButtonContent(UIElement& button) const override;
 
 private:
     UIChromeButtonKind kind_;

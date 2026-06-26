@@ -9,6 +9,7 @@
 #if QUADER_TEST_HAS_PROGRAMMATIC_API
 
 #include "BehaviorExpect.h"
+#include "api/QuaderApiTypeConversions.h"
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "scene/SceneBounds.h"
@@ -54,11 +55,69 @@ void addOverlayStats(BehaviorSnapshot& snapshot, const ViewportOverlayFrame& fra
     }
 }
 
+QuaderPickSelectRequest apiPickAt(QVec3 origin, PickOptions options) {
+    const ModelingPickSelectRequest request = pickAt(origin, options);
+    return {
+            .ray = toApiRay(request.ray),
+            .clickCount = request.clickCount,
+            .controlPressed = request.controlPressed,
+            .shiftPressed = request.shiftPressed,
+            .commandPressed = request.commandPressed,
+            .altPressed = request.altPressed,
+            .preserveSelectionOnMiss = request.preserveSelectionOnMiss,
+            .preserveSelectionOnSelectedHit = request.preserveSelectionOnSelectedHit,
+            .vertexRadius = request.vertexRadius,
+            .edgeRadius = request.edgeRadius,
+    };
+}
+
+QuaderHoverRequest apiHoverAt(QVec3 origin, HoverOptions options) {
+    const ModelingHoverRequest request = hoverAt(origin, options);
+    return {
+            .ray = toApiRay(request.ray),
+            .selectedModifierPressed = request.selectedModifierPressed,
+            .vertexRadius = request.vertexRadius,
+            .edgeRadius = request.edgeRadius,
+    };
+}
+
+QuaderTransformDragBeginRequest apiTransformDragBegin(DragBeginOptions options) {
+    const ModelingTransformDragBeginRequest request = transformDragBegin(options);
+    return {
+            .tool = toApiTransformTool(request.tool),
+            .operation = toApiTransformOperation(request.operation),
+            .axis = toApiTransformAxis(request.axis),
+            .pivot = request.pivot,
+            .screenPosition = request.screenPosition,
+            .screenPivot = request.screenPivot,
+            .screenTip = request.screenTip,
+            .hasWorldDirection = request.hasWorldDirection,
+            .worldDirection = request.worldDirection,
+            .ray = toApiRay(request.ray),
+            .camera = toApiViewportCamera(request.camera),
+            .gridSize = request.gridSize,
+            .vertexSnapRadius = request.vertexSnapRadius,
+            .duplicateSelected = request.duplicateSelected,
+    };
+}
+
+QuaderTransformDragUpdateRequest apiTransformDragUpdate(QVec2 screenPosition) {
+    const ModelingTransformDragUpdateRequest request = transformDragUpdate(screenPosition);
+    return {
+            .screenPosition = request.screenPosition,
+            .ray = toApiRay(request.ray),
+            .camera = toApiViewportCamera(request.camera),
+            .gridSize = request.gridSize,
+            .vertexSnapRadius = request.vertexSnapRadius,
+            .precision = request.precision,
+    };
+}
+
 } // namespace
 
 BehaviorScenario::BehaviorScenario()
     : session_()
-    , editor_(session_) {
+    , editor_(QuaderApiSessionInternalAccess::fromProjectSession(session_)) {
     lastStatus_.ok = true;
 }
 
@@ -171,14 +230,14 @@ void BehaviorScenario::recordStatus(const QuaderApiStatus& status) {
     lastStatus_ = status;
 }
 
-void BehaviorScenario::recordSelection(const QuaderApiResult<ModelingSelectionSummary>& selection) {
+void BehaviorScenario::recordSelection(const QuaderApiResult<QuaderSelectionSummary>& selection) {
     recordStatus(selection);
     if (selection.ok) {
         lastSelection_ = selection.value;
     }
 }
 
-void BehaviorScenario::recordDrag(const ModelingTransformDragPreview& drag) {
+void BehaviorScenario::recordDrag(const QuaderTransformDragPreview& drag) {
     lastDrag_ = drag;
     lastStatus_ = {
             .ok = drag.ok,
@@ -235,7 +294,7 @@ BehaviorGiven& BehaviorGiven::unitBox(std::string_view alias, std::string name) 
     return box(alias, {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, std::move(name));
 }
 
-BehaviorGiven& BehaviorGiven::box(std::string_view alias, ModelingBounds bounds, std::string name) {
+BehaviorGiven& BehaviorGiven::box(std::string_view alias, QuaderBounds bounds, std::string name) {
     QuaderCreateBoxArgs args;
     args.bounds = {
             .min = bounds.min,
@@ -315,7 +374,7 @@ BehaviorGiven& BehaviorGiven::selected(std::string_view alias) {
     return *this;
 }
 
-BehaviorGiven& BehaviorGiven::selectionMode(ModelingSelectionMode mode) {
+BehaviorGiven& BehaviorGiven::selectionMode(QuaderSelectionMode mode) {
     const QuaderApiStatus status = scenario_.api().selection().setMode(mode);
     scenario_.recordStatus(status);
     if (!status.ok) {
@@ -351,7 +410,7 @@ BehaviorGiven& BehaviorGiven::faceSelected(std::string_view alias, int face) {
     return *this;
 }
 
-BehaviorGiven& BehaviorGiven::allComponentsSelected(ModelingSelectionMode mode) {
+BehaviorGiven& BehaviorGiven::allComponentsSelected(QuaderSelectionMode mode) {
     selectionMode(mode);
     const QuaderApiStatus status = scenario_.api().selection().selectAll();
     scenario_.recordStatus(status);
@@ -361,7 +420,7 @@ BehaviorGiven& BehaviorGiven::allComponentsSelected(ModelingSelectionMode mode) 
     return *this;
 }
 
-BehaviorGiven& BehaviorGiven::transform(std::string_view alias, TransformComponent transform) {
+BehaviorGiven& BehaviorGiven::transform(std::string_view alias, QuaderTransform transform) {
     const QuaderApiStatus status = scenario_.api().scene().setTransform(scenario_.entity(alias), transform);
     scenario_.recordStatus(status);
     if (!status.ok) {
@@ -385,19 +444,21 @@ BehaviorWhen& BehaviorWhen::activate(ModelingViewportTool) {
 }
 
 BehaviorWhen& BehaviorWhen::pick(QVec3 rayOrigin, PickOptions options) {
-    const QuaderApiResult<ModelingSelectionSummary> result = scenario_.api().selection().pickSelect(pickAt(rayOrigin, options));
+    const QuaderApiResult<QuaderSelectionSummary> result =
+            scenario_.api().selection().pickSelect(apiPickAt(rayOrigin, options));
     scenario_.recordSelection(result);
     return *this;
 }
 
 BehaviorWhen& BehaviorWhen::hover(QVec3 rayOrigin, HoverOptions options) {
-    const QuaderApiResult<ModelingHoverSummary> result = scenario_.api().selection().hover(hoverAt(rayOrigin, options));
+    const QuaderApiResult<QuaderHoverSummary> result =
+            scenario_.api().selection().hover(apiHoverAt(rayOrigin, options));
     scenario_.recordStatus(result);
     return *this;
 }
 
 BehaviorWhen& BehaviorWhen::hoverVertex(std::string_view alias, int vertex) {
-    const QuaderApiResult<ModelingHoverSummary> result = scenario_.api().selection().hoverVertex(scenario_.object(alias), vertex);
+    const QuaderApiResult<QuaderHoverSummary> result = scenario_.api().selection().hoverVertex(scenario_.object(alias), vertex);
     scenario_.recordStatus(result);
     return *this;
 }
@@ -423,7 +484,7 @@ BehaviorWhen& BehaviorWhen::translatePreview(QVec3 delta) {
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::matrixPreview(const ModelingTransform3& transform, QVec3 pivot) {
+BehaviorWhen& BehaviorWhen::matrixPreview(const QuaderTransform3& transform, QVec3 pivot) {
     const QuaderApiStatus status = scenario_.api().modeling().updateTransformMatrix(transform, pivot);
     scenario_.recordStatus(status);
     return *this;
@@ -447,8 +508,8 @@ BehaviorWhen& BehaviorWhen::beginTransformDrag(DragBeginOptions options) {
             options.pivot = *center;
         }
     }
-    const QuaderApiResult<ModelingTransformDragPreview> result =
-            scenario_.api().modeling().beginTransformDrag(transformDragBegin(options));
+    const QuaderApiResult<QuaderTransformDragPreview> result =
+            scenario_.api().modeling().beginTransformDrag(apiTransformDragBegin(options));
     scenario_.recordDrag(result.value);
     if (!result.ok) {
         ADD_FAILURE() << result.message;
@@ -457,8 +518,8 @@ BehaviorWhen& BehaviorWhen::beginTransformDrag(DragBeginOptions options) {
 }
 
 BehaviorWhen& BehaviorWhen::updateTransformDrag(QVec2 screenPosition) {
-    const QuaderApiResult<ModelingTransformDragPreview> result =
-            scenario_.api().modeling().updateTransformDrag(transformDragUpdate(screenPosition));
+    const QuaderApiResult<QuaderTransformDragPreview> result =
+            scenario_.api().modeling().updateTransformDrag(apiTransformDragUpdate(screenPosition));
     scenario_.recordDrag(result.value);
     if (!result.ok) {
         ADD_FAILURE() << result.message;
@@ -479,7 +540,7 @@ BehaviorWhen& BehaviorWhen::updateXMoveDrag(float screenX) {
 }
 
 BehaviorWhen& BehaviorWhen::commitDrag() {
-    const QuaderApiResult<ModelingTransformDragPreview> result =
+    const QuaderApiResult<QuaderTransformDragPreview> result =
             scenario_.api().modeling().commitTransformDrag();
     scenario_.recordDrag(result.value);
     if (!result.ok) {
@@ -524,7 +585,7 @@ BehaviorWhen& BehaviorWhen::clearSceneSelection() {
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::groupSelection(std::string_view alias, std::string name, TransformComponent transform) {
+BehaviorWhen& BehaviorWhen::groupSelection(std::string_view alias, std::string name, QuaderTransform transform) {
     const QuaderApiResult<QuaderEntityRef> result = scenario_.api().scene().groupSelection(std::move(name), transform);
     scenario_.recordStatus(result);
     if (result.ok) {
@@ -578,7 +639,7 @@ BehaviorWhen& BehaviorWhen::reparent(
     return *this;
 }
 
-BehaviorWhen& BehaviorWhen::setTransform(std::string_view alias, TransformComponent transform) {
+BehaviorWhen& BehaviorWhen::setTransform(std::string_view alias, QuaderTransform transform) {
     const QuaderApiStatus status = scenario_.api().scene().setTransform(scenario_.entity(alias), transform);
     scenario_.recordStatus(status);
     return *this;
@@ -598,7 +659,7 @@ BehaviorWhen& BehaviorWhen::setLocked(std::string_view alias, bool locked) {
 
 BehaviorWhen& BehaviorWhen::setGroupFlags(
         std::string_view alias,
-        TransformComponent transform,
+        QuaderTransform transform,
         bool visible,
         bool locked) {
     const EntityId entity = scenario_.entity(alias);

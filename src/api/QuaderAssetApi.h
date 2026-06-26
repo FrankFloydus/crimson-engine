@@ -7,15 +7,12 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
-#include "assets/MaterialDocument.h"
-#include "assets/MeshAsset.h"
-#include "assets/TextureAsset.h"
+#include "api/QuaderApiSession.h"
 
 #include <string>
 
 namespace quader {
 
-class ProjectSession;
 class QuaderApiMutationRunner;
 
 /**
@@ -23,16 +20,16 @@ class QuaderApiMutationRunner;
  */
 class QuaderAssetApi final {
 public:
-    QuaderAssetApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
+    QuaderAssetApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
-    QuaderApiResult<QuaderAssetRef> addMaterial(MaterialDocument material);
+    QuaderApiResult<QuaderAssetRef> addMaterial(QuaderMaterialAsset material);
     QuaderApiResult<QuaderAssetRef> addMaterial(const QuaderMaterialArgs& args);
-    QuaderApiResult<QuaderAssetRef> addTexture(TextureAsset texture);
-    QuaderApiResult<QuaderAssetRef> addStandaloneMesh(MeshAsset mesh);
+    QuaderApiResult<QuaderAssetRef> addTexture(QuaderTextureAsset texture);
+    QuaderApiResult<QuaderAssetRef> addStandaloneMesh(QuaderMeshAsset mesh);
 
-    QuaderApiVoidResult replaceStandaloneMesh(AssetId mesh, MeshAsset replacement);
-    QuaderApiVoidResult replaceMaterial(AssetId material, MaterialDocument replacement);
-    QuaderApiVoidResult replaceTexture(AssetId texture, TextureAsset replacement);
+    QuaderApiVoidResult replaceStandaloneMesh(AssetId mesh, QuaderMeshAsset replacement);
+    QuaderApiVoidResult replaceMaterial(AssetId material, QuaderMaterialAsset replacement);
+    QuaderApiVoidResult replaceTexture(AssetId texture, QuaderTextureAsset replacement);
 
     QuaderApiVoidResult setMaterialBaseColor(AssetId material, QVec3 color);
     QuaderApiVoidResult setMaterialRoughness(AssetId material, float roughness);
@@ -43,7 +40,7 @@ public:
     QuaderApiVoidResult assignMaterialToObject(QuaderModelingObjectRef object, AssetId material);
 
 private:
-    ProjectSession& session_;
+    QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;
 };
 

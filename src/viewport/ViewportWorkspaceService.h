@@ -11,6 +11,9 @@
 #include "viewport/ViewportLayout.h"
 
 #include <array>
+#include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -39,6 +42,17 @@ enum class ViewportWorkspaceLayoutPolicy {
 struct ViewportWorkspacePaneState {
     ViewportPaneId id = ViewportPaneId::Perspective;
     ViewportShadingMode shading = ViewportShadingMode::Shaded;
+    ViewportCameraController camera;
+    QVec2 renderSize = {1.0f, 1.0f};
+    bool visibleThisFrame = false;
+};
+
+/**
+ * Stores state for a runtime-created viewport surface that is not part of the embedded pane layout.
+ */
+struct ViewportWorkspaceAuxiliaryViewportState {
+    std::string stableId;
+    std::uint8_t layerIndex = 0u;
     ViewportCameraController camera;
     QVec2 renderSize = {1.0f, 1.0f};
     bool visibleThisFrame = false;
@@ -93,6 +107,17 @@ public:
     bool setPaneRenderSize(ViewportPaneId pane, QVec2 size);
     [[nodiscard]] QVec2 paneRenderSize(ViewportPaneId pane) const;
 
+    [[nodiscard]] ViewportWorkspaceAuxiliaryViewportState& ensureAuxiliaryViewport(
+            std::string stableId,
+            std::uint8_t layerIndex);
+    bool removeAuxiliaryViewport(std::string_view stableId);
+    [[nodiscard]] ViewportWorkspaceAuxiliaryViewportState* auxiliaryViewport(std::string_view stableId);
+    [[nodiscard]] const ViewportWorkspaceAuxiliaryViewportState* auxiliaryViewport(std::string_view stableId) const;
+    [[nodiscard]] std::size_t auxiliaryViewportCount() const { return auxiliaryViewports_.size(); }
+    void setAuxiliaryViewportVisible(std::string_view stableId, bool visible);
+    [[nodiscard]] bool auxiliaryViewportVisible(std::string_view stableId) const;
+    bool setAuxiliaryViewportRenderSize(std::string_view stableId, QVec2 size);
+
 private:
     [[nodiscard]] bool focusedPaneIsVisible() const;
     [[nodiscard]] std::vector<ViewportPanePlacement> layoutPanePlacements() const;
@@ -104,6 +129,7 @@ private:
     ViewportPaneId focusedPane_ = ViewportPaneId::Perspective;
     bool focusedPaneMaximized_ = false;
     int gridPreset_ = 0;
+    std::vector<ViewportWorkspaceAuxiliaryViewportState> auxiliaryViewports_;
 };
 
 } // namespace quader

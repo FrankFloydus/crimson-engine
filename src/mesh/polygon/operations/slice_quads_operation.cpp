@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -34,8 +35,8 @@ class SliceQuadsOperation final : public PolyOperation {
 public:
     SliceQuadsOperation(int x_slices = 1, int y_slices = 1);
 
-    [[nodiscard]] std::string_view id() const override { return "slice_selected_quads"; }
-    [[nodiscard]] std::string_view label() const override { return "Slice Selected Quads"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::SliceSelectedQuads).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::SliceSelectedQuads).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

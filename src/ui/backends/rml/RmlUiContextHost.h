@@ -89,6 +89,7 @@ public:
     [[nodiscard]] std::optional<std::string> takeModelingModeShelfCommand();
     [[nodiscard]] bool initialized() const { return initialized_; }
     [[nodiscard]] bool debuggerVisible() const;
+    [[nodiscard]] bool textInputActive() const;
 
 private:
     SDL_Window* window_ = nullptr;

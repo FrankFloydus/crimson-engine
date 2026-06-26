@@ -7,11 +7,14 @@
 #pragma once
 
 #include "core/Types.h"
+#include "math/Types.h"
 
+#include <optional>
 #include <span>
 
 namespace quader {
 
+class AssetRegistry;
 class ModelingObjectRuntimeMap;
 class SceneDocument;
 
@@ -55,6 +58,11 @@ public:
             EntityId active,
             const ModelingObjectRuntimeMap& objectRegistry) const;
 
+    bool promoteObjectSelectionForTool(
+            quader_editor_core::EditorSession& session,
+            const SceneDocument& scene,
+            const ModelingObjectRuntimeMap& objectRegistry) const;
+
     bool projectSceneSelectionFromModeling(
             const quader_editor_core::EditorSession& session,
             SceneDocument& scene,
@@ -69,6 +77,12 @@ public:
             SceneDocument& scene,
             std::span<const EntityId> selected,
             EntityId active = InvalidEntityId) const;
+
+    [[nodiscard]] std::optional<QVec3> worldSelectionCenter(
+            const quader_editor_core::EditorSession& session,
+            const SceneDocument& scene,
+            const AssetRegistry& assets,
+            const ModelingObjectRuntimeMap& objectRegistry) const;
 };
 
 } // namespace quader

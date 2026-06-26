@@ -7,8 +7,8 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
+#include "api/QuaderApiSession.h"
 #include "api/QuaderApiTypes.h"
-#include "editor/modeling/ModelingTypes.h"
 
 #include <initializer_list>
 #include <span>
@@ -16,7 +16,6 @@
 
 namespace quader {
 
-class ProjectSession;
 class QuaderApiMutationRunner;
 
 /**
@@ -24,7 +23,7 @@ class QuaderApiMutationRunner;
  */
 class QuaderSelectionApi final {
 public:
-    QuaderSelectionApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
+    QuaderSelectionApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     QuaderApiVoidResult selectObjects(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     QuaderApiVoidResult selectObjects(std::initializer_list<EntityId> entities, EntityId active = InvalidEntityId);
@@ -62,30 +61,29 @@ public:
     QuaderApiVoidResult clear();
     QuaderApiVoidResult selectAll();
     QuaderApiVoidResult invert();
-    QuaderApiVoidResult setMode(ModelingSelectionMode mode);
+    QuaderApiVoidResult setMode(QuaderSelectionMode mode);
 
-    QuaderApiResult<ModelingSelectionSummary> pickSelect(const ModelingPickSelectRequest& request);
-    QuaderApiResult<ModelingHoverSummary> hover(const ModelingHoverRequest& request);
-    QuaderApiResult<ModelingHoverSummary> hoverVertex(QuaderModelingObjectRef object, QuaderElementId vertex);
-    QuaderApiResult<ModelingHoverSummary> hoverEdge(QuaderModelingObjectRef object, QuaderElementId a, QuaderElementId b);
-    QuaderApiResult<ModelingHoverSummary> hoverFace(QuaderModelingObjectRef object, QuaderElementId face);
+    QuaderApiResult<QuaderSelectionSummary> pickSelect(const QuaderPickSelectRequest& request);
+    QuaderApiResult<QuaderHoverSummary> hover(const QuaderHoverRequest& request);
+    QuaderApiResult<QuaderHoverSummary> hoverVertex(QuaderModelingObjectRef object, QuaderElementId vertex);
+    QuaderApiResult<QuaderHoverSummary> hoverEdge(QuaderModelingObjectRef object, QuaderElementId a, QuaderElementId b);
+    QuaderApiResult<QuaderHoverSummary> hoverFace(QuaderModelingObjectRef object, QuaderElementId face);
     QuaderApiVoidResult clearHover();
 
-    [[nodiscard]] ModelingSelectionSummary summary() const;
-    [[nodiscard]] ModelingHoverSummary hoverSummary() const;
-    [[nodiscard]] ModelingHoverSummary previewHover(const ModelingHoverRequest& request) const;
+    [[nodiscard]] QuaderSelectionSummary summary() const;
+    [[nodiscard]] QuaderHoverSummary hoverSummary() const;
+    [[nodiscard]] QuaderHoverSummary previewHover(const QuaderHoverRequest& request) const;
 
 private:
-    [[nodiscard]] std::vector<EntityId> editedEntitySelection(
-            EntityId entity,
-            QuaderSelectionEdit edit) const;
-    [[nodiscard]] std::vector<EntityId> editedObjectSelection(
+    [[nodiscard]] QuaderApiResult<QuaderHoverSummary> directHover(
             QuaderModelingObjectRef object,
-            QuaderSelectionEdit edit) const;
-    [[nodiscard]] static ModelingSelectionEdit toModelingEdit(QuaderSelectionEdit edit);
-    [[nodiscard]] QuaderApiResult<ModelingHoverSummary> directHover(const ModelingDirectHoverRequest& request);
+            QuaderActiveSelectionKind kind,
+            QuaderElementId vertex,
+            QuaderElementId edgeA,
+            QuaderElementId edgeB,
+            QuaderElementId face);
 
-    ProjectSession& session_;
+    QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;
 };
 

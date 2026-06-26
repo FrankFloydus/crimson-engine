@@ -20,12 +20,15 @@ namespace {
 
 constexpr float kNavigationZoomStepFactor = 1.18f;
 constexpr float kFlyMaxDeltaSeconds = 0.25f;
-constexpr float kDefaultFlySpeed = 15.0f;
 constexpr float kFlySpeedWheelStep = 1.0f;
 constexpr float kMinCameraDistance = 0.05f;
 
 float verticalFovRadians(float fovDegrees) {
     return fovDegrees * std::numbers::pi_v<float> / 180.0f;
+}
+
+float defaultFlySpeed() {
+    return static_cast<float>(viewportHostDefaults().flyBaseSpeed);
 }
 
 QVec3 forwardFromAngles(float yawRadians, float pitchRadians) {
@@ -228,7 +231,7 @@ ViewportCameraController::ViewportCameraController() {
     const ViewportHostDefaults defaults = viewportHostDefaults();
     state_.orthographicSize = static_cast<float>(defaults.defaultOrthographicSize);
     state_.fovDegrees = static_cast<float>(defaults.defaultFovDegrees);
-    flySpeed_ = kDefaultFlySpeed;
+    flySpeed_ = static_cast<float>(defaults.flyBaseSpeed);
     syncBasisFromAngles();
 }
 
@@ -436,11 +439,11 @@ void ViewportCameraController::adjustFlySpeed(float wheelSteps) {
 }
 
 void ViewportCameraController::resetFlySpeed() {
-    flySpeed_ = kDefaultFlySpeed;
+    flySpeed_ = defaultFlySpeed();
 }
 
 bool ViewportCameraController::flySpeedIsDefault() const {
-    return std::abs(flySpeed_ - kDefaultFlySpeed) <= 0.0001f;
+    return std::abs(flySpeed_ - defaultFlySpeed()) <= 0.0001f;
 }
 
 ViewportCameraPose ViewportCameraController::pose() const {

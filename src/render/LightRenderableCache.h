@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace quader {
 
@@ -25,6 +26,11 @@ namespace quader {
  */
 class LightRenderableCache {
 public:
+    LightRenderableCache() = default;
+    LightRenderableCache(const LightRenderableCache&) = delete;
+    LightRenderableCache& operator=(const LightRenderableCache&) = delete;
+    LightRenderableCache(LightRenderableCache&&) = delete;
+    LightRenderableCache& operator=(LightRenderableCache&&) = delete;
     ~LightRenderableCache();
 
     void initialize(filament::Engine& engine, filament::Scene& scene);
@@ -49,6 +55,18 @@ private:
      * Represents a Light Proxy value used by the render extraction and Filament resource layer.
      */
     struct LightProxy {
+        LightProxy() = default;
+        LightProxy(const LightProxy&) = delete;
+        LightProxy& operator=(const LightProxy&) = delete;
+        LightProxy(LightProxy&& other) noexcept
+            : entity(other.entity)
+            , sourceEntity(std::exchange(other.sourceEntity, InvalidEntityId))
+            , rebuildSignature(std::exchange(other.rebuildSignature, 0))
+            , transformSignature(std::exchange(other.transformSignature, 0)) {
+            other.entity.clear();
+        }
+        LightProxy& operator=(LightProxy&&) noexcept = delete;
+
         utils::Entity entity;
         EntityId sourceEntity = InvalidEntityId;
         std::uint64_t rebuildSignature = 0;

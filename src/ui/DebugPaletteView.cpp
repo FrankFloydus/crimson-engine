@@ -46,7 +46,7 @@ std::string buildDebugPalettePageRml(const std::vector<DebugPaletteColorToken>& 
             << "                <div class=\"debug-palette-swatch size-8 mr-3 border-1 border-gray-500 " << swatchClass << "\"></div>\n"
             << "                <div class=\"debug-palette-text\">\n"
             << "                    <div class=\"debug-palette-name text-sm leading-sm font-regular text-gray-100 mb-1\">" << name << "</div>\n"
-            << "                    <button class=\"debug-palette-hex font-mono text-xs leading-xs font-regular kerning-normal w-24 h-6 px-2 py-1 bg-gray-700 text-gray-50 border-1 border-gray-400\" data-copy-hex=\"" << hex << "\">" << hex << "</button>\n"
+            << "                    <button class=\"debug-palette-hex font-mono text-xs leading-xs font-regular kerning-normal w-24 h-6 px-2 py-1 bg-gray-700 text-gray-50 border-1 border-gray-400 hover-bg-gray-500 hover-border-gray-300 active-bg-gray-400 active-border-gray-200\" data-copy-hex=\"" << hex << "\">" << hex << "</button>\n"
             << "                </div>\n"
             << "            </div>\n";
     }

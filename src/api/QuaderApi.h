@@ -12,21 +12,22 @@
 #include "api/QuaderQueryApi.h"
 #include "api/QuaderSceneApi.h"
 #include "api/QuaderSelectionApi.h"
+#include "api/QuaderApiSession.h"
 #include "api/QuaderScript.h"
 
 #include <memory>
 
 namespace quader {
 
-class ProjectSession;
 class QuaderObjectHandle;
+class QuaderApiMutationRunner;
 
 /**
  * Exposes Quader API operations through the public Quader API surface.
  */
 class QuaderApi final {
 public:
-    explicit QuaderApi(ProjectSession& session);
+    explicit QuaderApi(QuaderApiSession session);
     ~QuaderApi();
 
     QuaderApi(const QuaderApi&) = delete;
@@ -54,9 +55,10 @@ public:
 
 private:
     friend class QuaderObjectHandle;
+    friend class QuaderScript;
 
-    [[nodiscard]] ProjectSession& session();
-    [[nodiscard]] const ProjectSession& session() const;
+    [[nodiscard]] QuaderApiSession session() const;
+    [[nodiscard]] QuaderApiMutationRunner& mutations();
 
     class Impl;
     std::unique_ptr<Impl> impl_;

@@ -35,19 +35,6 @@ struct SelectionSnapshot {
 	std::vector<ObjectSelectionSnapshot> objects;
 };
 
-bool selection_matches(const quader_poly::Selection& left, const quader_poly::Selection& right)
-{
-	return left.mode == right.mode &&
-		left.vertices == right.vertices &&
-		left.edges == right.edges &&
-		left.faces == right.faces &&
-		left.has_active == right.has_active &&
-		left.active_kind == right.active_kind &&
-		left.active_vertex == right.active_vertex &&
-		left.active_edge == right.active_edge &&
-		left.active_face == right.active_face;
-}
-
 SelectionSnapshot capture_selection_snapshot(
 		const std::vector<PolygonObject>& objects,
 		SelectionMode mode,
@@ -75,7 +62,7 @@ bool selection_snapshot_matches(const SelectionSnapshot& left, const SelectionSn
 		const ObjectSelectionSnapshot& right_object = right.objects[index];
 		if (left_object.id != right_object.id ||
 				left_object.selected != right_object.selected ||
-				!selection_matches(left_object.selection, right_object.selection)) {
+				!polygon_selection_matches(left_object.selection, right_object.selection)) {
 			return false;
 		}
 	}

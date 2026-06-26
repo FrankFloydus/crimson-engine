@@ -86,8 +86,7 @@ bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& do
 
         const MaterialComponent* materialComponent = document.material(entityId);
         const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
-        const MaterialDocument* material = materialComponent ? assets.material(materialComponent->material) : nullptr;
-        const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, material);
+        const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, materialComponent);
         if (meshCache_->needsRebuild(
                     entityId,
                     meshComponent->mesh,
@@ -122,13 +121,12 @@ void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetR
                 liveMeshEntities.insert(entityId);
                 const MaterialComponent* materialComponent = document.material(entityId);
                 const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
-                const MaterialDocument* material = materialComponent ? assets.material(materialComponent->material) : nullptr;
-                const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, material);
+                const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, materialComponent);
                 meshCache_->syncMesh(entityId,
                         meshComponent->mesh,
                         *mesh,
                         materialId,
-                        material,
+                        materialComponent,
                         assets,
                         worldTransform,
                         meshComponent->castShadows,

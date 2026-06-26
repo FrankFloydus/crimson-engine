@@ -6,10 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "viewport/ViewportInputRouter.h"
 #include "editor/tools/ViewportTool.h"
 #include "editor/tools/base/ModalViewportTool.h"
 #include "editor/tools/base/TransformViewportTool.h"
+#include "viewport/ViewportCameraController.h"
+#include "viewport/ViewportInputTypes.h"
 
 #include <span>
 #include <string_view>

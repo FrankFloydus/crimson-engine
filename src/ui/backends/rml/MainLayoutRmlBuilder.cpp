@@ -9,6 +9,7 @@
 #include "ui/backends/rml/RmlMarkupWriter.h"
 #include "ui/components/common/ResizableSplit.h"
 #include "ui/components/organisms/ViewportComponent.h"
+#include "ui/controllers/MainLayoutSashRegistry.h"
 #include "ui/core/UIElement.h"
 
 #include <optional>
@@ -21,10 +22,6 @@ namespace {
 
 constexpr int kResizeOverlaySizeDp = kResizableSplitDefaultHitThicknessDp;
 constexpr int kResizeOverlayHalfDp = kResizeOverlaySizeDp / 2;
-constexpr std::string_view kMainLayoutSidebarResizerHandleId = "sidebar";
-constexpr std::string_view kMainLayoutAuxiliarySidebarResizerHandleId = "auxiliary-sidebar";
-constexpr std::string_view kMainLayoutBottomDockResizerHandleId = "bottom-dock";
-constexpr std::string_view kMainLayoutBottomSplitResizerHandlePrefix = "bottom-split:";
 
 void appendViewport(std::ostringstream& rml) {
     UIElement viewport = UIElement::div()
@@ -189,58 +186,18 @@ void appendBottomSplitResizer(
         std::ostringstream& rml,
         std::string_view panelId,
         bool active) {
+    const std::string handleId = MainLayoutSashRegistry::bottomPanelSplitHandleId(panelId);
     rml << "<div id=\"" << mainLayoutBottomSplitResizerElementId(panelId)
         << "\" class=\"main-layout-bottom-split-resizer";
     if (active) {
         rml << " main-layout-resizer-active";
     }
     rml << "\" data-main-layout-resizer=\""
-        << kMainLayoutBottomSplitResizerHandlePrefix
-        << escapeRmlText(panelId)
+        << escapeRmlText(handleId)
         << "\">"
         << "<div class=\"main-layout-resizer-base-line main-layout-resizer-base-line-vertical bg-gray-600\"></div>"
         << "<div class=\"main-layout-resizer-drag-line main-layout-resizer-drag-line-vertical bg-purple-500\"></div>"
         << "</div>";
-}
-
-std::string_view labelForPanel(std::string_view panelId, const MainLayoutLabels& labels) {
-    if (panelId == kMainLayoutPanelOutliner) {
-        return labels.outliner;
-    }
-    if (panelId == kMainLayoutPanelInspector) {
-        return labels.inspector;
-    }
-    return panelId;
-}
-
-bool panelVisibleInModel(const MainLayoutModel& model, std::string_view panelId) {
-    if (panelId == kMainLayoutPanelOutliner) {
-        return model.outlinerVisible;
-    }
-    if (panelId == kMainLayoutPanelInspector) {
-        return model.inspectorVisible;
-    }
-    return false;
-}
-
-std::vector<std::string_view> visiblePanelsInLocation(const MainLayoutModel& model, DockLocation location) {
-    std::vector<std::string_view> panels;
-    for (std::string_view panelId : dockPanelsInLocation(model.dockLayout, location)) {
-        if (panelVisibleInModel(model, panelId)) {
-            panels.push_back(panelId);
-        }
-    }
-    return panels;
-}
-
-std::vector<std::string_view> visibleTabPanelsInLocation(const MainLayoutModel& model, DockLocation location) {
-    std::vector<std::string_view> panels;
-    for (std::string_view panelId : dockTabPanelsInLocation(model.dockLayout, location)) {
-        if (panelVisibleInModel(model, panelId)) {
-            panels.push_back(panelId);
-        }
-    }
-    return panels;
 }
 
 std::string_view sideDockClass(MainLayoutSidebarSide side) {
@@ -280,6 +237,7 @@ void appendSideDock(
         << "dp; flex-grow: 0; flex-shrink: 0;\">";
 
     const bool bothPanelsVisible = panels.size() > 1;
+    const int stackHeightDp = bothPanelsVisible ? mainLayoutSidePanelStackHeightDp(model, location) : 0;
     for (std::size_t index = 0; index < panels.size(); ++index) {
         const bool fixed = bothPanelsVisible && index == 0;
         const bool dragSource = interaction.dockDrag &&
@@ -287,19 +245,22 @@ void appendSideDock(
         appendPanel(rml,
                 mainLayoutPanelElementId(panels[index]),
                 panels[index],
-                labelForPanel(panels[index], labels),
+                mainLayoutLabelForPanel(labels, panels[index]),
                 fixed,
-                fixed ? model.outlinerHeightDp : 0,
+                fixed ? stackHeightDp : 0,
                 dragSource,
                 dropPresentationForPanel(interaction, panels[index]));
     }
     if (bothPanelsVisible) {
+        const std::string handleId = MainLayoutSashRegistry::sidePanelStackHandleId();
         rml << "<div id=\"main-layout-panel-resizer\" class=\"main-layout-panel-resizer";
         if (interaction.activeResizer == MainLayoutActiveResizer::Panels) {
             rml << " main-layout-resizer-active";
         }
-        rml << "\" data-main-layout-resizer=\"panels\" style=\"top: "
-            << (model.outlinerHeightDp - kResizeOverlayHalfDp)
+        rml << "\" data-main-layout-resizer=\""
+            << escapeRmlText(handleId)
+            << "\" style=\"top: "
+            << (stackHeightDp - kResizeOverlayHalfDp)
             << "dp;\">"
             << "<div class=\"main-layout-resizer-base-line main-layout-resizer-base-line-horizontal bg-gray-600\"></div>"
             << "<div class=\"main-layout-resizer-drag-line main-layout-resizer-drag-line-horizontal bg-purple-500\"></div>"
@@ -315,11 +276,8 @@ void appendBottomDock(
         const MainLayoutLabels& labels,
         const MainLayoutInteractionState& interaction,
         const std::vector<std::string_view>& panels) {
-    const std::optional<std::string_view> preferredActivePanel =
-            dockActivePanelId(model.dockLayout, DockLocation::Panel);
-    const UITabStripModel tabStrip = UITabStripModel::fromItems(
-            panels,
-            preferredActivePanel.value_or(std::string_view{}));
+    (void)panels;
+    const UITabStripModel tabStrip = mainLayoutVisibleTabStripInLocation(model, DockLocation::Panel);
     const std::optional<std::string_view> activePanelId = tabStrip.activeItemId();
     const std::vector<std::string_view> splitPanels = dockSplitPanelsInLocation(model.dockLayout, DockLocation::Panel);
 
@@ -332,7 +290,7 @@ void appendBottomDock(
     for (std::string_view panelId : tabStrip.itemIds()) {
         appendBottomDockTab(rml,
                 panelId,
-                labelForPanel(panelId, labels),
+                mainLayoutLabelForPanel(labels, panelId),
                 activePanelId && *activePanelId == panelId,
                 interaction.dockDrag && interaction.dockDrag->panelId == panelId,
                 dropPresentationForPanel(interaction, panelId));
@@ -350,7 +308,7 @@ void appendBottomDock(
         appendBottomPanelBody(
                 rml,
                 panelId,
-                labelForPanel(panelId, labels),
+                mainLayoutLabelForPanel(labels, panelId),
                 widthDp,
                 activePanelId && *activePanelId == panelId,
                 interaction.dockDrag && interaction.dockDrag->panelId == panelId,
@@ -373,6 +331,7 @@ void appendBottomDockResizer(
         const MainLayoutModel& model,
         const MainLayoutInteractionState& interaction,
         bool collapsed) {
+    const std::string handleId = MainLayoutSashRegistry::bottomDockHeightHandleId();
     rml << "<div id=\"" << mainLayoutBottomDockResizerElementId()
         << "\" class=\"main-layout-bottom-dock-resizer";
     if (collapsed) {
@@ -382,7 +341,7 @@ void appendBottomDockResizer(
         rml << " main-layout-resizer-active";
     }
     rml << "\" data-main-layout-resizer=\""
-        << kMainLayoutBottomDockResizerHandleId
+        << escapeRmlText(handleId)
         << "\" style=\"bottom: ";
     if (collapsed) {
         rml << "0dp";
@@ -402,6 +361,7 @@ void appendSideDockResizer(
         DockLocation location,
         MainLayoutSidebarSide side,
         bool collapsed) {
+    const std::string handleId = MainLayoutSashRegistry::sideDockWidthHandleId(location);
     rml << "<div id=\"" << mainLayoutSideDockResizerElementId(location)
         << "\" class=\"main-layout-sidebar-resizer";
     if (collapsed) {
@@ -417,9 +377,7 @@ void appendSideDockResizer(
         rml << " main-layout-resizer-active";
     }
     rml << "\" data-main-layout-resizer=\""
-        << (location == DockLocation::AuxiliaryBar ?
-                        kMainLayoutAuxiliarySidebarResizerHandleId :
-                        kMainLayoutSidebarResizerHandleId)
+        << escapeRmlText(handleId)
         << "\" style=\"";
     if (collapsed) {
         rml << (side == MainLayoutSidebarSide::Left ? "left: 0dp;" : "right: 0dp;");
@@ -476,7 +434,7 @@ void appendDockDragPreview(
     }
     rml << "\">"
         << "<span class=\"main-layout-panel-title main-layout-dock-drag-preview-title text-sm text-gray-200\">"
-        << escapeRmlText(labelForPanel(drag.panelId, labels))
+        << escapeRmlText(mainLayoutLabelForPanel(labels, drag.panelId))
         << "</span>"
         << "</div>";
 }
@@ -485,6 +443,20 @@ void appendDockDragPreview(
 
 std::string mainLayoutPanelElementId(std::string_view panelId) {
     return "main-layout-panel-" + std::string(panelId);
+}
+
+std::string_view mainLayoutLabelForPanel(
+        const MainLayoutLabels& labels,
+        std::string_view panelId) {
+    for (const MainLayoutPanelLabel& label : labels.panels) {
+        if (label.panelId == panelId) {
+            return label.label;
+        }
+    }
+    if (const std::optional<MainLayoutPanelDescriptor> descriptor = mainLayoutPanelDescriptor(panelId)) {
+        return descriptor->fallbackLabel;
+    }
+    return panelId;
 }
 
 std::string mainLayoutPanelHeaderElementId(std::string_view panelId) {
@@ -542,9 +514,12 @@ std::string buildMainLayoutRml(
         const MainLayoutLabels& labels,
         const MainLayoutInteractionState& interaction) {
     std::ostringstream rml;
-    const std::vector<std::string_view> sidebarPanels = visiblePanelsInLocation(model, DockLocation::Sidebar);
-    const std::vector<std::string_view> auxiliaryPanels = visiblePanelsInLocation(model, DockLocation::AuxiliaryBar);
-    const std::vector<std::string_view> bottomPanels = visibleTabPanelsInLocation(model, DockLocation::Panel);
+    const std::vector<std::string_view> sidebarPanels =
+            mainLayoutVisiblePanelsInLocation(model, DockLocation::Sidebar);
+    const std::vector<std::string_view> auxiliaryPanels =
+            mainLayoutVisiblePanelsInLocation(model, DockLocation::AuxiliaryBar);
+    const std::vector<std::string_view> bottomPanels =
+            mainLayoutVisibleTabPanelsInLocation(model, DockLocation::Panel);
     const bool sidebarAvailable = !sidebarPanels.empty();
     const bool auxiliaryAvailable = !auxiliaryPanels.empty();
     const bool bottomAvailable = !bottomPanels.empty();

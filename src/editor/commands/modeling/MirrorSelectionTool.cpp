@@ -23,6 +23,9 @@ CommandToolDescriptor MirrorSelectionTool::descriptor() const {
             .kind = CommandToolKind::Instant,
             .previewKind = ModelingActionPreviewKind::None,
             .rebuildsMeshOnSuccess = true,
+            .hostShortcutTargetId = axis_ == ModelingMirrorAxis::X ? "mirror_axis_x" :
+                    axis_ == ModelingMirrorAxis::Y ? "mirror_axis_y" :
+                    "mirror_axis_z",
     };
 }
 

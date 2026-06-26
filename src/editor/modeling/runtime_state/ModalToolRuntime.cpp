@@ -4,6 +4,15 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#pragma once
+#include "editor/modeling/runtime_state/ModalToolRuntime.h"
 
-#include "editor/modeling/runtime_state/TransformDragController.h"
+#include "editor/tools/ViewportToolDescriptorCatalog.h"
+
+namespace quader {
+
+bool ModalToolRuntime::ownsViewport(ModelingViewportTool tool) {
+    const ToolDescriptor* descriptor = findViewportToolDescriptor(tool);
+    return descriptor != nullptr && descriptor->ownsViewport;
+}
+
+} // namespace quader

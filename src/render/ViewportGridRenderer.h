@@ -26,6 +26,11 @@ namespace quader {
  */
 class ViewportGridRenderer {
 public:
+    ViewportGridRenderer() = default;
+    ViewportGridRenderer(const ViewportGridRenderer&) = delete;
+    ViewportGridRenderer& operator=(const ViewportGridRenderer&) = delete;
+    ViewportGridRenderer(ViewportGridRenderer&&) = delete;
+    ViewportGridRenderer& operator=(ViewportGridRenderer&&) = delete;
     ~ViewportGridRenderer();
 
     void initialize(filament::Engine& engine,

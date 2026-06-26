@@ -7,7 +7,7 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
-#include "editor/commands/document/DocumentCommandEdits.h"
+#include "api/QuaderApiSession.h"
 
 #include <initializer_list>
 #include <span>
@@ -16,9 +16,35 @@
 
 namespace quader {
 
-class ProjectSession;
 class QuaderApiMutationRunner;
 class QuaderSceneApi;
+
+/**
+ * Represents a scene transform edit used by the public Quader API surface.
+ */
+struct QuaderSceneTransformEdit {
+    EntityId entity = InvalidEntityId;
+    QuaderTransform before;
+    QuaderTransform after;
+};
+
+/**
+ * Represents a scene visibility edit used by the public Quader API surface.
+ */
+struct QuaderSceneVisibilityEdit {
+    EntityId entity = InvalidEntityId;
+    bool before = true;
+    bool after = true;
+};
+
+/**
+ * Represents a scene lock edit used by the public Quader API surface.
+ */
+struct QuaderSceneLockEdit {
+    EntityId entity = InvalidEntityId;
+    bool before = false;
+    bool after = false;
+};
 
 /**
  * Owns Quader Scene Batch behavior within the public Quader API surface.
@@ -29,7 +55,7 @@ public:
 
     QuaderSceneBatch& rename(EntityId entity, std::string name);
     QuaderSceneBatch& reparent(EntityId entity, EntityId parent, bool preserveWorldTransform = true);
-    QuaderSceneBatch& setTransform(EntityId entity, TransformComponent transform);
+    QuaderSceneBatch& setTransform(EntityId entity, QuaderTransform transform);
     QuaderSceneBatch& setVisible(EntityId entity, bool visible);
     QuaderSceneBatch& setLocked(EntityId entity, bool locked);
     QuaderApiVoidResult commit();
@@ -57,7 +83,7 @@ private:
         EntityId parent = InvalidEntityId;
         bool preserveWorldTransform = true;
         bool flag = false;
-        TransformComponent transform;
+        QuaderTransform transform;
         std::string name;
     };
 
@@ -72,26 +98,26 @@ private:
  */
 class QuaderSceneApi final {
 public:
-    QuaderSceneApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
+    QuaderSceneApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
     QuaderApiVoidResult destroy(EntityId entity);
     QuaderApiVoidResult rename(EntityId entity, std::string name);
     QuaderApiVoidResult reparent(EntityId entity, EntityId parent, bool preserveWorldTransform = true);
-    QuaderApiVoidResult setTransform(EntityId entity, TransformComponent transform);
-    QuaderApiVoidResult setTransforms(std::span<const DocumentTransformEdit> edits);
+    QuaderApiVoidResult setTransform(EntityId entity, QuaderTransform transform);
+    QuaderApiVoidResult setTransforms(std::span<const QuaderSceneTransformEdit> edits);
     QuaderApiVoidResult setVisible(EntityId entity, bool visible);
-    QuaderApiVoidResult setVisibility(std::span<const DocumentVisibilityEdit> edits);
+    QuaderApiVoidResult setVisibility(std::span<const QuaderSceneVisibilityEdit> edits);
     QuaderApiVoidResult setLocked(EntityId entity, bool locked);
-    QuaderApiVoidResult setLocks(std::span<const DocumentLockEdit> edits);
-    QuaderApiVoidResult setMeshComponent(EntityId entity, MeshComponent mesh);
+    QuaderApiVoidResult setLocks(std::span<const QuaderSceneLockEdit> edits);
+    QuaderApiVoidResult setMeshComponent(EntityId entity, QuaderMeshComponent mesh);
     QuaderApiVoidResult select(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     QuaderApiVoidResult select(std::initializer_list<EntityId> entities, EntityId active = InvalidEntityId);
     QuaderApiVoidResult select(EntityId entity);
 
     QuaderApiResult<QuaderEntityRef> duplicate(EntityId entity);
     QuaderApiResult<QuaderDuplicateHierarchyResult> duplicateSelectedHierarchy();
-    QuaderApiResult<QuaderEntityRef> groupSelection(std::string groupName = {}, TransformComponent transform = {});
+    QuaderApiResult<QuaderEntityRef> groupSelection(std::string groupName = {}, QuaderTransform transform = {});
     QuaderApiVoidResult ungroupSelection();
     [[nodiscard]] QuaderSceneBatch batch(std::string label = "Scene Batch");
 
@@ -100,7 +126,7 @@ private:
 
     QuaderApiVoidResult commitBatch(const QuaderSceneBatch& batch);
 
-    ProjectSession& session_;
+    QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;
 };
 

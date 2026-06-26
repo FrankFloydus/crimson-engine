@@ -21,6 +21,7 @@ void SceneRenderBridge::initialize(filament::Engine& engine,
         filament::Material& overlayLineMaterial,
         filament::Material& overlayPointMaterial,
         std::filesystem::path resourceRoot) {
+    shutdown();
     engine_ = &engine;
     scene_ = &scene;
     textureBinding_.initialize(engine, std::move(resourceRoot));

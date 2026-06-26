@@ -5,9 +5,12 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderSceneApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderApiMutationRunner.h"
 #include "scene/document/ProjectSession.h"
+#include "editor/commands/document/DocumentCommandEdits.h"
 #include "editor/selection/EditorSelectionService.h"
 #include "scene/SceneBounds.h"
 
@@ -18,6 +21,11 @@
 
 namespace quader {
 namespace {
+
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
+}
+
 
 std::string batchLabelOrDefault(std::string label) {
     return label.empty() ? "Scene Batch" : std::move(label);
@@ -35,15 +43,55 @@ bool isDefaultTransform(const TransformComponent& transform) {
             transform.scale.z == 1.0f;
 }
 
-TransformComponent groupTransformOrSelectedBoundsCenter(ProjectSession& session, TransformComponent transform) {
-    if (!isDefaultTransform(transform)) {
-        return transform;
+TransformComponent groupTransformOrSelectedBoundsCenter(ProjectSession& session, QuaderTransform transform) {
+    TransformComponent sceneTransform = toSceneTransform(transform);
+    if (!isDefaultTransform(sceneTransform)) {
+        return sceneTransform;
     }
 
     if (const std::optional<SceneBounds> bounds = selectedWorldBounds(session.scene(), session.assets())) {
-        transform.position = boundsCenter(*bounds);
+        sceneTransform.position = boundsCenter(*bounds);
     }
-    return transform;
+    return sceneTransform;
+}
+
+std::vector<DocumentTransformEdit> toDocumentTransformEdits(std::span<const QuaderSceneTransformEdit> edits) {
+    std::vector<DocumentTransformEdit> documentEdits;
+    documentEdits.reserve(edits.size());
+    for (const QuaderSceneTransformEdit& edit : edits) {
+        documentEdits.push_back(DocumentTransformEdit{
+                .entity = edit.entity,
+                .before = toSceneTransform(edit.before),
+                .after = toSceneTransform(edit.after),
+        });
+    }
+    return documentEdits;
+}
+
+std::vector<DocumentVisibilityEdit> toDocumentVisibilityEdits(std::span<const QuaderSceneVisibilityEdit> edits) {
+    std::vector<DocumentVisibilityEdit> documentEdits;
+    documentEdits.reserve(edits.size());
+    for (const QuaderSceneVisibilityEdit& edit : edits) {
+        documentEdits.push_back(DocumentVisibilityEdit{
+                .entity = edit.entity,
+                .before = edit.before,
+                .after = edit.after,
+        });
+    }
+    return documentEdits;
+}
+
+std::vector<DocumentLockEdit> toDocumentLockEdits(std::span<const QuaderSceneLockEdit> edits) {
+    std::vector<DocumentLockEdit> documentEdits;
+    documentEdits.reserve(edits.size());
+    for (const QuaderSceneLockEdit& edit : edits) {
+        documentEdits.push_back(DocumentLockEdit{
+                .entity = edit.entity,
+                .before = edit.before,
+                .after = edit.after,
+        });
+    }
+    return documentEdits;
 }
 
 } // namespace
@@ -74,7 +122,7 @@ QuaderSceneBatch& QuaderSceneBatch::reparent(
     return *this;
 }
 
-QuaderSceneBatch& QuaderSceneBatch::setTransform(EntityId entity, TransformComponent transform) {
+QuaderSceneBatch& QuaderSceneBatch::setTransform(EntityId entity, QuaderTransform transform) {
     operations_.push_back(Operation{
             .kind = OperationKind::SetTransform,
             .entity = entity,
@@ -122,7 +170,7 @@ QuaderApiVoidResult QuaderSceneBatch::commit() {
     return scene_->commitBatch(*this);
 }
 
-QuaderSceneApi::QuaderSceneApi(ProjectSession& session, QuaderApiMutationRunner& mutations)
+QuaderSceneApi::QuaderSceneApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
     : session_(session)
     , mutations_(mutations) {}
 
@@ -131,12 +179,12 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::createEntity(const QuaderCreate
 }
 
 QuaderApiVoidResult QuaderSceneApi::destroy(EntityId entity) {
-    return mutations_.runDocumentResult(session_.documentCommands().destroyEntity(entity), "Destroy Entity");
+    return mutations_.runDocumentResult(projectSession(session_).documentCommands().destroyEntity(entity), "Destroy Entity");
 }
 
 QuaderApiVoidResult QuaderSceneApi::rename(EntityId entity, std::string name) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().renameEntity(entity, std::move(name)),
+            projectSession(session_).documentCommands().renameEntity(entity, std::move(name)),
             "Rename Entity");
 }
 
@@ -145,58 +193,55 @@ QuaderApiVoidResult QuaderSceneApi::reparent(
         EntityId parent,
         bool preserveWorldTransform) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().reparentEntity(entity, parent, preserveWorldTransform),
+            projectSession(session_).documentCommands().reparentEntity(entity, parent, preserveWorldTransform),
             "Reparent Entity");
 }
 
-QuaderApiVoidResult QuaderSceneApi::setTransform(EntityId entity, TransformComponent transform) {
+QuaderApiVoidResult QuaderSceneApi::setTransform(EntityId entity, QuaderTransform transform) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setTransform(entity, transform),
+            projectSession(session_).documentCommands().setTransform(entity, toSceneTransform(transform)),
             "Set Transform");
 }
 
-QuaderApiVoidResult QuaderSceneApi::setTransforms(std::span<const DocumentTransformEdit> edits) {
+QuaderApiVoidResult QuaderSceneApi::setTransforms(std::span<const QuaderSceneTransformEdit> edits) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setTransforms(std::vector<DocumentTransformEdit>(edits.begin(), edits.end())),
+            projectSession(session_).documentCommands().setTransforms(toDocumentTransformEdits(edits)),
             "Set Transform");
 }
 
 QuaderApiVoidResult QuaderSceneApi::setVisible(EntityId entity, bool visible) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setVisible(entity, visible),
+            projectSession(session_).documentCommands().setVisible(entity, visible),
             "Set Visibility");
 }
 
-QuaderApiVoidResult QuaderSceneApi::setVisibility(std::span<const DocumentVisibilityEdit> edits) {
+QuaderApiVoidResult QuaderSceneApi::setVisibility(std::span<const QuaderSceneVisibilityEdit> edits) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setVisibility(std::vector<DocumentVisibilityEdit>(edits.begin(), edits.end())),
+            projectSession(session_).documentCommands().setVisibility(toDocumentVisibilityEdits(edits)),
             "Set Visibility");
 }
 
 QuaderApiVoidResult QuaderSceneApi::setLocked(EntityId entity, bool locked) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setLocked(entity, locked),
+            projectSession(session_).documentCommands().setLocked(entity, locked),
             "Set Lock");
 }
 
-QuaderApiVoidResult QuaderSceneApi::setLocks(std::span<const DocumentLockEdit> edits) {
+QuaderApiVoidResult QuaderSceneApi::setLocks(std::span<const QuaderSceneLockEdit> edits) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setLocks(std::vector<DocumentLockEdit>(edits.begin(), edits.end())),
+            projectSession(session_).documentCommands().setLocks(toDocumentLockEdits(edits)),
             "Set Lock");
 }
 
-QuaderApiVoidResult QuaderSceneApi::setMeshComponent(EntityId entity, MeshComponent mesh) {
-    if (mesh.mesh == InvalidAssetId || session_.assets().mesh(mesh.mesh) == nullptr) {
-        return mutations_.runDocumentCommand(commandInvalidResult("Mesh asset does not exist"), "Set Mesh Component");
-    }
+QuaderApiVoidResult QuaderSceneApi::setMeshComponent(EntityId entity, QuaderMeshComponent mesh) {
     return mutations_.runDocumentResult(
-            session_.documentCommands().setMeshComponent(entity, std::move(mesh)),
+            projectSession(session_).documentCommands().setMeshComponent(entity, toSceneMeshComponent(mesh)),
             "Set Mesh Component");
 }
 
 QuaderApiVoidResult QuaderSceneApi::select(std::span<const EntityId> entities, EntityId active) {
     return mutations_.runDocumentResult(
-            session_.selection().setSceneSelection(entities, active),
+            projectSession(session_).selection().setSceneSelection(entities, active),
             "Select Entities");
 }
 
@@ -209,72 +254,58 @@ QuaderApiVoidResult QuaderSceneApi::select(EntityId entity) {
 }
 
 QuaderApiResult<QuaderEntityRef> QuaderSceneApi::duplicate(EntityId entity) {
-    DocumentDuplicateEntityResult command = session_.documentCommands().duplicateEntity(entity);
+    DocumentDuplicateEntityResult command = projectSession(session_).documentCommands().duplicateEntity(entity);
     const EntityId duplicateEntity = command.duplicateEntity;
 
-    QuaderApiResult<QuaderEntityRef> result;
     const QuaderApiVoidResult status = mutations_.runDocumentResult(std::move(command), "Duplicate Entity");
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = status.message;
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
+    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
     if (result.ok && result.changed) {
         result.value = QuaderEntityRef{
                 .id = duplicateEntity,
-                .editorObjectId = session_.scene().editorObjectId(duplicateEntity),
+                .editorObjectId = projectSession(session_).scene().editorObjectId(duplicateEntity),
         };
     }
     return result;
 }
 
 QuaderApiResult<QuaderDuplicateHierarchyResult> QuaderSceneApi::duplicateSelectedHierarchy() {
-    DocumentDuplicateHierarchyResult command = session_.documentCommands().duplicateSelectedHierarchy();
+    DocumentDuplicateHierarchyResult command = projectSession(session_).documentCommands().duplicateSelectedHierarchy();
     const std::vector<EntityId> duplicateRoots = command.duplicateRoots;
 
-    QuaderApiResult<QuaderDuplicateHierarchyResult> result;
     const QuaderApiVoidResult status = mutations_.runDocumentResult(std::move(command), "Duplicate Hierarchy");
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = status.message;
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
+    QuaderApiResult<QuaderDuplicateHierarchyResult> result =
+            quaderApiResultFromStatus<QuaderDuplicateHierarchyResult>(status);
     if (result.ok && result.changed) {
         result.value.rootEntities.reserve(duplicateRoots.size());
         for (const EntityId duplicate : duplicateRoots) {
             result.value.rootEntities.push_back(QuaderEntityRef{
                     .id = duplicate,
-                    .editorObjectId = session_.scene().editorObjectId(duplicate),
+                    .editorObjectId = projectSession(session_).scene().editorObjectId(duplicate),
             });
         }
     }
     return result;
 }
 
-QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string groupName, TransformComponent transform) {
-    DocumentGroupSelectionResult command = session_.documentCommands().groupSelection(
+QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string groupName, QuaderTransform transform) {
+    DocumentGroupSelectionResult command = projectSession(session_).documentCommands().groupSelection(
             std::move(groupName),
-            groupTransformOrSelectedBoundsCenter(session_, transform));
+            groupTransformOrSelectedBoundsCenter(projectSession(session_), transform));
     const EntityId groupEntity = command.groupEntity;
 
-    QuaderApiResult<QuaderEntityRef> result;
     const QuaderApiVoidResult status = mutations_.runDocumentResult(std::move(command), "Group Selection");
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = status.message;
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
+    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
     if (result.ok && result.changed) {
         result.value = QuaderEntityRef{
                 .id = groupEntity,
-                .editorObjectId = session_.scene().editorObjectId(groupEntity),
+                .editorObjectId = projectSession(session_).scene().editorObjectId(groupEntity),
         };
     }
     return result;
 }
 
 QuaderApiVoidResult QuaderSceneApi::ungroupSelection() {
-    return mutations_.runDocumentResult(session_.documentCommands().ungroupSelection(), "Ungroup Selection");
+    return mutations_.runDocumentResult(projectSession(session_).documentCommands().ungroupSelection(), "Ungroup Selection");
 }
 
 QuaderSceneBatch QuaderSceneApi::batch(std::string label) {
@@ -290,7 +321,7 @@ QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
                 .parent = operation.parent,
                 .preserveWorldTransform = operation.preserveWorldTransform,
                 .flag = operation.flag,
-                .transform = operation.transform,
+                .transform = toSceneTransform(operation.transform),
                 .name = operation.name,
         };
         switch (operation.kind) {
@@ -314,7 +345,7 @@ QuaderApiVoidResult QuaderSceneApi::commitBatch(const QuaderSceneBatch& batch) {
     }
 
     return mutations_.runDocumentResult(
-            session_.documentCommands().applySceneBatch(batch.label_, std::move(operations)),
+            projectSession(session_).documentCommands().applySceneBatch(batch.label_, std::move(operations)),
             batch.label_);
 }
 

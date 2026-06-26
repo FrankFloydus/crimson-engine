@@ -22,6 +22,11 @@ namespace quader {
  */
 class ViewportRenderTarget {
 public:
+    ViewportRenderTarget() = default;
+    ViewportRenderTarget(const ViewportRenderTarget&) = delete;
+    ViewportRenderTarget& operator=(const ViewportRenderTarget&) = delete;
+    ViewportRenderTarget(ViewportRenderTarget&&) = delete;
+    ViewportRenderTarget& operator=(ViewportRenderTarget&&) = delete;
     ~ViewportRenderTarget();
 
     void initialize(filament::Engine& engine, TextureRegistry& textureRegistry);

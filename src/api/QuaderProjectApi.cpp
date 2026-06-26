@@ -6,13 +6,21 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderProjectApi.h"
 
+#include "api/QuaderApiSessionInternalAccess.h"
 #include "scene/document/ProjectSession.h"
 
 #include <utility>
 
 namespace quader {
+namespace {
 
-QuaderProjectApi::QuaderProjectApi(ProjectSession& session)
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
+}
+
+} // namespace
+
+QuaderProjectApi::QuaderProjectApi(QuaderApiSession session)
     : session_(session) {}
 
 QuaderApiVoidResult QuaderProjectApi::newProject() {
@@ -38,7 +46,7 @@ QuaderApiVoidResult QuaderProjectApi::close() {
 }
 
 bool QuaderProjectApi::dirty() const {
-    return session_.dirty();
+    return projectSession(session_).dirty();
 }
 
 const std::filesystem::path& QuaderProjectApi::path() const {
@@ -46,22 +54,24 @@ const std::filesystem::path& QuaderProjectApi::path() const {
 }
 
 QuaderProjectMetadata QuaderProjectApi::metadata() const {
+    ProjectSession& session = projectSession(session_);
     return {
-            .id = session_.document().id(),
-            .name = session_.document().name(),
+            .id = session.document().id(),
+            .name = session.document().name(),
     };
 }
 
 QuaderApiVoidResult QuaderProjectApi::unsupported(std::string message) const {
+    ProjectSession& session = projectSession(session_);
     return {
             .ok = false,
             .changed = false,
             .message = std::move(message),
             .mutationKind = QuaderMutationKind::None,
             .revisions = {
-                    .projectRevision = session_.document().revision(),
-                    .sceneRevision = session_.scene().revision(),
-                    .assetRevision = session_.assets().revision(),
+                    .projectRevision = session.document().revision(),
+                    .sceneRevision = session.scene().revision(),
+                    .assetRevision = session.assets().revision(),
             },
     };
 }

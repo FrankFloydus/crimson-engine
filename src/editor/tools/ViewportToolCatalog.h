@@ -21,6 +21,7 @@ namespace quader {
 [[nodiscard]] std::string_view viewportToolLabel(ViewportToolId tool);
 [[nodiscard]] bool viewportToolOwnsViewport(ViewportToolId tool);
 [[nodiscard]] bool viewportToolBlocksFocusShortcuts(ViewportToolId tool);
+[[nodiscard]] bool viewportToolSupportsTransformGizmo(ViewportToolId tool);
 [[nodiscard]] ModelingTransformTool viewportToolTransformTool(ViewportToolId tool);
 [[nodiscard]] ModelingViewportTool modelingViewportToolFor(ViewportToolId tool);
 [[nodiscard]] ViewportToolId viewportToolForModeling(ModelingViewportTool tool);

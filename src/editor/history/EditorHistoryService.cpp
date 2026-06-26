@@ -104,7 +104,13 @@ private:
 
 EditorTransaction::EditorTransaction(EditorHistoryService& history, std::string label)
     : history_(&history)
-    , label_(std::move(label)) {}
+    , label_(std::move(label)) {
+    if (history.activeTransaction_ != nullptr) {
+        history_ = nullptr;
+        return;
+    }
+    history.activeTransaction_ = this;
+}
 
 EditorTransaction::~EditorTransaction() {
     if (history_ != nullptr) {
@@ -116,6 +122,9 @@ EditorTransaction::EditorTransaction(EditorTransaction&& other) noexcept
     : history_(other.history_)
     , label_(std::move(other.label_))
     , commands_(std::move(other.commands_)) {
+    if (history_ != nullptr && history_->activeTransaction_ == &other) {
+        history_->activeTransaction_ = this;
+    }
     other.history_ = nullptr;
 }
 
@@ -129,6 +138,9 @@ EditorTransaction& EditorTransaction::operator=(EditorTransaction&& other) noexc
     history_ = other.history_;
     label_ = std::move(other.label_);
     commands_ = std::move(other.commands_);
+    if (history_ != nullptr && history_->activeTransaction_ == &other) {
+        history_->activeTransaction_ = this;
+    }
     other.history_ = nullptr;
     return *this;
 }
@@ -154,6 +166,9 @@ CommandResult EditorTransaction::commit() {
     }
 
     EditorHistoryService* history = history_;
+    if (history->activeTransaction_ == this) {
+        history->activeTransaction_ = nullptr;
+    }
     history_ = nullptr;
     return history->commitTransaction(std::move(label_), std::move(commands_));
 }
@@ -177,6 +192,23 @@ CommandResult EditorTransaction::cancel() {
     }
 
     commands_.clear();
+    if (history_->activeTransaction_ == this) {
+        history_->activeTransaction_ = nullptr;
+    }
+    history_ = nullptr;
+    return changed ? commandChangedResult() : commandUnchangedResult();
+}
+
+CommandResult EditorTransaction::discard() {
+    if (history_ == nullptr) {
+        return commandInvalidResult("Editor transaction is not active");
+    }
+
+    const bool changed = !commands_.empty();
+    commands_.clear();
+    if (history_->activeTransaction_ == this) {
+        history_->activeTransaction_ = nullptr;
+    }
     history_ = nullptr;
     return changed ? commandChangedResult() : commandUnchangedResult();
 }
@@ -191,6 +223,9 @@ EditorHistoryService::EditorHistoryService(EditorHistoryService&&) noexcept = de
 EditorHistoryService& EditorHistoryService::operator=(EditorHistoryService&&) noexcept = default;
 
 CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> command) {
+    if (activeTransaction_ != nullptr) {
+        return activeTransaction_->execute(std::move(command));
+    }
     return undoRedo_->execute(std::move(command));
 }
 
@@ -199,10 +234,16 @@ CommandResult EditorHistoryService::recordExecuted(std::unique_ptr<IUndoableComm
 }
 
 CommandResult EditorHistoryService::undo() {
+    if (activeTransaction_ != nullptr) {
+        return commandInvalidResult("Cannot undo while an editor transaction is active");
+    }
     return undoRedo_->undo();
 }
 
 CommandResult EditorHistoryService::redo() {
+    if (activeTransaction_ != nullptr) {
+        return commandInvalidResult("Cannot redo while an editor transaction is active");
+    }
     return undoRedo_->redo();
 }
 

@@ -29,6 +29,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -38,6 +39,11 @@ namespace quader {
  */
 class RmlFilamentRenderer final : public Rml::RenderInterface {
 public:
+    RmlFilamentRenderer() = default;
+    RmlFilamentRenderer(const RmlFilamentRenderer&) = delete;
+    RmlFilamentRenderer& operator=(const RmlFilamentRenderer&) = delete;
+    RmlFilamentRenderer(RmlFilamentRenderer&&) = delete;
+    RmlFilamentRenderer& operator=(RmlFilamentRenderer&&) = delete;
     ~RmlFilamentRenderer() override;
 
     void initialize(filament::Engine& engine, filament::Material& material, TextureRegistry& textures);
@@ -73,13 +79,46 @@ private:
      * Stores one frame's Filament resources for RmlUi draw geometry.
      */
     struct DrawResource {
+        DrawResource() = default;
+        DrawResource(const DrawResource&) = delete;
+        DrawResource& operator=(const DrawResource&) = delete;
+
+        DrawResource(DrawResource&& other) noexcept
+            : entity(std::exchange(other.entity, {}))
+            , vertexBuffer(std::exchange(other.vertexBuffer, nullptr))
+            , indexBuffer(std::exchange(other.indexBuffer, nullptr))
+            , materialInstance(std::exchange(other.materialInstance, nullptr)) {}
+
+        DrawResource& operator=(DrawResource&& other) noexcept = delete;
+
         utils::Entity entity;
         filament::VertexBuffer* vertexBuffer = nullptr;
         filament::IndexBuffer* indexBuffer = nullptr;
         filament::MaterialInstance* materialInstance = nullptr;
     };
 
+    /**
+     * Cleans partially created draw resources unless ownership moves into the frame resource list.
+     */
+    class DrawResourceCreationGuard final {
+    public:
+        DrawResourceCreationGuard(RmlFilamentRenderer& owner, DrawResource& resource);
+        DrawResourceCreationGuard(const DrawResourceCreationGuard&) = delete;
+        DrawResourceCreationGuard& operator=(const DrawResourceCreationGuard&) = delete;
+        DrawResourceCreationGuard(DrawResourceCreationGuard&&) = delete;
+        DrawResourceCreationGuard& operator=(DrawResourceCreationGuard&&) = delete;
+        ~DrawResourceCreationGuard();
+
+        void release();
+
+    private:
+        RmlFilamentRenderer* owner_ = nullptr;
+        DrawResource* resource_ = nullptr;
+        bool released_ = false;
+    };
+
     void releaseFrameResources();
+    void destroyDrawResource(DrawResource& resource);
     void createWhiteTexture();
     Rml::TextureHandle createOwnedTextureFromRgba(
             const unsigned char* pixels,

@@ -64,41 +64,14 @@ std::span<const EditorOperationRegistryEntry> operation_registry_entries()
 
 std::span<const EditorOperation* const> operation_entries()
 {
-	static const std::array<const EditorOperation*, 33> operations {
-		&bridge_operation(),
-		&edge_bevel_operation(),
-		&thicken_operation(),
-		&slice_quad_operation(),
-		&merge_by_distance_operation(),
-		&bevel_vertices_operation(),
-		&duplicate_meshes_operation(),
-		&connect_vertices_operation(),
-		&dissolve_vertices_operation(),
-		&connect_edges_operation(),
-		&split_edges_operation(),
-		&dissolve_edges_operation(),
-		&merge_edges_operation(),
-		&collapse_edges_operation(),
-		&fill_hole_operation(),
-		&combine_faces_operation(),
-		&collapse_faces_operation(),
-		&radial_align_operation(),
-		&flip_face_normals_operation(),
-		&shade_faces_smooth_operation(),
-		&shade_faces_flat_operation(),
-		&harden_edge_normals_operation(),
-		&soften_edge_normals_operation(),
-		&combine_meshes_operation(),
-		&extract_faces_operation(),
-		&detach_faces_operation(),
-		&snap_vertices_to_active_operation(),
-		&snap_edges_to_active_operation(),
-		&merge_vertices_to_active_operation(),
-		&merge_vertices_to_center_operation(),
-		&recalculate_face_normals_operation(),
-		&assign_material_operation(),
-		&delete_selection_operation(),
-	};
+	static const std::array<const EditorOperation*, 33> operations = [] {
+		std::array<const EditorOperation*, 33> result {};
+		const std::span<const EditorOperationRegistryEntry> entries = operation_registry_entries();
+		for (std::size_t index = 0; index < entries.size(); ++index) {
+			result[index] = entries[index].operation;
+		}
+		return result;
+	}();
 	return operations;
 }
 

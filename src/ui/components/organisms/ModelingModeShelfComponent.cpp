@@ -10,6 +10,7 @@
 #include "ui/components/common/UITabRailComponent.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace quader {
@@ -18,6 +19,12 @@ namespace {
 constexpr std::string_view kModelingModeShelfOverflowToggleControlId = "__modeling-mode-shelf-overflow-toggle";
 constexpr std::string_view kModelingModeShelfOverflowButtonElementId = "modeling-mode-shelf-overflow-button";
 constexpr std::string_view kModelingModeShelfOverflowMeasureElementId = "modeling-mode-shelf-overflow-measure-button";
+constexpr std::array<std::string_view, 4> kModelingModeShelfPointerBypassElementIds{{
+        "modeling-mode-shelf",
+        "modeling-mode-shelf-toolbar",
+        "modeling-mode-shelf-content",
+        "modeling-mode-shelf-overflow-menu",
+}};
 
 std::string modelingModeShelfCommandButtonElementId(std::string_view commandId) {
     std::string id("modeling-mode-shelf-command-");
@@ -104,10 +111,10 @@ protected:
             return;
         }
         UIToolbarButtonComponent::appendButtonAttributes(button);
-        button.data("modeling-mode-shelf-control", control_.id);
+        button.data(kModelingModeShelfControlDataKey, control_.id);
         button.data(
-                "modeling-mode-shelf-control-behavior",
-                modelingModeShelfControlOpensTabContent(control_) ? "opens-tab-content" : "action");
+                kModelingModeShelfControlBehaviorDataKey,
+                modelingModeShelfControlBehaviorName(control_.behavior));
     }
 
 private:
@@ -145,7 +152,7 @@ protected:
             return;
         }
         UIToolbarButtonComponent::appendButtonAttributes(button);
-        button.data("modeling-mode-shelf-overflow-toggle", "true");
+        button.data(kModelingModeShelfOverflowToggleDataKey, "true");
         button.attr("aria-expanded", open_ ? "true" : "false");
     }
 
@@ -173,13 +180,13 @@ protected:
     void appendButtonAttributes(UIElement& button) const override {
         UIToolbarButtonComponent::appendButtonAttributes(button);
         if (!command_.commandId.empty()) {
-            button.data("modeling-mode-shelf-command", command_.commandId);
+            button.data(kModelingModeShelfCommandDataKey, command_.commandId);
         }
         if (!command_.actionId.empty()) {
-            button.data("modeling-mode-shelf-action", command_.actionId);
+            button.data(kModelingModeShelfActionDataKey, command_.actionId);
         }
         if (!command_.disabledReason.empty()) {
-            button.data("modeling-mode-shelf-disabled-reason", command_.disabledReason);
+            button.data(kModelingModeShelfDisabledReasonDataKey, command_.disabledReason);
         }
     }
 
@@ -328,7 +335,7 @@ UIElement renderContentStrip(const ModelingModeShelfState& state, const Modeling
             .addClass("border-t-1")
             .addClass("border-b-1")
             .addClass("border-gray-700")
-            .data("modeling-mode-shelf-active-control", activeControl.id);
+            .data(kModelingModeShelfActiveControlDataKey, activeControl.id);
 
     for (const ModelingModeShelfCommand& command : state.activeStripCommands) {
         content.child(ModelingModeShelfCommandButtonComponent(command).render());
@@ -343,6 +350,16 @@ UIElement renderContentStrip(const ModelingModeShelfState& state, const Modeling
 
 bool modelingModeShelfControlOpensTabContent(const ModelingModeShelfControl& control) {
     return control.behavior == ModelingModeShelfControlBehavior::OpensTabContent;
+}
+
+std::string_view modelingModeShelfControlBehaviorName(ModelingModeShelfControlBehavior behavior) {
+    switch (behavior) {
+    case ModelingModeShelfControlBehavior::OpensTabContent:
+        return "opens-tab-content";
+    case ModelingModeShelfControlBehavior::Action:
+        return "action";
+    }
+    return {};
 }
 
 std::string modelingModeShelfControlButtonElementId(std::string_view controlId) {
@@ -367,6 +384,10 @@ std::string_view modelingModeShelfOverflowButtonElementId() {
 
 std::string_view modelingModeShelfOverflowMeasureElementId() {
     return kModelingModeShelfOverflowMeasureElementId;
+}
+
+std::span<const std::string_view> modelingModeShelfPointerBypassElementIds() {
+    return kModelingModeShelfPointerBypassElementIds;
 }
 
 ModelingModeShelfToolbarComponent::ModelingModeShelfToolbarComponent(ModelingModeShelfState state)

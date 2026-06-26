@@ -10,6 +10,7 @@
 #include "ui/core/UIComponent.h"
 
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,12 +72,25 @@ struct ModelingModeShelfState {
     bool overflowMenuOpen = false;
 };
 
+inline constexpr std::string_view kModelingModeShelfControlDataKey = "modeling-mode-shelf-control";
+inline constexpr std::string_view kModelingModeShelfControlBehaviorDataKey = "modeling-mode-shelf-control-behavior";
+inline constexpr std::string_view kModelingModeShelfOverflowToggleDataKey = "modeling-mode-shelf-overflow-toggle";
+inline constexpr std::string_view kModelingModeShelfCommandDataKey = "modeling-mode-shelf-command";
+inline constexpr std::string_view kModelingModeShelfActionDataKey = "modeling-mode-shelf-action";
+inline constexpr std::string_view kModelingModeShelfDisabledReasonDataKey = "modeling-mode-shelf-disabled-reason";
+inline constexpr std::string_view kModelingModeShelfActiveControlDataKey = "modeling-mode-shelf-active-control";
+inline constexpr std::string_view kModelingModeShelfControlAttribute = "data-modeling-mode-shelf-control";
+inline constexpr std::string_view kModelingModeShelfOverflowToggleAttribute = "data-modeling-mode-shelf-overflow-toggle";
+inline constexpr std::string_view kModelingModeShelfCommandAttribute = "data-modeling-mode-shelf-command";
+
 [[nodiscard]] bool modelingModeShelfControlOpensTabContent(const ModelingModeShelfControl& control);
+[[nodiscard]] std::string_view modelingModeShelfControlBehaviorName(ModelingModeShelfControlBehavior behavior);
 [[nodiscard]] std::string modelingModeShelfControlButtonElementId(std::string_view controlId);
 [[nodiscard]] std::string modelingModeShelfControlMeasureElementId(std::string_view controlId);
 [[nodiscard]] std::string_view modelingModeShelfOverflowToggleControlId();
 [[nodiscard]] std::string_view modelingModeShelfOverflowButtonElementId();
 [[nodiscard]] std::string_view modelingModeShelfOverflowMeasureElementId();
+[[nodiscard]] std::span<const std::string_view> modelingModeShelfPointerBypassElementIds();
 
 /**
  * Retained toolbar row for normal buttons that may open shelf tab content.

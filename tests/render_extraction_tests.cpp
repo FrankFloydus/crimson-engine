@@ -22,6 +22,7 @@
 #include "render/overlay/OverlayRenderableBuilder.h"
 #include "render/overlay/ViewportSceneOverlayBuilder.h"
 #include "scene/SceneDocument.h"
+#include "support/GuardrailFileScan.h"
 
 #include <gtest/gtest.h>
 
@@ -29,8 +30,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <initializer_list>
 #include <string>
 #include <string_view>
@@ -39,6 +38,8 @@
 using namespace quader;
 
 namespace {
+
+using quader::test::guardrail::readSourceFile;
 
 ViewportOverlayCamera testOverlayCamera() {
     return {
@@ -88,18 +89,6 @@ std::size_t triangleCountFor(const ViewportOverlayFrame& frame, ViewportOverlayL
             }));
 }
 
-std::string readSourceFile(std::initializer_list<std::string_view> parts) {
-    std::filesystem::path path = QUADER_SOURCE_DIR;
-    for (std::string_view part : parts) {
-        path /= std::string(part);
-    }
-    std::ifstream file(path);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    return {
-            std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>()};
-}
-
 } // namespace
 
 TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
@@ -112,19 +101,25 @@ TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
     const AssetId roughnessTexture = assets.addTexture(roughness);
 
     MaterialDocument material;
-    material.revision.value = 7u;
     material.textureSlots.emplace(MaterialTextureSlot::Roughness, roughnessTexture);
     material.textureSlots.emplace(MaterialTextureSlot::BaseColor, baseColorTexture);
-    MaterialDocument reorderedMaterial = material;
-    reorderedMaterial.textureSlots.clear();
-    reorderedMaterial.textureSlots.emplace(MaterialTextureSlot::BaseColor, baseColorTexture);
-    reorderedMaterial.textureSlots.emplace(MaterialTextureSlot::Roughness, roughnessTexture);
+    const AssetId materialId = assets.addMaterial(std::move(material));
+    ASSERT_NE(materialId, InvalidAssetId);
 
     MaterialBindingService materialBinding;
-    EXPECT_EQ(materialBinding.materialRevision(assets, &material),
-            RenderSignatureBuilder::materialSignature(assets, &material));
-    EXPECT_EQ(RenderSignatureBuilder::materialSignature(assets, &material),
-            RenderSignatureBuilder::materialSignature(assets, &reorderedMaterial));
+    const MaterialComponent materialComponent{.material = materialId};
+    const MaterialComponent orderedSlotComponent{
+            .material = materialId,
+            .materialSlots = {{1u, materialId}, {2u, materialId}},
+    };
+    const MaterialComponent reorderedSlotComponent{
+            .material = materialId,
+            .materialSlots = {{2u, materialId}, {1u, materialId}},
+    };
+    EXPECT_EQ(materialBinding.materialRevision(assets, &materialComponent),
+            RenderSignatureBuilder::materialSignature(assets, &materialComponent));
+    EXPECT_EQ(RenderSignatureBuilder::materialSignature(assets, &orderedSlotComponent),
+            RenderSignatureBuilder::materialSignature(assets, &reorderedSlotComponent));
 
     MeshAsset mesh = makeOverlayTriangleMesh();
     RenderSignatureBuilder meshSeed;
@@ -458,21 +453,8 @@ TEST(OverlayRenderableCacheTests, TracksSlotSignaturesWithoutOwningFilamentProxi
 }
 
 TEST(SceneRenderBridgeExtractionTests, DelegatesOverlayAndPreviewProxyOwnership) {
-    const std::filesystem::path bridgeHeaderPath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.h";
-    const std::filesystem::path bridgeSourcePath =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render" / "SceneRenderBridge.cpp";
-    std::ifstream headerFile(bridgeHeaderPath);
-    std::ifstream sourceFile(bridgeSourcePath);
-    ASSERT_TRUE(headerFile.is_open()) << bridgeHeaderPath.string();
-    ASSERT_TRUE(sourceFile.is_open()) << bridgeSourcePath.string();
-
-    const std::string header{
-            std::istreambuf_iterator<char>(headerFile),
-            std::istreambuf_iterator<char>()};
-    const std::string source{
-            std::istreambuf_iterator<char>(sourceFile),
-            std::istreambuf_iterator<char>()};
+    const std::string header = readSourceFile({"src", "render", "SceneRenderBridge.h"});
+    const std::string source = readSourceFile({"src", "render", "SceneRenderBridge.cpp"});
 
     EXPECT_NE(header.find("OverlayRenderableCache overlayCache_"), std::string::npos);
     EXPECT_NE(header.find("ToolPreviewRenderableCache toolPreviewCache_"), std::string::npos);

@@ -9,9 +9,6 @@
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiSnapshot.h"
 #include "api/QuaderApiTypes.h"
-#include "assets/MeshAsset.h"
-#include "editor/modeling/ModelingTypes.h"
-#include "scene/Components.h"
 
 #include <optional>
 #include <string>
@@ -30,13 +27,13 @@ public:
     [[nodiscard]] QuaderModelingObjectRef ref() const;
     [[nodiscard]] bool valid() const;
     [[nodiscard]] std::optional<QuaderEntitySnapshot> entity() const;
-    [[nodiscard]] std::optional<MeshAsset> compiledMesh() const;
+    [[nodiscard]] std::optional<QuaderMeshAsset> compiledMesh() const;
 
     QuaderApiVoidResult select();
     QuaderApiVoidResult rename(std::string name);
     QuaderApiVoidResult destroy();
     QuaderApiResult<QuaderEntityRef> duplicate();
-    QuaderApiVoidResult setTransform(TransformComponent transform);
+    QuaderApiVoidResult setTransform(QuaderTransform transform);
     QuaderApiVoidResult setVisible(bool visible);
     QuaderApiVoidResult setLocked(bool locked);
     QuaderApiVoidResult move(QVec3 delta);
@@ -55,9 +52,9 @@ public:
     QuaderApiVoidResult selectFace(
             QuaderElementId face,
             QuaderSelectionEdit edit = QuaderSelectionEdit::Replace);
-    QuaderApiResult<ModelingHoverSummary> hoverVertex(QuaderElementId vertex);
-    QuaderApiResult<ModelingHoverSummary> hoverEdge(QuaderElementId a, QuaderElementId b);
-    QuaderApiResult<ModelingHoverSummary> hoverFace(QuaderElementId face);
+    QuaderApiResult<QuaderHoverSummary> hoverVertex(QuaderElementId vertex);
+    QuaderApiResult<QuaderHoverSummary> hoverEdge(QuaderElementId a, QuaderElementId b);
+    QuaderApiResult<QuaderHoverSummary> hoverFace(QuaderElementId face);
 
 private:
     QuaderApi* api_ = nullptr;

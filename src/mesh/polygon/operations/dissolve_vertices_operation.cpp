@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -37,8 +38,8 @@ namespace {
  */
 class DissolveVerticesOperation final : public PolyOperation {
 public:
-    [[nodiscard]] std::string_view id() const override { return "dissolve_selected_vertices"; }
-    [[nodiscard]] std::string_view label() const override { return "Dissolve Selected Vertices"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::DissolveSelectedVertices).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::DissolveSelectedVertices).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 };
 

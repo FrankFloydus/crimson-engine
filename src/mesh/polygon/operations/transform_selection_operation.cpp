@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <diagnostics/profile.h>
 
@@ -43,8 +44,8 @@ class TransformSelectionOperation final : public PolyOperation {
 public:
     explicit TransformSelectionOperation(Transform3 transform);
 
-    [[nodiscard]] std::string_view id() const override { return "transform_selection"; }
-    [[nodiscard]] std::string_view label() const override { return "Transform Selection"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::TransformSelection).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::TransformSelection).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

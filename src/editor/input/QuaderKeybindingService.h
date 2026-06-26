@@ -59,6 +59,15 @@ struct QuaderKeybindingDispatch {
     std::string shortcut;
 };
 
+/**
+ * Stores the outcome of a user keybinding mutation.
+ */
+struct QuaderKeybindingMutationResult {
+    bool ok = true;
+    bool changed = false;
+    std::string message;
+};
+
 namespace keybinding_detail {
 
 inline std::string trimCopy(std::string_view text) {
@@ -314,6 +323,115 @@ private:
 
 inline bool whenMatches(std::string_view expression, const QuaderKeybindingContext& context) {
     return WhenParser(expression, context).evaluate();
+}
+
+inline std::vector<std::string> whenIdentifiers(std::string_view expression) {
+    std::vector<std::string> identifiers;
+    std::unordered_set<std::string> seen;
+    const auto addIdentifier = [&](std::string identifier) {
+        if (identifier == "true" || identifier == "false") {
+            return;
+        }
+        if (seen.insert(identifier).second) {
+            identifiers.push_back(std::move(identifier));
+        }
+    };
+    std::size_t offset = 0u;
+    while (offset < expression.size()) {
+        const char value = expression[offset];
+        const bool allowedStart = std::isalnum(static_cast<unsigned char>(value)) != 0 ||
+                value == '_' ||
+                value == '.' ||
+                value == '-';
+        if (!allowedStart) {
+            ++offset;
+            continue;
+        }
+
+        const std::size_t start = offset;
+        while (offset < expression.size()) {
+            const char token = expression[offset];
+            const bool allowed = std::isalnum(static_cast<unsigned char>(token)) != 0 ||
+                    token == '_' ||
+                    token == '.' ||
+                    token == '-';
+            if (!allowed) {
+                break;
+            }
+            ++offset;
+        }
+
+        const std::string identifier = std::string(expression.substr(start, offset - start));
+        addIdentifier(identifier);
+        if (identifier == "navigation.flyActive" ||
+                identifier == "navigation.orbitActive" ||
+                identifier == "navigation.panActive") {
+            addIdentifier("navigation.active");
+        }
+    }
+    return identifiers;
+}
+
+inline bool atMostOnePrefixTrue(const QuaderKeybindingContext& context, std::string_view prefix) {
+    bool found = false;
+    for (const auto& [key, value] : context.values) {
+        if (!value || key.find(prefix) != 0u) {
+            continue;
+        }
+        if (found) {
+            return false;
+        }
+        found = true;
+    }
+    return true;
+}
+
+inline bool validSemanticWhenContext(const QuaderKeybindingContext& context) {
+    if (!atMostOnePrefixTrue(context, "activeTool.")) {
+        return false;
+    }
+    if (!atMostOnePrefixTrue(context, "selectionMode.")) {
+        return false;
+    }
+
+    const bool fly = context.get("navigation.flyActive");
+    const bool orbit = context.get("navigation.orbitActive");
+    const bool pan = context.get("navigation.panActive");
+    if ((fly ? 1 : 0) + (orbit ? 1 : 0) + (pan ? 1 : 0) > 1) {
+        return false;
+    }
+    if ((fly || orbit || pan) && !context.get("navigation.active")) {
+        return false;
+    }
+    return true;
+}
+
+inline bool whenExpressionsOverlap(std::string_view left, std::string_view right) {
+    std::vector<std::string> identifiers = whenIdentifiers(left);
+    for (const std::string& identifier : whenIdentifiers(right)) {
+        if (std::find(identifiers.begin(), identifiers.end(), identifier) == identifiers.end()) {
+            identifiers.push_back(identifier);
+        }
+    }
+
+    if (identifiers.size() > 16u) {
+        return true;
+    }
+
+    const std::size_t combinations = std::size_t{1} << identifiers.size();
+    for (std::size_t mask = 0u; mask < combinations; ++mask) {
+        QuaderKeybindingContext context;
+        for (std::size_t index = 0u; index < identifiers.size(); ++index) {
+            context.set(identifiers[index], (mask & (std::size_t{1} << index)) != 0u);
+        }
+        if (!validSemanticWhenContext(context)) {
+            continue;
+        }
+        if (whenMatches(left, context) && whenMatches(right, context)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 inline bool sequenceStartsWith(
@@ -654,39 +772,57 @@ public:
         return addRule(defaultRules_, std::move(targetId), std::move(shortcut), std::move(when), "default", weight, false);
     }
 
-    [[nodiscard]] std::optional<std::string> setUserShortcut(std::string targetId, std::string shortcut, std::string when = {}) {
+    [[nodiscard]] QuaderKeybindingMutationResult setUserShortcut(std::string targetId, std::string shortcut, std::string when = {}) {
         if (targetId.empty()) {
-            return "Command id is required.";
+            return {.ok = false, .message = "Command id is required."};
         }
         if (!hasTarget(targetId)) {
-            return "Unknown command id.";
+            return {.ok = false, .message = "Unknown command id."};
         }
 
         const auto parsed = keybinding_detail::parseShortcut(shortcut);
         if (!parsed || parsed->empty()) {
-            return "Shortcut is invalid.";
+            return {.ok = false, .message = "Shortcut is invalid."};
+        }
+
+        QuaderKeybindingRule requested;
+        requested.targetId = targetId;
+        requested.sequence = *parsed;
+        requested.shortcut = keybinding_detail::formatShortcut(requested.sequence);
+        requested.when = when;
+        requested.source = "user";
+        requested.weight = kUserWeight;
+
+        if (const std::optional<QuaderKeybindingRule> current = effectiveRuleForTarget(targetId);
+                current &&
+                !current->removal &&
+                keybinding_detail::sameShortcut(current->sequence, requested.sequence) &&
+                current->when == requested.when) {
+            pendingSequence_.clear();
+            return {.ok = true, .changed = false, .message = "Shortcut unchanged."};
         }
 
         eraseUserRulesFor(targetId);
-        QuaderKeybindingRule rule;
-        rule.targetId = std::move(targetId);
-        rule.sequence = *parsed;
-        rule.shortcut = keybinding_detail::formatShortcut(rule.sequence);
-        rule.when = std::move(when);
-        rule.source = "user";
-        rule.weight = kUserWeight;
-        rule.order = nextOrder_++;
-        userRules_.push_back(std::move(rule));
+        requested.order = nextOrder_++;
+        userRules_.push_back(std::move(requested));
         pendingSequence_.clear();
-        return saveIfConfigured();
+        if (const std::optional<std::string> error = saveIfConfigured()) {
+            return {.ok = false, .changed = true, .message = *error};
+        }
+        return {.ok = true, .changed = true, .message = "Shortcut updated."};
     }
 
-    [[nodiscard]] std::optional<std::string> removeUserShortcut(std::string targetId) {
+    [[nodiscard]] QuaderKeybindingMutationResult removeUserShortcut(std::string targetId) {
         if (targetId.empty()) {
-            return "Command id is required.";
+            return {.ok = false, .message = "Command id is required."};
         }
         if (!hasTarget(targetId)) {
-            return "Unknown command id.";
+            return {.ok = false, .message = "Unknown command id."};
+        }
+
+        if (!effectiveRuleForTarget(targetId)) {
+            pendingSequence_.clear();
+            return {.ok = true, .changed = false, .message = "Shortcut already removed."};
         }
 
         eraseUserRulesFor(targetId);
@@ -698,20 +834,30 @@ public:
         rule.order = nextOrder_++;
         userRules_.push_back(std::move(rule));
         pendingSequence_.clear();
-        return saveIfConfigured();
+        if (const std::optional<std::string> error = saveIfConfigured()) {
+            return {.ok = false, .changed = true, .message = *error};
+        }
+        return {.ok = true, .changed = true, .message = "Shortcut removed."};
     }
 
-    [[nodiscard]] std::optional<std::string> resetUserShortcut(std::string_view targetId) {
+    [[nodiscard]] QuaderKeybindingMutationResult resetUserShortcut(std::string_view targetId) {
         if (targetId.empty()) {
-            return "Command id is required.";
+            return {.ok = false, .message = "Command id is required."};
         }
         if (!hasTarget(targetId)) {
-            return "Unknown command id.";
+            return {.ok = false, .message = "Unknown command id."};
+        }
+        if (!hasUserRuleFor(targetId)) {
+            pendingSequence_.clear();
+            return {.ok = true, .changed = false, .message = "Shortcut already at default."};
         }
 
         eraseUserRulesFor(targetId);
         pendingSequence_.clear();
-        return saveIfConfigured();
+        if (const std::optional<std::string> error = saveIfConfigured()) {
+            return {.ok = false, .changed = true, .message = *error};
+        }
+        return {.ok = true, .changed = true, .message = "Shortcut reset."};
     }
 
     [[nodiscard]] std::string shortcutFor(std::string_view targetId) const {
@@ -745,7 +891,7 @@ public:
             if (!keybinding_detail::sameShortcut(rule.sequence, *parsed)) {
                 continue;
             }
-            if (!when.empty() && !rule.when.empty() && rule.when != when) {
+            if (!keybinding_detail::whenExpressionsOverlap(rule.when, when)) {
                 continue;
             }
             conflicts.push_back({
@@ -871,7 +1017,7 @@ public:
                 return "Removal keybinding must include a command id.";
             }
             if (!hasTarget(targetId)) {
-                registerTarget(targetId);
+                return "Keybinding entry references an unknown command id: " + targetId;
             }
 
             QuaderKeybindingRule rule;
@@ -975,8 +1121,39 @@ private:
             rule.sequence = *parsed;
             rule.shortcut = keybinding_detail::formatShortcut(rule.sequence);
         }
+        const auto duplicate = std::find_if(rules.begin(), rules.end(), [&](const QuaderKeybindingRule& existing) {
+            return existing.targetId == rule.targetId &&
+                    existing.shortcut == rule.shortcut &&
+                    existing.when == rule.when &&
+                    existing.source == rule.source &&
+                    existing.removal == rule.removal &&
+                    keybinding_detail::sameShortcut(existing.sequence, rule.sequence);
+        });
+        if (duplicate != rules.end()) {
+            return true;
+        }
         rules.push_back(std::move(rule));
         return true;
+    }
+
+    [[nodiscard]] bool hasUserRuleFor(std::string_view targetId) const {
+        return std::any_of(userRules_.begin(), userRules_.end(), [&](const QuaderKeybindingRule& rule) {
+            return rule.targetId == targetId;
+        });
+    }
+
+    [[nodiscard]] std::optional<QuaderKeybindingRule> effectiveRuleForTarget(std::string_view targetId) const {
+        const std::vector<QuaderKeybindingRule> rules = effectiveRules();
+        const QuaderKeybindingRule* best = nullptr;
+        for (const QuaderKeybindingRule& rule : rules) {
+            if (rule.targetId != targetId) {
+                continue;
+            }
+            if (best == nullptr || rulePrecedes(*best, rule)) {
+                best = &rule;
+            }
+        }
+        return best == nullptr ? std::nullopt : std::optional<QuaderKeybindingRule>{*best};
     }
 
     void eraseUserRulesFor(std::string_view targetId) {

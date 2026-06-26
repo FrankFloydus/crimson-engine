@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -39,8 +40,8 @@ class BevelVerticesOperation final : public PolyOperation {
 public:
     explicit BevelVerticesOperation(float distance);
 
-    [[nodiscard]] std::string_view id() const override { return "bevel_selected_vertices"; }
-    [[nodiscard]] std::string_view label() const override { return "Bevel Selected Vertices"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::BevelSelectedVertices).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::BevelSelectedVertices).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

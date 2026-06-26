@@ -8,6 +8,7 @@
 
 #include "assets/AssetRegistry.h"
 #include "assets/MaterialDocument.h"
+#include "scene/Components.h"
 
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
@@ -23,6 +24,12 @@ class TextureBindingService;
  */
 class MaterialBindingService {
 public:
+    MaterialBindingService() = default;
+    MaterialBindingService(const MaterialBindingService&) = delete;
+    MaterialBindingService& operator=(const MaterialBindingService&) = delete;
+    MaterialBindingService(MaterialBindingService&&) = delete;
+    MaterialBindingService& operator=(MaterialBindingService&&) = delete;
+
     void initialize(filament::Material& meshMaterial, TextureBindingService& textureBinding);
     void shutdown();
 
@@ -30,7 +37,7 @@ public:
         return meshMaterial_ != nullptr && textureBinding_ != nullptr;
     }
 
-    std::uint64_t materialRevision(const AssetRegistry& assets, const MaterialDocument* material) const;
+    std::uint64_t materialRevision(const AssetRegistry& assets, const MaterialComponent* material) const;
     filament::MaterialInstance* createMeshMaterialInstance(
             const AssetRegistry& assets,
             const MaterialDocument* material,

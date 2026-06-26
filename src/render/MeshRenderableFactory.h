@@ -26,6 +26,12 @@ class MaterialBindingService;
  */
 class MeshRenderableFactory {
 public:
+    MeshRenderableFactory() = default;
+    MeshRenderableFactory(const MeshRenderableFactory&) = delete;
+    MeshRenderableFactory& operator=(const MeshRenderableFactory&) = delete;
+    MeshRenderableFactory(MeshRenderableFactory&&) = delete;
+    MeshRenderableFactory& operator=(MeshRenderableFactory&&) = delete;
+
     void initialize(filament::Engine& engine, filament::Scene& scene, MaterialBindingService& materialBinding);
     void shutdown();
 
@@ -36,8 +42,7 @@ public:
     MeshRenderableProxy create(EntityId entityId,
             AssetId meshId,
             const MeshAsset& mesh,
-            AssetId materialId,
-            const MaterialDocument* material,
+            const MaterialComponent* material,
             const AssetRegistry& assets,
             const QMat4& worldTransform,
             bool castShadows,

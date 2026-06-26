@@ -74,27 +74,26 @@ std::vector<int> snapshotModelingObjectIds(
 }
 
 EntityId entityForSnapshotModelingObject(
-        const SceneDocument& scene,
-        const DocumentEntitySnapshot& snapshot) {
+        const DocumentEntitySnapshot& snapshot,
+        const SceneAwareDeleteRuntime& runtime) {
     if (!snapshot.modelingObject.has_value()) {
         return InvalidEntityId;
     }
-    const ModelingObjectId objectId = snapshot.modelingObject->objectId;
-    for (const EntityId entity : scene.entities()) {
-        const ModelingObjectComponent* modelingObject = scene.modelingObject(entity);
-        if (modelingObject != nullptr && modelingObject->objectId == objectId) {
-            return entity;
-        }
+    if (!runtime.entityForModelingObject) {
+        return InvalidEntityId;
     }
-    return InvalidEntityId;
+
+    const std::optional<EntityId> entity = runtime.entityForModelingObject(snapshot.modelingObject->objectId);
+    return entity.value_or(InvalidEntityId);
 }
 
 EntityId restoreSceneDeleteSnapshot(
         SceneDocument& scene,
+        const SceneAwareDeleteRuntime& runtime,
         const DocumentEntitySnapshot& snapshot,
         EntityId parent,
         std::unordered_map<EntityId, EntityId>& remappedEntities) {
-    EntityId restored = entityForSnapshotModelingObject(scene, snapshot);
+    EntityId restored = entityForSnapshotModelingObject(snapshot, runtime);
     if (restored == InvalidEntityId || !scene.exists(restored)) {
         restored = documentCommandCreateEntityFromSnapshot(
                 scene,
@@ -119,7 +118,7 @@ EntityId restoreSceneDeleteSnapshot(
     remappedEntities[snapshot.originalId] = restored;
 
     for (const DocumentEntitySnapshot& child : snapshot.children) {
-        if (restoreSceneDeleteSnapshot(scene, child, restored, remappedEntities) == InvalidEntityId) {
+        if (restoreSceneDeleteSnapshot(scene, runtime, child, restored, remappedEntities) == InvalidEntityId) {
             return InvalidEntityId;
         }
     }
@@ -275,7 +274,7 @@ private:
             const EntityId parent = snapshot.originalParent != InvalidEntityId && scene_.exists(snapshot.originalParent)
                     ? snapshot.originalParent
                     : InvalidEntityId;
-            const EntityId restored = restoreSceneDeleteSnapshot(scene_, snapshot, parent, remappedEntities);
+            const EntityId restored = restoreSceneDeleteSnapshot(scene_, runtime_, snapshot, parent, remappedEntities);
             if (restored == InvalidEntityId) {
                 return {.ok = false, .changed = false, .message = "Deleted hierarchy could not be restored."};
             }

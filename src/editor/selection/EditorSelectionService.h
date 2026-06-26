@@ -35,6 +35,16 @@ enum class EditorSelectionTargetKind {
 };
 
 /**
+ * Enumerates EditorSelectionEdit values used by the editor selection authority.
+ */
+enum class EditorSelectionEdit {
+    Replace,
+    Add,
+    Remove,
+    Toggle,
+};
+
+/**
  * Represents an Editor Selection Target value used by the editor selection authority.
  */
 struct EditorSelectionTarget {
@@ -76,6 +86,8 @@ public:
     [[nodiscard]] ModelingSelectionMode mode() const;
 
     DocumentCommandResult setSceneSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
+    DocumentCommandResult editSceneSelection(EntityId entity, EditorSelectionEdit edit);
+    DocumentCommandResult editSceneSelection(std::span<const EntityId> entities, EditorSelectionEdit edit);
     ModelingCommandResult setObjectSelection(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request);
     ModelingCommandResult setMode(ModelingSelectionMode mode);

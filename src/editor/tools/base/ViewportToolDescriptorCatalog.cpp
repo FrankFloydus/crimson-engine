@@ -33,6 +33,7 @@ constexpr std::array<ToolDescriptor, 12> kViewportToolDescriptors {{
                 .menuGroup = ToolMenuGroup::Navigation,
                 .transformTool = ModelingTransformTool::Move,
                 .allowsSelectionFallback = true,
+                .supportsTransformGizmo = true,
         },
         {
                 .tool = ViewportToolId::Extend,
@@ -64,6 +65,7 @@ constexpr std::array<ToolDescriptor, 12> kViewportToolDescriptors {{
                 .menuGroup = ToolMenuGroup::Navigation,
                 .transformTool = ModelingTransformTool::Rotate,
                 .allowsSelectionFallback = true,
+                .supportsTransformGizmo = true,
         },
         {
                 .tool = ViewportToolId::Scale,
@@ -75,6 +77,7 @@ constexpr std::array<ToolDescriptor, 12> kViewportToolDescriptors {{
                 .menuGroup = ToolMenuGroup::Navigation,
                 .transformTool = ModelingTransformTool::Scale,
                 .allowsSelectionFallback = true,
+                .supportsTransformGizmo = true,
         },
         {
                 .tool = ViewportToolId::Box,
@@ -153,6 +156,15 @@ const ToolDescriptor* findViewportToolDescriptor(ViewportToolId tool)
     const auto found = std::find_if(kViewportToolDescriptors.begin(), kViewportToolDescriptors.end(),
             [&](const ToolDescriptor& descriptor) {
                 return descriptor.tool == tool;
+            });
+    return found == kViewportToolDescriptors.end() ? nullptr : &(*found);
+}
+
+const ToolDescriptor* findViewportToolDescriptor(ModelingViewportTool tool)
+{
+    const auto found = std::find_if(kViewportToolDescriptors.begin(), kViewportToolDescriptors.end(),
+            [&](const ToolDescriptor& descriptor) {
+                return descriptor.modelingTool == tool;
             });
     return found == kViewportToolDescriptors.end() ? nullptr : &(*found);
 }

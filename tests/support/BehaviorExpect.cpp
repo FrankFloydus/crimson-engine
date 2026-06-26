@@ -10,6 +10,7 @@
 
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "math/GlmBridge.h"
 #include "scene/SceneBounds.h"
 
 #include <gtest/gtest.h>
@@ -42,6 +43,28 @@ void expectTransformNear(const QuaderTransform& actual, const TransformComponent
     expectVec3Near(actual.position, expected.position, epsilon);
     expectVec3Near(actual.rotationEuler, expected.rotationEuler, epsilon);
     expectVec3Near(actual.scale, expected.scale, epsilon);
+}
+
+void expectTransformNear(const QuaderTransform& actual, const QuaderTransform& expected, float epsilon) {
+    expectVec3Near(actual.position, expected.position, epsilon);
+    expectVec3Near(actual.rotationEuler, expected.rotationEuler, epsilon);
+    expectVec3Near(actual.scale, expected.scale, epsilon);
+}
+
+ModelingSelectionMode modelingModeFromApi(QuaderSelectionMode mode) {
+    switch (mode) {
+    case QuaderSelectionMode::Vertex:
+        return ModelingSelectionMode::Vertex;
+    case QuaderSelectionMode::Edge:
+        return ModelingSelectionMode::Edge;
+    case QuaderSelectionMode::Face:
+        return ModelingSelectionMode::Face;
+    case QuaderSelectionMode::Object:
+        return ModelingSelectionMode::Object;
+    case QuaderSelectionMode::Group:
+        return ModelingSelectionMode::Group;
+    }
+    return ModelingSelectionMode::Object;
 }
 
 std::size_t countForLayer(const std::unordered_map<ViewportOverlayLayer, std::size_t>& counts, ViewportOverlayLayer layer) {
@@ -85,18 +108,7 @@ std::optional<QuaderEntitySnapshot> findEntityAlias(const BehaviorScenario& scen
 }
 
 QVec3 worldPosition(const BehaviorScenario& scenario, EntityId entity) {
-    QVec3 position;
-    EntityId current = entity;
-    int guard = 0;
-    while (current != InvalidEntityId && guard++ < 64) {
-        const std::optional<QuaderEntitySnapshot> snapshot = scenario.api().query().entity(current);
-        if (!snapshot.has_value()) {
-            break;
-        }
-        position += snapshot->transform.position;
-        current = snapshot->parent;
-    }
-    return position;
+    return transformPoint(scenario.session().scene().worldTransformMatrix(entity), {});
 }
 
 void includePoint(BehaviorBounds& bounds, QVec3 point) {
@@ -316,6 +328,16 @@ SceneExpect& SceneExpect::entityTransformNear(std::string_view alias, TransformC
     return *this;
 }
 
+SceneExpect& SceneExpect::entityTransformNear(std::string_view alias, QuaderTransform expected, float epsilon) {
+    const std::optional<QuaderEntitySnapshot> snapshot = findEntityAlias(scenario_, alias);
+    EXPECT_TRUE(snapshot.has_value()) << alias;
+    if (!snapshot.has_value()) {
+        return *this;
+    }
+    expectTransformNear(snapshot->transform, expected, epsilon);
+    return *this;
+}
+
 AssetExpect& AssetExpect::textureCount(std::size_t count) {
     EXPECT_EQ(scenario_.api().query().assets().textureCount, count);
     return *this;
@@ -324,6 +346,10 @@ AssetExpect& AssetExpect::textureCount(std::size_t count) {
 SelectionExpect& SelectionExpect::mode(ModelingSelectionMode mode) {
     EXPECT_EQ(scenario_.snapshot().selection.mode, mode);
     return *this;
+}
+
+SelectionExpect& SelectionExpect::mode(QuaderSelectionMode mode) {
+    return this->mode(modelingModeFromApi(mode));
 }
 
 SelectionExpect& SelectionExpect::objectCount(std::uint32_t count) {

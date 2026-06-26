@@ -99,6 +99,9 @@ public:
     ModelingCommandResult setInteractionSettings(const ModelingInteractionSettings& settings);
     [[nodiscard]] ModelingActionSet contextActionSet(const ModelingActionQuery& query = {}) const;
     [[nodiscard]] std::vector<ModelingActionItem> contextActions(const ModelingActionQuery& query = {}) const;
+    [[nodiscard]] std::optional<ModelingActionItem> contextAction(
+            std::string_view actionId,
+            const ModelingActionQuery& query = {}) const;
     ModelingCommandResult executeContextAction(std::string_view actionId);
     ModelingCommandResult commitActiveOperationPreview();
     ModelingCommandResult cancelActiveOperationPreview();

@@ -21,14 +21,12 @@
 
 namespace quader {
 
-class ProjectSession;
-
 /**
  * Exposes Quader Editor API operations through the public Quader API surface.
  */
 class QuaderEditorApi final {
 public:
-    explicit QuaderEditorApi(ProjectSession& session);
+    explicit QuaderEditorApi(QuaderApiSession session);
     ~QuaderEditorApi();
 
     QuaderEditorApi(const QuaderEditorApi&) = delete;
@@ -79,5 +77,28 @@ private:
     class Impl;
     std::unique_ptr<Impl> impl_;
 };
+
+/**
+ * Owns a standalone editor session for public examples and small automation programs.
+ */
+class QuaderStandaloneEditor final {
+public:
+    QuaderStandaloneEditor();
+    ~QuaderStandaloneEditor();
+
+    QuaderStandaloneEditor(const QuaderStandaloneEditor&) = delete;
+    QuaderStandaloneEditor& operator=(const QuaderStandaloneEditor&) = delete;
+    QuaderStandaloneEditor(QuaderStandaloneEditor&&) noexcept;
+    QuaderStandaloneEditor& operator=(QuaderStandaloneEditor&&) noexcept;
+
+    [[nodiscard]] QuaderEditorApi& editor();
+    [[nodiscard]] const QuaderEditorApi& editor() const;
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+[[nodiscard]] QuaderStandaloneEditor createStandaloneEditor();
 
 } // namespace quader

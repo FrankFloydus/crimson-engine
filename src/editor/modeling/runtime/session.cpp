@@ -281,6 +281,19 @@ quader_poly::SelectionMode component_selection_mode(SelectionMode mode)
 	}
 }
 
+bool polygon_selection_matches(const quader_poly::Selection& left, const quader_poly::Selection& right)
+{
+	return left.mode == right.mode &&
+		left.vertices == right.vertices &&
+		left.edges == right.edges &&
+		left.faces == right.faces &&
+		left.has_active == right.has_active &&
+		left.active_kind == right.active_kind &&
+		left.active_vertex == right.active_vertex &&
+		left.active_edge == right.active_edge &&
+		left.active_face == right.active_face;
+}
+
 int selected_object_index(const std::vector<PolygonObject>& objects, int active_object_id)
 {
 	if (active_object_id > 0) {

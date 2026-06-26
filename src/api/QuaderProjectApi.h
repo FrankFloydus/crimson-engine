@@ -6,18 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/QuaderApiSession.h"
 #include "api/QuaderEditorApiTypes.h"
 
 namespace quader {
-
-class ProjectSession;
 
 /**
  * Exposes Quader Project API operations through the public Quader API surface.
  */
 class QuaderProjectApi final {
 public:
-    explicit QuaderProjectApi(ProjectSession& session);
+    explicit QuaderProjectApi(QuaderApiSession session);
 
     QuaderApiVoidResult newProject();
     QuaderApiVoidResult open(const std::filesystem::path& path);
@@ -32,7 +31,7 @@ public:
 private:
     [[nodiscard]] QuaderApiVoidResult unsupported(std::string message) const;
 
-    ProjectSession& session_;
+    QuaderApiSession session_;
     std::filesystem::path path_;
 };
 

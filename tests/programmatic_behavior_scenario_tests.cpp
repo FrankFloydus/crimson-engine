@@ -15,29 +15,29 @@ namespace {
 /// Describes one synthetic component gizmo workflow so the same behavior can be
 /// verified across vertex, edge, and face selection modes.
 struct ComponentPickCase {
-    quader::ModelingSelectionMode mode = quader::ModelingSelectionMode::Face;
+    quader::QuaderSelectionMode mode = quader::QuaderSelectionMode::Face;
     quader::QVec3 rayOrigin = {};
     quader::ModelingTransformTool tool = quader::ModelingTransformTool::Move;
 };
 
 void expectSelectionCountForMode(
         quader::test::BehaviorScenario& s,
-        quader::ModelingSelectionMode mode) {
+        quader::QuaderSelectionMode mode) {
     s.then().selection()
             .mode(mode)
             .activeAlias("box");
     switch (mode) {
-    case quader::ModelingSelectionMode::Vertex:
+    case quader::QuaderSelectionMode::Vertex:
         s.then().selection().vertexCount(1);
         break;
-    case quader::ModelingSelectionMode::Edge:
+    case quader::QuaderSelectionMode::Edge:
         s.then().selection().edgeCount(1);
         break;
-    case quader::ModelingSelectionMode::Face:
+    case quader::QuaderSelectionMode::Face:
         s.then().selection().faceCount(1);
         break;
-    case quader::ModelingSelectionMode::Object:
-    case quader::ModelingSelectionMode::Group:
+    case quader::QuaderSelectionMode::Object:
+    case quader::QuaderSelectionMode::Group:
         ADD_FAILURE() << "component selection test received non-component mode";
         break;
     }
@@ -57,7 +57,7 @@ void runComponentTransformDragCase(ComponentPickCase testCase) {
             .beginTransformDrag([&] {
                 quader::test::DragBeginOptions options;
                 options.tool = testCase.tool;
-                if (testCase.mode == quader::ModelingSelectionMode::Vertex &&
+                if (testCase.mode == quader::QuaderSelectionMode::Vertex &&
                         testCase.tool != quader::ModelingTransformTool::Move) {
                     options.useSelectionCenter = false;
                     options.pivot = {};
@@ -138,47 +138,47 @@ TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepCompone
 #else
     for (const ComponentPickCase testCase : {
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Face,
+                         .mode = quader::QuaderSelectionMode::Face,
                          .rayOrigin = {0.0f, 0.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Move,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Face,
+                         .mode = quader::QuaderSelectionMode::Face,
                          .rayOrigin = {0.0f, 0.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Rotate,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Face,
+                         .mode = quader::QuaderSelectionMode::Face,
                          .rayOrigin = {0.0f, 0.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Scale,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Edge,
+                         .mode = quader::QuaderSelectionMode::Edge,
                          .rayOrigin = {0.0f, 1.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Move,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Edge,
+                         .mode = quader::QuaderSelectionMode::Edge,
                          .rayOrigin = {0.0f, 1.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Rotate,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Edge,
+                         .mode = quader::QuaderSelectionMode::Edge,
                          .rayOrigin = {0.0f, 1.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Scale,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Vertex,
+                         .mode = quader::QuaderSelectionMode::Vertex,
                          .rayOrigin = {1.0f, 1.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Move,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Vertex,
+                         .mode = quader::QuaderSelectionMode::Vertex,
                          .rayOrigin = {1.0f, 1.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Rotate,
                  },
                  ComponentPickCase{
-                         .mode = quader::ModelingSelectionMode::Vertex,
+                         .mode = quader::QuaderSelectionMode::Vertex,
                          .rayOrigin = {1.0f, 1.0f, 5.0f},
                          .tool = quader::ModelingTransformTool::Scale,
                  },
@@ -196,7 +196,7 @@ TEST(ProgrammaticBehaviorScenarioTests, FaceGizmoDragMovesOnlyPickedFaceAndKeeps
 
     s.given()
             .unitBox("box", "Face Gizmo Drag Box")
-            .selectionMode(quader::ModelingSelectionMode::Face);
+            .selectionMode(quader::QuaderSelectionMode::Face);
 
     s.when()
             .pick({0.0f, 0.0f, 5.0f})
@@ -206,7 +206,7 @@ TEST(ProgrammaticBehaviorScenarioTests, FaceGizmoDragMovesOnlyPickedFaceAndKeeps
 
     s.then().command().okChanged();
     s.then().selection()
-            .mode(quader::ModelingSelectionMode::Face)
+            .mode(quader::QuaderSelectionMode::Face)
             .faceCount(1)
             .activeAlias("box");
     s.then().mesh("box")
@@ -223,7 +223,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveExtrudesAndShiftFaceScaleIn
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Shift Extrude Box")
-                .selectionMode(quader::ModelingSelectionMode::Face);
+                .selectionMode(quader::QuaderSelectionMode::Face);
         s.when().pick({0.0f, 0.0f, 5.0f});
         const quader::test::BehaviorSnapshot before = s.snapshot("before shift extrude");
         ASSERT_EQ(before.meshes.size(), 1u);
@@ -238,7 +238,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveExtrudesAndShiftFaceScaleIn
 
         s.then().command().okChanged();
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Face)
+                .mode(quader::QuaderSelectionMode::Face)
                 .faceCount(1)
                 .activeAlias("box");
         s.then().mesh("box").verticesGreaterThan(before.meshes.front());
@@ -248,7 +248,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveExtrudesAndShiftFaceScaleIn
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Shift Inset Box")
-                .selectionMode(quader::ModelingSelectionMode::Face);
+                .selectionMode(quader::QuaderSelectionMode::Face);
         s.when().pick({0.0f, 0.0f, 5.0f});
         const quader::test::BehaviorSnapshot before = s.snapshot("before shift inset");
         ASSERT_EQ(before.meshes.size(), 1u);
@@ -263,7 +263,7 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveExtrudesAndShiftFaceScaleIn
 
         s.then().command().okChanged();
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Face)
+                .mode(quader::QuaderSelectionMode::Face)
                 .faceCount(1)
                 .activeAlias("box");
         s.then().mesh("box").verticesGreaterThan(before.meshes.front());
@@ -279,10 +279,10 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Face Pick Box")
-                .selectionMode(quader::ModelingSelectionMode::Face);
+                .selectionMode(quader::QuaderSelectionMode::Face);
         s.when().pick({0.0f, 0.0f, 5.0f});
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Face)
+                .mode(quader::QuaderSelectionMode::Face)
                 .faceCount(1)
                 .activeAlias("box");
 
@@ -295,10 +295,10 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Edge Pick Box")
-                .selectionMode(quader::ModelingSelectionMode::Edge);
+                .selectionMode(quader::QuaderSelectionMode::Edge);
         s.when().pick({0.0f, 1.0f, 5.0f});
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Edge)
+                .mode(quader::QuaderSelectionMode::Edge)
                 .edgeCount(1)
                 .activeAlias("box");
     }
@@ -307,25 +307,25 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Vertex Pick Box")
-                .selectionMode(quader::ModelingSelectionMode::Vertex);
+                .selectionMode(quader::QuaderSelectionMode::Vertex);
         s.when().pick({1.0f, 1.0f, 5.0f});
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Vertex)
+                .mode(quader::QuaderSelectionMode::Vertex)
                 .vertexCount(1)
                 .activeAlias("box");
     }
 
     {
         auto s = quader::test::BehaviorScenario::newProject();
-        quader::TransformComponent transform;
+        quader::QuaderTransform transform;
         transform.position = {4.0f, 0.0f, 0.0f};
         s.given()
                 .unitBox("box", "Transformed Pick Box")
                 .transform("box", transform)
-                .selectionMode(quader::ModelingSelectionMode::Face);
+                .selectionMode(quader::QuaderSelectionMode::Face);
         s.when().pick({4.0f, 0.0f, 5.0f});
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Face)
+                .mode(quader::QuaderSelectionMode::Face)
                 .faceCount(1)
                 .activeAlias("box");
     }
@@ -338,7 +338,7 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
                 .selected("left");
         s.when().pick({5.0f, 0.0f, 5.0f});
         s.then().selection()
-                .mode(quader::ModelingSelectionMode::Object)
+                .mode(quader::QuaderSelectionMode::Object)
                 .objectCount(1)
                 .activeAlias("right");
     }
@@ -353,7 +353,7 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Face Overlay Box")
-                .selectionMode(quader::ModelingSelectionMode::Face);
+                .selectionMode(quader::QuaderSelectionMode::Face);
         s.when().pick({0.0f, 0.0f, 5.0f});
         s.then().overlay()
                 .hasTriangle(quader::ViewportOverlayLayer::SelectedVisibleFace)
@@ -377,7 +377,7 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Edge Overlay Box")
-                .selectionMode(quader::ModelingSelectionMode::Edge);
+                .selectionMode(quader::QuaderSelectionMode::Edge);
         s.when().pick({0.0f, 1.0f, 5.0f});
         s.then().overlay()
                 .hasLine(quader::ViewportOverlayLayer::SelectedEdge)
@@ -391,7 +391,7 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
                 .unitBox("box", "Vertex Overlay Box")
-                .selectionMode(quader::ModelingSelectionMode::Vertex);
+                .selectionMode(quader::QuaderSelectionMode::Vertex);
         s.when().pick({1.0f, 1.0f, 5.0f});
         s.then().overlay()
                 .hasPoint(quader::ViewportOverlayLayer::SelectedVertex)

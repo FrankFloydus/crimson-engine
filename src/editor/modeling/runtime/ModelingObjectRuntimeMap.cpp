@@ -54,15 +54,7 @@ const std::unordered_map<int, EntityId>& ModelingObjectRuntimeMap::entitiesByObj
     return entitiesByObject_;
 }
 
-std::unordered_map<int, EntityId>& ModelingObjectRuntimeMap::entitiesByObject() {
-    return entitiesByObject_;
-}
-
 const std::unordered_map<EntityId, int>& ModelingObjectRuntimeMap::objectsByEntity() const {
-    return objectsByEntity_;
-}
-
-std::unordered_map<EntityId, int>& ModelingObjectRuntimeMap::objectsByEntity() {
     return objectsByEntity_;
 }
 

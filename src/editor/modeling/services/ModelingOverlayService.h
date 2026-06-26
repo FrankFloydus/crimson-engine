@@ -7,6 +7,7 @@
 #pragma once
 
 #include "editor/modeling/ModelingTypes.h"
+#include "editor/modeling/runtime/editor_runtime.h"
 #include "render/ViewportOverlayFrame.h"
 
 #include <cstdint>
@@ -64,6 +65,8 @@ class ModelingOverlayService {
 public:
     [[nodiscard]] static bool hasModalOverlay(const ModelingToolStatus& status);
     void invalidate() const;
+    [[nodiscard]] std::uint64_t selectionOverlaySignature(
+            const quader_editor_core::EditorRuntime& runtime) const;
 
     [[nodiscard]] bool selectionFrameMatches(
             std::uint64_t contentRevision,

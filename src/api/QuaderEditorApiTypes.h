@@ -7,8 +7,7 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
-#include "viewport/ViewportInputRouter.h"
-#include "viewport/ViewportLayout.h"
+#include "api/QuaderViewportLayoutTypes.h"
 
 #include <filesystem>
 #include <functional>
@@ -70,6 +69,7 @@ struct QuaderNotification {
 struct QuaderViewportRuntimeHooks {
     std::function<QuaderApiVoidResult(ViewportPaneId)> frameSelection;
     std::function<QuaderApiVoidResult(ViewportPaneId)> focusOrigin;
+    std::function<QuaderApiVoidResult()> spawnWindow;
     std::function<QuaderApiVoidResult(ViewportPaneId, const std::filesystem::path&)> captureScreenshot;
 };
 

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderToolsApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 
 #include "scene/document/ProjectSession.h"
 #include "editor/modeling/services/ModelingSessionService.h"
@@ -16,13 +17,18 @@
 namespace quader {
 namespace {
 
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
+}
+
+
 bool sameTool(std::string_view left, std::string_view right) {
     return left.empty() || left == right;
 }
 
 } // namespace
 
-QuaderToolsApi::QuaderToolsApi(ProjectSession& session)
+QuaderToolsApi::QuaderToolsApi(QuaderApiSession session)
     : session_(session) {}
 
 void QuaderToolsApi::setRuntimeHooks(QuaderToolsRuntimeHooks hooks) {
@@ -38,7 +44,8 @@ QuaderApiVoidResult QuaderToolsApi::activate(std::string_view toolId) {
     if (tool == nullptr) {
         return failure("Unknown viewport tool.");
     }
-    return statusFrom(tool->activate(session_.modeling()), toolId);
+    ModelingCommandResult result = tool->activate(projectSession(session_).modeling());
+    return statusFrom(result.ok, result.changed, std::move(result.message), toolId);
 }
 
 QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
@@ -46,7 +53,7 @@ QuaderApiVoidResult QuaderToolsApi::activate(ViewportToolId tool) {
 }
 
 QuaderApiVoidResult QuaderToolsApi::setSetting(std::string_view toolId, std::string_view name, double value) {
-    ModelingInteractionSettings settings = session_.modeling().interactionSettings();
+    ModelingInteractionSettings settings = projectSession(session_).modeling().interactionSettings();
     bool handled = false;
 
     if (sameTool(toolId, "bridge") && (name == "steps" || name == "bridge_steps")) {
@@ -78,37 +85,43 @@ QuaderApiVoidResult QuaderToolsApi::setSetting(std::string_view toolId, std::str
     if (!handled) {
         return failure("Unknown tool setting.");
     }
-    return statusFrom(session_.modeling().setInteractionSettings(settings), "Set Tool Setting");
+    ModelingCommandResult result = projectSession(session_).modeling().setInteractionSettings(settings);
+    return statusFrom(result.ok, result.changed, std::move(result.message), "Set Tool Setting");
 }
 
 QuaderApiVoidResult QuaderToolsApi::cancelModalTool() {
     if (hooks_.cancelModalTool) {
         return hooks_.cancelModalTool();
     }
-    return statusFrom(session_.modeling().cancelActiveModalTool(), "Cancel Modal Tool");
+    ModelingCommandResult result = projectSession(session_).modeling().cancelActiveModalTool();
+    return statusFrom(result.ok, result.changed, std::move(result.message), "Cancel Modal Tool");
 }
 
 std::string QuaderToolsApi::activeTool() const {
-    return std::string(viewportToolCatalogId(viewportToolForModeling(session_.modeling().toolStatus().activeTool)));
+    return std::string(viewportToolCatalogId(viewportToolForModeling(projectSession(session_).modeling().toolStatus().activeTool)));
 }
 
 QuaderRevisionStamp QuaderToolsApi::currentRevisions() const {
-    const ModelingSelectionSummary summary = session_.modeling().selectionSummary();
+    const ModelingSelectionSummary summary = projectSession(session_).modeling().selectionSummary();
     return {
-            .projectRevision = session_.document().revision(),
-            .sceneRevision = session_.scene().revision(),
-            .assetRevision = session_.assets().revision(),
+            .projectRevision = projectSession(session_).document().revision(),
+            .sceneRevision = projectSession(session_).scene().revision(),
+            .assetRevision = projectSession(session_).assets().revision(),
             .modelingContentRevision = summary.contentRevision,
             .modelingSelectionRevision = summary.selectionRevision,
     };
 }
 
-QuaderApiVoidResult QuaderToolsApi::statusFrom(ModelingCommandResult result, std::string_view label) const {
+QuaderApiVoidResult QuaderToolsApi::statusFrom(
+        bool ok,
+        bool changed,
+        std::string message,
+        std::string_view label) const {
     return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = result.message.empty() ? std::string(label) : std::move(result.message),
-            .mutationKind = result.ok && result.changed ? QuaderMutationKind::Modeling : QuaderMutationKind::None,
+            .ok = ok,
+            .changed = changed,
+            .message = message.empty() ? std::string(label) : std::move(message),
+            .mutationKind = ok && changed ? QuaderMutationKind::Modeling : QuaderMutationKind::None,
             .revisions = currentRevisions(),
     };
 }

@@ -7,8 +7,8 @@
 #include "api/QuaderApi.h"
 
 #include "api/QuaderApiMutationRunner.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 #include "api/QuaderObjectHandle.h"
-#include "scene/document/ProjectSession.h"
 #include "editor/commands/EditorCommandService.h"
 
 namespace quader {
@@ -18,19 +18,21 @@ namespace quader {
  */
 class QuaderApi::Impl final {
 public:
-    explicit Impl(ProjectSession& session)
-        : session(session)
-        , history(session.history())
-        , editorCommands(history, session.documentCommands())
-        , mutations(session, history, editorCommands, modelingCommands)
-        , scene(session, mutations)
-        , modeling(session, mutations)
-        , selection(session, mutations)
-        , assets(session, mutations)
-        , historyApi(history, mutations)
-        , query(session, history) {}
+    explicit Impl(QuaderApiSession apiSession)
+        : session(apiSession)
+        , projectSession(QuaderApiSessionInternalAccess::projectSession(apiSession))
+        , history(projectSession.history())
+        , editorCommands(history, projectSession.documentCommands())
+        , mutations(projectSession, history, editorCommands, modelingCommands)
+        , scene(apiSession, mutations)
+        , modeling(apiSession, mutations)
+        , selection(apiSession, mutations)
+        , assets(apiSession, mutations)
+        , historyApi(apiSession, mutations)
+        , query(apiSession) {}
 
-    ProjectSession& session;
+    QuaderApiSession session;
+    ProjectSession& projectSession;
     EditorHistoryService& history;
     EditorCommandService editorCommands;
     ModelingCommandExecutionService modelingCommands;
@@ -43,7 +45,7 @@ public:
     QuaderQueryApi query;
 };
 
-QuaderApi::QuaderApi(ProjectSession& session)
+QuaderApi::QuaderApi(QuaderApiSession session)
     : impl_(std::make_unique<Impl>(session)) {}
 
 QuaderApi::~QuaderApi() = default;
@@ -115,12 +117,12 @@ QuaderObjectHandle QuaderApi::object(QuaderModelingObjectRef ref) {
     return QuaderObjectHandle(*this, ref);
 }
 
-ProjectSession& QuaderApi::session() {
+QuaderApiSession QuaderApi::session() const {
     return impl_->session;
 }
 
-const ProjectSession& QuaderApi::session() const {
-    return impl_->session;
+QuaderApiMutationRunner& QuaderApi::mutations() {
+    return impl_->mutations;
 }
 
 } // namespace quader

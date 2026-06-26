@@ -23,6 +23,10 @@ public:
                 .kind = CommandToolKind::Instant,
                 .previewKind = ModelingActionPreviewKind::None,
                 .rebuildsMeshOnSuccess = false,
+                .publicCommandId = "edit.copy",
+                .registersPublicCommand = false,
+                .publicCompatibilityAlias = "modeling.copy_selection",
+                .hostShortcutTargetId = "copy_meshes",
         };
     }
 

@@ -48,6 +48,14 @@ void assignDocumentCommandStatus(DocumentCommandResult& target, DocumentCommandR
     target.message = std::move(source.message);
 }
 
+bool documentCommandEntityIsModelingOwned(const SceneDocument& scene, EntityId entity) {
+    return scene.modelingObject(entity) != nullptr;
+}
+
+DocumentCommandResult documentCommandModelingOwnedEntityResult() {
+    return documentCommandInvalidRequestResult("Entity is owned by a modeling object; use modeling commands");
+}
+
 std::vector<DocumentTransformEdit> normalizedTransformEdits(
         const SceneDocument& scene,
         std::vector<DocumentTransformEdit> edits) {
@@ -147,6 +155,9 @@ DocumentCommandResult DocumentCommandService::destroyEntity(EntityId entity) {
     if (!scene_.exists(entity)) {
         return documentCommandMissingEntityResult();
     }
+    if (documentCommandEntityIsModelingOwned(scene_, entity)) {
+        return documentCommandModelingOwnedEntityResult();
+    }
     return executeDocumentCommand(
             history_,
             std::make_unique<DestroyEntityCommand>(scene_, entity));
@@ -196,6 +207,11 @@ DocumentDuplicateEntityResult DocumentCommandService::duplicateEntity(EntityId e
     if (!scene_.exists(entity)) {
         DocumentDuplicateEntityResult result;
         assignDocumentCommandStatus(result, documentCommandMissingEntityResult());
+        return result;
+    }
+    if (documentCommandEntityIsModelingOwned(scene_, entity)) {
+        DocumentDuplicateEntityResult result;
+        assignDocumentCommandStatus(result, documentCommandModelingOwnedEntityResult());
         return result;
     }
 
@@ -402,6 +418,9 @@ DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, 
     const MeshComponent* currentMesh = scene_.mesh(entity);
     if (!currentMesh) {
         return documentCommandMissingEntityResult();
+    }
+    if (documentCommandEntityIsModelingOwned(scene_, entity)) {
+        return documentCommandModelingOwnedEntityResult();
     }
     if (documentCommandSameMeshComponent(*currentMesh, mesh)) {
         return documentCommandUnchangedResult();

@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 namespace quader_poly {
 
@@ -15,8 +16,8 @@ class ExtrudeElementsOperation final : public PolyOperation {
 public:
     ExtrudeElementsOperation(quader::QVec3 offset, float closed_edge_ledge_size = 0.0F);
 
-    [[nodiscard]] std::string_view id() const override { return "extrude_selected_elements"; }
-    [[nodiscard]] std::string_view label() const override { return "Extrude Selected Elements"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::ExtrudeSelectedElements).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::ExtrudeSelectedElements).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

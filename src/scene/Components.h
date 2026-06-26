@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace quader {
@@ -152,6 +153,14 @@ struct MeshComponent {
  */
 struct MaterialComponent {
     AssetId material = InvalidAssetId;
+    std::unordered_map<std::uint32_t, AssetId> materialSlots;
+
+    [[nodiscard]] AssetId materialForSlot(std::uint32_t slot) const {
+        const auto found = materialSlots.find(slot);
+        return found == materialSlots.end() ? material : found->second;
+    }
+
+    [[nodiscard]] bool operator==(const MaterialComponent&) const = default;
 };
 
 /**

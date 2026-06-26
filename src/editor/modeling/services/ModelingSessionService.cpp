@@ -22,14 +22,12 @@
 #include "editor/transform/SceneTransformDragService.h"
 #include "math/GlmBridge.h"
 #include "render/ViewportOverlayPolicy.h"
-#include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -343,6 +341,138 @@ ModelingActiveSelectionKind fromRuntime(quader_editor_core::ActiveSelectionKind 
     return ModelingActiveSelectionKind::None;
 }
 
+/**
+ * Stores a validated polygon component selection edit before it is committed into runtime selection state.
+ */
+struct ComponentSelectionEditResult {
+    bool ok = true;
+    quader_poly::Selection selection;
+    std::string_view message;
+};
+
+bool polygonEdgeExists(const quader_poly::Document& document, quader_poly::Edge edge) {
+    if (edge.a == quader_poly::invalid_element_id || edge.b == quader_poly::invalid_element_id || edge.a == edge.b) {
+        return false;
+    }
+    for (const quader_poly::Face& face : document.faces) {
+        if (face.vertices.size() < 2U) {
+            continue;
+        }
+        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+            const quader_poly::ElementId a = face.vertices[index];
+            const quader_poly::ElementId b = face.vertices[(index + 1U) % face.vertices.size()];
+            if ((a == edge.a && b == edge.b) || (a == edge.b && b == edge.a)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+template <typename Element>
+void applyComponentSelectionValue(std::vector<Element>& values, Element value, ModelingSelectionEdit edit) {
+    const auto found = std::find(values.begin(), values.end(), value);
+    const bool selected = found != values.end();
+    if (edit == ModelingSelectionEdit::Remove || (edit == ModelingSelectionEdit::Toggle && selected)) {
+        if (selected) {
+            values.erase(found);
+        }
+        return;
+    }
+    if (!selected) {
+        values.push_back(value);
+    }
+}
+
+ComponentSelectionEditResult validatedComponentSelectionEdit(
+        const quader_editor_core::PolygonObject& object,
+        const ModelingComponentSelectionRequest& request,
+        quader_editor_core::SelectionMode mode,
+        const quader_poly::Selection* currentSelection) {
+    ComponentSelectionEditResult result;
+    if (currentSelection != nullptr) {
+        result.selection = *currentSelection;
+    }
+    result.selection.mode = quader_editor_core::component_selection_mode(mode);
+
+    for (const int vertexId : request.vertices) {
+        if (vertexId <= 0) {
+            continue;
+        }
+        const auto id = static_cast<quader_poly::ElementId>(vertexId);
+        if (quader_poly::find_vertex(object.document, id) == nullptr) {
+            return {.ok = false, .message = "Selection vertex was not found."};
+        }
+        applyComponentSelectionValue(result.selection.vertices, id, request.edit);
+    }
+
+    for (const std::pair<int, int>& edgeIds : request.edges) {
+        if (edgeIds.first <= 0 || edgeIds.second <= 0) {
+            continue;
+        }
+        const quader_poly::Edge edge = quader_poly::make_edge(
+                static_cast<quader_poly::ElementId>(edgeIds.first),
+                static_cast<quader_poly::ElementId>(edgeIds.second));
+        if (!polygonEdgeExists(object.document, edge)) {
+            return {.ok = false, .message = "Selection edge was not found."};
+        }
+        applyComponentSelectionValue(result.selection.edges, edge, request.edit);
+    }
+
+    for (const int faceId : request.faces) {
+        if (faceId <= 0) {
+            continue;
+        }
+        const auto id = static_cast<quader_poly::ElementId>(faceId);
+        if (quader_poly::find_face(object.document, id) == nullptr) {
+            return {.ok = false, .message = "Selection face was not found."};
+        }
+        applyComponentSelectionValue(result.selection.faces, id, request.edit);
+    }
+
+    result.selection.has_active = false;
+    if (request.activeKind == ModelingActiveSelectionKind::Vertex && request.activeVertex > 0) {
+        const auto active = static_cast<quader_poly::ElementId>(request.activeVertex);
+        if (quader_poly::find_vertex(object.document, active) == nullptr) {
+            return {.ok = false, .message = "Active selection vertex was not found."};
+        }
+        if (std::find(result.selection.vertices.begin(), result.selection.vertices.end(), active) !=
+                result.selection.vertices.end()) {
+            result.selection.has_active = true;
+            result.selection.active_kind = quader_poly::ElementKind::vertex;
+            result.selection.active_vertex = active;
+        }
+    } else if (request.activeKind == ModelingActiveSelectionKind::Edge &&
+            request.activeEdge.first > 0 &&
+            request.activeEdge.second > 0) {
+        const quader_poly::Edge active = quader_poly::make_edge(
+                static_cast<quader_poly::ElementId>(request.activeEdge.first),
+                static_cast<quader_poly::ElementId>(request.activeEdge.second));
+        if (!polygonEdgeExists(object.document, active)) {
+            return {.ok = false, .message = "Active selection edge was not found."};
+        }
+        if (std::find(result.selection.edges.begin(), result.selection.edges.end(), active) !=
+                result.selection.edges.end()) {
+            result.selection.has_active = true;
+            result.selection.active_kind = quader_poly::ElementKind::edge;
+            result.selection.active_edge = active;
+        }
+    } else if (request.activeKind == ModelingActiveSelectionKind::Face && request.activeFace > 0) {
+        const auto active = static_cast<quader_poly::ElementId>(request.activeFace);
+        if (quader_poly::find_face(object.document, active) == nullptr) {
+            return {.ok = false, .message = "Active selection face was not found."};
+        }
+        if (std::find(result.selection.faces.begin(), result.selection.faces.end(), active) !=
+                result.selection.faces.end()) {
+            result.selection.has_active = true;
+            result.selection.active_kind = quader_poly::ElementKind::face;
+            result.selection.active_face = active;
+        }
+    }
+
+    return result;
+}
+
 ModelingHoverTarget fromRuntime(const quader_editor_core::SelectionHoverState& hover) {
     ModelingHoverTarget target;
     target.objectId = hover.object_id;
@@ -395,22 +525,6 @@ ModelingBoxDragState fromRuntime(quader_editor_core::BoxDragState state) {
         return ModelingBoxDragState::Height;
     }
     return ModelingBoxDragState::Idle;
-}
-
-QVec3 transformObjectPoint(
-        int objectId,
-        QVec3 point,
-        const std::unordered_map<int, EntityId>& entityByObject,
-        const SceneDocument& scene) {
-    const auto entity = entityByObject.find(objectId);
-    if (entity == entityByObject.end()) {
-        return point;
-    }
-    const TransformComponent* transform = scene.transform(entity->second);
-    if (transform == nullptr) {
-        return point;
-    }
-    return transformPoint(scene.worldTransformMatrix(entity->second), point);
 }
 
 /**
@@ -549,31 +663,6 @@ void appendDrawnPlaneToolOverlay(
 
 float runtimeLengthSquared(quader::QVec3 value) {
     return value.x * value.x + value.y * value.y + value.z * value.z;
-}
-
-void mixToolStateHash(std::uint64_t& hash, std::uint64_t value) {
-    hash ^= value;
-    hash *= 1099511628211ULL;
-}
-
-void mixToolStateHash(std::uint64_t& hash, bool value) {
-    mixToolStateHash(hash, value ? 1ULL : 0ULL);
-}
-
-void mixToolStateHash(std::uint64_t& hash, int value) {
-    mixToolStateHash(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
-}
-
-void mixToolStateHash(std::uint64_t& hash, double value) {
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    mixToolStateHash(hash, bits);
-}
-
-void mixToolStateHash(std::uint64_t& hash, quader::QVec3 value) {
-    mixToolStateHash(hash, static_cast<double>(value.x));
-    mixToolStateHash(hash, static_cast<double>(value.y));
-    mixToolStateHash(hash, static_cast<double>(value.z));
 }
 
 quader::QVec3 drawnPlaneSupportPoint(
@@ -1109,41 +1198,7 @@ public:
     }
 
     [[nodiscard]] std::optional<QVec3> selectionCenter() const {
-        if (session_.selection_mode() == quader_editor_core::SelectionMode::object) {
-            if (const std::optional<SceneBounds> bounds = selectedWorldBounds(scene_, assets_)) {
-                return boundsCenter(*bounds);
-            }
-        }
-
-        std::optional<SceneBounds> bounds;
-        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
-            if (!object.selected || object.selection.empty()) {
-                continue;
-            }
-            const std::vector<quader_poly::ElementId> vertexIds =
-                    quader_poly::selected_vertex_ids(object.document, object.selection);
-            for (const quader_poly::ElementId vertexId : vertexIds) {
-                const quader_poly::Vertex* vertex = quader_poly::find_vertex(object.document, vertexId);
-                if (vertex == nullptr) {
-                    continue;
-                }
-                const QVec3 world = transformObjectPoint(
-                        object.id,
-                        fromRuntime(vertex->position),
-                        objectRegistry_.entitiesByObject(),
-                        scene_);
-                if (!bounds) {
-                    bounds = SceneBounds{.min = world, .max = world};
-                } else {
-                    includePoint(*bounds, world);
-                }
-            }
-        }
-        if (bounds) {
-            return boundsCenter(*bounds);
-        }
-        const std::optional<quader::QVec3> center = session_.selection_center();
-        return center ? std::optional<QVec3>{fromRuntime(*center)} : std::nullopt;
+        return selectionProjectionService_.worldSelectionCenter(session_, scene_, assets_, objectRegistry_);
     }
 
     [[nodiscard]] ModelingSelectionMode selectionMode() const {
@@ -1199,44 +1254,7 @@ public:
     }
 
     [[nodiscard]] std::uint64_t selectionOverlaySignature() const {
-        std::uint64_t hash = selectionOverlayToolSignature();
-
-        const quader_editor_core::SelectionHoverState& hover = runtime_.hover();
-        mixToolStateHash(hash, hover.object_id);
-        mixToolStateHash(hash, static_cast<int>(hover.kind));
-        mixToolStateHash(hash, static_cast<int>(hover.vertex_id));
-        mixToolStateHash(hash, static_cast<int>(hover.edge.a));
-        mixToolStateHash(hash, static_cast<int>(hover.edge.b));
-        mixToolStateHash(hash, static_cast<int>(hover.face_id));
-        mixToolStateHash(hash, hover.selected_modifier_pressed);
-        mixToolStateHash(hash, hover.candidate_object_id);
-
-        const quader_editor_core::TransformDragState& drag = runtime_.transform_drag_state();
-        mixToolStateHash(hash, drag.active);
-        mixToolStateHash(hash, static_cast<int>(drag.tool));
-        mixToolStateHash(hash, static_cast<int>(drag.operation));
-        mixToolStateHash(hash, static_cast<int>(drag.axis));
-        mixToolStateHash(hash, drag.pivot);
-        mixToolStateHash(hash, drag.scene_transform_preview_eligible);
-        mixToolStateHash(hash, static_cast<int>(drag.snap_target.kind));
-        mixToolStateHash(hash, drag.snap_target.object_id);
-        mixToolStateHash(hash, static_cast<int>(drag.snap_target.vertex_id));
-        mixToolStateHash(hash, drag.snap_target.position);
-        if (drag.active) {
-            const std::vector<quader_editor_core::SelectionOverlayPoint> snapPoints =
-                    quader_editor_core::transform_drag_snap_overlay_points(drag);
-            mixToolStateHash(hash, static_cast<int>(snapPoints.size()));
-            for (const quader_editor_core::SelectionOverlayPoint& point : snapPoints) {
-                mixToolStateHash(hash, static_cast<int>(point.layer));
-                mixToolStateHash(hash, point.position);
-                mixToolStateHash(hash, static_cast<std::uint64_t>(point.color_abgr));
-                mixToolStateHash(hash, static_cast<double>(point.size_pixels));
-                mixToolStateHash(hash, point.object_id);
-                mixToolStateHash(hash, static_cast<int>(point.vertex_id));
-            }
-        }
-
-        return hash;
+        return overlayService_.selectionOverlaySignature(runtime_);
     }
 
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const {
@@ -1468,38 +1486,10 @@ public:
             syncSceneObjectsFromModeling();
         }
 
-        std::vector<int> sceneObjectIds;
-        sceneObjectIds.reserve(scene_.selectedEntities().size());
-        int activeObjectId = -1;
-        for (const EntityId entity : scene_.selectedEntities()) {
-            const auto it = objectRegistry_.objectsByEntity().find(entity);
-            if (it == objectRegistry_.objectsByEntity().end()) {
-                continue;
-            }
-            sceneObjectIds.push_back(it->second);
-            if (entity == scene_.primarySelection()) {
-                activeObjectId = it->second;
-            }
-        }
-
-        if (!sceneObjectIds.empty()) {
-            if (activeObjectId <= 0) {
-                activeObjectId = sceneObjectIds.back();
-            }
-            session_.set_selected_object_ids(sceneObjectIds, activeObjectId);
+        if (selectionProjectionService_.promoteObjectSelectionForTool(session_, scene_, objectRegistry_)) {
             syncSceneSelectionFromModeling();
             invalidateSelectionOverlayCaches();
-            return;
         }
-
-        std::vector<int> modelingObjectIds = session_.selected_object_ids();
-        if (modelingObjectIds.empty()) {
-            return;
-        }
-        activeObjectId = session_.active_object_id() > 0 ? session_.active_object_id() : modelingObjectIds.back();
-        session_.set_selected_object_ids(modelingObjectIds, activeObjectId);
-        syncSceneSelectionFromModeling();
-        invalidateSelectionOverlayCaches();
     }
 
     void syncSceneSelectionFromModeling() {
@@ -1683,6 +1673,9 @@ public:
                             return executeRuntimeCommand(
                                     noSettingsRuntimeCommand(quader_editor_core::EditorRuntimeCommandId::delete_selection),
                                     true);
+                        },
+                        .entityForModelingObject = [&](int modelingObjectId) {
+                            return objectRegistry_.entityForModelingObject(modelingObjectId);
                         },
                         .syncObjectSelectionFromScene = [&](bool forceObjectMode) {
                             syncObjectSelectionFromScene(forceObjectMode);
@@ -1911,6 +1904,12 @@ public:
         return contextActionService_.actions(selectionSummary(), query, modalToolOwnsViewport());
     }
 
+    [[nodiscard]] std::optional<ModelingActionItem> contextAction(
+            std::string_view actionId,
+            ModelingActionQuery query) const {
+        return contextActionService_.action(selectionSummary(), actionId, query, modalToolOwnsViewport());
+    }
+
     void resetSettingsForPreviewAction(ModelingActionPreviewKind previewKind) {
         interactionSettingsService_.resetForPreviewAction(previewKind);
     }
@@ -2018,8 +2017,12 @@ public:
         if (!action.ok) {
             return {.ok = false, .message = action.message};
         }
-        if (action.action.actionId == "delete_selection") {
-            return deleteSelection();
+        for (const ModelingInstantOperationCatalogEntry& entry : modelingInstantOperationCatalog()) {
+            if (entry.id == action.action.actionId &&
+                    (action.action.operationId.empty() || entry.operationId == action.action.operationId) &&
+                    action.action.previewKind == ModelingActionPreviewKind::None) {
+                return executeInstantOperation(entry.operation);
+            }
         }
         if (action.action.kind != ModelingActionKind::Operation || action.action.operationId.empty()) {
             return {.ok = false, .message = "Action is not an executable modeling operation."};
@@ -3134,110 +3137,20 @@ public:
         }
 
         const quader_editor_core::SelectionMode mode = appSelectionModeToRuntime(request.mode);
-        quader_poly::Selection selection;
+        const quader_poly::Selection* currentSelection = nullptr;
         if (request.edit != ModelingSelectionEdit::Replace &&
                 session_.selection_mode() == mode &&
                 object->selected) {
-            selection = object->selection;
+            currentSelection = &object->selection;
         }
-        selection.mode = quader_editor_core::component_selection_mode(mode);
-
-        auto applyVertex = [&](int vertexId) {
-            if (vertexId <= 0) {
-                return;
-            }
-            const auto id = static_cast<quader_poly::ElementId>(vertexId);
-            const auto found = std::find(selection.vertices.begin(), selection.vertices.end(), id);
-            const bool selected = found != selection.vertices.end();
-            if (request.edit == ModelingSelectionEdit::Remove || (request.edit == ModelingSelectionEdit::Toggle && selected)) {
-                if (selected) {
-                    selection.vertices.erase(found);
-                }
-                return;
-            }
-            if (!selected) {
-                selection.vertices.push_back(id);
-            }
-        };
-
-        auto applyEdge = [&](std::pair<int, int> edgeIds) {
-            if (edgeIds.first <= 0 || edgeIds.second <= 0) {
-                return;
-            }
-            const quader_poly::Edge edge = quader_poly::make_edge(
-                    static_cast<quader_poly::ElementId>(edgeIds.first),
-                    static_cast<quader_poly::ElementId>(edgeIds.second));
-            const auto found = std::find(selection.edges.begin(), selection.edges.end(), edge);
-            const bool selected = found != selection.edges.end();
-            if (request.edit == ModelingSelectionEdit::Remove || (request.edit == ModelingSelectionEdit::Toggle && selected)) {
-                if (selected) {
-                    selection.edges.erase(found);
-                }
-                return;
-            }
-            if (!selected) {
-                selection.edges.push_back(edge);
-            }
-        };
-
-        auto applyFace = [&](int faceId) {
-            if (faceId <= 0) {
-                return;
-            }
-            const auto id = static_cast<quader_poly::ElementId>(faceId);
-            const auto found = std::find(selection.faces.begin(), selection.faces.end(), id);
-            const bool selected = found != selection.faces.end();
-            if (request.edit == ModelingSelectionEdit::Remove || (request.edit == ModelingSelectionEdit::Toggle && selected)) {
-                if (selected) {
-                    selection.faces.erase(found);
-                }
-                return;
-            }
-            if (!selected) {
-                selection.faces.push_back(id);
-            }
-        };
-
-        for (const int vertex : request.vertices) {
-            applyVertex(vertex);
-        }
-        for (const std::pair<int, int>& edge : request.edges) {
-            applyEdge(edge);
-        }
-        for (const int face : request.faces) {
-            applyFace(face);
-        }
-
-        selection.has_active = false;
-        if (request.activeKind == ModelingActiveSelectionKind::Vertex && request.activeVertex > 0) {
-            const auto active = static_cast<quader_poly::ElementId>(request.activeVertex);
-            if (std::find(selection.vertices.begin(), selection.vertices.end(), active) != selection.vertices.end()) {
-                selection.has_active = true;
-                selection.active_kind = quader_poly::ElementKind::vertex;
-                selection.active_vertex = active;
-            }
-        } else if (request.activeKind == ModelingActiveSelectionKind::Edge &&
-                request.activeEdge.first > 0 &&
-                request.activeEdge.second > 0) {
-            const quader_poly::Edge active = quader_poly::make_edge(
-                    static_cast<quader_poly::ElementId>(request.activeEdge.first),
-                    static_cast<quader_poly::ElementId>(request.activeEdge.second));
-            if (std::find(selection.edges.begin(), selection.edges.end(), active) != selection.edges.end()) {
-                selection.has_active = true;
-                selection.active_kind = quader_poly::ElementKind::edge;
-                selection.active_edge = active;
-            }
-        } else if (request.activeKind == ModelingActiveSelectionKind::Face && request.activeFace > 0) {
-            const auto active = static_cast<quader_poly::ElementId>(request.activeFace);
-            if (std::find(selection.faces.begin(), selection.faces.end(), active) != selection.faces.end()) {
-                selection.has_active = true;
-                selection.active_kind = quader_poly::ElementKind::face;
-                selection.active_face = active;
-            }
+        ComponentSelectionEditResult selectionEdit =
+                validatedComponentSelectionEdit(*object, request, mode, currentSelection);
+        if (!selectionEdit.ok) {
+            return {.ok = false, .message = std::string(selectionEdit.message)};
         }
 
         const std::uint64_t selectionBefore = session_.state().selection_revision;
-        session_.set_component_selection(request.modelingObjectId, std::move(selection), mode);
+        session_.set_component_selection(request.modelingObjectId, std::move(selectionEdit.selection), mode);
         syncSceneSelectionFromModeling();
         invalidateSelectionOverlayCaches();
         return {.ok = true, .changed = session_.state().selection_revision != selectionBefore};
@@ -3338,61 +3251,6 @@ public:
 private:
     void invalidateSelectionOverlayCaches() const {
         overlayService_.invalidate();
-    }
-
-    [[nodiscard]] std::uint64_t selectionOverlayToolSignature() const {
-        std::uint64_t hash = 1469598103934665603ULL;
-        mixToolStateHash(hash, static_cast<int>(runtime_.active_tool()));
-
-        const quader_editor_core::CutToolState& cut = runtime_.cut_state();
-        const quader_editor_core::CutHoverState& cutHover = runtime_.cut_hover();
-        mixToolStateHash(hash, quader_editor_core::cut_is_active(cut));
-        mixToolStateHash(hash, static_cast<int>(cut.points.size()));
-        for (const quader::QVec3& point : cut.points) {
-            mixToolStateHash(hash, point);
-        }
-        mixToolStateHash(hash, static_cast<int>(cut.target_object_ids.size()));
-        for (const int objectId : cut.target_object_ids) {
-            mixToolStateHash(hash, objectId);
-        }
-        mixToolStateHash(hash, cut.source_object_id);
-        mixToolStateHash(hash, cut.face_normal);
-        mixToolStateHash(hash, static_cast<int>(cut.mode));
-        mixToolStateHash(hash, cut.dragging_point_index);
-        mixToolStateHash(hash, cut.dragging_new_point);
-        mixToolStateHash(hash, cut.dragging_line);
-        mixToolStateHash(hash, cut.drag_line_anchor);
-        mixToolStateHash(hash, cut.preview_valid);
-        mixToolStateHash(hash, cut.preview_counts.target_count);
-        mixToolStateHash(hash, cut.preview_counts.split_count);
-        mixToolStateHash(hash, cut.preview_counts.removed_count);
-        mixToolStateHash(hash, cutHover.valid);
-        mixToolStateHash(hash, cutHover.object_id);
-        mixToolStateHash(hash, cutHover.position);
-
-        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
-        const quader_editor_core::MirrorHoverState& mirrorHover = runtime_.mirror_hover();
-        mixToolStateHash(hash, quader_editor_core::mirror_is_active(mirror));
-        mixToolStateHash(hash, static_cast<int>(mirror.plane.points.size()));
-        for (const quader::QVec3& point : mirror.plane.points) {
-            mixToolStateHash(hash, point);
-        }
-        mixToolStateHash(hash, mirror.plane.face_normal);
-        mixToolStateHash(hash, mirror.plane.dragging_point_index);
-        mixToolStateHash(hash, mirror.plane.dragging_new_point);
-        mixToolStateHash(hash, mirror.plane.dragging_line);
-        mixToolStateHash(hash, mirror.plane.drag_line_anchor);
-        mixToolStateHash(hash, static_cast<int>(mirror.target_object_ids.size()));
-        for (const int objectId : mirror.target_object_ids) {
-            mixToolStateHash(hash, objectId);
-        }
-        mixToolStateHash(hash, mirror.preview_valid);
-        mixToolStateHash(hash, mirror.preview_counts.target_count);
-        mixToolStateHash(hash, mirror.preview_counts.mirrored_count);
-        mixToolStateHash(hash, mirrorHover.valid);
-        mixToolStateHash(hash, mirrorHover.object_id);
-        mixToolStateHash(hash, mirrorHover.position);
-        return hash;
     }
 
     [[nodiscard]] bool sceneObjectsSyncedForCurrentModelingContent() const {
@@ -3821,6 +3679,12 @@ ModelingActionSet ModelingSessionService::contextActionSet(const ModelingActionQ
 
 std::vector<ModelingActionItem> ModelingSessionService::contextActions(const ModelingActionQuery& query) const {
     return impl_->contextActions(query);
+}
+
+std::optional<ModelingActionItem> ModelingSessionService::contextAction(
+        std::string_view actionId,
+        const ModelingActionQuery& query) const {
+    return impl_->contextAction(actionId, query);
 }
 
 ModelingCommandResult ModelingSessionService::executeContextAction(std::string_view actionId) {

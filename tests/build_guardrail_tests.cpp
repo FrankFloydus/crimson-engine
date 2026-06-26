@@ -6,32 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "support/GuardrailFileScan.h"
+
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
-
 namespace {
 
-std::string readSourceFile(const std::filesystem::path& relativePath) {
-    const std::filesystem::path path = std::filesystem::path(QUADER_SOURCE_DIR) / relativePath;
-    std::ifstream file(path);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    if (!file.is_open()) {
-        return {};
-    }
-
-    return {
-            std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>()};
-}
+using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::filesWithExtension;
+using quader::test::guardrail::normalizedRelative;
+using quader::test::guardrail::sourcePath;
+using quader::test::guardrail::sourceRoot;
+using quader::test::guardrail::startsWith;
 
 void expectContains(const std::string& source, const std::string& needle) {
     EXPECT_NE(source.find(needle), std::string::npos) << needle;
@@ -41,13 +32,9 @@ void expectMissing(const std::string& source, const std::string& needle) {
     EXPECT_EQ(source.find(needle), std::string::npos) << needle;
 }
 
-bool pathStartsWith(const std::string& path, const std::string& prefix) {
-    return path.size() >= prefix.size() && path.substr(0, prefix.size()) == prefix;
-}
-
 bool isCommentCapableProjectFile(const std::filesystem::path& relativePath) {
     const std::string path = relativePath.generic_string();
-    if (pathStartsWith(path, "thirdparty/") || pathStartsWith(path, "vcpkg_installed/")) {
+    if (startsWith(path, "thirdparty/") || startsWith(path, "vcpkg_installed/")) {
         return false;
     }
 
@@ -84,7 +71,7 @@ bool isCommentCapableProjectFile(const std::filesystem::path& relativePath) {
 }
 
 std::vector<std::filesystem::path> projectOwnedCommentCapableFiles() {
-    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::filesystem::path root = sourceRoot();
     const std::vector<std::filesystem::path> roots = {
             ".gitignore",
             "AGENTS.md",
@@ -130,7 +117,7 @@ std::vector<std::filesystem::path> projectOwnedCommentCapableFiles() {
 }
 
 std::vector<std::filesystem::path> guardrailSourceFiles() {
-    const std::filesystem::path root = std::filesystem::path(QUADER_SOURCE_DIR);
+    const std::filesystem::path root = sourceRoot();
     const std::vector<std::filesystem::path> roots = {
             "src",
             "tests",
@@ -179,6 +166,21 @@ std::vector<std::filesystem::path> guardrailSourceFiles() {
     return files;
 }
 
+bool containsGitCommitLiteral(const std::string& source) {
+    static const std::regex commitLiteral(R"([0-9a-fA-F]{40})");
+    return std::regex_search(source, commitLiteral);
+}
+
+std::size_t countOccurrences(std::string_view source, std::string_view needle) {
+    std::size_t count = 0;
+    std::size_t offset = 0;
+    while ((offset = source.find(needle, offset)) != std::string_view::npos) {
+        ++count;
+        offset += needle.size();
+    }
+    return count;
+}
+
 } // namespace
 
 TEST(BuildGuardrailTests, ProjectOwnedCommentCapableFilesCarryProprietaryBanner) {
@@ -199,7 +201,7 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     const std::string buildFiles = rootCMake + "\n" + absorbedCMake;
     const std::string presets = readSourceFile("CMakePresets.json");
 
-    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(QUADER_SOURCE_DIR) / "sdk"));
+    EXPECT_FALSE(std::filesystem::exists(sourcePath("sdk")));
 
     expectMissing(buildFiles, "QUADER_BUILD_SDK_TESTS");
     expectMissing(buildFiles, "QUADER_ENABLE_MODELING_SDK");
@@ -255,7 +257,158 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH");
     expectContains(buildFiles, "QUADER_ALLOW_EXTERNAL_CATCH2_FETCH");
 
-    EXPECT_TRUE(std::filesystem::exists(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "commands" / "document"));
+    EXPECT_TRUE(std::filesystem::exists(sourcePath("src/editor/commands/document")));
+}
+
+TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string options = readSourceFile("cmake/QuaderBuildOptions.cmake");
+    const std::string modeling = readSourceFile("cmake/QuaderModeling.cmake");
+
+    expectContains(rootCMake, "include(cmake/QuaderBuildOptions.cmake)");
+    for (const std::string& optionName : {
+                 "QUADER_BUILD_TESTS",
+                 "QUADER_USE_OPENMESH_TOPOLOGY",
+                 "QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH",
+                 "QUADER_ALLOW_EXTERNAL_CATCH2_FETCH",
+                 "QUADER_ENABLE_TRACY",
+                 "QUADER_TRACY_ON_DEMAND",
+                 "QUADER_BUILD_PERFORMANCE_BENCHMARKS",
+         }) {
+        expectContains(options, "option(" + optionName);
+        expectMissing(rootCMake, "option(" + optionName);
+        expectMissing(modeling, "option(" + optionName);
+    }
+
+    expectContains(options, "set(_QUADER_OPENMESH_COMMIT");
+    expectContains(options, "set(_QUADER_CATCH2_COMMIT");
+    expectContains(options, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
+    expectContains(options, "set(QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
+    expectContains(options, "function(quader_resolve_dependency_source");
+    expectContains(options, "ENV{${env_var}}");
+    expectContains(options, "Desktop/_QUADER_DEV/_deps/${dev_dep_dir}");
+    expectMissing(rootCMake, "set(_QUADER_OPENMESH_COMMIT");
+    expectMissing(rootCMake, "set(_QUADER_CATCH2_COMMIT");
+    expectMissing(rootCMake, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
+    expectMissing(modeling, "set(QUADER_OPENMESH_COMMIT");
+    expectMissing(modeling, "set(QUADER_CATCH2_COMMIT");
+    expectMissing(modeling, "gte-8.2-");
+    expectContains(modeling, "QUADER_GEOMETRIC_TOOLS_VENDOR_DIR");
+    EXPECT_EQ(countOccurrences(rootCMake + "\n" + modeling, "Desktop/_QUADER_DEV/_deps/openmesh-"), 0U);
+    EXPECT_EQ(countOccurrences(rootCMake + "\n" + modeling, "Desktop/_QUADER_DEV/_deps/catch2-"), 0U);
+    EXPECT_EQ(countOccurrences(rootCMake + "\n" + modeling, "thirdparty/openmesh/openmesh-"), 0U);
+    EXPECT_EQ(countOccurrences(rootCMake + "\n" + modeling, "thirdparty/catch2/catch2-"), 0U);
+    EXPECT_EQ(countOccurrences(options, "openmesh/openmesh-${_QUADER_OPENMESH_COMMIT}"), 1U);
+    EXPECT_EQ(countOccurrences(options, "catch2/catch2-${_QUADER_CATCH2_COMMIT}"), 1U);
+}
+
+TEST(BuildGuardrailTests, RootQuaderTestsListsEveryRootTestSource) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "tests", ".cpp")) {
+        const std::string relative = normalizedRelative(file);
+        if (startsWith(relative, "tests/modeling_domain/")) {
+            continue;
+        }
+
+        EXPECT_NE(rootCMake.find(relative), std::string::npos) << relative;
+    }
+}
+
+TEST(BuildGuardrailTests, CatalogGuardrailTestsDoNotMirrorProductionCatalogs) {
+    const std::string modelingCatalogTests = readSourceFile("tests/modeling_tool_catalog_tests.cpp");
+    const std::string viewportCatalogTests = readSourceFile("tests/viewport_tool_catalog_tests.cpp");
+    const std::string modelingDomainToolContracts =
+            readSourceFile("tests/modeling_domain/tool/qdr_modeling_runtime_tool_operation_contract_tests.cpp");
+
+    expectMissing(modelingCatalogTests, "ExpectedAction");
+    expectMissing(modelingCatalogTests, "expectedActions");
+    expectMissing(modelingCatalogTests, "expectedOperations");
+    expectContains(modelingCatalogTests, "modelingInstantOperationCatalog()");
+    expectContains(modelingCatalogTests, "quader_host_contract::action_catalog()");
+
+    expectMissing(viewportCatalogTests, "ExpectedTool");
+    expectMissing(viewportCatalogTests, "constexpr std::array");
+    expectContains(viewportCatalogTests, "viewportToolDescriptors()");
+
+    expectMissing(modelingDomainToolContracts, "ExpectedTool");
+    expectMissing(modelingDomainToolContracts, "ExpectedOperation");
+    expectMissing(modelingDomainToolContracts, "constexpr std::array");
+    expectContains(modelingDomainToolContracts, "qec::tool_registry().tools()");
+    expectContains(modelingDomainToolContracts, "qec::operation_registry().entries()");
+}
+
+TEST(BuildGuardrailTests, ModelingDomainTestsUseCategorizedExplicitSourceRegistration) {
+    const std::string modeling = readSourceFile("cmake/QuaderModeling.cmake");
+
+    expectContains(modeling, "function(quader_add_modeling_domain_test_source category target)");
+    expectContains(modeling, "Unknown modeling-domain test category");
+    expectMissing(modeling, "function(quader_add_polygon_domain_test");
+    expectMissing(modeling, "function(quader_add_modeling_runtime_domain_test");
+    expectMissing(modeling, "function(quader_add_editor_metadata_domain_test");
+    expectMissing(modeling, "file(GLOB QUADER_POLYGON_OPERATION_TEST_SOURCES");
+    expectMissing(modeling, "file(GLOB QUADER_RUNTIME_OPERATION_TEST_SOURCES");
+    expectMissing(modeling, "file(GLOB QUADER_RUNTIME_TOOL_TEST_SOURCES");
+
+    for (const std::filesystem::path& file :
+            filesWithExtension(sourceRoot() / "tests/modeling_domain", ".cpp")) {
+        const std::string relative = normalizedRelative(file);
+        EXPECT_NE(modeling.find(relative), std::string::npos) << relative;
+    }
+
+    const std::size_t openmeshTest =
+            modeling.find("tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp");
+    ASSERT_NE(openmeshTest, std::string::npos);
+    const std::size_t openmeshCondition = modeling.rfind("if(QUADER_USE_OPENMESH_TOPOLOGY)", openmeshTest);
+    ASSERT_NE(openmeshCondition, std::string::npos);
+    const std::size_t openmeshEnd = modeling.find("endif()", openmeshCondition);
+    ASSERT_NE(openmeshEnd, std::string::npos);
+    EXPECT_LT(openmeshCondition, openmeshTest);
+    EXPECT_LT(openmeshTest, openmeshEnd);
+}
+
+TEST(BuildGuardrailTests, AbsorbedModelingDocsNameRealModelingDomainTargets) {
+    const std::string docs = readSourceFile("docs/absorbed_modeling/README.md");
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string modeling = readSourceFile("cmake/QuaderModeling.cmake");
+    const std::string buildFiles = rootCMake + "\n" + modeling;
+
+    const std::vector<std::string> documentedTargets = {
+            "quader_geometry",
+            "quader_modeling_polygon",
+            "quader_modeling_runtime",
+            "quader_qdr_document_io",
+            "quader_qdr_runtime_io",
+            "quader_editor_metadata",
+            "quader_modeling_domain_tests",
+    };
+    for (const std::string& target : documentedTargets) {
+        expectContains(docs, "`" + target + "`");
+        expectContains(buildFiles, target);
+    }
+
+    expectMissing(docs, "`qdr_modeling_domain_smoke`");
+}
+
+TEST(BuildGuardrailTests, DependencyCommitLiteralsStayInDependencyOwnerFiles) {
+    const std::vector<std::filesystem::path> allowedCommitOwnerFiles = {
+            "cmake/QuaderBuildOptions.cmake",
+            "docs/absorbed_modeling/QUADER_NATIVE_SOURCE.txt",
+            "thirdparty/THIRD_PARTY_MANIFEST.md",
+    };
+
+    std::vector<std::filesystem::path> files = projectOwnedCommentCapableFiles();
+    files.push_back("thirdparty/THIRD_PARTY_MANIFEST.md");
+    for (const std::filesystem::path& relativePath : files) {
+        if (std::find(
+                    allowedCommitOwnerFiles.begin(),
+                    allowedCommitOwnerFiles.end(),
+                    relativePath) != allowedCommitOwnerFiles.end()) {
+            continue;
+        }
+        EXPECT_FALSE(containsGitCommitLiteral(readSourceFile(relativePath)))
+                << relativePath.generic_string();
+    }
 }
 
 TEST(BuildGuardrailTests, MigratedModelingDomainTestFilesUseNativeNames) {
@@ -334,13 +487,15 @@ TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
 
 TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string options = readSourceFile("cmake/QuaderBuildOptions.cmake");
     const std::string presets = readSourceFile("CMakePresets.json");
 
     expectContains(rootCMake, "ENV{FILAMENT_SDK_ROOT}");
     expectContains(rootCMake, "../_SOURCES/filament-v1.71.6-windows");
-    expectContains(rootCMake, "ENV{QUADER_OPENMESH_SOURCE_DIR}");
-    expectContains(rootCMake, "ENV{QUADER_CATCH2_SOURCE_DIR}");
-    expectContains(rootCMake, "ENV{USERPROFILE}");
+    expectContains(options, "QUADER_OPENMESH_SOURCE_DIR");
+    expectContains(options, "QUADER_CATCH2_SOURCE_DIR");
+    expectContains(options, "ENV{${env_var}}");
+    expectContains(options, "ENV{USERPROFILE}");
 
     expectContains(presets, "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake");
     expectMissing(presets, "C:/Users/Drako/vcpkg");
@@ -360,6 +515,15 @@ TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
     expectContains(rootCMake, "bin/matc.exe");
     expectContains(rootCMake, "lib/x86_64/${_quader_filament_runtime}/${_quader_filament_lib}.lib");
     expectContains(rootCMake, "lib/x86_64/mdd/matdbg.lib");
+}
+
+TEST(BuildGuardrailTests, BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy) {
+    const std::string smoke = readSourceFile("tools/boot_smoke.ps1");
+
+    expectContains(smoke, "[switch]$AllowMissingLog");
+    expectContains(smoke, "Quader log was not found");
+    expectContains(smoke, "(?im)\\[(error|critical)\\]|fatal error|\\bfatal\\b");
+    expectContains(smoke, "Error, critical, or fatal log entry found");
 }
 
 TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
@@ -413,7 +577,7 @@ TEST(BuildGuardrailTests, RuntimeUiDoesNotReintroduceImGui) {
 
     for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
         const std::string path = relativePath.generic_string();
-        if (!pathStartsWith(path, "src/")) {
+        if (!startsWith(path, "src/")) {
             continue;
         }
 
@@ -490,6 +654,7 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
     const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
+    const std::string chromeButtonHeader = readSourceFile("src/ui/components/atoms/UIChromeButtonComponent.h");
 
     expectContains(mainSource, "bool borderlessWindow = true");
     expectContains(mainSource, "--borderless-window");
@@ -545,7 +710,8 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(uiSystemSource, "rmlHost_.takeWindowChromeAction()");
     expectContains(rmlHostHeader, "enum class WindowChromeAction");
     expectContains(rmlHostSource, "WindowChromeActionListener");
-    expectContains(rmlHostSource, "data-chrome-window-action");
+    expectContains(rmlHostSource, "kChromeWindowActionAttribute");
+    expectContains(chromeButtonHeader, "data-chrome-window-action");
 }
 
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {

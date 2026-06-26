@@ -34,10 +34,16 @@ enum class SwapChainPresentationColorSpace {
  */
 class RenderSystem {
 public:
+    RenderSystem() = default;
+    RenderSystem(const RenderSystem&) = delete;
+    RenderSystem& operator=(const RenderSystem&) = delete;
+    RenderSystem(RenderSystem&&) = delete;
+    RenderSystem& operator=(RenderSystem&&) = delete;
     ~RenderSystem();
 
     bool initialize(void* nativeWindow, const std::filesystem::path& executableDir, RenderConfig config = {});
     void shutdown();
+    [[nodiscard]] bool initialized() const { return engine_ != nullptr; }
 
     bool beginFrame();
     bool beginFrame(filament::SwapChain* swapChain);

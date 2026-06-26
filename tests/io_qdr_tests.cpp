@@ -9,6 +9,8 @@
 #include "scene/document/ProjectDocument.h"
 #include "io/qdr/QdrDocumentReader.h"
 #include "io/qdr/QdrDocumentWriter.h"
+#include "io/qdr/qdr_document.h"
+#include "support/GuardrailFileScan.h"
 
 #include <gtest/gtest.h>
 #include <mesh/polygon/document.h>
@@ -17,6 +19,8 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,13 +29,10 @@ using namespace quader;
 
 namespace {
 
-std::string readTextFile(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    return {
-            std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>()};
-}
+using quader::test::guardrail::readFile;
+using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::sourceFilesUnder;
+using quader::test::guardrail::sourcePath;
 
 MeshAsset makeTriangleMesh(std::string name) {
     MeshAsset mesh;
@@ -44,6 +45,26 @@ MeshAsset makeTriangleMesh(std::string name) {
     mesh.indices = {0u, 1u, 2u};
     mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 0u, .indexCount = 3u, .materialSlot = 2u}};
     return mesh;
+}
+
+quader_poly::Document makeAuthoredPolygonDocument() {
+    quader_poly::Document document;
+    document.next_vertex_id = 13u;
+    document.next_face_id = 21u;
+    document.vertices = {
+            quader_poly::Vertex{.id = 10u, .position = {0.0f, 0.0f, 0.0f}},
+            quader_poly::Vertex{.id = 11u, .position = {1.0f, 0.0f, 0.0f}},
+            quader_poly::Vertex{.id = 12u, .position = {0.0f, 1.0f, 0.0f}},
+    };
+    quader_poly::Face face;
+    face.id = 20u;
+    face.vertices = {10u, 11u, 12u};
+    face.uvs = {{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}};
+    face.material_slot = 2u;
+    face.normal_shading = quader_poly::SurfaceShading::authored;
+    document.faces.push_back(std::move(face));
+    document.hard_normal_edges.push_back(quader_poly::make_edge(10u, 11u));
+    return document;
 }
 
 TextureAsset makeTextureAsset(
@@ -145,6 +166,9 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     material.baseColor = {0.8f, 0.2f, 0.1f};
     material.roughness = 0.45f;
     const AssetId materialId = document.assets().addMaterial(22u, std::move(material));
+    MaterialDocument accentMaterial = makeDefaultQuaderMaterial("Accent");
+    accentMaterial.baseColor = {0.1f, 0.8f, 0.2f};
+    const AssetId accentMaterialId = document.assets().addMaterial(23u, std::move(accentMaterial));
 
     const EntityId group = document.scene().createEntityWithId(100u, "Group", EntityKind::Empty);
     const EntityId wall = document.scene().createEntityWithId(200u, "Wall", EntityKind::Mesh);
@@ -153,7 +177,10 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     document.scene().setTransform(wall, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
     document.scene().setModelingObject(wall, ModelingObjectComponent{.objectId = 42, .materialSlot = 2u});
     document.scene().setMesh(wall, MeshComponent{.mesh = meshId});
-    document.scene().setMaterial(wall, MaterialComponent{.material = materialId});
+    document.scene().setMaterial(wall, MaterialComponent{
+            .material = materialId,
+            .materialSlots = {{2u, accentMaterialId}},
+    });
     document.scene().setSelected(wall, true);
     document.scene().setActiveSelection(wall);
     document.upsertObjectRecord(ProjectObjectRecord{
@@ -196,6 +223,7 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.scene().mesh(wall)->mesh, meshId);
     ASSERT_NE(loaded.scene().material(wall), nullptr);
     EXPECT_EQ(loaded.scene().material(wall)->material, materialId);
+    EXPECT_EQ(loaded.scene().material(wall)->materialForSlot(2u), accentMaterialId);
     ASSERT_NE(loaded.scene().modelingObject(wall), nullptr);
     EXPECT_EQ(loaded.scene().modelingObject(wall)->objectId, 42);
     EXPECT_EQ(loaded.scene().primarySelection(), wall);
@@ -203,6 +231,8 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.assets().mesh(meshId)->indices.size(), 3u);
     ASSERT_NE(loaded.assets().material(materialId), nullptr);
     EXPECT_FLOAT_EQ(loaded.assets().material(materialId)->roughness, 0.45f);
+    ASSERT_NE(loaded.assets().material(accentMaterialId), nullptr);
+    EXPECT_FLOAT_EQ(loaded.assets().material(accentMaterialId)->baseColor.y, 0.8f);
     ASSERT_NE(loaded.assets().texture(baseColorTextureId), nullptr);
     EXPECT_EQ(loaded.assets().texture(baseColorTextureId)->name, "Brick Albedo");
     EXPECT_EQ(loaded.assets().texture(baseColorTextureId)->usage, TextureUsage::BaseColor);
@@ -218,16 +248,44 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.assets().material(materialId)->textureSlots.at(MaterialTextureSlot::BaseColor), baseColorTextureId);
     ASSERT_TRUE(loaded.assets().material(materialId)->textureSlots.contains(MaterialTextureSlot::Roughness));
     EXPECT_EQ(loaded.assets().material(materialId)->textureSlots.at(MaterialTextureSlot::Roughness), roughnessTextureId);
-    ASSERT_NE(loaded.objectRecord(900u), nullptr);
-    EXPECT_EQ(loaded.objectRecord(900u)->sceneEntity, wall);
+    const std::optional<ProjectObjectRecord> loadedRecord = loaded.objectRecord(900u);
+    ASSERT_TRUE(loadedRecord.has_value());
+    EXPECT_EQ(loadedRecord->sceneEntity, wall);
     const ProjectDocumentIdentityReport identity = loaded.validateObjectIdentityInvariants();
     EXPECT_TRUE(identity.ok()) << (identity.issues.empty() ? std::string{} : identity.issues.front().message);
 }
 
+TEST(QdrDocumentIoTests, WritesAndReadsUnreferencedProjectAssets) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 88u, .name = "Unreferenced Assets"});
+    const AssetId meshId = document.assets().addMesh(12u, makeTriangleMesh("Standalone Mesh"));
+    const AssetId textureId = document.assets().addTexture(31u, makeTextureAsset(
+            "Unassigned Albedo",
+            TextureUsage::BaseColor,
+            TextureColorSpace::Srgb,
+            4u,
+            4u,
+            "textures/unassigned.png"));
+    const AssetId materialId = document.assets().addMaterial(
+            22u,
+            makeDefaultQuaderMaterial("Unassigned Material", textureId, textureId));
+    ASSERT_NE(meshId, InvalidAssetId);
+    ASSERT_NE(textureId, InvalidAssetId);
+    ASSERT_NE(materialId, InvalidAssetId);
+
+    const std::string text = QdrDocumentWriter::serializeProjectDocument(document);
+    EXPECT_NE(text.find("\"id\": 12"), std::string::npos);
+    EXPECT_NE(text.find("\"id\": 22"), std::string::npos);
+    EXPECT_NE(text.find("\"id\": 31"), std::string::npos);
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_NE(result.document.assets().mesh(meshId), nullptr);
+    EXPECT_NE(result.document.assets().material(materialId), nullptr);
+    EXPECT_NE(result.document.assets().texture(textureId), nullptr);
+}
+
 TEST(QdrDocumentIoTests, ImportsLegacySessionPayloadButWritesProjectDocumentPayload) {
-    const std::filesystem::path fixture =
-            std::filesystem::path(QUADER_SOURCE_DIR) / "tests" / "fixtures" / "qdr" / "legacy_session_payload.qdr";
-    const std::string text = readTextFile(fixture);
+    const std::string text = readSourceFile({"tests", "fixtures", "qdr", "legacy_session_payload.qdr"});
 
     QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
     ASSERT_TRUE(result.ok) << result.message;
@@ -402,31 +460,380 @@ TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithDanglingMaterialTextu
     QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.migratedLegacySession);
-    EXPECT_NE(result.message.find("material references a missing texture asset"), std::string::npos);
+    EXPECT_NE(result.message.find("Texture asset does not exist"), std::string::npos);
 }
 
-TEST(QdrDocumentIoTests, ProjectAtomicWriterRejectsDanglingMaterialTextureBeforeReplace) {
-    ScopedTempDirectory directory("qdr-project-atomic-texture-failure");
-    const std::filesystem::path target = directory.path() / "project.qdr";
-    constexpr std::string_view existingText = "old project bytes";
-    writeTextFile(target, existingText);
+TEST(QdrDocumentIoTests, MigratesLegacyMaterialTextureSlotAliasesToCanonicalSlots) {
+    const std::string text = R"json({
+  "format": "quader.qdr",
+  "version": 4,
+  "document": {
+    "kind": "quader.project-document",
+    "project": {
+      "id": 83,
+      "name": "Aliased Texture Slot"
+    },
+    "assets": {
+      "meshes": [],
+      "materials": [
+        {
+          "id": 22,
+          "name": "Textured Material",
+          "baseColor": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "roughness": 1,
+          "metallic": 0,
+          "textureSlots": {
+            "baseColor": 31
+          },
+          "nodeGraphReserved": true
+        }
+      ],
+      "textures": [
+        {
+          "id": 31,
+          "name": "Base Texture",
+          "usage": "baseColor",
+          "colorSpace": "srgb",
+          "width": 1,
+          "height": 1,
+          "sourcePath": "",
+          "generated": true
+        }
+      ]
+    },
+    "entities": [
+      {
+        "id": 200,
+        "name": "Material Entity",
+        "kind": "generic",
+        "parent": 0,
+        "material": {
+          "material": 22
+        }
+      }
+    ],
+    "objects": []
+  }
+})json";
 
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    const MaterialDocument* material = result.document.assets().material(22u);
+    ASSERT_NE(material, nullptr);
+    ASSERT_TRUE(material->textureSlots.contains(MaterialTextureSlot::BaseColor));
+    EXPECT_EQ(material->textureSlots.at(MaterialTextureSlot::BaseColor), 31u);
+    EXPECT_FALSE(material->textureSlots.contains("baseColor"));
+
+    const std::string rewritten = QdrDocumentWriter::serializeProjectDocument(result.document);
+    EXPECT_NE(rewritten.find("\"baseColorTexture\": 31"), std::string::npos);
+    EXPECT_EQ(rewritten.find("\"baseColor\": 31"), std::string::npos);
+}
+
+TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithUnsupportedMaterialTextureSlot) {
+    const std::string text = R"json({
+  "format": "quader.qdr",
+  "version": 4,
+  "document": {
+    "kind": "quader.project-document",
+    "project": {
+      "id": 84,
+      "name": "Unsupported Texture Slot"
+    },
+    "assets": {
+      "meshes": [],
+      "materials": [
+        {
+          "id": 22,
+          "name": "Textured Material",
+          "baseColor": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "roughness": 1,
+          "metallic": 0,
+          "textureSlots": {
+            "normalTexture": 31
+          },
+          "nodeGraphReserved": true
+        }
+      ],
+      "textures": [
+        {
+          "id": 31,
+          "name": "Normal Texture",
+          "usage": "normal",
+          "colorSpace": "linear",
+          "width": 1,
+          "height": 1,
+          "sourcePath": "",
+          "generated": true
+        }
+      ]
+    },
+    "entities": [],
+    "objects": []
+  }
+})json";
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.migratedLegacySession);
+    EXPECT_NE(result.message.find("Unsupported material texture slot"), std::string::npos);
+}
+
+TEST(QdrDocumentIoTests, RegistryRejectsDanglingMaterialTextureBeforeProjectWrite) {
     ProjectDocument document(ProjectDocumentRecord{.id = 82u, .name = "Bad Texture Ref"});
     MaterialDocument material = makeDefaultQuaderMaterial("Broken Material");
     material.textureSlots[MaterialTextureSlot::BaseColor] = 404u;
     const AssetId materialId = document.assets().addMaterial(22u, std::move(material));
-    const EntityId entity = document.scene().createEntityWithId(200u, "Object", EntityKind::Mesh);
-    document.scene().setMaterial(entity, MaterialComponent{.material = materialId});
+    EXPECT_EQ(materialId, InvalidAssetId);
+    EXPECT_EQ(document.assets().materialCount(), 0u);
+}
 
-    const QdrProjectWriteResult result = QdrDocumentWriter::writeProjectDocumentAtomic(target, document);
+TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithDuplicateMeshAssetIds) {
+    const std::string text = R"json({
+  "format": "quader.qdr",
+  "version": 4,
+  "document": {
+    "kind": "quader.project-document",
+    "project": {
+      "id": 85,
+      "name": "Duplicate Mesh"
+    },
+    "assets": {
+      "meshes": [
+        {
+          "id": 12,
+          "name": "First",
+          "hasStableCpuTopology": true,
+          "vertices": [],
+          "indices": [],
+          "primitives": []
+        },
+        {
+          "id": 12,
+          "name": "Second",
+          "hasStableCpuTopology": true,
+          "vertices": [],
+          "indices": [],
+          "primitives": []
+        }
+      ],
+      "materials": [],
+      "textures": []
+    },
+    "entities": [],
+    "objects": []
+  }
+})json";
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
     EXPECT_FALSE(result.ok);
-    EXPECT_NE(result.message.find("material references a missing texture asset"), std::string::npos);
-    EXPECT_EQ(readTextFile(target), std::string(existingText));
-    EXPECT_FALSE(containsTempQdrFiles(directory.path()));
+    EXPECT_NE(result.message.find("duplicate mesh asset ids"), std::string::npos);
+}
+
+TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithDuplicateMaterialAssetIds) {
+    const std::string text = R"json({
+  "format": "quader.qdr",
+  "version": 4,
+  "document": {
+    "kind": "quader.project-document",
+    "project": {
+      "id": 86,
+      "name": "Duplicate Material"
+    },
+    "assets": {
+      "meshes": [],
+      "materials": [
+        {
+          "id": 22,
+          "name": "First",
+          "baseColor": {"x": 1, "y": 1, "z": 1},
+          "roughness": 1,
+          "metallic": 0,
+          "textureSlots": {},
+          "nodeGraphReserved": true
+        },
+        {
+          "id": 22,
+          "name": "Second",
+          "baseColor": {"x": 1, "y": 1, "z": 1},
+          "roughness": 1,
+          "metallic": 0,
+          "textureSlots": {},
+          "nodeGraphReserved": true
+        }
+      ],
+      "textures": []
+    },
+    "entities": [],
+    "objects": []
+  }
+})json";
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.message.find("duplicate material asset ids"), std::string::npos);
+}
+
+TEST(QdrDocumentIoTests, NormalizesMeshPrimitiveSpansAtQdrBoundary) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 87u, .name = "Primitive Normalize"});
+    MeshAsset mesh = makeTriangleMesh("Invalid Primitive Mesh");
+    mesh.primitives = {MeshPrimitiveSpan{.indexOffset = 12u, .indexCount = 3u, .materialSlot = 7u}};
+    const AssetId meshId = document.assets().addMesh(12u, std::move(mesh));
+    ASSERT_NE(meshId, InvalidAssetId);
+
+    const std::string text = QdrDocumentWriter::serializeProjectDocument(document);
+    EXPECT_NE(text.find("\"indexOffset\": 0"), std::string::npos);
+    EXPECT_NE(text.find("\"indexCount\": 3"), std::string::npos);
+    EXPECT_NE(text.find("\"materialSlot\": 0"), std::string::npos);
+    EXPECT_EQ(text.find("\"indexOffset\": 12"), std::string::npos);
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    const MeshAsset* loaded = result.document.assets().mesh(meshId);
+    ASSERT_NE(loaded, nullptr);
+    ASSERT_EQ(loaded->primitives.size(), 1u);
+    EXPECT_EQ(loaded->primitives.front().indexOffset, 0u);
+    EXPECT_EQ(loaded->primitives.front().indexCount, 3u);
+    EXPECT_EQ(loaded->primitives.front().materialSlot, 0u);
+}
+
+TEST(QdrDocumentIoTests, SceneSelectablePersistsThroughQdrUsingSceneOwnedMutation) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 90u, .name = "Selectable Persistence"});
+    const EntityId entity = document.scene().createEntityWithId(200u, "Pick Masked", EntityKind::Mesh);
+    ASSERT_NE(entity, InvalidEntityId);
+    const std::uint64_t before = document.scene().revision();
+    EXPECT_TRUE(document.scene().setSelectable(entity, false));
+    EXPECT_GT(document.scene().revision(), before);
+
+    const std::string text = QdrDocumentWriter::serializeProjectDocument(document);
+    EXPECT_NE(text.find("\"selectable\": false"), std::string::npos);
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(result.document.scene().exists(entity));
+    const VisibilityComponent* visibility = result.document.scene().visibility(entity);
+    ASSERT_NE(visibility, nullptr);
+    EXPECT_TRUE(visibility->visible);
+    EXPECT_FALSE(visibility->selectable);
+}
+
+TEST(QdrDocumentIoTests, SharedPolygonDocumentCodecPreservesAuthoredNormalShadingAcrossProjectAndLegacyQdr) {
+    const quader_poly::Document polygon = makeAuthoredPolygonDocument();
+
+    ProjectDocument project(ProjectDocumentRecord{.id = 91u, .name = "Authored Normals"});
+    MeshAsset authoredMesh;
+    authoredMesh.name = "Authored Polygon Mesh";
+    authoredMesh.hasAuthoredPolygonDocument = true;
+    authoredMesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(polygon);
+    const AssetId meshId = project.assets().addMesh(12u, std::move(authoredMesh));
+    ASSERT_NE(meshId, InvalidAssetId);
+
+    const std::string projectText = QdrDocumentWriter::serializeProjectDocument(project);
+    EXPECT_NE(projectText.find("\"normalShading\": \"authored\""), std::string::npos);
+    QdrProjectReadResult projectRoundTrip = QdrDocumentReader::deserializeProjectDocument(projectText);
+    ASSERT_TRUE(projectRoundTrip.ok) << projectRoundTrip.message;
+    const MeshAsset* loadedMesh = projectRoundTrip.document.assets().mesh(meshId);
+    ASSERT_NE(loadedMesh, nullptr);
+    ASSERT_TRUE(loadedMesh->authoredPolygonDocument);
+    ASSERT_EQ(loadedMesh->authoredPolygonDocument->faces.size(), 1u);
+    EXPECT_EQ(loadedMesh->authoredPolygonDocument->faces.front().normal_shading, quader_poly::SurfaceShading::authored);
+
+    quader_io::QdrObject object;
+    object.id = 1;
+    object.material_id = 2;
+    object.selected = true;
+    object.document = polygon;
+    object.selection.mode = quader_poly::SelectionMode::face;
+    object.selection.faces = {20u};
+    object.selection.has_active = true;
+    object.selection.active_kind = quader_poly::ElementKind::face;
+    object.selection.active_face = 20u;
+
+    quader_io::QdrDocument legacy;
+    legacy.objects.push_back(std::move(object));
+    legacy.next_object_id = 2;
+    legacy.active_object_id = 1;
+    legacy.selection_mode = quader_io::QdrSelectionMode::face;
+
+    const std::string legacyText = quader_io::serialize_document(legacy);
+    EXPECT_NE(legacyText.find("\"normalShading\": \"authored\""), std::string::npos);
+    const quader_io::QdrReadResult legacyRoundTrip = quader_io::deserialize_document(legacyText);
+    ASSERT_TRUE(legacyRoundTrip.ok) << legacyRoundTrip.message;
+    ASSERT_EQ(legacyRoundTrip.document.objects.front().document.faces.size(), 1u);
+    EXPECT_EQ(
+            legacyRoundTrip.document.objects.front().document.faces.front().normal_shading,
+            quader_poly::SurfaceShading::authored);
+}
+
+TEST(QdrDocumentIoTests, QdrPolygonDocumentCodecAndAtomicWriteHaveSingleOwners) {
+    const std::string reader = readSourceFile({"src", "io", "qdr", "QdrDocumentReader.cpp"});
+    const std::string writer = readSourceFile({"src", "io", "qdr", "QdrDocumentWriter.cpp"});
+    const std::string legacy = readSourceFile({"src", "io", "qdr", "qdr_document.cpp"});
+    const std::string codec = readSourceFile({"src", "io", "qdr", "QdrPolygonDocumentCodec.cpp"});
+    const std::string atomic = readSourceFile({"src", "io", "qdr", "QdrAtomicWrite.cpp"});
+
+    EXPECT_NE(reader.find("#include \"io/qdr/QdrPolygonDocumentCodec.h\""), std::string::npos);
+    EXPECT_NE(writer.find("#include \"io/qdr/QdrPolygonDocumentCodec.h\""), std::string::npos);
+    EXPECT_NE(legacy.find("#include \"io/qdr/QdrPolygonDocumentCodec.h\""), std::string::npos);
+    EXPECT_NE(writer.find("#include \"io/qdr/QdrAtomicWrite.h\""), std::string::npos);
+    EXPECT_NE(legacy.find("#include \"io/qdr/QdrAtomicWrite.h\""), std::string::npos);
+
+    EXPECT_NE(codec.find("qdr_polygon_document_to_json"), std::string::npos);
+    EXPECT_NE(codec.find("qdr_polygon_document_from_json"), std::string::npos);
+    EXPECT_NE(atomic.find("write_qdr_text_atomic"), std::string::npos);
+    EXPECT_NE(atomic.find("make_temp_path_for_atomic_write"), std::string::npos);
+
+    EXPECT_EQ(reader.find("polygonDocumentFromJson("), std::string::npos);
+    EXPECT_EQ(reader.find("polygonVec2FromJson("), std::string::npos);
+    EXPECT_EQ(reader.find("parseSurfaceShading("), std::string::npos);
+    EXPECT_EQ(writer.find("polygonDocumentToJson("), std::string::npos);
+    EXPECT_EQ(writer.find("polygonVec2ToJson("), std::string::npos);
+    EXPECT_EQ(writer.find("surfaceShadingName("), std::string::npos);
+    EXPECT_EQ(legacy.find("\njson document_to_json(const quader_poly::Document&"), std::string::npos);
+    EXPECT_EQ(legacy.find("\nquader_poly::Document document_from_json(const json& value)"), std::string::npos);
+
+    const char* atomicOwnerTokens[] = {
+            "unique_temp_suffix(",
+            "make_temp_path_for_atomic_write(",
+            "replace_with_temp_file(",
+            "MoveFileExW(",
+    };
+    for (const char* token : atomicOwnerTokens) {
+        EXPECT_EQ(writer.find(token), std::string::npos) << token;
+        EXPECT_EQ(legacy.find(token), std::string::npos) << token;
+        EXPECT_NE(atomic.find(token), std::string::npos) << token;
+    }
+}
+
+TEST(QdrDocumentIoTests, SceneSelectableMutationStaysSceneOwned) {
+    const std::string sceneHeader = readSourceFile({"src", "scene", "SceneDocument.h"});
+    const std::string sceneSource = readSourceFile({"src", "scene", "SceneDocument.cpp"});
+    const std::string qdrReader = readSourceFile({"src", "io", "qdr", "QdrDocumentReader.cpp"});
+
+    EXPECT_NE(sceneHeader.find("bool setSelectable(EntityId id, bool selectable);"), std::string::npos);
+    EXPECT_NE(sceneSource.find("bool SceneDocument::setSelectable"), std::string::npos);
+    EXPECT_NE(qdrReader.find("document.scene().setSelectable("), std::string::npos);
+    EXPECT_EQ(qdrReader.find("->selectable ="), std::string::npos);
+
+    const std::filesystem::path sourceRoot = sourcePath("src");
+    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot)) {
+        if (file.filename() == "SceneDocument.cpp") {
+            continue;
+        }
+        const std::string source = readFile(file);
+        EXPECT_EQ(source.find("->selectable ="), std::string::npos) << file.string();
+    }
 }
 
 TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsSceneSync) {
-    const std::string cmake = readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "CMakeLists.txt");
+    const std::string cmake = readSourceFile("CMakeLists.txt");
     EXPECT_NE(cmake.find("src/editor/projection/MeshProjectionService.cpp"), std::string::npos);
     EXPECT_EQ(cmake.find("src/editor/projection/ModelingSceneReconcileService.cpp"), std::string::npos);
     EXPECT_NE(cmake.find("src/editor/projection/PickingCacheProjection.cpp"), std::string::npos);
@@ -434,14 +841,14 @@ TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsScene
     EXPECT_NE(cmake.find("src/editor/modeling/services/ModelingMeshSyncService.cpp"), std::string::npos);
 
     const std::string services =
-            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionServices.cpp");
+            readSourceFile({"src", "editor", "modeling", "services", "ModelingSessionServices.cpp"});
     EXPECT_EQ(services.find("ModelingSceneReconcileService::reconcileModelingObjectSceneNodes"), std::string::npos);
     EXPECT_EQ(services.find("MeshProjectionService::projectModelingMeshesToScene"), std::string::npos);
     EXPECT_NE(services.find("PickingCacheProjection::sceneTransformedObjectsForPicking"), std::string::npos);
     EXPECT_NE(services.find("PickingCacheProjection::objectFaceGeometrySignature"), std::string::npos);
 
     const std::string meshSync =
-            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingMeshSyncService.cpp");
+            readSourceFile({"src", "editor", "modeling", "services", "ModelingMeshSyncService.cpp"});
     EXPECT_NE(meshSync.find("void reconcileModelingObjectSceneNodes"), std::string::npos);
     EXPECT_NE(meshSync.find("void projectModelingMeshesToScene"), std::string::npos);
     EXPECT_NE(meshSync.find("scene.createEntity"), std::string::npos);
@@ -466,41 +873,25 @@ TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsScene
             "clearSelection(",
             "setSelected(",
     };
-    const std::filesystem::path projectionRoot = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "projection";
-    for (const std::filesystem::directory_entry& entry :
-            std::filesystem::recursive_directory_iterator(projectionRoot)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const std::string extension = entry.path().extension().string();
-        if (extension != ".h" && extension != ".cpp") {
-            continue;
-        }
-        const std::string source = readTextFile(entry.path());
+    const std::filesystem::path projectionRoot = sourcePath({"src", "editor", "projection"});
+    for (const std::filesystem::path& file : sourceFilesUnder(projectionRoot)) {
+        const std::string source = readFile(file);
         for (const char* forbidden : forbiddenProjectionMutations) {
             EXPECT_EQ(source.find(forbidden), std::string::npos)
-                    << entry.path().string() << " contains projection-owned mutation token " << forbidden;
+                    << file.string() << " contains projection-owned mutation token " << forbidden;
         }
     }
 
     const std::string facade =
-            readTextFile(std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "editor" / "modeling" / "services" / "ModelingSessionService.cpp");
+            readSourceFile({"src", "editor", "modeling", "services", "ModelingSessionService.cpp"});
     EXPECT_NE(facade.find("SelectionOverlayProjection::projectSelectionOverlayFrame"), std::string::npos);
 }
 
 TEST(ProjectionOwnershipGuardrailTests, RenderDoesNotDependOnProjectionOrModelingOwners) {
-    const std::filesystem::path renderRoot = std::filesystem::path(QUADER_SOURCE_DIR) / "src" / "render";
-    for (const std::filesystem::directory_entry& entry :
-            std::filesystem::recursive_directory_iterator(renderRoot)) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const std::string extension = entry.path().extension().string();
-        if (extension != ".h" && extension != ".cpp") {
-            continue;
-        }
-        const std::string source = readTextFile(entry.path());
-        EXPECT_EQ(source.find("editor/projection/"), std::string::npos) << entry.path().string();
-        EXPECT_EQ(source.find("#include \"modeling/"), std::string::npos) << entry.path().string();
+    const std::filesystem::path renderRoot = sourcePath({"src", "render"});
+    for (const std::filesystem::path& file : sourceFilesUnder(renderRoot)) {
+        const std::string source = readFile(file);
+        EXPECT_EQ(source.find("editor/projection/"), std::string::npos) << file.string();
+        EXPECT_EQ(source.find("#include \"modeling/"), std::string::npos) << file.string();
     }
 }

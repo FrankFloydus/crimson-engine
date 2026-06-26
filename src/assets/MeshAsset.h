@@ -51,4 +51,25 @@ struct MeshAsset final : AssetDocumentBase<MeshAssetRevision> {
     std::shared_ptr<quader_poly::Document> authoredPolygonDocument;
 };
 
+inline std::vector<MeshPrimitiveSpan> normalizedMeshPrimitiveSpans(const MeshAsset& mesh) {
+    std::vector<MeshPrimitiveSpan> spans;
+    spans.reserve(mesh.primitives.empty() ? 1u : mesh.primitives.size());
+    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
+        const std::uint64_t offset = primitive.indexOffset;
+        const std::uint64_t count = primitive.indexCount;
+        if (count == 0u || offset >= mesh.indices.size() || offset + count > mesh.indices.size()) {
+            continue;
+        }
+        spans.push_back(primitive);
+    }
+    if (spans.empty() && !mesh.indices.empty()) {
+        spans.push_back(MeshPrimitiveSpan{
+                .indexOffset = 0,
+                .indexCount = static_cast<std::uint32_t>(mesh.indices.size()),
+                .materialSlot = 0,
+        });
+    }
+    return spans;
+}
+
 } // namespace quader

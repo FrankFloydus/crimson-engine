@@ -12,14 +12,19 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace quader {
 
 /// Stores localized labels used when projecting the app root layout.
+struct MainLayoutPanelLabel {
+    std::string panelId;
+    std::string label;
+};
+
+/// Stores localized labels keyed by stable panel id.
 struct MainLayoutLabels {
-    std::string viewport = "Viewport";
-    std::string outliner = "Outliner";
-    std::string inspector = "Inspector";
+    std::vector<MainLayoutPanelLabel> panels;
 };
 
 /// Identifies which resize handle is actively being dragged in the main layout.
@@ -68,6 +73,9 @@ std::string buildMainLayoutRml(
         const MainLayoutInteractionState& interaction = {});
 
 [[nodiscard]] std::string mainLayoutPanelElementId(std::string_view panelId);
+[[nodiscard]] std::string_view mainLayoutLabelForPanel(
+        const MainLayoutLabels& labels,
+        std::string_view panelId);
 [[nodiscard]] std::string mainLayoutPanelHeaderElementId(std::string_view panelId);
 [[nodiscard]] std::string mainLayoutPanelTabElementId(std::string_view panelId);
 [[nodiscard]] std::string mainLayoutEditorColumnElementId();

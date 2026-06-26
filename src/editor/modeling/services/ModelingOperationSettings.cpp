@@ -33,64 +33,47 @@ const char* fallbackToolSettingsLabel(ModelingToolSettingsTargetKind kind) {
 quader_editor_core::EditorOperationSettings settingsForOperation(
         quader_editor_core::EditorOperationId operation,
         const ModelingInteractionSettings& interactionSettings) {
-    switch (operation) {
-    case quader_editor_core::EditorOperationId::bridge:
+    const std::optional<quader_editor_core::EditorOperationCommandSchema> schema =
+            quader_editor_core::command_schema_for_operation(operation);
+    if (!schema.has_value()) {
+        return quader_editor_core::SelectionOperationSettings{};
+    }
+
+    switch (schema->settings_kind) {
+    case quader_editor_core::EditorOperationSettingsKind::bridge:
         return quader_editor_core::BridgeOperationSettings{.steps = interactionSettings.bridgeSteps};
-    case quader_editor_core::EditorOperationId::edge_bevel:
+    case quader_editor_core::EditorOperationSettingsKind::edge_bevel:
         return quader_editor_core::EdgeBevelOperationSettings{
                 .width = interactionSettings.edgeBevelWidth,
                 .profile = interactionSettings.edgeBevelProfile,
                 .segments = interactionSettings.edgeBevelSegments,
         };
-    case quader_editor_core::EditorOperationId::thicken:
+    case quader_editor_core::EditorOperationSettingsKind::thicken:
         return quader_editor_core::ThickenOperationSettings{
                 .thickness = interactionSettings.thickenThickness,
                 .from_center = interactionSettings.thickenFromCenter,
         };
-    case quader_editor_core::EditorOperationId::slice_quad:
+    case quader_editor_core::EditorOperationSettingsKind::slice_quad:
         return quader_editor_core::SliceQuadOperationSettings{
                 .x_slices = interactionSettings.sliceQuadXSlices,
                 .y_slices = interactionSettings.sliceQuadYSlices,
         };
-    case quader_editor_core::EditorOperationId::merge_by_distance:
+    case quader_editor_core::EditorOperationSettingsKind::merge_by_distance:
         return quader_editor_core::MergeByDistanceOperationSettings{
                 .tolerance = interactionSettings.mergeByDistanceTolerance,
         };
-    case quader_editor_core::EditorOperationId::bevel_vertices:
+    case quader_editor_core::EditorOperationSettingsKind::bevel_vertices:
         return quader_editor_core::BevelVerticesOperationSettings{};
-    case quader_editor_core::EditorOperationId::duplicate_meshes:
+    case quader_editor_core::EditorOperationSettingsKind::duplicate_meshes:
         return quader_editor_core::DuplicateMeshesOperationSettings{};
-    case quader_editor_core::EditorOperationId::recalculate_face_normals: {
+    case quader_editor_core::EditorOperationSettingsKind::recalculate_face_normals: {
         quader_editor_core::RecalculateFaceNormalsOperationSettings settings;
         settings.outside = true;
         return settings;
     }
-    case quader_editor_core::EditorOperationId::assign_material:
+    case quader_editor_core::EditorOperationSettingsKind::assign_material:
         return quader_editor_core::AssignMaterialOperationSettings{};
-    case quader_editor_core::EditorOperationId::connect_vertices:
-    case quader_editor_core::EditorOperationId::dissolve_vertices:
-    case quader_editor_core::EditorOperationId::connect_edges:
-    case quader_editor_core::EditorOperationId::split_edges:
-    case quader_editor_core::EditorOperationId::dissolve_edges:
-    case quader_editor_core::EditorOperationId::merge_edges:
-    case quader_editor_core::EditorOperationId::collapse_edges:
-    case quader_editor_core::EditorOperationId::fill_hole:
-    case quader_editor_core::EditorOperationId::combine_faces:
-    case quader_editor_core::EditorOperationId::collapse_faces:
-    case quader_editor_core::EditorOperationId::radial_align:
-    case quader_editor_core::EditorOperationId::flip_face_normals:
-    case quader_editor_core::EditorOperationId::shade_faces_smooth:
-    case quader_editor_core::EditorOperationId::shade_faces_flat:
-    case quader_editor_core::EditorOperationId::harden_edge_normals:
-    case quader_editor_core::EditorOperationId::soften_edge_normals:
-    case quader_editor_core::EditorOperationId::combine_meshes:
-    case quader_editor_core::EditorOperationId::extract_faces:
-    case quader_editor_core::EditorOperationId::detach_faces:
-    case quader_editor_core::EditorOperationId::snap_vertices_to_active:
-    case quader_editor_core::EditorOperationId::snap_edges_to_active:
-    case quader_editor_core::EditorOperationId::merge_vertices_to_active:
-    case quader_editor_core::EditorOperationId::merge_vertices_to_center:
-    case quader_editor_core::EditorOperationId::delete_selection:
+    case quader_editor_core::EditorOperationSettingsKind::selection:
         return quader_editor_core::SelectionOperationSettings{};
     }
     return quader_editor_core::SelectionOperationSettings{};
@@ -118,22 +101,7 @@ ModelingToolSettingsTargetKind toolSettingsTargetKindForPreview(
 
 std::optional<quader_editor_core::EditorOperationId> operationForPreviewKind(
         quader_editor_core::PreviewTransactionKind kind) {
-    switch (kind) {
-    case quader_editor_core::PreviewTransactionKind::bridge:
-        return quader_editor_core::EditorOperationId::bridge;
-    case quader_editor_core::PreviewTransactionKind::edge_bevel:
-        return quader_editor_core::EditorOperationId::edge_bevel;
-    case quader_editor_core::PreviewTransactionKind::thicken:
-        return quader_editor_core::EditorOperationId::thicken;
-    case quader_editor_core::PreviewTransactionKind::slice_quad:
-        return quader_editor_core::EditorOperationId::slice_quad;
-    case quader_editor_core::PreviewTransactionKind::merge_by_distance:
-        return quader_editor_core::EditorOperationId::merge_by_distance;
-    case quader_editor_core::PreviewTransactionKind::none:
-    case quader_editor_core::PreviewTransactionKind::transform:
-        break;
-    }
-    return std::nullopt;
+    return quader_editor_core::operation_for_preview_transaction_kind(kind);
 }
 
 } // namespace quader

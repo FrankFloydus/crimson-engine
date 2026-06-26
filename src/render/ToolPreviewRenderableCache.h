@@ -34,6 +34,11 @@ struct ToolPreviewMesh {
  */
 class ToolPreviewRenderableCache {
 public:
+    ToolPreviewRenderableCache() = default;
+    ToolPreviewRenderableCache(const ToolPreviewRenderableCache&) = delete;
+    ToolPreviewRenderableCache& operator=(const ToolPreviewRenderableCache&) = delete;
+    ToolPreviewRenderableCache(ToolPreviewRenderableCache&&) = delete;
+    ToolPreviewRenderableCache& operator=(ToolPreviewRenderableCache&&) = delete;
     ~ToolPreviewRenderableCache();
 
     void initialize(MeshRenderableFactory& factory, MaterialBindingService& materialBinding);

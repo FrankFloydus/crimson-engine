@@ -136,7 +136,7 @@ private:
     QVec3 pivot_ = {};
     float viewportWidth_ = 1.0f;
     float viewportHeight_ = 1.0f;
-    float flySpeed_ = 15.0f;
+    float flySpeed_ = 6.0f;
     QVec2 lastMouse_ = {};
     ViewportDragMode dragMode_ = ViewportDragMode::None;
     bool orthographicViewLocked_ = false;

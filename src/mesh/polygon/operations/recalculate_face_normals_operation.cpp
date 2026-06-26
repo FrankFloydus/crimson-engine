@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -38,8 +39,8 @@ class RecalculateFaceNormalsOperation final : public PolyOperation {
 public:
     explicit RecalculateFaceNormalsOperation(bool outside);
 
-    [[nodiscard]] std::string_view id() const override { return "recalculate_selected_face_normals"; }
-    [[nodiscard]] std::string_view label() const override { return "Recalculate Selected Face Normals"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::RecalculateSelectedFaceNormals).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::RecalculateSelectedFaceNormals).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

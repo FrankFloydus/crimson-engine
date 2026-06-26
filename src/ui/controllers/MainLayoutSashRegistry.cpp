@@ -20,50 +20,22 @@ constexpr std::string_view kAuxiliarySidebarWidthHandleId = "auxiliary-sidebar";
 constexpr std::string_view kSidePanelStackHandleId = "panels";
 constexpr std::string_view kBottomDockHeightHandleId = "bottom-dock";
 constexpr std::string_view kBottomPanelSplitHandlePrefix = "bottom-split:";
-constexpr int kMainLayoutViewportMinSizeDp = 120;
 
 bool startsWith(std::string_view value, std::string_view prefix) {
     return value.size() >= prefix.size() && value.substr(0, prefix.size()) == prefix;
-}
-
-bool panelVisibleInLocation(
-        const MainLayoutModel& model,
-        std::string_view panelId,
-        DockLocation expectedLocation) {
-    const std::optional<DockLocation> location = dockPanelLocation(model.dockLayout, panelId);
-    if (!location || *location != expectedLocation) {
-        return false;
-    }
-    if (panelId == kMainLayoutPanelOutliner) {
-        return model.outlinerVisible;
-    }
-    if (panelId == kMainLayoutPanelInspector) {
-        return model.inspectorVisible;
-    }
-    return false;
-}
-
-int visiblePanelCountInLocation(const MainLayoutModel& model, DockLocation location) {
-    int count = 0;
-    for (std::string_view panelId : dockPanelsInLocation(model.dockLayout, location)) {
-        if (panelVisibleInLocation(model, panelId, location)) {
-            ++count;
-        }
-    }
-    return count;
 }
 
 bool sideDockVisibleForLocation(const MainLayoutModel& model, DockLocation location) {
     if (!mainLayoutLocationIsSideDock(location) || mainLayoutSideDockCollapsed(model, location)) {
         return false;
     }
-    return visiblePanelCountInLocation(model, location) > 0;
+    return mainLayoutVisibleDockPanelCount(model, location) > 0;
 }
 
 int visibleSideDockPanelCountMax(const MainLayoutModel& model) {
     return std::max(
-            visiblePanelCountInLocation(model, DockLocation::Sidebar),
-            visiblePanelCountInLocation(model, DockLocation::AuxiliaryBar));
+            mainLayoutVisibleDockPanelCount(model, DockLocation::Sidebar),
+            mainLayoutVisibleDockPanelCount(model, DockLocation::AuxiliaryBar));
 }
 
 int otherVisibleSideDockWidthDp(const MainLayoutModel& model, DockLocation location) {
@@ -77,7 +49,7 @@ int otherVisibleSideDockWidthDp(const MainLayoutModel& model, DockLocation locat
 
 bool bottomDockVisible(const MainLayoutModel& model) {
     return !mainLayoutBottomDockCollapsed(model) &&
-            visiblePanelCountInLocation(model, DockLocation::Panel) > 0;
+            mainLayoutVisibleDockPanelCount(model, DockLocation::Panel) > 0;
 }
 
 int bottomSplitRemainingPaneCount(std::size_t splitIndex, std::size_t splitCount) {
@@ -195,10 +167,20 @@ void MainLayoutSashRegistry::addSideDockWidthSash(
 void MainLayoutSashRegistry::addSidePanelStackSash(
         const MainLayoutModel& model,
         UIPixelRect hitRect) {
+    const std::optional<DockLocation> location = mainLayoutSidePanelStackLocation(model);
+    if (!location) {
+        return;
+    }
+    const std::optional<std::string_view> leadingPanel =
+            mainLayoutLeadingSidePanelStackPanelId(model, *location);
+    if (!leadingPanel) {
+        return;
+    }
     const std::string handleId = sidePanelStackHandleId();
     addRegistration({
             .kind = SashKind::SidePanelStack,
-            .location = DockLocation::Sidebar,
+            .location = *location,
+            .panelId = std::string(*leadingPanel),
             .hitRegion = {
                     .id = handleId,
                     .axis = ResizableSplitAxis::Vertical,
@@ -208,7 +190,7 @@ void MainLayoutSashRegistry::addSidePanelStackSash(
                     .id = handleId,
                     .axis = ResizableSplitAxis::Vertical,
                     .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = model.outlinerHeightDp,
+                    .sizeDp = mainLayoutSidePanelStackHeightDp(model, *location),
                     .minSize = ResizableSplitSizeRule::dp(kMainLayoutPanelMinHeightDp),
                     .maxSize = ResizableSplitSizeRule::dp(kMainLayoutPanelMaxHeightDp),
                     .oppositeMinSize = ResizableSplitSizeRule::dp(kMainLayoutPanelMinHeightDp),
@@ -346,7 +328,7 @@ bool MainLayoutSashRegistry::applyResize(
                 controller.resizeSidebar(registration->location, restoredWidthDp);
     }
     case SashKind::SidePanelStack:
-        return controller.resizeOutlinerPanel(resize.sizeDp);
+        return controller.resizeSidePanelStack(registration->location, registration->panelId, resize.sizeDp);
     case SashKind::BottomDockHeight: {
         const int restoredHeightDp = mainLayoutBottomDockCollapsed(model) ?
                 std::max(resize.sizeDp, mainLayoutBottomDockHeightDp(model)) :
@@ -392,13 +374,20 @@ bool MainLayoutSashRegistry::normalizeMeasuredBounds(
     }
 
     if (measured_.sideDockHeightDp > 0 && visibleSideDockPanelCountMax(model) > 1) {
-        const int measuredMaxOutlinerHeightDp = std::clamp(
+        const int measuredMaxSideStackHeightDp = std::clamp(
                 measured_.sideDockHeightDp - kMainLayoutPanelMinHeightDp - kResizableSplitDefaultHitThicknessDp,
                 kMainLayoutPanelMinHeightDp,
                 kMainLayoutPanelMaxHeightDp);
-        if (model.outlinerHeightDp > measuredMaxOutlinerHeightDp &&
-                controller.resizeOutlinerPanel(measuredMaxOutlinerHeightDp)) {
-            changed = true;
+        for (DockLocation location : {DockLocation::Sidebar, DockLocation::AuxiliaryBar}) {
+            const std::optional<std::string_view> leadingPanel =
+                    mainLayoutLeadingSidePanelStackPanelId(model, location);
+            if (!leadingPanel) {
+                continue;
+            }
+            if (mainLayoutSidePanelStackHeightDp(model, location) > measuredMaxSideStackHeightDp &&
+                    controller.resizeSidePanelStack(location, *leadingPanel, measuredMaxSideStackHeightDp)) {
+                changed = true;
+            }
         }
     }
 

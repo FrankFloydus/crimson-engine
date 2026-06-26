@@ -6,4 +6,24 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/modeling/runtime_state/ModalToolRuntime.h"
+namespace quader {
+
+class QuaderApiSessionInternalAccess;
+
+/**
+ * Stores an opaque editor-session handle used by the public Quader API surface.
+ */
+class QuaderApiSession final {
+public:
+    [[nodiscard]] bool valid() const noexcept { return session_ != nullptr; }
+
+private:
+    friend class QuaderApiSessionInternalAccess;
+
+    explicit QuaderApiSession(void* session) noexcept
+        : session_(session) {}
+
+    void* session_ = nullptr;
+};
+
+} // namespace quader

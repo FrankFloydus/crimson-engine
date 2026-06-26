@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <diagnostics/profile.h>
 
@@ -38,8 +39,8 @@ class InsertEdgeLoopOperation final : public PolyOperation {
 public:
     explicit InsertEdgeLoopOperation(float factor = 0.5F);
 
-    [[nodiscard]] std::string_view id() const override { return "insert_edge_loop"; }
-    [[nodiscard]] std::string_view label() const override { return "Insert Edge Loop"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::InsertEdgeLoop).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::InsertEdgeLoop).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

@@ -92,6 +92,19 @@ public:
     [[nodiscard]] CommandToolKind kind() const { return descriptor().kind; }
     [[nodiscard]] ModelingActionPreviewKind previewKind() const { return descriptor().previewKind; }
     [[nodiscard]] bool rebuildsMeshOnSuccess() const { return descriptor().rebuildsMeshOnSuccess; }
+    [[nodiscard]] std::string_view publicCommandId() const { return descriptor().publicCommandId; }
+    [[nodiscard]] bool registersPublicCommand() const { return descriptor().registersPublicCommand; }
+    [[nodiscard]] std::string_view publicCompatibilityAlias() const { return descriptor().publicCompatibilityAlias; }
+    [[nodiscard]] std::string_view hostShortcutTargetId() const { return descriptor().hostShortcutTargetId; }
+    [[nodiscard]] std::string publicCommandTargetId() const {
+        const std::string_view fixedId = publicCommandId();
+        if (!fixedId.empty()) {
+            return std::string(fixedId);
+        }
+        std::string commandId("modeling.");
+        commandId.append(id());
+        return commandId;
+    }
 
     [[nodiscard]] bool enabled(ModelingSessionService& modeling) const {
         const ModelingCommandExecutionContext context{.modeling = modeling};

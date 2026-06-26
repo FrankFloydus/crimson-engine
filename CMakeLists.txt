@@ -12,13 +12,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(QUADER_BUILD_TESTS "Build Quader tests" ON)
-option(QUADER_USE_OPENMESH_TOPOLOGY "Use OpenMesh for topology-backed polygon edit operations." ON)
-option(QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH "Allow CMake to download OpenMesh when a local source checkout is not supplied." OFF)
-option(QUADER_ALLOW_EXTERNAL_CATCH2_FETCH "Allow CMake to download Catch2 when a local source checkout is not supplied." OFF)
-option(QUADER_ENABLE_TRACY "Enable Tracy profiler instrumentation for Quader modeling targets." OFF)
-option(QUADER_TRACY_ON_DEMAND "Enable Tracy on-demand capture mode when Tracy instrumentation is enabled." ON)
-option(QUADER_BUILD_PERFORMANCE_BENCHMARKS "Build opt-in Quader performance baseline executables." OFF)
+include(cmake/QuaderBuildOptions.cmake)
 
 set(_QUADER_DEFAULT_FILAMENT_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../_SOURCES/filament-v1.71.6-windows")
 if(DEFINED ENV{FILAMENT_SDK_ROOT} AND NOT "$ENV{FILAMENT_SDK_ROOT}" STREQUAL "")
@@ -27,43 +21,6 @@ endif()
 set(FILAMENT_SDK_ROOT
     "${_QUADER_DEFAULT_FILAMENT_SDK_ROOT}"
     CACHE PATH "Path to the Filament binary SDK")
-
-set(_QUADER_OPENMESH_COMMIT "5f016723f9f183770cffe5787a6f9f628e2914d8")
-set(_QUADER_CATCH2_COMMIT "644821ce28cb25d7992a4d0375b1d83214392592")
-set(QUADER_OPENMESH_COMMIT "${_QUADER_OPENMESH_COMMIT}")
-set(QUADER_CATCH2_COMMIT "${_QUADER_CATCH2_COMMIT}")
-
-set(_QUADER_DEFAULT_OPENMESH_SOURCE_DIR "")
-if(DEFINED ENV{QUADER_OPENMESH_SOURCE_DIR} AND NOT "$ENV{QUADER_OPENMESH_SOURCE_DIR}" STREQUAL "")
-    file(TO_CMAKE_PATH "$ENV{QUADER_OPENMESH_SOURCE_DIR}" _QUADER_DEFAULT_OPENMESH_SOURCE_DIR)
-else()
-    set(_QUADER_LOCAL_OPENMESH_SOURCE_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/openmesh/openmesh-${_QUADER_OPENMESH_COMMIT}")
-    if(EXISTS "${_QUADER_LOCAL_OPENMESH_SOURCE_DIR}/CMakeLists.txt")
-        set(_QUADER_DEFAULT_OPENMESH_SOURCE_DIR "${_QUADER_LOCAL_OPENMESH_SOURCE_DIR}")
-    elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
-        file(TO_CMAKE_PATH "$ENV{USERPROFILE}/Desktop/_QUADER_DEV/_deps/openmesh-${_QUADER_OPENMESH_COMMIT}" _QUADER_DEV_OPENMESH_SOURCE_DIR)
-        if(EXISTS "${_QUADER_DEV_OPENMESH_SOURCE_DIR}/CMakeLists.txt")
-            set(_QUADER_DEFAULT_OPENMESH_SOURCE_DIR "${_QUADER_DEV_OPENMESH_SOURCE_DIR}")
-        endif()
-    endif()
-endif()
-
-set(_QUADER_DEFAULT_CATCH2_SOURCE_DIR "")
-if(DEFINED ENV{QUADER_CATCH2_SOURCE_DIR} AND NOT "$ENV{QUADER_CATCH2_SOURCE_DIR}" STREQUAL "")
-    file(TO_CMAKE_PATH "$ENV{QUADER_CATCH2_SOURCE_DIR}" _QUADER_DEFAULT_CATCH2_SOURCE_DIR)
-else()
-    set(_QUADER_LOCAL_CATCH2_SOURCE_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/catch2/catch2-${_QUADER_CATCH2_COMMIT}")
-    if(EXISTS "${_QUADER_LOCAL_CATCH2_SOURCE_DIR}/CMakeLists.txt")
-        set(_QUADER_DEFAULT_CATCH2_SOURCE_DIR "${_QUADER_LOCAL_CATCH2_SOURCE_DIR}")
-    elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
-        file(TO_CMAKE_PATH "$ENV{USERPROFILE}/Desktop/_QUADER_DEV/_deps/catch2-${_QUADER_CATCH2_COMMIT}" _QUADER_DEV_CATCH2_SOURCE_DIR)
-        if(EXISTS "${_QUADER_DEV_CATCH2_SOURCE_DIR}/CMakeLists.txt")
-            set(_QUADER_DEFAULT_CATCH2_SOURCE_DIR "${_QUADER_DEV_CATCH2_SOURCE_DIR}")
-        endif()
-    endif()
-endif()
 
 if(MSVC)
     if(POLICY CMP0141)
@@ -125,6 +82,9 @@ add_library(quader_modeling STATIC
     src/editor/modeling/services/ModelingOperationSettings.cpp
     src/editor/modeling/services/ModelingSessionServices.cpp
     src/editor/modeling/services/ModelingSessionService.cpp
+    src/editor/modeling/preview/TransformPreviewService.cpp
+    src/editor/modeling/runtime_state/ModalToolRuntime.cpp
+    src/editor/modeling/runtime_state/TransformDragController.cpp
     ${QUADER_MODELING_TOOL_SOURCES}
 )
 
@@ -177,6 +137,7 @@ add_library(quader_core STATIC
     src/ui/core/UIIconRegistry.cpp
     src/ui/controllers/MainLayoutController.cpp
     src/ui/controllers/MainLayoutDockDragController.cpp
+    src/ui/controllers/MainLayoutDockHitRegionBuilder.cpp
     src/ui/controllers/MainLayoutSashRegistry.cpp
     src/ui/controllers/ResizableSplitController.cpp
     src/ui/controllers/UIDragDropController.cpp
@@ -186,6 +147,7 @@ add_library(quader_core STATIC
     src/ui/UISettings.cpp
     src/viewport/ViewportCameraController.cpp
     src/viewport/ViewportInputRouter.cpp
+    src/viewport/ViewportLegacyShortcutAdapter.cpp
     src/viewport/ViewportLayout.cpp
     src/viewport/ViewportSettings.cpp
     src/viewport/ViewportWorkspaceService.cpp
@@ -195,7 +157,7 @@ add_library(quader_core STATIC
 target_include_directories(quader_core
     PUBLIC src
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
-target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling)
+target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io)
 target_compile_definitions(quader_core
     PUBLIC
         GLM_ENABLE_EXPERIMENTAL)
@@ -340,6 +302,8 @@ add_library(quader_runtime STATIC
     src/editor/transform/SceneTransformDragService.cpp
     src/platform/FatalErrorHandler.cpp
     src/platform/PlatformWindow.cpp
+    src/platform/SdlEventUtils.cpp
+    src/platform/SdlInputAdapter.cpp
     src/render/FilamentUtils.cpp
     src/render/FilamentBufferDescriptorFactory.cpp
     src/render/FilamentMaterialLibrary.cpp
@@ -418,6 +382,17 @@ add_dependencies(quader
 if(MSVC)
     target_link_options(quader PRIVATE /ENTRY:mainCRTStartup)
 endif()
+
+set(QUADER_PUBLIC_CPP_EXAMPLES
+    examples/create_box.cpp
+    examples/script_modeling_workflow.cpp)
+
+foreach(_quader_public_example IN LISTS QUADER_PUBLIC_CPP_EXAMPLES)
+    get_filename_component(_quader_public_example_name "${_quader_public_example}" NAME_WE)
+    add_executable("quader_example_${_quader_public_example_name}" "${_quader_public_example}")
+    target_compile_features("quader_example_${_quader_public_example_name}" PRIVATE cxx_std_20)
+    target_link_libraries("quader_example_${_quader_public_example_name}" PRIVATE quader_runtime)
+endforeach()
 
 add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials"
@@ -509,6 +484,7 @@ if(QUADER_BUILD_TESTS)
         tests/viewport_tool_catalog_tests.cpp
         tests/support/BehaviorExpect.cpp
         tests/support/BehaviorScenario.cpp
+        tests/support/GuardrailFileScan.cpp
         tests/support/ModelingTestEvents.cpp
     )
     target_compile_definitions(quader_tests

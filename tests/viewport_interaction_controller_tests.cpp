@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 #include "editor/tools/ViewportTool.h"
 #include "editor/viewport/ViewportInteractionController.h"
 #include "render/ViewportOverlayPolicy.h"
@@ -36,7 +37,7 @@ struct ViewportInteractionHarness {
     quader::ViewportInputResult inputResult;
 
     ViewportInteractionHarness()
-        : editor(session) {
+        : editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session)) {
         camera.setViewportSize(800.0f, 600.0f);
         camera.focusOrigin(8.0f);
         camera.setViewDirection({0.0f, 0.0f, -1.0f});
@@ -71,7 +72,7 @@ struct ViewportInteractionHarness {
 quader::QuaderModelingObjectRef createUnitBox(ViewportInteractionHarness& harness) {
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
             harness.editor.modeling().createBox(
-                    quader::ModelingBounds{
+                    quader::QuaderBounds{
                             .min = {-1.0f, -1.0f, -1.0f},
                             .max = {1.0f, 1.0f, 1.0f},
                     },
@@ -141,7 +142,7 @@ TEST(ViewportInteractionControllerTests, ClickFrameSelectsComponentThroughViewpo
     ViewportInteractionHarness harness;
     (void)createUnitBox(harness);
 
-    ASSERT_TRUE(harness.editor.selection().setMode(quader::ModelingSelectionMode::Face).ok);
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok);
     harness.router.setSelectionMode(quader::ViewportSelectionMode::Face);
 
     const quader::ViewportBeforeToolInteractionResult beforeTool =
@@ -153,19 +154,19 @@ TEST(ViewportInteractionControllerTests, ClickFrameSelectsComponentThroughViewpo
             quader::ViewportToolResult{},
             beforeTool);
 
-    const quader::ModelingSelectionSummary selection = harness.editor.selection().summary();
-    EXPECT_EQ(selection.mode, quader::ModelingSelectionMode::Face);
+    const quader::QuaderSelectionSummary selection = harness.editor.selection().summary();
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Face);
     EXPECT_EQ(selection.selectedFaceCount, 1u);
-    EXPECT_EQ(selection.activeKind, quader::ModelingActiveSelectionKind::Face);
+    EXPECT_EQ(selection.activeKind, quader::QuaderActiveSelectionKind::Face);
     EXPECT_EQ(harness.router.state().selectionMode, quader::ViewportSelectionMode::Face);
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::ModelingActiveSelectionKind::None);
+    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::None);
 
     harness.controller.handleAfterActiveTool(
             harness.editor,
             harness.frame(),
             quader::ViewportToolResult{},
             quader::ViewportBeforeToolInteractionResult{});
-    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::ModelingActiveSelectionKind::None);
+    EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::None);
 }
 
 TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames) {

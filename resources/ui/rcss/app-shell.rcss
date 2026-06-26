@@ -65,15 +65,6 @@ body {
     flex-shrink: 0;
     width: 16dp;
     height: 16dp;
-    image-color: #5B5B5B;
-}
-
-.chrome-icon-button:hover .ui-icon {
-    image-color: #D8D8D8;
-}
-
-.chrome-icon-button:active .ui-icon {
-    image-color: #D8D8D8;
 }
 
 .toolbar-button {
@@ -635,14 +626,4 @@ body {
 
 .debug-palette-hex {
     text-align: left;
-}
-
-.debug-palette-hex:hover {
-    background-color: #3C3C3C;
-    border-color: #838383;
-}
-
-.debug-palette-hex:active {
-    background-color: #5B5B5B;
-    border-color: #B4B4B4;
 }

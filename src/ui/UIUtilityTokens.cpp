@@ -202,6 +202,27 @@ void appendPseudoRule(
     rcss << "." << className << pseudoClass << " { " << property << ": " << value << "; }\n";
 }
 
+void appendPseudoDescendantRule(
+        std::ostringstream& rcss,
+        std::string_view className,
+        std::string_view pseudoClass,
+        std::string_view descendantSelector,
+        std::string_view property,
+        std::string_view value) {
+    if (!isSafeUtilityName(className) || !isSafeRcssValue(value)) {
+        return;
+    }
+    if (pseudoClass != ":hover" && pseudoClass != ":active") {
+        return;
+    }
+    if (descendantSelector != ".ui-icon") {
+        return;
+    }
+
+    rcss << "." << className << pseudoClass << " " << descendantSelector
+         << " { " << property << ": " << value << "; }\n";
+}
+
 void appendRule2(
         std::ostringstream& rcss,
         std::string_view className,
@@ -394,6 +415,7 @@ std::string buildUIUtilityRcss(
 
         appendPseudoRule(rcss, "hover-bg-" + suffix, ":hover", "background-color", color.hex);
         appendPseudoRule(rcss, "hover-border-" + suffix, ":hover", "border-color", color.hex);
+        appendPseudoDescendantRule(rcss, "hover-icon-" + suffix, ":hover", ".ui-icon", "image-color", color.hex);
     }
     for (const DebugPaletteColorToken& color : paletteColors) {
         const std::string suffix = debugPaletteUtilityClassSuffix(color.name);
@@ -403,6 +425,7 @@ std::string buildUIUtilityRcss(
 
         appendPseudoRule(rcss, "active-bg-" + suffix, ":active", "background-color", color.hex);
         appendPseudoRule(rcss, "active-border-" + suffix, ":active", "border-color", color.hex);
+        appendPseudoDescendantRule(rcss, "active-icon-" + suffix, ":active", ".ui-icon", "image-color", color.hex);
     }
     return rcss.str();
 }

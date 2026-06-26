@@ -38,6 +38,11 @@ enum class ViewportRenderSurface {
  */
 class ViewportRenderer {
 public:
+    ViewportRenderer() = default;
+    ViewportRenderer(const ViewportRenderer&) = delete;
+    ViewportRenderer& operator=(const ViewportRenderer&) = delete;
+    ViewportRenderer(ViewportRenderer&&) = delete;
+    ViewportRenderer& operator=(ViewportRenderer&&) = delete;
     ~ViewportRenderer();
 
     void initialize(filament::Engine& engine,

@@ -100,8 +100,8 @@ bool SceneDocument::destroyEntity(EntityId id) {
         if (entity == entt::null) {
             continue;
         }
-        if (HierarchyComponent* component = hierarchy(entityId)) {
-            if (HierarchyComponent* parentHierarchy = hierarchy(component->parent)) {
+        if (HierarchyComponent* component = mutableHierarchy(entityId)) {
+            if (HierarchyComponent* parentHierarchy = mutableHierarchy(component->parent)) {
                 removeChild(parentHierarchy->children, entityId);
             }
         }
@@ -123,7 +123,7 @@ bool SceneDocument::exists(EntityId id) const {
 }
 
 bool SceneDocument::renameEntity(EntityId id, std::string name) {
-    if (NameComponent* component = this->name(id)) {
+    if (NameComponent* component = mutableName(id)) {
         component->name = std::move(name);
         markDirty();
         return true;
@@ -169,7 +169,7 @@ bool SceneDocument::setEditorObjectId(EntityId id, EditorObjectId editorObjectId
 }
 
 bool SceneDocument::setEntityKind(EntityId id, EntityKind kind) {
-    if (EntityKindComponent* component = entityKind(id)) {
+    if (EntityKindComponent* component = mutableEntityKind(id)) {
         component->kind = kind;
         markDirty();
         return true;
@@ -178,7 +178,7 @@ bool SceneDocument::setEntityKind(EntityId id, EntityKind kind) {
 }
 
 bool SceneDocument::setVisible(EntityId id, bool visible) {
-    if (VisibilityComponent* component = visibility(id)) {
+    if (VisibilityComponent* component = mutableVisibility(id)) {
         component->visible = visible;
         markDirty();
         return true;
@@ -186,8 +186,17 @@ bool SceneDocument::setVisible(EntityId id, bool visible) {
     return false;
 }
 
+bool SceneDocument::setSelectable(EntityId id, bool selectable) {
+    if (VisibilityComponent* component = mutableVisibility(id)) {
+        component->selectable = selectable;
+        markDirty();
+        return true;
+    }
+    return false;
+}
+
 bool SceneDocument::setLocked(EntityId id, bool locked) {
-    if (LockComponent* component = lock(id)) {
+    if (LockComponent* component = mutableLock(id)) {
         component->locked = locked;
         markDirty();
         return true;
@@ -196,7 +205,7 @@ bool SceneDocument::setLocked(EntityId id, bool locked) {
 }
 
 bool SceneDocument::setSelected(EntityId id, bool selected) {
-    if (SelectionComponent* component = selection(id)) {
+    if (SelectionComponent* component = mutableSelection(id)) {
         const bool wasSelected = component->selected;
         const EntityId previousActiveSelection = activeSelection_;
         component->selected = selected;
@@ -252,7 +261,7 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
         return false;
     }
 
-    HierarchyComponent* childHierarchy = hierarchy(child);
+    HierarchyComponent* childHierarchy = mutableHierarchy(child);
     if (!childHierarchy) {
         return false;
     }
@@ -264,12 +273,12 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
 
     const QMat4 childWorld = preserveWorldTransform ? worldTransformMatrix(child) : localTransformMatrix(child);
 
-    if (HierarchyComponent* oldParentHierarchy = hierarchy(oldParent)) {
+    if (HierarchyComponent* oldParentHierarchy = mutableHierarchy(oldParent)) {
         removeChild(oldParentHierarchy->children, child);
     }
 
     childHierarchy->parent = newParent;
-    if (HierarchyComponent* newParentHierarchy = hierarchy(newParent)) {
+    if (HierarchyComponent* newParentHierarchy = mutableHierarchy(newParent)) {
         if (std::find(newParentHierarchy->children.begin(), newParentHierarchy->children.end(), child) ==
                 newParentHierarchy->children.end()) {
             newParentHierarchy->children.push_back(child);
@@ -280,7 +289,7 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
         const QMat4 parentWorld = newParent == InvalidEntityId
                 ? sceneTransformIdentityMatrix()
                 : worldTransformMatrix(newParent);
-        if (TransformComponent* localTransform = transform(child)) {
+        if (TransformComponent* localTransform = mutableTransform(child)) {
             *localTransform = transformComponentFromMatrix(
                     sceneLocalMatrixFromWorldMatrix(parentWorld, childWorld),
                     localTransform->rotationEuler);
@@ -348,64 +357,39 @@ void SceneDocument::setLight(EntityId id, LightComponent light) {
     markDirty();
 }
 
-NameComponent* SceneDocument::name(EntityId id) {
+NameComponent* SceneDocument::mutableName(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<NameComponent>(entity);
 }
 
-EditorObjectIdentityComponent* SceneDocument::editorObjectIdentity(EntityId id) {
-    const entt::entity entity = requireEntity(id);
-    return entity == entt::null ? nullptr : registry_.try_get<EditorObjectIdentityComponent>(entity);
-}
-
-TransformComponent* SceneDocument::transform(EntityId id) {
+TransformComponent* SceneDocument::mutableTransform(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<TransformComponent>(entity);
 }
 
-EntityKindComponent* SceneDocument::entityKind(EntityId id) {
+EntityKindComponent* SceneDocument::mutableEntityKind(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<EntityKindComponent>(entity);
 }
 
-HierarchyComponent* SceneDocument::hierarchy(EntityId id) {
+HierarchyComponent* SceneDocument::mutableHierarchy(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<HierarchyComponent>(entity);
 }
 
-VisibilityComponent* SceneDocument::visibility(EntityId id) {
+VisibilityComponent* SceneDocument::mutableVisibility(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<VisibilityComponent>(entity);
 }
 
-LockComponent* SceneDocument::lock(EntityId id) {
+LockComponent* SceneDocument::mutableLock(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<LockComponent>(entity);
 }
 
-SelectionComponent* SceneDocument::selection(EntityId id) {
+SelectionComponent* SceneDocument::mutableSelection(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<SelectionComponent>(entity);
-}
-
-ModelingObjectComponent* SceneDocument::modelingObject(EntityId id) {
-    const entt::entity entity = requireEntity(id);
-    return entity == entt::null ? nullptr : registry_.try_get<ModelingObjectComponent>(entity);
-}
-
-MeshComponent* SceneDocument::mesh(EntityId id) {
-    const entt::entity entity = requireEntity(id);
-    return entity == entt::null ? nullptr : registry_.try_get<MeshComponent>(entity);
-}
-
-MaterialComponent* SceneDocument::material(EntityId id) {
-    const entt::entity entity = requireEntity(id);
-    return entity == entt::null ? nullptr : registry_.try_get<MaterialComponent>(entity);
-}
-
-LightComponent* SceneDocument::light(EntityId id) {
-    const entt::entity entity = requireEntity(id);
-    return entity == entt::null ? nullptr : registry_.try_get<LightComponent>(entity);
 }
 
 const NameComponent* SceneDocument::name(EntityId id) const {

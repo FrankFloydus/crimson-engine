@@ -37,14 +37,19 @@ enum class MainLayoutDockDropAction {
     SplitPanel,
 };
 
+/// Describes what measured UI surface a panel drop zone represents.
+enum class MainLayoutPanelDropZoneKind {
+    PanelBody,
+    BottomTab,
+    BottomTabTrailing,
+};
+
 /// Stores one visible panel surface that accepts before/after panel insertion.
 struct MainLayoutPanelDropZone {
     DockLocation location = DockLocation::Sidebar;
     std::string panelId;
     UIPixelRect rect;
-    MainLayoutDockDropAction action = MainLayoutDockDropAction::InsertPanel;
-    UIDropPlacementPolicy placementPolicy = UIDropPlacementPolicy::VerticalBeforeAfter;
-    UIDropFeedbackKind feedbackKind = UIDropFeedbackKind::Target;
+    MainLayoutPanelDropZoneKind kind = MainLayoutPanelDropZoneKind::PanelBody;
 };
 
 /// Identifies the active panel-drag drop target.

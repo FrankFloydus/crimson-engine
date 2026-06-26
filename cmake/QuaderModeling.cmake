@@ -4,19 +4,6 @@
 # No permission is granted to use, copy, modify, distribute, or sublicense this
 # file except through prior written authorization from Francesco Di Blasi.
 ################################################################################
-option(QUADER_USE_OPENMESH_TOPOLOGY "Use OpenMesh for topology-backed polygon edit operations." ON)
-option(QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH "Allow CMake to download OpenMesh when no local source checkout is supplied." OFF)
-option(QUADER_ALLOW_EXTERNAL_CATCH2_FETCH "Allow CMake to download Catch2 when no local source checkout is supplied." OFF)
-option(QUADER_ENABLE_TRACY "Enable Tracy profiler instrumentation for Quader native modeling targets." OFF)
-option(QUADER_TRACY_ON_DEMAND "Enable Tracy on-demand capture mode when Tracy instrumentation is enabled." ON)
-option(QUADER_BUILD_PERFORMANCE_BENCHMARKS "Build opt-in Quader performance baseline executables." OFF)
-
-set(QUADER_OPENMESH_SOURCE_DIR "" CACHE PATH "Path to a local OpenMesh source checkout.")
-set(QUADER_CATCH2_SOURCE_DIR "" CACHE PATH "Path to a local Catch2 source checkout.")
-set(QUADER_TRACY_SOURCE_DIR "" CACHE PATH "Path to a local Tracy profiler source checkout.")
-set(QUADER_OPENMESH_COMMIT "5f016723f9f183770cffe5787a6f9f628e2914d8")
-set(QUADER_CATCH2_COMMIT "644821ce28cb25d7992a4d0375b1d83214392592")
-
 set(QUADER_APP_THIRDPARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
 set(QUADER_MODELING_DOMAIN_TEST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/tests/modeling_domain")
 
@@ -77,19 +64,13 @@ if(QUADER_USE_OPENMESH_TOPOLOGY)
     endif()
 
     set(_quader_openmesh_source_dir "${QUADER_OPENMESH_SOURCE_DIR}")
-    if(_quader_openmesh_source_dir STREQUAL "" AND DEFINED ENV{QUADER_OPENMESH_SOURCE_DIR})
-        file(TO_CMAKE_PATH "$ENV{QUADER_OPENMESH_SOURCE_DIR}" _quader_openmesh_source_dir)
-    endif()
     if(_quader_openmesh_source_dir STREQUAL "")
-        set(_quader_openmesh_default_source_dir "${QUADER_APP_THIRDPARTY_DIR}/openmesh/openmesh-${QUADER_OPENMESH_COMMIT}")
-        if(EXISTS "${_quader_openmesh_default_source_dir}/CMakeLists.txt")
-            set(_quader_openmesh_source_dir "${_quader_openmesh_default_source_dir}")
-        elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
-            file(TO_CMAKE_PATH "$ENV{USERPROFILE}/Desktop/_QUADER_DEV/_deps/openmesh-${QUADER_OPENMESH_COMMIT}" _quader_dev_openmesh_source_dir)
-            if(EXISTS "${_quader_dev_openmesh_source_dir}/CMakeLists.txt")
-                set(_quader_openmesh_source_dir "${_quader_dev_openmesh_source_dir}")
-            endif()
-        endif()
+        quader_resolve_dependency_source(
+            _quader_openmesh_source_dir
+            QUADER_OPENMESH_SOURCE_DIR
+            "openmesh/openmesh-${QUADER_OPENMESH_COMMIT}"
+            "openmesh-${QUADER_OPENMESH_COMMIT}"
+            CMakeLists.txt)
     endif()
 
     if(NOT _quader_openmesh_source_dir STREQUAL "")
@@ -119,7 +100,7 @@ endif()
 add_library(quader_modeling_gte_math INTERFACE)
 target_include_directories(quader_modeling_gte_math
     INTERFACE
-        "${QUADER_APP_THIRDPARTY_DIR}/geometrictools/gte-8.2-e095b84018766274f1546a7baa12c257fd18f7d8/GTE")
+        "${QUADER_APP_THIRDPARTY_DIR}/${QUADER_GEOMETRIC_TOOLS_VENDOR_DIR}")
 
 add_library(quader_geometry STATIC
     src/mesh/geometry/geometry.cpp)
@@ -223,6 +204,21 @@ target_include_directories(quader_editor_metadata
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
 
+add_library(quader_qdr_shared_io STATIC
+    src/io/qdr/QdrAtomicWrite.cpp
+    src/io/qdr/QdrPolygonDocumentCodec.cpp)
+target_compile_features(quader_qdr_shared_io PUBLIC cxx_std_20)
+target_include_directories(quader_qdr_shared_io
+    PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    PRIVATE
+        "${QUADER_APP_THIRDPARTY_DIR}")
+target_link_libraries(quader_qdr_shared_io
+    PUBLIC
+        quader_modeling_polygon
+    PRIVATE
+        quader_modeling_profile)
+
 add_library(quader_qdr_document_io STATIC
     src/io/qdr/qdr_document.cpp)
 target_compile_features(quader_qdr_document_io PUBLIC cxx_std_20)
@@ -234,6 +230,7 @@ target_include_directories(quader_qdr_document_io
 target_link_libraries(quader_qdr_document_io
     PUBLIC
         quader_modeling_polygon
+        quader_qdr_shared_io
     PRIVATE
         quader_modeling_profile)
 
@@ -271,19 +268,13 @@ function(quader_ensure_catch2)
     set(CATCH_INSTALL_EXTRAS OFF CACHE BOOL "Disable Catch2 extras install." FORCE)
 
     set(_quader_catch2_source_dir "${QUADER_CATCH2_SOURCE_DIR}")
-    if(_quader_catch2_source_dir STREQUAL "" AND DEFINED ENV{QUADER_CATCH2_SOURCE_DIR})
-        file(TO_CMAKE_PATH "$ENV{QUADER_CATCH2_SOURCE_DIR}" _quader_catch2_source_dir)
-    endif()
     if(_quader_catch2_source_dir STREQUAL "")
-        set(_quader_catch2_default_source_dir "${QUADER_APP_THIRDPARTY_DIR}/catch2/catch2-${QUADER_CATCH2_COMMIT}")
-        if(EXISTS "${_quader_catch2_default_source_dir}/CMakeLists.txt")
-            set(_quader_catch2_source_dir "${_quader_catch2_default_source_dir}")
-        elseif(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
-            file(TO_CMAKE_PATH "$ENV{USERPROFILE}/Desktop/_QUADER_DEV/_deps/catch2-${QUADER_CATCH2_COMMIT}" _quader_dev_catch2_source_dir)
-            if(EXISTS "${_quader_dev_catch2_source_dir}/CMakeLists.txt")
-                set(_quader_catch2_source_dir "${_quader_dev_catch2_source_dir}")
-            endif()
-        endif()
+        quader_resolve_dependency_source(
+            _quader_catch2_source_dir
+            QUADER_CATCH2_SOURCE_DIR
+            "catch2/catch2-${QUADER_CATCH2_COMMIT}"
+            "catch2-${QUADER_CATCH2_COMMIT}"
+            CMakeLists.txt)
     endif()
 
     if(NOT _quader_catch2_source_dir STREQUAL "")
@@ -306,34 +297,25 @@ function(quader_ensure_catch2)
     endif()
 endfunction()
 
-function(quader_add_modeling_domain_catch2_sources target)
+function(quader_add_modeling_domain_test_source category target)
+    set(_quader_modeling_domain_categories
+        smoke
+        geometry
+        polygon
+        runtime
+        editor_metadata
+        qdr_document
+        qdr_runtime)
+    if(NOT category IN_LIST _quader_modeling_domain_categories)
+        message(FATAL_ERROR "Unknown modeling-domain test category: ${category}")
+    endif()
+    if(ARGC LESS 3)
+        message(FATAL_ERROR "Modeling-domain test ${target} must register at least one source.")
+    endif()
     list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST "${category}:${target}")
     set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
-endfunction()
-
-function(quader_add_polygon_domain_test target)
-    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
-    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
-endfunction()
-
-function(quader_add_modeling_runtime_domain_test target)
-    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
-    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
-endfunction()
-
-function(quader_add_editor_metadata_domain_test target)
-    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
-    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
-endfunction()
-
-function(quader_add_qdr_document_domain_test target)
-    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
-    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
-endfunction()
-
-function(quader_add_qdr_runtime_domain_test target)
-    list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
-    set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST "${QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST}" PARENT_SCOPE)
 endfunction()
 
 function(quader_add_modeling_domain_catch2_test_target target)
@@ -369,66 +351,170 @@ endfunction()
 if(QUADER_BUILD_TESTS)
     set(QUADER_MODELING_DOMAIN_TEST_SOURCES)
 
-    quader_add_modeling_domain_catch2_sources(qdr_modeling_domain_smoke
+    quader_add_modeling_domain_test_source(smoke qdr_modeling_domain_smoke
         tests/modeling_domain/qdr_modeling_domain_smoke.cpp)
 
-    quader_add_modeling_domain_catch2_sources(qdr_custom_engine_modeling_runtime_smoke_tests
+    quader_add_modeling_domain_test_source(smoke qdr_custom_engine_modeling_runtime_smoke_tests
         tests/modeling_domain/qdr_custom_engine_modeling_runtime_smoke_tests.cpp)
 
-    quader_add_modeling_domain_catch2_sources(qdr_geometry_tests
+    quader_add_modeling_domain_test_source(geometry qdr_geometry_tests
         tests/modeling_domain/qdr_geometry_tests.cpp)
 
-    quader_add_polygon_domain_test(qdr_poly_geometry_characterization_tests tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp)
-    quader_add_polygon_domain_test(qdr_document_model_api_tests tests/modeling_domain/qdr_document_model_api_tests.cpp)
-    quader_add_polygon_domain_test(qdr_document_primitive_tests tests/modeling_domain/qdr_document_primitive_tests.cpp)
-    quader_add_polygon_domain_test(qdr_document_mesh_uv_tests tests/modeling_domain/qdr_document_mesh_uv_tests.cpp)
-    quader_add_polygon_domain_test(qdr_document_builder_tests tests/modeling_domain/qdr_document_builder_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_poly_geometry_characterization_tests tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_document_model_api_tests tests/modeling_domain/qdr_document_model_api_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_document_primitive_tests tests/modeling_domain/qdr_document_primitive_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_document_mesh_uv_tests tests/modeling_domain/qdr_document_mesh_uv_tests.cpp)
+    quader_add_modeling_domain_test_source(polygon qdr_document_builder_tests tests/modeling_domain/qdr_document_builder_tests.cpp)
     if(QUADER_USE_OPENMESH_TOPOLOGY)
-        quader_add_polygon_domain_test(qdr_document_openmesh_topology_query_tests tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp)
+        quader_add_modeling_domain_test_source(polygon qdr_document_openmesh_topology_query_tests tests/modeling_domain/qdr_document_openmesh_topology_query_tests.cpp)
     endif()
 
-    quader_add_qdr_document_domain_test(qdr_io_document_tests tests/modeling_domain/qdr_io_document_tests.cpp)
-    quader_add_qdr_runtime_domain_test(qdr_runtime_io_compat_tests tests/modeling_domain/qdr_runtime_io_compat_tests.cpp)
+    quader_add_modeling_domain_test_source(qdr_document qdr_io_document_tests tests/modeling_domain/qdr_io_document_tests.cpp)
+    quader_add_modeling_domain_test_source(qdr_runtime qdr_runtime_io_compat_tests tests/modeling_domain/qdr_runtime_io_compat_tests.cpp)
 
-    quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_overlay_tests tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp)
-    quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_picking_tests tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp)
-    quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_lifecycle_tests tests/modeling_domain/qdr_modeling_runtime_lifecycle_tests.cpp)
-    quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_geometry_characterization_tests tests/modeling_domain/qdr_modeling_runtime_geometry_characterization_tests.cpp)
-    quader_add_modeling_runtime_domain_test(qdr_modeling_runtime_repeat_last_action_tests tests/modeling_domain/qdr_modeling_runtime_repeat_last_action_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_operation_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_action_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_action_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_panel_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_panel_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_ui_placement_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_ui_placement_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_consumer_smoke_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_consumer_smoke_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_tool_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_tool_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_shortcut_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_shortcut_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_gesture_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_gesture_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_schema_mirror_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_schema_mirror_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_viewport_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_viewport_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_overlay_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_overlay_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_preference_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_preference_catalog_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_presentation_material_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_presentation_material_tests.cpp)
-    quader_add_editor_metadata_domain_test(qdr_editor_metadata_surface_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_surface_tests.cpp)
+    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_overlay_tests tests/modeling_domain/qdr_modeling_runtime_overlay_tests.cpp)
+    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_picking_tests tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp)
+    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_lifecycle_tests tests/modeling_domain/qdr_modeling_runtime_lifecycle_tests.cpp)
+    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_geometry_characterization_tests tests/modeling_domain/qdr_modeling_runtime_geometry_characterization_tests.cpp)
+    quader_add_modeling_domain_test_source(runtime qdr_modeling_runtime_repeat_last_action_tests tests/modeling_domain/qdr_modeling_runtime_repeat_last_action_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_operation_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_operation_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_action_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_action_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_panel_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_panel_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_ui_placement_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_ui_placement_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_consumer_smoke_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_consumer_smoke_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_tool_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_tool_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_shortcut_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_shortcut_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_gesture_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_gesture_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_schema_mirror_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_schema_mirror_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_viewport_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_viewport_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_overlay_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_overlay_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_preference_catalog_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_preference_catalog_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_presentation_material_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_presentation_material_tests.cpp)
+    quader_add_modeling_domain_test_source(editor_metadata qdr_editor_metadata_surface_tests tests/modeling_domain/editor_metadata/qdr_editor_metadata_surface_tests.cpp)
 
-    file(GLOB QUADER_POLYGON_OPERATION_TEST_SOURCES CONFIGURE_DEPENDS
-        "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation/qdr_document_*.cpp")
+    set(QUADER_POLYGON_OPERATION_TEST_SOURCES
+        tests/modeling_domain/operation/qdr_document_operation_assign_material_slot_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bevel_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bevel_vertices_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bridge_edge_boundaries_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bridge_edge_pairs_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bridge_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_bridge_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_collapse_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_collapse_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_combine_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_connect_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_connect_vertices_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_delete_selection_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_detach_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_dissolve_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_dissolve_vertices_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_extract_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_extrude_elements_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_extrude_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_fill_hole_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_flip_normals_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_insert_edge_loop_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_inset_elements_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_inset_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_knife_segment_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_knife_stroke_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_merge_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_merge_vertices_by_distance_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_merge_vertices_to_active_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_merge_vertices_to_center_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_normal_shading_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_plane_cut_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_radial_align_selection_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_recalculate_normals_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_registry_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_slice_quad_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_snap_vertices_to_active_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_split_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_thicken_faces_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_transform_selection_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_translate_selection_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_align_face_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_align_grid_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_fit_both_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_fit_x_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_fit_y_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_justify_bottom_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_justify_center_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_justify_left_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_justify_right_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_justify_top_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_shift_down_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_shift_left_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_shift_right_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_shift_up_tests.cpp
+        tests/modeling_domain/operation/qdr_document_operation_uv_validation_tests.cpp)
     foreach(_quader_domain_operation_test_source IN LISTS QUADER_POLYGON_OPERATION_TEST_SOURCES)
         get_filename_component(_quader_domain_operation_test_target "${_quader_domain_operation_test_source}" NAME_WE)
-        quader_add_polygon_domain_test("${_quader_domain_operation_test_target}" "${_quader_domain_operation_test_source}")
+        quader_add_modeling_domain_test_source(polygon "${_quader_domain_operation_test_target}" "${_quader_domain_operation_test_source}")
     endforeach()
 
-    file(GLOB QUADER_RUNTIME_OPERATION_TEST_SOURCES CONFIGURE_DEPENDS
-        "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation/qdr_modeling_runtime_*.cpp")
+    set(QUADER_RUNTIME_OPERATION_TEST_SOURCES
+        tests/modeling_domain/operation/qdr_modeling_runtime_command_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_apply_history_command_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_assign_material_slot_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_bevel_vertices_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_bridge_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_combine_mesh_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_commit_cut_tool_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_commit_knife_tool_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_copy_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_create_box_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_delete_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_duplicate_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_edge_bevel_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_fill_hole_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_invert_mesh_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_invert_selection_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_merge_by_distance_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_merge_edges_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_mirror_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_normal_shading_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_paste_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_recalculate_inside_mesh_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_recalculate_outside_mesh_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_redo_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_select_all_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_slice_quad_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_snap_edges_to_active_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_thicken_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_transform_preview_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_transform_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_translate_tests.cpp
+        tests/modeling_domain/operation/qdr_modeling_runtime_operation_undo_tests.cpp)
     foreach(_quader_domain_operation_test_source IN LISTS QUADER_RUNTIME_OPERATION_TEST_SOURCES)
         get_filename_component(_quader_domain_operation_test_target "${_quader_domain_operation_test_source}" NAME_WE)
-        quader_add_modeling_runtime_domain_test("${_quader_domain_operation_test_target}" "${_quader_domain_operation_test_source}")
+        quader_add_modeling_domain_test_source(runtime "${_quader_domain_operation_test_target}" "${_quader_domain_operation_test_source}")
     endforeach()
 
-    file(GLOB QUADER_RUNTIME_TOOL_TEST_SOURCES CONFIGURE_DEPENDS
-        "${QUADER_MODELING_DOMAIN_TEST_ROOT}/tool/qdr_modeling_runtime_*.cpp")
+    set(QUADER_RUNTIME_TOOL_TEST_SOURCES
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_activation_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_box_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_cut_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_extend_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_extrude_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_insert_edge_loop_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_knife_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_mirror_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_move_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_operation_contract_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_overlay_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_poly_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_rotate_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_scale_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_select_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_transform_gizmo_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_viewport_navigation_tests.cpp
+        tests/modeling_domain/tool/qdr_modeling_runtime_tool_viewport_projection_tests.cpp)
     foreach(_quader_runtime_tool_test_source IN LISTS QUADER_RUNTIME_TOOL_TEST_SOURCES)
         get_filename_component(_quader_runtime_tool_test_target "${_quader_runtime_tool_test_source}" NAME_WE)
-        quader_add_modeling_runtime_domain_test("${_quader_runtime_tool_test_target}" "${_quader_runtime_tool_test_source}")
+        quader_add_modeling_domain_test_source(runtime "${_quader_runtime_tool_test_target}" "${_quader_runtime_tool_test_source}")
     endforeach()
 
     quader_add_modeling_domain_catch2_test_target(quader_modeling_domain_tests)

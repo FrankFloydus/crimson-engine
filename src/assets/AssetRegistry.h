@@ -14,12 +14,22 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
+#include <vector>
 
 namespace quader {
 
 using MeshAssetStore = TypedAssetStore<MeshAsset, MeshAssetRevision>;
 using MaterialAssetStore = TypedAssetStore<MaterialDocument, MaterialAssetRevision>;
 using TextureAssetStore = TypedAssetStore<TextureAsset, TextureAssetRevision>;
+
+/**
+ * Stores asset-registry validation status for caller-facing asset mutations.
+ */
+struct AssetRegistryValidationResult {
+    bool ok = true;
+    std::string message;
+};
 
 /**
  * Owns Asset Registry lookup and registration for the asset document and registry layer.
@@ -38,10 +48,7 @@ public:
     bool updateMesh(AssetId id, const std::function<void(MeshAsset&)>& update);
     bool updateMaterial(AssetId id, const std::function<void(MaterialDocument&)>& update);
     bool updateTexture(AssetId id, const std::function<void(TextureAsset&)>& update);
-
-    MeshAsset* mesh(AssetId id);
-    MaterialDocument* material(AssetId id);
-    TextureAsset* texture(AssetId id);
+    [[nodiscard]] AssetRegistryValidationResult validateMaterial(const MaterialDocument& material) const;
 
     const MeshAsset* mesh(AssetId id) const;
     const MaterialDocument* material(AssetId id) const;
@@ -53,6 +60,9 @@ public:
     std::size_t meshCount() const { return meshes_.size(); }
     std::size_t materialCount() const { return materials_.size(); }
     std::size_t textureCount() const { return textures_.size(); }
+    std::vector<AssetId> meshIds() const { return meshes_.ids(); }
+    std::vector<AssetId> materialIds() const { return materials_.ids(); }
+    std::vector<AssetId> textureIds() const { return textures_.ids(); }
     std::uint64_t revision() const { return revision_; }
 
 private:

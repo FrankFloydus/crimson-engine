@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <diagnostics/profile.h>
 
@@ -42,8 +43,8 @@ class TranslateSelectionOperation final : public PolyOperation {
 public:
     explicit TranslateSelectionOperation(quader::QVec3 delta);
 
-    [[nodiscard]] std::string_view id() const override { return "translate_selection"; }
-    [[nodiscard]] std::string_view label() const override { return "Translate Selection"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::TranslateSelection).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::TranslateSelection).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

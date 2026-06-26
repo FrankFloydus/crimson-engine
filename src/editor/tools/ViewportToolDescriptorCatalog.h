@@ -7,7 +7,7 @@
 #pragma once
 
 #include "editor/modeling/ModelingTypes.h"
-#include "viewport/ViewportInputRouter.h"
+#include "viewport/ViewportInputTypes.h"
 
 #include <span>
 #include <string_view>
@@ -46,10 +46,12 @@ struct ToolDescriptor {
     bool ownsViewport = false;
     bool blocksViewportFocusShortcuts = false;
     bool allowsSelectionFallback = false;
+    bool supportsTransformGizmo = false;
 };
 
 [[nodiscard]] std::span<const ToolDescriptor> viewportToolDescriptors();
 [[nodiscard]] const ToolDescriptor* findViewportToolDescriptor(ViewportToolId tool);
+[[nodiscard]] const ToolDescriptor* findViewportToolDescriptor(ModelingViewportTool tool);
 [[nodiscard]] const ToolDescriptor* findViewportToolDescriptor(std::string_view id);
 [[nodiscard]] ToolDescriptor viewportToolDescriptor(ViewportToolId tool);
 

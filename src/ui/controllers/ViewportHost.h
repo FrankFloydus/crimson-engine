@@ -33,6 +33,7 @@ namespace quader {
 
 class QuaderEditorApi;
 class ModelingSessionService;
+struct ViewportWorkspaceAuxiliaryViewportState;
 class ViewportWorkspaceService;
 
 /// Stores the measured viewport frame in framebuffer pixels.
@@ -74,6 +75,8 @@ public:
     void renderWindowedViewports(RenderSystem& renderSystem);
     void setViewportSettings(const ViewportSettings& settings);
     void setCursorCaptured(bool captured);
+    void setWindowedViewportTitleFormat(std::string titleFormat);
+    void setTextInputActive(bool active);
 
     [[nodiscard]] const ViewportToolState& viewportToolState() const { return inputRouter_.state(); }
     [[nodiscard]] std::string textureSource() const;
@@ -87,11 +90,57 @@ public:
     [[nodiscard]] bool hasActivePointerGesture() const;
 
 private:
+    /**
+     * Stores one UI input snapshot before it is projected into viewport input.
+     */
+    struct ViewportInputSurfaceState {
+        QVec2 mouseWindow = {};
+        QVec2 mouseDeltaWindow = {};
+        QVec2 relativeMouseDelta = {};
+        bool middleDown = false;
+        bool middlePressed = false;
+        bool middleReleased = false;
+        bool leftDown = false;
+        bool leftPressed = false;
+        bool leftReleased = false;
+        QVec2 leftClickWindow = {};
+        int leftClickCount = 1;
+        bool rightDown = false;
+        bool rightPressed = false;
+        bool rightReleased = false;
+        float wheelY = 0.0f;
+        std::unordered_set<ViewportKey> keysDown;
+        std::unordered_set<QuaderKeyCode> keyboardKeysDown;
+        std::vector<ViewportKey> pressedKeys;
+        std::unordered_set<QuaderMouseButton> mouseButtonsDown;
+        std::unordered_map<QuaderMouseButton, QuaderInputChord> mouseDragChordsDown;
+        std::vector<QuaderInputChord> pressedInputChords;
+        std::vector<QuaderInputChord> releasedInputChords;
+    };
+
     struct ViewportWindowInstance;
 
     void updateWindowMetrics();
     [[nodiscard]] bool mainViewportContainsWindowPoint(float windowX, float windowY) const;
     [[nodiscard]] QVec2 mainViewportWindowPointToLocal(QVec2 windowPoint) const;
+    static void accumulateMouseMotion(ViewportInputSurfaceState& input, QVec2 windowPoint, QVec2 windowDelta);
+    static void accumulateMouseButton(
+            ViewportInputSurfaceState& input,
+            std::uint8_t button,
+            bool down,
+            bool acceptPress,
+            QVec2 windowPoint,
+            int clickCount,
+            ViewportModifiers modifiers);
+    static void accumulateMouseWheel(ViewportInputSurfaceState& input, QVec2 windowPoint, float wheelY);
+    static void accumulateKey(
+            ViewportInputSurfaceState& input,
+            QuaderKeyCode keyCode,
+            bool down,
+            bool repeat,
+            ViewportModifiers modifiers);
+    [[nodiscard]] static bool inputStateHasActivePointerGesture(const ViewportInputSurfaceState& input);
+    static void clearTransientInputState(ViewportInputSurfaceState& input);
     ViewportInputFrame buildViewportInputFrame() const;
     ViewportModifiers currentModifiers() const;
     void clearTransientInput();
@@ -105,7 +154,25 @@ private:
             const AssetRegistry& assets,
             ModelingSessionService& modeling,
             AssetId defaultMaterial);
+    void handleViewportFrameSurface(
+            QuaderEditorApi& editor,
+            ViewportWorkspaceService& workspace,
+            SceneDocument& document,
+            ModelingSessionService& modeling,
+            AssetId defaultMaterial,
+            const ViewportComponent& component,
+            ViewportInputRouter& inputRouter,
+            ViewportInteractionController& interactions,
+            ViewportCameraController& camera,
+            ViewportInputFrame input,
+            ViewportInputSurfaceState& inputState,
+            QVec2 leftClickLocal,
+            ViewportWindowInstance* windowedInstance);
     void prepareWindowedViewports(ViewportWorkspaceService& workspace);
+    ViewportWorkspaceAuxiliaryViewportState& ensureWindowedViewportWorkspaceState(
+            ViewportWorkspaceService& workspace,
+            const ViewportWindowInstance& instance) const;
+    void flushRemovedWindowedViewportWorkspaceState(ViewportWorkspaceService& workspace);
     ViewportInputFrame buildWindowedViewportInputFrame(const ViewportWindowInstance& instance) const;
     void setWindowedViewportCursorCaptured(ViewportWindowInstance& instance, bool captured);
     void clearWindowedViewportTransientInput(ViewportWindowInstance& instance);
@@ -124,32 +191,14 @@ private:
     ViewportFrameRect mainViewportFrame_;
     int windowWidth_ = 1;
     int windowHeight_ = 1;
-    QVec2 mouseWindow_ = {};
-    QVec2 mouseDeltaWindow_ = {};
-    QVec2 relativeMouseDelta_ = {};
-    bool middleDown_ = false;
-    bool middlePressed_ = false;
-    bool middleReleased_ = false;
-    bool leftDown_ = false;
-    bool leftPressed_ = false;
-    bool leftReleased_ = false;
-    QVec2 leftClickWindow_ = {};
-    int leftClickCount_ = 1;
-    bool rightDown_ = false;
-    bool rightPressed_ = false;
-    bool rightReleased_ = false;
-    float wheelY_ = 0.0f;
-    std::unordered_set<ViewportKey> keysDown_;
-    std::vector<ViewportKey> pressedKeys_;
-    std::unordered_set<QuaderMouseButton> mouseButtonsDown_;
-    std::unordered_map<QuaderMouseButton, QuaderInputChord> mouseDragChordsDown_;
-    std::vector<QuaderInputChord> pressedInputChords_;
-    std::vector<QuaderInputChord> activeInputChords_;
-    std::vector<QuaderInputChord> releasedInputChords_;
+    ViewportInputSurfaceState mainInput_;
     ViewportInteractionController viewportInteractions_;
     bool relativeMouseCaptured_ = false;
     bool relativeMouseCaptureWarningIssued_ = false;
+    bool textInputActive_ = false;
     std::vector<std::unique_ptr<ViewportWindowInstance>> windowedViewports_;
+    std::vector<std::string> removedWindowedViewportIds_;
+    std::string windowedViewportTitleFormat_ = "Quader Viewport {index}";
 };
 
 } // namespace quader

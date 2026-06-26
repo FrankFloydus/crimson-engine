@@ -6,35 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "support/GuardrailFileScan.h"
+
 #include <algorithm>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
-
 namespace {
 
-std::filesystem::path sourceRoot() {
-    return std::filesystem::path(QUADER_SOURCE_DIR);
-}
+using quader::test::guardrail::contains;
+using quader::test::guardrail::filesNamedUnder;
+using quader::test::guardrail::normalizedRelative;
+using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::sourceRoot;
 
-std::string readFile(const std::filesystem::path& relativePath) {
-    const std::filesystem::path path = sourceRoot() / relativePath;
-    std::ifstream file(path);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    if (!file.is_open()) {
-        return {};
-    }
-    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-}
-
-std::vector<std::string_view> requiredInstructionFiles() {
+std::vector<std::string> requiredInstructionFiles() {
     return {
             "agents/README.md",
             "agents/project-identity.md",
@@ -48,41 +36,29 @@ std::vector<std::string_view> requiredInstructionFiles() {
             "agents/testing-build.md",
             "agents/dependencies.md",
             "agents/docs-public-examples.md",
+            "INPUT_KEYBINDINGS.md",
     };
 }
 
-std::vector<std::string_view> nestedInstructionFiles() {
-    return {
-            "benchmarks/AGENTS.md",
-            "cmake/AGENTS.md",
-            "docs/AGENTS.md",
-            "examples/AGENTS.md",
-            "resources/AGENTS.md",
-            "src/AGENTS.md",
-            "src/api/AGENTS.md",
-            "src/app/AGENTS.md",
-            "src/assets/AGENTS.md",
-            "src/core/AGENTS.md",
-            "src/diagnostics/AGENTS.md",
-            "src/editor/AGENTS.md",
-            "src/io/AGENTS.md",
-            "src/io/qdr/AGENTS.md",
-            "src/math/AGENTS.md",
-            "src/mesh/AGENTS.md",
-            "src/platform/AGENTS.md",
-            "src/render/AGENTS.md",
-            "src/scene/AGENTS.md",
-            "src/ui/AGENTS.md",
-            "src/viewport/AGENTS.md",
-            "tests/AGENTS.md",
-            "tests/modeling_domain/AGENTS.md",
-            "thirdparty/AGENTS.md",
-            "tools/AGENTS.md",
-    };
+std::vector<std::string> discoveredNestedInstructionFiles() {
+    std::vector<std::string> files;
+    for (const std::filesystem::path& file : filesNamedUnder(sourceRoot(), "AGENTS.md")) {
+        const std::string relative = normalizedRelative(file);
+        if (relative != "AGENTS.md") {
+            files.push_back(relative);
+        }
+    }
+    std::sort(files.begin(), files.end());
+    return files;
 }
 
-bool contains(const std::string& source, std::string_view needle) {
-    return source.find(needle) != std::string::npos;
+std::vector<std::string> routedInstructionFiles() {
+    std::vector<std::string> files = {"AGENTS.md"};
+    const std::vector<std::string> required = requiredInstructionFiles();
+    files.insert(files.end(), required.begin(), required.end());
+    const std::vector<std::string> nested = discoveredNestedInstructionFiles();
+    files.insert(files.end(), nested.begin(), nested.end());
+    return files;
 }
 
 std::vector<std::string> retiredRefactorPlanFiles() {
@@ -96,7 +72,7 @@ std::vector<std::string> retiredRefactorPlanFiles() {
 } // namespace
 
 TEST(AgentInstructionRoutingTests, RootAgentsFileIsThinRouterToDomainInstructions) {
-    const std::string root = readFile("AGENTS.md");
+    const std::string root = readSourceFile("AGENTS.md");
 
     EXPECT_LT(root.size(), 8000u);
     EXPECT_TRUE(contains(root, "agents/project-identity.md"));
@@ -107,23 +83,26 @@ TEST(AgentInstructionRoutingTests, RootAgentsFileIsThinRouterToDomainInstruction
 }
 
 TEST(AgentInstructionRoutingTests, RequiredDomainInstructionFilesExistAndAreRouted) {
-    const std::string root = readFile("AGENTS.md");
+    const std::string root = readSourceFile("AGENTS.md");
 
-    for (const std::string_view relative : requiredInstructionFiles()) {
+    for (const std::string& relative : requiredInstructionFiles()) {
         EXPECT_TRUE(std::filesystem::exists(sourceRoot() / relative)) << relative;
         EXPECT_TRUE(contains(root, relative) || relative == "agents/README.md") << relative;
     }
 }
 
 TEST(AgentInstructionRoutingTests, NestedPackageInstructionFilesExistAndStayFocused) {
-    const std::string root = readFile("AGENTS.md");
+    const std::string root = readSourceFile("AGENTS.md");
 
     EXPECT_TRUE(contains(root, "Nested Package Routing"));
     EXPECT_TRUE(contains(root, "src/<package>/AGENTS.md"));
     EXPECT_TRUE(contains(root, "nearest nested `AGENTS.md`"));
 
-    for (const std::string_view relative : nestedInstructionFiles()) {
-        const std::string source = readFile(std::string(relative));
+    const std::vector<std::string> nested = discoveredNestedInstructionFiles();
+    EXPECT_FALSE(nested.empty());
+
+    for (const std::string& relative : nested) {
+        const std::string source = readSourceFile(relative);
         EXPECT_FALSE(source.empty()) << relative;
         EXPECT_LT(source.size(), 2500u) << relative;
         EXPECT_TRUE(contains(source, "# ")) << relative;
@@ -131,8 +110,8 @@ TEST(AgentInstructionRoutingTests, NestedPackageInstructionFilesExistAndStayFocu
 }
 
 TEST(AgentInstructionRoutingTests, ArchitectureGuidanceLivesInDomainInstructions) {
-    const std::string projectIdentity = readFile("agents/project-identity.md");
-    const std::string publicApi = readFile("agents/public-api-and-scripting.md");
+    const std::string projectIdentity = readSourceFile("agents/project-identity.md");
+    const std::string publicApi = readSourceFile("agents/public-api-and-scripting.md");
 
     EXPECT_TRUE(contains(projectIdentity, "native standalone Windows Quader app"));
     EXPECT_TRUE(contains(projectIdentity, "Do not preserve the old top-level copied SDK boundary"));
@@ -141,7 +120,7 @@ TEST(AgentInstructionRoutingTests, ArchitectureGuidanceLivesInDomainInstructions
 }
 
 TEST(AgentInstructionRoutingTests, PublicApiPolicyIsFirstClassInstruction) {
-    const std::string publicApi = readFile("agents/public-api-and-scripting.md");
+    const std::string publicApi = readSourceFile("agents/public-api-and-scripting.md");
 
     EXPECT_TRUE(contains(publicApi, "QuaderApi"));
     EXPECT_TRUE(contains(publicApi, "QuaderEditorApi"));
@@ -151,25 +130,18 @@ TEST(AgentInstructionRoutingTests, PublicApiPolicyIsFirstClassInstruction) {
     EXPECT_TRUE(contains(publicApi, "Lua bindings must not expose"));
 }
 
-TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
-    const std::vector<std::filesystem::path> files = {
-            "AGENTS.md",
-            "agents/README.md",
-            "agents/project-identity.md",
-            "agents/public-api-and-scripting.md",
-            "agents/domain-ownership.md",
-            "agents/oop-architecture.md",
-            "agents/modeling-tools.md",
-            "agents/viewport-tools.md",
-            "agents/rendering-overlays.md",
-            "agents/ui-localization.md",
-            "agents/testing-build.md",
-            "agents/dependencies.md",
-            "agents/docs-public-examples.md",
-    };
+TEST(AgentInstructionRoutingTests, InputKeybindingGuidanceIsFirstClassInstruction) {
+    const std::string input = readSourceFile("INPUT_KEYBINDINGS.md");
 
-    for (const std::filesystem::path& file : files) {
-        const std::string source = readFile(file);
+    EXPECT_TRUE(contains(input, "source-of-truth map for Quader input"));
+    EXPECT_TRUE(contains(input, "QuaderKeybindingService"));
+    EXPECT_TRUE(contains(input, "context keys"));
+    EXPECT_TRUE(contains(input, "Do not bypass these owners"));
+}
+
+TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
+    for (const std::filesystem::path& file : routedInstructionFiles()) {
+        const std::string source = readSourceFile(file);
         for (const std::string& retiredPlan : retiredRefactorPlanFiles()) {
             EXPECT_FALSE(contains(source, retiredPlan)) << file.generic_string();
         }
@@ -178,9 +150,9 @@ TEST(AgentInstructionRoutingTests, StaleOopSourceOfTruthIsNotReferenced) {
 }
 
 TEST(AgentInstructionRoutingTests, ProjectIdentitySupersedesCopiedSdkBoundary) {
-    const std::string projectIdentity = readFile("agents/project-identity.md");
-    const std::string domainOwnership = readFile("agents/domain-ownership.md");
-    const std::string testingBuild = readFile("agents/testing-build.md");
+    const std::string projectIdentity = readSourceFile("agents/project-identity.md");
+    const std::string domainOwnership = readSourceFile("agents/domain-ownership.md");
+    const std::string testingBuild = readSourceFile("agents/testing-build.md");
 
     EXPECT_TRUE(contains(projectIdentity, "Do not preserve the old top-level copied SDK boundary"));
     EXPECT_TRUE(contains(projectIdentity, "compile-time SDK presence macro"));
@@ -194,22 +166,6 @@ TEST(AgentInstructionRoutingTests, ProjectIdentitySupersedesCopiedSdkBoundary) {
 }
 
 TEST(AgentInstructionRoutingTests, AgentInstructionsStayNative) {
-    const std::vector<std::filesystem::path> files = {
-            "AGENTS.md",
-            "agents/README.md",
-            "agents/project-identity.md",
-            "agents/public-api-and-scripting.md",
-            "agents/domain-ownership.md",
-            "agents/oop-architecture.md",
-            "agents/modeling-tools.md",
-            "agents/viewport-tools.md",
-            "agents/rendering-overlays.md",
-            "agents/ui-localization.md",
-            "agents/testing-build.md",
-            "agents/dependencies.md",
-            "agents/docs-public-examples.md",
-    };
-
     const std::string retiredInstructionName = std::string("sdk-") + "un" + "ity-" + "par" + "ity.md";
     const std::string retiredInstruction = std::string("agents/") + retiredInstructionName;
     const std::string retiredCheckout = std::string("quader-") + "un" + "ity";
@@ -218,8 +174,8 @@ TEST(AgentInstructionRoutingTests, AgentInstructionsStayNative) {
 
     EXPECT_FALSE(std::filesystem::exists(sourceRoot() / retiredInstruction));
 
-    for (const std::filesystem::path& file : files) {
-        const std::string source = readFile(file);
+    for (const std::filesystem::path& file : routedInstructionFiles()) {
+        const std::string source = readSourceFile(file);
         EXPECT_FALSE(contains(source, retiredInstructionName)) << file.generic_string();
         EXPECT_FALSE(contains(source, retiredInstruction)) << file.generic_string();
         EXPECT_FALSE(contains(source, retiredCheckout)) << file.generic_string();

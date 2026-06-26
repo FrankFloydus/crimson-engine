@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_topology_helpers.h>
@@ -31,8 +32,8 @@ namespace {
  */
 class RadialAlignOperation final : public PolyOperation {
 public:
-    [[nodiscard]] std::string_view id() const override { return "radial_align_selection"; }
-    [[nodiscard]] std::string_view label() const override { return "Radial Align Selection"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::RadialAlignSelection).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::RadialAlignSelection).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 };
 

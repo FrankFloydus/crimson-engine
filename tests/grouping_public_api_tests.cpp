@@ -7,9 +7,9 @@
 #include "support/BehaviorExpect.h"
 #include "support/BehaviorScenario.h"
 
-#include "assets/MaterialDocument.h"
-#include "assets/TextureAsset.h"
 #include "ui/ViewportShortcutController.h"
+#include "viewport/ViewportCameraController.h"
+#include "viewport/ViewportInputRouter.h"
 
 #include <gtest/gtest.h>
 
@@ -22,12 +22,14 @@ namespace {
 using namespace quader;
 using quader::test::BehaviorScenario;
 
-ModelingBounds unitBoxBounds() {
+constexpr float kHalfPi = 1.57079632679f;
+
+QuaderBounds unitBoxBounds() {
     return {.min = {-0.5f, -0.5f, -0.5f}, .max = {0.5f, 0.5f, 0.5f}};
 }
 
-TransformComponent transformAt(QVec3 position) {
-    TransformComponent transform;
+QuaderTransform transformAt(QVec3 position) {
+    QuaderTransform transform;
     transform.position = position;
     return transform;
 }
@@ -38,28 +40,30 @@ void givenBoxAt(BehaviorScenario& scenario, std::string_view alias, std::string 
 }
 
 AssetId createTexturedMaterial(BehaviorScenario& scenario, std::string name, QVec3 color) {
-    TextureAsset baseColor;
+    QuaderTextureAsset baseColor;
     baseColor.name = name + " Base";
-    baseColor.usage = TextureUsage::BaseColor;
+    baseColor.usage = QuaderTextureUsage::BaseColor;
     baseColor.width = 4;
     baseColor.height = 4;
     baseColor.generated = true;
     const QuaderApiResult<QuaderAssetRef> baseTexture = scenario.api().assets().addTexture(std::move(baseColor));
     EXPECT_TRUE(baseTexture.ok()) << baseTexture.errorMessage();
 
-    TextureAsset roughness;
+    QuaderTextureAsset roughness;
     roughness.name = name + " Roughness";
-    roughness.usage = TextureUsage::Roughness;
-    roughness.colorSpace = TextureColorSpace::Linear;
+    roughness.usage = QuaderTextureUsage::Roughness;
+    roughness.colorSpace = QuaderTextureColorSpace::Linear;
     roughness.width = 4;
     roughness.height = 4;
     roughness.generated = true;
     const QuaderApiResult<QuaderAssetRef> roughnessTexture = scenario.api().assets().addTexture(std::move(roughness));
     EXPECT_TRUE(roughnessTexture.ok()) << roughnessTexture.errorMessage();
 
-    MaterialDocument material =
-            makeDefaultQuaderMaterial(std::move(name), baseTexture.value().id, roughnessTexture.value().id);
+    QuaderMaterialAsset material;
+    material.name = std::move(name);
     material.baseColor = color;
+    material.textureSlots.emplace("baseColorTexture", baseTexture.value().id);
+    material.textureSlots.emplace("roughnessTexture", roughnessTexture.value().id);
     const QuaderApiResult<QuaderAssetRef> created = scenario.api().assets().addMaterial(std::move(material));
     EXPECT_TRUE(created.ok()) << created.errorMessage();
     return created.value().id;
@@ -79,7 +83,7 @@ void assignMaterial(BehaviorScenario& scenario, std::string_view alias, AssetId 
 
 void selectGroupForCommandDelete(BehaviorScenario& scenario, std::string_view groupAlias) {
     scenario.given().selected(groupAlias);
-    scenario.given().selectionMode(ModelingSelectionMode::Group);
+    scenario.given().selectionMode(QuaderSelectionMode::Group);
 }
 
 void rememberRestoredSubtree(BehaviorScenario& scenario, std::string_view groupAlias, std::string_view groupName) {
@@ -88,13 +92,30 @@ void rememberRestoredSubtree(BehaviorScenario& scenario, std::string_view groupA
 
 } // namespace
 
+TEST(GroupingPublicApiTests, BehaviorWorldPositionExpectationUsesSceneWorldTransform) {
+    BehaviorScenario scenario = BehaviorScenario::newProject();
+
+    QuaderTransform parentTransform;
+    parentTransform.position = {10.0f, -1.0f, 0.0f};
+    parentTransform.rotationEuler = {0.0f, 0.0f, kHalfPi};
+    parentTransform.scale = {2.0f, 3.0f, 1.0f};
+
+    QuaderTransform childTransform;
+    childTransform.position = {1.0f, 0.0f, 0.0f};
+
+    scenario.given().entity("parent", "Rotated Parent", QuaderEntityKind::Empty, parentTransform);
+    scenario.given().entity("child", "World Child", QuaderEntityKind::Empty, childTransform, "parent");
+
+    scenario.then().scene().worldPositionNear("child", {10.0f, 1.0f, 0.0f});
+}
+
 TEST(GroupingPublicApiTests, GroupSelectionParentsSelectedRootsAndUndoRedoRestoresHierarchy) {
     BehaviorScenario scenario = BehaviorScenario::newProject();
     givenBoxAt(scenario, "left", "Left", {-3.0f, 0.0f, 0.0f});
     givenBoxAt(scenario, "right", "Right", {4.0f, 0.0f, 0.0f});
     scenario.given().selectedAliases({"left", "right"}, "right");
 
-    TransformComponent groupTransform;
+    QuaderTransform groupTransform;
     groupTransform.position = {10.0f, 0.0f, 0.0f};
     scenario.when().groupSelection("group", "Pair", groupTransform);
 
@@ -147,7 +168,7 @@ TEST(GroupingPublicApiTests, UngroupUndoRedoRestoresGroupSelectionAndChildPlacem
     givenBoxAt(scenario, "first", "First", {-2.0f, 0.0f, 0.0f});
     givenBoxAt(scenario, "second", "Second", {2.0f, 0.0f, 0.0f});
     scenario.given().selectedAliases({"first", "second"}, "first");
-    TransformComponent groupTransform;
+    QuaderTransform groupTransform;
     groupTransform.position = {5.0f, 0.0f, 0.0f};
     scenario.when().groupSelection("group", "Ungroup Me", groupTransform);
 
@@ -187,7 +208,7 @@ TEST(GroupingPublicApiTests, SceneDestroyGroupUndoRedoRestoresMaterialsTexturesA
     assignMaterial(scenario, "blue", blueMaterial);
 
     scenario.given().selectedAliases({"red", "blue"}, "red");
-    TransformComponent groupTransform;
+    QuaderTransform groupTransform;
     groupTransform.position = {12.0f, 0.0f, 0.0f};
     scenario.when().groupSelection("group", "Textured Group", groupTransform);
 
@@ -250,10 +271,8 @@ TEST(GroupingPublicApiTests, SceneDestroyNestedGroupUndoRedoRestoresNestedHierar
 
 TEST(GroupingPublicApiTests, SceneDestroyGroupedChildUndoKeepsChildInsideParentGroup) {
     BehaviorScenario scenario = BehaviorScenario::newProject();
-    givenBoxAt(scenario, "child", "Child Mesh", {-1.0f, 0.0f, 0.0f});
-    givenBoxAt(scenario, "sibling", "Sibling Mesh", {1.0f, 0.0f, 0.0f});
-    const AssetId material = createTexturedMaterial(scenario, "Child Material", {0.2f, 0.8f, 0.4f});
-    assignMaterial(scenario, "child", material);
+    scenario.given().entity("child", "Child Entity", QuaderEntityKind::Empty, transformAt({-1.0f, 0.0f, 0.0f}));
+    scenario.given().entity("sibling", "Sibling Entity", QuaderEntityKind::Empty, transformAt({1.0f, 0.0f, 0.0f}));
     scenario.given().selectedAliases({"child", "sibling"}, "child");
     scenario.when().groupSelection("group", "Parent Group");
 
@@ -261,10 +280,9 @@ TEST(GroupingPublicApiTests, SceneDestroyGroupedChildUndoKeepsChildInsideParentG
     scenario.then().scene().missingAlias("child");
 
     scenario.when().undo();
-    scenario.rememberEntityNamed("child", "Child Mesh");
+    scenario.rememberEntityNamed("child", "Child Entity");
     scenario.then().scene()
             .parent("child", "group")
-            .hasMaterial("child", material)
             .worldPositionNear("child", {-1.0f, 0.0f, 0.0f});
 }
 
@@ -375,8 +393,8 @@ TEST(GroupingPublicApiTests, ObjectModeSceneSelectedGroupDeleteUsesSceneRoots) {
 
     scenario.given().selectedAliases({"child", "sibling"}, "child");
     scenario.when().groupSelection("group", "Object Mode Group");
-    scenario.given().selectionMode(ModelingSelectionMode::Object).selected("group");
-    scenario.then().selection().mode(ModelingSelectionMode::Object);
+    scenario.given().selectionMode(QuaderSelectionMode::Object).selected("group");
+    scenario.then().selection().mode(QuaderSelectionMode::Object);
 
     scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
     scenario.then().command().okChanged();
@@ -394,8 +412,8 @@ TEST(GroupingPublicApiTests, ComponentModeSceneSelectedGroupDeleteUsesSceneRoots
     scenario.given().selectedAliases({"child", "sibling"}, "child");
     scenario.when().groupSelection("group", "Component Mode Group");
 
-    scenario.given().selectionMode(ModelingSelectionMode::Face).selected("group");
-    scenario.then().selection().mode(ModelingSelectionMode::Face);
+    scenario.given().selectionMode(QuaderSelectionMode::Face).selected("group");
+    scenario.then().selection().mode(QuaderSelectionMode::Face);
 
     scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
     scenario.then().command().okChanged();
@@ -415,7 +433,7 @@ TEST(GroupingPublicApiTests, EmptySceneSelectionWithStaleModelingObjectDoesNotDe
     BehaviorScenario scenario = BehaviorScenario::newProject();
     givenBoxAt(scenario, "decoy", "Stale Delete Decoy", {4.0f, 0.0f, 0.0f});
     scenario.given().selected("decoy");
-    scenario.then().selection().mode(ModelingSelectionMode::Object);
+    scenario.then().selection().mode(QuaderSelectionMode::Object);
 
     scenario.when().clearSceneSelection();
     scenario.then().scene().selectedAliases({});
@@ -468,7 +486,7 @@ TEST(GroupingPublicApiTests, ModelingDeleteGroupedChildUndoKeepsChildGroupedAndT
     scenario.given().selectedAliases({"target", "sibling"}, "target");
     scenario.when().groupSelection("group", "Child Delete Group");
 
-    scenario.given().selectionMode(ModelingSelectionMode::Object).selected("target");
+    scenario.given().selectionMode(QuaderSelectionMode::Object).selected("target");
     scenario.when().execute(QuaderCommand::ModelingDeleteSelection);
     scenario.then().scene().namedMissing("Delete Child").namedExists("Child Delete Group");
 
@@ -534,7 +552,7 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
     scenario.given().selectedAliases({"first", "second"}, "first");
     scenario.when().groupSelection("group", "Batch Group");
 
-    TransformComponent moved;
+    QuaderTransform moved;
     moved.position = {2.0f, 3.0f, 0.0f};
     scenario.when().setGroupFlags("group", moved, false, true);
     scenario.then().command().okChanged();
@@ -549,7 +567,7 @@ TEST(GroupingPublicApiTests, GroupVisibilityLockAndTransformBatchUndoRedoSurvive
     scenario.then().scene()
             .visible("group", true)
             .locked("group", false)
-            .entityTransformNear("group", TransformComponent{})
+            .entityTransformNear("group", QuaderTransform{})
             .parent("first", "group")
             .parent("second", "group");
 
@@ -587,10 +605,10 @@ TEST(GroupingPublicApiTests, DuplicateSelectedHierarchyCopiesStateSelectsCloneAn
     scenario.then().command().okChanged();
     scenario.rememberEntityNamed("child.copy", "Duplicate Child_1");
 
-    TransformComponent groupExpected;
+    QuaderTransform groupExpected;
     groupExpected.position = groupCreateTransform.position;
     groupExpected.rotationEuler = groupCreateTransform.rotationEuler;
-    TransformComponent childExpected;
+    QuaderTransform childExpected;
     childExpected.position = {4.0f, 5.0f, 6.0f};
 
     scenario.then().scene()

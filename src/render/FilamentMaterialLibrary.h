@@ -18,6 +18,11 @@ namespace quader {
  */
 class FilamentMaterialLibrary {
 public:
+    FilamentMaterialLibrary() = default;
+    FilamentMaterialLibrary(const FilamentMaterialLibrary&) = delete;
+    FilamentMaterialLibrary& operator=(const FilamentMaterialLibrary&) = delete;
+    FilamentMaterialLibrary(FilamentMaterialLibrary&&) = delete;
+    FilamentMaterialLibrary& operator=(FilamentMaterialLibrary&&) = delete;
     ~FilamentMaterialLibrary();
 
     bool initialize(filament::Engine& engine, const std::filesystem::path& executableDir);

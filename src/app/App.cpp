@@ -7,8 +7,11 @@
 #include "app/App.h"
 
 #include "api/QuaderEditorApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 #include "assets/MaterialDocument.h"
 #include "core/Logger.h"
+#include "editor/render/QuaderRenderApiRuntimeAccess.h"
+#include "platform/SdlEventUtils.h"
 
 #include <SDL3/SDL.h>
 
@@ -52,7 +55,8 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     LOG_INFO("UI system initialized");
 
     createStartupScene();
-    editor_ = std::make_unique<QuaderEditorApi>(projectSession_);
+    editor_ = std::make_unique<QuaderEditorApi>(
+            QuaderApiSessionInternalAccess::fromProjectSession(projectSession_));
     ui_.installRuntimeHooks(*editor_);
 
     running_ = true;
@@ -81,17 +85,17 @@ int App::run() {
             }
             if (event.type == SDL_EVENT_QUIT ||
                     (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-                            event.window.windowID == mainWindowId)) {
+                            sdlEventTargetsWindow(event, mainWindowId))) {
                 running_ = false;
             }
             if ((event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
                         event.type == SDL_EVENT_WINDOW_RESIZED) &&
-                    event.window.windowID == mainWindowId) {
+                    sdlEventTargetsWindow(event, mainWindowId)) {
                 window_.refreshPixelSize();
             }
             if ((event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
                         event.type == SDL_EVENT_WINDOW_FOCUS_LOST) &&
-                    event.window.windowID == mainWindowId) {
+                    sdlEventTargetsWindow(event, mainWindowId)) {
                 window_.refreshNativeChrome();
             }
         }
@@ -115,7 +119,7 @@ int App::run() {
         if (quitRequested) {
             running_ = false;
         }
-        (void)editor_->render().syncScene(renderBridge_);
+        (void)QuaderRenderApiRuntimeAccess::syncScene(editor_->render(), renderBridge_);
 
         ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
         ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());

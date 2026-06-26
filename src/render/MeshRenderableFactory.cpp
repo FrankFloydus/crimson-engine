@@ -39,6 +39,49 @@ struct RenderVertex {
     std::uint32_t color;
 };
 
+void destroyMeshRenderableProxyResources(
+        filament::Engine& engine,
+        filament::Scene* scene,
+        MeshRenderableProxy& proxy,
+        bool removeFromScene);
+
+/**
+ * Cleans up partially constructed Filament mesh resources until ownership is handed to the proxy.
+ */
+class MeshRenderableCreationGuard {
+public:
+    MeshRenderableCreationGuard(filament::Engine& engine, filament::Scene& scene, MeshRenderableProxy& proxy)
+        : engine_(engine)
+        , scene_(scene)
+        , proxy_(proxy) {}
+
+    MeshRenderableCreationGuard(const MeshRenderableCreationGuard&) = delete;
+    MeshRenderableCreationGuard& operator=(const MeshRenderableCreationGuard&) = delete;
+    MeshRenderableCreationGuard(MeshRenderableCreationGuard&&) = delete;
+    MeshRenderableCreationGuard& operator=(MeshRenderableCreationGuard&&) = delete;
+
+    ~MeshRenderableCreationGuard() {
+        if (active_) {
+            destroyMeshRenderableProxyResources(engine_, &scene_, proxy_, sceneAdded_);
+        }
+    }
+
+    void markSceneAdded() {
+        sceneAdded_ = true;
+    }
+
+    void release() {
+        active_ = false;
+    }
+
+private:
+    filament::Engine& engine_;
+    filament::Scene& scene_;
+    MeshRenderableProxy& proxy_;
+    bool sceneAdded_ = false;
+    bool active_ = true;
+};
+
 filament::math::mat4f makeTransform(const QMat4& transform) {
     const glm::mat4 glmTransform = toGlm(transform);
     filament::math::mat4f result;
@@ -74,25 +117,38 @@ filament::math::float4 tangentFrameFromNormal(QVec3 normal) {
     return {packed.x, packed.y, packed.z, packed.w};
 }
 
-std::vector<MeshPrimitiveSpan> renderPrimitiveSpansFor(const MeshAsset& mesh) {
-    std::vector<MeshPrimitiveSpan> spans;
-    spans.reserve(mesh.primitives.empty() ? 1u : mesh.primitives.size());
-    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
-        const std::uint64_t offset = primitive.indexOffset;
-        const std::uint64_t count = primitive.indexCount;
-        if (count == 0u || offset >= mesh.indices.size() || offset + count > mesh.indices.size()) {
-            continue;
+void destroyMeshRenderableProxyResources(
+        filament::Engine& engine,
+        filament::Scene* scene,
+        MeshRenderableProxy& proxy,
+        bool removeFromScene) {
+    if (proxy.entity) {
+        if (removeFromScene && scene != nullptr) {
+            scene->remove(proxy.entity);
         }
-        spans.push_back(primitive);
+        engine.getRenderableManager().destroy(proxy.entity);
+        engine.getTransformManager().destroy(proxy.entity);
     }
-    if (spans.empty() && !mesh.indices.empty()) {
-        spans.push_back(MeshPrimitiveSpan{
-                .indexOffset = 0,
-                .indexCount = static_cast<std::uint32_t>(mesh.indices.size()),
-                .materialSlot = 0,
-        });
+    for (filament::MaterialInstance*& materialInstance : proxy.materialInstances) {
+        if (materialInstance) {
+            engine.destroy(materialInstance);
+            materialInstance = nullptr;
+        }
     }
-    return spans;
+    proxy.materialInstances.clear();
+    proxy.materialSlots.clear();
+    if (proxy.vertexBuffer) {
+        engine.destroy(proxy.vertexBuffer);
+        proxy.vertexBuffer = nullptr;
+    }
+    if (proxy.indexBuffer) {
+        engine.destroy(proxy.indexBuffer);
+        proxy.indexBuffer = nullptr;
+    }
+    if (proxy.entity) {
+        utils::EntityManager::get().destroy(proxy.entity);
+        proxy.entity.clear();
+    }
 }
 
 } // namespace
@@ -115,19 +171,19 @@ void MeshRenderableFactory::shutdown() {
 MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         AssetId meshId,
         const MeshAsset& mesh,
-        AssetId materialId,
-        const MaterialDocument* material,
+        const MaterialComponent* material,
         const AssetRegistry& assets,
         const QMat4& worldTransform,
         bool castShadows,
         bool doubleSided,
         std::uint64_t materialRevision) {
     MeshRenderableProxy proxy;
+    MeshRenderableCreationGuard creationGuard(*engine_, *scene_, proxy);
     proxy.entity = utils::EntityManager::get().create();
     proxy.sourceEntity = entityId;
     proxy.mesh = meshId;
     proxy.meshRevision = mesh.revision.value;
-    proxy.material = materialId;
+    proxy.material = material ? material->material : InvalidAssetId;
     proxy.materialRevision = materialRevision;
     proxy.castShadows = castShadows;
     proxy.doubleSided = doubleSided;
@@ -160,13 +216,16 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
             .build(*engine_);
     proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(mesh.indices));
 
-    const std::vector<MeshPrimitiveSpan> primitiveSpans = renderPrimitiveSpansFor(mesh);
+    const std::vector<MeshPrimitiveSpan> primitiveSpans = normalizedMeshPrimitiveSpans(mesh);
     proxy.materialSlots.reserve(primitiveSpans.size());
     proxy.materialInstances.reserve(primitiveSpans.size());
     filament::RenderableManager::Builder builder(primitiveSpans.size());
     for (std::size_t primitiveIndex = 0; primitiveIndex < primitiveSpans.size(); ++primitiveIndex) {
         const MeshPrimitiveSpan& primitive = primitiveSpans[primitiveIndex];
-        filament::MaterialInstance* materialInstance = materialBinding_->createMeshMaterialInstance(assets, material, doubleSided);
+        const AssetId primitiveMaterialId = material ? material->materialForSlot(primitive.materialSlot) : InvalidAssetId;
+        const MaterialDocument* primitiveMaterial = assets.material(primitiveMaterialId);
+        filament::MaterialInstance* materialInstance =
+                materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided);
         proxy.materialSlots.push_back(primitive.materialSlot);
         proxy.materialInstances.push_back(materialInstance);
         builder.geometry(primitiveIndex,
@@ -185,6 +244,8 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
     engine_->getTransformManager().create(proxy.entity);
     updateTransform(proxy, worldTransform);
     scene_->addEntity(proxy.entity);
+    creationGuard.markSceneAdded();
+    creationGuard.release();
     return proxy;
 }
 
@@ -207,31 +268,7 @@ void MeshRenderableFactory::destroy(MeshRenderableProxy& proxy) {
         return;
     }
 
-    if (proxy.entity) {
-        scene_->remove(proxy.entity);
-        engine_->getRenderableManager().destroy(proxy.entity);
-        engine_->getTransformManager().destroy(proxy.entity);
-    }
-    for (filament::MaterialInstance*& materialInstance : proxy.materialInstances) {
-        if (materialInstance) {
-            engine_->destroy(materialInstance);
-            materialInstance = nullptr;
-        }
-    }
-    proxy.materialInstances.clear();
-    proxy.materialSlots.clear();
-    if (proxy.vertexBuffer) {
-        engine_->destroy(proxy.vertexBuffer);
-        proxy.vertexBuffer = nullptr;
-    }
-    if (proxy.indexBuffer) {
-        engine_->destroy(proxy.indexBuffer);
-        proxy.indexBuffer = nullptr;
-    }
-    if (proxy.entity) {
-        utils::EntityManager::get().destroy(proxy.entity);
-        proxy.entity.clear();
-    }
+    destroyMeshRenderableProxyResources(*engine_, scene_, proxy, true);
 }
 
 std::uint64_t MeshRenderableFactory::meshAssetSignature(std::uint64_t hash, const MeshAsset& mesh) {

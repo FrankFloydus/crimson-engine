@@ -7,6 +7,7 @@
 #include "editor/transform/SceneTransformDragService.h"
 
 #include "api/QuaderEditorApi.h"
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderSceneApi.h"
 #include "editor/commands/document/DocumentCommandEdits.h"
 #include "editor/history/EditorHistoryService.h"
@@ -73,7 +74,7 @@ QuaderApiVoidResult commitSceneTransformPreviewThroughApi(
 
     QuaderSceneBatch batch = editor.scene().batch(label);
     for (const DocumentTransformEdit& edit : changedEdits) {
-        batch.setTransform(edit.entity, edit.after);
+        batch.setTransform(edit.entity, toApiTransform(edit.after));
     }
     return batch.commit();
 }

@@ -47,6 +47,7 @@ public:
 
     QuaderApiVoidResult frameSelection(ViewportPaneId pane = ViewportPaneId::Perspective);
     QuaderApiVoidResult focusOrigin(ViewportPaneId pane = ViewportPaneId::Perspective);
+    QuaderApiVoidResult spawnWindow();
     QuaderApiVoidResult captureScreenshot(
             const std::filesystem::path& path,
             ViewportPaneId pane = ViewportPaneId::Perspective);

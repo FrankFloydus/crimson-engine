@@ -86,4 +86,37 @@ struct QuaderApiResult : QuaderApiStatus {
 
 using QuaderApiVoidResult = QuaderApiStatus;
 
+inline void copyQuaderApiStatus(QuaderApiStatus& target, const QuaderApiStatus& source) {
+    target.ok = source.ok;
+    target.changed = source.changed;
+    target.message = source.message;
+    target.mutationKind = source.mutationKind;
+    target.revisions = source.revisions;
+}
+
+inline QuaderApiStatus quaderApiStatusFromResult(const QuaderApiStatus& status) {
+    return status;
+}
+
+template <typename T>
+QuaderApiStatus quaderApiStatusFromResult(const QuaderApiResult<T>& result) {
+    QuaderApiStatus status;
+    copyQuaderApiStatus(status, result);
+    return status;
+}
+
+template <typename T>
+QuaderApiResult<T> quaderApiResultFromStatus(const QuaderApiStatus& status) {
+    QuaderApiResult<T> result;
+    copyQuaderApiStatus(result, status);
+    return result;
+}
+
+template <typename T>
+QuaderApiResult<T> quaderApiResultFromStatus(const QuaderApiStatus& status, T value) {
+    QuaderApiResult<T> result = quaderApiResultFromStatus<T>(status);
+    result.value = std::move(value);
+    return result;
+}
+
 } // namespace quader

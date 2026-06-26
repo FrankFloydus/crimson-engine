@@ -207,8 +207,7 @@ UISettings UISettings::load(const std::filesystem::path& path) {
         return settings;
     }
 
-    std::optional<DockLocation> outlinerDockLocation;
-    std::optional<DockLocation> inspectorDockLocation;
+    std::vector<DockPanelPlacement> dockPanelLocations;
     std::vector<std::string> dockPanelOrder;
     std::vector<DockLocationActivePanel> dockActivePanels;
     std::vector<DockLocationSplitPanels> dockSplitPanels;
@@ -251,17 +250,19 @@ UISettings UISettings::load(const std::filesystem::path& path) {
                     mainLayoutClampedBottomDockHeightDp(parseInt(value, settings.mainLayout().bottomDock.heightDp));
         } else if (key == "BottomDockCollapsed") {
             settings.mainLayout().bottomDock.collapsed = parseBool(value, settings.mainLayout().bottomDock.collapsed);
-        } else if (key == "OutlinerVisible") {
-            settings.mainLayout().outlinerVisible = parseBool(value, settings.mainLayout().outlinerVisible);
-        } else if (key == "InspectorVisible") {
-            settings.mainLayout().inspectorVisible = parseBool(value, settings.mainLayout().inspectorVisible);
-        } else if (key == "OutlinerDockLocation") {
+        } else if (const std::optional<std::string_view> panelId =
+                           mainLayoutPanelIdFromVisibilitySettingsKey(key)) {
+            (void)mainLayoutSetPanelVisible(
+                    settings.mainLayout(),
+                    *panelId,
+                    parseBool(value, mainLayoutPanelVisible(settings.mainLayout(), *panelId)));
+        } else if (const std::optional<std::string_view> panelId =
+                           mainLayoutPanelIdFromDockLocationSettingsKey(key)) {
             if (const std::optional<DockLocation> location = dockLocationFromName(value)) {
-                outlinerDockLocation = *location;
-            }
-        } else if (key == "InspectorDockLocation") {
-            if (const std::optional<DockLocation> location = dockLocationFromName(value)) {
-                inspectorDockLocation = *location;
+                dockPanelLocations.push_back({
+                        .panelId = std::string(*panelId),
+                        .location = *location,
+                });
             }
         } else if (key == "DockPanelOrder") {
             dockPanelOrder = parseDockPanelOrder(value);
@@ -273,14 +274,9 @@ UISettings UISettings::load(const std::filesystem::path& path) {
     }
 
     settings.setMainLayout(settings.mainLayout());
-    if (outlinerDockLocation) {
+    for (const DockPanelPlacement& placement : dockPanelLocations) {
         const bool changed =
-                dockMovePanelToLocation(settings.mainLayout().dockLayout, kMainLayoutPanelOutliner, *outlinerDockLocation);
-        (void)changed;
-    }
-    if (inspectorDockLocation) {
-        const bool changed =
-                dockMovePanelToLocation(settings.mainLayout().dockLayout, kMainLayoutPanelInspector, *inspectorDockLocation);
+                dockMovePanelToLocation(settings.mainLayout().dockLayout, placement.panelId, placement.location);
         (void)changed;
     }
     if (!dockPanelOrder.empty()) {
@@ -315,9 +311,12 @@ UISettings UISettings::load(const std::filesystem::path& path) {
             if (index >= splitPanels.panelSizesDp.size() || splitPanels.panelSizesDp[index] <= 0) {
                 continue;
             }
-            const int sizeDp = splitPanels.location == DockLocation::Panel ?
-                    mainLayoutClampedBottomSplitPanelWidthDp(splitPanels.panelSizesDp[index]) :
-                    splitPanels.panelSizesDp[index];
+            int sizeDp = splitPanels.panelSizesDp[index];
+            if (splitPanels.location == DockLocation::Panel) {
+                sizeDp = mainLayoutClampedBottomSplitPanelWidthDp(sizeDp);
+            } else if (mainLayoutLocationIsSideDock(splitPanels.location)) {
+                sizeDp = mainLayoutClampedSidePanelStackHeightDp(sizeDp);
+            }
             const bool resized = dockSetSplitPanelSizeDp(
                     settings.mainLayout().dockLayout,
                     splitPanels.location,
@@ -357,14 +356,20 @@ bool UISettings::save(const std::filesystem::path& path) const {
     file << "OutlinerHeightDp=" << mainLayout_.outlinerHeightDp << '\n';
     file << "BottomDockHeightDp=" << mainLayout_.bottomDock.heightDp << '\n';
     file << "BottomDockCollapsed=" << (mainLayout_.bottomDock.collapsed ? "true" : "false") << '\n';
-    file << "OutlinerVisible=" << (mainLayout_.outlinerVisible ? "true" : "false") << '\n';
-    file << "InspectorVisible=" << (mainLayout_.inspectorVisible ? "true" : "false") << '\n';
-    file << "OutlinerDockLocation="
-         << dockLocationName(dockPanelLocation(mainLayout_.dockLayout, kMainLayoutPanelOutliner).value_or(DockLocation::Sidebar))
-         << '\n';
-    file << "InspectorDockLocation="
-         << dockLocationName(dockPanelLocation(mainLayout_.dockLayout, kMainLayoutPanelInspector).value_or(DockLocation::Sidebar))
-         << '\n';
+    for (const MainLayoutPanelDescriptor& descriptor : mainLayoutPanelDescriptors()) {
+        if (!descriptor.visibilitySettingsKey.empty()) {
+            file << descriptor.visibilitySettingsKey << '='
+                 << (mainLayoutPanelVisible(mainLayout_, descriptor.id) ? "true" : "false")
+                 << '\n';
+        }
+    }
+    for (const MainLayoutPanelDescriptor& descriptor : mainLayoutPanelDescriptors()) {
+        if (!descriptor.dockLocationSettingsKey.empty()) {
+            file << descriptor.dockLocationSettingsKey << '='
+                 << dockLocationName(dockPanelLocation(mainLayout_.dockLayout, descriptor.id).value_or(DockLocation::Sidebar))
+                 << '\n';
+        }
+    }
     file << "DockPanelOrder=";
     for (std::size_t index = 0; index < mainLayout_.dockLayout.panels.size(); ++index) {
         if (index > 0) {

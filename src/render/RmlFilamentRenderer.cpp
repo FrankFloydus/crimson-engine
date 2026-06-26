@@ -78,10 +78,27 @@ RmlFilamentRenderer::~RmlFilamentRenderer() {
     shutdown();
 }
 
+RmlFilamentRenderer::DrawResourceCreationGuard::DrawResourceCreationGuard(
+        RmlFilamentRenderer& owner,
+        DrawResource& resource)
+    : owner_(&owner)
+    , resource_(&resource) {}
+
+RmlFilamentRenderer::DrawResourceCreationGuard::~DrawResourceCreationGuard() {
+    if (!released_ && owner_ != nullptr && resource_ != nullptr) {
+        owner_->destroyDrawResource(*resource_);
+    }
+}
+
+void RmlFilamentRenderer::DrawResourceCreationGuard::release() {
+    released_ = true;
+}
+
 void RmlFilamentRenderer::initialize(
         filament::Engine& engine,
         filament::Material& material,
         TextureRegistry& textures) {
+    shutdown();
     engine_ = &engine;
     material_ = &material;
     textures_ = &textures;
@@ -285,6 +302,7 @@ void RmlFilamentRenderer::RenderGeometry(
     }
 
     DrawResource resource;
+    DrawResourceCreationGuard creationGuard(*this, resource);
     resource.entity = utils::EntityManager::get().create();
     resource.vertexBuffer = filament::VertexBuffer::Builder()
             .vertexCount(static_cast<std::uint32_t>(vertices.size()))
@@ -319,18 +337,6 @@ void RmlFilamentRenderer::RenderGeometry(
         const int width = right - left;
         const int height = bottom - top;
         if (width <= 0 || height <= 0) {
-            if (resource.materialInstance) {
-                engine_->destroy(resource.materialInstance);
-            }
-            if (resource.vertexBuffer) {
-                engine_->destroy(resource.vertexBuffer);
-            }
-            if (resource.indexBuffer) {
-                engine_->destroy(resource.indexBuffer);
-            }
-            if (resource.entity) {
-                utils::EntityManager::get().destroy(resource.entity);
-            }
             return;
         }
         resource.materialInstance->setScissor(
@@ -357,7 +363,8 @@ void RmlFilamentRenderer::RenderGeometry(
             .globalBlendOrderEnabled(0, true)
             .build(*engine_, resource.entity);
     scene_->addEntity(resource.entity);
-    frameResources_.push_back(resource);
+    frameResources_.push_back(std::move(resource));
+    creationGuard.release();
 }
 
 void RmlFilamentRenderer::ReleaseGeometry(Rml::CompiledGeometryHandle geometry) {
@@ -455,32 +462,41 @@ void RmlFilamentRenderer::SetScissorRegion(Rml::Rectanglei region) {
 
 void RmlFilamentRenderer::releaseFrameResources() {
     if (!engine_) {
+        frameResources_.clear();
         return;
     }
 
     for (DrawResource& resource : frameResources_) {
+        destroyDrawResource(resource);
+    }
+    frameResources_.clear();
+}
+
+void RmlFilamentRenderer::destroyDrawResource(DrawResource& resource) {
+    if (engine_) {
         if (resource.entity) {
-            scene_->remove(resource.entity);
+            if (scene_) {
+                scene_->remove(resource.entity);
+            }
             engine_->getRenderableManager().destroy(resource.entity);
         }
         if (resource.materialInstance) {
             engine_->destroy(resource.materialInstance);
-            resource.materialInstance = nullptr;
         }
         if (resource.vertexBuffer) {
             engine_->destroy(resource.vertexBuffer);
-            resource.vertexBuffer = nullptr;
         }
         if (resource.indexBuffer) {
             engine_->destroy(resource.indexBuffer);
-            resource.indexBuffer = nullptr;
-        }
-        if (resource.entity) {
-            utils::EntityManager::get().destroy(resource.entity);
-            resource.entity.clear();
         }
     }
-    frameResources_.clear();
+    if (resource.entity) {
+        utils::EntityManager::get().destroy(resource.entity);
+        resource.entity.clear();
+    }
+    resource.materialInstance = nullptr;
+    resource.vertexBuffer = nullptr;
+    resource.indexBuffer = nullptr;
 }
 
 void RmlFilamentRenderer::createWhiteTexture() {

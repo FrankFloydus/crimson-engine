@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -37,8 +38,8 @@ namespace {
  */
 class SplitEdgesOperation final : public PolyOperation {
 public:
-    [[nodiscard]] std::string_view id() const override { return "split_selected_edges"; }
-    [[nodiscard]] std::string_view label() const override { return "Split Selected Edges"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::SplitSelectedEdges).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::SplitSelectedEdges).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 };
 

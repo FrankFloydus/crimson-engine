@@ -44,9 +44,7 @@ public:
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] bool empty() const;
     [[nodiscard]] const std::unordered_map<int, EntityId>& entitiesByObject() const;
-    [[nodiscard]] std::unordered_map<int, EntityId>& entitiesByObject();
     [[nodiscard]] const std::unordered_map<EntityId, int>& objectsByEntity() const;
-    [[nodiscard]] std::unordered_map<EntityId, int>& objectsByEntity();
     [[nodiscard]] std::optional<EntityId> entityForModelingObject(int modelingObjectId) const;
     [[nodiscard]] std::optional<int> modelingObjectForEntity(EntityId entity) const;
     [[nodiscard]] std::optional<ModelingObjectSceneIdentity> sceneIdentityForModelingObject(int modelingObjectId) const;

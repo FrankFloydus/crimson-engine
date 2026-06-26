@@ -20,6 +20,7 @@
 namespace quader {
 
 class ProjectSession;
+class ModelingSessionMemento;
 
 /**
  * Owns Quader API Mutation Runner behavior within the public Quader API surface.
@@ -33,6 +34,13 @@ public:
             ModelingCommandExecutionService& modelingCommands);
 
     [[nodiscard]] QuaderRevisionStamp currentRevisions() const;
+    [[nodiscard]] EditorTransaction beginTransaction(std::string label);
+    [[nodiscard]] ModelingSessionMemento captureModelingMemento() const;
+    QuaderApiVoidResult restoreModelingMemento(const ModelingSessionMemento& memento, std::string_view label);
+    QuaderApiVoidResult recordModelingMementoTransaction(
+            std::string label,
+            ModelingSessionMemento before,
+            ModelingSessionMemento after);
 
     QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
     QuaderApiVoidResult runDocumentCommand(CommandResult result, std::string_view label);
@@ -45,6 +53,7 @@ public:
     QuaderApiVoidResult runModelingUndoableCommand(
             std::unique_ptr<IUndoableCommand> command,
             std::string_view label);
+    [[nodiscard]] bool canRunTrackedModelingTool(std::string_view toolId) const;
     QuaderApiVoidResult runTrackedModelingTool(std::string_view toolId);
     QuaderApiVoidResult beginTrackedModelingPreview(std::string_view actionId);
     QuaderApiVoidResult commitModelingPreview(std::string label);

@@ -11,34 +11,36 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace quader {
 
 void resetViewportCameraForView(ViewportCameraController& camera, ViewportView view) {
     camera = ViewportCameraController{};
+    const float focusOriginDistance = static_cast<float>(viewportHostDefaults().focusOriginDistance);
     switch (view) {
     case ViewportView::Top:
-        camera.focusOrigin(64.0f);
+        camera.focusOrigin(focusOriginDistance);
         camera.viewAxis(ViewportViewAxis::Y, 1);
         break;
     case ViewportView::Bottom:
-        camera.focusOrigin(64.0f);
+        camera.focusOrigin(focusOriginDistance);
         camera.viewAxis(ViewportViewAxis::Y, -1);
         break;
     case ViewportView::Front:
-        camera.focusOrigin(64.0f);
+        camera.focusOrigin(focusOriginDistance);
         camera.viewAxis(ViewportViewAxis::Z, -1);
         break;
     case ViewportView::Back:
-        camera.focusOrigin(64.0f);
+        camera.focusOrigin(focusOriginDistance);
         camera.viewAxis(ViewportViewAxis::Z, 1);
         break;
     case ViewportView::Side:
-        camera.focusOrigin(64.0f);
+        camera.focusOrigin(focusOriginDistance);
         camera.viewAxis(ViewportViewAxis::X, 1);
         break;
     case ViewportView::Left:
-        camera.focusOrigin(64.0f);
+        camera.focusOrigin(focusOriginDistance);
         camera.viewAxis(ViewportViewAxis::X, -1);
         break;
     case ViewportView::Perspective:
@@ -139,10 +141,11 @@ bool ViewportWorkspaceService::toggleFocusedPaneMaximized() {
 }
 
 bool ViewportWorkspaceService::setGridPreset(int preset) {
-    if (gridPreset_ == preset) {
+    const int clampedPreset = viewportClampGridPreset(preset);
+    if (gridPreset_ == clampedPreset) {
         return false;
     }
-    gridPreset_ = preset;
+    gridPreset_ = clampedPreset;
     return true;
 }
 
@@ -220,6 +223,9 @@ void ViewportWorkspaceService::clearPaneVisibility() {
     for (ViewportWorkspacePaneState& paneState : panes_) {
         paneState.visibleThisFrame = false;
     }
+    for (ViewportWorkspaceAuxiliaryViewportState& viewportState : auxiliaryViewports_) {
+        viewportState.visibleThisFrame = false;
+    }
 }
 
 void ViewportWorkspaceService::setPaneVisible(ViewportPaneId paneId, bool visible) {
@@ -242,6 +248,80 @@ bool ViewportWorkspaceService::setPaneRenderSize(ViewportPaneId paneId, QVec2 si
 
 QVec2 ViewportWorkspaceService::paneRenderSize(ViewportPaneId paneId) const {
     return pane(paneId).renderSize;
+}
+
+ViewportWorkspaceAuxiliaryViewportState& ViewportWorkspaceService::ensureAuxiliaryViewport(
+        std::string stableId,
+        std::uint8_t layerIndex) {
+    if (ViewportWorkspaceAuxiliaryViewportState* existing = auxiliaryViewport(stableId)) {
+        existing->layerIndex = layerIndex;
+        return *existing;
+    }
+
+    ViewportWorkspaceAuxiliaryViewportState state;
+    state.stableId = std::move(stableId);
+    state.layerIndex = layerIndex;
+    state.camera.focusOrigin(static_cast<float>(viewportHostDefaults().focusOriginDistance));
+    auxiliaryViewports_.push_back(std::move(state));
+    return auxiliaryViewports_.back();
+}
+
+bool ViewportWorkspaceService::removeAuxiliaryViewport(std::string_view stableId) {
+    const auto found = std::find_if(
+            auxiliaryViewports_.begin(),
+            auxiliaryViewports_.end(),
+            [stableId](const ViewportWorkspaceAuxiliaryViewportState& state) {
+                return state.stableId == stableId;
+            });
+    if (found == auxiliaryViewports_.end()) {
+        return false;
+    }
+    auxiliaryViewports_.erase(found);
+    return true;
+}
+
+ViewportWorkspaceAuxiliaryViewportState* ViewportWorkspaceService::auxiliaryViewport(std::string_view stableId) {
+    const auto found = std::find_if(
+            auxiliaryViewports_.begin(),
+            auxiliaryViewports_.end(),
+            [stableId](const ViewportWorkspaceAuxiliaryViewportState& state) {
+                return state.stableId == stableId;
+            });
+    return found == auxiliaryViewports_.end() ? nullptr : &*found;
+}
+
+const ViewportWorkspaceAuxiliaryViewportState* ViewportWorkspaceService::auxiliaryViewport(std::string_view stableId) const {
+    const auto found = std::find_if(
+            auxiliaryViewports_.begin(),
+            auxiliaryViewports_.end(),
+            [stableId](const ViewportWorkspaceAuxiliaryViewportState& state) {
+                return state.stableId == stableId;
+            });
+    return found == auxiliaryViewports_.end() ? nullptr : &*found;
+}
+
+void ViewportWorkspaceService::setAuxiliaryViewportVisible(std::string_view stableId, bool visible) {
+    if (ViewportWorkspaceAuxiliaryViewportState* state = auxiliaryViewport(stableId)) {
+        state->visibleThisFrame = visible;
+    }
+}
+
+bool ViewportWorkspaceService::auxiliaryViewportVisible(std::string_view stableId) const {
+    const ViewportWorkspaceAuxiliaryViewportState* state = auxiliaryViewport(stableId);
+    return state != nullptr && state->visibleThisFrame;
+}
+
+bool ViewportWorkspaceService::setAuxiliaryViewportRenderSize(std::string_view stableId, QVec2 size) {
+    ViewportWorkspaceAuxiliaryViewportState* state = auxiliaryViewport(stableId);
+    if (state == nullptr) {
+        return false;
+    }
+    if (state->renderSize.x == size.x && state->renderSize.y == size.y) {
+        return false;
+    }
+    state->renderSize = size;
+    state->camera.setViewportSize(size.x, size.y);
+    return true;
 }
 
 bool ViewportWorkspaceService::focusedPaneIsVisible() const {

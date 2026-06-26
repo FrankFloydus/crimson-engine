@@ -39,16 +39,28 @@ QuaderApiVoidResult QuaderPreferencesApi::setShortcut(std::string_view commandId
             unavailable("Command runtime is not attached.");
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::setShortcut(QuaderCommandId commandId, std::string shortcut) {
+    return setShortcut(commandId.string(), std::move(shortcut));
+}
+
 QuaderApiVoidResult QuaderPreferencesApi::removeShortcut(std::string_view commandId) {
     return commands_ != nullptr ?
             commands_->removeShortcut(commandId) :
             unavailable("Command runtime is not attached.");
 }
 
+QuaderApiVoidResult QuaderPreferencesApi::removeShortcut(QuaderCommandId commandId) {
+    return removeShortcut(commandId.string());
+}
+
 QuaderApiVoidResult QuaderPreferencesApi::resetShortcut(std::string_view commandId) {
     return commands_ != nullptr ?
             commands_->resetShortcut(commandId) :
             unavailable("Command runtime is not attached.");
+}
+
+QuaderApiVoidResult QuaderPreferencesApi::resetShortcut(QuaderCommandId commandId) {
+    return resetShortcut(commandId.string());
 }
 
 QuaderApiVoidResult QuaderPreferencesApi::setNavigationGizmoVisible(bool visible) {

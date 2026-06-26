@@ -28,6 +28,11 @@ namespace quader {
  */
 class TextureBindingService {
 public:
+    TextureBindingService() = default;
+    TextureBindingService(const TextureBindingService&) = delete;
+    TextureBindingService& operator=(const TextureBindingService&) = delete;
+    TextureBindingService(TextureBindingService&&) = delete;
+    TextureBindingService& operator=(TextureBindingService&&) = delete;
     ~TextureBindingService();
 
     void initialize(filament::Engine& engine, std::filesystem::path resourceRoot);
@@ -79,6 +84,7 @@ private:
 
     filament::Texture* loadTextureAsset(const TextureAsset& texture);
     filament::Texture* createSolidTexture(std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a, TextureColorSpace colorSpace);
+    void evictObsoleteTextureRevisions(const TextureCacheKey& currentKey);
     void destroyTexture(filament::Texture*& texture);
 
     filament::Engine* engine_ = nullptr;

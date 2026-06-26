@@ -28,8 +28,22 @@ void ProjectDocument::rename(std::string name) {
     markDirty();
 }
 
+bool ProjectDocument::synchronizeObjectRecordsWithScene() {
+    if (!syncObjectRecordsWithScene()) {
+        return false;
+    }
+    markDirty();
+    return true;
+}
+
 EditorObjectId ProjectDocument::createObjectRecord(ProjectObjectRecord record) {
-    syncObjectRecordsWithScene();
+    const bool recordsSynced = syncObjectRecordsWithScene();
+    const auto invalidResult = [&]() {
+        if (recordsSynced) {
+            markDirty();
+        }
+        return InvalidEditorObjectId;
+    };
     if (record.sceneEntity != InvalidEntityId && scene_.exists(record.sceneEntity)) {
         const EditorObjectId requested = record.id;
         EditorObjectId objectId = requested != InvalidEditorObjectId
@@ -39,12 +53,12 @@ EditorObjectId ProjectDocument::createObjectRecord(ProjectObjectRecord record) {
             objectId = allocateObjectId(InvalidEditorObjectId);
         }
         if (!canAssignObjectId(objectId, record.sceneEntity)) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
         (void)allocateObjectId(objectId);
         if (scene_.editorObjectId(record.sceneEntity) != objectId &&
                 !scene_.setEditorObjectId(record.sceneEntity, objectId)) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
         record.id = objectId;
         if (const auto existing = objectByEntity_.find(record.sceneEntity); existing != objectByEntity_.end()) {
@@ -53,11 +67,11 @@ EditorObjectId ProjectDocument::createObjectRecord(ProjectObjectRecord record) {
         }
     } else {
         if (record.id != InvalidEditorObjectId && objects_.contains(record.id)) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
         record.id = allocateObjectId(record.id);
         if (record.id == InvalidEditorObjectId) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
     }
     const EditorObjectId objectId = record.id;
@@ -68,7 +82,13 @@ EditorObjectId ProjectDocument::createObjectRecord(ProjectObjectRecord record) {
 }
 
 EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
-    syncObjectRecordsWithScene();
+    const bool recordsSynced = syncObjectRecordsWithScene();
+    const auto invalidResult = [&]() {
+        if (recordsSynced) {
+            markDirty();
+        }
+        return InvalidEditorObjectId;
+    };
     if (record.sceneEntity != InvalidEntityId && scene_.exists(record.sceneEntity)) {
         EditorObjectId objectId = record.id;
         if (objectId == InvalidEditorObjectId) {
@@ -78,12 +98,12 @@ EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
             objectId = allocateObjectId(InvalidEditorObjectId);
         }
         if (!canAssignObjectId(objectId, record.sceneEntity)) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
         (void)allocateObjectId(objectId);
         if (scene_.editorObjectId(record.sceneEntity) != objectId &&
                 !scene_.setEditorObjectId(record.sceneEntity, objectId)) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
         record.id = objectId;
         if (const auto existing = objectByEntity_.find(record.sceneEntity);
@@ -93,11 +113,11 @@ EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
         }
     } else {
         if (record.id != InvalidEditorObjectId && scene_.entityForEditorObjectId(record.id) != InvalidEntityId) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
         record.id = allocateObjectId(record.id);
         if (record.id == InvalidEditorObjectId) {
-            return InvalidEditorObjectId;
+            return invalidResult();
         }
     }
     const EditorObjectId objectId = record.id;
@@ -112,29 +132,38 @@ EditorObjectId ProjectDocument::upsertObjectRecord(ProjectObjectRecord record) {
     return objectId;
 }
 
-const ProjectObjectRecord* ProjectDocument::objectRecord(EditorObjectId objectId) const {
-    syncObjectRecordsWithScene();
-    const auto existing = objects_.find(objectId);
-    return existing == objects_.end() ? nullptr : &existing->second;
+std::optional<ProjectObjectRecord> ProjectDocument::objectRecord(EditorObjectId objectId) const {
+    if (objectId == InvalidEditorObjectId) {
+        return std::nullopt;
+    }
+    if (const EntityId entity = scene_.entityForEditorObjectId(objectId); entity != InvalidEntityId) {
+        return mergedSceneObjectRecord(recordForSceneEntity(entity, objectId));
+    }
+    return storedObjectRecord(objectId);
 }
 
 EditorObjectId ProjectDocument::objectIdForEntity(EntityId entity) const {
     if (const EditorObjectId objectId = scene_.editorObjectId(entity); objectId != InvalidEditorObjectId) {
-        syncObjectRecordsWithScene();
         return objectId;
     }
-    syncObjectRecordsWithScene();
     const auto existing = objectByEntity_.find(entity);
-    return existing == objectByEntity_.end() ? InvalidEditorObjectId : existing->second;
+    if (existing != objectByEntity_.end() && objectRecord(existing->second).has_value()) {
+        return existing->second;
+    }
+    for (const auto& [objectId, record] : objects_) {
+        if (record.sceneEntity == entity && objectRecord(objectId).has_value()) {
+            return objectId;
+        }
+    }
+    return InvalidEditorObjectId;
 }
 
 EntityId ProjectDocument::entityForObjectId(EditorObjectId objectId) const {
     if (const EntityId entity = scene_.entityForEditorObjectId(objectId); entity != InvalidEntityId) {
-        syncObjectRecordsWithScene();
         return entity;
     }
-    const ProjectObjectRecord* record = objectRecord(objectId);
-    return record ? record->sceneEntity : InvalidEntityId;
+    const std::optional<ProjectObjectRecord> record = objectRecord(objectId);
+    return record.has_value() ? record->sceneEntity : InvalidEntityId;
 }
 
 void ProjectDocument::forgetObjectRecord(EditorObjectId objectId) {
@@ -160,10 +189,25 @@ void ProjectDocument::forgetEntity(EntityId entity) {
 }
 
 std::vector<ProjectObjectRecord> ProjectDocument::objectRecords() const {
-    syncObjectRecordsWithScene();
+    std::unordered_map<EditorObjectId, ProjectObjectRecord> recordsById;
+    recordsById.reserve(objects_.size() + scene_.entities().size());
+    for (const auto& [objectId, record] : objects_) {
+        if (const std::optional<ProjectObjectRecord> stored = storedObjectRecord(objectId)) {
+            recordsById[objectId] = *stored;
+        }
+    }
+    for (const EntityId entity : scene_.entities()) {
+        const EditorObjectId objectId = scene_.editorObjectId(entity);
+        if (objectId == InvalidEditorObjectId) {
+            continue;
+        }
+        recordsById[objectId] = mergedSceneObjectRecord(recordForSceneEntity(entity, objectId));
+    }
+
     std::vector<ProjectObjectRecord> records;
-    records.reserve(objects_.size());
-    for (const auto& [id, record] : objects_) {
+    records.reserve(recordsById.size());
+    for (const auto& [id, record] : recordsById) {
+        (void)id;
         records.push_back(record);
     }
 
@@ -174,10 +218,12 @@ std::vector<ProjectObjectRecord> ProjectDocument::objectRecords() const {
 }
 
 ProjectDocumentIdentityReport ProjectDocument::validateObjectIdentityInvariants() const {
-    syncObjectRecordsWithScene();
-
     ProjectDocumentIdentityReport report;
     std::unordered_map<EditorObjectId, EntityId> entityByObjectId;
+    std::unordered_map<EditorObjectId, ProjectObjectRecord> recordsById;
+    for (const ProjectObjectRecord& record : objectRecords()) {
+        recordsById[record.id] = record;
+    }
     for (const EntityId entity : scene_.entities()) {
         const EditorObjectId objectId = scene_.editorObjectId(entity);
         if (objectId == InvalidEditorObjectId) {
@@ -197,8 +243,8 @@ ProjectDocumentIdentityReport ProjectDocument::validateObjectIdentityInvariants(
         }
         entityByObjectId[objectId] = entity;
 
-        const auto record = objects_.find(objectId);
-        if (record == objects_.end()) {
+        const auto record = recordsById.find(objectId);
+        if (record == recordsById.end()) {
             report.issues.push_back(ProjectDocumentIdentityIssue{
                     .entity = entity,
                     .objectId = objectId,
@@ -215,7 +261,7 @@ ProjectDocumentIdentityReport ProjectDocument::validateObjectIdentityInvariants(
         }
     }
 
-    for (const auto& [objectId, record] : objects_) {
+    for (const auto& [objectId, record] : recordsById) {
         if (record.sceneEntity == InvalidEntityId) {
             continue;
         }
@@ -261,48 +307,24 @@ void ProjectDocument::bindSceneObjectIdentityAllocator() {
     });
 }
 
-void ProjectDocument::syncObjectRecordsWithScene() const {
-    for (auto it = objects_.begin(); it != objects_.end();) {
-        const EntityId entity = it->second.sceneEntity;
-        if (entity != InvalidEntityId && !scene_.exists(entity)) {
-            if (const auto byEntity = objectByEntity_.find(entity);
-                    byEntity != objectByEntity_.end() && byEntity->second == it->first) {
-                objectByEntity_.erase(byEntity);
-            }
-            it = objects_.erase(it);
+bool ProjectDocument::syncObjectRecordsWithScene() {
+    std::unordered_map<EditorObjectId, ProjectObjectRecord> syncedObjects;
+    std::unordered_map<EntityId, EditorObjectId> syncedObjectByEntity;
+    for (ProjectObjectRecord record : objectRecords()) {
+        if (record.id == InvalidEditorObjectId) {
             continue;
         }
-        ++it;
+        if (record.sceneEntity != InvalidEntityId) {
+            syncedObjectByEntity[record.sceneEntity] = record.id;
+        }
+        syncedObjects[record.id] = std::move(record);
     }
-
-    for (const EntityId entity : scene_.entities()) {
-        const EditorObjectId objectId = scene_.editorObjectId(entity);
-        if (objectId == InvalidEditorObjectId) {
-            continue;
-        }
-        if (const auto previous = objectByEntity_.find(entity);
-                previous != objectByEntity_.end() && previous->second != objectId) {
-            objects_.erase(previous->second);
-            objectByEntity_.erase(previous);
-        }
-
-        ProjectObjectRecord record = recordForSceneEntity(entity, objectId);
-        if (const auto existing = objects_.find(objectId); existing != objects_.end()) {
-            ProjectObjectRecord merged = existing->second;
-            merged.sceneEntity = record.sceneEntity;
-            merged.mesh = record.mesh;
-            merged.material = record.material;
-            merged.modelingObject = record.modelingObject;
-            merged.visible = record.visible;
-            merged.materialSlot = record.materialSlot;
-            if (merged.authoredName.empty() && !record.authoredName.empty()) {
-                merged.authoredName = record.authoredName;
-            }
-            record = std::move(merged);
-        }
-        objects_[objectId] = std::move(record);
-        objectByEntity_[entity] = objectId;
+    if (syncedObjects == objects_ && syncedObjectByEntity == objectByEntity_) {
+        return false;
     }
+    objects_ = std::move(syncedObjects);
+    objectByEntity_ = std::move(syncedObjectByEntity);
+    return true;
 }
 
 bool ProjectDocument::canAssignObjectId(EditorObjectId objectId, EntityId entity) const {
@@ -317,19 +339,52 @@ bool ProjectDocument::canAssignObjectId(EditorObjectId objectId, EntityId entity
     return existing == objects_.end() || existing->second.sceneEntity == entity;
 }
 
+std::optional<ProjectObjectRecord> ProjectDocument::storedObjectRecord(EditorObjectId objectId) const {
+    const auto existing = objects_.find(objectId);
+    if (existing == objects_.end()) {
+        return std::nullopt;
+    }
+    ProjectObjectRecord record = existing->second;
+    if (record.sceneEntity != InvalidEntityId) {
+        if (!scene_.exists(record.sceneEntity)) {
+            return std::nullopt;
+        }
+        const EditorObjectId sceneObjectId = scene_.editorObjectId(record.sceneEntity);
+        if (sceneObjectId != InvalidEditorObjectId && sceneObjectId != objectId) {
+            return std::nullopt;
+        }
+    }
+    hydrateRecordFromScene(record);
+    return record;
+}
+
 ProjectObjectRecord ProjectDocument::recordForSceneEntity(EntityId entity, EditorObjectId objectId) const {
     ProjectObjectRecord record{
             .id = objectId,
             .sceneEntity = entity,
     };
-    indexRecord(record);
+    hydrateRecordFromScene(record);
     return record;
 }
 
-void ProjectDocument::indexRecord(ProjectObjectRecord& record) const {
-    if (record.sceneEntity != InvalidEntityId) {
-        objectByEntity_[record.sceneEntity] = record.id;
+ProjectObjectRecord ProjectDocument::mergedSceneObjectRecord(ProjectObjectRecord record) const {
+    if (const auto existing = objects_.find(record.id); existing != objects_.end()) {
+        ProjectObjectRecord merged = existing->second;
+        merged.sceneEntity = record.sceneEntity;
+        merged.mesh = record.mesh;
+        merged.material = record.material;
+        merged.modelingObject = record.modelingObject;
+        merged.visible = record.visible;
+        merged.materialSlot = record.materialSlot;
+        if (merged.authoredName.empty() && !record.authoredName.empty()) {
+            merged.authoredName = record.authoredName;
+        }
+        return merged;
     }
+    return record;
+}
+
+void ProjectDocument::hydrateRecordFromScene(ProjectObjectRecord& record) const {
     if (record.authoredName.empty() && record.sceneEntity != InvalidEntityId) {
         if (const NameComponent* name = scene_.name(record.sceneEntity)) {
             record.authoredName = name->name;
@@ -355,6 +410,13 @@ void ProjectDocument::indexRecord(ProjectObjectRecord& record) const {
         if (const MaterialComponent* material = scene_.material(record.sceneEntity)) {
             record.material = material->material;
         }
+    }
+}
+
+void ProjectDocument::indexRecord(ProjectObjectRecord& record) {
+    hydrateRecordFromScene(record);
+    if (record.sceneEntity != InvalidEntityId) {
+        objectByEntity_[record.sceneEntity] = record.id;
     }
 }
 

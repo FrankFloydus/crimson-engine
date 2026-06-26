@@ -6,29 +6,19 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/qdr/QdrDocumentWriter.h"
 
+#include "assets/MaterialDocument.h"
+#include "io/qdr/QdrAtomicWrite.h"
 #include "io/qdr/QdrDocumentReader.h"
 #include "io/qdr/QdrFormat.h"
+#include "io/qdr/QdrPolygonDocumentCodec.h"
 
 #include <nlohmann/json.hpp>
-#include <mesh/polygon/document.h>
 
-#include <atomic>
-#include <chrono>
 #include <filesystem>
-#include <fstream>
-#include <set>
-#include <sstream>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace quader {
 namespace {
@@ -145,68 +135,6 @@ std::string textureColorSpaceName(TextureColorSpace colorSpace) {
     return "srgb";
 }
 
-json polygonVec2ToJson(quader::QVec2 value) {
-    return json{{"x", value.x}, {"y", value.y}};
-}
-
-json polygonVec3ToJson(quader::QVec3 value) {
-    return json{{"x", value.x}, {"y", value.y}, {"z", value.z}};
-}
-
-json polygonEdgeToJson(quader_poly::Edge edge) {
-    return json{{"a", edge.a}, {"b", edge.b}};
-}
-
-std::string surfaceShadingName(quader_poly::SurfaceShading shading) {
-    switch (shading) {
-    case quader_poly::SurfaceShading::flat:
-        return "flat";
-    case quader_poly::SurfaceShading::smooth:
-        return "smooth";
-    case quader_poly::SurfaceShading::authored:
-        return "authored";
-    }
-    return "flat";
-}
-
-json polygonDocumentToJson(const quader_poly::Document& document) {
-    json vertices = json::array();
-    for (const quader_poly::Vertex& vertex : document.vertices) {
-        vertices.push_back(json{
-                {"id", vertex.id},
-                {"position", polygonVec3ToJson(vertex.position)},
-        });
-    }
-
-    json faces = json::array();
-    for (const quader_poly::Face& face : document.faces) {
-        json uvs = json::array();
-        for (quader::QVec2 uv : face.uvs) {
-            uvs.push_back(polygonVec2ToJson(uv));
-        }
-        faces.push_back(json{
-                {"id", face.id},
-                {"vertices", face.vertices},
-                {"uvs", uvs},
-                {"materialSlot", face.material_slot},
-                {"normalShading", surfaceShadingName(face.normal_shading)},
-        });
-    }
-
-    json hardNormalEdges = json::array();
-    for (quader_poly::Edge edge : document.hard_normal_edges) {
-        hardNormalEdges.push_back(polygonEdgeToJson(edge));
-    }
-
-    return json{
-            {"nextVertexId", document.next_vertex_id},
-            {"nextFaceId", document.next_face_id},
-            {"vertices", vertices},
-            {"faces", faces},
-            {"hardNormalEdges", hardNormalEdges},
-    };
-}
-
 json meshToJson(AssetId id, const MeshAsset& mesh) {
     json vertices = json::array();
     for (const MeshVertex& vertex : mesh.vertices) {
@@ -219,7 +147,7 @@ json meshToJson(AssetId id, const MeshAsset& mesh) {
     }
 
     json primitives = json::array();
-    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
+    for (const MeshPrimitiveSpan& primitive : normalizedMeshPrimitiveSpans(mesh)) {
         primitives.push_back(json{
                 {"indexOffset", primitive.indexOffset},
                 {"indexCount", primitive.indexCount},
@@ -236,7 +164,7 @@ json meshToJson(AssetId id, const MeshAsset& mesh) {
             {"primitives", primitives},
     };
     if (mesh.hasAuthoredPolygonDocument && mesh.authoredPolygonDocument) {
-        value["polygonDocument"] = polygonDocumentToJson(*mesh.authoredPolygonDocument);
+        value["polygonDocument"] = quader_io::qdr_polygon_document_to_json(*mesh.authoredPolygonDocument);
     }
     return value;
 }
@@ -256,8 +184,10 @@ json textureToJson(AssetId id, const TextureAsset& texture) {
 
 json materialToJson(AssetId id, const MaterialDocument& material) {
     json textureSlots = json::object();
-    for (const auto& [slot, textureId] : material.textureSlots) {
-        textureSlots[slot] = textureId;
+    for (const MaterialTextureSlotDescriptor& descriptor : materialTextureSlotDescriptors()) {
+        if (const std::optional<AssetId> textureId = materialTextureSlotAsset(material, descriptor.id)) {
+            textureSlots[descriptor.id] = *textureId;
+        }
     }
     return json{
             {"id", id},
@@ -326,7 +256,15 @@ json entityToJson(const SceneDocument& scene, EntityId entity) {
         value["mesh"] = meshComponentToJson(*mesh);
     }
     if (const MaterialComponent* material = scene.material(entity)) {
-        value["material"] = json{{"material", material->material}};
+        json materialJson{{"material", material->material}};
+        if (!material->materialSlots.empty()) {
+            json slots = json::object();
+            for (const auto& [slot, materialId] : material->materialSlots) {
+                slots[std::to_string(slot)] = materialId;
+            }
+            materialJson["slots"] = std::move(slots);
+        }
+        value["material"] = std::move(materialJson);
     }
     if (const LightComponent* light = scene.light(entity)) {
         value["light"] = lightToJson(*light);
@@ -351,54 +289,22 @@ json projectPayloadToJson(const ProjectDocument& document) {
     const SceneDocument& scene = document.scene();
     const AssetRegistry& assets = document.assets();
 
-    std::set<AssetId> meshIds;
-    std::set<AssetId> materialIds;
-    std::set<AssetId> textureIds;
-    for (const EntityId entity : scene.entities()) {
-        if (const MeshComponent* mesh = scene.mesh(entity); mesh != nullptr && mesh->mesh != InvalidAssetId) {
-            meshIds.insert(mesh->mesh);
-        }
-        if (const MaterialComponent* material = scene.material(entity);
-                material != nullptr && material->material != InvalidAssetId) {
-            materialIds.insert(material->material);
-        }
-    }
-    for (const ProjectObjectRecord& record : document.objectRecords()) {
-        if (record.mesh != InvalidAssetId) {
-            meshIds.insert(record.mesh);
-        }
-        if (record.material != InvalidAssetId) {
-            materialIds.insert(record.material);
-        }
-    }
-
-    for (const AssetId materialId : materialIds) {
-        if (const MaterialDocument* material = assets.material(materialId)) {
-            for (const auto& [slot, textureId] : material->textureSlots) {
-                (void)slot;
-                if (textureId != InvalidAssetId) {
-                    textureIds.insert(textureId);
-                }
-            }
-        }
-    }
-
     json meshes = json::array();
-    for (const AssetId id : meshIds) {
+    for (const AssetId id : assets.meshIds()) {
         if (const MeshAsset* mesh = assets.mesh(id)) {
             meshes.push_back(meshToJson(id, *mesh));
         }
     }
 
     json materials = json::array();
-    for (const AssetId id : materialIds) {
+    for (const AssetId id : assets.materialIds()) {
         if (const MaterialDocument* material = assets.material(id)) {
             materials.push_back(materialToJson(id, *material));
         }
     }
 
     json textures = json::array();
-    for (const AssetId id : textureIds) {
+    for (const AssetId id : assets.textureIds()) {
         if (const TextureAsset* texture = assets.texture(id)) {
             textures.push_back(textureToJson(id, *texture));
         }
@@ -430,66 +336,7 @@ json projectPayloadToJson(const ProjectDocument& document) {
     };
 }
 
-std::string systemErrorMessage(const std::string& action, const std::error_code& error) {
-    if (!error) {
-        return action;
-    }
-    return action + ": " + error.message();
-}
-
-std::string windowsErrorMessage(const std::string& action, unsigned long errorCode) {
-    std::error_code error(static_cast<int>(errorCode), std::system_category());
-    return systemErrorMessage(action, error);
-}
-
-std::string uniqueTempSuffix(std::uint64_t attempt) {
-    static std::atomic_uint64_t counter{0};
-    const std::uint64_t tick =
-            static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-    const std::uint64_t value = counter.fetch_add(1, std::memory_order_relaxed) ^ tick;
-    std::ostringstream stream;
-    stream << std::hex << value << "-" << attempt;
-    return stream.str();
-}
-
-std::filesystem::path targetDirectoryForAtomicWrite(const std::filesystem::path& target) {
-    const std::filesystem::path directory = target.parent_path();
-    return directory.empty() ? std::filesystem::path(".") : directory;
-}
-
-std::filesystem::path makeTempPathForAtomicWrite(
-        const std::filesystem::path& target,
-        const std::filesystem::path& directory,
-        std::uint64_t attempt) {
-    return directory / ("." + target.filename().string() + "." + uniqueTempSuffix(attempt) + ".tmp");
-}
-
-void deleteTempFileBestEffort(const std::filesystem::path& temp) {
-    std::error_code ignored;
-    std::filesystem::remove(temp, ignored);
-}
-
-QdrProjectWriteResult writeTextFile(const std::filesystem::path& temp, std::string_view text) {
-    std::ofstream stream(temp, std::ios::binary | std::ios::trunc);
-    if (!stream.is_open()) {
-        return {false, "Could not open temporary QDR file for writing."};
-    }
-    stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-    if (!stream.good()) {
-        return {false, "Could not write QDR file contents."};
-    }
-    stream.flush();
-    if (!stream.good()) {
-        return {false, "Could not flush QDR file contents."};
-    }
-    stream.close();
-    if (!stream.good()) {
-        return {false, "Could not close temporary QDR file."};
-    }
-    return {true, {}};
-}
-
-QdrProjectWriteResult validateTemporaryProjectFile(const std::filesystem::path& temp) {
+quader_io::QdrAtomicWriteResult validateTemporaryProjectFile(const std::filesystem::path& temp) {
     const QdrProjectReadResult validation = QdrDocumentReader::readProjectDocument(temp);
     if (!validation.ok) {
         return {
@@ -502,65 +349,8 @@ QdrProjectWriteResult validateTemporaryProjectFile(const std::filesystem::path& 
     return {true, {}};
 }
 
-QdrProjectWriteResult replaceWithTempFile(const std::filesystem::path& temp, const std::filesystem::path& target) {
-#ifdef _WIN32
-    if (::MoveFileExW(temp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
-        return {false, windowsErrorMessage("Could not replace QDR file", ::GetLastError())};
-    }
-    return {true, {}};
-#else
-    std::error_code error;
-    std::filesystem::rename(temp, target, error);
-    if (error) {
-        return {false, systemErrorMessage("Could not replace QDR file", error)};
-    }
-    return {true, {}};
-#endif
-}
-
-QdrProjectWriteResult writeTextAtomic(const std::filesystem::path& target, std::string_view text) {
-    if (target.empty() || target.filename().empty()) {
-        return {false, "QDR file path is empty."};
-    }
-
-    const std::filesystem::path directory = targetDirectoryForAtomicWrite(target);
-    std::error_code error;
-    if (!std::filesystem::is_directory(directory, error)) {
-        return {false, systemErrorMessage("QDR output directory does not exist", error)};
-    }
-
-    constexpr std::uint64_t maxAttempts = 32;
-    for (std::uint64_t attempt = 0; attempt < maxAttempts; ++attempt) {
-        const std::filesystem::path temp = makeTempPathForAtomicWrite(target, directory, attempt);
-        if (std::filesystem::exists(temp, error)) {
-            continue;
-        }
-        if (error) {
-            return {false, systemErrorMessage("Could not inspect temporary QDR file path", error)};
-        }
-
-        QdrProjectWriteResult writeResult = writeTextFile(temp, text);
-        if (!writeResult.ok) {
-            deleteTempFileBestEffort(temp);
-            return writeResult;
-        }
-
-        QdrProjectWriteResult validationResult = validateTemporaryProjectFile(temp);
-        if (!validationResult.ok) {
-            deleteTempFileBestEffort(temp);
-            return validationResult;
-        }
-
-        QdrProjectWriteResult replaceResult = replaceWithTempFile(temp, target);
-        if (!replaceResult.ok) {
-            deleteTempFileBestEffort(temp);
-            return replaceResult;
-        }
-
-        return {true, {}};
-    }
-
-    return {false, "Could not allocate a unique temporary QDR file path."};
+QdrProjectWriteResult projectWriteResultFromAtomic(quader_io::QdrAtomicWriteResult result) {
+    return {result.ok, std::move(result.message)};
 }
 
 } // namespace
@@ -577,7 +367,10 @@ std::string QdrDocumentWriter::serializeProjectDocument(const ProjectDocument& d
 QdrProjectWriteResult QdrDocumentWriter::writeProjectDocumentAtomic(
         const std::filesystem::path& path,
         const ProjectDocument& document) {
-    return writeTextAtomic(path, serializeProjectDocument(document));
+    return projectWriteResultFromAtomic(quader_io::write_qdr_text_atomic(
+            path,
+            serializeProjectDocument(document),
+            validateTemporaryProjectFile));
 }
 
 } // namespace quader

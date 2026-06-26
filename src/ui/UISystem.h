@@ -125,7 +125,7 @@ private:
     [[nodiscard]] bool normalizeMainLayoutForMeasuredBounds();
     [[nodiscard]] bool rmlConsumedEventBlocksViewport(const SDL_Event& event) const;
     [[nodiscard]] bool pointerEventInsideMainViewport(const SDL_Event& event) const;
-    [[nodiscard]] bool pointerEventInsideRmlElement(const SDL_Event& event, const std::string& elementId) const;
+    [[nodiscard]] bool pointerEventInsideRmlElement(const SDL_Event& event, std::string_view elementId) const;
     [[nodiscard]] bool pointerEventInsideModelingModeShelf(const SDL_Event& event) const;
     [[nodiscard]] bool pointerEventShouldBypassViewport(const SDL_Event& event) const;
     bool isMainLayoutPanelVisible(std::string_view panel) const;

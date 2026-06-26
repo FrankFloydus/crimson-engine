@@ -7,7 +7,7 @@
 #pragma once
 
 #include "editor/modeling/ModelingTypes.h"
-#include "viewport/ViewportInputRouter.h"
+#include "viewport/ViewportInputTypes.h"
 
 namespace quader {
 

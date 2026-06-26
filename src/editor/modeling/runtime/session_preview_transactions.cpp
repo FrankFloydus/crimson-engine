@@ -26,6 +26,52 @@ void EditorSession::clear_preview_transaction()
 	preview_transaction_ = {};
 }
 
+void EditorSession::begin_preview_transaction(PreviewTransactionKind kind)
+{
+	cancel_preview_transaction();
+	preview_transaction_.kind = kind;
+	preview_transaction_.active = true;
+	preview_transaction_.changed = false;
+	preview_transaction_.base_state = state_;
+	preview_transaction_.history_state = preview_transaction_.base_state;
+}
+
+bool EditorSession::preview_transaction_active(PreviewTransactionKind kind) const
+{
+	return preview_transaction_.active && preview_transaction_.kind == kind;
+}
+
+CommandResult EditorSession::finish_preview_begin(CommandResult result)
+{
+	if (!result.ok) {
+		clear_preview_transaction();
+	}
+	return result;
+}
+
+CommandResult EditorSession::finish_preview_update_from_base(
+		const SessionState& base,
+		CommandResult result,
+		CommandResult unchanged_result)
+{
+	if (!result.ok) {
+		set_state(base);
+		preview_transaction_.base_state = base;
+		preview_transaction_.changed = false;
+		return result;
+	}
+	if (!result.changed) {
+		set_state(base);
+		preview_transaction_.base_state = base;
+		preview_transaction_.changed = false;
+		return unchanged_result;
+	}
+
+	preview_transaction_.base_state = base;
+	preview_transaction_.changed = true;
+	return result;
+}
+
 bool EditorSession::discard_preview_transactions(bool restore_transform_preview)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.discard_preview_transactions");
@@ -41,17 +87,8 @@ bool EditorSession::discard_preview_transactions(bool restore_transform_preview)
 CommandResult EditorSession::begin_edge_bevel_preview(const quader_poly::EdgeBevelSettings& settings)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.begin_edge_bevel_preview");
-	cancel_preview_transaction();
-	preview_transaction_.kind = PreviewTransactionKind::edge_bevel;
-	preview_transaction_.active = true;
-	preview_transaction_.changed = false;
-	preview_transaction_.base_state = state_;
-	preview_transaction_.history_state = preview_transaction_.base_state;
-	const CommandResult result = update_edge_bevel_preview_from_base(settings);
-	if (!result.ok) {
-		clear_preview_transaction();
-	}
-	return result;
+	begin_preview_transaction(PreviewTransactionKind::edge_bevel);
+	return finish_preview_begin(update_edge_bevel_preview_from_base(settings));
 }
 
 CommandResult EditorSession::begin_edge_bevel_preview(EdgeBevelOperationSettings settings)
@@ -62,7 +99,7 @@ CommandResult EditorSession::begin_edge_bevel_preview(EdgeBevelOperationSettings
 CommandResult EditorSession::update_edge_bevel_preview(const quader_poly::EdgeBevelSettings& settings)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_edge_bevel_preview");
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::edge_bevel) {
+	if (!preview_transaction_active(PreviewTransactionKind::edge_bevel)) {
 		return error_result("No edge bevel preview is active.");
 	}
 	return update_edge_bevel_preview_from_base(settings);
@@ -75,17 +112,8 @@ CommandResult EditorSession::update_edge_bevel_preview(EdgeBevelOperationSetting
 
 CommandResult EditorSession::begin_thicken_preview(float thickness, bool from_center)
 {
-	cancel_preview_transaction();
-	preview_transaction_.kind = PreviewTransactionKind::thicken;
-	preview_transaction_.active = true;
-	preview_transaction_.changed = false;
-	preview_transaction_.base_state = state_;
-	preview_transaction_.history_state = preview_transaction_.base_state;
-	const CommandResult result = update_thicken_preview_from_base(thickness, from_center);
-	if (!result.ok) {
-		clear_preview_transaction();
-	}
-	return result;
+	begin_preview_transaction(PreviewTransactionKind::thicken);
+	return finish_preview_begin(update_thicken_preview_from_base(thickness, from_center));
 }
 
 CommandResult EditorSession::begin_thicken_preview(ThickenOperationSettings settings)
@@ -96,7 +124,7 @@ CommandResult EditorSession::begin_thicken_preview(ThickenOperationSettings sett
 
 CommandResult EditorSession::update_thicken_preview(float thickness, bool from_center)
 {
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::thicken) {
+	if (!preview_transaction_active(PreviewTransactionKind::thicken)) {
 		return error_result("No thicken preview is active.");
 	}
 	return update_thicken_preview_from_base(thickness, from_center);
@@ -110,17 +138,8 @@ CommandResult EditorSession::update_thicken_preview(ThickenOperationSettings set
 
 CommandResult EditorSession::begin_slice_quad_preview(int x_slices, int y_slices)
 {
-	cancel_preview_transaction();
-	preview_transaction_.kind = PreviewTransactionKind::slice_quad;
-	preview_transaction_.active = true;
-	preview_transaction_.changed = false;
-	preview_transaction_.base_state = state_;
-	preview_transaction_.history_state = preview_transaction_.base_state;
-	const CommandResult result = update_slice_quad_preview_from_base(x_slices, y_slices);
-	if (!result.ok) {
-		clear_preview_transaction();
-	}
-	return result;
+	begin_preview_transaction(PreviewTransactionKind::slice_quad);
+	return finish_preview_begin(update_slice_quad_preview_from_base(x_slices, y_slices));
 }
 
 CommandResult EditorSession::begin_slice_quad_preview(SliceQuadOperationSettings settings)
@@ -131,7 +150,7 @@ CommandResult EditorSession::begin_slice_quad_preview(SliceQuadOperationSettings
 
 CommandResult EditorSession::update_slice_quad_preview(int x_slices, int y_slices)
 {
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::slice_quad) {
+	if (!preview_transaction_active(PreviewTransactionKind::slice_quad)) {
 		return error_result("No slice quad preview is active.");
 	}
 	return update_slice_quad_preview_from_base(x_slices, y_slices);
@@ -146,17 +165,8 @@ CommandResult EditorSession::update_slice_quad_preview(SliceQuadOperationSetting
 CommandResult EditorSession::begin_merge_by_distance_preview(double tolerance)
 {
 	tolerance = normalize_merge_by_distance_operation_settings({ tolerance }).tolerance;
-	cancel_preview_transaction();
-	preview_transaction_.kind = PreviewTransactionKind::merge_by_distance;
-	preview_transaction_.active = true;
-	preview_transaction_.changed = false;
-	preview_transaction_.base_state = state_;
-	preview_transaction_.history_state = preview_transaction_.base_state;
-	const CommandResult result = update_merge_by_distance_preview_from_base(tolerance);
-	if (!result.ok) {
-		clear_preview_transaction();
-	}
-	return result;
+	begin_preview_transaction(PreviewTransactionKind::merge_by_distance);
+	return finish_preview_begin(update_merge_by_distance_preview_from_base(tolerance));
 }
 
 CommandResult EditorSession::begin_merge_by_distance_preview(MergeByDistanceOperationSettings settings)
@@ -167,7 +177,7 @@ CommandResult EditorSession::begin_merge_by_distance_preview(MergeByDistanceOper
 
 CommandResult EditorSession::update_merge_by_distance_preview(double tolerance)
 {
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::merge_by_distance) {
+	if (!preview_transaction_active(PreviewTransactionKind::merge_by_distance)) {
 		return error_result("No merge by distance preview is active.");
 	}
 	tolerance = normalize_merge_by_distance_operation_settings({ tolerance }).tolerance;
@@ -183,12 +193,7 @@ CommandResult EditorSession::update_merge_by_distance_preview(MergeByDistanceOpe
 CommandResult EditorSession::begin_transform_preview(bool duplicate_selected)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.begin_transform_preview");
-	cancel_preview_transaction();
-	preview_transaction_.kind = PreviewTransactionKind::transform;
-	preview_transaction_.active = true;
-	preview_transaction_.changed = false;
-	preview_transaction_.base_state = state_;
-	preview_transaction_.history_state = state_;
+	begin_preview_transaction(PreviewTransactionKind::transform);
 
 	if (duplicate_selected &&
 			state_.selection_mode == SelectionMode::object &&
@@ -214,7 +219,7 @@ CommandResult EditorSession::begin_transform_preview(bool duplicate_selected)
 CommandResult EditorSession::update_transform_translate_preview(quader::QVec3 delta, bool texture_lock_enabled)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_translate_preview");
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
+	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
@@ -233,7 +238,7 @@ CommandResult EditorSession::update_transform_matrix_preview(
 		bool texture_lock_scale_enabled)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_matrix_preview");
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
+	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
@@ -243,7 +248,7 @@ CommandResult EditorSession::update_transform_matrix_preview(
 CommandResult EditorSession::update_transform_extrude_preview(quader::QVec3 offset, float closed_edge_ledge_size)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_extrude_preview");
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
+	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
@@ -258,7 +263,7 @@ CommandResult EditorSession::update_transform_extrude_preview(quader::QVec3 offs
 CommandResult EditorSession::update_transform_inset_preview(const quader_poly::Transform3& transform, quader::QVec3 pivot)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_transform_inset_preview");
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::transform) {
+	if (!preview_transaction_active(PreviewTransactionKind::transform)) {
 		return error_result("No transform preview is active.");
 	}
 	set_state(preview_transaction_.base_state);
@@ -308,16 +313,10 @@ CommandResult EditorSession::update_edge_bevel_preview_from_base(const quader_po
 	const SessionState base = preview_transaction_.base_state;
 	set_state(base);
 	const CommandResult result = bevel_selected_edges(settings);
-	if (!result.ok || !result.changed) {
-		set_state(base);
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return result.ok ? CommandResult { false, false, result.message } : result;
-	}
-
-	preview_transaction_.base_state = base;
-	preview_transaction_.changed = true;
-	return result;
+	return finish_preview_update_from_base(
+		base,
+		result,
+		CommandResult { false, false, result.message });
 }
 
 CommandResult EditorSession::update_thicken_preview_from_base(float thickness, bool from_center)
@@ -326,22 +325,14 @@ CommandResult EditorSession::update_thicken_preview_from_base(float thickness, b
 	const SessionState base = preview_transaction_.base_state;
 	set_state(base);
 	if (std::abs(thickness) <= 1.0e-6F) {
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return ok_result(false);
+		return finish_preview_update_from_base(base, ok_result(false), ok_result(false));
 	}
 
 	const CommandResult result = thicken_selected_faces(thickness, from_center);
-	if (!result.ok || !result.changed) {
-		set_state(base);
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return result.ok ? CommandResult { false, false, result.message } : result;
-	}
-
-	preview_transaction_.base_state = base;
-	preview_transaction_.changed = true;
-	return result;
+	return finish_preview_update_from_base(
+		base,
+		result,
+		CommandResult { false, false, result.message });
 }
 
 CommandResult EditorSession::update_slice_quad_preview_from_base(int x_slices, int y_slices)
@@ -354,22 +345,14 @@ CommandResult EditorSession::update_slice_quad_preview_from_base(int x_slices, i
 	settings.y_slices = y_slices;
 	settings = normalize_slice_quad_operation_settings(settings);
 	if (settings.x_slices == 0 && settings.y_slices == 0) {
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return ok_result(false);
+		return finish_preview_update_from_base(base, ok_result(false), ok_result(false));
 	}
 
 	const CommandResult result = slice_selected_quads(settings);
-	if (!result.ok || !result.changed) {
-		set_state(base);
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return result.ok ? CommandResult { false, false, result.message } : result;
-	}
-
-	preview_transaction_.base_state = base;
-	preview_transaction_.changed = true;
-	return result;
+	return finish_preview_update_from_base(
+		base,
+		result,
+		CommandResult { false, false, result.message });
 }
 
 CommandResult EditorSession::update_merge_by_distance_preview_from_base(double tolerance)
@@ -378,16 +361,7 @@ CommandResult EditorSession::update_merge_by_distance_preview_from_base(double t
 	const SessionState base = preview_transaction_.base_state;
 	set_state(base);
 	const CommandResult result = merge_selected_vertices_by_distance(tolerance);
-	if (!result.ok || !result.changed) {
-		set_state(base);
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return result.ok ? ok_result(false) : result;
-	}
-
-	preview_transaction_.base_state = base;
-	preview_transaction_.changed = true;
-	return result;
+	return finish_preview_update_from_base(base, result, ok_result(false));
 }
 
 CommandResult EditorSession::update_transform_preview_from_base(CommandResult result)

@@ -7,6 +7,7 @@
 #include "platform/PlatformWindow.h"
 
 #include "core/Logger.h"
+#include "platform/SdlEventUtils.h"
 
 #include <SDL3/SDL_properties.h>
 #include <SDL3/SDL_mouse.h>
@@ -364,23 +365,8 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
     }
 
     const SDL_WindowID windowId = SDL_GetWindowID(window_);
-    auto eventTargetsMainWindow = [&]() {
-        switch (event.type) {
-        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-        case SDL_EVENT_WINDOW_FOCUS_LOST:
-        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-            return event.window.windowID == windowId;
-        case SDL_EVENT_MOUSE_MOTION:
-            return event.motion.windowID == windowId;
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        case SDL_EVENT_MOUSE_BUTTON_UP:
-            return event.button.windowID == windowId;
-        default:
-            return false;
-        }
-    };
-
-    if (!eventTargetsMainWindow()) {
+    const std::optional<SDL_WindowID> eventWindow = sdlEventWindowId(event);
+    if (!eventWindow || *eventWindow != windowId) {
         return false;
     }
 

@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -197,6 +198,38 @@ enum class QuaderSelectionMode {
 };
 
 /**
+ * Enumerates Quader Transform Tool values used by the public Quader API surface.
+ */
+enum class QuaderTransformTool {
+    Move,
+    Rotate,
+    Scale,
+};
+
+/**
+ * Enumerates Quader Transform Operation values used by the public Quader API surface.
+ */
+enum class QuaderTransformOperation {
+    Transform,
+    Extrude,
+    Inset,
+};
+
+/**
+ * Enumerates Quader Transform Axis values used by the public Quader API surface.
+ */
+enum class QuaderTransformAxis {
+    None,
+    X,
+    Y,
+    Z,
+    XY,
+    XZ,
+    YZ,
+    All,
+};
+
+/**
  * Enumerates Quader Viewport Tool values used by the public Quader API surface.
  */
 enum class QuaderViewportTool {
@@ -309,6 +342,235 @@ struct QuaderInteractionSettings {
     int sliceQuadYSlices = 1;
     double mergeByDistanceTolerance = 0.125;
     QuaderCutMode cutMode = QuaderCutMode::KeepBoth;
+};
+
+/**
+ * Represents a Quader Ray value used by the public Quader API surface.
+ */
+struct QuaderRay {
+    QVec3 origin;
+    QVec3 direction;
+};
+
+/**
+ * Represents a Quader Viewport Camera value used by the public Quader API surface.
+ */
+struct QuaderViewportCamera {
+    bool orthographic = false;
+    QVec3 origin = {};
+    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
+    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
+    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
+    QVec2 viewportSize = {1.0f, 1.0f};
+    double orthographicSize = 24.0;
+    double fovDegrees = 60.0;
+};
+
+/**
+ * Represents a Quader 3x4 Transform value used by the public Quader API surface.
+ */
+struct QuaderTransform3 {
+    QVec3 xAxis = {1.0f, 0.0f, 0.0f};
+    QVec3 yAxis = {0.0f, 1.0f, 0.0f};
+    QVec3 zAxis = {0.0f, 0.0f, 1.0f};
+    QVec3 origin = {};
+};
+
+/**
+ * Stores a Quader Pick Select Request value used by the public Quader API surface.
+ */
+struct QuaderPickSelectRequest {
+    QuaderRay ray;
+    int clickCount = 1;
+    bool controlPressed = false;
+    bool shiftPressed = false;
+    bool commandPressed = false;
+    bool altPressed = false;
+    bool preserveSelectionOnMiss = false;
+    bool preserveSelectionOnSelectedHit = false;
+    double vertexRadius = 0.3;
+    double edgeRadius = 0.2;
+};
+
+/**
+ * Stores a Quader Hover Request value used by the public Quader API surface.
+ */
+struct QuaderHoverRequest {
+    QuaderRay ray;
+    bool selectedModifierPressed = false;
+    double vertexRadius = 0.3;
+    double edgeRadius = 0.2;
+};
+
+/**
+ * Represents a Quader Hover Target value used by the public Quader API surface.
+ */
+struct QuaderHoverTarget {
+    QuaderActiveSelectionKind kind = QuaderActiveSelectionKind::None;
+    int objectId = -1;
+    int vertexId = -1;
+    int edgeA = -1;
+    int edgeB = -1;
+    int faceId = -1;
+};
+
+/**
+ * Represents a Quader Hover Summary value used by the public Quader API surface.
+ */
+struct QuaderHoverSummary {
+    bool changed = false;
+    QuaderHoverTarget target;
+    bool targetSelected = false;
+};
+
+/**
+ * Stores a Quader Transform Drag Begin Request value used by the public Quader API surface.
+ */
+struct QuaderTransformDragBeginRequest {
+    QuaderTransformTool tool = QuaderTransformTool::Move;
+    QuaderTransformOperation operation = QuaderTransformOperation::Transform;
+    QuaderTransformAxis axis = QuaderTransformAxis::None;
+    QVec3 pivot = {};
+    QVec2 screenPosition = {};
+    QVec2 screenPivot = {};
+    QVec2 screenTip = {};
+    bool hasWorldDirection = false;
+    QVec3 worldDirection = {};
+    QuaderRay ray;
+    QuaderViewportCamera camera;
+    double gridSize = 1.0;
+    double vertexSnapRadius = 0.3;
+    bool duplicateSelected = false;
+};
+
+/**
+ * Stores a Quader Transform Drag Update Request value used by the public Quader API surface.
+ */
+struct QuaderTransformDragUpdateRequest {
+    QVec2 screenPosition = {};
+    QuaderRay ray;
+    QuaderViewportCamera camera;
+    double gridSize = 1.0;
+    double vertexSnapRadius = 0.3;
+    bool precision = false;
+};
+
+/**
+ * Represents a Quader Transform Drag Preview value used by the public Quader API surface.
+ */
+struct QuaderTransformDragPreview {
+    bool ok = false;
+    bool active = false;
+    bool changed = false;
+    bool previewDriven = false;
+    std::string message;
+    QuaderTransformTool tool = QuaderTransformTool::Move;
+    QuaderTransformOperation operation = QuaderTransformOperation::Transform;
+    QuaderTransformAxis axis = QuaderTransformAxis::None;
+    QVec3 pivot = {};
+    QVec3 moveDelta = {};
+    double rotateAngleDegrees = 0.0;
+    QVec3 scale = {1.0f, 1.0f, 1.0f};
+    std::uint64_t contentRevision = 0;
+    std::uint64_t selectionRevision = 0;
+    bool sceneTransform = false;
+    bool hasScenePreviewTransform = false;
+    QuaderTransform3 scenePreviewTransform = {};
+};
+
+/**
+ * Enumerates Quader Action Surface values used by the public Quader API surface.
+ */
+enum class QuaderActionSurface {
+    ViewportContextMenu,
+    OperationsPanel,
+};
+
+/**
+ * Enumerates Quader Action Visibility values used by the public Quader API surface.
+ */
+enum class QuaderActionVisibility {
+    Hidden,
+    Disabled,
+    Enabled,
+};
+
+/**
+ * Enumerates Quader Action Kind values used by the public Quader API surface.
+ */
+enum class QuaderActionKind {
+    Operation,
+    Tool,
+};
+
+/**
+ * Enumerates Quader Action Preview Kind values used by the public Quader API surface.
+ */
+enum class QuaderActionPreviewKind {
+    None,
+    Bridge,
+    EdgeBevel,
+    Thicken,
+    SliceQuad,
+    MergeByDistance,
+};
+
+/**
+ * Stores a Quader Action Query value used by the public Quader API surface.
+ */
+struct QuaderActionQuery {
+    QuaderActionSurface surface = QuaderActionSurface::OperationsPanel;
+    bool modalToolOwnsViewport = false;
+    bool suppressWhenModalToolOwnsViewport = true;
+    bool includeDisabled = true;
+    bool includeHidden = false;
+};
+
+/**
+ * Stores a Quader Action Item value used by the public Quader API surface.
+ */
+struct QuaderActionItem {
+    std::string actionId;
+    std::string operationId;
+    std::string toolId;
+    std::string label;
+    QuaderActionKind kind = QuaderActionKind::Operation;
+    QuaderActionPreviewKind previewKind = QuaderActionPreviewKind::None;
+    QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
+    std::string disabledReason;
+    std::string disabledReasonKey;
+    std::uint32_t disabledReasonCount = 0;
+    bool rebuildsMeshOnSuccess = true;
+};
+
+/**
+ * Stores a Quader Action Panel value used by the public Quader API surface.
+ */
+struct QuaderActionPanel {
+    std::string panelId;
+    std::string label;
+    std::string selectionModeId;
+    QuaderActionVisibility visibility = QuaderActionVisibility::Hidden;
+    std::vector<QuaderActionItem> actions;
+};
+
+/**
+ * Stores a Quader Action Set value used by the public Quader API surface.
+ */
+struct QuaderActionSet {
+    QuaderActionSurface surface = QuaderActionSurface::OperationsPanel;
+    std::string surfaceId;
+    std::vector<QuaderActionPanel> panels;
+};
+
+/**
+ * Stores a Quader Instant Operation Descriptor value used by the public Quader API surface.
+ */
+struct QuaderInstantOperationDescriptor {
+    std::string id;
+    std::string label;
+    bool enabled = false;
+    bool rebuildsMeshOnSuccess = true;
 };
 
 /**
@@ -516,6 +778,109 @@ struct QuaderMaterialArgs {
     QVec3 baseColor = {1.0f, 1.0f, 1.0f};
     float roughness = 1.0f;
     float metallic = 0.0f;
+};
+
+/**
+ * Represents a Quader Mesh Vertex value used by the public Quader API surface.
+ */
+struct QuaderMeshVertex {
+    QVec3 position;
+    QVec3 normal;
+    QVec2 uv;
+    std::uint32_t rgba = 0xffffffffu;
+};
+
+/**
+ * Represents a Quader Mesh Primitive Span value used by the public Quader API surface.
+ */
+struct QuaderMeshPrimitiveSpan {
+    std::uint32_t indexOffset = 0;
+    std::uint32_t indexCount = 0;
+    std::uint32_t materialSlot = 0;
+};
+
+/**
+ * Represents a Quader Mesh Asset value used by the public Quader API surface.
+ */
+struct QuaderMeshAsset {
+    AssetId id = InvalidAssetId;
+    std::uint64_t revision = 0;
+    std::string name;
+    std::vector<QuaderMeshVertex> vertices;
+    std::vector<std::uint32_t> indices;
+    std::vector<QuaderMeshPrimitiveSpan> primitives;
+    bool hasStableCpuTopology = true;
+    bool hasAuthoredPolygonDocument = false;
+};
+
+/**
+ * Enumerates Quader Texture Usage values used by the public Quader API surface.
+ */
+enum class QuaderTextureUsage {
+    Unknown,
+    BaseColor,
+    Normal,
+    Roughness,
+    Metallic,
+    Curvature,
+    Thickness,
+    AmbientOcclusion,
+    Position,
+    Id,
+    Mask,
+};
+
+/**
+ * Enumerates Quader Texture Color Space values used by the public Quader API surface.
+ */
+enum class QuaderTextureColorSpace {
+    Linear,
+    Srgb,
+};
+
+/**
+ * Represents a Quader Texture Asset value used by the public Quader API surface.
+ */
+struct QuaderTextureAsset {
+    AssetId id = InvalidAssetId;
+    std::uint64_t revision = 0;
+    std::string name;
+    QuaderTextureUsage usage = QuaderTextureUsage::Unknown;
+    QuaderTextureColorSpace colorSpace = QuaderTextureColorSpace::Srgb;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::string sourcePath;
+    bool generated = false;
+};
+
+/**
+ * Represents a Quader Material Asset value used by the public Quader API surface.
+ */
+struct QuaderMaterialAsset {
+    AssetId id = InvalidAssetId;
+    std::uint64_t revision = 0;
+    std::string name;
+    QVec3 baseColor = {1.0f, 1.0f, 1.0f};
+    float roughness = 1.0f;
+    float metallic = 0.0f;
+    std::unordered_map<std::string, AssetId> textureSlots;
+    bool nodeGraphReserved = true;
+};
+
+/**
+ * Represents a Quader Mesh Component value used by the public Quader API surface.
+ */
+struct QuaderMeshComponent {
+    AssetId mesh = InvalidAssetId;
+};
+
+/**
+ * Represents a Quader Tool Preview Mesh value used by the public Quader API surface.
+ */
+struct QuaderToolPreviewMesh {
+    EntityId sourceEntity = InvalidEntityId;
+    AssetId material = InvalidAssetId;
+    QuaderMeshAsset mesh;
 };
 
 } // namespace quader

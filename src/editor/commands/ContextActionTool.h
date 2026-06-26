@@ -9,10 +9,8 @@
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "editor/commands/CommandTool.h"
 
-#include <algorithm>
 #include <optional>
 #include <string_view>
-#include <vector>
 
 namespace quader {
 
@@ -31,14 +29,7 @@ public:
     [[nodiscard]] std::optional<ModelingActionItem> actionItem(
             const ModelingCommandExecutionContext& context,
             ModelingActionQuery query) const {
-        const std::vector<ModelingActionItem> actions = context.modeling.contextActions(query);
-        const auto found = std::find_if(actions.begin(), actions.end(), [&](const ModelingActionItem& item) {
-            return item.actionId == actionId();
-        });
-        if (found == actions.end()) {
-            return std::nullopt;
-        }
-        return *found;
+        return context.modeling.contextAction(actionId(), query);
     }
 
     [[nodiscard]] std::optional<ModelingActionItem> actionItem(

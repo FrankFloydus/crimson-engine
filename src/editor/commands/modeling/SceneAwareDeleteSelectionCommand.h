@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace quader {
@@ -26,6 +27,7 @@ struct SceneAwareDeleteRuntime {
     std::function<ModelingSelectionMode()> appSelectionMode;
     std::function<void(ModelingSelectionMode)> setAppSelectionMode;
     std::function<ModelingCommandResult(const std::vector<int>&)> deleteModelingObjects;
+    std::function<std::optional<EntityId>(int)> entityForModelingObject;
     std::function<void(bool)> syncObjectSelectionFromScene;
     std::function<void()> clearRuntimeObjectSelectionForGroupMode;
     std::function<void()> invalidateSelectionOverlayCaches;

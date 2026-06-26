@@ -7,7 +7,7 @@
 #pragma once
 
 #include "editor/modeling/ModelingTypes.h"
-#include "viewport/ViewportInputRouter.h"
+#include "viewport/ViewportInputTypes.h"
 
 #include <editor/modeling/runtime/session.h>
 #include <editor/metadata/host_contract.h>

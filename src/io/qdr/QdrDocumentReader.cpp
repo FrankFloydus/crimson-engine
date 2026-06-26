@@ -9,6 +9,7 @@
 #include "assets/MaterialDocument.h"
 #include "editor/projection/MeshProjectionService.h"
 #include "io/qdr/QdrFormat.h"
+#include "io/qdr/QdrPolygonDocumentCodec.h"
 
 #include <nlohmann/json.hpp>
 
@@ -21,6 +22,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -183,64 +185,6 @@ QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
 
-quader::QVec2 polygonVec2FromJson(const json& value) {
-    return {
-            value.value("x", 0.0f),
-            value.value("y", 0.0f),
-    };
-}
-
-quader::QVec3 polygonVec3FromJson(const json& value) {
-    return {
-            value.value("x", 0.0f),
-            value.value("y", 0.0f),
-            value.value("z", 0.0f),
-    };
-}
-
-quader_poly::Edge polygonEdgeFromJson(const json& value) {
-    return quader_poly::make_edge(
-            value.value("a", quader_poly::invalid_element_id),
-            value.value("b", quader_poly::invalid_element_id));
-}
-
-quader_poly::SurfaceShading parseSurfaceShading(const std::string& value) {
-    if (value == "smooth") {
-        return quader_poly::SurfaceShading::smooth;
-    }
-    if (value == "authored") {
-        return quader_poly::SurfaceShading::authored;
-    }
-    return quader_poly::SurfaceShading::flat;
-}
-
-quader_poly::Document polygonDocumentFromJson(const json& value) {
-    quader_poly::Document document;
-    document.next_vertex_id = value.value("nextVertexId", 1u);
-    document.next_face_id = value.value("nextFaceId", 1u);
-    for (const json& vertexJson : value.value("vertices", json::array())) {
-        document.vertices.push_back(quader_poly::Vertex{
-                .id = vertexJson.value("id", quader_poly::invalid_element_id),
-                .position = polygonVec3FromJson(vertexJson.value("position", json::object())),
-        });
-    }
-    for (const json& faceJson : value.value("faces", json::array())) {
-        quader_poly::Face face;
-        face.id = faceJson.value("id", quader_poly::invalid_element_id);
-        face.vertices = faceJson.value("vertices", std::vector<quader_poly::ElementId>{});
-        face.material_slot = faceJson.value("materialSlot", 0u);
-        face.normal_shading = parseSurfaceShading(faceJson.value("normalShading", std::string("flat")));
-        for (const json& uvJson : faceJson.value("uvs", json::array())) {
-            face.uvs.push_back(polygonVec2FromJson(uvJson));
-        }
-        document.faces.push_back(std::move(face));
-    }
-    for (const json& edgeJson : value.value("hardNormalEdges", json::array())) {
-        document.hard_normal_edges.push_back(polygonEdgeFromJson(edgeJson));
-    }
-    return document;
-}
-
 MeshAsset meshFromPolygonDocument(const quader_poly::Document& document, std::string name) {
     MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(document);
     mesh.name = std::move(name);
@@ -271,11 +215,13 @@ MeshAsset meshFromJson(const json& value) {
     }
     if (const auto polygon = value.find("polygonDocument"); polygon != value.end() && polygon->is_object()) {
         mesh.hasAuthoredPolygonDocument = true;
-        mesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(polygonDocumentFromJson(*polygon));
+        mesh.authoredPolygonDocument =
+                std::make_shared<quader_poly::Document>(quader_io::qdr_polygon_document_from_json(*polygon));
         if (mesh.vertices.empty() && mesh.indices.empty()) {
             mesh = meshFromPolygonDocument(*mesh.authoredPolygonDocument, mesh.name);
         }
     }
+    mesh.primitives = normalizedMeshPrimitiveSpans(mesh);
     return mesh;
 }
 
@@ -300,7 +246,9 @@ MaterialDocument materialFromJson(const json& value) {
     material.nodeGraphReserved = value.value("nodeGraphReserved", true);
     if (const auto slots = value.find("textureSlots"); slots != value.end() && slots->is_object()) {
         for (const auto& [slot, textureId] : slots->items()) {
-            material.textureSlots[slot] = textureId.get<AssetId>();
+            if (!setMaterialTextureSlot(material, slot, textureId.get<AssetId>())) {
+                throw std::runtime_error("QDR project document material is invalid: Unsupported material texture slot.");
+            }
         }
     }
     return material;
@@ -317,6 +265,22 @@ MeshComponent meshComponentFromJson(const json& value) {
     mesh.displayCollision = value.value("displayCollision", false);
     mesh.bodyType = parsePhysicsBodyType(value.value("bodyType", std::string("staticBody")));
     return mesh;
+}
+
+MaterialComponent materialComponentFromJson(const json& value) {
+    MaterialComponent material;
+    material.material = value.value("material", InvalidAssetId);
+    if (const auto slots = value.find("slots"); slots != value.end() && slots->is_object()) {
+        for (const auto& [slotText, materialId] : slots->items()) {
+            std::size_t consumed = 0u;
+            const unsigned long slot = std::stoul(slotText, &consumed, 10);
+            if (consumed != slotText.size() || slot > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error("QDR project document material slot binding contains an invalid slot id.");
+            }
+            material.materialSlots[static_cast<std::uint32_t>(slot)] = materialId.get<AssetId>();
+        }
+    }
+    return material;
 }
 
 LightComponent lightFromJson(const json& value) {
@@ -349,12 +313,28 @@ ProjectObjectRecord objectRecordFromJson(const json& value) {
     };
 }
 
-void validateMaterialTextureReferences(const std::set<AssetId>& textureAssetIds, const MaterialDocument& material) {
-    for (const auto& [slot, textureId] : material.textureSlots) {
-        (void)slot;
-        if (textureId == InvalidAssetId || !textureAssetIds.contains(textureId)) {
-            throw std::runtime_error("QDR project document material references a missing texture asset.");
-        }
+std::string assetKindLabel(std::string_view kind) {
+    return std::string(kind.data(), kind.size());
+}
+
+AssetId qdrAssetIdFromJson(const json& value, std::string_view kind) {
+    const AssetId id = value.value("id", InvalidAssetId);
+    if (id == InvalidAssetId) {
+        throw std::runtime_error("QDR project document contains an invalid " + assetKindLabel(kind) + " asset id.");
+    }
+    return id;
+}
+
+void requireUniqueAssetId(std::set<AssetId>& ids, AssetId id, std::string_view kind) {
+    if (!ids.insert(id).second) {
+        throw std::runtime_error("QDR project document contains duplicate " + assetKindLabel(kind) + " asset ids.");
+    }
+}
+
+void validateMaterialAssetForQdr(const AssetRegistry& assets, const MaterialDocument& material) {
+    const AssetRegistryValidationResult validation = assets.validateMaterial(material);
+    if (!validation.ok) {
+        throw std::runtime_error("QDR project document material is invalid: " + validation.message + ".");
     }
 }
 
@@ -367,6 +347,14 @@ void validateEntityAssetReferences(const ProjectDocument& document) {
         if (const MaterialComponent* material = document.scene().material(entity);
                 material != nullptr && document.assets().material(material->material) == nullptr) {
             throw std::runtime_error("QDR project document entity references a missing material asset.");
+        }
+        if (const MaterialComponent* material = document.scene().material(entity)) {
+            for (const auto& [slot, materialId] : material->materialSlots) {
+                (void)slot;
+                if (materialId == InvalidAssetId || document.assets().material(materialId) == nullptr) {
+                    throw std::runtime_error("QDR project document entity material slot references a missing material asset.");
+                }
+            }
         }
     }
 }
@@ -395,26 +383,31 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
     });
 
     const json assetsJson = payload.value("assets", json::object());
+    std::set<AssetId> meshAssetIds;
     for (const json& meshJson : assetsJson.value("meshes", json::array())) {
-        const AssetId id = meshJson.value("id", InvalidAssetId);
-        document.assets().addMesh(id, meshFromJson(meshJson));
+        const AssetId id = qdrAssetIdFromJson(meshJson, "mesh");
+        requireUniqueAssetId(meshAssetIds, id, "mesh");
+        if (document.assets().addMesh(id, meshFromJson(meshJson)) == InvalidAssetId) {
+            throw std::runtime_error("QDR project document contains duplicate mesh asset ids.");
+        }
     }
     std::set<AssetId> textureAssetIds;
     for (const json& textureJson : assetsJson.value("textures", json::array())) {
-        const AssetId id = textureJson.value("id", InvalidAssetId);
-        if (id == InvalidAssetId) {
-            throw std::runtime_error("QDR project document contains an invalid texture asset id.");
-        }
-        if (!textureAssetIds.insert(id).second) {
+        const AssetId id = qdrAssetIdFromJson(textureJson, "texture");
+        requireUniqueAssetId(textureAssetIds, id, "texture");
+        if (document.assets().addTexture(id, textureFromJson(textureJson)) == InvalidAssetId) {
             throw std::runtime_error("QDR project document contains duplicate texture asset ids.");
         }
-        document.assets().addTexture(id, textureFromJson(textureJson));
     }
+    std::set<AssetId> materialAssetIds;
     for (const json& materialJson : assetsJson.value("materials", json::array())) {
-        const AssetId id = materialJson.value("id", InvalidAssetId);
+        const AssetId id = qdrAssetIdFromJson(materialJson, "material");
+        requireUniqueAssetId(materialAssetIds, id, "material");
         MaterialDocument material = materialFromJson(materialJson);
-        validateMaterialTextureReferences(textureAssetIds, material);
-        document.assets().addMaterial(id, std::move(material));
+        validateMaterialAssetForQdr(document.assets(), material);
+        if (document.assets().addMaterial(id, std::move(material)) == InvalidAssetId) {
+            throw std::runtime_error("QDR project document contains duplicate or invalid material asset ids.");
+        }
     }
 
     std::vector<std::pair<EntityId, EntityId>> parentLinks;
@@ -440,9 +433,7 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         if (const auto visibilityJson = entityJson.find("visibility");
                 visibilityJson != entityJson.end() && visibilityJson->is_object()) {
             document.scene().setVisible(entity, visibilityJson->value("visible", true));
-            if (VisibilityComponent* visibility = document.scene().visibility(entity)) {
-                visibility->selectable = visibilityJson->value("selectable", true);
-            }
+            document.scene().setSelectable(entity, visibilityJson->value("selectable", true));
         }
         document.scene().setLocked(entity, entityJson.value("locked", false));
         if (const auto objectJson = entityJson.find("modelingObject");
@@ -457,9 +448,9 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         }
         if (const auto materialJson = entityJson.find("material");
                 materialJson != entityJson.end() && materialJson->is_object()) {
-            const AssetId material = materialJson->value("material", InvalidAssetId);
-            if (material != InvalidAssetId) {
-                document.scene().setMaterial(entity, MaterialComponent{.material = material});
+            MaterialComponent material = materialComponentFromJson(*materialJson);
+            if (material.material != InvalidAssetId) {
+                document.scene().setMaterial(entity, std::move(material));
             }
         }
         if (const auto lightJson = entityJson.find("light"); lightJson != entityJson.end() && lightJson->is_object()) {

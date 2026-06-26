@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -44,6 +45,49 @@ filament::Box overlayMeshBounds() {
     box.set(-halfExtent, halfExtent);
     return box;
 }
+
+void destroyOverlayProxyResources(
+        filament::Engine& engine,
+        filament::Scene* scene,
+        OverlayRenderableProxy& proxy,
+        bool removeFromScene);
+
+/**
+ * Cleans up partially constructed overlay resources until ownership is handed to the proxy.
+ */
+class OverlayProxyCreationGuard {
+public:
+    OverlayProxyCreationGuard(filament::Engine& engine, filament::Scene& scene, OverlayRenderableProxy& proxy)
+        : engine_(engine)
+        , scene_(scene)
+        , proxy_(proxy) {}
+
+    OverlayProxyCreationGuard(const OverlayProxyCreationGuard&) = delete;
+    OverlayProxyCreationGuard& operator=(const OverlayProxyCreationGuard&) = delete;
+    OverlayProxyCreationGuard(OverlayProxyCreationGuard&&) = delete;
+    OverlayProxyCreationGuard& operator=(OverlayProxyCreationGuard&&) = delete;
+
+    ~OverlayProxyCreationGuard() {
+        if (active_) {
+            destroyOverlayProxyResources(engine_, &scene_, proxy_, sceneAdded_);
+        }
+    }
+
+    void markSceneAdded() {
+        sceneAdded_ = true;
+    }
+
+    void release() {
+        active_ = false;
+    }
+
+private:
+    filament::Engine& engine_;
+    filament::Scene& scene_;
+    OverlayRenderableProxy& proxy_;
+    bool sceneAdded_ = false;
+    bool active_ = true;
+};
 
 filament::MaterialInstance::DepthFunc toFilamentDepthFunc(OverlayDepthFunc depthFunc) {
     switch (depthFunc) {
@@ -77,6 +121,90 @@ filament::MaterialInstance::TransparencyMode toFilamentTransparencyMode(OverlayT
         return filament::MaterialInstance::TransparencyMode::TWO_PASSES_TWO_SIDES;
     }
     return filament::MaterialInstance::TransparencyMode::DEFAULT;
+}
+
+void destroyOverlayProxyResources(
+        filament::Engine& engine,
+        filament::Scene* scene,
+        OverlayRenderableProxy& proxy,
+        bool removeFromScene) {
+    if (proxy.entityId != 0u) {
+        const utils::Entity entity = toFilamentEntity(proxy.entityId);
+        if (removeFromScene && scene != nullptr) {
+            scene->remove(entity);
+        }
+        engine.getRenderableManager().destroy(entity);
+    }
+    if (proxy.materialInstance) {
+        engine.destroy(proxy.materialInstance);
+        proxy.materialInstance = nullptr;
+    }
+    if (proxy.vertexBuffer) {
+        engine.destroy(proxy.vertexBuffer);
+        proxy.vertexBuffer = nullptr;
+    }
+    if (proxy.indexBuffer) {
+        engine.destroy(proxy.indexBuffer);
+        proxy.indexBuffer = nullptr;
+    }
+    if (proxy.entityId != 0u) {
+        utils::EntityManager::get().destroy(toFilamentEntity(proxy.entityId));
+        proxy.entityId = 0u;
+    }
+}
+
+template <typename Vertex, typename ConfigureAttributes, typename ConfigureMaterial>
+void appendOverlayProxy(
+        filament::Engine& engine,
+        filament::Scene& scene,
+        filament::Material& material,
+        const std::vector<Vertex>& vertices,
+        const std::vector<std::uint32_t>& indices,
+        const OverlayRenderState& state,
+        std::uint8_t layerMask,
+        std::vector<OverlayRenderableProxy>& proxies,
+        ConfigureAttributes configureAttributes,
+        ConfigureMaterial configureMaterial) {
+    if (vertices.empty() || indices.empty()) {
+        return;
+    }
+
+    OverlayRenderableProxy proxy;
+    const utils::Entity entity = utils::EntityManager::get().create();
+    proxy.entityId = toOverlayEntityId(entity);
+    OverlayProxyCreationGuard creationGuard(engine, scene, proxy);
+    proxy.materialInstance = material.createInstance();
+    configureMaterial(*proxy.materialInstance);
+
+    filament::VertexBuffer::Builder vertexBuilder;
+    vertexBuilder
+            .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+            .bufferCount(1);
+    configureAttributes(vertexBuilder);
+    proxy.vertexBuffer = vertexBuilder.build(engine);
+    proxy.vertexBuffer->setBufferAt(engine, 0, FilamentBufferDescriptorFactory::vector(vertices));
+
+    proxy.indexBuffer = filament::IndexBuffer::Builder()
+            .indexCount(static_cast<std::uint32_t>(indices.size()))
+            .bufferType(filament::IndexBuffer::IndexType::UINT)
+            .build(engine);
+    proxy.indexBuffer->setBuffer(engine, FilamentBufferDescriptorFactory::vector(indices));
+
+    filament::RenderableManager::Builder(1)
+            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
+            .material(0, proxy.materialInstance)
+            .blendOrder(0, state.blendOrder)
+            .globalBlendOrderEnabled(0, true)
+            .layerMask(kViewportAllLayerMask, layerMask)
+            .boundingBox(overlayMeshBounds())
+            .culling(false)
+            .castShadows(false)
+            .receiveShadows(false)
+            .build(engine, entity);
+    scene.addEntity(entity);
+    creationGuard.markSceneAdded();
+    proxies.push_back(std::move(proxy));
+    creationGuard.release();
 }
 
 } // namespace
@@ -127,27 +255,7 @@ void OverlayProxyFactory::destroy(OverlayRenderableProxy& proxy) {
         return;
     }
 
-    if (proxy.entityId != 0u) {
-        const utils::Entity entity = toFilamentEntity(proxy.entityId);
-        scene_->remove(entity);
-        engine_->getRenderableManager().destroy(entity);
-    }
-    if (proxy.materialInstance) {
-        engine_->destroy(proxy.materialInstance);
-        proxy.materialInstance = nullptr;
-    }
-    if (proxy.vertexBuffer) {
-        engine_->destroy(proxy.vertexBuffer);
-        proxy.vertexBuffer = nullptr;
-    }
-    if (proxy.indexBuffer) {
-        engine_->destroy(proxy.indexBuffer);
-        proxy.indexBuffer = nullptr;
-    }
-    if (proxy.entityId != 0u) {
-        utils::EntityManager::get().destroy(toFilamentEntity(proxy.entityId));
-        proxy.entityId = 0u;
-    }
+    destroyOverlayProxyResources(*engine_, scene_, proxy, true);
 }
 
 std::size_t OverlayProxyFactory::plannedProxyCount(const OverlayLayerBuildPlan& plan) {
@@ -172,39 +280,25 @@ void OverlayProxyFactory::createTriangleProxy(
         return;
     }
 
-    OverlayRenderableProxy proxy;
-    const utils::Entity entity = utils::EntityManager::get().create();
-    proxy.entityId = toOverlayEntityId(entity);
-    proxy.materialInstance = overlayMaterial_->createInstance();
-    configureOverlayMaterial(*proxy.materialInstance, batch.state);
-    proxy.vertexBuffer = filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<std::uint32_t>(batch.mesh.vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(OverlayFaceFillVertex, position), sizeof(OverlayFaceFillVertex))
-            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(OverlayFaceFillVertex, uv), sizeof(OverlayFaceFillVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayFaceFillVertex, color), sizeof(OverlayFaceFillVertex))
-            .normalized(filament::VertexAttribute::COLOR)
-            .build(*engine_);
-    proxy.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(batch.mesh.vertices));
-    proxy.indexBuffer = filament::IndexBuffer::Builder()
-            .indexCount(static_cast<std::uint32_t>(batch.mesh.indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-    proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(batch.mesh.indices));
-
-    filament::RenderableManager::Builder(1)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
-            .material(0, proxy.materialInstance)
-            .blendOrder(0, batch.state.blendOrder)
-            .globalBlendOrderEnabled(0, true)
-            .layerMask(kViewportAllLayerMask, layerMask)
-            .boundingBox(overlayMeshBounds())
-            .culling(false)
-            .castShadows(false)
-            .receiveShadows(false)
-            .build(*engine_, entity);
-    scene_->addEntity(entity);
-    proxies.push_back(proxy);
+    appendOverlayProxy(
+            *engine_,
+            *scene_,
+            *overlayMaterial_,
+            batch.mesh.vertices,
+            batch.mesh.indices,
+            batch.state,
+            layerMask,
+            proxies,
+            [](filament::VertexBuffer::Builder& builder) {
+                builder
+                        .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(OverlayFaceFillVertex, position), sizeof(OverlayFaceFillVertex))
+                        .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(OverlayFaceFillVertex, uv), sizeof(OverlayFaceFillVertex))
+                        .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayFaceFillVertex, color), sizeof(OverlayFaceFillVertex))
+                        .normalized(filament::VertexAttribute::COLOR);
+            },
+            [this, &batch](filament::MaterialInstance& material) {
+                configureOverlayMaterial(material, batch.state);
+            });
 }
 
 void OverlayProxyFactory::createLineProxy(
@@ -215,42 +309,28 @@ void OverlayProxyFactory::createLineProxy(
         return;
     }
 
-    OverlayRenderableProxy proxy;
-    const utils::Entity entity = utils::EntityManager::get().create();
-    proxy.entityId = toOverlayEntityId(entity);
-    proxy.materialInstance = overlayLineMaterial_->createInstance();
-    configureOverlayMaterial(*proxy.materialInstance, batch.state);
-    proxy.materialInstance->setParameter("lineWidth", batch.widthPixels);
-    proxy.materialInstance->setParameter("featherPixels", kOverlayLineFeatherPixels);
     (void)batch.depthBias;
-    proxy.vertexBuffer = filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<std::uint32_t>(batch.mesh.vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT4, offsetof(OverlayLineVertex, position), sizeof(OverlayLineVertex))
-            .attribute(filament::VertexAttribute::CUSTOM0, 0, AttributeType::FLOAT4, offsetof(OverlayLineVertex, lineDistancePixels), sizeof(OverlayLineVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayLineVertex, color), sizeof(OverlayLineVertex))
-            .normalized(filament::VertexAttribute::COLOR)
-            .build(*engine_);
-    proxy.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(batch.mesh.vertices));
-    proxy.indexBuffer = filament::IndexBuffer::Builder()
-            .indexCount(static_cast<std::uint32_t>(batch.mesh.indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-    proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(batch.mesh.indices));
-
-    filament::RenderableManager::Builder(1)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
-            .material(0, proxy.materialInstance)
-            .blendOrder(0, batch.state.blendOrder)
-            .globalBlendOrderEnabled(0, true)
-            .layerMask(kViewportAllLayerMask, layerMask)
-            .boundingBox(overlayMeshBounds())
-            .culling(false)
-            .castShadows(false)
-            .receiveShadows(false)
-            .build(*engine_, entity);
-    scene_->addEntity(entity);
-    proxies.push_back(proxy);
+    appendOverlayProxy(
+            *engine_,
+            *scene_,
+            *overlayLineMaterial_,
+            batch.mesh.vertices,
+            batch.mesh.indices,
+            batch.state,
+            layerMask,
+            proxies,
+            [](filament::VertexBuffer::Builder& builder) {
+                builder
+                        .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT4, offsetof(OverlayLineVertex, position), sizeof(OverlayLineVertex))
+                        .attribute(filament::VertexAttribute::CUSTOM0, 0, AttributeType::FLOAT4, offsetof(OverlayLineVertex, lineDistancePixels), sizeof(OverlayLineVertex))
+                        .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayLineVertex, color), sizeof(OverlayLineVertex))
+                        .normalized(filament::VertexAttribute::COLOR);
+            },
+            [this, &batch](filament::MaterialInstance& material) {
+                configureOverlayMaterial(material, batch.state);
+                material.setParameter("lineWidth", batch.widthPixels);
+                material.setParameter("featherPixels", kOverlayLineFeatherPixels);
+            });
 }
 
 void OverlayProxyFactory::createPointProxy(
@@ -261,42 +341,28 @@ void OverlayProxyFactory::createPointProxy(
         return;
     }
 
-    OverlayRenderableProxy proxy;
-    const utils::Entity entity = utils::EntityManager::get().create();
-    proxy.entityId = toOverlayEntityId(entity);
-    proxy.materialInstance = overlayPointMaterial_->createInstance();
-    configureOverlayMaterial(*proxy.materialInstance, batch.state);
-    proxy.materialInstance->setParameter("innerRadius", batch.innerRadius);
     (void)batch.sizePixels;
     (void)batch.depthBias;
-    proxy.vertexBuffer = filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<std::uint32_t>(batch.mesh.vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT4, offsetof(OverlayPointVertex, position), sizeof(OverlayPointVertex))
-            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(OverlayPointVertex, uv), sizeof(OverlayPointVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayPointVertex, color), sizeof(OverlayPointVertex))
-            .normalized(filament::VertexAttribute::COLOR)
-            .build(*engine_);
-    proxy.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(batch.mesh.vertices));
-    proxy.indexBuffer = filament::IndexBuffer::Builder()
-            .indexCount(static_cast<std::uint32_t>(batch.mesh.indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-    proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(batch.mesh.indices));
-
-    filament::RenderableManager::Builder(1)
-            .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES, proxy.vertexBuffer, proxy.indexBuffer)
-            .material(0, proxy.materialInstance)
-            .blendOrder(0, batch.state.blendOrder)
-            .globalBlendOrderEnabled(0, true)
-            .layerMask(kViewportAllLayerMask, layerMask)
-            .boundingBox(overlayMeshBounds())
-            .culling(false)
-            .castShadows(false)
-            .receiveShadows(false)
-            .build(*engine_, entity);
-    scene_->addEntity(entity);
-    proxies.push_back(proxy);
+    appendOverlayProxy(
+            *engine_,
+            *scene_,
+            *overlayPointMaterial_,
+            batch.mesh.vertices,
+            batch.mesh.indices,
+            batch.state,
+            layerMask,
+            proxies,
+            [](filament::VertexBuffer::Builder& builder) {
+                builder
+                        .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT4, offsetof(OverlayPointVertex, position), sizeof(OverlayPointVertex))
+                        .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(OverlayPointVertex, uv), sizeof(OverlayPointVertex))
+                        .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(OverlayPointVertex, color), sizeof(OverlayPointVertex))
+                        .normalized(filament::VertexAttribute::COLOR);
+            },
+            [this, &batch](filament::MaterialInstance& material) {
+                configureOverlayMaterial(material, batch.state);
+                material.setParameter("innerRadius", batch.innerRadius);
+            });
 }
 
 void OverlayProxyFactory::configureOverlayMaterial(

@@ -1058,6 +1058,7 @@ SessionState default_scene_state();
 SelectionMode sanitize_selection_mode(int mode);
 SelectionEditOperation sanitize_selection_operation(int operation);
 quader_poly::SelectionMode component_selection_mode(SelectionMode mode);
+bool polygon_selection_matches(const quader_poly::Selection& left, const quader_poly::Selection& right);
 
 int selected_object_index(const std::vector<PolygonObject>& objects, int active_object_id);
 int selected_object_id(const std::vector<PolygonObject>& objects, int active_object_id);
@@ -1465,6 +1466,13 @@ private:
 	void note_selection_changed();
 	void note_content_result(const CommandResult& result);
 	void restore_recorded_state(SessionState state);
+	void begin_preview_transaction(PreviewTransactionKind kind);
+	[[nodiscard]] bool preview_transaction_active(PreviewTransactionKind kind) const;
+	[[nodiscard]] CommandResult finish_preview_begin(CommandResult result);
+	[[nodiscard]] CommandResult finish_preview_update_from_base(
+		const SessionState& base,
+		CommandResult result,
+		CommandResult unchanged_result);
 	CommandResult update_bridge_preview_from_base(int steps);
 	CommandResult update_edge_bevel_preview_from_base(const quader_poly::EdgeBevelSettings& settings);
 	CommandResult update_thicken_preview_from_base(float thickness, bool from_center);

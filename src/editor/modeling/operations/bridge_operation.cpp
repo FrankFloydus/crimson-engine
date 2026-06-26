@@ -118,17 +118,8 @@ CommandResult BridgeOperation::update_preview(EditorSession& session, BridgeOper
 
 CommandResult EditorSession::begin_bridge_preview(int steps)
 {
-	cancel_preview_transaction();
-	preview_transaction_.kind = PreviewTransactionKind::bridge;
-	preview_transaction_.active = true;
-	preview_transaction_.changed = false;
-	preview_transaction_.base_state = state_;
-	preview_transaction_.history_state = preview_transaction_.base_state;
-	const CommandResult result = update_bridge_preview_from_base(steps);
-	if (!result.ok) {
-		clear_preview_transaction();
-	}
-	return result;
+	begin_preview_transaction(PreviewTransactionKind::bridge);
+	return finish_preview_begin(update_bridge_preview_from_base(steps));
 }
 
 CommandResult EditorSession::begin_bridge_preview(BridgeOperationSettings settings)
@@ -138,7 +129,7 @@ CommandResult EditorSession::begin_bridge_preview(BridgeOperationSettings settin
 
 CommandResult EditorSession::update_bridge_preview(int steps)
 {
-	if (!preview_transaction_.active || preview_transaction_.kind != PreviewTransactionKind::bridge) {
+	if (!preview_transaction_active(PreviewTransactionKind::bridge)) {
 		return error_result("No bridge preview is active.");
 	}
 	return update_bridge_preview_from_base(steps);
@@ -189,16 +180,10 @@ CommandResult EditorSession::update_bridge_preview_from_base(int steps)
 		selection_mode() == SelectionMode::face ?
 			bridge_selected_faces(steps) :
 			bridge_selected_edges(steps);
-	if (!result.ok || !result.changed) {
-		set_state(base);
-		preview_transaction_.base_state = base;
-		preview_transaction_.changed = false;
-		return result.ok ? CommandResult { false, false, result.message } : result;
-	}
-
-	preview_transaction_.base_state = base;
-	preview_transaction_.changed = true;
-	return result;
+	return finish_preview_update_from_base(
+		base,
+		result,
+		CommandResult { false, false, result.message });
 }
 
 } // namespace quader_editor_core

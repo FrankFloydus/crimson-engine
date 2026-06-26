@@ -7,6 +7,8 @@
 #include "api/QuaderObjectHandle.h"
 
 #include "api/QuaderApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
+#include "api/QuaderApiTypeConversions.h"
 #include "scene/document/ProjectSession.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 
@@ -26,7 +28,8 @@ bool QuaderObjectHandle::valid() const {
     if (api_ == nullptr || ref_.entity == InvalidEntityId || ref_.modelingObjectId == InvalidModelingObjectId) {
         return false;
     }
-    const ModelingObjectComponent* object = api_->session().scene().modelingObject(ref_.entity);
+    const ModelingObjectComponent* object =
+            QuaderApiSessionInternalAccess::projectSession(api_->session()).scene().modelingObject(ref_.entity);
     return object != nullptr && object->objectId == ref_.modelingObjectId;
 }
 
@@ -37,11 +40,13 @@ std::optional<QuaderEntitySnapshot> QuaderObjectHandle::entity() const {
     return api_->query().entity(ref_.entity);
 }
 
-std::optional<MeshAsset> QuaderObjectHandle::compiledMesh() const {
+std::optional<QuaderMeshAsset> QuaderObjectHandle::compiledMesh() const {
     if (api_ == nullptr) {
         return std::nullopt;
     }
-    return api_->session().modeling().compileObjectMesh(ref_.modelingObjectId);
+    const std::optional<MeshAsset> mesh =
+            QuaderApiSessionInternalAccess::projectSession(api_->session()).modeling().compileObjectMesh(ref_.modelingObjectId);
+    return mesh ? std::optional<QuaderMeshAsset>{toApiMeshAsset(*mesh)} : std::nullopt;
 }
 
 QuaderApiVoidResult QuaderObjectHandle::select() {
@@ -60,7 +65,7 @@ QuaderApiResult<QuaderEntityRef> QuaderObjectHandle::duplicate() {
     return api_->scene().duplicate(ref_.entity);
 }
 
-QuaderApiVoidResult QuaderObjectHandle::setTransform(TransformComponent transform) {
+QuaderApiVoidResult QuaderObjectHandle::setTransform(QuaderTransform transform) {
     return api_->scene().setTransform(ref_.entity, transform);
 }
 
@@ -123,15 +128,15 @@ QuaderApiVoidResult QuaderObjectHandle::selectFace(QuaderElementId face, QuaderS
     return api_->selection().selectFace(ref_, face, edit);
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderObjectHandle::hoverVertex(QuaderElementId vertex) {
+QuaderApiResult<QuaderHoverSummary> QuaderObjectHandle::hoverVertex(QuaderElementId vertex) {
     return api_->selection().hoverVertex(ref_, vertex);
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderObjectHandle::hoverEdge(QuaderElementId a, QuaderElementId b) {
+QuaderApiResult<QuaderHoverSummary> QuaderObjectHandle::hoverEdge(QuaderElementId a, QuaderElementId b) {
     return api_->selection().hoverEdge(ref_, a, b);
 }
 
-QuaderApiResult<ModelingHoverSummary> QuaderObjectHandle::hoverFace(QuaderElementId face) {
+QuaderApiResult<QuaderHoverSummary> QuaderObjectHandle::hoverFace(QuaderElementId face) {
     return api_->selection().hoverFace(ref_, face);
 }
 

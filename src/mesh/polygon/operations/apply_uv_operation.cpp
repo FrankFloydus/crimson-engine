@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_constants.h>
 #include <mesh/polygon/internal/quader_poly_document_mesh_internal.h>
@@ -27,8 +28,8 @@ class ApplyUvOperation final : public PolyOperation {
 public:
     explicit ApplyUvOperation(std::string_view operation, float shift_world_amount = 1.0F);
 
-    [[nodiscard]] std::string_view id() const override { return "apply_uv"; }
-    [[nodiscard]] std::string_view label() const override { return "Apply UV Operation"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::ApplyUv).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::ApplyUv).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

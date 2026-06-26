@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/input/QuaderInputBinding.h"
+#include "api/QuaderInputTypes.h"
 
 #include <cstddef>
 #include <string>

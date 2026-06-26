@@ -9,6 +9,7 @@
 #include "editor/modeling/services/ModelingActionCatalog.h"
 #include "editor/modeling/ModelingTypes.h"
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,11 @@ public:
             bool modalToolOwnsViewport) const;
     [[nodiscard]] std::vector<ModelingActionItem> actions(
             const ModelingSelectionSummary& summary,
+            ModelingActionQuery query,
+            bool modalToolOwnsViewport) const;
+    [[nodiscard]] std::optional<ModelingActionItem> action(
+            const ModelingSelectionSummary& summary,
+            std::string_view actionId,
             ModelingActionQuery query,
             bool modalToolOwnsViewport) const;
     [[nodiscard]] ModelingContextActionResolution resolveExecutableAction(

@@ -1,0 +1,21 @@
+////////////////////////////////////////////////////////////////////////////////
+// Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
+// This file is part of Quader and is protected proprietary source code.
+// No permission is granted to use, copy, modify, distribute, or sublicense this
+// file except through prior written authorization from Francesco Di Blasi.
+////////////////////////////////////////////////////////////////////////////////
+# Public docs and examples classification manifest.
+# Format: `<public|internal> <repo-relative-path>`.
+
+public docs/api-overview.md
+public docs/editor-scripting-lua.md
+public examples/create_box.cpp
+public examples/script_modeling_workflow.cpp
+public examples/lua/README.md
+
+internal docs/AGENTS.md
+internal docs/absorbed_modeling/LICENSE.md
+internal docs/absorbed_modeling/QUADER_NATIVE_SOURCE.txt
+internal docs/absorbed_modeling/README.md
+internal docs/public-docs-examples.txt
+internal examples/AGENTS.md

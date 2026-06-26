@@ -67,6 +67,7 @@ public:
     bool setEditorObjectId(EntityId id, EditorObjectId editorObjectId);
     bool setEntityKind(EntityId id, EntityKind kind);
     bool setVisible(EntityId id, bool visible);
+    bool setSelectable(EntityId id, bool selectable);
     bool setLocked(EntityId id, bool locked);
     bool setSelected(EntityId id, bool selected);
     bool setActiveSelection(EntityId id);
@@ -79,19 +80,6 @@ public:
     void setMaterial(EntityId id, MaterialComponent material);
     bool clearMaterial(EntityId id);
     void setLight(EntityId id, LightComponent light);
-
-    NameComponent* name(EntityId id);
-    EditorObjectIdentityComponent* editorObjectIdentity(EntityId id);
-    TransformComponent* transform(EntityId id);
-    EntityKindComponent* entityKind(EntityId id);
-    HierarchyComponent* hierarchy(EntityId id);
-    VisibilityComponent* visibility(EntityId id);
-    LockComponent* lock(EntityId id);
-    SelectionComponent* selection(EntityId id);
-    ModelingObjectComponent* modelingObject(EntityId id);
-    MeshComponent* mesh(EntityId id);
-    MaterialComponent* material(EntityId id);
-    LightComponent* light(EntityId id);
 
     const NameComponent* name(EntityId id) const;
     const EditorObjectIdentityComponent* editorObjectIdentity(EntityId id) const;
@@ -132,6 +120,14 @@ public:
     std::uint64_t revision() const { return revision_; }
 
 private:
+    NameComponent* mutableName(EntityId id);
+    TransformComponent* mutableTransform(EntityId id);
+    EntityKindComponent* mutableEntityKind(EntityId id);
+    HierarchyComponent* mutableHierarchy(EntityId id);
+    VisibilityComponent* mutableVisibility(EntityId id);
+    LockComponent* mutableLock(EntityId id);
+    SelectionComponent* mutableSelection(EntityId id);
+
     void markDirty();
     EditorObjectId allocateEditorObjectId(EditorObjectId requested);
     entt::entity requireEntity(EntityId id) const;

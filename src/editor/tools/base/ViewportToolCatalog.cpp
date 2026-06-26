@@ -96,6 +96,11 @@ bool viewportToolBlocksFocusShortcuts(ViewportToolId tool) {
     return item != nullptr && item->blocksViewportFocusShortcuts();
 }
 
+bool viewportToolSupportsTransformGizmo(ViewportToolId tool) {
+    const ViewportTool* item = findViewportTool(tool);
+    return item != nullptr && item->supportsTransformGizmo();
+}
+
 ModelingTransformTool viewportToolTransformTool(ViewportToolId tool) {
     const ViewportTool* item = findViewportTool(tool);
     return item != nullptr ? item->transformTool() : ModelingTransformTool::Move;

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -37,6 +38,7 @@ TextureBindingService::~TextureBindingService() {
 }
 
 void TextureBindingService::initialize(filament::Engine& engine, std::filesystem::path resourceRoot) {
+    shutdown();
     engine_ = &engine;
     resourceRoot_ = std::move(resourceRoot);
     fallbackAlbedoTexture_ = createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb);
@@ -65,23 +67,16 @@ filament::Texture* TextureBindingService::resolveTexture(const AssetRegistry& as
     if (!material) {
         return fallback;
     }
-    auto it = material->textureSlots.find(slotName);
-    if (it == material->textureSlots.end()) {
-        std::string alternateSlot = slotName;
-        if (!alternateSlot.ends_with("Texture")) {
-            alternateSlot += "Texture";
-        }
-        it = material->textureSlots.find(alternateSlot);
-        if (it == material->textureSlots.end()) {
-            return fallback;
-        }
+    const std::optional<AssetId> textureId = materialTextureSlotAsset(*material, slotName);
+    if (!textureId.has_value()) {
+        return fallback;
     }
-    const TextureAsset* texture = assets.texture(it->second);
+    const TextureAsset* texture = assets.texture(*textureId);
     if (!texture) {
         return fallback;
     }
     const TextureCacheKey cacheKey{
-            .id = it->second,
+            .id = *textureId,
             .revision = texture->revision.value,
             .colorSpace = texture->colorSpace,
     };
@@ -90,6 +85,7 @@ filament::Texture* TextureBindingService::resolveTexture(const AssetRegistry& as
     }
     filament::Texture* loaded = loadTextureAsset(*texture);
     textureCache_[cacheKey] = loaded;
+    evictObsoleteTextureRevisions(cacheKey);
     return loaded ? loaded : fallback;
 }
 
@@ -153,6 +149,19 @@ void TextureBindingService::destroyTexture(filament::Texture*& texture) {
         engine_->destroy(texture);
     }
     texture = nullptr;
+}
+
+void TextureBindingService::evictObsoleteTextureRevisions(const TextureCacheKey& currentKey) {
+    for (auto it = textureCache_.begin(); it != textureCache_.end();) {
+        if (it->first.id == currentKey.id &&
+                it->first.colorSpace == currentKey.colorSpace &&
+                it->first.revision != currentKey.revision) {
+            destroyTexture(it->second);
+            it = textureCache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 } // namespace quader

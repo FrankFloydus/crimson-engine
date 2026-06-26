@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderModelingApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 
 #include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderApiMutationRunner.h"
@@ -24,23 +25,21 @@
 namespace quader {
 namespace {
 
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
+}
+
+
 QuaderApiResult<QuaderModelingObjectRef> resultFromCreate(
         QuaderApiVoidResult status,
         QuaderModelingObjectRef value) {
-    QuaderApiResult<QuaderModelingObjectRef> result;
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = std::move(status.message);
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
-    result.value = value;
-    return result;
+    return quaderApiResultFromStatus(status, value);
 }
 
-QuaderApiResult<ModelingTransformDragPreview> resultFromTransformDragPreview(
+QuaderApiResult<QuaderTransformDragPreview> resultFromTransformDragPreview(
         const ProjectSession& session,
         ModelingTransformDragPreview preview) {
-    QuaderApiResult<ModelingTransformDragPreview> result;
+    QuaderApiResult<QuaderTransformDragPreview> result;
     result.ok = preview.ok;
     result.changed = preview.changed;
     result.message = preview.message;
@@ -56,11 +55,11 @@ QuaderApiResult<ModelingTransformDragPreview> resultFromTransformDragPreview(
             .modelingContentRevision = summary.contentRevision,
             .modelingSelectionRevision = summary.selectionRevision,
     };
-    result.value = std::move(preview);
+    result.value = toApiTransformDragPreview(preview);
     return result;
 }
 
-ModelingTransform3 rotationTransform(QVec3 eulerRadians) {
+QuaderTransform3 rotationTransform(QVec3 eulerRadians) {
     const glm::mat3 rotation = glm::mat3_cast(toGlm(quatFromEulerRadians(eulerRadians)));
     return {
             .xAxis = fromGlm(glm::vec3(rotation[0])),
@@ -70,7 +69,7 @@ ModelingTransform3 rotationTransform(QVec3 eulerRadians) {
     };
 }
 
-ModelingTransform3 scaleTransform(QVec3 scale) {
+QuaderTransform3 scaleTransform(QVec3 scale) {
     return {
             .xAxis = {scale.x, 0.0f, 0.0f},
             .yAxis = {0.0f, scale.y, 0.0f},
@@ -81,13 +80,13 @@ ModelingTransform3 scaleTransform(QVec3 scale) {
 
 } // namespace
 
-QuaderModelingApi::QuaderModelingApi(ProjectSession& session, QuaderApiMutationRunner& mutations)
+QuaderModelingApi::QuaderModelingApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
     : session_(session)
     , mutations_(mutations) {}
 
 QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(const QuaderCreateBoxArgs& args) {
     auto command = std::make_unique<CreateBoxFromBoundsHistoryCommand>(
-            session_.modeling(),
+            projectSession(session_).modeling(),
             ModelingCreateBoxRequest{
                     .bounds = toModelingBounds(args.bounds),
                     .name = args.name,
@@ -97,7 +96,7 @@ QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(const Quad
 
     QuaderModelingObjectRef created;
     if (status.ok && status.changed) {
-        created = refFromRecord(createCommand->created().object);
+        created = refFromRecord(toApiModelingObjectRecord(createCommand->created().object));
     }
     return resultFromCreate(std::move(status), created);
 }
@@ -109,16 +108,12 @@ QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(QuaderBoun
     });
 }
 
-QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createBox(ModelingBounds bounds, std::string name) {
-    return createBox(toApiBounds(bounds), std::move(name));
-}
-
 QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::commitBoxPreview(
         std::string name,
         AssetId defaultMaterial) {
     auto command = std::make_unique<CommitBoxPreviewCommand>(
-            session_.modeling(),
-            session_.scene(),
+            projectSession(session_).modeling(),
+            projectSession(session_).scene(),
             std::move(name),
             defaultMaterial);
     CommitBoxPreviewCommand* commitCommand = command.get();
@@ -128,7 +123,7 @@ QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::commitBoxPreview(
 
     QuaderModelingObjectRef created;
     if (status.ok && status.changed) {
-        created = refFromRecord(commitCommand->committed().object);
+        created = refFromRecord(toApiModelingObjectRecord(commitCommand->committed().object));
     }
     return resultFromCreate(std::move(status), created);
 }
@@ -140,19 +135,28 @@ QuaderApiResult<QuaderModelingObjectRef> QuaderModelingApi::createMesh(
     request.document = QuaderPolygonDocumentInternalAccess::toBackend(document);
     request.name = std::move(args.name);
     request.materialSlot = args.materialSlot;
-    auto command = std::make_unique<CreateMeshHistoryCommand>(session_.modeling(), std::move(request));
+    auto command = std::make_unique<CreateMeshHistoryCommand>(projectSession(session_).modeling(), std::move(request));
     CreateMeshHistoryCommand* createCommand = command.get();
     QuaderApiVoidResult status = mutations_.runModelingCommand(std::move(command), "Create Mesh");
 
     QuaderModelingObjectRef created;
     if (status.ok && status.changed) {
-        created = refFromRecord(createCommand->created().object);
+        created = refFromRecord(toApiModelingObjectRecord(createCommand->created().object));
     }
     return resultFromCreate(std::move(status), created);
 }
 
-QuaderApiVoidResult QuaderModelingApi::setSelectionMode(ModelingSelectionMode mode) {
-    return mutations_.runModelingResult(session_.selection().setMode(mode), "Set Selection Mode");
+QuaderApiVoidResult QuaderModelingApi::setSelectionMode(QuaderSelectionMode mode) {
+    return mutations_.runModelingResult(
+            projectSession(session_).selection().setMode(toModelingSelectionMode(mode)),
+            "Set Selection Mode");
+}
+
+bool QuaderModelingApi::canExecuteTool(std::string_view toolId) const {
+    if (toolId == "delete_selection" && projectSession(session_).modeling().hasSelectedSceneGroupRoot()) {
+        return true;
+    }
+    return mutations_.canRunTrackedModelingTool(toolId);
 }
 
 QuaderApiVoidResult QuaderModelingApi::executeTool(std::string_view toolId) {
@@ -165,7 +169,7 @@ QuaderApiVoidResult QuaderModelingApi::beginPreview(std::string_view actionId) {
 
 QuaderApiVoidResult QuaderModelingApi::updatePreview(const QuaderPreviewSettings& settings) {
     return mutations_.runModelingResult(
-            session_.modeling().setInteractionSettings(toModelingInteractionSettings(settings.interaction)),
+            projectSession(session_).modeling().setInteractionSettings(toModelingInteractionSettings(settings.interaction)),
             "Update Operation Preview");
 }
 
@@ -179,75 +183,75 @@ QuaderApiVoidResult QuaderModelingApi::cancelPreview() {
 
 QuaderApiVoidResult QuaderModelingApi::beginTransformPreview(bool duplicateSelected) {
     return mutations_.runModelingResult(
-            session_.modeling().beginTransformPreview(duplicateSelected),
+            projectSession(session_).modeling().beginTransformPreview(duplicateSelected),
             "Begin Transform Preview");
 }
 
 QuaderApiVoidResult QuaderModelingApi::updateTransformTranslate(QVec3 delta) {
     return mutations_.runModelingResult(
-            session_.modeling().updateTransformTranslatePreview(delta),
+            projectSession(session_).modeling().updateTransformTranslatePreview(delta),
             "Update Transform Preview");
 }
 
-QuaderApiVoidResult QuaderModelingApi::updateTransformMatrix(const ModelingTransform3& transform, QVec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::updateTransformMatrix(const QuaderTransform3& transform, QVec3 pivot) {
     return mutations_.runModelingResult(
-            session_.modeling().updateTransformMatrixPreview(transform, pivot),
+            projectSession(session_).modeling().updateTransformMatrixPreview(toModelingTransform3(transform), pivot),
             "Update Transform Preview");
 }
 
 QuaderApiVoidResult QuaderModelingApi::updateTransformExtrude(QVec3 offset, float closedEdgeLedgeSize) {
     return mutations_.runModelingResult(
-            session_.modeling().updateTransformExtrudePreview(offset, closedEdgeLedgeSize),
+            projectSession(session_).modeling().updateTransformExtrudePreview(offset, closedEdgeLedgeSize),
             "Update Transform Preview");
 }
 
-QuaderApiVoidResult QuaderModelingApi::updateTransformInset(const ModelingTransform3& transform, QVec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::updateTransformInset(const QuaderTransform3& transform, QVec3 pivot) {
     return mutations_.runModelingResult(
-            session_.modeling().updateTransformInsetPreview(transform, pivot),
+            projectSession(session_).modeling().updateTransformInsetPreview(toModelingTransform3(transform), pivot),
             "Update Transform Preview");
 }
 
 QuaderApiVoidResult QuaderModelingApi::commitTransformPreview(std::string label) {
     return mutations_.runModelingCommand(
-            std::make_unique<CommitTransformPreviewHistoryCommand>(session_.modeling()),
+            std::make_unique<CommitTransformPreviewHistoryCommand>(projectSession(session_).modeling()),
             label.empty() ? "Commit Transform Preview" : label);
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancelTransformPreview() {
     return mutations_.runModelingResult(
-            session_.modeling().cancelTransformPreview(),
+            projectSession(session_).modeling().cancelTransformPreview(),
             "Cancel Transform Preview");
 }
 
-QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::beginTransformDrag(
-        const ModelingTransformDragBeginRequest& request) {
+QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::beginTransformDrag(
+        const QuaderTransformDragBeginRequest& request) {
     return resultFromTransformDragPreview(
-            session_,
-            session_.modeling().beginTransformDrag(request));
+            projectSession(session_),
+            projectSession(session_).modeling().beginTransformDrag(toModelingTransformDragBeginRequest(request)));
 }
 
-QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::updateTransformDrag(
-        const ModelingTransformDragUpdateRequest& request) {
+QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::updateTransformDrag(
+        const QuaderTransformDragUpdateRequest& request) {
     return resultFromTransformDragPreview(
-            session_,
-            session_.modeling().updateTransformDrag(request));
+            projectSession(session_),
+            projectSession(session_).modeling().updateTransformDrag(toModelingTransformDragUpdateRequest(request)));
 }
 
-QuaderApiResult<ModelingTransformDragPreview> QuaderModelingApi::commitTransformDrag() {
+QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::commitTransformDrag() {
     return resultFromTransformDragPreview(
-            session_,
-            session_.modeling().commitTransformDrag(session_.history()));
+            projectSession(session_),
+            projectSession(session_).modeling().commitTransformDrag(projectSession(session_).history()));
 }
 
 QuaderApiVoidResult QuaderModelingApi::cancelTransformDrag() {
     return mutations_.runModelingResult(
-            session_.modeling().cancelTransformDrag(),
+            projectSession(session_).modeling().cancelTransformDrag(),
             "Cancel Transform Drag");
 }
 
 QuaderApiVoidResult QuaderModelingApi::moveSelection(QVec3 delta) {
     return mutations_.runModelingCommand(
-            std::make_unique<MoveSelectionHistoryCommand>(session_.modeling(), delta),
+            std::make_unique<MoveSelectionHistoryCommand>(projectSession(session_).modeling(), delta),
             "Move Selection");
 }
 
@@ -259,27 +263,27 @@ QuaderApiVoidResult QuaderModelingApi::scaleSelection(QVec3 scale, QVec3 pivot) 
     return transformSelection(scaleTransform(scale), pivot);
 }
 
-QuaderApiVoidResult QuaderModelingApi::transformSelection(const ModelingTransform3& transform, QVec3 pivot) {
+QuaderApiVoidResult QuaderModelingApi::transformSelection(const QuaderTransform3& transform, QVec3 pivot) {
     return mutations_.runModelingCommand(
-            std::make_unique<TransformSelectionHistoryCommand>(session_.modeling(), transform, pivot),
+            std::make_unique<TransformSelectionHistoryCommand>(projectSession(session_).modeling(), toModelingTransform3(transform), pivot),
             "Transform Selection");
 }
 
 QuaderApiVoidResult QuaderModelingApi::duplicateSelectedHierarchyForGroupDrag() {
     return mutations_.runModelingResult(
-            session_.modeling().duplicateSelectedHierarchyForGroupDrag(session_.documentCommands()),
+            projectSession(session_).modeling().duplicateSelectedHierarchyForGroupDrag(projectSession(session_).documentCommands()),
             "Duplicate Group Selection");
 }
 
 QuaderApiVoidResult QuaderModelingApi::applyActiveMaterial(std::uint32_t materialSlot) {
     return mutations_.runModelingCommand(
-            std::make_unique<ApplyActiveMaterialHistoryCommand>(session_.modeling(), materialSlot),
+            std::make_unique<ApplyActiveMaterialHistoryCommand>(projectSession(session_).modeling(), materialSlot),
             "Apply Active Material");
 }
 
 QuaderApiVoidResult QuaderModelingApi::assignMaterialSlotToSelection(std::uint32_t materialSlot) {
     return mutations_.runModelingCommand(
-            std::make_unique<AssignMaterialSlotToSelectionHistoryCommand>(session_.modeling(), materialSlot),
+            std::make_unique<AssignMaterialSlotToSelectionHistoryCommand>(projectSession(session_).modeling(), materialSlot),
             "Assign Material Slot");
 }
 
@@ -289,40 +293,58 @@ QuaderApiVoidResult QuaderModelingApi::assignMaterialSlotToFace(
             std::uint32_t materialSlot) {
     return mutations_.runModelingCommand(
             std::make_unique<AssignMaterialSlotToFaceHistoryCommand>(
-                    session_.modeling(),
+                    projectSession(session_).modeling(),
                     object.modelingObjectId,
                     face,
                     materialSlot),
             "Assign Face Material Slot");
 }
 
-ModelingActionSet QuaderModelingApi::availableActionSet(const ModelingActionQuery& query) const {
-    return session_.modeling().contextActionSet(query);
+QuaderActionSet QuaderModelingApi::availableActionSet(const QuaderActionQuery& query) const {
+    return toApiActionSet(projectSession(session_).modeling().contextActionSet(toModelingActionQuery(query)));
 }
 
-std::vector<ModelingActionItem> QuaderModelingApi::availableActions(const ModelingActionQuery& query) const {
-    return session_.modeling().contextActions(query);
+std::vector<QuaderActionItem> QuaderModelingApi::availableActions(const QuaderActionQuery& query) const {
+    const std::vector<ModelingActionItem> actions = projectSession(session_).modeling().contextActions(toModelingActionQuery(query));
+    std::vector<QuaderActionItem> result;
+    result.reserve(actions.size());
+    for (const ModelingActionItem& action : actions) {
+        result.push_back(toApiActionItem(action));
+    }
+    return result;
 }
 
-std::vector<ModelingInstantOperationDescriptor> QuaderModelingApi::instantOperations() const {
-    return session_.modeling().instantOperations();
+std::vector<QuaderInstantOperationDescriptor> QuaderModelingApi::instantOperations() const {
+    const std::vector<ModelingInstantOperationDescriptor> operations = projectSession(session_).modeling().instantOperations();
+    std::vector<QuaderInstantOperationDescriptor> result;
+    result.reserve(operations.size());
+    for (const ModelingInstantOperationDescriptor& operation : operations) {
+        result.push_back(toApiInstantOperationDescriptor(operation));
+    }
+    return result;
 }
 
-ModelingSelectionSummary QuaderModelingApi::selectionSummary() const {
-    return session_.modeling().selectionSummary();
+QuaderSelectionSummary QuaderModelingApi::selectionSummary() const {
+    return toApiSelectionSummary(projectSession(session_).modeling().selectionSummary());
 }
 
-std::vector<ModelingObjectRecord> QuaderModelingApi::objects() const {
-    return session_.modeling().objects();
+std::vector<QuaderModelingObjectRecord> QuaderModelingApi::objects() const {
+    const std::vector<ModelingObjectRecord> records = projectSession(session_).modeling().objects();
+    std::vector<QuaderModelingObjectRecord> result;
+    result.reserve(records.size());
+    for (const ModelingObjectRecord& record : records) {
+        result.push_back(toApiModelingObjectRecord(record));
+    }
+    return result;
 }
 
-QuaderModelingObjectRef QuaderModelingApi::refFromRecord(const ModelingObjectRecord& record) const {
+QuaderModelingObjectRef QuaderModelingApi::refFromRecord(const QuaderModelingObjectRecord& record) const {
     QuaderModelingObjectRef ref;
     ref.entity = record.entity;
-    ref.editorObjectId = session_.scene().editorObjectId(record.entity);
+    ref.editorObjectId = projectSession(session_).scene().editorObjectId(record.entity);
     ref.modelingObjectId = record.modelingObjectId;
     ref.mesh = record.mesh;
-    if (const MaterialComponent* material = session_.scene().material(record.entity)) {
+    if (const MaterialComponent* material = projectSession(session_).scene().material(record.entity)) {
         ref.material = material->material;
     }
     return ref;

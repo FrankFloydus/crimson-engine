@@ -14,7 +14,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$LogCopyPath,
 
-    [int]$TimeoutSeconds = 30
+    [int]$TimeoutSeconds = 30,
+
+    [switch]$AllowMissingLog
 )
 
 $ErrorActionPreference = "Stop"
@@ -106,10 +108,16 @@ public static class NativeWindowCapture {
         }
     }
 
-    if (Test-Path -LiteralPath $LogCopyPath) {
+    if (-not (Test-Path -LiteralPath $LogCopyPath)) {
+        if ($AllowMissingLog) {
+            Write-Warning "Quader log was not found; skipping log verdict because -AllowMissingLog was supplied."
+        } else {
+            throw "Quader log was not found and copied to $LogCopyPath."
+        }
+    } else {
         $logText = Get-Content -LiteralPath $LogCopyPath -Raw
-        if ($logText -match "CRITICAL|Fatal error|fatal error") {
-            throw "Critical or fatal log entry found in $LogCopyPath"
+        if ($logText -match "(?im)\[(error|critical)\]|fatal error|\bfatal\b") {
+            throw "Error, critical, or fatal log entry found in $LogCopyPath"
         }
     }
 } finally {

@@ -61,6 +61,7 @@ public:
     SceneExpect& worldPositionNear(std::string_view alias, QVec3 expected, float epsilon = 0.001f);
     SceneExpect& selectedBoundsCenterNear(QVec3 expected, float epsilon = 0.001f);
     SceneExpect& entityTransformNear(std::string_view alias, TransformComponent expected, float epsilon = 0.001f);
+    SceneExpect& entityTransformNear(std::string_view alias, QuaderTransform expected, float epsilon = 0.001f);
 
 private:
     const BehaviorScenario& scenario_;
@@ -87,6 +88,7 @@ public:
     explicit SelectionExpect(const BehaviorScenario& scenario) : scenario_(scenario) {}
 
     SelectionExpect& mode(ModelingSelectionMode mode);
+    SelectionExpect& mode(QuaderSelectionMode mode);
     SelectionExpect& objectCount(std::uint32_t count);
     SelectionExpect& vertexCount(std::uint32_t count);
     SelectionExpect& edgeCount(std::uint32_t count);

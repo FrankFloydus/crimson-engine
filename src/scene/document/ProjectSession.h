@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace quader {
 
@@ -28,6 +29,15 @@ struct ProjectContentRevisionStamp {
     std::uint64_t modelingContentRevision = 0;
 
     [[nodiscard]] bool operator==(const ProjectContentRevisionStamp&) const = default;
+};
+
+/**
+ * Stores the result of project-owned asset mutations that depend on scene ownership.
+ */
+struct ProjectAssetMutationResult {
+    bool ok = true;
+    bool changed = false;
+    std::string message;
 };
 
 /**
@@ -64,6 +74,7 @@ public:
 
     [[nodiscard]] ProjectContentRevisionStamp contentRevisionStamp() const;
     [[nodiscard]] bool dirty() const;
+    [[nodiscard]] ProjectAssetMutationResult replaceStandaloneMesh(AssetId mesh, MeshAsset replacement);
     void markClean();
 
 private:

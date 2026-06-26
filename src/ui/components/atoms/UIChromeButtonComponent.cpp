@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/components/atoms/UIChromeButtonComponent.h"
 
+#include <utility>
+
 namespace quader {
 
 std::string_view chromeButtonElementId(UIChromeButtonKind kind) {
@@ -32,6 +34,19 @@ std::string_view chromeButtonActionName(UIChromeButtonKind kind) {
     return {};
 }
 
+std::optional<UIChromeButtonKind> chromeButtonKindForActionName(std::string_view action) {
+    for (const UIChromeButtonKind kind : {
+                 UIChromeButtonKind::Minimize,
+                 UIChromeButtonKind::Restore,
+                 UIChromeButtonKind::Close,
+         }) {
+        if (chromeButtonActionName(kind) == action) {
+            return kind;
+        }
+    }
+    return std::nullopt;
+}
+
 UIIconId chromeButtonIconId(UIChromeButtonKind kind) {
     switch (kind) {
     case UIChromeButtonKind::Minimize:
@@ -51,7 +66,10 @@ UIChromeButtonComponent::UIChromeButtonComponent(UIChromeButtonKind kind)
 }
 
 void UIChromeButtonComponent::appendButtonClasses(UIElement& button) const {
-    button.addClass("chrome-icon-button").addClass("bg-gray-800");
+    button.addClass("chrome-icon-button")
+            .addClass("bg-gray-800")
+            .addClass("hover-icon-gray-100")
+            .addClass("active-icon-gray-100");
     if (kind_ == UIChromeButtonKind::Close) {
         button.addClass("hover-bg-red-500").addClass("active-bg-red-600");
         return;
@@ -61,7 +79,13 @@ void UIChromeButtonComponent::appendButtonClasses(UIElement& button) const {
 
 void UIChromeButtonComponent::appendButtonAttributes(UIElement& button) const {
     UIButtonComponent::appendButtonAttributes(button);
-    button.data("chrome-window-action", chromeButtonActionName(kind_));
+    button.data(kChromeWindowActionDataKey, chromeButtonActionName(kind_));
+}
+
+void UIChromeButtonComponent::appendButtonContent(UIElement& button) const {
+    UIElement icon = UIIconRegistry::instance().renderIcon(chromeButtonIconId(kind_), "ui-button-icon");
+    icon.addClass("icon-gray-400");
+    button.child(std::move(icon));
 }
 
 } // namespace quader

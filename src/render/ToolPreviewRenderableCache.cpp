@@ -47,18 +47,17 @@ bool ToolPreviewRenderableCache::setMeshes(const std::vector<ToolPreviewMesh>& m
         if (previewMesh.mesh.vertices.empty() || previewMesh.mesh.indices.empty()) {
             continue;
         }
-        const MaterialDocument* material = assets.material(previewMesh.material);
+        const MaterialComponent material{.material = previewMesh.material};
         meshProxies_.push_back(factory_->create(
                 previewMesh.sourceEntity,
                 InvalidAssetId,
                 previewMesh.mesh,
-                previewMesh.material,
-                material,
+                &material,
                 assets,
                 previewMesh.transform,
                 false,
                 true,
-                materialBinding_->materialRevision(assets, material)));
+                materialBinding_->materialRevision(assets, &material)));
     }
     return true;
 }
@@ -77,11 +76,11 @@ std::uint64_t ToolPreviewRenderableCache::previewMeshSignature(
         const ToolPreviewMesh& previewMesh,
         const AssetRegistry& assets,
         const MaterialBindingService& materialBinding) {
-    const MaterialDocument* material = assets.material(previewMesh.material);
+    const MaterialComponent material{.material = previewMesh.material};
     RenderSignatureBuilder signature;
     signature.addValue(previewMesh.sourceEntity)
             .addValue(previewMesh.material)
-            .addValue(materialBinding.materialRevision(assets, material))
+            .addValue(materialBinding.materialRevision(assets, &material))
             .addMat4(previewMesh.transform);
     return MeshRenderableFactory::meshAssetSignature(signature.value(), previewMesh.mesh);
 }

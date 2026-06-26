@@ -29,7 +29,7 @@ void MaterialBindingService::shutdown() {
     textureBinding_ = nullptr;
 }
 
-std::uint64_t MaterialBindingService::materialRevision(const AssetRegistry& assets, const MaterialDocument* material) const {
+std::uint64_t MaterialBindingService::materialRevision(const AssetRegistry& assets, const MaterialComponent* material) const {
     return RenderSignatureBuilder::materialSignature(assets, material);
 }
 

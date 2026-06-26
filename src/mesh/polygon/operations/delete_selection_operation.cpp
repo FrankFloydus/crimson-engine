@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -36,8 +37,8 @@ namespace quader_poly {
  */
 class DeleteSelectionOperation final : public PolyOperation {
 public:
-    [[nodiscard]] std::string_view id() const override { return "delete_selection"; }
-    [[nodiscard]] std::string_view label() const override { return "Delete Selection"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::DeleteSelection).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::DeleteSelection).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 };
 

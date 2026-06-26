@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <diagnostics/profile.h>
 
@@ -37,8 +38,8 @@ class BevelEdgesOperation final : public PolyOperation {
 public:
     explicit BevelEdgesOperation(EdgeBevelSettings settings = {});
 
-    [[nodiscard]] std::string_view id() const override { return "bevel_selected_edges"; }
-    [[nodiscard]] std::string_view label() const override { return "Bevel Selected Edges"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::BevelSelectedEdges).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::BevelSelectedEdges).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

@@ -12,12 +12,15 @@
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
 
+#include <editor/interactions/cut_tool.h>
+#include <editor/interactions/mirror_tool.h>
 #include <editor/interactions/transform_drag.h>
 #include <mesh/polygon/document.h>
 
@@ -128,6 +131,32 @@ void appendSelectedHoverFilteredBaseFrame(
             target.points.push_back(point);
         }
     }
+}
+
+void mixOverlaySignatureHash(std::uint64_t& hash, std::uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ULL;
+}
+
+void mixOverlaySignatureHash(std::uint64_t& hash, bool value) {
+    mixOverlaySignatureHash(hash, value ? 1ULL : 0ULL);
+}
+
+void mixOverlaySignatureHash(std::uint64_t& hash, int value) {
+    mixOverlaySignatureHash(hash, static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
+}
+
+void mixOverlaySignatureHash(std::uint64_t& hash, double value) {
+    std::uint64_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(value));
+    mixOverlaySignatureHash(hash, bits);
+}
+
+void mixOverlaySignatureHash(std::uint64_t& hash, quader::QVec3 value) {
+    mixOverlaySignatureHash(hash, static_cast<double>(value.x));
+    mixOverlaySignatureHash(hash, static_cast<double>(value.y));
+    mixOverlaySignatureHash(hash, static_cast<double>(value.z));
 }
 
 } // namespace
@@ -262,15 +291,7 @@ const std::vector<quader_editor_core::PickObjectFaceGeometry>& ModelingSelection
 bool ModelingSelectionService::selectionMatches(
         const quader_poly::Selection& left,
         const quader_poly::Selection& right) {
-    return left.mode == right.mode &&
-            left.vertices == right.vertices &&
-            left.edges == right.edges &&
-            left.faces == right.faces &&
-            left.has_active == right.has_active &&
-            left.active_kind == right.active_kind &&
-            left.active_vertex == right.active_vertex &&
-            left.active_edge == right.active_edge &&
-            left.active_face == right.active_face;
+    return quader_editor_core::polygon_selection_matches(left, right);
 }
 
 SceneModelingSyncService::SceneModelingSyncService(ModelingObjectRuntimeMap& objectMap)
@@ -335,6 +356,97 @@ bool ModelingOverlayService::hasModalOverlay(const ModelingToolStatus& status) {
 void ModelingOverlayService::invalidate() const {
     selectionOverlayCache_.invalidate();
     overlayBaseCache_.valid = false;
+}
+
+std::uint64_t ModelingOverlayService::selectionOverlaySignature(
+        const quader_editor_core::EditorRuntime& runtime) const {
+    std::uint64_t hash = 1469598103934665603ULL;
+    mixOverlaySignatureHash(hash, static_cast<int>(runtime.active_tool()));
+
+    const quader_editor_core::SelectionHoverState& hover = runtime.hover();
+    mixOverlaySignatureHash(hash, hover.object_id);
+    mixOverlaySignatureHash(hash, static_cast<int>(hover.kind));
+    mixOverlaySignatureHash(hash, static_cast<int>(hover.vertex_id));
+    mixOverlaySignatureHash(hash, static_cast<int>(hover.edge.a));
+    mixOverlaySignatureHash(hash, static_cast<int>(hover.edge.b));
+    mixOverlaySignatureHash(hash, static_cast<int>(hover.face_id));
+    mixOverlaySignatureHash(hash, hover.selected_modifier_pressed);
+    mixOverlaySignatureHash(hash, hover.candidate_object_id);
+
+    const quader_editor_core::TransformDragState& drag = runtime.transform_drag_state();
+    mixOverlaySignatureHash(hash, drag.active);
+    mixOverlaySignatureHash(hash, static_cast<int>(drag.tool));
+    mixOverlaySignatureHash(hash, static_cast<int>(drag.operation));
+    mixOverlaySignatureHash(hash, static_cast<int>(drag.axis));
+    mixOverlaySignatureHash(hash, drag.pivot);
+    mixOverlaySignatureHash(hash, drag.scene_transform_preview_eligible);
+    mixOverlaySignatureHash(hash, static_cast<int>(drag.snap_target.kind));
+    mixOverlaySignatureHash(hash, drag.snap_target.object_id);
+    mixOverlaySignatureHash(hash, static_cast<int>(drag.snap_target.vertex_id));
+    mixOverlaySignatureHash(hash, drag.snap_target.position);
+    if (drag.active) {
+        const std::vector<quader_editor_core::SelectionOverlayPoint> snapPoints =
+                quader_editor_core::transform_drag_snap_overlay_points(drag);
+        mixOverlaySignatureHash(hash, static_cast<int>(snapPoints.size()));
+        for (const quader_editor_core::SelectionOverlayPoint& point : snapPoints) {
+            mixOverlaySignatureHash(hash, static_cast<int>(point.layer));
+            mixOverlaySignatureHash(hash, point.position);
+            mixOverlaySignatureHash(hash, static_cast<std::uint64_t>(point.color_abgr));
+            mixOverlaySignatureHash(hash, static_cast<double>(point.size_pixels));
+            mixOverlaySignatureHash(hash, point.object_id);
+            mixOverlaySignatureHash(hash, static_cast<int>(point.vertex_id));
+        }
+    }
+
+    const quader_editor_core::CutToolState& cut = runtime.cut_state();
+    const quader_editor_core::CutHoverState& cutHover = runtime.cut_hover();
+    mixOverlaySignatureHash(hash, quader_editor_core::cut_is_active(cut));
+    mixOverlaySignatureHash(hash, static_cast<int>(cut.points.size()));
+    for (const quader::QVec3& point : cut.points) {
+        mixOverlaySignatureHash(hash, point);
+    }
+    mixOverlaySignatureHash(hash, static_cast<int>(cut.target_object_ids.size()));
+    for (const int objectId : cut.target_object_ids) {
+        mixOverlaySignatureHash(hash, objectId);
+    }
+    mixOverlaySignatureHash(hash, cut.source_object_id);
+    mixOverlaySignatureHash(hash, cut.face_normal);
+    mixOverlaySignatureHash(hash, static_cast<int>(cut.mode));
+    mixOverlaySignatureHash(hash, cut.dragging_point_index);
+    mixOverlaySignatureHash(hash, cut.dragging_new_point);
+    mixOverlaySignatureHash(hash, cut.dragging_line);
+    mixOverlaySignatureHash(hash, cut.drag_line_anchor);
+    mixOverlaySignatureHash(hash, cut.preview_valid);
+    mixOverlaySignatureHash(hash, cut.preview_counts.target_count);
+    mixOverlaySignatureHash(hash, cut.preview_counts.split_count);
+    mixOverlaySignatureHash(hash, cut.preview_counts.removed_count);
+    mixOverlaySignatureHash(hash, cutHover.valid);
+    mixOverlaySignatureHash(hash, cutHover.object_id);
+    mixOverlaySignatureHash(hash, cutHover.position);
+
+    const quader_editor_core::MirrorToolState& mirror = runtime.mirror_state();
+    const quader_editor_core::MirrorHoverState& mirrorHover = runtime.mirror_hover();
+    mixOverlaySignatureHash(hash, quader_editor_core::mirror_is_active(mirror));
+    mixOverlaySignatureHash(hash, static_cast<int>(mirror.plane.points.size()));
+    for (const quader::QVec3& point : mirror.plane.points) {
+        mixOverlaySignatureHash(hash, point);
+    }
+    mixOverlaySignatureHash(hash, mirror.plane.face_normal);
+    mixOverlaySignatureHash(hash, mirror.plane.dragging_point_index);
+    mixOverlaySignatureHash(hash, mirror.plane.dragging_new_point);
+    mixOverlaySignatureHash(hash, mirror.plane.dragging_line);
+    mixOverlaySignatureHash(hash, mirror.plane.drag_line_anchor);
+    mixOverlaySignatureHash(hash, static_cast<int>(mirror.target_object_ids.size()));
+    for (const int objectId : mirror.target_object_ids) {
+        mixOverlaySignatureHash(hash, objectId);
+    }
+    mixOverlaySignatureHash(hash, mirror.preview_valid);
+    mixOverlaySignatureHash(hash, mirror.preview_counts.target_count);
+    mixOverlaySignatureHash(hash, mirror.preview_counts.mirrored_count);
+    mixOverlaySignatureHash(hash, mirrorHover.valid);
+    mixOverlaySignatureHash(hash, mirrorHover.object_id);
+    mixOverlaySignatureHash(hash, mirrorHover.position);
+    return hash;
 }
 
 void SelectionOverlayCache::invalidate() const {
@@ -582,24 +694,7 @@ std::optional<RuntimeOperationExecutor::OperationCommand> RuntimeOperationExecut
 
     OperationCommand command;
     command.operation = *entry->runtimeOperation;
-    command.settings = quader_editor_core::SelectionOperationSettings{};
-
-    switch (entry->settingsKind) {
-    case RuntimeOperationSettingsKind::Selection:
-        break;
-    case RuntimeOperationSettingsKind::DuplicateMeshes:
-        command.settings = quader_editor_core::DuplicateMeshesOperationSettings{};
-        break;
-    case RuntimeOperationSettingsKind::Bridge:
-        command.settings = quader_editor_core::BridgeOperationSettings{.steps = interactionSettings.bridgeSteps};
-        break;
-    case RuntimeOperationSettingsKind::BevelVertices:
-        command.settings = quader_editor_core::BevelVerticesOperationSettings{};
-        break;
-    case RuntimeOperationSettingsKind::RecalculateFaceNormals:
-        command.settings = quader_editor_core::RecalculateFaceNormalsOperationSettings{};
-        break;
-    }
+    command.settings = settingsForOperation(*entry->runtimeOperation, interactionSettings);
 
     return command;
 }
@@ -617,78 +712,6 @@ quader_editor_core::EditorOperationCommandResult RuntimeOperationExecutor::execu
         quader_editor_core::EditorSession& session,
         const OperationCommand& operation) {
     return quader_editor_core::execute_command(session, makeCommand(operation));
-}
-
-bool TransformPreviewService::isTransform(ModelingTransformOperation operation) {
-    return operation == ModelingTransformOperation::Transform;
-}
-
-bool TransformPreviewService::hasTransformPreview(const quader_editor_core::EditorSession& session) {
-    const quader_editor_core::PreviewTransactionStatus status = session.preview_transaction_status();
-    return status.active && status.kind == quader_editor_core::PreviewTransactionKind::transform;
-}
-
-ModelingCommandResult TransformPreviewService::finishResult(
-        const quader_editor_core::PreviewTransactionFinishResult& finish,
-        bool cancel) {
-    return {
-            .ok = !finish.before.active || finish.before.kind == quader_editor_core::PreviewTransactionKind::transform,
-            .changed = cancel ? finish.restored : finish.before.changed,
-    };
-}
-
-TransformDragPreviewRouting TransformDragController::previewRouting(
-        bool duplicateSelected,
-        bool objectSelectionMode,
-        bool transformOperation) {
-    const bool duplicateSceneTransformPreview =
-            duplicateSelected &&
-            objectSelectionMode &&
-            transformOperation;
-    TransformDragPreviewRouting routing;
-    routing.previewDriven = !duplicateSceneTransformPreview && (duplicateSelected || !objectSelectionMode);
-    routing.needsRuntimePreviewTransaction = routing.previewDriven || duplicateSelected;
-    routing.sceneTransformPreviewEligible =
-            (duplicateSceneTransformPreview || !routing.previewDriven) && transformOperation;
-    return routing;
-}
-
-void TransformDragController::setPreviewDriven(bool previewDriven, bool duplicateSelected) {
-    previewDriven_ = previewDriven;
-    duplicateSelected_ = duplicateSelected;
-}
-
-void TransformDragController::clear() {
-    previewDriven_ = false;
-    duplicateSelected_ = false;
-}
-
-bool TransformDragController::previewDriven() const {
-    return previewDriven_;
-}
-
-bool TransformDragController::duplicateSelected() const {
-    return duplicateSelected_;
-}
-
-bool ModalToolRuntime::ownsViewport(ModelingViewportTool tool) {
-    switch (tool) {
-    case ModelingViewportTool::Box:
-    case ModelingViewportTool::InsertEdgeLoop:
-    case ModelingViewportTool::Knife:
-    case ModelingViewportTool::Cut:
-    case ModelingViewportTool::Poly:
-    case ModelingViewportTool::Mirror:
-        return true;
-    case ModelingViewportTool::Select:
-    case ModelingViewportTool::Move:
-    case ModelingViewportTool::Extend:
-    case ModelingViewportTool::Extrude:
-    case ModelingViewportTool::Rotate:
-    case ModelingViewportTool::Scale:
-        return false;
-    }
-    return false;
 }
 
 quader_editor_core::EditorRuntimeCommandId ModelingClipboardService::copyCommand() {
@@ -936,6 +959,29 @@ std::vector<ModelingActionItem> ModelingContextActionService::actions(
     return ModelingActionCatalog::actionsFor(summary, effectiveActionQuery(query, modalToolOwnsViewport));
 }
 
+std::optional<ModelingActionItem> ModelingContextActionService::action(
+        const ModelingSelectionSummary& summary,
+        std::string_view actionId,
+        ModelingActionQuery query,
+        bool modalToolOwnsViewport) const {
+    query = effectiveActionQuery(query, modalToolOwnsViewport);
+    if (query.modalToolOwnsViewport) {
+        return std::nullopt;
+    }
+
+    std::optional<ModelingActionItem> item = ModelingActionCatalog::actionFor(summary, actionId);
+    if (!item.has_value()) {
+        return std::nullopt;
+    }
+    if (item->visibility == ModelingActionVisibility::Hidden && !query.includeHidden) {
+        return std::nullopt;
+    }
+    if (item->visibility == ModelingActionVisibility::Disabled && !query.includeDisabled) {
+        return std::nullopt;
+    }
+    return item;
+}
+
 ModelingContextActionResolution ModelingContextActionService::resolveExecutableAction(
         const ModelingSelectionSummary& summary,
         std::string_view actionId,
@@ -952,26 +998,21 @@ ModelingContextActionResolution ModelingContextActionService::resolveExecutableA
     query.includeDisabled = true;
     query.includeHidden = false;
 
-    const std::vector<ModelingActionItem> availableActions = ModelingActionCatalog::actionsFor(summary, query);
-    const auto found = std::find_if(
-            availableActions.begin(),
-            availableActions.end(),
-            [&](const ModelingActionItem& action) {
-                return action.actionId == actionId;
-            });
-    if (found == availableActions.end()) {
+    const std::optional<ModelingActionItem> action = this->action(summary, actionId, query, modalToolOwnsViewport);
+    if (!action.has_value()) {
         resolution.message = "Action is not available in the current mode.";
         return resolution;
     }
-    if (found->visibility != ModelingActionVisibility::Enabled) {
-        resolution.message = found->disabledReason.empty()
+    if (action->visibility != ModelingActionVisibility::Enabled) {
+        resolution.action = *action;
+        resolution.message = action->disabledReason.empty()
                 ? "Action is disabled for the current selection."
-                : found->disabledReason;
+                : action->disabledReason;
         return resolution;
     }
 
     resolution.ok = true;
-    resolution.action = *found;
+    resolution.action = *action;
     return resolution;
 }
 

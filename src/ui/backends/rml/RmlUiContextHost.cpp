@@ -7,7 +7,9 @@
 #include "ui/backends/rml/RmlUiContextHost.h"
 
 #include "core/Logger.h"
+#include "platform/SdlEventUtils.h"
 #include "render/RenderSystem.h"
+#include "ui/components/atoms/UIChromeButtonComponent.h"
 #include "ui/components/organisms/ModelingModeShelfComponent.h"
 
 #include <RmlUi/Core.h>
@@ -254,19 +256,23 @@ public:
 
     void ProcessEvent(Rml::Event& event) override {
         for (Rml::Element* element = event.GetTargetElement(); element != nullptr; element = element->GetParentNode()) {
-            const Rml::String action = element->GetAttribute<Rml::String>("data-chrome-window-action", "");
+            const Rml::String action = element->GetAttribute<Rml::String>(
+                    kChromeWindowActionAttribute.data(),
+                    "");
             if (action.empty()) {
                 continue;
             }
 
-            if (action == "minimize") {
-                pendingAction_ = WindowChromeAction::Minimize;
-            } else if (action == "restore") {
-                pendingAction_ = WindowChromeAction::RestoreOrMaximize;
-            } else if (action == "close") {
-                pendingAction_ = WindowChromeAction::Close;
-            } else {
+            const std::optional<UIChromeButtonKind> kind = chromeButtonKindForActionName(action);
+            if (!kind.has_value()) {
                 return;
+            }
+            if (*kind == UIChromeButtonKind::Minimize) {
+                pendingAction_ = WindowChromeAction::Minimize;
+            } else if (*kind == UIChromeButtonKind::Restore) {
+                pendingAction_ = WindowChromeAction::RestoreOrMaximize;
+            } else if (*kind == UIChromeButtonKind::Close) {
+                pendingAction_ = WindowChromeAction::Close;
             }
 
             event.StopPropagation();
@@ -291,7 +297,9 @@ public:
 
     void ProcessEvent(Rml::Event& event) override {
         for (Rml::Element* element = event.GetTargetElement(); element != nullptr; element = element->GetParentNode()) {
-            const Rml::String command = element->GetAttribute<Rml::String>("data-modeling-mode-shelf-command", "");
+            const Rml::String command = element->GetAttribute<Rml::String>(
+                    kModelingModeShelfCommandAttribute.data(),
+                    "");
             if (!command.empty()) {
                 pendingCommand_ = command;
                 event.StopPropagation();
@@ -299,14 +307,16 @@ public:
             }
 
             const Rml::String overflowToggle =
-                    element->GetAttribute<Rml::String>("data-modeling-mode-shelf-overflow-toggle", "");
+                    element->GetAttribute<Rml::String>(kModelingModeShelfOverflowToggleAttribute.data(), "");
             if (!overflowToggle.empty()) {
                 pendingControl_ = std::string(modelingModeShelfOverflowToggleControlId());
                 event.StopPropagation();
                 return;
             }
 
-            const Rml::String control = element->GetAttribute<Rml::String>("data-modeling-mode-shelf-control", "");
+            const Rml::String control = element->GetAttribute<Rml::String>(
+                    kModelingModeShelfControlAttribute.data(),
+                    "");
             if (!control.empty()) {
                 pendingControl_ = control;
                 event.StopPropagation();
@@ -357,29 +367,6 @@ bool isRmlDebuggerToggleShortcut(const SDL_Event& event) {
     return (mod & SDL_KMOD_CTRL) != 0 &&
             (mod & SDL_KMOD_SHIFT) != 0 &&
             (mod & (SDL_KMOD_ALT | SDL_KMOD_GUI)) == 0;
-}
-
-std::optional<SDL_WindowID> eventWindowId(const SDL_Event& event) {
-    switch (event.type) {
-    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-    case SDL_EVENT_WINDOW_FOCUS_GAINED:
-    case SDL_EVENT_WINDOW_FOCUS_LOST:
-        return event.window.windowID;
-    case SDL_EVENT_KEY_DOWN:
-    case SDL_EVENT_KEY_UP:
-        return event.key.windowID;
-    case SDL_EVENT_MOUSE_MOTION:
-        return event.motion.windowID;
-    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-    case SDL_EVENT_MOUSE_BUTTON_UP:
-        return event.button.windowID;
-    case SDL_EVENT_MOUSE_WHEEL:
-        return event.wheel.windowID;
-    case SDL_EVENT_TEXT_INPUT:
-        return event.text.windowID;
-    default:
-        return std::nullopt;
-    }
 }
 
 bool processRmlContextEventConsumed(
@@ -568,7 +555,7 @@ bool RmlUiContextHost::processEvent(
     if (!context_) {
         return false;
     }
-    const std::optional<SDL_WindowID> targetWindow = eventWindowId(event);
+    const std::optional<SDL_WindowID> targetWindow = sdlEventWindowId(event);
     if (targetWindow && window_ && *targetWindow != SDL_GetWindowID(window_)) {
         return false;
     }
@@ -592,6 +579,27 @@ bool RmlUiContextHost::processEvent(
 
 bool RmlUiContextHost::debuggerVisible() const {
     return rmlDebuggerInitialized_ && Rml::Debugger::IsVisible();
+}
+
+bool RmlUiContextHost::textInputActive() const {
+    if (!context_) {
+        return false;
+    }
+
+    for (Rml::Element* element = context_->GetFocusElement(); element != nullptr; element = element->GetParentNode()) {
+        const Rml::String tagName = element->GetTagName();
+        const std::string_view tag(tagName.data(), tagName.size());
+        if (tag == "input" || tag == "textarea" || tag == "select") {
+            return true;
+        }
+
+        const Rml::String contentEditable = element->GetAttribute<Rml::String>("contenteditable", "");
+        if (contentEditable == "true" || contentEditable == "plaintext-only") {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void RmlUiContextHost::setDensityIndependentPixelRatio(float dpRatio) {

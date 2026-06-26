@@ -8,7 +8,9 @@
 
 #include "ui/components/common/DockLayoutModel.h"
 
+#include <array>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -21,7 +23,7 @@ inline constexpr int kMainLayoutBottomDockDefaultHeightDp = 240;
 inline constexpr int kMainLayoutPanelMinHeightDp = 120;
 inline constexpr int kMainLayoutPanelMaxHeightDp = 900;
 inline constexpr int kMainLayoutBottomSplitPanelMinWidthDp = 120;
-inline constexpr int kMainLayoutViewportMinWidthDp = 160;
+inline constexpr int kMainLayoutViewportMinSizeDp = 120;
 inline constexpr std::string_view kMainLayoutPanelViewport = "viewport";
 inline constexpr std::string_view kMainLayoutPanelOutliner = "outliner";
 inline constexpr std::string_view kMainLayoutPanelInspector = "inspector";
@@ -44,6 +46,27 @@ struct MainLayoutBottomDockModel {
     bool collapsed = false;
 };
 
+/// Describes one stable panel identity and the external names that map to it.
+struct MainLayoutPanelDescriptor {
+    std::string_view id;
+    std::string_view legacySettingsId;
+    std::string_view localeKey;
+    std::string_view fallbackLabel;
+    std::string_view visibilitySettingsKey;
+    std::string_view dockLocationSettingsKey;
+    bool dockable = false;
+};
+
+/// Stores mutable per-panel state keyed by stable panel id.
+struct MainLayoutPanelState {
+    std::string panelId;
+    bool visible = true;
+};
+
+inline constexpr std::size_t kMainLayoutPanelDescriptorCount = 3;
+using MainLayoutPanelDescriptorList =
+        std::array<MainLayoutPanelDescriptor, kMainLayoutPanelDescriptorCount>;
+
 /// Stores the app UI root layout state used by the RmlUi presentation.
 struct MainLayoutModel {
     MainLayoutSidebarSide sidebarSide = MainLayoutSidebarSide::Right;
@@ -51,8 +74,7 @@ struct MainLayoutModel {
     MainLayoutSideDockModel auxiliarySidebar;
     MainLayoutBottomDockModel bottomDock;
     int outlinerHeightDp = kMainLayoutOutlinerDefaultHeightDp;
-    bool outlinerVisible = true;
-    bool inspectorVisible = true;
+    std::vector<MainLayoutPanelState> panelStates;
     DockLayoutModel dockLayout;
 
     [[nodiscard]] static MainLayoutModel defaults();
@@ -78,6 +100,7 @@ struct MainLayoutModel {
 [[nodiscard]] bool mainLayoutBottomDockCollapsed(const MainLayoutModel& model);
 [[nodiscard]] int mainLayoutClampedSidebarWidthDp(int widthDp);
 [[nodiscard]] int mainLayoutClampedOutlinerHeightDp(int heightDp);
+[[nodiscard]] int mainLayoutClampedSidePanelStackHeightDp(int heightDp);
 [[nodiscard]] int mainLayoutClampedBottomDockHeightDp(int heightDp);
 [[nodiscard]] int mainLayoutClampedBottomSplitPanelWidthDp(int widthDp);
 [[nodiscard]] MainLayoutModel normalizedMainLayoutModel(MainLayoutModel model);
@@ -85,6 +108,34 @@ struct MainLayoutModel {
 [[nodiscard]] std::optional<std::string_view> mainLayoutPanelIdFromLegacySettings(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsKnown(std::string_view panelId);
 [[nodiscard]] bool mainLayoutPanelIdIsViewport(std::string_view panelId);
+[[nodiscard]] const MainLayoutPanelDescriptorList& mainLayoutPanelDescriptors();
+[[nodiscard]] std::optional<MainLayoutPanelDescriptor> mainLayoutPanelDescriptor(std::string_view panelId);
+[[nodiscard]] std::optional<std::string_view> mainLayoutPanelIdFromVisibilitySettingsKey(std::string_view key);
+[[nodiscard]] std::optional<std::string_view> mainLayoutPanelIdFromDockLocationSettingsKey(std::string_view key);
 [[nodiscard]] std::vector<std::string_view> mainLayoutDockablePanelIds();
+[[nodiscard]] bool mainLayoutPanelVisible(const MainLayoutModel& model, std::string_view panelId);
+[[nodiscard]] bool mainLayoutSetPanelVisible(MainLayoutModel& model, std::string_view panelId, bool visible);
+[[nodiscard]] bool mainLayoutPanelVisibleInLocation(
+        const MainLayoutModel& model,
+        std::string_view panelId,
+        DockLocation expectedLocation);
+[[nodiscard]] bool mainLayoutPanelVisibleInRenderedDock(const MainLayoutModel& model, std::string_view panelId);
+[[nodiscard]] int mainLayoutVisibleDockPanelCount(const MainLayoutModel& model, DockLocation location);
+[[nodiscard]] std::vector<std::string_view> mainLayoutVisiblePanelsInLocation(
+        const MainLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] std::vector<std::string_view> mainLayoutVisibleTabPanelsInLocation(
+        const MainLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] UITabStripModel mainLayoutVisibleTabStripInLocation(
+        const MainLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] bool mainLayoutSideDockVisibleOnSide(const MainLayoutModel& model, MainLayoutSidebarSide side);
+[[nodiscard]] bool mainLayoutBottomDockVisibleForLocation(const MainLayoutModel& model);
+[[nodiscard]] std::optional<DockLocation> mainLayoutSidePanelStackLocation(const MainLayoutModel& model);
+[[nodiscard]] std::optional<std::string_view> mainLayoutLeadingSidePanelStackPanelId(
+        const MainLayoutModel& model,
+        DockLocation location);
+[[nodiscard]] int mainLayoutSidePanelStackHeightDp(const MainLayoutModel& model, DockLocation location);
 
 } // namespace quader

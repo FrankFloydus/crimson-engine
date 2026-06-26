@@ -5,11 +5,10 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
-#include "scene/document/ProjectSession.h"
 
 int main() {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(session);
+    quader::QuaderStandaloneEditor standalone = quader::createStandaloneEditor();
+    quader::QuaderEditorApi& editor = standalone.editor();
 
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
@@ -21,9 +20,16 @@ int main() {
         return 1;
     }
 
-    editor.object(box.value())
-            .rename("Selected Example Box")
-            .select();
+    quader::QuaderObjectHandle object = editor.object(box.value());
+    const quader::QuaderApiVoidResult renamed = object.rename("Selected Example Box");
+    if (!renamed.ok()) {
+        return 1;
+    }
+    const quader::QuaderApiVoidResult selected = object.select();
+    if (!selected.ok()) {
+        return 1;
+    }
+
     editor.mainViewport().setShadingMode(quader::QuaderShadingMode::Wireframe);
     return 0;
 }

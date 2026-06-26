@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
@@ -171,8 +172,8 @@ class BridgeEdgePairsOperation final : public PolyOperation {
 public:
     BridgeEdgePairsOperation(std::vector<std::pair<Edge, Edge>> edge_pairs, int steps = 1);
 
-    [[nodiscard]] std::string_view id() const override { return "bridge_edge_pairs"; }
-    [[nodiscard]] std::string_view label() const override { return "Bridge Edge Pairs"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::BridgeEdgePairs).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::BridgeEdgePairs).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

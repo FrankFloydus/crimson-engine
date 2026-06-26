@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/viewport/TransformGizmoInteraction.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
 #include "editor/tools/ViewportToolCatalog.h"
@@ -17,16 +18,10 @@
 namespace quader {
 namespace {
 
-bool componentSelectionMode(ModelingSelectionMode mode) {
-    return mode == ModelingSelectionMode::Vertex ||
-            mode == ModelingSelectionMode::Edge ||
-            mode == ModelingSelectionMode::Face;
-}
-
-bool supportsTransformGizmo(ViewportToolId tool) {
-    return tool == ViewportToolId::Move ||
-            tool == ViewportToolId::Rotate ||
-            tool == ViewportToolId::Scale;
+bool componentSelectionMode(QuaderSelectionMode mode) {
+    return mode == QuaderSelectionMode::Vertex ||
+            mode == QuaderSelectionMode::Edge ||
+            mode == QuaderSelectionMode::Face;
 }
 
 quader_editor_core::ViewportInteractionTool runtimeToolFor(ViewportToolId tool) {
@@ -51,26 +46,38 @@ quader_editor_core::ViewportInteractionTool runtimeToolFor(ViewportToolId tool) 
     return quader_editor_core::ViewportInteractionTool::select;
 }
 
-ModelingTransformAxis modelingAxisFor(quader_editor_core::TransformAxis axis) {
+QuaderTransformAxis apiAxisFor(quader_editor_core::TransformAxis axis) {
     switch (axis) {
     case quader_editor_core::TransformAxis::x:
-        return ModelingTransformAxis::X;
+        return QuaderTransformAxis::X;
     case quader_editor_core::TransformAxis::y:
-        return ModelingTransformAxis::Y;
+        return QuaderTransformAxis::Y;
     case quader_editor_core::TransformAxis::z:
-        return ModelingTransformAxis::Z;
+        return QuaderTransformAxis::Z;
     case quader_editor_core::TransformAxis::xy:
-        return ModelingTransformAxis::XY;
+        return QuaderTransformAxis::XY;
     case quader_editor_core::TransformAxis::xz:
-        return ModelingTransformAxis::XZ;
+        return QuaderTransformAxis::XZ;
     case quader_editor_core::TransformAxis::yz:
-        return ModelingTransformAxis::YZ;
+        return QuaderTransformAxis::YZ;
     case quader_editor_core::TransformAxis::all:
-        return ModelingTransformAxis::All;
+        return QuaderTransformAxis::All;
     case quader_editor_core::TransformAxis::none:
-        return ModelingTransformAxis::None;
+        return QuaderTransformAxis::None;
     }
-    return ModelingTransformAxis::None;
+    return QuaderTransformAxis::None;
+}
+
+QuaderTransformTool apiTransformToolFor(ViewportToolId tool) {
+    switch (viewportToolTransformTool(tool)) {
+    case ModelingTransformTool::Move:
+        return QuaderTransformTool::Move;
+    case ModelingTransformTool::Rotate:
+        return QuaderTransformTool::Rotate;
+    case ModelingTransformTool::Scale:
+        return QuaderTransformTool::Scale;
+    }
+    return QuaderTransformTool::Move;
 }
 
 quader_editor_core::TransformGizmoFrameInput makeGizmoInput(
@@ -95,20 +102,20 @@ quader_editor_core::TransformGizmoFrameInput makeGizmoInput(
     return input;
 }
 
-ModelingTransformOperation transformOperationFor(
+QuaderTransformOperation transformOperationFor(
         ViewportToolId tool,
-        ModelingSelectionMode mode,
+        QuaderSelectionMode mode,
         ViewportModifiers modifiers) {
     if (!modifiers.shift || !componentSelectionMode(mode)) {
-        return ModelingTransformOperation::Transform;
+        return QuaderTransformOperation::Transform;
     }
     if (tool == ViewportToolId::Move) {
-        return ModelingTransformOperation::Extrude;
+        return QuaderTransformOperation::Extrude;
     }
     if (tool == ViewportToolId::Scale) {
-        return ModelingTransformOperation::Inset;
+        return QuaderTransformOperation::Inset;
     }
-    return ModelingTransformOperation::Transform;
+    return QuaderTransformOperation::Transform;
 }
 
 } // namespace
@@ -119,9 +126,9 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
     ViewportBeforeToolInteractionResult result;
 
     const ViewportToolId tool = frame.inputRouter.state().activeTool;
-    const ModelingSelectionSummary selection = editor.query().selection();
+    const QuaderSelectionSummary selection = editor.query().selection();
     const std::optional<QVec3> pivot = editor.query().selectionCenter();
-    if (!supportsTransformGizmo(tool) || !selection.hasSelection || !pivot.has_value()) {
+    if (!viewportToolSupportsTransformGizmo(tool) || !selection.hasSelection || !pivot.has_value()) {
         clearFrame();
         if (dragging_) {
             result.gizmoConsumed = cancelActiveDrag(editor);
@@ -154,7 +161,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
     if (dragging_) {
         result.gizmoConsumed = true;
         if (frame.leftReleased || !frame.leftDown) {
-            const QuaderApiResult<ModelingTransformDragPreview> commit = editor.modeling().commitTransformDrag();
+            const QuaderApiResult<QuaderTransformDragPreview> commit = editor.modeling().commitTransformDrag();
             if (!commit.ok) {
                 LOG_ERROR("Transform drag commit failed: {}", commit.message.empty() ? "Commit failed." : commit.message);
             }
@@ -163,14 +170,14 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
         }
 
         const ViewportRay dragRay = frame.camera.rayFromViewportPoint(frame.input.mouseLocal);
-        const QuaderApiResult<ModelingTransformDragPreview> preview =
+        const QuaderApiResult<QuaderTransformDragPreview> preview =
                 editor.modeling().updateTransformDrag({
                         .screenPosition = frame.input.mouseLocal,
                         .ray = {
                                 .origin = dragRay.origin,
                                 .direction = dragRay.direction,
                         },
-                        .camera = ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize),
+                        .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
                         .gridSize = viewportGridWorldSizeForPreset(frame.inputRouter.state().gridPreset),
                         .vertexSnapRadius = frame.settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
                         .precision = frame.input.modifiers.primary,
@@ -193,11 +200,11 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
 
     const ViewportRay startRay = frame.camera.rayFromViewportPoint(frame.leftClickLocal);
     const bool duplicateSelected = !componentSelectionMode(selection.mode) && frame.input.modifiers.shift;
-    const QuaderApiResult<ModelingTransformDragPreview> begin =
+    const QuaderApiResult<QuaderTransformDragPreview> begin =
             editor.modeling().beginTransformDrag({
-                    .tool = viewportToolTransformTool(tool),
+                    .tool = apiTransformToolFor(tool),
                     .operation = transformOperationFor(tool, selection.mode, frame.input.modifiers),
-                    .axis = modelingAxisFor(hit.axis),
+                    .axis = apiAxisFor(hit.axis),
                     .pivot = *pivot,
                     .screenPosition = frame.leftClickLocal,
                     .screenPivot = currentFrame_->info.screen_pivot,
@@ -208,7 +215,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
                             .origin = startRay.origin,
                             .direction = startRay.direction,
                     },
-                    .camera = ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize),
+                    .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
                     .gridSize = viewportGridWorldSizeForPreset(frame.inputRouter.state().gridPreset),
                     .vertexSnapRadius = frame.settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
                     .duplicateSelected = duplicateSelected,

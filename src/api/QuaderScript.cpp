@@ -7,6 +7,8 @@
 #include "api/QuaderScript.h"
 
 #include "api/QuaderApi.h"
+#include "api/QuaderApiMutationRunner.h"
+#include "editor/modeling/services/ModelingSessionService.h"
 
 #include <memory>
 #include <optional>
@@ -15,19 +17,18 @@
 namespace quader {
 namespace {
 
-QuaderApiStatus statusFromResult(const QuaderApiStatus& status) {
-    return status;
+void mergeScriptStepStatus(QuaderScriptResult& result, const QuaderApiStatus& status) {
+    if (status.changed) {
+        result.changed = true;
+    }
+    if (status.mutationKind != QuaderMutationKind::None) {
+        result.mutationKind = status.mutationKind;
+    }
+    result.revisions = status.revisions;
 }
 
-template <typename T>
-QuaderApiStatus statusFromResult(const QuaderApiResult<T>& result) {
-    QuaderApiStatus status;
-    status.ok = result.ok;
-    status.changed = result.changed;
-    status.message = result.message;
-    status.mutationKind = result.mutationKind;
-    status.revisions = result.revisions;
-    return status;
+std::string scriptTransactionLabel(std::string_view label) {
+    return label.empty() ? std::string("Script") : std::string(label);
 }
 
 } // namespace
@@ -36,7 +37,7 @@ QuaderScript::QuaderScript(QuaderApi& api, std::string label)
     : api_(api)
     , label_(std::move(label)) {}
 
-QuaderScript& QuaderScript::createBox(std::string alias, ModelingBounds bounds, std::string name) {
+QuaderScript& QuaderScript::createBox(std::string alias, QuaderBounds bounds, std::string name) {
     const std::string stepLabel = "createBox(" + alias + ")";
     return addStep(stepLabel, [this, alias = std::move(alias), bounds, name = std::move(name)](
                                   QuaderScriptResult& result) mutable {
@@ -44,7 +45,7 @@ QuaderScript& QuaderScript::createBox(std::string alias, ModelingBounds bounds, 
         if (created.ok) {
             result.objects[alias] = created.value;
         }
-        return statusFromResult(created);
+        return quaderApiStatusFromResult(created);
     });
 }
 
@@ -69,7 +70,7 @@ QuaderScript& QuaderScript::createMesh(std::string alias, QuaderPolygonDocument 
                 if (created.ok) {
                     result.objects[alias] = created.value;
                 }
-                return statusFromResult(created);
+                return quaderApiStatusFromResult(created);
             });
 }
 
@@ -80,7 +81,7 @@ QuaderScript& QuaderScript::select(std::string alias) {
         if (found == result.objects.end()) {
             return missingAliasStatus(alias);
         }
-        return statusFromResult(api_.selection().selectObject(found->second));
+        return quaderApiStatusFromResult(api_.selection().selectObject(found->second));
     });
 }
 
@@ -92,7 +93,7 @@ QuaderScript& QuaderScript::selectVertex(std::string alias, QuaderElementId vert
         if (found == result.objects.end()) {
             return missingAliasStatus(alias);
         }
-        return statusFromResult(api_.selection().selectVertex(found->second, vertex));
+        return quaderApiStatusFromResult(api_.selection().selectVertex(found->second, vertex));
     });
 }
 
@@ -104,7 +105,7 @@ QuaderScript& QuaderScript::selectEdge(std::string alias, QuaderElementId a, Qua
         if (found == result.objects.end()) {
             return missingAliasStatus(alias);
         }
-        return statusFromResult(api_.selection().selectEdge(found->second, a, b));
+        return quaderApiStatusFromResult(api_.selection().selectEdge(found->second, a, b));
     });
 }
 
@@ -116,68 +117,80 @@ QuaderScript& QuaderScript::selectFace(std::string alias, QuaderElementId face) 
         if (found == result.objects.end()) {
             return missingAliasStatus(alias);
         }
-        return statusFromResult(api_.selection().selectFace(found->second, face));
+        return quaderApiStatusFromResult(api_.selection().selectFace(found->second, face));
     });
 }
 
 QuaderScript& QuaderScript::clearSelection() {
     return addStep("clearSelection", [this](QuaderScriptResult&) {
-        return statusFromResult(api_.selection().clear());
+        return quaderApiStatusFromResult(api_.selection().clear());
     });
 }
 
-QuaderScript& QuaderScript::setSelectionMode(ModelingSelectionMode mode) {
+QuaderScript& QuaderScript::setSelectionMode(QuaderSelectionMode mode) {
     return addStep("setSelectionMode", [this, mode](QuaderScriptResult&) {
-        return statusFromResult(api_.selection().setMode(mode));
+        return quaderApiStatusFromResult(api_.selection().setMode(mode));
     });
 }
 
 QuaderScript& QuaderScript::moveSelection(QVec3 delta) {
     return addStep("moveSelection", [this, delta](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().moveSelection(delta));
+        return quaderApiStatusFromResult(api_.modeling().moveSelection(delta));
     });
 }
 
 QuaderScript& QuaderScript::rotateSelection(QVec3 eulerRadians, QVec3 pivot) {
     return addStep("rotateSelection", [this, eulerRadians, pivot](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().rotateSelection(eulerRadians, pivot));
+        return quaderApiStatusFromResult(api_.modeling().rotateSelection(eulerRadians, pivot));
     });
 }
 
 QuaderScript& QuaderScript::scaleSelection(QVec3 scale, QVec3 pivot) {
     return addStep("scaleSelection", [this, scale, pivot](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().scaleSelection(scale, pivot));
+        return quaderApiStatusFromResult(api_.modeling().scaleSelection(scale, pivot));
     });
 }
 
 QuaderScript& QuaderScript::executeTool(std::string toolId) {
     return addStep("executeTool(" + toolId + ")", [this, toolId = std::move(toolId)](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().executeTool(toolId));
+        return quaderApiStatusFromResult(api_.modeling().executeTool(toolId));
     });
 }
 
 QuaderScript& QuaderScript::assignMaterialSlot(std::uint32_t materialSlot) {
     return addStep("assignMaterialSlot", [this, materialSlot](QuaderScriptResult&) {
-        return statusFromResult(api_.modeling().assignMaterialSlotToSelection(materialSlot));
+        return quaderApiStatusFromResult(api_.modeling().assignMaterialSlotToSelection(materialSlot));
     });
 }
 
 QuaderScript& QuaderScript::undo() {
     return addStep("undo", [this](QuaderScriptResult&) {
-        return statusFromResult(api_.history().undo());
+        return quaderApiStatusFromResult(api_.history().undo());
     });
 }
 
 QuaderScript& QuaderScript::redo() {
     return addStep("redo", [this](QuaderScriptResult&) {
-        return statusFromResult(api_.history().redo());
+        return quaderApiStatusFromResult(api_.history().redo());
     });
 }
 
 QuaderScriptResult QuaderScript::run() {
     QuaderScriptResult result;
+    QuaderApiMutationRunner& mutations = api_.mutations();
+    ModelingSessionMemento before = mutations.captureModelingMemento();
+    EditorTransaction transaction = mutations.beginTransaction(scriptTransactionLabel(label_));
+    if (!transaction.active()) {
+        result.ok = false;
+        result.changed = false;
+        result.message = "Cannot run script while another editor transaction is active.";
+        result.revisions = api_.revisions();
+        result.finalSnapshot = api_.snapshot();
+        return result;
+    }
+
     for (const Step& step : steps_) {
-        QuaderApiStatus status = step.execute(result);
+        QuaderApiStatus status = quaderApiStatusFromResult(step.execute(result));
         result.steps.push_back({
                 .label = step.label,
                 .status = status,
@@ -185,9 +198,52 @@ QuaderScriptResult QuaderScript::run() {
 
         if (!status.ok) {
             result.ok = false;
+            result.message = status.message;
+            mergeScriptStepStatus(result, status);
             break;
         }
+        mergeScriptStepStatus(result, status);
     }
+
+    if (!result.ok) {
+        const CommandResult canceled = transaction.cancel();
+        const QuaderApiVoidResult restored = mutations.restoreModelingMemento(before, "Rollback Script");
+        result.objects.clear();
+        result.changed = false;
+        result.mutationKind = QuaderMutationKind::None;
+        result.revisions = restored.revisions;
+        if (!canceled.ok || !restored.ok) {
+            if (!result.message.empty()) {
+                result.message += "; ";
+            }
+            result.message += !canceled.ok ? canceled.message : restored.message;
+        }
+        result.finalSnapshot = api_.snapshot();
+        return result;
+    }
+
+    ModelingSessionMemento after = mutations.captureModelingMemento();
+    const CommandResult discarded = transaction.discard();
+    if (!discarded.ok) {
+        result.ok = false;
+        result.changed = false;
+        result.mutationKind = QuaderMutationKind::None;
+        result.message = discarded.message;
+        result.revisions = api_.revisions();
+        result.finalSnapshot = api_.snapshot();
+        return result;
+    }
+
+    if (result.changed) {
+        const QuaderApiVoidResult recorded = mutations.recordModelingMementoTransaction(
+                scriptTransactionLabel(label_),
+                std::move(before),
+                std::move(after));
+        copyQuaderApiStatus(result, recorded);
+    } else {
+        result.revisions = api_.revisions();
+    }
+
     result.finalSnapshot = api_.snapshot();
     return result;
 }

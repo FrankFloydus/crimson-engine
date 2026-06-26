@@ -12,6 +12,7 @@
 #include <math/vec4.h>
 
 #include <cstdint>
+#include <string_view>
 
 namespace quader {
 namespace {
@@ -48,20 +49,34 @@ RenderSystem::~RenderSystem() {
 }
 
 bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& executableDir, RenderConfig config) {
+    shutdown();
     LOG_INFO("Initializing Filament renderer with {} backend", toString(config.backend));
+    const auto fail = [&](std::string_view message) {
+        LOG_ERROR("{}", message);
+        shutdown();
+        return false;
+    };
 
     engine_ = filament::Engine::create(toFilamentBackend(config.backend));
     if (!engine_) {
-        LOG_ERROR("Unable to create Filament engine");
-        return false;
+        return fail("Unable to create Filament engine");
     }
     LOG_INFO("Filament engine created");
 
     swapChain_ = engine_->createSwapChain(nativeWindow);
+    if (!swapChain_) {
+        return fail("Unable to create Filament swapchain");
+    }
     LOG_INFO("Filament swapchain created for native window {}", nativeWindow);
     renderer_ = engine_->createRenderer();
+    if (!renderer_) {
+        return fail("Unable to create Filament renderer");
+    }
     LOG_INFO("Filament renderer created");
     scene_ = engine_->createScene();
+    if (!scene_) {
+        return fail("Unable to create Filament scene");
+    }
     LOG_INFO("Filament scene created");
     const EnvironmentDocument& environment = config.settings.environment;
     filament::Renderer::ClearOptions clear;
@@ -71,7 +86,7 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     renderer_->setClearOptions(clear);
 
     if (!materialLibrary_.initialize(*engine_, executableDir)) {
-        return false;
+        return fail("Unable to initialize Filament material library");
     }
 
     return true;
@@ -106,7 +121,7 @@ void RenderSystem::shutdown() {
 }
 
 bool RenderSystem::beginFrame() {
-    return renderer_->beginFrame(swapChain_);
+    return renderer_ != nullptr && swapChain_ != nullptr && renderer_->beginFrame(swapChain_);
 }
 
 bool RenderSystem::beginFrame(filament::SwapChain* swapChain) {
@@ -114,7 +129,9 @@ bool RenderSystem::beginFrame(filament::SwapChain* swapChain) {
 }
 
 void RenderSystem::endFrame() {
-    renderer_->endFrame();
+    if (renderer_) {
+        renderer_->endFrame();
+    }
 }
 
 filament::SwapChain* RenderSystem::createAdditionalSwapChain(

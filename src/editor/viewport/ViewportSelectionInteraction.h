@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/QuaderApiTypes.h"
 #include "editor/modeling/ModelingTypes.h"
 #include "editor/viewport/ViewportInteractionFrame.h"
 
@@ -31,7 +32,7 @@ public:
 private:
     bool paintSelectionActive_ = false;
     bool hoverClearIssued_ = false;
-    std::optional<ModelingHoverTarget> hoverSuppressedTarget_;
+    std::optional<QuaderHoverTarget> hoverSuppressedTarget_;
 };
 
 } // namespace quader

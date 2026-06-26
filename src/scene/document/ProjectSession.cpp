@@ -51,6 +51,25 @@ bool ProjectSession::dirty() const {
     return !(contentRevisionStamp() == cleanStamp_);
 }
 
+ProjectAssetMutationResult ProjectSession::replaceStandaloneMesh(AssetId mesh, MeshAsset replacement) {
+    if (mesh == InvalidAssetId) {
+        return {.ok = false, .changed = false, .message = "Mesh asset is invalid"};
+    }
+    for (const EntityId entity : scene().entities()) {
+        const MeshComponent* meshComponent = scene().mesh(entity);
+        if (meshComponent == nullptr || meshComponent->mesh != mesh) {
+            continue;
+        }
+        if (scene().modelingObject(entity) != nullptr) {
+            return {.ok = false, .changed = false, .message = "Mesh asset is owned by a modeling object"};
+        }
+    }
+    if (!assets().replaceMesh(mesh, std::move(replacement))) {
+        return {.ok = false, .changed = false, .message = "Mesh asset does not exist"};
+    }
+    return {.ok = true, .changed = true, .message = "Mesh replaced"};
+}
+
 void ProjectSession::markClean() {
     cleanStamp_ = contentRevisionStamp();
 }

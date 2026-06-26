@@ -5,16 +5,24 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderRenderApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderQueryApi.h"
-#include "scene/document/ProjectSession.h"
+#include "editor/render/QuaderRenderApiRuntimeAccess.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "render/SceneRenderBridge.h"
+#include "scene/document/ProjectSession.h"
 
 #include <utility>
 
 namespace quader {
 namespace {
+
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
+}
+
 
 bool viewportOverlayFrameVisible(const ViewportOverlayFrame& frame) {
     return !frame.lines.empty() || !frame.triangles.empty() || !frame.points.empty();
@@ -28,17 +36,18 @@ void appendOverlayFrame(ViewportOverlayFrame& frame, const ViewportOverlayFrame&
 
 } // namespace
 
-QuaderRenderApi::QuaderRenderApi(ProjectSession& session, QuaderQueryApi& query)
+QuaderRenderApi::QuaderRenderApi(QuaderApiSession session, QuaderQueryApi& query)
     : session_(session)
     , query_(query) {}
 
-QuaderApiVoidResult QuaderRenderApi::syncScene(SceneRenderBridge& bridge) {
-    bridge.sync(session_.scene(), session_.assets());
-    return runtimeStatus("Render scene synchronized.");
+QuaderApiVoidResult QuaderRenderApiRuntimeAccess::syncScene(QuaderRenderApi& api, SceneRenderBridge& bridge) {
+    bridge.sync(projectSession(api.session_).scene(), projectSession(api.session_).assets());
+    return api.runtimeStatus("Render scene synchronized.");
 }
 
-QuaderApiVoidResult QuaderRenderApi::syncToolPreviews(SceneRenderBridge& bridge) {
-    std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = toolPreviewMeshes();
+QuaderApiVoidResult QuaderRenderApiRuntimeAccess::syncToolPreviews(QuaderRenderApi& api, SceneRenderBridge& bridge) {
+    std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes =
+            projectSession(api.session_).modeling().toolPreviewMeshes();
     std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
     renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
     for (ModelingToolPreviewMesh& previewMesh : modelingPreviewMeshes) {
@@ -50,56 +59,51 @@ QuaderApiVoidResult QuaderRenderApi::syncToolPreviews(SceneRenderBridge& bridge)
         });
     }
 
-    bridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), session_.assets());
-    return runtimeStatus("Render tool previews synchronized.");
+    bridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), projectSession(api.session_).assets());
+    return api.runtimeStatus("Render tool previews synchronized.");
 }
 
-QuaderApiResult<QuaderRenderOverlaySubmission> QuaderRenderApi::syncSelectionOverlay(
+QuaderApiResult<QuaderRenderOverlaySubmission> QuaderRenderApiRuntimeAccess::syncSelectionOverlay(
+        QuaderRenderApi& api,
         SceneRenderBridge& bridge,
         std::size_t viewportIndex,
         std::uint8_t layerMask,
         ViewportOverlayCamera camera,
         const ViewportOverlayFrame* toolOverlayFrame) {
-    ViewportOverlayFrame frame = selectionOverlayFrame();
+    ViewportOverlayFrame frame = projectSession(api.session_).modeling().selectionOverlayFrame();
     if (toolOverlayFrame != nullptr) {
         appendOverlayFrame(frame, *toolOverlayFrame);
     }
     const bool visible = viewportOverlayFrameVisible(frame);
     bridge.setOverlayFrame(viewportIndex, layerMask, std::move(frame), camera);
 
-    QuaderApiVoidResult status = runtimeStatus("Render selection overlay synchronized.");
-    QuaderApiResult<QuaderRenderOverlaySubmission> result;
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = std::move(status.message);
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
-    result.value = QuaderRenderOverlaySubmission{.visible = visible};
-    return result;
+    const QuaderApiVoidResult status = api.runtimeStatus("Render selection overlay synchronized.");
+    return quaderApiResultFromStatus(status, QuaderRenderOverlaySubmission{.visible = visible});
 }
 
-QuaderApiVoidResult QuaderRenderApi::setSelectionOverlay(
+QuaderApiVoidResult QuaderRenderApiRuntimeAccess::setSelectionOverlay(
+        QuaderRenderApi& api,
         SceneRenderBridge& bridge,
         std::size_t viewportIndex,
         std::uint8_t layerMask,
         ViewportOverlayCamera camera) {
     const QuaderApiResult<QuaderRenderOverlaySubmission> result =
-            syncSelectionOverlay(bridge, viewportIndex, layerMask, camera);
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = result.message,
-            .mutationKind = result.mutationKind,
-            .revisions = result.revisions,
-    };
+            syncSelectionOverlay(api, bridge, viewportIndex, layerMask, camera);
+    return quaderApiStatusFromResult(result);
 }
 
-ViewportOverlayFrame QuaderRenderApi::selectionOverlayFrame() const {
+QuaderOverlayFrame QuaderRenderApi::selectionOverlayFrame() const {
     return query_.selectionOverlay();
 }
 
-std::vector<ModelingToolPreviewMesh> QuaderRenderApi::toolPreviewMeshes() const {
-    return session_.modeling().toolPreviewMeshes();
+std::vector<QuaderToolPreviewMesh> QuaderRenderApi::toolPreviewMeshes() const {
+    const std::vector<ModelingToolPreviewMesh> previews = projectSession(session_).modeling().toolPreviewMeshes();
+    std::vector<QuaderToolPreviewMesh> result;
+    result.reserve(previews.size());
+    for (const ModelingToolPreviewMesh& preview : previews) {
+        result.push_back(toApiToolPreviewMesh(preview));
+    }
+    return result;
 }
 
 QuaderApiVoidResult QuaderRenderApi::runtimeStatus(std::string message) const {

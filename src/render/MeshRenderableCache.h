@@ -26,6 +26,11 @@ class MeshRenderableCache {
 public:
     using MeshProxy = MeshRenderableProxy;
 
+    MeshRenderableCache() = default;
+    MeshRenderableCache(const MeshRenderableCache&) = delete;
+    MeshRenderableCache& operator=(const MeshRenderableCache&) = delete;
+    MeshRenderableCache(MeshRenderableCache&&) = delete;
+    MeshRenderableCache& operator=(MeshRenderableCache&&) = delete;
     ~MeshRenderableCache();
 
     void initialize(MeshRenderableFactory& factory);
@@ -48,7 +53,7 @@ public:
             AssetId meshId,
             const MeshAsset& mesh,
             AssetId materialId,
-            const MaterialDocument* material,
+            const MaterialComponent* material,
             const AssetRegistry& assets,
             const QMat4& worldTransform,
             bool castShadows,

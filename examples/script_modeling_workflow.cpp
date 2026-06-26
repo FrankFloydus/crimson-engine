@@ -5,13 +5,12 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderEditorApi.h"
-#include "scene/document/ProjectSession.h"
 
 int main() {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(session);
+    quader::QuaderStandaloneEditor standalone = quader::createStandaloneEditor();
+    quader::QuaderEditorApi& editor = standalone.editor();
 
-    const quader::ModelingBounds bounds{
+    const quader::QuaderBounds bounds{
             .min = {-1.0f, -1.0f, -1.0f},
             .max = {1.0f, 1.0f, 1.0f},
     };
@@ -22,7 +21,7 @@ int main() {
             .moveSelection({2.0f, 0.0f, 0.0f})
             .run();
 
-    if (!result.ok) {
+    if (!result.ok()) {
         return 1;
     }
 

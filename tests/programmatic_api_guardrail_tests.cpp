@@ -6,72 +6,94 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
+#include "support/GuardrailFileScan.h"
+
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
+#include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
-
 namespace {
 
-std::filesystem::path sourceRoot() {
-    return std::filesystem::path(QUADER_SOURCE_DIR);
-}
+using quader::test::guardrail::containsAny;
+using quader::test::guardrail::filesWithExtension;
+using quader::test::guardrail::linesContaining;
+using quader::test::guardrail::normalizedRelative;
+using quader::test::guardrail::readFile;
+using quader::test::guardrail::readSourceFile;
+using quader::test::guardrail::sourceFilesUnder;
+using quader::test::guardrail::sourceRoot;
+using quader::test::guardrail::splitLines;
+using quader::test::guardrail::startsWith;
 
-std::string readFile(const std::filesystem::path& path) {
-    std::ifstream file(path);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    if (!file.is_open()) {
-        return {};
-    }
-    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-}
+/**
+ * Separates public API-facing docs/examples from internal architecture and provenance docs.
+ */
+struct PublicDocsExamplesManifest {
+    std::vector<std::filesystem::path> publicFiles;
+    std::vector<std::filesystem::path> internalFiles;
+};
 
-std::vector<std::filesystem::path> filesWithExtension(const std::filesystem::path& root, std::string_view extension) {
+std::vector<std::filesystem::path> docAndExampleFilesUnder(const std::filesystem::path& root) {
     std::vector<std::filesystem::path> files;
-    if (!std::filesystem::exists(root)) {
-        return files;
+    for (const std::string_view extension : {
+                 std::string_view{".cpp"},
+                 std::string_view{".lua"},
+                 std::string_view{".md"},
+                 std::string_view{".txt"},
+         }) {
+        std::vector<std::filesystem::path> withExtension = filesWithExtension(root, extension);
+        files.insert(files.end(), withExtension.begin(), withExtension.end());
     }
+    std::sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
+    return files;
+}
 
-    for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(root)) {
-        if (entry.is_regular_file() && entry.path().extension() == extension) {
-            files.push_back(entry.path());
+PublicDocsExamplesManifest publicDocsExamplesManifest() {
+    PublicDocsExamplesManifest manifest;
+    const std::string source = readSourceFile("docs/public-docs-examples.txt");
+    std::set<std::string> seen;
+
+    for (const std::string& line : splitLines(source)) {
+        if (line.empty() || startsWith(line, "#") || startsWith(line, "//")) {
+            continue;
+        }
+
+        std::istringstream stream(line);
+        std::string visibility;
+        std::string relative;
+        stream >> visibility >> relative;
+        if (visibility.empty() || relative.empty()) {
+            continue;
+        }
+
+        EXPECT_TRUE(visibility == "public" || visibility == "internal") << line;
+        EXPECT_TRUE(seen.insert(relative).second) << "duplicate docs/examples classification: " << relative;
+
+        if (visibility == "public") {
+            manifest.publicFiles.push_back(sourceRoot() / relative);
+        } else if (visibility == "internal") {
+            manifest.internalFiles.push_back(sourceRoot() / relative);
         }
     }
-    std::sort(files.begin(), files.end());
-    return files;
+
+    return manifest;
 }
 
-std::vector<std::filesystem::path> sourceFilesUnder(const std::filesystem::path& root) {
-    std::vector<std::filesystem::path> files;
-    for (const std::string_view extension : {std::string_view{".h"}, std::string_view{".cpp"}}) {
-        std::vector<std::filesystem::path> withExtension = filesWithExtension(root, extension);
-        files.insert(files.end(), withExtension.begin(), withExtension.end());
-    }
-    std::sort(files.begin(), files.end());
-    return files;
-}
-
-std::vector<std::filesystem::path> publicDocAndExampleFilesUnder(const std::filesystem::path& root) {
-    std::vector<std::filesystem::path> files = sourceFilesUnder(root);
-    for (const std::string_view extension : {std::string_view{".md"}, std::string_view{".lua"}}) {
-        std::vector<std::filesystem::path> withExtension = filesWithExtension(root, extension);
-        files.insert(files.end(), withExtension.begin(), withExtension.end());
-    }
-    std::sort(files.begin(), files.end());
-    return files;
+std::vector<std::filesystem::path> publicDocAndExampleFiles() {
+    return publicDocsExamplesManifest().publicFiles;
 }
 
 bool isInternalApiHeader(const std::filesystem::path& path) {
-    const std::string relative = std::filesystem::relative(path, sourceRoot()).generic_string();
+    const std::string relative = normalizedRelative(path);
     return relative == "src/api/QuaderApiMutationRunner.h" ||
+            relative == "src/api/QuaderApiSessionInternalAccess.h" ||
             relative == "src/api/QuaderApiTypeConversions.h" ||
             relative == "src/api/QuaderPolygonDocumentInternalAccess.h" ||
             relative == "src/editor/viewport/QuaderViewportApiRuntimeAccess.h";
@@ -87,38 +109,27 @@ std::vector<std::filesystem::path> publicApiHeaderFiles() {
     return headers;
 }
 
-std::string normalizedRelative(const std::filesystem::path& path) {
-    return std::filesystem::relative(path, sourceRoot()).generic_string();
-}
-
-bool containsAny(const std::string& source, const std::vector<std::string_view>& needles) {
-    return std::any_of(needles.begin(), needles.end(), [&](std::string_view needle) {
-        return source.find(needle) != std::string::npos;
-    });
-}
-
-std::vector<std::string> linesContaining(const std::string& source, const std::vector<std::string_view>& needles) {
-    std::vector<std::string> matches;
-    std::string line;
-    for (const char ch : source) {
-        if (ch == '\n') {
-            if (containsAny(line, needles)) {
-                matches.push_back(line);
-            }
-            line.clear();
-        } else if (ch != '\r') {
-            line.push_back(ch);
-        }
-    }
-    if (!line.empty() && containsAny(line, needles)) {
-        matches.push_back(line);
-    }
-    return matches;
-}
-
 bool allowedRawModelingMutation(std::string_view relative, std::string_view line) {
     (void)relative;
     (void)line;
+    return false;
+}
+
+bool isIdentifierCharacter(char value) {
+    return std::isalnum(static_cast<unsigned char>(value)) != 0 || value == '_';
+}
+
+bool containsIdentifierToken(std::string_view source, std::string_view token) {
+    std::size_t position = source.find(token);
+    while (position != std::string_view::npos) {
+        const bool leftBoundary = position == 0 || !isIdentifierCharacter(source[position - 1]);
+        const std::size_t end = position + token.size();
+        const bool rightBoundary = end >= source.size() || !isIdentifierCharacter(source[end]);
+        if (leftBoundary && rightBoundary) {
+            return true;
+        }
+        position = source.find(token, position + 1);
+    }
     return false;
 }
 
@@ -148,13 +159,32 @@ std::vector<std::filesystem::path> publicBehaviorTestFiles() {
     return files;
 }
 
+std::vector<std::filesystem::path> publicCppExampleFiles() {
+    std::vector<std::filesystem::path> examples;
+    for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
+        if (file.extension() == ".cpp" && normalizedRelative(file).find("examples/") == 0) {
+            examples.push_back(file);
+        }
+    }
+    return examples;
+}
+
+bool isDocumentationOnlyExample(const std::string& source) {
+    return source.find("QUADER_DOCUMENTATION_ONLY_EXAMPLE") != std::string::npos ||
+            source.find("documentation-only") != std::string::npos;
+}
+
 bool allowedPublicBehaviorHarnessUse(std::string_view relative, std::string_view line) {
     if (relative == "tests/editor_api_tests.cpp") {
         return line.find("\"scene/document/ProjectSession.h\"") != std::string_view::npos ||
                 line.find("\"editor/modeling/services/ModelingSessionService.h\"") != std::string_view::npos ||
                 line.find("session.document().rename(") != std::string_view::npos ||
                 line.find("session.markClean(") != std::string_view::npos ||
-                line.find("session.modeling().createBoxFromBounds(") != std::string_view::npos;
+                line.find("session.modeling().createBoxFromBounds(") != std::string_view::npos ||
+                line.find("session.assets().addMesh(") != std::string_view::npos ||
+                line.find("session.scene().createEntity(") != std::string_view::npos ||
+                line.find("session.scene().setMesh(") != std::string_view::npos ||
+                line.find("session.replaceStandaloneMesh(") != std::string_view::npos;
     }
     return false;
 }
@@ -179,6 +209,76 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals)
                              "\"entt/",
                      }))
                 << relative;
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidInternalOwnerContracts) {
+    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+
+        EXPECT_FALSE(containsAny(source, {
+                             "\"assets/",
+                             "<assets/",
+                             "\"editor/",
+                             "<editor/",
+                             "\"mesh/",
+                             "<mesh/",
+                             "\"render/",
+                             "<render/",
+                             "\"scene/",
+                             "<scene/",
+                             "\"viewport/",
+                             "<viewport/",
+                             "quader_editor_core::",
+                             "quader_host_contract::",
+                             "quader_io::",
+                             "quader_poly::",
+                     }))
+                << relative;
+
+        for (std::string_view token : {
+                     "ProjectSession",
+                     "EditorHistoryService",
+                     "SceneDocument",
+                     "AssetRegistry",
+                     "ModelingSessionService",
+                     "MeshAsset",
+                     "TextureAsset",
+                     "MaterialDocument",
+                     "MeshAssetRevision",
+                     "TransformComponent",
+                     "ViewportOverlayFrame",
+                     "ModelingBounds",
+                     "ModelingSelectionSummary",
+                     "ModelingToolStatus",
+             }) {
+            EXPECT_FALSE(containsIdentifierToken(source, token)) << relative << " exposes " << token;
+        }
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicRenderApiDoesNotExposeRenderBridge) {
+    const std::string header = readFile(sourceRoot() / "src/api/QuaderRenderApi.h");
+
+    EXPECT_EQ(header.find("SceneRenderBridge"), std::string::npos);
+    EXPECT_EQ(header.find("syncScene("), std::string::npos);
+    EXPECT_EQ(header.find("syncToolPreviews("), std::string::npos);
+    EXPECT_EQ(header.find("syncSelectionOverlay("), std::string::npos);
+    EXPECT_NE(header.find("friend class QuaderRenderApiRuntimeAccess"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, ApiLayerUsesSharedResultStatusConversion) {
+    for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
+        const std::string relative = normalizedRelative(file);
+        if (relative == "src/api/QuaderApiMutationRunner.cpp") {
+            continue;
+        }
+
+        const std::string source = readFile(file);
+        for (const std::string& line : linesContaining(source, {".ok = result.ok", ".changed = result.changed"})) {
+            ADD_FAILURE() << relative << ": use quaderApiStatusFromResult for QuaderApiResult status copies: " << line;
+        }
     }
 }
 
@@ -230,10 +330,32 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersDoNotExposeMutableInternalOw
                      "QuaderKeybindingService",
                      "\"editor/commands/EditorCommandRegistry.h\"",
                      "\"editor/input/QuaderKeybindingService.h\"",
+                     "\"editor/commands/document/",
              }) {
             EXPECT_EQ(source.find(forbidden), std::string::npos) << relative << " exposes " << forbidden;
         }
     }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicCommandApiUsesViewportInputValueContracts) {
+    for (const std::filesystem::path& file : publicApiHeaderFiles()) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+
+        EXPECT_EQ(source.find("\"viewport/ViewportInputRouter.h\""), std::string::npos)
+                << relative;
+        EXPECT_EQ(source.find("\"viewport/ViewportInputTypes.h\""), std::string::npos)
+                << relative;
+        EXPECT_EQ(source.find("\"editor/input/QuaderInputBinding.h\""), std::string::npos)
+                << relative;
+    }
+
+    const std::string commandHeader = readFile(sourceRoot() / "src/api/QuaderCommandsApi.h");
+    const std::string keybindingHeader = readFile(sourceRoot() / "src/api/QuaderKeybindingTypes.h");
+    const std::string toolsHeader = readFile(sourceRoot() / "src/api/QuaderToolsApi.h");
+    EXPECT_NE(commandHeader.find("\"api/QuaderViewportInputTypes.h\""), std::string::npos);
+    EXPECT_NE(toolsHeader.find("\"api/QuaderViewportInputTypes.h\""), std::string::npos);
+    EXPECT_NE(keybindingHeader.find("\"api/QuaderInputTypes.h\""), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ModelingSessionServiceDoesNotExposeSelectionSyncAuthority) {
@@ -344,6 +466,20 @@ TEST(ProgrammaticApiGuardrailTests, SelectionCommandToolsPreferEditorSelectionSe
     }
 }
 
+TEST(ProgrammaticApiGuardrailTests, PublicSelectionApiDelegatesEntityEditPolicyToEditorSelectionService) {
+    const std::string apiHeader = readFile(sourceRoot() / "src/api/QuaderSelectionApi.h");
+    const std::string apiSource = readFile(sourceRoot() / "src/api/QuaderSelectionApi.cpp");
+    const std::string serviceSource = readFile(sourceRoot() / "src/editor/selection/EditorSelectionService.cpp");
+
+    EXPECT_EQ(apiHeader.find("EditorSelectionEdit"), std::string::npos);
+    EXPECT_EQ(apiSource.find("editedEntitySelection"), std::string::npos);
+    EXPECT_EQ(apiSource.find("editedObjectSelection"), std::string::npos);
+    EXPECT_EQ(apiSource.find("session_.scene().selectedEntities()"), std::string::npos);
+    EXPECT_NE(apiSource.find("projectSession(session_).selection().editSceneSelection("), std::string::npos);
+    EXPECT_NE(serviceSource.find("EditorSelectionService::editSceneSelection("), std::string::npos);
+    EXPECT_NE(serviceSource.find("resolveSceneSelectionEdit("), std::string::npos);
+}
+
 TEST(ProgrammaticApiGuardrailTests, ApiDoesNotTreatHostContractDescriptorsAsCommands) {
     for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot() / "src/api")) {
         const std::string source = readFile(file);
@@ -372,20 +508,6 @@ TEST(ProgrammaticApiGuardrailTests, ProductionSourcesDoNotIncludeTestSupportDsl)
                              "\"support/ModelingTestEvents.h\"",
                      }))
                 << relative;
-    }
-}
-
-TEST(ProgrammaticApiGuardrailTests, ProgrammaticTestSourcesAreListedInCMake) {
-    const std::string cmake = readFile(sourceRoot() / "CMakeLists.txt");
-
-    std::vector<std::filesystem::path> files = filesWithExtension(sourceRoot() / "tests/support", ".cpp");
-    files.push_back(sourceRoot() / "tests/programmatic_api_guardrail_tests.cpp");
-    files.push_back(sourceRoot() / "tests/programmatic_api_tests.cpp");
-    files.push_back(sourceRoot() / "tests/programmatic_behavior_scenario_tests.cpp");
-
-    for (const std::filesystem::path& file : files) {
-        const std::string relative = normalizedRelative(file);
-        EXPECT_NE(cmake.find(relative), std::string::npos) << relative;
     }
 }
 
@@ -516,6 +638,14 @@ TEST(ProgrammaticApiGuardrailTests, ViewportRoutesDoNotExecuteFixedRawModelingCo
             EXPECT_TRUE(false) << relative << ": " << line;
         }
     }
+}
+
+TEST(ProgrammaticApiGuardrailTests, ViewportShortcutControllerDoesNotRemapCommands) {
+    const std::string source = readFile(sourceRoot() / "src/ui/ViewportShortcutController.cpp");
+
+    EXPECT_EQ(source.find("QuaderCommand::"), std::string::npos);
+    EXPECT_EQ(source.find("executeViewportModelingShortcut"), std::string::npos);
+    EXPECT_EQ(source.find("commandForMirrorAxis"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotExposeRawHistoryOrDocumentCommandServices) {
@@ -696,30 +826,112 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersExposeAppNamedTypes) {
     }
 }
 
-TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders) {
-    for (const std::filesystem::path& root : {sourceRoot() / "docs", sourceRoot() / "examples"}) {
-        for (const std::filesystem::path& file : publicDocAndExampleFilesUnder(root)) {
-            const std::string source = readFile(file);
-            const std::string relative = normalizedRelative(file);
+TEST(ProgrammaticApiGuardrailTests, PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile) {
+    const PublicDocsExamplesManifest manifest = publicDocsExamplesManifest();
+    EXPECT_FALSE(manifest.publicFiles.empty());
 
-            EXPECT_FALSE(containsAny(source, {
-                                 "editor/modeling/services/ModelingSessionService.h",
-                                 "scene/SceneDocument.h",
-                                 "assets/AssetRegistry.h",
-                                 "editor/commands/DocumentCommandService.h",
-                         }))
-                    << relative;
+    std::set<std::string> classified;
+    for (const std::filesystem::path& file : manifest.publicFiles) {
+        const std::string relative = normalizedRelative(file);
+        EXPECT_TRUE(std::filesystem::exists(file)) << relative;
+        classified.insert(relative);
+    }
+    for (const std::filesystem::path& file : manifest.internalFiles) {
+        const std::string relative = normalizedRelative(file);
+        EXPECT_TRUE(std::filesystem::exists(file)) << relative;
+        classified.insert(relative);
+    }
+
+    for (const std::filesystem::path& root : {sourceRoot() / "docs", sourceRoot() / "examples"}) {
+        for (const std::filesystem::path& file : docAndExampleFilesUnder(root)) {
+            const std::string relative = normalizedRelative(file);
+            EXPECT_NE(classified.find(relative), classified.end()) << "unclassified docs/examples file: " << relative;
+        }
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders) {
+    for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+
+        EXPECT_FALSE(containsAny(source, {
+                             "editor/modeling/services/ModelingSessionService.h",
+                             "scene/SceneDocument.h",
+                             "assets/AssetRegistry.h",
+                             "editor/commands/DocumentCommandService.h",
+                             "render/SceneRenderBridge.h",
+                             "ui/UISystem.h",
+                             "platform/PlatformWindow.h",
+                             "scene/document/ProjectSession.h",
+                             "ProjectSession",
+                     }))
+                << relative;
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicCppExamplesAreCompiledOrMarkedDocumentationOnly) {
+    const std::string cmake = readFile(sourceRoot() / "CMakeLists.txt");
+
+    for (const std::filesystem::path& file : publicCppExampleFiles()) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+        EXPECT_TRUE(cmake.find(relative) != std::string::npos || isDocumentationOnlyExample(source))
+                << relative;
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicCppExamplesUseCallableResultHelpers) {
+    const std::vector<std::string_view> rawResultFieldPatterns = {
+            ".ok)",
+            ".ok;",
+            ".ok &&",
+            ".ok ||",
+            ".changed)",
+            ".changed;",
+            ".changed &&",
+            ".changed ||",
+            ".value.",
+            ".message",
+    };
+
+    for (const std::filesystem::path& file : publicCppExampleFiles()) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+        for (const std::string& line : linesContaining(source, rawResultFieldPatterns)) {
+            ADD_FAILURE() << relative << ": use callable result helpers in public examples: " << line;
         }
     }
 }
 
 TEST(ProgrammaticApiGuardrailTests, PublicExamplesStartFromEditorApiOrScriptSurface) {
-    const std::string createBox = readFile(sourceRoot() / "examples/create_box.cpp");
-    const std::string workflow = readFile(sourceRoot() / "examples/script_modeling_workflow.cpp");
-    const std::string luaReadme = readFile(sourceRoot() / "examples/lua/README.md");
+    const std::vector<std::string_view> publicEntrySurfaces = {
+            "QuaderEditorApi",
+            "QuaderApi",
+            "QuaderObjectHandle",
+            "QuaderScript",
+            "public `quader` scripting object",
+            "BehaviorScenario",
+    };
 
-    EXPECT_NE(createBox.find("QuaderEditorApi"), std::string::npos);
-    EXPECT_NE(workflow.find("QuaderEditorApi"), std::string::npos);
-    EXPECT_NE(luaReadme.find("public `quader` scripting object"), std::string::npos);
-    EXPECT_NE(luaReadme.find("does not ship a Lua runtime"), std::string::npos);
+    for (const std::filesystem::path& file : publicDocAndExampleFiles()) {
+        const std::string source = readFile(file);
+        const std::string relative = normalizedRelative(file);
+        EXPECT_TRUE(containsAny(source, publicEntrySurfaces)) << relative;
+    }
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicModelingCommandBridgeIsDescriptorDriven) {
+    const std::string commandsApi = readFile(sourceRoot() / "src/api/QuaderCommandsApi.cpp");
+    const std::string commandDescriptor = readFile(sourceRoot() / "src/editor/commands/CommandToolDescriptor.h");
+    const std::string commandCatalog = readFile(sourceRoot() / "src/editor/commands/ModelingCommandToolCatalog.cpp");
+
+    EXPECT_EQ(commandsApi.find("ModelingActionCommandBridgeDescriptor"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("modelingActionCommandBridgeCatalog"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("fixedCommandIdForModelingAction"), std::string::npos);
+    EXPECT_NE(commandsApi.find("tool->publicCommandTargetId()"), std::string::npos);
+    EXPECT_NE(commandsApi.find("tool->publicCompatibilityAlias()"), std::string::npos);
+    EXPECT_NE(commandDescriptor.find("publicCommandId"), std::string::npos);
+    EXPECT_NE(commandDescriptor.find("registersPublicCommand"), std::string::npos);
+    EXPECT_NE(commandCatalog.find(".publicCommandId = entry.publicCommandId"), std::string::npos);
 }

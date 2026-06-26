@@ -9,9 +9,11 @@
 #include "assets/AssetRevision.h"
 #include "core/Types.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <optional>
+#include <vector>
 #include <unordered_map>
 #include <utility>
 
@@ -24,6 +26,9 @@ template <typename Document, typename Revision>
 class TypedAssetStore {
 public:
     AssetId add(AssetId id, Document document) {
+        if (documents_.contains(id)) {
+            return InvalidAssetId;
+        }
         stamp(id, document);
         documents_[id] = std::move(document);
         return id;
@@ -49,14 +54,24 @@ public:
         return true;
     }
 
-    Document* get(AssetId id) {
+    const Document* get(AssetId id) const {
         auto existing = documents_.find(id);
         return existing == documents_.end() ? nullptr : &existing->second;
     }
 
-    const Document* get(AssetId id) const {
-        auto existing = documents_.find(id);
-        return existing == documents_.end() ? nullptr : &existing->second;
+    bool contains(AssetId id) const {
+        return documents_.find(id) != documents_.end();
+    }
+
+    std::vector<AssetId> ids() const {
+        std::vector<AssetId> result;
+        result.reserve(documents_.size());
+        for (const auto& [id, document] : documents_) {
+            (void)document;
+            result.push_back(id);
+        }
+        std::sort(result.begin(), result.end());
+        return result;
     }
 
     Revision revision(AssetId id) const {

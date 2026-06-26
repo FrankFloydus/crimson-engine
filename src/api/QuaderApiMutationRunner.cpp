@@ -46,6 +46,37 @@ QuaderRevisionStamp QuaderApiMutationRunner::currentRevisions() const {
     };
 }
 
+EditorTransaction QuaderApiMutationRunner::beginTransaction(std::string label) {
+    return history_.beginTransaction(std::move(label));
+}
+
+ModelingSessionMemento QuaderApiMutationRunner::captureModelingMemento() const {
+    return session_.modeling().captureHistoryMemento();
+}
+
+QuaderApiVoidResult QuaderApiMutationRunner::restoreModelingMemento(
+        const ModelingSessionMemento& memento,
+        std::string_view label) {
+    return statusFrom(session_.modeling().restoreHistoryMemento(memento), QuaderMutationKind::Modeling, label);
+}
+
+QuaderApiVoidResult QuaderApiMutationRunner::recordModelingMementoTransaction(
+        std::string label,
+        ModelingSessionMemento before,
+        ModelingSessionMemento after) {
+    if (label.empty()) {
+        label = "Script";
+    }
+    return statusFrom(
+            history_.recordExecuted(std::make_unique<RecordedModelingMementoCommand>(
+                    session_.modeling(),
+                    std::move(label),
+                    std::move(before),
+                    std::move(after))),
+            QuaderMutationKind::Modeling,
+            "Record Script Transaction");
+}
+
 QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const QuaderCreateEntityArgs& args) {
     DocumentCreateEntityResult command = session_.documentCommands().createEntity(
             args.name,
@@ -54,13 +85,8 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const Qua
             toSceneTransform(args.transform));
     const EntityId createdEntity = command.entity;
 
-    QuaderApiResult<QuaderEntityRef> result;
     const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Entity");
-    result.ok = status.ok;
-    result.changed = status.changed;
-    result.message = status.message;
-    result.mutationKind = status.mutationKind;
-    result.revisions = status.revisions;
+    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
     if (result.ok && result.changed) {
         result.value = QuaderEntityRef{
                 .id = createdEntity,
@@ -100,6 +126,13 @@ QuaderApiVoidResult QuaderApiMutationRunner::runModelingUndoableCommand(
         std::unique_ptr<IUndoableCommand> command,
         std::string_view label) {
     return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Modeling, label);
+}
+
+bool QuaderApiMutationRunner::canRunTrackedModelingTool(std::string_view toolId) const {
+    return modelingCommands_.availability(
+            session_.modeling(),
+            toolId,
+            &session_.selection()).enabled;
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingTool(std::string_view toolId) {

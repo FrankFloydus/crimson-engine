@@ -6,67 +6,111 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/controllers/ModelingModeShelfController.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderEditorApi.h"
 #include "core/LocalizationService.h"
+#include "editor/metadata/host_contract.h"
 
 #include <algorithm>
-#include <array>
 #include <span>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
-
-/**
- * Describes one selection mode tab exposed by the modeling shelf.
- */
-struct ModelingModeShelfModeDescriptor {
-    std::string_view controlId;
-    ModelingSelectionMode selectionMode = ModelingSelectionMode::Object;
-    std::string_view labelKey;
-    std::string_view fallbackLabel;
-    UIIconId icon = UIIconId::Mesh;
-};
-
-std::span<const ModelingModeShelfModeDescriptor> modelingModeShelfModeDescriptors() {
-    static constexpr std::array descriptors{
-            ModelingModeShelfModeDescriptor{
-                    .controlId = "vertex",
-                    .selectionMode = ModelingSelectionMode::Vertex,
-                    .labelKey = "ui.modeling_shelf.tab.vertex",
-                    .fallbackLabel = "Vertices",
-                    .icon = UIIconId::VertexSelection,
-            },
-            ModelingModeShelfModeDescriptor{
-                    .controlId = "edge",
-                    .selectionMode = ModelingSelectionMode::Edge,
-                    .labelKey = "ui.modeling_shelf.tab.edge",
-                    .fallbackLabel = "Edges",
-                    .icon = UIIconId::EdgeSelection,
-            },
-            ModelingModeShelfModeDescriptor{
-                    .controlId = "face",
-                    .selectionMode = ModelingSelectionMode::Face,
-                    .labelKey = "ui.modeling_shelf.tab.face",
-                    .fallbackLabel = "Faces",
-                    .icon = UIIconId::FaceSelection,
-            },
-            ModelingModeShelfModeDescriptor{
-                    .controlId = "object",
-                    .selectionMode = ModelingSelectionMode::Object,
-                    .labelKey = "ui.modeling_shelf.tab.object",
-                    .fallbackLabel = "Mesh",
-                    .icon = UIIconId::MeshSelection,
-            },
-    };
-    return descriptors;
-}
 
 std::string modelingActionLabelKey(std::string_view actionId) {
     std::string key("modeling.action.");
     key.append(actionId);
     key.append(".label");
     return key;
+}
+
+std::optional<ModelingSelectionMode> modelingSelectionModeFromHostSelectionMode(
+        quader_host_contract::HostSelectionMode mode) {
+    using quader_host_contract::HostSelectionMode;
+    switch (mode) {
+    case HostSelectionMode::object:
+        return ModelingSelectionMode::Object;
+    case HostSelectionMode::vertex:
+        return ModelingSelectionMode::Vertex;
+    case HostSelectionMode::edge:
+        return ModelingSelectionMode::Edge;
+    case HostSelectionMode::face:
+        return ModelingSelectionMode::Face;
+    case HostSelectionMode::group:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::string_view shelfControlIdForHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
+    using quader_host_contract::HostSelectionMode;
+    switch (mode) {
+    case HostSelectionMode::object:
+        return "object";
+    case HostSelectionMode::vertex:
+        return "vertex";
+    case HostSelectionMode::edge:
+        return "edge";
+    case HostSelectionMode::face:
+        return "face";
+    case HostSelectionMode::group:
+        return {};
+    }
+    return {};
+}
+
+std::string_view shelfLabelKeyForHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
+    using quader_host_contract::HostSelectionMode;
+    switch (mode) {
+    case HostSelectionMode::object:
+        return "ui.modeling_shelf.tab.object";
+    case HostSelectionMode::vertex:
+        return "ui.modeling_shelf.tab.vertex";
+    case HostSelectionMode::edge:
+        return "ui.modeling_shelf.tab.edge";
+    case HostSelectionMode::face:
+        return "ui.modeling_shelf.tab.face";
+    case HostSelectionMode::group:
+        return {};
+    }
+    return {};
+}
+
+std::string_view shelfFallbackLabelForHostSelectionMode(
+        const quader_host_contract::HostOperationPanelDescriptor& panel) {
+    using quader_host_contract::HostSelectionMode;
+    switch (panel.selection_mode) {
+    case HostSelectionMode::object:
+        return "Mesh";
+    case HostSelectionMode::vertex:
+        return "Vertices";
+    case HostSelectionMode::edge:
+        return "Edges";
+    case HostSelectionMode::face:
+        return "Faces";
+    case HostSelectionMode::group:
+        return panel.label;
+    }
+    return panel.label;
+}
+
+UIIconId shelfIconForHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
+    using quader_host_contract::HostSelectionMode;
+    switch (mode) {
+    case HostSelectionMode::object:
+        return UIIconId::MeshSelection;
+    case HostSelectionMode::vertex:
+        return UIIconId::VertexSelection;
+    case HostSelectionMode::edge:
+        return UIIconId::EdgeSelection;
+    case HostSelectionMode::face:
+        return UIIconId::FaceSelection;
+    case HostSelectionMode::group:
+        return UIIconId::Mesh;
+    }
+    return UIIconId::Mesh;
 }
 
 bool stringListsEqual(const std::vector<std::string>& lhs, const std::vector<std::string>& rhs) {
@@ -105,32 +149,118 @@ bool selectionSummariesEqual(const ModelingSelectionSummary& lhs, const Modeling
             lhs.selectionRevision == rhs.selectionRevision;
 }
 
-ModelingModeShelfControl controlFromDescriptor(
-        const ModelingModeShelfModeDescriptor& descriptor,
+ModelingActiveSelectionKind toModelingActiveSelectionKind(QuaderActiveSelectionKind kind) {
+    switch (kind) {
+    case QuaderActiveSelectionKind::Object:
+        return ModelingActiveSelectionKind::Object;
+    case QuaderActiveSelectionKind::Vertex:
+        return ModelingActiveSelectionKind::Vertex;
+    case QuaderActiveSelectionKind::Edge:
+        return ModelingActiveSelectionKind::Edge;
+    case QuaderActiveSelectionKind::Face:
+        return ModelingActiveSelectionKind::Face;
+    case QuaderActiveSelectionKind::Light:
+        return ModelingActiveSelectionKind::Light;
+    case QuaderActiveSelectionKind::None:
+        return ModelingActiveSelectionKind::None;
+    }
+    return ModelingActiveSelectionKind::None;
+}
+
+ModelingSelectionSummary toModelingSelectionSummary(const QuaderSelectionSummary& summary) {
+    return {
+            .mode = toModelingSelectionMode(summary.mode),
+            .hasSelection = summary.hasSelection,
+            .activeKind = toModelingActiveSelectionKind(summary.activeKind),
+            .activeObjectId = summary.activeObjectId,
+            .activeVertexId = summary.activeVertexId,
+            .activeEdgeA = summary.activeEdgeA,
+            .activeEdgeB = summary.activeEdgeB,
+            .activeFaceId = summary.activeFaceId,
+            .selectedObjectCount = summary.selectedObjectCount,
+            .selectedVertexCount = summary.selectedVertexCount,
+            .selectedEdgeCount = summary.selectedEdgeCount,
+            .selectedFaceCount = summary.selectedFaceCount,
+            .contentRevision = summary.contentRevision,
+            .selectionRevision = summary.selectionRevision,
+    };
+}
+
+std::optional<ModelingModeShelfControl> controlFromOperationPanel(
+        const quader_host_contract::HostOperationPanelDescriptor& panel,
         const LocalizationService& localization) {
+    if (!modelingSelectionModeFromHostSelectionMode(panel.selection_mode)) {
+        return std::nullopt;
+    }
+    const std::string_view controlId = shelfControlIdForHostSelectionMode(panel.selection_mode);
+    if (controlId.empty()) {
+        return std::nullopt;
+    }
     return ModelingModeShelfControl{
-            .id = std::string(descriptor.controlId),
-            .label = localization.text(descriptor.labelKey, descriptor.fallbackLabel),
-            .icon = descriptor.icon,
+            .id = std::string(controlId),
+            .label = localization.text(
+                    shelfLabelKeyForHostSelectionMode(panel.selection_mode),
+                    shelfFallbackLabelForHostSelectionMode(panel)),
+            .icon = shelfIconForHostSelectionMode(panel.selection_mode),
             .labelVisibility = ModelingModeShelfControlLabelVisibility::Hidden,
             .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
     };
 }
 
-std::string commandIdForAction(const QuaderEditorApi& editor, const ModelingActionItem& action) {
-    if (action.kind == ModelingActionKind::Tool && !action.toolId.empty()) {
+std::vector<const quader_host_contract::HostOperationPanelDescriptor*> operationPanelsForModelingShelf() {
+    std::vector<const quader_host_contract::HostUiPlacementDescriptor*> placements;
+    for (const quader_host_contract::HostUiPlacementDescriptor& placement :
+            quader_host_contract::ui_placement_catalog()) {
+        if (placement.surface_id == std::string_view("operations_top_bar") &&
+                placement.target_kind == quader_host_contract::HostUiPlacementTargetKind::panel) {
+            placements.push_back(&placement);
+        }
+    }
+    std::stable_sort(placements.begin(), placements.end(), [](const auto* lhs, const auto* rhs) {
+        return lhs->order < rhs->order;
+    });
+
+    std::vector<const quader_host_contract::HostOperationPanelDescriptor*> panels;
+    panels.reserve(placements.size());
+    for (const quader_host_contract::HostUiPlacementDescriptor* placement : placements) {
+        if (const quader_host_contract::HostOperationPanelDescriptor* panel =
+                    quader_host_contract::find_operation_panel_descriptor(placement->target_id)) {
+            panels.push_back(panel);
+        }
+    }
+    return panels;
+}
+
+std::string commandIdForAction(const QuaderEditorApi& editor, const QuaderActionItem& action) {
+    if (action.kind == QuaderActionKind::Tool && !action.toolId.empty()) {
         return editor.commands().commandIdForToolActivation(action.toolId);
     }
     return editor.commands().commandIdForModelingAction(action.actionId);
 }
 
+std::string localizedDisabledReason(
+        const LocalizationService& localization,
+        const QuaderActionItem& action) {
+    if (action.disabledReasonKey.empty()) {
+        return action.disabledReason;
+    }
+    if (action.disabledReasonCount != 0U) {
+        const std::string count = std::to_string(action.disabledReasonCount);
+        return localization.format(
+                action.disabledReasonKey,
+                action.disabledReasonKey,
+                {{"count", count}});
+    }
+    return localization.text(action.disabledReasonKey, action.disabledReasonKey);
+}
+
 ModelingModeShelfCommand commandFromAction(
         const QuaderEditorApi& editor,
         const LocalizationService& localization,
-        const ModelingActionItem& action,
+        const QuaderActionItem& action,
         bool modalToolOwnsViewport) {
     const std::string commandId = commandIdForAction(editor, action);
-    const bool actionDisabled = action.visibility != ModelingActionVisibility::Enabled;
+    const bool actionDisabled = action.visibility != QuaderActionVisibility::Enabled;
     const bool disabled = actionDisabled || modalToolOwnsViewport;
     return ModelingModeShelfCommand{
             .id = action.actionId,
@@ -138,7 +268,7 @@ ModelingModeShelfCommand commandFromAction(
             .commandId = commandId,
             .label = localization.text(modelingActionLabelKey(action.actionId), action.label),
             .secondaryText = editor.commands().shortcutFor(commandId),
-            .disabledReason = actionDisabled ? action.disabledReason : modalToolOwnsViewport
+            .disabledReason = actionDisabled ? localizedDisabledReason(localization, action) : modalToolOwnsViewport
                     ? localization.text(
                             "ui.modeling_shelf.command.disabled.modal_tool",
                             "Finish active tool before running this command.")
@@ -150,20 +280,20 @@ ModelingModeShelfCommand commandFromAction(
 std::vector<ModelingModeShelfCommand> commandsFromEditor(
         const QuaderEditorApi& editor,
         const LocalizationService& localization) {
-    ModelingActionQuery query{
-            .surface = ModelingActionSurface::OperationsPanel,
+    QuaderActionQuery query{
+            .surface = QuaderActionSurface::OperationsPanel,
             .suppressWhenModalToolOwnsViewport = false,
             .includeDisabled = true,
             .includeHidden = false,
     };
     const bool modalToolOwnsViewport = editor.query().toolStatus().modalToolOwnsViewport;
 
-    const ModelingActionSet actionSet = editor.modeling().availableActionSet(query);
+    const QuaderActionSet actionSet = editor.modeling().availableActionSet(query);
     const auto activePanel = std::find_if(
             actionSet.panels.begin(),
             actionSet.panels.end(),
-            [](const ModelingActionPanel& panel) {
-                return panel.visibility == ModelingActionVisibility::Enabled;
+            [](const QuaderActionPanel& panel) {
+                return panel.visibility == QuaderActionVisibility::Enabled;
             });
     if (activePanel == actionSet.panels.end()) {
         return {};
@@ -171,8 +301,8 @@ std::vector<ModelingModeShelfCommand> commandsFromEditor(
 
     std::vector<ModelingModeShelfCommand> activeStripCommands;
     activeStripCommands.reserve(activePanel->actions.size());
-    for (const ModelingActionItem& action : activePanel->actions) {
-        if (action.visibility == ModelingActionVisibility::Hidden) {
+    for (const QuaderActionItem& action : activePanel->actions) {
+        if (action.visibility == QuaderActionVisibility::Hidden) {
             continue;
         }
         activeStripCommands.push_back(commandFromAction(editor, localization, action, modalToolOwnsViewport));
@@ -199,7 +329,7 @@ ModelingModeShelfState ModelingModeShelfController::buildState(
 bool ModelingModeShelfController::syncEditorState(
         const QuaderEditorApi& editor,
         const LocalizationService& localization) {
-    bool changed = syncSelectionSummary(editor.modeling().selectionSummary());
+    bool changed = syncSelectionSummary(toModelingSelectionSummary(editor.modeling().selectionSummary()));
     std::vector<ModelingModeShelfCommand> commands = commandsFromEditor(editor, localization);
     if (!commandsEqual(activeStripCommands_, commands)) {
         activeStripCommands_ = std::move(commands);
@@ -211,19 +341,24 @@ bool ModelingModeShelfController::syncEditorState(
 std::vector<ModelingModeShelfControl> ModelingModeShelfController::controls(
         const LocalizationService& localization) const {
     std::vector<ModelingModeShelfControl> result;
-    const std::span<const ModelingModeShelfModeDescriptor> descriptors = modelingModeShelfModeDescriptors();
-    result.reserve(descriptors.size());
-    for (const ModelingModeShelfModeDescriptor& descriptor : descriptors) {
-        result.push_back(controlFromDescriptor(descriptor, localization));
+    const std::vector<const quader_host_contract::HostOperationPanelDescriptor*> panels =
+            operationPanelsForModelingShelf();
+    result.reserve(panels.size());
+    for (const quader_host_contract::HostOperationPanelDescriptor* panel : panels) {
+        if (std::optional<ModelingModeShelfControl> control = controlFromOperationPanel(*panel, localization)) {
+            result.push_back(std::move(*control));
+        }
     }
     return result;
 }
 
 std::optional<std::string_view> ModelingModeShelfController::controlIdForSelectionMode(
         ModelingSelectionMode mode) const {
-    for (const ModelingModeShelfModeDescriptor& descriptor : modelingModeShelfModeDescriptors()) {
-        if (descriptor.selectionMode == mode) {
-            return descriptor.controlId;
+    for (const quader_host_contract::HostOperationPanelDescriptor* panel : operationPanelsForModelingShelf()) {
+        if (const std::optional<ModelingSelectionMode> panelMode =
+                    modelingSelectionModeFromHostSelectionMode(panel->selection_mode);
+                panelMode && *panelMode == mode) {
+            return shelfControlIdForHostSelectionMode(panel->selection_mode);
         }
     }
     return std::nullopt;
@@ -231,9 +366,9 @@ std::optional<std::string_view> ModelingModeShelfController::controlIdForSelecti
 
 std::optional<ModelingSelectionMode> ModelingModeShelfController::selectionModeForControlId(
         std::string_view controlId) const {
-    for (const ModelingModeShelfModeDescriptor& descriptor : modelingModeShelfModeDescriptors()) {
-        if (descriptor.controlId == controlId) {
-            return descriptor.selectionMode;
+    for (const quader_host_contract::HostOperationPanelDescriptor* panel : operationPanelsForModelingShelf()) {
+        if (shelfControlIdForHostSelectionMode(panel->selection_mode) == controlId) {
+            return modelingSelectionModeFromHostSelectionMode(panel->selection_mode);
         }
     }
     return std::nullopt;

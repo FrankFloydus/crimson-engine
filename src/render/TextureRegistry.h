@@ -29,6 +29,12 @@ enum class TextureSampleColorSpace {
  */
 class TextureRegistry {
 public:
+    TextureRegistry() = default;
+    TextureRegistry(const TextureRegistry&) = delete;
+    TextureRegistry& operator=(const TextureRegistry&) = delete;
+    TextureRegistry(TextureRegistry&&) = delete;
+    TextureRegistry& operator=(TextureRegistry&&) = delete;
+
     RenderTextureHandle registerTexture(filament::Texture* texture, TextureSampleColorSpace sampleColorSpace = TextureSampleColorSpace::DisplaySrgb);
     void updateTexture(RenderTextureHandle id,
             filament::Texture* texture,

@@ -23,6 +23,9 @@ public:
                 .kind = CommandToolKind::Instant,
                 .previewKind = ModelingActionPreviewKind::None,
                 .rebuildsMeshOnSuccess = true,
+                .publicCommandId = "edit.apply_material",
+                .registersPublicCommand = false,
+                .publicCompatibilityAlias = "modeling.assign_material",
         };
     }
 

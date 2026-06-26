@@ -13,6 +13,7 @@
 #include "scene/SceneDocument.h"
 #include "scene/SceneEntityNaming.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -29,7 +30,14 @@ std::unordered_map<std::uint32_t, AssetId> materialSlotsForLiveModelingNodes(
         const ModelingObjectRuntimeMap& objectMap,
         std::optional<AssetId>& firstModelingMaterial) {
     std::unordered_map<std::uint32_t, AssetId> materialBySlot;
-    for (const auto& [modelingObjectId, entity] : objectMap.entitiesByObject()) {
+    std::vector<std::pair<int, EntityId>> entitiesByObject(
+            objectMap.entitiesByObject().begin(),
+            objectMap.entitiesByObject().end());
+    std::sort(entitiesByObject.begin(), entitiesByObject.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first < rhs.first;
+    });
+
+    for (const auto& [modelingObjectId, entity] : entitiesByObject) {
         (void)modelingObjectId;
         if (!scene.exists(entity)) {
             continue;
@@ -39,12 +47,51 @@ std::unordered_map<std::uint32_t, AssetId> materialSlotsForLiveModelingNodes(
         if (modelingObject == nullptr || material == nullptr || material->material == InvalidAssetId) {
             continue;
         }
-        materialBySlot.try_emplace(modelingObject->materialSlot, material->material);
         if (!firstModelingMaterial) {
             firstModelingMaterial = material->material;
         }
+        materialBySlot.try_emplace(modelingObject->materialSlot, material->material);
     }
     return materialBySlot;
+}
+
+std::optional<MaterialComponent> materialComponentForModelingSlot(
+        std::uint32_t materialSlot,
+        const std::unordered_map<std::uint32_t, AssetId>& materialBySlot,
+        std::optional<AssetId> firstModelingMaterial,
+        const MaterialComponent* existingMaterial) {
+    AssetId primaryMaterial = InvalidAssetId;
+    if (existingMaterial != nullptr && existingMaterial->material != InvalidAssetId) {
+        primaryMaterial = existingMaterial->material;
+    } else if (const auto material = materialBySlot.find(materialSlot); material != materialBySlot.end()) {
+        primaryMaterial = material->second;
+    } else if (firstModelingMaterial.has_value()) {
+        primaryMaterial = *firstModelingMaterial;
+    }
+    if (primaryMaterial == InvalidAssetId) {
+        return std::nullopt;
+    }
+    return MaterialComponent{
+            .material = primaryMaterial,
+            .materialSlots = materialBySlot,
+    };
+}
+
+void syncMaterialSlotBindings(
+        SceneDocument& scene,
+        EntityId entity,
+        std::uint32_t materialSlot,
+        const std::unordered_map<std::uint32_t, AssetId>& materialBySlot,
+        std::optional<AssetId> firstModelingMaterial) {
+    const MaterialComponent* currentMaterial = scene.material(entity);
+    const std::optional<MaterialComponent> nextMaterial =
+            materialComponentForModelingSlot(materialSlot, materialBySlot, firstModelingMaterial, currentMaterial);
+    if (!nextMaterial.has_value()) {
+        return;
+    }
+    if (currentMaterial == nullptr || *currentMaterial != *nextMaterial) {
+        scene.setMaterial(entity, *nextMaterial);
+    }
 }
 
 void applyDurableSceneIdentityToEntity(
@@ -72,8 +119,10 @@ void reconcileModelingObjectSceneNodes(
     std::unordered_set<int> liveObjects;
     for (const quader_editor_core::PolygonObject& object : session.objects()) {
         liveObjects.insert(object.id);
+        const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
         const auto existing = objectMap.entitiesByObject().find(object.id);
         if (existing != objectMap.entitiesByObject().end() && scene.exists(existing->second)) {
+            syncMaterialSlotBindings(scene, existing->second, materialSlot, materialBySlot, firstModelingMaterial);
             continue;
         }
 
@@ -89,7 +138,6 @@ void reconcileModelingObjectSceneNodes(
             continue;
         }
 
-        const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
         scene.setModelingObject(entity, ModelingObjectComponent{
                 .objectId = object.id,
                 .materialSlot = materialSlot,
@@ -97,13 +145,11 @@ void reconcileModelingObjectSceneNodes(
         if (identity.has_value()) {
             applyDurableSceneIdentityToEntity(scene, entity, *identity);
         }
-        const auto material = materialBySlot.find(materialSlot);
-        if (material != materialBySlot.end()) {
-            scene.setMaterial(entity, MaterialComponent{.material = material->second});
-        } else if (identity.has_value() && identity->material.has_value()) {
-            scene.setMaterial(entity, *identity->material);
-        } else if (firstModelingMaterial) {
-            scene.setMaterial(entity, MaterialComponent{.material = *firstModelingMaterial});
+        const MaterialComponent* identityMaterial =
+                identity.has_value() && identity->material.has_value() ? &*identity->material : nullptr;
+        if (const std::optional<MaterialComponent> material =
+                    materialComponentForModelingSlot(materialSlot, materialBySlot, firstModelingMaterial, identityMaterial)) {
+            scene.setMaterial(entity, *material);
         }
 
         objectMap.bind(object.id, entity);

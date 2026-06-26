@@ -5,42 +5,31 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/QuaderHistoryApi.h"
+#include "api/QuaderApiSessionInternalAccess.h"
 
 #include "api/QuaderApiMutationRunner.h"
 #include "editor/history/EditorHistoryService.h"
-
-#include <string>
-#include <string_view>
-#include <utility>
+#include "scene/document/ProjectSession.h"
 
 namespace quader {
 namespace {
 
-QuaderApiVoidResult historyStatusFrom(
-        CommandResult result,
-        const QuaderApiMutationRunner& mutations,
-        std::string_view fallbackMessage) {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = result.message.empty() ? std::string(fallbackMessage) : std::move(result.message),
-            .mutationKind = result.ok && result.changed ? QuaderMutationKind::Document : QuaderMutationKind::None,
-            .revisions = mutations.currentRevisions(),
-    };
+ProjectSession& projectSession(QuaderApiSession session) {
+    return QuaderApiSessionInternalAccess::projectSession(session);
 }
 
 } // namespace
 
-QuaderHistoryApi::QuaderHistoryApi(EditorHistoryService& history, QuaderApiMutationRunner& mutations)
-    : history_(history)
+QuaderHistoryApi::QuaderHistoryApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
+    : session_(session)
     , mutations_(mutations) {}
 
 QuaderApiVoidResult QuaderHistoryApi::undo() {
-    return historyStatusFrom(history_.undo(), mutations_, "Undo");
+    return mutations_.undo();
 }
 
 QuaderApiVoidResult QuaderHistoryApi::redo() {
-    return historyStatusFrom(history_.redo(), mutations_, "Redo");
+    return mutations_.redo();
 }
 
 QuaderApiVoidResult QuaderHistoryApi::repeatLastAction() {
@@ -48,21 +37,21 @@ QuaderApiVoidResult QuaderHistoryApi::repeatLastAction() {
 }
 
 bool QuaderHistoryApi::canUndo() const {
-    return history_.canUndo();
+    return projectSession(session_).history().canUndo();
 }
 
 bool QuaderHistoryApi::canRedo() const {
-    return history_.canRedo();
+    return projectSession(session_).history().canRedo();
 }
 
 QuaderHistorySnapshot QuaderHistoryApi::snapshot() const {
     QuaderHistorySnapshot result;
     result.canUndo = canUndo();
     result.canRedo = canRedo();
-    if (const std::string* label = history_.undoLabel()) {
+    if (const std::string* label = projectSession(session_).history().undoLabel()) {
         result.undoLabel = *label;
     }
-    if (const std::string* label = history_.redoLabel()) {
+    if (const std::string* label = projectSession(session_).history().redoLabel()) {
         result.redoLabel = *label;
     }
     return result;

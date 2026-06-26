@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/viewport/ViewportSelectionInteraction.h"
 
+#include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
 #include "editor/modeling/services/SelectionModeAdapter.h"
@@ -17,38 +18,38 @@
 namespace quader {
 namespace {
 
-bool componentSelectionMode(ModelingSelectionMode mode) {
-    return mode == ModelingSelectionMode::Vertex ||
-            mode == ModelingSelectionMode::Edge ||
-            mode == ModelingSelectionMode::Face;
+bool componentSelectionMode(QuaderSelectionMode mode) {
+    return mode == QuaderSelectionMode::Vertex ||
+            mode == QuaderSelectionMode::Edge ||
+            mode == QuaderSelectionMode::Face;
 }
 
-bool hoverTargetValid(const ModelingHoverTarget& target) {
-    return target.kind != ModelingActiveSelectionKind::None && target.objectId > 0;
+bool hoverTargetValid(const QuaderHoverTarget& target) {
+    return target.kind != QuaderActiveSelectionKind::None && target.objectId > 0;
 }
 
-bool hoverTargetsMatch(const ModelingHoverTarget& left, const ModelingHoverTarget& right) {
+bool hoverTargetsMatch(const QuaderHoverTarget& left, const QuaderHoverTarget& right) {
     if (left.kind != right.kind || left.objectId != right.objectId) {
         return false;
     }
     switch (left.kind) {
-    case ModelingActiveSelectionKind::Object:
+    case QuaderActiveSelectionKind::Object:
         return true;
-    case ModelingActiveSelectionKind::Vertex:
+    case QuaderActiveSelectionKind::Vertex:
         return left.vertexId == right.vertexId;
-    case ModelingActiveSelectionKind::Edge:
+    case QuaderActiveSelectionKind::Edge:
         return (left.edgeA == right.edgeA && left.edgeB == right.edgeB) ||
                 (left.edgeA == right.edgeB && left.edgeB == right.edgeA);
-    case ModelingActiveSelectionKind::Face:
+    case QuaderActiveSelectionKind::Face:
         return left.faceId == right.faceId;
-    case ModelingActiveSelectionKind::None:
-    case ModelingActiveSelectionKind::Light:
+    case QuaderActiveSelectionKind::None:
+    case QuaderActiveSelectionKind::Light:
         break;
     }
     return false;
 }
 
-ModelingPickSelectRequest makePickSelectRequest(
+QuaderPickSelectRequest makePickSelectRequest(
         const ViewportCameraController& camera,
         const ViewportSettings& settings,
         QVec2 localMouse,
@@ -74,7 +75,7 @@ ModelingPickSelectRequest makePickSelectRequest(
     };
 }
 
-ModelingHoverRequest makeHoverRequest(
+QuaderHoverRequest makeHoverRequest(
         const ViewportCameraController& camera,
         const ViewportSettings& settings,
         QVec2 localMouse,
@@ -91,7 +92,7 @@ ModelingHoverRequest makeHoverRequest(
     };
 }
 
-ModelingSelectionSummary pickSelection(
+QuaderSelectionSummary pickSelection(
         QuaderEditorApi& editor,
         ViewportInputRouter& inputRouter,
         const ViewportInteractionFrame& frame,
@@ -99,7 +100,7 @@ ModelingSelectionSummary pickSelection(
         int clickCount,
         bool preserveSelectionOnMiss = false,
         bool preserveSelectionOnSelectedHit = false) {
-    const QuaderApiResult<ModelingSelectionSummary> result =
+    const QuaderApiResult<QuaderSelectionSummary> result =
             editor.selection().pickSelect(makePickSelectRequest(
                     frame.camera,
                     frame.settings,
@@ -111,8 +112,8 @@ ModelingSelectionSummary pickSelection(
     if (!result.ok) {
         LOG_ERROR("Viewport selection failed: {}", result.message.empty() ? "Selection failed." : result.message);
     }
-    const ModelingSelectionSummary summary = result.ok ? result.value() : editor.selection().summary();
-    inputRouter.setSelectionMode(appSelectionModeToViewport(summary.mode));
+    const QuaderSelectionSummary summary = result.ok ? result.value() : editor.selection().summary();
+    inputRouter.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(summary.mode)));
     return summary;
 }
 
@@ -154,11 +155,11 @@ void ViewportSelectionInteraction::handleFrame(
         hoverClearIssued_ = true;
     };
 
-    auto suppressHoverAfterSelection = [&](QVec2 localMouse, ModelingHoverTarget hoveredBeforeSelection) {
+    auto suppressHoverAfterSelection = [&](QVec2 localMouse, QuaderHoverTarget hoveredBeforeSelection) {
         if (hoverTargetValid(hoveredBeforeSelection)) {
             hoverSuppressedTarget_ = hoveredBeforeSelection;
         } else {
-            const ModelingHoverSummary hover =
+            const QuaderHoverSummary hover =
                     editor.selection().previewHover(makeHoverRequest(
                             frame.camera,
                             frame.settings,
@@ -174,8 +175,8 @@ void ViewportSelectionInteraction::handleFrame(
     };
 
     if (canPick && frame.leftPressed) {
-        const ModelingHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
-        const ModelingSelectionSummary summary = pickSelection(
+        const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
+        const QuaderSelectionSummary summary = pickSelection(
                 editor,
                 frame.inputRouter,
                 frame,
@@ -184,8 +185,8 @@ void ViewportSelectionInteraction::handleFrame(
         paintSelectionActive_ = componentSelectionMode(summary.mode);
         suppressHoverAfterSelection(frame.leftClickLocal, hoveredBeforeSelection);
     } else if (canPick && paintSelectionActive_ && frame.leftDown && !frame.leftPressed) {
-        const ModelingHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
-        const ModelingSelectionSummary summary = pickSelection(
+        const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
+        const QuaderSelectionSummary summary = pickSelection(
                 editor,
                 frame.inputRouter,
                 frame,
@@ -199,7 +200,7 @@ void ViewportSelectionInteraction::handleFrame(
         paintSelectionActive_ = false;
     }
 
-    const bool groupSelectionMode = editor.selection().summary().mode == ModelingSelectionMode::Group;
+    const bool groupSelectionMode = editor.selection().summary().mode == QuaderSelectionMode::Group;
     if (groupSelectionMode) {
         hoverSuppressedTarget_.reset();
         if (!hoverClearIssued_) {
@@ -218,7 +219,7 @@ void ViewportSelectionInteraction::handleFrame(
 
     bool hoverSuppressedThisFrame = false;
     if (canHover && hoverSuppressedTarget_.has_value()) {
-        const ModelingHoverSummary hover =
+        const QuaderHoverSummary hover =
                 editor.selection().previewHover(makeHoverRequest(
                         frame.camera,
                         frame.settings,
@@ -235,7 +236,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     if (canHover && !hoverSuppressedThisFrame) {
-        const QuaderApiResult<ModelingHoverSummary> hover =
+        const QuaderApiResult<QuaderHoverSummary> hover =
                 editor.selection().hover(makeHoverRequest(
                         frame.camera,
                         frame.settings,

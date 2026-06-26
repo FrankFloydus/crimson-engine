@@ -38,6 +38,8 @@ bool Tool::blocksViewportFocusShortcuts() const { return descriptor_.blocksViewp
 
 ModelingTransformTool Tool::transformTool() const { return descriptor_.transformTool; }
 
+bool Tool::supportsTransformGizmo() const { return descriptor_.supportsTransformGizmo; }
+
 ModelingCommandResult Tool::activate(ModelingSessionService& modeling) const {
     return modeling.activateViewportTool(modelingTool());
 }

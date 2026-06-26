@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <mesh/polygon/document.h>
 #include <mesh/polygon/poly_operation.h>
+#include <mesh/polygon/poly_operation_descriptor.h>
 
 #include <diagnostics/profile.h>
 
@@ -38,8 +39,8 @@ class KnifeSegmentOperation final : public PolyOperation {
 public:
     KnifeSegmentOperation(KnifePointTarget previous, KnifePointTarget current);
 
-    [[nodiscard]] std::string_view id() const override { return "knife_segment"; }
-    [[nodiscard]] std::string_view label() const override { return "Knife Segment"; }
+    [[nodiscard]] std::string_view id() const override { return poly_operation_descriptor(PolyOperationKey::KnifeSegment).id; }
+    [[nodiscard]] std::string_view label() const override { return poly_operation_descriptor(PolyOperationKey::KnifeSegment).label; }
     [[nodiscard]] OperationResult apply(Document& document, Selection& selection) const override;
 
 private:

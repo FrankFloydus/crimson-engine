@@ -7,9 +7,8 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
+#include "api/QuaderApiSession.h"
 #include "api/QuaderApiTypes.h"
-#include "editor/modeling/ModelingTypes.h"
-#include "editor/modeling/services/ModelingActionCatalog.h"
 
 #include <cstdint>
 #include <string>
@@ -18,7 +17,6 @@
 
 namespace quader {
 
-class ProjectSession;
 class QuaderApiMutationRunner;
 
 /**
@@ -26,11 +24,10 @@ class QuaderApiMutationRunner;
  */
 class QuaderModelingApi final {
 public:
-    QuaderModelingApi(ProjectSession& session, QuaderApiMutationRunner& mutations);
+    QuaderModelingApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     QuaderApiResult<QuaderModelingObjectRef> createBox(const QuaderCreateBoxArgs& args);
     QuaderApiResult<QuaderModelingObjectRef> createBox(QuaderBounds bounds, std::string name = "Box");
-    QuaderApiResult<QuaderModelingObjectRef> createBox(ModelingBounds bounds, std::string name = "Box");
     QuaderApiResult<QuaderModelingObjectRef> commitBoxPreview(
             std::string name = "Box",
             AssetId defaultMaterial = InvalidAssetId);
@@ -39,7 +36,8 @@ public:
             QuaderPolygonDocument document,
             QuaderCreateMeshArgs args = {});
 
-    QuaderApiVoidResult setSelectionMode(ModelingSelectionMode mode);
+    QuaderApiVoidResult setSelectionMode(QuaderSelectionMode mode);
+    [[nodiscard]] bool canExecuteTool(std::string_view toolId) const;
     QuaderApiVoidResult executeTool(std::string_view toolId);
 
     QuaderApiVoidResult beginPreview(std::string_view actionId);
@@ -49,21 +47,21 @@ public:
 
     QuaderApiVoidResult beginTransformPreview(bool duplicateSelected = false);
     QuaderApiVoidResult updateTransformTranslate(QVec3 delta);
-    QuaderApiVoidResult updateTransformMatrix(const ModelingTransform3& transform, QVec3 pivot);
+    QuaderApiVoidResult updateTransformMatrix(const QuaderTransform3& transform, QVec3 pivot);
     QuaderApiVoidResult updateTransformExtrude(QVec3 offset, float closedEdgeLedgeSize = 0.0f);
-    QuaderApiVoidResult updateTransformInset(const ModelingTransform3& transform, QVec3 pivot);
+    QuaderApiVoidResult updateTransformInset(const QuaderTransform3& transform, QVec3 pivot);
     QuaderApiVoidResult commitTransformPreview(std::string label = {});
     QuaderApiVoidResult cancelTransformPreview();
 
-    QuaderApiResult<ModelingTransformDragPreview> beginTransformDrag(const ModelingTransformDragBeginRequest& request);
-    QuaderApiResult<ModelingTransformDragPreview> updateTransformDrag(const ModelingTransformDragUpdateRequest& request);
-    QuaderApiResult<ModelingTransformDragPreview> commitTransformDrag();
+    QuaderApiResult<QuaderTransformDragPreview> beginTransformDrag(const QuaderTransformDragBeginRequest& request);
+    QuaderApiResult<QuaderTransformDragPreview> updateTransformDrag(const QuaderTransformDragUpdateRequest& request);
+    QuaderApiResult<QuaderTransformDragPreview> commitTransformDrag();
     QuaderApiVoidResult cancelTransformDrag();
 
     QuaderApiVoidResult moveSelection(QVec3 delta);
     QuaderApiVoidResult rotateSelection(QVec3 eulerRadians, QVec3 pivot = {});
     QuaderApiVoidResult scaleSelection(QVec3 scale, QVec3 pivot = {});
-    QuaderApiVoidResult transformSelection(const ModelingTransform3& transform, QVec3 pivot = {});
+    QuaderApiVoidResult transformSelection(const QuaderTransform3& transform, QVec3 pivot = {});
     QuaderApiVoidResult duplicateSelectedHierarchyForGroupDrag();
 
     QuaderApiVoidResult applyActiveMaterial(std::uint32_t materialSlot = 0);
@@ -73,16 +71,16 @@ public:
             QuaderElementId face,
             std::uint32_t materialSlot);
 
-    [[nodiscard]] ModelingActionSet availableActionSet(const ModelingActionQuery& query = {}) const;
-    [[nodiscard]] std::vector<ModelingActionItem> availableActions(const ModelingActionQuery& query = {}) const;
-    [[nodiscard]] std::vector<ModelingInstantOperationDescriptor> instantOperations() const;
-    [[nodiscard]] ModelingSelectionSummary selectionSummary() const;
-    [[nodiscard]] std::vector<ModelingObjectRecord> objects() const;
+    [[nodiscard]] QuaderActionSet availableActionSet(const QuaderActionQuery& query = {}) const;
+    [[nodiscard]] std::vector<QuaderActionItem> availableActions(const QuaderActionQuery& query = {}) const;
+    [[nodiscard]] std::vector<QuaderInstantOperationDescriptor> instantOperations() const;
+    [[nodiscard]] QuaderSelectionSummary selectionSummary() const;
+    [[nodiscard]] std::vector<QuaderModelingObjectRecord> objects() const;
 
 private:
-    [[nodiscard]] QuaderModelingObjectRef refFromRecord(const ModelingObjectRecord& record) const;
+    [[nodiscard]] QuaderModelingObjectRef refFromRecord(const QuaderModelingObjectRecord& record) const;
 
-    ProjectSession& session_;
+    QuaderApiSession session_;
     QuaderApiMutationRunner& mutations_;
 };
 

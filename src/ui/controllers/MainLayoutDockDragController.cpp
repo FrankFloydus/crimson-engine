@@ -14,6 +14,44 @@ namespace {
 constexpr int kDockSurfaceDropTargetPriority = 0;
 constexpr int kPanelDropTargetPriority = 10;
 
+MainLayoutDockDropAction actionForPanelDropZone(const MainLayoutPanelDropZone& zone) {
+    switch (zone.kind) {
+    case MainLayoutPanelDropZoneKind::PanelBody:
+        return zone.location == DockLocation::Panel ?
+                MainLayoutDockDropAction::SplitPanel :
+                MainLayoutDockDropAction::InsertPanel;
+    case MainLayoutPanelDropZoneKind::BottomTab:
+    case MainLayoutPanelDropZoneKind::BottomTabTrailing:
+        return MainLayoutDockDropAction::InsertPanel;
+    }
+    return MainLayoutDockDropAction::InsertPanel;
+}
+
+UIDropPlacementPolicy placementPolicyForPanelDropZone(const MainLayoutPanelDropZone& zone) {
+    switch (zone.kind) {
+    case MainLayoutPanelDropZoneKind::PanelBody:
+        return zone.location == DockLocation::Panel ?
+                UIDropPlacementPolicy::HorizontalBeforeAfter :
+                UIDropPlacementPolicy::VerticalBeforeAfter;
+    case MainLayoutPanelDropZoneKind::BottomTab:
+        return UIDropPlacementPolicy::HorizontalBeforeAfter;
+    case MainLayoutPanelDropZoneKind::BottomTabTrailing:
+        return UIDropPlacementPolicy::WholeRect;
+    }
+    return UIDropPlacementPolicy::VerticalBeforeAfter;
+}
+
+UIDropFeedbackKind feedbackForPanelDropZone(MainLayoutPanelDropZoneKind kind) {
+    switch (kind) {
+    case MainLayoutPanelDropZoneKind::PanelBody:
+        return UIDropFeedbackKind::Target;
+    case MainLayoutPanelDropZoneKind::BottomTab:
+    case MainLayoutPanelDropZoneKind::BottomTabTrailing:
+        return UIDropFeedbackKind::Insertion;
+    }
+    return UIDropFeedbackKind::Target;
+}
+
 } // namespace
 
 void MainLayoutDockDragController::setHitRegions(std::vector<MainLayoutDockDragHitRegion> regions) {
@@ -129,19 +167,20 @@ void MainLayoutDockDragController::rebuildDropTargets() {
     }
 
     for (const MainLayoutPanelDropZone& zone : panelDropZones_) {
+        const UIDropFeedbackKind feedbackKind = feedbackForPanelDropZone(zone.kind);
         appendDropZone(
                 zones,
                 MainLayoutDockDropTarget{
                         .location = zone.location,
                         .targetPanelId = zone.panelId,
                         .position = DockPanelInsertPosition::Before,
-                        .action = zone.action,
-                        .feedbackKind = zone.feedbackKind,
+                        .action = actionForPanelDropZone(zone),
+                        .feedbackKind = feedbackKind,
                 },
                 zone.rect,
                 UIDropZoneKind::DockPanel,
-                zone.placementPolicy,
-                zone.feedbackKind,
+                placementPolicyForPanelDropZone(zone),
+                feedbackKind,
                 kPanelDropTargetPriority);
     }
 

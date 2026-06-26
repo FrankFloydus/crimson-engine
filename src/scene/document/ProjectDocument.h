@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -38,6 +39,8 @@ struct ProjectObjectRecord {
     std::string authoredName;
     bool visible = true;
     std::uint32_t materialSlot = 0;
+
+    [[nodiscard]] bool operator==(const ProjectObjectRecord&) const = default;
 };
 
 /**
@@ -80,9 +83,10 @@ public:
     AssetRegistry& assets() { return assets_; }
     const AssetRegistry& assets() const { return assets_; }
 
+    bool synchronizeObjectRecordsWithScene();
     EditorObjectId createObjectRecord(ProjectObjectRecord record);
     EditorObjectId upsertObjectRecord(ProjectObjectRecord record);
-    const ProjectObjectRecord* objectRecord(EditorObjectId objectId) const;
+    std::optional<ProjectObjectRecord> objectRecord(EditorObjectId objectId) const;
     EditorObjectId objectIdForEntity(EntityId entity) const;
     EntityId entityForObjectId(EditorObjectId objectId) const;
     void forgetObjectRecord(EditorObjectId objectId);
@@ -95,10 +99,13 @@ public:
 private:
     void markDirty();
     void bindSceneObjectIdentityAllocator();
-    void syncObjectRecordsWithScene() const;
+    bool syncObjectRecordsWithScene();
     bool canAssignObjectId(EditorObjectId objectId, EntityId entity) const;
+    std::optional<ProjectObjectRecord> storedObjectRecord(EditorObjectId objectId) const;
     ProjectObjectRecord recordForSceneEntity(EntityId entity, EditorObjectId objectId) const;
-    void indexRecord(ProjectObjectRecord& record) const;
+    ProjectObjectRecord mergedSceneObjectRecord(ProjectObjectRecord record) const;
+    void hydrateRecordFromScene(ProjectObjectRecord& record) const;
+    void indexRecord(ProjectObjectRecord& record);
     EditorObjectId allocateObjectId(EditorObjectId requested);
 
     ProjectDocumentRecord record_;
@@ -106,8 +113,8 @@ private:
     std::uint64_t revision_ = 0;
     SceneDocument scene_;
     AssetRegistry assets_;
-    mutable std::unordered_map<EditorObjectId, ProjectObjectRecord> objects_;
-    mutable std::unordered_map<EntityId, EditorObjectId> objectByEntity_;
+    std::unordered_map<EditorObjectId, ProjectObjectRecord> objects_;
+    std::unordered_map<EntityId, EditorObjectId> objectByEntity_;
 };
 
 } // namespace quader

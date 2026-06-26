@@ -73,15 +73,33 @@ private:
 /**
  * Applies Recorded Modeling Memento Command behavior as a command in the editor coordination layer.
  */
-class RecordedModelingMementoCommand final : public ModelingMementoCommand {
+class RecordedModelingMementoCommand final : public IUndoableCommand {
 public:
-    RecordedModelingMementoCommand(ModelingSessionService& modeling, std::string label)
-        : ModelingMementoCommand(modeling, std::move(label), true) {}
+    RecordedModelingMementoCommand(
+            ModelingSessionService& modeling,
+            std::string label,
+            ModelingSessionMemento before,
+            ModelingSessionMemento after)
+        : modeling_(modeling)
+        , label_(std::move(label))
+        , before_(std::move(before))
+        , after_(std::move(after)) {}
+
+    [[nodiscard]] const std::string& label() const override { return label_; }
+
+    CommandResult undo() override {
+        return modelingMementoCommandResult(modeling_.restoreHistoryMemento(before_));
+    }
+
+    CommandResult redo() override {
+        return modelingMementoCommandResult(modeling_.restoreHistoryMemento(after_));
+    }
 
 private:
-    ModelingCommandResult executeInitial() override {
-        return {.ok = false, .message = "Recorded modeling command has already been executed"};
-    }
+    ModelingSessionService& modeling_;
+    std::string label_;
+    ModelingSessionMemento before_;
+    ModelingSessionMemento after_;
 };
 
 /**

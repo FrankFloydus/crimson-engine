@@ -6,18 +6,18 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/QuaderApiSession.h"
 #include "api/QuaderEditorApiTypes.h"
+#include "api/QuaderViewportInputTypes.h"
 
 namespace quader {
-
-class ProjectSession;
 
 /**
  * Exposes Quader Tools API operations through the public Quader API surface.
  */
 class QuaderToolsApi final {
 public:
-    explicit QuaderToolsApi(ProjectSession& session);
+    explicit QuaderToolsApi(QuaderApiSession session);
 
     void setRuntimeHooks(QuaderToolsRuntimeHooks hooks);
 
@@ -30,10 +30,14 @@ public:
 
 private:
     [[nodiscard]] QuaderRevisionStamp currentRevisions() const;
-    [[nodiscard]] QuaderApiVoidResult statusFrom(ModelingCommandResult result, std::string_view label) const;
+    [[nodiscard]] QuaderApiVoidResult statusFrom(
+            bool ok,
+            bool changed,
+            std::string message,
+            std::string_view label) const;
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
 
-    ProjectSession& session_;
+    QuaderApiSession session_;
     QuaderToolsRuntimeHooks hooks_;
 };
 

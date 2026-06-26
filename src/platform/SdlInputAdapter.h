@@ -6,4 +6,16 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "editor/modeling/preview/TransformPreviewService.h"
+#include "editor/input/QuaderInputBinding.h"
+
+#include <SDL3/SDL_keycode.h>
+
+#include <cstdint>
+#include <optional>
+
+namespace quader {
+
+[[nodiscard]] std::optional<QuaderKeyCode> quaderKeyCodeFromSdlKey(SDL_Keycode key);
+[[nodiscard]] std::optional<QuaderMouseButton> quaderMouseButtonFromSdlButton(std::uint8_t button);
+
+} // namespace quader

@@ -6,10 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/RenderSignatureBuilder.h"
 
-#include <algorithm>
 #include <bit>
 #include <functional>
+#include <optional>
 #include <string>
+#include <algorithm>
 #include <vector>
 
 namespace quader {
@@ -66,27 +67,50 @@ RenderSignatureBuilder& RenderSignatureBuilder::addMat4(const QMat4& value) {
     return *this;
 }
 
+namespace {
+
+void addMaterialDocumentSignature(RenderSignatureBuilder& signature, const AssetRegistry& assets, AssetId materialId) {
+    const MaterialDocument* material = assets.material(materialId);
+    signature.addValue(materialId);
+    if (!material) {
+        signature.addValue(0);
+        return;
+    }
+
+    signature.addValue(material->revision.value);
+    for (const MaterialTextureSlotDescriptor& descriptor : materialTextureSlotDescriptors()) {
+        const std::optional<AssetId> textureId = materialTextureSlotAsset(*material, descriptor.id);
+        if (!textureId.has_value()) {
+            continue;
+        }
+        signature.addString(descriptor.id)
+                .addValue(*textureId)
+                .addValue(assets.textureRevision(*textureId).value);
+    }
+}
+
+} // namespace
+
 std::uint64_t RenderSignatureBuilder::materialSignature(
         const AssetRegistry& assets,
-        const MaterialDocument* material) {
+        const MaterialComponent* material) {
     if (!material) {
         return 0;
     }
 
     RenderSignatureBuilder signature;
-    signature.addValue(material->revision.value);
-    std::vector<std::string> textureSlots;
-    textureSlots.reserve(material->textureSlots.size());
-    for (const auto& [slot, texture] : material->textureSlots) {
-        (void)texture;
-        textureSlots.push_back(slot);
+    addMaterialDocumentSignature(signature, assets, material->material);
+    signature.addSize(material->materialSlots.size());
+    std::vector<std::uint32_t> slots;
+    slots.reserve(material->materialSlots.size());
+    for (const auto& [slot, materialId] : material->materialSlots) {
+        (void)materialId;
+        slots.push_back(slot);
     }
-    std::sort(textureSlots.begin(), textureSlots.end());
-    for (const std::string& slot : textureSlots) {
-        const AssetId textureId = material->textureSlots.at(slot);
-        signature.addString(slot)
-                .addValue(textureId)
-                .addValue(assets.textureRevision(textureId).value);
+    std::sort(slots.begin(), slots.end());
+    for (const std::uint32_t slot : slots) {
+        signature.addValue(slot);
+        addMaterialDocumentSignature(signature, assets, material->materialSlots.at(slot));
     }
     return signature.value();
 }
@@ -104,8 +128,9 @@ std::uint64_t RenderSignatureBuilder::meshAssetSignature(std::uint64_t seed, con
     for (const std::uint32_t index : mesh.indices) {
         signature.addValue(index);
     }
-    signature.addSize(mesh.primitives.size());
-    for (const MeshPrimitiveSpan& primitive : mesh.primitives) {
+    const std::vector<MeshPrimitiveSpan> primitiveSpans = normalizedMeshPrimitiveSpans(mesh);
+    signature.addSize(primitiveSpans.size());
+    for (const MeshPrimitiveSpan& primitive : primitiveSpans) {
         signature.addValue(primitive.indexOffset)
                 .addValue(primitive.indexCount)
                 .addValue(primitive.materialSlot);

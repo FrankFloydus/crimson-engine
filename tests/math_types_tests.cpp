@@ -6,31 +6,17 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "math/GlmBridge.h"
 #include "math/Types.h"
+#include "support/GuardrailFileScan.h"
 
 #include <gtest/gtest.h>
 
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <string>
-
-#ifndef QUADER_SOURCE_DIR
-#define QUADER_SOURCE_DIR "."
-#endif
 
 using namespace quader;
 
 namespace {
 
-std::string readSourceFile(const std::filesystem::path& relativePath) {
-    const std::filesystem::path path = std::filesystem::path(QUADER_SOURCE_DIR) / relativePath;
-    std::ifstream file(path);
-    EXPECT_TRUE(file.is_open()) << path.string();
-    if (!file.is_open()) {
-        return {};
-    }
-    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-}
+using quader::test::guardrail::readSourceFile;
 
 void expectQVec3Near(QVec3 actual, QVec3 expected) {
     EXPECT_NEAR(actual.x, expected.x, 0.001f);

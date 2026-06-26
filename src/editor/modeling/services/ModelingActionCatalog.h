@@ -6,13 +6,15 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/modeling/ModelingTypes.h"
+
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace quader {
-
-struct ModelingSelectionSummary;
 
 /**
  * Enumerates ModelingActionSurface values used by the modeling layer.
@@ -52,6 +54,42 @@ enum class ModelingActionPreviewKind {
 };
 
 /**
+ * Enumerates selection requirement shapes for modeling action availability.
+ */
+enum class ModelingActionSelectionRequirement {
+    AnySelection,
+    SelectionMode,
+    NonObjectSelection,
+    ObjectOrFaceSelection,
+    EdgeOrFaceSelection,
+};
+
+/**
+ * Represents the app-side action availability rule evaluated for host and instant modeling actions.
+ */
+struct ModelingActionAvailabilityRule {
+    ModelingActionSelectionRequirement requirement = ModelingActionSelectionRequirement::AnySelection;
+    ModelingSelectionMode mode = ModelingSelectionMode::Object;
+    std::uint32_t minimumSelectedVertices = 0;
+    std::uint32_t minimumSelectedEdges = 0;
+    std::uint32_t exactSelectedEdges = 0;
+    std::uint32_t minimumSelectedFaces = 0;
+    std::uint32_t minimumSelectedObjects = 0;
+    ModelingActiveSelectionKind requiredActiveKind = ModelingActiveSelectionKind::None;
+    bool requiresSingleObject = false;
+};
+
+/**
+ * Represents an evaluated modeling action availability result.
+ */
+struct ModelingActionAvailabilityResult {
+    ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
+    std::string disabledReason;
+    std::string disabledReasonKey;
+    std::uint32_t disabledReasonCount = 0;
+};
+
+/**
  * Represents a Modeling Action Query value used by the modeling application service layer.
  */
 struct ModelingActionQuery {
@@ -74,6 +112,8 @@ struct ModelingActionItem {
     ModelingActionPreviewKind previewKind = ModelingActionPreviewKind::None;
     ModelingActionVisibility visibility = ModelingActionVisibility::Hidden;
     std::string disabledReason;
+    std::string disabledReasonKey;
+    std::uint32_t disabledReasonCount = 0;
     bool rebuildsMeshOnSuccess = true;
 };
 
@@ -108,9 +148,19 @@ public:
     [[nodiscard]] static std::vector<ModelingActionItem> actionsFor(
             const ModelingSelectionSummary& summary,
             const ModelingActionQuery& query);
+    [[nodiscard]] static std::optional<ModelingActionItem> actionFor(
+            const ModelingSelectionSummary& summary,
+            std::string_view actionId);
     [[nodiscard]] static bool actionAvailable(
             const ModelingSelectionSummary& summary,
             std::string_view actionId);
+    [[nodiscard]] static ModelingActionAvailabilityResult evaluateAvailability(
+            const ModelingSelectionSummary& summary,
+            const ModelingActionAvailabilityRule& rule);
+    [[nodiscard]] static ModelingActionAvailabilityResult evaluateOperationAvailability(
+            const ModelingSelectionSummary& summary,
+            std::string_view operationId,
+            const ModelingActionAvailabilityRule& rule);
 };
 
 } // namespace quader

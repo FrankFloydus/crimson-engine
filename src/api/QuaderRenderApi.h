@@ -7,9 +7,8 @@
 #pragma once
 
 #include "api/QuaderApiResult.h"
+#include "api/QuaderApiSession.h"
 #include "api/QuaderApiTypes.h"
-#include "editor/modeling/ModelingTypes.h"
-#include "render/ViewportOverlayFrame.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,9 +16,8 @@
 
 namespace quader {
 
-class ProjectSession;
 class QuaderQueryApi;
-class SceneRenderBridge;
+class QuaderRenderApiRuntimeAccess;
 
 /**
  * Stores the result of submitting editor-owned viewport overlay payloads to the render bridge.
@@ -33,29 +31,17 @@ struct QuaderRenderOverlaySubmission {
  */
 class QuaderRenderApi final {
 public:
-    QuaderRenderApi(ProjectSession& session, QuaderQueryApi& query);
+    QuaderRenderApi(QuaderApiSession session, QuaderQueryApi& query);
 
-    QuaderApiVoidResult syncScene(SceneRenderBridge& bridge);
-    QuaderApiVoidResult syncToolPreviews(SceneRenderBridge& bridge);
-    QuaderApiResult<QuaderRenderOverlaySubmission> syncSelectionOverlay(
-            SceneRenderBridge& bridge,
-            std::size_t viewportIndex,
-            std::uint8_t layerMask,
-            ViewportOverlayCamera camera,
-            const ViewportOverlayFrame* toolOverlayFrame = nullptr);
-    QuaderApiVoidResult setSelectionOverlay(
-            SceneRenderBridge& bridge,
-            std::size_t viewportIndex,
-            std::uint8_t layerMask,
-            ViewportOverlayCamera camera);
-
-    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
-    [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const;
+    [[nodiscard]] QuaderOverlayFrame selectionOverlayFrame() const;
+    [[nodiscard]] std::vector<QuaderToolPreviewMesh> toolPreviewMeshes() const;
 
 private:
+    friend class QuaderRenderApiRuntimeAccess;
+
     [[nodiscard]] QuaderApiVoidResult runtimeStatus(std::string message = {}) const;
 
-    ProjectSession& session_;
+    QuaderApiSession session_;
     QuaderQueryApi& query_;
 };
 

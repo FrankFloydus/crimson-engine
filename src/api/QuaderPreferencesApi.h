@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApiTypes.h"
 
 namespace quader {
@@ -26,8 +27,11 @@ public:
     [[nodiscard]] std::string locale() const;
     QuaderApiVoidResult setLocale(std::string locale);
     QuaderApiVoidResult setShortcut(std::string_view commandId, std::string shortcut);
+    QuaderApiVoidResult setShortcut(QuaderCommandId commandId, std::string shortcut);
     QuaderApiVoidResult removeShortcut(std::string_view commandId);
+    QuaderApiVoidResult removeShortcut(QuaderCommandId commandId);
     QuaderApiVoidResult resetShortcut(std::string_view commandId);
+    QuaderApiVoidResult resetShortcut(QuaderCommandId commandId);
     QuaderApiVoidResult setNavigationGizmoVisible(bool visible);
     [[nodiscard]] bool navigationGizmoVisible() const;
     QuaderApiVoidResult save();

@@ -9,7 +9,6 @@
 #include "api/QuaderApiResult.h"
 #include "api/QuaderApiSnapshot.h"
 #include "api/QuaderApiTypes.h"
-#include "editor/modeling/ModelingTypes.h"
 
 #include <functional>
 #include <string>
@@ -31,8 +30,9 @@ struct QuaderScriptStepResult {
 /**
  * Stores the Quader Script Result data contract used by the public Quader API surface.
  */
-struct QuaderScriptResult {
-    bool ok = true;
+struct QuaderScriptResult : QuaderApiStatus {
+    QuaderScriptResult() { ok = true; }
+
     std::vector<QuaderScriptStepResult> steps;
     std::unordered_map<std::string, QuaderModelingObjectRef> objects;
     QuaderApiSnapshot finalSnapshot;
@@ -45,7 +45,7 @@ class QuaderScript final {
 public:
     QuaderScript(QuaderApi& api, std::string label = {});
 
-    QuaderScript& createBox(std::string alias, ModelingBounds bounds, std::string name = "Box");
+    QuaderScript& createBox(std::string alias, QuaderBounds bounds, std::string name = "Box");
 
     QuaderScript& createMesh(std::string alias, QuaderPolygonDocument document, QuaderCreateMeshArgs args = {});
 
@@ -54,7 +54,7 @@ public:
     QuaderScript& selectEdge(std::string alias, QuaderElementId a, QuaderElementId b);
     QuaderScript& selectFace(std::string alias, QuaderElementId face);
     QuaderScript& clearSelection();
-    QuaderScript& setSelectionMode(ModelingSelectionMode mode);
+    QuaderScript& setSelectionMode(QuaderSelectionMode mode);
 
     QuaderScript& moveSelection(QVec3 delta);
     QuaderScript& rotateSelection(QVec3 eulerRadians, QVec3 pivot = {});
