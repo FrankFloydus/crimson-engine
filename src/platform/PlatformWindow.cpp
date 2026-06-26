@@ -9,6 +9,7 @@
 #include "core/Logger.h"
 #include "platform/SdlEventUtils.h"
 
+#include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_properties.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_video.h>
@@ -117,6 +118,7 @@ std::optional<COLORREF> systemAccentBorderColor() {
 #endif
 
 bool acquireSdlVideo() {
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
     if (gSdlVideoWindowCount == 0 && !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         LOG_ERROR("SDL_Init failed: {}", SDL_GetError());
         return false;

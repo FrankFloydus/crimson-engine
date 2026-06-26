@@ -678,6 +678,8 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(platformHeader, "processChromeEvent");
     expectContains(platformHeader, "releaseChromeResizeCursor");
     expectContains(platformSource, "SDL_WINDOW_BORDERLESS");
+    expectContains(platformSource, "SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH");
+    expectContains(platformSource, "SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, \"1\")");
     expectContains(platformSource, "SDL_SetWindowMinimumSize(window_, kPlatformWindowMinimumWidth, kPlatformWindowMinimumHeight)");
     expectContains(platformSource, "SDL_WINDOW_INPUT_FOCUS");
     expectContains(platformSource, "SDL_HITTEST_DRAGGABLE");
