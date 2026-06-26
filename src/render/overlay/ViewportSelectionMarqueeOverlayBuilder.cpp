@@ -7,6 +7,7 @@
 #include "render/overlay/ViewportSelectionMarqueeOverlayBuilder.h"
 
 #include "editor/viewport/ViewportSelectionInteraction.h"
+#include "render/overlay/ViewportOverlayDash.h"
 #include "render/ViewportOverlayPolicy.h"
 
 #include <algorithm>
@@ -70,36 +71,6 @@ void appendSegment(
     });
 }
 
-void appendEdge(
-        ViewportOverlayFrame& frame,
-        const ViewportOverlayCamera& camera,
-        QVec2 start,
-        QVec2 end,
-        std::uint32_t color,
-        bool dashed) {
-    const QVec2 delta = end - start;
-    const float edgeLength = std::sqrt(delta.x * delta.x + delta.y * delta.y);
-    if (edgeLength <= 0.001f) {
-        return;
-    }
-    if (!dashed) {
-        appendSegment(frame, camera, start, end, color);
-        return;
-    }
-
-    constexpr float kDashPixels = 8.0f;
-    constexpr float kGapPixels = 5.0f;
-    for (float offset = 0.0f; offset < edgeLength; offset += kDashPixels + kGapPixels) {
-        const float segmentEnd = std::min(offset + kDashPixels, edgeLength);
-        appendSegment(
-                frame,
-                camera,
-                start + delta * (offset / edgeLength),
-                start + delta * (segmentEnd / edgeLength),
-                color);
-    }
-}
-
 } // namespace
 
 void ViewportSelectionMarqueeOverlayBuilder::append(
@@ -150,13 +121,13 @@ void ViewportSelectionMarqueeOverlayBuilder::append(
             .source = ViewportOverlaySource::Tool,
     });
     for (std::size_t index = 0; index < corners.size(); ++index) {
-        appendEdge(
-                overlayFrame,
-                camera,
+        appendViewportOverlayDashedEdge(
                 corners[index],
                 corners[(index + 1U) % corners.size()],
-                kOverlaySelectionMarqueeLineColor,
-                dashed);
+                dashed,
+                [&](QVec2 start, QVec2 end, float, float) {
+                    appendSegment(overlayFrame, camera, start, end, kOverlaySelectionMarqueeLineColor);
+                });
     }
 }
 

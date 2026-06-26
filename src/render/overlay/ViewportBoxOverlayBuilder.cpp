@@ -6,12 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/ViewportBoxOverlayBuilder.h"
 
+#include "render/overlay/ViewportOverlayDash.h"
 #include "render/ViewportOverlayPolicy.h"
 
-#include <array>
+#include <algorithm>
+#include <cmath>
 
 namespace quader {
 namespace {
+
+/**
+ * Stores a projected box preview endpoint for dash segmentation.
+ */
+struct OverlayScreenPoint {
+    QVec2 position;
+    float depth = 0.0f;
+    bool visible = false;
+};
 
 ViewportOverlayLine boxPreviewLine(QVec3 start, QVec3 end) {
     return {
@@ -29,26 +40,55 @@ void appendLine(ViewportOverlayFrame& overlayFrame, QVec3 start, QVec3 end) {
     overlayFrame.lines.push_back(boxPreviewLine(start, end));
 }
 
-} // namespace
+QVec3 normalizedOr(QVec3 value, QVec3 fallback) {
+    const float magnitude = length(value);
+    return magnitude <= 0.000001f ? fallback : value / magnitude;
+}
 
-void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame& overlayFrame, const ModelingBoxPreview& preview) {
-    if (!preview.valid) {
-        return;
+OverlayScreenPoint projectOverlayWorldPoint(const ViewportOverlayCamera& camera, QVec3 worldPoint) {
+    const float width = std::max(camera.viewportSize.x, 1.0f);
+    const float height = std::max(camera.viewportSize.y, 1.0f);
+    const float aspect = width / height;
+    const QVec3 forward = normalizedOr(camera.forward, {0.0f, 0.0f, -1.0f});
+    const QVec3 right = normalizedOr(camera.right, {1.0f, 0.0f, 0.0f});
+    const QVec3 up = normalizedOr(camera.up, {0.0f, 1.0f, 0.0f});
+    const QVec3 cameraDelta = worldPoint - camera.eye;
+    const float depth = dot(cameraDelta, forward);
+    if (depth <= camera.nearPlane || depth >= camera.farPlane) {
+        return {};
     }
 
-    if (preview.cornerCount >= 8U) {
-        constexpr std::array<std::array<int, 2>, 12> edges{{
-                {{0, 1}}, {{1, 2}}, {{2, 3}}, {{3, 0}},
-                {{4, 5}}, {{5, 6}}, {{6, 7}}, {{7, 4}},
-                {{0, 4}}, {{1, 5}}, {{2, 6}}, {{3, 7}},
-        }};
+    float ndcX = 0.0f;
+    float ndcY = 0.0f;
+    if (camera.projection == ViewportOverlayProjection::Orthographic) {
+        const float halfHeight = std::max(camera.orthographicSize, 0.0001f) * 0.5f;
+        ndcX = dot(cameraDelta, right) / (halfHeight * aspect);
+        ndcY = dot(cameraDelta, up) / halfHeight;
+    } else {
+        constexpr float kPi = 3.14159265358979323846f;
+        const float fovRadians = std::clamp(camera.fovDegrees, 1.0f, 170.0f) * kPi / 180.0f;
+        const float tanHalfFov = std::tan(fovRadians * 0.5f);
+        ndcX = dot(cameraDelta, right) / (depth * tanHalfFov * aspect);
+        ndcY = dot(cameraDelta, up) / (depth * tanHalfFov);
+    }
 
-        for (const std::array<int, 2>& edge : edges) {
-            appendLine(
-                    overlayFrame,
-                    preview.corners[static_cast<std::size_t>(edge[0])],
-                    preview.corners[static_cast<std::size_t>(edge[1])]);
-        }
+    return {
+            .position = {
+                    (ndcX + 1.0f) * 0.5f * width,
+                    (1.0f - ndcY) * 0.5f * height,
+            },
+            .depth = depth,
+            .visible = std::isfinite(ndcX) && std::isfinite(ndcY),
+    };
+}
+
+} // namespace
+
+void ViewportBoxOverlayBuilder::append(
+        ViewportOverlayFrame& overlayFrame,
+        const ViewportOverlayCamera& camera,
+        const ModelingBoxPreview& preview) {
+    if (!preview.valid) {
         return;
     }
 
@@ -56,10 +96,24 @@ void ViewportBoxOverlayBuilder::append(ViewportOverlayFrame& overlayFrame, const
         return;
     }
     for (std::size_t index = 0; index < preview.footprintCount; ++index) {
-        appendLine(
-                overlayFrame,
-                preview.footprint[index],
-                preview.footprint[(index + 1U) % preview.footprintCount]);
+        const QVec3 worldStart = preview.footprint[index];
+        const QVec3 worldEnd = preview.footprint[(index + 1U) % preview.footprintCount];
+        const OverlayScreenPoint screenStart = projectOverlayWorldPoint(camera, worldStart);
+        const OverlayScreenPoint screenEnd = projectOverlayWorldPoint(camera, worldEnd);
+        if (!screenStart.visible || !screenEnd.visible) {
+            continue;
+        }
+        const QVec3 worldDelta = worldEnd - worldStart;
+        appendViewportOverlayDashedEdge(
+                screenStart.position,
+                screenEnd.position,
+                true,
+                [&](QVec2, QVec2, float startT, float endT) {
+                    appendLine(
+                            overlayFrame,
+                            worldStart + worldDelta * startT,
+                            worldStart + worldDelta * endT);
+                });
     }
 }
 

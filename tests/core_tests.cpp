@@ -5306,7 +5306,7 @@ TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
     EXPECT_EQ(scene.name(sphere)->name, "Box");
     ASSERT_NE(scene.mesh(sphere), nullptr);
     EXPECT_EQ(scene.mesh(sphere)->mesh, 11u);
-    EXPECT_TRUE(scene.mesh(sphere)->doubleSided);
+    EXPECT_FALSE(scene.mesh(sphere)->doubleSided);
     ASSERT_NE(scene.modelingObject(sphere), nullptr);
     EXPECT_EQ(scene.modelingObject(sphere)->objectId, 42);
     EXPECT_EQ(scene.modelingObject(sphere)->materialSlot, 3u);

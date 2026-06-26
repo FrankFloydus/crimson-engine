@@ -284,6 +284,30 @@ TEST(QdrDocumentIoTests, WritesAndReadsUnreferencedProjectAssets) {
     EXPECT_NE(result.document.assets().texture(textureId), nullptr);
 }
 
+TEST(QdrDocumentIoTests, MissingMeshDoubleSidedFieldDefaultsToSingleSided) {
+    ProjectDocument document(ProjectDocumentRecord{.id = 89u, .name = "Mesh Defaults"});
+    const AssetId meshId = document.assets().addMesh(12u, makeTriangleMesh("Triangle Mesh"));
+    const EntityId wall = document.scene().createEntityWithId(200u, "Wall", EntityKind::Mesh);
+    document.scene().setMesh(wall, MeshComponent{
+            .mesh = meshId,
+            .doubleSided = true,
+    });
+
+    std::string text = QdrDocumentWriter::serializeProjectDocument(document);
+    const std::size_t doubleSidedKey = text.find("\"doubleSided\": true");
+    ASSERT_NE(doubleSidedKey, std::string::npos);
+    const std::size_t lineBegin = text.rfind('\n', doubleSidedKey);
+    const std::size_t lineEnd = text.find('\n', doubleSidedKey);
+    ASSERT_NE(lineBegin, std::string::npos);
+    ASSERT_NE(lineEnd, std::string::npos);
+    text.erase(lineBegin + 1u, lineEnd - lineBegin);
+
+    QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_NE(result.document.scene().mesh(wall), nullptr);
+    EXPECT_FALSE(result.document.scene().mesh(wall)->doubleSided);
+}
+
 TEST(QdrDocumentIoTests, ImportsLegacySessionPayloadButWritesProjectDocumentPayload) {
     const std::string text = readSourceFile({"tests", "fixtures", "qdr", "legacy_session_payload.qdr"});
 

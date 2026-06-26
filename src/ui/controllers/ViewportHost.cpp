@@ -187,9 +187,7 @@ ViewportOverlayFrame buildToolOverlayFrame(
         const ViewportOverlayCamera& overlayCamera) {
     ViewportOverlayFrame toolOverlayFrame;
     const ModelingBoxPreview& boxPreview = inputRouter.boxPreview();
-    if (boxPreview.dragState != ModelingBoxDragState::Height) {
-        ViewportBoxOverlayBuilder::append(toolOverlayFrame, boxPreview);
-    }
+    ViewportBoxOverlayBuilder::append(toolOverlayFrame, overlayCamera, boxPreview);
     const quader_editor_core::TransformGizmoFrame* transformGizmoFrame =
             interactions.transformGizmoFrame();
     if (transformGizmoFrame != nullptr) {

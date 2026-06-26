@@ -501,7 +501,16 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
     }
 }
 
-TEST(ViewportBoxOverlayBuilderTests, EmitsOldFootprintAndBoxLinePreviewContract) {
+TEST(ViewportBoxOverlayBuilderTests, EmitsDashedFootprintOutlineWithoutFill) {
+    quader::ViewportOverlayCamera camera;
+    camera.eye = {0.0f, 10.0f, 0.0f};
+    camera.forward = {0.0f, -1.0f, 0.0f};
+    camera.right = {1.0f, 0.0f, 0.0f};
+    camera.up = {0.0f, 0.0f, 1.0f};
+    camera.viewportSize = {800.0f, 600.0f};
+    camera.projection = quader::ViewportOverlayProjection::Orthographic;
+    camera.orthographicSize = 8.0f;
+
     quader::ModelingBoxPreview footprint;
     footprint.ok = true;
     footprint.valid = true;
@@ -515,8 +524,9 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsOldFootprintAndBoxLinePreviewContract)
     }};
 
     quader::ViewportOverlayFrame footprintOverlay;
-    quader::ViewportBoxOverlayBuilder::append(footprintOverlay, footprint);
-    ASSERT_EQ(footprintOverlay.lines.size(), 4u);
+    quader::ViewportBoxOverlayBuilder::append(footprintOverlay, camera, footprint);
+    ASSERT_GT(footprintOverlay.lines.size(), 4u);
+    EXPECT_TRUE(footprintOverlay.triangles.empty());
     for (const quader::ViewportOverlayLine& line : footprintOverlay.lines) {
         EXPECT_EQ(line.layer, quader::ViewportOverlayLayer::ToolPreviewLine);
         EXPECT_EQ(line.color, quader::kOverlayToolBoxPreviewLineColor);
@@ -539,8 +549,9 @@ TEST(ViewportBoxOverlayBuilderTests, EmitsOldFootprintAndBoxLinePreviewContract)
     }};
 
     quader::ViewportOverlayFrame boxOverlay;
-    quader::ViewportBoxOverlayBuilder::append(boxOverlay, box);
-    EXPECT_EQ(boxOverlay.lines.size(), 12u);
+    quader::ViewportBoxOverlayBuilder::append(boxOverlay, camera, box);
+    EXPECT_EQ(boxOverlay.lines.size(), footprintOverlay.lines.size());
+    EXPECT_TRUE(boxOverlay.triangles.empty());
 }
 
 TEST(ViewportSelectionMarqueeOverlayBuilderTests, EmitsFillAndRuleSpecificEdges) {

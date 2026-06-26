@@ -17,7 +17,10 @@ namespace quader {
  */
 class ViewportBoxOverlayBuilder {
 public:
-    static void append(ViewportOverlayFrame& overlayFrame, const ModelingBoxPreview& preview);
+    static void append(
+            ViewportOverlayFrame& overlayFrame,
+            const ViewportOverlayCamera& camera,
+            const ModelingBoxPreview& preview);
 };
 
 } // namespace quader

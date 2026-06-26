@@ -11,7 +11,7 @@
 namespace quader {
 
 /**
- * Implements Two Stage Box Tool behavior for editor-owned viewport tool interactions.
+ * Implements Box Tool behavior for editor-owned viewport tool interactions.
  */
 class TwoStageBoxTool : public ModalViewportTool {
 public:

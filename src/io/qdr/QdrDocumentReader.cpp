@@ -259,7 +259,7 @@ MeshComponent meshComponentFromJson(const json& value) {
     mesh.mesh = value.value("mesh", InvalidAssetId);
     mesh.editorOnly = value.value("editorOnly", false);
     mesh.castShadows = value.value("castShadows", true);
-    mesh.doubleSided = value.value("doubleSided", true);
+    mesh.doubleSided = value.value("doubleSided", false);
     mesh.generateCollisions = value.value("generateCollisions", true);
     mesh.collisionType = parseCollisionType(value.value("collisionType", std::string("box")));
     mesh.displayCollision = value.value("displayCollision", false);

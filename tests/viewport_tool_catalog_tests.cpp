@@ -237,11 +237,6 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
             },
             .gridSize = 1.0,
     };
-    const ModelingBoxToolEvent heightEnd{
-            .screenPosition = {400.0f, 360.0f},
-            .ray = start.ray,
-            .gridSize = 1.0,
-    };
     ModelingBoxToolEvent currentEvent = start;
     EntityId committedEntity = InvalidEntityId;
     int commitCount = 0;
@@ -306,25 +301,21 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
     currentEvent = footprintEnd;
     result = dispatchFrame(ViewportPointerToolEvent{
             .hovered = true,
-            .leftDown = true,
     });
     ASSERT_TRUE(result.handled);
     ASSERT_TRUE(modalState.boxPreview.valid);
+    ASSERT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Footprint);
+    EXPECT_EQ(commitCount, 0);
 
-    currentEvent = start;
+    currentEvent = footprintEnd;
     result = dispatchFrame(ViewportPointerToolEvent{
             .hovered = true,
             .leftReleased = true,
     });
     ASSERT_TRUE(result.handled);
-    ASSERT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Height);
-
-    currentEvent = heightEnd;
-    result = dispatchFrame(ViewportPointerToolEvent{
-            .hovered = true,
-    });
-    ASSERT_TRUE(result.handled);
-    ASSERT_TRUE(modalState.boxPreview.valid);
+    ASSERT_FALSE(result.activeToolChanged);
+    ASSERT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Footprint);
+    EXPECT_EQ(commitCount, 0);
 
     result = dispatchFrame(ViewportPointerToolEvent{
             .hovered = true,
@@ -332,6 +323,7 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
     });
     ASSERT_TRUE(result.handled);
     ASSERT_TRUE(result.activeToolChanged);
+    EXPECT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Idle);
     EXPECT_EQ(commitCount, 1);
     ASSERT_NE(committedEntity, InvalidEntityId);
     ASSERT_TRUE(session.scene().exists(committedEntity));

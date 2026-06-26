@@ -1034,18 +1034,10 @@ TEST_CASE("editor runtime command facade drives box footprint height and commit"
 	REQUIRE(begin_height_result.command.ok);
 	REQUIRE(begin_height_result.command.changed);
 	REQUIRE(runtime.box_state().drag_state == qec::BoxDragState::height);
-
-	const qec::EditorRuntimeCommandResult update_height_result =
-		qec::execute_runtime_command(
-			session,
-			runtime,
-			box_height_command(qec::EditorRuntimeCommandId::update_box_height, { 400.0F, 360.0F }));
-	REQUIRE(update_height_result.command.ok);
-	REQUIRE(runtime.box_state().drag_state == qec::BoxDragState::height);
 	const qec::BoxPreviewDescriptor preview = runtime.box_preview_descriptor(true);
 	REQUIRE(preview.ok);
 	REQUIRE_FALSE(preview.bounds.empty);
-	REQUIRE(preview.distance > 0.0F);
+	REQUIRE(preview.distance == Catch::Approx(1.0F));
 
 	const qec::EditorRuntimeCommandResult commit_result =
 		qec::execute_runtime_command(

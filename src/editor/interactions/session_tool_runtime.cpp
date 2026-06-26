@@ -832,14 +832,23 @@ BoxToolStateResult EditorRuntime::begin_box_footprint(
 		quader::QVec3 raw_end,
 		bool grid_enabled)
 {
-	return quader_editor_core::begin_box_footprint(state_.box, raw_start, raw_end, grid_enabled, state_.box_grid_size);
+	return quader_editor_core::begin_box_footprint(
+		state_.box,
+		raw_start,
+		raw_end,
+		grid_enabled,
+		state_.box_grid_size);
 }
 
 BoxToolStateResult EditorRuntime::update_box_footprint(
 		quader::QVec3 raw_end,
 		bool grid_enabled)
 {
-	return quader_editor_core::update_box_footprint(state_.box, raw_end, grid_enabled, state_.box_grid_size);
+	return quader_editor_core::update_box_footprint(
+		state_.box,
+		raw_end,
+		grid_enabled,
+		state_.box_grid_size);
 }
 
 BoxToolStateResult EditorRuntime::update_box_hover_cell(

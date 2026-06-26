@@ -102,16 +102,24 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
     }
 
     if (pointer.leftClicked && !pointer.gizmoConsumed && !pointer.navigationActive) {
-        if (preview.dragState == ModelingBoxDragState::Height) {
-            const std::string name = boxContext.nextMeshName ? boxContext.nextMeshName() : std::string{"Mesh"};
-            if (commitPreview(boxContext, name)) {
-                if (context.setSelectionMode) {
-                    context.setSelectionMode(ViewportSelectionMode::Object);
+        if (preview.dragState == ModelingBoxDragState::Footprint) {
+            preview = context.modeling.updateBoxFootprint(boxEvent);
+            logPreviewFailure("Box footprint finalize update", preview);
+            if (preview.ok) {
+                preview = context.modeling.beginBoxHeight(boxEvent);
+                logPreviewFailure("Box height begin", preview);
+            }
+            if (preview.ok) {
+                const std::string name = boxContext.nextMeshName ? boxContext.nextMeshName() : std::string{"Mesh"};
+                if (commitPreview(boxContext, name)) {
+                    if (context.setSelectionMode) {
+                        context.setSelectionMode(ViewportSelectionMode::Object);
+                    }
+                    if (context.setAppSelectionMode) {
+                        context.setAppSelectionMode(ModelingSelectionMode::Object);
+                    }
+                    activeToolSyncRequested = true;
                 }
-                if (context.setAppSelectionMode) {
-                    context.setAppSelectionMode(ModelingSelectionMode::Object);
-                }
-                activeToolSyncRequested = true;
             }
             preview = {};
         } else {
@@ -122,26 +130,13 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
         actionConsumed = true;
     }
 
-    if (!actionConsumed && preview.dragState == ModelingBoxDragState::Footprint && pointer.leftDown) {
+    if (!actionConsumed &&
+            preview.dragState == ModelingBoxDragState::Footprint &&
+            pointer.hovered &&
+            !pointer.suppressHoverWork &&
+            !pointer.navigationActive) {
         preview = context.modeling.updateBoxFootprint(boxEvent);
         logPreviewFailure("Box footprint update", preview);
-        invalidate(context);
-    }
-
-    if (!actionConsumed && preview.dragState == ModelingBoxDragState::Footprint && pointer.leftReleased) {
-        preview = context.modeling.beginBoxHeight(boxEvent);
-        logPreviewFailure("Box height begin", preview);
-        invalidate(context);
-    }
-
-    if (!actionConsumed &&
-            pointer.hovered &&
-            !pointer.leftDown &&
-            !pointer.suppressHoverWork &&
-            preview.dragState == ModelingBoxDragState::Height &&
-            (!context.claimHover || context.claimHover(preview.dragState))) {
-        preview = context.modeling.updateBoxHeight(boxEvent);
-        logPreviewFailure("Box height update", preview);
         invalidate(context);
     }
 

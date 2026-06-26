@@ -141,7 +141,7 @@ struct MeshComponent {
     AssetId mesh = InvalidAssetId;
     bool editorOnly = false;
     bool castShadows = true;
-    bool doubleSided = true;
+    bool doubleSided = false;
     bool generateCollisions = true;
     MeshCollisionType collisionType = MeshCollisionType::Box;
     bool displayCollision = false;

@@ -294,8 +294,10 @@ public:
 	{
 		state.raw_end_point = raw_end;
 		if (!grid_enabled) {
-			state.start_point = project_point_to_plane(state.raw_start_point, state.plane.origin, state.plane.normal);
-			state.end_point = project_point_to_plane(state.raw_end_point, state.plane.origin, state.plane.normal);
+			const quader::QVec3 projected_start = project_point_to_plane(state.raw_start_point, state.plane.origin, state.plane.normal);
+			const quader::QVec3 projected_end = project_point_to_plane(state.raw_end_point, state.plane.origin, state.plane.normal);
+			state.start_point = projected_start;
+			state.end_point = projected_end;
 			return box_result(state, box_ok_status(true));
 		}
 
@@ -534,7 +536,11 @@ BoxToolStateResult begin_box_footprint(
 	return box_tool_instance().begin_footprint(state, raw_start, raw_end, grid_enabled, grid_size);
 }
 
-BoxToolStateResult update_box_footprint(BoxToolState& state, quader::QVec3 raw_end, bool grid_enabled, double grid_size)
+BoxToolStateResult update_box_footprint(
+		BoxToolState& state,
+		quader::QVec3 raw_end,
+		bool grid_enabled,
+		double grid_size)
 {
 	return box_tool_instance().update_footprint(state, raw_end, grid_enabled, grid_size);
 }
