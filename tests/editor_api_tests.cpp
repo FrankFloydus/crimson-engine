@@ -133,6 +133,19 @@ quader::QuaderModelingObjectRef createSelectedBox(quader::QuaderEditorApi& edito
     return created.value();
 }
 
+quader::QuaderViewportCamera apiOrthographicCamera() {
+    return {
+            .orthographic = true,
+            .origin = {0.0f, 0.0f, 10.0f},
+            .xAxis = {1.0f, 0.0f, 0.0f},
+            .yAxis = {0.0f, 1.0f, 0.0f},
+            .zAxis = {0.0f, 0.0f, 1.0f},
+            .viewportSize = {100.0f, 100.0f},
+            .orthographicSize = 100.0,
+            .fovDegrees = 60.0,
+    };
+}
+
 void setupSelectionForMode(
         quader::QuaderEditorApi& editor,
         quader::QuaderSelectionMode mode) {
@@ -688,6 +701,22 @@ TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
             action));
     EXPECT_EQ(action, quader::ViewportInputActionKind::ResetFlySpeed);
 
+    action = quader::ViewportInputActionKind::None;
+    EXPECT_FALSE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("Escape"),
+            state,
+            true,
+            false,
+            action));
+    ASSERT_TRUE(editor.commands().resolveViewportInputAction(
+            *quader::quaderInputParseChord("Escape"),
+            state,
+            true,
+            false,
+            action,
+            quader::QuaderViewportKeybindingContext{.navigationActive = true}));
+    EXPECT_EQ(action, quader::ViewportInputActionKind::CancelNavigation);
+
     ASSERT_TRUE(editor.preferences().setShortcut("viewport.navigation.orbit", "Alt+LeftMouseDrag").ok());
     EXPECT_EQ(editor.commands().shortcutFor("viewport.navigation.orbit"), "Alt+LeftMouseDrag");
 
@@ -810,9 +839,14 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
         ASSERT_EQ(parsed->size(), 1u) << descriptor.shortcut;
 
         quader::ViewportInputActionKind resolvedAction = quader::ViewportInputActionKind::None;
+        const bool navigationOnlyAction = descriptor.when.find("!navigation.active") == std::string_view::npos &&
+                descriptor.when.find("navigation.active") != std::string_view::npos;
         const bool flyOnlyAction = descriptor.when.find("navigation.flyActive") != std::string_view::npos;
         const bool modalOnlyAction = descriptor.when.find("modalTool.active") != std::string_view::npos;
         quader::QuaderViewportKeybindingContext inputContext;
+        if (navigationOnlyAction) {
+            inputContext.navigationActive = true;
+        }
         if (flyOnlyAction) {
             inputContext.navigationActive = true;
             inputContext.flyNavigationActive = true;
@@ -1297,6 +1331,152 @@ TEST(EditorApiTests, RightClickPickOnUnselectedObjectChangesSelectionBeforeConte
     ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
     EXPECT_TRUE(harness.editor.query().entity(left.entity).has_value());
     EXPECT_FALSE(harness.editor.query().entity(right.value().entity).has_value());
+}
+
+TEST(EditorApiTests, BoxSelectApiSelectsContainedObjectByViewportRectangle) {
+    CommandTestHarness harness;
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> left =
+            harness.editor.modeling().createBox(
+                    quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Box Select Left");
+    ASSERT_TRUE(left.ok()) << left.errorMessage();
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+            harness.editor.modeling().createBox(
+                    quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Box Select Right");
+    ASSERT_TRUE(right.ok()) << right.errorMessage();
+    ASSERT_TRUE(harness.editor.scene().setTransform(
+            left.value().entity,
+            quader::QuaderTransform{.position = {-20.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(harness.editor.scene().setTransform(
+            right.value().entity,
+            quader::QuaderTransform{.position = {20.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+
+    quader::QuaderBoxSelectRequest request;
+    request.camera = apiOrthographicCamera();
+    request.start = {25.0f, 45.0f};
+    request.end = {35.0f, 55.0f};
+    request.edit = quader::QuaderSelectionEdit::Replace;
+    request.rule = quader::QuaderBoxSelectionRule::Contain;
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> selected =
+            harness.editor.selection().boxSelect(request);
+
+    ASSERT_TRUE(selected.ok()) << selected.errorMessage();
+    EXPECT_EQ(selected.value().mode, quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(selected.value().selectedObjectCount, 1u);
+    EXPECT_EQ(selectedEntities(harness.editor), std::vector<quader::EntityId>{left.value().entity});
+}
+
+TEST(EditorApiTests, BoxSelectApiTogglesObjectSelection) {
+    CommandTestHarness harness;
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> left =
+            harness.editor.modeling().createBox(
+                    quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Box Toggle Left");
+    ASSERT_TRUE(left.ok()) << left.errorMessage();
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+            harness.editor.modeling().createBox(
+                    quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Box Toggle Right");
+    ASSERT_TRUE(right.ok()) << right.errorMessage();
+    ASSERT_TRUE(harness.editor.scene().setTransform(
+            left.value().entity,
+            quader::QuaderTransform{.position = {-20.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(harness.editor.scene().setTransform(
+            right.value().entity,
+            quader::QuaderTransform{.position = {20.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(harness.editor.selection().selectObject(left.value()).ok());
+
+    quader::QuaderBoxSelectRequest request;
+    request.camera = apiOrthographicCamera();
+    request.start = {25.0f, 45.0f};
+    request.end = {35.0f, 55.0f};
+    request.edit = quader::QuaderSelectionEdit::Toggle;
+    request.rule = quader::QuaderBoxSelectionRule::Contain;
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> removed =
+            harness.editor.selection().boxSelect(request);
+
+    ASSERT_TRUE(removed.ok()) << removed.errorMessage();
+    EXPECT_EQ(removed.value().mode, quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(removed.value().selectedObjectCount, 0u);
+    EXPECT_TRUE(selectedEntities(harness.editor).empty());
+}
+
+TEST(EditorApiTests, BoxSelectApiPreservesActiveFaceFromBaseline) {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef object = createSelectedBox(harness.editor, "Face Baseline Box");
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(harness.editor.selection().selectFace(object, 1).ok());
+    quader::QuaderSelectionSummary summary = harness.editor.selection().summary();
+    ASSERT_EQ(summary.mode, quader::QuaderSelectionMode::Face);
+    ASSERT_EQ(summary.activeFaceId, 1);
+    ASSERT_EQ(summary.selectedFaceCount, 1u);
+
+    quader::QuaderBoxSelectRequest request;
+    request.camera = apiOrthographicCamera();
+    request.start = {0.0f, 0.0f};
+    request.end = {1.0f, 1.0f};
+    request.edit = quader::QuaderSelectionEdit::Add;
+    request.rule = quader::QuaderBoxSelectionRule::Contain;
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> selected =
+            harness.editor.selection().boxSelect(request);
+
+    ASSERT_TRUE(selected.ok()) << selected.errorMessage();
+    EXPECT_EQ(selected.value().mode, quader::QuaderSelectionMode::Face);
+    EXPECT_EQ(selected.value().activeKind, quader::QuaderActiveSelectionKind::Face);
+    EXPECT_EQ(selected.value().activeFaceId, 1);
+    EXPECT_EQ(selected.value().selectedFaceCount, 1u);
+}
+
+TEST(EditorApiTests, GroupModeBoxSelectsContainingGroupByViewportRectangle) {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef left = createSelectedBox(harness.editor, "Box Group Left");
+    ASSERT_TRUE(harness.editor.scene().setTransform(
+            left.entity,
+            quader::QuaderTransform{.position = {-20.0f, 0.0f, 0.0f}}).ok());
+    const quader::QuaderApiResult<quader::QuaderEntityRef> leftGroup =
+            harness.editor.scene().groupSelection("Box Group A");
+    ASSERT_TRUE(leftGroup.ok()) << leftGroup.errorMessage();
+
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
+            harness.editor.modeling().createBox(
+                    quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Box Group Right");
+    ASSERT_TRUE(right.ok()) << right.errorMessage();
+    ASSERT_TRUE(harness.editor.scene().setTransform(
+            right.value().entity,
+            quader::QuaderTransform{.position = {20.0f, 0.0f, 0.0f}}).ok());
+    ASSERT_TRUE(harness.editor.selection().selectObject(right.value()).ok());
+    const quader::QuaderApiResult<quader::QuaderEntityRef> rightGroup =
+            harness.editor.scene().groupSelection("Box Group B");
+    ASSERT_TRUE(rightGroup.ok()) << rightGroup.errorMessage();
+
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Group).ok());
+    ASSERT_TRUE(harness.editor.selection().clear().ok());
+    quader::QuaderBoxSelectRequest request;
+    request.camera = apiOrthographicCamera();
+    request.start = {25.0f, 45.0f};
+    request.end = {35.0f, 55.0f};
+    request.edit = quader::QuaderSelectionEdit::Replace;
+    request.rule = quader::QuaderBoxSelectionRule::Contain;
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> selected =
+            harness.editor.selection().boxSelect(request);
+
+    ASSERT_TRUE(selected.ok()) << selected.errorMessage();
+    EXPECT_EQ(selected.value().mode, quader::QuaderSelectionMode::Group);
+    EXPECT_EQ(selected.value().selectedObjectCount, 1u);
+    const std::optional<quader::QuaderEntitySnapshot> leftGroupSnapshot =
+            entityById(harness.editor, leftGroup.value().id);
+    const std::optional<quader::QuaderEntitySnapshot> rightGroupSnapshot =
+            entityById(harness.editor, rightGroup.value().id);
+    ASSERT_TRUE(leftGroupSnapshot.has_value());
+    ASSERT_TRUE(rightGroupSnapshot.has_value());
+    EXPECT_TRUE(leftGroupSnapshot->selected);
+    EXPECT_TRUE(leftGroupSnapshot->active);
+    EXPECT_FALSE(rightGroupSnapshot->selected);
 }
 
 TEST(EditorApiTests, RightClickPickOnUnselectedFaceChangesComponentSelectionBeforeContextDelete) {

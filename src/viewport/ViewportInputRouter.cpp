@@ -7,7 +7,6 @@
 #include "viewport/ViewportInputRouter.h"
 
 #include "viewport/HostViewportContractAdapter.h"
-#include "viewport/ViewportLegacyShortcutAdapter.h"
 #include "editor/tools/ViewportToolCatalog.h"
 #include "editor/tools/ViewportToolRuntime.h"
 
@@ -17,50 +16,23 @@
 namespace quader {
 namespace {
 
-bool usesResolvedInputBindings(const ViewportInputFrame& input) {
-    return input.shortcutResolverActive;
-}
-
 ViewportInputActionKind pressedNavigationAction(const ViewportInputFrame& input) {
-    if (usesResolvedInputBindings(input)) {
-        if (input.navigationBindings.flyPressed) {
-            return ViewportInputActionKind::Fly;
-        }
-        if (input.navigationBindings.panPressed) {
-            return ViewportInputActionKind::Pan;
-        }
-        if (input.navigationBindings.orbitSnapPressed) {
-            return ViewportInputActionKind::OrbitSnap;
-        }
-        if (input.navigationBindings.orbitPressed) {
-            return ViewportInputActionKind::Orbit;
-        }
-        return ViewportInputActionKind::None;
-    }
-
-    if (input.rightPressed &&
-            !input.modifiers.primary &&
-            !input.modifiers.shift &&
-            !input.modifiers.alt) {
+    if (input.navigationBindings.flyPressed) {
         return ViewportInputActionKind::Fly;
     }
-    if (!input.middlePressed) {
-        return ViewportInputActionKind::None;
-    }
-    if (input.modifiers.shift) {
+    if (input.navigationBindings.panPressed) {
         return ViewportInputActionKind::Pan;
     }
-    if (input.modifiers.alt) {
+    if (input.navigationBindings.orbitSnapPressed) {
         return ViewportInputActionKind::OrbitSnap;
     }
-    return ViewportInputActionKind::Orbit;
+    if (input.navigationBindings.orbitPressed) {
+        return ViewportInputActionKind::Orbit;
+    }
+    return ViewportInputActionKind::None;
 }
 
-bool navigationActionDown(const ViewportInputFrame& input, ViewportInputActionKind action, bool legacyRightButton) {
-    if (!usesResolvedInputBindings(input)) {
-        return legacyRightButton ? input.rightDown : input.middleDown;
-    }
-
+bool navigationActionDown(const ViewportInputFrame& input, ViewportInputActionKind action) {
     switch (action) {
     case ViewportInputActionKind::Orbit:
         return input.navigationBindings.orbitDown;
@@ -75,11 +47,7 @@ bool navigationActionDown(const ViewportInputFrame& input, ViewportInputActionKi
     }
 }
 
-bool navigationActionReleased(const ViewportInputFrame& input, ViewportInputActionKind action, bool legacyRightButton) {
-    if (!usesResolvedInputBindings(input)) {
-        return legacyRightButton ? input.rightReleased : input.middleReleased;
-    }
-
+bool navigationActionReleased(const ViewportInputFrame& input, ViewportInputActionKind action) {
     switch (action) {
     case ViewportInputActionKind::Orbit:
         return input.navigationBindings.orbitReleased;
@@ -141,7 +109,6 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     if (pressedAction != ViewportInputActionKind::None) {
         activeNavigationAction_ = pressedAction;
         navigationMode_ = navigationModeForAction(pressedAction, camera);
-        navigationUsesRightButton_ = !usesResolvedInputBindings(input) && pressedAction == ViewportInputActionKind::Fly;
         orbitSnapActionUsesAltModifier_ = pressedAction == ViewportInputActionKind::OrbitSnap && input.modifiers.alt;
         flyCursorCaptureActive_ = navigationMode_ == ViewportDragMode::Fly;
         flyHudActive_ = false;
@@ -151,10 +118,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     }
 
     if (navigationMode_ == ViewportDragMode::Fly) {
-        const bool resetFlySpeedPressed = usesResolvedInputBindings(input)
-                ? input.navigationBindings.resetFlySpeedPressed
-                : input.middlePressed;
-        if (resetFlySpeedPressed) {
+        if (input.navigationBindings.resetFlySpeedPressed) {
             camera.resetFlySpeed();
             result.consumed = true;
             result.flySpeedChanged = true;
@@ -162,8 +126,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             result.flySpeed = camera.flySpeed();
         }
 
-        const bool flySpeedWheelActive = !usesResolvedInputBindings(input) ||
-                input.navigationBindings.zoomWheel ||
+        const bool flySpeedWheelActive = input.navigationBindings.zoomWheel ||
                 input.navigationBindings.zoomToCursorWheel;
         if (input.mouseWheel != 0.0f && flySpeedWheelActive) {
             camera.adjustFlySpeed(input.mouseWheel);
@@ -172,15 +135,8 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             result.flySpeed = camera.flySpeed();
         }
 
-        bool cancelFly = false;
-        for (ViewportKey key : input.pressedKeys) {
-            if (key == ViewportKey::Escape) {
-                cancelFly = true;
-                break;
-            }
-        }
-
-        const bool flyDown = navigationActionDown(input, activeNavigationAction_, navigationUsesRightButton_);
+        const bool cancelFly = input.navigationBindings.cancelNavigationPressed;
+        const bool flyDown = navigationActionDown(input, activeNavigationAction_);
         if (flyDown && !cancelFly && !flyStartedThisFrame) {
             if (hasFlyMovementInput) {
                 flyHudActive_ = true;
@@ -191,10 +147,9 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             result.cameraChanged = true;
         }
 
-        if (navigationActionReleased(input, activeNavigationAction_, navigationUsesRightButton_) || !flyDown || cancelFly) {
+        if (navigationActionReleased(input, activeNavigationAction_) || !flyDown || cancelFly) {
             navigationMode_ = ViewportDragMode::None;
             activeNavigationAction_ = ViewportInputActionKind::None;
-            navigationUsesRightButton_ = false;
             orbitSnapActionUsesAltModifier_ = false;
             flyCursorCaptureActive_ = false;
             flyHudActive_ = false;
@@ -210,12 +165,12 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     }
 
     if (navigating()) {
-        const bool dragDown = navigationActionDown(input, activeNavigationAction_, navigationUsesRightButton_);
-        const bool dragReleased = navigationActionReleased(input, activeNavigationAction_, navigationUsesRightButton_);
+        const bool dragDown = navigationActionDown(input, activeNavigationAction_);
+        const bool dragReleased = navigationActionReleased(input, activeNavigationAction_) ||
+                input.navigationBindings.cancelNavigationPressed;
         if (dragDown) {
             const ViewportDragMode activeNavigationMode =
-                    !navigationUsesRightButton_ &&
-                            isOrbitNavigationAction(activeNavigationAction_)
+                    isOrbitNavigationAction(activeNavigationAction_)
                     ? (input.modifiers.alt ||
                                     (activeNavigationAction_ == ViewportInputActionKind::OrbitSnap &&
                                             !orbitSnapActionUsesAltModifier_)
@@ -235,7 +190,6 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         if (dragReleased || !dragDown) {
             navigationMode_ = ViewportDragMode::None;
             activeNavigationAction_ = ViewportInputActionKind::None;
-            navigationUsesRightButton_ = false;
             orbitSnapActionUsesAltModifier_ = false;
             flyCursorCaptureActive_ = false;
             flyHudActive_ = false;
@@ -244,11 +198,9 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         }
     }
 
-    const bool wheelZoomActive = usesResolvedInputBindings(input)
-            ? input.navigationBindings.zoomWheel || input.navigationBindings.zoomToCursorWheel
-            : true;
+    const bool wheelZoomActive = input.navigationBindings.zoomWheel || input.navigationBindings.zoomToCursorWheel;
     if (input.viewportHovered && input.mouseWheel != 0.0f && wheelZoomActive) {
-        if (usesResolvedInputBindings(input) ? input.navigationBindings.zoomToCursorWheel : input.modifiers.primary) {
+        if (input.navigationBindings.zoomToCursorWheel) {
             camera.scrollToCursor(input.mouseWheel, input.mouseLocal);
             result.zoomedToCursor = true;
         } else {
@@ -276,21 +228,6 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         }
     }
 
-    if (acceptsShortcuts && !result.shortcutHandled && !input.shortcutResolverActive) {
-        for (ViewportKey key : input.pressedKeys) {
-            ViewportShortcut shortcut;
-            if (!resolveShortcut(key, input.modifiers, shortcut)) {
-                continue;
-            }
-            if (handleShortcut(shortcut, camera, result)) {
-                result.consumed = true;
-                result.shortcutHandled = true;
-                result.shortcut = shortcut;
-                break;
-            }
-        }
-    }
-
     result.navigationActive = navigating();
     result.flyNavigationActive = flyNavigating();
     result.flyCursorCaptureActive = flyCursorCaptureActive();
@@ -301,7 +238,6 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
 void ViewportInputRouter::reset() {
     navigationMode_ = ViewportDragMode::None;
     activeNavigationAction_ = ViewportInputActionKind::None;
-    navigationUsesRightButton_ = false;
     orbitSnapActionUsesAltModifier_ = false;
     flyCursorCaptureActive_ = false;
     flyHudActive_ = false;
@@ -354,13 +290,6 @@ void ViewportInputRouter::clearModalDragState() {
 
 const ViewportTool* ViewportInputRouter::activeTool() const {
     return toolRuntime_ != nullptr ? toolRuntime_->activeTool() : findViewportTool(state_.activeTool);
-}
-
-bool ViewportInputRouter::resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut) {
-    if (resolveViewportShortcutFromHostContract(key, modifiers, shortcut)) {
-        return true;
-    }
-    return resolveStandaloneViewportLegacyShortcut(key, modifiers, shortcut);
 }
 
 bool ViewportInputRouter::handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result) {

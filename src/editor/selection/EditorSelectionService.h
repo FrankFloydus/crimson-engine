@@ -9,9 +9,11 @@
 #include "core/CommandResult.h"
 #include "core/Types.h"
 #include "editor/commands/document/DocumentCommandResult.h"
+#include "editor/modeling/ModelingSelectionBoxBaseline.h"
 #include "editor/modeling/ModelingTypes.h"
 #include "scene/Components.h"
 
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -69,6 +71,16 @@ struct EditorSelectionState {
 };
 
 /**
+ * Stores the selection baseline used to recompute live box-selection edits during one drag.
+ */
+struct EditorSelectionBoxBaseline {
+    ModelingSelectionMode mode = ModelingSelectionMode::Object;
+    std::vector<EntityId> sceneSelection;
+    EntityId activeEntity = InvalidEntityId;
+    std::optional<ModelingSelectionBoxBaseline> modelingSelection;
+};
+
+/**
  * Coordinates Editor Selection Service responsibilities for the editor selection authority.
  */
 class EditorSelectionService final {
@@ -95,7 +107,12 @@ public:
     ModelingCommandResult invert();
     ModelingCommandResult clear();
 
+    [[nodiscard]] EditorSelectionBoxBaseline captureBoxSelectionBaseline() const;
     [[nodiscard]] ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
+    [[nodiscard]] ModelingSelectionSummary boxSelect(const ModelingBoxSelectRequest& request);
+    [[nodiscard]] ModelingSelectionSummary boxSelect(
+            const ModelingBoxSelectRequest& request,
+            const EditorSelectionBoxBaseline& baseline);
     ModelingCommandResult updateHover(const ModelingHoverRequest& request);
     ModelingCommandResult setHover(const ModelingDirectHoverRequest& request);
     [[nodiscard]] ModelingHoverSummary previewHover(const ModelingHoverRequest& request) const;
@@ -103,11 +120,20 @@ public:
 
 private:
     [[nodiscard]] EditorSelectionTarget targetFromSummary(const ModelingSelectionSummary& summary) const;
+    [[nodiscard]] ModelingSelectionSummary boxSelect(
+            const ModelingBoxSelectRequest& request,
+            const EditorSelectionBoxBaseline* baseline);
     [[nodiscard]] ModelingSelectionSummary scenePickSelection(
             EntityId targetEntity,
             ModelingSelectionMode mode,
             const ModelingPickSelectRequest& request);
+    [[nodiscard]] ModelingSelectionSummary sceneBoxSelection(
+            std::span<const EntityId> targetEntities,
+            ModelingSelectionMode mode,
+            ModelingSelectionEdit edit,
+            const EditorSelectionBoxBaseline* baseline = nullptr);
     [[nodiscard]] EntityId pickMeshEntityByBounds(const ModelingRay& ray) const;
+    [[nodiscard]] std::vector<EntityId> boxPickMeshEntitiesByBounds(const ModelingBoxSelectRequest& request) const;
     [[nodiscard]] EntityId nearestGroupAncestor(EntityId entity) const;
     [[nodiscard]] ModelingSelectionSummary sceneSummaryFor(ModelingSelectionMode mode) const;
 

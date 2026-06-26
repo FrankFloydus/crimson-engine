@@ -147,7 +147,6 @@ add_library(quader_core STATIC
     src/ui/UISettings.cpp
     src/viewport/ViewportCameraController.cpp
     src/viewport/ViewportInputRouter.cpp
-    src/viewport/ViewportLegacyShortcutAdapter.cpp
     src/viewport/ViewportLayout.cpp
     src/viewport/ViewportSettings.cpp
     src/viewport/ViewportWorkspaceService.cpp
@@ -323,6 +322,7 @@ add_library(quader_runtime STATIC
     src/render/overlay/OverlayRenderableBuilder.cpp
     src/render/overlay/OverlayRenderableCache.cpp
     src/render/overlay/ViewportBoxOverlayBuilder.cpp
+    src/render/overlay/ViewportSelectionMarqueeOverlayBuilder.cpp
     src/render/overlay/ViewportTransformGizmoOverlayBuilder.cpp
     src/render/overlay/ViewportSceneOverlayBuilder.cpp
     src/render/overlay/ViewportOverlayStyleResolver.cpp

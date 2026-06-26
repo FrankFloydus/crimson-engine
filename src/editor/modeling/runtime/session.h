@@ -44,6 +44,7 @@ enum class SelectionEditOperation {
 	replace = 0,
 	add = 1,
 	remove = 2,
+	toggle = 3,
 };
 
 /**

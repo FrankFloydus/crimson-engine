@@ -52,15 +52,18 @@ TEST_CASE("selection edit operations preserve expected host ids", "[editor-core]
 	CHECK(quader_editor_core::selection_edit_operation_id(quader_editor_core::SelectionEditOperation::replace) == 0);
 	CHECK(quader_editor_core::selection_edit_operation_id(quader_editor_core::SelectionEditOperation::add) == 1);
 	CHECK(quader_editor_core::selection_edit_operation_id(quader_editor_core::SelectionEditOperation::remove) == 2);
+	CHECK(quader_editor_core::selection_edit_operation_id(quader_editor_core::SelectionEditOperation::toggle) == 3);
 	CHECK(quader_editor_core::selection_edit_operation_from_id(0) == quader_editor_core::SelectionEditOperation::replace);
 	CHECK(quader_editor_core::selection_edit_operation_from_id(1) == quader_editor_core::SelectionEditOperation::add);
 	CHECK(quader_editor_core::selection_edit_operation_from_id(2) == quader_editor_core::SelectionEditOperation::remove);
+	CHECK(quader_editor_core::selection_edit_operation_from_id(3) == quader_editor_core::SelectionEditOperation::toggle);
 	CHECK(quader_editor_core::selection_edit_operation_from_id(99) == quader_editor_core::SelectionEditOperation::replace);
 	CHECK(quader_editor_core::selection_edit_operation_from_modifiers(false, false) == quader_editor_core::SelectionEditOperation::replace);
 	CHECK(quader_editor_core::selection_edit_operation_from_modifiers(true, false) == quader_editor_core::SelectionEditOperation::remove);
 	CHECK(quader_editor_core::selection_edit_operation_from_modifiers(false, true) == quader_editor_core::SelectionEditOperation::add);
 	CHECK(quader_editor_core::selection_edit_operation_preserves_existing(quader_editor_core::SelectionEditOperation::add));
 	CHECK(quader_editor_core::selection_edit_operation_preserves_existing(quader_editor_core::SelectionEditOperation::remove));
+	CHECK(quader_editor_core::selection_edit_operation_preserves_existing(quader_editor_core::SelectionEditOperation::toggle));
 	CHECK_FALSE(quader_editor_core::selection_edit_operation_preserves_existing(quader_editor_core::SelectionEditOperation::replace));
 }
 
@@ -109,6 +112,140 @@ TEST_CASE("rectangle selection remove edits existing face selections", "[editor-
 	CHECK(result.selection.selected_faces[1].face_index == 0);
 	CHECK(result.selection.active_object_id == 2);
 	CHECK(result.selection.active_face_index == 0);
+}
+
+TEST_CASE("projected rectangle object hits distinguish contain and crossing", "[editor-core][tool][select]")
+{
+	quader_editor_core::RectangleProjectedHitsRequest request;
+	request.mode = quader_editor_core::SelectionMode::object;
+	request.rect = { 0.0, 0.0, 10.0, 10.0 };
+	request.objects = {
+		{
+			.object_id = 1,
+			.has_screen_bounds = true,
+			.screen_min = { 2.0f, 2.0f },
+			.screen_max = { 8.0f, 8.0f },
+			.screen_points = { { 2.0f, 2.0f }, { 8.0f, 8.0f } },
+		},
+		{
+			.object_id = 2,
+			.has_screen_bounds = true,
+			.screen_min = { -2.0f, 2.0f },
+			.screen_max = { 5.0f, 8.0f },
+			.screen_points = { { -2.0f, 2.0f }, { 5.0f, 8.0f } },
+		},
+	};
+
+	request.match = quader_editor_core::RectangleSelectionMatch::contain;
+	quader_editor_core::RectangleSelectionHits hits =
+		quader_editor_core::rectangle_hits_from_projected_candidates(request);
+	REQUIRE(hits.object_ids.size() == 1);
+	CHECK(hits.object_ids[0] == 1);
+
+	request.match = quader_editor_core::RectangleSelectionMatch::crossing;
+	hits = quader_editor_core::rectangle_hits_from_projected_candidates(request);
+	REQUIRE(hits.object_ids.size() == 2);
+	CHECK(hits.object_ids[0] == 1);
+	CHECK(hits.object_ids[1] == 2);
+}
+
+TEST_CASE("projected rectangle object crossing ignores loose screen bounds gaps", "[editor-core][tool][select]")
+{
+	quader_editor_core::RectangleProjectedHitsRequest request;
+	request.mode = quader_editor_core::SelectionMode::object;
+	request.match = quader_editor_core::RectangleSelectionMatch::crossing;
+	request.objects = {
+		{
+			.object_id = 1,
+			.has_screen_center = true,
+			.screen_center = { 5.0f, 5.0f },
+			.has_screen_bounds = true,
+			.screen_min = { 0.0f, 0.0f },
+			.screen_max = { 10.0f, 10.0f },
+			.screen_points = { { 5.0f, 0.0f }, { 10.0f, 5.0f }, { 5.0f, 10.0f }, { 0.0f, 5.0f } },
+			.screen_segments = {
+				{ { 5.0f, 0.0f }, { 10.0f, 5.0f } },
+				{ { 10.0f, 5.0f }, { 5.0f, 10.0f } },
+				{ { 5.0f, 10.0f }, { 0.0f, 5.0f } },
+				{ { 0.0f, 5.0f }, { 5.0f, 0.0f } },
+			},
+			.screen_polygons = { { { 5.0f, 0.0f }, { 10.0f, 5.0f }, { 5.0f, 10.0f }, { 0.0f, 5.0f } } },
+		},
+	};
+
+	request.rect = { 0.5, 0.5, 2.0, 2.0 };
+	CHECK(quader_editor_core::rectangle_hits_from_projected_candidates(request).object_ids.empty());
+
+	request.rect = { 1.0, 4.0, 3.0, 6.0 };
+	REQUIRE(quader_editor_core::rectangle_hits_from_projected_candidates(request).object_ids.size() == 1);
+
+	request.rect = { 4.0, 4.0, 6.0, 6.0 };
+	REQUIRE(quader_editor_core::rectangle_hits_from_projected_candidates(request).object_ids.size() == 1);
+}
+
+TEST_CASE("projected rectangle component hits use segment and polygon crossing", "[editor-core][tool][select]")
+{
+	quader_editor_core::RectangleProjectedHitsRequest edge_request;
+	edge_request.mode = quader_editor_core::SelectionMode::edge;
+	edge_request.rect = { 0.0, 0.0, 10.0, 10.0 };
+	edge_request.edges = {
+		{
+			.object_id = 1,
+			.a_index = 1,
+			.b_index = 2,
+			.has_screen_start = true,
+			.screen_start = { -5.0f, 5.0f },
+			.has_screen_end = true,
+			.screen_end = { 15.0f, 5.0f },
+		},
+	};
+	edge_request.match = quader_editor_core::RectangleSelectionMatch::contain;
+	CHECK(quader_editor_core::rectangle_hits_from_projected_candidates(edge_request).edges.empty());
+	edge_request.match = quader_editor_core::RectangleSelectionMatch::crossing;
+	REQUIRE(quader_editor_core::rectangle_hits_from_projected_candidates(edge_request).edges.size() == 1);
+
+	quader_editor_core::RectangleProjectedHitsRequest face_request;
+	face_request.mode = quader_editor_core::SelectionMode::face;
+	face_request.rect = { 0.0, 0.0, 10.0, 10.0 };
+	face_request.faces = {
+		{
+			.object_id = 3,
+			.face_index = 7,
+			.vertex_indices = { 1, 2, 3, 4 },
+			.screen_vertices = {
+				{ -10.0f, -10.0f },
+				{ 20.0f, -10.0f },
+				{ 20.0f, 20.0f },
+				{ -10.0f, 20.0f },
+			},
+		},
+	};
+	face_request.match = quader_editor_core::RectangleSelectionMatch::contain;
+	CHECK(quader_editor_core::rectangle_hits_from_projected_candidates(face_request).faces.empty());
+	face_request.match = quader_editor_core::RectangleSelectionMatch::crossing;
+	REQUIRE(quader_editor_core::rectangle_hits_from_projected_candidates(face_request).faces.size() == 1);
+}
+
+TEST_CASE("projected rectangle vertex hits require point containment", "[editor-core][tool][select]")
+{
+	quader_editor_core::RectangleProjectedHitsRequest request;
+	request.mode = quader_editor_core::SelectionMode::vertex;
+	request.rect = { 0.0, 0.0, 10.0, 10.0 };
+	request.vertices = {
+		{ .object_id = 1, .vertex_index = 4, .has_screen_position = true, .screen_position = { 5.0f, 5.0f } },
+		{ .object_id = 1, .vertex_index = 5, .has_screen_position = true, .screen_position = { 11.0f, 5.0f } },
+	};
+
+	request.match = quader_editor_core::RectangleSelectionMatch::contain;
+	quader_editor_core::RectangleSelectionHits hits =
+		quader_editor_core::rectangle_hits_from_projected_candidates(request);
+	REQUIRE(hits.vertices.size() == 1);
+	CHECK(hits.vertices[0].vertex_index == 4);
+
+	request.match = quader_editor_core::RectangleSelectionMatch::crossing;
+	hits = quader_editor_core::rectangle_hits_from_projected_candidates(request);
+	REQUIRE(hits.vertices.size() == 1);
+	CHECK(hits.vertices[0].vertex_index == 4);
 }
 
 TEST_CASE("handle selection policy toggles grouped edge and face handles", "[editor-core][tool][select]")

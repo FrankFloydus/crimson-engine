@@ -165,6 +165,7 @@ enum class ViewportInputActionKind {
     Zoom,
     ZoomToCursor,
     ResetFlySpeed,
+    CancelNavigation,
     FlyForward,
     FlyBackward,
     FlyRight,

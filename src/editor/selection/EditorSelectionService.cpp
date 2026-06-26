@@ -10,6 +10,9 @@
 #include "assets/MeshAsset.h"
 #include "editor/commands/DocumentCommandService.h"
 #include "editor/modeling/services/ModelingSessionService.h"
+#include "editor/interactions/selection_box.h"
+#include "editor/interactions/viewport_projection.h"
+#include "editor/selection/BoxSelectionRules.h"
 #include "math/GlmBridge.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneDocument.h"
@@ -17,8 +20,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -114,6 +119,81 @@ ResolvedSceneSelectionEdit resolveSceneSelectionEdit(
     return result;
 }
 
+EditorSelectionEdit toEditorSelectionEdit(ModelingSelectionEdit edit) {
+    switch (edit) {
+    case ModelingSelectionEdit::Add:
+        return EditorSelectionEdit::Add;
+    case ModelingSelectionEdit::Remove:
+        return EditorSelectionEdit::Remove;
+    case ModelingSelectionEdit::Toggle:
+        return EditorSelectionEdit::Toggle;
+    case ModelingSelectionEdit::Replace:
+        return EditorSelectionEdit::Replace;
+    }
+    return EditorSelectionEdit::Replace;
+}
+
+quader_editor_core::ViewportCameraState toRuntimeCamera(const ModelingViewportCamera& value) {
+    quader_editor_core::ViewportCameraState camera;
+    camera.projection = value.orthographic
+            ? quader_editor_core::CameraProjection::orthographic
+            : quader_editor_core::CameraProjection::perspective;
+    camera.transform = {
+            .x_axis = value.xAxis,
+            .y_axis = value.yAxis,
+            .z_axis = value.zAxis,
+            .origin = value.origin,
+    };
+    camera.viewport_size = {
+            std::max(value.viewportSize.x, 1.0f),
+            std::max(value.viewportSize.y, 1.0f),
+    };
+    camera.orthographic_size = std::max(value.orthographicSize, 0.0001);
+    camera.fov_degrees = value.fovDegrees;
+    return camera;
+}
+
+quader_editor_core::RectangleSelectionMatch rectangleMatch(const ModelingBoxSelectRequest& request) {
+    switch (resolveBoxSelectionRule(request.rule, request.start, request.end)) {
+    case ModelingBoxSelectionRule::Contain:
+        return quader_editor_core::RectangleSelectionMatch::contain;
+    case ModelingBoxSelectionRule::Crossing:
+        return quader_editor_core::RectangleSelectionMatch::crossing;
+    case ModelingBoxSelectionRule::DragDirection:
+        break;
+    }
+    return quader_editor_core::RectangleSelectionMatch::crossing;
+}
+
+std::array<QVec3, 8> boundsCorners(const SceneBounds& bounds) {
+    return {{
+            {bounds.min.x, bounds.min.y, bounds.min.z},
+            {bounds.max.x, bounds.min.y, bounds.min.z},
+            {bounds.max.x, bounds.max.y, bounds.min.z},
+            {bounds.min.x, bounds.max.y, bounds.min.z},
+            {bounds.min.x, bounds.min.y, bounds.max.z},
+            {bounds.max.x, bounds.min.y, bounds.max.z},
+            {bounds.max.x, bounds.max.y, bounds.max.z},
+            {bounds.min.x, bounds.max.y, bounds.max.z},
+    }};
+}
+
+void includeProjectedObjectPoint(
+        quader_editor_core::RectangleProjectedObject& projected,
+        QVec2 screen) {
+    projected.screen_points.push_back(screen);
+    if (!projected.has_screen_bounds) {
+        projected.screen_min = screen;
+        projected.screen_max = screen;
+        projected.has_screen_bounds = true;
+    } else {
+        projected.screen_min.x = std::min(projected.screen_min.x, screen.x);
+        projected.screen_min.y = std::min(projected.screen_min.y, screen.y);
+        projected.screen_max.x = std::max(projected.screen_max.x, screen.x);
+        projected.screen_max.y = std::max(projected.screen_max.y, screen.y);
+    }
+}
+
 } // namespace
 
 EditorSelectionService::EditorSelectionService(
@@ -200,6 +280,17 @@ ModelingCommandResult EditorSelectionService::clear() {
     return modeling_.clearSelection();
 }
 
+EditorSelectionBoxBaseline EditorSelectionService::captureBoxSelectionBaseline() const {
+    EditorSelectionBoxBaseline baseline;
+    baseline.mode = modeling_.selectionMode();
+    baseline.sceneSelection = scene_.selectedEntities();
+    baseline.activeEntity = scene_.primarySelection();
+    if (modeling_.runtimeAvailable() && baseline.mode != ModelingSelectionMode::Group) {
+        baseline.modelingSelection = modeling_.captureBoxSelectionBaseline();
+    }
+    return baseline;
+}
+
 ModelingSelectionSummary EditorSelectionService::pickSelect(const ModelingPickSelectRequest& request) {
     if (modeling_.selectionMode() == ModelingSelectionMode::Group) {
         const EntityId hitMesh = pickMeshEntityByBounds(request.ray);
@@ -211,6 +302,45 @@ ModelingSelectionSummary EditorSelectionService::pickSelect(const ModelingPickSe
     }
 
     return scenePickSelection(pickMeshEntityByBounds(request.ray), ModelingSelectionMode::Object, request);
+}
+
+ModelingSelectionSummary EditorSelectionService::boxSelect(const ModelingBoxSelectRequest& request) {
+    return boxSelect(request, nullptr);
+}
+
+ModelingSelectionSummary EditorSelectionService::boxSelect(
+        const ModelingBoxSelectRequest& request,
+        const EditorSelectionBoxBaseline& baseline) {
+    return boxSelect(request, &baseline);
+}
+
+ModelingSelectionSummary EditorSelectionService::boxSelect(
+        const ModelingBoxSelectRequest& request,
+        const EditorSelectionBoxBaseline* baseline) {
+    if (modeling_.selectionMode() == ModelingSelectionMode::Group) {
+        std::vector<EntityId> groups;
+        for (const EntityId meshEntity : boxPickMeshEntitiesByBounds(request)) {
+            const EntityId group = nearestGroupAncestor(meshEntity);
+            if (group != InvalidEntityId &&
+                    std::find(groups.begin(), groups.end(), group) == groups.end()) {
+                groups.push_back(group);
+            }
+        }
+        return sceneBoxSelection(groups, ModelingSelectionMode::Group, request.edit, baseline);
+    }
+
+    if (modeling_.runtimeAvailable()) {
+        if (baseline != nullptr &&
+                baseline->modelingSelection.has_value() &&
+                baseline->modelingSelection->valid() &&
+                baseline->mode == modeling_.selectionMode()) {
+            return modeling_.boxSelect(request, *baseline->modelingSelection);
+        }
+        return modeling_.boxSelect(request);
+    }
+
+    const std::vector<EntityId> entities = boxPickMeshEntitiesByBounds(request);
+    return sceneBoxSelection(entities, ModelingSelectionMode::Object, request.edit, baseline);
 }
 
 ModelingCommandResult EditorSelectionService::updateHover(const ModelingHoverRequest& request) {
@@ -336,6 +466,27 @@ ModelingSelectionSummary EditorSelectionService::scenePickSelection(
     return current.mode == mode ? current : sceneSummaryFor(mode);
 }
 
+ModelingSelectionSummary EditorSelectionService::sceneBoxSelection(
+        std::span<const EntityId> targetEntities,
+        ModelingSelectionMode mode,
+        ModelingSelectionEdit edit,
+        const EditorSelectionBoxBaseline* baseline) {
+    const std::vector<EntityId> previousSelected =
+            (baseline != nullptr && baseline->mode == mode)
+            ? baseline->sceneSelection
+            : scene_.selectedEntities();
+    const ResolvedSceneSelectionEdit resolved =
+            resolveSceneSelectionEdit(previousSelected, targetEntities, toEditorSelectionEdit(edit));
+    if (resolved.selected != previousSelected) {
+        (void)setSceneSelection(
+                std::span<const EntityId>(resolved.selected.data(), resolved.selected.size()),
+                resolved.active);
+    }
+
+    const ModelingSelectionSummary current = modeling_.selectionSummary();
+    return current.mode == mode ? current : sceneSummaryFor(mode);
+}
+
 EntityId EditorSelectionService::pickMeshEntityByBounds(const ModelingRay& ray) const {
     EntityId bestEntity = InvalidEntityId;
     float bestDistance = std::numeric_limits<float>::max();
@@ -386,6 +537,101 @@ EntityId EditorSelectionService::pickMeshEntityByBounds(const ModelingRay& ray) 
     }
 
     return bestEntity;
+}
+
+std::vector<EntityId> EditorSelectionService::boxPickMeshEntitiesByBounds(const ModelingBoxSelectRequest& request) const {
+    const quader_editor_core::ViewportCameraState camera = toRuntimeCamera(request.camera);
+    quader_editor_core::RectangleProjectedHitsRequest hitsRequest;
+    hitsRequest.mode = quader_editor_core::SelectionMode::object;
+    hitsRequest.match = rectangleMatch(request);
+    hitsRequest.rect = quader_editor_core::normalized_screen_rect(request.start, request.end);
+
+    std::vector<EntityId> entitiesByCandidate;
+    for (const EntityId id : scene_.entities()) {
+        const VisibilityComponent* visibility = scene_.visibility(id);
+        if (!scene_.isEffectivelyVisible(id) ||
+                (visibility != nullptr && !visibility->selectable)) {
+            continue;
+        }
+
+        const MeshComponent* meshComponent = scene_.mesh(id);
+        if (!meshComponent || scene_.transform(id) == nullptr) {
+            continue;
+        }
+
+        const MeshAsset* mesh = assets_.mesh(meshComponent->mesh);
+        if (!mesh) {
+            continue;
+        }
+
+        if (mesh->vertices.empty()) {
+            continue;
+        }
+
+        const int candidateId = static_cast<int>(entitiesByCandidate.size());
+        entitiesByCandidate.push_back(id);
+        quader_editor_core::RectangleProjectedObject projected;
+        projected.object_id = candidateId;
+        const QMat4 worldFromLocal = scene_.worldTransformMatrix(id);
+
+        std::vector<std::optional<QVec2>> projectedVertices(mesh->vertices.size());
+        for (std::size_t vertexIndex = 0; vertexIndex < mesh->vertices.size(); ++vertexIndex) {
+            QVec2 screen;
+            if (!quader_editor_core::project_viewport_point(
+                        camera,
+                        transformPoint(worldFromLocal, mesh->vertices[vertexIndex].position),
+                        screen)) {
+                continue;
+            }
+            projectedVertices[vertexIndex] = screen;
+            includeProjectedObjectPoint(projected, screen);
+        }
+        if (projected.has_screen_bounds) {
+            projected.has_screen_center = true;
+            projected.screen_center = {
+                    (projected.screen_min.x + projected.screen_max.x) * 0.5f,
+                    (projected.screen_min.y + projected.screen_max.y) * 0.5f,
+            };
+        }
+
+        const std::vector<MeshPrimitiveSpan> primitiveSpans = normalizedMeshPrimitiveSpans(*mesh);
+        for (const MeshPrimitiveSpan& span : primitiveSpans) {
+            const std::uint64_t end = static_cast<std::uint64_t>(span.indexOffset) + span.indexCount;
+            for (std::uint64_t offset = span.indexOffset; offset + 2U < end; offset += 3U) {
+                const std::uint32_t ia = mesh->indices[static_cast<std::size_t>(offset)];
+                const std::uint32_t ib = mesh->indices[static_cast<std::size_t>(offset + 1U)];
+                const std::uint32_t ic = mesh->indices[static_cast<std::size_t>(offset + 2U)];
+                if (ia >= projectedVertices.size() ||
+                        ib >= projectedVertices.size() ||
+                        ic >= projectedVertices.size()) {
+                    continue;
+                }
+                const std::optional<QVec2>& a = projectedVertices[ia];
+                const std::optional<QVec2>& b = projectedVertices[ib];
+                const std::optional<QVec2>& c = projectedVertices[ic];
+                if (!a || !b || !c) {
+                    continue;
+                }
+                projected.screen_segments.push_back({*a, *b});
+                projected.screen_segments.push_back({*b, *c});
+                projected.screen_segments.push_back({*c, *a});
+                projected.screen_polygons.push_back({*a, *b, *c});
+            }
+        }
+
+        hitsRequest.objects.push_back(std::move(projected));
+    }
+
+    std::vector<EntityId> selected;
+    const quader_editor_core::RectangleSelectionHits hits =
+            quader_editor_core::rectangle_hits_from_projected_candidates(hitsRequest);
+    selected.reserve(hits.object_ids.size());
+    for (const int candidateId : hits.object_ids) {
+        if (candidateId >= 0 && static_cast<std::size_t>(candidateId) < entitiesByCandidate.size()) {
+            selected.push_back(entitiesByCandidate[static_cast<std::size_t>(candidateId)]);
+        }
+    }
+    return selected;
 }
 
 EntityId EditorSelectionService::nearestGroupAncestor(EntityId entity) const {

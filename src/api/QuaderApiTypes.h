@@ -111,6 +111,15 @@ enum class QuaderSelectionEdit {
 };
 
 /**
+ * Enumerates QuaderBoxSelectionRule values used by viewport box-selection requests.
+ */
+enum class QuaderBoxSelectionRule {
+    DragDirection,
+    Contain,
+    Crossing,
+};
+
+/**
  * Enumerates QuaderMutationKind values used by the api layer.
  */
 enum class QuaderMutationKind {
@@ -390,6 +399,17 @@ struct QuaderPickSelectRequest {
     bool preserveSelectionOnSelectedHit = false;
     double vertexRadius = 0.3;
     double edgeRadius = 0.2;
+};
+
+/**
+ * Stores a Quader Box Select Request value used by the public Quader API surface.
+ */
+struct QuaderBoxSelectRequest {
+    QuaderViewportCamera camera;
+    QVec2 start = {};
+    QVec2 end = {};
+    QuaderSelectionEdit edit = QuaderSelectionEdit::Replace;
+    QuaderBoxSelectionRule rule = QuaderBoxSelectionRule::DragDirection;
 };
 
 /**

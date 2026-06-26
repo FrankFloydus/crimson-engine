@@ -193,6 +193,7 @@ bool UISystem::processEvent(const SDL_Event& event) {
     }
 
     updateWindowMetrics();
+    refreshMeasuredViewportFrameForPointerEvent(event);
     if (event.type == SDL_EVENT_KEY_DOWN &&
             event.key.key == SDLK_F1 &&
             !event.key.repeat &&
@@ -448,6 +449,31 @@ void UISystem::updateRmlDensityScale() {
 
     rmlDpRatio_ = dpRatio;
     rmlHost_.setDensityIndependentPixelRatio(rmlDpRatio_);
+}
+
+void UISystem::refreshMeasuredViewportFrameForPointerEvent(const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+    case SDL_EVENT_MOUSE_WHEEL:
+        break;
+    default:
+        return;
+    }
+
+    if (!rmlHost_.initialized()) {
+        return;
+    }
+
+    if (mainLayoutDirty_) {
+        rebuildMainLayout();
+    }
+    rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+    if (updateModelingModeShelfOverflowFromRml()) {
+        rmlHost_.updateLayout(framebufferWidth_, framebufferHeight_);
+    }
+    updateMainViewportFrameFromRml();
 }
 
 void UISystem::saveViewportSettings() {

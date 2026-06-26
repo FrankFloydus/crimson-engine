@@ -217,6 +217,13 @@ inline std::vector<ViewportInputActionBindingDescriptor> viewportInputActionBind
                     .action = ViewportInputActionKind::ResetFlySpeed,
             },
             {
+                    .targetId = viewportInputActionTargetId("navigation.cancel"),
+                    .shortcut = "Escape",
+                    .when = "viewportFocus && !textInputActive && navigation.active",
+                    .weight = 30,
+                    .action = ViewportInputActionKind::CancelNavigation,
+            },
+            {
                     .targetId = viewportInputActionTargetId("navigation.zoom"),
                     .shortcut = "Wheel",
                     .action = ViewportInputActionKind::Zoom,
@@ -411,144 +418,6 @@ inline float viewportGridWorldSizeFromContract(int preset) {
     const int clampedPreset = viewportClampGridPreset(preset);
     const float mapUnits = std::pow(2.0f, static_cast<float>(clampedPreset - 1));
     return mapUnits / 32.0f;
-}
-
-inline bool viewportKeyMatchesText(ViewportKey key, std::string_view text) {
-    switch (key) {
-    case ViewportKey::A:
-        return text == "A";
-    case ViewportKey::Q:
-        return text == "Q";
-    case ViewportKey::W:
-        return text == "W";
-    case ViewportKey::D:
-        return text == "D";
-    case ViewportKey::E:
-        return text == "E";
-    case ViewportKey::F:
-        return text == "F";
-    case ViewportKey::G:
-        return text == "G";
-    case ViewportKey::H:
-        return text == "H";
-    case ViewportKey::I:
-        return text == "I";
-    case ViewportKey::J:
-        return text == "J";
-    case ViewportKey::K:
-        return text == "K";
-    case ViewportKey::L:
-        return text == "L";
-    case ViewportKey::M:
-        return text == "M";
-    case ViewportKey::N:
-        return text == "N";
-    case ViewportKey::O:
-        return text == "O";
-    case ViewportKey::R:
-        return text == "R";
-    case ViewportKey::S:
-        return text == "S";
-    case ViewportKey::B:
-        return text == "B";
-    case ViewportKey::C:
-        return text == "C";
-    case ViewportKey::P:
-        return text == "P";
-    case ViewportKey::T:
-        return text == "T";
-    case ViewportKey::U:
-        return text == "U";
-    case ViewportKey::V:
-        return text == "V";
-    case ViewportKey::X:
-        return text == "X";
-    case ViewportKey::Y:
-        return text == "Y";
-    case ViewportKey::Z:
-        return text == "Z";
-    case ViewportKey::Number0:
-        return text == "0" || text == "Keypad0";
-    case ViewportKey::Number1:
-        return text == "1" || text == "Keypad1";
-    case ViewportKey::Number2:
-        return text == "2" || text == "Keypad2";
-    case ViewportKey::Number3:
-        return text == "3" || text == "Keypad3";
-    case ViewportKey::Number4:
-        return text == "4" || text == "Keypad4";
-    case ViewportKey::Number5:
-        return text == "5" || text == "Keypad5";
-    case ViewportKey::Number6:
-        return text == "6" || text == "Keypad6";
-    case ViewportKey::Number7:
-        return text == "7" || text == "Keypad7";
-    case ViewportKey::Number8:
-        return text == "8" || text == "Keypad8";
-    case ViewportKey::Number9:
-        return text == "9" || text == "Keypad9";
-    case ViewportKey::Home:
-        return text == "Home";
-    case ViewportKey::End:
-        return text == "End";
-    case ViewportKey::PageUp:
-        return text == "PageUp";
-    case ViewportKey::PageDown:
-        return text == "PageDown";
-    case ViewportKey::Left:
-        return text == "Left";
-    case ViewportKey::Right:
-        return text == "Right";
-    case ViewportKey::Up:
-        return text == "Up";
-    case ViewportKey::Down:
-        return text == "Down";
-    case ViewportKey::Space:
-        return text == "Space";
-    case ViewportKey::F1:
-        return text == "F1";
-    case ViewportKey::F2:
-        return text == "F2";
-    case ViewportKey::F3:
-        return text == "F3";
-    case ViewportKey::F4:
-        return text == "F4";
-    case ViewportKey::F5:
-        return text == "F5";
-    case ViewportKey::F6:
-        return text == "F6";
-    case ViewportKey::F7:
-        return text == "F7";
-    case ViewportKey::F8:
-        return text == "F8";
-    case ViewportKey::F9:
-        return text == "F9";
-    case ViewportKey::F10:
-        return text == "F10";
-    case ViewportKey::F11:
-        return text == "F11";
-    case ViewportKey::F12:
-        return text == "F12";
-    case ViewportKey::Escape:
-        return text == "Escape";
-    case ViewportKey::Delete:
-        return text == "Delete";
-    case ViewportKey::Backspace:
-        return text == "Backspace";
-    case ViewportKey::Enter:
-        return text == "Enter";
-    case ViewportKey::Tab:
-        return text == "Tab";
-    }
-    return false;
-}
-
-inline bool viewportShortcutModifiersMatch(
-        bool primary,
-        bool alt,
-        bool shift,
-        ViewportModifiers modifiers) {
-    return primary == modifiers.primary && alt == modifiers.alt && shift == modifiers.shift;
 }
 
 inline bool viewportToolFromContractId(std::string_view id, ViewportToolId& tool) {
@@ -764,42 +633,6 @@ inline bool viewportRouterShortcutForTargetId(
         ViewportShortcut& shortcut) {
     return viewportTargetRequiresRouterDispatch(targetId) &&
             viewportShortcutForCommandTargetId(targetId, shortcut);
-}
-
-inline bool resolveViewportShortcutFromHostContract(
-        ViewportKey key,
-        ViewportModifiers modifiers,
-        ViewportShortcut& shortcut) {
-    if (!modifiers.primary && !modifiers.alt && !modifiers.shift) {
-        const auto presets = quader_host_contract::grid_preset_catalog();
-        for (std::size_t index = 0; index < presets.size(); ++index) {
-            if (viewportKeyMatchesText(key, presets[index].shortcut)) {
-                shortcut.kind = ViewportShortcutKind::SetGridPreset;
-                shortcut.context = ViewportShortcutContext::Viewport;
-                shortcut.gridPreset = static_cast<int>(index + 1U);
-                return true;
-            }
-        }
-    }
-
-    for (const quader_host_contract::HostShortcutDescriptor& descriptor :
-            quader_host_contract::shortcut_catalog()) {
-        if (!viewportKeyMatchesText(key, descriptor.key) ||
-                !viewportShortcutModifiersMatch(
-                        descriptor.primary_modifier,
-                        descriptor.alt,
-                        descriptor.shift,
-                        modifiers)) {
-            continue;
-        }
-
-        ViewportShortcut resolved;
-        if (viewportShortcutFromContractTarget(descriptor.target_id, resolved)) {
-            shortcut = resolved;
-            return true;
-        }
-    }
-    return false;
 }
 
 } // namespace quader

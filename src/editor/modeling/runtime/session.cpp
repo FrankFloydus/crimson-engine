@@ -261,7 +261,9 @@ SelectionMode sanitize_selection_mode(int mode)
 
 SelectionEditOperation sanitize_selection_operation(int operation)
 {
-	if (operation == int(SelectionEditOperation::add) || operation == int(SelectionEditOperation::remove)) {
+	if (operation == int(SelectionEditOperation::add) ||
+			operation == int(SelectionEditOperation::remove) ||
+			operation == int(SelectionEditOperation::toggle)) {
 		return static_cast<SelectionEditOperation>(operation);
 	}
 	return SelectionEditOperation::replace;

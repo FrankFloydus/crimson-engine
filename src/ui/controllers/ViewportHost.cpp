@@ -9,7 +9,7 @@
 #include "api/QuaderApiTypeConversions.h"
 #include "api/QuaderEditorApi.h"
 #include "core/Logger.h"
-#include "editor/input/ViewportInputBindingAdapter.h"
+#include "editor/input/QuaderInputBinding.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "editor/render/QuaderRenderApiRuntimeAccess.h"
 #include "editor/modeling/services/SelectionModeAdapter.h"
@@ -21,6 +21,7 @@
 #include "render/RenderLayers.h"
 #include "render/ViewportOverlayFrame.h"
 #include "render/overlay/ViewportBoxOverlayBuilder.h"
+#include "render/overlay/ViewportSelectionMarqueeOverlayBuilder.h"
 #include "render/overlay/ViewportTransformGizmoOverlayBuilder.h"
 #include "scene/SceneBounds.h"
 #include "scene/SceneEntityNaming.h"
@@ -34,7 +35,8 @@
 #include <SDL3/SDL_video.h>
 
 #include <algorithm>
-#include <cmath>
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -177,6 +179,24 @@ float distanceToSegmentSquared(QVec2 point, QVec2 start, QVec2 end) {
             0.0f,
             1.0f);
     return distanceSquared(point, start + segment * t);
+}
+
+ViewportOverlayFrame buildToolOverlayFrame(
+        const ViewportInputRouter& inputRouter,
+        const ViewportInteractionController& interactions,
+        const ViewportOverlayCamera& overlayCamera) {
+    ViewportOverlayFrame toolOverlayFrame;
+    const ModelingBoxPreview& boxPreview = inputRouter.boxPreview();
+    if (boxPreview.dragState != ModelingBoxDragState::Height) {
+        ViewportBoxOverlayBuilder::append(toolOverlayFrame, boxPreview);
+    }
+    const quader_editor_core::TransformGizmoFrame* transformGizmoFrame =
+            interactions.transformGizmoFrame();
+    if (transformGizmoFrame != nullptr) {
+        ViewportTransformGizmoOverlayBuilder::append(toolOverlayFrame, *transformGizmoFrame, overlayCamera);
+    }
+    ViewportSelectionMarqueeOverlayBuilder::append(toolOverlayFrame, overlayCamera, interactions.selectionMarquee());
+    return toolOverlayFrame;
 }
 
 std::optional<int> hitDrawnPlaneCapturedPoint(
@@ -475,6 +495,9 @@ void markNavigationPressed(ViewportNavigationInput& navigation, ViewportInputAct
     case ViewportInputActionKind::ResetFlySpeed:
         navigation.resetFlySpeedPressed = true;
         break;
+    case ViewportInputActionKind::CancelNavigation:
+        navigation.cancelNavigationPressed = true;
+        break;
     case ViewportInputActionKind::FlyForward:
         navigation.flyForwardDown = true;
         break;
@@ -650,7 +673,6 @@ void resolveKeybindingsForFrame(
         QuaderEditorApi& editor,
         const ViewportToolState& state,
         ViewportInputFrame& input) {
-    input.shortcutResolverActive = true;
     input.resolvedShortcuts.clear();
     input.navigationBindings = {};
     if (!input.viewportFocused || input.textInputActive) {
@@ -696,21 +718,6 @@ void resolveKeybindingsForFrame(
         }
     }
 
-    if (input.pressedInputChords.empty()) {
-        for (ViewportKey key : input.pressedKeys) {
-            const QuaderViewportKeybindingContext keybindingContext = keybindingContextFromInput(input);
-            const QuaderViewportKeybindingDispatch dispatch = editor.commands().dispatchViewportKeybinding(
-                    key,
-                    input.modifiers,
-                    state,
-                    input.viewportFocused,
-                    input.textInputActive,
-                    keybindingContext);
-            if (applyViewportKeybindingDispatch(editor, dispatch, input)) {
-                return;
-            }
-        }
-    }
     syncFlyDirectionFromNavigationBindings(input);
 }
 
@@ -785,6 +792,14 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
     }
 
     switch (event.type) {
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        setCursorCaptured(false);
+        inputRouter_.reset();
+        clearAllInputState(mainInput_);
+        break;
+    case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        mainInput_.mouseWindow = {-1.0f, -1.0f};
+        break;
     case SDL_EVENT_MOUSE_MOTION:
         accumulateMouseMotion(mainInput_, {event.motion.x, event.motion.y}, {event.motion.xrel, event.motion.yrel});
         break;
@@ -903,9 +918,15 @@ void ViewportHost::handleFrame(
 
     if (inputSuppressed) {
         setCursorCaptured(false);
+        inputRouter_.reset();
         (void)viewportInteractions_.cancelActiveDrag(editor);
         viewportInteractions_.reset();
-        clearTransientInput();
+        clearAllInputState(mainInput_);
+        for (const std::unique_ptr<ViewportWindowInstance>& viewport : windowedViewports_) {
+            viewport->inputRouter.reset();
+            setWindowedViewportCursorCaptured(*viewport, false);
+            clearAllInputState(viewport->input);
+        }
         handleWindowedViewportFrames(editor, workspace, document, assets, modeling, defaultMaterial);
         return;
     }
@@ -1035,29 +1056,21 @@ void ViewportHost::prepareViewports(
             true);
     renderer_.setSceneVisible(true);
     logCommandFailure("Sync tool previews", QuaderRenderApiRuntimeAccess::syncToolPreviews(editor.render(), renderBridge));
-    ViewportOverlayFrame toolOverlayFrame;
-    const ModelingBoxPreview& boxPreview = inputRouter_.boxPreview();
-    if (boxPreview.dragState != ModelingBoxDragState::Height) {
-        ViewportBoxOverlayBuilder::append(toolOverlayFrame, boxPreview);
-    }
-    const quader_editor_core::TransformGizmoFrame* transformGizmoFrame =
-            viewportInteractions_.transformGizmoFrame();
     const ViewportOverlayCamera overlayCamera = ViewportCameraAdapter::overlayCamera(pane.camera, pane.renderSize);
-    if (transformGizmoFrame != nullptr) {
-        ViewportTransformGizmoOverlayBuilder::append(toolOverlayFrame, *transformGizmoFrame, overlayCamera);
-    }
+    ViewportOverlayFrame toolOverlayFrame =
+            buildToolOverlayFrame(inputRouter_, viewportInteractions_, overlayCamera);
     const bool hasToolOverlay = viewportOverlayFrameVisible(toolOverlayFrame);
     const QuaderApiResult<QuaderRenderOverlaySubmission> overlaySubmission =
             QuaderRenderApiRuntimeAccess::syncSelectionOverlay(
                     editor.render(),
                     renderBridge,
-                    viewportPaneIndex(mainViewport_.pane),
+                    mainViewport_.layerIndex,
                     viewportGridLayerMask(mainViewport_.layerIndex),
                     overlayCamera,
                     hasToolOverlay ? &toolOverlayFrame : nullptr);
     logCommandFailure("Sync selection overlay", overlaySubmission);
     renderer_.setOverlayVisible(overlaySubmission.ok && overlaySubmission.value.visible);
-    prepareWindowedViewports(workspace);
+    prepareWindowedViewports(editor, renderBridge, workspace);
 }
 
 void ViewportHost::renderViewports(RenderSystem& renderSystem) {
@@ -1149,12 +1162,18 @@ void ViewportHost::updateWindowMetrics() {
     mainInput_.mouseWindow = {mouseX, mouseY};
     if ((buttons & SDL_BUTTON_MMASK) == 0u) {
         mainInput_.middleDown = false;
+        mainInput_.mouseButtonsDown.erase(QuaderMouseButton::Middle);
+        mainInput_.mouseDragChordsDown.erase(QuaderMouseButton::Middle);
     }
     if ((buttons & SDL_BUTTON_LMASK) == 0u) {
         mainInput_.leftDown = false;
+        mainInput_.mouseButtonsDown.erase(QuaderMouseButton::Left);
+        mainInput_.mouseDragChordsDown.erase(QuaderMouseButton::Left);
     }
     if ((buttons & SDL_BUTTON_RMASK) == 0u) {
         mainInput_.rightDown = false;
+        mainInput_.mouseButtonsDown.erase(QuaderMouseButton::Right);
+        mainInput_.mouseDragChordsDown.erase(QuaderMouseButton::Right);
     }
 }
 
@@ -1277,25 +1296,15 @@ void ViewportHost::accumulateKey(
         bool down,
         bool repeat,
         ViewportModifiers modifiers) {
-    const std::optional<ViewportKey> key = viewportKeyForQuaderKeyCode(keyCode);
     if (down) {
         input.keyboardKeysDown.insert(keyCode);
-        if (key) {
-            input.keysDown.insert(*key);
-        }
         if (!repeat) {
-            if (key) {
-                input.pressedKeys.push_back(*key);
-            }
             input.pressedInputChords.push_back(keyboardInputChord(keyCode, modifiers));
         }
         return;
     }
 
     input.keyboardKeysDown.erase(keyCode);
-    if (key) {
-        input.keysDown.erase(*key);
-    }
 }
 
 void ViewportHost::applyModifierMask(ViewportInputSurfaceState& input, SDL_Keymod modifiers) {
@@ -1358,9 +1367,23 @@ void ViewportHost::clearTransientInputState(ViewportInputSurfaceState& input) {
     input.rightReleased = false;
     input.wheelY = 0.0f;
     input.mouseDeltaWindow = {};
-    input.pressedKeys.clear();
     input.pressedInputChords.clear();
     input.releasedInputChords.clear();
+}
+
+void ViewportHost::clearHeldInputState(ViewportInputSurfaceState& input) {
+    input.middleDown = false;
+    input.leftDown = false;
+    input.rightDown = false;
+    input.keyboardKeysDown.clear();
+    input.mouseButtonsDown.clear();
+    input.mouseDragChordsDown.clear();
+    input.modifierKeys = {};
+}
+
+void ViewportHost::clearAllInputState(ViewportInputSurfaceState& input) {
+    clearHeldInputState(input);
+    clearTransientInputState(input);
 }
 
 ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
@@ -1391,12 +1414,6 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
     input.panNavigationActive = inputRouter_.panNavigating();
     input.modalToolActive = inputRouter_.hasActiveModalPreview();
     input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
-    input.middlePressed = mainInput_.middlePressed && input.viewportHovered;
-    input.middleDown = mainInput_.middleDown;
-    input.middleReleased = mainInput_.middleReleased;
-    input.rightPressed = mainInput_.rightPressed && input.viewportHovered;
-    input.rightDown = mainInput_.rightDown;
-    input.rightReleased = mainInput_.rightReleased;
     input.mouseWheel = input.viewportHovered ? mainInput_.wheelY : 0.0f;
     input.deltaSeconds = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
     input.mouseScreen = mousePixel;
@@ -1413,7 +1430,6 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
     appendActiveMouseDragChords(mainInput_.mouseDragChordsDown, input.activeInputChords);
     appendActiveKeyboardChords(mainInput_.keyboardKeysDown, modifiers, input.activeInputChords);
     appendWheelChords(input.mouseWheel, modifiers, input.wheelInputChords);
-    input.pressedKeys = mainInput_.pressedKeys;
     return input;
 }
 
@@ -1536,6 +1552,11 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
         shutdownWindowedViewport(instance);
         windowedViewports_.erase(found);
         return true;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        setWindowedViewportCursorCaptured(instance, false);
+        instance.inputRouter.reset();
+        clearAllInputState(instance.input);
+        return true;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_RESIZED:
         instance.window.refreshPixelSize();
@@ -1632,7 +1653,10 @@ void ViewportHost::handleWindowedViewportFrames(
     }
 }
 
-void ViewportHost::prepareWindowedViewports(ViewportWorkspaceService& workspace) {
+void ViewportHost::prepareWindowedViewports(
+        QuaderEditorApi& editor,
+        SceneRenderBridge& renderBridge,
+        ViewportWorkspaceService& workspace) {
     for (const std::unique_ptr<ViewportWindowInstance>& viewport : windowedViewports_) {
         ViewportWindowInstance& instance = *viewport;
         ViewportWorkspaceAuxiliaryViewportState& workspaceState =
@@ -1653,7 +1677,22 @@ void ViewportHost::prepareWindowedViewports(ViewportWorkspaceService& workspace)
                 settings_,
                 true);
         instance.renderer.setSceneVisible(workspace.auxiliaryViewportVisible(workspaceState.stableId));
-        instance.renderer.setOverlayVisible(false);
+        const ViewportOverlayCamera overlayCamera = ViewportCameraAdapter::overlayCamera(
+                workspaceState.camera,
+                {static_cast<float>(instance.framebufferWidth), static_cast<float>(instance.framebufferHeight)});
+        ViewportOverlayFrame toolOverlayFrame =
+                buildToolOverlayFrame(instance.inputRouter, instance.interactions, overlayCamera);
+        const bool hasToolOverlay = viewportOverlayFrameVisible(toolOverlayFrame);
+        const QuaderApiResult<QuaderRenderOverlaySubmission> overlaySubmission =
+                QuaderRenderApiRuntimeAccess::syncSelectionOverlay(
+                        editor.render(),
+                        renderBridge,
+                        instance.component.layerIndex,
+                        viewportGridLayerMask(instance.component.layerIndex),
+                        overlayCamera,
+                        hasToolOverlay ? &toolOverlayFrame : nullptr);
+        logCommandFailure("Sync windowed selection overlay", overlaySubmission);
+        instance.renderer.setOverlayVisible(overlaySubmission.ok && overlaySubmission.value.visible);
     }
 }
 
@@ -1700,12 +1739,6 @@ ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(const ViewportW
     input.panNavigationActive = instance.inputRouter.panNavigating();
     input.modalToolActive = instance.inputRouter.hasActiveModalPreview();
     input.activeToolOwnsViewport = instance.inputRouter.activeToolOwnsViewport();
-    input.middlePressed = instance.input.middlePressed && input.viewportHovered;
-    input.middleDown = instance.input.middleDown;
-    input.middleReleased = instance.input.middleReleased;
-    input.rightPressed = instance.input.rightPressed && input.viewportHovered;
-    input.rightDown = instance.input.rightDown;
-    input.rightReleased = instance.input.rightReleased;
     input.mouseWheel = input.viewportHovered ? instance.input.wheelY : 0.0f;
     input.deltaSeconds = static_cast<float>(std::max(instance.frameTiming.deltaSeconds, 0.0));
     input.mouseScreen = mousePixel;
@@ -1722,7 +1755,6 @@ ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(const ViewportW
     appendActiveMouseDragChords(instance.input.mouseDragChordsDown, input.activeInputChords);
     appendActiveKeyboardChords(instance.input.keyboardKeysDown, modifiers, input.activeInputChords);
     appendWheelChords(input.mouseWheel, modifiers, input.wheelInputChords);
-    input.pressedKeys = instance.input.pressedKeys;
     return input;
 }
 

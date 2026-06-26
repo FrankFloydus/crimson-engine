@@ -171,6 +171,115 @@ bool metadataMethodReturnsLiteral(std::string_view source, std::string_view sign
     }
 }
 
+ViewportShortcut testToolShortcut(ViewportToolId tool) {
+    return {
+            .kind = ViewportShortcutKind::ActivateTool,
+            .context = ViewportShortcutContext::Viewport,
+            .tool = tool,
+    };
+}
+
+ViewportShortcut testSelectionShortcut(ViewportSelectionMode mode) {
+    return {
+            .kind = ViewportShortcutKind::SetSelectionMode,
+            .context = ViewportShortcutContext::Viewport,
+            .selectionMode = mode,
+    };
+}
+
+ViewportShortcut testGridShortcut(int preset) {
+    return {
+            .kind = ViewportShortcutKind::SetGridPreset,
+            .context = ViewportShortcutContext::Viewport,
+            .gridPreset = preset,
+    };
+}
+
+ViewportShortcut testRouterShortcut(
+        ViewportShortcutKind kind,
+        ViewportShortcutContext context = ViewportShortcutContext::Viewport) {
+    return {
+            .kind = kind,
+            .context = context,
+    };
+}
+
+ViewportShortcut testMirrorShortcut(ViewportMirrorAxis axis) {
+    return {
+            .kind = ViewportShortcutKind::MirrorAxis,
+            .context = ViewportShortcutContext::Viewport,
+            .mirrorAxis = axis,
+    };
+}
+
+void setResolvedShortcut(ViewportInputFrame& input, ViewportShortcut shortcut) {
+    input.resolvedShortcuts = {shortcut};
+}
+
+void setNavigationPressed(ViewportInputFrame& input, ViewportInputActionKind action) {
+    input.navigationBindings = {};
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        input.navigationBindings.orbitPressed = true;
+        input.navigationBindings.orbitDown = true;
+        break;
+    case ViewportInputActionKind::OrbitSnap:
+        input.navigationBindings.orbitSnapPressed = true;
+        input.navigationBindings.orbitSnapDown = true;
+        break;
+    case ViewportInputActionKind::Pan:
+        input.navigationBindings.panPressed = true;
+        input.navigationBindings.panDown = true;
+        break;
+    case ViewportInputActionKind::Fly:
+        input.navigationBindings.flyPressed = true;
+        input.navigationBindings.flyDown = true;
+        break;
+    default:
+        break;
+    }
+}
+
+void setNavigationDown(ViewportInputFrame& input, ViewportInputActionKind action) {
+    input.navigationBindings = {};
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        input.navigationBindings.orbitDown = true;
+        break;
+    case ViewportInputActionKind::OrbitSnap:
+        input.navigationBindings.orbitSnapDown = true;
+        break;
+    case ViewportInputActionKind::Pan:
+        input.navigationBindings.panDown = true;
+        break;
+    case ViewportInputActionKind::Fly:
+        input.navigationBindings.flyDown = true;
+        break;
+    default:
+        break;
+    }
+}
+
+void setNavigationReleased(ViewportInputFrame& input, ViewportInputActionKind action) {
+    input.navigationBindings = {};
+    switch (action) {
+    case ViewportInputActionKind::Orbit:
+        input.navigationBindings.orbitReleased = true;
+        break;
+    case ViewportInputActionKind::OrbitSnap:
+        input.navigationBindings.orbitSnapReleased = true;
+        break;
+    case ViewportInputActionKind::Pan:
+        input.navigationBindings.panReleased = true;
+        break;
+    case ViewportInputActionKind::Fly:
+        input.navigationBindings.flyReleased = true;
+        break;
+    default:
+        break;
+    }
+}
+
 /**
  * Carries EditorSelectionTestHarness state used by the test layer.
  */
@@ -2121,6 +2230,7 @@ TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
     EXPECT_NE(rml.find("id=\"modeling-mode-shelf-slot\" class=\"modeling-mode-shelf-slot\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-viewport\""), std::string::npos);
+    EXPECT_EQ(rml.find("id=\"viewport-selection-marquee-layer\""), std::string::npos);
     EXPECT_NE(rml.find("src=\"quader://viewport/main\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-layout-sidebar\" class=\"main-layout-sidebar main-layout-primary-sidebar main-layout-side-dock-right min-w-40 bg-gray-950 border-gray-600\""),
             std::string::npos);
@@ -4988,8 +5098,12 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     const std::string viewportHostHeader = readSourceFile("src/ui/controllers/ViewportHost.h");
     const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
     const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
+    const std::string rmlBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
+    const std::string appShellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
     const std::string commandsSource = readSourceFile("src/api/QuaderCommandsApi.cpp");
     const std::string inputAdapterHeader = readSourceFile("src/editor/input/ViewportInputBindingAdapter.h");
+    const std::string marqueeOverlayBuilderSource =
+            readSourceFile("src/render/overlay/ViewportSelectionMarqueeOverlayBuilder.cpp");
 
     const std::size_t prepareLayout = appSource.find("ui_.prepareLayout(window_.widthPixels(), window_.heightPixels())");
     const std::size_t draw = appSource.find("ui_.draw(*editor_");
@@ -5039,13 +5153,20 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(viewportHostSource.find("keyDown(SDL_SCANCODE_LALT)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("clearTransientInputState(mainInput_)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("clearTransientInputState(instance.input)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("clearAllInputState(mainInput_)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("clearAllInputState(instance.input)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("case SDL_EVENT_WINDOW_FOCUS_LOST:"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("inputRouter_.reset()"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("input.mouseDragChordsDown[*mouseButton] = dragChord"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(mainInput_.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(instance.input.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(mainInput_.keyboardKeysDown, modifiers, input.activeInputChords)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(instance.input.keyboardKeysDown, modifiers, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("#include \"editor/input/ViewportInputBindingAdapter.h\""), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("viewportKeyForQuaderKeyCode(keyCode)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("#include \"editor/input/QuaderInputBinding.h\""), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("#include \"editor/input/ViewportInputBindingAdapter.h\""), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("viewportKeyForQuaderKeyCode(keyCode)"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("pressedKeys"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("shortcutResolverActive"), std::string::npos);
     EXPECT_NE(commandsSource.find("#include \"editor/input/ViewportInputBindingAdapter.h\""), std::string::npos);
     EXPECT_NE(commandsSource.find("quaderInputChordForViewportKey(key, modifiers)"), std::string::npos);
     EXPECT_NE(inputAdapterHeader.find("viewportKeyForQuaderKeyCode"), std::string::npos);
@@ -5073,6 +5194,24 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_EQ(viewportHostSource.find("input.textInputActive = false"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("input.mouseLocal = mouseLocal"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("buildToolOverlayFrame(inputRouter_, viewportInteractions_, overlayCamera)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("buildToolOverlayFrame(instance.inputRouter, instance.interactions, overlayCamera)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("ViewportSelectionMarqueeOverlayBuilder::append(toolOverlayFrame, overlayCamera, interactions.selectionMarquee())"), std::string::npos);
+    EXPECT_EQ(viewportHostHeader.find("selectionMarquee() const"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("ViewportSelectionMarquee ViewportHost::selectionMarquee() const"), std::string::npos);
+    EXPECT_EQ(rmlBuilderSource.find("viewport-selection-marquee"), std::string::npos);
+    EXPECT_EQ(appShellRcss.find("viewport-selection-marquee"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("refreshMeasuredViewportFrameForPointerEvent(event)"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("syncViewportSelectionMarqueeOverlay"), std::string::npos);
+    EXPECT_EQ(uiSystemSource.find("viewport-selection-marquee-layer"), std::string::npos);
+    EXPECT_NE(marqueeOverlayBuilderSource.find("kOverlaySelectionMarqueeFillColor"), std::string::npos);
+    EXPECT_NE(marqueeOverlayBuilderSource.find("kOverlaySelectionMarqueeLineColor"), std::string::npos);
+    EXPECT_NE(marqueeOverlayBuilderSource.find("overlayFrame.triangles.push_back"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("mainViewport_.layerIndex"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("instance.component.layerIndex"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("viewportPaneIndex(instance.component.pane)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("logCommandFailure(\"Sync windowed selection overlay\", overlaySubmission)"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("instance.renderer.setOverlayVisible(false)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("rmlHost_.registerTextureSource("), std::string::npos);
 }
 
@@ -6300,25 +6439,25 @@ TEST(ViewportInputRouterTests, ImplementedToolHotkeysMatchViewportContract) {
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
 
-    input.pressedKeys = {ViewportKey::B};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Box));
     auto result = router.handleFrame(input, camera);
     EXPECT_EQ(result.shortcutHandled, viewportToolHasNativeController(ViewportTool::Box));
     EXPECT_EQ(router.state().activeTool,
             viewportToolHasNativeController(ViewportTool::Box) ? ViewportTool::Box : ViewportTool::Select);
 
-    input.pressedKeys = {ViewportKey::Q};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Select));
     result = router.handleFrame(input, camera);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Select);
 
-    input.pressedKeys = {ViewportKey::W};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Move));
     result = router.handleFrame(input, camera);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Move);
 
-    input.pressedKeys = {ViewportKey::R};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Rotate));
     result = router.handleFrame(input, camera);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Rotate);
 
-    input.pressedKeys = {ViewportKey::S};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Scale));
     result = router.handleFrame(input, camera);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Scale);
 }
@@ -6329,33 +6468,25 @@ TEST(ViewportInputRouterTests, ResolvedNavigationBindingsDriveMouseNavigation) {
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
-    input.shortcutResolverActive = true;
     input.viewportSize = {800.0f, 600.0f};
     input.mouseScreen = {200.0f, 150.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
 
     ViewportInputResult result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.navigationActive);
     EXPECT_FALSE(result.consumed);
 
-    input.middlePressed = false;
-    input.middleDown = false;
-    input.navigationBindings.orbitPressed = true;
-    input.navigationBindings.orbitDown = true;
+    setNavigationPressed(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.navigationActive);
     EXPECT_TRUE(result.consumed);
 
-    input.navigationBindings = {};
-    input.navigationBindings.orbitDown = true;
+    setNavigationDown(input, ViewportInputActionKind::Orbit);
     input.mouseScreen = {220.0f, 165.0f};
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.cameraChanged);
     EXPECT_TRUE(result.navigationActive);
 
-    input.navigationBindings = {};
-    input.navigationBindings.orbitReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.navigationActive);
     EXPECT_TRUE(result.consumed);
@@ -6371,19 +6502,16 @@ TEST(ViewportInputRouterTests, ResolvedMiddleOrbitSamplesAltDuringDragForAxisSna
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
-    input.shortcutResolverActive = true;
     input.viewportSize = {800.0f, 600.0f};
     input.mouseScreen = {100.0f, 100.0f};
-    input.navigationBindings.orbitPressed = true;
-    input.navigationBindings.orbitDown = true;
+    setNavigationPressed(input, ViewportInputActionKind::Orbit);
 
     ViewportInputResult result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
     ASSERT_TRUE(router.navigating());
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
 
-    input.navigationBindings = {};
-    input.navigationBindings.orbitDown = true;
+    setNavigationDown(input, ViewportInputActionKind::Orbit);
     input.modifiers.alt = true;
     input.mouseScreen = {220.0f, 100.0f};
     result = router.handleFrame(input, camera);
@@ -6406,7 +6534,6 @@ TEST(ViewportInputRouterTests, ResolvedWheelBindingsDriveViewportZoom) {
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
-    input.shortcutResolverActive = true;
     input.viewportSize = {800.0f, 600.0f};
     input.mouseLocal = {400.0f, 300.0f};
     input.mouseWheel = 1.0f;
@@ -6437,17 +6564,14 @@ TEST(ViewportInputRouterTests, ResolvedResetFlySpeedDoesNotPreemptActiveFlyNavig
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
-    input.shortcutResolverActive = true;
     input.viewportSize = {800.0f, 600.0f};
     input.mouseScreen = {300.0f, 240.0f};
-    input.navigationBindings.flyPressed = true;
-    input.navigationBindings.flyDown = true;
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     ViewportInputResult result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.flyNavigationActive);
 
-    input.navigationBindings = {};
-    input.navigationBindings.flyDown = true;
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     input.navigationBindings.orbitPressed = true;
     input.navigationBindings.orbitDown = true;
     input.navigationBindings.resetFlySpeedPressed = true;
@@ -6468,17 +6592,14 @@ TEST(ViewportInputRouterTests, ResolvedFlyNavigationKeepsWasdMovementAheadOfTool
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
-    input.shortcutResolverActive = true;
     input.viewportSize = {800.0f, 600.0f};
     input.mouseScreen = {300.0f, 240.0f};
-    input.navigationBindings.flyPressed = true;
-    input.navigationBindings.flyDown = true;
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     ViewportInputResult result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.flyNavigationActive);
 
-    input.navigationBindings = {};
-    input.navigationBindings.flyDown = true;
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
     input.resolvedShortcuts = {{
             .kind = ViewportShortcutKind::ActivateTool,
@@ -6501,17 +6622,14 @@ TEST(ViewportInputRouterTests, ResolvedFlyNavigationContinuesWhileShiftIsHeld) {
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
-    input.shortcutResolverActive = true;
     input.viewportSize = {800.0f, 600.0f};
     input.mouseScreen = {300.0f, 240.0f};
-    input.navigationBindings.flyPressed = true;
-    input.navigationBindings.flyDown = true;
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     ViewportInputResult result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.flyNavigationActive);
 
-    input.navigationBindings = {};
-    input.navigationBindings.flyDown = true;
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     input.modifiers.shift = true;
     input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
     result = router.handleFrame(input, camera);
@@ -6528,24 +6646,22 @@ TEST(ViewportInputRouterTests, ModalToolHotkeysActivateNativeControllers) {
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
 
-    input.modifiers.shift = true;
-    input.pressedKeys = {ViewportKey::R};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::InsertEdgeLoop));
     ViewportInputResult result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_EQ(router.state().activeTool, ViewportTool::InsertEdgeLoop);
 
-    input.pressedKeys = {ViewportKey::C};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Cut));
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Cut);
 
-    input.modifiers.shift = false;
-    input.pressedKeys = {ViewportKey::C};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Knife));
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Knife);
 
-    input.pressedKeys = {ViewportKey::P};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Poly));
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_EQ(router.state().activeTool, ViewportTool::Poly);
@@ -6557,39 +6673,31 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
      */
     struct ShortcutCase {
         const char* label;
-        ViewportKey key;
-        ViewportModifiers modifiers;
-        ViewportShortcutKind kind;
-        ViewportShortcutContext context;
-        ViewportMirrorAxis mirrorAxis = ViewportMirrorAxis::X;
-        bool checkMirrorAxis = false;
+        ViewportShortcut shortcut;
     };
 
-    const ViewportModifiers primary{.primary = true};
-    const ViewportModifiers primaryShift{.primary = true, .shift = true};
-    const ViewportModifiers shift{.shift = true};
     const std::array<ShortcutCase, 21> shortcuts{{
-            {"Ctrl+A select all", ViewportKey::A, primary, ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global},
-            {"Ctrl+I invert selection", ViewportKey::I, primary, ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global},
-            {"Delete delete selection", ViewportKey::Delete, {}, ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global},
-            {"Backspace delete selection", ViewportKey::Backspace, {}, ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global},
-            {"Ctrl+D duplicate", ViewportKey::D, primary, ViewportShortcutKind::Duplicate, ViewportShortcutContext::Global},
-            {"Ctrl+C copy", ViewportKey::C, primary, ViewportShortcutKind::Copy, ViewportShortcutContext::Global},
-            {"Ctrl+V paste", ViewportKey::V, primary, ViewportShortcutKind::Paste, ViewportShortcutContext::Global},
-            {"Ctrl+Z undo", ViewportKey::Z, primary, ViewportShortcutKind::Undo, ViewportShortcutContext::Global},
-            {"Ctrl+Y redo", ViewportKey::Y, primary, ViewportShortcutKind::Redo, ViewportShortcutContext::Global},
-            {"Ctrl+Shift+Z redo", ViewportKey::Z, primaryShift, ViewportShortcutKind::Redo, ViewportShortcutContext::Global},
-            {"Ctrl+R repeat", ViewportKey::R, primary, ViewportShortcutKind::RepeatLastAction, ViewportShortcutContext::Global},
-            {"M merge active", ViewportKey::M, {}, ViewportShortcutKind::MergeActive, ViewportShortcutContext::Viewport},
-            {"Shift+M merge center", ViewportKey::M, shift, ViewportShortcutKind::MergeCenter, ViewportShortcutContext::Viewport},
-            {"X delete popup", ViewportKey::X, {}, ViewportShortcutKind::DeletePopup, ViewportShortcutContext::Viewport},
-            {"Shift+X mirror X", ViewportKey::X, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::X, true},
-            {"Shift+Y mirror Y", ViewportKey::Y, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::Y, true},
-            {"Shift+Z mirror Z", ViewportKey::Z, shift, ViewportShortcutKind::MirrorAxis, ViewportShortcutContext::Viewport, ViewportMirrorAxis::Z, true},
-            {"F flip mesh normals", ViewportKey::F, {}, ViewportShortcutKind::FlipMeshNormals, ViewportShortcutContext::Viewport},
-            {"Shift+H flip horizontal", ViewportKey::H, shift, ViewportShortcutKind::FlipHorizontal, ViewportShortcutContext::Viewport},
-            {"Shift+V flip vertical", ViewportKey::V, shift, ViewportShortcutKind::FlipVertical, ViewportShortcutContext::Viewport},
-            {"Shift+T apply material", ViewportKey::T, shift, ViewportShortcutKind::ApplyMaterial, ViewportShortcutContext::Viewport},
+            {"Ctrl+A select all", testRouterShortcut(ViewportShortcutKind::SelectAll, ViewportShortcutContext::Global)},
+            {"Ctrl+I invert selection", testRouterShortcut(ViewportShortcutKind::InvertSelection, ViewportShortcutContext::Global)},
+            {"Delete delete selection", testRouterShortcut(ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global)},
+            {"Backspace delete selection", testRouterShortcut(ViewportShortcutKind::DeleteSelection, ViewportShortcutContext::Global)},
+            {"Ctrl+D duplicate", testRouterShortcut(ViewportShortcutKind::Duplicate, ViewportShortcutContext::Global)},
+            {"Ctrl+C copy", testRouterShortcut(ViewportShortcutKind::Copy, ViewportShortcutContext::Global)},
+            {"Ctrl+V paste", testRouterShortcut(ViewportShortcutKind::Paste, ViewportShortcutContext::Global)},
+            {"Ctrl+Z undo", testRouterShortcut(ViewportShortcutKind::Undo, ViewportShortcutContext::Global)},
+            {"Ctrl+Y redo", testRouterShortcut(ViewportShortcutKind::Redo, ViewportShortcutContext::Global)},
+            {"Ctrl+Shift+Z redo", testRouterShortcut(ViewportShortcutKind::Redo, ViewportShortcutContext::Global)},
+            {"Ctrl+R repeat", testRouterShortcut(ViewportShortcutKind::RepeatLastAction, ViewportShortcutContext::Global)},
+            {"M merge active", testRouterShortcut(ViewportShortcutKind::MergeActive)},
+            {"Shift+M merge center", testRouterShortcut(ViewportShortcutKind::MergeCenter)},
+            {"X delete popup", testRouterShortcut(ViewportShortcutKind::DeletePopup)},
+            {"Shift+X mirror X", testMirrorShortcut(ViewportMirrorAxis::X)},
+            {"Shift+Y mirror Y", testMirrorShortcut(ViewportMirrorAxis::Y)},
+            {"Shift+Z mirror Z", testMirrorShortcut(ViewportMirrorAxis::Z)},
+            {"F flip mesh normals", testRouterShortcut(ViewportShortcutKind::FlipMeshNormals)},
+            {"Shift+H flip horizontal", testRouterShortcut(ViewportShortcutKind::FlipHorizontal)},
+            {"Shift+V flip vertical", testRouterShortcut(ViewportShortcutKind::FlipVertical)},
+            {"Shift+T apply material", testRouterShortcut(ViewportShortcutKind::ApplyMaterial)},
     }};
 
     for (const ShortcutCase& shortcutCase : shortcuts) {
@@ -6599,32 +6707,25 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
         ViewportInputFrame input;
         input.viewportFocused = true;
         input.viewportSize = {800.0f, 600.0f};
-        input.modifiers = shortcutCase.modifiers;
-        input.pressedKeys = {shortcutCase.key};
+        setResolvedShortcut(input, shortcutCase.shortcut);
 
         const auto result = router.handleFrame(input, camera);
 
         EXPECT_TRUE(result.shortcutHandled);
         EXPECT_TRUE(result.consumed);
-        EXPECT_EQ(result.shortcut.kind, shortcutCase.kind);
-        EXPECT_EQ(result.shortcut.context, shortcutCase.context);
-        if (shortcutCase.checkMirrorAxis) {
-            EXPECT_EQ(result.shortcut.mirrorAxis, shortcutCase.mirrorAxis);
+        EXPECT_EQ(result.shortcut.kind, shortcutCase.shortcut.kind);
+        EXPECT_EQ(result.shortcut.context, shortcutCase.shortcut.context);
+        if (shortcutCase.shortcut.kind == ViewportShortcutKind::MirrorAxis) {
+            EXPECT_EQ(result.shortcut.mirrorAxis, shortcutCase.shortcut.mirrorAxis);
         }
     }
 }
 
-TEST(ViewportInputRouterTests, LegacyShortcutFallbackIsExplicitCompatibilityAdapter) {
-    const std::string router = readSourceFile("src/viewport/ViewportInputRouter.cpp");
-    const std::string legacy = readSourceFile("src/viewport/ViewportLegacyShortcutAdapter.cpp");
+TEST(ViewportInputRouterTests, LegacyShortcutAdapterSourceIsNotBuilt) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
-    EXPECT_NE(router.find("resolveViewportShortcutFromHostContract(key, modifiers, shortcut)"), std::string::npos);
-    EXPECT_NE(router.find("resolveStandaloneViewportLegacyShortcut(key, modifiers, shortcut)"), std::string::npos);
-    EXPECT_EQ(router.find("case ViewportKey::"), std::string::npos);
-    EXPECT_NE(legacy.find("resolveStandaloneViewportLegacyShortcut("), std::string::npos);
-    EXPECT_NE(legacy.find("case ViewportKey::"), std::string::npos);
-    EXPECT_NE(cmake.find("src/viewport/ViewportLegacyShortcutAdapter.cpp"), std::string::npos);
+    EXPECT_EQ(cmake.find("src/viewport/ViewportLegacyShortcutAdapter.cpp"), std::string::npos);
+    EXPECT_EQ(cmake.find("src/viewport/ViewportLegacyShortcutAdapter.h"), std::string::npos);
 }
 
 TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
@@ -6636,33 +6737,29 @@ TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
     input.modifiers.shift = true;
 
     router.setSelectionMode(ViewportSelectionMode::Face);
-    input.modifiers.shift = false;
-    input.pressedKeys = {ViewportKey::F};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FlipMeshNormals));
     ViewportInputResult result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.consumed);
 
-    input.modifiers.shift = true;
-    input.pressedKeys = {ViewportKey::H};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FlipHorizontal));
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.consumed);
 
     router.setSelectionMode(ViewportSelectionMode::Edge);
-    input.pressedKeys = {ViewportKey::V};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FlipVertical));
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.consumed);
 
     router.setSelectionMode(ViewportSelectionMode::Object);
-    input.modifiers.shift = false;
-    input.pressedKeys = {ViewportKey::F};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FlipMeshNormals));
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FlipMeshNormals);
 
-    input.modifiers.shift = true;
-    input.pressedKeys = {ViewportKey::H};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FlipHorizontal));
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FlipHorizontal);
@@ -6675,19 +6772,19 @@ TEST(ViewportInputRouterTests, SelectionModeHotkeysMatchViewportShortcuts) {
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
 
-    input.pressedKeys = {ViewportKey::Number1};
+    setResolvedShortcut(input, testSelectionShortcut(ViewportSelectionMode::Vertex));
     router.handleFrame(input, camera);
     EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Vertex);
 
-    input.pressedKeys = {ViewportKey::Number2};
+    setResolvedShortcut(input, testSelectionShortcut(ViewportSelectionMode::Edge));
     router.handleFrame(input, camera);
     EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Edge);
 
-    input.pressedKeys = {ViewportKey::Number3};
+    setResolvedShortcut(input, testSelectionShortcut(ViewportSelectionMode::Face));
     router.handleFrame(input, camera);
     EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Face);
 
-    input.pressedKeys = {ViewportKey::Number4};
+    setResolvedShortcut(input, testSelectionShortcut(ViewportSelectionMode::Object));
     router.handleFrame(input, camera);
     EXPECT_EQ(router.state().selectionMode, ViewportSelectionMode::Object);
 }
@@ -6710,7 +6807,7 @@ TEST(ViewportInputRouterTests, GridPresetShortcutReportsOnlyActualChanges) {
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
 
-    input.pressedKeys = {ViewportKey::F7};
+    setResolvedShortcut(input, testGridShortcut(7));
     ViewportInputResult result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_TRUE(result.gridPresetChanged);
@@ -6743,18 +6840,18 @@ TEST(ViewportInputRouterTests, ModalToolGestureKeysAreNotConsumedByViewShortcuts
     input.viewportSize = {800.0f, 600.0f};
 
     router.setActiveTool(ViewportTool::Cut);
-    input.pressedKeys = {ViewportKey::F};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FocusDocument));
     ViewportInputResult result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.focusDocumentRequested);
 
-    input.pressedKeys = {ViewportKey::Space};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::ToggleMaximized));
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.maximizedToggleRequested);
 
     router.setActiveTool(ViewportTool::Mirror);
-    input.pressedKeys = {ViewportKey::Space};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::ToggleMaximized));
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.shortcutHandled);
     EXPECT_FALSE(result.maximizedToggleRequested);
@@ -6766,7 +6863,7 @@ TEST(ViewportInputRouterTests, ToggleMaximizedShortcutReportsWorkspaceRequest) {
     ViewportInputFrame input;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.pressedKeys = {ViewportKey::Space};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::ToggleMaximized));
 
     const ViewportInputResult result = router.handleFrame(input, camera);
 
@@ -6784,7 +6881,7 @@ TEST(ViewportInputRouterTests, FocusGateBlocksViewportToolHotkeys) {
     ViewportInputFrame input;
     input.viewportFocused = false;
     input.viewportSize = {800.0f, 600.0f};
-    input.pressedKeys = {ViewportKey::B};
+    setResolvedShortcut(input, testToolShortcut(ViewportTool::Box));
 
     const auto result = router.handleFrame(input, camera);
 
@@ -6798,7 +6895,7 @@ TEST(ViewportInputRouterTests, EscapeRequestsActiveToolCancel) {
     ViewportInputFrame input;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.pressedKeys = {ViewportKey::Escape};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::CancelActiveTool));
 
     const auto result = router.handleFrame(input, camera);
 
@@ -6821,15 +6918,14 @@ TEST(ViewportInputRouterTests, FocusShortcutsMatchViewportContract) {
     ViewportInputFrame input;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.pressedKeys = {ViewportKey::Home};
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FocusDocument));
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_TRUE(result.focusDocumentRequested);
     EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::FocusDocument);
 
-    input.pressedKeys = {ViewportKey::Home};
-    input.modifiers.shift = true;
+    setResolvedShortcut(input, testRouterShortcut(ViewportShortcutKind::FocusOrigin));
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_FALSE(result.focusDocumentRequested);
@@ -6842,22 +6938,21 @@ TEST(ViewportInputRouterTests, MiddleMouseNavigationAndWheelAreViewportGated) {
     ViewportCameraController camera;
     ViewportInputFrame input;
     input.viewportHovered = true;
+    input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Orbit);
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
 
-    input.middlePressed = false;
     input.mouseScreen = {160.0f, 120.0f};
+    setNavigationDown(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.cameraChanged);
 
-    input.middleDown = false;
-    input.middleReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(router.navigating());
 
@@ -6882,17 +6977,16 @@ TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.modifiers.alt = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::OrbitSnap);
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
 
-    input.middlePressed = false;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationDown(input, ViewportInputActionKind::OrbitSnap);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.cameraChanged);
     EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
@@ -6902,8 +6996,7 @@ TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
     EXPECT_NEAR(forward.y, 0.0f, 0.001f);
     EXPECT_NEAR(forward.z, -1.0f, 0.001f);
 
-    input.middleDown = false;
-    input.middleReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::OrbitSnap);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_FALSE(router.navigating());
@@ -6920,18 +7013,17 @@ TEST(ViewportInputRouterTests, MiddleOrbitSamplesAltDuringDragForOrthographicSna
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Orbit);
 
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
     ASSERT_TRUE(router.navigating());
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
 
-    input.middlePressed = false;
     input.modifiers.alt = true;
     input.mouseScreen = {220.0f, 100.0f};
+    setNavigationDown(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.cameraChanged);
@@ -6940,6 +7032,7 @@ TEST(ViewportInputRouterTests, MiddleOrbitSamplesAltDuringDragForOrthographicSna
 
     input.modifiers.alt = false;
     input.mouseScreen = {116.0f, 100.0f};
+    setNavigationDown(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.cameraChanged);
@@ -6957,22 +7050,20 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.modifiers.alt = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::OrbitSnap);
 
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
-    input.middlePressed = false;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationDown(input, ViewportInputActionKind::OrbitSnap);
     result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.cameraChanged);
     ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
     ASSERT_FALSE(camera.orthographicViewLocked());
 
-    input.middleDown = false;
-    input.middleReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::OrbitSnap);
     result = router.handleFrame(input, camera);
     ASSERT_FALSE(router.navigating());
 
@@ -6980,9 +7071,8 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7002,22 +7092,20 @@ TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicView) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.modifiers.alt = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::OrbitSnap);
 
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
-    input.middlePressed = false;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationDown(input, ViewportInputActionKind::OrbitSnap);
     result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.cameraChanged);
     ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
     ASSERT_FALSE(camera.orthographicViewLocked());
 
-    input.middleDown = false;
-    input.middleReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::OrbitSnap);
     result = router.handleFrame(input, camera);
     ASSERT_FALSE(router.navigating());
 
@@ -7025,9 +7113,8 @@ TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicView) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {300.0f, 240.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7050,16 +7137,15 @@ TEST(ViewportInputRouterTests, LockedOrthographicViewConsumesMiddleOrbitWithoutM
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Orbit);
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
 
-    input.middlePressed = false;
     input.mouseScreen = {180.0f, 140.0f};
+    setNavigationDown(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7071,8 +7157,7 @@ TEST(ViewportInputRouterTests, LockedOrthographicViewConsumesMiddleOrbitWithoutM
     EXPECT_NEAR(camera.state().pitchRadians, before.pitchRadians, 0.001f);
     EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
 
-    input.middleDown = false;
-    input.middleReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::Orbit);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_FALSE(router.navigating());
@@ -7091,17 +7176,16 @@ TEST(ViewportInputRouterTests, ShiftMiddleMousePansLockedOrthographicView) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.middlePressed = true;
-    input.middleDown = true;
     input.modifiers.shift = true;
     input.mouseScreen = {100.0f, 100.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Pan);
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
 
-    input.middlePressed = false;
     input.mouseScreen = {180.0f, 140.0f};
+    setNavigationDown(input, ViewportInputActionKind::Pan);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7123,18 +7207,17 @@ TEST(ViewportInputRouterTests, RightMousePansOrthographicViewInsteadOfFlying) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {240.0f, 180.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
 
-    input.rightPressed = false;
     input.mouseScreen = {310.0f, 210.0f};
     input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
     input.deltaSeconds = 0.25f;
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7144,9 +7227,8 @@ TEST(ViewportInputRouterTests, RightMousePansOrthographicViewInsteadOfFlying) {
     EXPECT_NEAR(camera.state().pitchRadians, before.pitchRadians, 0.001f);
     EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
 
-    input.rightDown = false;
-    input.rightReleased = true;
     input.flyLocalDirection = {};
+    setNavigationReleased(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_FALSE(router.navigating());
@@ -7159,9 +7241,8 @@ TEST(ViewportInputRouterTests, RightMouseFlyNavigationConsumesMovementHotkeys) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {300.0f, 240.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     auto result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
@@ -7171,11 +7252,10 @@ TEST(ViewportInputRouterTests, RightMouseFlyNavigationConsumesMovementHotkeys) {
     EXPECT_FALSE(result.flyHudActive);
 
     const ViewportCameraPose beforeMove = camera.pose();
-    input.rightPressed = false;
     input.mouseDelta = {40.0f, 0.0f};
     input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
     input.deltaSeconds = 0.25f;
-    input.pressedKeys = {ViewportKey::W};
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.cameraChanged);
@@ -7186,15 +7266,14 @@ TEST(ViewportInputRouterTests, RightMouseFlyNavigationConsumesMovementHotkeys) {
     EXPECT_GT(length(camera.pose().eye - beforeMove.eye), 1.0f);
 
     input.flyLocalDirection = {};
-    input.pressedKeys = {};
     input.mouseDelta = {};
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.flyNavigationActive);
     EXPECT_TRUE(result.flyCursorCaptureActive);
     EXPECT_TRUE(result.flyHudActive);
 
-    input.rightDown = false;
-    input.rightReleased = true;
+    setNavigationReleased(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.consumed);
     EXPECT_FALSE(router.navigating());
@@ -7208,12 +7287,11 @@ TEST(ViewportInputRouterTests, RightMouseFlyNavigationIgnoresPressFrameMouseDelt
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {300.0f, 240.0f};
     input.mouseDelta = {250.0f, -180.0f};
     input.flyLocalDirection = {0.0f, 0.0f, 1.0f};
     input.deltaSeconds = 0.25f;
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     const ViewportCameraPose before = camera.pose();
     const auto result = router.handleFrame(input, camera);
@@ -7240,18 +7318,17 @@ TEST(ViewportInputRouterTests, RightMouseFlyLookNearOrthogonalAxisStaysPerspecti
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {300.0f, 240.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
     ASSERT_TRUE(result.flyNavigationActive);
 
     const ViewportCameraPose before = camera.pose();
-    input.rightPressed = false;
     input.mouseDelta = {0.0f, -2.0f};
     input.deltaSeconds = 0.016f;
+    setNavigationDown(input, ViewportInputActionKind::Fly);
     result = router.handleFrame(input, camera);
 
     const ViewportCameraPose after = camera.pose();
@@ -7272,9 +7349,8 @@ TEST(ViewportInputRouterTests, FlyWheelAdjustsNavigationSpeedInsteadOfZooming) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {300.0f, 240.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.flyNavigationActive);
@@ -7282,9 +7358,10 @@ TEST(ViewportInputRouterTests, FlyWheelAdjustsNavigationSpeedInsteadOfZooming) {
     const float distanceBeforeWheel = camera.state().distance;
     const float speedBeforeWheel = camera.flySpeed();
 
-    input.rightPressed = false;
     input.mouseWheel = 1.0f;
     input.mouseDelta = {};
+    setNavigationDown(input, ViewportInputActionKind::Fly);
+    input.navigationBindings.zoomWheel = true;
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7295,6 +7372,8 @@ TEST(ViewportInputRouterTests, FlyWheelAdjustsNavigationSpeedInsteadOfZooming) {
     EXPECT_NEAR(camera.state().distance, distanceBeforeWheel, 0.001f);
 
     input.mouseWheel = -2.0f;
+    setNavigationDown(input, ViewportInputActionKind::Fly);
+    input.navigationBindings.zoomWheel = true;
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.flySpeedChanged);
     EXPECT_NEAR(camera.flySpeed(), speedBeforeWheel - 1.0f, 0.001f);
@@ -7311,16 +7390,15 @@ TEST(ViewportInputRouterTests, MiddleMouseResetsFlyNavigationSpeed) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.mouseScreen = {300.0f, 240.0f};
+    setNavigationPressed(input, ViewportInputActionKind::Fly);
 
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.flyNavigationActive);
 
-    input.rightPressed = false;
-    input.middlePressed = true;
     input.mouseDelta = {};
+    setNavigationDown(input, ViewportInputActionKind::Fly);
+    input.navigationBindings.resetFlySpeedPressed = true;
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.consumed);
@@ -7339,8 +7417,6 @@ TEST(ViewportInputRouterTests, ShiftRightMouseDoesNotStartFlyNavigation) {
     input.viewportHovered = true;
     input.viewportFocused = true;
     input.viewportSize = {800.0f, 600.0f};
-    input.rightPressed = true;
-    input.rightDown = true;
     input.modifiers.shift = true;
     input.mouseScreen = {300.0f, 240.0f};
 

@@ -123,10 +123,8 @@ private:
         bool rightPressed = false;
         bool rightReleased = false;
         float wheelY = 0.0f;
-        std::unordered_set<ViewportKey> keysDown;
         std::unordered_set<QuaderKeyCode> keyboardKeysDown;
         ViewportModifierKeyState modifierKeys;
-        std::vector<ViewportKey> pressedKeys;
         std::unordered_set<QuaderMouseButton> mouseButtonsDown;
         std::unordered_map<QuaderMouseButton, QuaderInputChord> mouseDragChordsDown;
         std::vector<QuaderInputChord> pressedInputChords;
@@ -162,6 +160,8 @@ private:
             bool down);
     [[nodiscard]] static bool inputStateHasActivePointerGesture(const ViewportInputSurfaceState& input);
     static void clearTransientInputState(ViewportInputSurfaceState& input);
+    static void clearHeldInputState(ViewportInputSurfaceState& input);
+    static void clearAllInputState(ViewportInputSurfaceState& input);
     ViewportInputFrame buildViewportInputFrame() const;
     ViewportModifiers currentModifiers(const ViewportInputSurfaceState& input) const;
     void clearTransientInput();
@@ -189,7 +189,10 @@ private:
             ViewportInputSurfaceState& inputState,
             QVec2 leftClickLocal,
             ViewportWindowInstance* windowedInstance);
-    void prepareWindowedViewports(ViewportWorkspaceService& workspace);
+    void prepareWindowedViewports(
+            QuaderEditorApi& editor,
+            SceneRenderBridge& renderBridge,
+            ViewportWorkspaceService& workspace);
     ViewportWorkspaceAuxiliaryViewportState& ensureWindowedViewportWorkspaceState(
             ViewportWorkspaceService& workspace,
             const ViewportWindowInstance& instance) const;

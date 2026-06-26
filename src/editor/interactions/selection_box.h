@@ -24,6 +24,22 @@ struct ScreenRect {
 };
 
 /**
+ * Enumerates rectangle selection hit matching rules used by projected candidates.
+ */
+enum class RectangleSelectionMatch {
+	contain,
+	crossing,
+};
+
+/**
+ * Represents a projected screen-space segment used by rectangle selection candidates.
+ */
+struct RectangleProjectedSegment {
+	quader::QVec2 start;
+	quader::QVec2 end;
+};
+
+/**
  * Represents a Rectangle Projected Object value used by the modal modeling interaction layer.
  */
 struct RectangleProjectedObject {
@@ -33,6 +49,9 @@ struct RectangleProjectedObject {
 	bool has_screen_bounds = false;
 	quader::QVec2 screen_min;
 	quader::QVec2 screen_max;
+	std::vector<quader::QVec2> screen_points;
+	std::vector<RectangleProjectedSegment> screen_segments;
+	std::vector<std::vector<quader::QVec2>> screen_polygons;
 };
 
 /**
@@ -44,6 +63,7 @@ struct RectangleProjectedFace {
 	std::vector<int> vertex_indices;
 	bool has_screen_position = false;
 	quader::QVec2 screen_position;
+	std::vector<quader::QVec2> screen_vertices;
 };
 
 /**
@@ -55,6 +75,10 @@ struct RectangleProjectedEdge {
 	int b_index = -1;
 	bool has_screen_position = false;
 	quader::QVec2 screen_position;
+	bool has_screen_start = false;
+	quader::QVec2 screen_start;
+	bool has_screen_end = false;
+	quader::QVec2 screen_end;
 };
 
 /**
@@ -72,6 +96,7 @@ struct RectangleProjectedVertex {
  */
 struct RectangleProjectedHitsRequest {
 	SelectionMode mode = SelectionMode::object;
+	RectangleSelectionMatch match = RectangleSelectionMatch::crossing;
 	ScreenRect rect;
 	std::vector<RectangleProjectedObject> objects;
 	std::vector<RectangleProjectedFace> faces;

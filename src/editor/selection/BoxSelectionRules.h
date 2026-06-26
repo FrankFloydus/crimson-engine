@@ -6,13 +6,21 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "viewport/ViewportInputTypes.h"
+#include "editor/modeling/ModelingTypes.h"
 
 namespace quader {
 
-[[nodiscard]] bool resolveStandaloneViewportLegacyShortcut(
-        ViewportKey key,
-        ViewportModifiers modifiers,
-        ViewportShortcut& shortcut);
+/**
+ * Resolves drag-direction box selection policy into an explicit hit matching rule.
+ */
+inline ModelingBoxSelectionRule resolveBoxSelectionRule(
+        ModelingBoxSelectionRule rule,
+        QVec2 start,
+        QVec2 end) {
+    if (rule != ModelingBoxSelectionRule::DragDirection) {
+        return rule;
+    }
+    return end.x >= start.x ? ModelingBoxSelectionRule::Contain : ModelingBoxSelectionRule::Crossing;
+}
 
 } // namespace quader

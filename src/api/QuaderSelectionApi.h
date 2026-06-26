@@ -11,12 +11,36 @@
 #include "api/QuaderApiTypes.h"
 
 #include <initializer_list>
+#include <memory>
 #include <span>
 #include <vector>
 
 namespace quader {
 
 class QuaderApiMutationRunner;
+
+/**
+ * Stores an opaque selection baseline for live viewport box-selection drags.
+ */
+class QuaderSelectionBoxBaseline final {
+public:
+    QuaderSelectionBoxBaseline();
+    ~QuaderSelectionBoxBaseline();
+    QuaderSelectionBoxBaseline(const QuaderSelectionBoxBaseline&) noexcept = default;
+    QuaderSelectionBoxBaseline& operator=(const QuaderSelectionBoxBaseline&) noexcept = default;
+    QuaderSelectionBoxBaseline(QuaderSelectionBoxBaseline&&) noexcept = default;
+    QuaderSelectionBoxBaseline& operator=(QuaderSelectionBoxBaseline&&) noexcept = default;
+
+    [[nodiscard]] bool valid() const;
+
+private:
+    friend class QuaderSelectionApi;
+
+    class Impl;
+    explicit QuaderSelectionBoxBaseline(std::shared_ptr<const Impl> impl);
+
+    std::shared_ptr<const Impl> impl_;
+};
 
 /**
  * Exposes Quader Selection API operations through the public Quader API surface.
@@ -64,6 +88,11 @@ public:
     QuaderApiVoidResult setMode(QuaderSelectionMode mode);
 
     QuaderApiResult<QuaderSelectionSummary> pickSelect(const QuaderPickSelectRequest& request);
+    [[nodiscard]] QuaderSelectionBoxBaseline captureBoxSelectionBaseline() const;
+    QuaderApiResult<QuaderSelectionSummary> boxSelect(const QuaderBoxSelectRequest& request);
+    QuaderApiResult<QuaderSelectionSummary> boxSelect(
+            const QuaderBoxSelectRequest& request,
+            const QuaderSelectionBoxBaseline& baseline);
     QuaderApiResult<QuaderHoverSummary> hover(const QuaderHoverRequest& request);
     QuaderApiResult<QuaderHoverSummary> hoverVertex(QuaderModelingObjectRef object, QuaderElementId vertex);
     QuaderApiResult<QuaderHoverSummary> hoverEdge(QuaderModelingObjectRef object, QuaderElementId a, QuaderElementId b);

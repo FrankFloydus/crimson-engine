@@ -51,15 +51,12 @@ public:
     bool flyHudActive() const { return flyHudActive_; }
     const class ViewportTool* activeTool() const;
 
-    static bool resolveShortcut(ViewportKey key, ViewportModifiers modifiers, ViewportShortcut& shortcut);
-
 private:
     bool handleShortcut(const ViewportShortcut& shortcut, ViewportCameraController& camera, ViewportInputResult& result);
 
     ViewportToolState state_;
     ViewportDragMode navigationMode_ = ViewportDragMode::None;
     ViewportInputActionKind activeNavigationAction_ = ViewportInputActionKind::None;
-    bool navigationUsesRightButton_ = false;
     bool orbitSnapActionUsesAltModifier_ = false;
     bool flyCursorCaptureActive_ = false;
     bool flyHudActive_ = false;

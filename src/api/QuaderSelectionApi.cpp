@@ -12,6 +12,7 @@
 #include "scene/document/ProjectSession.h"
 #include "editor/selection/EditorSelectionService.h"
 
+#include <memory>
 #include <utility>
 
 namespace quader {
@@ -63,6 +64,27 @@ ModelingSelectionEdit toModelingEdit(QuaderSelectionEdit edit) {
 }
 
 } // namespace
+
+/**
+ * Stores QuaderSelectionBoxBaseline implementation data outside the public API header.
+ */
+class QuaderSelectionBoxBaseline::Impl final {
+public:
+    explicit Impl(EditorSelectionBoxBaseline baseline)
+        : baseline(std::move(baseline)) {}
+
+    EditorSelectionBoxBaseline baseline;
+};
+
+QuaderSelectionBoxBaseline::QuaderSelectionBoxBaseline() = default;
+QuaderSelectionBoxBaseline::~QuaderSelectionBoxBaseline() = default;
+
+QuaderSelectionBoxBaseline::QuaderSelectionBoxBaseline(std::shared_ptr<const Impl> impl)
+    : impl_(std::move(impl)) {}
+
+bool QuaderSelectionBoxBaseline::valid() const {
+    return impl_ != nullptr;
+}
 
 QuaderSelectionApi::QuaderSelectionApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
     : session_(session)
@@ -250,6 +272,40 @@ QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pickSelect(const Qua
             ModelingCommandResult{.ok = true, .changed = changed},
             "Pick Select");
     return selectionResultFromStatus(std::move(status), picked);
+}
+
+QuaderSelectionBoxBaseline QuaderSelectionApi::captureBoxSelectionBaseline() const {
+    return QuaderSelectionBoxBaseline(std::shared_ptr<const QuaderSelectionBoxBaseline::Impl>(
+            new QuaderSelectionBoxBaseline::Impl(
+                    projectSession(session_).selection().captureBoxSelectionBaseline())));
+}
+
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::boxSelect(const QuaderBoxSelectRequest& request) {
+    const ModelingSelectionSummary before = projectSession(session_).selection().summary();
+    const ModelingSelectionSummary selected = projectSession(session_).selection().boxSelect(toModelingBoxSelectRequest(request));
+    const ModelingSelectionSummary after = projectSession(session_).selection().summary();
+    const bool changed = before.contentRevision != after.contentRevision ||
+            before.selectionRevision != after.selectionRevision;
+    QuaderApiVoidResult status = mutations_.runModelingResult(
+            ModelingCommandResult{.ok = true, .changed = changed},
+            "Box Select");
+    return selectionResultFromStatus(std::move(status), selected);
+}
+
+QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::boxSelect(
+        const QuaderBoxSelectRequest& request,
+        const QuaderSelectionBoxBaseline& baseline) {
+    const ModelingSelectionSummary before = projectSession(session_).selection().summary();
+    const ModelingSelectionSummary selected = baseline.impl_ != nullptr
+            ? projectSession(session_).selection().boxSelect(toModelingBoxSelectRequest(request), baseline.impl_->baseline)
+            : projectSession(session_).selection().boxSelect(toModelingBoxSelectRequest(request));
+    const ModelingSelectionSummary after = projectSession(session_).selection().summary();
+    const bool changed = before.contentRevision != after.contentRevision ||
+            before.selectionRevision != after.selectionRevision;
+    QuaderApiVoidResult status = mutations_.runModelingResult(
+            ModelingCommandResult{.ok = true, .changed = changed},
+            "Box Select");
+    return selectionResultFromStatus(std::move(status), selected);
 }
 
 QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hover(const QuaderHoverRequest& request) {

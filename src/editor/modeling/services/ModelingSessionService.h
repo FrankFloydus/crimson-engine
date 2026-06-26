@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/modeling/ModelingSelectionBoxBaseline.h"
 #include "editor/modeling/services/ModelingActionCatalog.h"
 #include "editor/modeling/ModelingTypes.h"
 #include "render/ViewportOverlayFrame.h"
@@ -121,6 +122,11 @@ public:
     ModelingTransformDragPreview commitTransformDrag(EditorHistoryService& history);
     ModelingCommandResult cancelTransformDrag();
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request);
+    [[nodiscard]] ModelingSelectionBoxBaseline captureBoxSelectionBaseline() const;
+    ModelingSelectionSummary boxSelect(const ModelingBoxSelectRequest& request);
+    ModelingSelectionSummary boxSelect(
+            const ModelingBoxSelectRequest& request,
+            const ModelingSelectionBoxBaseline& baseline);
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request);
     [[nodiscard]] ModelingHoverSummary selectionHoverSummary() const;
     [[nodiscard]] ModelingHoverSummary previewSelectionHover(const ModelingHoverRequest& request) const;

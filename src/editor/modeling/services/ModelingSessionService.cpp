@@ -48,6 +48,7 @@
 #include <editor/interactions/cut_tool.h>
 #include <editor/interactions/mirror_tool.h>
 #include <editor/interactions/move_tool.h>
+#include <editor/interactions/selection_box.h>
 #include <editor/interactions/viewport_projection.h>
 #include <editor/interactions/rotate_tool.h>
 #include <editor/interactions/scale_tool.h>
@@ -92,6 +93,20 @@ quader_editor_core::ViewportCameraState toRuntime(const ModelingViewportCamera& 
     camera.orthographic_size = std::max(value.orthographicSize, 0.0001);
     camera.fov_degrees = value.fovDegrees;
     return camera;
+}
+
+quader_editor_core::SelectionEditOperation toRuntime(ModelingSelectionEdit edit) {
+    switch (edit) {
+    case ModelingSelectionEdit::Add:
+        return quader_editor_core::SelectionEditOperation::add;
+    case ModelingSelectionEdit::Remove:
+        return quader_editor_core::SelectionEditOperation::remove;
+    case ModelingSelectionEdit::Toggle:
+        return quader_editor_core::SelectionEditOperation::toggle;
+    case ModelingSelectionEdit::Replace:
+        return quader_editor_core::SelectionEditOperation::replace;
+    }
+    return quader_editor_core::SelectionEditOperation::replace;
 }
 
 quader_poly::Transform3 toRuntime(const ModelingTransform3& transform) {
@@ -1158,6 +1173,26 @@ bool ModelingSessionMemento::valid() const {
 }
 
 /**
+ * Stores private runtime selection state for a modeling box-selection baseline.
+ */
+struct ModelingSelectionBoxBaseline::Impl {
+    explicit Impl(quader_editor_core::RectangleSelectionState selection)
+        : selection(std::move(selection)) {}
+
+    quader_editor_core::RectangleSelectionState selection;
+};
+
+ModelingSelectionBoxBaseline::ModelingSelectionBoxBaseline() = default;
+ModelingSelectionBoxBaseline::~ModelingSelectionBoxBaseline() = default;
+
+ModelingSelectionBoxBaseline::ModelingSelectionBoxBaseline(std::shared_ptr<const Impl> impl)
+    : impl_(std::move(impl)) {}
+
+bool ModelingSelectionBoxBaseline::valid() const {
+    return static_cast<bool>(impl_);
+}
+
+/**
  * Owns Impl behavior within the modeling application service layer.
  */
 class ModelingSessionService::Impl {
@@ -1251,6 +1286,11 @@ public:
                 .contentRevision = session_.state().content_revision,
                 .selectionRevision = session_.state().selection_revision,
         };
+    }
+
+    [[nodiscard]] ModelingSelectionBoxBaseline captureBoxSelectionBaseline() const {
+        return ModelingSelectionBoxBaseline(std::make_shared<ModelingSelectionBoxBaseline::Impl>(
+                selectionService_.rectangleSelectionState(session_)));
     }
 
     [[nodiscard]] std::uint64_t selectionOverlaySignature() const {
@@ -2541,6 +2581,32 @@ public:
         return selectionSummary();
     }
 
+    ModelingSelectionSummary boxSelect(const ModelingBoxSelectRequest& request) {
+        return boxSelect(request, selectionService_.rectangleSelectionState(session_));
+    }
+
+    ModelingSelectionSummary boxSelect(
+            const ModelingBoxSelectRequest& request,
+            const quader_editor_core::RectangleSelectionState& baselineSelection) {
+        std::vector<quader_editor_core::PolygonObject> pickingObjects = sceneTransformedObjectsForPicking();
+        const quader_editor_core::RectangleProjectedHitsRequest hitsRequest =
+                selectionService_.rectangleProjectedHitsRequest(
+                        pickingObjects,
+                        session_.selection_mode(),
+                        request);
+        quader_editor_core::RectangleSelectionRequest rectangleRequest;
+        rectangleRequest.current_selection = baselineSelection;
+        rectangleRequest.operation = toRuntime(request.edit);
+        rectangleRequest.universe = selectionService_.rectangleSelectionUniverse(session_);
+        rectangleRequest.hits = quader_editor_core::rectangle_hits_from_projected_candidates(hitsRequest);
+        const quader_editor_core::RectangleSelectionResult result =
+                quader_editor_core::apply_rectangle_selection(rectangleRequest);
+        (void)selectionService_.applyRectangleSelection(session_, result.selection);
+        syncSceneSelectionFromModeling();
+        invalidateSelectionOverlayCaches();
+        return selectionSummary();
+    }
+
     ModelingCommandResult updateSelectionHover(const ModelingHoverRequest& request) {
         const std::vector<quader_editor_core::PolygonObject>& pickingObjects = cachedSceneTransformedObjectsForPicking();
         const quader_poly::PickOptions pickOptions = pickOptionsFromRequest(request);
@@ -3573,6 +3639,10 @@ ModelingSelectionSummary ModelingSessionService::selectionSummary() const {
     return impl_->selectionSummary();
 }
 
+ModelingSelectionBoxBaseline ModelingSessionService::captureBoxSelectionBaseline() const {
+    return impl_->captureBoxSelectionBaseline();
+}
+
 std::uint64_t ModelingSessionService::selectionOverlaySignature() const {
     return impl_->selectionOverlaySignature();
 }
@@ -3761,6 +3831,16 @@ ModelingCommandResult ModelingSessionService::cancelTransformDrag() {
 
 ModelingSelectionSummary ModelingSessionService::pickSelect(const ModelingPickSelectRequest& request) {
     return impl_->pickSelect(request);
+}
+
+ModelingSelectionSummary ModelingSessionService::boxSelect(const ModelingBoxSelectRequest& request) {
+    return impl_->boxSelect(request);
+}
+
+ModelingSelectionSummary ModelingSessionService::boxSelect(
+        const ModelingBoxSelectRequest& request,
+        const ModelingSelectionBoxBaseline& baseline) {
+    return baseline.impl_ ? impl_->boxSelect(request, baseline.impl_->selection) : impl_->boxSelect(request);
 }
 
 ModelingCommandResult ModelingSessionService::updateSelectionHover(const ModelingHoverRequest& request) {

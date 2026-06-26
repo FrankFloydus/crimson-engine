@@ -33,6 +33,7 @@ struct ViewportNavigationInput {
     bool zoomWheel = false;
     bool zoomToCursorWheel = false;
     bool resetFlySpeedPressed = false;
+    bool cancelNavigationPressed = false;
     bool flyForwardDown = false;
     bool flyBackwardDown = false;
     bool flyRightDown = false;
@@ -54,12 +55,6 @@ struct ViewportInputFrame {
     bool activeToolOwnsViewport = false;
     bool modalToolFinalizePressed = false;
     bool modalToolModeCyclePressed = false;
-    bool middlePressed = false;
-    bool middleDown = false;
-    bool middleReleased = false;
-    bool rightPressed = false;
-    bool rightDown = false;
-    bool rightReleased = false;
     float mouseWheel = 0.0f;
     float deltaSeconds = 1.0f / 60.0f;
     QVec2 mouseScreen = {};
@@ -68,14 +63,12 @@ struct ViewportInputFrame {
     QVec2 viewportSize = {};
     ViewportModifiers modifiers = {};
     QVec3 flyLocalDirection = {};
-    std::vector<ViewportKey> pressedKeys;
     std::vector<QuaderInputChord> pressedInputChords;
     std::vector<QuaderInputChord> activeInputChords;
     std::vector<QuaderInputChord> releasedInputChords;
     std::vector<QuaderInputChord> wheelInputChords;
     std::vector<ViewportShortcut> resolvedShortcuts;
     ViewportNavigationInput navigationBindings = {};
-    bool shortcutResolverActive = false;
 };
 
 /**

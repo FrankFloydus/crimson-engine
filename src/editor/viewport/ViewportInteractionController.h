@@ -31,6 +31,7 @@ public:
     void reset();
 
     [[nodiscard]] const quader_editor_core::TransformGizmoFrame* transformGizmoFrame() const;
+    [[nodiscard]] ViewportSelectionMarquee selectionMarquee() const;
 
 private:
     TransformGizmoInteraction transformGizmo_;

@@ -9,6 +9,7 @@
 #include "editor/modeling/services/ModelingInstantOperationCatalog.h"
 #include "editor/modeling/services/ModelingOperationSettings.h"
 #include "editor/projection/PickingCacheProjection.h"
+#include "editor/selection/BoxSelectionRules.h"
 #include "scene/SceneDocument.h"
 
 #include <algorithm>
@@ -21,7 +22,9 @@
 
 #include <editor/interactions/cut_tool.h>
 #include <editor/interactions/mirror_tool.h>
+#include <editor/interactions/selection_box.h>
 #include <editor/interactions/transform_drag.h>
+#include <editor/interactions/viewport_projection.h>
 #include <mesh/polygon/document.h>
 
 namespace quader {
@@ -159,6 +162,57 @@ void mixOverlaySignatureHash(std::uint64_t& hash, quader::QVec3 value) {
     mixOverlaySignatureHash(hash, static_cast<double>(value.z));
 }
 
+quader_editor_core::ViewportCameraState toRuntimeCamera(const ModelingViewportCamera& value) {
+    quader_editor_core::ViewportCameraState camera;
+    camera.projection = value.orthographic
+            ? quader_editor_core::CameraProjection::orthographic
+            : quader_editor_core::CameraProjection::perspective;
+    camera.transform = {
+            .x_axis = value.xAxis,
+            .y_axis = value.yAxis,
+            .z_axis = value.zAxis,
+            .origin = value.origin,
+    };
+    camera.viewport_size = {
+            std::max(value.viewportSize.x, 1.0f),
+            std::max(value.viewportSize.y, 1.0f),
+    };
+    camera.orthographic_size = std::max(value.orthographicSize, 0.0001);
+    camera.fov_degrees = value.fovDegrees;
+    return camera;
+}
+
+quader_editor_core::RectangleSelectionMatch rectangleSelectionMatch(
+        ModelingBoxSelectionRule rule,
+        QVec2 start,
+        QVec2 end) {
+    switch (resolveBoxSelectionRule(rule, start, end)) {
+    case ModelingBoxSelectionRule::Contain:
+        return quader_editor_core::RectangleSelectionMatch::contain;
+    case ModelingBoxSelectionRule::Crossing:
+        return quader_editor_core::RectangleSelectionMatch::crossing;
+    case ModelingBoxSelectionRule::DragDirection:
+        break;
+    }
+    return quader_editor_core::RectangleSelectionMatch::crossing;
+}
+
+void includeProjectedObjectPoint(
+        quader_editor_core::RectangleProjectedObject& projected,
+        QVec2 screen) {
+    projected.screen_points.push_back(screen);
+    if (!projected.has_screen_bounds) {
+        projected.screen_min = screen;
+        projected.screen_max = screen;
+        projected.has_screen_bounds = true;
+        return;
+    }
+    projected.screen_min.x = std::min(projected.screen_min.x, screen.x);
+    projected.screen_min.y = std::min(projected.screen_min.y, screen.y);
+    projected.screen_max.x = std::max(projected.screen_max.x, screen.x);
+    projected.screen_max.y = std::max(projected.screen_max.y, screen.y);
+}
+
 } // namespace
 
 bool ModelingSelectionService::hasComponentSelection(const ModelingSelectionSummary& summary) {
@@ -286,6 +340,304 @@ const std::vector<quader_editor_core::PickObjectFaceGeometry>& ModelingSelection
     pickingCache_.faceGeometryEntries = std::move(nextEntries);
     pickingCache_.faceGeometryValid = true;
     return pickingCache_.faceGeometry;
+}
+
+quader_editor_core::RectangleSelectionState ModelingSelectionService::rectangleSelectionState(
+        const quader_editor_core::EditorSession& session) const {
+    quader_editor_core::RectangleSelectionState selection;
+    selection.mode = session.selection_mode();
+    selection.active_object_id = session.active_object_id();
+    for (const quader_editor_core::PolygonObject& object : session.objects()) {
+        if (!object.selected) {
+            continue;
+        }
+        if (selection.mode == quader_editor_core::SelectionMode::object) {
+            selection.selected_object_ids.push_back(object.id);
+            continue;
+        }
+        if (selection.mode == quader_editor_core::SelectionMode::face) {
+            for (const quader_poly::ElementId faceId : object.selection.faces) {
+                const quader_poly::Face* face = quader_poly::find_face(object.document, faceId);
+                std::vector<int> vertexIds;
+                if (face != nullptr) {
+                    vertexIds.reserve(face->vertices.size());
+                    for (const quader_poly::ElementId vertexId : face->vertices) {
+                        vertexIds.push_back(static_cast<int>(vertexId));
+                    }
+                }
+                selection.selected_faces.push_back({object.id, static_cast<int>(faceId), std::move(vertexIds)});
+            }
+            if (object.id == selection.active_object_id &&
+                    object.selection.has_active &&
+                    object.selection.active_kind == quader_poly::ElementKind::face) {
+                selection.active_face_index = static_cast<int>(object.selection.active_face);
+            }
+        } else if (selection.mode == quader_editor_core::SelectionMode::edge) {
+            for (const quader_poly::Edge edge : object.selection.edges) {
+                selection.selected_edges.push_back({
+                        object.id,
+                        static_cast<int>(edge.a),
+                        static_cast<int>(edge.b),
+                });
+            }
+            if (object.id == selection.active_object_id &&
+                    object.selection.has_active &&
+                    object.selection.active_kind == quader_poly::ElementKind::edge) {
+                selection.active_edge_vertex_indices = {
+                        static_cast<int>(object.selection.active_edge.a),
+                        static_cast<int>(object.selection.active_edge.b),
+                };
+            }
+        } else if (selection.mode == quader_editor_core::SelectionMode::vertex) {
+            for (const quader_poly::ElementId vertexId : object.selection.vertices) {
+                selection.selected_vertices.push_back({object.id, static_cast<int>(vertexId)});
+            }
+            if (object.id == selection.active_object_id &&
+                    object.selection.has_active &&
+                    object.selection.active_kind == quader_poly::ElementKind::vertex) {
+                selection.active_vertex_indices = {static_cast<int>(object.selection.active_vertex)};
+            }
+        }
+    }
+    return selection;
+}
+
+quader_editor_core::RectangleSelectionUniverse ModelingSelectionService::rectangleSelectionUniverse(
+        const quader_editor_core::EditorSession& session) const {
+    quader_editor_core::RectangleSelectionUniverse universe;
+    for (const quader_editor_core::PolygonObject& object : session.objects()) {
+        universe.object_ids.push_back(object.id);
+        for (const quader_poly::Face& face : object.document.faces) {
+            std::vector<int> vertexIds;
+            vertexIds.reserve(face.vertices.size());
+            for (const quader_poly::ElementId vertexId : face.vertices) {
+                vertexIds.push_back(static_cast<int>(vertexId));
+            }
+            universe.faces.push_back({object.id, static_cast<int>(face.id), std::move(vertexIds)});
+        }
+        for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
+            universe.edges.push_back({object.id, static_cast<int>(edge.a), static_cast<int>(edge.b)});
+        }
+        for (const quader_poly::Vertex& vertex : object.document.vertices) {
+            universe.vertices.push_back({object.id, static_cast<int>(vertex.id)});
+        }
+    }
+    return universe;
+}
+
+quader_editor_core::RectangleProjectedHitsRequest ModelingSelectionService::rectangleProjectedHitsRequest(
+        const std::vector<quader_editor_core::PolygonObject>& pickingObjects,
+        quader_editor_core::SelectionMode selectionMode,
+        const ModelingBoxSelectRequest& request) const {
+    const quader_editor_core::ViewportCameraState camera = toRuntimeCamera(request.camera);
+    quader_editor_core::RectangleProjectedHitsRequest hitsRequest;
+    hitsRequest.mode = selectionMode;
+    hitsRequest.match = rectangleSelectionMatch(request.rule, request.start, request.end);
+    hitsRequest.rect = quader_editor_core::normalized_screen_rect(request.start, request.end);
+
+    for (const quader_editor_core::PolygonObject& object : pickingObjects) {
+        std::unordered_map<int, QVec2> projectedVertices;
+        projectedVertices.reserve(object.document.vertices.size());
+        quader_editor_core::RectangleProjectedObject projectedObject;
+        projectedObject.object_id = object.id;
+        for (const quader_poly::Vertex& vertex : object.document.vertices) {
+            QVec2 screen;
+            if (!quader_editor_core::project_viewport_point(camera, vertex.position, screen)) {
+                continue;
+            }
+            projectedVertices.emplace(static_cast<int>(vertex.id), screen);
+            includeProjectedObjectPoint(projectedObject, screen);
+        }
+        if (projectedObject.has_screen_bounds) {
+            projectedObject.has_screen_center = true;
+            projectedObject.screen_center = {
+                    (projectedObject.screen_min.x + projectedObject.screen_max.x) * 0.5f,
+                    (projectedObject.screen_min.y + projectedObject.screen_max.y) * 0.5f,
+            };
+        }
+
+        for (const quader_poly::Face& face : object.document.faces) {
+            quader_editor_core::RectangleProjectedFace projectedFace;
+            projectedFace.object_id = object.id;
+            projectedFace.face_index = static_cast<int>(face.id);
+            projectedFace.vertex_indices.reserve(face.vertices.size());
+            projectedFace.screen_vertices.reserve(face.vertices.size());
+            QVec2 center{};
+            bool allProjected = !face.vertices.empty();
+            for (const quader_poly::ElementId vertexId : face.vertices) {
+                projectedFace.vertex_indices.push_back(static_cast<int>(vertexId));
+                const auto found = projectedVertices.find(static_cast<int>(vertexId));
+                if (found == projectedVertices.end()) {
+                    allProjected = false;
+                    continue;
+                }
+                center = center + found->second;
+                projectedFace.screen_vertices.push_back(found->second);
+            }
+            if (allProjected && !projectedFace.screen_vertices.empty()) {
+                projectedFace.has_screen_position = true;
+                projectedFace.screen_position = center / static_cast<float>(projectedFace.screen_vertices.size());
+                projectedObject.screen_polygons.push_back(projectedFace.screen_vertices);
+            } else {
+                projectedFace.screen_vertices.clear();
+            }
+            hitsRequest.faces.push_back(std::move(projectedFace));
+        }
+
+        for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
+            quader_editor_core::RectangleProjectedEdge projectedEdge;
+            projectedEdge.object_id = object.id;
+            projectedEdge.a_index = static_cast<int>(edge.a);
+            projectedEdge.b_index = static_cast<int>(edge.b);
+            const auto a = projectedVertices.find(static_cast<int>(edge.a));
+            const auto b = projectedVertices.find(static_cast<int>(edge.b));
+            if (a != projectedVertices.end() && b != projectedVertices.end()) {
+                projectedEdge.has_screen_start = true;
+                projectedEdge.screen_start = a->second;
+                projectedEdge.has_screen_end = true;
+                projectedEdge.screen_end = b->second;
+                projectedEdge.has_screen_position = true;
+                projectedEdge.screen_position = (a->second + b->second) * 0.5f;
+                projectedObject.screen_segments.push_back({a->second, b->second});
+            }
+            hitsRequest.edges.push_back(projectedEdge);
+        }
+
+        for (const quader_poly::Vertex& vertex : object.document.vertices) {
+            quader_editor_core::RectangleProjectedVertex projectedVertex;
+            projectedVertex.object_id = object.id;
+            projectedVertex.vertex_index = static_cast<int>(vertex.id);
+            const auto found = projectedVertices.find(static_cast<int>(vertex.id));
+            if (found != projectedVertices.end()) {
+                projectedVertex.has_screen_position = true;
+                projectedVertex.screen_position = found->second;
+            }
+            hitsRequest.vertices.push_back(projectedVertex);
+        }
+
+        hitsRequest.objects.push_back(std::move(projectedObject));
+    }
+    return hitsRequest;
+}
+
+bool ModelingSelectionService::applyRectangleSelection(
+        quader_editor_core::EditorSession& session,
+        const quader_editor_core::RectangleSelectionState& selection) const {
+    quader_editor_core::SessionState& state = session.state();
+    bool changed = state.selection_mode != selection.mode ||
+            state.active_object_id != selection.active_object_id;
+
+    std::unordered_set<int> selectedObjects(selection.selected_object_ids.begin(), selection.selected_object_ids.end());
+    std::unordered_map<int, std::vector<int>> selectedFacesByObject;
+    std::unordered_map<int, std::vector<quader_poly::Edge>> selectedEdgesByObject;
+    std::unordered_map<int, std::vector<int>> selectedVerticesByObject;
+    if (selection.mode == quader_editor_core::SelectionMode::face) {
+        for (const quader_editor_core::RectangleSelectionFace face : selection.selected_faces) {
+            selectedFacesByObject[face.object_id].push_back(face.face_index);
+        }
+    } else if (selection.mode == quader_editor_core::SelectionMode::edge) {
+        std::unordered_set<int> fullObjectIds(
+                selection.selected_edge_full_object_ids.begin(),
+                selection.selected_edge_full_object_ids.end());
+        for (const quader_editor_core::PolygonObject& object : state.objects) {
+            if (fullObjectIds.find(object.id) == fullObjectIds.end()) {
+                continue;
+            }
+            selectedEdgesByObject[object.id] = quader_poly::document_edges(object.document);
+        }
+        for (const quader_editor_core::RectangleSelectionEdge edge : selection.selected_edges) {
+            selectedEdgesByObject[edge.object_id].push_back(quader_poly::make_edge(
+                    static_cast<quader_poly::ElementId>(edge.a_index),
+                    static_cast<quader_poly::ElementId>(edge.b_index)));
+        }
+    } else if (selection.mode == quader_editor_core::SelectionMode::vertex) {
+        std::unordered_set<int> fullObjectIds(
+                selection.selected_vertex_full_object_ids.begin(),
+                selection.selected_vertex_full_object_ids.end());
+        for (const quader_editor_core::PolygonObject& object : state.objects) {
+            if (fullObjectIds.find(object.id) == fullObjectIds.end()) {
+                continue;
+            }
+            std::vector<int>& vertices = selectedVerticesByObject[object.id];
+            vertices.reserve(object.document.vertices.size());
+            for (const quader_poly::Vertex& vertex : object.document.vertices) {
+                vertices.push_back(static_cast<int>(vertex.id));
+            }
+        }
+        for (const quader_editor_core::RectangleSelectionVertex vertex : selection.selected_vertices) {
+            selectedVerticesByObject[vertex.object_id].push_back(vertex.vertex_index);
+        }
+    }
+
+    for (quader_editor_core::PolygonObject& object : state.objects) {
+        bool nextSelected = false;
+        quader_poly::Selection nextSelection;
+        if (selection.mode == quader_editor_core::SelectionMode::object) {
+            nextSelected = selectedObjects.find(object.id) != selectedObjects.end();
+        } else {
+            nextSelection.mode = quader_editor_core::component_selection_mode(selection.mode);
+            if (selection.mode == quader_editor_core::SelectionMode::face) {
+                const auto found = selectedFacesByObject.find(object.id);
+                if (found != selectedFacesByObject.end()) {
+                    for (const int faceId : found->second) {
+                        nextSelection.faces.push_back(static_cast<quader_poly::ElementId>(faceId));
+                    }
+                }
+                if (object.id == selection.active_object_id &&
+                        selection.active_face_index >= 0 &&
+                        std::find(
+                                nextSelection.faces.begin(),
+                                nextSelection.faces.end(),
+                                static_cast<quader_poly::ElementId>(selection.active_face_index)) !=
+                                nextSelection.faces.end()) {
+                    nextSelection.has_active = true;
+                    nextSelection.active_kind = quader_poly::ElementKind::face;
+                    nextSelection.active_face = static_cast<quader_poly::ElementId>(selection.active_face_index);
+                }
+            } else if (selection.mode == quader_editor_core::SelectionMode::edge) {
+                const auto found = selectedEdgesByObject.find(object.id);
+                if (found != selectedEdgesByObject.end()) {
+                    nextSelection.edges = found->second;
+                }
+                if (object.id == selection.active_object_id && !nextSelection.edges.empty()) {
+                    const quader_poly::Edge active = nextSelection.edges.back();
+                    nextSelection.has_active = true;
+                    nextSelection.active_kind = quader_poly::ElementKind::edge;
+                    nextSelection.active_edge = active;
+                }
+            } else if (selection.mode == quader_editor_core::SelectionMode::vertex) {
+                const auto found = selectedVerticesByObject.find(object.id);
+                if (found != selectedVerticesByObject.end()) {
+                    for (const int vertexId : found->second) {
+                        nextSelection.vertices.push_back(static_cast<quader_poly::ElementId>(vertexId));
+                    }
+                }
+                if (object.id == selection.active_object_id && !nextSelection.vertices.empty()) {
+                    const quader_poly::ElementId active = nextSelection.vertices.back();
+                    nextSelection.has_active = true;
+                    nextSelection.active_kind = quader_poly::ElementKind::vertex;
+                    nextSelection.active_vertex = active;
+                }
+            }
+            nextSelected = !nextSelection.empty();
+        }
+
+        changed = changed ||
+                object.selected != nextSelected ||
+                !selectionMatches(object.selection, nextSelection);
+        object.selected = nextSelected;
+        object.selection = std::move(nextSelection);
+    }
+
+    if (!changed) {
+        return false;
+    }
+    state.selection_mode = selection.mode;
+    state.active_object_id = selection.active_object_id;
+    quader_editor_core::normalize_active_object_id(state.objects, state.active_object_id);
+    state.dirty = true;
+    ++state.selection_revision;
+    return true;
 }
 
 bool ModelingSelectionService::selectionMatches(

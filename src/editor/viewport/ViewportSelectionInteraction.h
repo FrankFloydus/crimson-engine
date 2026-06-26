@@ -6,9 +6,11 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "api/QuaderApiTypes.h"
+#include "api/QuaderSelectionApi.h"
 #include "editor/modeling/ModelingTypes.h"
 #include "editor/viewport/ViewportInteractionFrame.h"
+
+#include <editor/interactions/selection_box.h>
 
 #include <optional>
 
@@ -16,6 +18,16 @@ namespace quader {
 
 class QuaderEditorApi;
 struct ViewportToolResult;
+
+/**
+ * Stores the active viewport selection marquee for overlay presentation.
+ */
+struct ViewportSelectionMarquee {
+    bool active = false;
+    QVec2 start = {};
+    QVec2 end = {};
+    ModelingBoxSelectionRule rule = ModelingBoxSelectionRule::Contain;
+};
 
 /**
  * Owns selection fallback, paint selection, and hover sequencing for viewport frames.
@@ -28,10 +40,16 @@ public:
             const ViewportInteractionFrame& frame,
             const ViewportToolResult& toolResult,
             bool gizmoConsumed);
+    [[nodiscard]] ViewportSelectionMarquee marquee() const;
 
 private:
-    bool paintSelectionActive_ = false;
     bool hoverClearIssued_ = false;
+    quader_editor_core::SelectionBoxState boxState_;
+    QuaderSelectionEdit boxEdit_ = QuaderSelectionEdit::Replace;
+    std::optional<QuaderHoverTarget> boxHoveredBeforeSelection_;
+    std::optional<QuaderSelectionBoxBaseline> boxBaseline_;
+    std::optional<ViewportSelectionMarquee> committedMarquee_;
+    std::optional<ViewportSelectionMarquee> liveBoxSelection_;
     std::optional<QuaderHoverTarget> hoverSuppressedTarget_;
 };
 

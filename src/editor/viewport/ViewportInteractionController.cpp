@@ -36,4 +36,8 @@ const quader_editor_core::TransformGizmoFrame* ViewportInteractionController::tr
     return transformGizmo_.frame();
 }
 
+ViewportSelectionMarquee ViewportInteractionController::selectionMarquee() const {
+    return selection_.marquee();
+}
+
 } // namespace quader

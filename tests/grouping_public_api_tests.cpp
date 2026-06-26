@@ -322,7 +322,10 @@ TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
     ViewportInputFrame inputFrame;
     inputFrame.viewportFocused = true;
     inputFrame.viewportSize = {800.0f, 600.0f};
-    inputFrame.pressedKeys = {ViewportKey::Delete};
+    inputFrame.resolvedShortcuts = {{
+            .kind = ViewportShortcutKind::DeleteSelection,
+            .context = ViewportShortcutContext::Global,
+    }};
     const ViewportInputResult input = router.handleFrame(inputFrame, camera);
     ASSERT_TRUE(input.shortcutHandled);
     ASSERT_TRUE(input.consumed);

@@ -69,7 +69,9 @@ struct RectangleEdgeKeyHash {
 
 bool rectangle_preserves_existing(SelectionEditOperation operation)
 {
-	return operation == SelectionEditOperation::add || operation == SelectionEditOperation::remove;
+	return operation == SelectionEditOperation::add ||
+		operation == SelectionEditOperation::remove ||
+		operation == SelectionEditOperation::toggle;
 }
 
 bool rectangle_contains_id(const std::vector<int>& ids, int id)
@@ -155,6 +157,15 @@ RectangleSelectionResult rectangle_select_objects(const RectangleSelectionReques
 			if (rectangle_remove_id(result.selection.selected_object_ids, object_id) && result.selection.active_object_id == object_id) {
 				result.selection.active_object_id = -1;
 			}
+		} else if (request.operation == SelectionEditOperation::toggle) {
+			if (rectangle_remove_id(result.selection.selected_object_ids, object_id)) {
+				if (result.selection.active_object_id == object_id) {
+					result.selection.active_object_id = -1;
+				}
+			} else {
+				rectangle_append_unique_id(result.selection.selected_object_ids, object_id);
+				result.selection.active_object_id = object_id;
+			}
 		} else {
 			rectangle_append_unique_id(result.selection.selected_object_ids, object_id);
 			result.selection.active_object_id = object_id;
@@ -187,6 +198,12 @@ RectangleSelectionResult rectangle_select_faces(const RectangleSelectionRequest&
 		const RectangleFaceKey key = rectangle_face_key(face);
 		if (request.operation == SelectionEditOperation::remove) {
 			selected_faces.erase(key);
+		} else if (request.operation == SelectionEditOperation::toggle) {
+			if (selected_faces.find(key) != selected_faces.end()) {
+				selected_faces.erase(key);
+			} else {
+				selected_faces.insert(key);
+			}
 		} else {
 			selected_faces.insert(key);
 		}
@@ -234,6 +251,12 @@ RectangleSelectionResult rectangle_select_edges(const RectangleSelectionRequest&
 		const RectangleEdgeKey key = rectangle_edge_key(edge);
 		if (request.operation == SelectionEditOperation::remove) {
 			edge_keys.erase(key);
+		} else if (request.operation == SelectionEditOperation::toggle) {
+			if (edge_keys.find(key) != edge_keys.end()) {
+				edge_keys.erase(key);
+			} else {
+				edge_keys.insert(key);
+			}
 		} else {
 			edge_keys.insert(key);
 		}
@@ -305,6 +328,12 @@ RectangleSelectionResult rectangle_select_vertices(const RectangleSelectionReque
 		std::unordered_set<int>& vertex_indices = selected_vertices_by_object[vertex.object_id];
 		if (request.operation == SelectionEditOperation::remove) {
 			vertex_indices.erase(vertex.vertex_index);
+		} else if (request.operation == SelectionEditOperation::toggle) {
+			if (vertex_indices.find(vertex.vertex_index) != vertex_indices.end()) {
+				vertex_indices.erase(vertex.vertex_index);
+			} else {
+				vertex_indices.insert(vertex.vertex_index);
+			}
 		} else {
 			vertex_indices.insert(vertex.vertex_index);
 		}

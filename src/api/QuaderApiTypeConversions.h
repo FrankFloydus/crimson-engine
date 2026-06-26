@@ -99,6 +99,32 @@ inline ModelingSelectionMode toModelingSelectionMode(QuaderSelectionMode mode) {
     return ModelingSelectionMode::Object;
 }
 
+inline ModelingSelectionEdit toModelingSelectionEdit(QuaderSelectionEdit edit) {
+    switch (edit) {
+    case QuaderSelectionEdit::Add:
+        return ModelingSelectionEdit::Add;
+    case QuaderSelectionEdit::Remove:
+        return ModelingSelectionEdit::Remove;
+    case QuaderSelectionEdit::Toggle:
+        return ModelingSelectionEdit::Toggle;
+    case QuaderSelectionEdit::Replace:
+        return ModelingSelectionEdit::Replace;
+    }
+    return ModelingSelectionEdit::Replace;
+}
+
+inline ModelingBoxSelectionRule toModelingBoxSelectionRule(QuaderBoxSelectionRule rule) {
+    switch (rule) {
+    case QuaderBoxSelectionRule::Contain:
+        return ModelingBoxSelectionRule::Contain;
+    case QuaderBoxSelectionRule::Crossing:
+        return ModelingBoxSelectionRule::Crossing;
+    case QuaderBoxSelectionRule::DragDirection:
+        return ModelingBoxSelectionRule::DragDirection;
+    }
+    return ModelingBoxSelectionRule::DragDirection;
+}
+
 inline ModelingCutMode toModelingCutMode(QuaderCutMode mode) {
     switch (mode) {
     case QuaderCutMode::DiscardLeft:
@@ -353,6 +379,16 @@ inline ModelingPickSelectRequest toModelingPickSelectRequest(const QuaderPickSel
             .preserveSelectionOnSelectedHit = request.preserveSelectionOnSelectedHit,
             .vertexRadius = request.vertexRadius,
             .edgeRadius = request.edgeRadius,
+    };
+}
+
+inline ModelingBoxSelectRequest toModelingBoxSelectRequest(const QuaderBoxSelectRequest& request) {
+    return {
+            .camera = toModelingViewportCamera(request.camera),
+            .start = request.start,
+            .end = request.end,
+            .edit = toModelingSelectionEdit(request.edit),
+            .rule = toModelingBoxSelectionRule(request.rule),
     };
 }
 

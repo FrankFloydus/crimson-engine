@@ -92,6 +92,7 @@ private:
 
     void updateWindowMetrics();
     void updateRmlDensityScale();
+    void refreshMeasuredViewportFrameForPointerEvent(const SDL_Event& event);
     void saveViewportSettings();
     void saveUISettings();
     void loadLocalization(const std::filesystem::path& executableDir);

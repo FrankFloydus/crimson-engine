@@ -13,6 +13,7 @@
 #include <mesh/geometry/geometry.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <vector>
@@ -146,6 +147,9 @@ public:
 		if (operation == static_cast<int>(SelectionEditOperation::remove)) {
 			return SelectionEditOperation::remove;
 		}
+		if (operation == static_cast<int>(SelectionEditOperation::toggle)) {
+			return SelectionEditOperation::toggle;
+		}
 		return SelectionEditOperation::replace;
 	}
 
@@ -167,7 +171,9 @@ public:
 
 	[[nodiscard]] bool edit_operation_preserves_existing(SelectionEditOperation operation) const
 	{
-		return operation == SelectionEditOperation::add || operation == SelectionEditOperation::remove;
+		return operation == SelectionEditOperation::add ||
+			operation == SelectionEditOperation::remove ||
+			operation == SelectionEditOperation::toggle;
 	}
 
 	void begin_box(SelectionBoxState& state, quader::QVec2 position, SelectionEditOperation operation) const
@@ -233,6 +239,301 @@ public:
 		return quader_geometry::rect_overlaps(to_geometry_rect(rect), bounds);
 	}
 
+	[[nodiscard]] std::array<quader::QVec2, 4> rect_corners(const ScreenRect& rect) const
+	{
+		return { {
+			{ static_cast<float>(rect.min_x), static_cast<float>(rect.min_y) },
+			{ static_cast<float>(rect.max_x), static_cast<float>(rect.min_y) },
+			{ static_cast<float>(rect.max_x), static_cast<float>(rect.max_y) },
+			{ static_cast<float>(rect.min_x), static_cast<float>(rect.max_y) },
+		} };
+	}
+
+	[[nodiscard]] bool all_points_inside_rect(const ScreenRect& rect, const std::vector<quader::QVec2>& points) const
+	{
+		return !points.empty() && std::all_of(points.begin(), points.end(), [&](quader::QVec2 point) {
+			return rect_contains(rect, point);
+		});
+	}
+
+	[[nodiscard]] bool bounds_inside_rect(const ScreenRect& rect, quader::QVec2 min_bounds, quader::QVec2 max_bounds) const
+	{
+		for (const quader::QVec2 corner : rect_corners(ScreenRect {
+				 min_bounds.x,
+				 min_bounds.y,
+				 max_bounds.x,
+				 max_bounds.y,
+			 })) {
+			if (!rect_contains(rect, corner)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	[[nodiscard]] double orientation(quader::QVec2 a, quader::QVec2 b, quader::QVec2 c) const
+	{
+		return (static_cast<double>(b.x) - static_cast<double>(a.x)) * (static_cast<double>(c.y) - static_cast<double>(a.y)) -
+			(static_cast<double>(b.y) - static_cast<double>(a.y)) * (static_cast<double>(c.x) - static_cast<double>(a.x));
+	}
+
+	[[nodiscard]] bool point_on_segment(quader::QVec2 point, quader::QVec2 a, quader::QVec2 b) const
+	{
+		constexpr double epsilon = 0.0001;
+		if (std::abs(orientation(a, b, point)) > epsilon) {
+			return false;
+		}
+		return static_cast<double>(point.x) >= std::min(static_cast<double>(a.x), static_cast<double>(b.x)) - epsilon &&
+			static_cast<double>(point.x) <= std::max(static_cast<double>(a.x), static_cast<double>(b.x)) + epsilon &&
+			static_cast<double>(point.y) >= std::min(static_cast<double>(a.y), static_cast<double>(b.y)) - epsilon &&
+			static_cast<double>(point.y) <= std::max(static_cast<double>(a.y), static_cast<double>(b.y)) + epsilon;
+	}
+
+	[[nodiscard]] bool segments_intersect(quader::QVec2 a0, quader::QVec2 a1, quader::QVec2 b0, quader::QVec2 b1) const
+	{
+		constexpr double epsilon = 0.0001;
+		const double o1 = orientation(a0, a1, b0);
+		const double o2 = orientation(a0, a1, b1);
+		const double o3 = orientation(b0, b1, a0);
+		const double o4 = orientation(b0, b1, a1);
+		if (((o1 > epsilon && o2 < -epsilon) || (o1 < -epsilon && o2 > epsilon)) &&
+				((o3 > epsilon && o4 < -epsilon) || (o3 < -epsilon && o4 > epsilon))) {
+			return true;
+		}
+		return point_on_segment(b0, a0, a1) ||
+			point_on_segment(b1, a0, a1) ||
+			point_on_segment(a0, b0, b1) ||
+			point_on_segment(a1, b0, b1);
+	}
+
+	[[nodiscard]] bool segment_intersects_rect(const ScreenRect& rect, quader::QVec2 a, quader::QVec2 b) const
+	{
+		if (rect_contains(rect, a) || rect_contains(rect, b)) {
+			return true;
+		}
+		const std::array<quader::QVec2, 4> corners = rect_corners(rect);
+		for (std::size_t index = 0; index < corners.size(); ++index) {
+			if (segments_intersect(a, b, corners[index], corners[(index + 1U) % corners.size()])) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	[[nodiscard]] bool point_in_polygon(quader::QVec2 point, const std::vector<quader::QVec2>& polygon) const
+	{
+		if (polygon.size() < 3U) {
+			return false;
+		}
+		bool inside = false;
+		for (std::size_t current = 0, previous = polygon.size() - 1U; current < polygon.size(); previous = current++) {
+			const quader::QVec2 a = polygon[previous];
+			const quader::QVec2 b = polygon[current];
+			if (point_on_segment(point, a, b)) {
+				return true;
+			}
+			const bool crosses = (static_cast<double>(a.y) > static_cast<double>(point.y)) !=
+				(static_cast<double>(b.y) > static_cast<double>(point.y));
+			if (crosses) {
+				const double x_intersect = static_cast<double>(a.x) +
+					(static_cast<double>(point.y) - static_cast<double>(a.y)) *
+						(static_cast<double>(b.x) - static_cast<double>(a.x)) /
+						(static_cast<double>(b.y) - static_cast<double>(a.y));
+				if (x_intersect >= static_cast<double>(point.x)) {
+					inside = !inside;
+				}
+			}
+		}
+		return inside;
+	}
+
+	[[nodiscard]] bool any_rect_corner_inside_polygon(const ScreenRect& rect, const std::vector<quader::QVec2>& polygon) const
+	{
+		for (const quader::QVec2 corner : rect_corners(rect)) {
+			if (point_in_polygon(corner, polygon)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	[[nodiscard]] bool same_screen_point(quader::QVec2 a, quader::QVec2 b) const
+	{
+		constexpr double epsilon = 0.0001;
+		return std::abs(static_cast<double>(a.x) - static_cast<double>(b.x)) <= epsilon &&
+			std::abs(static_cast<double>(a.y) - static_cast<double>(b.y)) <= epsilon;
+	}
+
+	[[nodiscard]] std::vector<quader::QVec2> convex_hull(std::vector<quader::QVec2> points) const
+	{
+		std::sort(points.begin(), points.end(), [](quader::QVec2 left, quader::QVec2 right) {
+			if (left.x == right.x) {
+				return left.y < right.y;
+			}
+			return left.x < right.x;
+		});
+		points.erase(
+			std::unique(points.begin(), points.end(), [&](quader::QVec2 left, quader::QVec2 right) {
+				return same_screen_point(left, right);
+			}),
+			points.end());
+		if (points.size() <= 2U) {
+			return points;
+		}
+
+		constexpr double epsilon = 0.0001;
+		std::vector<quader::QVec2> lower;
+		lower.reserve(points.size());
+		for (const quader::QVec2 point : points) {
+			while (lower.size() >= 2U &&
+					orientation(lower[lower.size() - 2U], lower.back(), point) <= epsilon) {
+				lower.pop_back();
+			}
+			lower.push_back(point);
+		}
+
+		std::vector<quader::QVec2> upper;
+		upper.reserve(points.size());
+		for (auto it = points.rbegin(); it != points.rend(); ++it) {
+			while (upper.size() >= 2U &&
+					orientation(upper[upper.size() - 2U], upper.back(), *it) <= epsilon) {
+				upper.pop_back();
+			}
+			upper.push_back(*it);
+		}
+
+		lower.pop_back();
+		upper.pop_back();
+		lower.insert(lower.end(), upper.begin(), upper.end());
+		return lower;
+	}
+
+	[[nodiscard]] bool polygon_intersects_rect(const ScreenRect& rect, const std::vector<quader::QVec2>& polygon) const
+	{
+		if (polygon.empty()) {
+			return false;
+		}
+		for (const quader::QVec2 point : polygon) {
+			if (rect_contains(rect, point)) {
+				return true;
+			}
+		}
+		if (polygon.size() == 2U) {
+			return segment_intersects_rect(rect, polygon[0], polygon[1]);
+		}
+		if (polygon.size() < 3U) {
+			return false;
+		}
+		for (std::size_t index = 0; index < polygon.size(); ++index) {
+			if (segment_intersects_rect(rect, polygon[index], polygon[(index + 1U) % polygon.size()])) {
+				return true;
+			}
+		}
+		return any_rect_corner_inside_polygon(rect, polygon);
+	}
+
+	[[nodiscard]] bool projected_points_shape_intersects_rect(
+			const ScreenRect& rect,
+			const std::vector<quader::QVec2>& points) const
+	{
+		if (points.empty()) {
+			return false;
+		}
+		if (points.size() == 1U) {
+			return rect_contains(rect, points.front());
+		}
+		if (points.size() == 2U) {
+			return segment_intersects_rect(rect, points[0], points[1]);
+		}
+		return polygon_intersects_rect(rect, convex_hull(points));
+	}
+
+	[[nodiscard]] bool projected_object_matches(const RectangleProjectedObject& object, const RectangleProjectedHitsRequest& request) const
+	{
+		if (request.match == RectangleSelectionMatch::contain) {
+			if (!object.screen_points.empty()) {
+				return all_points_inside_rect(request.rect, object.screen_points);
+			}
+			if (object.has_screen_bounds) {
+				return bounds_inside_rect(request.rect, object.screen_min, object.screen_max);
+			}
+			return object.has_screen_center && rect_contains(request.rect, object.screen_center);
+		}
+
+		for (const quader::QVec2 point : object.screen_points) {
+			if (rect_contains(request.rect, point)) {
+				return true;
+			}
+		}
+		for (const RectangleProjectedSegment segment : object.screen_segments) {
+			if (segment_intersects_rect(request.rect, segment.start, segment.end)) {
+				return true;
+			}
+		}
+		for (const std::vector<quader::QVec2>& polygon : object.screen_polygons) {
+			if (polygon_intersects_rect(request.rect, polygon)) {
+				return true;
+			}
+		}
+
+		const bool has_projected_geometry = !object.screen_segments.empty() || !object.screen_polygons.empty();
+		if (has_projected_geometry) {
+			return false;
+		}
+		if (projected_points_shape_intersects_rect(request.rect, object.screen_points)) {
+			return true;
+		}
+		return (object.has_screen_center && rect_contains(request.rect, object.screen_center)) ||
+			(object.has_screen_bounds && rect_intersects_bounds(request.rect, object.screen_min, object.screen_max));
+	}
+
+	[[nodiscard]] bool projected_face_matches(const RectangleProjectedFace& face, const RectangleProjectedHitsRequest& request) const
+	{
+		if (request.match == RectangleSelectionMatch::contain) {
+			if (!face.screen_vertices.empty()) {
+				return all_points_inside_rect(request.rect, face.screen_vertices);
+			}
+			return face.has_screen_position && rect_contains(request.rect, face.screen_position);
+		}
+		if (face.has_screen_position && rect_contains(request.rect, face.screen_position)) {
+			return true;
+		}
+		for (const quader::QVec2 point : face.screen_vertices) {
+			if (rect_contains(request.rect, point)) {
+				return true;
+			}
+		}
+		if (face.screen_vertices.size() >= 2U) {
+			for (std::size_t index = 0; index < face.screen_vertices.size(); ++index) {
+				if (segment_intersects_rect(
+							request.rect,
+							face.screen_vertices[index],
+							face.screen_vertices[(index + 1U) % face.screen_vertices.size()])) {
+					return true;
+				}
+			}
+			if (any_rect_corner_inside_polygon(request.rect, face.screen_vertices)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	[[nodiscard]] bool projected_edge_matches(const RectangleProjectedEdge& edge, const RectangleProjectedHitsRequest& request) const
+	{
+		const bool has_segment = edge.has_screen_start && edge.has_screen_end;
+		if (request.match == RectangleSelectionMatch::contain) {
+			if (has_segment) {
+				return rect_contains(request.rect, edge.screen_start) && rect_contains(request.rect, edge.screen_end);
+			}
+			return edge.has_screen_position && rect_contains(request.rect, edge.screen_position);
+		}
+		if (has_segment) {
+			return segment_intersects_rect(request.rect, edge.screen_start, edge.screen_end);
+		}
+		return edge.has_screen_position && rect_contains(request.rect, edge.screen_position);
+	}
+
 	[[nodiscard]] RectangleSelectionHits rectangle_hits_from_projected_candidates(const RectangleProjectedHitsRequest& request) const
 	{
 		RectangleSelectionHits hits;
@@ -241,9 +542,7 @@ public:
 				if (object.object_id < 0) {
 					continue;
 				}
-				const bool center_inside = object.has_screen_center && rect_contains(request.rect, object.screen_center);
-				const bool bounds_inside = object.has_screen_bounds && rect_intersects_bounds(request.rect, object.screen_min, object.screen_max);
-				if (center_inside || bounds_inside) {
+				if (projected_object_matches(object, request)) {
 					hits.object_ids.push_back(object.object_id);
 				}
 			}
@@ -251,7 +550,7 @@ public:
 		}
 		if (request.mode == SelectionMode::face) {
 			for (const RectangleProjectedFace& face : request.faces) {
-				if (face.object_id >= 0 && face.face_index >= 0 && face.has_screen_position && rect_contains(request.rect, face.screen_position)) {
+				if (face.object_id >= 0 && face.face_index >= 0 && projected_face_matches(face, request)) {
 					hits.faces.push_back({ face.object_id, face.face_index, face.vertex_indices });
 				}
 			}
@@ -259,7 +558,7 @@ public:
 		}
 		if (request.mode == SelectionMode::edge) {
 			for (const RectangleProjectedEdge& edge : request.edges) {
-				if (edge.object_id >= 0 && edge.a_index >= 0 && edge.b_index >= 0 && edge.has_screen_position && rect_contains(request.rect, edge.screen_position)) {
+				if (edge.object_id >= 0 && edge.a_index >= 0 && edge.b_index >= 0 && projected_edge_matches(edge, request)) {
 					hits.edges.push_back({ edge.object_id, edge.a_index, edge.b_index });
 				}
 			}

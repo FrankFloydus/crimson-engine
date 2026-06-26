@@ -314,6 +314,15 @@ enum class ModelingSelectionEdit {
 };
 
 /**
+ * Enumerates ModelingBoxSelectionRule values used by the modeling layer.
+ */
+enum class ModelingBoxSelectionRule {
+    DragDirection,
+    Contain,
+    Crossing,
+};
+
+/**
  * Stores the Modeling Component Selection Request data contract used by the modeling domain.
  */
 struct ModelingComponentSelectionRequest {
@@ -355,6 +364,17 @@ struct ModelingPickSelectRequest {
     bool preserveSelectionOnSelectedHit = false;
     double vertexRadius = 0.3;
     double edgeRadius = 0.2;
+};
+
+/**
+ * Stores the Modeling Box Select Request data contract used by the modeling domain.
+ */
+struct ModelingBoxSelectRequest {
+    ModelingViewportCamera camera;
+    QVec2 start = {};
+    QVec2 end = {};
+    ModelingSelectionEdit edit = ModelingSelectionEdit::Replace;
+    ModelingBoxSelectionRule rule = ModelingBoxSelectionRule::DragDirection;
 };
 
 /**
