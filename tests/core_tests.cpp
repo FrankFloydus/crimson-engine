@@ -4827,6 +4827,7 @@ TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
     EXPECT_NE(source.find("TextureSampleColorSpace::LinearSrgb"), std::string::npos);
     EXPECT_NE(gridSource.find("settings.color(ViewportColorSettingId::GridMinor)"), std::string::npos);
     EXPECT_NE(gridSource.find("settings.floatValue(ViewportFloatSettingId::GridMinorLineSize)"), std::string::npos);
+    EXPECT_NE(gridSource.find("setDepthCulling(controller.state().projection != ViewportProjection::Orthographic)"), std::string::npos);
     EXPECT_EQ(source.find(".format(Texture::InternalFormat::SRGB8_A8)"), std::string::npos);
 }
 
@@ -4984,6 +4985,7 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     const std::string appSource = readSourceFile("src/app/App.cpp");
     const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
     const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
+    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/ViewportHost.h");
     const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
     const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
     const std::string commandsSource = readSourceFile("src/api/QuaderCommandsApi.cpp");
@@ -5019,9 +5021,22 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(viewportHostSource.find("setCursorCaptured(result.flyCursorCaptureActive)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("struct ViewportHost::ViewportWindowInstance"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("ViewportInputSurfaceState input;"), std::string::npos);
+    EXPECT_NE(viewportHostHeader.find("struct ViewportModifierKeyState"), std::string::npos);
+    EXPECT_NE(viewportHostHeader.find("ViewportModifierKeyState modifierKeys"), std::string::npos);
+    EXPECT_EQ(viewportHostHeader.find("std::unordered_set<SDL_Keycode>"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("modifierKeysDown"), std::string::npos);
+    EXPECT_EQ(viewportHostHeader.find("modifierKeysDown"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("accumulateMouseButton("), std::string::npos);
     EXPECT_NE(viewportHostSource.find("accumulateKey(mainInput_"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("accumulateKey(instance.input"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("accumulateModifierKey(mainInput_, event.key.scancode, event.key.mod, event.key.down)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("accumulateModifierKey(instance.input, event.key.scancode, event.key.mod, event.key.down)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("applyModifierMask(input, modifiers)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("SDL_GetKeyboardState(nullptr)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("currentModifiers(mainInput_)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("currentModifiers(instance.input)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("input.modifierKeys.leftAlt"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("keyDown(SDL_SCANCODE_LALT)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("clearTransientInputState(mainInput_)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("clearTransientInputState(instance.input)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("input.mouseDragChordsDown[*mouseButton] = dragChord"), std::string::npos);
@@ -6108,6 +6123,102 @@ TEST(ViewportCameraTests, OrbitSnapUsesRuntimeOrthogonalSnap) {
     EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
 }
 
+TEST(ViewportCameraTests, OrbitSnapPreservesPerspectiveZoomLevel) {
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(30.0f);
+    camera.scroll(3.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    const float expectedVisibleHeight = 2.0f * camera.state().distance *
+            std::tan(camera.state().fovDegrees * static_cast<float>(std::acos(-1.0)) / 360.0f);
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+    camera.endDrag();
+
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_NEAR(camera.state().orthographicSize, expectedVisibleHeight, 0.001f);
+}
+
+TEST(ViewportCameraTests, OrbitSnapTransitionSamplesCurrentViewBeforeMouseDelta) {
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({220.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+    camera.endDrag();
+
+    const QVec3 forward = normalize(camera.pose().target - camera.pose().eye);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_NEAR(forward.x, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.y, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.z, -1.0f, 0.001f);
+}
+
+TEST(ViewportCameraTests, OrbitSnapUsesViewAxisWhenNavigationPivotIsOffCenter) {
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+    camera.scrollToCursor(1.0f, {700.0f, 100.0f});
+    ASSERT_GT(length(camera.state().target), 0.001f);
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+    camera.endDrag();
+
+    const QVec3 forward = normalize(camera.pose().target - camera.pose().eye);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_NEAR(forward.x, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.y, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.z, -1.0f, 0.001f);
+}
+
+TEST(ViewportCameraTests, OrbitFromUnlockedOrthographicPreservesZoomLevel) {
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(30.0f);
+    camera.viewAxis(ViewportViewAxis::Z, 1, ViewportAxisLock::Unlocked);
+    camera.scroll(3.0f);
+
+    const float orthographicSize = camera.state().orthographicSize;
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::Orbit);
+    camera.updateDrag({118.0f, 100.0f});
+    camera.endDrag();
+
+    const float visibleHeight = 2.0f * camera.state().distance *
+            std::tan(camera.state().fovDegrees * static_cast<float>(std::acos(-1.0)) / 360.0f);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    EXPECT_NEAR(visibleHeight, orthographicSize, 0.001f);
+}
+
+TEST(ViewportCameraTests, OrbitSnapUsesBlenderDiagonalAxisTargets) {
+    ViewportCameraController camera;
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({-0.63f, 0.02f, -0.78f});
+
+    camera.beginDrag({100.0f, 100.0f}, ViewportDragMode::OrbitSnap);
+    camera.updateDrag({100.0f, 100.0f});
+    camera.endDrag();
+
+    const ViewportCameraPose pose = camera.pose();
+    const QVec3 forward = normalize(pose.target - pose.eye);
+    constexpr float kDiagonalComponent = 0.70710678f;
+    EXPECT_NEAR(forward.x, -kDiagonalComponent, 0.001f);
+    EXPECT_NEAR(forward.y, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.z, -kDiagonalComponent, 0.001f);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+}
+
 TEST(ViewportCameraTests, FlyLookKeepsEyeFixedAndFlyMoveAdvancesCamera) {
     ViewportCameraController camera;
     camera.setViewportSize(800.0f, 600.0f);
@@ -6248,6 +6359,45 @@ TEST(ViewportInputRouterTests, ResolvedNavigationBindingsDriveMouseNavigation) {
     result = router.handleFrame(input, camera);
     EXPECT_FALSE(result.navigationActive);
     EXPECT_TRUE(result.consumed);
+}
+
+TEST(ViewportInputRouterTests, ResolvedMiddleOrbitSamplesAltDuringDragForAxisSnap) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
+    ViewportInputFrame input;
+    input.viewportHovered = true;
+    input.viewportFocused = true;
+    input.shortcutResolverActive = true;
+    input.viewportSize = {800.0f, 600.0f};
+    input.mouseScreen = {100.0f, 100.0f};
+    input.navigationBindings.orbitPressed = true;
+    input.navigationBindings.orbitDown = true;
+
+    ViewportInputResult result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.consumed);
+    ASSERT_TRUE(router.navigating());
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
+
+    input.navigationBindings = {};
+    input.navigationBindings.orbitDown = true;
+    input.modifiers.alt = true;
+    input.mouseScreen = {220.0f, 100.0f};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.cameraChanged);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+
+    input.modifiers.alt = false;
+    input.mouseScreen = {116.0f, 100.0f};
+    result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.cameraChanged);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Perspective);
 }
 
 TEST(ViewportInputRouterTests, ResolvedWheelBindingsDriveViewportZoom) {
@@ -6724,6 +6874,10 @@ TEST(ViewportInputRouterTests, MiddleMouseNavigationAndWheelAreViewportGated) {
 TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
     ViewportInputRouter router;
     ViewportCameraController camera;
+    camera.setViewportSize(800.0f, 600.0f);
+    camera.focusOrigin(8.0f);
+    camera.setViewDirection({0.02f, 0.0f, -1.0f});
+
     ViewportInputFrame input;
     input.viewportHovered = true;
     input.viewportFocused = true;
@@ -6737,12 +6891,16 @@ TEST(ViewportInputRouterTests, AltMiddleMouseStartsOrbitSnapNavigation) {
     EXPECT_TRUE(result.consumed);
     EXPECT_TRUE(router.navigating());
 
-    const ViewportCameraPose before = camera.pose();
     input.middlePressed = false;
-    input.mouseScreen = {120.0f, 110.0f};
+    input.mouseScreen = {100.0f, 100.0f};
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.cameraChanged);
-    EXPECT_LT(dot(normalize(camera.pose().target - camera.pose().eye), normalize(before.target - before.eye)), 0.9999f);
+    EXPECT_EQ(camera.state().projection, ViewportProjection::Orthographic);
+    EXPECT_FALSE(camera.orthographicViewLocked());
+    const QVec3 forward = normalize(camera.pose().target - camera.pose().eye);
+    EXPECT_NEAR(forward.x, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.y, 0.0f, 0.001f);
+    EXPECT_NEAR(forward.z, -1.0f, 0.001f);
 
     input.middleDown = false;
     input.middleReleased = true;
@@ -6773,7 +6931,7 @@ TEST(ViewportInputRouterTests, MiddleOrbitSamplesAltDuringDragForOrthographicSna
 
     input.middlePressed = false;
     input.modifiers.alt = true;
-    input.mouseScreen = {100.0f, 100.0f};
+    input.mouseScreen = {220.0f, 100.0f};
     result = router.handleFrame(input, camera);
 
     EXPECT_TRUE(result.cameraChanged);
@@ -6807,7 +6965,9 @@ TEST(ViewportInputRouterTests, PlainMiddleOrbitAfterAltSnapDoesNotSnap) {
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
     input.middlePressed = false;
+    input.mouseScreen = {100.0f, 100.0f};
     result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.cameraChanged);
     ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
     ASSERT_FALSE(camera.orthographicViewLocked());
 
@@ -6850,7 +7010,9 @@ TEST(ViewportInputRouterTests, RightMouseAfterAltSnapPansOrthographicView) {
     auto result = router.handleFrame(input, camera);
     ASSERT_TRUE(result.consumed);
     input.middlePressed = false;
+    input.mouseScreen = {100.0f, 100.0f};
     result = router.handleFrame(input, camera);
+    ASSERT_TRUE(result.cameraChanged);
     ASSERT_EQ(camera.state().projection, ViewportProjection::Orthographic);
     ASSERT_FALSE(camera.orthographicViewLocked());
 

@@ -31,6 +31,32 @@ float defaultFlySpeed() {
     return static_cast<float>(viewportHostDefaults().flyBaseSpeed);
 }
 
+float perspectiveVisibleHeight(const ViewportCameraState& state) {
+    return std::max(0.0001f,
+            2.0f * std::max(kMinCameraDistance, state.distance) *
+                    std::tan(verticalFovRadians(state.fovDegrees) * 0.5f));
+}
+
+float perspectiveDistanceForVisibleHeight(float visibleHeight, float fovDegrees) {
+    const float halfFovTangent = std::tan(verticalFovRadians(fovDegrees) * 0.5f);
+    if (halfFovTangent <= 0.000001f) {
+        return kMinCameraDistance;
+    }
+    return std::max(kMinCameraDistance, std::max(0.0001f, visibleHeight) / (2.0f * halfFovTangent));
+}
+
+float currentVisibleHeight(const ViewportCameraState& state) {
+    return state.projection == ViewportProjection::Orthographic
+            ? std::max(0.0001f, state.orthographicSize)
+            : perspectiveVisibleHeight(state);
+}
+
+void syncPerspectiveDistanceFromOrthographicZoom(ViewportCameraState& state) {
+    if (state.projection == ViewportProjection::Orthographic) {
+        state.distance = perspectiveDistanceForVisibleHeight(state.orthographicSize, state.fovDegrees);
+    }
+}
+
 QVec3 forwardFromAngles(float yawRadians, float pitchRadians) {
     const float cp = std::cos(pitchRadians);
     return normalize({
@@ -255,9 +281,12 @@ void ViewportCameraController::updateDrag(QVec2 mouse) {
 }
 
 void ViewportCameraController::updateDrag(QVec2 mouse, ViewportDragMode mode) {
-    const QVec2 delta{mouse.x - lastMouse_.x, mouse.y - lastMouse_.y};
+    const ViewportDragMode previousMode = dragMode_;
+    const bool enteringOrbitSnap =
+            previousMode != ViewportDragMode::OrbitSnap && mode == ViewportDragMode::OrbitSnap;
+    const QVec2 delta = enteringOrbitSnap ? QVec2{} : QVec2{mouse.x - lastMouse_.x, mouse.y - lastMouse_.y};
     lastMouse_ = mouse;
-    if (dragMode_ == ViewportDragMode::OrbitSnap && mode != ViewportDragMode::OrbitSnap) {
+    if (previousMode == ViewportDragMode::OrbitSnap && mode != ViewportDragMode::OrbitSnap) {
         clearOrbitSnapSource();
     }
     dragMode_ = mode;
@@ -277,6 +306,8 @@ void ViewportCameraController::updateDragDelta(QVec2 delta) {
         if (!snapToOrthographic) {
             clearOrbitSnapSource();
         }
+        const float snappedOrthographicSize = currentVisibleHeight(state_);
+        syncPerspectiveDistanceFromOrthographicZoom(state_);
         input.camera_transform = snapToOrthographic && hasOrbitSnapSource_
                 ? makeRuntimeTransform(orbitSnapSourcePose_)
                 : makeRuntimeTransform(pose());
@@ -294,11 +325,7 @@ void ViewportCameraController::updateDragDelta(QVec2 delta) {
         }
         if (snapToOrthographic && orbitResult.orthogonal_snap) {
             state_.projection = ViewportProjection::Orthographic;
-            state_.orthographicSize = static_cast<float>(
-                    quader_editor_core::viewport_orthographic_size_for_perspective(
-                            orbitResult.camera_transform,
-                            toRuntime(pivot_),
-                            state_.fovDegrees));
+            state_.orthographicSize = snappedOrthographicSize;
             orthographicViewLocked_ = false;
         } else {
             state_.projection = ViewportProjection::Perspective;

@@ -60,6 +60,7 @@ private:
     ViewportDragMode navigationMode_ = ViewportDragMode::None;
     ViewportInputActionKind activeNavigationAction_ = ViewportInputActionKind::None;
     bool navigationUsesRightButton_ = false;
+    bool orbitSnapActionUsesAltModifier_ = false;
     bool flyCursorCaptureActive_ = false;
     bool flyHudActive_ = false;
     std::unique_ptr<class ViewportToolRuntime> toolRuntime_;

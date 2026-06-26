@@ -94,6 +94,10 @@ bool navigationActionReleased(const ViewportInputFrame& input, ViewportInputActi
     }
 }
 
+bool isOrbitNavigationAction(ViewportInputActionKind action) {
+    return action == ViewportInputActionKind::Orbit || action == ViewportInputActionKind::OrbitSnap;
+}
+
 ViewportDragMode navigationModeForAction(ViewportInputActionKind action, const ViewportCameraController& camera) {
     switch (action) {
     case ViewportInputActionKind::Orbit:
@@ -138,6 +142,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         activeNavigationAction_ = pressedAction;
         navigationMode_ = navigationModeForAction(pressedAction, camera);
         navigationUsesRightButton_ = !usesResolvedInputBindings(input) && pressedAction == ViewportInputActionKind::Fly;
+        orbitSnapActionUsesAltModifier_ = pressedAction == ViewportInputActionKind::OrbitSnap && input.modifiers.alt;
         flyCursorCaptureActive_ = navigationMode_ == ViewportDragMode::Fly;
         flyHudActive_ = false;
         camera.beginDrag(input.mouseScreen, navigationMode_);
@@ -190,6 +195,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             navigationMode_ = ViewportDragMode::None;
             activeNavigationAction_ = ViewportInputActionKind::None;
             navigationUsesRightButton_ = false;
+            orbitSnapActionUsesAltModifier_ = false;
             flyCursorCaptureActive_ = false;
             flyHudActive_ = false;
             camera.endDrag();
@@ -208,10 +214,13 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
         const bool dragReleased = navigationActionReleased(input, activeNavigationAction_, navigationUsesRightButton_);
         if (dragDown) {
             const ViewportDragMode activeNavigationMode =
-                    !usesResolvedInputBindings(input) &&
                     !navigationUsesRightButton_ &&
-                            (navigationMode_ == ViewportDragMode::Orbit || navigationMode_ == ViewportDragMode::OrbitSnap)
-                    ? (input.modifiers.alt ? ViewportDragMode::OrbitSnap : ViewportDragMode::Orbit)
+                            isOrbitNavigationAction(activeNavigationAction_)
+                    ? (input.modifiers.alt ||
+                                    (activeNavigationAction_ == ViewportInputActionKind::OrbitSnap &&
+                                            !orbitSnapActionUsesAltModifier_)
+                            ? ViewportDragMode::OrbitSnap
+                            : ViewportDragMode::Orbit)
                     : navigationMode_;
             const bool lockedOrthographicOrbit =
                     camera.orthographicViewLocked() &&
@@ -227,6 +236,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             navigationMode_ = ViewportDragMode::None;
             activeNavigationAction_ = ViewportInputActionKind::None;
             navigationUsesRightButton_ = false;
+            orbitSnapActionUsesAltModifier_ = false;
             flyCursorCaptureActive_ = false;
             flyHudActive_ = false;
             camera.endDrag();
@@ -292,6 +302,7 @@ void ViewportInputRouter::reset() {
     navigationMode_ = ViewportDragMode::None;
     activeNavigationAction_ = ViewportInputActionKind::None;
     navigationUsesRightButton_ = false;
+    orbitSnapActionUsesAltModifier_ = false;
     flyCursorCaptureActive_ = false;
     flyHudActive_ = false;
 }

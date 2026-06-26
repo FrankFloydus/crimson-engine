@@ -130,6 +130,7 @@ void ViewportGridRenderer::update(const ViewportCameraController& controller,
         return;
     }
 
+    groundGridMaterialInstance_->setDepthCulling(controller.state().projection != ViewportProjection::Orthographic);
     const float spacing = std::max(gridWorldSpacing, 0.0001f);
     const float parentSpacing = std::max(kParentGridWorldSize, spacing);
     groundGridMaterialInstance_->setParameter("gridColor", settingColor(settings.color(ViewportColorSettingId::GridMinor)));

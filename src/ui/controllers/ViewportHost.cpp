@@ -799,7 +799,7 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
                 startedInMainViewport,
                 {event.button.x, event.button.y},
                 static_cast<int>(event.button.clicks),
-                currentModifiers());
+                currentModifiers(mainInput_));
         break;
     }
     case SDL_EVENT_MOUSE_WHEEL: {
@@ -809,9 +809,10 @@ bool ViewportHost::processEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
+        accumulateModifierKey(mainInput_, event.key.scancode, event.key.mod, event.key.down);
         const std::optional<QuaderKeyCode> keyCode = quaderKeyCodeFromSdlKey(event.key.key);
         if (keyCode) {
-            accumulateKey(mainInput_, *keyCode, event.key.down, event.key.repeat, currentModifiers());
+            accumulateKey(mainInput_, *keyCode, event.key.down, event.key.repeat, currentModifiers(mainInput_));
         }
         break;
     }
@@ -1297,6 +1298,53 @@ void ViewportHost::accumulateKey(
     }
 }
 
+void ViewportHost::applyModifierMask(ViewportInputSurfaceState& input, SDL_Keymod modifiers) {
+    input.modifierKeys.leftControl = (modifiers & SDL_KMOD_LCTRL) != 0;
+    input.modifierKeys.rightControl = (modifiers & SDL_KMOD_RCTRL) != 0;
+    input.modifierKeys.leftGui = (modifiers & SDL_KMOD_LGUI) != 0;
+    input.modifierKeys.rightGui = (modifiers & SDL_KMOD_RGUI) != 0;
+    input.modifierKeys.leftShift = (modifiers & SDL_KMOD_LSHIFT) != 0;
+    input.modifierKeys.rightShift = (modifiers & SDL_KMOD_RSHIFT) != 0;
+    input.modifierKeys.leftAlt = (modifiers & SDL_KMOD_LALT) != 0;
+    input.modifierKeys.rightAlt = (modifiers & SDL_KMOD_RALT) != 0;
+}
+
+void ViewportHost::accumulateModifierKey(
+        ViewportInputSurfaceState& input,
+        SDL_Scancode scanCode,
+        SDL_Keymod modifiers,
+        bool down) {
+    applyModifierMask(input, modifiers);
+    switch (scanCode) {
+    case SDL_SCANCODE_LCTRL:
+        input.modifierKeys.leftControl = down;
+        break;
+    case SDL_SCANCODE_RCTRL:
+        input.modifierKeys.rightControl = down;
+        break;
+    case SDL_SCANCODE_LGUI:
+        input.modifierKeys.leftGui = down;
+        break;
+    case SDL_SCANCODE_RGUI:
+        input.modifierKeys.rightGui = down;
+        break;
+    case SDL_SCANCODE_LSHIFT:
+        input.modifierKeys.leftShift = down;
+        break;
+    case SDL_SCANCODE_RSHIFT:
+        input.modifierKeys.rightShift = down;
+        break;
+    case SDL_SCANCODE_LALT:
+        input.modifierKeys.leftAlt = down;
+        break;
+    case SDL_SCANCODE_RALT:
+        input.modifierKeys.rightAlt = down;
+        break;
+    default:
+        break;
+    }
+}
+
 bool ViewportHost::inputStateHasActivePointerGesture(const ViewportInputSurfaceState& input) {
     return input.leftDown || input.middleDown || input.rightDown || !input.mouseButtonsDown.empty();
 }
@@ -1358,7 +1406,7 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
             static_cast<float>(mainViewportFrame_.width),
             static_cast<float>(mainViewportFrame_.height),
     };
-    const ViewportModifiers modifiers = currentModifiers();
+    const ViewportModifiers modifiers = currentModifiers(mainInput_);
     input.modifiers = modifiers;
     input.pressedInputChords = mainInput_.pressedInputChords;
     input.releasedInputChords = mainInput_.releasedInputChords;
@@ -1369,12 +1417,33 @@ ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
     return input;
 }
 
-ViewportModifiers ViewportHost::currentModifiers() const {
+ViewportModifiers ViewportHost::currentModifiers(const ViewportInputSurfaceState& input) const {
     const SDL_Keymod mod = SDL_GetModState();
+    const bool* keyboardState = SDL_GetKeyboardState(nullptr);
+    const auto keyDown = [keyboardState](SDL_Scancode scancode) {
+        return keyboardState != nullptr && keyboardState[scancode];
+    };
     return {
-            .primary = (mod & SDL_KMOD_CTRL) != 0 || (mod & SDL_KMOD_GUI) != 0,
-            .shift = (mod & SDL_KMOD_SHIFT) != 0,
-            .alt = (mod & SDL_KMOD_ALT) != 0,
+            .primary = (mod & SDL_KMOD_CTRL) != 0 ||
+                    (mod & SDL_KMOD_GUI) != 0 ||
+                    input.modifierKeys.leftControl ||
+                    input.modifierKeys.rightControl ||
+                    input.modifierKeys.leftGui ||
+                    input.modifierKeys.rightGui ||
+                    keyDown(SDL_SCANCODE_LCTRL) ||
+                    keyDown(SDL_SCANCODE_RCTRL) ||
+                    keyDown(SDL_SCANCODE_LGUI) ||
+                    keyDown(SDL_SCANCODE_RGUI),
+            .shift = (mod & SDL_KMOD_SHIFT) != 0 ||
+                    input.modifierKeys.leftShift ||
+                    input.modifierKeys.rightShift ||
+                    keyDown(SDL_SCANCODE_LSHIFT) ||
+                    keyDown(SDL_SCANCODE_RSHIFT),
+            .alt = (mod & SDL_KMOD_ALT) != 0 ||
+                    input.modifierKeys.leftAlt ||
+                    input.modifierKeys.rightAlt ||
+                    keyDown(SDL_SCANCODE_LALT) ||
+                    keyDown(SDL_SCANCODE_RALT),
     };
 }
 
@@ -1492,7 +1561,7 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
                 true,
                 {event.button.x, event.button.y},
                 static_cast<int>(event.button.clicks),
-                currentModifiers());
+                currentModifiers(instance.input));
         return true;
     }
     case SDL_EVENT_MOUSE_WHEEL: {
@@ -1502,9 +1571,10 @@ bool ViewportHost::processWindowedViewportEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
+        accumulateModifierKey(instance.input, event.key.scancode, event.key.mod, event.key.down);
         const std::optional<QuaderKeyCode> keyCode = quaderKeyCodeFromSdlKey(event.key.key);
         if (keyCode) {
-            accumulateKey(instance.input, *keyCode, event.key.down, event.key.repeat, currentModifiers());
+            accumulateKey(instance.input, *keyCode, event.key.down, event.key.repeat, currentModifiers(instance.input));
         }
         return true;
     }
@@ -1645,7 +1715,7 @@ ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(const ViewportW
             static_cast<float>(instance.framebufferWidth),
             static_cast<float>(instance.framebufferHeight),
     };
-    const ViewportModifiers modifiers = currentModifiers();
+    const ViewportModifiers modifiers = currentModifiers(instance.input);
     input.modifiers = modifiers;
     input.pressedInputChords = instance.input.pressedInputChords;
     input.releasedInputChords = instance.input.releasedInputChords;

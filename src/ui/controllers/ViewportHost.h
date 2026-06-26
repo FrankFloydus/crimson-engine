@@ -91,6 +91,20 @@ public:
 
 private:
     /**
+     * Tracks physical modifier key state after SDL events are translated at the viewport host edge.
+     */
+    struct ViewportModifierKeyState {
+        bool leftControl = false;
+        bool rightControl = false;
+        bool leftGui = false;
+        bool rightGui = false;
+        bool leftShift = false;
+        bool rightShift = false;
+        bool leftAlt = false;
+        bool rightAlt = false;
+    };
+
+    /**
      * Stores one UI input snapshot before it is projected into viewport input.
      */
     struct ViewportInputSurfaceState {
@@ -111,6 +125,7 @@ private:
         float wheelY = 0.0f;
         std::unordered_set<ViewportKey> keysDown;
         std::unordered_set<QuaderKeyCode> keyboardKeysDown;
+        ViewportModifierKeyState modifierKeys;
         std::vector<ViewportKey> pressedKeys;
         std::unordered_set<QuaderMouseButton> mouseButtonsDown;
         std::unordered_map<QuaderMouseButton, QuaderInputChord> mouseDragChordsDown;
@@ -139,10 +154,16 @@ private:
             bool down,
             bool repeat,
             ViewportModifiers modifiers);
+    static void applyModifierMask(ViewportInputSurfaceState& input, SDL_Keymod modifiers);
+    static void accumulateModifierKey(
+            ViewportInputSurfaceState& input,
+            SDL_Scancode scanCode,
+            SDL_Keymod modifiers,
+            bool down);
     [[nodiscard]] static bool inputStateHasActivePointerGesture(const ViewportInputSurfaceState& input);
     static void clearTransientInputState(ViewportInputSurfaceState& input);
     ViewportInputFrame buildViewportInputFrame() const;
-    ViewportModifiers currentModifiers() const;
+    ViewportModifiers currentModifiers(const ViewportInputSurfaceState& input) const;
     void clearTransientInput();
     void spawnWindowedViewport();
     void shutdownWindowedViewports();

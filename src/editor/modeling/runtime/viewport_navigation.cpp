@@ -208,36 +208,66 @@ quader_poly::Transform3 orthogonal_camera_basis_for_offset_axis(quader::QVec3 ax
 	return orthonormalized_basis({ right, geometry_is_tiny(up) ? world_up : up, back, {} });
 }
 
-double basis_alignment_score(const quader_poly::Transform3& left, const quader_poly::Transform3& right)
-{
-	const quader_poly::Transform3 a = orthonormalized_basis(left);
-	const quader_poly::Transform3 b = orthonormalized_basis(right);
-	return geometry_dot(a.x_axis, b.x_axis) + geometry_dot(a.y_axis, b.y_axis) + geometry_dot(a.z_axis, b.z_axis);
-}
+/**
+ * Distinguishes snap targets that should enter a locked orthographic projection from diagonal orbit snap targets.
+ */
+struct ViewportAxisSnapTransformResult {
+	bool orthographic_axis = false;
+};
 
-quader_poly::Transform3 closest_orthogonal_camera_basis_for_offset_axis(quader::QVec3 axis, const quader_poly::Transform3& reference_basis)
+/**
+ * Returns the chosen camera basis and whether its roll lands on a canonical single-axis orthographic orientation.
+ */
+struct ViewportAxisSnapBasisResult {
+	quader_poly::Transform3 basis;
+	bool canonical_axis_view = false;
+};
+
+ViewportAxisSnapBasisResult closest_blender_axis_snap_camera_basis(quader::QVec3 axis, int axis_components, const quader_poly::Transform3& reference_basis)
 {
 	const quader::QVec3 back = geometry_is_tiny(axis) ? quader::QVec3 { 0.0F, 0.0F, 1.0F } : geometry_normalized_axis(axis);
 	const quader_poly::Transform3 base = orthogonal_camera_basis_for_offset_axis(back);
-	static constexpr std::array<double, 4> rolls {
+	const quader::QVec3 reference_back = geometry_normalized_axis(reference_basis.z_axis);
+	const double alignment = std::clamp(geometry_dot(reference_back, back), -1.0, 1.0);
+	quader_poly::Transform3 aligned_basis = reference_basis;
+	if (alignment < 0.999999) {
+		quader::QVec3 alignment_axis = geometry_cross(reference_back, back);
+		if (geometry_is_tiny(alignment_axis)) {
+			alignment_axis = std::abs(reference_back.y) > 0.9F ? quader::QVec3 { 1.0F, 0.0F, 0.0F } : quader::QVec3 { 0.0F, 1.0F, 0.0F };
+		}
+		aligned_basis = rotated_camera_basis(reference_basis, rotation_basis(alignment_axis, std::acos(alignment)));
+	}
+
+	static constexpr std::array<double, 8> rolls {
 		0.0,
+		0.7853981633974483,
 		1.5707963267948966,
+		2.3561944901923449,
 		3.1415926535897932,
+		3.9269908169872414,
 		4.7123889803846899,
+		5.4977871437821380,
 	};
 
-	quader_poly::Transform3 best_basis = base;
-	double best_score = basis_alignment_score(base, reference_basis);
-	for (const double roll : rolls) {
-		const quader_poly::Transform3 roll_rotation = rotation_basis(back, roll);
-		const quader_poly::Transform3 candidate = rotated_camera_basis(base, roll_rotation);
-		const double score = basis_alignment_score(candidate, reference_basis);
-		if (score > best_score) {
-			best_score = score;
+	quader_poly::Transform3 best_basis = aligned_basis;
+	double best_dot = navigation_orthogonal_snap_dot;
+	int best_roll_index = -1;
+	for (int index = 0; index < static_cast<int>(rolls.size()); ++index) {
+		const quader_poly::Transform3 candidate = rotated_camera_basis(base, rotation_basis(back, rolls[index]));
+		const double candidate_dot = geometry_dot(
+				geometry_normalized_axis(candidate.x_axis),
+				geometry_normalized_axis(aligned_basis.x_axis));
+		if (candidate_dot >= best_dot) {
+			best_dot = candidate_dot;
 			best_basis = candidate;
+			best_roll_index = index;
 		}
 	}
-	return orthonormalized_basis(best_basis);
+
+	return {
+		orthonormalized_basis(best_basis),
+		axis_components == 1 && best_roll_index >= 0 && best_roll_index % 2 == 0,
+	};
 }
 
 ViewportNavigationResult navigation_result(const quader_poly::Transform3& transform, quader::QVec3 pivot, double camera_size = -1.0)
@@ -266,44 +296,53 @@ double capped_orthographic_zoom_size(double current_size, double factor, double 
 	return std::max(navigation_min_orthographic_size, requested_size);
 }
 
-bool orthogonal_snap_transform(const quader_poly::Transform3& unsnapped_transform, quader::QVec3 pivot, quader_poly::Transform3& snapped_transform)
+ViewportAxisSnapTransformResult axis_snap_transform(const quader_poly::Transform3& unsnapped_transform, quader::QVec3 pivot, quader_poly::Transform3& snapped_transform)
 {
 	const quader::QVec3 offset = unsnapped_transform.origin - pivot;
 	const double distance = geometry_length(offset);
 	if (distance <= navigation_min_camera_distance) {
-		return false;
+		return {};
 	}
 
-	const quader::QVec3 direction = offset / static_cast<float>(distance);
-	const quader::QVec3 axes[6] = {
-		{ 0.0F, 0.0F, 1.0F },
-		{ 0.0F, 0.0F, -1.0F },
-		{ 1.0F, 0.0F, 0.0F },
-		{ -1.0F, 0.0F, 0.0F },
-		{ 0.0F, 1.0F, 0.0F },
-		{ 0.0F, -1.0F, 0.0F },
-	};
-
+	const quader::QVec3 direction = geometry_is_tiny(unsnapped_transform.z_axis)
+		? offset / static_cast<float>(distance)
+		: geometry_normalized_axis(unsnapped_transform.z_axis);
 	double best_dot = -1.0;
-	quader::QVec3 best_axis = axes[0];
-	for (const quader::QVec3& axis : axes) {
-		const double axis_dot = geometry_dot(direction, axis);
-		if (axis_dot > best_dot) {
-			best_dot = axis_dot;
-			best_axis = axis;
+	quader::QVec3 best_axis { 0.0F, 0.0F, 1.0F };
+	int best_axis_components = 1;
+	for (int x = -1; x < 2; ++x) {
+		for (int y = -1; y < 2; ++y) {
+			for (int z = -1; z < 2; ++z) {
+				const int component_count = (x != 0 ? 1 : 0) + (y != 0 ? 1 : 0) + (z != 0 ? 1 : 0);
+				if (component_count == 0) {
+					continue;
+				}
+				const quader::QVec3 axis = geometry_normalized_axis({
+						static_cast<float>(x),
+						static_cast<float>(y),
+						static_cast<float>(z),
+				});
+				const double axis_dot = geometry_dot(direction, axis);
+				if (axis_dot > best_dot) {
+					best_dot = axis_dot;
+					best_axis = axis;
+					best_axis_components = component_count;
+				}
+			}
 		}
 	}
 	if (best_dot < navigation_orthogonal_snap_dot) {
-		return false;
+		return {};
 	}
 
 	snapped_transform = unsnapped_transform;
 	snapped_transform.origin = pivot + geometry_scale(best_axis, distance);
-	const quader_poly::Transform3 snapped_basis = closest_orthogonal_camera_basis_for_offset_axis(best_axis, unsnapped_transform);
-	snapped_transform.x_axis = snapped_basis.x_axis;
-	snapped_transform.y_axis = snapped_basis.y_axis;
-	snapped_transform.z_axis = snapped_basis.z_axis;
-	return true;
+	const ViewportAxisSnapBasisResult snapped_basis =
+		closest_blender_axis_snap_camera_basis(best_axis, best_axis_components, unsnapped_transform);
+	snapped_transform.x_axis = snapped_basis.basis.x_axis;
+	snapped_transform.y_axis = snapped_basis.basis.y_axis;
+	snapped_transform.z_axis = snapped_basis.basis.z_axis;
+	return { snapped_basis.canonical_axis_view };
 }
 
 /**
@@ -825,9 +864,10 @@ ViewportNavigationResult viewport_orbit(const ViewportOrbitInput& input)
 	unsnapped_result.z_axis = rotated_basis.z_axis;
 
 	quader_poly::Transform3 visible_result = unsnapped_result;
-	const bool snapped = input.snap_to_orthogonal && orthogonal_snap_transform(unsnapped_result, input.pivot, visible_result);
+	const ViewportAxisSnapTransformResult snap =
+		input.snap_to_orthogonal ? axis_snap_transform(unsnapped_result, input.pivot, visible_result) : ViewportAxisSnapTransformResult {};
 	ViewportNavigationResult result = navigation_result(visible_result, input.pivot);
-	result.orthogonal_snap = snapped;
+	result.orthogonal_snap = snap.orthographic_axis;
 	result.unsnapped_camera_transform = unsnapped_result;
 	return result;
 }
