@@ -84,8 +84,19 @@ public:
         for (const ViewportOverlayTriangle& triangle : frame.triangles) {
             if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
                     triangle.element.objectId >= 0) {
-                stampsByObject_[triangle.element.objectId].push_back(&triangle);
+                StampSet& set = stampsByObject_[triangle.element.objectId];
+                set.triangles.push_back(&triangle);
+                set.centroid += triangle.a + triangle.b + triangle.c;
+                set.vertexCount += 3;
             }
+        }
+        for (auto& entry : stampsByObject_) {
+            StampSet& set = entry.second;
+            if (set.vertexCount <= 0) {
+                continue;
+            }
+            set.centroid = set.centroid / static_cast<float>(set.vertexCount);
+            set.insideOut = insideOutScore(set) < -kOverlayVisibilityEpsilon;
         }
     }
 
@@ -94,8 +105,8 @@ public:
     }
 
     [[nodiscard]] bool lineVisible(const ViewportOverlayLine& line, const ViewportOverlayCamera& camera) const {
-        const std::vector<const ViewportOverlayTriangle*>* stamps = stampsFor(line.element.objectId);
-        if (stamps == nullptr) {
+        const StampSet* stamps = stampsFor(line.element.objectId);
+        if (stamps == nullptr || stamps->insideOut) {
             return true;
         }
         return pointVisible(pointOnLine(line.start, line.end, 0.2f), camera, *stamps) &&
@@ -104,20 +115,37 @@ public:
     }
 
     [[nodiscard]] bool pointVisible(const ViewportOverlayPoint& point, const ViewportOverlayCamera& camera) const {
-        const std::vector<const ViewportOverlayTriangle*>* stamps = stampsFor(point.element.objectId);
-        return stamps == nullptr || pointVisible(point.position, camera, *stamps);
+        const StampSet* stamps = stampsFor(point.element.objectId);
+        return stamps == nullptr || stamps->insideOut || pointVisible(point.position, camera, *stamps);
     }
 
 private:
-    [[nodiscard]] const std::vector<const ViewportOverlayTriangle*>* stampsFor(int objectId) const {
+    struct StampSet {
+        std::vector<const ViewportOverlayTriangle*> triangles;
+        QVec3 centroid{};
+        int vertexCount = 0;
+        bool insideOut = false;
+    };
+
+    [[nodiscard]] const StampSet* stampsFor(int objectId) const {
         const auto found = stampsByObject_.find(objectId);
         return found == stampsByObject_.end() ? nullptr : &found->second;
+    }
+
+    [[nodiscard]] static float insideOutScore(const StampSet& stamps) {
+        float score = 0.0f;
+        for (const ViewportOverlayTriangle* triangle : stamps.triangles) {
+            const QVec3 normal = cross(triangle->b - triangle->a, triangle->c - triangle->a);
+            const QVec3 triangleCentroid = (triangle->a + triangle->b + triangle->c) / 3.0f;
+            score += dot(normal, triangleCentroid - stamps.centroid);
+        }
+        return score;
     }
 
     [[nodiscard]] static bool pointVisible(
             QVec3 point,
             const ViewportOverlayCamera& rawCamera,
-            const std::vector<const ViewportOverlayTriangle*>& stamps) {
+            const StampSet& stamps) {
         const ViewportOverlayCamera camera = OverlayCameraProjector::sanitizedCamera(rawCamera);
         const QVec3 forward = cameraForward(camera);
         QVec3 origin;
@@ -145,7 +173,7 @@ private:
         if (maxDistance <= 0.0001f) {
             return true;
         }
-        for (const ViewportOverlayTriangle* triangle : stamps) {
+        for (const ViewportOverlayTriangle* triangle : stamps.triangles) {
             float hitDistance = 0.0f;
             if (intersectRayTriangle(origin, direction, *triangle, hitDistance) &&
                     hitDistance < maxDistance) {
@@ -155,7 +183,7 @@ private:
         return true;
     }
 
-    std::unordered_map<int, std::vector<const ViewportOverlayTriangle*>> stampsByObject_;
+    std::unordered_map<int, StampSet> stampsByObject_;
 };
 
 std::uint64_t OverlayRenderableBuilder::frameSignature(const ViewportOverlayFrame& frame) {
