@@ -31,6 +31,35 @@ if(MSVC)
     add_compile_options(/FS)
 endif()
 
+function(quader_enable_common_pch target)
+    if(NOT QUADER_ENABLE_PCH)
+        return()
+    endif()
+    target_precompile_headers(${target}
+        PRIVATE
+            <algorithm>
+            <array>
+            <cmath>
+            <cstddef>
+            <cstdint>
+            <filesystem>
+            <functional>
+            <limits>
+            <map>
+            <memory>
+            <optional>
+            <ranges>
+            <set>
+            <span>
+            <string>
+            <string_view>
+            <tuple>
+            <unordered_map>
+            <unordered_set>
+            <utility>
+            <vector>)
+endfunction()
+
 find_package(spdlog CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
@@ -89,6 +118,7 @@ add_library(quader_modeling STATIC
     ${QUADER_MODELING_TOOL_SOURCES}
 )
 
+quader_enable_common_pch(quader_modeling)
 target_include_directories(quader_modeling PUBLIC src)
 target_link_libraries(quader_modeling PUBLIC glm::glm EnTT::EnTT)
 target_compile_definitions(quader_modeling
@@ -154,6 +184,7 @@ add_library(quader_core STATIC
     ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
 )
 
+quader_enable_common_pch(quader_core)
 target_include_directories(quader_core
     PUBLIC src
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
@@ -185,6 +216,7 @@ add_library(quader_api STATIC
     src/editor/commands/editor_command_registry.cpp
 )
 
+quader_enable_common_pch(quader_api)
 target_include_directories(quader_api PUBLIC src)
 target_link_libraries(quader_api PUBLIC quader_core)
 target_compile_definitions(quader_api
@@ -346,6 +378,7 @@ add_library(quader_runtime STATIC
     src/ui/ui_system.cpp
 )
 
+quader_enable_common_pch(quader_runtime)
 target_include_directories(quader_runtime PUBLIC src)
 target_compile_definitions(quader_runtime
     PUBLIC
@@ -469,6 +502,7 @@ if(QUADER_BUILD_TESTS)
         tests/programmatic_api_guardrail_tests.cpp
         tests/support/guardrail_file_scan.cpp
     )
+    quader_enable_common_pch(quader_guardrail_tests)
     target_compile_features(quader_guardrail_tests PRIVATE cxx_std_20)
     target_compile_definitions(quader_guardrail_tests
         PRIVATE
@@ -498,6 +532,7 @@ if(QUADER_BUILD_TESTS)
         tests/support/guardrail_file_scan.cpp
         tests/support/modeling_test_events.cpp
     )
+    quader_enable_common_pch(quader_tests)
     target_compile_definitions(quader_tests
         PRIVATE
             QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

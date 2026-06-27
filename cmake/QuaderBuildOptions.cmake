@@ -10,6 +10,7 @@ option(QUADER_ALLOW_EXTERNAL_OPENMESH_FETCH "Allow CMake to download OpenMesh wh
 option(QUADER_ENABLE_TRACY "Enable Tracy profiler instrumentation for Quader modeling targets." OFF)
 option(QUADER_TRACY_ON_DEMAND "Enable Tracy on-demand capture mode when Tracy instrumentation is enabled." ON)
 option(QUADER_BUILD_PERFORMANCE_BENCHMARKS "Build opt-in Quader performance baseline executables." OFF)
+option(QUADER_ENABLE_PCH "Enable Quader target-local precompiled headers for faster incremental C++ builds." ON)
 
 set(_QUADER_OPENMESH_COMMIT "5f016723f9f183770cffe5787a6f9f628e2914d8")
 set(_QUADER_GEOMETRIC_TOOLS_VERSION "8.2")

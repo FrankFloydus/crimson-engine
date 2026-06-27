@@ -105,6 +105,7 @@ target_include_directories(quader_modeling_gte_math
 add_library(quader_geometry STATIC
     src/mesh/geometry/geometry.cpp)
 
+quader_enable_common_pch(quader_geometry)
 target_compile_features(quader_geometry PUBLIC cxx_std_20)
 target_include_directories(quader_geometry
     PUBLIC
@@ -118,6 +119,7 @@ file(GLOB QUADER_POLYGON_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/mesh/polygon/operations/*.cpp")
 
 add_library(quader_modeling_polygon STATIC ${QUADER_POLYGON_SOURCES})
+quader_enable_common_pch(quader_modeling_polygon)
 target_compile_features(quader_modeling_polygon PUBLIC cxx_std_20)
 target_include_directories(quader_modeling_polygon
     PUBLIC
@@ -183,6 +185,7 @@ set(QUADER_MODELING_RUNTIME_SOURCES
     src/editor/interactions/tool_viewport_projection.cpp)
 
 add_library(quader_modeling_runtime STATIC ${QUADER_MODELING_RUNTIME_SOURCES})
+quader_enable_common_pch(quader_modeling_runtime)
 target_compile_features(quader_modeling_runtime PUBLIC cxx_std_20)
 target_include_directories(quader_modeling_runtime
     PUBLIC
@@ -198,6 +201,7 @@ add_library(quader_editor_metadata STATIC
     src/editor/metadata/host_contract.cpp
     src/editor/tools/base/viewport_tool_descriptor_catalog.cpp)
 add_library(quader::editor_metadata ALIAS quader_editor_metadata)
+quader_enable_common_pch(quader_editor_metadata)
 target_compile_features(quader_editor_metadata PUBLIC cxx_std_20)
 target_include_directories(quader_editor_metadata
     PUBLIC
@@ -207,6 +211,7 @@ target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
 add_library(quader_qdr_shared_io STATIC
     src/io/qdr/qdr_atomic_write.cpp
     src/io/qdr/qdr_polygon_document_codec.cpp)
+quader_enable_common_pch(quader_qdr_shared_io)
 target_compile_features(quader_qdr_shared_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_shared_io
     PUBLIC
@@ -221,6 +226,7 @@ target_link_libraries(quader_qdr_shared_io
 
 add_library(quader_qdr_document_io STATIC
     src/io/qdr/qdr_document.cpp)
+quader_enable_common_pch(quader_qdr_document_io)
 target_compile_features(quader_qdr_document_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_document_io
     PUBLIC
@@ -236,6 +242,7 @@ target_link_libraries(quader_qdr_document_io
 
 add_library(quader_qdr_runtime_io STATIC
     src/io/qdr/qdr_runtime_io_compat.cpp)
+quader_enable_common_pch(quader_qdr_runtime_io)
 target_compile_features(quader_qdr_runtime_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_runtime_io
     PUBLIC
@@ -250,6 +257,7 @@ target_link_libraries(quader_qdr_runtime_io
 if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     add_executable(qdr_performance_baseline
         benchmarks/modeling/qdr_performance_baseline.cpp)
+    quader_enable_common_pch(qdr_performance_baseline)
     target_compile_features(qdr_performance_baseline PRIVATE cxx_std_20)
     target_link_libraries(qdr_performance_baseline PRIVATE quader_modeling_polygon quader_modeling_runtime quader_modeling_profile)
 endif()
@@ -312,6 +320,7 @@ endfunction()
 function(quader_add_modeling_domain_test_object_library target)
     find_package(GTest CONFIG REQUIRED)
     add_library(${target} OBJECT EXCLUDE_FROM_ALL ${ARGN})
+    quader_enable_common_pch(${target})
     quader_configure_modeling_domain_test_compile(${target})
 endfunction()
 

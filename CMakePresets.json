@@ -12,6 +12,17 @@
         "VCPKG_TARGET_TRIPLET": "x64-windows",
         "QUADER_BUILD_TESTS": "ON"
       }
+    },
+    {
+      "name": "ninja-msvc",
+      "displayName": "Ninja Multi-Config MSVC x64",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/ninja-msvc",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "QUADER_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -28,12 +39,35 @@
       "configuration": "Release",
       "jobs": 24,
       "nativeToolOptions": ["/nodeReuse:false"]
+    },
+    {
+      "name": "ninja-msvc-debug",
+      "configurePreset": "ninja-msvc",
+      "configuration": "Debug",
+      "jobs": 24
+    },
+    {
+      "name": "ninja-msvc-release",
+      "configurePreset": "ninja-msvc",
+      "configuration": "Release",
+      "jobs": 24
     }
   ],
   "testPresets": [
     {
       "name": "vs2026-debug",
       "configurePreset": "vs2026",
+      "configuration": "Debug",
+      "execution": {
+        "jobs": 24
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ninja-msvc-debug",
+      "configurePreset": "ninja-msvc",
       "configuration": "Debug",
       "execution": {
         "jobs": 24

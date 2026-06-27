@@ -37,17 +37,33 @@ cmake --build --preset vs2026-debug
 ctest --preset vs2026-debug
 ```
 
+For local prototyping, the optional Ninja Multi-Config path keeps artifacts in `build/ninja-msvc`.
+Run it from a Visual Studio Developer PowerShell/CMD so `cl.exe` is on `PATH`; do not hardcode
+local compiler paths into presets.
+
+```powershell
+cmake --preset ninja-msvc
+cmake --build --preset ninja-msvc-debug --target quader
+ctest --preset ninja-msvc-debug
+```
+
 The native test suite uses GoogleTest only. It is split into `quader_guardrail_tests` for pure
 source-policy scans, `quader_tests` for app/runtime behavior, and the GoogleTest
 `quader_modeling_domain_tests` aggregate for modeling-domain behavior. All three run through
 `ctest --preset vs2026-debug`. Do not add SDK-specific configure, build, or test presets back to the
 native app.
 
+`QUADER_ENABLE_PCH` is enabled by default and adds private target-local precompiled headers with
+stable C++ standard-library headers only. Keep project headers, SDK headers, and GoogleTest out of
+the common PCH list unless a separate measurement proves the benefit and the affected owner agrees.
+
 Modeling-domain prototyping loops may build developer-only `EXCLUDE_FROM_ALL` targets:
 `quader_modeling_domain_polygon_loop_tests`, `quader_modeling_domain_runtime_loop_tests`, and
 `quader_modeling_domain_metadata_loop_tests`. These exist so `tools/affected_check.ps1` can compile
 and run only the relevant modeling-domain bucket. Do not register them with CTest; full verification
 stays on the aggregate `quader_modeling_domain_tests` entry.
+For direct polygon or runtime operation source edits, the affected workflow should prefer
+operation-family GoogleTest filters before falling back to broad polygon/runtime filters.
 
 ## Affected Build/Test Workflow
 
@@ -64,6 +80,11 @@ in-app verification or runtime resource copying is part of the change. In a very
 pass comma-separated `-ChangedPath` values for the intended edit instead of letting the tool infer
 the whole diff. Docs, tooling, and source-policy changes should route to `quader_guardrail_tests`
 instead of forcing the app/runtime test executable to build.
+To use the optional Ninja tree with the affected checker, pass the matching presets:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -BuildPreset ninja-msvc-debug -TestPreset ninja-msvc-debug -ChangedPath src/render/overlay/overlay_renderable_builder.cpp
+```
 
 If PowerShell inherits conflicting `PATH`/`Path` entries and CMake cannot find tools, use:
 

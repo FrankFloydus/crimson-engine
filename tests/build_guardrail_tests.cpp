@@ -355,6 +355,9 @@ TEST(BuildGuardrailTests, FormerSdkBoundaryIsAbsorbedIntoAppBuild) {
     expectMissing(presets, "vs2026-sdk-tests");
     expectMissing(presets, "QUADER_BUILD_SDK_TESTS");
     expectMissing(presets, "quader_sdk_tests");
+    expectContains(presets, "\"name\": \"ninja-msvc\"");
+    expectContains(presets, "\"generator\": \"Ninja Multi-Config\"");
+    expectContains(presets, "${sourceDir}/build/ninja-msvc");
 
     expectContains(buildFiles, "src/mesh/polygon");
     expectContains(buildFiles, "src/mesh/geometry");
@@ -405,11 +408,26 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
                  "QUADER_ENABLE_TRACY",
                  "QUADER_TRACY_ON_DEMAND",
                  "QUADER_BUILD_PERFORMANCE_BENCHMARKS",
+                 "QUADER_ENABLE_PCH",
          }) {
         expectContains(options, "option(" + optionName);
         expectMissing(rootCMake, "option(" + optionName);
         expectMissing(modeling, "option(" + optionName);
     }
+
+    const std::string pchHelper = sourceSlice(rootCMake, "function(quader_enable_common_pch target)", "endfunction()");
+    expectContains(pchHelper, "target_precompile_headers(${target}");
+    expectContains(pchHelper, "PRIVATE");
+    expectContains(pchHelper, "<string>");
+    expectContains(pchHelper, "<vector>");
+    expectContains(pchHelper, "<unordered_map>");
+    expectMissing(pchHelper, "PUBLIC");
+    expectMissing(pchHelper, "INTERFACE");
+    expectMissing(pchHelper, "src/");
+    expectMissing(pchHelper, "filament/");
+    expectMissing(pchHelper, "SDL3/");
+    expectMissing(pchHelper, "RmlUi/");
+    expectMissing(pchHelper, "gtest/");
 
     expectContains(options, "set(_QUADER_OPENMESH_COMMIT");
     expectContains(options, "set(_QUADER_GEOMETRIC_TOOLS_COMMIT");
@@ -753,6 +771,10 @@ TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
 
     expectContains(presets, "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake");
     expectMissing(presets, "C:/Users/Drako/vcpkg");
+    expectMissing(presets, "CMAKE_C_COMPILER");
+    expectMissing(presets, "CMAKE_CXX_COMPILER");
+    expectMissing(presets, "Program Files/Microsoft Visual Studio");
+    expectMissing(presets, "Program Files\\\\Microsoft Visual Studio");
 }
 
 TEST(BuildGuardrailTests, FilamentSdkIsValidatedAtConfigureTime) {
@@ -788,6 +810,10 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "After affected workflow");
     expectContains(tool, "Before -> after");
     expectContains(tool, "MeasureFull");
+    expectContains(tool, "Resolve-CMakePresetBinaryDir");
+    expectContains(tool, "Get-CMakePresetProperty \"build\" $BuildPreset \"configurePreset\"");
+    expectContains(tool, "Get-CMakePresetProperty \"build\" $BuildPreset \"configuration\"");
+    expectMissing(tool, "build\\vs2026\\$Configuration");
     expectContains(tool, "quader_guardrail_tests.exe");
     expectContains(tool, "quader_tests.exe");
     expectContains(tool, "quader_modeling_domain_tests.exe");
@@ -797,6 +823,16 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "--gtest_filter=");
     expectContains(tool, "GuardrailTestsFilters");
     expectContains(tool, "ModelingLoopFilters");
+    expectContains(tool, "Get-PolygonOperationFilterForSourcePath");
+    expectContains(tool, "Get-RuntimeOperationFilterForSourcePath");
+    expectContains(tool, "fill_hole_from_edges");
+    expectContains(tool, "apply_uv");
+    expectContains(tool, "QdrDocumentOperationUv*");
+    expectContains(tool, "assign_material");
+    expectContains(tool, "assign_material_slot");
+    expectContains(tool, "selection_operations.cpp");
+    expectContains(tool, "QdrModelingRuntimeOperationCommandTests.*");
+    expectContains(tool, "QdrModelingRuntimeToolOperationContractTests.*");
     expectContains(tool, "Add-PathPlan");
     expectContains(tool, "Remove-RedundantBuildTargets");
     expectContains(tool, "AGENTS\\.md");

@@ -25,7 +25,124 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$BuildDir = Join-Path $SourceRoot "build\vs2026\$Configuration"
+$script:CMakePresetsDocument = $null
+
+function Get-CMakePresetsDocument {
+    if ($null -ne $script:CMakePresetsDocument) {
+        return $script:CMakePresetsDocument
+    }
+    $presetsPath = Join-Path $SourceRoot "CMakePresets.json"
+    if (-not (Test-Path $presetsPath -PathType Leaf)) {
+        throw "CMakePresets.json was not found at '$presetsPath'."
+    }
+    $script:CMakePresetsDocument = Get-Content $presetsPath -Raw | ConvertFrom-Json
+    return $script:CMakePresetsDocument
+}
+
+function Get-CMakePresetCollection {
+    param([string]$Kind)
+
+    $document = Get-CMakePresetsDocument
+    switch ($Kind) {
+        "configure" { return @($document.configurePresets) }
+        "build" { return @($document.buildPresets) }
+        "test" { return @($document.testPresets) }
+        default { throw "Unsupported CMake preset kind '$Kind'." }
+    }
+}
+
+function Get-CMakePreset {
+    param([string]$Kind, [string]$Name)
+
+    foreach ($preset in @(Get-CMakePresetCollection $Kind)) {
+        $nameProperty = $preset.PSObject.Properties["name"]
+        if ($null -ne $nameProperty -and [string]$nameProperty.Value -eq $Name) {
+            return $preset
+        }
+    }
+    return $null
+}
+
+function Get-CMakePresetProperty {
+    param(
+        [string]$Kind,
+        [string]$Name,
+        [string]$PropertyName,
+        [string[]]$Visited = @()
+    )
+
+    $key = "${Kind}:${Name}"
+    if ($Visited -contains $key) {
+        throw "Cyclic CMake preset inheritance detected at '$key'."
+    }
+
+    $preset = Get-CMakePreset $Kind $Name
+    if ($null -eq $preset) {
+        return $null
+    }
+
+    $property = $preset.PSObject.Properties[$PropertyName]
+    if ($null -ne $property) {
+        return $property.Value
+    }
+
+    $inheritsProperty = $preset.PSObject.Properties["inherits"]
+    if ($null -eq $inheritsProperty) {
+        return $null
+    }
+
+    foreach ($parent in @($inheritsProperty.Value)) {
+        $value = Get-CMakePresetProperty $Kind ([string]$parent) $PropertyName ($Visited + $key)
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+    return $null
+}
+
+function Expand-CMakePresetPath {
+    param([string]$Path)
+
+    $expanded = $Path.Replace('${sourceDir}', $SourceRoot)
+    $expanded = [regex]::Replace(
+        $expanded,
+        '\$env\{([^}]+)\}',
+        [System.Text.RegularExpressions.MatchEvaluator]{
+            param($match)
+            $value = [Environment]::GetEnvironmentVariable($match.Groups[1].Value)
+            if ($null -eq $value) {
+                return ""
+            }
+            return $value
+        })
+    return ($expanded -replace "/", [System.IO.Path]::DirectorySeparatorChar)
+}
+
+function Resolve-CMakePresetBinaryDir {
+    param([string]$PresetName)
+
+    $binaryDir = Get-CMakePresetProperty "configure" $PresetName "binaryDir"
+    if ($null -eq $binaryDir -or [string]::IsNullOrWhiteSpace([string]$binaryDir)) {
+        throw "Configure preset '$PresetName' does not define binaryDir. Add one so focused test executables can be located."
+    }
+    return Expand-CMakePresetPath ([string]$binaryDir)
+}
+
+if (-not $PSBoundParameters.ContainsKey("ConfigurePreset")) {
+    $derivedConfigurePreset = Get-CMakePresetProperty "build" $BuildPreset "configurePreset"
+    if ($null -ne $derivedConfigurePreset -and -not [string]::IsNullOrWhiteSpace([string]$derivedConfigurePreset)) {
+        $ConfigurePreset = [string]$derivedConfigurePreset
+    }
+}
+
+if (-not $PSBoundParameters.ContainsKey("Configuration")) {
+    $derivedConfiguration = Get-CMakePresetProperty "build" $BuildPreset "configuration"
+    if ($null -ne $derivedConfiguration -and -not [string]::IsNullOrWhiteSpace([string]$derivedConfiguration)) {
+        $Configuration = [string]$derivedConfiguration
+    }
+}
+
+$BuildDir = Join-Path (Resolve-CMakePresetBinaryDir $ConfigurePreset) $Configuration
 
 function Add-Unique {
     param(
@@ -103,6 +220,11 @@ function Join-GTestFilter {
     return ($unique -join ":")
 }
 
+function Get-TestFileFilter {
+    param([string]$Path)
+    return Join-GTestFilter @(Get-GTestSuites @($Path))
+}
+
 function Test-IsGuardrailTestPath {
     param([string]$Path)
     return @(
@@ -177,6 +299,81 @@ function Get-ModelingLoopTargetForTestPath {
             $Path -match '^tests/modeling_domain/qdr_document_' -or
             $Path -match '^tests/modeling_domain/qdr_io_document_') {
         return "quader_modeling_domain_polygon_loop_tests"
+    }
+    return ""
+}
+
+function Get-PolygonOperationFilterForSourcePath {
+    param([string]$Path)
+
+    if ($Path -match '^src/mesh/polygon/(operations/)?poly_operation_registry\.(cpp|hpp)$') {
+        return Get-TestFileFilter "tests/modeling_domain/operation/qdr_document_operation_registry_tests.cpp"
+    }
+    if ($Path -notmatch '^src/mesh/polygon/operations/([^/]+)_operation\.cpp$') {
+        return ""
+    }
+
+    $slug = $Matches[1]
+    $filterOverrides = @{
+        "apply_uv" = "QdrDocumentOperationUv*"
+    }
+    if ($filterOverrides.ContainsKey($slug)) {
+        return $filterOverrides[$slug]
+    }
+
+    $testSlugOverrides = @{
+        "fill_hole_from_edges" = "fill_hole"
+        "flip_face_normals" = "flip_normals"
+        "radial_align" = "radial_align_selection"
+        "recalculate_face_normals" = "recalculate_normals"
+        "slice_quads" = "slice_quad"
+    }
+    $testSlug = $slug
+    if ($testSlugOverrides.ContainsKey($slug)) {
+        $testSlug = $testSlugOverrides[$slug]
+    }
+
+    $testPath = "tests/modeling_domain/operation/qdr_document_operation_${testSlug}_tests.cpp"
+    $absoluteTestPath = Join-Path $SourceRoot $testPath
+    if (Test-Path $absoluteTestPath -PathType Leaf) {
+        return Get-TestFileFilter $testPath
+    }
+    return ""
+}
+
+function Get-RuntimeOperationFilterForSourcePath {
+    param([string]$Path)
+
+    if ($Path -match '^src/editor/modeling/operations/operation_command\.(cpp|hpp)$') {
+        return Get-TestFileFilter "tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp"
+    }
+    if ($Path -match '^src/editor/modeling/operations/(operation_registry|editor_operation)\.(cpp|hpp)$') {
+        return "QdrModelingRuntimeOperationCommandTests.*:QdrModelingRuntimeToolOperationContractTests.*"
+    }
+    if ($Path -match '^src/editor/modeling/operations/operation_schema\.(cpp|hpp)$') {
+        return "QdrModelingRuntimeOperation*:QdrModelingRuntimeCommandTests.*"
+    }
+    if ($Path -eq 'src/editor/modeling/operations/selection_operations.cpp') {
+        return "QdrModelingRuntimeOperationCommandTests.*:QdrModelingRuntimeOperationDeleteTests.*:QdrModelingRuntimeOperationFillHoleTests.*:QdrModelingRuntimeOperationInvertSelectionTests.*:QdrModelingRuntimeOperationMergeEdgesTests.*:QdrModelingRuntimeOperationNormalShadingTests.*:QdrModelingRuntimeOperationRecalculateInsideMeshTests.*:QdrModelingRuntimeOperationRecalculateOutsideMeshTests.*:QdrModelingRuntimeOperationSelectAllTests.*:QdrModelingRuntimeOperationSnapEdgesToActiveTests.*"
+    }
+    if ($Path -notmatch '^src/editor/modeling/operations/([^/]+)_operation\.cpp$') {
+        return ""
+    }
+
+    $slug = $Matches[1]
+    $testSlugOverrides = @{
+        "assign_material" = "assign_material_slot"
+        "duplicate_meshes" = "duplicate"
+    }
+    $testSlug = $slug
+    if ($testSlugOverrides.ContainsKey($slug)) {
+        $testSlug = $testSlugOverrides[$slug]
+    }
+
+    $testPath = "tests/modeling_domain/operation/qdr_modeling_runtime_operation_${testSlug}_tests.cpp"
+    $absoluteTestPath = Join-Path $SourceRoot $testPath
+    if (Test-Path $absoluteTestPath -PathType Leaf) {
+        return Get-TestFileFilter $testPath
     }
     return ""
 }
@@ -328,6 +525,13 @@ function Add-PathPlan {
         return
     }
 
+    $polygonOperationFilter = Get-PolygonOperationFilterForSourcePath $Path
+    if ($polygonOperationFilter -ne "") {
+        Add-BuildTarget "quader_modeling_polygon" "polygon operation source changed"
+        Add-PolygonModelingLoopFilter $polygonOperationFilter "focused polygon operation tests"
+        return
+    }
+
     if ($Path -match '^src/mesh/polygon/') {
         Add-BuildTarget "quader_modeling_polygon" "polygon document source changed"
         Add-PolygonModelingLoopFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "polygon and document-operation tests"
@@ -341,6 +545,14 @@ function Add-PathPlan {
         Add-PolygonModelingLoopFilter "QdrIoDocumentTests.*" "QDR document IO modeling-domain tests"
         Add-RuntimeModelingLoopFilter "QdrRuntimeIoCompatTests.*" "QDR runtime IO modeling-domain tests"
         Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "QDR app IO tests"
+        return
+    }
+
+    $runtimeOperationFilter = Get-RuntimeOperationFilterForSourcePath $Path
+    if ($runtimeOperationFilter -ne "") {
+        Add-BuildTarget "quader_modeling_runtime" "modeling runtime operation source changed"
+        Add-RuntimeModelingLoopFilter $runtimeOperationFilter "focused modeling runtime operation tests"
+        Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "modeling metadata tests affected by operation descriptors"
         return
     }
 

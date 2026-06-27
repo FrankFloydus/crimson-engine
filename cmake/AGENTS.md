@@ -19,3 +19,5 @@ Read `../agents/dependencies.md` before changing CMake dependency or build behav
   unless the target already intentionally uses one.
 - Preserve the expected build and test presets: `vs2026`, `vs2026-debug`, and `ctest --preset
   vs2026-debug`.
+- Optional local acceleration presets such as `ninja-msvc` must use their own `build/` subdirectory
+  and must not hardcode machine-specific compiler paths.

@@ -201,5 +201,84 @@ Verification:
 - Runtime modeling test-source sample after loop targets:
   `tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp`, full baseline
   52.13s -> affected workflow 3.24s, 48.89s saved.
+- Polygon operation source sample after operation-family filters:
+  `src/mesh/polygon/operations/bevel_edges_operation.cpp`, full baseline 46.86s -> affected
+  workflow 3.08s, 43.78s saved.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File tools\affected_check.ps1 -NoUntracked -ChangedPath tools/affected_check.ps1,agents/testing-build.md,tests/build_guardrail_tests.cpp`
 - `ctest --preset vs2026-debug --output-on-failure`
+
+## 2026-06-27 - Target-Local Standard-Library PCH
+
+Task/context: manual in-app prototype builds still paid repeated C++ standard-library parse cost in
+large runtime/modeling targets after affected checks selected the right target.
+
+Invariant:
+
+- `QUADER_ENABLE_PCH` owns the opt-out switch in `cmake/QuaderBuildOptions.cmake`.
+- Common PCH is private and target-local. Do not publish PCH through target interfaces.
+- Keep the common PCH list to stable C++ standard-library headers. Do not add project owner
+  headers, Filament/SDL/RmlUi SDK headers, or GoogleTest without a separate measured change.
+
+Affected owners/files:
+
+- `CMakeLists.txt`
+- `cmake/QuaderBuildOptions.cmake`
+- `cmake/QuaderModeling.cmake`
+- `agents/testing-build.md`
+- `tests/build_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Added `quader_enable_common_pch(target)` and applied it to app/runtime/modeling libraries, app
+  tests, guardrail tests, and modeling-domain test object libraries.
+- Kept PCH behind `QUADER_ENABLE_PCH=ON` so a developer can disable it for local diagnosis.
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader`
+- Runtime app incremental sample after PCH warm-up: touching
+  `src/render/viewport_renderer.cpp`, `quader` build 7.87s -> 5.72s, 2.15s saved.
+
+## 2026-06-27 - Optional Ninja Multi-Config Prototype Build
+
+Task/context: after target-local PCH, Visual Studio/MSBuild still spent avoidable time in warm
+incremental app rebuilds used for manual in-app prototyping.
+
+Invariant:
+
+- Keep `vs2026` and `vs2026-debug` as the default expected presets.
+- Optional Ninja/MSVC acceleration must use a single contained tree under `build/ninja-msvc`.
+- Do not hardcode local Visual Studio or compiler paths in presets. Ninja/MSVC runs from a Visual
+  Studio Developer PowerShell/CMD, or an equivalent environment where `cl.exe` is already on `PATH`.
+- `tools/affected_check.ps1` derives focused test executable paths from the selected configure
+  preset `binaryDir`; it must not assume `build/vs2026`.
+
+Affected owners/files:
+
+- `CMakePresets.json`
+- `tools/affected_check.ps1`
+- `agents/testing-build.md`
+- `cmake/AGENTS.md`
+- `tests/build_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Added optional `ninja-msvc`, `ninja-msvc-debug`, and `ninja-msvc-release` presets.
+- Updated affected-check preset resolution so passing `-BuildPreset ninja-msvc-debug` also derives
+  `ninja-msvc` and `Debug` when those parameters are not supplied explicitly.
+- Added guardrails for Ninja preset presence, no local compiler paths, and no hardcoded focused
+  test executable dir.
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.BuildOptionsAndDependencyPinsHaveSingleCMakeOwner:BuildGuardrailTests.FormerSdkBoundaryIsAbsorbedIntoAppBuild:BuildGuardrailTests.LocalMachinePathsUseEnvironmentBackedDefaults:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns`
+- Through `VsDevCmd.bat`: `cmake --preset ninja-msvc`
+- Through `VsDevCmd.bat`: `cmake --build --preset ninja-msvc-debug --target quader_guardrail_tests`
+- Through `VsDevCmd.bat`: `build\ninja-msvc\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FormerSdkBoundaryIsAbsorbedIntoAppBuild:BuildGuardrailTests.LocalMachinePathsUseEnvironmentBackedDefaults:BuildGuardrailTests.AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns`
+- Runtime app warm incremental sample after the Ninja tree was populated: touching
+  `src/render/viewport_renderer.cpp`, `vs2026-debug` `quader` build 7.90s ->
+  `ninja-msvc-debug` `quader` build 2.98s, 4.92s saved. The first-time Ninja tree build is not
+  included in this warm prototyping comparison.
