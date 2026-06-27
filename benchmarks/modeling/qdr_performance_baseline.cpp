@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/interaction_api.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>

@@ -4,13 +4,13 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/mirror_tool.h>
-#include <diagnostics/profile.h>
-#include <editor/modeling/runtime/editor_tool.h>
-#include <mesh/polygon/document.h>
+#include <editor/interactions/mirror_tool.hpp>
+#include <diagnostics/profile.hpp>
+#include <editor/modeling/runtime/editor_tool.hpp>
+#include <mesh/polygon/document.hpp>
 
-#include "editor/modeling/runtime/session_internal.h"
-#include "tool_math_internal.h"
+#include "editor/modeling/runtime/session_internal.hpp"
+#include "tool_math_internal.hpp"
 
 #include <algorithm>
 #include <cstddef>

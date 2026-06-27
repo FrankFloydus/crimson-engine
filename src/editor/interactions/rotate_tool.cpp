@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/rotate_tool.h>
+#include <editor/interactions/rotate_tool.hpp>
 
-#include "tool_math_internal.h"
+#include "tool_math_internal.hpp"
 
-#include <editor/modeling/runtime/editor_tool.h>
-#include <editor/interactions/transform_drag.h>
+#include <editor/modeling/runtime/editor_tool.hpp>
+#include <editor/interactions/transform_drag.hpp>
 
 #include <algorithm>
 #include <cmath>

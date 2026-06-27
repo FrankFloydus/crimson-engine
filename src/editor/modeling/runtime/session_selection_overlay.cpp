@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/session.h>
-#include <mesh/geometry/geometry.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <mesh/geometry/geometry.hpp>
+#include <mesh/polygon/document.hpp>
 
-#include <diagnostics/profile.h>
+#include <diagnostics/profile.hpp>
 
 #include <algorithm>
 #include <cstddef>

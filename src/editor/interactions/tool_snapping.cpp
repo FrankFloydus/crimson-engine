@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/tool_snapping.h>
+#include <editor/interactions/tool_snapping.hpp>
 
-#include <editor/modeling/runtime/tool_constants.h>
+#include <editor/modeling/runtime/tool_constants.hpp>
 
-#include <mesh/geometry/geometry.h>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

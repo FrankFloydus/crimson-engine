@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/modeling/services/SelectionModeAdapter.h"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 
-#include "editor/modeling/services/ModelingActionCatalog.h"
+#include "editor/modeling/services/modeling_action_catalog.hpp"
 
 #include <gtest/gtest.h>
 

@@ -4,11 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/operations/operation_command.h>
-#include <editor/modeling/runtime/repeat_last_action.h>
+#include <editor/modeling/operations/operation_command.hpp>
+#include <editor/modeling/runtime/repeat_last_action.hpp>
 
 #include <array>
 #include <utility>
@@ -24,9 +23,9 @@ qec::EditorSession selected_box_session(
 {
 	qec::EditorSession session;
 	const qec::CommandResult create = session.create_box_from_bounds(min_bounds, max_bounds);
-	REQUIRE(create.ok);
-	REQUIRE(create.changed);
-	REQUIRE(session.objects().size() == 1U);
+	EXPECT_TRUE(create.ok);
+	EXPECT_TRUE(create.changed);
+	EXPECT_TRUE(session.objects().size() == 1U);
 	return session;
 }
 
@@ -40,7 +39,7 @@ qec::EditorSession selected_quad_face_session()
 	const quader_poly::ElementId face = quader_poly::add_face(
 		document,
 		std::array<quader_poly::ElementId, 4> { bottom_left, bottom_right, top_right, top_left });
-	REQUIRE(face != quader_poly::invalid_element_id);
+	EXPECT_TRUE(face != quader_poly::invalid_element_id);
 
 	qec::PolygonObject object;
 	object.id = 1;
@@ -92,7 +91,7 @@ qec::EditorOperationCommand thicken_command(double thickness, bool from_center =
 void select_first_face(qec::EditorSession& session)
 {
 	const qec::PolygonObject& object = session.objects().front();
-	REQUIRE_FALSE(object.document.faces.empty());
+	EXPECT_FALSE(object.document.faces.empty());
 	const quader_poly::ElementId selected_face = object.document.faces.front().id;
 	quader_poly::Selection selection;
 	selection.mode = quader_poly::SelectionMode::face;
@@ -138,96 +137,96 @@ qec::TransformDragState scale_drag(quader::QVec3 scale, qec::TransformDragOperat
 
 const qec::PolygonObject& only_object(const qec::EditorSession& session)
 {
-	REQUIRE(session.objects().size() == 1U);
+	EXPECT_TRUE(session.objects().size() == 1U);
 	return session.objects().front();
 }
 
 } // namespace
 
-TEST_CASE("repeat last action reports no prior portable action", "[editor-core][repeat-last]")
-{
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReportsNoPriorPortableAction) {
 	qec::EditorSession session = selected_box_session();
 	qec::RepeatLastActionState state;
 
 	const qec::CommandResult result = qec::execute_repeat_last_action(session, state);
 
-	CHECK_FALSE(result.ok);
-	CHECK_FALSE(result.changed);
-	CHECK(result.message == "No repeatable action is available.");
+	EXPECT_FALSE(result.ok);
+	EXPECT_FALSE(result.changed);
+	EXPECT_TRUE(result.message == "No repeatable action is available.");
 }
 
-TEST_CASE("repeat last action ignores non-repeatable delete commands", "[editor-core][repeat-last]")
-{
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionIgnoresNonRepeatableDeleteCommands) {
 	qec::EditorSession session = selected_box_session();
 	qec::RepeatLastActionState state;
 	const qec::EditorOperationCommand command = selection_command(qec::EditorOperationId::delete_selection);
 	const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
 
 	qec::record_repeatable_operation(state, command, result.command);
 	const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-	CHECK_FALSE(qec::operation_is_repeatable(qec::EditorOperationId::delete_selection));
-	CHECK_FALSE(repeat.ok);
-	CHECK_FALSE(repeat.changed);
-	CHECK(repeat.message == "No repeatable action is available.");
+	EXPECT_FALSE(qec::operation_is_repeatable(qec::EditorOperationId::delete_selection));
+	EXPECT_FALSE(repeat.ok);
+	EXPECT_FALSE(repeat.changed);
+	EXPECT_TRUE(repeat.message == "No repeatable action is available.");
 }
 
-TEST_CASE("repeat last action replays captured operation commands", "[editor-core][repeat-last]")
-{
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReplaysCapturedOperationCommands) {
 	qec::EditorSession session = selected_box_session();
 	qec::RepeatLastActionState state;
 	const qec::EditorOperationCommand command = selection_command(qec::EditorOperationId::flip_face_normals);
 
 	const qec::EditorOperationCommandResult first = qec::execute_command(session, command);
-	REQUIRE(first.command.ok);
-	REQUIRE(first.command.changed);
+	EXPECT_TRUE(first.command.ok);
+	EXPECT_TRUE(first.command.changed);
 	qec::record_repeatable_operation(state, command, first.command);
 
 	const qec::EditorOperationCommandResult second = qec::execute_command(session, command);
-	REQUIRE(second.command.ok);
-	REQUIRE(second.command.changed);
+	EXPECT_TRUE(second.command.ok);
+	EXPECT_TRUE(second.command.changed);
 	const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-	CHECK(repeat.ok);
-	CHECK(repeat.changed);
-	CHECK(session.history_status().undo_count == 3U);
+	EXPECT_TRUE(repeat.ok);
+	EXPECT_TRUE(repeat.changed);
+	EXPECT_TRUE(session.history_status().undo_count == 3U);
 }
 
-TEST_CASE("repeat last action keeps the prior action after failed or unchanged operation results", "[editor-core][repeat-last]")
-{
-	SECTION("failed")
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionKeepsThePriorActionAfterFailedOrUnchangedOperationResultsFailed) {
 	{
 		qec::EditorSession session = selected_box_session();
 		qec::RepeatLastActionState state;
 		const qec::EditorOperationCommand previous = duplicate_command({ 2.0F, 0.0F, 0.0F });
 		const qec::EditorOperationCommandResult first = qec::execute_command(session, previous);
-		REQUIRE(first.command.ok);
-		REQUIRE(first.command.changed);
+		EXPECT_TRUE(first.command.ok);
+		EXPECT_TRUE(first.command.changed);
 		qec::record_repeatable_operation(state, previous, first.command);
 
 		qec::EditorOperationCommand failed = selection_command(qec::EditorOperationId::flip_face_normals);
 		failed.settings = qec::BridgeOperationSettings {};
 		const qec::EditorOperationCommandResult failed_result = qec::execute_command(session, failed);
-		REQUIRE_FALSE(failed_result.command.ok);
+		EXPECT_FALSE(failed_result.command.ok);
 		qec::record_repeatable_operation(state, failed, failed_result.command);
 
 		const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-		REQUIRE(repeat.ok);
-		REQUIRE(repeat.changed);
-		CHECK(session.objects().size() == 3U);
+		EXPECT_TRUE(repeat.ok);
+		EXPECT_TRUE(repeat.changed);
+		EXPECT_TRUE(session.objects().size() == 3U);
 	}
 
-	SECTION("unchanged")
+	
+}
+
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionKeepsThePriorActionAfterFailedOrUnchangedOperationResultsUnchanged) {
+	
+
 	{
 		qec::EditorSession session = selected_box_session();
 		qec::RepeatLastActionState state;
 		const qec::EditorOperationCommand previous = duplicate_command({ 2.0F, 0.0F, 0.0F });
 		const qec::EditorOperationCommandResult first = qec::execute_command(session, previous);
-		REQUIRE(first.command.ok);
-		REQUIRE(first.command.changed);
+		EXPECT_TRUE(first.command.ok);
+		EXPECT_TRUE(first.command.changed);
 		qec::record_repeatable_operation(state, previous, first.command);
 
 		const qec::EditorOperationCommand ignored = selection_command(qec::EditorOperationId::flip_face_normals);
@@ -235,15 +234,13 @@ TEST_CASE("repeat last action keeps the prior action after failed or unchanged o
 
 		const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-		REQUIRE(repeat.ok);
-		REQUIRE(repeat.changed);
-		CHECK(session.objects().size() == 3U);
+		EXPECT_TRUE(repeat.ok);
+		EXPECT_TRUE(repeat.changed);
+		EXPECT_TRUE(session.objects().size() == 3U);
 	}
 }
 
-TEST_CASE("repeat last action promotes preview settings only after changed commits", "[editor-core][repeat-last]")
-{
-	SECTION("changed commit captures the pending execute settings")
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionPromotesPreviewSettingsOnlyAfterChangedCommitsChangedCommitCapturesThePendingExecuteSettings) {
 	{
 		qec::EditorSession session = selected_quad_face_session();
 		const std::size_t original_face_count = session.objects().front().document.faces.size();
@@ -252,37 +249,42 @@ TEST_CASE("repeat last action promotes preview settings only after changed commi
 		qec::EditorOperationCommand command = thicken_command(0.25);
 		command.phase = qec::EditorOperationCommandPhase::begin_preview;
 		const qec::EditorOperationCommandResult begin = qec::execute_command(session, command);
-		REQUIRE(begin.command.ok);
-		REQUIRE(begin.command.changed);
+		EXPECT_TRUE(begin.command.ok);
+		EXPECT_TRUE(begin.command.changed);
 		qec::record_repeatable_operation(state, command, begin.command);
 
 		command = thicken_command(0.5);
 		command.phase = qec::EditorOperationCommandPhase::update_preview;
 		const qec::EditorOperationCommandResult update = qec::execute_command(session, command);
-		REQUIRE(update.command.ok);
-		REQUIRE(update.command.changed);
+		EXPECT_TRUE(update.command.ok);
+		EXPECT_TRUE(update.command.changed);
 		qec::record_repeatable_operation(state, command, update.command);
 
 		command.phase = qec::EditorOperationCommandPhase::commit_preview;
 		const qec::EditorOperationCommandResult commit = qec::execute_command(session, command);
-		REQUIRE(commit.command.ok);
-		REQUIRE(commit.command.changed);
+		EXPECT_TRUE(commit.command.ok);
+		EXPECT_TRUE(commit.command.changed);
 		qec::record_repeatable_operation(state, command, commit.command);
 
 		const std::size_t committed_face_count = session.objects().front().document.faces.size();
-		REQUIRE(committed_face_count > original_face_count);
+		EXPECT_TRUE(committed_face_count > original_face_count);
 
-		REQUIRE(state.last_action_kind == qec::RepeatableActionKind::operation);
-		REQUIRE(state.last_operation.has_value());
-		CHECK_FALSE(state.pending_preview_operation.has_value());
-		CHECK(state.last_operation->operation_id == qec::EditorOperationId::thicken);
-		CHECK(state.last_operation->phase == qec::EditorOperationCommandPhase::execute);
+		EXPECT_TRUE(state.last_action_kind == qec::RepeatableActionKind::operation);
+		EXPECT_TRUE(state.last_operation.has_value());
+		EXPECT_FALSE(state.pending_preview_operation.has_value());
+		EXPECT_TRUE(state.last_operation->operation_id == qec::EditorOperationId::thicken);
+		EXPECT_TRUE(state.last_operation->phase == qec::EditorOperationCommandPhase::execute);
 		const qec::ThickenOperationSettings stored =
 			std::get<qec::ThickenOperationSettings>(state.last_operation->settings);
-		CHECK(stored.thickness == Catch::Approx(0.5));
+		EXPECT_NEAR(stored.thickness, 0.5, 0.0001);
 	}
 
-	SECTION("cancel clears pending settings")
+	
+}
+
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionPromotesPreviewSettingsOnlyAfterChangedCommitsCancelClearsPendingSettings) {
+	
+
 	{
 		qec::EditorSession session = selected_quad_face_session();
 		qec::RepeatLastActionState state;
@@ -290,24 +292,23 @@ TEST_CASE("repeat last action promotes preview settings only after changed commi
 		qec::EditorOperationCommand command = thicken_command(0.25);
 		command.phase = qec::EditorOperationCommandPhase::begin_preview;
 		const qec::EditorOperationCommandResult begin = qec::execute_command(session, command);
-		REQUIRE(begin.command.ok);
+		EXPECT_TRUE(begin.command.ok);
 		qec::record_repeatable_operation(state, command, begin.command);
 
 		command.phase = qec::EditorOperationCommandPhase::cancel_preview;
 		const qec::EditorOperationCommandResult cancel = qec::execute_command(session, command);
-		REQUIRE(cancel.command.ok);
+		EXPECT_TRUE(cancel.command.ok);
 		qec::record_repeatable_operation(state, command, cancel.command);
 
 		const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-		CHECK_FALSE(repeat.ok);
-		CHECK_FALSE(repeat.changed);
-		CHECK(repeat.message == "No repeatable action is available.");
+		EXPECT_FALSE(repeat.ok);
+		EXPECT_FALSE(repeat.changed);
+		EXPECT_TRUE(repeat.message == "No repeatable action is available.");
 	}
 }
 
-TEST_CASE("repeat last action replays duplicate move transforms", "[editor-core][repeat-last]")
-{
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReplaysDuplicateMoveTransforms) {
 	qec::EditorSession session = selected_box_session();
 	const qec::Bounds3 original_bounds = session.document_bounds();
 	qec::RepeatLastActionState state;
@@ -315,17 +316,15 @@ TEST_CASE("repeat last action replays duplicate move transforms", "[editor-core]
 
 	const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-	REQUIRE(repeat.ok);
-	REQUIRE(repeat.changed);
-	CHECK(session.objects().size() == 2U);
+	EXPECT_TRUE(repeat.ok);
+	EXPECT_TRUE(repeat.changed);
+	EXPECT_TRUE(session.objects().size() == 2U);
 	const qec::Bounds3 moved_bounds = session.document_bounds();
-	CHECK(moved_bounds.max.x == Catch::Approx(original_bounds.max.x + 2.0F));
-	CHECK(session.history_status().undo_count == 1U);
+	EXPECT_NEAR(moved_bounds.max.x, original_bounds.max.x + 2.0F, 0.0001);
+	EXPECT_TRUE(session.history_status().undo_count == 1U);
 }
 
-TEST_CASE("repeat last action replays rotate and scale transforms", "[editor-core][repeat-last]")
-{
-	SECTION("rotate")
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReplaysRotateAndScaleTransformsRotate) {
 	{
 		qec::EditorSession session = selected_box_session({ -1.0F, -2.0F, -0.5F }, { 1.0F, 2.0F, 0.5F });
 		qec::RepeatLastActionState state;
@@ -333,16 +332,21 @@ TEST_CASE("repeat last action replays rotate and scale transforms", "[editor-cor
 
 		const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-		REQUIRE(repeat.ok);
-		REQUIRE(repeat.changed);
+		EXPECT_TRUE(repeat.ok);
+		EXPECT_TRUE(repeat.changed);
 		const qec::Bounds3 bounds = session.document_bounds();
-		CHECK(bounds.min.x == Catch::Approx(-2.0F));
-		CHECK(bounds.max.x == Catch::Approx(2.0F));
-		CHECK(bounds.min.y == Catch::Approx(-1.0F));
-		CHECK(bounds.max.y == Catch::Approx(1.0F));
+		EXPECT_NEAR(bounds.min.x, -2.0F, 0.0001);
+		EXPECT_NEAR(bounds.max.x, 2.0F, 0.0001);
+		EXPECT_NEAR(bounds.min.y, -1.0F, 0.0001);
+		EXPECT_NEAR(bounds.max.y, 1.0F, 0.0001);
 	}
 
-	SECTION("scale")
+	
+}
+
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionReplaysRotateAndScaleTransformsScale) {
+	
+
 	{
 		qec::EditorSession session = selected_box_session();
 		qec::RepeatLastActionState state;
@@ -350,16 +354,15 @@ TEST_CASE("repeat last action replays rotate and scale transforms", "[editor-cor
 
 		const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-		REQUIRE(repeat.ok);
-		REQUIRE(repeat.changed);
+		EXPECT_TRUE(repeat.ok);
+		EXPECT_TRUE(repeat.changed);
 		const qec::Bounds3 bounds = session.document_bounds();
-		CHECK(bounds.min.x == Catch::Approx(-2.0F));
-		CHECK(bounds.max.x == Catch::Approx(2.0F));
+		EXPECT_NEAR(bounds.min.x, -2.0F, 0.0001);
+		EXPECT_NEAR(bounds.max.x, 2.0F, 0.0001);
 	}
 }
 
-TEST_CASE("repeat last action records face extrude as current selection forward distance", "[editor-core][repeat-last]")
-{
+TEST(QdrModelingRuntimeRepeatLastActionTests, RepeatLastActionRecordsFaceExtrudeAsCurrentSelectionForwardDistance) {
 	qec::EditorSession session = selected_box_session();
 	select_first_face(session);
 	const std::size_t original_face_count = session.objects().front().document.faces.size();
@@ -372,7 +375,7 @@ TEST_CASE("repeat last action records face extrude as current selection forward 
 
 	const qec::CommandResult repeat = qec::execute_repeat_last_action(session, state);
 
-	REQUIRE(repeat.ok);
-	REQUIRE(repeat.changed);
-	CHECK(only_object(session).document.faces.size() > original_face_count);
+	EXPECT_TRUE(repeat.ok);
+	EXPECT_TRUE(repeat.changed);
+	EXPECT_TRUE(only_object(session).document.faces.size() > original_face_count);
 }

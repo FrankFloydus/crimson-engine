@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "session_internal.h"
+#include "session_internal.hpp"
 
-#include <editor/interactions/interaction_api.h>
+#include <editor/interactions/interaction_api.hpp>
 
 #include <algorithm>
 #include <optional>

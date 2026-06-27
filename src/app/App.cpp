@@ -4,14 +4,14 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "app/App.h"
+#include "app/app.hpp"
 
-#include "api/QuaderEditorApi.h"
-#include "api/QuaderApiSessionInternalAccess.h"
-#include "assets/MaterialDocument.h"
-#include "core/Logger.h"
-#include "editor/render/QuaderRenderApiRuntimeAccess.h"
-#include "platform/SdlEventUtils.h"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "assets/material_document.hpp"
+#include "core/logger.hpp"
+#include "editor/render/quader_render_api_runtime_access.hpp"
+#include "platform/sdl_event_utils.hpp"
 
 #include <SDL3/SDL.h>
 

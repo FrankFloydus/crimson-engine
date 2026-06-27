@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/session.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -790,8 +790,7 @@ void click_and_drag_pick_plans_stay_in_editor_core()
 
 } // namespace
 
-TEST_CASE("qdr_editor_core_picking_tests", "[editor-core-picking]")
-{
+TEST(QdrModelingRuntimePickingTests, QdrEditorCorePickingTests) {
 	hover_tracks_face_candidates_and_selected_feedback();
 	component_hover_preserves_candidate_on_miss();
 	component_hover_rejects_single_mesh_occluded_source_edges();

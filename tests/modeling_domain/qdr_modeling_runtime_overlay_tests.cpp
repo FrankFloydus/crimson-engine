@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/interaction_api.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -880,8 +880,7 @@ void diagnostic_edges_mark_crossing_edges()
 
 } // namespace
 
-TEST_CASE("qdr_editor_core_overlay_tests", "[editor-core-overlay]")
-{
+TEST(QdrModelingRuntimeOverlayTests, QdrEditorCoreOverlayTests) {
 	selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire();
 	selected_mesh_source_wire_uses_source_color_in_component_mode();
 	selected_component_does_not_cut_holes_in_active_mesh_source_wire();

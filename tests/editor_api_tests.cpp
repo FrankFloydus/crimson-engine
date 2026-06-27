@@ -4,17 +4,17 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "api/QuaderEditorApi.h"
-#include "api/QuaderApiSessionInternalAccess.h"
-#include "assets/MaterialDocument.h"
-#include "assets/MeshAsset.h"
-#include "editor/input/QuaderKeybindingService.h"
-#include "editor/input/ViewportInputBindingAdapter.h"
-#include "editor/modeling/services/ModelingSessionService.h"
-#include "scene/Components.h"
-#include "scene/document/ProjectSession.h"
-#include "ui/ViewportShortcutController.h"
-#include "viewport/HostViewportContractAdapter.h"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "assets/material_document.hpp"
+#include "assets/mesh_asset.hpp"
+#include "editor/input/quader_keybinding_service.hpp"
+#include "editor/input/viewport_input_binding_adapter.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "scene/components.hpp"
+#include "scene/document/project_session.hpp"
+#include "ui/viewport_shortcut_controller.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <gtest/gtest.h>
 

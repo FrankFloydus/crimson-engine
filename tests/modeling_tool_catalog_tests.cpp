@@ -4,24 +4,24 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/commands/ModelingCommandToolCatalog.h"
+#include "editor/commands/modeling_command_tool_catalog.hpp"
 
-#include "editor/commands/ActivateViewportToolActionTool.h"
-#include "editor/commands/CustomInstantCommandTool.h"
-#include "editor/commands/ModelingCommandDispatcher.h"
-#include "editor/commands/RuntimeCommandTool.h"
-#include "editor/commands/ContextOperationCommandTool.h"
-#include "editor/commands/InstantOperationCommandTool.h"
-#include "editor/commands/PreviewOperationCommandTool.h"
-#include "editor/commands/modeling/AssignMaterialTool.h"
-#include "editor/commands/modeling/DeleteSelectionTool.h"
-#include "editor/commands/modeling/FlipHorizontalTool.h"
-#include "editor/commands/modeling/MirrorSelectionTool.h"
-#include "editor/commands/modeling/SelectAllTool.h"
-#include "editor/modeling/services/ModelingInstantOperationCatalog.h"
-#include "support/GuardrailFileScan.h"
+#include "editor/commands/activate_viewport_tool_action_tool.hpp"
+#include "editor/commands/custom_instant_command_tool.hpp"
+#include "editor/commands/modeling_command_dispatcher.hpp"
+#include "editor/commands/runtime_command_tool.hpp"
+#include "editor/commands/context_operation_command_tool.hpp"
+#include "editor/commands/instant_operation_command_tool.hpp"
+#include "editor/commands/preview_operation_command_tool.hpp"
+#include "editor/commands/modeling/assign_material_tool.hpp"
+#include "editor/commands/modeling/delete_selection_tool.hpp"
+#include "editor/commands/modeling/flip_horizontal_tool.hpp"
+#include "editor/commands/modeling/mirror_selection_tool.hpp"
+#include "editor/commands/modeling/select_all_tool.hpp"
+#include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
+#include "support/guardrail_file_scan.hpp"
 
-#include <editor/metadata/host_contract.h>
+#include <editor/metadata/host_contract.hpp>
 
 #include <gtest/gtest.h>
 
@@ -241,7 +241,7 @@ TEST(ModelingToolCatalogTests, DispatcherUsesCatalogAndHistoryPolicy) {
 
 TEST(ModelingToolCatalogTests, HostActionCommandToolsAreDerivedFromActionCatalog) {
     const std::filesystem::path root = sourceRoot();
-    const std::string source = readSourceFile(root / "src" / "editor" / "commands" / "ModelingCommandToolCatalog.cpp");
+    const std::string source = readSourceFile(root / "src" / "editor" / "commands" / "modeling_command_tool_catalog.cpp");
 
     EXPECT_NE(source.find("quader_host_contract::action_catalog()"), std::string::npos);
     EXPECT_NE(source.find("instantOperationCatalogOwnsActionId("), std::string::npos);

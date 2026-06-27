@@ -4,14 +4,14 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
-#include <diagnostics/profile.h>
+#include <diagnostics/profile.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_mesh_internal.h>
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.h>
+#include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 namespace quader_poly {
 

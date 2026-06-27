@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/metadata/host_contract.h>
+#include <editor/metadata/host_contract.hpp>
 
 #include <fstream>
 #include <string>
@@ -19,7 +19,7 @@ namespace {
 std::string read_host_contract_header()
 {
 	std::ifstream stream(QUADER_HOST_CONTRACT_HEADER_PATH);
-	REQUIRE(stream.good());
+	EXPECT_TRUE(stream.good());
 	return std::string(
 		std::istreambuf_iterator<char>(stream),
 		std::istreambuf_iterator<char>());
@@ -28,7 +28,7 @@ std::string read_host_contract_header()
 std::string read_host_contract_source()
 {
 	std::ifstream stream(QUADER_HOST_CONTRACT_SOURCE_PATH);
-	REQUIRE(stream.good());
+	EXPECT_TRUE(stream.good());
 	return std::string(
 		std::istreambuf_iterator<char>(stream),
 		std::istreambuf_iterator<char>());
@@ -41,8 +41,7 @@ bool has_token(const std::string &text, const std::string &token)
 
 } // namespace
 
-TEST_CASE("host contract public API stays descriptor-only", "[host-contract]")
-{
+TEST(QdrEditorMetadataSurfaceTests, HostContractPublicAPIStaysDescriptorOnly) {
 	static_assert(std::is_trivially_copyable_v<qhc::HostOptionDescriptor>);
 	static_assert(std::is_trivially_copyable_v<qhc::HostOperationDescriptor>);
 	static_assert(std::is_trivially_copyable_v<qhc::HostActionAvailabilityDescriptor>);
@@ -81,22 +80,22 @@ TEST_CASE("host contract public API stays descriptor-only", "[host-contract]")
 	const std::string legacy_bridge_prefix = std::string("qdr_") + "un" + "ity";
 	const std::string legacy_engine_namespace = std::string("Un") + "ityEngine";
 
-	CHECK(header.find("operation_command") == std::string::npos);
-	CHECK(header.find("runtime_command") == std::string::npos);
-	CHECK(header.find("EditorOperationCommand") == std::string::npos);
-	CHECK(header.find("EditorRuntimeCommand") == std::string::npos);
-	CHECK(header.find(legacy_export_macro) == std::string::npos);
-	CHECK(header.find(legacy_bridge_prefix) == std::string::npos);
-	CHECK(header.find("execute") == std::string::npos);
-	CHECK(header.find("dispatch") == std::string::npos);
-	CHECK(header.find("payload") == std::string::npos);
-	CHECK_FALSE(has_token(header, std::string("Open") + "Mesh"));
-	CHECK_FALSE(has_token(header, std::string("gte") + "::"));
+	EXPECT_TRUE(header.find("operation_command") == std::string::npos);
+	EXPECT_TRUE(header.find("runtime_command") == std::string::npos);
+	EXPECT_TRUE(header.find("EditorOperationCommand") == std::string::npos);
+	EXPECT_TRUE(header.find("EditorRuntimeCommand") == std::string::npos);
+	EXPECT_TRUE(header.find(legacy_export_macro) == std::string::npos);
+	EXPECT_TRUE(header.find(legacy_bridge_prefix) == std::string::npos);
+	EXPECT_TRUE(header.find("execute") == std::string::npos);
+	EXPECT_TRUE(header.find("dispatch") == std::string::npos);
+	EXPECT_TRUE(header.find("payload") == std::string::npos);
+	EXPECT_FALSE(has_token(header, std::string("Open") + "Mesh"));
+	EXPECT_FALSE(has_token(header, std::string("gte") + "::"));
 
 	const std::string source = read_host_contract_source();
-	CHECK(source.find("EditorPrefs") == std::string::npos);
-	CHECK(source.find("QVertexWorks.Quader") == std::string::npos);
-	CHECK(source.find(legacy_engine_namespace) == std::string::npos);
-	CHECK(source.find("QuaderViewportSettingsState") == std::string::npos);
-	CHECK(source.find("DllImport") == std::string::npos);
+	EXPECT_TRUE(source.find("EditorPrefs") == std::string::npos);
+	EXPECT_TRUE(source.find("QVertexWorks.Quader") == std::string::npos);
+	EXPECT_TRUE(source.find(legacy_engine_namespace) == std::string::npos);
+	EXPECT_TRUE(source.find("QuaderViewportSettingsState") == std::string::npos);
+	EXPECT_TRUE(source.find("DllImport") == std::string::npos);
 }

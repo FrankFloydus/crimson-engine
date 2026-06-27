@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <algorithm>
 #include <map>
@@ -76,19 +76,19 @@ std::map<std::pair<ElementId, ElementId>, int> edge_counts(const Document& docum
 
 void check_closed_manifold(const Document& document)
 {
-	REQUIRE_FALSE(document.faces.empty());
+	EXPECT_FALSE(document.faces.empty());
 	for (const auto& [edge, count] : edge_counts(document)) {
 		(void)edge;
-		CHECK(count == 2);
+		EXPECT_TRUE(count == 2);
 	}
-	CHECK_FALSE(quader_poly::compile_document(document).indices.empty());
+	EXPECT_FALSE(quader_poly::compile_document(document).indices.empty());
 }
 
 const Face* selected_cap_face(const Document& document, const quader_poly::Selection& selection)
 {
-	REQUIRE(selection.faces.size() == 1U);
+	EXPECT_TRUE(selection.faces.size() == 1U);
 	const Face* face = quader_poly::find_face(document, selection.faces.front());
-	REQUIRE(face != nullptr);
+	EXPECT_TRUE(face != nullptr);
 	return face;
 }
 
@@ -127,107 +127,111 @@ Document two_cube_document()
 
 } // namespace
 
-TEST_CASE("plane cut splits a cube and keeps both closed halves", "[operation][plane_cut]")
-{
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSplitsACubeAndKeepsBothClosedHalves) {
 	Document document = quader_poly::make_cube({});
 	set_all_material_slots(document, 7);
 
 	const PlaneCutResult result = quader_poly::plane_cut(document, center_x_cut(PlaneCutMode::keep_both));
-	REQUIRE(result.changed);
-	CHECK(result.split_count == 1);
-	CHECK(result.removed_count == 0);
-	CHECK(cap_face_count(result.front_selection) == 1);
-	CHECK(cap_face_count(result.back_selection) == 1);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(result.split_count == 1);
+	EXPECT_TRUE(result.removed_count == 0);
+	EXPECT_TRUE(cap_face_count(result.front_selection) == 1);
+	EXPECT_TRUE(cap_face_count(result.back_selection) == 1);
 	check_closed_manifold(result.front_document);
 	check_closed_manifold(result.back_document);
 
 	const ElementId front_cap_id = result.front_selection.faces.front();
 	const Face* front_cap = quader_poly::find_face(result.front_document, front_cap_id);
-	REQUIRE(front_cap != nullptr);
-	CHECK(front_cap->material_slot == 7);
-	CHECK(dot(face_normal(result.front_document, *front_cap), quader::QVec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
+	EXPECT_TRUE(front_cap != nullptr);
+	EXPECT_TRUE(front_cap->material_slot == 7);
+	EXPECT_TRUE(dot(face_normal(result.front_document, *front_cap), quader::QVec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
 
 	const Face* back_cap = selected_cap_face(result.back_document, result.back_selection);
-	CHECK(dot(face_normal(result.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
+	EXPECT_TRUE(dot(face_normal(result.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
 }
 
-TEST_CASE("plane cut supports destructive front and back modes", "[operation][plane_cut]")
-{
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsDestructiveFrontAndBackModes) {
 	Document document = quader_poly::make_cube({});
 
 	// PlaneCutOperation is still a translation-unit-local concrete type with no public factory,
 	// so this pins the stable single-document replacement data consumed by its apply() path.
 	const PlaneCutResult front = quader_poly::plane_cut(document, center_x_cut(PlaneCutMode::keep_front));
-	REQUIRE(front.changed);
-	CHECK(front.removed_count == 1);
-	CHECK(front.front_selection.mode == quader_poly::SelectionMode::face);
+	EXPECT_TRUE(front.changed);
+	EXPECT_TRUE(front.removed_count == 1);
+	EXPECT_TRUE(front.front_selection.mode == quader_poly::SelectionMode::face);
 	check_closed_manifold(front.front_document);
 	check_closed_manifold(front.back_document);
 	const Face* front_cap = selected_cap_face(front.front_document, front.front_selection);
-	CHECK(dot(face_normal(front.front_document, *front_cap), quader::QVec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
+	EXPECT_TRUE(dot(face_normal(front.front_document, *front_cap), quader::QVec3 { -1.0F, 0.0F, 0.0F }) > 0.9F);
 
 	const PlaneCutResult back = quader_poly::plane_cut(document, center_x_cut(PlaneCutMode::keep_back));
-	REQUIRE(back.changed);
-	CHECK(back.removed_count == 1);
-	CHECK(back.back_selection.mode == quader_poly::SelectionMode::face);
+	EXPECT_TRUE(back.changed);
+	EXPECT_TRUE(back.removed_count == 1);
+	EXPECT_TRUE(back.back_selection.mode == quader_poly::SelectionMode::face);
 	check_closed_manifold(back.front_document);
 	check_closed_manifold(back.back_document);
 	const Face* back_cap = selected_cap_face(back.back_document, back.back_selection);
-	CHECK(dot(face_normal(back.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
+	EXPECT_TRUE(dot(face_normal(back.back_document, *back_cap), quader::QVec3 { 1.0F, 0.0F, 0.0F }) > 0.9F);
 }
 
-TEST_CASE("plane cut creates valid caps for tilted planes", "[operation][plane_cut]")
-{
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutCreatesValidCapsForTiltedPlanes) {
 	Document document = quader_poly::make_cube({});
 
 	const PlaneCutResult result = quader_poly::plane_cut(document, tilted_cut(PlaneCutMode::keep_both));
-	REQUIRE(result.changed);
-	REQUIRE(cap_face_count(result.front_selection) == 1);
-	REQUIRE(cap_face_count(result.back_selection) == 1);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(cap_face_count(result.front_selection) == 1);
+	EXPECT_TRUE(cap_face_count(result.back_selection) == 1);
 	check_closed_manifold(result.front_document);
 	check_closed_manifold(result.back_document);
 }
 
-TEST_CASE("plane cut supports cuts through existing vertices", "[operation][plane_cut]")
-{
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsCutsThroughExistingVertices) {
 	Document document = quader_poly::make_cube({});
 
 	const PlaneCutResult result = quader_poly::plane_cut(document, corner_on_vertex_cut(PlaneCutMode::keep_both));
-	REQUIRE(result.changed);
-	CHECK(cap_face_count(result.front_selection) == 1);
-	CHECK(cap_face_count(result.back_selection) == 1);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(cap_face_count(result.front_selection) == 1);
+	EXPECT_TRUE(cap_face_count(result.back_selection) == 1);
 	check_closed_manifold(result.front_document);
 	check_closed_manifold(result.back_document);
 
 	const Face* front_cap = selected_cap_face(result.front_document, result.front_selection);
 	const Face* back_cap = selected_cap_face(result.back_document, result.back_selection);
-	CHECK(front_cap->vertices.size() == 3U);
-	CHECK(back_cap->vertices.size() == 3U);
+	EXPECT_TRUE(front_cap->vertices.size() == 3U);
+	EXPECT_TRUE(back_cap->vertices.size() == 3U);
 }
 
-TEST_CASE("plane cut supports multiple simple cap loops in one closed document", "[operation][plane_cut]")
-{
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutSupportsMultipleSimpleCapLoopsInOneClosedDocument) {
 	Document document = two_cube_document();
 
 	const PlaneCutResult result = quader_poly::plane_cut(document, center_x_cut(PlaneCutMode::keep_both));
-	REQUIRE(result.changed);
-	CHECK(cap_face_count(result.front_selection) == 2);
-	CHECK(cap_face_count(result.back_selection) == 2);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(cap_face_count(result.front_selection) == 2);
+	EXPECT_TRUE(cap_face_count(result.back_selection) == 2);
 	check_closed_manifold(result.front_document);
 	check_closed_manifold(result.back_document);
 }
 
-TEST_CASE("plane cut rejects invalid inputs and unsupported meshes", "[operation][plane_cut]")
-{
-	SECTION("open mesh")
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesOpenMesh) {
 	{
 		Document plane = quader_poly::make_plane({});
 		const PlaneCutResult result = quader_poly::plane_cut(plane, center_x_cut(PlaneCutMode::keep_both));
-		CHECK_FALSE(result.changed);
-		CHECK(result.message.find("closed manifold") != std::string::npos);
+		EXPECT_FALSE(result.changed);
+		EXPECT_TRUE(result.message.find("closed manifold") != std::string::npos);
 	}
 
-	SECTION("degenerate plane")
+	
+
+	
+
+	
+
+	
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesDegeneratePlane) {
+	
+
 	{
 		Document cube = quader_poly::make_cube({});
 		const PlaneCutResult result = quader_poly::plane_cut(cube, {
@@ -236,11 +240,22 @@ TEST_CASE("plane cut rejects invalid inputs and unsupported meshes", "[operation
 			{ 2.0F, 0.0F, 0.0F },
 			PlaneCutMode::keep_both,
 		});
-		CHECK_FALSE(result.changed);
-		CHECK(result.message.find("non-collinear") != std::string::npos);
+		EXPECT_FALSE(result.changed);
+		EXPECT_TRUE(result.message.find("non-collinear") != std::string::npos);
 	}
 
-	SECTION("no interior intersection")
+	
+
+	
+
+	
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesNoInteriorIntersection) {
+	
+
+	
+
 	{
 		Document cube = quader_poly::make_cube({});
 		const PlaneCutResult result = quader_poly::plane_cut(cube, {
@@ -249,11 +264,22 @@ TEST_CASE("plane cut rejects invalid inputs and unsupported meshes", "[operation
 			{ 3.0F, -1.0F, 1.0F },
 			PlaneCutMode::keep_both,
 		});
-		CHECK_FALSE(result.changed);
-		CHECK(result.message.find("interior") != std::string::npos);
+		EXPECT_FALSE(result.changed);
+		EXPECT_TRUE(result.message.find("interior") != std::string::npos);
 	}
 
-	SECTION("cut plane lies on an existing face")
+	
+
+	
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesCutPlaneLiesOnAnExistingFace) {
+	
+
+	
+
+	
+
 	{
 		Document cube = quader_poly::make_cube({});
 		const PlaneCutResult result = quader_poly::plane_cut(cube, {
@@ -262,15 +288,26 @@ TEST_CASE("plane cut rejects invalid inputs and unsupported meshes", "[operation
 			{ 1.0F, -1.0F, 1.0F },
 			PlaneCutMode::keep_both,
 		});
-		CHECK_FALSE(result.changed);
-		CHECK(result.message.find("existing face") != std::string::npos);
+		EXPECT_FALSE(result.changed);
+		EXPECT_TRUE(result.message.find("existing face") != std::string::npos);
 	}
 
-	SECTION("cut plane follows existing edges")
+	
+}
+
+TEST(QdrDocumentOperationPlaneCutTests, PlaneCutRejectsInvalidInputsAndUnsupportedMeshesCutPlaneFollowsExistingEdges) {
+	
+
+	
+
+	
+
+	
+
 	{
 		Document cube = quader_poly::make_cube({});
 		const PlaneCutResult result = quader_poly::plane_cut(cube, diagonal_on_existing_edges_cut(PlaneCutMode::keep_both));
-		CHECK_FALSE(result.changed);
-		CHECK_FALSE(result.message.empty());
+		EXPECT_FALSE(result.changed);
+		EXPECT_FALSE(result.message.empty());
 	}
 }

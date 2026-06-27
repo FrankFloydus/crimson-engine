@@ -4,19 +4,19 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "api/QuaderEditorApi.h"
-#include "api/QuaderApiSessionInternalAccess.h"
-#include "editor/tools/ViewportTool.h"
-#include "editor/viewport/ViewportInteractionController.h"
-#include "render/ViewportOverlayPolicy.h"
-#include "render/overlay/ViewportBoxOverlayBuilder.h"
-#include "render/overlay/ViewportSelectionMarqueeOverlayBuilder.h"
-#include "render/overlay/ViewportTransformGizmoOverlayBuilder.h"
-#include "scene/document/ProjectSession.h"
-#include "viewport/ViewportCameraAdapter.h"
-#include "viewport/ViewportCameraController.h"
-#include "viewport/ViewportInputRouter.h"
-#include "viewport/ViewportSettings.h"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "editor/tools/viewport_tool.hpp"
+#include "editor/viewport/viewport_interaction_controller.hpp"
+#include "render/viewport_overlay_policy.hpp"
+#include "render/overlay/viewport_box_overlay_builder.hpp"
+#include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
+#include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
+#include "scene/document/project_session.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
+#include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_input_router.hpp"
+#include "viewport/viewport_settings.hpp"
 
 #include <gtest/gtest.h>
 

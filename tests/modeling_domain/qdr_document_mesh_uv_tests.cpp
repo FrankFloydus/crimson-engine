@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <array>
 #include <cmath>
@@ -97,8 +97,7 @@ void align_face_operation_keeps_compile_output_renderable()
 
 } // namespace
 
-TEST_CASE("qdr_document_mesh_uv_tests", "[document-mesh-uv]")
-{
+TEST(QdrDocumentMeshUvTests, QdrDocumentMeshUvTests) {
     compile_document_preserves_loop_uvs_material_slots_and_normals();
     generated_uvs_and_translation_shift_share_document_helper_boundary();
     align_face_operation_keeps_compile_output_renderable();

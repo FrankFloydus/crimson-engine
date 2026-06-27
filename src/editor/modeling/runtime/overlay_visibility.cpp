@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/overlay_visibility.h>
+#include <editor/interactions/overlay_visibility.hpp>
 
-#include <diagnostics/profile.h>
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/viewport_projection.h>
-#include <mesh/geometry/geometry.h>
+#include <diagnostics/profile.hpp>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/viewport_projection.hpp>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <limits>

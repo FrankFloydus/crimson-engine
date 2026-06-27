@@ -4,13 +4,13 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/editor_tool.h>
-#include <editor/interactions/selection_box.h>
-#include <editor/interactions/selection_edit.h>
+#include <editor/modeling/runtime/editor_tool.hpp>
+#include <editor/interactions/selection_box.hpp>
+#include <editor/interactions/selection_edit.hpp>
 
-#include "tool_math_internal.h"
+#include "tool_math_internal.hpp"
 
-#include <mesh/geometry/geometry.h>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

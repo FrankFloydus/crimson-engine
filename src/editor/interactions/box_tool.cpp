@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/box_tool.h>
-#include <editor/modeling/runtime/editor_tool.h>
-#include <editor/interactions/tool_drag_math.h>
-#include "tool_math_internal.h"
+#include <editor/interactions/box_tool.hpp>
+#include <editor/modeling/runtime/editor_tool.hpp>
+#include <editor/interactions/tool_drag_math.hpp>
+#include "tool_math_internal.hpp"
 
-#include <mesh/geometry/geometry.h>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>

@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/modeling/runtime/session_internal.h"
+#include "editor/modeling/runtime/session_internal.hpp"
 
-#include <diagnostics/profile.h>
-#include <editor/modeling/runtime/editor_runtime.h>
-#include <editor/interactions/interaction_api.h>
+#include <diagnostics/profile.hpp>
+#include <editor/modeling/runtime/editor_runtime.hpp>
+#include <editor/interactions/interaction_api.hpp>
 
 #include <algorithm>
 #include <cmath>

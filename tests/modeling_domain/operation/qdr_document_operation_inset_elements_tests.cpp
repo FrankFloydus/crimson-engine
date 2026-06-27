@@ -4,12 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 using namespace quader_poly;
 
-TEST_CASE("inset selected edge elements transforms a copied edge into a new face strip", "[operation][inset_elements]")
-{
+TEST(QdrDocumentOperationInsetElementsTests, InsetSelectedEdgeElementsTransformsACopiedEdgeIntoANewFaceStrip) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	const Edge source = make_edge(fixture.bottom_left, fixture.bottom_right);
 	Selection selection = qdr_test::edge_selection({ source }, source);
@@ -18,9 +17,9 @@ TEST_CASE("inset selected edge elements transforms a copied edge into a new face
 
 	const OperationResult result = inset_selected_elements(fixture.document, selection, transform, {});
 
-	REQUIRE(result.changed);
-	REQUIRE(selection.mode == SelectionMode::edge);
-	REQUIRE(selection.edges.size() == 1U);
-	REQUIRE(fixture.document.faces.size() == 2U);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(selection.mode == SelectionMode::edge);
+	EXPECT_TRUE(selection.edges.size() == 1U);
+	EXPECT_TRUE(fixture.document.faces.size() == 2U);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }

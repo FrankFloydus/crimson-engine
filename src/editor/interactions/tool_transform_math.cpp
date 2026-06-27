@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/tool_transform_math.h>
+#include <editor/interactions/tool_transform_math.hpp>
 
-#include "tool_math_internal.h"
+#include "tool_math_internal.hpp"
 
 #include <algorithm>
 #include <cmath>

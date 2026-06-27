@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_mesh_internal.h>
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_uv_helpers.h>
+#include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_uv_helpers.hpp>
 
 #include <map>
 #include <utility>

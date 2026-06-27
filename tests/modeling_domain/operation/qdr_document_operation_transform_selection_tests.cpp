@@ -4,13 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 using namespace quader_poly;
 
-TEST_CASE("transform selection applies the supplied transform to selected vertices", "[operation][transform_selection]")
-{
-	SECTION("face selections scale all referenced vertices")
+TEST(QdrDocumentOperationTransformSelectionTests, TransformSelectionAppliesTheSuppliedTransformToSelectedVerticesFaceSelectionsScaleAllReferencedVertices) {
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
@@ -21,13 +19,20 @@ TEST_CASE("transform selection applies the supplied transform to selected vertic
 
 		const OperationResult result = transform_selection(fixture.document, selection, transform);
 
-		REQUIRE(result.changed);
-		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_left)->position, { -2.0F, -3.0F, 0.0F }));
-		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.top_right)->position, { 2.0F, 3.0F, 0.0F }));
-		REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+		EXPECT_TRUE(result.changed);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_left)->position, { -2.0F, -3.0F, 0.0F }));
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.top_right)->position, { 2.0F, 3.0F, 0.0F }));
+		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 	}
 
-	SECTION("edge selections transform only the edge endpoints")
+	
+
+	
+}
+
+TEST(QdrDocumentOperationTransformSelectionTests, TransformSelectionAppliesTheSuppliedTransformToSelectedVerticesEdgeSelectionsTransformOnlyTheEdgeEndpoints) {
+	
+
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		const quader::QVec3 unselected_before = find_vertex(fixture.document, fixture.top_right)->position;
@@ -39,13 +44,20 @@ TEST_CASE("transform selection applies the supplied transform to selected vertic
 
 		const OperationResult result = transform_selection(fixture.document, selection, transform);
 
-		REQUIRE(result.changed);
-		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_left)->position, { 4.0F, -1.0F, 0.0F }));
-		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_right)->position, { 6.0F, -1.0F, 0.0F }));
-		REQUIRE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.top_right)->position, unselected_before));
+		EXPECT_TRUE(result.changed);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_left)->position, { 4.0F, -1.0F, 0.0F }));
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.bottom_right)->position, { 6.0F, -1.0F, 0.0F }));
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(find_vertex(fixture.document, fixture.top_right)->position, unselected_before));
 	}
 
-	SECTION("empty selections report no mutation")
+	
+}
+
+TEST(QdrDocumentOperationTransformSelectionTests, TransformSelectionAppliesTheSuppliedTransformToSelectedVerticesEmptySelectionsReportNoMutation) {
+	
+
+	
+
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		Selection selection;
@@ -53,7 +65,7 @@ TEST_CASE("transform selection applies the supplied transform to selected vertic
 
 		const OperationResult result = transform_selection(fixture.document, selection, {});
 
-		REQUIRE_FALSE(result.changed);
-		REQUIRE(result.message == "No polygon elements are selected.");
+		EXPECT_FALSE(result.changed);
+		EXPECT_TRUE(result.message == "No polygon elements are selected.");
 	}
 }

@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/operations/operation_registry.h>
-#include <editor/metadata/host_contract.h>
+#include <editor/modeling/operations/operation_registry.hpp>
+#include <editor/metadata/host_contract.hpp>
 
 #include <string_view>
 
@@ -23,31 +23,29 @@ bool same_text(std::string_view left, std::string_view right)
 
 } // namespace
 
-TEST_CASE("host contract operation catalog mirrors editor-core registry identity", "[host-contract]")
-{
+TEST(QdrEditorMetadataOperationCatalogTests, HostContractOperationCatalogMirrorsEditorCoreRegistryIdentity) {
 	const std::span<const qhc::HostOperationDescriptor> descriptors = qhc::operation_catalog();
 	const std::span<const qec::EditorOperationRegistryEntry> registry_entries =
 		qec::operation_registry().entries();
 
-	REQUIRE(descriptors.size() == registry_entries.size());
+	EXPECT_TRUE(descriptors.size() == registry_entries.size());
 
 	for (const qec::EditorOperationRegistryEntry& entry : registry_entries) {
 		const qhc::HostOperationDescriptor *descriptor = qhc::find_operation_descriptor(entry.id);
-		REQUIRE(descriptor != nullptr);
-		CHECK(same_text(descriptor->id, entry.id));
-		CHECK(same_text(descriptor->label, entry.operation->label()));
-		CHECK(descriptor->supports_preview == entry.operation->supports_preview());
+		EXPECT_TRUE(descriptor != nullptr);
+		EXPECT_TRUE(same_text(descriptor->id, entry.id));
+		EXPECT_TRUE(same_text(descriptor->label, entry.operation->label()));
+		EXPECT_TRUE(descriptor->supports_preview == entry.operation->supports_preview());
 	}
 }
 
-TEST_CASE("host contract operation catalog is descriptor-only metadata", "[host-contract]")
-{
+TEST(QdrEditorMetadataOperationCatalogTests, HostContractOperationCatalogIsDescriptorOnlyMetadata) {
 	for (const qhc::HostOperationDescriptor& descriptor : qhc::operation_catalog()) {
-		CHECK_FALSE(descriptor.id.empty());
-		CHECK_FALSE(descriptor.label.empty());
+		EXPECT_FALSE(descriptor.id.empty());
+		EXPECT_FALSE(descriptor.label.empty());
 		for (const qhc::HostOptionDescriptor& option : descriptor.options) {
-			CHECK_FALSE(option.id.empty());
-			CHECK_FALSE(option.label.empty());
+			EXPECT_FALSE(option.id.empty());
+			EXPECT_FALSE(option.label.empty());
 		}
 	}
 }

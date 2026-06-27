@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/transform_gizmo.h>
-#include <editor/interactions/tool_drag_math.h>
-#include <editor/interactions/tool_transform_math.h>
-#include <editor/modeling/runtime/tool_constants.h>
-#include <diagnostics/profile.h>
-#include <mesh/geometry/geometry.h>
+#include <editor/interactions/transform_gizmo.hpp>
+#include <editor/interactions/tool_drag_math.hpp>
+#include <editor/interactions/tool_transform_math.hpp>
+#include <editor/modeling/runtime/tool_constants.hpp>
+#include <diagnostics/profile.hpp>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

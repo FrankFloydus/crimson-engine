@@ -40,52 +40,52 @@ if(QUADER_BUILD_TESTS)
 endif()
 
 set(QUADER_MODELING_TOOL_SOURCES
-    src/editor/commands/ModelingCommandDispatcher.cpp
-    src/editor/commands/ModelingCommandToolCatalog.cpp
-    src/editor/commands/modeling/AssignMaterialTool.cpp
-    src/editor/commands/modeling/ClearSelectionTool.cpp
-    src/editor/commands/modeling/CommitBoxPreviewCommand.cpp
-    src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp
-    src/editor/commands/modeling/DeleteSelectionTool.cpp
-    src/editor/commands/modeling/CopySelectionTool.cpp
-    src/editor/commands/modeling/FlipHorizontalTool.cpp
-    src/editor/commands/modeling/FlipVerticalTool.cpp
-    src/editor/commands/modeling/InvertSelectionTool.cpp
-    src/editor/commands/modeling/MirrorSelectionTool.cpp
-    src/editor/commands/modeling/PasteSelectionTool.cpp
-    src/editor/commands/modeling/RepeatLastActionTool.cpp
-    src/editor/commands/modeling/SelectAllTool.cpp
+    src/editor/commands/modeling_command_dispatcher.cpp
+    src/editor/commands/modeling_command_tool_catalog.cpp
+    src/editor/commands/modeling/assign_material_tool.cpp
+    src/editor/commands/modeling/clear_selection_tool.cpp
+    src/editor/commands/modeling/commit_box_preview_command.cpp
+    src/editor/commands/modeling/scene_aware_delete_selection_command.cpp
+    src/editor/commands/modeling/delete_selection_tool.cpp
+    src/editor/commands/modeling/copy_selection_tool.cpp
+    src/editor/commands/modeling/flip_horizontal_tool.cpp
+    src/editor/commands/modeling/flip_vertical_tool.cpp
+    src/editor/commands/modeling/invert_selection_tool.cpp
+    src/editor/commands/modeling/mirror_selection_tool.cpp
+    src/editor/commands/modeling/paste_selection_tool.cpp
+    src/editor/commands/modeling/repeat_last_action_tool.cpp
+    src/editor/commands/modeling/select_all_tool.cpp
 )
 
 set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
-    src/editor/tools/ViewportTool.cpp
-    src/editor/tools/ViewportToolRuntime.cpp
-    src/editor/tools/base/DragCommitTool.cpp
-    src/editor/tools/base/DrawnPlaneTool.cpp
-    src/editor/tools/base/ModalViewportTool.cpp
-    src/editor/tools/base/PointSequenceTool.cpp
-    src/editor/tools/base/TwoStageBoxTool.cpp
-    src/editor/tools/base/ViewportToolCatalog.cpp
+    src/editor/tools/viewport_tool.cpp
+    src/editor/tools/viewport_tool_runtime.cpp
+    src/editor/tools/base/drag_commit_tool.cpp
+    src/editor/tools/base/drawn_plane_tool.cpp
+    src/editor/tools/base/modal_viewport_tool.cpp
+    src/editor/tools/base/point_sequence_tool.cpp
+    src/editor/tools/base/two_stage_box_tool.cpp
+    src/editor/tools/base/viewport_tool_catalog.cpp
 )
 
 include(cmake/QuaderModeling.cmake)
 
 add_library(quader_modeling STATIC
-    src/editor/projection/MeshProjectionService.cpp
-    src/editor/projection/PickingCacheProjection.cpp
-    src/editor/projection/SelectionOverlayProjection.cpp
-    src/editor/selection/SelectionProjectionService.cpp
-    src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp
-    src/editor/modeling/services/ModelingActionCatalog.cpp
-    src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp
-    src/editor/modeling/services/ModelingInstantOperationCatalog.cpp
-    src/editor/modeling/services/ModelingMeshSyncService.cpp
-    src/editor/modeling/services/ModelingOperationSettings.cpp
-    src/editor/modeling/services/ModelingSessionServices.cpp
-    src/editor/modeling/services/ModelingSessionService.cpp
-    src/editor/modeling/preview/TransformPreviewService.cpp
-    src/editor/modeling/runtime_state/ModalToolRuntime.cpp
-    src/editor/modeling/runtime_state/TransformDragController.cpp
+    src/editor/projection/mesh_projection_service.cpp
+    src/editor/projection/picking_cache_projection.cpp
+    src/editor/projection/selection_overlay_projection.cpp
+    src/editor/selection/selection_projection_service.cpp
+    src/editor/modeling/runtime/modeling_object_runtime_map.cpp
+    src/editor/modeling/services/modeling_action_catalog.cpp
+    src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp
+    src/editor/modeling/services/modeling_instant_operation_catalog.cpp
+    src/editor/modeling/services/modeling_mesh_sync_service.cpp
+    src/editor/modeling/services/modeling_operation_settings.cpp
+    src/editor/modeling/services/modeling_session_services.cpp
+    src/editor/modeling/services/modeling_session_service.cpp
+    src/editor/modeling/preview/transform_preview_service.cpp
+    src/editor/modeling/runtime_state/modal_tool_runtime.cpp
+    src/editor/modeling/runtime_state/transform_drag_controller.cpp
     ${QUADER_MODELING_TOOL_SOURCES}
 )
 
@@ -104,53 +104,53 @@ target_link_libraries(quader_modeling
 )
 
 add_library(quader_core STATIC
-    src/assets/AssetRegistry.cpp
-    src/assets/BakeService.cpp
-    src/assets/MaterialDocument.cpp
-    src/core/LocalizationService.cpp
-    src/core/Logger.cpp
-    src/core/QStr.cpp
-    src/core/UndoRedoManager.cpp
-    src/editor/commands/DocumentCommandService.cpp
-    src/scene/document/ProjectDocument.cpp
-    src/scene/document/ProjectSession.cpp
-    src/editor/history/EditorHistoryService.cpp
-    src/editor/commands/ModelingCommandExecutionService.cpp
-    src/editor/selection/EditorSelectionService.cpp
-    src/io/qdr/QdrDocumentReader.cpp
-    src/io/qdr/QdrDocumentWriter.cpp
-    src/scene/SceneBounds.cpp
-    src/scene/SceneDocument.cpp
-    src/ui/ConsoleModel.cpp
-    src/ui/backends/rml/MainLayoutRmlBuilder.cpp
-    src/ui/backends/rml/RmlMarkupWriter.cpp
-    src/ui/components/atoms/UIButtonComponent.cpp
-    src/ui/components/atoms/UIChromeButtonComponent.cpp
-    src/ui/components/atoms/UIToolbarButtonComponent.cpp
-    src/ui/components/common/DockLayoutModel.cpp
-    src/ui/components/common/UITabRailComponent.cpp
-    src/ui/components/common/UITabStripModel.cpp
-    src/ui/components/organisms/MainLayoutModel.cpp
-    src/ui/components/organisms/ModelingModeShelfComponent.cpp
-    src/ui/components/organisms/WindowChromeControlsComponent.cpp
-    src/ui/core/UIClassList.cpp
-    src/ui/core/UIElement.cpp
-    src/ui/core/UIIconRegistry.cpp
-    src/ui/controllers/MainLayoutController.cpp
-    src/ui/controllers/MainLayoutDockDragController.cpp
-    src/ui/controllers/MainLayoutDockHitRegionBuilder.cpp
-    src/ui/controllers/MainLayoutSashRegistry.cpp
-    src/ui/controllers/ResizableSplitController.cpp
-    src/ui/controllers/UIDragDropController.cpp
-    src/ui/DebugPaletteView.cpp
-    src/ui/UIUtilityTokens.cpp
-    src/ui/ViewportContextMenuPolicy.cpp
-    src/ui/UISettings.cpp
-    src/viewport/ViewportCameraController.cpp
-    src/viewport/ViewportInputRouter.cpp
-    src/viewport/ViewportLayout.cpp
-    src/viewport/ViewportSettings.cpp
-    src/viewport/ViewportWorkspaceService.cpp
+    src/assets/asset_registry.cpp
+    src/assets/bake_service.cpp
+    src/assets/material_document.cpp
+    src/core/localization_service.cpp
+    src/core/logger.cpp
+    src/core/q_str.cpp
+    src/core/undo_redo_manager.cpp
+    src/editor/commands/document_command_service.cpp
+    src/scene/document/project_document.cpp
+    src/scene/document/project_session.cpp
+    src/editor/history/editor_history_service.cpp
+    src/editor/commands/modeling_command_execution_service.cpp
+    src/editor/selection/editor_selection_service.cpp
+    src/io/qdr/qdr_document_reader.cpp
+    src/io/qdr/qdr_document_writer.cpp
+    src/scene/scene_bounds.cpp
+    src/scene/scene_document.cpp
+    src/ui/console_model.cpp
+    src/ui/backends/rml/main_layout_rml_builder.cpp
+    src/ui/backends/rml/rml_markup_writer.cpp
+    src/ui/components/atoms/ui_button_component.cpp
+    src/ui/components/atoms/ui_chrome_button_component.cpp
+    src/ui/components/atoms/ui_toolbar_button_component.cpp
+    src/ui/components/common/dock_layout_model.cpp
+    src/ui/components/common/ui_tab_rail_component.cpp
+    src/ui/components/common/ui_tab_strip_model.cpp
+    src/ui/components/organisms/main_layout_model.cpp
+    src/ui/components/organisms/modeling_mode_shelf_component.cpp
+    src/ui/components/organisms/window_chrome_controls_component.cpp
+    src/ui/core/ui_class_list.cpp
+    src/ui/core/ui_element.cpp
+    src/ui/core/ui_icon_registry.cpp
+    src/ui/controllers/main_layout_controller.cpp
+    src/ui/controllers/main_layout_dock_drag_controller.cpp
+    src/ui/controllers/main_layout_dock_hit_region_builder.cpp
+    src/ui/controllers/main_layout_sash_registry.cpp
+    src/ui/controllers/resizable_split_controller.cpp
+    src/ui/controllers/ui_drag_drop_controller.cpp
+    src/ui/debug_palette_view.cpp
+    src/ui/ui_utility_tokens.cpp
+    src/ui/viewport_context_menu_policy.cpp
+    src/ui/ui_settings.cpp
+    src/viewport/viewport_camera_controller.cpp
+    src/viewport/viewport_input_router.cpp
+    src/viewport/viewport_layout.cpp
+    src/viewport/viewport_settings.cpp
+    src/viewport/viewport_workspace_service.cpp
     ${QUADER_EDITOR_VIEWPORT_TOOL_SOURCES}
 )
 
@@ -164,25 +164,25 @@ target_compile_definitions(quader_core
 target_compile_features(quader_core PUBLIC cxx_std_20)
 
 add_library(quader_api STATIC
-    src/api/QuaderApi.cpp
-    src/api/QuaderApiTypes.cpp
-    src/api/QuaderApiMutationRunner.cpp
-    src/api/QuaderAssetApi.cpp
-    src/api/QuaderCommandsApi.cpp
-    src/api/QuaderEventsApi.cpp
-    src/api/QuaderHistoryApi.cpp
-    src/api/QuaderModelingApi.cpp
-    src/api/QuaderObjectHandle.cpp
-    src/api/QuaderPreferencesApi.cpp
-    src/api/QuaderProjectApi.cpp
-    src/api/QuaderQueryApi.cpp
-    src/api/QuaderSceneApi.cpp
-    src/api/QuaderSelectionApi.cpp
-    src/api/QuaderScript.cpp
-    src/api/QuaderToolsApi.cpp
-    src/api/QuaderUIApi.cpp
-    src/api/QuaderViewportApi.cpp
-    src/editor/commands/EditorCommandRegistry.cpp
+    src/api/quader_api.cpp
+    src/api/quader_api_types.cpp
+    src/api/quader_api_mutation_runner.cpp
+    src/api/quader_asset_api.cpp
+    src/api/quader_commands_api.cpp
+    src/api/quader_events_api.cpp
+    src/api/quader_history_api.cpp
+    src/api/quader_modeling_api.cpp
+    src/api/quader_object_handle.cpp
+    src/api/quader_preferences_api.cpp
+    src/api/quader_project_api.cpp
+    src/api/quader_query_api.cpp
+    src/api/quader_scene_api.cpp
+    src/api/quader_selection_api.cpp
+    src/api/quader_script.cpp
+    src/api/quader_tools_api.cpp
+    src/api/quader_ui_api.cpp
+    src/api/quader_viewport_api.cpp
+    src/editor/commands/editor_command_registry.cpp
 )
 
 target_include_directories(quader_api PUBLIC src)
@@ -294,56 +294,56 @@ quader_compile_material(rmlui_material resources/materials/rmlui.mat rmlui)
 quader_compile_material(ground_grid_material resources/materials/ground_grid.mat ground_grid)
 
 add_library(quader_runtime STATIC
-    src/app/AppFrameClock.cpp
-    src/app/App.cpp
-    src/editor/viewport/TransformGizmoInteraction.cpp
-    src/editor/viewport/ViewportInteractionController.cpp
-    src/editor/viewport/ViewportSelectionInteraction.cpp
-    src/editor/transform/SceneTransformDragService.cpp
-    src/platform/FatalErrorHandler.cpp
-    src/platform/PlatformWindow.cpp
-    src/platform/SdlEventUtils.cpp
-    src/platform/SdlInputAdapter.cpp
-    src/render/FilamentUtils.cpp
-    src/render/FilamentBufferDescriptorFactory.cpp
-    src/render/FilamentMaterialLibrary.cpp
-    src/render/RmlFilamentRenderer.cpp
-    src/api/QuaderEditorApi.cpp
-    src/api/QuaderRenderApi.cpp
-    src/render/LightRenderableCache.cpp
-    src/render/MaterialBindingService.cpp
-    src/render/MaterialCompilerService.cpp
-    src/render/MeshRenderableCache.cpp
-    src/render/MeshRenderableFactory.cpp
-    src/render/overlay/OverlayCameraProjector.cpp
-    src/render/overlay/OverlayFaceFillBuilder.cpp
-    src/render/overlay/OverlayLineMeshBuilder.cpp
-    src/render/overlay/OverlayPointMeshBuilder.cpp
-    src/render/overlay/OverlayProxyFactory.cpp
-    src/render/overlay/OverlayRenderableBuilder.cpp
-    src/render/overlay/OverlayRenderableCache.cpp
-    src/render/overlay/ViewportBoxOverlayBuilder.cpp
-    src/render/overlay/ViewportSelectionMarqueeOverlayBuilder.cpp
-    src/render/overlay/ViewportTransformGizmoOverlayBuilder.cpp
-    src/render/overlay/ViewportSceneOverlayBuilder.cpp
-    src/render/overlay/ViewportOverlayStyleResolver.cpp
-    src/render/RenderSystem.cpp
-    src/render/RenderSignatureBuilder.cpp
-    src/render/SceneRenderBridge.cpp
-    src/render/SceneRenderSyncService.cpp
-    src/render/TextureBindingService.cpp
-    src/render/TextureRegistry.cpp
-    src/render/ToolPreviewRenderableCache.cpp
-    src/render/ViewportGridRenderer.cpp
-    src/render/ViewportOverlayPolicy.cpp
-    src/render/ViewportRenderPassCoordinator.cpp
-    src/render/ViewportRenderTarget.cpp
-    src/render/ViewportRenderer.cpp
-    src/ui/backends/rml/RmlUiContextHost.cpp
-    src/ui/controllers/ModelingModeShelfController.cpp
-    src/ui/controllers/ViewportHost.cpp
-    src/ui/ViewportShortcutController.cpp
-    src/ui/UISystem.cpp
+    src/app/app_frame_clock.cpp
+    src/app/app.cpp
+    src/editor/viewport/transform_gizmo_interaction.cpp
+    src/editor/viewport/viewport_interaction_controller.cpp
+    src/editor/viewport/viewport_selection_interaction.cpp
+    src/editor/transform/scene_transform_drag_service.cpp
+    src/platform/fatal_error_handler.cpp
+    src/platform/platform_window.cpp
+    src/platform/sdl_event_utils.cpp
+    src/platform/sdl_input_adapter.cpp
+    src/render/filament_utils.cpp
+    src/render/filament_buffer_descriptor_factory.cpp
+    src/render/filament_material_library.cpp
+    src/render/rml_filament_renderer.cpp
+    src/api/quader_editor_api.cpp
+    src/api/quader_render_api.cpp
+    src/render/light_renderable_cache.cpp
+    src/render/material_binding_service.cpp
+    src/render/material_compiler_service.cpp
+    src/render/mesh_renderable_cache.cpp
+    src/render/mesh_renderable_factory.cpp
+    src/render/overlay/overlay_camera_projector.cpp
+    src/render/overlay/overlay_face_fill_builder.cpp
+    src/render/overlay/overlay_line_mesh_builder.cpp
+    src/render/overlay/overlay_point_mesh_builder.cpp
+    src/render/overlay/overlay_proxy_factory.cpp
+    src/render/overlay/overlay_renderable_builder.cpp
+    src/render/overlay/overlay_renderable_cache.cpp
+    src/render/overlay/viewport_box_overlay_builder.cpp
+    src/render/overlay/viewport_selection_marquee_overlay_builder.cpp
+    src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp
+    src/render/overlay/viewport_scene_overlay_builder.cpp
+    src/render/overlay/viewport_overlay_style_resolver.cpp
+    src/render/render_system.cpp
+    src/render/render_signature_builder.cpp
+    src/render/scene_render_bridge.cpp
+    src/render/scene_render_sync_service.cpp
+    src/render/texture_binding_service.cpp
+    src/render/texture_registry.cpp
+    src/render/tool_preview_renderable_cache.cpp
+    src/render/viewport_grid_renderer.cpp
+    src/render/viewport_overlay_policy.cpp
+    src/render/viewport_render_pass_coordinator.cpp
+    src/render/viewport_render_target.cpp
+    src/render/viewport_renderer.cpp
+    src/ui/backends/rml/rml_ui_context_host.cpp
+    src/ui/controllers/modeling_mode_shelf_controller.cpp
+    src/ui/controllers/viewport_host.cpp
+    src/ui/viewport_shortcut_controller.cpp
+    src/ui/ui_system.cpp
 )
 
 target_include_directories(quader_runtime PUBLIC src)
@@ -462,16 +462,26 @@ endif()
 if(QUADER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
 
+    add_executable(quader_guardrail_tests
+        tests/agent_instruction_routing_tests.cpp
+        tests/build_guardrail_tests.cpp
+        tests/oop_architecture_guardrail_tests.cpp
+        tests/programmatic_api_guardrail_tests.cpp
+        tests/support/guardrail_file_scan.cpp
+    )
+    target_compile_features(quader_guardrail_tests PRIVATE cxx_std_20)
+    target_compile_definitions(quader_guardrail_tests
+        PRIVATE
+            QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(quader_guardrail_tests PRIVATE GTest::gtest GTest::gtest_main)
+    add_test(NAME quader_guardrail_tests COMMAND quader_guardrail_tests)
+
     add_executable(quader_tests
         tests/app_frame_clock_tests.cpp
         tests/core_tests.cpp
-        tests/agent_instruction_routing_tests.cpp
-        tests/build_guardrail_tests.cpp
         tests/localization_tests.cpp
         tests/math_types_tests.cpp
-        tests/oop_architecture_guardrail_tests.cpp
         tests/qstr_tests.cpp
-        tests/programmatic_api_guardrail_tests.cpp
         tests/editor_api_tests.cpp
         tests/programmatic_api_tests.cpp
         tests/programmatic_behavior_scenario_tests.cpp
@@ -483,10 +493,10 @@ if(QUADER_BUILD_TESTS)
         tests/selection_mode_adapter_tests.cpp
         tests/viewport_interaction_controller_tests.cpp
         tests/viewport_tool_catalog_tests.cpp
-        tests/support/BehaviorExpect.cpp
-        tests/support/BehaviorScenario.cpp
-        tests/support/GuardrailFileScan.cpp
-        tests/support/ModelingTestEvents.cpp
+        tests/support/behavior_expect.cpp
+        tests/support/behavior_scenario.cpp
+        tests/support/guardrail_file_scan.cpp
+        tests/support/modeling_test_events.cpp
     )
     target_compile_definitions(quader_tests
         PRIVATE

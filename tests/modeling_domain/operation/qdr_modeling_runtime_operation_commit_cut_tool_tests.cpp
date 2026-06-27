@@ -4,12 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-#include <editor/interactions/interaction_api.h>
+#include <editor/interactions/interaction_api.hpp>
 
-TEST_CASE("commit cut tool applies plane clipping through editor history", "[operation][commit_cut_tool]")
-{
+TEST(QdrModelingRuntimeOperationCommitCutToolTests, CommitCutToolAppliesPlaneClippingThroughEditorHistory) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 	session.set_selected_object_ids({ 1 }, 1);
 
@@ -24,18 +23,17 @@ TEST_CASE("commit cut tool applies plane clipping through editor history", "[ope
 
 	const quader_editor_core::CommandResult result = session.commit_cut_tool(state);
 
-	REQUIRE(result.ok);
-	REQUIRE(result.changed);
-	REQUIRE(session.objects().size() == 2U);
-	CHECK(session.selection_mode() == quader_editor_core::SelectionMode::face);
-	CHECK(session.history_status().can_undo);
-	CHECK_FALSE(quader_editor_core::cut_is_active(state));
-	REQUIRE(session.undo().applied);
-	REQUIRE(session.objects().size() == 1U);
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(session.objects().size() == 2U);
+	EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::face);
+	EXPECT_TRUE(session.history_status().can_undo);
+	EXPECT_FALSE(quader_editor_core::cut_is_active(state));
+	EXPECT_TRUE(session.undo().applied);
+	EXPECT_TRUE(session.objects().size() == 1U);
 }
 
-TEST_CASE("commit cut tool rejects incomplete state predictably", "[operation][commit_cut_tool]")
-{
+TEST(QdrModelingRuntimeOperationCommitCutToolTests, CommitCutToolRejectsIncompleteStatePredictably) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 
 	quader_editor_core::CutToolState state;
@@ -44,13 +42,12 @@ TEST_CASE("commit cut tool rejects incomplete state predictably", "[operation][c
 
 	const quader_editor_core::CommandResult result = session.commit_cut_tool(state);
 
-	REQUIRE_FALSE(result.ok);
-	REQUIRE_FALSE(result.changed);
-	CHECK_FALSE(quader_editor_core::cut_is_active(state));
+	EXPECT_FALSE(result.ok);
+	EXPECT_FALSE(result.changed);
+	EXPECT_FALSE(quader_editor_core::cut_is_active(state));
 }
 
-TEST_CASE("commit cut tool preserves placed line when no cut targets are selected", "[operation][commit_cut_tool]")
-{
+TEST(QdrModelingRuntimeOperationCommitCutToolTests, CommitCutToolPreservesPlacedLineWhenNoCutTargetsAreSelected) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 
 	quader_editor_core::CutToolState state;
@@ -62,8 +59,8 @@ TEST_CASE("commit cut tool preserves placed line when no cut targets are selecte
 
 	const quader_editor_core::CommandResult result = session.commit_cut_tool(state);
 
-	REQUIRE_FALSE(result.ok);
-	REQUIRE_FALSE(result.changed);
-	CHECK(quader_editor_core::cut_is_active(state));
-	CHECK(state.points.size() == 2);
+	EXPECT_FALSE(result.ok);
+	EXPECT_FALSE(result.changed);
+	EXPECT_TRUE(quader_editor_core::cut_is_active(state));
+	EXPECT_TRUE(state.points.size() == 2);
 }

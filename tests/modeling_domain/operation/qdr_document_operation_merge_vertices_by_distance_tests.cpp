@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 #include <algorithm>
 
@@ -34,8 +34,8 @@ TwoTriangleFixture make_two_triangle_fixture(float duplicate_offset = 0.1F)
 	fixture.d = add_vertex(fixture.document, { 0.0F, 1.0F + duplicate_offset, 0.0F });
 	fixture.e = add_vertex(fixture.document, { -1.0F, 1.0F, 0.0F });
 	fixture.f = add_vertex(fixture.document, { -1.0F, 0.0F, 0.0F });
-	REQUIRE(add_face(fixture.document, std::array<ElementId, 3> { fixture.a, fixture.b, fixture.c }) != invalid_element_id);
-	REQUIRE(add_face(fixture.document, std::array<ElementId, 3> { fixture.d, fixture.e, fixture.f }) != invalid_element_id);
+	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 3> { fixture.a, fixture.b, fixture.c }) != invalid_element_id);
+	EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 3> { fixture.d, fixture.e, fixture.f }) != invalid_element_id);
 	return fixture;
 }
 
@@ -80,44 +80,41 @@ std::size_t face_count_on_plane_x(const Document& document, float x)
 
 } // namespace
 
-TEST_CASE("merge vertices by distance welds selected vertices inclusively to the centroid", "[operation][merge_vertices_by_distance]")
-{
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceWeldsSelectedVerticesInclusivelyToTheCentroid) {
 	TwoTriangleFixture fixture = make_two_triangle_fixture();
 	Selection selection = qdr_test::vertex_selection({ fixture.c, fixture.d });
 
 	const OperationResult result = merge_selected_vertices_by_distance(fixture.document, selection, 0.1F);
 
-	REQUIRE(result.changed);
-	REQUIRE(fixture.document.vertices.size() == 5U);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(fixture.document.vertices.size() == 5U);
 	const Vertex* survivor = find_vertex(fixture.document, fixture.c);
-	REQUIRE(survivor != nullptr);
-	REQUIRE(find_vertex(fixture.document, fixture.d) == nullptr);
-	REQUIRE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, 1.05F, 0.0F }));
-	REQUIRE(selection.mode == SelectionMode::vertex);
-	REQUIRE(selection.vertices.size() == 1U);
-	REQUIRE(selection.vertices.front() == fixture.c);
-	REQUIRE(selection.has_active);
-	REQUIRE(selection.active_vertex == fixture.c);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+	EXPECT_TRUE(survivor != nullptr);
+	EXPECT_TRUE(find_vertex(fixture.document, fixture.d) == nullptr);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, 1.05F, 0.0F }));
+	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
+	EXPECT_TRUE(selection.vertices.size() == 1U);
+	EXPECT_TRUE(selection.vertices.front() == fixture.c);
+	EXPECT_TRUE(selection.has_active);
+	EXPECT_TRUE(selection.active_vertex == fixture.c);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
-TEST_CASE("merge vertices by distance keeps selected vertices when tolerance finds no cluster", "[operation][merge_vertices_by_distance]")
-{
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceKeepsSelectedVerticesWhenToleranceFindsNoCluster) {
 	TwoTriangleFixture fixture = make_two_triangle_fixture(0.25F);
 	Selection selection = qdr_test::vertex_selection({ fixture.c, fixture.d });
 	const std::size_t vertex_count_before = fixture.document.vertices.size();
 
 	const OperationResult result = merge_selected_vertices_by_distance(fixture.document, selection, 0.1F);
 
-	REQUIRE_FALSE(result.changed);
-	REQUIRE(fixture.document.vertices.size() == vertex_count_before);
-	REQUIRE(selection.vertices.size() == 2U);
-	REQUIRE(std::find(selection.vertices.begin(), selection.vertices.end(), fixture.c) != selection.vertices.end());
-	REQUIRE(std::find(selection.vertices.begin(), selection.vertices.end(), fixture.d) != selection.vertices.end());
+	EXPECT_FALSE(result.changed);
+	EXPECT_TRUE(fixture.document.vertices.size() == vertex_count_before);
+	EXPECT_TRUE(selection.vertices.size() == 2U);
+	EXPECT_TRUE(std::find(selection.vertices.begin(), selection.vertices.end(), fixture.c) != selection.vertices.end());
+	EXPECT_TRUE(std::find(selection.vertices.begin(), selection.vertices.end(), fixture.d) != selection.vertices.end());
 }
 
-TEST_CASE("merge vertices by distance picks the most central survivor for larger clusters", "[operation][merge_vertices_by_distance]")
-{
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistancePicksTheMostCentralSurvivorForLargerClusters) {
 	Document document;
 	const ElementId a = add_vertex(document, { -1.0F, 0.0F, 0.0F });
 	const ElementId b = add_vertex(document, { 0.05F, 0.0F, 0.0F });
@@ -128,32 +125,31 @@ TEST_CASE("merge vertices by distance picks the most central survivor for larger
 	const ElementId b2 = add_vertex(document, { 0.5F, -1.0F, 0.0F });
 	const ElementId c1 = add_vertex(document, { 0.5F, 1.0F, 0.0F });
 	const ElementId c2 = add_vertex(document, { 1.5F, 1.0F, 0.0F });
-	REQUIRE(add_face(document, std::array<ElementId, 3> { a, a1, a2 }) != invalid_element_id);
-	REQUIRE(add_face(document, std::array<ElementId, 3> { b, b1, b2 }) != invalid_element_id);
-	REQUIRE(add_face(document, std::array<ElementId, 3> { c, c1, c2 }) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { a, a1, a2 }) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { b, b1, b2 }) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { c, c1, c2 }) != invalid_element_id);
 	Selection selection = qdr_test::vertex_selection({ a, b, c });
 
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 1.1F);
 
-	REQUIRE(result.changed);
-	REQUIRE(find_vertex(document, a) == nullptr);
-	REQUIRE(find_vertex(document, c) == nullptr);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(find_vertex(document, a) == nullptr);
+	EXPECT_TRUE(find_vertex(document, c) == nullptr);
 	const Vertex* survivor = find_vertex(document, b);
-	REQUIRE(survivor != nullptr);
-	REQUIRE(qdr_test::vec_nearly_equal(survivor->position, { -0.28333333F, 0.0F, 0.0F }));
-	REQUIRE(selection.vertices.size() == 1U);
-	REQUIRE(selection.vertices.front() == b);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(survivor != nullptr);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, { -0.28333333F, 0.0F, 0.0F }));
+	EXPECT_TRUE(selection.vertices.size() == 1U);
+	EXPECT_TRUE(selection.vertices.front() == b);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
-TEST_CASE("merge vertices by distance collapses duplicate faces created by welded cube sides", "[operation][merge_vertices_by_distance]")
-{
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceCollapsesDuplicateFacesCreatedByWeldedCubeSides) {
 	std::vector<ElementId> first_interface;
 	std::vector<ElementId> second_interface;
 	Document document = make_touching_cube_pair_document(first_interface, second_interface);
-	REQUIRE(first_interface.size() == 4U);
-	REQUIRE(second_interface.size() == 4U);
-	REQUIRE(face_count_on_plane_x(document, 1.0F) == 2U);
+	EXPECT_TRUE(first_interface.size() == 4U);
+	EXPECT_TRUE(second_interface.size() == 4U);
+	EXPECT_TRUE(face_count_on_plane_x(document, 1.0F) == 2U);
 	const std::size_t vertex_count_before = document.vertices.size();
 
 	Selection selection;
@@ -163,17 +159,16 @@ TEST_CASE("merge vertices by distance collapses duplicate faces created by welde
 
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 0.0F);
 
-	REQUIRE(result.changed);
-	REQUIRE(document.vertices.size() == vertex_count_before - 4U);
-	REQUIRE(document.faces.size() == 11U);
-	REQUIRE(face_count_on_plane_x(document, 1.0F) == 1U);
-	REQUIRE(selection.mode == SelectionMode::vertex);
-	REQUIRE(selection.vertices.size() == 4U);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(document.vertices.size() == vertex_count_before - 4U);
+	EXPECT_TRUE(document.faces.size() == 11U);
+	EXPECT_TRUE(face_count_on_plane_x(document, 1.0F) == 1U);
+	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
+	EXPECT_TRUE(selection.vertices.size() == 4U);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
-TEST_CASE("merge vertices by distance allows non-manifold edge clusters", "[operation][merge_vertices_by_distance]")
-{
+TEST(QdrDocumentOperationMergeVerticesByDistanceTests, MergeVerticesByDistanceAllowsNonManifoldEdgeClusters) {
 	Document document;
 	const ElementId a1 = add_vertex(document, { 0.0F, 0.0F, 0.0F });
 	const ElementId b1 = add_vertex(document, { 0.0F, 0.0F, 1.0F });
@@ -187,16 +182,16 @@ TEST_CASE("merge vertices by distance allows non-manifold edge clusters", "[oper
 	const ElementId d2 = add_vertex(document, { 0.0F, 1.0F, 0.0F });
 	const ElementId c3 = add_vertex(document, { -1.0F, 0.0F, 1.0F });
 	const ElementId d3 = add_vertex(document, { -1.0F, 0.0F, 0.0F });
-	REQUIRE(add_face(document, std::array<ElementId, 4> { a1, b1, c1, d1 }) != invalid_element_id);
-	REQUIRE(add_face(document, std::array<ElementId, 4> { a2, b2, c2, d2 }) != invalid_element_id);
-	REQUIRE(add_face(document, std::array<ElementId, 4> { a3, b3, c3, d3 }) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a1, b1, c1, d1 }) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a2, b2, c2, d2 }) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { a3, b3, c3, d3 }) != invalid_element_id);
 	Selection selection = qdr_test::vertex_selection({ a1, b1, a2, b2, a3, b3 });
 
 	const OperationResult result = merge_selected_vertices_by_distance(document, selection, 0.001F);
 
-	REQUIRE(result.changed);
-	CHECK(result.message.empty());
-	CHECK(document.vertices.size() == 8U);
-	CHECK(qdr_test::edge_incidence_count(document, make_edge(a1, b1)) == 3);
-	CHECK(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(result.message.empty());
+	EXPECT_TRUE(document.vertices.size() == 8U);
+	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(a1, b1)) == 3);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }

@@ -4,15 +4,15 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.h>
-#include <mesh/polygon/poly_operation.h>
-#include <mesh/polygon/poly_operation_descriptor.h>
+#include <mesh/polygon/document.hpp>
+#include <mesh/polygon/poly_operation.hpp>
+#include <mesh/polygon/poly_operation_descriptor.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_knife_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_topology_backend.h>
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.h>
+#include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_knife_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_topology_backend.hpp>
+#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #include <algorithm>
 #include <array>

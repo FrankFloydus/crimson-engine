@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-#include <editor/modeling/operations/operation_command.h>
+#include <editor/modeling/operations/operation_command.hpp>
 
 #include <algorithm>
 
@@ -27,9 +27,9 @@ std::uint32_t material_slot_for_face(const qec::EditorSession& session, int obje
 	const auto object = std::ranges::find_if(session.objects(), [object_id](const qec::PolygonObject& candidate) {
 		return candidate.id == object_id;
 	});
-	REQUIRE(object != session.objects().end());
+	EXPECT_TRUE(object != session.objects().end());
 	const qp::Face* face = qp::find_face(object->document, face_id);
-	REQUIRE(face != nullptr);
+	EXPECT_TRUE(face != nullptr);
 	return face->material_slot;
 }
 
@@ -42,11 +42,10 @@ bool all_faces_use_slot(const qec::PolygonObject& object, std::uint32_t slot)
 
 } // namespace
 
-TEST_CASE("editor session assigns material slots to selected faces in face mode", "[operation][material_slot]")
-{
+TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorSessionAssignsMaterialSlotsToSelectedFacesInFaceMode) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	qec::PolygonObject& object = session.objects().front();
-	REQUIRE(object.document.faces.size() >= 2U);
+	EXPECT_TRUE(object.document.faces.size() >= 2U);
 	const int object_id = object.id;
 	const qp::ElementId selected_face_id = object.document.faces[0].id;
 	const qp::ElementId untouched_face_id = object.document.faces[1].id;
@@ -58,14 +57,13 @@ TEST_CASE("editor session assigns material slots to selected faces in face mode"
 
 	const qec::CommandResult result = session.assign_material_to_selection(0U);
 
-	REQUIRE(result.ok);
-	REQUIRE(result.changed);
-	REQUIRE(material_slot_for_face(session, object_id, selected_face_id) == 0U);
-	REQUIRE(material_slot_for_face(session, object_id, untouched_face_id) == 6U);
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, selected_face_id) == 0U);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, untouched_face_id) == 6U);
 }
 
-TEST_CASE("editor session assigns material slots to all faces of selected objects in object mode", "[operation][material_slot]")
-{
+TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorSessionAssignsMaterialSlotsToAllFacesOfSelectedObjectsInObjectMode) {
 	qp::Document first = qp::make_cube({});
 	qp::Document second = qp::make_cube({});
 	set_all_face_slots(first, 1U);
@@ -78,30 +76,28 @@ TEST_CASE("editor session assigns material slots to all faces of selected object
 
 	const qec::CommandResult result = session.assign_material_to_selection(4U);
 
-	REQUIRE(result.ok);
-	REQUIRE(result.changed);
-	REQUIRE(all_faces_use_slot(session.objects()[0], 4U));
-	REQUIRE(all_faces_use_slot(session.objects()[1], 2U));
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(all_faces_use_slot(session.objects()[0], 4U));
+	EXPECT_TRUE(all_faces_use_slot(session.objects()[1], 2U));
 }
 
-TEST_CASE("editor session assigns material slots to one explicit face target", "[operation][material_slot]")
-{
+TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorSessionAssignsMaterialSlotsToOneExplicitFaceTarget) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	const int object_id = session.objects().front().id;
-	REQUIRE(session.objects().front().document.faces.size() >= 2U);
+	EXPECT_TRUE(session.objects().front().document.faces.size() >= 2U);
 	const qp::ElementId target_face_id = session.objects().front().document.faces[1].id;
 	const qp::ElementId untouched_face_id = session.objects().front().document.faces[0].id;
 
 	const qec::CommandResult result = session.assign_material_to_face(object_id, target_face_id, 9U);
 
-	REQUIRE(result.ok);
-	REQUIRE(result.changed);
-	REQUIRE(material_slot_for_face(session, object_id, target_face_id) == 9U);
-	REQUIRE(material_slot_for_face(session, object_id, untouched_face_id) == 0U);
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, target_face_id) == 9U);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, untouched_face_id) == 0U);
 }
 
-TEST_CASE("editor session material slot assignment participates in undo and redo", "[operation][material_slot]")
-{
+TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorSessionMaterialSlotAssignmentParticipatesInUndoAndRedo) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	const int object_id = session.objects().front().id;
 	const qp::ElementId face_id = session.objects().front().document.faces.front().id;
@@ -115,23 +111,22 @@ TEST_CASE("editor session material slot assignment participates in undo and redo
 			return editor.assign_material_to_selection(12U);
 		});
 
-	REQUIRE(command.ok);
-	REQUIRE(command.changed);
-	REQUIRE(material_slot_for_face(session, object_id, face_id) == 12U);
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(command.ok);
+	EXPECT_TRUE(command.changed);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, face_id) == 12U);
+	EXPECT_TRUE(session.history_status().can_undo);
 
 	const qec::HistoryRestoreResult undo = session.undo();
-	REQUIRE(undo.applied);
-	REQUIRE(material_slot_for_face(session, object_id, face_id) == 0U);
-	REQUIRE(session.history_status().can_redo);
+	EXPECT_TRUE(undo.applied);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, face_id) == 0U);
+	EXPECT_TRUE(session.history_status().can_redo);
 
 	const qec::HistoryRestoreResult redo = session.redo();
-	REQUIRE(redo.applied);
-	REQUIRE(material_slot_for_face(session, object_id, face_id) == 12U);
+	EXPECT_TRUE(redo.applied);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, face_id) == 12U);
 }
 
-TEST_CASE("editor operation command assigns explicit material target through history", "[operation][material_slot]")
-{
+TEST(QdrModelingRuntimeOperationAssignMaterialSlotTests, EditorOperationCommandAssignsExplicitMaterialTargetThroughHistory) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 	const int object_id = session.objects().front().id;
 	const qp::ElementId face_id = session.objects().front().document.faces.front().id;
@@ -148,13 +143,13 @@ TEST_CASE("editor operation command assigns explicit material target through his
 
 	const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
 
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE(material_slot_for_face(session, object_id, face_id) == 15U);
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_TRUE(material_slot_for_face(session, object_id, face_id) == 15U);
+	EXPECT_TRUE(session.history_status().can_undo);
 
 	const qec::HistoryRestoreResult undo = session.undo();
-	REQUIRE(undo.applied);
-	REQUIRE(material_slot_for_face(session, object_id, face_id) == 0U);
+	EXPECT_TRUE(undo.applied);
+	EXPECT_TRUE(material_slot_for_face(session, object_id, face_id) == 0U);
 }

@@ -16,15 +16,15 @@ rebinding UI, or keybinding persistence.
 
 Quader input is split into four layers:
 
-- `src/editor/input/QuaderInputBinding.h` owns canonical physical input values: keyboard keys,
+- `src/editor/input/quader_input_binding.hpp` owns canonical physical input values: keyboard keys,
   mouse buttons, drag gestures, wheel gestures, modifiers, shortcut parsing, and shortcut
   formatting.
-- `src/editor/input/QuaderKeybindingService.h` owns keybinding rules: target id, shortcut
+- `src/editor/input/quader_keybinding_service.hpp` owns keybinding rules: target id, shortcut
   sequence, `when` expression, source, weight, removals, conflict lookup, pending chord state, and
   user JSON persistence.
 - `src/api/QuaderCommandsApi.*` owns command ids, default keybindings, canonical command aliases,
   viewport shortcut/action mapping, keybinding storage path selection, and public API access.
-- `src/ui/controllers/ViewportHost.cpp` translates platform events into a `ViewportInputFrame`;
+- `src/ui/controllers/viewport_host.cpp` translates platform events into a `ViewportInputFrame`;
   `src/viewport/ViewportInputRouter.*` consumes semantic navigation input and resolved viewport
   shortcuts.
 

@@ -78,9 +78,9 @@ concrete code evidence.
     transform-point helper; cover invisible/object/component selection-center behavior.
 
 - [x] Remove internal owner/domain types from public API headers.
-  - Files/functions: `src/api/*.h`, especially `QuaderModelingApi.h`, `QuaderSelectionApi.h`,
-    `QuaderSceneApi.h`, `QuaderAssetApi.h`, `QuaderQueryApi.h`, `QuaderRenderApi.h`,
-    `QuaderObjectHandle.h`, `QuaderScript.h`.
+  - Files/functions: `src/api/*.hpp`, especially `quader_modeling_api.hpp`, `quader_selection_api.hpp`,
+    `quader_scene_api.hpp`, `quader_asset_api.hpp`, `quader_query_api.hpp`, `quader_render_api.hpp`,
+    `quader_object_handle.hpp`, `quader_script.hpp`.
   - Risk: public API consumers compile against internal modeling, scene, asset, render, and session
     owners, making the API boundary unstable and forcing future scripting bindings through internals.
   - Owner/source of truth: API-owned public DTOs in `src/api`, with internal conversions in `.cpp`
@@ -164,18 +164,18 @@ current-run actionable findings.
 
 ### Build, Tests, Docs, And Guardrail Infrastructure
 
-- [x] Consolidate CMake dependency source discovery for OpenMesh/Catch2.
+- [x] Consolidate CMake dependency source discovery for OpenMesh.
   - Files/functions: `CMakeLists.txt`, `cmake/QuaderModeling.cmake`,
     `cmake/QuaderBuildOptions.cmake` or a new narrow CMake helper.
   - Risk: cache defaults and actual dependency resolution can drift.
   - Owner/source of truth: one CMake dependency-source resolver.
   - Checklist: extract env/cache/local/dev path resolution; reuse it for cache defaults and modeling
     setup; keep fetch/license behavior in dependency-specific functions; add a guardrail forbidding
-    duplicate `_deps/openmesh`, `_deps/catch2`, and `thirdparty/<dep>` fallback blocks.
+    duplicate `_deps/openmesh` and `thirdparty/<dep>` fallback blocks.
 
 - [x] Tighten boot smoke log verdict to fail on normal app errors.
   - Files/functions: `tools/boot_smoke.ps1`, `tests/build_guardrail_tests.cpp`,
-    `src/core/Logger.cpp`, `src/core/Logger.h`.
+    `src/core/logger.cpp`, `src/core/logger.hpp`.
   - Risk: smoke can pass while startup logs contain `[error]` entries.
   - Owner/source of truth: `tools/boot_smoke.ps1` aligned with logger severity formatting.
   - Checklist: fail on case-insensitive `[error]` and `[critical]` plus fatal text; require copied log
@@ -192,7 +192,7 @@ current-run actionable findings.
 
 - [x] Stop catalog guardrail tests from copying production descriptor catalogs.
   - Files/functions: `tests/modeling_tool_catalog_tests.cpp`, `tests/viewport_tool_catalog_tests.cpp`,
-    `ModelingInstantOperationCatalog.cpp`, `host_contract.cpp`, `ViewportToolDescriptorCatalog.cpp`.
+    `modeling_instant_operation_catalog.cpp`, `host_contract.cpp`, `viewport_tool_descriptor_catalog.cpp`.
   - Risk: tests become a second source of truth and can mirror drift instead of catching it.
   - Owner/source of truth: production descriptor spans and host action catalog.
   - Checklist: iterate owner catalogs in tests; assert every owner descriptor resolves to matching
@@ -200,7 +200,7 @@ current-run actionable findings.
     guardrail forbidding local `ExpectedAction`/`ExpectedTool` catalog arrays.
 
 - [x] Derive typed command coverage tests from one typed-ID owner instead of copied lists.
-  - Files/functions: `QuaderCommandIds.h`, `editor_api_tests.cpp`, command catalog tests.
+  - Files/functions: `quader_command_ids.hpp`, `editor_api_tests.cpp`, command catalog tests.
   - Risk: public typed IDs and tests can drift together.
   - Owner/source of truth: exported typed command ID table/span or equivalent single owner.
   - Checklist: add a single iterable typed command ID owner; update tests to derive coverage from it
@@ -210,7 +210,7 @@ current-run actionable findings.
 
 - [x] Route host-declared project document commands through `QuaderCommandsApi`.
   - Files/functions: `host_contract.cpp`, `QuaderProjectApi.*`, `QuaderCommandsApi.*`,
-    `QuaderCommandIds.h`.
+    `quader_command_ids.hpp`.
   - Risk: metadata advertises New/Open/Save/Save As and shortcuts, but commands/keybindings cannot
     execute them.
   - Owner/source of truth: `QuaderCommandsApi` command catalog delegating to `QuaderProjectApi`.
@@ -219,8 +219,8 @@ current-run actionable findings.
     execution status parity with `editor.project()`.
 
 - [x] Collapse duplicate default shortcut ownership into one keybinding projection.
-  - Files/functions: `QuaderCommandsApi.cpp`, `QuaderKeybindingService.h`, `host_contract.cpp`,
-    `HostViewportContractAdapter.h`, `ViewportToolDescriptorCatalog.cpp`.
+  - Files/functions: `quader_commands_api.cpp`, `quader_keybinding_service.hpp`, `host_contract.cpp`,
+    `host_viewport_contract_adapter.hpp`, `viewport_tool_descriptor_catalog.cpp`.
   - Risk: duplicate effective defaults and stale active shortcuts when one catalog changes.
   - Owner/source of truth: `QuaderCommandsApi` projection fed by host shortcut/action catalogs and
     tool descriptors.
@@ -231,7 +231,7 @@ current-run actionable findings.
 
 - [x] Make shortcut mutation APIs report real no-op `changed` status.
   - Files/functions: `QuaderCommandsApi::setShortcut/removeShortcut/resetShortcut`,
-    `QuaderPreferencesApi.*`, `QuaderKeybindingService.h`.
+    `QuaderPreferencesApi.*`, `quader_keybinding_service.hpp`.
   - Risk: preferences/UI can mark dirty and rewrite files when nothing changed.
   - Owner/source of truth: `QuaderKeybindingService` mutation result.
   - Checklist: return `{ok, changed, message}` from keybinding mutations; update API result status;
@@ -239,30 +239,30 @@ current-run actionable findings.
     shortcuts.
 
 - [x] Hide viewport/editor input internals from public command/keybinding headers.
-  - Files/functions: `QuaderCommandsApi.h`, `QuaderToolsApi.h`, `QuaderKeybindingTypes.h`,
-    `ViewportInputTypes.h`, `programmatic_api_guardrail_tests.cpp`.
+  - Files/functions: `quader_commands_api.hpp`, `quader_tools_api.hpp`, `quader_keybinding_types.hpp`,
+    `viewport_input_types.hpp`, `programmatic_api_guardrail_tests.cpp`.
   - Risk: public API consumers compile against viewport/router/internal input contracts.
   - Owner/source of truth: API-owned public value types plus internal viewport adapters.
   - Checklist: introduce API value enums/structs where needed; convert internally; forbid
     `viewport/` and `editor/input` includes in public command/keybinding headers.
 
 - [x] Remove internal `ProjectSession` bootstrap from public docs/examples.
-  - Files/functions: `QuaderEditorApi.h`, `docs/api-overview.md`, `examples/create_box.cpp`,
+  - Files/functions: `quader_editor_api.hpp`, `docs/api-overview.md`, `examples/create_box.cpp`,
     `examples/script_modeling_workflow.cpp`, public docs/examples guardrails.
   - Risk: onboarding docs/examples teach users to instantiate a document owner directly.
   - Owner/source of truth: public API bootstrap wrapper/factory owning `ProjectSession`.
   - Checklist: add a small public bootstrap/factory; update public docs/examples to start from public
-    API/bootstrap only; guard public docs/examples against `scene/document/ProjectSession.h`.
+    API/bootstrap only; guard public docs/examples against `scene/document/project_session.hpp`.
 
 - [x] Fix `QuaderScript::run()` aggregate mutation status ownership.
-  - Files/functions: `QuaderScript.h`, `QuaderScript.cpp`, script/API tests.
+  - Files/functions: `quader_script.hpp`, `quader_script.cpp`, script/API tests.
   - Risk: scripts can report `changed=true` with `mutationKind=None` after later no-op/failure steps.
   - Owner/source of truth: a script status aggregation helper.
   - Checklist: aggregate `changed`, mutation kind, revisions, and errors consistently; test changed
     step followed by no-op and changed step followed by missing alias.
 
 - [x] Move standalone mesh replacement invariants out of public API code.
-  - Files/functions: `QuaderAssetApi.cpp::replaceStandaloneMesh`, `AssetRegistry::replaceMesh`,
+  - Files/functions: `quader_asset_api.cpp::replaceStandaloneMesh`, `AssetRegistry::replaceMesh`,
     a project/session asset mutation service.
   - Risk: non-API import/command paths can bypass the standalone-only replacement rule.
   - Owner/source of truth: project/session asset mutation owner that sees assets, scene, and modeling
@@ -273,7 +273,7 @@ current-run actionable findings.
 ### Viewport, Input, And Keybindings
 
 - [x] Use semantic context overlap, not literal `when` string equality, for keybinding conflicts.
-  - Files/functions: `QuaderKeybindingService.h`, keybinding tests.
+  - Files/functions: `quader_keybinding_service.hpp`, keybinding tests.
   - Risk: rebinding UI can miss conflicts when contexts differ textually but overlap semantically.
   - Owner/source of truth: `QuaderKeybindingService` and its `WhenParser`.
   - Checklist: add conservative overlap/satisfiability helper; encode known implications such as
@@ -281,7 +281,7 @@ current-run actionable findings.
     conflicts and mutually exclusive navigation/tool contexts.
 
 - [x] Prevent persisted keybinding JSON from creating unknown command targets.
-  - Files/functions: `QuaderKeybindingService.h`, keybinding persistence tests.
+  - Files/functions: `quader_keybinding_service.hpp`, keybinding persistence tests.
   - Risk: typoed user JSON silently creates ghost shortcuts.
   - Owner/source of truth: registered target catalog owned by `QuaderCommandsApi` and
     `QuaderKeybindingService`.
@@ -289,8 +289,8 @@ current-run actionable findings.
     from JSON load; cover unknown normal and removal entries.
 
 - [x] Unify fly-navigation speed defaults.
-  - Files/functions: `tool_constants.h`, `host_contract.cpp`, `HostViewportContractAdapter.h`,
-    `ViewportCameraController.cpp`, viewport tests.
+  - Files/functions: `tool_constants.hpp`, `host_contract.cpp`, `host_viewport_contract_adapter.hpp`,
+    `viewport_camera_controller.cpp`, viewport tests.
   - Risk: host metadata and actual viewport movement/reset speed diverge.
   - Owner/source of truth: `viewportHostDefaults()` carrying runtime fly speed values.
   - Checklist: add fly base/fast/slow values to `ViewportHostDefaults`; initialize/reset camera speed
@@ -318,7 +318,7 @@ current-run actionable findings.
     one-too-few selections and direct execution failures.
 
 - [x] Restore scene-aware delete modeling entities through the runtime map owner.
-  - Files/functions: `SceneAwareDeleteSelectionCommand.cpp`, `ModelingObjectRuntimeMap.*`,
+  - Files/functions: `scene_aware_delete_selection_command.cpp`, `ModelingObjectRuntimeMap.*`,
     `SceneAwareDeleteRuntime` callbacks.
   - Risk: undo/redo can attach snapshots to a stale/duplicate scene component instead of the mapped
     entity.
@@ -327,7 +327,7 @@ current-run actionable findings.
     `ModelingObjectComponent` does not steal restore identity.
 
 - [x] Centralize selection projection active fallback policy.
-  - Files/functions: `SelectionProjectionService.cpp`, `session_operations.cpp`,
+  - Files/functions: `selection_projection_service.cpp`, `session_operations.cpp`,
     modeling selection projection tests.
   - Risk: round-trips can flip active entity/object and change pivot/inspector/command behavior.
   - Owner/source of truth: `SelectionProjectionService`.
@@ -335,7 +335,7 @@ current-run actionable findings.
     with runtime last-selected fallback unless explicitly documented; add round-trip tests.
 
 - [x] Derive modeling command tool catalog entries from host action metadata.
-  - Files/functions: `ModelingCommandToolCatalog.cpp`, `host_contract.cpp`,
+  - Files/functions: `modeling_command_tool_catalog.cpp`, `host_contract.cpp`,
     `tests/modeling_tool_catalog_tests.cpp`.
   - Risk: panels/context metadata and command palette/tool registration can diverge.
   - Owner/source of truth: host action catalog/operation panel descriptors, with explicit overrides
@@ -345,7 +345,7 @@ current-run actionable findings.
     guardrail.
 
 - [x] Collapse operation settings factory mapping onto operation command schema.
-  - Files/functions: `operation_command.cpp`, `ModelingOperationSettings.cpp`,
+  - Files/functions: `operation_command.cpp`, `modeling_operation_settings.cpp`,
     operation command/modeling-domain tests.
   - Risk: a new operation can have valid command schema but mismatched default/current settings.
   - Owner/source of truth: `EditorOperationCommandSchema`.
@@ -353,14 +353,14 @@ current-run actionable findings.
     every `operation_registry().entries()` item against production `settingsForOperation()`.
 
 - [x] Remove mutable map accessors from `ModelingObjectRuntimeMap`.
-  - Files/functions: `ModelingObjectRuntimeMap.h/.cpp`, current read callers, OOP guardrails.
+  - Files/functions: `modeling_object_runtime_map.hpp/.cpp`, current read callers, OOP guardrails.
   - Risk: callers can bypass bidirectional cleanup/tombstone invariants.
   - Owner/source of truth: `ModelingObjectRuntimeMap`.
   - Checklist: remove non-const `entitiesByObject()` / `objectsByEntity()`; add narrow iteration or
     lookup APIs; update callers; add source/compile guard that no mutable accessor remains.
 
 - [x] Fix material-slot sync so separate modeling objects keep per-entity materials.
-  - Files/functions: `ModelingMeshSyncService.cpp`, `ModelingObjectRuntimeMap`, scene/material-slot
+  - Files/functions: `modeling_mesh_sync_service.cpp`, `ModelingObjectRuntimeMap`, scene/material-slot
     tests.
   - Risk: unordered-map iteration can collapse two objects using slot `0` onto one material.
   - Owner/source of truth: modeling mesh sync material-slot binding policy.
@@ -371,7 +371,7 @@ current-run actionable findings.
 ### QDR, Scene, Assets, And Render
 
 - [x] Share validated QDR polygon-document codec between project and legacy paths.
-  - Files/functions: `QdrDocumentReader.cpp::polygonDocumentFromJson`, `QdrDocumentWriter.cpp`,
+  - Files/functions: `qdr_document_reader.cpp::polygonDocumentFromJson`, `qdr_document_writer.cpp`,
     `qdr_document.cpp`, QDR tests.
   - Risk: malformed project polygon documents can enter truth; authored shading compatibility can
     diverge.
@@ -380,7 +380,7 @@ current-run actionable findings.
     test explicit authored-shading compatibility; reject duplicate/missing topology consistently.
 
 - [x] Share QDR atomic-write implementation.
-  - Files/functions: `qdr_document.cpp`, `QdrDocumentWriter.cpp`, new narrow QDR atomic writer helper.
+  - Files/functions: `qdr_document.cpp`, `qdr_document_writer.cpp`, new narrow QDR atomic writer helper.
   - Risk: temp-file, cleanup, retry, and validation semantics drift between legacy and project
     writers.
   - Owner/source of truth: shared `QdrAtomicFileWriter` or equivalent helper with caller validation.
@@ -388,7 +388,7 @@ current-run actionable findings.
     project atomic success/failure tests and guardrail allowing one atomic replace implementation.
 
 - [x] Add scene-owned mutation path for `VisibilityComponent::selectable`.
-  - Files/functions: `SceneDocument.*`, `QdrDocumentReader.cpp`, scene/QDR tests.
+  - Files/functions: `SceneDocument.*`, `qdr_document_reader.cpp`, scene/QDR tests.
   - Risk: selectable is persisted scene truth but currently mutated directly by IO with unclear
     revision/history semantics.
   - Owner/source of truth: `SceneDocument` for IO hydration, document command/API only if exposed to
@@ -397,7 +397,7 @@ current-run actionable findings.
     guard against direct `->selectable =` outside the scene owner.
 
 - [x] Evict obsolete texture revisions in render texture cache.
-  - Files/functions: `TextureBindingService.h/.cpp`, render cache tests/guardrails.
+  - Files/functions: `texture_binding_service.hpp/.cpp`, render cache tests/guardrails.
   - Risk: repeated texture replacement loads new Filament textures while old revisions stay allocated
     until renderer shutdown.
   - Owner/source of truth: `TextureBindingService` cache lifecycle.
@@ -407,7 +407,7 @@ current-run actionable findings.
 ### UI, Layout, Localization, And Component Contracts
 
 - [x] Derive modeling shelf tabs from operation panel metadata.
-  - Files/functions: `ModelingModeShelfController.cpp`, `ModelingActionCatalog.cpp`,
+  - Files/functions: `modeling_mode_shelf_controller.cpp`, `modeling_action_catalog.cpp`,
     `host_contract.cpp`, UI/modeling shelf tests.
   - Risk: shelf tab identity/order can drift from operation panel metadata; current order already
     differs from metadata.
@@ -418,7 +418,7 @@ current-run actionable findings.
 
 - [x] Remove stale modeling-shelf command locale keys.
   - Files/functions: `resources/locales/en-US.lang`, `resources/locales/it-IT.lang`,
-    `ModelingModeShelfController.cpp`, localization tests.
+    `modeling_mode_shelf_controller.cpp`, localization tests.
   - Risk: translators update obsolete keys that no UI reads.
   - Owner/source of truth: `modeling.action.<actionId>.label` from action catalog; shelf-specific
     text stays under `ui.modeling_shelf.*`.
@@ -427,7 +427,7 @@ current-run actionable findings.
     except documented shelf-only messages.
 
 - [x] Consolidate viewport minimum layout size constant.
-  - Files/functions: `MainLayoutModel.h`, `MainLayoutSashRegistry.cpp`, MainLayout tests.
+  - Files/functions: `main_layout_model.hpp`, `main_layout_sash_registry.cpp`, MainLayout tests.
   - Risk: public model constant says 160dp while measured sash behavior clamps to 120dp.
   - Owner/source of truth: `MainLayoutModel` exported layout constants.
   - Checklist: choose intended value; replace private sash constant with model-owned width/height

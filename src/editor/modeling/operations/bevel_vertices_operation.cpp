@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor/modeling/runtime/session_internal.h"
+#include "editor/modeling/runtime/session_internal.hpp"
 
-#include <editor/modeling/operations/operation_registry.h>
+#include <editor/modeling/operations/operation_registry.hpp>
 
 namespace quader_editor_core {
 

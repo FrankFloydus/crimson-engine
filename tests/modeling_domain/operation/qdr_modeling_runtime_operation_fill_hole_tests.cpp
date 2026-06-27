@@ -4,12 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
 using namespace quader_poly;
 
-TEST_CASE("fill hole switches editor selection to the new face and rejects repeated fills", "[operation][fill_hole]")
-{
+TEST(QdrModelingRuntimeOperationFillHoleTests, FillHoleSwitchesEditorSelectionToTheNewFaceAndRejectsRepeatedFills) {
 	Document document = make_cube({});
 	const Face removed_face = document.faces.front();
 	document.faces.erase(document.faces.begin());
@@ -28,17 +27,17 @@ TEST_CASE("fill hole switches editor selection to the new face and rejects repea
 
 	const quader_editor_core::CommandResult first_result = session.fill_hole_from_selected_edges();
 
-	REQUIRE(first_result.ok);
-	REQUIRE(first_result.changed);
-	REQUIRE(session.selection_mode() == quader_editor_core::SelectionMode::face);
-	REQUIRE(session.objects().front().document.faces.size() == face_count_before + 1U);
-	REQUIRE(session.objects().front().selection.mode == SelectionMode::face);
-	REQUIRE(session.objects().front().selection.faces.size() == 1U);
+	EXPECT_TRUE(first_result.ok);
+	EXPECT_TRUE(first_result.changed);
+	EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::face);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before + 1U);
+	EXPECT_TRUE(session.objects().front().selection.mode == SelectionMode::face);
+	EXPECT_TRUE(session.objects().front().selection.faces.size() == 1U);
 
 	const std::size_t face_count_after_fill = session.objects().front().document.faces.size();
 	const quader_editor_core::CommandResult repeat_result = session.fill_hole_from_selected_edges();
 
-	REQUIRE_FALSE(repeat_result.ok);
-	REQUIRE_FALSE(repeat_result.changed);
-	REQUIRE(session.objects().front().document.faces.size() == face_count_after_fill);
+	EXPECT_FALSE(repeat_result.ok);
+	EXPECT_FALSE(repeat_result.changed);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_after_fill);
 }

@@ -14,7 +14,7 @@ policy, history policy, and execution path through that contract.
 ## Tool Families
 
 - Polygon-backed instant operations use catalog-owned `InstantOperationCommandTool` rows in
-  `ModelingCommandToolCatalog.cpp`; only commands with custom behavior get a file under
+  `modeling_command_tool_catalog.cpp`; only commands with custom behavior get a file under
   `src/editor/commands/modeling`.
 - Native service-backed instant commands use `CustomInstantCommandTool` or a narrower existing base.
 - Native runtime-backed instant commands use `RuntimeCommandTool` when they execute an
@@ -61,7 +61,7 @@ delete selection back into `ModelingInstantOperationCatalog` or recreate a gener
 
 - Put real custom behavior in `.cpp` only when there is meaningful behavior.
 - Do not create files merely to restate descriptor metadata.
-- Register command tools in `ModelingCommandToolCatalog.cpp`.
+- Register command tools in `modeling_command_tool_catalog.cpp`.
 - Keep catalog implementation out of headers.
 - Keep ids unique.
 - Update `tests/modeling_tool_catalog_tests.cpp` for new command families or routing rules.

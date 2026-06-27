@@ -48,7 +48,7 @@ The modeling-domain CMake targets are:
 - `quader_editor_metadata`
 - `quader_modeling_domain_tests`
 
-`quader_modeling_domain_tests` is the aggregate Catch2 executable for modeling-domain sources; the
+`quader_modeling_domain_tests` is the aggregate GoogleTest executable for modeling-domain sources; the
 individual `qdr_*` labels in `cmake/QuaderModeling.cmake` are source-registration groups, not
 standalone CTest tests.
 

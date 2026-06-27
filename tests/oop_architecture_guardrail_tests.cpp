@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
-#include "support/GuardrailFileScan.h"
+#include "support/guardrail_file_scan.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -115,7 +115,7 @@ TEST(OopArchitectureGuardrailTests, TypeDeclarationsHaveMeaningfulDocumentation)
     const std::regex declaration(R"(^\s*(class|struct|enum(?:\s+class)?)\s+([A-Za-z_][A-Za-z0-9_]*)\b)");
 
     for (const std::filesystem::path& root : {sourceRoot() / "src", sourceRoot() / "tests", sourceRoot() / "benchmarks"}) {
-        for (const std::string_view extension : {std::string_view{".h"}, std::string_view{".hpp"}, std::string_view{".cpp"}}) {
+        for (const std::string_view extension : {std::string_view{".hpp"}, std::string_view{".cpp"}}) {
             for (const std::filesystem::path& file : filesWithExtension(root, extension)) {
                 const std::string source = readFile(file);
                 const std::vector<std::string> fileLines = splitLines(source);
@@ -147,7 +147,7 @@ TEST(OopArchitectureGuardrailTests, SourceCppFilesAreNotEmptyOrConstructorOnly) 
 TEST(OopArchitectureGuardrailTests, InteractionSourceFilesIncludeTheirPublicHeaderFirst) {
     const std::filesystem::path root = sourceRoot() / "src/editor/interactions";
     for (const std::filesystem::path& file : filesWithExtension(root, ".cpp")) {
-        const std::filesystem::path header = file.parent_path() / (file.stem().string() + ".h");
+        const std::filesystem::path header = file.parent_path() / (file.stem().string() + ".hpp");
         if (!std::filesystem::exists(header)) {
             continue;
         }
@@ -156,9 +156,9 @@ TEST(OopArchitectureGuardrailTests, InteractionSourceFilesIncludeTheirPublicHead
         const std::string relative = normalizedRelative(file);
         const std::string stem = file.stem().string();
         const std::vector<std::string> allowed{
-                "#include <editor/interactions/" + stem + ".h>",
-                "#include \"editor/interactions/" + stem + ".h\"",
-                "#include \"" + stem + ".h\"",
+                "#include <editor/interactions/" + stem + ".hpp>",
+                "#include \"editor/interactions/" + stem + ".hpp\"",
+                "#include \"" + stem + ".hpp\"",
         };
 
         EXPECT_NE(std::find(allowed.begin(), allowed.end(), firstInclude), allowed.end())
@@ -176,10 +176,10 @@ TEST(OopArchitectureGuardrailTests, EverySourceCppIsPartOfCMakeSourceTruth) {
 }
 
 TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
-    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/editor/commands/modeling", ".h")) {
+    for (const std::filesystem::path& file : filesWithExtension(sourceRoot() / "src/editor/commands/modeling", ".hpp")) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
-        if (relative.find("Tool.h") == std::string::npos ||
+        if (relative.find("_tool.hpp") == std::string::npos ||
                 (relative.find("/commands/") == std::string::npos &&
                         relative.find("/context/") == std::string::npos &&
                         relative.find("/preview/") == std::string::npos)) {
@@ -194,9 +194,9 @@ TEST(OopArchitectureGuardrailTests, UserFacingToolsAreNotPassThroughAliases) {
 
 TEST(OopArchitectureGuardrailTests, ToolCatalogHeadersAreDeclarationsOnly) {
     for (const std::filesystem::path& file : {
-                 sourceRoot() / "src/editor/commands/ModelingCommandToolCatalog.h",
-                 sourceRoot() / "src/editor/tools/ViewportToolCatalog.h",
-                 sourceRoot() / "src/editor/tools/ViewportToolDescriptorCatalog.h",
+                 sourceRoot() / "src/editor/commands/modeling_command_tool_catalog.hpp",
+                 sourceRoot() / "src/editor/tools/viewport_tool_catalog.hpp",
+                 sourceRoot() / "src/editor/tools/viewport_tool_descriptor_catalog.hpp",
          }) {
         const std::string source = readFile(file);
         const std::string relative = normalizedRelative(file);
@@ -213,16 +213,16 @@ TEST(OopArchitectureGuardrailTests, ModelingInternalDomainHeadersAvoidFacadeDepe
                  sourceRoot() / "src/editor/modeling/preview",
                  sourceRoot() / "src/editor/modeling/runtime_state",
          }) {
-        for (const std::filesystem::path& file : filesWithExtension(root, ".h")) {
+        for (const std::filesystem::path& file : filesWithExtension(root, ".hpp")) {
             const std::string source = readFile(file);
             const std::string relative = normalizedRelative(file);
-            EXPECT_EQ(source.find("editor/modeling/services/ModelingSessionService.h"), std::string::npos) << relative;
+            EXPECT_EQ(source.find("editor/modeling/services/modeling_session_service.hpp"), std::string::npos) << relative;
         }
     }
 }
 
 TEST(OopArchitectureGuardrailTests, SceneDocumentDoesNotExposeRawRegistryAccess) {
-    const std::string header = readFile(sourceRoot() / "src/scene/SceneDocument.h");
+    const std::string header = readFile(sourceRoot() / "src/scene/scene_document.hpp");
 
     EXPECT_EQ(header.find("registry& registry("), std::string::npos);
     EXPECT_EQ(header.find("entt::registry& registry("), std::string::npos);
@@ -246,7 +246,7 @@ TEST(OopArchitectureGuardrailTests, UiDoesNotBypassCommandAndPreviewBoundaries) 
 }
 
 TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
-    const std::string source = readFile(sourceRoot() / "src/ui/UISystem.cpp");
+    const std::string source = readFile(sourceRoot() / "src/ui/ui_system.cpp");
 
     for (std::string_view forbidden : {
                  "selectFromViewport",
@@ -271,10 +271,10 @@ TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
 }
 
 TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderBuilder) {
-    const std::string uiSystem = readFile(sourceRoot() / "src/ui/UISystem.cpp");
-    const std::string viewportHost = readFile(sourceRoot() / "src/ui/controllers/ViewportHost.cpp");
+    const std::string uiSystem = readFile(sourceRoot() / "src/ui/ui_system.cpp");
+    const std::string viewportHost = readFile(sourceRoot() / "src/ui/controllers/viewport_host.cpp");
     const std::string uiShell = uiSystem + viewportHost;
-    const std::string builder = readFile(sourceRoot() / "src/render/overlay/ViewportSceneOverlayBuilder.cpp");
+    const std::string builder = readFile(sourceRoot() / "src/render/overlay/viewport_scene_overlay_builder.cpp");
 
     EXPECT_NE(builder.find("appendHierarchySelectionWires"), std::string::npos);
     EXPECT_NE(builder.find("appendGroupSelectionCages"), std::string::npos);
@@ -298,12 +298,12 @@ TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderB
 }
 
 TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceService) {
-    const std::string inputHeader = readFile(sourceRoot() / "src/viewport/ViewportInputTypes.h");
-    const std::string apiInputHeader = readFile(sourceRoot() / "src/api/QuaderViewportInputTypes.h");
-    const std::string inputSource = readFile(sourceRoot() / "src/viewport/ViewportInputRouter.cpp");
-    const std::string runtimeSource = readFile(sourceRoot() / "src/editor/tools/ViewportToolRuntime.cpp");
-    const std::string workspaceHeader = readFile(sourceRoot() / "src/viewport/ViewportWorkspaceService.h");
-    const std::string workspaceSource = readFile(sourceRoot() / "src/viewport/ViewportWorkspaceService.cpp");
+    const std::string inputHeader = readFile(sourceRoot() / "src/viewport/viewport_input_types.hpp");
+    const std::string apiInputHeader = readFile(sourceRoot() / "src/api/quader_viewport_input_types.hpp");
+    const std::string inputSource = readFile(sourceRoot() / "src/viewport/viewport_input_router.cpp");
+    const std::string runtimeSource = readFile(sourceRoot() / "src/editor/tools/viewport_tool_runtime.cpp");
+    const std::string workspaceHeader = readFile(sourceRoot() / "src/viewport/viewport_workspace_service.hpp");
+    const std::string workspaceSource = readFile(sourceRoot() / "src/viewport/viewport_workspace_service.cpp");
 
     const std::size_t stateStart = apiInputHeader.find("struct ViewportToolState");
     ASSERT_NE(stateStart, std::string::npos);
@@ -325,13 +325,13 @@ TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceServ
 }
 
 TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPreviewTransactions) {
-    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/TransformGizmoController.h"));
-    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/TransformGizmoController.cpp"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/transform_gizmo_controller.hpp"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/transform_gizmo_controller.cpp"));
 
     const std::string serviceSource =
-            readFile(sourceRoot() / "src/editor/transform/SceneTransformDragService.cpp");
+            readFile(sourceRoot() / "src/editor/transform/scene_transform_drag_service.cpp");
     const std::string modelingSource =
-            readFile(sourceRoot() / "src/editor/modeling/services/ModelingSessionService.cpp");
+            readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.cpp");
 
     EXPECT_NE(serviceSource.find("SceneTransformPreviewTransaction"), std::string::npos);
     EXPECT_NE(serviceSource.find("hasSelectedAncestor(document, entity)"), std::string::npos);
@@ -343,7 +343,7 @@ TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPrevie
 }
 
 TEST(OopArchitectureGuardrailTests, EditorSessionOwnsSharedPreviewTransactionLifecycle) {
-    const std::string sessionHeader = readFile(sourceRoot() / "src/editor/modeling/runtime/session.h");
+    const std::string sessionHeader = readFile(sourceRoot() / "src/editor/modeling/runtime/session.hpp");
     const std::string previewSource =
             readFile(sourceRoot() / "src/editor/modeling/runtime/session_preview_transactions.cpp");
     const std::string bridgeSource =
@@ -363,8 +363,8 @@ TEST(OopArchitectureGuardrailTests, EditorSessionOwnsSharedPreviewTransactionLif
 }
 
 TEST(OopArchitectureGuardrailTests, RenderFacadeDoesNotOwnOverlayProxyInternals) {
-    const std::string header = readFile(sourceRoot() / "src/render/SceneRenderBridge.h");
-    const std::string source = readFile(sourceRoot() / "src/render/SceneRenderBridge.cpp");
+    const std::string header = readFile(sourceRoot() / "src/render/scene_render_bridge.hpp");
+    const std::string source = readFile(sourceRoot() / "src/render/scene_render_bridge.cpp");
     const std::string combined = header + "\n" + source;
 
     for (std::string_view forbidden : {

@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/session.h>
+#include <editor/modeling/runtime/session.hpp>
 
 #include <algorithm>
 #include <limits>

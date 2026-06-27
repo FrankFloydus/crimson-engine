@@ -4,8 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/tool_identity.h>
-#include <editor/interactions/cut_tool.h>
+#include <editor/interactions/tool_identity.hpp>
+#include <editor/interactions/cut_tool.hpp>
 
 namespace quader_editor_core {
 

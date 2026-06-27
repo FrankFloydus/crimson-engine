@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/metadata/host_contract.h>
+#include <editor/metadata/host_contract.hpp>
 
 #include <array>
 #include <string_view>
@@ -23,7 +23,7 @@ bool same_text(std::string_view left, std::string_view right)
 const qhc::HostOperationPanelDescriptor& require_panel(std::string_view id)
 {
 	const qhc::HostOperationPanelDescriptor *descriptor = qhc::find_operation_panel_descriptor(id);
-	REQUIRE(descriptor != nullptr);
+	EXPECT_TRUE(descriptor != nullptr);
 	return *descriptor;
 }
 
@@ -42,58 +42,55 @@ void check_action_order(
 		const qhc::HostOperationPanelDescriptor& panel,
 		const std::array<std::string_view, Size>& expected)
 {
-	REQUIRE(panel.action_ids.size() == expected.size());
+	EXPECT_TRUE(panel.action_ids.size() == expected.size());
 	for (std::size_t i = 0; i < expected.size(); ++i) {
-		CHECK(same_text(panel.action_ids[i], expected[i]));
+		EXPECT_TRUE(same_text(panel.action_ids[i], expected[i]));
 	}
 }
 
 } // namespace
 
-TEST_CASE("host contract operation panel catalog exposes one panel per selection mode", "[host-contract]")
-{
+TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelCatalogExposesOnePanelPerSelectionMode) {
 	const std::span<const qhc::HostOperationPanelDescriptor> panels = qhc::operation_panel_catalog();
-	REQUIRE(panels.size() == 4U);
+	EXPECT_TRUE(panels.size() == 4U);
 
 	const qhc::HostOperationPanelDescriptor& object = require_panel("object_operations");
-	CHECK(same_text(object.label, "Object Operations"));
-	CHECK(object.selection_mode == qhc::HostSelectionMode::object);
-	CHECK(object.fallback_for_unknown_selection);
+	EXPECT_TRUE(same_text(object.label, "Object Operations"));
+	EXPECT_TRUE(object.selection_mode == qhc::HostSelectionMode::object);
+	EXPECT_TRUE(object.fallback_for_unknown_selection);
 
 	const qhc::HostOperationPanelDescriptor& vertex = require_panel("vertex_operations");
-	CHECK(same_text(vertex.label, "Vertex Operations"));
-	CHECK(vertex.selection_mode == qhc::HostSelectionMode::vertex);
-	CHECK_FALSE(vertex.fallback_for_unknown_selection);
+	EXPECT_TRUE(same_text(vertex.label, "Vertex Operations"));
+	EXPECT_TRUE(vertex.selection_mode == qhc::HostSelectionMode::vertex);
+	EXPECT_FALSE(vertex.fallback_for_unknown_selection);
 
 	const qhc::HostOperationPanelDescriptor& edge = require_panel("edge_operations");
-	CHECK(same_text(edge.label, "Edge Operations"));
-	CHECK(edge.selection_mode == qhc::HostSelectionMode::edge);
-	CHECK_FALSE(edge.fallback_for_unknown_selection);
+	EXPECT_TRUE(same_text(edge.label, "Edge Operations"));
+	EXPECT_TRUE(edge.selection_mode == qhc::HostSelectionMode::edge);
+	EXPECT_FALSE(edge.fallback_for_unknown_selection);
 
 	const qhc::HostOperationPanelDescriptor& face = require_panel("face_operations");
-	CHECK(same_text(face.label, "Face Operations"));
-	CHECK(face.selection_mode == qhc::HostSelectionMode::face);
-	CHECK_FALSE(face.fallback_for_unknown_selection);
+	EXPECT_TRUE(same_text(face.label, "Face Operations"));
+	EXPECT_TRUE(face.selection_mode == qhc::HostSelectionMode::face);
+	EXPECT_FALSE(face.fallback_for_unknown_selection);
 }
 
-TEST_CASE("host contract operation panel items resolve to visible actions for the same selection mode", "[host-contract]")
-{
+TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelItemsResolveToVisibleActionsForTheSameSelectionMode) {
 	std::size_t item_count = 0;
 	for (const qhc::HostOperationPanelDescriptor& panel : qhc::operation_panel_catalog()) {
 		for (std::string_view action_id : panel.action_ids) {
 			const qhc::HostActionDescriptor *action = qhc::find_action_descriptor(action_id);
-			REQUIRE(action != nullptr);
-			CHECK(action->show_in_operations_panel);
-			CHECK(action->availability.selection_mode == panel.selection_mode);
+			EXPECT_TRUE(action != nullptr);
+			EXPECT_TRUE(action->show_in_operations_panel);
+			EXPECT_TRUE(action->availability.selection_mode == panel.selection_mode);
 			++item_count;
 		}
 	}
 
-	CHECK(item_count == 36U);
+	EXPECT_TRUE(item_count == 36U);
 }
 
-TEST_CASE("host contract operation panel preserves native panel ordering", "[host-contract]")
-{
+TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelPreservesNativePanelOrdering) {
 	check_action_order(require_panel("object_operations"), std::array<std::string_view, 5> {{
 		"invert_mesh",
 		"shade_smooth_mesh",
@@ -143,17 +140,16 @@ TEST_CASE("host contract operation panel preserves native panel ordering", "[hos
 	}});
 }
 
-TEST_CASE("host contract operation panel excludes viewport-only tool actions", "[host-contract]")
-{
+TEST(QdrEditorMetadataPanelCatalogTests, HostContractOperationPanelExcludesViewportOnlyToolActions) {
 	for (const qhc::HostOperationPanelDescriptor& panel : qhc::operation_panel_catalog()) {
-		CHECK_FALSE(panel_contains(panel, "insert_edge_loop_tool"));
-		CHECK_FALSE(panel_contains(panel, "knife_tool"));
-		CHECK_FALSE(panel_contains(panel, "cut_tool"));
-		CHECK_FALSE(panel_contains(panel, "poly_tool"));
+		EXPECT_FALSE(panel_contains(panel, "insert_edge_loop_tool"));
+		EXPECT_FALSE(panel_contains(panel, "knife_tool"));
+		EXPECT_FALSE(panel_contains(panel, "cut_tool"));
+		EXPECT_FALSE(panel_contains(panel, "poly_tool"));
 	}
 
-	CHECK_FALSE(qhc::find_action_descriptor("insert_edge_loop_tool")->show_in_operations_panel);
-	CHECK_FALSE(qhc::find_action_descriptor("knife_tool")->show_in_operations_panel);
-	CHECK_FALSE(qhc::find_action_descriptor("cut_tool")->show_in_operations_panel);
-	CHECK_FALSE(qhc::find_action_descriptor("poly_tool")->show_in_operations_panel);
+	EXPECT_FALSE(qhc::find_action_descriptor("insert_edge_loop_tool")->show_in_operations_panel);
+	EXPECT_FALSE(qhc::find_action_descriptor("knife_tool")->show_in_operations_panel);
+	EXPECT_FALSE(qhc::find_action_descriptor("cut_tool")->show_in_operations_panel);
+	EXPECT_FALSE(qhc::find_action_descriptor("poly_tool")->show_in_operations_panel);
 }

@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.h>
-#include <mesh/polygon/poly_operation_descriptor.h>
+#include <mesh/polygon/document.hpp>
+#include <mesh/polygon/poly_operation_descriptor.hpp>
 
-#include <diagnostics/profile.h>
+#include <diagnostics/profile.hpp>
 
 #include <string_view>
 

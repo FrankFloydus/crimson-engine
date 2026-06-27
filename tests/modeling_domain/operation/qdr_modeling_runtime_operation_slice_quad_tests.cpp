@@ -4,40 +4,37 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-#include <editor/modeling/operations/operation_schema.h>
+#include <editor/modeling/operations/operation_schema.hpp>
 
-TEST_CASE("slice quad operation schema owns integer slice ranges", "[operation][slice_quad]")
-{
+TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadOperationSchemaOwnsIntegerSliceRanges) {
 	const quader_editor_core::SliceQuadOperationSchema schema = quader_editor_core::slice_quad_operation_schema();
 
-	REQUIRE(schema.id == quader_editor_core::EditorOperationId::slice_quad);
-	REQUIRE(std::string(schema.operation_id) == "slice_quad");
-	REQUIRE(std::string(schema.label) == "Slice Quad");
-	REQUIRE(std::string(schema.x_slices.id) == "x_slices");
-	REQUIRE(std::string(schema.y_slices.id) == "y_slices");
-	REQUIRE(schema.x_slices.default_value == 1);
-	REQUIRE(schema.y_slices.default_value == 1);
-	REQUIRE(schema.x_slices.minimum == 0);
-	REQUIRE(schema.y_slices.minimum == 0);
-	REQUIRE(schema.x_slices.maximum == 64);
-	REQUIRE(schema.y_slices.maximum == 64);
-	REQUIRE(schema.x_slices.hard_limits);
-	REQUIRE(schema.y_slices.hard_limits);
+	EXPECT_TRUE(schema.id == quader_editor_core::EditorOperationId::slice_quad);
+	EXPECT_TRUE(std::string(schema.operation_id) == "slice_quad");
+	EXPECT_TRUE(std::string(schema.label) == "Slice Quad");
+	EXPECT_TRUE(std::string(schema.x_slices.id) == "x_slices");
+	EXPECT_TRUE(std::string(schema.y_slices.id) == "y_slices");
+	EXPECT_TRUE(schema.x_slices.default_value == 1);
+	EXPECT_TRUE(schema.y_slices.default_value == 1);
+	EXPECT_TRUE(schema.x_slices.minimum == 0);
+	EXPECT_TRUE(schema.y_slices.minimum == 0);
+	EXPECT_TRUE(schema.x_slices.maximum == 64);
+	EXPECT_TRUE(schema.y_slices.maximum == 64);
+	EXPECT_TRUE(schema.x_slices.hard_limits);
+	EXPECT_TRUE(schema.y_slices.hard_limits);
 
 	quader_editor_core::SliceQuadOperationSettings settings;
 	settings.x_slices = -100;
 	settings.y_slices = 1000;
 	const quader_editor_core::SliceQuadOperationSettings normalized =
 		quader_editor_core::normalize_slice_quad_operation_settings(settings);
-	REQUIRE(normalized.x_slices == 0);
-	REQUIRE(normalized.y_slices == 64);
+	EXPECT_TRUE(normalized.x_slices == 0);
+	EXPECT_TRUE(normalized.y_slices == 64);
 }
 
-TEST_CASE("slice quad previews generated face grids transactionally", "[operation][slice_quad]")
-{
-	SECTION("commit records generated topology and undo restores the base")
+TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadPreviewsGeneratedFaceGridsTransactionallyCommitRecordsGeneratedTopologyAndUndoRestoresTheBase) {
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
@@ -47,18 +44,25 @@ TEST_CASE("slice quad previews generated face grids transactionally", "[operatio
 			quader_editor_core::SelectionMode::face);
 		const std::size_t face_count_before = session.objects().front().document.faces.size();
 
-		REQUIRE(session.begin_slice_quad_preview(1, 1).changed);
-		REQUIRE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
-		REQUIRE(session.objects().front().document.faces.size() == 4U);
+		EXPECT_TRUE(session.begin_slice_quad_preview(1, 1).changed);
+		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
+		EXPECT_TRUE(session.objects().front().document.faces.size() == 4U);
 		const quader_editor_core::PreviewTransactionFinishResult commit =
 			session.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::slice_quad);
-		REQUIRE(commit.before.changed);
-		REQUIRE(session.history_status().can_undo);
-		REQUIRE(session.undo().applied);
-		REQUIRE(session.objects().front().document.faces.size() == face_count_before);
+		EXPECT_TRUE(commit.before.changed);
+		EXPECT_TRUE(session.history_status().can_undo);
+		EXPECT_TRUE(session.undo().applied);
+		EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
 	}
 
-	SECTION("cancel and update rebuild from the preview base")
+	
+
+	
+}
+
+TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadPreviewsGeneratedFaceGridsTransactionallyCancelAndUpdateRebuildFromThePreviewBase) {
+	
+
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
@@ -67,21 +71,28 @@ TEST_CASE("slice quad previews generated face grids transactionally", "[operatio
 			qdr_test::face_selection({ session.objects().front().document.faces.front().id }, session.objects().front().document.faces.front().id),
 			quader_editor_core::SelectionMode::face);
 
-		REQUIRE(session.begin_slice_quad_preview(1, 0).changed);
-		REQUIRE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
-		REQUIRE(session.objects().front().document.faces.size() == 2U);
-		REQUIRE(session.update_slice_quad_preview(2, 1).changed);
-		REQUIRE(session.objects().front().document.faces.size() == 6U);
+		EXPECT_TRUE(session.begin_slice_quad_preview(1, 0).changed);
+		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
+		EXPECT_TRUE(session.objects().front().document.faces.size() == 2U);
+		EXPECT_TRUE(session.update_slice_quad_preview(2, 1).changed);
+		EXPECT_TRUE(session.objects().front().document.faces.size() == 6U);
 
 		const quader_editor_core::PreviewTransactionFinishResult cancel =
 			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::slice_quad);
 
-		REQUIRE(cancel.restored);
-		REQUIRE(session.objects().front().document.faces.size() == 1U);
-		REQUIRE_FALSE(session.history_status().can_undo);
+		EXPECT_TRUE(cancel.restored);
+		EXPECT_TRUE(session.objects().front().document.faces.size() == 1U);
+		EXPECT_FALSE(session.history_status().can_undo);
 	}
 
-	SECTION("wrong expected kind does not finish the active slice quad preview")
+	
+}
+
+TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadPreviewsGeneratedFaceGridsTransactionallyWrongExpectedKindDoesNotFinishTheActiveSliceQuadPreview) {
+	
+
+	
+
 	{
 		quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 		quader_editor_core::EditorSession session({ object });
@@ -89,13 +100,13 @@ TEST_CASE("slice quad previews generated face grids transactionally", "[operatio
 			1,
 			qdr_test::face_selection({ session.objects().front().document.faces.front().id }, session.objects().front().document.faces.front().id),
 			quader_editor_core::SelectionMode::face);
-		REQUIRE(session.begin_slice_quad_preview(1, 1).changed);
+		EXPECT_TRUE(session.begin_slice_quad_preview(1, 1).changed);
 
 		const quader_editor_core::PreviewTransactionFinishResult cancel =
 			session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::thicken);
 
-		REQUIRE_FALSE(cancel.restored);
-		REQUIRE(session.preview_transaction_status().active);
-		REQUIRE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
+		EXPECT_FALSE(cancel.restored);
+		EXPECT_TRUE(session.preview_transaction_status().active);
+		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
 	}
 }

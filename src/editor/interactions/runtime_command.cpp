@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/runtime_command.h>
-#include <editor/interactions/selection_edit.h>
-#include <editor/modeling/runtime/tool_runtime_policy.h>
+#include <editor/modeling/runtime/runtime_command.hpp>
+#include <editor/interactions/selection_edit.hpp>
+#include <editor/modeling/runtime/tool_runtime_policy.hpp>
 
 #include <cmath>
 #include <cstddef>

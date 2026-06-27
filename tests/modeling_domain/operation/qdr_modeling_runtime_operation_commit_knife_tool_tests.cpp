@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
 using namespace quader_poly;
 
@@ -42,8 +42,7 @@ std::vector<KnifePointTarget> quad_knife_points(const qdr_test::QuadFixture& fix
 
 } // namespace
 
-TEST_CASE("commit knife tool applies the captured stroke through editor history", "[operation][commit_knife_tool]")
-{
+TEST(QdrModelingRuntimeOperationCommitKnifeToolTests, CommitKnifeToolAppliesTheCapturedStrokeThroughEditorHistory) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	quader_editor_core::PolygonObject object = qdr_test::make_object(1, fixture.document);
 	quader_editor_core::EditorSession session({ object });
@@ -65,20 +64,18 @@ TEST_CASE("commit knife tool applies the captured stroke through editor history"
 
 	const quader_editor_core::CommandResult result = session.commit_knife_tool(state);
 
-	REQUIRE(result.ok);
-	REQUIRE(result.changed);
-	REQUIRE(session.objects().front().document.faces.size() > face_count_before);
-	REQUIRE(session.history_status().can_undo);
-	REQUIRE_FALSE(quader_editor_core::knife_tool_preview(state).active);
-	REQUIRE(state.points.empty());
-	REQUIRE(state.segments.empty());
-	REQUIRE(session.undo().applied);
-	REQUIRE(session.objects().front().document.faces.size() == face_count_before);
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
+	EXPECT_TRUE(session.history_status().can_undo);
+	EXPECT_FALSE(quader_editor_core::knife_tool_preview(state).active);
+	EXPECT_TRUE(state.points.empty());
+	EXPECT_TRUE(state.segments.empty());
+	EXPECT_TRUE(session.undo().applied);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
 }
 
-TEST_CASE("commit knife tool rejects incomplete or targetless state predictably", "[operation][commit_knife_tool]")
-{
-	SECTION("empty stroke resets as unchanged success")
+TEST(QdrModelingRuntimeOperationCommitKnifeToolTests, CommitKnifeToolRejectsIncompleteOrTargetlessStatePredictablyEmptyStrokeResetsAsUnchangedSuccess) {
 	{
 		quader_editor_core::EditorSession session;
 		session.reset_to_default_scene();
@@ -87,12 +84,17 @@ TEST_CASE("commit knife tool rejects incomplete or targetless state predictably"
 
 		const quader_editor_core::CommandResult result = session.commit_knife_tool(state);
 
-		REQUIRE(result.ok);
-		REQUIRE_FALSE(result.changed);
-		REQUIRE_FALSE(quader_editor_core::knife_tool_preview(state).active);
+		EXPECT_TRUE(result.ok);
+		EXPECT_FALSE(result.changed);
+		EXPECT_FALSE(quader_editor_core::knife_tool_preview(state).active);
 	}
 
-	SECTION("segments without a target keep the state inspectable and invalid")
+	
+}
+
+TEST(QdrModelingRuntimeOperationCommitKnifeToolTests, CommitKnifeToolRejectsIncompleteOrTargetlessStatePredictablySegmentsWithoutATargetKeepTheStateInspectableAndInvalid) {
+	
+
 	{
 		quader_editor_core::EditorSession session;
 		session.reset_to_default_scene();
@@ -103,9 +105,9 @@ TEST_CASE("commit knife tool rejects incomplete or targetless state predictably"
 
 		const quader_editor_core::CommandResult result = session.commit_knife_tool(state);
 
-		REQUIRE_FALSE(result.ok);
-		REQUIRE_FALSE(result.changed);
-		REQUIRE(state.status == quader_editor_core::KnifeToolStatus::invalid_target);
-		REQUIRE(quader_editor_core::knife_tool_preview(state).active);
+		EXPECT_FALSE(result.ok);
+		EXPECT_FALSE(result.changed);
+		EXPECT_TRUE(state.status == quader_editor_core::KnifeToolStatus::invalid_target);
+		EXPECT_TRUE(quader_editor_core::knife_tool_preview(state).active);
 	}
 }

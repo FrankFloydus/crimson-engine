@@ -4,14 +4,14 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/operations/operation_command.h>
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/interaction_api.h>
-#include <editor/metadata/host_contract.h>
-#include <io/qdr/QdrRuntimeIoCompat.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/operations/operation_command.hpp>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <editor/metadata/host_contract.hpp>
+#include <io/qdr/qdr_runtime_io_compat.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <fstream>
 #include <iterator>
@@ -48,40 +48,39 @@ qec::ViewportCameraState front_camera()
 
 void require_compilable_meshes(const qec::EditorSession& session)
 {
-	REQUIRE_FALSE(session.objects().empty());
+	EXPECT_FALSE(session.objects().empty());
 	for (const qec::PolygonObject& object : session.objects()) {
 		const quader_poly::CompiledMesh mesh = quader_poly::compile_document(object.document);
-		CHECK_FALSE(mesh.vertices.empty());
-		CHECK_FALSE(mesh.indices.empty());
-		CHECK_FALSE(mesh.primitives.empty());
+		EXPECT_FALSE(mesh.vertices.empty());
+		EXPECT_FALSE(mesh.indices.empty());
+		EXPECT_FALSE(mesh.primitives.empty());
 	}
 }
 
 std::string read_text_file(const char *path)
 {
 	std::ifstream input(path, std::ios::binary);
-	REQUIRE(input.good());
+	EXPECT_TRUE(input.good());
 	return { std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
 }
 
 } // namespace
 
-TEST_CASE("custom engine consumer can run a modeling session through app-owned modeling domain", "[custom-engine][modeling-runtime-smoke]")
-{
-	REQUIRE(catalog_has_operation("duplicate_meshes"));
-	REQUIRE(catalog_has_tool("move"));
-	REQUIRE_FALSE(qhc::ui_placement_catalog().empty());
-	REQUIRE_FALSE(qhc::overlay_layer_catalog().empty());
-	REQUIRE_FALSE(qhc::material_recipe_catalog().empty());
+TEST(QdrCustomEngineModelingRuntimeSmokeTests, CustomEngineConsumerCanRunAModelingSessionThroughAppOwnedModelingDomain) {
+	EXPECT_TRUE(catalog_has_operation("duplicate_meshes"));
+	EXPECT_TRUE(catalog_has_tool("move"));
+	EXPECT_FALSE(qhc::ui_placement_catalog().empty());
+	EXPECT_FALSE(qhc::overlay_layer_catalog().empty());
+	EXPECT_FALSE(qhc::material_recipe_catalog().empty());
 
 	qec::EditorSession session;
 	const qec::CommandResult create = session.create_box_from_bounds(
 		{ -1.0F, -1.0F, -1.0F },
 		{ 1.0F, 1.0F, 1.0F });
-	REQUIRE(create.ok);
-	REQUIRE(create.changed);
-	REQUIRE(session.has_selection());
-	REQUIRE(session.objects().size() == 1U);
+	EXPECT_TRUE(create.ok);
+	EXPECT_TRUE(create.changed);
+	EXPECT_TRUE(session.has_selection());
+	EXPECT_TRUE(session.objects().size() == 1U);
 
 	qec::DuplicateMeshesOperationSettings duplicate_settings;
 	duplicate_settings.explicit_offset = { { 2.0F, 0.0F, 0.0F }, true };
@@ -92,20 +91,20 @@ TEST_CASE("custom engine consumer can run a modeling session through app-owned m
 	duplicate_command.settings = duplicate_settings;
 
 	const qec::EditorOperationCommandResult duplicate = qec::execute_command(session, duplicate_command);
-	REQUIRE(duplicate.command.ok);
-	REQUIRE(duplicate.command.changed);
-	REQUIRE(session.has_selection());
-	REQUIRE(session.objects().size() == 2U);
+	EXPECT_TRUE(duplicate.command.ok);
+	EXPECT_TRUE(duplicate.command.changed);
+	EXPECT_TRUE(session.has_selection());
+	EXPECT_TRUE(session.objects().size() == 2U);
 	require_compilable_meshes(session);
 
 	qec::SelectionHoverState hover;
 	const qec::SelectionOverlayFrame overlay =
 		qec::build_selection_overlay_frame(session.objects(), session.selection_mode(), hover);
-	CHECK_FALSE(overlay.triangles.empty());
-	CHECK_FALSE(overlay.lines.empty());
+	EXPECT_FALSE(overlay.triangles.empty());
+	EXPECT_FALSE(overlay.lines.empty());
 
 	const std::optional<quader::QVec3> pivot = session.selection_center();
-	REQUIRE(pivot.has_value());
+	EXPECT_TRUE(pivot.has_value());
 
 	qec::TransformGizmoFrameInput gizmo_input;
 	gizmo_input.tool = qec::ViewportInteractionTool::move;
@@ -115,33 +114,32 @@ TEST_CASE("custom engine consumer can run a modeling session through app-owned m
 	gizmo_input.camera = front_camera();
 
 	const qec::TransformGizmoFrame gizmo = qec::build_transform_gizmo_frame(gizmo_input);
-	REQUIRE(gizmo.info.ok);
-	CHECK_FALSE(gizmo.axes.empty());
-	CHECK_FALSE(gizmo.planes.empty());
+	EXPECT_TRUE(gizmo.info.ok);
+	EXPECT_FALSE(gizmo.axes.empty());
+	EXPECT_FALSE(gizmo.planes.empty());
 
 	const std::string serialized = quader_io::serialize_session_state(session.state());
-	REQUIRE(serialized.find("\"format\": \"quader.qdr\"") != std::string::npos);
+	EXPECT_TRUE(serialized.find("\"format\": \"quader.qdr\"") != std::string::npos);
 
 	const quader_io::ReadResult read = quader_io::deserialize_session_state(serialized);
-	REQUIRE(read.ok);
+	EXPECT_TRUE(read.ok);
 
 	const qec::EditorSession loaded(read.state);
-	REQUIRE(loaded.objects().size() == session.objects().size());
+	EXPECT_TRUE(loaded.objects().size() == session.objects().size());
 	require_compilable_meshes(loaded);
 }
 
 #ifdef QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH
-TEST_CASE("custom engine smoke test stays off legacy adapter surfaces", "[custom-engine][surface]")
-{
+TEST(QdrCustomEngineModelingRuntimeSmokeTests, CustomEngineSmokeTestStaysOffLegacyAdapterSurfaces) {
 	const std::string source = read_text_file(QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH);
 	const std::string bridge_name = std::string("qdr_") + "un" + "ity";
 	const std::string managed_import = std::string("Dll") + "Import";
 	const std::string session_export_prefix = std::string("qdr_") + "session_";
 
-	CHECK(source.find(bridge_name) == std::string::npos);
-	CHECK(source.find(managed_import) == std::string::npos);
-	CHECK(source.find(std::string("native") + "/include") == std::string::npos);
-	CHECK(source.find(std::string("native") + "\\include") == std::string::npos);
-	CHECK(source.find(session_export_prefix) == std::string::npos);
+	EXPECT_TRUE(source.find(bridge_name) == std::string::npos);
+	EXPECT_TRUE(source.find(managed_import) == std::string::npos);
+	EXPECT_TRUE(source.find(std::string("native") + "/include") == std::string::npos);
+	EXPECT_TRUE(source.find(std::string("native") + "\\include") == std::string::npos);
+	EXPECT_TRUE(source.find(session_export_prefix) == std::string::npos);
 }
 #endif

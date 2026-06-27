@@ -37,9 +37,27 @@ cmake --build --preset vs2026-debug
 ctest --preset vs2026-debug
 ```
 
-The native test suite is split into the GoogleTest `quader_tests` target and the Catch2
-`quader_modeling_domain_tests` aggregate. Both run through `ctest --preset vs2026-debug`. Do not
-add SDK-specific configure, build, or test presets back to the native app.
+The native test suite uses GoogleTest only. It is split into `quader_guardrail_tests` for pure
+source-policy scans, `quader_tests` for app/runtime behavior, and the GoogleTest
+`quader_modeling_domain_tests` aggregate for modeling-domain behavior. All three run through
+`ctest --preset vs2026-debug`. Do not add SDK-specific configure, build, or test presets back to the
+native app.
+
+## Affected Build/Test Workflow
+
+For prototyping or agent loops, prefer the affected workflow before full verification:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -PlanOnly -ChangedPath src/render/overlay/overlay_renderable_builder.cpp
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -ChangedPath src/render/overlay/overlay_renderable_builder.cpp
+```
+
+The tool prints the old full workflow and the affected workflow side by side. Use `-MeasureFull`
+when a task needs a concrete before -> after timing comparison. Use `-IncludeApp` when manual
+in-app verification or runtime resource copying is part of the change. In a very dirty worktree,
+pass comma-separated `-ChangedPath` values for the intended edit instead of letting the tool infer
+the whole diff. Docs, tooling, and source-policy changes should route to `quader_guardrail_tests`
+instead of forcing the app/runtime test executable to build.
 
 If PowerShell inherits conflicting `PATH`/`Path` entries and CMake cannot find tools, use:
 

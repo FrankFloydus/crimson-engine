@@ -4,15 +4,15 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/metadata/host_contract.h>
+#include <editor/metadata/host_contract.hpp>
 
-#include <editor/modeling/operations/operation_registry.h>
-#include <editor/modeling/operations/operation_schema.h>
-#include <editor/modeling/runtime/session.h>
-#include <editor/tools/ViewportToolDescriptorCatalog.h>
-#include <editor/interactions/cut_tool.h>
-#include <editor/interactions/tool_identity.h>
-#include <editor/modeling/runtime/tool_constants.h>
+#include <editor/modeling/operations/operation_registry.hpp>
+#include <editor/modeling/operations/operation_schema.hpp>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/tools/viewport_tool_descriptor_catalog.hpp>
+#include <editor/interactions/cut_tool.hpp>
+#include <editor/interactions/tool_identity.hpp>
+#include <editor/modeling/runtime/tool_constants.hpp>
 
 #include <array>
 #include <vector>

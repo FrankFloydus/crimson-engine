@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "support/BehaviorScenario.h"
+#include "support/behavior_scenario.hpp"
 
 #include <gtest/gtest.h>
 

@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <mesh/geometry/geometry.h>
+#include <mesh/geometry/geometry.hpp>
 
 #include <array>
 #include <cmath>
@@ -689,8 +689,7 @@ void projected_polygon_triangulation_is_stable()
 
 } // namespace
 
-TEST_CASE("qdr_geometry helpers remain stable", "[qdr_geometry]")
-{
+TEST(QdrGeometryTests, QdrGeometryHelpersRemainStable) {
 	ray_plane_and_projection_are_stable();
 	plane_basis_helpers_are_stable();
 	three_plane_intersection_is_stable();

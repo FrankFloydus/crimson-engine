@@ -4,13 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/interactions/interaction_api.h>
+#include <editor/interactions/interaction_api.hpp>
 
-TEST_CASE("extrude drag reports preview mode and cut count policy", "[editor-core][tool][extrude]")
-{
+TEST(QdrModelingRuntimeToolExtrudeTests, ExtrudeDragReportsPreviewModeAndCutCountPolicy) {
 	quader_editor_core::ExtrudeBeginInput input;
 	input.source_object_id = 4;
 	input.source_face_index = 1;
@@ -24,34 +22,33 @@ TEST_CASE("extrude drag reports preview mode and cut count policy", "[editor-cor
 	input.face_vertex_indices = { 0, 1, 2, 3 };
 
 	const quader_editor_core::ExtrudeStateResult begin = quader_editor_core::begin_extrude_drag(input);
-	REQUIRE(begin.ok);
+	EXPECT_TRUE(begin.ok);
 	quader_editor_core::ExtrudeToolState state = begin.state;
 
-	REQUIRE(quader_editor_core::preview_extrude_from_distance(state, 3.0, false, true, 1.0).ok);
-	CHECK(state.preview_distance == Catch::Approx(3.0));
-	CHECK(state.max_cut_count == 2);
+	EXPECT_TRUE(quader_editor_core::preview_extrude_from_distance(state, 3.0, false, true, 1.0).ok);
+	EXPECT_NEAR(state.preview_distance, 3.0, 0.0001);
+	EXPECT_TRUE(state.max_cut_count == 2);
 
 	const quader_editor_core::ExtrudeStateResult cuts =
 		quader_editor_core::adjust_extrude_cut_count(state, 5, true, 1.0);
-	REQUIRE(cuts.ok);
-	CHECK(cuts.changed);
-	CHECK(cuts.state.requested_cut_count == 2);
-	CHECK(cuts.state.active_cut_count == 2);
+	EXPECT_TRUE(cuts.ok);
+	EXPECT_TRUE(cuts.changed);
+	EXPECT_TRUE(cuts.state.requested_cut_count == 2);
+	EXPECT_TRUE(cuts.state.active_cut_count == 2);
 
 	quader_editor_core::set_extrude_preview_valid(state, true);
 	const quader_editor_core::ExtrudePreviewOperation operation = quader_editor_core::extrude_preview_operation(state);
-	REQUIRE(operation.ok);
-	CHECK(operation.preview_mode == quader_editor_core::ExtrudePreviewMode::positive);
-	CHECK_FALSE(operation.clear_preview_meshes);
+	EXPECT_TRUE(operation.ok);
+	EXPECT_TRUE(operation.preview_mode == quader_editor_core::ExtrudePreviewMode::positive);
+	EXPECT_FALSE(operation.clear_preview_meshes);
 
-	REQUIRE(quader_editor_core::preview_extrude_from_distance(state, -1.0, false, true, 1.0).ok);
+	EXPECT_TRUE(quader_editor_core::preview_extrude_from_distance(state, -1.0, false, true, 1.0).ok);
 	const quader_editor_core::ExtrudePreviewOperation negative_operation = quader_editor_core::extrude_preview_operation(state);
-	CHECK(negative_operation.preview_mode == quader_editor_core::ExtrudePreviewMode::negative);
-	CHECK(negative_operation.clear_preview_meshes);
+	EXPECT_TRUE(negative_operation.preview_mode == quader_editor_core::ExtrudePreviewMode::negative);
+	EXPECT_TRUE(negative_operation.clear_preview_meshes);
 }
 
-TEST_CASE("extrude drag pixels and grid cuts clamp to preview capacity", "[editor-core][tool][extrude]")
-{
+TEST(QdrModelingRuntimeToolExtrudeTests, ExtrudeDragPixelsAndGridCutsClampToPreviewCapacity) {
 	quader_editor_core::ExtrudeBeginInput input;
 	input.source_object_id = 7;
 	input.source_face_index = 2;
@@ -60,23 +57,23 @@ TEST_CASE("extrude drag pixels and grid cuts clamp to preview capacity", "[edito
 	input.screen_axis = { 0.0F, 1.0F };
 
 	quader_editor_core::ExtrudeStateResult result = quader_editor_core::begin_extrude_drag(input);
-	REQUIRE(result.ok);
+	EXPECT_TRUE(result.ok);
 	quader_editor_core::ExtrudeToolState state = result.state;
 
 	result = quader_editor_core::preview_extrude_from_drag_pixels(state, 96.0, false, true, 64.0);
-	REQUIRE(result.ok);
-	CHECK(result.state.preview_distance == Catch::Approx(128.0));
-	CHECK(result.state.active_cut_count == 0);
+	EXPECT_TRUE(result.ok);
+	EXPECT_NEAR(result.state.preview_distance, 128.0, 0.0001);
+	EXPECT_TRUE(result.state.active_cut_count == 0);
 
 	result = quader_editor_core::adjust_extrude_cut_count(result.state, 5, true, 64.0);
-	REQUIRE(result.ok);
-	CHECK(result.changed);
-	CHECK(result.state.requested_cut_count == 1);
-	CHECK(result.state.active_cut_count == 1);
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(result.state.requested_cut_count == 1);
+	EXPECT_TRUE(result.state.active_cut_count == 1);
 
 	const quader_editor_core::ExtrudePreviewStatus status =
 		quader_editor_core::extrude_preview_status(result.state, true);
-	CHECK(status.show_cut_status);
-	CHECK(status.active_cut_count == 1);
-	CHECK(status.max_cut_count == 1);
+	EXPECT_TRUE(status.show_cut_status);
+	EXPECT_TRUE(status.active_cut_count == 1);
+	EXPECT_TRUE(status.max_cut_count == 1);
 }

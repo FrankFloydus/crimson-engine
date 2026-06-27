@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/operations/editor_operation.h>
+#include <editor/modeling/operations/editor_operation.hpp>
 
 namespace quader_editor_core {
 

@@ -4,13 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/editor_runtime.h>
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/interaction_api.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/editor_runtime.hpp>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <vector>
 
@@ -62,14 +61,13 @@ quader_editor_core::MoveToolState begin_axis_move(
 		quader::QVec2 { 200.0F, 100.0F };
 	input.screen_position = { 100.0F, 100.0F };
 	const quader_editor_core::MoveBeginResult begin = quader_editor_core::begin_move_drag(input);
-	REQUIRE(begin.ok);
+	EXPECT_TRUE(begin.ok);
 	return begin.state;
 }
 
 } // namespace
 
-TEST_CASE("move drag begins with local and screen axis state", "[editor-core][tool][move]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, MoveDragBeginsWithLocalAndScreenAxisState) {
 	quader_editor_core::MoveBeginInput input;
 	input.axis = quader_editor_core::TransformAxis::x;
 	input.center_local = { 2.0F, 0.0F, 0.0F };
@@ -81,24 +79,23 @@ TEST_CASE("move drag begins with local and screen axis state", "[editor-core][to
 	input.screen_position = { 12.0F, 22.0F };
 
 	const quader_editor_core::MoveBeginResult begin = quader_editor_core::begin_move_drag(input);
-	REQUIRE(begin.ok);
-	CHECK(begin.state.active);
-	CHECK(begin.state.axis == quader_editor_core::TransformAxis::x);
-	CHECK(begin.state.center_world.x == Catch::Approx(5.0F));
-	CHECK(begin.state.screen_axis.x == Catch::Approx(1.0F));
-	CHECK(begin.state.screen_axis.y == Catch::Approx(0.0F));
+	EXPECT_TRUE(begin.ok);
+	EXPECT_TRUE(begin.state.active);
+	EXPECT_TRUE(begin.state.axis == quader_editor_core::TransformAxis::x);
+	EXPECT_NEAR(begin.state.center_world.x, 5.0F, 0.0001);
+	EXPECT_NEAR(begin.state.screen_axis.x, 1.0F, 0.0001);
+	EXPECT_NEAR(begin.state.screen_axis.y, 0.0F, 0.0001);
 
 	quader_editor_core::MoveToolState state = begin.state;
 	const quader_editor_core::MovePreviewResult preview =
 		quader_editor_core::preview_move_from_drag_pixels(state, 64.0, false, true, 0.5);
-	REQUIRE(preview.ok);
-	CHECK(preview.preview_distance == Catch::Approx(0.5));
-	CHECK(preview.preview_delta.x == Catch::Approx(0.5F));
-	CHECK(preview.preview_delta.y == Catch::Approx(0.0F));
+	EXPECT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_distance, 0.5, 0.0001);
+	EXPECT_NEAR(preview.preview_delta.x, 0.5F, 0.0001);
+	EXPECT_NEAR(preview.preview_delta.y, 0.0F, 0.0001);
 }
 
-TEST_CASE("object move drag snaps selection center to grid intersections", "[editor-core][tool][move]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, ObjectMoveDragSnapsSelectionCenterToGridIntersections) {
 	quader_editor_core::MoveToolState state =
 		begin_axis_move(quader_editor_core::TransformAxis::x, { 0.25F, 0.0F, 0.0F });
 
@@ -113,28 +110,26 @@ TEST_CASE("object move drag snaps selection center to grid intersections", "[edi
 			1.0,
 			true);
 
-	REQUIRE(preview.ok);
-	CHECK(preview.preview_delta.x == Catch::Approx(0.75F));
-	CHECK(state.center_world.x + preview.preview_delta.x == Catch::Approx(1.0F));
+	EXPECT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_delta.x, 0.75F, 0.0001);
+	EXPECT_NEAR(state.center_world.x + preview.preview_delta.x, 1.0F, 0.0001);
 }
 
-TEST_CASE("move drag snaps preview delta to hovered vertex target", "[editor-core][tool][move][snap]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsPreviewDeltaToHoveredVertexTarget) {
 	quader_editor_core::MoveToolState state =
 		begin_axis_move(quader_editor_core::TransformAxis::y, { 2.0F, 3.0F, 4.0F });
 
 	const quader_editor_core::MovePreviewResult preview =
 		quader_editor_core::preview_move_to_axis_snap_target(state, { 99.0F, 7.0F, -30.0F });
 
-	REQUIRE(preview.ok);
-	CHECK(preview.preview_distance == Catch::Approx(4.0));
-	CHECK(preview.preview_delta.x == Catch::Approx(0.0F));
-	CHECK(preview.preview_delta.y == Catch::Approx(4.0F));
-	CHECK(preview.preview_delta.z == Catch::Approx(0.0F));
+	EXPECT_TRUE(preview.ok);
+	EXPECT_NEAR(preview.preview_distance, 4.0, 0.0001);
+	EXPECT_NEAR(preview.preview_delta.x, 0.0F, 0.0001);
+	EXPECT_NEAR(preview.preview_delta.y, 4.0F, 0.0001);
+	EXPECT_NEAR(preview.preview_delta.z, 0.0F, 0.0001);
 }
 
-TEST_CASE("move drag snaps selected anchor to vertex target on another mesh", "[editor-core][tool][move][snap]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsSelectedAnchorToVertexTargetOnAnotherMesh) {
 	quader_editor_core::PolygonObject moving = cube_object(1, {}, true);
 	quader_editor_core::PolygonObject target = cube_object(2, { 0.0F, 4.0F, 0.0F }, false);
 	quader_editor_core::EditorSession session({ moving, target });
@@ -158,27 +153,26 @@ TEST_CASE("move drag snaps selected anchor to vertex target on another mesh", "[
 	const quader_editor_core::CommandResult result =
 		quader_editor_core::apply_transform_drag_preview(session, drag, input);
 
-	REQUIRE(result.ok);
-	CHECK(result.changed);
-	CHECK(drag.snap_target.kind == quader_editor_core::TransformSnapLandmarkKind::vertex);
-	CHECK(drag.snap_target.object_id == 2);
-	CHECK(drag.move.preview_delta.x == Catch::Approx(0.0F));
-	CHECK(drag.move.preview_delta.y == Catch::Approx(5.0F));
-	CHECK(drag.move.preview_delta.z == Catch::Approx(0.0F));
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(drag.snap_target.kind == quader_editor_core::TransformSnapLandmarkKind::vertex);
+	EXPECT_TRUE(drag.snap_target.object_id == 2);
+	EXPECT_NEAR(drag.move.preview_delta.x, 0.0F, 0.0001);
+	EXPECT_NEAR(drag.move.preview_delta.y, 5.0F, 0.0001);
+	EXPECT_NEAR(drag.move.preview_delta.z, 0.0F, 0.0001);
 
 	const std::vector<quader_editor_core::SelectionOverlayPoint> points =
 		quader_editor_core::transform_drag_snap_overlay_points(drag);
-	REQUIRE(points.size() == 2U);
-	CHECK(points[0].layer == quader_editor_core::SelectionOverlayLayer::hover_vertex);
-	CHECK(points[0].object_id == 2);
-	CHECK(points[0].color_abgr == 0xff38ff00U);
-	CHECK(points[1].layer == quader_editor_core::SelectionOverlayLayer::snap_target_vertex);
-	CHECK(points[1].object_id == 2);
-	CHECK(points[1].color_abgr == 0xff0000ffU);
+	EXPECT_TRUE(points.size() == 2U);
+	EXPECT_TRUE(points[0].layer == quader_editor_core::SelectionOverlayLayer::hover_vertex);
+	EXPECT_TRUE(points[0].object_id == 2);
+	EXPECT_TRUE(points[0].color_abgr == 0xff38ff00U);
+	EXPECT_TRUE(points[1].layer == quader_editor_core::SelectionOverlayLayer::snap_target_vertex);
+	EXPECT_TRUE(points[1].object_id == 2);
+	EXPECT_TRUE(points[1].color_abgr == 0xff0000ffU);
 }
 
-TEST_CASE("move drag ignores vertex snap when no target is inside snap radius", "[editor-core][tool][move][snap]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, MoveDragIgnoresVertexSnapWhenNoTargetIsInsideSnapRadius) {
 	quader_editor_core::EditorSession session({ cube_object(1, {}, true) });
 	session.set_selected_object_ids({ 1 }, 1);
 
@@ -200,14 +194,13 @@ TEST_CASE("move drag ignores vertex snap when no target is inside snap radius", 
 	const quader_editor_core::CommandResult result =
 		quader_editor_core::apply_transform_drag_preview(session, drag, input);
 
-	REQUIRE(result.ok);
-	CHECK_FALSE(result.changed);
-	CHECK(drag.snap_target.kind == quader_editor_core::TransformSnapLandmarkKind::none);
-	CHECK(drag.move.preview_delta.y == Catch::Approx(0.0F));
+	EXPECT_TRUE(result.ok);
+	EXPECT_FALSE(result.changed);
+	EXPECT_TRUE(drag.snap_target.kind == quader_editor_core::TransformSnapLandmarkKind::none);
+	EXPECT_NEAR(drag.move.preview_delta.y, 0.0F, 0.0001);
 }
 
-TEST_CASE("transform drag runtime helper resets stale move state before activation", "[editor-core][tool][move]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, TransformDragRuntimeHelperResetsStaleMoveStateBeforeActivation) {
 	quader_editor_core::EditorRuntime runtime;
 	quader_editor_core::TransformDragState stale_drag;
 	stale_drag.active = true;
@@ -221,29 +214,28 @@ TEST_CASE("transform drag runtime helper resets stale move state before activati
 		quader_editor_core::TransformAxis::z,
 		{ 1.0F, 2.0F, 3.0F });
 
-	CHECK(runtime.status().transform_drag_active);
-	CHECK(runtime.state().transform_drag.tool == quader_editor_core::ViewportInteractionTool::rotate);
-	CHECK(runtime.state().transform_drag.axis == quader_editor_core::TransformAxis::z);
-	CHECK(runtime.state().transform_drag.pivot.x == Catch::Approx(1.0F));
-	CHECK(runtime.state().transform_drag.pivot.y == Catch::Approx(2.0F));
-	CHECK(runtime.state().transform_drag.pivot.z == Catch::Approx(3.0F));
-	CHECK(runtime.state().transform_drag.move.preview_delta.x == Catch::Approx(0.0F));
+	EXPECT_TRUE(runtime.status().transform_drag_active);
+	EXPECT_TRUE(runtime.state().transform_drag.tool == quader_editor_core::ViewportInteractionTool::rotate);
+	EXPECT_TRUE(runtime.state().transform_drag.axis == quader_editor_core::TransformAxis::z);
+	EXPECT_NEAR(runtime.state().transform_drag.pivot.x, 1.0F, 0.0001);
+	EXPECT_NEAR(runtime.state().transform_drag.pivot.y, 2.0F, 0.0001);
+	EXPECT_NEAR(runtime.state().transform_drag.pivot.z, 3.0F, 0.0001);
+	EXPECT_NEAR(runtime.state().transform_drag.move.preview_delta.x, 0.0F, 0.0001);
 
 	runtime.clear_transform_drag_state();
-	CHECK_FALSE(runtime.status().transform_drag_active);
+	EXPECT_FALSE(runtime.status().transform_drag_active);
 }
 
-TEST_CASE("modal move planner routes duplicate previews and tool commits", "[editor-core][tool][move]")
-{
+TEST(QdrModelingRuntimeToolMoveTests, ModalMovePlannerRoutesDuplicatePreviewsAndToolCommits) {
 	quader_editor_core::ModalMoveBeginPlan begin =
 		quader_editor_core::plan_modal_move_drag_begin({ true, true, true });
-	CHECK(begin.request_duplicate);
-	CHECK(begin.preview_uses_transform);
-	CHECK(begin.mark_selection_dirty);
+	EXPECT_TRUE(begin.request_duplicate);
+	EXPECT_TRUE(begin.preview_uses_transform);
+	EXPECT_TRUE(begin.mark_selection_dirty);
 
 	begin = quader_editor_core::plan_modal_move_drag_begin({ true, false, false });
-	CHECK_FALSE(begin.request_duplicate);
-	CHECK_FALSE(begin.preview_uses_transform);
+	EXPECT_FALSE(begin.request_duplicate);
+	EXPECT_FALSE(begin.preview_uses_transform);
 
 	quader_editor_core::ModalMoveUpdatePlan update =
 		quader_editor_core::plan_modal_move_drag_update({
@@ -254,8 +246,8 @@ TEST_CASE("modal move planner routes duplicate previews and tool commits", "[edi
 			{},
 			quader_editor_core::tool_epsilon,
 		});
-	CHECK(update.handled);
-	CHECK_FALSE(update.changed);
+	EXPECT_TRUE(update.handled);
+	EXPECT_FALSE(update.changed);
 
 	update = quader_editor_core::plan_modal_move_drag_update({
 		true,
@@ -265,7 +257,7 @@ TEST_CASE("modal move planner routes duplicate previews and tool commits", "[edi
 		{ 0.0F, 1.0F, 0.0F },
 		quader_editor_core::tool_epsilon,
 	});
-	CHECK(update.route == quader_editor_core::ModalMovePreviewRoute::extend_patch_preview);
+	EXPECT_TRUE(update.route == quader_editor_core::ModalMovePreviewRoute::extend_patch_preview);
 
 	update = quader_editor_core::plan_modal_move_drag_update({
 		true,
@@ -275,7 +267,7 @@ TEST_CASE("modal move planner routes duplicate previews and tool commits", "[edi
 		{ 0.0F, 1.0F, 0.0F },
 		quader_editor_core::tool_epsilon,
 	});
-	CHECK(update.route == quader_editor_core::ModalMovePreviewRoute::extrude_patch_preview);
+	EXPECT_TRUE(update.route == quader_editor_core::ModalMovePreviewRoute::extrude_patch_preview);
 
 	quader_editor_core::ModalMoveCommitPlan commit =
 		quader_editor_core::plan_modal_move_drag_commit({
@@ -285,10 +277,10 @@ TEST_CASE("modal move planner routes duplicate previews and tool commits", "[edi
 			{},
 			quader_editor_core::tool_epsilon,
 		});
-	CHECK(commit.handled);
-	CHECK_FALSE(commit.model_changed);
-	CHECK(commit.restore_base_snapshot);
-	CHECK(commit.restore_selection);
+	EXPECT_TRUE(commit.handled);
+	EXPECT_FALSE(commit.model_changed);
+	EXPECT_TRUE(commit.restore_base_snapshot);
+	EXPECT_TRUE(commit.restore_selection);
 
 	commit = quader_editor_core::plan_modal_move_drag_commit({
 		true,
@@ -297,7 +289,7 @@ TEST_CASE("modal move planner routes duplicate previews and tool commits", "[edi
 		{ 0.0F, 2.0F, 0.0F },
 		quader_editor_core::tool_epsilon,
 	});
-	CHECK(commit.model_changed);
-	CHECK(commit.route == quader_editor_core::ModalMoveCommitRoute::extrude_patch);
-	CHECK(commit.undo_action == "Quader Extrude Face");
+	EXPECT_TRUE(commit.model_changed);
+	EXPECT_TRUE(commit.route == quader_editor_core::ModalMoveCommitRoute::extrude_patch);
+	EXPECT_TRUE(commit.undo_action == "Quader Extrude Face");
 }

@@ -20,7 +20,7 @@ Owns:
 - stable file DTOs that are converted into editor runtime state instead of
   serializing live `EditorSession` internals directly
 
-The stable DTO boundary is `<io/qdr/qdr_document.h>` plus the
+The stable DTO boundary is `<io/qdr/qdr_document.hpp>` plus the
 `quader_qdr_document_io` target. It depends on portable document types only.
 The root schema is versioned with `format: "quader.qdr"`, `version: 1`, and a
 canonical `document` payload. Readers still accept the old v1 `session` payload
@@ -31,7 +31,7 @@ Project-document persistence emits texture assets referenced by material
 point at missing or invalid texture asset ids, and atomic project writes validate
 the temporary file by reading it back before replacing the target.
 
-The legacy `<io/qdr/QdrRuntimeIoCompat.h>` API remains as a modeling-runtime
+The legacy `<io/qdr/qdr_runtime_io_compat.hpp>` API remains as a modeling-runtime
 compatibility adapter for callers that still save or load `SessionState`. It
 converts through `QdrDocument` and must not add canonical schema fields or
 serialize live editor runtime state such as dirty flags, undo history, redo

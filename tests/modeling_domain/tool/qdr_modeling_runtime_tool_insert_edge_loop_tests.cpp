@@ -4,56 +4,52 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/editor_runtime.h>
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/interaction_api.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/editor_runtime.hpp>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <vector>
 
-TEST_CASE("insert edge loop factor snaps to grid", "[editor-core][tool][insert-edge-loop]")
-{
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopFactorSnapsToGrid) {
 	const quader_poly::Document cube = quader_poly::make_cube({});
-	REQUIRE_FALSE(cube.faces.empty());
-	REQUIRE(cube.faces[0].vertices.size() >= 2);
+	EXPECT_FALSE(cube.faces.empty());
+	EXPECT_TRUE(cube.faces[0].vertices.size() >= 2);
 	const quader_poly::Edge edge { cube.faces[0].vertices[0], cube.faces[0].vertices[1] };
 
-	CHECK(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 0.51F, 1.0, false) == Catch::Approx(0.51F));
-	CHECK(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 0.49F, 1.0, true) == Catch::Approx(0.5F));
-	CHECK(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, -10.0F, 1.0, false) == Catch::Approx(0.01F));
-	CHECK(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 10.0F, 1.0, false) == Catch::Approx(0.99F));
+	EXPECT_NEAR(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 0.51F, 1.0, false), 0.51F, 0.0001);
+	EXPECT_NEAR(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 0.49F, 1.0, true), 0.5F, 0.0001);
+	EXPECT_NEAR(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, -10.0F, 1.0, false), 0.01F, 0.0001);
+	EXPECT_NEAR(quader_editor_core::snap_insert_edge_loop_factor(cube, edge, 10.0F, 1.0, false), 0.99F, 0.0001);
 }
 
-TEST_CASE("insert edge loop preview rejects grid snaps onto existing edges", "[editor-core][tool][insert-edge-loop]")
-{
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewRejectsGridSnapsOntoExistingEdges) {
 	const quader_poly::Document cube = quader_poly::make_cube({});
-	REQUIRE_FALSE(cube.faces.empty());
-	REQUIRE(cube.faces[0].vertices.size() >= 2);
+	EXPECT_FALSE(cube.faces.empty());
+	EXPECT_TRUE(cube.faces[0].vertices.size() >= 2);
 	const quader_poly::Edge edge { cube.faces[0].vertices[0], cube.faces[0].vertices[1] };
 
 	const std::optional<float> midpoint =
 		quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.49F, 1.0, true);
-	REQUIRE(midpoint.has_value());
-	CHECK(*midpoint == Catch::Approx(0.5F));
-	CHECK_FALSE(quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.04F, 1.0, true).has_value());
-	CHECK_FALSE(quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.96F, 1.0, true).has_value());
+	EXPECT_TRUE(midpoint.has_value());
+	EXPECT_NEAR(*midpoint, 0.5F, 0.0001);
+	EXPECT_FALSE(quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.04F, 1.0, true).has_value());
+	EXPECT_FALSE(quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.96F, 1.0, true).has_value());
 
 	const std::optional<float> free_slide =
 		quader_editor_core::snap_insert_edge_loop_preview_factor(cube, edge, 0.04F, 1.0, false);
-	REQUIRE(free_slide.has_value());
-	CHECK(*free_slide == Catch::Approx(0.04F));
+	EXPECT_TRUE(free_slide.has_value());
+	EXPECT_NEAR(*free_slide, 0.04F, 0.0001);
 }
 
-TEST_CASE("insert edge loop preview stores seed and clears hover candidate", "[editor-core][tool][insert-edge-loop]")
-{
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewStoresSeedAndClearsHoverCandidate) {
 	quader_editor_core::PolygonObject object;
 	object.id = 3;
 	object.document = quader_poly::make_cube({});
-	REQUIRE_FALSE(object.document.faces.empty());
-	REQUIRE(object.document.faces[0].vertices.size() >= 2);
+	EXPECT_FALSE(object.document.faces.empty());
+	EXPECT_TRUE(object.document.faces[0].vertices.size() >= 2);
 	const quader_poly::Edge edge { object.document.faces[0].vertices[0], object.document.faces[0].vertices[1] };
 	std::vector<quader_editor_core::PolygonObject> objects { object };
 
@@ -64,36 +60,35 @@ TEST_CASE("insert edge loop preview stores seed and clears hover candidate", "[e
 
 	const bool changed =
 		quader_editor_core::set_insert_edge_loop_preview(state, objects, hover, 3, edge, 0.5F, true);
-	REQUIRE(changed);
-	CHECK(state.active);
-	CHECK(state.dragging);
-	CHECK(state.object_id == 3);
-	CHECK(state.edge.a == edge.a);
-	CHECK(state.edge.b == edge.b);
-	CHECK(state.factor == Catch::Approx(0.5F));
-	CHECK_FALSE(state.preview_lines.empty());
-	CHECK(quader_editor_core::insert_edge_loop_tool_has_seed(state));
-	CHECK(hover.candidate_object_id == 3);
+	EXPECT_TRUE(changed);
+	EXPECT_TRUE(state.active);
+	EXPECT_TRUE(state.dragging);
+	EXPECT_TRUE(state.object_id == 3);
+	EXPECT_TRUE(state.edge.a == edge.a);
+	EXPECT_TRUE(state.edge.b == edge.b);
+	EXPECT_NEAR(state.factor, 0.5F, 0.0001);
+	EXPECT_FALSE(state.preview_lines.empty());
+	EXPECT_TRUE(quader_editor_core::insert_edge_loop_tool_has_seed(state));
+	EXPECT_TRUE(hover.candidate_object_id == 3);
 }
 
-TEST_CASE("insert edge loop preview clears when snapped drag reaches an existing edge", "[editor-core][tool][insert-edge-loop]")
-{
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopPreviewClearsWhenSnappedDragReachesAnExistingEdge) {
 	quader_editor_core::PolygonObject object;
 	object.id = 3;
 	object.document = quader_poly::make_cube({});
-	REQUIRE_FALSE(object.document.faces.empty());
-	REQUIRE(object.document.faces[0].vertices.size() >= 2);
+	EXPECT_FALSE(object.document.faces.empty());
+	EXPECT_TRUE(object.document.faces[0].vertices.size() >= 2);
 	const quader_poly::Edge edge { object.document.faces[0].vertices[0], object.document.faces[0].vertices[1] };
 	const quader_poly::Vertex *start = quader_poly::find_vertex(object.document, edge.a);
 	const quader_poly::Vertex *end = quader_poly::find_vertex(object.document, edge.b);
-	REQUIRE(start != nullptr);
-	REQUIRE(end != nullptr);
+	EXPECT_TRUE(start != nullptr);
+	EXPECT_TRUE(end != nullptr);
 	std::vector<quader_editor_core::PolygonObject> objects { object };
 
 	quader_editor_core::InsertEdgeLoopToolState state;
 	quader_editor_core::SelectionHoverState hover;
-	REQUIRE(quader_editor_core::set_insert_edge_loop_preview(state, objects, hover, 3, edge, 0.5F, true));
-	REQUIRE_FALSE(state.preview_lines.empty());
+	EXPECT_TRUE(quader_editor_core::set_insert_edge_loop_preview(state, objects, hover, 3, edge, 0.5F, true));
+	EXPECT_FALSE(state.preview_lines.empty());
 
 	const quader::QVec3 near_start {
 		start->position.x + ((end->position.x - start->position.x) * 0.04F),
@@ -105,18 +100,17 @@ TEST_CASE("insert edge loop preview clears when snapped drag reaches an existing
 		{ 0.0F, -1.0F, 0.0F },
 	};
 
-	CHECK_FALSE(quader_editor_core::update_insert_edge_loop_locked_seed(state, objects, hover, ray, 1.0, true, true));
-	CHECK(state.active);
-	CHECK(state.dragging);
-	CHECK(state.object_id == 3);
-	CHECK(state.edge == quader_poly::make_edge(edge.a, edge.b));
-	CHECK(state.preview_lines.empty());
-	CHECK(hover.object_id == 3);
-	CHECK(hover.kind == quader_editor_core::SelectionHoverKind::edge);
+	EXPECT_FALSE(quader_editor_core::update_insert_edge_loop_locked_seed(state, objects, hover, ray, 1.0, true, true));
+	EXPECT_TRUE(state.active);
+	EXPECT_TRUE(state.dragging);
+	EXPECT_TRUE(state.object_id == 3);
+	EXPECT_TRUE(state.edge == quader_poly::make_edge(edge.a, edge.b));
+	EXPECT_TRUE(state.preview_lines.empty());
+	EXPECT_TRUE(hover.object_id == 3);
+	EXPECT_TRUE(hover.kind == quader_editor_core::SelectionHoverKind::edge);
 }
 
-TEST_CASE("insert edge loop reset can preserve active ownership through runtime helper", "[editor-core][tool][insert-edge-loop]")
-{
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopResetCanPreserveActiveOwnershipThroughRuntimeHelper) {
 	quader_editor_core::EditorRuntimeState runtime;
 	runtime.active_tool = quader_editor_core::ViewportInteractionTool::insert_edge_loop;
 	runtime.insert_edge_loop.active = true;
@@ -125,17 +119,16 @@ TEST_CASE("insert edge loop reset can preserve active ownership through runtime 
 	runtime.insert_edge_loop.preview_lines.push_back({});
 
 	quader_editor_core::reset_editor_runtime_insert_edge_loop_state(runtime, true);
-	CHECK(runtime.insert_edge_loop.active);
-	CHECK_FALSE(runtime.insert_edge_loop.dragging);
-	CHECK(runtime.insert_edge_loop.object_id == -1);
-	CHECK(runtime.insert_edge_loop.preview_lines.empty());
+	EXPECT_TRUE(runtime.insert_edge_loop.active);
+	EXPECT_FALSE(runtime.insert_edge_loop.dragging);
+	EXPECT_TRUE(runtime.insert_edge_loop.object_id == -1);
+	EXPECT_TRUE(runtime.insert_edge_loop.preview_lines.empty());
 
 	quader_editor_core::reset_editor_runtime_insert_edge_loop_state(runtime, false);
-	CHECK_FALSE(runtime.insert_edge_loop.active);
+	EXPECT_FALSE(runtime.insert_edge_loop.active);
 }
 
-TEST_CASE("insert edge loop runtime helpers publish drag state and promote hover candidates", "[editor-core][tool][insert-edge-loop]")
-{
+TEST(QdrModelingRuntimeToolInsertEdgeLoopTests, InsertEdgeLoopRuntimeHelpersPublishDragStateAndPromoteHoverCandidates) {
 	quader_editor_core::EditorRuntime runtime;
 	runtime.state().hover.object_id = 42;
 	runtime.state().box.preview_valid = true;
@@ -147,15 +140,15 @@ TEST_CASE("insert edge loop runtime helpers publish drag state and promote hover
 	request.selection_mode = quader_editor_core::SelectionMode::object;
 	const quader_editor_core::EditorRuntimeToolActivationResult result = runtime.activate_tool(request);
 
-	REQUIRE(result.applied);
-	CHECK(result.plan.selection_mode == quader_editor_core::SelectionMode::edge);
-	CHECK(result.plan.selection_mode_changed);
-	CHECK(runtime.state().active_tool == quader_editor_core::ViewportInteractionTool::insert_edge_loop);
-	CHECK(runtime.state().insert_edge_loop.active);
-	CHECK_FALSE(runtime.state().knife.active);
-	CHECK(runtime.state().hover.candidate_object_id == 42);
-	CHECK_FALSE(quader_editor_core::editor_runtime_status(runtime.state()).box_active);
-	CHECK(runtime.state().box_grid_size == quader_editor_core::default_editor_runtime_box_grid_size);
+	EXPECT_TRUE(result.applied);
+	EXPECT_TRUE(result.plan.selection_mode == quader_editor_core::SelectionMode::edge);
+	EXPECT_TRUE(result.plan.selection_mode_changed);
+	EXPECT_TRUE(runtime.state().active_tool == quader_editor_core::ViewportInteractionTool::insert_edge_loop);
+	EXPECT_TRUE(runtime.state().insert_edge_loop.active);
+	EXPECT_FALSE(runtime.state().knife.active);
+	EXPECT_TRUE(runtime.state().hover.candidate_object_id == 42);
+	EXPECT_FALSE(quader_editor_core::editor_runtime_status(runtime.state()).box_active);
+	EXPECT_TRUE(runtime.state().box_grid_size == quader_editor_core::default_editor_runtime_box_grid_size);
 
 	quader_editor_core::InsertEdgeLoopToolState edge_loop;
 	edge_loop.active = true;
@@ -164,10 +157,10 @@ TEST_CASE("insert edge loop runtime helpers publish drag state and promote hover
 	edge_loop.edge = { 1, 2 };
 	edge_loop.preview_lines.push_back({});
 	runtime.set_insert_edge_loop_state(edge_loop);
-	CHECK(runtime.status().insert_edge_loop_active);
-	CHECK(runtime.status().insert_edge_loop_dragging);
+	EXPECT_TRUE(runtime.status().insert_edge_loop_active);
+	EXPECT_TRUE(runtime.status().insert_edge_loop_dragging);
 
 	runtime.set_insert_edge_loop_dragging(false);
-	CHECK(runtime.status().insert_edge_loop_active);
-	CHECK_FALSE(runtime.status().insert_edge_loop_dragging);
+	EXPECT_TRUE(runtime.status().insert_edge_loop_active);
+	EXPECT_FALSE(runtime.status().insert_edge_loop_dragging);
 }

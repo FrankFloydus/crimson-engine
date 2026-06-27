@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "math/GlmBridge.h"
-#include "math/Types.h"
-#include "support/GuardrailFileScan.h"
+#include "math/glm_bridge.hpp"
+#include "math/types.hpp"
+#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
 
@@ -27,27 +27,27 @@ void expectQVec3Near(QVec3 actual, QVec3 expected) {
 } // namespace
 
 TEST(MathTypesTests, ValueHeadersDoNotIncludeGlmBridge) {
-    EXPECT_EQ(readSourceFile("src/math/Types.h").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/Types.h").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/QVec2.h").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/QVec3.h").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/QQuat.h").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/QMat4.h").find("glm"), std::string::npos);
-    EXPECT_EQ(readSourceFile("src/math/types/QTransform.h").find("glm"), std::string::npos);
-    EXPECT_NE(readSourceFile("src/math/GlmBridge.h").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types.hpp").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types.hpp").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types/q_vec2.hpp").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types/q_vec3.hpp").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types/q_quat.hpp").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types/q_mat4.hpp").find("glm"), std::string::npos);
+    EXPECT_EQ(readSourceFile("src/math/types/q_transform.hpp").find("glm"), std::string::npos);
+    EXPECT_NE(readSourceFile("src/math/glm_bridge.hpp").find("glm"), std::string::npos);
 }
 
 TEST(MathTypesTests, QUmbrellaOnlyIncludesSplitVectorHeaders) {
-    const std::string vecUmbrella = readSourceFile("src/math/Types.h");
+    const std::string vecUmbrella = readSourceFile("src/math/types.hpp");
 
-    EXPECT_NE(vecUmbrella.find("#include \"math/types/QVec2.h\""), std::string::npos);
-    EXPECT_NE(vecUmbrella.find("#include \"math/types/QVec3.h\""), std::string::npos);
+    EXPECT_NE(vecUmbrella.find("#include \"math/types/q_vec2.hpp\""), std::string::npos);
+    EXPECT_NE(vecUmbrella.find("#include \"math/types/q_vec3.hpp\""), std::string::npos);
     EXPECT_EQ(vecUmbrella.find("struct QVec2"), std::string::npos);
     EXPECT_EQ(vecUmbrella.find("struct QVec3"), std::string::npos);
 }
 
 TEST(MathTypesTests, PolygonDocumentUsesSharedVectorTypes) {
-    const std::string polygonDocument = readSourceFile("src/mesh/polygon/document.h");
+    const std::string polygonDocument = readSourceFile("src/mesh/polygon/document.hpp");
 
     EXPECT_NE(polygonDocument.find("quader::QVec2"), std::string::npos);
     EXPECT_NE(polygonDocument.find("quader::QVec3"), std::string::npos);

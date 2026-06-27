@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "core/LocalizationService.h"
-#include "editor/metadata/host_contract.h"
-#include "editor/tools/ViewportToolDescriptorCatalog.h"
-#include "support/GuardrailFileScan.h"
+#include "core/localization_service.hpp"
+#include "editor/metadata/host_contract.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
+#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
 
@@ -277,7 +277,7 @@ TEST(LocalizationResourceTests, ModelingActionDisabledReasonsUseLocaleKeys) {
         }
     }
 
-    const std::string source = readFile(sourcePath("src/editor/modeling/services/ModelingActionCatalog.cpp"));
+    const std::string source = readFile(sourcePath("src/editor/modeling/services/modeling_action_catalog.cpp"));
     EXPECT_EQ(source.find("Select something to delete."), std::string::npos);
     EXPECT_EQ(source.find("Select something to use this action."), std::string::npos);
     EXPECT_EQ(source.find("Set an active selection element."), std::string::npos);

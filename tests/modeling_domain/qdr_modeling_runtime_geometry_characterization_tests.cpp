@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/session.h>
-#include <editor/interactions/interaction_api.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -358,8 +358,7 @@ void overlay_visibility_preserves_edit_wire_layers()
 
 } // namespace
 
-TEST_CASE("qdr_editor_core_geometry_characterization_tests", "[editor-core-geometry-characterization]")
-{
+TEST(QdrModelingRuntimeGeometryCharacterizationTests, QdrEditorCoreGeometryCharacterizationTests) {
 	viewport_projection_and_ray_construction_are_stable();
 	screen_segment_distance_and_gizmo_pick_ordering_are_stable();
 	box_construction_ray_plane_behavior_is_stable();

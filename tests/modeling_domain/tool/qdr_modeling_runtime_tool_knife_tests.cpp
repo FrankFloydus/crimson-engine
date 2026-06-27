@@ -4,28 +4,26 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
 #include <array>
 #include <cmath>
 #include <string>
 
-#include <editor/modeling/runtime/editor_runtime.h>
-#include <editor/interactions/knife_tool.h>
-#include <editor/interactions/tool_snapping.h>
-#include <editor/modeling/runtime/tool_registry.h>
-#include <editor/interactions/interaction_api.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/editor_runtime.hpp>
+#include <editor/interactions/knife_tool.hpp>
+#include <editor/interactions/tool_snapping.hpp>
+#include <editor/modeling/runtime/tool_registry.hpp>
+#include <editor/interactions/interaction_api.hpp>
+#include <mesh/polygon/document.hpp>
 
-TEST_CASE("knife tool exposes stable registry contract and reset ownership", "[editor-core][tool][knife]")
-{
+TEST(QdrModelingRuntimeToolKnifeTests, KnifeToolExposesStableRegistryContractAndResetOwnership) {
 	const quader_editor_core::EditorTool& tool = quader_editor_core::knife_tool();
-	CHECK(tool.tool_id() == quader_editor_core::ViewportInteractionTool::knife);
-	CHECK(std::string(tool.id()) == "knife");
-	CHECK(std::string(tool.label()) == "Knife");
-	CHECK(quader_editor_core::editor_tool_for_kind(quader_editor_core::ViewportInteractionTool::knife) == &tool);
-	CHECK(quader_editor_core::editor_tool_for_id("knife") == &tool);
+	EXPECT_TRUE(tool.tool_id() == quader_editor_core::ViewportInteractionTool::knife);
+	EXPECT_TRUE(std::string(tool.id()) == "knife");
+	EXPECT_TRUE(std::string(tool.label()) == "Knife");
+	EXPECT_TRUE(quader_editor_core::editor_tool_for_kind(quader_editor_core::ViewportInteractionTool::knife) == &tool);
+	EXPECT_TRUE(quader_editor_core::editor_tool_for_id("knife") == &tool);
 
 	quader_editor_core::EditorRuntimeState runtime;
 	runtime.active_tool = quader_editor_core::ViewportInteractionTool::knife;
@@ -34,16 +32,15 @@ TEST_CASE("knife tool exposes stable registry contract and reset ownership", "[e
 	runtime.knife.preview_points.push_back({});
 
 	tool.reset_runtime_state(runtime, true);
-	CHECK(runtime.knife.active);
-	CHECK_FALSE(runtime.knife.has_current);
-	CHECK(runtime.knife.preview_points.empty());
+	EXPECT_TRUE(runtime.knife.active);
+	EXPECT_FALSE(runtime.knife.has_current);
+	EXPECT_TRUE(runtime.knife.preview_points.empty());
 
 	tool.reset_runtime_state(runtime, false);
-	CHECK_FALSE(runtime.knife.active);
+	EXPECT_FALSE(runtime.knife.active);
 }
 
-TEST_CASE("knife preview reports stroke overlay state", "[editor-core][tool][knife]")
-{
+TEST(QdrModelingRuntimeToolKnifeTests, KnifePreviewReportsStrokeOverlayState) {
 	quader_editor_core::KnifeToolState state;
 	state.active = true;
 	state.has_active_stroke = true;
@@ -66,32 +63,31 @@ TEST_CASE("knife preview reports stroke overlay state", "[editor-core][tool][kni
 	quader_editor_core::rebuild_knife_overlay(state);
 	const quader_editor_core::KnifeToolPreview preview = quader_editor_core::knife_tool_preview(state);
 
-	CHECK(preview.active);
-	CHECK(preview.has_active_stroke);
-	CHECK(preview.has_current);
-	CHECK(preview.target_object_id == 7);
-	CHECK(preview.previous_point.x == Catch::Approx(1.0F));
-	CHECK(preview.current_point.z == Catch::Approx(1.0F));
-	CHECK(preview.point_count == 2U);
-	CHECK(preview.segment_count == 1U);
-	CHECK(preview.preview_point_count == 4U);
-	CHECK(preview.preview_line_count == 2U);
-	CHECK(preview.can_commit);
+	EXPECT_TRUE(preview.active);
+	EXPECT_TRUE(preview.has_active_stroke);
+	EXPECT_TRUE(preview.has_current);
+	EXPECT_TRUE(preview.target_object_id == 7);
+	EXPECT_NEAR(preview.previous_point.x, 1.0F, 0.0001);
+	EXPECT_NEAR(preview.current_point.z, 1.0F, 0.0001);
+	EXPECT_TRUE(preview.point_count == 2U);
+	EXPECT_TRUE(preview.segment_count == 1U);
+	EXPECT_TRUE(preview.preview_point_count == 4U);
+	EXPECT_TRUE(preview.preview_line_count == 2U);
+	EXPECT_TRUE(preview.can_commit);
 }
 
-TEST_CASE("knife snapping and accept flow stay in editor-core", "[editor-core][tool][knife]")
-{
+TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappingAndAcceptFlowStayInEditorCore) {
 	const quader::QVec3 snapped =
 		quader_editor_core::snap_knife_point_to_grid({ 0.49F, 0.26F, -0.49F }, 0.5, true);
-	CHECK(snapped.x == Catch::Approx(0.5F));
-	CHECK(snapped.y == Catch::Approx(0.5F));
-	CHECK(snapped.z == Catch::Approx(-0.5F));
+	EXPECT_NEAR(snapped.x, 0.5F, 0.0001);
+	EXPECT_NEAR(snapped.y, 0.5F, 0.0001);
+	EXPECT_NEAR(snapped.z, -0.5F, 0.0001);
 
 	const quader::QVec3 raw =
 		quader_editor_core::snap_knife_point_to_grid({ 0.49F, 0.26F, -0.49F }, 0.5, false);
-	CHECK(raw.x == Catch::Approx(0.49F));
-	CHECK(raw.y == Catch::Approx(0.26F));
-	CHECK(raw.z == Catch::Approx(-0.49F));
+	EXPECT_NEAR(raw.x, 0.49F, 0.0001);
+	EXPECT_NEAR(raw.y, 0.26F, 0.0001);
+	EXPECT_NEAR(raw.z, -0.49F, 0.0001);
 
 	const quader::QVec3 constrained =
 		quader_editor_core::constrain_knife_point_to_axis(
@@ -100,9 +96,9 @@ TEST_CASE("knife snapping and accept flow stay in editor-core", "[editor-core][t
 			{ 0.0F, 1.0F, 0.0F },
 			0.5,
 			true);
-	CHECK(constrained.x == Catch::Approx(1.0F));
-	CHECK(constrained.y == Catch::Approx(0.0F));
-	CHECK(constrained.z == Catch::Approx(0.0F));
+	EXPECT_NEAR(constrained.x, 1.0F, 0.0001);
+	EXPECT_NEAR(constrained.y, 0.0F, 0.0001);
+	EXPECT_NEAR(constrained.z, 0.0F, 0.0001);
 
 	quader_editor_core::EditorSession session;
 	quader_editor_core::PolygonObject object;
@@ -115,7 +111,7 @@ TEST_CASE("knife snapping and accept flow stay in editor-core", "[editor-core][t
 	quader_editor_core::ViewportCameraState camera;
 	camera.projection = quader_editor_core::CameraProjection::perspective;
 
-	REQUIRE(quader_editor_core::update_knife_preview_from_pick(
+	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
 		session,
 		state,
 		hover,
@@ -124,20 +120,20 @@ TEST_CASE("knife snapping and accept flow stay in editor-core", "[editor-core][t
 		0.5,
 		true,
 		false));
-	CHECK(state.active);
-	CHECK(state.has_current);
-	CHECK(state.current_target_valid);
-	CHECK(state.target_object_id == 7);
-	CHECK(state.status == quader_editor_core::KnifeToolStatus::preview);
-	CHECK(state.current_point.y == Catch::Approx(1.0F));
+	EXPECT_TRUE(state.active);
+	EXPECT_TRUE(state.has_current);
+	EXPECT_TRUE(state.current_target_valid);
+	EXPECT_TRUE(state.target_object_id == 7);
+	EXPECT_TRUE(state.status == quader_editor_core::KnifeToolStatus::preview);
+	EXPECT_NEAR(state.current_point.y, 1.0F, 0.0001);
 
-	REQUIRE(quader_editor_core::accept_knife_current_point(session, state, camera, 0.5));
-	CHECK(state.has_active_stroke);
-	REQUIRE(state.points.size() == 1U);
-	CHECK_FALSE(state.has_current);
-	CHECK(state.status == quader_editor_core::KnifeToolStatus::previous_set);
+	EXPECT_TRUE(quader_editor_core::accept_knife_current_point(session, state, camera, 0.5));
+	EXPECT_TRUE(state.has_active_stroke);
+	EXPECT_TRUE(state.points.size() == 1U);
+	EXPECT_FALSE(state.has_current);
+	EXPECT_TRUE(state.status == quader_editor_core::KnifeToolStatus::previous_set);
 
-	REQUIRE(quader_editor_core::update_knife_preview_from_pick(
+	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
 		session,
 		state,
 		hover,
@@ -146,17 +142,16 @@ TEST_CASE("knife snapping and accept flow stay in editor-core", "[editor-core][t
 		0.5,
 		true,
 		false));
-	REQUIRE(quader_editor_core::accept_knife_current_point(session, state, camera, 0.5));
-	CHECK(state.has_active_stroke);
-	REQUIRE(state.points.size() == 2U);
-	REQUIRE(state.segments.size() == 1U);
-	CHECK(state.segments[0].first_point == 0U);
-	CHECK(state.segments[0].second_point == 1U);
-	CHECK_FALSE(state.preview_lines.empty());
+	EXPECT_TRUE(quader_editor_core::accept_knife_current_point(session, state, camera, 0.5));
+	EXPECT_TRUE(state.has_active_stroke);
+	EXPECT_TRUE(state.points.size() == 2U);
+	EXPECT_TRUE(state.segments.size() == 1U);
+	EXPECT_TRUE(state.segments[0].first_point == 0U);
+	EXPECT_TRUE(state.segments[0].second_point == 1U);
+	EXPECT_FALSE(state.preview_lines.empty());
 }
 
-TEST_CASE("knife snapped face points stay projected onto tilted mesh surfaces", "[editor-core][tool][knife]")
-{
+TEST(QdrModelingRuntimeToolKnifeTests, KnifeSnappedFacePointsStayProjectedOntoTiltedMeshSurfaces) {
 	quader_poly::Document document;
 	const quader_poly::ElementId bottom_left = quader_poly::add_vertex(document, { -2.0F, 0.0F, -2.0F });
 	const quader_poly::ElementId top_left = quader_poly::add_vertex(document, { -2.0F, 2.0F, 2.0F });
@@ -169,7 +164,7 @@ TEST_CASE("knife snapped face points stay projected onto tilted mesh surfaces", 
 			top_right,
 			bottom_right,
 		});
-	REQUIRE(face_id != quader_poly::invalid_element_id);
+	EXPECT_TRUE(face_id != quader_poly::invalid_element_id);
 
 	quader_editor_core::PolygonObject object;
 	object.id = 7;
@@ -190,7 +185,7 @@ TEST_CASE("knife snapped face points stay projected onto tilted mesh surfaces", 
 		camera.transform.origin,
 		{ 0.0F, -1.0F, 0.0F },
 	};
-	REQUIRE(quader_editor_core::update_knife_preview_from_pick(
+	EXPECT_TRUE(quader_editor_core::update_knife_preview_from_pick(
 		session,
 		state,
 		hover,
@@ -200,17 +195,17 @@ TEST_CASE("knife snapped face points stay projected onto tilted mesh surfaces", 
 		true,
 		false));
 
-	REQUIRE(state.has_current);
-	REQUIRE(state.current_target.kind == quader_poly::KnifePointTargetKind::face_point);
-	CHECK(state.current_target.face_id == face_id);
+	EXPECT_TRUE(state.has_current);
+	EXPECT_TRUE(state.current_target.kind == quader_poly::KnifePointTargetKind::face_point);
+	EXPECT_TRUE(state.current_target.face_id == face_id);
 
 	const quader_poly::Face *face = quader_poly::find_face(document, face_id);
-	REQUIRE(face != nullptr);
+	EXPECT_TRUE(face != nullptr);
 	const quader::QVec3 normal = quader_poly::face_normal(document, *face);
 	const quader_poly::Vertex *origin = quader_poly::find_vertex(document, bottom_left);
-	REQUIRE(origin != nullptr);
+	EXPECT_TRUE(origin != nullptr);
 	const float signed_distance = quader::dot(state.current_point - origin->position, normal);
-	CHECK(std::abs(signed_distance) <= 0.0001F);
-	CHECK(state.current_point.y != Catch::Approx(2.0F));
-	CHECK(state.current_target.position.y == Catch::Approx(state.current_point.y));
+	EXPECT_TRUE(std::abs(signed_distance) <= 0.0001F);
+	EXPECT_FALSE(qdr_test::nearly_equal(state.current_point.y, 2.0F, 0.0001));
+	EXPECT_NEAR(state.current_target.position.y, state.current_point.y, 0.0001);
 }

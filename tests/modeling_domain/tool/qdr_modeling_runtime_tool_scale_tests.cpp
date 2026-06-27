@@ -4,10 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/interactions/interaction_api.h>
+#include <editor/interactions/interaction_api.hpp>
 
 namespace {
 
@@ -26,8 +25,7 @@ quader_editor_core::ViewportCameraState front_camera()
 
 } // namespace
 
-TEST_CASE("scale drag snaps against bounds and supports uniform center pick", "[editor-core][tool][scale]")
-{
+TEST(QdrModelingRuntimeToolScaleTests, ScaleDragSnapsAgainstBoundsAndSupportsUniformCenterPick) {
 	quader_editor_core::ScaleBeginInput input;
 	input.axis = quader_editor_core::TransformAxis::x;
 	input.pivot = { 0.0F, 0.0F, 0.0F };
@@ -41,15 +39,15 @@ TEST_CASE("scale drag snaps against bounds and supports uniform center pick", "[
 	input.bounds.max = { 1.0F, 1.0F, 1.0F };
 
 	const quader_editor_core::ScaleBeginResult begin = quader_editor_core::begin_scale_drag(input);
-	REQUIRE(begin.ok);
+	EXPECT_TRUE(begin.ok);
 	quader_editor_core::ScaleToolState state = begin.state;
 
 	const quader_editor_core::ScalePreviewResult preview =
 		quader_editor_core::preview_scale_from_screen_position(state, { 300.0F, 200.0F }, true, 0.5);
-	REQUIRE(preview.ok);
-	CHECK(preview.preview_scale.x > 1.0F);
-	CHECK(preview.preview_scale.y == Catch::Approx(1.0F));
-	CHECK(preview.preview_scale.z == Catch::Approx(1.0F));
+	EXPECT_TRUE(preview.ok);
+	EXPECT_TRUE(preview.preview_scale.x > 1.0F);
+	EXPECT_NEAR(preview.preview_scale.y, 1.0F, 0.0001);
+	EXPECT_NEAR(preview.preview_scale.z, 1.0F, 0.0001);
 
 	quader_editor_core::TransformGizmoFrameInput gizmo;
 	gizmo.tool = quader_editor_core::ViewportInteractionTool::scale;
@@ -61,12 +59,11 @@ TEST_CASE("scale drag snaps against bounds and supports uniform center pick", "[
 
 	const quader_editor_core::TransformGizmoPickHit center_hit =
 		quader_editor_core::pick_transform_gizmo(gizmo, { 400.0F, 300.0F });
-	REQUIRE(center_hit.hit);
-	CHECK(center_hit.axis == quader_editor_core::TransformAxis::all);
+	EXPECT_TRUE(center_hit.hit);
+	EXPECT_TRUE(center_hit.axis == quader_editor_core::TransformAxis::all);
 }
 
-TEST_CASE("modal scale planner routes non-identity previews and commit names", "[editor-core][tool][scale]")
-{
+TEST(QdrModelingRuntimeToolScaleTests, ModalScalePlannerRoutesNonIdentityPreviewsAndCommitNames) {
 	const quader_editor_core::ModalTransformUpdatePlan update =
 		quader_editor_core::plan_modal_transform_drag_update({
 			true,
@@ -76,9 +73,9 @@ TEST_CASE("modal scale planner routes non-identity previews and commit names", "
 			{ 1.0F, 1.25F, 1.0F },
 			quader_editor_core::tool_epsilon,
 		});
-	CHECK(update.handled);
-	CHECK(update.preview_valid);
-	CHECK(update.route == quader_editor_core::ModalTransformPreviewRoute::transform_preview);
+	EXPECT_TRUE(update.handled);
+	EXPECT_TRUE(update.preview_valid);
+	EXPECT_TRUE(update.route == quader_editor_core::ModalTransformPreviewRoute::transform_preview);
 
 	const quader_editor_core::ModalTransformCommitPlan commit =
 		quader_editor_core::plan_modal_transform_drag_commit({
@@ -87,7 +84,7 @@ TEST_CASE("modal scale planner routes non-identity previews and commit names", "
 			true,
 			false,
 		});
-	CHECK(commit.model_changed);
-	CHECK(commit.route == quader_editor_core::ModalTransformCommitRoute::transform_patch);
-	CHECK(commit.undo_action == "Quader Scale Brushes");
+	EXPECT_TRUE(commit.model_changed);
+	EXPECT_TRUE(commit.route == quader_editor_core::ModalTransformCommitRoute::transform_patch);
+	EXPECT_TRUE(commit.undo_action == "Quader Scale Brushes");
 }

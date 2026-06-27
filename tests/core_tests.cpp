@@ -4,104 +4,104 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "assets/AssetRegistry.h"
-#include "assets/BakeService.h"
-#include "assets/MaterialDocument.h"
-#include "core/LocalizationService.h"
-#include "core/Logger.h"
-#include "core/UndoRedoManager.h"
-#include "editor/commands/DocumentCommandService.h"
-#include "editor/history/SceneTransformPreviewTransaction.h"
-#include "editor/transform/SceneTransformDragService.h"
-#include "editor/commands/document/ApplyEntityTransformCommand.h"
-#include "editor/commands/document/BatchDocumentCommand.h"
-#include "editor/commands/document/CreateEntityCommand.h"
-#include "editor/commands/document/DestroyEntityCommand.h"
-#include "editor/commands/document/DuplicateEntityCommand.h"
-#include "editor/commands/document/GroupSelectionCommand.h"
-#include "editor/commands/document/RenameEntityCommand.h"
-#include "editor/commands/document/ReparentEntityCommand.h"
-#include "editor/commands/document/SelectEntitiesCommand.h"
-#include "editor/commands/document/SetLockCommand.h"
-#include "editor/commands/document/SetVisibilityCommand.h"
-#include "editor/commands/document/UngroupSelectionCommand.h"
-#include "scene/document/ProjectDocument.h"
-#include "scene/document/ProjectSession.h"
-#include "editor/commands/EditorCommandService.h"
-#include "editor/history/EditorHistoryService.h"
-#include "editor/history/ModelingMementoCommand.h"
-#include "editor/metadata/host_contract.h"
-#include "editor/selection/EditorSelectionService.h"
-#include "editor/modeling/services/ModelingSessionService.h"
-#include "render/FilamentMaterialLibrary.h"
-#include "render/LightRenderableCache.h"
-#include "render/MaterialBindingService.h"
-#include "render/MeshRenderableCache.h"
-#include "render/MeshRenderableFactory.h"
-#include "render/overlay/ViewportOverlayStyleResolver.h"
-#include "render/MeshRenderableProxy.h"
-#include "render/RenderSystem.h"
-#include "render/RmlFilamentRenderer.h"
-#include "render/SceneRenderBridge.h"
-#include "render/SceneRenderSyncService.h"
-#include "render/TextureBindingService.h"
-#include "render/TextureRegistry.h"
-#include "render/ToolPreviewRenderableCache.h"
-#include "render/ViewportGridRenderer.h"
-#include "render/ViewportOverlayPolicy.h"
-#include "render/overlay/OverlayRenderableProxy.h"
-#include "render/overlay/OverlayProxyFactory.h"
-#include "render/overlay/OverlayRenderableCache.h"
-#include "render/ViewportRenderer.h"
-#include "render/ViewportRenderTarget.h"
-#include "scene/SceneBounds.h"
-#include "scene/SceneDocument.h"
-#include "scene/SceneEntityNaming.h"
-#include "scene/TransformPivot.h"
-#include "platform/PlatformWindow.h"
-#include "platform/SdlEventUtils.h"
-#include "api/QuaderEditorApi.h"
-#include "api/QuaderApiSessionInternalAccess.h"
-#include "ui/ConsoleModel.h"
-#include "ui/backends/rml/MainLayoutRmlBuilder.h"
-#include "ui/backends/rml/RmlMarkupWriter.h"
-#include "ui/components/atoms/UIButtonComponent.h"
-#include "ui/components/atoms/UIChromeButtonComponent.h"
-#include "ui/components/atoms/UIToolbarButtonComponent.h"
-#include "ui/components/common/DockLayoutModel.h"
-#include "ui/components/common/ResizableSplit.h"
-#include "ui/components/common/UIDragDrop.h"
-#include "ui/components/common/UITabStripModel.h"
-#include "ui/components/organisms/MainLayoutModel.h"
-#include "ui/components/organisms/ModelingModeShelfComponent.h"
-#include "ui/components/organisms/WindowChromeControlsComponent.h"
-#include "ui/core/UIClassList.h"
-#include "ui/core/UIElement.h"
-#include "ui/core/UIIconRegistry.h"
-#include "ui/controllers/MainLayoutController.h"
-#include "ui/controllers/MainLayoutDockDragController.h"
-#include "ui/controllers/MainLayoutDockHitRegionBuilder.h"
-#include "ui/controllers/MainLayoutSashRegistry.h"
-#include "ui/controllers/ModelingModeShelfController.h"
-#include "ui/controllers/ResizableSplitController.h"
-#include "ui/controllers/UIDragDropController.h"
-#include "ui/DebugPaletteView.h"
-#include "ui/UISettings.h"
-#include "ui/UIUtilityTokens.h"
-#include "ui/ViewportContextMenuPolicy.h"
-#include "viewport/HostViewportContractAdapter.h"
-#include "viewport/ViewportCameraAdapter.h"
-#include "viewport/ViewportCameraController.h"
-#include "viewport/ViewportGridPlacementPolicy.h"
-#include "viewport/ViewportInputRouter.h"
-#include "viewport/ViewportLayout.h"
-#include "viewport/ViewportSettings.h"
-#include "viewport/ViewportWorkspaceService.h"
-#include "support/GuardrailFileScan.h"
+#include "assets/asset_registry.hpp"
+#include "assets/bake_service.hpp"
+#include "assets/material_document.hpp"
+#include "core/localization_service.hpp"
+#include "core/logger.hpp"
+#include "core/undo_redo_manager.hpp"
+#include "editor/commands/document_command_service.hpp"
+#include "editor/history/scene_transform_preview_transaction.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
+#include "editor/commands/document/apply_entity_transform_command.hpp"
+#include "editor/commands/document/batch_document_command.hpp"
+#include "editor/commands/document/create_entity_command.hpp"
+#include "editor/commands/document/destroy_entity_command.hpp"
+#include "editor/commands/document/duplicate_entity_command.hpp"
+#include "editor/commands/document/group_selection_command.hpp"
+#include "editor/commands/document/rename_entity_command.hpp"
+#include "editor/commands/document/reparent_entity_command.hpp"
+#include "editor/commands/document/select_entities_command.hpp"
+#include "editor/commands/document/set_lock_command.hpp"
+#include "editor/commands/document/set_visibility_command.hpp"
+#include "editor/commands/document/ungroup_selection_command.hpp"
+#include "scene/document/project_document.hpp"
+#include "scene/document/project_session.hpp"
+#include "editor/commands/editor_command_service.hpp"
+#include "editor/history/editor_history_service.hpp"
+#include "editor/history/modeling_memento_command.hpp"
+#include "editor/metadata/host_contract.hpp"
+#include "editor/selection/editor_selection_service.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "render/filament_material_library.hpp"
+#include "render/light_renderable_cache.hpp"
+#include "render/material_binding_service.hpp"
+#include "render/mesh_renderable_cache.hpp"
+#include "render/mesh_renderable_factory.hpp"
+#include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/mesh_renderable_proxy.hpp"
+#include "render/render_system.hpp"
+#include "render/rml_filament_renderer.hpp"
+#include "render/scene_render_bridge.hpp"
+#include "render/scene_render_sync_service.hpp"
+#include "render/texture_binding_service.hpp"
+#include "render/texture_registry.hpp"
+#include "render/tool_preview_renderable_cache.hpp"
+#include "render/viewport_grid_renderer.hpp"
+#include "render/viewport_overlay_policy.hpp"
+#include "render/overlay/overlay_renderable_proxy.hpp"
+#include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_renderable_cache.hpp"
+#include "render/viewport_renderer.hpp"
+#include "render/viewport_render_target.hpp"
+#include "scene/scene_bounds.hpp"
+#include "scene/scene_document.hpp"
+#include "scene/scene_entity_naming.hpp"
+#include "scene/transform_pivot.hpp"
+#include "platform/platform_window.hpp"
+#include "platform/sdl_event_utils.hpp"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "ui/console_model.hpp"
+#include "ui/backends/rml/main_layout_rml_builder.hpp"
+#include "ui/backends/rml/rml_markup_writer.hpp"
+#include "ui/components/atoms/ui_button_component.hpp"
+#include "ui/components/atoms/ui_chrome_button_component.hpp"
+#include "ui/components/atoms/ui_toolbar_button_component.hpp"
+#include "ui/components/common/dock_layout_model.hpp"
+#include "ui/components/common/resizable_split.hpp"
+#include "ui/components/common/ui_drag_drop.hpp"
+#include "ui/components/common/ui_tab_strip_model.hpp"
+#include "ui/components/organisms/main_layout_model.hpp"
+#include "ui/components/organisms/modeling_mode_shelf_component.hpp"
+#include "ui/components/organisms/window_chrome_controls_component.hpp"
+#include "ui/core/ui_class_list.hpp"
+#include "ui/core/ui_element.hpp"
+#include "ui/core/ui_icon_registry.hpp"
+#include "ui/controllers/main_layout_controller.hpp"
+#include "ui/controllers/main_layout_dock_drag_controller.hpp"
+#include "ui/controllers/main_layout_dock_hit_region_builder.hpp"
+#include "ui/controllers/main_layout_sash_registry.hpp"
+#include "ui/controllers/modeling_mode_shelf_controller.hpp"
+#include "ui/controllers/resizable_split_controller.hpp"
+#include "ui/controllers/ui_drag_drop_controller.hpp"
+#include "ui/debug_palette_view.hpp"
+#include "ui/ui_settings.hpp"
+#include "ui/ui_utility_tokens.hpp"
+#include "ui/viewport_context_menu_policy.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_camera_adapter.hpp"
+#include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_grid_placement_policy.hpp"
+#include "viewport/viewport_input_router.hpp"
+#include "viewport/viewport_layout.hpp"
+#include "viewport/viewport_settings.hpp"
+#include "viewport/viewport_workspace_service.hpp"
+#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
 
-#include <editor/interactions/viewport_navigation.h>
+#include <editor/interactions/viewport_navigation.hpp>
 
 #include <algorithm>
 #include <array>
@@ -546,7 +546,7 @@ TEST(LoggerTests, RoutesMessagesToMemorySink) {
 
 TEST(FatalErrorHandlerTests, MainInstallsReportableFatalErrorBoundary) {
     const std::string mainSource = readSourceFile("src/main.cpp");
-    const std::string handlerSource = readSourceFile("src/platform/FatalErrorHandler.cpp");
+    const std::string handlerSource = readSourceFile("src/platform/fatal_error_handler.cpp");
     const std::string cmakeSource = readSourceFile("CMakeLists.txt");
 
     EXPECT_NE(mainSource.find("installFatalErrorHandler(logPath)"), std::string::npos);
@@ -1398,8 +1398,8 @@ TEST(MainLayoutSashRegistryTests, SidebarsAndBottomDockSnapCollapseThroughMainLa
 }
 
 TEST(MainLayoutSashRegistryTests, ViewportMinimumSizeComesFromMainLayoutModel) {
-    const std::string modelHeader = readSourceFile("src/ui/components/organisms/MainLayoutModel.h");
-    const std::string sashSource = readSourceFile("src/ui/controllers/MainLayoutSashRegistry.cpp");
+    const std::string modelHeader = readSourceFile("src/ui/components/organisms/main_layout_model.hpp");
+    const std::string sashSource = readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
 
     EXPECT_NE(modelHeader.find("kMainLayoutViewportMinSizeDp = 120"), std::string::npos);
     EXPECT_EQ(modelHeader.find("kMainLayoutViewportMinWidthDp"), std::string::npos);
@@ -2967,7 +2967,7 @@ TEST(ModelingModeShelfControllerTests, ControlsFollowOperationsTopBarPlacementOr
             controller.selectionModeForControlId("face"),
             std::optional<ModelingSelectionMode>(ModelingSelectionMode::Face));
 
-    const std::string source = readSourceFile("src/ui/controllers/ModelingModeShelfController.cpp");
+    const std::string source = readSourceFile("src/ui/controllers/modeling_mode_shelf_controller.cpp");
     EXPECT_NE(source.find("quader_host_contract::ui_placement_catalog()"), std::string::npos);
     EXPECT_NE(source.find("quader_host_contract::find_operation_panel_descriptor("), std::string::npos);
     EXPECT_EQ(source.find("struct ModelingModeShelfModeDescriptor"), std::string::npos);
@@ -3404,51 +3404,51 @@ TEST(SdlEventUtilsTests, ExtractsWindowIdsForRuntimeRoutedEvents) {
 }
 
 TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
-    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
-    const std::string platformWindowSource = readSourceFile("src/platform/PlatformWindow.cpp");
-    const std::string appSource = readSourceFile("src/app/App.cpp");
-    const std::string sdlEventUtilsSource = readSourceFile("src/platform/SdlEventUtils.cpp");
-    const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/ViewportComponent.h");
-    const std::string dockLayoutModelHeader = readSourceFile("src/ui/components/common/DockLayoutModel.h");
-    const std::string mainLayoutModelHeader = readSourceFile("src/ui/components/organisms/MainLayoutModel.h");
-    const std::string mainLayoutControllerSource = readSourceFile("src/ui/controllers/MainLayoutController.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
+    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
+    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/rml_ui_context_host.hpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string platformWindowSource = readSourceFile("src/platform/platform_window.cpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string sdlEventUtilsSource = readSourceFile("src/platform/sdl_event_utils.cpp");
+    const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/viewport_component.hpp");
+    const std::string dockLayoutModelHeader = readSourceFile("src/ui/components/common/dock_layout_model.hpp");
+    const std::string mainLayoutModelHeader = readSourceFile("src/ui/components/organisms/main_layout_model.hpp");
+    const std::string mainLayoutControllerSource = readSourceFile("src/ui/controllers/main_layout_controller.cpp");
     const std::string mainLayoutDockDragControllerHeader =
-            readSourceFile("src/ui/controllers/MainLayoutDockDragController.h");
+            readSourceFile("src/ui/controllers/main_layout_dock_drag_controller.hpp");
     const std::string mainLayoutDockDragControllerSource =
-            readSourceFile("src/ui/controllers/MainLayoutDockDragController.cpp");
+            readSourceFile("src/ui/controllers/main_layout_dock_drag_controller.cpp");
     const std::string mainLayoutDockHitRegionBuilderHeader =
-            readSourceFile("src/ui/controllers/MainLayoutDockHitRegionBuilder.h");
+            readSourceFile("src/ui/controllers/main_layout_dock_hit_region_builder.hpp");
     const std::string mainLayoutDockHitRegionBuilderSource =
-            readSourceFile("src/ui/controllers/MainLayoutDockHitRegionBuilder.cpp");
+            readSourceFile("src/ui/controllers/main_layout_dock_hit_region_builder.cpp");
     const std::string mainLayoutSashRegistryHeader =
-            readSourceFile("src/ui/controllers/MainLayoutSashRegistry.h");
+            readSourceFile("src/ui/controllers/main_layout_sash_registry.hpp");
     const std::string mainLayoutSashRegistrySource =
-            readSourceFile("src/ui/controllers/MainLayoutSashRegistry.cpp");
-    const std::string uiGeometryHeader = readSourceFile("src/ui/components/common/UIGeometry.h");
-    const std::string uiDragDropHeader = readSourceFile("src/ui/components/common/UIDragDrop.h");
-    const std::string uiTabStripModelHeader = readSourceFile("src/ui/components/common/UITabStripModel.h");
-    const std::string uiDragDropControllerHeader = readSourceFile("src/ui/controllers/UIDragDropController.h");
-    const std::string uiDragDropControllerSource = readSourceFile("src/ui/controllers/UIDragDropController.cpp");
-    const std::string resizableSplitHeader = readSourceFile("src/ui/components/common/ResizableSplit.h");
-    const std::string resizableSplitControllerSource = readSourceFile("src/ui/controllers/ResizableSplitController.cpp");
-    const std::string uiButtonHeader = readSourceFile("src/ui/components/atoms/UIButtonComponent.h");
-    const std::string uiChromeButtonHeader = readSourceFile("src/ui/components/atoms/UIChromeButtonComponent.h");
-    const std::string uiToolbarButtonHeader = readSourceFile("src/ui/components/atoms/UIToolbarButtonComponent.h");
+            readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
+    const std::string uiGeometryHeader = readSourceFile("src/ui/components/common/ui_geometry.hpp");
+    const std::string uiDragDropHeader = readSourceFile("src/ui/components/common/ui_drag_drop.hpp");
+    const std::string uiTabStripModelHeader = readSourceFile("src/ui/components/common/ui_tab_strip_model.hpp");
+    const std::string uiDragDropControllerHeader = readSourceFile("src/ui/controllers/ui_drag_drop_controller.hpp");
+    const std::string uiDragDropControllerSource = readSourceFile("src/ui/controllers/ui_drag_drop_controller.cpp");
+    const std::string resizableSplitHeader = readSourceFile("src/ui/components/common/resizable_split.hpp");
+    const std::string resizableSplitControllerSource = readSourceFile("src/ui/controllers/resizable_split_controller.cpp");
+    const std::string uiButtonHeader = readSourceFile("src/ui/components/atoms/ui_button_component.hpp");
+    const std::string uiChromeButtonHeader = readSourceFile("src/ui/components/atoms/ui_chrome_button_component.hpp");
+    const std::string uiToolbarButtonHeader = readSourceFile("src/ui/components/atoms/ui_toolbar_button_component.hpp");
     const std::string windowChromeControlsHeader =
-            readSourceFile("src/ui/components/organisms/WindowChromeControlsComponent.h");
+            readSourceFile("src/ui/components/organisms/window_chrome_controls_component.hpp");
     const std::string modelingModeShelfHeader =
-            readSourceFile("src/ui/components/organisms/ModelingModeShelfComponent.h");
-    const std::string uiIconRegistrySource = readSourceFile("src/ui/core/UIIconRegistry.cpp");
-    const std::string uiUtilityTokensSource = readSourceFile("src/ui/UIUtilityTokens.cpp");
+            readSourceFile("src/ui/components/organisms/modeling_mode_shelf_component.hpp");
+    const std::string uiIconRegistrySource = readSourceFile("src/ui/core/ui_icon_registry.cpp");
+    const std::string uiUtilityTokensSource = readSourceFile("src/ui/ui_utility_tokens.cpp");
     const std::string modelingModeShelfSource =
-            readSourceFile("src/ui/components/organisms/ModelingModeShelfComponent.cpp");
+            readSourceFile("src/ui/components/organisms/modeling_mode_shelf_component.cpp");
     const std::string modelingModeShelfControllerSource =
-            readSourceFile("src/ui/controllers/ModelingModeShelfController.cpp");
-    const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
+            readSourceFile("src/ui/controllers/modeling_mode_shelf_controller.cpp");
+    const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/main_layout_rml_builder.cpp");
     const std::string shellRml = readSourceFile("resources/ui/rml/viewport-shell.rml");
     const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
     const std::string cmakeSource = readSourceFile("CMakeLists.txt");
@@ -3548,19 +3548,19 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(rmlHostHeader.find("setElementInnerRml"), std::string::npos);
     EXPECT_NE(rmlHostHeader.find("takeModelingModeShelfControlSelection"), std::string::npos);
     EXPECT_EQ(rmlHostSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("#include \"platform/SdlEventUtils.h\""), std::string::npos);
+    EXPECT_NE(rmlHostSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
     EXPECT_NE(rmlHostSource.find("sdlEventWindowId(event)"), std::string::npos);
     EXPECT_NE(rmlHostSource.find("SDL_GetWindowID(window_)"), std::string::npos);
     EXPECT_EQ(uiSystemSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("#include \"platform/SdlEventUtils.h\""), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("#include \"platform/SdlEventUtils.h\""), std::string::npos);
-    EXPECT_NE(platformWindowSource.find("#include \"platform/SdlEventUtils.h\""), std::string::npos);
-    EXPECT_NE(appSource.find("#include \"platform/SdlEventUtils.h\""), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
+    EXPECT_NE(platformWindowSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
+    EXPECT_NE(appSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
     EXPECT_NE(platformWindowSource.find("sdlEventWindowId(event)"), std::string::npos);
     EXPECT_NE(appSource.find("sdlEventTargetsWindow(event, mainWindowId)"), std::string::npos);
     EXPECT_NE(sdlEventUtilsSource.find("std::optional<SDL_WindowID> sdlEventWindowId"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/platform/SdlEventUtils.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/platform/sdl_event_utils.cpp"), std::string::npos);
     for (const std::string* source : {&rmlHostSource, &uiSystemSource, &viewportHostSource, &platformWindowSource, &appSource}) {
         EXPECT_EQ(source->find(".windowID"), std::string::npos);
     }
@@ -3651,23 +3651,23 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(mainLayoutDockDragControllerSource.find("feedbackForPanelDropZone"), std::string::npos);
     EXPECT_NE(mainLayoutDockDragControllerSource.find("MainLayoutDockDragController::targetForDropTarget"),
             std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/MainLayoutDockDragController.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/MainLayoutDockHitRegionBuilder.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/MainLayoutSashRegistry.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/controllers/main_layout_dock_drag_controller.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/controllers/main_layout_dock_hit_region_builder.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/controllers/main_layout_sash_registry.cpp"), std::string::npos);
     EXPECT_NE(mainLayoutDockHitRegionBuilderHeader.find("struct MainLayoutDockHitRegions"), std::string::npos);
     EXPECT_NE(mainLayoutDockHitRegionBuilderHeader.find("buildMainLayoutDockHitRegions"), std::string::npos);
     EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("MainLayoutPanelDropZoneKind::BottomTab"), std::string::npos);
     EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("MainLayoutPanelDropZoneKind::PanelBody"), std::string::npos);
     EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("MainLayoutPanelDropZoneKind::BottomTabTrailing"), std::string::npos);
     EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("mainLayoutPanelTabElementId"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/UIDragDropController.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIButtonComponent.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIChromeButtonComponent.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/UIToolbarButtonComponent.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/common/UITabStripModel.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/ModelingModeShelfComponent.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/WindowChromeControlsComponent.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/core/UIIconRegistry.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/controllers/ui_drag_drop_controller.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/ui_button_component.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/ui_chrome_button_component.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/ui_toolbar_button_component.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/common/ui_tab_strip_model.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/modeling_mode_shelf_component.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/window_chrome_controls_component.cpp"), std::string::npos);
+    EXPECT_NE(cmakeSource.find("src/ui/core/ui_icon_registry.cpp"), std::string::npos);
     EXPECT_NE(uiGeometryHeader.find("struct UIPixelPoint"), std::string::npos);
     EXPECT_NE(uiGeometryHeader.find("struct UIPixelRect"), std::string::npos);
     EXPECT_NE(uiTabStripModelHeader.find("class UITabStripModel"), std::string::npos);
@@ -3684,7 +3684,7 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(uiDragDropControllerSource.find("UIDragDropController::placementForZone"), std::string::npos);
     EXPECT_EQ(uiDragDropHeader.find("MainLayout"), std::string::npos);
     EXPECT_EQ(uiDragDropControllerSource.find("MainLayout"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("#include \"ui/components/common/UIGeometry.h\""), std::string::npos);
+    EXPECT_NE(resizableSplitHeader.find("#include \"ui/components/common/ui_geometry.hpp\""), std::string::npos);
     EXPECT_NE(resizableSplitHeader.find("enum class ResizableSplitAxis"), std::string::npos);
     EXPECT_NE(resizableSplitHeader.find("enum class ResizableSplitSizeUnit"), std::string::npos);
     EXPECT_NE(resizableSplitHeader.find("struct ResizableSplitHandle"), std::string::npos);
@@ -3910,8 +3910,8 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
 }
 
 TEST(UISystemTests, ModelingShelfPointerEventsDoNotFallThroughToViewport) {
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
 
     EXPECT_NE(uiSystemHeader.find("pointerEventInsideRmlElement"), std::string::npos);
     EXPECT_NE(uiSystemHeader.find("pointerEventInsideModelingModeShelf"), std::string::npos);
@@ -3927,14 +3927,14 @@ TEST(UISystemTests, ModelingShelfPointerEventsDoNotFallThroughToViewport) {
 }
 
 TEST(UISystemTests, WindowedViewportComponentsAreBoundedAndNonExperimental) {
-    const std::string appSource = readSourceFile("src/app/App.cpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
-    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/ViewportHost.h");
-    const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/ViewportComponent.h");
-    const std::string renderSystemHeader = readSourceFile("src/render/RenderSystem.h");
-    const std::string renderSystemSource = readSourceFile("src/render/RenderSystem.cpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/viewport_host.hpp");
+    const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/viewport_component.hpp");
+    const std::string renderSystemHeader = readSourceFile("src/render/render_system.hpp");
+    const std::string renderSystemSource = readSourceFile("src/render/render_system.cpp");
 
     EXPECT_NE(viewportComponentHeader.find("kMaxViewportComponents = 4u"), std::string::npos);
     EXPECT_NE(viewportComponentHeader.find("enum class ViewportComponentSurface"), std::string::npos);
@@ -3968,7 +3968,7 @@ TEST(UISystemTests, WindowedViewportComponentsAreBoundedAndNonExperimental) {
 }
 
 TEST(UISystemTests, ViewportFrameRoutingHandlesPreviewShortcutsBeforeGenericShortcuts) {
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
     EXPECT_NE(viewportHostSource.find("handleViewportFrameSurface("), std::string::npos);
     EXPECT_EQ(countOccurrences(viewportHostSource, "handleOperationPreviewShortcut("), 1u);
     EXPECT_EQ(countOccurrences(viewportHostSource, "handleModelingShortcut(result, editor, modeling)"), 1u);
@@ -3980,10 +3980,10 @@ TEST(UISystemTests, ViewportFrameRoutingHandlesPreviewShortcutsBeforeGenericShor
 }
 
 TEST(UISystemTests, WindowedViewportWorkspaceStateLivesInWorkspaceService) {
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
-    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/ViewportHost.h");
-    const std::string workspaceHeader = readSourceFile("src/viewport/ViewportWorkspaceService.h");
-    const std::string workspaceSource = readSourceFile("src/viewport/ViewportWorkspaceService.cpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/viewport_host.hpp");
+    const std::string workspaceHeader = readSourceFile("src/viewport/viewport_workspace_service.hpp");
+    const std::string workspaceSource = readSourceFile("src/viewport/viewport_workspace_service.cpp");
 
     EXPECT_NE(workspaceHeader.find("ViewportWorkspaceAuxiliaryViewportState"), std::string::npos);
     EXPECT_NE(workspaceHeader.find("ensureAuxiliaryViewport"), std::string::npos);
@@ -3997,10 +3997,10 @@ TEST(UISystemTests, WindowedViewportWorkspaceStateLivesInWorkspaceService) {
 }
 
 TEST(UISystemTests, DebugPalettePageIsShiftF1ToggledAndCopyable) {
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/UISystem.h");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
-    const std::string debugPaletteSource = readSourceFile("src/ui/DebugPaletteView.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
+    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
+    const std::string debugPaletteSource = readSourceFile("src/ui/debug_palette_view.cpp");
 
     EXPECT_NE(uiSystemSource.find("SDLK_F1"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("SDL_KMOD_SHIFT"), std::string::npos);
@@ -4463,7 +4463,7 @@ TEST(ViewportOverlayStyleResolverTests, PrioritizesDiagnosticsThenExternalOverri
 }
 
 TEST(PolygonOperationRegistryTests, MetadataComesFromDescriptorOwner) {
-    const std::string descriptor = readSourceFile("src/mesh/polygon/poly_operation_descriptor.h");
+    const std::string descriptor = readSourceFile("src/mesh/polygon/poly_operation_descriptor.hpp");
     const std::string registry = readSourceFile("src/mesh/polygon/operations/poly_operation_registry.cpp");
 
     EXPECT_NE(descriptor.find("k_poly_operation_descriptors"), std::string::npos);
@@ -4491,9 +4491,9 @@ TEST(PolygonOperationRegistryTests, MetadataComesFromDescriptorOwner) {
 }
 
 TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
-    const std::string source = readSourceFile("src/editor/projection/SelectionOverlayProjection.cpp");
-    const std::string modelingService = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string overlayService = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
+    const std::string source = readSourceFile("src/editor/projection/selection_overlay_projection.cpp");
+    const std::string modelingService = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string overlayService = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
 
     EXPECT_EQ(source.find("static_cast<ViewportOverlayLayer>(static_cast<int>(layer))"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::source_wire:"), std::string::npos);
@@ -4568,10 +4568,10 @@ TEST(ViewportGridPlacementPolicyTests, ResolvesPerspectiveAndOrthographicPlanesW
 }
 
 TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
-    const std::string bridgeSource = readSourceFile("src/render/SceneRenderBridge.cpp");
-    const std::string builderSource = readSourceFile("src/render/overlay/OverlayRenderableBuilder.cpp");
-    const std::string proxyFactorySource = readSourceFile("src/render/overlay/OverlayProxyFactory.cpp");
-    const std::string toolPreviewCacheSource = readSourceFile("src/render/ToolPreviewRenderableCache.cpp");
+    const std::string bridgeSource = readSourceFile("src/render/scene_render_bridge.cpp");
+    const std::string builderSource = readSourceFile("src/render/overlay/overlay_renderable_builder.cpp");
+    const std::string proxyFactorySource = readSourceFile("src/render/overlay/overlay_proxy_factory.cpp");
+    const std::string toolPreviewCacheSource = readSourceFile("src/render/tool_preview_renderable_cache.cpp");
 
     EXPECT_NE(builderSource.find("viewportOverlayLayerUsesDepthStampedFaceFill"), std::string::npos);
     EXPECT_NE(proxyFactorySource.find("setColorWrite(state.colorWrite)"), std::string::npos);
@@ -4593,11 +4593,11 @@ TEST(SceneRenderBridgeTests, UsesDepthStampedFaceFillForOverlayTriangles) {
 }
 
 TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
-    const std::string proxyFactorySource = readSourceFile("src/render/overlay/OverlayProxyFactory.cpp");
-    const std::string lineBuilderSource = readSourceFile("src/render/overlay/OverlayLineMeshBuilder.cpp");
-    const std::string pointBuilderSource = readSourceFile("src/render/overlay/OverlayPointMeshBuilder.cpp");
-    const std::string renderableBuilderSource = readSourceFile("src/render/overlay/OverlayRenderableBuilder.h");
-    const std::string projectorSource = readSourceFile("src/render/overlay/OverlayCameraProjector.cpp");
+    const std::string proxyFactorySource = readSourceFile("src/render/overlay/overlay_proxy_factory.cpp");
+    const std::string lineBuilderSource = readSourceFile("src/render/overlay/overlay_line_mesh_builder.cpp");
+    const std::string pointBuilderSource = readSourceFile("src/render/overlay/overlay_point_mesh_builder.cpp");
+    const std::string renderableBuilderSource = readSourceFile("src/render/overlay/overlay_renderable_builder.hpp");
+    const std::string projectorSource = readSourceFile("src/render/overlay/overlay_camera_projector.cpp");
 
     EXPECT_NE(lineBuilderSource.find("appendLineQuad"), std::string::npos);
     EXPECT_NE(pointBuilderSource.find("appendPointQuad"), std::string::npos);
@@ -4618,7 +4618,7 @@ TEST(SceneRenderBridgeTests, UsesQuadMaterialsForSelectionLineAndPointOverlay) {
 }
 
 TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
-    const std::string source = readSourceFile("src/render/MeshRenderableFactory.cpp");
+    const std::string source = readSourceFile("src/render/mesh_renderable_factory.cpp");
 
     EXPECT_NE(source.find("tangentFrameFromNormal(vertex.normal)"), std::string::npos);
     EXPECT_NE(source.find("filament::VertexAttribute::TANGENTS"), std::string::npos);
@@ -4630,8 +4630,8 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
 }
 
 TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
-    const std::string syncSource = readSourceFile("src/render/SceneRenderSyncService.cpp");
-    const std::string cacheSource = readSourceFile("src/render/MeshRenderableCache.cpp");
+    const std::string syncSource = readSourceFile("src/render/scene_render_sync_service.cpp");
+    const std::string cacheSource = readSourceFile("src/render/mesh_renderable_cache.cpp");
 
     EXPECT_NE(syncSource.find("syncedAssetRevision_"), std::string::npos);
     EXPECT_NE(syncSource.find("renderAssetRevisionsChanged"), std::string::npos);
@@ -4648,7 +4648,7 @@ TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
 }
 
 TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
-    const std::string source = readSourceFile("src/render/MaterialBindingService.cpp");
+    const std::string source = readSourceFile("src/render/material_binding_service.cpp");
 
     EXPECT_NE(source.find("kMeshTextureAnisotropy"), std::string::npos);
     EXPECT_NE(source.find("sampler.setAnisotropy(kMeshTextureAnisotropy)"), std::string::npos);
@@ -4656,7 +4656,7 @@ TEST(SceneRenderBridgeTests, UsesAnisotropicSamplingForMeshTextures) {
 }
 
 TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
-    const std::string source = readSourceFile("src/render/RenderSystem.cpp");
+    const std::string source = readSourceFile("src/render/render_system.cpp");
 
     EXPECT_NE(source.find("renderer_->setClearOptions(clear)"), std::string::npos);
     EXPECT_NE(source.find("clear.clearColor = {environment.clearColor.x"), std::string::npos);
@@ -4665,8 +4665,8 @@ TEST(RenderSystemTests, ShadedViewportUsesClearColorWithoutSkybox) {
 }
 
 TEST(RenderSystemTests, InitializeUnwindsPartialFilamentStateOnFailure) {
-    const std::string header = readSourceFile("src/render/RenderSystem.h");
-    const std::string source = readSourceFile("src/render/RenderSystem.cpp");
+    const std::string header = readSourceFile("src/render/render_system.hpp");
+    const std::string source = readSourceFile("src/render/render_system.cpp");
 
     EXPECT_NE(header.find("[[nodiscard]] bool initialized() const"), std::string::npos);
     EXPECT_NE(source.find("shutdown();\n    LOG_INFO(\"Initializing Filament renderer"), std::string::npos);
@@ -4688,12 +4688,12 @@ TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
     static_assert(!std::is_copy_assignable_v<OverlayRenderableProxy>);
     static_assert(std::is_move_constructible_v<OverlayRenderableProxy>);
 
-    const std::string meshProxyHeader = readSourceFile("src/render/MeshRenderableProxy.h");
-    const std::string meshFactorySource = readSourceFile("src/render/MeshRenderableFactory.cpp");
-    const std::string overlayProxyHeader = readSourceFile("src/render/overlay/OverlayRenderableProxy.h");
-    const std::string overlayFactorySource = readSourceFile("src/render/overlay/OverlayProxyFactory.cpp");
-    const std::string lightCacheHeader = readSourceFile("src/render/LightRenderableCache.h");
-    const std::string lightCacheSource = readSourceFile("src/render/LightRenderableCache.cpp");
+    const std::string meshProxyHeader = readSourceFile("src/render/mesh_renderable_proxy.hpp");
+    const std::string meshFactorySource = readSourceFile("src/render/mesh_renderable_factory.cpp");
+    const std::string overlayProxyHeader = readSourceFile("src/render/overlay/overlay_renderable_proxy.hpp");
+    const std::string overlayFactorySource = readSourceFile("src/render/overlay/overlay_proxy_factory.cpp");
+    const std::string lightCacheHeader = readSourceFile("src/render/light_renderable_cache.hpp");
+    const std::string lightCacheSource = readSourceFile("src/render/light_renderable_cache.cpp");
 
     EXPECT_NE(meshProxyHeader.find("MeshRenderableProxy(const MeshRenderableProxy&) = delete"), std::string::npos);
     EXPECT_NE(meshProxyHeader.find("MeshRenderableProxy(MeshRenderableProxy&& other) noexcept"), std::string::npos);
@@ -4736,10 +4736,10 @@ TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
     EXPECT_TRUE(renderOwnerIsNonTransferable<ViewportRenderer>());
     EXPECT_TRUE(renderOwnerIsNonTransferable<RmlFilamentRenderer>());
 
-    const std::string renderSystemHeader = readSourceFile("src/render/RenderSystem.h");
-    const std::string sceneRenderBridgeHeader = readSourceFile("src/render/SceneRenderBridge.h");
-    const std::string viewportRendererHeader = readSourceFile("src/render/ViewportRenderer.h");
-    const std::string rmlRendererHeader = readSourceFile("src/render/RmlFilamentRenderer.h");
+    const std::string renderSystemHeader = readSourceFile("src/render/render_system.hpp");
+    const std::string sceneRenderBridgeHeader = readSourceFile("src/render/scene_render_bridge.hpp");
+    const std::string viewportRendererHeader = readSourceFile("src/render/viewport_renderer.hpp");
+    const std::string rmlRendererHeader = readSourceFile("src/render/rml_filament_renderer.hpp");
 
     EXPECT_NE(renderSystemHeader.find("RenderSystem(const RenderSystem&) = delete"), std::string::npos);
     EXPECT_NE(sceneRenderBridgeHeader.find("SceneRenderBridge(SceneRenderBridge&&) = delete"), std::string::npos);
@@ -4827,7 +4827,7 @@ TEST(ModelingInteractionTests, AxisDragDistanceMathLivesInSharedHelper) {
 }
 
 TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsRemovePreviewContract) {
-    const std::string appOverlay = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
+    const std::string appOverlay = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
     const std::string runtimeOverlay = readSourceFile("src/editor/modeling/runtime/session_selection_overlay.cpp");
 
     EXPECT_EQ(appOverlay.find("selectedHoverTarget && !hover.selected_modifier_pressed"), std::string::npos);
@@ -4844,9 +4844,9 @@ TEST(ModelingSessionServiceTests, SelectedHoverOverlayKeepsRemovePreviewContract
 }
 
 TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
-    const std::string textureSource = readSourceFile("src/render/TextureBindingService.cpp");
-    const std::string materialSource = readSourceFile("src/render/MaterialBindingService.cpp");
-    const std::string factorySource = readSourceFile("src/render/MeshRenderableFactory.cpp");
+    const std::string textureSource = readSourceFile("src/render/texture_binding_service.cpp");
+    const std::string materialSource = readSourceFile("src/render/material_binding_service.cpp");
+    const std::string factorySource = readSourceFile("src/render/mesh_renderable_factory.cpp");
 
     EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb)"), std::string::npos);
     EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Linear)"), std::string::npos);
@@ -4868,8 +4868,8 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
 }
 
 TEST(SceneRenderBridgeTests, TextureBindingServiceEvictsObsoleteTextureRevisions) {
-    const std::string textureHeader = readSourceFile("src/render/TextureBindingService.h");
-    const std::string textureSource = readSourceFile("src/render/TextureBindingService.cpp");
+    const std::string textureHeader = readSourceFile("src/render/texture_binding_service.hpp");
+    const std::string textureSource = readSourceFile("src/render/texture_binding_service.cpp");
 
     EXPECT_NE(textureHeader.find("void evictObsoleteTextureRevisions(const TextureCacheKey& currentKey);"), std::string::npos);
     EXPECT_NE(textureSource.find("evictObsoleteTextureRevisions(cacheKey);"), std::string::npos);
@@ -4882,9 +4882,9 @@ TEST(SceneRenderBridgeTests, TextureBindingServiceEvictsObsoleteTextureRevisions
 }
 
 TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchanged) {
-    const std::string cacheSource = readSourceFile("src/render/overlay/OverlayRenderableCache.cpp");
-    const std::string cacheHeader = readSourceFile("src/render/overlay/OverlayRenderableCache.h");
-    const std::string builderSource = readSourceFile("src/render/overlay/OverlayRenderableBuilder.cpp");
+    const std::string cacheSource = readSourceFile("src/render/overlay/overlay_renderable_cache.cpp");
+    const std::string cacheHeader = readSourceFile("src/render/overlay/overlay_renderable_cache.hpp");
+    const std::string builderSource = readSourceFile("src/render/overlay/overlay_renderable_builder.cpp");
 
     EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::frameSignature"), std::string::npos);
     EXPECT_NE(cacheSource.find("OverlayRenderableBuilder::layerSignature"), std::string::npos);
@@ -4906,10 +4906,10 @@ TEST(SceneRenderBridgeTests, SkipsOverlayProxyRebuildWhenOverlayPayloadIsUnchang
 }
 
 TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverState) {
-    const std::string source = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string splitSource = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
-    const std::string overlayHeader = readSourceFile("src/editor/modeling/services/ModelingOverlayService.h");
-    const std::string selectionHeader = readSourceFile("src/editor/modeling/services/ModelingSelectionService.h");
+    const std::string source = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string splitSource = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
+    const std::string overlayHeader = readSourceFile("src/editor/modeling/services/modeling_overlay_service.hpp");
+    const std::string selectionHeader = readSourceFile("src/editor/modeling/services/modeling_selection_service.hpp");
 
     EXPECT_NE(overlayHeader.find("SelectionOverlayCache selectionOverlayCache_"), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.matches("), std::string::npos);
@@ -4931,7 +4931,7 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
     EXPECT_NE(splitSource.find("pickingCache_.faceGeometryEntries"), std::string::npos);
     EXPECT_NE(splitSource.find("PickingCacheProjection::objectFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
-    const std::string pickingProjection = readSourceFile("src/editor/projection/PickingCacheProjection.cpp");
+    const std::string pickingProjection = readSourceFile("src/editor/projection/picking_cache_projection.cpp");
     EXPECT_NE(pickingProjection.find("pickOptions.vertex_radius"), std::string::npos);
     EXPECT_NE(pickingProjection.find("pickOptions.edge_radius"), std::string::npos);
     EXPECT_NE(pickingProjection.find("pickOptions.has_hidden_material_slot"), std::string::npos);
@@ -4939,15 +4939,15 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
 }
 
 TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEncode) {
-    const std::string source = readSourceFile("src/render/overlay/OverlayFaceFillBuilder.cpp");
+    const std::string source = readSourceFile("src/render/overlay/overlay_face_fill_builder.cpp");
 
     EXPECT_NE(source.find("rgba8SrgbToLinear(triangle.color)"), std::string::npos);
     EXPECT_NE(source.find("linearColor"), std::string::npos);
 }
 
 TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
-    const std::string source = readSourceFile("src/render/ViewportRenderTarget.cpp");
-    const std::string gridSource = readSourceFile("src/render/ViewportGridRenderer.cpp");
+    const std::string source = readSourceFile("src/render/viewport_render_target.cpp");
+    const std::string gridSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
 
     EXPECT_NE(source.find(".format(Texture::InternalFormat::RGBA8)"), std::string::npos);
     EXPECT_NE(source.find("TextureSampleColorSpace::LinearSrgb"), std::string::npos);
@@ -4958,14 +4958,14 @@ TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
 }
 
 TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame) {
-    const std::string rendererSource = readSourceFile("src/render/ViewportRenderer.cpp");
-    const std::string gridRendererSource = readSourceFile("src/render/ViewportGridRenderer.cpp");
-    const std::string coordinatorSource = readSourceFile("src/render/ViewportRenderPassCoordinator.cpp");
-    const std::string appSource = readSourceFile("src/app/App.cpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
-    const std::string overlayCacheSource = readSourceFile("src/render/overlay/OverlayRenderableCache.cpp");
-    const std::string overlayProxyFactorySource = readSourceFile("src/render/overlay/OverlayProxyFactory.cpp");
+    const std::string rendererSource = readSourceFile("src/render/viewport_renderer.cpp");
+    const std::string gridRendererSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
+    const std::string coordinatorSource = readSourceFile("src/render/viewport_render_pass_coordinator.cpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string overlayCacheSource = readSourceFile("src/render/overlay/overlay_renderable_cache.cpp");
+    const std::string overlayProxyFactorySource = readSourceFile("src/render/overlay/overlay_proxy_factory.cpp");
 
     const std::size_t renderStart = rendererSource.find("void ViewportRenderer::render");
     const std::size_t renderEnd = rendererSource.find("void ViewportRenderer::updateVisibleLayers");
@@ -5019,7 +5019,7 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
 }
 
 TEST(RmlFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
-    const std::string rendererSource = readSourceFile("src/render/RmlFilamentRenderer.cpp");
+    const std::string rendererSource = readSourceFile("src/render/rml_filament_renderer.cpp");
 
     EXPECT_NE(rendererSource.find("textureSources_.find(source)"), std::string::npos);
     EXPECT_NE(rendererSource.find("RmlFilamentRenderer::registerTextureSource"), std::string::npos);
@@ -5045,7 +5045,7 @@ TEST(RmlFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
 }
 
 TEST(RmlFilamentRendererTests, PreservesRmlPremultipliedTextureAndVertexColorConventions) {
-    const std::string rendererSource = readSourceFile("src/render/RmlFilamentRenderer.cpp");
+    const std::string rendererSource = readSourceFile("src/render/rml_filament_renderer.cpp");
     const std::string materialSource = readSourceFile("resources/materials/rmlui.mat");
 
     EXPECT_NE(materialSource.find("flipUV : false"), std::string::npos);
@@ -5055,8 +5055,8 @@ TEST(RmlFilamentRendererTests, PreservesRmlPremultipliedTextureAndVertexColorCon
 }
 
 TEST(RmlFilamentRendererTests, DrawResourcesAreMoveOnlyAndDestroyedThroughOwnerHelper) {
-    const std::string rendererHeader = readSourceFile("src/render/RmlFilamentRenderer.h");
-    const std::string rendererSource = readSourceFile("src/render/RmlFilamentRenderer.cpp");
+    const std::string rendererHeader = readSourceFile("src/render/rml_filament_renderer.hpp");
+    const std::string rendererSource = readSourceFile("src/render/rml_filament_renderer.cpp");
 
     EXPECT_NE(rendererHeader.find("DrawResource(const DrawResource&) = delete"), std::string::npos);
     EXPECT_NE(rendererHeader.find("DrawResource& operator=(const DrawResource&) = delete"), std::string::npos);
@@ -5077,10 +5077,10 @@ TEST(RmlFilamentRendererTests, DrawResourcesAreMoveOnlyAndDestroyedThroughOwnerH
 
 TEST(RenderLifecycleTests, ResourceOwnersShutdownBeforeInitialize) {
     for (const char* relativePath : {
-                 "src/render/SceneRenderBridge.cpp",
-                 "src/render/TextureBindingService.cpp",
-                 "src/render/RmlFilamentRenderer.cpp",
-                 "src/render/ViewportGridRenderer.cpp",
+                 "src/render/scene_render_bridge.cpp",
+                 "src/render/texture_binding_service.cpp",
+                 "src/render/rml_filament_renderer.cpp",
+                 "src/render/viewport_grid_renderer.cpp",
          }) {
         const std::string source = readSourceFile(relativePath);
         const std::size_t initialize = source.find("::initialize");
@@ -5092,7 +5092,7 @@ TEST(RenderLifecycleTests, ResourceOwnersShutdownBeforeInitialize) {
 }
 
 TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
-    const std::string headerSource = readSourceFile("src/render/TextureRegistry.h");
+    const std::string headerSource = readSourceFile("src/render/texture_registry.hpp");
 
     EXPECT_NE(headerSource.find("enum class TextureSampleColorSpace"), std::string::npos);
     EXPECT_NE(headerSource.find("DisplaySrgb"), std::string::npos);
@@ -5101,25 +5101,25 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
     EXPECT_NE(headerSource.find("TextureSampleColorSpace sampleColorSpace(RenderTextureHandle id) const"), std::string::npos);
     EXPECT_NE(headerSource.find("void updateTexture(RenderTextureHandle id"), std::string::npos);
 
-    const std::string source = readSourceFile("src/render/TextureRegistry.cpp");
+    const std::string source = readSourceFile("src/render/texture_registry.cpp");
 
     EXPECT_NE(source.find(".sampleColorSpace = sampleColorSpace"), std::string::npos);
     EXPECT_NE(source.find("TextureSampleColorSpace::DisplaySrgb : it->second.sampleColorSpace"), std::string::npos);
 }
 
 TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
-    const std::string appSource = readSourceFile("src/app/App.cpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
-    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/ViewportHost.h");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/RmlUiContextHost.cpp");
-    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/RmlUiContextHost.h");
-    const std::string rmlBuilderSource = readSourceFile("src/ui/backends/rml/MainLayoutRmlBuilder.cpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/viewport_host.hpp");
+    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
+    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/rml_ui_context_host.hpp");
+    const std::string rmlBuilderSource = readSourceFile("src/ui/backends/rml/main_layout_rml_builder.cpp");
     const std::string appShellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
-    const std::string commandsSource = readSourceFile("src/api/QuaderCommandsApi.cpp");
-    const std::string inputAdapterHeader = readSourceFile("src/editor/input/ViewportInputBindingAdapter.h");
+    const std::string commandsSource = readSourceFile("src/api/quader_commands_api.cpp");
+    const std::string inputAdapterHeader = readSourceFile("src/editor/input/viewport_input_binding_adapter.hpp");
     const std::string marqueeOverlayBuilderSource =
-            readSourceFile("src/render/overlay/ViewportSelectionMarqueeOverlayBuilder.cpp");
+            readSourceFile("src/render/overlay/viewport_selection_marquee_overlay_builder.cpp");
 
     const std::size_t prepareLayout = appSource.find("ui_.prepareLayout(window_.widthPixels(), window_.heightPixels())");
     const std::size_t draw = appSource.find("ui_.draw(*editor_");
@@ -5178,12 +5178,12 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(instance.input.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(mainInput_.keyboardKeysDown, modifiers, input.activeInputChords)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(instance.input.keyboardKeysDown, modifiers, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("#include \"editor/input/QuaderInputBinding.h\""), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("#include \"editor/input/ViewportInputBindingAdapter.h\""), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("#include \"editor/input/quader_input_binding.hpp\""), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("#include \"editor/input/viewport_input_binding_adapter.hpp\""), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("viewportKeyForQuaderKeyCode(keyCode)"), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("pressedKeys"), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("shortcutResolverActive"), std::string::npos);
-    EXPECT_NE(commandsSource.find("#include \"editor/input/ViewportInputBindingAdapter.h\""), std::string::npos);
+    EXPECT_NE(commandsSource.find("#include \"editor/input/viewport_input_binding_adapter.hpp\""), std::string::npos);
     EXPECT_NE(commandsSource.find("quaderInputChordForViewportKey(key, modifiers)"), std::string::npos);
     EXPECT_NE(inputAdapterHeader.find("viewportKeyForQuaderKeyCode"), std::string::npos);
     EXPECT_NE(inputAdapterHeader.find("quaderInputChordForViewportKey"), std::string::npos);
@@ -5232,8 +5232,8 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
 }
 
 TEST(UISystemTests, RmlViewportShellUsesWorkspaceSinglePanePolicyForV1) {
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
 
     EXPECT_EQ(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("workspace.focusPane(mainViewport_.pane)"), std::string::npos);
@@ -5243,9 +5243,9 @@ TEST(UISystemTests, RmlViewportShellUsesWorkspaceSinglePanePolicyForV1) {
 }
 
 TEST(UISystemTests, RmlViewportShellLoadsViewportAndMainLayoutSettings) {
-    const std::string uiSystemSource = readSourceFile("src/ui/UISystem.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/ViewportHost.cpp");
-    const std::string uiSettingsSource = readSourceFile("src/ui/UISettings.cpp");
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string uiSettingsSource = readSourceFile("src/ui/ui_settings.cpp");
 
     EXPECT_NE(uiSystemSource.find("settingsPaths_ = UISettings::resolvePaths(executableDir)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("uiSettings_ = UISettings::load(settingsPaths_.settingsFile)"), std::string::npos);
@@ -5293,7 +5293,7 @@ TEST(UISystemTests, RmlViewportShellLoadsViewportAndMainLayoutSettings) {
 }
 
 TEST(AppStartupTests, DoesNotCreateDefaultModelingMesh) {
-    const std::string source = readSourceFile("src/app/App.cpp");
+    const std::string source = readSourceFile("src/app/app.cpp");
 
     EXPECT_EQ(source.find("createBoxFromBounds({"), std::string::npos);
     EXPECT_EQ(source.find("Startup scene created modeling box"), std::string::npos);
@@ -5359,7 +5359,7 @@ TEST(SceneDocumentTests, ComponentAccessorsAreReadOnlyOutsideDocumentMutators) {
     static_assert(std::is_same_v<decltype(std::declval<SceneDocument&>().material(EntityId{})), const MaterialComponent*>);
     static_assert(std::is_same_v<decltype(std::declval<SceneDocument&>().light(EntityId{})), const LightComponent*>);
 
-    const std::string header = readSourceFile("src/scene/SceneDocument.h");
+    const std::string header = readSourceFile("src/scene/scene_document.hpp");
     EXPECT_EQ(header.find("TransformComponent* transform(EntityId id);"), std::string::npos);
     EXPECT_EQ(header.find("VisibilityComponent* visibility(EntityId id);"), std::string::npos);
     EXPECT_EQ(header.find("MeshComponent* mesh(EntityId id);"), std::string::npos);
@@ -5926,7 +5926,7 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
 }
 
 TEST(ViewportWorkspaceServiceTests, WorkspaceFocusDistancesUseHostViewportDefaults) {
-    const std::string source = readSourceFile("src/viewport/ViewportWorkspaceService.cpp");
+    const std::string source = readSourceFile("src/viewport/viewport_workspace_service.cpp");
     EXPECT_NE(source.find("viewportHostDefaults().focusOriginDistance"), std::string::npos);
     EXPECT_EQ(source.find("focusOrigin(64.0f)"), std::string::npos);
 }
@@ -5940,7 +5940,7 @@ TEST(ViewportCameraTests, FlySpeedDefaultsUseHostViewportDefaults) {
     ViewportCameraController camera;
     EXPECT_NEAR(camera.flySpeed(), static_cast<float>(defaults.flyBaseSpeed), 0.001f);
 
-    const std::string source = readSourceFile("src/viewport/ViewportCameraController.cpp");
+    const std::string source = readSourceFile("src/viewport/viewport_camera_controller.cpp");
     EXPECT_EQ(source.find("kDefaultFlySpeed"), std::string::npos);
     EXPECT_NE(source.find("viewportHostDefaults().flyBaseSpeed"), std::string::npos);
 }
@@ -6006,8 +6006,8 @@ TEST(ViewportWorkspaceServiceTests, AuxiliaryViewportRecordsOwnWindowedCameraAnd
 }
 
 TEST(ViewportWorkspaceServiceTests, PaneStateDoesNotStoreDuplicateView) {
-    const std::string header = readSourceFile("src/viewport/ViewportWorkspaceService.h");
-    const std::string source = readSourceFile("src/viewport/ViewportWorkspaceService.cpp");
+    const std::string header = readSourceFile("src/viewport/viewport_workspace_service.hpp");
+    const std::string source = readSourceFile("src/viewport/viewport_workspace_service.cpp");
 
     EXPECT_EQ(header.find("ViewportView view ="), std::string::npos);
     EXPECT_EQ(source.find("paneState.view"), std::string::npos);
@@ -6740,8 +6740,8 @@ TEST(ViewportInputRouterTests, OperationShortcutsMatchViewportContract) {
 TEST(ViewportInputRouterTests, LegacyShortcutAdapterSourceIsNotBuilt) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
-    EXPECT_EQ(cmake.find("src/viewport/ViewportLegacyShortcutAdapter.cpp"), std::string::npos);
-    EXPECT_EQ(cmake.find("src/viewport/ViewportLegacyShortcutAdapter.h"), std::string::npos);
+    EXPECT_EQ(cmake.find("src/viewport/viewport_legacy_shortcut_adapter.cpp"), std::string::npos);
+    EXPECT_EQ(cmake.find("src/viewport/viewport_legacy_shortcut_adapter.hpp"), std::string::npos);
 }
 
 TEST(ViewportInputRouterTests, FlipShortcutsOnlyApplyInObjectSelectionMode) {
@@ -7882,11 +7882,11 @@ TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWir
 }
 
 TEST(AssetProjectArchitectureTests, SourceExposesNamedAssetAndProjectArchitectureTypes) {
-    const std::string assetDocumentSource = readSourceFile("src/assets/AssetDocument.h");
-    const std::string typedStoreSource = readSourceFile("src/assets/TypedAssetStore.h");
-    const std::string registrySource = readSourceFile("src/assets/AssetRegistry.h");
-    const std::string projectDocumentSource = readSourceFile("src/scene/document/ProjectDocument.h");
-    const std::string projectSessionSource = readSourceFile("src/scene/document/ProjectSession.h");
+    const std::string assetDocumentSource = readSourceFile("src/assets/asset_document.hpp");
+    const std::string typedStoreSource = readSourceFile("src/assets/typed_asset_store.hpp");
+    const std::string registrySource = readSourceFile("src/assets/asset_registry.hpp");
+    const std::string projectDocumentSource = readSourceFile("src/scene/document/project_document.hpp");
+    const std::string projectSessionSource = readSourceFile("src/scene/document/project_session.hpp");
 
     EXPECT_NE(assetDocumentSource.find("struct AssetDocumentBase"), std::string::npos);
     EXPECT_NE(typedStoreSource.find("class TypedAssetStore"), std::string::npos);
@@ -11965,13 +11965,13 @@ TEST(MaterialDocumentTests, MaterialTextureSlotPolicyOwnsAliasesAndSupportedSlot
 }
 
 TEST(MaterialDocumentTests, MaterialTextureSlotPolicyOwnsApiQdrAndRenderSlotNormalization) {
-    const std::string materialHeader = readSourceFile("src/assets/MaterialDocument.h");
-    const std::string materialSource = readSourceFile("src/assets/MaterialDocument.cpp");
-    const std::string apiSource = readSourceFile("src/api/QuaderAssetApi.cpp");
-    const std::string qdrReaderSource = readSourceFile("src/io/qdr/QdrDocumentReader.cpp");
-    const std::string qdrWriterSource = readSourceFile("src/io/qdr/QdrDocumentWriter.cpp");
-    const std::string textureBindingSource = readSourceFile("src/render/TextureBindingService.cpp");
-    const std::string renderSignatureSource = readSourceFile("src/render/RenderSignatureBuilder.cpp");
+    const std::string materialHeader = readSourceFile("src/assets/material_document.hpp");
+    const std::string materialSource = readSourceFile("src/assets/material_document.cpp");
+    const std::string apiSource = readSourceFile("src/api/quader_asset_api.cpp");
+    const std::string qdrReaderSource = readSourceFile("src/io/qdr/qdr_document_reader.cpp");
+    const std::string qdrWriterSource = readSourceFile("src/io/qdr/qdr_document_writer.cpp");
+    const std::string textureBindingSource = readSourceFile("src/render/texture_binding_service.cpp");
+    const std::string renderSignatureSource = readSourceFile("src/render/render_signature_builder.cpp");
 
     EXPECT_NE(materialHeader.find("struct MaterialTextureSlotDescriptor"), std::string::npos);
     EXPECT_NE(materialSource.find("kMaterialTextureSlotDescriptors"), std::string::npos);

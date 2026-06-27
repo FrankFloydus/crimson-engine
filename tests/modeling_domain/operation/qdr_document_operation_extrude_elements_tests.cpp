@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 #include <array>
 
@@ -43,7 +43,7 @@ CircularBoundaryFixture make_circular_boundary_fixture()
 
 	for (std::size_t index = 0; index < directions.size(); ++index) {
 		const std::size_t next = (index + 1U) % directions.size();
-		REQUIRE(add_face(fixture.document, std::array<ElementId, 4> {
+		EXPECT_TRUE(add_face(fixture.document, std::array<ElementId, 4> {
 			inner[index],
 			inner[next],
 			outer[next],
@@ -53,7 +53,7 @@ CircularBoundaryFixture make_circular_boundary_fixture()
 	}
 
 	for (const Face& face : fixture.document.faces) {
-		REQUIRE(dot(face_normal(fixture.document, face), { 0.0F, 1.0F, 0.0F }) > 0.5F);
+		EXPECT_TRUE(dot(face_normal(fixture.document, face), { 0.0F, 1.0F, 0.0F }) > 0.5F);
 	}
 	return fixture;
 }
@@ -84,23 +84,21 @@ bool vertical_wall_normals_have_consistent_radial_direction(const Document& docu
 
 } // namespace
 
-TEST_CASE("extrude selected edge elements creates side geometry and selects the offset edge", "[operation][extrude_elements]")
-{
+TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedEdgeElementsCreatesSideGeometryAndSelectsTheOffsetEdge) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	const Edge source = make_edge(fixture.bottom_left, fixture.bottom_right);
 	Selection selection = qdr_test::edge_selection({ source }, source);
 
 	const OperationResult result = extrude_selected_elements(fixture.document, selection, { 0.0F, -0.5F, 0.0F });
 
-	REQUIRE(result.changed);
-	REQUIRE(selection.mode == SelectionMode::edge);
-	REQUIRE(selection.edges.size() == 1U);
-	REQUIRE(fixture.document.faces.size() == 2U);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(selection.mode == SelectionMode::edge);
+	EXPECT_TRUE(selection.edges.size() == 1U);
+	EXPECT_TRUE(fixture.document.faces.size() == 2U);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
-TEST_CASE("extrude selected circular boundary edges keeps wall normals and winding coherent", "[operation][extrude_elements]")
-{
+TEST(QdrDocumentOperationExtrudeElementsTests, ExtrudeSelectedCircularBoundaryEdgesKeepsWallNormalsAndWindingCoherent) {
 	for (const quader::QVec3 offset : { quader::QVec3 { 0.0F, 0.5F, 0.0F }, quader::QVec3 { 0.0F, -0.5F, 0.0F } }) {
 		CircularBoundaryFixture fixture = make_circular_boundary_fixture();
 		Selection selection = qdr_test::edge_selection({
@@ -116,12 +114,12 @@ TEST_CASE("extrude selected circular boundary edges keeps wall normals and windi
 
 		const OperationResult result = extrude_selected_elements(fixture.document, selection, offset);
 
-		REQUIRE(result.changed);
-		REQUIRE(selection.mode == SelectionMode::edge);
-		REQUIRE(selection.edges.size() == fixture.inner_edges.size());
-		REQUIRE(fixture.document.faces.size() == 16U);
-		REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
-		REQUIRE(vertical_wall_normals_have_consistent_radial_direction(fixture.document));
-		REQUIRE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
+		EXPECT_TRUE(result.changed);
+		EXPECT_TRUE(selection.mode == SelectionMode::edge);
+		EXPECT_TRUE(selection.edges.size() == fixture.inner_edges.size());
+		EXPECT_TRUE(fixture.document.faces.size() == 16U);
+		EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+		EXPECT_TRUE(vertical_wall_normals_have_consistent_radial_direction(fixture.document));
+		EXPECT_TRUE(qdr_test::shared_edges_have_opposite_winding(fixture.document));
 	}
 }

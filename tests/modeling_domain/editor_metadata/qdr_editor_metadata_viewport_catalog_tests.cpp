@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/tool_constants.h>
-#include <editor/metadata/host_contract.h>
+#include <editor/modeling/runtime/tool_constants.hpp>
+#include <editor/metadata/host_contract.hpp>
 
 #include <string_view>
 
@@ -28,7 +28,9 @@ const qhc::HostViewportViewDescriptor& require_view(std::string_view id)
 			return descriptor;
 		}
 	}
-	FAIL("Missing host viewport view descriptor");
+	ADD_FAILURE() << "Missing host viewport view descriptor";
+	static const qhc::HostViewportViewDescriptor missing_descriptor {};
+	return missing_descriptor;
 }
 
 const qhc::HostGridPresetDescriptor& require_grid(std::string_view shortcut)
@@ -38,63 +40,62 @@ const qhc::HostGridPresetDescriptor& require_grid(std::string_view shortcut)
 			return descriptor;
 		}
 	}
-	FAIL("Missing host grid preset descriptor");
+	ADD_FAILURE() << "Missing host grid preset descriptor";
+	static const qhc::HostGridPresetDescriptor missing_descriptor {};
+	return missing_descriptor;
 }
 
 } // namespace
 
-TEST_CASE("host contract viewport defaults expose current host glue constants", "[host-contract]")
-{
+TEST(QdrEditorMetadataViewportCatalogTests, HostContractViewportDefaultsExposeCurrentHostGlueConstants) {
 	const qhc::HostViewportDefaultsDescriptor defaults = qhc::viewport_defaults();
 
-	CHECK(defaults.map_units_per_world_unit == qec::default_map_units_per_world_unit);
-	CHECK(defaults.default_grid_map_units == 32.0);
-	CHECK(defaults.default_orthographic_size == 24.0);
-	CHECK(defaults.focus_origin_distance == 64.0);
-	CHECK(defaults.default_fov_degrees == 60.0);
-	CHECK(defaults.orbit_radians_per_pixel == qec::navigation_orbit_radians_per_pixel);
-	CHECK(defaults.fly_look_radians_per_pixel == qec::navigation_fly_look_radians_per_pixel);
-	CHECK(defaults.fly_base_speed == qec::navigation_fly_base_speed);
-	CHECK(defaults.fly_fast_multiplier == qec::navigation_fly_fast_multiplier);
-	CHECK(defaults.fly_slow_multiplier == qec::navigation_fly_slow_multiplier);
-	CHECK(defaults.selection_box_drag_threshold_pixels == qec::selection_box_default_drag_threshold);
+	EXPECT_TRUE(defaults.map_units_per_world_unit == qec::default_map_units_per_world_unit);
+	EXPECT_TRUE(defaults.default_grid_map_units == 32.0);
+	EXPECT_TRUE(defaults.default_orthographic_size == 24.0);
+	EXPECT_TRUE(defaults.focus_origin_distance == 64.0);
+	EXPECT_TRUE(defaults.default_fov_degrees == 60.0);
+	EXPECT_TRUE(defaults.orbit_radians_per_pixel == qec::navigation_orbit_radians_per_pixel);
+	EXPECT_TRUE(defaults.fly_look_radians_per_pixel == qec::navigation_fly_look_radians_per_pixel);
+	EXPECT_TRUE(defaults.fly_base_speed == qec::navigation_fly_base_speed);
+	EXPECT_TRUE(defaults.fly_fast_multiplier == qec::navigation_fly_fast_multiplier);
+	EXPECT_TRUE(defaults.fly_slow_multiplier == qec::navigation_fly_slow_multiplier);
+	EXPECT_TRUE(defaults.selection_box_drag_threshold_pixels == qec::selection_box_default_drag_threshold);
 }
 
-TEST_CASE("host contract grid preset catalog is explicit and map-unit based", "[host-contract]")
-{
+TEST(QdrEditorMetadataViewportCatalogTests, HostContractGridPresetCatalogIsExplicitAndMapUnitBased) {
 	const std::span<const qhc::HostGridPresetDescriptor> presets = qhc::grid_preset_catalog();
-	REQUIRE(presets.size() == 10U);
+	EXPECT_TRUE(presets.size() == 10U);
 
-	CHECK(same_text(presets.front().shortcut, "F1"));
-	CHECK(same_text(presets.back().shortcut, "F10"));
-	CHECK(require_grid("F1").map_units == 1.0);
-	CHECK(require_grid("F6").map_units == 32.0);
-	CHECK(require_grid("F10").map_units == 512.0);
-	CHECK(require_grid("F6").default_preset);
-	CHECK_FALSE(require_grid("F5").default_preset);
-	CHECK(require_grid("F6").world_units == 32.0 / qec::default_map_units_per_world_unit);
+	EXPECT_TRUE(same_text(presets.front().shortcut, "F1"));
+	EXPECT_TRUE(same_text(presets.back().shortcut, "F10"));
+	EXPECT_TRUE(require_grid("F1").map_units == 1.0);
+	EXPECT_TRUE(require_grid("F6").map_units == 32.0);
+	EXPECT_TRUE(require_grid("F10").map_units == 512.0);
+	EXPECT_TRUE(require_grid("F6").default_preset);
+	EXPECT_FALSE(require_grid("F5").default_preset);
+	EXPECT_TRUE(require_grid("F6").world_units == 32.0 / qec::default_map_units_per_world_unit);
 }
 
-TEST_CASE("host contract viewport view catalog describes canonical initial cameras", "[host-contract]")
-{
+TEST(QdrEditorMetadataViewportCatalogTests, HostContractViewportViewCatalogDescribesCanonicalInitialCameras) {
 	const std::span<const qhc::HostViewportViewDescriptor> views = qhc::viewport_view_catalog();
-	REQUIRE(views.size() == 7U);
+	EXPECT_TRUE(views.size() == 7U);
 
 	const qhc::HostViewportViewDescriptor& perspective = require_view("perspective");
-	CHECK(same_text(perspective.label, "Perspective"));
-	CHECK_FALSE(perspective.orthographic);
-	CHECK(perspective.position.x == 6.0);
-	CHECK(perspective.position.y == 5.0);
-	CHECK(perspective.position.z == 8.0);
+	EXPECT_TRUE(same_text(perspective.label, "Perspective"));
+	EXPECT_FALSE(perspective.orthographic);
+	EXPECT_TRUE(perspective.position.x == 6.0);
+	EXPECT_TRUE(perspective.position.y == 5.0);
+	EXPECT_TRUE(perspective.position.z == 8.0);
 
 	const qhc::HostViewportViewDescriptor& top = require_view("top");
-	CHECK(top.orthographic);
-	CHECK(top.position.y == qhc::viewport_defaults().focus_origin_distance);
-	CHECK(top.up.z == -1.0);
+	EXPECT_TRUE(top.orthographic);
+	EXPECT_TRUE(top.position.y == qhc::viewport_defaults().focus_origin_distance);
+	EXPECT_TRUE(top.up.z == -1.0);
 
 	const qhc::HostViewportViewDescriptor& side = require_view("side");
-	CHECK(same_text(side.label, "Right"));
-	CHECK(side.orthographic);
-	CHECK(side.position.x == qhc::viewport_defaults().focus_origin_distance);
-	CHECK(side.up.y == 1.0);
+	EXPECT_TRUE(same_text(side.label, "Right"));
+	EXPECT_TRUE(side.orthographic);
+	EXPECT_TRUE(side.position.x == qhc::viewport_defaults().focus_origin_distance);
+	EXPECT_TRUE(side.up.y == 1.0);
 }

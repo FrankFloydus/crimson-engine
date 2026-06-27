@@ -4,15 +4,14 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/editor_runtime.h>
-#include <editor/interactions/interaction_api.h>
+#include <editor/modeling/runtime/editor_runtime.hpp>
+#include <editor/interactions/interaction_api.hpp>
 
 #include <vector>
 
-TEST_CASE("mirror tool captures object targets from current selection", "[editor-core][tool][mirror]")
-{
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorToolCapturesObjectTargetsFromCurrentSelection) {
 	quader_editor_core::RectangleSelectionState selection;
 	selection.mode = quader_editor_core::SelectionMode::object;
 	selection.selected_object_ids = { 4, 8 };
@@ -21,19 +20,18 @@ TEST_CASE("mirror tool captures object targets from current selection", "[editor
 	quader_editor_core::MirrorToolState state;
 	const quader_editor_core::MirrorToolResult first =
 		quader_editor_core::capture_first_mirror_point(state, selection, { 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
-	REQUIRE(first.ok);
-	CHECK(first.changed);
-	CHECK(first.target_count == 2);
-	REQUIRE(state.target_object_ids.size() == 2U);
-	CHECK(state.target_object_ids[0] == 4);
-	CHECK(state.target_object_ids[1] == 8);
-	CHECK(state.plane.dragging_new_point);
-	CHECK(quader_editor_core::mirror_is_active(state));
-	CHECK(quader_editor_core::mirror_is_dragging(state));
+	EXPECT_TRUE(first.ok);
+	EXPECT_TRUE(first.changed);
+	EXPECT_TRUE(first.target_count == 2);
+	EXPECT_TRUE(state.target_object_ids.size() == 2U);
+	EXPECT_TRUE(state.target_object_ids[0] == 4);
+	EXPECT_TRUE(state.target_object_ids[1] == 8);
+	EXPECT_TRUE(state.plane.dragging_new_point);
+	EXPECT_TRUE(quader_editor_core::mirror_is_active(state));
+	EXPECT_TRUE(quader_editor_core::mirror_is_dragging(state));
 }
 
-TEST_CASE("mirror target policy is object mode only", "[editor-core][tool][mirror]")
-{
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorTargetPolicyIsObjectModeOnly) {
 	quader_editor_core::RectangleSelectionState selection;
 	selection.mode = quader_editor_core::SelectionMode::face;
 	selection.active_object_id = 5;
@@ -43,13 +41,12 @@ TEST_CASE("mirror target policy is object mode only", "[editor-core][tool][mirro
 	const quader_editor_core::MirrorToolResult result =
 		quader_editor_core::capture_first_mirror_point(state, selection, { 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 0.0F });
 
-	REQUIRE(result.ok);
-	CHECK(state.target_object_ids.empty());
-	CHECK_FALSE(quader_editor_core::mirror_can_preview(state));
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(state.target_object_ids.empty());
+	EXPECT_FALSE(quader_editor_core::mirror_can_preview(state));
 }
 
-TEST_CASE("mirror tool uses two snapped world-grid points", "[editor-core][tool][mirror]")
-{
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorToolUsesTwoSnappedWorldGridPoints) {
 	quader_editor_core::RectangleSelectionState selection;
 	selection.mode = quader_editor_core::SelectionMode::object;
 	selection.selected_object_ids = { 5 };
@@ -62,24 +59,23 @@ TEST_CASE("mirror tool uses two snapped world-grid points", "[editor-core][tool]
 			camera,
 			{ { 0.49F, 2.0F, 1.51F }, { 0.0F, -1.0F, 0.0F } },
 			0.5);
-	REQUIRE(grid_point.ok);
+	EXPECT_TRUE(grid_point.ok);
 
 	quader_editor_core::MirrorToolState state;
-	REQUIRE(quader_editor_core::capture_first_mirror_point(state, selection, grid_point.position, grid_point.plane_normal).ok);
-	CHECK_FALSE(quader_editor_core::capture_second_mirror_point(state, grid_point.position).ok);
-	REQUIRE(quader_editor_core::capture_second_mirror_point(state, { 1.5F, 0.0F, 1.5F }).ok);
+	EXPECT_TRUE(quader_editor_core::capture_first_mirror_point(state, selection, grid_point.position, grid_point.plane_normal).ok);
+	EXPECT_FALSE(quader_editor_core::capture_second_mirror_point(state, grid_point.position).ok);
+	EXPECT_TRUE(quader_editor_core::capture_second_mirror_point(state, { 1.5F, 0.0F, 1.5F }).ok);
 
-	REQUIRE(state.plane.points.size() == 2U);
-	REQUIRE(state.target_object_ids.size() == 1U);
-	CHECK(state.target_object_ids[0] == 5);
-	CHECK(quader_editor_core::mirror_can_preview(state));
+	EXPECT_TRUE(state.plane.points.size() == 2U);
+	EXPECT_TRUE(state.target_object_ids.size() == 1U);
+	EXPECT_TRUE(state.target_object_ids[0] == 5);
+	EXPECT_TRUE(quader_editor_core::mirror_can_preview(state));
 	const std::vector<quader::QVec3> plane_points = quader_editor_core::mirror_plane_points(state);
-	REQUIRE(plane_points.size() == 3U);
-	CHECK(plane_points[2].y > plane_points[0].y);
+	EXPECT_TRUE(plane_points.size() == 3U);
+	EXPECT_TRUE(plane_points[2].y > plane_points[0].y);
 }
 
-TEST_CASE("mirror preview policy evaluates target meshes outside native transport", "[editor-core][tool][mirror]")
-{
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewPolicyEvaluatesTargetMeshesOutsideNativeTransport) {
 	quader_editor_core::PolygonObject object;
 	object.id = 7;
 	object.document = quader_poly::make_cube({});
@@ -95,22 +91,21 @@ TEST_CASE("mirror preview policy evaluates target meshes outside native transpor
 
 	const quader_editor_core::MirrorToolResult result =
 		quader_editor_core::refresh_mirror_preview(state, objects);
-	REQUIRE(result.ok);
+	EXPECT_TRUE(result.ok);
 
 	const quader_editor_core::MirrorPreviewMetadata metadata =
 		quader_editor_core::mirror_preview_metadata(state);
-	CHECK(metadata.preview_valid);
-	CHECK(metadata.target_count == 1);
-	CHECK(metadata.mirrored_count == 1);
+	EXPECT_TRUE(metadata.preview_valid);
+	EXPECT_TRUE(metadata.target_count == 1);
+	EXPECT_TRUE(metadata.mirrored_count == 1);
 
 	const std::vector<quader_poly::Document> documents =
 		quader_editor_core::mirror_preview_documents(state, objects);
-	REQUIRE(documents.size() == 1U);
-	CHECK_FALSE(quader_poly::compile_document(documents.front()).vertices.empty());
+	EXPECT_TRUE(documents.size() == 1U);
+	EXPECT_FALSE(quader_poly::compile_document(documents.front()).vertices.empty());
 }
 
-TEST_CASE("mirror preview validates on the first drag after the first point", "[editor-core][tool][mirror]")
-{
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorPreviewValidatesOnTheFirstDragAfterTheFirstPoint) {
 	quader_editor_core::PolygonObject object;
 	object.id = 7;
 	object.document = quader_poly::make_cube({});
@@ -132,11 +127,11 @@ TEST_CASE("mirror preview validates on the first drag after the first point", "[
 
 	const quader_editor_core::MirrorToolResult first =
 		runtime.click_mirror_from_ray(selection, objects, first_input);
-	REQUIRE(first.ok);
-	CHECK(first.changed);
-	REQUIRE(runtime.mirror_state().plane.points.size() == 1U);
-	CHECK(runtime.mirror_state().plane.dragging_new_point);
-	CHECK_FALSE(runtime.mirror_state().preview_valid);
+	EXPECT_TRUE(first.ok);
+	EXPECT_TRUE(first.changed);
+	EXPECT_TRUE(runtime.mirror_state().plane.points.size() == 1U);
+	EXPECT_TRUE(runtime.mirror_state().plane.dragging_new_point);
+	EXPECT_FALSE(runtime.mirror_state().preview_valid);
 
 	quader_editor_core::MirrorRayUpdateInput drag_input = first_input;
 	drag_input.ray = { { 1.0F, 2.0F, 0.0F }, { 0.0F, -1.0F, 0.0F } };
@@ -144,25 +139,24 @@ TEST_CASE("mirror preview validates on the first drag after the first point", "[
 
 	const quader_editor_core::MirrorToolResult drag =
 		runtime.update_mirror_hover_from_ray(selection, objects, drag_input);
-	REQUIRE(drag.ok);
-	CHECK(drag.changed);
-	REQUIRE(runtime.mirror_state().plane.points.size() == 2U);
-	CHECK(runtime.mirror_state().plane.dragging_new_point);
+	EXPECT_TRUE(drag.ok);
+	EXPECT_TRUE(drag.changed);
+	EXPECT_TRUE(runtime.mirror_state().plane.points.size() == 2U);
+	EXPECT_TRUE(runtime.mirror_state().plane.dragging_new_point);
 
 	const quader_editor_core::MirrorPreviewMetadata metadata =
 		quader_editor_core::mirror_preview_metadata(runtime.mirror_state());
-	CHECK(metadata.can_preview);
-	CHECK(metadata.preview_valid);
-	CHECK(metadata.target_count == 1);
+	EXPECT_TRUE(metadata.can_preview);
+	EXPECT_TRUE(metadata.preview_valid);
+	EXPECT_TRUE(metadata.target_count == 1);
 
 	const std::vector<quader_poly::Document> documents =
 		runtime.mirror_preview_documents(objects);
-	REQUIRE(documents.size() == 1U);
-	CHECK_FALSE(quader_poly::compile_document(documents.front()).vertices.empty());
+	EXPECT_TRUE(documents.size() == 1U);
+	EXPECT_FALSE(quader_poly::compile_document(documents.front()).vertices.empty());
 }
 
-TEST_CASE("mirror line drag moves the whole placed plane", "[editor-core][tool][mirror]")
-{
+TEST(QdrModelingRuntimeToolMirrorTests, MirrorLineDragMovesTheWholePlacedPlane) {
 	quader_editor_core::MirrorToolState state;
 	state.plane.points = {
 		{ 0.0F, 0.0F, 0.0F },
@@ -172,18 +166,18 @@ TEST_CASE("mirror line drag moves the whole placed plane", "[editor-core][tool][
 	state.target_object_ids = { 1 };
 	state.preview_valid = true;
 
-	REQUIRE(quader_editor_core::begin_mirror_line_drag(state, { 0.5F, 0.0F, 0.0F }).ok);
-	CHECK(quader_editor_core::mirror_is_dragging(state));
+	EXPECT_TRUE(quader_editor_core::begin_mirror_line_drag(state, { 0.5F, 0.0F, 0.0F }).ok);
+	EXPECT_TRUE(quader_editor_core::mirror_is_dragging(state));
 
 	const quader_editor_core::MirrorToolResult moved =
 		quader_editor_core::update_dragged_mirror_line(state, { 1.5F, 0.0F, 0.0F });
-	REQUIRE(moved.ok);
-	CHECK(moved.changed);
-	REQUIRE(state.plane.points.size() == 2U);
-	CHECK(state.plane.points[0].x == 1.0F);
-	CHECK(state.plane.points[1].x == 2.0F);
-	CHECK_FALSE(state.preview_valid);
+	EXPECT_TRUE(moved.ok);
+	EXPECT_TRUE(moved.changed);
+	EXPECT_TRUE(state.plane.points.size() == 2U);
+	EXPECT_TRUE(state.plane.points[0].x == 1.0F);
+	EXPECT_TRUE(state.plane.points[1].x == 2.0F);
+	EXPECT_FALSE(state.preview_valid);
 
-	REQUIRE(quader_editor_core::end_mirror_line_drag(state).ok);
-	CHECK_FALSE(quader_editor_core::mirror_is_dragging(state));
+	EXPECT_TRUE(quader_editor_core::end_mirror_line_drag(state).ok);
+	EXPECT_FALSE(quader_editor_core::mirror_is_dragging(state));
 }

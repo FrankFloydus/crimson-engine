@@ -4,60 +4,57 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 #include <algorithm>
 #include <vector>
 
 using namespace quader_poly;
 
-TEST_CASE("merge vertices to center places the survivor at the selected centroid", "[operation][merge_vertices_to_center]")
-{
+TEST(QdrDocumentOperationMergeVerticesToCenterTests, MergeVerticesToCenterPlacesTheSurvivorAtTheSelectedCentroid) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	Selection selection = qdr_test::vertex_selection({ fixture.bottom_left, fixture.bottom_right });
 
 	const OperationResult result = merge_selected_vertices_to_center(fixture.document, selection);
 
-	REQUIRE(result.changed);
-	REQUIRE(selection.mode == SelectionMode::vertex);
-	REQUIRE(selection.vertices.size() == 1U);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
+	EXPECT_TRUE(selection.vertices.size() == 1U);
 	const Vertex* survivor = find_vertex(fixture.document, selection.vertices.front());
-	REQUIRE(survivor != nullptr);
-	REQUIRE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, -1.0F, 0.0F }));
-	REQUIRE(find_vertex(fixture.document, fixture.bottom_right) == nullptr);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(fixture.document));
+	EXPECT_TRUE(survivor != nullptr);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, -1.0F, 0.0F }));
+	EXPECT_TRUE(find_vertex(fixture.document, fixture.bottom_right) == nullptr);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(fixture.document));
 }
 
-TEST_CASE("merge vertices to center keeps a simple cube hull closed", "[operation][merge_vertices_to_center]")
-{
+TEST(QdrDocumentOperationMergeVerticesToCenterTests, MergeVerticesToCenterKeepsASimpleCubeHullClosed) {
 	Document document = make_cube({});
 	const Edge edge = document_edges(document).front();
 	const Vertex* first = find_vertex(document, edge.a);
 	const Vertex* second = find_vertex(document, edge.b);
-	REQUIRE(first != nullptr);
-	REQUIRE(second != nullptr);
+	EXPECT_TRUE(first != nullptr);
+	EXPECT_TRUE(second != nullptr);
 	const quader::QVec3 expected_center = (first->position + second->position) / 2.0F;
 	const std::size_t vertex_count_before = document.vertices.size();
 	Selection selection = qdr_test::vertex_selection({ edge.a, edge.b }, edge.a);
 
 	const OperationResult result = merge_selected_vertices_to_center(document, selection);
 
-	REQUIRE(result.changed);
-	REQUIRE(document.vertices.size() == vertex_count_before - 1U);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(document.vertices.size() == vertex_count_before - 1U);
 	const Vertex* survivor = find_vertex(document, edge.a);
-	REQUIRE(survivor != nullptr);
-	REQUIRE(find_vertex(document, edge.b) == nullptr);
-	REQUIRE(qdr_test::vec_nearly_equal(survivor->position, expected_center));
-	REQUIRE(selection.has_active);
-	REQUIRE(selection.vertices.size() == 1U);
-	REQUIRE(selection.active_vertex == edge.a);
-	REQUIRE(std::none_of(document.faces.begin(), document.faces.end(), qdr_test::face_has_repeated_vertices));
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(document));
-	REQUIRE(qdr_test::every_edge_is_closed(document));
+	EXPECT_TRUE(survivor != nullptr);
+	EXPECT_TRUE(find_vertex(document, edge.b) == nullptr);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, expected_center));
+	EXPECT_TRUE(selection.has_active);
+	EXPECT_TRUE(selection.vertices.size() == 1U);
+	EXPECT_TRUE(selection.active_vertex == edge.a);
+	EXPECT_TRUE(std::none_of(document.faces.begin(), document.faces.end(), qdr_test::face_has_repeated_vertices));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
 }
 
-TEST_CASE("merge vertices to center fans folded cube sides around opposite top corners", "[operation][merge_vertices_to_center]")
-{
+TEST(QdrDocumentOperationMergeVerticesToCenterTests, MergeVerticesToCenterFansFoldedCubeSidesAroundOppositeTopCorners) {
 	Document document = make_cube({});
 	const ElementId bottom_front_left = 1;
 	const ElementId bottom_front_right = 2;
@@ -84,27 +81,27 @@ TEST_CASE("merge vertices to center fans folded cube sides around opposite top c
 			return qdr_test::face_vertices_match_cyclic(face, expected);
 		});
 	};
-	REQUIRE(result.changed);
-	REQUIRE(find_vertex(document, top_front_left) == nullptr);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(find_vertex(document, top_front_left) == nullptr);
 	const Vertex* survivor = find_vertex(document, top_back_right);
-	REQUIRE(survivor != nullptr);
-	REQUIRE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, 1.0F, 0.0F }));
-	REQUIRE_FALSE(has_face({ bottom_back_left, bottom_front_left, bottom_front_right, top_front_right, top_back_right, top_back_left }));
-	REQUIRE(has_cyclic_face({ bottom_front_left, bottom_front_right, top_front_right, top_back_right }));
-	REQUIRE(has_cyclic_face({ bottom_back_left, bottom_front_left, top_back_right, top_back_left }));
-	REQUIRE(has_cyclic_face({ bottom_back_right, top_back_right, top_front_right, bottom_front_right }));
-	REQUIRE(has_cyclic_face({ bottom_back_left, top_back_left, top_back_right, bottom_back_right }));
-	REQUIRE_FALSE(has_face({ top_back_left, top_front_right, top_back_right }));
-	REQUIRE(qdr_test::edge_incidence_count(document, make_edge(bottom_front_left, top_back_right)) == 2);
-	REQUIRE(document.faces.size() == 5U);
-	REQUIRE(selection.has_active);
-	REQUIRE(selection.vertices.size() == 1U);
-	REQUIRE(selection.active_vertex == top_back_right);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(document));
-	REQUIRE(qdr_test::every_edge_is_closed(document));
+	EXPECT_TRUE(survivor != nullptr);
+	EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, 1.0F, 0.0F }));
+	EXPECT_FALSE(has_face({ bottom_back_left, bottom_front_left, bottom_front_right, top_front_right, top_back_right, top_back_left }));
+	EXPECT_TRUE(has_cyclic_face({ bottom_front_left, bottom_front_right, top_front_right, top_back_right }));
+	EXPECT_TRUE(has_cyclic_face({ bottom_back_left, bottom_front_left, top_back_right, top_back_left }));
+	EXPECT_TRUE(has_cyclic_face({ bottom_back_right, top_back_right, top_front_right, bottom_front_right }));
+	EXPECT_TRUE(has_cyclic_face({ bottom_back_left, top_back_left, top_back_right, bottom_back_right }));
+	EXPECT_FALSE(has_face({ top_back_left, top_front_right, top_back_right }));
+	EXPECT_TRUE(qdr_test::edge_incidence_count(document, make_edge(bottom_front_left, top_back_right)) == 2);
+	EXPECT_TRUE(document.faces.size() == 5U);
+	EXPECT_TRUE(selection.has_active);
+	EXPECT_TRUE(selection.vertices.size() == 1U);
+	EXPECT_TRUE(selection.active_vertex == top_back_right);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(qdr_test::every_edge_is_closed(document));
 	const CompiledMesh mesh = compile_document(document);
-	REQUIRE(mesh.primitives.size() == document.faces.size());
-	REQUIRE(std::all_of(mesh.primitives.begin(), mesh.primitives.end(), [](const CompiledPrimitive& primitive) {
+	EXPECT_TRUE(mesh.primitives.size() == document.faces.size());
+	EXPECT_TRUE(std::all_of(mesh.primitives.begin(), mesh.primitives.end(), [](const CompiledPrimitive& primitive) {
 		return primitive.index_count == 6U;
 	}));
 }

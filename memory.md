@@ -9,6 +9,52 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-27 - Modeling Tests Are GoogleTest-Only
+
+Task/context: the modeling-domain test harness was migrated permanently to GoogleTest and the old
+test framework was removed as a CMake and third-party dependency.
+
+Root cause/invariant:
+
+- Native tests must use GoogleTest only. Do not add parallel test frameworks or fallback source-fetch
+  policy for modeling-domain tests.
+- App/runtime behavior tests live in `quader_tests`, source-policy scans live in
+  `quader_guardrail_tests`, and modeling-domain tests are one aggregate executable,
+  `quader_modeling_domain_tests`, registered through explicit categorized source lists in
+  `cmake/QuaderModeling.cmake`.
+- Project-owned files must not reintroduce retired test-framework include paths, macros, dependency
+  options, source-policy docs, or license evidence.
+
+Affected owners/files:
+
+- `cmake/QuaderBuildOptions.cmake`
+- `cmake/QuaderModeling.cmake`
+- `tests/modeling_domain/**`
+- `tests/build_guardrail_tests.cpp`
+- `agents/testing-build.md`
+- `agents/dependencies.md`
+- `docs/absorbed_modeling/README.md`
+- `thirdparty/THIRD_PARTY_MANIFEST.md`
+
+Resolved approach:
+
+- Removed the old dependency option, commit pin, source-dir cache variable, FetchContent path, and
+  test-support compile definition.
+- Rewired `quader_modeling_domain_tests` to `GTest::gtest` and `GTest::gtest_main`.
+- Converted modeling-domain test sources to GoogleTest syntax and moved shared approximate
+  comparison support into `tests/modeling_domain/test_support.hpp`.
+- Removed old third-party manifest/license entries and added guardrails that scan project-owned
+  files for retired test-framework tokens.
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no`
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.*:DependencyLicenseGuardrailTests.*`
+- `ctest --preset vs2026-debug --output-on-failure`
+
 ## 2026-06-27 - Source-Wire Overlays, Flipped Mesh Picking, And Inverted Face Fill
 
 Task/context: source-wire and selection overlays had a long-running set of regressions: large wire
@@ -31,14 +77,14 @@ Root cause/invariants:
 Affected owners/files:
 
 - `src/editor/modeling/runtime/session_picking.cpp`
-- `src/mesh/polygon/document.h`
+- `src/mesh/polygon/document.hpp`
 - `src/mesh/polygon/quader_poly_document_picking_overlay.cpp`
-- `src/editor/projection/PickingCacheProjection.cpp`
+- `src/editor/projection/picking_cache_projection.cpp`
 - `src/editor/modeling/runtime/session_selection_overlay.cpp`
-- `src/render/ViewportOverlayPolicy.cpp`
-- `src/render/overlay/OverlayRenderableBuilder.cpp`
-- `src/render/overlay/OverlayRenderableBuilder.h`
-- `src/render/overlay/OverlayFaceFillBuilder.cpp`
+- `src/render/viewport_overlay_policy.cpp`
+- `src/render/overlay/overlay_renderable_builder.cpp`
+- `src/render/overlay/overlay_renderable_builder.hpp`
+- `src/render/overlay/overlay_face_fill_builder.cpp`
 - `tests/modeling_domain/qdr_modeling_runtime_picking_tests.cpp`
 - `tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp`
 - `tests/render_extraction_tests.cpp`
@@ -63,3 +109,86 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_tests`
 - `ctest --preset vs2026-debug --output-on-failure`
 - `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-27 - Project-Owned C++ File Naming Invariant
+
+Task/context: the native app source tree had mixed PascalCase and snake_case C++ filenames, plus
+project headers using mixed extensions. The repository now standardizes project-owned C++ filenames
+so future refactors, CMake entries, includes, and tests have one naming convention.
+
+Invariant:
+
+- Project-owned C++ files under `src`, `tests`, `examples`, `benchmarks`, and `tools` use
+  snake_case basenames only.
+- Project-owned C++ source/header extensions are only `.cpp` and `.hpp`.
+- Third-party/vendor headers keep their upstream names and extensions.
+
+Affected guardrails:
+
+- `tests/build_guardrail_tests.cpp` enforces snake_case `.cpp`/`.hpp` project filenames, rejects
+  stale PascalCase or old-extension project path references, rejects broken extension rewrite
+  artifacts, and rejects temporary rename files.
+- `tests/support/guardrail_file_scan.cpp`, `tests/programmatic_api_guardrail_tests.cpp`, and
+  `tests/oop_architecture_guardrail_tests.cpp` scan `.hpp` project headers instead of old header
+  extensions.
+
+Resolved approach:
+
+- Renamed project-owned C++ files to snake_case and changed project headers to `.hpp`.
+- Updated CMake, docs, examples, source includes, and tests to the new paths.
+- Repaired mechanical rewrite fallout in member names such as `history_status`, `has_selection`,
+  `has_projection`, and `hard_normal_edges`.
+- Restored the external RmlUi vendor include to `RmlUi/Core/Types.h`.
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
+- `cmake --build --preset vs2026-debug --target quader`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.*:OopArchitectureGuardrailTests.*:ProgrammaticApiGuardrailTests.*`
+- `ctest --preset vs2026-debug --output-on-failure`
+
+## 2026-06-27 - Affected Build/Test Workflow
+
+Task/context: prototype loops were paying the full app/test cost for narrow source changes. The
+fast path now uses an affected workflow before full verification, while still printing a concrete
+before -> after timing when requested.
+
+Invariant:
+
+- Use `tools/affected_check.ps1` for scoped build/test checks during prototyping and agent loops.
+- Pass explicit comma-separated `-ChangedPath` values in dirty worktrees so the plan reflects the
+  intended edit, not unrelated local changes.
+- Route pure source-policy scans through `quader_guardrail_tests`; do not force `quader_tests` to
+  compile/link for docs, tooling, CMake policy, or API/source-boundary guardrails.
+- Use `-MeasureFull` when a task needs a concrete before -> after comparison.
+- Use `-IncludeApp` when manual in-app verification or runtime resource copying is part of the
+  change.
+
+Affected owners/files:
+
+- `tools/affected_check.ps1`
+- `CMakeLists.txt`
+- `agents/testing-build.md`
+- `tests/build_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Added path-based target and GoogleTest filter planning for render, UI, viewport, modeling,
+  polygon/geometry, QDR, resources, docs, tools, CMake, and direct test-source edits.
+- Split pure source-policy scans into one lightweight `quader_guardrail_tests` executable so docs
+  and tooling changes do not pay the app/runtime test link cost.
+- Kept the workflow in the existing `build/vs2026` tree and added only one lightweight guardrail
+  executable instead of many test shards or artifact folders.
+- Added a guardrail so the tool keeps printing the full baseline, affected workflow, filtered
+  GoogleTest commands, and before -> after comparison support.
+
+Verification:
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools\affected_check.ps1 -NoUntracked -ChangedPath src/render/overlay/overlay_renderable_builder.cpp -MeasureFull`
+- Render-overlay sample timing: full baseline 51.36s -> affected workflow 4.22s, 47.14s saved.
+- Tooling-only sample after the guardrail split and filter tightening: full baseline 54.03s ->
+  affected workflow 2.43s, 51.60s saved.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools\affected_check.ps1 -NoUntracked -ChangedPath tools/affected_check.ps1,agents/testing-build.md,tests/build_guardrail_tests.cpp`
+- `ctest --preset vs2026-debug --output-on-failure`

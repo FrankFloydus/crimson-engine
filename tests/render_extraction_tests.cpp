@@ -4,25 +4,25 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "assets/AssetRegistry.h"
-#include "assets/MeshAsset.h"
-#include "assets/TextureAsset.h"
-#include "core/ColorSpace.h"
-#include "render/LightRenderableCache.h"
-#include "render/MaterialBindingService.h"
-#include "render/MeshRenderableFactory.h"
-#include "render/RenderSignatureBuilder.h"
-#include "render/RenderLayers.h"
-#include "render/ViewportRenderPassCoordinator.h"
-#include "render/ViewportOverlayFrame.h"
-#include "render/ViewportOverlayPolicy.h"
-#include "render/overlay/OverlayCameraProjector.h"
-#include "render/overlay/OverlayProxyFactory.h"
-#include "render/overlay/OverlayRenderableCache.h"
-#include "render/overlay/OverlayRenderableBuilder.h"
-#include "render/overlay/ViewportSceneOverlayBuilder.h"
-#include "scene/SceneDocument.h"
-#include "support/GuardrailFileScan.h"
+#include "assets/asset_registry.hpp"
+#include "assets/mesh_asset.hpp"
+#include "assets/texture_asset.hpp"
+#include "core/color_space.hpp"
+#include "render/light_renderable_cache.hpp"
+#include "render/material_binding_service.hpp"
+#include "render/mesh_renderable_factory.hpp"
+#include "render/render_signature_builder.hpp"
+#include "render/render_layers.hpp"
+#include "render/viewport_render_pass_coordinator.hpp"
+#include "render/viewport_overlay_frame.hpp"
+#include "render/viewport_overlay_policy.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
+#include "render/overlay/overlay_proxy_factory.hpp"
+#include "render/overlay/overlay_renderable_cache.hpp"
+#include "render/overlay/overlay_renderable_builder.hpp"
+#include "render/overlay/viewport_scene_overlay_builder.hpp"
+#include "scene/scene_document.hpp"
+#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
 
@@ -159,10 +159,10 @@ TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
 
 TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {
     const std::array<std::string_view, 4u> cacheSources = {
-            "src/render/MaterialBindingService.cpp",
-            "src/render/MeshRenderableFactory.cpp",
-            "src/render/ToolPreviewRenderableCache.cpp",
-            "src/render/overlay/OverlayRenderableBuilder.cpp",
+            "src/render/material_binding_service.cpp",
+            "src/render/mesh_renderable_factory.cpp",
+            "src/render/tool_preview_renderable_cache.cpp",
+            "src/render/overlay/overlay_renderable_builder.cpp",
     };
     for (const std::string_view source : cacheSources) {
         const std::string text = readSourceFile({source});
@@ -191,9 +191,9 @@ TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
 }
 
 TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
-    const std::string header = readSourceFile({"src", "render", "LightRenderableCache.h"});
-    const std::string source = readSourceFile({"src", "render", "LightRenderableCache.cpp"});
-    const std::string syncSource = readSourceFile({"src", "render", "SceneRenderSyncService.cpp"});
+    const std::string header = readSourceFile({"src", "render", "light_renderable_cache.hpp"});
+    const std::string source = readSourceFile({"src", "render", "light_renderable_cache.cpp"});
+    const std::string syncSource = readSourceFile({"src", "render", "scene_render_sync_service.cpp"});
 
     EXPECT_NE(header.find("rebuildSignature"), std::string::npos);
     EXPECT_NE(header.find("transformSignature"), std::string::npos);
@@ -773,8 +773,8 @@ TEST(OverlayRenderableCacheTests, TracksSlotSignaturesWithoutOwningFilamentProxi
 }
 
 TEST(SceneRenderBridgeExtractionTests, DelegatesOverlayAndPreviewProxyOwnership) {
-    const std::string header = readSourceFile({"src", "render", "SceneRenderBridge.h"});
-    const std::string source = readSourceFile({"src", "render", "SceneRenderBridge.cpp"});
+    const std::string header = readSourceFile({"src", "render", "scene_render_bridge.hpp"});
+    const std::string source = readSourceFile({"src", "render", "scene_render_bridge.cpp"});
 
     EXPECT_NE(header.find("OverlayRenderableCache overlayCache_"), std::string::npos);
     EXPECT_NE(header.find("ToolPreviewRenderableCache toolPreviewCache_"), std::string::npos);

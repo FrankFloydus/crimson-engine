@@ -4,16 +4,16 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/move_tool.h>
+#include <editor/interactions/move_tool.hpp>
 
-#include "tool_math_internal.h"
+#include "tool_math_internal.hpp"
 
-#include <editor/modeling/runtime/editor_tool.h>
-#include <editor/interactions/transform_drag.h>
-#include <editor/interactions/tool_drag_math.h>
-#include <editor/interactions/tool_snapping.h>
+#include <editor/modeling/runtime/editor_tool.hpp>
+#include <editor/interactions/transform_drag.hpp>
+#include <editor/interactions/tool_drag_math.hpp>
+#include <editor/interactions/tool_snapping.hpp>
 
-#include <diagnostics/profile.h>
+#include <diagnostics/profile.hpp>
 
 #include <algorithm>
 #include <cmath>

@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
-#include "support/GuardrailFileScan.h"
+#include "support/guardrail_file_scan.hpp"
 
 #include <algorithm>
 #include <filesystem>

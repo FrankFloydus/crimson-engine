@@ -4,28 +4,27 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "uv_operation_test_helpers.h"
+#include "uv_operation_test_helpers.hpp"
 
-#include <catch2/catch_approx.hpp>
+#include "test_support.hpp"
 
 using namespace quader_poly;
 
-TEST_CASE("UV fit both maps the selected UV island into the unit square", "[operation][uv_fit_both]")
-{
+TEST(QdrDocumentOperationUvFitBothTests, UVFitBothMapsTheSelectedUVIslandIntoTheUnitSquare) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	Face* face = find_face(fixture.document, fixture.face);
-	REQUIRE(face != nullptr);
+	EXPECT_TRUE(face != nullptr);
 	qdr_test::assign_offset_uvs(*face);
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 
 	const OperationResult result = apply_uv_operation(fixture.document, selection, "fit_both", 64.0F);
 
-	REQUIRE(result.changed);
+	EXPECT_TRUE(result.changed);
 	face = find_face(fixture.document, fixture.face);
-	REQUIRE(face != nullptr);
+	EXPECT_TRUE(face != nullptr);
 	const qdr_test::UvBounds bounds = qdr_test::uv_bounds(*face);
-	REQUIRE(bounds.min_u == Catch::Approx(0.0F));
-	REQUIRE(bounds.max_u == Catch::Approx(1.0F));
-	REQUIRE(bounds.min_v == Catch::Approx(0.0F));
-	REQUIRE(bounds.max_v == Catch::Approx(1.0F));
+	EXPECT_NEAR(bounds.min_u, 0.0F, 0.0001);
+	EXPECT_NEAR(bounds.max_u, 1.0F, 0.0001);
+	EXPECT_NEAR(bounds.min_v, 0.0F, 0.0001);
+	EXPECT_NEAR(bounds.max_v, 1.0F, 0.0001);
 }

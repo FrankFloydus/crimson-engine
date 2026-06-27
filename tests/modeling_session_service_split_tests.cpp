@@ -4,16 +4,16 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "assets/AssetRegistry.h"
-#include "editor/commands/modeling/SceneAwareDeleteSelectionCommand.h"
-#include "editor/modeling/services/ModelingSessionService.h"
-#include "editor/modeling/services/ModelingSessionServices.h"
-#include "editor/modeling/services/ModelingOperationSettings.h"
-#include "editor/modeling/services/ModelingInstantOperationCatalog.h"
-#include "editor/selection/SelectionProjectionService.h"
-#include "editor/tools/ViewportToolDescriptorCatalog.h"
-#include "scene/SceneDocument.h"
-#include "support/GuardrailFileScan.h"
+#include "assets/asset_registry.hpp"
+#include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/modeling/services/modeling_session_services.hpp"
+#include "editor/modeling/services/modeling_operation_settings.hpp"
+#include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
+#include "editor/selection/selection_projection_service.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
+#include "scene/scene_document.hpp"
+#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
 
@@ -25,7 +25,7 @@
 #include <vector>
 #include <variant>
 
-#include <editor/modeling/runtime/session.h>
+#include <editor/modeling/runtime/session.hpp>
 
 namespace quader {
 namespace {
@@ -434,15 +434,15 @@ TEST(ModelingSessionServiceSplitTests, SelectionProjectionServicePromotionFallsB
 
 TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
-    const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
-    const std::string serviceAggregate = readSourceFile("src/editor/modeling/services/ModelingSessionServices.h");
+    const std::string services = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
+    const std::string serviceAggregate = readSourceFile("src/editor/modeling/services/modeling_session_services.hpp");
 
-    EXPECT_NE(cmake.find("src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp"), std::string::npos);
-    EXPECT_NE(serviceAggregate.find("editor/modeling/runtime/ModelingObjectRuntimeMap.h"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/modeling/runtime/modeling_object_runtime_map.cpp"), std::string::npos);
+    EXPECT_NE(serviceAggregate.find("editor/modeling/runtime/modeling_object_runtime_map.hpp"), std::string::npos);
     EXPECT_EQ(cmake.find("src/editor/modeling/services/ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(serviceAggregate.find("ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(services.find("ModelingObjectRuntimeMap::"), std::string::npos);
-    const std::string runtimeMapHeader = readSourceFile("src/editor/modeling/runtime/ModelingObjectRuntimeMap.h");
+    const std::string runtimeMapHeader = readSourceFile("src/editor/modeling/runtime/modeling_object_runtime_map.hpp");
     EXPECT_EQ(runtimeMapHeader.find("\n    std::unordered_map<int, EntityId>& entitiesByObject()"), std::string::npos);
     EXPECT_EQ(runtimeMapHeader.find("\n    std::unordered_map<EntityId, int>& objectsByEntity()"), std::string::npos);
     EXPECT_NE(runtimeMapHeader.find("void bind(int modelingObjectId, EntityId entity)"), std::string::npos);
@@ -450,8 +450,8 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) 
 }
 
 TEST(ModelingSessionServiceSplitTests, ObjectSelectionMappingLivesInSelectionProjectionService) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string projection = readSourceFile("src/editor/selection/SelectionProjectionService.cpp");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string projection = readSourceFile("src/editor/selection/selection_projection_service.cpp");
 
     EXPECT_NE(facade.find("selectionProjectionService_.projectObjectSelectionForSceneEntities("), std::string::npos);
     EXPECT_EQ(facade.find("const auto object = objectRegistry_.modelingObjectForEntity(entity);"), std::string::npos);
@@ -465,9 +465,9 @@ TEST(ModelingSessionServiceSplitTests, ObjectSelectionMappingLivesInSelectionPro
 }
 
 TEST(ModelingSessionServiceSplitTests, SelectionCenterWorldProjectionLivesInSelectionProjectionService) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string projectionHeader = readSourceFile("src/editor/selection/SelectionProjectionService.h");
-    const std::string projection = readSourceFile("src/editor/selection/SelectionProjectionService.cpp");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string projectionHeader = readSourceFile("src/editor/selection/selection_projection_service.hpp");
+    const std::string projection = readSourceFile("src/editor/selection/selection_projection_service.cpp");
 
     EXPECT_NE(
             facade.find("selectionProjectionService_.worldSelectionCenter(session_, scene_, assets_, objectRegistry_)"),
@@ -483,9 +483,9 @@ TEST(ModelingSessionServiceSplitTests, SelectionCenterWorldProjectionLivesInSele
 }
 
 TEST(ModelingSessionServiceSplitTests, DuplicateSceneIdentityLivesInRuntimeMapAndMeshSync) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string runtimeMap = readSourceFile("src/editor/modeling/runtime/ModelingObjectRuntimeMap.cpp");
-    const std::string meshSync = readSourceFile("src/editor/modeling/services/ModelingMeshSyncService.cpp");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string runtimeMap = readSourceFile("src/editor/modeling/runtime/modeling_object_runtime_map.cpp");
+    const std::string meshSync = readSourceFile("src/editor/modeling/services/modeling_mesh_sync_service.cpp");
 
     EXPECT_EQ(facade.find("DuplicateSceneState"), std::string::npos);
     EXPECT_EQ(facade.find("scene_.setTransform(*duplicate"), std::string::npos);
@@ -501,23 +501,23 @@ TEST(ModelingSessionServiceSplitTests, DuplicateSceneIdentityLivesInRuntimeMapAn
 }
 
 TEST(ModelingSessionServiceSplitTests, TransformDragPreviewRoutingLivesInController) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string controller = readSourceFile("src/editor/modeling/runtime_state/TransformDragController.cpp");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string controller = readSourceFile("src/editor/modeling/runtime_state/transform_drag_controller.cpp");
 
     EXPECT_NE(facade.find("TransformDragController::previewRouting("), std::string::npos);
     EXPECT_EQ(facade.find("duplicateSceneTransformPreview"), std::string::npos);
     EXPECT_EQ(facade.find("needsRuntimePreviewTransaction ="), std::string::npos);
     EXPECT_NE(controller.find("TransformDragController::previewRouting("), std::string::npos);
     EXPECT_NE(controller.find("sceneTransformPreviewEligible"), std::string::npos);
-    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/services/TransformDragController.h"));
-    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/services/TransformPreviewService.h"));
-    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/services/ModalToolRuntime.h"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/services/transform_drag_controller.hpp"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/services/transform_preview_service.hpp"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/editor/modeling/services/modal_tool_runtime.hpp"));
 }
 
 TEST(ModelingSessionServiceSplitTests, PickingAndOverlayProjectionHelpersStayOutOfFacade) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
-    const std::string pickingProjection = readSourceFile("src/editor/projection/PickingCacheProjection.cpp");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string services = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
+    const std::string pickingProjection = readSourceFile("src/editor/projection/picking_cache_projection.cpp");
 
     EXPECT_EQ(facade.find("objectPickFaceGeometrySignature("), std::string::npos);
     EXPECT_EQ(facade.find("mixPickGeometryHash("), std::string::npos);
@@ -538,12 +538,12 @@ TEST(ModelingSessionServiceSplitTests, PickingAndOverlayProjectionHelpersStayOut
 }
 
 TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInFocusedService) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string service = readSourceFile("src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp");
-    const std::string documentHelpers = readSourceFile("src/editor/commands/document/DocumentCommandSceneHelpers.h");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string service = readSourceFile("src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp");
+    const std::string documentHelpers = readSourceFile("src/editor/commands/document/document_command_scene_helpers.hpp");
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
-    EXPECT_NE(cmake.find("src/editor/modeling/services/ModelingHierarchyDuplicateService.cpp"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/modeling/services/modeling_hierarchy_duplicate_service.cpp"), std::string::npos);
     EXPECT_NE(facade.find("hierarchyDuplicateService_.duplicateSelectedHierarchyForGroupDrag("), std::string::npos);
     EXPECT_EQ(facade.find("std::unordered_map<EntityId, EntityId> cloneBySource"), std::string::npos);
     EXPECT_EQ(facade.find("auto copyCommonEntityState"), std::string::npos);
@@ -555,12 +555,12 @@ TEST(ModelingSessionServiceSplitTests, GroupDragHierarchyDuplicatePolicyLivesInF
 }
 
 TEST(ModelingSessionServiceSplitTests, SceneAwareDeletePolicyLivesInFocusedCommand) {
-    const std::string facade = readSourceFile("src/editor/modeling/services/ModelingSessionService.cpp");
-    const std::string command = readSourceFile("src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp");
-    const std::string commandHeader = readSourceFile("src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.h");
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string command = readSourceFile("src/editor/commands/modeling/scene_aware_delete_selection_command.cpp");
+    const std::string commandHeader = readSourceFile("src/editor/commands/modeling/scene_aware_delete_selection_command.hpp");
     const std::string cmake = readSourceFile("CMakeLists.txt");
 
-    EXPECT_NE(cmake.find("src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/commands/modeling/scene_aware_delete_selection_command.cpp"), std::string::npos);
     EXPECT_NE(facade.find("createSceneAwareDeleteSelectionCommand("), std::string::npos);
     EXPECT_NE(facade.find("SceneAwareDeleteRuntime{"), std::string::npos);
     EXPECT_NE(facade.find(".entityForModelingObject = [&](int modelingObjectId)"), std::string::npos);
@@ -825,11 +825,11 @@ TEST(ModelingSessionServiceSplitTests, InstantOperationEnablementUsesHostSingleO
 
 TEST(ModelingSessionServiceSplitTests, InstantOperationAvailabilityUsesActionCatalogEvaluator) {
     const std::string instantHeader =
-            readSourceFile("src/editor/modeling/services/ModelingInstantOperationCatalog.h");
+            readSourceFile("src/editor/modeling/services/modeling_instant_operation_catalog.hpp");
     const std::string instantCatalog =
-            readSourceFile("src/editor/modeling/services/ModelingInstantOperationCatalog.cpp");
+            readSourceFile("src/editor/modeling/services/modeling_instant_operation_catalog.cpp");
     const std::string actionCatalog =
-            readSourceFile("src/editor/modeling/services/ModelingActionCatalog.cpp");
+            readSourceFile("src/editor/modeling/services/modeling_action_catalog.cpp");
 
     EXPECT_EQ(instantHeader.find("ModelingInstantOperationEnablement"), std::string::npos);
     EXPECT_EQ(instantCatalog.find("switch (entry"), std::string::npos);
@@ -869,10 +869,10 @@ TEST(ModelingSessionServiceSplitTests, InstantOperationSettingsComeFromSharedOpe
 
 TEST(ModelingSessionServiceSplitTests, InstantOperationSettingsMappingHasSingleOwner) {
     const std::string catalogHeader =
-            readSourceFile("src/editor/modeling/services/ModelingInstantOperationCatalog.h");
-    const std::string catalog = readSourceFile("src/editor/modeling/services/ModelingInstantOperationCatalog.cpp");
-    const std::string services = readSourceFile("src/editor/modeling/services/ModelingSessionServices.cpp");
-    const std::string operationSettings = readSourceFile("src/editor/modeling/services/ModelingOperationSettings.cpp");
+            readSourceFile("src/editor/modeling/services/modeling_instant_operation_catalog.hpp");
+    const std::string catalog = readSourceFile("src/editor/modeling/services/modeling_instant_operation_catalog.cpp");
+    const std::string services = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
+    const std::string operationSettings = readSourceFile("src/editor/modeling/services/modeling_operation_settings.cpp");
 
     EXPECT_EQ(catalogHeader.find("RuntimeOperationSettingsKind"), std::string::npos);
     EXPECT_EQ(catalog.find("RuntimeOperationSettingsKind"), std::string::npos);

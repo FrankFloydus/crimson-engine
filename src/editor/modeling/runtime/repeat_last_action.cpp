@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/modeling/runtime/repeat_last_action.h>
+#include <editor/modeling/runtime/repeat_last_action.hpp>
 
-#include <editor/interactions/rotate_tool.h>
-#include <editor/interactions/scale_tool.h>
+#include <editor/interactions/rotate_tool.hpp>
+#include <editor/interactions/scale_tool.hpp>
 
 #include <algorithm>
 #include <cmath>

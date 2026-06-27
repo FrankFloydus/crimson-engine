@@ -31,7 +31,7 @@ Lua/sol2 or any scripting dependency must pass this check before integration.
 
 ## Local Source Dependencies
 
-OpenMesh and Catch2 use pinned local-source-or-explicit-fetch policy in CMake. Prefer local
-checkouts through `QUADER_OPENMESH_SOURCE_DIR` and `QUADER_CATCH2_SOURCE_DIR`; enable network fetch
-options only for one-off development builds. GTE Mathematics is vendored under `thirdparty/` with
-license evidence and must stay private to geometry implementation boundaries.
+OpenMesh uses pinned local-source-or-explicit-fetch policy in CMake. Prefer local checkouts through
+`QUADER_OPENMESH_SOURCE_DIR`; enable network fetch options only for one-off development builds. GTE
+Mathematics is vendored under `thirdparty/` with license evidence and must stay private to geometry
+implementation boundaries.

@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/session.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -244,8 +244,7 @@ void transform_preview_commit_and_history_apply_to_selected_lights()
 
 } // namespace
 
-TEST_CASE("qdr_editor_core_runtime_lifecycle_tests", "[editor-core-runtime-lifecycle]")
-{
+TEST(QdrModelingRuntimeLifecycleTests, QdrEditorCoreRuntimeLifecycleTests) {
 	default_scene_reset_restores_stable_runtime_defaults();
 	mark_clean_tracks_content_changes_not_selection_only_changes();
 	history_restore_bumps_revisions_and_preserves_redo();

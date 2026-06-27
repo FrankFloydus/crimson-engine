@@ -4,18 +4,18 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "api/QuaderEditorApi.h"
-#include "api/QuaderApiSessionInternalAccess.h"
-#include "api/QuaderApiTypeConversions.h"
-#include "assets/AssetRegistry.h"
-#include "editor/modeling/services/ModelingSessionService.h"
-#include "editor/metadata/host_contract.h"
-#include "scene/SceneDocument.h"
-#include "scene/document/ProjectSession.h"
-#include "editor/tools/ViewportToolCatalog.h"
-#include "editor/tools/ViewportToolRuntime.h"
-#include "support/GuardrailFileScan.h"
-#include "viewport/HostViewportContractAdapter.h"
+#include "api/quader_editor_api.hpp"
+#include "api/quader_api_session_internal_access.hpp"
+#include "api/quader_api_type_conversions.hpp"
+#include "assets/asset_registry.hpp"
+#include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/metadata/host_contract.hpp"
+#include "scene/scene_document.hpp"
+#include "scene/document/project_session.hpp"
+#include "editor/tools/viewport_tool_catalog.hpp"
+#include "editor/tools/viewport_tool_runtime.hpp"
+#include "support/guardrail_file_scan.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <gtest/gtest.h>
 
@@ -350,19 +350,19 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
 
 TEST(ViewportToolGuardrailTests, RemovedLegacyViewportToolBase) {
     const std::filesystem::path root = sourceRoot();
-    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
-    const std::string catalogHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportToolCatalog.h");
+    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
+    const std::string catalogHeader = readSourceFile(root / "src" / "editor" / "tools" / "viewport_tool_catalog.hpp");
     EXPECT_EQ(toolHeader.find("ViewportToolBase"), std::string::npos);
     EXPECT_EQ(catalogHeader.find("ViewportToolBase"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, BoxToolUsesFocusedContextInsteadOfBroadToolBag) {
     const std::filesystem::path root = sourceRoot();
-    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
+    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
     const std::string broadContext =
             sourceSlice(toolHeader, "struct ViewportToolContext {", "};");
     const std::string boxToolSource =
-            readSourceFile(root / "src" / "editor" / "tools" / "base" / "TwoStageBoxTool.cpp");
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "two_stage_box_tool.cpp");
 
     EXPECT_NE(toolHeader.find("struct ViewportBoxToolContext"), std::string::npos);
     EXPECT_NE(broadContext.find("ViewportBoxToolContext* box"), std::string::npos);
@@ -379,15 +379,15 @@ TEST(ViewportToolGuardrailTests, BoxToolUsesFocusedContextInsteadOfBroadToolBag)
 
 TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBag) {
     const std::filesystem::path root = sourceRoot();
-    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "ViewportTool.h");
+    const std::string toolHeader = readSourceFile(root / "src" / "editor" / "tools" / "viewport_tool.hpp");
     const std::string broadContext =
             sourceSlice(toolHeader, "struct ViewportToolContext {", "};");
     const std::string dragToolSource =
-            readSourceFile(root / "src" / "editor" / "tools" / "base" / "DragCommitTool.cpp");
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "drag_commit_tool.cpp");
     const std::string pointSequenceToolSource =
-            readSourceFile(root / "src" / "editor" / "tools" / "base" / "PointSequenceTool.cpp");
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "point_sequence_tool.cpp");
     const std::string drawnPlaneToolSource =
-            readSourceFile(root / "src" / "editor" / "tools" / "base" / "DrawnPlaneTool.cpp");
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "drawn_plane_tool.cpp");
 
     EXPECT_NE(toolHeader.find("struct ViewportPointToolContext"), std::string::npos);
     EXPECT_NE(broadContext.find("ViewportPointToolContext* point"), std::string::npos);
@@ -403,7 +403,7 @@ TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBa
 TEST(ViewportToolGuardrailTests, RmlViewportHostProvidesPointToolContextToModalTools) {
     const std::filesystem::path root = sourceRoot();
     const std::string viewportHost =
-            readSourceFile(root / "src" / "ui" / "controllers" / "ViewportHost.cpp");
+            readSourceFile(root / "src" / "ui" / "controllers" / "viewport_host.cpp");
 
     EXPECT_NE(viewportHost.find("ViewportPointToolContext pointToolContext"), std::string::npos);
     EXPECT_NE(viewportHost.find("pointToolContext.makeEventAt"), std::string::npos);
@@ -417,15 +417,15 @@ TEST(ViewportToolGuardrailTests, RmlViewportHostProvidesPointToolContextToModalT
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
     const std::filesystem::path root = sourceRoot();
-    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "ViewportToolRuntime.h"));
-    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "ViewportToolRuntime.cpp"));
-    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "base" / "ViewportToolCatalog.cpp"));
+    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "viewport_tool_runtime.hpp"));
+    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "viewport_tool_runtime.cpp"));
+    EXPECT_TRUE(std::filesystem::exists(root / "src" / "editor" / "tools" / "base" / "viewport_tool_catalog.cpp"));
     EXPECT_FALSE(std::filesystem::exists(root / "src" / "viewport" / "modes"));
 }
 
 TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
     const std::filesystem::path root = sourceRoot();
-    const std::string uiShell = readSourceFile(root / "src" / "ui" / "UISystem.cpp");
+    const std::string uiShell = readSourceFile(root / "src" / "ui" / "ui_system.cpp");
     EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Box"), std::string::npos);
     EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::InsertEdgeLoop"), std::string::npos);
     EXPECT_EQ(uiShell.find("activeTool == ViewportToolId::Knife"), std::string::npos);
@@ -438,11 +438,11 @@ TEST(ViewportToolGuardrailTests, UiShellHasNoDirectModalToolBranches) {
 TEST(ViewportToolGuardrailTests, TransformGizmoEligibilityLivesInViewportToolMetadata) {
     const std::filesystem::path root = sourceRoot();
     const std::string interaction =
-            readSourceFile(root / "src" / "editor" / "viewport" / "TransformGizmoInteraction.cpp");
+            readSourceFile(root / "src" / "editor" / "viewport" / "transform_gizmo_interaction.cpp");
     const std::string descriptor =
-            readSourceFile(root / "src" / "editor" / "tools" / "ViewportToolDescriptorCatalog.h");
+            readSourceFile(root / "src" / "editor" / "tools" / "viewport_tool_descriptor_catalog.hpp");
     const std::string catalog =
-            readSourceFile(root / "src" / "editor" / "tools" / "ViewportToolCatalog.h");
+            readSourceFile(root / "src" / "editor" / "tools" / "viewport_tool_catalog.hpp");
 
     EXPECT_NE(descriptor.find("supportsTransformGizmo"), std::string::npos);
     EXPECT_NE(catalog.find("viewportToolSupportsTransformGizmo"), std::string::npos);
@@ -462,7 +462,7 @@ TEST(ViewportToolGuardrailTests, HostViewportAdapterUsesViewportToolDescriptors)
     EXPECT_FALSE(viewportToolAllowsSelectionFallback(ViewportToolId::Knife));
 
     const std::filesystem::path root = sourceRoot();
-    const std::string adapter = readSourceFile(root / "src" / "viewport" / "HostViewportContractAdapter.h");
+    const std::string adapter = readSourceFile(root / "src" / "viewport" / "host_viewport_contract_adapter.hpp");
     EXPECT_NE(adapter.find("findViewportToolDescriptor(tool)"), std::string::npos);
     EXPECT_NE(adapter.find("findViewportToolDescriptor(id)"), std::string::npos);
     EXPECT_NE(adapter.find("quader_host_contract::find_action_descriptor(id)"), std::string::npos);

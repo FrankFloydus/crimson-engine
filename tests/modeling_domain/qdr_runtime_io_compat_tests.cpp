@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <editor/modeling/runtime/session.h>
-#include <io/qdr/QdrRuntimeIoCompat.h>
-#include <mesh/polygon/document.h>
+#include <editor/modeling/runtime/session.hpp>
+#include <io/qdr/qdr_runtime_io_compat.hpp>
+#include <mesh/polygon/document.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -282,8 +282,7 @@ void session_compatibility_atomic_writer_uses_stable_dto_payload()
 
 } // namespace
 
-TEST_CASE("qdr_io_session_tests", "[io-session]")
-{
+TEST(QdrRuntimeIoCompatTests, QdrIoSessionTests) {
 	session_compatibility_api_roundtrips_through_stable_dto();
 	session_compatibility_reader_accepts_legacy_session_payload_but_rewrites_stable_document_payload();
 	session_compatibility_reader_drops_runtime_fields_from_legacy_payloads();

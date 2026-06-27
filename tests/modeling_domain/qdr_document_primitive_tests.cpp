@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <cmath>
 #include <cstddef>
@@ -132,8 +132,7 @@ void primitive_dimension_sanitization_stays_private_to_factory_source()
 
 } // namespace
 
-TEST_CASE("qdr_document_primitive_tests", "[document-primitive]")
-{
+TEST(QdrDocumentPrimitiveTests, QdrDocumentPrimitiveTests) {
     primitive_factories_keep_segment_counts_after_split();
     sphere_factories_keep_orientation_and_topology_after_split();
     primitive_dimension_sanitization_stays_private_to_factory_source();

@@ -4,14 +4,14 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/knife_tool.h>
-#include <editor/interactions/tool_snapping.h>
-#include <diagnostics/profile.h>
-#include <editor/modeling/runtime/tool_operation_contracts.h>
+#include <editor/interactions/knife_tool.hpp>
+#include <editor/interactions/tool_snapping.hpp>
+#include <diagnostics/profile.hpp>
+#include <editor/modeling/runtime/tool_operation_contracts.hpp>
 
-#include "editor/modeling/runtime/session_internal.h"
+#include "editor/modeling/runtime/session_internal.hpp"
 
-#include <mesh/geometry/geometry.h>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <cmath>

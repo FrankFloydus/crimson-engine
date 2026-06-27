@@ -4,13 +4,13 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
-#include <diagnostics/profile.h>
-#include <mesh/geometry/geometry.h>
+#include <diagnostics/profile.hpp>
+#include <mesh/geometry/geometry.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_constants.h>
-#include <mesh/polygon/internal/quader_poly_document_mesh_internal.h>
+#include <mesh/polygon/internal/quader_poly_document_constants.hpp>
+#include <mesh/polygon/internal/quader_poly_document_mesh_internal.hpp>
 
 #include <cstdint>
 #include <map>

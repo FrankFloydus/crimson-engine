@@ -4,31 +4,34 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-TEST_CASE("undo operation restores the previous editor snapshot", "[operation][undo]")
-{
-	SECTION("undo restores a successful content command")
+TEST(QdrModelingRuntimeOperationUndoTests, UndoOperationRestoresThePreviousEditorSnapshotUndoRestoresASuccessfulContentCommand) {
 	{
 		quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 		const quader::QVec3 position_before = session.objects().front().document.vertices.front().position;
-		REQUIRE(session.apply_history_command([](quader_editor_core::EditorSession& editor) {
+		EXPECT_TRUE(session.apply_history_command([](quader_editor_core::EditorSession& editor) {
 			return editor.translate_selected({ 2.0F, 0.0F, 0.0F });
 		}).changed);
 
 		const quader_editor_core::HistoryRestoreResult undo = session.undo();
 
-		REQUIRE(undo.applied);
-		REQUIRE(session.history_status().can_redo);
-		REQUIRE(qdr_test::vec_nearly_equal(session.objects().front().document.vertices.front().position, position_before));
+		EXPECT_TRUE(undo.applied);
+		EXPECT_TRUE(session.history_status().can_redo);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(session.objects().front().document.vertices.front().position, position_before));
 	}
 
-	SECTION("undo on an empty stack reports no restore")
+	
+}
+
+TEST(QdrModelingRuntimeOperationUndoTests, UndoOperationRestoresThePreviousEditorSnapshotUndoOnAnEmptyStackReportsNoRestore) {
+	
+
 	{
 		quader_editor_core::EditorSession session;
 
 		const quader_editor_core::HistoryRestoreResult undo = session.undo();
 
-		REQUIRE_FALSE(undo.applied);
+		EXPECT_FALSE(undo.applied);
 	}
 }

@@ -4,22 +4,21 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "uv_operation_test_helpers.h"
+#include "uv_operation_test_helpers.hpp"
 
-#include <catch2/catch_approx.hpp>
+#include "test_support.hpp"
 
 using namespace quader_poly;
 
-TEST_CASE("UV justify right pins the selected U maximum to one", "[operation][uv_justify_right]")
-{
+TEST(QdrDocumentOperationUvJustifyRightTests, UVJustifyRightPinsTheSelectedUMaximumToOne) {
 	qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 	Face* face = find_face(fixture.document, fixture.face);
-	REQUIRE(face != nullptr);
+	EXPECT_TRUE(face != nullptr);
 	qdr_test::assign_offset_uvs(*face);
 	Selection selection = qdr_test::face_selection({ fixture.face }, fixture.face);
 
 	const OperationResult result = apply_uv_operation(fixture.document, selection, "justify_right", 64.0F);
 
-	REQUIRE(result.changed);
-	REQUIRE(qdr_test::uv_bounds(*face).max_u == Catch::Approx(1.0F));
+	EXPECT_TRUE(result.changed);
+	EXPECT_NEAR(qdr_test::uv_bounds(*face).max_u, 1.0F, 0.0001);
 }

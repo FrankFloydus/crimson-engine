@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/insert_edge_loop_tool.h>
-#include <editor/interactions/tool_snapping.h>
-#include <editor/modeling/runtime/tool_operation_contracts.h>
+#include <editor/interactions/insert_edge_loop_tool.hpp>
+#include <editor/interactions/tool_snapping.hpp>
+#include <editor/modeling/runtime/tool_operation_contracts.hpp>
 
-#include "editor/modeling/runtime/session_internal.h"
+#include "editor/modeling/runtime/session_internal.hpp"
 
 #include <algorithm>
 #include <optional>

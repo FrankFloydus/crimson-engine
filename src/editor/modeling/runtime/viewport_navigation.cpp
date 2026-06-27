@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/viewport_navigation.h>
-#include <diagnostics/profile.h>
-#include <mesh/geometry/geometry.h>
+#include <editor/interactions/viewport_navigation.hpp>
+#include <diagnostics/profile.hpp>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

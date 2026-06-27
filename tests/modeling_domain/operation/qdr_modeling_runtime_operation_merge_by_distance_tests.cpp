@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-#include <editor/modeling/operations/operation_schema.h>
+#include <editor/modeling/operations/operation_schema.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -36,8 +36,8 @@ quader_poly::Document make_distance_merge_document(float offset)
 	const quader_poly::ElementId d = add_vertex(document, { 0.0F, 1.0F + offset, 0.0F });
 	const quader_poly::ElementId e = add_vertex(document, { -1.0F, 1.0F, 0.0F });
 	const quader_poly::ElementId f = add_vertex(document, { -1.0F, 0.0F, 0.0F });
-	REQUIRE(add_face(document, std::array<quader_poly::ElementId, 3> { a, b, c }) != quader_poly::invalid_element_id);
-	REQUIRE(add_face(document, std::array<quader_poly::ElementId, 3> { d, e, f }) != quader_poly::invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<quader_poly::ElementId, 3> { a, b, c }) != quader_poly::invalid_element_id);
+	EXPECT_TRUE(add_face(document, std::array<quader_poly::ElementId, 3> { d, e, f }) != quader_poly::invalid_element_id);
 	return document;
 }
 
@@ -83,34 +83,31 @@ std::vector<quader_poly::ElementId> vertices_at_positions(
 
 quader_poly::Selection near_vertex_selection(const quader_poly::Document& document)
 {
-	REQUIRE(document.vertices.size() >= 4U);
+	EXPECT_TRUE(document.vertices.size() >= 4U);
 	return qdr_test::vertex_selection({ document.vertices[2].id, document.vertices[3].id });
 }
 
 } // namespace
 
-TEST_CASE("merge by distance operation schema owns tolerance defaults and limits", "[operation][merge_by_distance]")
-{
+TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistanceOperationSchemaOwnsToleranceDefaultsAndLimits) {
 	const MergeByDistanceOperationSchema schema = merge_by_distance_operation_schema();
 
-	REQUIRE(schema.id == EditorOperationId::merge_by_distance);
-	REQUIRE(std::string(schema.operation_id) == "merge_by_distance");
-	REQUIRE(std::string(schema.label) == "Merge by Distance");
-	REQUIRE(std::string(schema.tolerance.id) == "tolerance");
-	REQUIRE(schema.tolerance.default_value == Catch::Approx(0.125));
-	REQUIRE(schema.tolerance.minimum == Catch::Approx(0.0));
-	REQUIRE(schema.tolerance.maximum == Catch::Approx(128.0));
-	REQUIRE(schema.tolerance.step == Catch::Approx(0.001));
-	REQUIRE(schema.tolerance.hard_limits);
+	EXPECT_TRUE(schema.id == EditorOperationId::merge_by_distance);
+	EXPECT_TRUE(std::string(schema.operation_id) == "merge_by_distance");
+	EXPECT_TRUE(std::string(schema.label) == "Merge by Distance");
+	EXPECT_TRUE(std::string(schema.tolerance.id) == "tolerance");
+	EXPECT_NEAR(schema.tolerance.default_value, 0.125, 0.0001);
+	EXPECT_NEAR(schema.tolerance.minimum, 0.0, 0.0001);
+	EXPECT_NEAR(schema.tolerance.maximum, 128.0, 0.0001);
+	EXPECT_NEAR(schema.tolerance.step, 0.001, 0.0001);
+	EXPECT_TRUE(schema.tolerance.hard_limits);
 
-	REQUIRE(normalize_merge_by_distance_operation_settings({ -1.0 }).tolerance == Catch::Approx(0.0));
-	REQUIRE(normalize_merge_by_distance_operation_settings({ 1000.0 }).tolerance == Catch::Approx(128.0));
-	REQUIRE(normalize_merge_by_distance_operation_settings({ std::numeric_limits<double>::infinity() }).tolerance == Catch::Approx(0.125));
+	EXPECT_NEAR(normalize_merge_by_distance_operation_settings({ -1.0 }).tolerance, 0.0, 0.0001);
+	EXPECT_NEAR(normalize_merge_by_distance_operation_settings({ 1000.0 }).tolerance, 128.0, 0.0001);
+	EXPECT_NEAR(normalize_merge_by_distance_operation_settings({ std::numeric_limits<double>::infinity() }).tolerance, 0.125, 0.0001);
 }
 
-TEST_CASE("merge by distance preview rebuilds from base and commits transactionally", "[operation][merge_by_distance]")
-{
-	SECTION("update and cancel restore the original selected mesh")
+TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistancePreviewRebuildsFromBaseAndCommitsTransactionallyUpdateAndCancelRestoreTheOriginalSelectedMesh) {
 	{
 		quader_poly::Document document = make_distance_merge_document(0.2F);
 		EditorSession session({ qdr_test::make_object(1, document) });
@@ -118,44 +115,48 @@ TEST_CASE("merge by distance preview rebuilds from base and commits transactiona
 		const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
 
 		const CommandResult begin = session.begin_merge_by_distance_preview(0.05);
-		REQUIRE(begin.ok);
-		REQUIRE_FALSE(begin.changed);
-		REQUIRE(session.preview_transaction_status().active);
-		REQUIRE(session.preview_transaction_status().kind == PreviewTransactionKind::merge_by_distance);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before);
+		EXPECT_TRUE(begin.ok);
+		EXPECT_FALSE(begin.changed);
+		EXPECT_TRUE(session.preview_transaction_status().active);
+		EXPECT_TRUE(session.preview_transaction_status().kind == PreviewTransactionKind::merge_by_distance);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
 
-		REQUIRE(session.update_merge_by_distance_preview(0.25).changed);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
+		EXPECT_TRUE(session.update_merge_by_distance_preview(0.25).changed);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
 
 		const PreviewTransactionFinishResult cancel =
 			session.cancel_preview_transaction(PreviewTransactionKind::merge_by_distance);
 
-		REQUIRE(cancel.restored);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before);
-		REQUIRE_FALSE(session.history_status().can_undo);
+		EXPECT_TRUE(cancel.restored);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
+		EXPECT_FALSE(session.history_status().can_undo);
 	}
 
-	SECTION("commit records the preview and undo restores the base")
+	
+}
+
+TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistancePreviewRebuildsFromBaseAndCommitsTransactionallyCommitRecordsThePreviewAndUndoRestoresTheBase) {
+	
+
 	{
 		quader_poly::Document document = make_distance_merge_document(0.1F);
 		EditorSession session({ qdr_test::make_object(1, document) });
 		session.set_component_selection(1, near_vertex_selection(session.objects().front().document), SelectionMode::vertex);
 		const std::size_t vertex_count_before = session.objects().front().document.vertices.size();
 
-		REQUIRE(session.begin_merge_by_distance_preview({ 0.125 }).changed);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
+		EXPECT_TRUE(session.begin_merge_by_distance_preview({ 0.125 }).changed);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
 		const PreviewTransactionFinishResult commit =
 			session.commit_preview_transaction(PreviewTransactionKind::merge_by_distance);
 
-		REQUIRE(commit.before.changed);
-		REQUIRE(session.history_status().undo_count == 1U);
-		REQUIRE(session.undo().applied);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before);
+		EXPECT_TRUE(commit.before.changed);
+		EXPECT_TRUE(session.history_status().undo_count == 1U);
+		EXPECT_TRUE(session.undo().applied);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
 	}
 }
 
-TEST_CASE("merge by distance processes selected vertices within each mesh only", "[operation][merge_by_distance]")
-{
+TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistanceProcessesSelectedVerticesWithinEachMeshOnly) {
 	EditorSession session({
 		qdr_test::make_object(1, make_distance_merge_document(0.1F)),
 		qdr_test::make_object(2, make_distance_merge_document(0.1F)),
@@ -172,47 +173,46 @@ TEST_CASE("merge by distance processes selected vertices within each mesh only",
 
 	const CommandResult result = session.begin_merge_by_distance_preview(0.125);
 
-	REQUIRE(result.ok);
-	REQUIRE(result.changed);
-	REQUIRE(session.objects().size() == 2U);
-	REQUIRE(session.objects()[0].document.vertices.size() == first_before - 1U);
-	REQUIRE(session.objects()[1].document.vertices.size() == second_before - 1U);
+	EXPECT_TRUE(result.ok);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(session.objects().size() == 2U);
+	EXPECT_TRUE(session.objects()[0].document.vertices.size() == first_before - 1U);
+	EXPECT_TRUE(session.objects()[1].document.vertices.size() == second_before - 1U);
 }
 
-TEST_CASE("merge by distance keeps a combined welded seam usable by edge loop", "[operation][merge_by_distance][combine_mesh][insert_edge_loop]")
-{
+TEST(QdrModelingRuntimeOperationMergeByDistanceTests, MergeByDistanceKeepsACombinedWeldedSeamUsableByEdgeLoop) {
 	quader_poly::Document left = qdr_test::make_quad_document().document;
 	quader_poly::Document right = qdr_test::make_quad_document().document;
 	translate_document(right, { 2.0F, 0.0F, 0.0F });
 	EditorSession session({ qdr_test::make_object(1, left), qdr_test::make_object(2, right) });
 	session.set_selected_object_ids({ 1, 2 }, 1);
-	REQUIRE(session.combine_selected_meshes().ok);
-	REQUIRE(session.objects().size() == 1U);
+	EXPECT_TRUE(session.combine_selected_meshes().ok);
+	EXPECT_TRUE(session.objects().size() == 1U);
 
 	const std::vector<quader_poly::ElementId> seam_vertices = vertices_at_positions(
 		session.objects().front().document,
 		{ { 1.0F, -1.0F, 0.0F }, { 1.0F, 1.0F, 0.0F } });
-	REQUIRE(seam_vertices.size() == 4U);
+	EXPECT_TRUE(seam_vertices.size() == 4U);
 	quader_poly::Selection selection;
 	selection.mode = quader_poly::SelectionMode::vertex;
 	selection.vertices = seam_vertices;
 	session.set_component_selection(1, selection, SelectionMode::vertex);
 
-	REQUIRE(session.begin_merge_by_distance_preview(0.001).changed);
+	EXPECT_TRUE(session.begin_merge_by_distance_preview(0.001).changed);
 	const PreviewTransactionFinishResult merge_commit =
 		session.commit_preview_transaction(PreviewTransactionKind::merge_by_distance);
-	REQUIRE(merge_commit.before.active);
-	REQUIRE(session.objects().front().document.vertices.size() == 6U);
+	EXPECT_TRUE(merge_commit.before.active);
+	EXPECT_TRUE(session.objects().front().document.vertices.size() == 6U);
 
 	const quader_poly::Edge seed = edge_between_positions(
 		session.objects().front().document,
 		{ -1.0F, -1.0F, 0.0F },
 		{ 1.0F, -1.0F, 0.0F });
-	REQUIRE(seed.a != quader_poly::invalid_element_id);
-	REQUIRE(seed.b != quader_poly::invalid_element_id);
+	EXPECT_TRUE(seed.a != quader_poly::invalid_element_id);
+	EXPECT_TRUE(seed.b != quader_poly::invalid_element_id);
 
 	const CommandResult edge_loop = session.insert_edge_loop(1, seed, 0.5F);
-	REQUIRE(edge_loop.ok);
-	REQUIRE(edge_loop.changed);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(session.objects().front().document));
+	EXPECT_TRUE(edge_loop.ok);
+	EXPECT_TRUE(edge_loop.changed);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(session.objects().front().document));
 }

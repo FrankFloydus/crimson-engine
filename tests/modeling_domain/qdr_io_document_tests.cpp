@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <io/qdr/qdr_document.h>
+#include <io/qdr/qdr_document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -804,8 +804,7 @@ void dto_atomic_writer_rejects_invalid_document_without_clobbering_existing_file
 
 } // namespace
 
-TEST_CASE("qdr_io_document_tests", "[io-document]")
-{
+TEST(QdrIoDocumentTests, QdrIoDocumentTests) {
 	dto_roundtrip_preserves_portable_document_data();
 	dto_roundtrip_preserves_normal_control_data();
 	dto_roundtrip_preserves_material_slot_assignment();

@@ -4,12 +4,12 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/internal/quader_poly_document_openmesh_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_topology_backend.h>
+#include <mesh/polygon/internal/quader_poly_document_openmesh_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_topology_backend.hpp>
 
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <algorithm>
 #include <array>
@@ -49,13 +49,13 @@ bool contains_edge(const std::vector<Edge>& edges, Edge edge)
 
 void require_topology_queries_match(const DocumentTopologyQuery& neutral, const DocumentTopologyQuery& shim)
 {
-    CHECK(shim.edge_incidence_counts == neutral.edge_incidence_counts);
-    CHECK(shim.face_indices_by_edge == neutral.face_indices_by_edge);
-    CHECK(shim.adjacent_vertices_by_vertex == neutral.adjacent_vertices_by_vertex);
-    CHECK(shim.face_indices_by_vertex == neutral.face_indices_by_vertex);
-    CHECK(shim.boundary_edges == neutral.boundary_edges);
-    CHECK(shim.closed_edges == neutral.closed_edges);
-    CHECK(shim.nonmanifold_edges == neutral.nonmanifold_edges);
+    EXPECT_TRUE(shim.edge_incidence_counts == neutral.edge_incidence_counts);
+    EXPECT_TRUE(shim.face_indices_by_edge == neutral.face_indices_by_edge);
+    EXPECT_TRUE(shim.adjacent_vertices_by_vertex == neutral.adjacent_vertices_by_vertex);
+    EXPECT_TRUE(shim.face_indices_by_vertex == neutral.face_indices_by_vertex);
+    EXPECT_TRUE(shim.boundary_edges == neutral.boundary_edges);
+    EXPECT_TRUE(shim.closed_edges == neutral.closed_edges);
+    EXPECT_TRUE(shim.nonmanifold_edges == neutral.nonmanifold_edges);
 }
 
 DocumentTopologyQuery require_topology_query(const Document& document)
@@ -63,15 +63,15 @@ DocumentTopologyQuery require_topology_query(const Document& document)
     DocumentTopologyQuery neutral_query;
     std::string neutral_message;
     const bool neutral_ok = build_topology_query(document, neutral_query, neutral_message);
-    INFO(neutral_message);
-    REQUIRE(neutral_ok);
+    SCOPED_TRACE(::testing::Message() << neutral_message);
+    EXPECT_TRUE(neutral_ok);
 
     DocumentTopologyQuery shim_query;
     std::string shim_message;
     const bool shim_ok = build_openmesh_topology_query(document, shim_query, shim_message);
-    INFO(shim_message);
-    REQUIRE(shim_ok);
-    CHECK(shim_message == neutral_message);
+    SCOPED_TRACE(::testing::Message() << shim_message);
+    EXPECT_TRUE(shim_ok);
+    EXPECT_TRUE(shim_message == neutral_message);
     require_topology_queries_match(neutral_query, shim_query);
 
     return neutral_query;
@@ -84,7 +84,7 @@ Document make_single_quad_document()
     const ElementId bottom_right = add_vertex(document, { 1.0F, -1.0F, 0.0F });
     const ElementId top_right = add_vertex(document, { 1.0F, 1.0F, 0.0F });
     const ElementId top_left = add_vertex(document, { -1.0F, 1.0F, 0.0F });
-    REQUIRE(add_face(document, std::array<ElementId, 4> { bottom_left, bottom_right, top_right, top_left }) != invalid_element_id);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 4> { bottom_left, bottom_right, top_right, top_left }) != invalid_element_id);
     return document;
 }
 
@@ -97,9 +97,9 @@ Document make_three_faces_sharing_one_edge()
     const ElementId bottom = add_vertex(document, { 0.5F, -1.0F, 0.0F });
     const ElementId raised = add_vertex(document, { 0.5F, 0.0F, 1.0F });
 
-    REQUIRE(add_face(document, std::array<ElementId, 3> { shared_a, shared_b, top }) != invalid_element_id);
-    REQUIRE(add_face(document, std::array<ElementId, 3> { shared_b, shared_a, bottom }) != invalid_element_id);
-    REQUIRE(add_face(document, std::array<ElementId, 3> { shared_a, shared_b, raised }) != invalid_element_id);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { shared_a, shared_b, top }) != invalid_element_id);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { shared_b, shared_a, bottom }) != invalid_element_id);
+    EXPECT_TRUE(add_face(document, std::array<ElementId, 3> { shared_a, shared_b, raised }) != invalid_element_id);
     return document;
 }
 
@@ -107,103 +107,100 @@ void require_edge_count(const DocumentTopologyQuery& query, Edge edge, int expec
 {
     const auto key = edge_key(edge);
     const auto found = query.edge_incidence_counts.find(key);
-    REQUIRE(found != query.edge_incidence_counts.end());
-    CHECK(found->second == expected);
+    EXPECT_TRUE(found != query.edge_incidence_counts.end());
+    EXPECT_TRUE(found->second == expected);
 }
 
 } // namespace
 
-TEST_CASE("neutral topology query characterizes a closed cube manifold", "[document][topology-query]")
-{
+TEST(QdrDocumentOpenmeshTopologyQueryTests, NeutralTopologyQueryCharacterizesAClosedCubeManifold) {
     const Document document = make_cube(CubePrimitiveSpec {});
     const std::vector<Edge> edges = document_edges(document);
-    REQUIRE(edges.size() == 12U);
+    EXPECT_TRUE(edges.size() == 12U);
 
     const DocumentTopologyQuery query = require_topology_query(document);
 
-    CHECK(query.edge_incidence_counts.size() == edges.size());
-    CHECK(query.face_indices_by_edge.size() == edges.size());
-    CHECK(query.boundary_edges.empty());
-    CHECK(query.closed_edges.size() == edges.size());
-    CHECK(query.nonmanifold_edges.empty());
+    EXPECT_TRUE(query.edge_incidence_counts.size() == edges.size());
+    EXPECT_TRUE(query.face_indices_by_edge.size() == edges.size());
+    EXPECT_TRUE(query.boundary_edges.empty());
+    EXPECT_TRUE(query.closed_edges.size() == edges.size());
+    EXPECT_TRUE(query.nonmanifold_edges.empty());
 
     for (const Edge edge : edges) {
         require_edge_count(query, edge, 2);
-        CHECK(contains_edge(query.closed_edges, edge));
+        EXPECT_TRUE(contains_edge(query.closed_edges, edge));
 
         const auto faces = query.face_indices_by_edge.find(edge_key(edge));
-        REQUIRE(faces != query.face_indices_by_edge.end());
-        CHECK(faces->second.size() == 2U);
+        EXPECT_TRUE(faces != query.face_indices_by_edge.end());
+        EXPECT_TRUE(faces->second.size() == 2U);
     }
 
     for (const Vertex& vertex : document.vertices) {
         const auto adjacent = query.adjacent_vertices_by_vertex.find(vertex.id);
-        REQUIRE(adjacent != query.adjacent_vertices_by_vertex.end());
-        CHECK(adjacent->second.size() == 3U);
+        EXPECT_TRUE(adjacent != query.adjacent_vertices_by_vertex.end());
+        EXPECT_TRUE(adjacent->second.size() == 3U);
 
         const auto faces = query.face_indices_by_vertex.find(vertex.id);
-        REQUIRE(faces != query.face_indices_by_vertex.end());
-        CHECK(faces->second.size() == 3U);
+        EXPECT_TRUE(faces != query.face_indices_by_vertex.end());
+        EXPECT_TRUE(faces->second.size() == 3U);
     }
 }
 
-TEST_CASE("neutral topology query characterizes an open quad boundary", "[document][topology-query]")
-{
+TEST(QdrDocumentOpenmeshTopologyQueryTests, NeutralTopologyQueryCharacterizesAnOpenQuadBoundary) {
     const Document document = make_single_quad_document();
     const std::vector<Edge> edges = document_edges(document);
-    REQUIRE(edges.size() == 4U);
+    EXPECT_TRUE(edges.size() == 4U);
 
     const DocumentTopologyQuery query = require_topology_query(document);
 
-    CHECK(query.edge_incidence_counts.size() == edges.size());
-    CHECK(query.face_indices_by_edge.size() == edges.size());
-    CHECK(query.boundary_edges.size() == edges.size());
-    CHECK(query.closed_edges.empty());
-    CHECK(query.nonmanifold_edges.empty());
+    EXPECT_TRUE(query.edge_incidence_counts.size() == edges.size());
+    EXPECT_TRUE(query.face_indices_by_edge.size() == edges.size());
+    EXPECT_TRUE(query.boundary_edges.size() == edges.size());
+    EXPECT_TRUE(query.closed_edges.empty());
+    EXPECT_TRUE(query.nonmanifold_edges.empty());
 
     for (const Edge edge : edges) {
         require_edge_count(query, edge, 1);
-        CHECK(contains_edge(query.boundary_edges, edge));
+        EXPECT_TRUE(contains_edge(query.boundary_edges, edge));
 
         const auto faces = query.face_indices_by_edge.find(edge_key(edge));
-        REQUIRE(faces != query.face_indices_by_edge.end());
-        REQUIRE(faces->second.size() == 1U);
-        CHECK(faces->second.front() == 0U);
+        EXPECT_TRUE(faces != query.face_indices_by_edge.end());
+        EXPECT_TRUE(faces->second.size() == 1U);
+        EXPECT_TRUE(faces->second.front() == 0U);
     }
 
     for (const Vertex& vertex : document.vertices) {
         const auto adjacent = query.adjacent_vertices_by_vertex.find(vertex.id);
-        REQUIRE(adjacent != query.adjacent_vertices_by_vertex.end());
-        CHECK(adjacent->second.size() == 2U);
+        EXPECT_TRUE(adjacent != query.adjacent_vertices_by_vertex.end());
+        EXPECT_TRUE(adjacent->second.size() == 2U);
 
         const auto faces = query.face_indices_by_vertex.find(vertex.id);
-        REQUIRE(faces != query.face_indices_by_vertex.end());
-        REQUIRE(faces->second.size() == 1U);
-        CHECK(faces->second.front() == 0U);
+        EXPECT_TRUE(faces != query.face_indices_by_vertex.end());
+        EXPECT_TRUE(faces->second.size() == 1U);
+        EXPECT_TRUE(faces->second.front() == 0U);
     }
 }
 
-TEST_CASE("neutral topology query rejects a shared edge with three incident faces", "[document][topology-query]")
-{
+TEST(QdrDocumentOpenmeshTopologyQueryTests, NeutralTopologyQueryRejectsASharedEdgeWithThreeIncidentFaces) {
     const Document document = make_three_faces_sharing_one_edge();
 
     DocumentTopologyQuery query;
     std::string message;
     const bool ok = build_topology_query(document, query, message);
 
-    CHECK_FALSE(ok);
-    CHECK_FALSE(message.empty());
-    CHECK(query.edge_incidence_counts.empty());
-    CHECK(query.face_indices_by_edge.empty());
-    CHECK(query.boundary_edges.empty());
-    CHECK(query.closed_edges.empty());
-    CHECK(query.nonmanifold_edges.empty());
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(message.empty());
+    EXPECT_TRUE(query.edge_incidence_counts.empty());
+    EXPECT_TRUE(query.face_indices_by_edge.empty());
+    EXPECT_TRUE(query.boundary_edges.empty());
+    EXPECT_TRUE(query.closed_edges.empty());
+    EXPECT_TRUE(query.nonmanifold_edges.empty());
 
     DocumentTopologyQuery shim_query;
     std::string shim_message;
     const bool shim_ok = build_openmesh_topology_query(document, shim_query, shim_message);
 
-    CHECK_FALSE(shim_ok);
-    CHECK(shim_message == message);
+    EXPECT_FALSE(shim_ok);
+    EXPECT_TRUE(shim_message == message);
     require_topology_queries_match(query, shim_query);
 }

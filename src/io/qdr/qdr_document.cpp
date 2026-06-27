@@ -4,10 +4,10 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <io/qdr/qdr_document.h>
+#include <io/qdr/qdr_document.hpp>
 
-#include "io/qdr/QdrAtomicWrite.h"
-#include "io/qdr/QdrPolygonDocumentCodec.h"
+#include "io/qdr/qdr_atomic_write.hpp"
+#include "io/qdr/qdr_polygon_document_codec.hpp"
 
 #include <nlohmann/json.hpp>
 

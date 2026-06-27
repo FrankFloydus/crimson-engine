@@ -24,7 +24,7 @@ adapters so OpenGL and Metal can be added later.
 
 ## Overlay Rules
 
-- `src/render/ViewportOverlayPolicy.h` is the native app overlay presentation policy.
+- `src/render/viewport_overlay_policy.hpp` is the native app overlay presentation policy.
 - Keep layer draw order, colors, alpha, widths, point sizes, and depth/draw-on-top decisions
   centralized there.
 - Do not scatter overlay color constants through unrelated files.

@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <array>
 #include <cmath>
@@ -137,8 +137,7 @@ void edge_factor_helpers_are_stable_after_model_api_split()
 
 } // namespace
 
-TEST_CASE("qdr_document_model_api_tests", "[document-model-api]")
-{
+TEST(QdrDocumentModelApiTests, QdrDocumentModelApiTests) {
 	selection_clear_resets_active_state();
 	face_perimeter_predicates_remain_data_driven();
 	vec3_math_and_edge_normalization_stay_linkable_after_split();

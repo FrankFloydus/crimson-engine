@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "app/App.h"
-#include "core/Logger.h"
-#include "platform/FatalErrorHandler.h"
+#include "app/app.hpp"
+#include "core/logger.hpp"
+#include "platform/fatal_error_handler.hpp"
 
 #include <exception>
 #include <filesystem>

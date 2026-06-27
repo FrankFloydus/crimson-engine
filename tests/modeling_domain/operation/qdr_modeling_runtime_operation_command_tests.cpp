@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-#include <editor/modeling/operations/operation_command.h>
+#include <editor/modeling/operations/operation_command.hpp>
 
 namespace qec = quader_editor_core;
 
@@ -50,31 +50,29 @@ qec::EditorOperationSettings matching_settings(qec::EditorOperationSettingsKind 
 
 } // namespace
 
-TEST_CASE("editor operation command schema owns settings and preview mappings", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandSchemaOwnsSettingsAndPreviewMappings) {
 	for (const qec::EditorOperationRegistryEntry& entry : qec::operation_registry().entries()) {
 		const std::optional<qec::EditorOperationCommandSchema> schema =
 			qec::command_schema_for_operation(entry.operation_id);
-		REQUIRE(schema.has_value());
-		CHECK(schema->operation_id == entry.operation_id);
-		CHECK(qec::command_settings_match_operation(entry.operation_id, matching_settings(schema->settings_kind)));
+		EXPECT_TRUE(schema.has_value());
+		EXPECT_TRUE(schema->operation_id == entry.operation_id);
+		EXPECT_TRUE(qec::command_settings_match_operation(entry.operation_id, matching_settings(schema->settings_kind)));
 		const bool accepts_wrong_bridge_settings =
 			qec::command_settings_match_operation(entry.operation_id, qec::BridgeOperationSettings {}) &&
 			schema->settings_kind != qec::EditorOperationSettingsKind::bridge;
-		CHECK_FALSE(accepts_wrong_bridge_settings);
-		CHECK(qec::preview_transaction_kind_for_operation(entry.operation_id) == schema->preview_transaction_kind);
-		CHECK(entry.operation->supports_preview() == schema->preview_transaction_kind.has_value());
+		EXPECT_FALSE(accepts_wrong_bridge_settings);
+		EXPECT_TRUE(qec::preview_transaction_kind_for_operation(entry.operation_id) == schema->preview_transaction_kind);
+		EXPECT_TRUE(entry.operation->supports_preview() == schema->preview_transaction_kind.has_value());
 		if (schema->preview_transaction_kind.has_value()) {
-			CHECK(qec::operation_for_preview_transaction_kind(*schema->preview_transaction_kind) == entry.operation_id);
+			EXPECT_TRUE(qec::operation_for_preview_transaction_kind(*schema->preview_transaction_kind) == entry.operation_id);
 		}
 	}
 
-	CHECK_FALSE(qec::operation_for_preview_transaction_kind(qec::PreviewTransactionKind::transform).has_value());
-	CHECK_FALSE(qec::operation_for_preview_transaction_kind(qec::PreviewTransactionKind::none).has_value());
+	EXPECT_FALSE(qec::operation_for_preview_transaction_kind(qec::PreviewTransactionKind::transform).has_value());
+	EXPECT_FALSE(qec::operation_for_preview_transaction_kind(qec::PreviewTransactionKind::none).has_value());
 }
 
-TEST_CASE("editor operation command facade executes operations through history", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesOperationsThroughHistory) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 	const std::size_t object_count_before = session.objects().size();
 
@@ -88,19 +86,18 @@ TEST_CASE("editor operation command facade executes operations through history",
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE(session.objects().size() == object_count_before + 1U);
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_TRUE(session.objects().size() == object_count_before + 1U);
+	EXPECT_TRUE(session.history_status().can_undo);
 
 	const quader_editor_core::HistoryRestoreResult undo = session.undo();
-	REQUIRE(undo.applied);
-	REQUIRE(session.objects().size() == object_count_before);
+	EXPECT_TRUE(undo.applied);
+	EXPECT_TRUE(session.objects().size() == object_count_before);
 }
 
-TEST_CASE("editor operation command facade executes explicit bevel distance", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesExplicitBevelDistance) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 	const int object_id = session.objects().front().id;
 	const quader_poly::ElementId vertex_id = session.objects().front().document.vertices.front().id;
@@ -120,15 +117,14 @@ TEST_CASE("editor operation command facade executes explicit bevel distance", "[
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE(session.objects().front().selection.vertices.size() >= 2U);
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_TRUE(session.objects().front().selection.vertices.size() >= 2U);
+	EXPECT_TRUE(session.history_status().can_undo);
 }
 
-TEST_CASE("editor operation command facade executes recalculate face normals", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesRecalculateFaceNormals) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 
 	quader_editor_core::RecalculateFaceNormalsOperationSettings settings;
@@ -141,34 +137,37 @@ TEST_CASE("editor operation command facade executes recalculate face normals", "
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE(qdr_test::all_faces_point_relative_to_center(session.objects().front().document, false));
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_TRUE(qdr_test::all_faces_point_relative_to_center(session.objects().front().document, false));
+	EXPECT_TRUE(session.history_status().can_undo);
 }
 
-TEST_CASE("editor operation command facade executes delete selection with legacy no-selection compatibility", "[operation][command]")
-{
-	SECTION("selected objects are deleted through history")
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesDeleteSelectionWithLegacyNoSelectionCompatibilitySelectedObjectsAreDeletedThroughHistory) {
 	{
 		qec::EditorSession session = qdr_test::selected_cube_session();
 
 		const qec::EditorOperationCommandResult result =
 			qec::execute_command(session, selection_execute_command(qec::EditorOperationId::delete_selection));
 
-		REQUIRE(result.command.ok);
-		REQUIRE(result.command.changed);
-		REQUIRE_FALSE(result.preview_finish.has_value());
-		REQUIRE(session.objects().empty());
-		REQUIRE(session.history_status().can_undo);
+		EXPECT_TRUE(result.command.ok);
+		EXPECT_TRUE(result.command.changed);
+		EXPECT_FALSE(result.preview_finish.has_value());
+		EXPECT_TRUE(session.objects().empty());
+		EXPECT_TRUE(session.history_status().can_undo);
 
 		const qec::HistoryRestoreResult undo = session.undo();
-		REQUIRE(undo.applied);
-		REQUIRE(session.objects().size() == 1U);
+		EXPECT_TRUE(undo.applied);
+		EXPECT_TRUE(session.objects().size() == 1U);
 	}
 
-	SECTION("missing selection is ok and unchanged")
+	
+}
+
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesDeleteSelectionWithLegacyNoSelectionCompatibilityMissingSelectionIsOkAndUnchanged) {
+	
+
 	{
 		qec::EditorSession session = qdr_test::selected_cube_session();
 		session.clear_selection();
@@ -176,16 +175,15 @@ TEST_CASE("editor operation command facade executes delete selection with legacy
 		const qec::EditorOperationCommandResult result =
 			qec::execute_command(session, selection_execute_command(qec::EditorOperationId::delete_selection));
 
-		REQUIRE(result.command.ok);
-		REQUIRE_FALSE(result.command.changed);
-		REQUIRE_FALSE(result.preview_finish.has_value());
-		REQUIRE(session.objects().size() == 1U);
-		REQUIRE_FALSE(session.history_status().can_undo);
+		EXPECT_TRUE(result.command.ok);
+		EXPECT_FALSE(result.command.changed);
+		EXPECT_FALSE(result.preview_finish.has_value());
+		EXPECT_TRUE(session.objects().size() == 1U);
+		EXPECT_FALSE(session.history_status().can_undo);
 	}
 }
 
-TEST_CASE("editor operation command facade executes no-argument selection operations", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesNoArgumentSelectionOperations) {
 	quader_poly::Document document = quader_poly::make_cube({});
 	const quader_poly::Face removed_face = document.faces.front();
 	document.faces.erase(document.faces.begin());
@@ -210,17 +208,15 @@ TEST_CASE("editor operation command facade executes no-argument selection operat
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE(session.selection_mode() == quader_editor_core::SelectionMode::face);
-	REQUIRE(session.objects().front().document.faces.size() == face_count_before + 1U);
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_TRUE(session.selection_mode() == quader_editor_core::SelectionMode::face);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before + 1U);
+	EXPECT_TRUE(session.history_status().can_undo);
 }
 
-TEST_CASE("editor operation command facade executes active selection operations", "[operation][command]")
-{
-	SECTION("snap vertices to active")
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesActiveSelectionOperationsSnapVerticesToActive) {
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		qec::EditorSession session({ qdr_test::make_object(1, fixture.document) });
@@ -234,23 +230,32 @@ TEST_CASE("editor operation command facade executes active selection operations"
 		const qec::EditorOperationCommandResult result =
 			qec::execute_command(session, selection_execute_command(qec::EditorOperationId::snap_vertices_to_active));
 
-		REQUIRE(result.command.ok);
-		REQUIRE(result.command.changed);
+		EXPECT_TRUE(result.command.ok);
+		EXPECT_TRUE(result.command.changed);
 		const quader_poly::Vertex* active = quader_poly::find_vertex(session.objects().front().document, fixture.bottom_left);
 		const quader_poly::Vertex* source = quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right);
-		REQUIRE(active != nullptr);
-		REQUIRE(source != nullptr);
-		REQUIRE(qdr_test::vec_nearly_equal(source->position, active->position));
-		REQUIRE(session.history_status().can_undo);
+		EXPECT_TRUE(active != nullptr);
+		EXPECT_TRUE(source != nullptr);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(source->position, active->position));
+		EXPECT_TRUE(session.history_status().can_undo);
 
 		const qec::HistoryRestoreResult undo = session.undo();
-		REQUIRE(undo.applied);
+		EXPECT_TRUE(undo.applied);
 		source = quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right);
-		REQUIRE(source != nullptr);
-		REQUIRE(qdr_test::vec_nearly_equal(source->position, source_position_before));
+		EXPECT_TRUE(source != nullptr);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(source->position, source_position_before));
 	}
 
-	SECTION("snap edges to active")
+	
+
+	
+
+	
+}
+
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesActiveSelectionOperationsSnapEdgesToActive) {
+	
+
 	{
 		qec::EditorSession session = qdr_test::selected_cube_session();
 		qec::PolygonObject& object = session.objects().front();
@@ -269,36 +274,45 @@ TEST_CASE("editor operation command facade executes active selection operations"
 		const qec::EditorOperationCommandResult result =
 			qec::execute_command(session, selection_execute_command(qec::EditorOperationId::snap_edges_to_active));
 
-		REQUIRE(result.command.ok);
-		REQUIRE(result.command.changed);
+		EXPECT_TRUE(result.command.ok);
+		EXPECT_TRUE(result.command.changed);
 		const quader_poly::Vertex* active_a = quader_poly::find_vertex(session.objects().front().document, active.a);
 		const quader_poly::Vertex* active_b = quader_poly::find_vertex(session.objects().front().document, active.b);
 		const quader_poly::Vertex* source_a = quader_poly::find_vertex(session.objects().front().document, source_edge.a);
 		const quader_poly::Vertex* source_b = quader_poly::find_vertex(session.objects().front().document, source_edge.b);
-		REQUIRE(active_a != nullptr);
-		REQUIRE(active_b != nullptr);
-		REQUIRE(source_a != nullptr);
-		REQUIRE(source_b != nullptr);
+		EXPECT_TRUE(active_a != nullptr);
+		EXPECT_TRUE(active_b != nullptr);
+		EXPECT_TRUE(source_a != nullptr);
+		EXPECT_TRUE(source_b != nullptr);
 		const bool direct =
 			qdr_test::vec_nearly_equal(source_a->position, active_a->position) &&
 			qdr_test::vec_nearly_equal(source_b->position, active_b->position);
 		const bool flipped =
 			qdr_test::vec_nearly_equal(source_a->position, active_b->position) &&
 			qdr_test::vec_nearly_equal(source_b->position, active_a->position);
-		REQUIRE((direct || flipped));
-		REQUIRE(session.history_status().can_undo);
+		EXPECT_TRUE((direct || flipped));
+		EXPECT_TRUE(session.history_status().can_undo);
 
 		const qec::HistoryRestoreResult undo = session.undo();
-		REQUIRE(undo.applied);
+		EXPECT_TRUE(undo.applied);
 		source_a = quader_poly::find_vertex(session.objects().front().document, source_edge.a);
 		source_b = quader_poly::find_vertex(session.objects().front().document, source_edge.b);
-		REQUIRE(source_a != nullptr);
-		REQUIRE(source_b != nullptr);
-		REQUIRE(qdr_test::vec_nearly_equal(source_a->position, source_a_before));
-		REQUIRE(qdr_test::vec_nearly_equal(source_b->position, source_b_before));
+		EXPECT_TRUE(source_a != nullptr);
+		EXPECT_TRUE(source_b != nullptr);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(source_a->position, source_a_before));
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(source_b->position, source_b_before));
 	}
 
-	SECTION("merge vertices to active")
+	
+
+	
+}
+
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesActiveSelectionOperationsMergeVerticesToActive) {
+	
+
+	
+
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		qec::EditorSession session({ qdr_test::make_object(1, fixture.document) });
@@ -311,20 +325,29 @@ TEST_CASE("editor operation command facade executes active selection operations"
 		const qec::EditorOperationCommandResult result =
 			qec::execute_command(session, selection_execute_command(qec::EditorOperationId::merge_vertices_to_active));
 
-		REQUIRE(result.command.ok);
-		REQUIRE(result.command.changed);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
-		REQUIRE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_left) != nullptr);
-		REQUIRE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) == nullptr);
-		REQUIRE(session.history_status().can_undo);
+		EXPECT_TRUE(result.command.ok);
+		EXPECT_TRUE(result.command.changed);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
+		EXPECT_TRUE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_left) != nullptr);
+		EXPECT_TRUE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) == nullptr);
+		EXPECT_TRUE(session.history_status().can_undo);
 
 		const qec::HistoryRestoreResult undo = session.undo();
-		REQUIRE(undo.applied);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before);
-		REQUIRE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) != nullptr);
+		EXPECT_TRUE(undo.applied);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
+		EXPECT_TRUE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) != nullptr);
 	}
 
-	SECTION("merge vertices to center")
+	
+}
+
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeExecutesActiveSelectionOperationsMergeVerticesToCenter) {
+	
+
+	
+
+	
+
 	{
 		qdr_test::QuadFixture fixture = qdr_test::make_quad_document();
 		qec::EditorSession session({ qdr_test::make_object(1, fixture.document) });
@@ -337,40 +360,38 @@ TEST_CASE("editor operation command facade executes active selection operations"
 		const qec::EditorOperationCommandResult result =
 			qec::execute_command(session, selection_execute_command(qec::EditorOperationId::merge_vertices_to_center));
 
-		REQUIRE(result.command.ok);
-		REQUIRE(result.command.changed);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
+		EXPECT_TRUE(result.command.ok);
+		EXPECT_TRUE(result.command.changed);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before - 1U);
 		const quader_poly::Vertex* survivor =
 			quader_poly::find_vertex(session.objects().front().document, fixture.bottom_left);
-		REQUIRE(survivor != nullptr);
-		REQUIRE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, -1.0F, 0.0F }));
-		REQUIRE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) == nullptr);
-		REQUIRE(session.history_status().can_undo);
+		EXPECT_TRUE(survivor != nullptr);
+		EXPECT_TRUE(qdr_test::vec_nearly_equal(survivor->position, { 0.0F, -1.0F, 0.0F }));
+		EXPECT_TRUE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) == nullptr);
+		EXPECT_TRUE(session.history_status().can_undo);
 
 		const qec::HistoryRestoreResult undo = session.undo();
-		REQUIRE(undo.applied);
-		REQUIRE(session.objects().front().document.vertices.size() == vertex_count_before);
-		REQUIRE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) != nullptr);
+		EXPECT_TRUE(undo.applied);
+		EXPECT_TRUE(session.objects().front().document.vertices.size() == vertex_count_before);
+		EXPECT_TRUE(quader_poly::find_vertex(session.objects().front().document, fixture.bottom_right) != nullptr);
 	}
 }
 
-TEST_CASE("editor operation command facade rejects active selection operation previews", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeRejectsActiveSelectionOperationPreviews) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 
 	qec::EditorOperationCommand command = selection_execute_command(qec::EditorOperationId::snap_vertices_to_active);
 	command.phase = qec::EditorOperationCommandPhase::begin_preview;
 	const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
 
-	REQUIRE_FALSE(result.command.ok);
-	REQUIRE_FALSE(result.command.changed);
-	REQUIRE(result.command.message.find("preview") != std::string::npos);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE_FALSE(session.preview_transaction_status().active);
+	EXPECT_FALSE(result.command.ok);
+	EXPECT_FALSE(result.command.changed);
+	EXPECT_TRUE(result.command.message.find("preview") != std::string::npos);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_FALSE(session.preview_transaction_status().active);
 }
 
-TEST_CASE("editor operation command facade rejects mismatched active selection operation settings", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeRejectsMismatchedActiveSelectionOperationSettings) {
 	qec::EditorSession session = qdr_test::selected_cube_session();
 
 	qec::EditorOperationCommand command;
@@ -379,14 +400,13 @@ TEST_CASE("editor operation command facade rejects mismatched active selection o
 	command.settings = qec::BridgeOperationSettings {};
 	const qec::EditorOperationCommandResult result = qec::execute_command(session, command);
 
-	REQUIRE_FALSE(result.command.ok);
-	REQUIRE_FALSE(result.command.changed);
-	REQUIRE(result.command.message.find("settings") != std::string::npos);
-	REQUIRE_FALSE(session.history_status().can_undo);
+	EXPECT_FALSE(result.command.ok);
+	EXPECT_FALSE(result.command.changed);
+	EXPECT_TRUE(result.command.message.find("settings") != std::string::npos);
+	EXPECT_FALSE(session.history_status().can_undo);
 }
 
-TEST_CASE("editor operation command facade routes preview phases", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeRoutesPreviewPhases) {
 	quader_editor_core::PolygonObject object = qdr_test::make_object(1, qdr_test::make_quad_document().document);
 	quader_editor_core::EditorSession session({ object });
 	session.set_component_selection(
@@ -406,12 +426,12 @@ TEST_CASE("editor operation command facade routes preview phases", "[operation][
 	const quader_editor_core::EditorOperationCommandResult begin =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(begin.command.ok);
-	REQUIRE(begin.command.changed);
-	REQUIRE_FALSE(begin.preview_finish.has_value());
-	REQUIRE(session.preview_transaction_status().active);
-	REQUIRE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::thicken);
-	REQUIRE(session.objects().front().document.faces.size() > face_count_before);
+	EXPECT_TRUE(begin.command.ok);
+	EXPECT_TRUE(begin.command.changed);
+	EXPECT_FALSE(begin.preview_finish.has_value());
+	EXPECT_TRUE(session.preview_transaction_status().active);
+	EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::thicken);
+	EXPECT_TRUE(session.objects().front().document.faces.size() > face_count_before);
 
 	settings.thickness = 0.5;
 	command.settings = settings;
@@ -419,41 +439,40 @@ TEST_CASE("editor operation command facade routes preview phases", "[operation][
 	const quader_editor_core::EditorOperationCommandResult update =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(update.command.ok);
-	REQUIRE(update.command.changed);
-	REQUIRE_FALSE(update.preview_finish.has_value());
+	EXPECT_TRUE(update.command.ok);
+	EXPECT_TRUE(update.command.changed);
+	EXPECT_FALSE(update.preview_finish.has_value());
 
 	command.phase = quader_editor_core::EditorOperationCommandPhase::cancel_preview;
 	const quader_editor_core::EditorOperationCommandResult cancel =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(cancel.command.ok);
-	REQUIRE(cancel.command.changed);
-	REQUIRE(cancel.preview_finish.has_value());
-	REQUIRE(cancel.preview_finish->restored);
-	REQUIRE_FALSE(session.preview_transaction_status().active);
-	REQUIRE(session.objects().front().document.faces.size() == face_count_before);
-	REQUIRE_FALSE(session.history_status().can_undo);
+	EXPECT_TRUE(cancel.command.ok);
+	EXPECT_TRUE(cancel.command.changed);
+	EXPECT_TRUE(cancel.preview_finish.has_value());
+	EXPECT_TRUE(cancel.preview_finish->restored);
+	EXPECT_FALSE(session.preview_transaction_status().active);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == face_count_before);
+	EXPECT_FALSE(session.history_status().can_undo);
 
 	settings.thickness = 0.25;
 	command.settings = settings;
 	command.phase = quader_editor_core::EditorOperationCommandPhase::begin_preview;
-	REQUIRE(quader_editor_core::execute_command(session, command).command.changed);
+	EXPECT_TRUE(quader_editor_core::execute_command(session, command).command.changed);
 
 	command.phase = quader_editor_core::EditorOperationCommandPhase::commit_preview;
 	const quader_editor_core::EditorOperationCommandResult commit =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE(commit.command.ok);
-	REQUIRE(commit.command.changed);
-	REQUIRE(commit.preview_finish.has_value());
-	REQUIRE(commit.preview_finish->before.changed);
-	REQUIRE_FALSE(commit.preview_finish->restored);
-	REQUIRE(session.history_status().can_undo);
+	EXPECT_TRUE(commit.command.ok);
+	EXPECT_TRUE(commit.command.changed);
+	EXPECT_TRUE(commit.preview_finish.has_value());
+	EXPECT_TRUE(commit.preview_finish->before.changed);
+	EXPECT_FALSE(commit.preview_finish->restored);
+	EXPECT_TRUE(session.history_status().can_undo);
 }
 
-TEST_CASE("editor operation command facade rejects preview phases for non-preview operations", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeRejectsPreviewPhasesForNonPreviewOperations) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 
 	quader_editor_core::EditorOperationCommand command;
@@ -464,14 +483,13 @@ TEST_CASE("editor operation command facade rejects preview phases for non-previe
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE_FALSE(result.command.ok);
-	REQUIRE_FALSE(result.command.changed);
-	REQUIRE_FALSE(result.preview_finish.has_value());
-	REQUIRE_FALSE(session.preview_transaction_status().active);
+	EXPECT_FALSE(result.command.ok);
+	EXPECT_FALSE(result.command.changed);
+	EXPECT_FALSE(result.preview_finish.has_value());
+	EXPECT_FALSE(session.preview_transaction_status().active);
 }
 
-TEST_CASE("editor operation command facade rejects mismatched settings", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandFacadeRejectsMismatchedSettings) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 	const std::size_t object_count_before = session.objects().size();
 
@@ -483,15 +501,14 @@ TEST_CASE("editor operation command facade rejects mismatched settings", "[opera
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::execute_command(session, command);
 
-	REQUIRE_FALSE(result.command.ok);
-	REQUIRE_FALSE(result.command.changed);
-	REQUIRE(result.command.message.find("settings") != std::string::npos);
-	REQUIRE(session.objects().size() == object_count_before);
-	REQUIRE_FALSE(session.history_status().can_undo);
+	EXPECT_FALSE(result.command.ok);
+	EXPECT_FALSE(result.command.changed);
+	EXPECT_TRUE(result.command.message.find("settings") != std::string::npos);
+	EXPECT_TRUE(session.objects().size() == object_count_before);
+	EXPECT_FALSE(session.history_status().can_undo);
 }
 
-TEST_CASE("editor operation command dispatch compatibility forwards to execute_command", "[operation][command]")
-{
+TEST(QdrModelingRuntimeOperationCommandTests, EditorOperationCommandDispatchCompatibilityForwardsToExecuteCommand) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 
 	quader_editor_core::EditorOperationCommand command;
@@ -502,7 +519,7 @@ TEST_CASE("editor operation command dispatch compatibility forwards to execute_c
 	const quader_editor_core::EditorOperationCommandResult result =
 		quader_editor_core::dispatch_editor_operation_command(session, command);
 
-	REQUIRE(result.command.ok);
-	REQUIRE(result.command.changed);
-	REQUIRE(session.objects().size() == 2U);
+	EXPECT_TRUE(result.command.ok);
+	EXPECT_TRUE(result.command.changed);
+	EXPECT_TRUE(session.objects().size() == 2U);
 }

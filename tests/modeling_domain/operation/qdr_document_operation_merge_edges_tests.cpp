@@ -4,7 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 #include <array>
 
@@ -26,8 +26,8 @@ Document make_parallel_quad_edge_document(Edge& active_edge, Edge& source_edge)
 
 	const std::array first_face { bottom_left, bottom_right, top_right, top_left };
 	const std::array second_face { source_right, source_left, source_top_left, source_top_right };
-	REQUIRE(add_face(document, first_face) != invalid_element_id);
-	REQUIRE(add_face(document, second_face) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, first_face) != invalid_element_id);
+	EXPECT_TRUE(add_face(document, second_face) != invalid_element_id);
 
 	active_edge = make_edge(bottom_left, bottom_right);
 	source_edge = make_edge(source_right, source_left);
@@ -36,8 +36,7 @@ Document make_parallel_quad_edge_document(Edge& active_edge, Edge& source_edge)
 
 } // namespace
 
-TEST_CASE("merge edges welds source endpoints into the closest survivor edge vertices", "[operation][merge_edges]")
-{
+TEST(QdrDocumentOperationMergeEdgesTests, MergeEdgesWeldsSourceEndpointsIntoTheClosestSurvivorEdgeVertices) {
 	Edge active_edge;
 	Edge source_edge;
 	Document document = make_parallel_quad_edge_document(active_edge, source_edge);
@@ -45,23 +44,22 @@ TEST_CASE("merge edges welds source endpoints into the closest survivor edge ver
 
 	const OperationResult result = merge_selected_edges(document, selection);
 
-	REQUIRE(result.changed);
-	REQUIRE(find_vertex(document, active_edge.a) != nullptr);
-	REQUIRE(find_vertex(document, active_edge.b) != nullptr);
-	REQUIRE(find_vertex(document, source_edge.a) == nullptr);
-	REQUIRE(find_vertex(document, source_edge.b) == nullptr);
-	REQUIRE(document.faces.size() == 2U);
-	REQUIRE(qdr_test::document_has_edge(document, active_edge));
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(document));
-	REQUIRE(selection.mode == SelectionMode::edge);
-	REQUIRE(selection.edges.size() == 1U);
-	REQUIRE(selection.edges.front() == active_edge);
-	REQUIRE(selection.has_active);
-	REQUIRE(selection.active_edge == active_edge);
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(find_vertex(document, active_edge.a) != nullptr);
+	EXPECT_TRUE(find_vertex(document, active_edge.b) != nullptr);
+	EXPECT_TRUE(find_vertex(document, source_edge.a) == nullptr);
+	EXPECT_TRUE(find_vertex(document, source_edge.b) == nullptr);
+	EXPECT_TRUE(document.faces.size() == 2U);
+	EXPECT_TRUE(qdr_test::document_has_edge(document, active_edge));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(selection.mode == SelectionMode::edge);
+	EXPECT_TRUE(selection.edges.size() == 1U);
+	EXPECT_TRUE(selection.edges.front() == active_edge);
+	EXPECT_TRUE(selection.has_active);
+	EXPECT_TRUE(selection.active_edge == active_edge);
 }
 
-TEST_CASE("merge edges rejects incomplete edge selections", "[operation][merge_edges]")
-{
+TEST(QdrDocumentOperationMergeEdgesTests, MergeEdgesRejectsIncompleteEdgeSelections) {
 	Edge active_edge;
 	Edge source_edge;
 	Document document = make_parallel_quad_edge_document(active_edge, source_edge);
@@ -69,6 +67,6 @@ TEST_CASE("merge edges rejects incomplete edge selections", "[operation][merge_e
 
 	const OperationResult result = merge_selected_edges(document, selection);
 
-	REQUIRE_FALSE(result.changed);
-	REQUIRE_FALSE(result.message.empty());
+	EXPECT_FALSE(result.changed);
+	EXPECT_FALSE(result.message.empty());
 }

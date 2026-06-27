@@ -196,7 +196,7 @@ target_link_libraries(quader_modeling_runtime
 
 add_library(quader_editor_metadata STATIC
     src/editor/metadata/host_contract.cpp
-    src/editor/tools/base/ViewportToolDescriptorCatalog.cpp)
+    src/editor/tools/base/viewport_tool_descriptor_catalog.cpp)
 add_library(quader::editor_metadata ALIAS quader_editor_metadata)
 target_compile_features(quader_editor_metadata PUBLIC cxx_std_20)
 target_include_directories(quader_editor_metadata
@@ -205,8 +205,8 @@ target_include_directories(quader_editor_metadata
 target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
 
 add_library(quader_qdr_shared_io STATIC
-    src/io/qdr/QdrAtomicWrite.cpp
-    src/io/qdr/QdrPolygonDocumentCodec.cpp)
+    src/io/qdr/qdr_atomic_write.cpp
+    src/io/qdr/qdr_polygon_document_codec.cpp)
 target_compile_features(quader_qdr_shared_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_shared_io
     PUBLIC
@@ -235,7 +235,7 @@ target_link_libraries(quader_qdr_document_io
         quader_modeling_profile)
 
 add_library(quader_qdr_runtime_io STATIC
-    src/io/qdr/QdrRuntimeIoCompat.cpp)
+    src/io/qdr/qdr_runtime_io_compat.cpp)
 target_compile_features(quader_qdr_runtime_io PUBLIC cxx_std_20)
 target_include_directories(quader_qdr_runtime_io
     PUBLIC
@@ -253,49 +253,6 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     target_compile_features(qdr_performance_baseline PRIVATE cxx_std_20)
     target_link_libraries(qdr_performance_baseline PRIVATE quader_modeling_polygon quader_modeling_runtime quader_modeling_profile)
 endif()
-
-function(quader_ensure_catch2)
-    if(NOT EXISTS "${QUADER_APP_THIRDPARTY_DIR}/licenses/catch2-BSL-1.0.txt")
-        message(FATAL_ERROR "Missing Catch2 license evidence: thirdparty/licenses/catch2-BSL-1.0.txt")
-    endif()
-
-    if(TARGET Catch2::Catch2WithMain)
-        return()
-    endif()
-
-    set(CATCH_BUILD_TESTING OFF CACHE BOOL "Disable Catch2 self-tests." FORCE)
-    set(CATCH_INSTALL_DOCS OFF CACHE BOOL "Disable Catch2 documentation install." FORCE)
-    set(CATCH_INSTALL_EXTRAS OFF CACHE BOOL "Disable Catch2 extras install." FORCE)
-
-    set(_quader_catch2_source_dir "${QUADER_CATCH2_SOURCE_DIR}")
-    if(_quader_catch2_source_dir STREQUAL "")
-        quader_resolve_dependency_source(
-            _quader_catch2_source_dir
-            QUADER_CATCH2_SOURCE_DIR
-            "catch2/catch2-${QUADER_CATCH2_COMMIT}"
-            "catch2-${QUADER_CATCH2_COMMIT}"
-            CMakeLists.txt)
-    endif()
-
-    if(NOT _quader_catch2_source_dir STREQUAL "")
-        if(NOT EXISTS "${_quader_catch2_source_dir}/CMakeLists.txt")
-            message(FATAL_ERROR "QUADER_CATCH2_SOURCE_DIR does not contain CMakeLists.txt: ${_quader_catch2_source_dir}")
-        endif()
-        message(STATUS "Using local Catch2 source: ${_quader_catch2_source_dir}")
-        add_subdirectory("${_quader_catch2_source_dir}" "${CMAKE_CURRENT_BINARY_DIR}/_deps/catch2-local-build" EXCLUDE_FROM_ALL)
-    elseif(QUADER_ALLOW_EXTERNAL_CATCH2_FETCH)
-        message(STATUS "External Catch2 fetch explicitly enabled for commit ${QUADER_CATCH2_COMMIT}")
-        include(FetchContent)
-        FetchContent_Declare(
-            catch2
-            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-            GIT_TAG ${QUADER_CATCH2_COMMIT}
-            GIT_SHALLOW FALSE)
-        FetchContent_MakeAvailable(catch2)
-    else()
-        message(FATAL_ERROR "Modeling-domain tests are enabled, but no local Catch2 checkout was found. Provide -DQUADER_CATCH2_SOURCE_DIR=<path> or explicitly opt in to network fetches with -DQUADER_ALLOW_EXTERNAL_CATCH2_FETCH=ON.")
-    endif()
-endfunction()
 
 function(quader_add_modeling_domain_test_source category target)
     set(_quader_modeling_domain_categories
@@ -318,15 +275,14 @@ function(quader_add_modeling_domain_test_source category target)
     set(QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST "${QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST}" PARENT_SCOPE)
 endfunction()
 
-function(quader_add_modeling_domain_catch2_test_target target)
-    quader_ensure_catch2()
+function(quader_add_modeling_domain_gtest_target target)
+    find_package(GTest CONFIG REQUIRED)
     add_executable(${target} ${QUADER_MODELING_DOMAIN_TEST_SOURCES})
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_definitions(${target}
         PRIVATE
-            QUADER_MODELING_TEST_SUPPORT_CATCH2=1
             "QUADER_CUSTOM_ENGINE_SMOKE_SOURCE_PATH=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/qdr_custom_engine_modeling_runtime_smoke_tests.cpp\""
-            "QUADER_HOST_CONTRACT_HEADER_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.h\""
+            "QUADER_HOST_CONTRACT_HEADER_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.hpp\""
             "QUADER_HOST_CONTRACT_SOURCE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/src/editor/metadata/host_contract.cpp\""
             "QUADER_QDR_TEST_FIXTURE_DIR=\"${QUADER_MODELING_DOMAIN_TEST_ROOT}/fixtures/io\"")
     target_include_directories(${target}
@@ -338,13 +294,14 @@ function(quader_add_modeling_domain_catch2_test_target target)
             "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation")
     target_link_libraries(${target}
         PRIVATE
-            Catch2::Catch2WithMain
             quader_geometry
             quader_modeling_polygon
             quader_modeling_runtime
             quader_editor_metadata
             quader_qdr_document_io
-            quader_qdr_runtime_io)
+            quader_qdr_runtime_io
+            GTest::gtest
+            GTest::gtest_main)
     add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
@@ -517,5 +474,5 @@ if(QUADER_BUILD_TESTS)
         quader_add_modeling_domain_test_source(runtime "${_quader_runtime_tool_test_target}" "${_quader_runtime_tool_test_source}")
     endforeach()
 
-    quader_add_modeling_domain_catch2_test_target(quader_modeling_domain_tests)
+    quader_add_modeling_domain_gtest_target(quader_modeling_domain_tests)
 endif()

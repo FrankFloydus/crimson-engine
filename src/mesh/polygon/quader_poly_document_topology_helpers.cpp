@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.h>
+#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_topology_backend.h>
+#include <mesh/polygon/internal/quader_poly_document_topology_backend.hpp>
 
-#include <mesh/geometry/geometry.h>
+#include <mesh/geometry/geometry.hpp>
 
 #include <algorithm>
 #include <array>

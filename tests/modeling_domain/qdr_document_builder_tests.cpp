@@ -4,10 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <catch2/catch_approx.hpp>
-#include <catch2/catch_test_macros.hpp>
+#include "test_support.hpp"
 
-#include <mesh/polygon/document_builder.h>
+#include <mesh/polygon/document_builder.hpp>
 
 #include <algorithm>
 #include <array>
@@ -56,14 +55,17 @@ Bounds document_bounds(const Document& document)
 const Vertex* require_vertex(const Document& document, ElementId id)
 {
     const Vertex* vertex = find_vertex(document, id);
-    REQUIRE(vertex != nullptr);
+    if (vertex == nullptr) {
+        ADD_FAILURE() << "Missing document vertex " << id;
+        static const Vertex missing_vertex {};
+        return &missing_vertex;
+    }
     return vertex;
 }
 
 } // namespace
 
-TEST_CASE("document builder creates vertices, quads, and material slots", "[document-builder]")
-{
+TEST(QdrDocumentBuilderTests, DocumentBuilderCreatesVerticesQuadsAndMaterialSlots) {
     DocumentBuilder builder;
     const DocumentBuilder::VertexRef a = builder.vertex({ 0.0F, 0.0F, 0.0F });
     const DocumentBuilder::VertexRef b = builder.vertex({ 1.0F, 0.0F, 0.0F });
@@ -72,18 +74,17 @@ TEST_CASE("document builder creates vertices, quads, and material slots", "[docu
 
     const Document document = builder.quad(a, b, c, d, 3).assignMaterialSlot(7).build();
 
-    REQUIRE(document.vertices.size() == 4U);
-    REQUIRE(document.faces.size() == 1U);
-    CHECK(document.next_vertex_id == 5U);
-    CHECK(document.next_face_id == 2U);
-    CHECK(document.faces.front().material_slot == 7U);
-    CHECK(document.faces.front().vertices == std::vector<ElementId> { 1, 2, 3, 4 });
-    CHECK(vec_nearly_equal(require_vertex(document, 3)->position, { 1.0F, 1.0F, 0.0F }));
-    CHECK_FALSE(compile_document(document).indices.empty());
+    EXPECT_TRUE(document.vertices.size() == 4U);
+    EXPECT_TRUE(document.faces.size() == 1U);
+    EXPECT_TRUE(document.next_vertex_id == 5U);
+    EXPECT_TRUE(document.next_face_id == 2U);
+    EXPECT_TRUE(document.faces.front().material_slot == 7U);
+    EXPECT_TRUE((document.faces.front().vertices == std::vector<ElementId> { 1, 2, 3, 4 }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(document, 3)->position, { 1.0F, 1.0F, 0.0F }));
+    EXPECT_FALSE(compile_document(document).indices.empty());
 }
 
-TEST_CASE("document builder creates faces from vertex arrays and indices", "[document-builder]")
-{
+TEST(QdrDocumentBuilderTests, DocumentBuilderCreatesFacesFromVertexArraysAndIndices) {
     DocumentBuilder builder;
     const std::array<quader::QVec3, 4> positions {{
         { 0.0F, 0.0F, 0.0F },
@@ -95,45 +96,43 @@ TEST_CASE("document builder creates faces from vertex arrays and indices", "[doc
 
     const Document document = builder.vertices(positions).faceByIndex(triangle_indices, 2).build();
 
-    REQUIRE(document.vertices.size() == 4U);
-    REQUIRE(document.faces.size() == 1U);
-    CHECK(document.faces.front().material_slot == 2U);
-    CHECK(document.faces.front().vertices == std::vector<ElementId> { 1, 2, 3 });
+    EXPECT_TRUE(document.vertices.size() == 4U);
+    EXPECT_TRUE(document.faces.size() == 1U);
+    EXPECT_TRUE(document.faces.front().material_slot == 2U);
+    EXPECT_TRUE((document.faces.front().vertices == std::vector<ElementId> { 1, 2, 3 }));
 }
 
-TEST_CASE("document builder appends cubes from bounds", "[document-builder]")
-{
+TEST(QdrDocumentBuilderTests, DocumentBuilderAppendsCubesFromBounds) {
     const Document document = DocumentBuilder {}
         .cube({ -2.0F, -3.0F, -4.0F }, { 2.0F, 3.0F, 4.0F }, 5)
         .build();
 
-    REQUIRE(document.vertices.size() == 8U);
-    REQUIRE(document.faces.size() == 6U);
-    CHECK(std::ranges::all_of(document.faces, [](const Face& face) {
+    EXPECT_TRUE(document.vertices.size() == 8U);
+    EXPECT_TRUE(document.faces.size() == 6U);
+    EXPECT_TRUE(std::ranges::all_of(document.faces, [](const Face& face) {
         return face.material_slot == 5U;
     }));
 
     const Bounds bounds = document_bounds(document);
-    CHECK(vec_nearly_equal(bounds.min, { -2.0F, -3.0F, -4.0F }));
-    CHECK(vec_nearly_equal(bounds.max, { 2.0F, 3.0F, 4.0F }));
-    CHECK_FALSE(compile_document(document).indices.empty());
+    EXPECT_TRUE(vec_nearly_equal(bounds.min, { -2.0F, -3.0F, -4.0F }));
+    EXPECT_TRUE(vec_nearly_equal(bounds.max, { 2.0F, 3.0F, 4.0F }));
+    EXPECT_FALSE(compile_document(document).indices.empty());
 
     const Document swapped_bounds = DocumentBuilder {}
         .cube({ 2.0F, 3.0F, 4.0F }, { -2.0F, -3.0F, -4.0F }, 5)
         .build();
     const Bounds swapped = document_bounds(swapped_bounds);
-    CHECK(vec_nearly_equal(swapped.min, { -2.0F, -3.0F, -4.0F }));
-    CHECK(vec_nearly_equal(swapped.max, { 2.0F, 3.0F, 4.0F }));
+    EXPECT_TRUE(vec_nearly_equal(swapped.min, { -2.0F, -3.0F, -4.0F }));
+    EXPECT_TRUE(vec_nearly_equal(swapped.max, { 2.0F, 3.0F, 4.0F }));
 
     const Document degenerate = DocumentBuilder {}
         .cube({ 0.0F, 0.0F, 0.0F }, { 0.0F, 1.0F, 1.0F })
         .build();
-    CHECK(degenerate.vertices.empty());
-    CHECK(degenerate.faces.empty());
+    EXPECT_TRUE(degenerate.vertices.empty());
+    EXPECT_TRUE(degenerate.faces.empty());
 }
 
-TEST_CASE("document builder creates oriented boxes from corners", "[document-builder]")
-{
+TEST(QdrDocumentBuilderTests, DocumentBuilderCreatesOrientedBoxesFromCorners) {
     const std::array<quader::QVec3, 8> corners {{
         { 2.0F, -2.0F, -1.0F },
         { 2.0F, 2.0F, -1.0F },
@@ -147,12 +146,12 @@ TEST_CASE("document builder creates oriented boxes from corners", "[document-bui
 
     const Document document = DocumentBuilder {}.boxFromCorners(corners, 9).build();
 
-    REQUIRE(document.vertices.size() == 8U);
-    REQUIRE(document.faces.size() == 6U);
-    CHECK(std::ranges::all_of(document.faces, [](const Face& face) {
+    EXPECT_TRUE(document.vertices.size() == 8U);
+    EXPECT_TRUE(document.faces.size() == 6U);
+    EXPECT_TRUE(std::ranges::all_of(document.faces, [](const Face& face) {
         return face.material_slot == 9U;
     }));
-    CHECK_FALSE(compile_document(document).indices.empty());
+    EXPECT_FALSE(compile_document(document).indices.empty());
 
     bool found_left = false;
     bool found_right = false;
@@ -161,37 +160,36 @@ TEST_CASE("document builder creates oriented boxes from corners", "[document-bui
         bool all_right = true;
         for (const ElementId vertex_id : face.vertices) {
             const Vertex* vertex = require_vertex(document, vertex_id);
-            all_left = all_left && vertex->position.x == Catch::Approx(2.0F);
-            all_right = all_right && vertex->position.x == Catch::Approx(4.0F);
+            all_left = all_left &&qdr_test::nearly_equal(vertex->position.x, 2.0F, 0.0001);
+            all_right = all_right &&qdr_test::nearly_equal(vertex->position.x, 4.0F, 0.0001);
         }
         const quader::QVec3 normal = face_normal(document, face);
         if (all_left) {
             found_left = true;
-            CHECK(normal.x == Catch::Approx(-1.0F));
+            EXPECT_NEAR(normal.x, -1.0F, 0.0001);
         }
         if (all_right) {
             found_right = true;
-            CHECK(normal.x == Catch::Approx(1.0F));
+            EXPECT_NEAR(normal.x, 1.0F, 0.0001);
         }
     }
-    CHECK(found_left);
-    CHECK(found_right);
+    EXPECT_TRUE(found_left);
+    EXPECT_TRUE(found_right);
 }
 
-TEST_CASE("document builder transforms all detached vertices", "[document-builder]")
-{
+TEST(QdrDocumentBuilderTests, DocumentBuilderTransformsAllDetachedVertices) {
     DocumentBuilder builder;
     const DocumentBuilder::VertexRef a = builder.vertex({ 1.0F, 1.0F, 1.0F });
     builder.vertex({ 2.0F, 0.0F, 0.0F });
     builder.triangle(a, { 1U }, { 0U });
 
     Document translated = builder.translate({ 1.0F, 2.0F, 3.0F }).build();
-    CHECK(vec_nearly_equal(require_vertex(translated, 1)->position, { 2.0F, 3.0F, 4.0F }));
-    CHECK(vec_nearly_equal(require_vertex(translated, 2)->position, { 3.0F, 2.0F, 3.0F }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(translated, 1)->position, { 2.0F, 3.0F, 4.0F }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(translated, 2)->position, { 3.0F, 2.0F, 3.0F }));
 
     Document scaled = builder.scale({ 2.0F, 3.0F, 4.0F }, { 1.0F, 2.0F, 3.0F }).build();
-    CHECK(vec_nearly_equal(require_vertex(scaled, 1)->position, { 3.0F, 5.0F, 7.0F }));
-    CHECK(vec_nearly_equal(require_vertex(scaled, 2)->position, { 5.0F, 2.0F, 3.0F }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(scaled, 1)->position, { 3.0F, 5.0F, 7.0F }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(scaled, 2)->position, { 5.0F, 2.0F, 3.0F }));
 
     Transform3 transform;
     transform.x_axis = { 0.0F, 1.0F, 0.0F };
@@ -200,12 +198,11 @@ TEST_CASE("document builder transforms all detached vertices", "[document-builde
     transform.origin = { 5.0F, 0.0F, 0.0F };
 
     Document transformed = builder.transform(transform, { 1.0F, 2.0F, 3.0F }).build();
-    CHECK(vec_nearly_equal(require_vertex(transformed, 1)->position, { 9.0F, 4.0F, 7.0F }));
-    CHECK(vec_nearly_equal(require_vertex(transformed, 2)->position, { 6.0F, 6.0F, 3.0F }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(transformed, 1)->position, { 9.0F, 4.0F, 7.0F }));
+    EXPECT_TRUE(vec_nearly_equal(require_vertex(transformed, 2)->position, { 6.0F, 6.0F, 3.0F }));
 }
 
-TEST_CASE("document builder build copies and take resets", "[document-builder]")
-{
+TEST(QdrDocumentBuilderTests, DocumentBuilderBuildCopiesAndTakeResets) {
     DocumentBuilder builder;
     const DocumentBuilder::VertexRef a = builder.vertex({ 0.0F, 0.0F, 0.0F });
     const DocumentBuilder::VertexRef b = builder.vertex({ 1.0F, 0.0F, 0.0F });
@@ -215,19 +212,19 @@ TEST_CASE("document builder build copies and take resets", "[document-builder]")
     Document built = builder.build();
     built.vertices.front().position.x = 99.0F;
 
-    REQUIRE(builder.preview().vertices.size() == 3U);
-    CHECK(builder.preview().vertices.front().position.x == Catch::Approx(0.0F));
+    EXPECT_TRUE(builder.preview().vertices.size() == 3U);
+    EXPECT_NEAR(builder.preview().vertices.front().position.x, 0.0F, 0.0001);
 
     Document taken = builder.take();
-    REQUIRE(taken.vertices.size() == 3U);
-    REQUIRE(taken.faces.size() == 1U);
-    CHECK(taken.faces.front().material_slot == 4U);
-    CHECK(builder.preview().vertices.empty());
-    CHECK(builder.preview().faces.empty());
+    EXPECT_TRUE(taken.vertices.size() == 3U);
+    EXPECT_TRUE(taken.faces.size() == 1U);
+    EXPECT_TRUE(taken.faces.front().material_slot == 4U);
+    EXPECT_TRUE(builder.preview().vertices.empty());
+    EXPECT_TRUE(builder.preview().faces.empty());
 
     static_cast<void>(builder.vertex({ 7.0F, 8.0F, 9.0F }));
     const Document rebuilt = builder.build();
-    REQUIRE(rebuilt.vertices.size() == 1U);
-    CHECK(rebuilt.vertices.front().id == 1U);
-    CHECK(vec_nearly_equal(rebuilt.vertices.front().position, { 7.0F, 8.0F, 9.0F }));
+    EXPECT_TRUE(rebuilt.vertices.size() == 1U);
+    EXPECT_TRUE(rebuilt.vertices.front().id == 1U);
+    EXPECT_TRUE(vec_nearly_equal(rebuilt.vertices.front().position, { 7.0F, 8.0F, 9.0F }));
 }

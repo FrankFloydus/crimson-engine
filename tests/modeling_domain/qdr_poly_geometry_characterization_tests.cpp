@@ -4,9 +4,9 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "test_support.h"
+#include "test_support.hpp"
 
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <array>
 #include <algorithm>
@@ -541,8 +541,7 @@ void characterizes_adjacent_edge_bevel_miter_geometry()
 
 } // namespace
 
-TEST_CASE("qdr_poly_geometry_characterization_tests", "[poly-geometry-characterization]")
-{
+TEST(QdrPolyGeometryCharacterizationTests, QdrPolyGeometryCharacterizationTests) {
     characterizes_face_pick_on_quad();
     characterizes_face_pick_with_near_parallel_bounds_axis();
     characterizes_edge_pick_radius_and_tie_break();
@@ -557,8 +556,7 @@ TEST_CASE("qdr_poly_geometry_characterization_tests", "[poly-geometry-characteri
     characterizes_adjacent_edge_bevel_miter_geometry();
 }
 
-TEST_CASE("poly overlay emits selected face primitives for a quad", "[poly-geometry-characterization][overlay]")
-{
+TEST(QdrPolyGeometryCharacterizationTests, PolyOverlayEmitsSelectedFacePrimitivesForAQuad) {
     const Document document = make_single_quad_document();
     Selection selection;
     selection.mode = SelectionMode::face;
@@ -566,7 +564,7 @@ TEST_CASE("poly overlay emits selected face primitives for a quad", "[poly-geome
 
     const OverlayData overlay = build_overlay(document, selection);
 
-    REQUIRE(overlay.triangles.size() == 2U);
-    CHECK(overlay.lines.size() >= 8U);
-    CHECK(overlay.points.empty());
+    EXPECT_TRUE(overlay.triangles.size() == 2U);
+    EXPECT_TRUE(overlay.lines.size() >= 8U);
+    EXPECT_TRUE(overlay.points.empty());
 }

@@ -4,8 +4,8 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/poly_operation.h>
-#include <mesh/polygon/poly_operation_descriptor.h>
+#include <mesh/polygon/poly_operation.hpp>
+#include <mesh/polygon/poly_operation_descriptor.hpp>
 
 namespace quader_poly {
 

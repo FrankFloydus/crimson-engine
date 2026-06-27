@@ -4,15 +4,15 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
-#include <diagnostics/profile.h>
+#include <diagnostics/profile.hpp>
 
-#include <mesh/polygon/internal/quader_poly_document_constants.h>
-#include <mesh/polygon/internal/quader_poly_document_knife_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_mesh_internal.h>
-#include <mesh/polygon/internal/quader_poly_document_picking_helpers.h>
-#include <mesh/polygon/internal/quader_poly_document_topology_helpers.h>
+#include <mesh/polygon/internal/quader_poly_document_constants.hpp>
+#include <mesh/polygon/internal/quader_poly_document_knife_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_mesh_internal.hpp>
+#include <mesh/polygon/internal/quader_poly_document_picking_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #include <cmath>
 #include <limits>

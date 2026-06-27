@@ -4,33 +4,31 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
 using namespace quader_editor_core;
 
-TEST_CASE("shade smooth and flat operate on selected mesh objects", "[operation][normal_shading]")
-{
+TEST(QdrModelingRuntimeOperationNormalShadingTests, ShadeSmoothAndFlatOperateOnSelectedMeshObjects) {
 	EditorSession session = qdr_test::selected_cube_session();
 
 	const CommandResult smooth = session.shade_selected_faces_smooth();
 
-	REQUIRE(smooth.ok);
-	REQUIRE(smooth.changed);
+	EXPECT_TRUE(smooth.ok);
+	EXPECT_TRUE(smooth.changed);
 	for (const quader_poly::Face& face : session.objects().front().document.faces) {
-		CHECK(face.normal_shading == quader_poly::SurfaceShading::smooth);
+		EXPECT_TRUE(face.normal_shading == quader_poly::SurfaceShading::smooth);
 	}
 
 	const CommandResult flat = session.shade_selected_faces_flat();
 
-	REQUIRE(flat.ok);
-	REQUIRE(flat.changed);
+	EXPECT_TRUE(flat.ok);
+	EXPECT_TRUE(flat.changed);
 	for (const quader_poly::Face& face : session.objects().front().document.faces) {
-		CHECK(face.normal_shading == quader_poly::SurfaceShading::flat);
+		EXPECT_TRUE(face.normal_shading == quader_poly::SurfaceShading::flat);
 	}
 }
 
-TEST_CASE("hard and soft normal operations operate on selected edges", "[operation][normal_shading]")
-{
+TEST(QdrModelingRuntimeOperationNormalShadingTests, HardAndSoftNormalOperationsOperateOnSelectedEdges) {
 	EditorSession session = qdr_test::selected_cube_session();
 	quader_editor_core::PolygonObject& object = session.objects().front();
 	const quader_poly::Face first_face = object.document.faces.front();
@@ -42,26 +40,26 @@ TEST_CASE("hard and soft normal operations operate on selected edges", "[operati
 
 	const CommandResult soft_default = session.soften_selected_edge_normals();
 
-	REQUIRE(soft_default.ok);
-	REQUIRE(soft_default.changed);
+	EXPECT_TRUE(soft_default.ok);
+	EXPECT_TRUE(soft_default.changed);
 	std::size_t smooth_face_count = 0;
 	for (const quader_poly::Face& face : session.objects().front().document.faces) {
 		if (face.normal_shading == quader_poly::SurfaceShading::smooth) {
 			++smooth_face_count;
 		}
 	}
-	REQUIRE(smooth_face_count > 0U);
-	REQUIRE(session.objects().front().document.hard_normal_edges.empty());
+	EXPECT_TRUE(smooth_face_count > 0U);
+	EXPECT_TRUE(session.objects().front().document.hard_normal_edges.empty());
 
 	const CommandResult hard = session.harden_selected_edge_normals();
 
-	REQUIRE(hard.ok);
-	REQUIRE(hard.changed);
-	REQUIRE(session.objects().front().document.hard_normal_edges.size() == 1U);
+	EXPECT_TRUE(hard.ok);
+	EXPECT_TRUE(hard.changed);
+	EXPECT_TRUE(session.objects().front().document.hard_normal_edges.size() == 1U);
 
 	const CommandResult soft = session.soften_selected_edge_normals();
 
-	REQUIRE(soft.ok);
-	REQUIRE(soft.changed);
-	REQUIRE(session.objects().front().document.hard_normal_edges.empty());
+	EXPECT_TRUE(soft.ok);
+	EXPECT_TRUE(soft.changed);
+	EXPECT_TRUE(session.objects().front().document.hard_normal_edges.empty());
 }

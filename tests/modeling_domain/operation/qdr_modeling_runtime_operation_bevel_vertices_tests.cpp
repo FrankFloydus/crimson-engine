@@ -4,28 +4,27 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "editor_operation_test_helpers.h"
+#include "editor_operation_test_helpers.hpp"
 
-#include <catch2/catch_approx.hpp>
+#include "test_support.hpp"
 
-TEST_CASE("bevel vertex command settings use focused grid distance", "[operation][bevel_vertices]")
-{
+TEST(QdrModelingRuntimeOperationBevelVerticesTests, BevelVertexCommandSettingsUseFocusedGridDistance) {
 	quader_editor_core::BevelVerticesOperationSettings settings;
 	settings.focused_grid = { 0.25, true };
 
-	CHECK(quader_editor_core::bevel_vertices_distance_from_settings(settings) == Catch::Approx(0.25F));
+	EXPECT_NEAR(quader_editor_core::bevel_vertices_distance_from_settings(settings), 0.25F, 0.0001);
 
 	settings.focused_grid = { 0.0, false };
-	CHECK(quader_editor_core::bevel_vertices_distance_from_settings(settings) == Catch::Approx(
-		static_cast<float>(quader_editor_core::default_command_grid_world_size)));
+	EXPECT_NEAR(quader_editor_core::bevel_vertices_distance_from_settings(settings),
+		static_cast<float>(quader_editor_core::default_command_grid_world_size),
+		0.0001);
 
 	settings.focused_grid = { 1.0, true };
 	settings.explicit_distance = { 0.125, true };
-	CHECK(quader_editor_core::bevel_vertices_distance_from_settings(settings) == Catch::Approx(0.125F));
+	EXPECT_NEAR(quader_editor_core::bevel_vertices_distance_from_settings(settings), 0.125F, 0.0001);
 }
 
-TEST_CASE("bevel vertex command settings apply through editor session", "[operation][bevel_vertices]")
-{
+TEST(QdrModelingRuntimeOperationBevelVerticesTests, BevelVertexCommandSettingsApplyThroughEditorSession) {
 	quader_editor_core::EditorSession session = qdr_test::selected_cube_session();
 	const int object_id = session.objects().front().id;
 	const quader_poly::ElementId vertex_id = session.objects().front().document.vertices.front().id;
@@ -38,9 +37,9 @@ TEST_CASE("bevel vertex command settings apply through editor session", "[operat
 	settings.focused_grid = { 0.25, true };
 	const quader_editor_core::CommandResult bevel = session.bevel_selected_vertices(settings);
 
-	REQUIRE(bevel.ok);
-	REQUIRE(bevel.changed);
-	REQUIRE(session.objects().size() == 1U);
-	CHECK(session.objects().front().selection.mode == quader_poly::SelectionMode::vertex);
-	CHECK(session.objects().front().selection.vertices.size() >= 2U);
+	EXPECT_TRUE(bevel.ok);
+	EXPECT_TRUE(bevel.changed);
+	EXPECT_TRUE(session.objects().size() == 1U);
+	EXPECT_TRUE(session.objects().front().selection.mode == quader_poly::SelectionMode::vertex);
+	EXPECT_TRUE(session.objects().front().selection.vertices.size() >= 2U);
 }

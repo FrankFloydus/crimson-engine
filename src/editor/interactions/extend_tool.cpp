@@ -4,11 +4,11 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include <editor/interactions/extend_tool.h>
+#include <editor/interactions/extend_tool.hpp>
 
-#include <editor/modeling/runtime/editor_tool.h>
+#include <editor/modeling/runtime/editor_tool.hpp>
 
-#include "tool_math_internal.h"
+#include "tool_math_internal.hpp"
 
 #include <cmath>
 #include <string_view>

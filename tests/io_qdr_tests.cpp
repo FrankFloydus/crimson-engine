@@ -4,16 +4,16 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "assets/MaterialDocument.h"
-#include "assets/TextureAsset.h"
-#include "scene/document/ProjectDocument.h"
-#include "io/qdr/QdrDocumentReader.h"
-#include "io/qdr/QdrDocumentWriter.h"
-#include "io/qdr/qdr_document.h"
-#include "support/GuardrailFileScan.h"
+#include "assets/material_document.hpp"
+#include "assets/texture_asset.hpp"
+#include "scene/document/project_document.hpp"
+#include "io/qdr/qdr_document_reader.hpp"
+#include "io/qdr/qdr_document_writer.hpp"
+#include "io/qdr/qdr_document.hpp"
+#include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
-#include <mesh/polygon/document.h>
+#include <mesh/polygon/document.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -797,17 +797,17 @@ TEST(QdrDocumentIoTests, SharedPolygonDocumentCodecPreservesAuthoredNormalShadin
 }
 
 TEST(QdrDocumentIoTests, QdrPolygonDocumentCodecAndAtomicWriteHaveSingleOwners) {
-    const std::string reader = readSourceFile({"src", "io", "qdr", "QdrDocumentReader.cpp"});
-    const std::string writer = readSourceFile({"src", "io", "qdr", "QdrDocumentWriter.cpp"});
+    const std::string reader = readSourceFile({"src", "io", "qdr", "qdr_document_reader.cpp"});
+    const std::string writer = readSourceFile({"src", "io", "qdr", "qdr_document_writer.cpp"});
     const std::string legacy = readSourceFile({"src", "io", "qdr", "qdr_document.cpp"});
-    const std::string codec = readSourceFile({"src", "io", "qdr", "QdrPolygonDocumentCodec.cpp"});
-    const std::string atomic = readSourceFile({"src", "io", "qdr", "QdrAtomicWrite.cpp"});
+    const std::string codec = readSourceFile({"src", "io", "qdr", "qdr_polygon_document_codec.cpp"});
+    const std::string atomic = readSourceFile({"src", "io", "qdr", "qdr_atomic_write.cpp"});
 
-    EXPECT_NE(reader.find("#include \"io/qdr/QdrPolygonDocumentCodec.h\""), std::string::npos);
-    EXPECT_NE(writer.find("#include \"io/qdr/QdrPolygonDocumentCodec.h\""), std::string::npos);
-    EXPECT_NE(legacy.find("#include \"io/qdr/QdrPolygonDocumentCodec.h\""), std::string::npos);
-    EXPECT_NE(writer.find("#include \"io/qdr/QdrAtomicWrite.h\""), std::string::npos);
-    EXPECT_NE(legacy.find("#include \"io/qdr/QdrAtomicWrite.h\""), std::string::npos);
+    EXPECT_NE(reader.find("#include \"io/qdr/qdr_polygon_document_codec.hpp\""), std::string::npos);
+    EXPECT_NE(writer.find("#include \"io/qdr/qdr_polygon_document_codec.hpp\""), std::string::npos);
+    EXPECT_NE(legacy.find("#include \"io/qdr/qdr_polygon_document_codec.hpp\""), std::string::npos);
+    EXPECT_NE(writer.find("#include \"io/qdr/qdr_atomic_write.hpp\""), std::string::npos);
+    EXPECT_NE(legacy.find("#include \"io/qdr/qdr_atomic_write.hpp\""), std::string::npos);
 
     EXPECT_NE(codec.find("qdr_polygon_document_to_json"), std::string::npos);
     EXPECT_NE(codec.find("qdr_polygon_document_from_json"), std::string::npos);
@@ -837,9 +837,9 @@ TEST(QdrDocumentIoTests, QdrPolygonDocumentCodecAndAtomicWriteHaveSingleOwners) 
 }
 
 TEST(QdrDocumentIoTests, SceneSelectableMutationStaysSceneOwned) {
-    const std::string sceneHeader = readSourceFile({"src", "scene", "SceneDocument.h"});
-    const std::string sceneSource = readSourceFile({"src", "scene", "SceneDocument.cpp"});
-    const std::string qdrReader = readSourceFile({"src", "io", "qdr", "QdrDocumentReader.cpp"});
+    const std::string sceneHeader = readSourceFile({"src", "scene", "scene_document.hpp"});
+    const std::string sceneSource = readSourceFile({"src", "scene", "scene_document.cpp"});
+    const std::string qdrReader = readSourceFile({"src", "io", "qdr", "qdr_document_reader.cpp"});
 
     EXPECT_NE(sceneHeader.find("bool setSelectable(EntityId id, bool selectable);"), std::string::npos);
     EXPECT_NE(sceneSource.find("bool SceneDocument::setSelectable"), std::string::npos);
@@ -848,7 +848,7 @@ TEST(QdrDocumentIoTests, SceneSelectableMutationStaysSceneOwned) {
 
     const std::filesystem::path sourceRoot = sourcePath("src");
     for (const std::filesystem::path& file : sourceFilesUnder(sourceRoot)) {
-        if (file.filename() == "SceneDocument.cpp") {
+        if (file.filename() == "scene_document.cpp") {
             continue;
         }
         const std::string source = readFile(file);
@@ -858,21 +858,21 @@ TEST(QdrDocumentIoTests, SceneSelectableMutationStaysSceneOwned) {
 
 TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsSceneSync) {
     const std::string cmake = readSourceFile("CMakeLists.txt");
-    EXPECT_NE(cmake.find("src/editor/projection/MeshProjectionService.cpp"), std::string::npos);
-    EXPECT_EQ(cmake.find("src/editor/projection/ModelingSceneReconcileService.cpp"), std::string::npos);
-    EXPECT_NE(cmake.find("src/editor/projection/PickingCacheProjection.cpp"), std::string::npos);
-    EXPECT_NE(cmake.find("src/editor/projection/SelectionOverlayProjection.cpp"), std::string::npos);
-    EXPECT_NE(cmake.find("src/editor/modeling/services/ModelingMeshSyncService.cpp"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/projection/mesh_projection_service.cpp"), std::string::npos);
+    EXPECT_EQ(cmake.find("src/editor/projection/modeling_scene_reconcile_service.cpp"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/projection/picking_cache_projection.cpp"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/projection/selection_overlay_projection.cpp"), std::string::npos);
+    EXPECT_NE(cmake.find("src/editor/modeling/services/modeling_mesh_sync_service.cpp"), std::string::npos);
 
     const std::string services =
-            readSourceFile({"src", "editor", "modeling", "services", "ModelingSessionServices.cpp"});
+            readSourceFile({"src", "editor", "modeling", "services", "modeling_session_services.cpp"});
     EXPECT_EQ(services.find("ModelingSceneReconcileService::reconcileModelingObjectSceneNodes"), std::string::npos);
     EXPECT_EQ(services.find("MeshProjectionService::projectModelingMeshesToScene"), std::string::npos);
     EXPECT_NE(services.find("PickingCacheProjection::sceneTransformedObjectsForPicking"), std::string::npos);
     EXPECT_NE(services.find("PickingCacheProjection::objectFaceGeometrySignature"), std::string::npos);
 
     const std::string meshSync =
-            readSourceFile({"src", "editor", "modeling", "services", "ModelingMeshSyncService.cpp"});
+            readSourceFile({"src", "editor", "modeling", "services", "modeling_mesh_sync_service.cpp"});
     EXPECT_NE(meshSync.find("void reconcileModelingObjectSceneNodes"), std::string::npos);
     EXPECT_NE(meshSync.find("void projectModelingMeshesToScene"), std::string::npos);
     EXPECT_NE(meshSync.find("scene.createEntity"), std::string::npos);
@@ -907,7 +907,7 @@ TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsScene
     }
 
     const std::string facade =
-            readSourceFile({"src", "editor", "modeling", "services", "ModelingSessionService.cpp"});
+            readSourceFile({"src", "editor", "modeling", "services", "modeling_session_service.cpp"});
     EXPECT_NE(facade.find("SelectionOverlayProjection::projectSelectionOverlayFrame"), std::string::npos);
 }
 

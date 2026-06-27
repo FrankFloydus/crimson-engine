@@ -5,7 +5,6 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | Dependency | Source | Version / commit | License | Used for |
 | --- | --- | --- | --- | --- |
 | OpenMesh | https://gitlab.vci.rwth-aachen.de:9000/OpenMesh/OpenMesh.git | `5f016723f9f183770cffe5787a6f9f628e2914d8` | BSD 3-Clause, see `licenses/openmesh-BSD-3-Clause.txt` | Topology-backed polygon edit operations when `QUADER_USE_OPENMESH_TOPOLOGY=ON`. |
-| Catch2 | https://github.com/catchorg/Catch2 | `v3.9.1` / `644821ce28cb25d7992a4d0375b1d83214392592` | Boost Software License 1.0, see `licenses/catch2-BSL-1.0.txt` | Modeling-domain C++ test harness. |
 | earcut.hpp | https://github.com/mapbox/earcut.hpp | vendored header | ISC, see `licenses/earcut-hpp-ISC.txt` | Polygon triangulation. |
 | nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header | MIT, see `licenses/nlohmann-json-MIT.txt` | Portable `.qdr` JSON persistence. |
 | Geometric Tools Engine Mathematics | https://github.com/davideberly/GeometricTools | `GTE-version-8.2` / `e095b84018766274f1546a7baa12c257fd18f7d8`, vendored at `thirdparty/geometrictools/gte-8.2-e095b84018766274f1546a7baa12c257fd18f7d8/GTE/Mathematics` | Boost Software License 1.0, see `licenses/geometrictools-BSL-1.0.txt` | Robust native geometry and modeling runtime helpers. Only GTE Mathematics headers are vendored; Graphics, Applications, GPU, and Samples are excluded. |
@@ -36,22 +35,6 @@ cmake --preset vs2026 -DQUADER_ALLOW_EXTERNAL_OPENMESH_FETCH=ON
 ```
 
 If a local source snapshot is checked into a release workspace, place it at `thirdparty/openmesh/openmesh-5f016723f9f183770cffe5787a6f9f628e2914d8` or pass `QUADER_OPENMESH_SOURCE_DIR`.
-
-## Catch2 Source Policy
-
-Catch2-backed absorbed modeling tests use pinned Catch2 `v3.9.1` at commit `644821ce28cb25d7992a4d0375b1d83214392592`. Release and package builds should provide a local checkout with:
-
-```powershell
-cmake --preset vs2026 -DQUADER_CATCH2_SOURCE_DIR=C:\path\to\Catch2
-```
-
-For one-off development builds only, opt in to the pinned upstream fetch:
-
-```powershell
-cmake --preset vs2026 -DQUADER_ALLOW_EXTERNAL_CATCH2_FETCH=ON
-```
-
-If a local source snapshot is checked into a release workspace, place it at `thirdparty/catch2/catch2-644821ce28cb25d7992a4d0375b1d83214392592` or pass `QUADER_CATCH2_SOURCE_DIR`.
 
 ## Tracy Source Policy
 

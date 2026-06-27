@@ -4,22 +4,21 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "operation_test_helpers.h"
+#include "operation_test_helpers.hpp"
 
 using namespace quader_poly;
 
-TEST_CASE("collapse faces turns selected face area into one selected vertex", "[operation][collapse_faces]")
-{
+TEST(QdrDocumentOperationCollapseFacesTests, CollapseFacesTurnsSelectedFaceAreaIntoOneSelectedVertex) {
 	Document document = make_cube({});
 	Selection selection = qdr_test::face_selection({ document.faces.front().id }, document.faces.front().id);
 	const std::size_t vertex_count_before = document.vertices.size();
 
 	const OperationResult result = collapse_selected_faces(document, selection);
 
-	REQUIRE(result.changed);
-	REQUIRE(document.vertices.size() < vertex_count_before);
-	REQUIRE(selection.mode == SelectionMode::vertex);
-	REQUIRE(selection.vertices.size() == 1U);
-	REQUIRE(find_vertex(document, selection.vertices.front()) != nullptr);
-	REQUIRE(qdr_test::every_face_compiles_to_triangles(document));
+	EXPECT_TRUE(result.changed);
+	EXPECT_TRUE(document.vertices.size() < vertex_count_before);
+	EXPECT_TRUE(selection.mode == SelectionMode::vertex);
+	EXPECT_TRUE(selection.vertices.size() == 1U);
+	EXPECT_TRUE(find_vertex(document, selection.vertices.front()) != nullptr);
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
