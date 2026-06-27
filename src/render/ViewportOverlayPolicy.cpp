@@ -33,8 +33,11 @@ bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
 }
 
 bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::SelectedFaceEdge ||
+    return layer == ViewportOverlayLayer::SourceWire ||
+            layer == ViewportOverlayLayer::SelectedFaceEdge ||
             layer == ViewportOverlayLayer::SelectedEdge ||
+            layer == ViewportOverlayLayer::HoverFaceEdge ||
+            layer == ViewportOverlayLayer::HoverEdge ||
             layer == ViewportOverlayLayer::GroupBounds ||
             layer == ViewportOverlayLayer::DiagnosticEdge ||
             layer == ViewportOverlayLayer::ToolPlaneLine ||

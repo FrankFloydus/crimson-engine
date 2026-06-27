@@ -53,13 +53,13 @@ public:
 
     OverlayViewPoint viewPointFor(QVec3 world) const;
 
-    void applyDepthBias(OverlayViewPoint& point, float depthBias) const;
-
     float nearPlaneDistance(const OverlayViewPoint& point) const;
 
-    std::optional<OverlayClippedLine> clipLineToNearPlane(QVec3 start, QVec3 end, float depthBias) const;
+    std::optional<OverlayClippedLine> clipLineToNearPlane(QVec3 start, QVec3 end) const;
 
     OverlayProjectedPoint project(OverlayViewPoint point) const;
+
+    void applyDeviceDepthBias(OverlayProjectedPoint& projected, float depthBiasUnits) const;
 
     OverlayFloat4 withPixelOffset(OverlayFloat4 device, QVec2 pixelOffset) const;
 

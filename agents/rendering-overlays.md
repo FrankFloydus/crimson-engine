@@ -36,17 +36,23 @@ adapters so OpenGL and Metal can be added later.
   - `resources/materials/quader_overlay_line.mat`
   - `resources/materials/quader_overlay_point.mat`
 - Filament device-domain overlay vertices must be normalized device coordinates with `w = 1`.
-- Apply overlay depth bias in view space before projection.
-- Lines must be clipped against the near plane before pixel expansion.
+- Clip lines against the near plane before pixel expansion using unbiased view-space geometry.
+- Apply line and point overlay depth bias as a tiny post-projection device-depth offset only; do not
+  move line or point overlay geometry in screen X/Y.
 - Device-domain overlay renderables must disable renderable culling.
 - Filament uses reversed depth. For depth-tested overlay passes, use `DepthFunc::GE`.
 
 ## Overlay Contract
 
-- Depth-tested: `SourceWire`, `OpenEdge`, `HoverFaceEdge`, `HoverEdge`.
-- Draw-on-top: `SelectedFaceEdge`, `SelectedEdge`, `DiagnosticEdge`, selected/hover/snap vertices.
+- Depth-tested: `OpenEdge`.
+- Draw-on-top: `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
+  `GroupBounds`, `DiagnosticEdge`, selected/hover/snap vertices, and tool line/handle overlays.
+- Active source-wire topology is interactive edit geometry: component hover and pick paths must test the
+  visible active source-wire handles before falling back to shaded surface-depth picking.
 - Face fills use depth-stamped two-pass behavior.
 - Native layer order is:
-  `SelectedVisibleFace`, `SelectedFaceMask`, `SourceWire`, `SelectedXrayFace`, `HoverFace`,
-  `OpenEdge`, `DiagnosticEdge`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
-  `UnselectedVertex`, `SelectedVertex`, `HoverVertex`, `SnapTargetVertex`.
+  `SelectedVisibleFace`, `SelectedFaceMask`, `WireframeBase`, `SelectedXrayFace`, `HoverFace`,
+  `SourceWire`, `OpenEdge`, `DiagnosticEdge`, `SelectedFaceEdge`, `SelectedEdge`, `GroupBounds`,
+  `HoverFaceEdge`, `HoverEdge`, `UnselectedVertex`, `SelectedVertex`, `HoverVertex`,
+  `SnapTargetVertex`, `ToolPlane`, `ToolPreviewFill`, `ToolPlaneLine`, `ToolPreviewLine`,
+  `ToolPreviewSeam`, `ToolHandle`.

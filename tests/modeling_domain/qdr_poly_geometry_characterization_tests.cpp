@@ -182,6 +182,53 @@ Document make_parallel_vertical_edge_faces()
     return document;
 }
 
+/**
+ * Stores the Backface Preference Fixture data contract used by the automated test suite.
+ */
+struct BackfacePreferenceFixture {
+    Document document;
+    ElementId near_backfacing_face = invalid_element_id;
+    ElementId far_frontfacing_face = invalid_element_id;
+    Edge near_backfacing_edge;
+    Edge far_frontfacing_edge;
+    ElementId near_backfacing_vertex = invalid_element_id;
+    ElementId far_frontfacing_vertex = invalid_element_id;
+};
+
+BackfacePreferenceFixture make_backface_preference_fixture()
+{
+    BackfacePreferenceFixture fixture;
+
+    const ElementId near_bottom_left = add_vertex(fixture.document, { -1.0F, -1.0F, 0.0F });
+    const ElementId near_bottom_right = add_vertex(fixture.document, { 1.0F, -1.0F, 0.0F });
+    const ElementId near_top_right = add_vertex(fixture.document, { 1.0F, 1.0F, 0.0F });
+    const ElementId near_top_left = add_vertex(fixture.document, { -1.0F, 1.0F, 0.0F });
+    fixture.near_backfacing_face = add_face(fixture.document, std::array<ElementId, 4> {
+        near_bottom_left,
+        near_bottom_right,
+        near_top_right,
+        near_top_left,
+    });
+    require_test(fixture.near_backfacing_face != invalid_element_id, "near backfacing face should be created");
+    fixture.near_backfacing_edge = make_edge(near_bottom_right, near_top_right);
+    fixture.near_backfacing_vertex = near_top_right;
+
+    const ElementId far_bottom_left = add_vertex(fixture.document, { -1.0F, -1.0F, 1.0F });
+    const ElementId far_bottom_right = add_vertex(fixture.document, { 1.0F, -1.0F, 1.0F });
+    const ElementId far_top_right = add_vertex(fixture.document, { 1.0F, 1.0F, 1.0F });
+    const ElementId far_top_left = add_vertex(fixture.document, { -1.0F, 1.0F, 1.0F });
+    fixture.far_frontfacing_face = add_face(fixture.document, std::array<ElementId, 4> {
+        far_bottom_left,
+        far_top_left,
+        far_top_right,
+        far_bottom_right,
+    });
+    require_test(fixture.far_frontfacing_face != invalid_element_id, "far frontfacing face should be created");
+    fixture.far_frontfacing_edge = make_edge(far_bottom_right, far_top_right);
+    fixture.far_frontfacing_vertex = far_top_right;
+    return fixture;
+}
+
 Document make_concave_ngon_document()
 {
     Document document;
@@ -270,6 +317,51 @@ void characterizes_component_occlusion_by_front_face()
         { { 0.5F, 0.5F, -2.0F }, { 0.0F, 0.0F, 1.0F } },
         vertex_options);
     require_test(!vertex_pick.hit, "vertex pick should be occluded by a closer front face it does not belong to");
+}
+
+void backface_enabled_face_picking_prefers_front_facing_authored_side()
+{
+    const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
+    PickOptions options;
+    options.mode = SelectionMode::face;
+    options.pick_backfaces = true;
+    const Ray ray { { 0.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
+
+    const PickResult uncached = pick_element(fixture.document, ray, options);
+    require_test(uncached.hit && uncached.face_id == fixture.far_frontfacing_face,
+        "backface-enabled face picking should prefer a farther front-facing authored side over a nearer backface");
+
+    const std::vector<PickFaceTriangle> face_geometry = build_face_pick_geometry(fixture.document, options);
+    const PickResult cached = pick_face_geometry(face_geometry, ray, options);
+    require_test(cached.hit && cached.face_id == fixture.far_frontfacing_face,
+        "cached backface-enabled face picking should use the same front-facing preference");
+}
+
+void backface_enabled_component_picking_prefers_front_facing_incident_side_on_overlap()
+{
+    const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
+
+    PickOptions edge_options;
+    edge_options.mode = SelectionMode::edge;
+    edge_options.edge_radius = 0.1F;
+    edge_options.pick_backfaces = true;
+    const PickResult edge_pick = pick_element(
+        fixture.document,
+        { { 1.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } },
+        edge_options);
+    require_test(edge_pick.hit && edge_pick.edge == fixture.far_frontfacing_edge,
+        "overlapping edge picking should prefer the edge incident to a front-facing authored face");
+
+    PickOptions vertex_options;
+    vertex_options.mode = SelectionMode::vertex;
+    vertex_options.vertex_radius = 0.1F;
+    vertex_options.pick_backfaces = true;
+    const PickResult vertex_pick = pick_element(
+        fixture.document,
+        { { 1.0F, 1.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } },
+        vertex_options);
+    require_test(vertex_pick.hit && vertex_pick.vertex_id == fixture.far_frontfacing_vertex,
+        "overlapping vertex picking should prefer the vertex incident to a front-facing authored face");
 }
 
 void characterizes_concave_ngon_renderability()
@@ -436,6 +528,8 @@ TEST_CASE("qdr_poly_geometry_characterization_tests", "[poly-geometry-characteri
     characterizes_face_pick_with_near_parallel_bounds_axis();
     characterizes_edge_pick_radius_and_tie_break();
     characterizes_component_occlusion_by_front_face();
+    backface_enabled_face_picking_prefers_front_facing_authored_side();
+    backface_enabled_component_picking_prefers_front_facing_incident_side_on_overlap();
     characterizes_concave_ngon_renderability();
     characterizes_edge_factor_from_ray();
     characterizes_convex_hull_rebuild_and_normal_recalculation();

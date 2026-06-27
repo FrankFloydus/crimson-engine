@@ -55,6 +55,20 @@ ViewportOverlayCamera testOverlayCamera() {
     };
 }
 
+ViewportOverlayCamera testPerspectiveOverlayCamera() {
+    return {
+            .eye = {0.0f, 0.0f, 0.0f},
+            .forward = {0.0f, 0.0f, -1.0f},
+            .right = {1.0f, 0.0f, 0.0f},
+            .up = {0.0f, 1.0f, 0.0f},
+            .viewportSize = {200.0f, 100.0f},
+            .projection = ViewportOverlayProjection::Perspective,
+            .fovDegrees = 60.0f,
+            .nearPlane = 0.1f,
+            .farPlane = 10.0f,
+    };
+}
+
 MeshAsset makeOverlayTriangleMesh() {
     MeshAsset mesh;
     mesh.name = "Overlay Triangle";
@@ -276,14 +290,14 @@ TEST(ViewportSceneOverlayBuilderTests, BuildsWireframeOverlayWithoutObjectFaceFi
 TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
+            .layer = ViewportOverlayLayer::OpenEdge,
             .start = {-0.5f, 0.0f, -0.05f},
             .end = {0.5f, 0.0f, -1.0f},
             .color = rgba8(255, 128, 64, 255),
             .widthPixels = 2.0f,
     });
     frame.lines.push_back({
-            .layer = ViewportOverlayLayer::SourceWire,
+            .layer = ViewportOverlayLayer::OpenEdge,
             .start = {-0.25f, 0.25f, -1.0f},
             .end = {0.25f, 0.25f, -1.0f},
             .color = rgba8(255, 128, 64, 255),
@@ -291,7 +305,7 @@ TEST(OverlayLineMeshBuilderTests, ClipsAndExpandsLinesToDeviceSpaceQuads) {
     });
 
     const OverlayLayerBuildPlan plan =
-            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::OpenEdge);
 
     ASSERT_EQ(plan.lineBatches.size(), 1u);
     const OverlayLineBatch& batch = plan.lineBatches.front();
@@ -326,6 +340,106 @@ TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirec
     ASSERT_EQ(mesh.vertices.size(), 4u);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.x - mesh.vertices[3].position.x), 0.0001f);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.y - mesh.vertices[3].position.y), 0.0001f);
+}
+
+TEST(OverlayLineMeshBuilderTests, ExtendsLineCapsInScreenSpace) {
+    const ViewportOverlayCamera camera = testOverlayCamera();
+    const QVec3 lineStart{-0.25f, 0.0f, -1.0f};
+    const QVec3 lineEnd{0.25f, 0.0f, -1.0f};
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SelectedEdge,
+            .start = lineStart,
+            .end = lineEnd,
+            .color = rgba8(255, 211, 31, 255),
+            .widthPixels = 2.0f,
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, camera, ViewportOverlayLayer::SelectedEdge);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineMesh& mesh = plan.lineBatches.front().mesh;
+    ASSERT_EQ(mesh.vertices.size(), 4u);
+
+    const OverlayCameraProjector projector(camera);
+    const OverlayProjectedPoint projectedStart = projector.project(projector.viewPointFor(lineStart));
+    const OverlayProjectedPoint projectedEnd = projector.project(projector.viewPointFor(lineEnd));
+    ASSERT_TRUE(projectedStart.valid);
+    ASSERT_TRUE(projectedEnd.valid);
+
+    const float capPixels = (2.0f + kOverlayLineFeatherPixels) * 0.5f;
+    const float capDeviceX = capPixels * 2.0f / camera.viewportSize.x;
+    const float startCapCenterX = (mesh.vertices[0].position.x + mesh.vertices[3].position.x) * 0.5f;
+    const float endCapCenterX = (mesh.vertices[1].position.x + mesh.vertices[2].position.x) * 0.5f;
+    EXPECT_NEAR(startCapCenterX, projectedStart.device.x - capDeviceX, 0.00001f);
+    EXPECT_NEAR(endCapCenterX, projectedEnd.device.x + capDeviceX, 0.00001f);
+}
+
+TEST(OverlayLineMeshBuilderTests, PerspectiveDepthBiasDoesNotMoveLineOrPointScreenPosition) {
+    const ViewportOverlayCamera camera = testPerspectiveOverlayCamera();
+    const QVec3 lineStart{-0.5f, 0.2f, -1.0f};
+    const QVec3 lineEnd{0.5f, 0.2f, -1.0f};
+    const QVec3 pointPosition{0.35f, -0.25f, -1.0f};
+
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::OpenEdge,
+            .start = lineStart,
+            .end = lineEnd,
+            .color = rgba8(255, 128, 64, 255),
+            .widthPixels = 2.0f,
+    });
+    frame.points.push_back({
+            .layer = ViewportOverlayLayer::UnselectedVertex,
+            .position = pointPosition,
+            .color = rgba8(255, 211, 31, 255),
+            .sizePixels = 6.0f,
+    });
+
+    const OverlayLayerBuildPlan linePlan =
+            OverlayRenderableBuilder::buildLayer(frame, camera, ViewportOverlayLayer::OpenEdge);
+    const OverlayLayerBuildPlan pointPlan =
+            OverlayRenderableBuilder::buildLayer(frame, camera, ViewportOverlayLayer::UnselectedVertex);
+
+    ASSERT_EQ(linePlan.lineBatches.size(), 1u);
+    ASSERT_EQ(pointPlan.pointBatches.size(), 1u);
+    const OverlayLineMesh& lineMesh = linePlan.lineBatches.front().mesh;
+    const OverlayPointMesh& pointMesh = pointPlan.pointBatches.front().mesh;
+    ASSERT_EQ(lineMesh.vertices.size(), 4u);
+    ASSERT_EQ(pointMesh.vertices.size(), 4u);
+
+    const OverlayCameraProjector projector(camera);
+    const OverlayProjectedPoint projectedLineStart = projector.project(projector.viewPointFor(lineStart));
+    const OverlayProjectedPoint projectedLineEnd = projector.project(projector.viewPointFor(lineEnd));
+    const OverlayProjectedPoint projectedPoint = projector.project(projector.viewPointFor(pointPosition));
+    ASSERT_TRUE(projectedLineStart.valid);
+    ASSERT_TRUE(projectedLineEnd.valid);
+    ASSERT_TRUE(projectedPoint.valid);
+
+    const float expectedLineDepth =
+            projectedLineStart.device.z + camera.nearPlane * kOverlayDeviceDepthBiasPerNearPlane * kOverlayLineDepthBias;
+    const float lineCenterX = (lineMesh.vertices[0].position.x + lineMesh.vertices[1].position.x +
+                               lineMesh.vertices[2].position.x + lineMesh.vertices[3].position.x) *
+            0.25f;
+    const float lineCenterY = (lineMesh.vertices[0].position.y + lineMesh.vertices[1].position.y +
+                               lineMesh.vertices[2].position.y + lineMesh.vertices[3].position.y) *
+            0.25f;
+    EXPECT_NEAR(lineCenterX, (projectedLineStart.device.x + projectedLineEnd.device.x) * 0.5f, 0.00001f);
+    EXPECT_NEAR(lineCenterY, (projectedLineStart.device.y + projectedLineEnd.device.y) * 0.5f, 0.00001f);
+    EXPECT_NEAR(lineMesh.vertices[0].position.z, expectedLineDepth, 0.00001f);
+
+    const float expectedPointDepth =
+            projectedPoint.device.z + camera.nearPlane * kOverlayDeviceDepthBiasPerNearPlane * kOverlayPointDepthBias;
+    const float pointCenterX = (pointMesh.vertices[0].position.x + pointMesh.vertices[1].position.x +
+                                pointMesh.vertices[2].position.x + pointMesh.vertices[3].position.x) *
+            0.25f;
+    const float pointCenterY = (pointMesh.vertices[0].position.y + pointMesh.vertices[1].position.y +
+                                pointMesh.vertices[2].position.y + pointMesh.vertices[3].position.y) *
+            0.25f;
+    EXPECT_NEAR(pointCenterX, projectedPoint.device.x, 0.00001f);
+    EXPECT_NEAR(pointCenterY, projectedPoint.device.y, 0.00001f);
+    EXPECT_NEAR(pointMesh.vertices[0].position.z, expectedPointDepth, 0.00001f);
 }
 
 TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {

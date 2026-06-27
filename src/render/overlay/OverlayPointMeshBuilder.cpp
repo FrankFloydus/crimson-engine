@@ -39,15 +39,15 @@ bool OverlayPointMeshBuilder::appendPointQuad(
         float sizePixels,
         float depthBias) {
     OverlayViewPoint center = projector.viewPointFor(position);
-    projector.applyDepthBias(center, depthBias);
     if (projector.nearPlaneDistance(center) < 0.0f) {
         return false;
     }
 
-    const OverlayProjectedPoint projected = projector.project(center);
+    OverlayProjectedPoint projected = projector.project(center);
     if (!projected.valid) {
         return false;
     }
+    projector.applyDeviceDepthBias(projected, depthBias);
 
     const float halfSize = std::max(sizePixels, 1.0f) * 0.5f;
     const std::uint32_t linearColor = rgba8SrgbToLinear(color);

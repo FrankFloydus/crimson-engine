@@ -37,16 +37,18 @@ bool OverlayLineMeshBuilder::appendLineQuad(
         float widthPixels,
         float depthBias) {
     const std::optional<OverlayClippedLine> clipped =
-            projector.clipLineToNearPlane(line.start, line.end, depthBias);
+            projector.clipLineToNearPlane(line.start, line.end);
     if (!clipped.has_value()) {
         return false;
     }
 
-    const OverlayProjectedPoint projectedA = projector.project(clipped->start);
-    const OverlayProjectedPoint projectedB = projector.project(clipped->end);
+    OverlayProjectedPoint projectedA = projector.project(clipped->start);
+    OverlayProjectedPoint projectedB = projector.project(clipped->end);
     if (!projectedA.valid || !projectedB.valid) {
         return false;
     }
+    projector.applyDeviceDepthBias(projectedA, depthBias);
+    projector.applyDeviceDepthBias(projectedB, depthBias);
 
     QVec2 pixelDirection = projectedB.pixel - projectedA.pixel;
     const float pixelLength = std::sqrt(pixelDirection.x * pixelDirection.x + pixelDirection.y * pixelDirection.y);
@@ -57,26 +59,28 @@ bool OverlayLineMeshBuilder::appendLineQuad(
     }
     const QVec2 pixelNormal{-pixelDirection.y, pixelDirection.x};
     const float sideDistance = (std::max(widthPixels, 1.0f) + kOverlayLineFeatherPixels) * 0.5f;
+    const QVec2 startCapOffset = pixelDirection * -sideDistance;
+    const QVec2 endCapOffset = pixelDirection * sideDistance;
     const std::uint32_t linearColor = rgba8SrgbToLinear(line.color);
     const std::uint32_t offset = static_cast<std::uint32_t>(mesh.vertices.size());
 
     mesh.vertices.push_back({
-            projector.withPixelOffset(projectedA.device, pixelNormal * -sideDistance),
+            projector.withPixelOffset(projectedA.device, startCapOffset + pixelNormal * -sideDistance),
             {-sideDistance, 0.0f, 0.0f, 0.0f},
             linearColor,
     });
     mesh.vertices.push_back({
-            projector.withPixelOffset(projectedB.device, pixelNormal * -sideDistance),
+            projector.withPixelOffset(projectedB.device, endCapOffset + pixelNormal * -sideDistance),
             {-sideDistance, 0.0f, 0.0f, 0.0f},
             linearColor,
     });
     mesh.vertices.push_back({
-            projector.withPixelOffset(projectedB.device, pixelNormal * sideDistance),
+            projector.withPixelOffset(projectedB.device, endCapOffset + pixelNormal * sideDistance),
             {sideDistance, 0.0f, 0.0f, 0.0f},
             linearColor,
     });
     mesh.vertices.push_back({
-            projector.withPixelOffset(projectedA.device, pixelNormal * sideDistance),
+            projector.withPixelOffset(projectedA.device, startCapOffset + pixelNormal * sideDistance),
             {sideDistance, 0.0f, 0.0f, 0.0f},
             linearColor,
     });

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/OverlayCameraProjector.h"
 
+#include "render/ViewportOverlayPolicy.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -53,24 +55,15 @@ OverlayViewPoint OverlayCameraProjector::viewPointFor(QVec3 world) const {
     };
 }
 
-void OverlayCameraProjector::applyDepthBias(OverlayViewPoint& point, float depthBias) const {
-    if (depthBias > 0.0f && point.z < -0.0001f) {
-        point.z += std::min(depthBias, -point.z * 0.5f);
-    }
-}
-
 float OverlayCameraProjector::nearPlaneDistance(const OverlayViewPoint& point) const {
     return -point.z - camera_.nearPlane;
 }
 
 std::optional<OverlayClippedLine> OverlayCameraProjector::clipLineToNearPlane(
         QVec3 start,
-        QVec3 end,
-        float depthBias) const {
+        QVec3 end) const {
     OverlayViewPoint a = viewPointFor(start);
     OverlayViewPoint b = viewPointFor(end);
-    applyDepthBias(a, depthBias);
-    applyDepthBias(b, depthBias);
 
     const float aNear = nearPlaneDistance(a);
     const float bNear = nearPlaneDistance(b);
@@ -129,6 +122,14 @@ OverlayProjectedPoint OverlayCameraProjector::project(OverlayViewPoint point) co
     };
     projected.valid = true;
     return projected;
+}
+
+void OverlayCameraProjector::applyDeviceDepthBias(OverlayProjectedPoint& projected, float depthBiasUnits) const {
+    if (!projected.valid || depthBiasUnits <= 0.0f) {
+        return;
+    }
+    const float deviceOffset = depthBiasUnits * camera_.nearPlane * kOverlayDeviceDepthBiasPerNearPlane;
+    projected.device.z += deviceOffset;
 }
 
 OverlayFloat4 OverlayCameraProjector::withPixelOffset(OverlayFloat4 device, QVec2 pixelOffset) const {

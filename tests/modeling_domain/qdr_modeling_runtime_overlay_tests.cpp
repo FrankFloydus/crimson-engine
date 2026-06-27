@@ -167,7 +167,113 @@ quader_editor_core::EditorSession two_box_session()
 	return session;
 }
 
-void selected_object_overlay_uses_xray_fill_and_depth_tested_active_wire()
+quader_poly::Edge require_edge_between_positions(
+	const quader_poly::Document& document,
+	quader::QVec3 first,
+	quader::QVec3 second)
+{
+	for (const quader_poly::Edge edge : quader_poly::document_edges(document)) {
+		const quader_poly::Vertex* a = quader_poly::find_vertex(document, edge.a);
+		const quader_poly::Vertex* b = quader_poly::find_vertex(document, edge.b);
+		if (a == nullptr || b == nullptr) {
+			continue;
+		}
+		const bool direct = position_matches(a->position, first) && position_matches(b->position, second);
+		const bool reversed = position_matches(a->position, second) && position_matches(b->position, first);
+		if (direct || reversed) {
+			return edge;
+		}
+	}
+	require_test(false, "edge fixture should find the requested document edge");
+	return {};
+}
+
+/**
+ * Stores overlapping source-wire edge fixture data for active topology hover tests.
+ */
+struct OverlappingSourceWireEdgeFixture {
+	quader_editor_core::PolygonObject object;
+	quader_poly::Edge selected_edge;
+	quader_poly::Edge front_edge;
+};
+
+OverlappingSourceWireEdgeFixture overlapping_source_wire_edge_fixture()
+{
+	OverlappingSourceWireEdgeFixture fixture;
+	fixture.object.id = 7;
+	fixture.object.selected = true;
+	quader_poly::Document& document = fixture.object.document;
+
+	const quader_poly::ElementId near_bottom_left = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const quader_poly::ElementId near_top_left = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId near_top_right = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId near_bottom_right = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	require_test(
+		quader_poly::add_face(document, std::array { near_bottom_left, near_top_left, near_top_right, near_bottom_right }) != quader_poly::invalid_element_id,
+		"source-wire fixture should create the nearer front-facing face");
+	fixture.front_edge = quader_poly::make_edge(near_bottom_right, near_top_right);
+
+	const quader_poly::ElementId far_bottom_left = quader_poly::add_vertex(document, { -1.0F, -1.0F, 1.0F });
+	const quader_poly::ElementId far_top_left = quader_poly::add_vertex(document, { -1.0F, 1.0F, 1.0F });
+	const quader_poly::ElementId far_top_right = quader_poly::add_vertex(document, { 1.0F, 1.0F, 1.0F });
+	const quader_poly::ElementId far_bottom_right = quader_poly::add_vertex(document, { 1.0F, -1.0F, 1.0F });
+	require_test(
+		quader_poly::add_face(document, std::array { far_bottom_left, far_top_left, far_top_right, far_bottom_right }) != quader_poly::invalid_element_id,
+		"source-wire fixture should create the farther front-facing face");
+	fixture.selected_edge = quader_poly::make_edge(far_bottom_right, far_top_right);
+
+	fixture.object.selection.mode = quader_poly::SelectionMode::edge;
+	fixture.object.selection.edges.push_back(fixture.selected_edge);
+	fixture.object.selection.has_active = true;
+	fixture.object.selection.active_kind = quader_poly::ElementKind::edge;
+	fixture.object.selection.active_edge = fixture.selected_edge;
+	return fixture;
+}
+
+/**
+ * Stores inverted open cube edge fixture data for inner-edge hover tests.
+ */
+struct InvertedOpenCubeEdgeFixture {
+	quader_editor_core::PolygonObject object;
+	quader_poly::Edge inner_edge;
+	quader_poly::Ray inner_edge_ray;
+};
+
+InvertedOpenCubeEdgeFixture inverted_open_cube_edge_fixture()
+{
+	InvertedOpenCubeEdgeFixture fixture;
+	fixture.object.id = 9;
+	fixture.object.selected = true;
+	fixture.object.document = quader_poly::make_cube({});
+	quader_poly::Document& document = fixture.object.document;
+	document.faces.erase(
+		std::remove_if(
+			document.faces.begin(),
+			document.faces.end(),
+			[&document](const quader_poly::Face& face) {
+				return quader::dot(quader_poly::face_normal(document, face), { 0.0F, 1.0F, 0.0F }) > 0.5F;
+			}),
+		document.faces.end());
+
+	quader_poly::Selection all_faces;
+	all_faces.mode = quader_poly::SelectionMode::face;
+	for (const quader_poly::Face& face : document.faces) {
+		all_faces.faces.push_back(face.id);
+	}
+	require_test(quader_poly::flip_selected_face_normals(document, all_faces).changed,
+		"inverted open cube fixture should flip remaining faces inward");
+
+	fixture.inner_edge = require_edge_between_positions(document, { 1.0F, -1.0F, -1.0F }, { 1.0F, -1.0F, 1.0F });
+	fixture.inner_edge_ray = { { 0.0F, 0.0F, 0.0F }, quader::normalize_or_zero(quader::QVec3 { 1.0F, -1.0F, 0.0F }) };
+	fixture.object.selection.mode = quader_poly::SelectionMode::edge;
+	fixture.object.selection.edges.push_back(fixture.inner_edge);
+	fixture.object.selection.has_active = true;
+	fixture.object.selection.active_kind = quader_poly::ElementKind::edge;
+	fixture.object.selection.active_edge = fixture.inner_edge;
+	return fixture;
+}
+
+void selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire()
 {
 	quader_editor_core::EditorSession session;
 	require_test(session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
@@ -177,15 +283,13 @@ void selected_object_overlay_uses_xray_fill_and_depth_tested_active_wire()
 		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), {});
 	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_xray_face) > 0,
 		"selected object overlay should include x-ray face fill");
-	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 12U,
-		"selected object active wire should use the depth-tested source wire layer");
 	const quader_editor_core::SelectionOverlayStyle style;
-	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.selected_edge_color_abgr) == 12U,
-		"selected object source wire should keep the selected-wire color while remaining depth-tested");
 	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == 0U,
-		"selected object source wire should not be colored as ordinary source/candidate wire");
-	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_edge) == 0U,
-		"selected object active wire should not use selected component edge handles");
+		"selected object active wire should not be emitted as ordinary source/candidate wire");
+	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_edge) == 12U,
+		"selected object active wire should use the draw-on-top selected edge layer");
+	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::selected_edge, style.selected_edge_color_abgr) == 12U,
+		"selected object active wire should keep the selected-wire color");
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_face_edge) == 0U,
 		"selected object active wire should not use selected component face-edge handles");
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::open_edge) == 0,
@@ -209,6 +313,119 @@ void selected_mesh_source_wire_uses_source_color_in_component_mode()
 		"component mode selected mesh source wire should use ordinary source-wire color");
 	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.selected_edge_color_abgr) == 0U,
 		"component mode selected mesh source wire should not use selected-wire color");
+}
+
+void selected_component_does_not_cut_holes_in_active_mesh_source_wire()
+{
+	quader_editor_core::EditorSession session;
+	require_test(session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
+		"selected component source-wire fixture should create a box");
+	session.set_selection_mode(quader_editor_core::SelectionMode::face);
+	require_test(
+		session.pick_select_face(
+			quader_editor_core::SelectionEditOperation::replace,
+			{ { 0.0F, 0.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } }),
+		"selected component source-wire fixture should select a face");
+
+	const quader_editor_core::SelectionOverlayFrame frame =
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), {});
+	const quader_editor_core::SelectionOverlayStyle style;
+	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 12U,
+		"selected component overlays should keep the full active mesh topology source wire");
+	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == 12U,
+		"active mesh topology source wire should keep ordinary source-wire color under selected highlights");
+	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_face_edge) >= 4U,
+		"selected face should still draw selected face-edge highlights over source wire");
+}
+
+void selected_inner_edge_hover_uses_active_source_wire_selected_color()
+{
+	const OverlappingSourceWireEdgeFixture fixture = overlapping_source_wire_edge_fixture();
+	std::vector<quader_editor_core::PolygonObject> objects { fixture.object };
+	quader_poly::PickOptions options;
+	options.mode = quader_poly::SelectionMode::edge;
+	options.edge_radius = 0.12F;
+	options.pick_backfaces = true;
+	const quader_poly::Ray ray_through_overlapping_edges { { 1.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
+
+	const quader_editor_core::SelectionHoverUpdateResult hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			{},
+			ray_through_overlapping_edges,
+			true,
+			options);
+
+	require_test(hover.hover.kind == quader_editor_core::SelectionHoverKind::edge &&
+			hover.hover.edge == fixture.selected_edge,
+		"edge hover should use the selected active source-wire edge instead of the nearer shaded edge");
+	require_test(
+		quader_editor_core::selection_hover_target_matches_selection(objects, quader_editor_core::SelectionMode::edge, hover.hover),
+		"selected source-wire edge hover should match the existing edge selection");
+
+	const quader_editor_core::SelectionOverlayStyle style;
+	const quader_editor_core::SelectionOverlayFrame frame =
+		quader_editor_core::build_selection_overlay_frame(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			hover.hover,
+			style);
+	require_test(frame.hover_target_selected,
+		"selected source-wire edge hover with the modifier should become remove-preview hover");
+	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::hover_edge, style.hover_selected_line_color_abgr) == 1U,
+		"selected source-wire edge hover should draw the deselect hover color");
+
+	quader_editor_core::SelectionMode mode = quader_editor_core::SelectionMode::edge;
+	int active_object_id = fixture.object.id;
+	require_test(
+		quader_editor_core::pick_select(
+			objects,
+			mode,
+			quader_editor_core::SelectionEditOperation::remove,
+			ray_through_overlapping_edges,
+			active_object_id),
+		"edge remove should use the same selected active source-wire edge as hover");
+	require_test(objects.front().selection.edges.empty(),
+		"edge remove should deselect the selected active source-wire edge");
+}
+
+void inverted_open_cube_inner_edge_hover_uses_selected_deselect_color()
+{
+	const InvertedOpenCubeEdgeFixture fixture = inverted_open_cube_edge_fixture();
+	std::vector<quader_editor_core::PolygonObject> objects { fixture.object };
+	quader_poly::PickOptions options;
+	options.mode = quader_poly::SelectionMode::edge;
+	options.edge_radius = 0.12F;
+	options.pick_backfaces = true;
+
+	const quader_editor_core::SelectionHoverUpdateResult hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			{},
+			fixture.inner_edge_ray,
+			true,
+			options);
+
+	require_test(hover.hover.kind == quader_editor_core::SelectionHoverKind::edge &&
+			hover.hover.edge == fixture.inner_edge,
+		"inverted open cube inner edge hover should resolve to the selected source-wire edge");
+	require_test(
+		quader_editor_core::selection_hover_target_matches_selection(objects, quader_editor_core::SelectionMode::edge, hover.hover),
+		"inverted open cube inner edge hover should match the selected edge");
+
+	const quader_editor_core::SelectionOverlayStyle style;
+	const quader_editor_core::SelectionOverlayFrame frame =
+		quader_editor_core::build_selection_overlay_frame(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			hover.hover,
+			style);
+	require_test(frame.hover_target_selected,
+		"inverted open cube selected edge hover should become a remove-preview hover");
+	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::hover_edge, style.hover_selected_line_color_abgr) == 1U,
+		"inverted open cube selected edge hover should draw the deselect hover color");
 }
 
 void component_deselect_keeps_active_mesh_source_wire_visible()
@@ -582,8 +799,11 @@ void diagnostic_edges_mark_crossing_edges()
 
 TEST_CASE("qdr_editor_core_overlay_tests", "[editor-core-overlay]")
 {
-	selected_object_overlay_uses_xray_fill_and_depth_tested_active_wire();
+	selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire();
 	selected_mesh_source_wire_uses_source_color_in_component_mode();
+	selected_component_does_not_cut_holes_in_active_mesh_source_wire();
+	selected_inner_edge_hover_uses_active_source_wire_selected_color();
+	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();
 	component_deselect_keeps_active_mesh_source_wire_visible();
 	component_hover_source_wire_candidate_is_sticky_until_replaced();
 	vertex_mode_hover_candidate_exposes_unselected_handles();

@@ -534,24 +534,6 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		}
 	};
 
-	std::unordered_map<int, std::unordered_set<std::uint64_t>> source_hidden_edges_by_object;
-	for (const PolygonObject& object : objects) {
-		if (!object.selected) {
-			continue;
-		}
-		if (mode == SelectionMode::face) {
-			std::unordered_set<std::uint64_t>& hidden_edges = source_hidden_edges_by_object[object.id];
-			for (const quader_poly::ElementId face_id : object.selection.faces) {
-				overlay_append_face_edges_to_set(object.document, face_id, hidden_edges);
-			}
-		} else if (mode == SelectionMode::edge) {
-			std::unordered_set<std::uint64_t>& hidden_edges = source_hidden_edges_by_object[object.id];
-			for (const quader_poly::Edge edge : object.selection.edges) {
-				hidden_edges.insert(overlay_face_edge_key(edge.a, edge.b));
-			}
-		}
-	}
-
 	auto object_draws_source_wire = [&](const PolygonObject& object) {
 		const bool selected_object = object.selected;
 		const bool hovered_object = object.id > 0 &&
@@ -564,19 +546,31 @@ SelectionOverlayFrame build_selection_overlay_frame(
 		if (!object_draws_source_wire(object)) {
 			continue;
 		}
-		const auto hidden_edges_for_object = source_hidden_edges_by_object.find(object.id);
 		for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
-			const std::uint64_t edge_key = overlay_face_edge_key(edge.a, edge.b);
-			if (hidden_edges_for_object != source_hidden_edges_by_object.end() &&
-					hidden_edges_for_object->second.find(edge_key) != hidden_edges_for_object->second.end()) {
-				continue;
-			}
 			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
 			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
 			if (a != nullptr && b != nullptr) {
-				const std::uint32_t wire_color =
-					(mode == SelectionMode::object && object.selected) ? style.selected_edge_color_abgr : style.source_wire_color_abgr;
-				append_line(SelectionOverlayLayer::source_wire, a->position, b->position, wire_color, style.edge_line_width_pixels, object.id, quader_poly::invalid_element_id, edge);
+				if (mode == SelectionMode::object && object.selected) {
+					append_line(
+						SelectionOverlayLayer::selected_edge,
+						a->position,
+						b->position,
+						style.selected_edge_color_abgr,
+						style.edge_line_width_pixels,
+						object.id,
+						quader_poly::invalid_element_id,
+						edge);
+				} else {
+					append_line(
+						SelectionOverlayLayer::source_wire,
+						a->position,
+						b->position,
+						style.source_wire_color_abgr,
+						style.edge_line_width_pixels,
+						object.id,
+						quader_poly::invalid_element_id,
+						edge);
+				}
 			}
 		}
 	}

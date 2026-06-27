@@ -45,9 +45,9 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
         ViewportOverlayLayer::SelectedVisibleFace,
         ViewportOverlayLayer::SelectedFaceMask,
         ViewportOverlayLayer::WireframeBase,
-        ViewportOverlayLayer::SourceWire,
         ViewportOverlayLayer::SelectedXrayFace,
         ViewportOverlayLayer::HoverFace,
+        ViewportOverlayLayer::SourceWire,
         ViewportOverlayLayer::OpenEdge,
         ViewportOverlayLayer::DiagnosticEdge,
         ViewportOverlayLayer::SelectedFaceEdge,
@@ -105,9 +105,10 @@ inline constexpr std::uint32_t kOverlayCutPreviewKeepBothOutlineColor = rgba8(25
 inline constexpr std::uint32_t kOverlayCutPreviewDiscardOutlineColor = rgba8(255, 15, 5, 240);
 inline constexpr std::uint32_t kOverlayCutPreviewSeamColor = rgba8(255, 122, 5, 255);
 
-inline constexpr float kOverlayLineDepthBias = 0.02f;
-inline constexpr float kOverlayPointDepthBias = 0.01f;
+inline constexpr float kOverlayLineDepthBias = 1.0f;
+inline constexpr float kOverlayPointDepthBias = 1.5f;
 inline constexpr float kOverlayFillDepthBias = 0.035f;
+inline constexpr float kOverlayDeviceDepthBiasPerNearPlane = 0.0025f;
 inline constexpr float kOverlayLineFeatherPixels = 1.0f;
 inline constexpr float kOverlayWireframeBaseLineWidthPixels = 1.0f;
 inline constexpr float kOverlaySourceWireLineWidthPixels = 1.5f;

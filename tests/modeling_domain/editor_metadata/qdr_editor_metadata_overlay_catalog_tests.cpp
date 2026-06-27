@@ -80,8 +80,8 @@ TEST_CASE("host contract overlay layer catalog states render-depth semantics", "
 	const qhc::HostOverlayLayerDescriptor& source_wire = require_layer(qec::SelectionOverlayLayer::source_wire);
 	CHECK(same_text(source_wire.id, "source_wire"));
 	CHECK(source_wire.lines);
-	CHECK_FALSE(source_wire.line_draws_on_top);
-	CHECK(source_wire.depth_tested_by_default);
+	CHECK(source_wire.line_draws_on_top);
+	CHECK_FALSE(source_wire.depth_tested_by_default);
 
 	const qhc::HostOverlayLayerDescriptor& open_edge = require_layer(qec::SelectionOverlayLayer::open_edge);
 	CHECK(open_edge.lines);
@@ -97,6 +97,16 @@ TEST_CASE("host contract overlay layer catalog states render-depth semantics", "
 	CHECK(selected_edge.lines);
 	CHECK(selected_edge.line_draws_on_top);
 	CHECK_FALSE(selected_edge.depth_tested_by_default);
+
+	const qhc::HostOverlayLayerDescriptor& hover_face_edge = require_layer(qec::SelectionOverlayLayer::hover_face_edge);
+	CHECK(hover_face_edge.lines);
+	CHECK(hover_face_edge.line_draws_on_top);
+	CHECK_FALSE(hover_face_edge.depth_tested_by_default);
+
+	const qhc::HostOverlayLayerDescriptor& hover_edge = require_layer(qec::SelectionOverlayLayer::hover_edge);
+	CHECK(hover_edge.lines);
+	CHECK(hover_edge.line_draws_on_top);
+	CHECK_FALSE(hover_edge.depth_tested_by_default);
 
 	const qhc::HostOverlayLayerDescriptor& selected_vertex = require_layer(qec::SelectionOverlayLayer::selected_vertex);
 	CHECK(selected_vertex.points);
@@ -131,9 +141,9 @@ TEST_CASE("host contract overlay presentation exposes the native layer draw orde
 	static constexpr std::array<std::string_view, 15> expected {{
 		"selected_visible_face",
 		"selected_face_mask",
-		"source_wire",
 		"selected_xray_face",
 		"hover_face",
+		"source_wire",
 		"open_edge",
 		"diagnostic_edge",
 		"selected_face_edge",

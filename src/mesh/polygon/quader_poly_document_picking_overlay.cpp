@@ -31,6 +31,7 @@ namespace {
 struct FaceRayHit {
     ElementId face_id = invalid_element_id;
     float distance = std::numeric_limits<float>::max();
+    bool front_facing = false;
 };
 
 quader::QVec3 min_vec(quader::QVec3 left, quader::QVec3 right)
@@ -59,9 +60,20 @@ quader_geometry::QAabb3<float> triangle_pick_bounds(const PickFaceTriangle& tria
     };
 }
 
-bool face_is_pickable_from_ray(quader::QVec3 normal, const Ray& ray, const PickOptions& options)
+bool face_is_front_facing_from_ray(quader::QVec3 normal, const Ray& ray)
 {
-    return options.pick_backfaces || dot(normal, ray.direction) < -epsilon;
+    return dot(normal, ray.direction) < -epsilon;
+}
+
+bool face_hit_is_better(const FaceRayHit& candidate, const std::optional<FaceRayHit>& nearest)
+{
+    if (!nearest.has_value()) {
+        return true;
+    }
+    if (candidate.front_facing != nearest->front_facing) {
+        return candidate.front_facing;
+    }
+    return candidate.distance < nearest->distance;
 }
 
 std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle> triangles, const Ray& ray, const PickOptions& options = {})
@@ -71,7 +83,8 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
     const quader_geometry::QRay3<float> geometry_pick_ray = geometry_ray(ray);
     const float picking_epsilon = std::nextafter(epsilon, 0.0F);
     for (const PickFaceTriangle& triangle : triangles) {
-        if (!face_is_pickable_from_ray(triangle.normal, ray, options)) {
+        const bool front_facing = face_is_front_facing_from_ray(triangle.normal, ray);
+        if (!front_facing && !options.pick_backfaces) {
             continue;
         }
 
@@ -80,9 +93,9 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
             geometry_vec3(triangle.b),
             geometry_vec3(triangle.c),
         };
-        const quader_geometry::QRayBoundedTriangleQueryOptions<float> options {
+        const quader_geometry::QRayBoundedTriangleQueryOptions<float> query_options {
             0.0F,
-            nearest.has_value() ? nearest->distance : std::numeric_limits<float>::infinity(),
+            nearest.has_value() && front_facing == nearest->front_facing ? nearest->distance : std::numeric_limits<float>::infinity(),
             picking_epsilon,
         };
         const quader_geometry::QRayBoundedTriangleHit<float> hit =
@@ -90,9 +103,10 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
                 geometry_pick_ray,
                 geometry_triangle,
                 triangle_pick_bounds(triangle),
-                options);
-        if (hit.hit && (!nearest.has_value() || hit.triangle_hit.distance < nearest->distance)) {
-            nearest = FaceRayHit { triangle.face_id, hit.triangle_hit.distance };
+                query_options);
+        const FaceRayHit candidate { triangle.face_id, hit.triangle_hit.distance, front_facing };
+        if (hit.hit && face_hit_is_better(candidate, nearest)) {
+            nearest = candidate;
         }
     }
     return nearest;
@@ -143,6 +157,64 @@ bool edge_can_be_picked(const Document& document, Edge edge, const PickOptions& 
     return !used_by_face;
 }
 
+bool vertex_has_front_facing_pickable_face(
+    const Document& document,
+    ElementId vertex_id,
+    const Ray& ray,
+    const PickOptions& options)
+{
+    for (const Face& face : document.faces) {
+        if (!face_uses_vertex(face, vertex_id) || !face_can_be_picked(face, options)) {
+            continue;
+        }
+        if (face_is_front_facing_from_ray(face_normal(document, face), ray)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool edge_has_front_facing_pickable_face(
+    const Document& document,
+    Edge edge,
+    const Ray& ray,
+    const PickOptions& options)
+{
+    for (const Face& face : document.faces) {
+        if (!face_uses_edge(face, edge) || !face_can_be_picked(face, options)) {
+            continue;
+        }
+        if (face_is_front_facing_from_ray(face_normal(document, face), ray)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool component_pick_is_better(
+    float pick_distance,
+    float ray_distance,
+    bool front_facing,
+    const PickResult& best,
+    float best_pick_distance,
+    bool best_front_facing,
+    const PickOptions& options)
+{
+    if (!best.hit) {
+        return true;
+    }
+    if (pick_distance < best_pick_distance - epsilon) {
+        return true;
+    }
+    if (std::abs(pick_distance - best_pick_distance) > epsilon) {
+        return false;
+    }
+    if (options.pick_backfaces && front_facing != best_front_facing) {
+        return front_facing;
+    }
+    return ray_distance < best.distance;
+}
+
 std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const Ray& ray, const PickOptions& options = {})
 {
     QDR_PROFILE_SCOPE("qdr_document.nearest_face_ray_hit");
@@ -153,7 +225,8 @@ std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const R
         }
 
         const quader::QVec3 normal = face_normal(document, face);
-        if (!face_is_pickable_from_ray(normal, ray, options)) {
+        const bool front_facing = face_is_front_facing_from_ray(normal, ray);
+        if (!front_facing && !options.pick_backfaces) {
             continue;
         }
 
@@ -169,8 +242,8 @@ std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const R
             float distance = 0.0F;
             quader::QVec3 position;
             if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
-                (!nearest.has_value() || distance < nearest->distance)) {
-                nearest = FaceRayHit { face.id, distance };
+                face_hit_is_better({ face.id, distance, front_facing }, nearest)) {
+                nearest = FaceRayHit { face.id, distance, front_facing };
             }
         }
     }
@@ -285,6 +358,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
     PickResult best;
     best.distance = std::numeric_limits<float>::max();
     float best_pick_distance = std::numeric_limits<float>::max();
+    bool best_front_facing = false;
     const std::optional<FaceRayHit> surface_hit =
         options.mode == SelectionMode::vertex || options.mode == SelectionMode::edge ?
             nearest_face_ray_hit(document, ray, options) :
@@ -298,10 +372,10 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
 
             float ray_distance = 0.0F;
             const float distance = point_ray_distance(ray, vertex.position, ray_distance);
+            const bool front_facing = vertex_has_front_facing_pickable_face(document, vertex.id, ray, options);
             if (distance <= options.vertex_radius &&
                 !vertex_pick_is_occluded(document, vertex.id, ray_distance, surface_hit) &&
-                (distance < best_pick_distance ||
-                 (std::abs(distance - best_pick_distance) <= epsilon && ray_distance < best.distance))) {
+                component_pick_is_better(distance, ray_distance, front_facing, best, best_pick_distance, best_front_facing, options)) {
                 best = {
                     true,
                     ElementKind::vertex,
@@ -312,6 +386,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
                     vertex.position,
                 };
                 best_pick_distance = distance;
+                best_front_facing = front_facing;
             }
         }
         return best.hit ? best : PickResult {};
@@ -332,10 +407,10 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
             float ray_distance = 0.0F;
             quader::QVec3 position;
             const float distance = segment_ray_distance(ray, a->position, b->position, ray_distance, position);
+            const bool front_facing = edge_has_front_facing_pickable_face(document, edge, ray, options);
             if (distance <= options.edge_radius &&
                 !edge_pick_is_occluded(document, edge, ray_distance, surface_hit) &&
-                (distance < best_pick_distance ||
-                 (std::abs(distance - best_pick_distance) <= epsilon && ray_distance < best.distance))) {
+                component_pick_is_better(distance, ray_distance, front_facing, best, best_pick_distance, best_front_facing, options)) {
                 best = {
                     true,
                     ElementKind::edge,
@@ -346,6 +421,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
                     position,
                 };
                 best_pick_distance = distance;
+                best_front_facing = front_facing;
             }
         }
         return best.hit ? best : PickResult {};
@@ -357,7 +433,8 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
         }
 
         const quader::QVec3 normal = face_normal(document, face);
-        if (!face_is_pickable_from_ray(normal, ray, options)) {
+        const bool front_facing = face_is_front_facing_from_ray(normal, ray);
+        if (!front_facing && !options.pick_backfaces) {
             continue;
         }
 
@@ -373,7 +450,9 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
             float distance = 0.0F;
             quader::QVec3 position;
             if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
-                distance < best.distance) {
+                face_hit_is_better({ face.id, distance, front_facing }, best.hit ? std::optional<FaceRayHit> {
+                    FaceRayHit { best.face_id, best.distance, best_front_facing }
+                } : std::optional<FaceRayHit> {})) {
                 best = {
                     true,
                     ElementKind::face,
@@ -383,6 +462,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
                     distance,
                     position,
                 };
+                best_front_facing = front_facing;
             }
         }
     }

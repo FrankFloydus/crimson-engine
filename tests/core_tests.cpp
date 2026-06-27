@@ -4198,9 +4198,9 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
             ViewportOverlayLayer::SelectedVisibleFace,
             ViewportOverlayLayer::SelectedFaceMask,
             ViewportOverlayLayer::WireframeBase,
-            ViewportOverlayLayer::SourceWire,
             ViewportOverlayLayer::SelectedXrayFace,
             ViewportOverlayLayer::HoverFace,
+            ViewportOverlayLayer::SourceWire,
             ViewportOverlayLayer::OpenEdge,
             ViewportOverlayLayer::DiagnosticEdge,
             ViewportOverlayLayer::SelectedFaceEdge,
@@ -4228,15 +4228,21 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
 
 TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::WireframeBase, ViewportOverlayGeometryKind::Lines));
-    EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines));
+    EXPECT_FALSE(viewportOverlayDepthTested(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::OpenEdge, ViewportOverlayGeometryKind::Lines));
-    EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::HoverFaceEdge, ViewportOverlayGeometryKind::Lines));
-    EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::HoverEdge, ViewportOverlayGeometryKind::Lines));
+    EXPECT_FALSE(viewportOverlayDepthTested(ViewportOverlayLayer::HoverFaceEdge, ViewportOverlayGeometryKind::Lines));
+    EXPECT_FALSE(viewportOverlayDepthTested(ViewportOverlayLayer::HoverEdge, ViewportOverlayGeometryKind::Lines));
     EXPECT_TRUE(viewportOverlayDepthTested(ViewportOverlayLayer::UnselectedVertex, ViewportOverlayGeometryKind::Points));
 
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines),
+            ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SelectedFaceEdge, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::SelectedEdge, ViewportOverlayGeometryKind::Lines),
+            ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::HoverFaceEdge, ViewportOverlayGeometryKind::Lines),
+            ViewportOverlayDepthMode::DrawOnTop);
+    EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::HoverEdge, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
     EXPECT_EQ(viewportOverlayDepthMode(ViewportOverlayLayer::GroupBounds, ViewportOverlayGeometryKind::Lines),
             ViewportOverlayDepthMode::DrawOnTop);
@@ -11757,7 +11763,7 @@ TEST(ModelingSessionServiceTests, ObjectSelectionOverlayUsesSelectionColors) {
     }
 
     const auto wire = std::find_if(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& value) {
-        return value.layer == ViewportOverlayLayer::SourceWire;
+        return value.layer == ViewportOverlayLayer::SelectedEdge;
     });
     ASSERT_NE(wire, frame.lines.end());
     EXPECT_EQ(wire->color, rgba8(255, 211, 31, 255));

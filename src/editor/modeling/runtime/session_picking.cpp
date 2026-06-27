@@ -29,6 +29,16 @@ constexpr double default_edge_pick_radius = 0.10;
 constexpr double min_pick_radius = 0.001;
 constexpr double max_pick_radius = 2.0;
 
+/**
+ * Stores the active source-wire component pick used by component hover and selection.
+ */
+struct SourceWireComponentPick {
+	int object_index = -1;
+	quader_poly::PickResult hit;
+	float pick_distance = std::numeric_limits<float>::max();
+	bool selected_target = false;
+};
+
 void keep_component_edit_target(PolygonObject& object, int& active_object_id)
 {
 	object.selected = true;
@@ -161,6 +171,215 @@ const PickObjectBounds* cached_bounds_for_object(
 		}
 	}
 	return nullptr;
+}
+
+bool ray_intersects_object_pick_bounds(
+		const PolygonObject& object,
+		const quader_poly::Ray& ray,
+		const quader_poly::PickOptions& options,
+		const PickObjectBounds* cached_bounds);
+
+bool object_draws_active_source_wire(const PolygonObject& object, int candidate_object_id)
+{
+	return object.selected || (object.id > 0 && object.id == candidate_object_id);
+}
+
+bool source_wire_component_is_selected(const PolygonObject& object, const quader_poly::PickResult& hit)
+{
+	if (!object.selected) {
+		return false;
+	}
+	if (hit.kind == quader_poly::ElementKind::vertex && object.selection.mode == quader_poly::SelectionMode::vertex) {
+		return quader_poly::selection_contains(object.selection, hit.vertex_id);
+	}
+	if (hit.kind == quader_poly::ElementKind::edge && object.selection.mode == quader_poly::SelectionMode::edge) {
+		return quader_poly::selection_contains(object.selection, hit.edge);
+	}
+	return false;
+}
+
+bool source_wire_candidate_is_better(
+		const SourceWireComponentPick& candidate,
+		const std::optional<SourceWireComponentPick>& best)
+{
+	if (!best.has_value()) {
+		return true;
+	}
+	if (std::abs(candidate.pick_distance - best->pick_distance) > transform_point_epsilon) {
+		return candidate.pick_distance < best->pick_distance;
+	}
+	if (std::abs(candidate.hit.distance - best->hit.distance) > transform_point_epsilon) {
+		return candidate.hit.distance < best->hit.distance;
+	}
+	return candidate.object_index < best->object_index;
+}
+
+void keep_source_wire_candidate(
+		std::optional<SourceWireComponentPick>& best_selected,
+		std::optional<SourceWireComponentPick>& best_unselected,
+		SourceWireComponentPick candidate)
+{
+	std::optional<SourceWireComponentPick>& bucket = candidate.selected_target ? best_selected : best_unselected;
+	if (source_wire_candidate_is_better(candidate, bucket)) {
+		bucket = std::move(candidate);
+	}
+}
+
+std::optional<SourceWireComponentPick> resolve_source_wire_component_pick(
+		const std::optional<SourceWireComponentPick>& best_selected,
+		const std::optional<SourceWireComponentPick>& best_unselected,
+		float radius,
+		bool prefer_selected_target)
+{
+	if (!best_selected.has_value()) {
+		return best_unselected;
+	}
+	if (!best_unselected.has_value()) {
+		return best_selected;
+	}
+
+	const float selected_tolerance =
+		prefer_selected_target ? radius : std::max(transform_point_epsilon, radius * 0.25F);
+	if (best_selected->pick_distance <= best_unselected->pick_distance + selected_tolerance) {
+		return best_selected;
+	}
+	return best_unselected;
+}
+
+std::optional<SourceWireComponentPick> pick_active_source_wire_component(
+		const std::vector<PolygonObject>& objects,
+		SelectionMode mode,
+		const quader_poly::Ray& ray,
+		quader_poly::PickOptions options,
+		int candidate_object_id,
+		bool prefer_selected_target,
+		std::span<const PickObjectBounds> object_bounds = {})
+{
+	if (mode == SelectionMode::object || mode == SelectionMode::face) {
+		return std::nullopt;
+	}
+
+	options.mode = component_selection_mode(mode);
+	const float radius = pick_bounds_padding(options);
+	if (radius <= 0.0F) {
+		return std::nullopt;
+	}
+
+	const quader::QVec3 direction = quader::normalize_or_zero(ray.direction);
+	if (quader::length_squared(direction) <= transform_point_epsilon * transform_point_epsilon) {
+		return std::nullopt;
+	}
+	const quader_poly::Ray pick_ray { ray.origin, direction };
+	const quader_geometry::QRay3<float> geometry_pick_ray = to_geometry_ray(pick_ray);
+	std::optional<SourceWireComponentPick> best_selected;
+	std::optional<SourceWireComponentPick> best_unselected;
+
+	for (int object_index = 0; object_index < static_cast<int>(objects.size()); ++object_index) {
+		const PolygonObject& object = objects[object_index];
+		if (!object_draws_active_source_wire(object, candidate_object_id)) {
+			continue;
+		}
+		if (!ray_intersects_object_pick_bounds(
+					object,
+					pick_ray,
+					options,
+					cached_bounds_for_object(object_bounds, object_index, object))) {
+			continue;
+		}
+
+		if (options.mode == quader_poly::SelectionMode::vertex) {
+			for (const quader_poly::Vertex& vertex : object.document.vertices) {
+				if (!vertex_visible_for_pick_expansion(object.document, vertex.id, options)) {
+					continue;
+				}
+
+				const quader::QVec3 offset = vertex.position - pick_ray.origin;
+				const float projected_ray_distance = quader::dot(offset, pick_ray.direction);
+				if (projected_ray_distance < 0.0F) {
+					continue;
+				}
+
+				const quader_geometry::QClosestRayPoint<float> closest =
+					quader_geometry::closest_point_on_ray<float>(
+						to_geometry_vec3(vertex.position),
+						geometry_pick_ray,
+						transform_point_epsilon);
+				if (!closest.valid) {
+					continue;
+				}
+				const float pick_distance = std::sqrt(closest.distance_squared);
+				if (pick_distance > radius) {
+					continue;
+				}
+
+				quader_poly::PickResult hit;
+				hit.hit = true;
+				hit.kind = quader_poly::ElementKind::vertex;
+				hit.vertex_id = vertex.id;
+				hit.distance = closest.ray_distance;
+				hit.position = vertex.position;
+				keep_source_wire_candidate(
+					best_selected,
+					best_unselected,
+					{
+						object_index,
+						hit,
+						pick_distance,
+						source_wire_component_is_selected(object, hit),
+					});
+			}
+			continue;
+		}
+
+		if (options.mode != quader_poly::SelectionMode::edge) {
+			continue;
+		}
+		for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
+			if (!edge_visible_for_pick_expansion(object.document, edge, options)) {
+				continue;
+			}
+			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
+			const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
+			if (a == nullptr || b == nullptr) {
+				continue;
+			}
+
+			const quader_geometry::QSegmentRayClosestPoints<float> closest =
+				quader_geometry::closest_points_segment_ray<float>(
+					{ to_geometry_vec3(a->position), to_geometry_vec3(b->position) },
+					geometry_pick_ray,
+					transform_point_epsilon);
+			if (!closest.valid || closest.ray_distance < 0.0F) {
+				continue;
+			}
+			const float pick_distance = std::sqrt(closest.distance_squared);
+			if (pick_distance > radius) {
+				continue;
+			}
+
+			quader_poly::PickResult hit;
+			hit.hit = true;
+			hit.kind = quader_poly::ElementKind::edge;
+			hit.edge = quader_poly::make_edge(edge.a, edge.b);
+			hit.distance = closest.ray_distance;
+			hit.position = {
+				closest.segment_point.x,
+				closest.segment_point.y,
+				closest.segment_point.z,
+			};
+			keep_source_wire_candidate(
+				best_selected,
+				best_unselected,
+				{
+					object_index,
+					hit,
+					pick_distance,
+					source_wire_component_is_selected(object, hit),
+				});
+		}
+	}
+
+	return resolve_source_wire_component_pick(best_selected, best_unselected, radius, prefer_selected_target);
 }
 
 const PickObjectFaceGeometry* cached_face_geometry_for_object(
@@ -1042,7 +1261,22 @@ SelectionHoverUpdateResult update_selection_hover(
 		quader_poly::PickResult hit;
 		quader_poly::PickOptions options = pick_options;
 		options.mode = component_selection_mode(mode);
-		const bool component_hover = pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry);
+		bool component_hover = false;
+		if (const std::optional<SourceWireComponentPick> source_wire_hit =
+					pick_active_source_wire_component(
+						objects,
+						mode,
+						ray,
+						options,
+						current_hover.candidate_object_id,
+						selected_modifier_pressed,
+						object_bounds)) {
+			hit_index = source_wire_hit->object_index;
+			hit = source_wire_hit->hit;
+			component_hover = true;
+		} else {
+			component_hover = pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry);
+		}
 		if (!component_hover) {
 			options.mode = quader_poly::SelectionMode::face;
 			pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry);
@@ -1145,7 +1379,24 @@ bool pick_select(
 	quader_poly::PickOptions options = pick_options;
 	options.mode = mode == SelectionMode::object ? quader_poly::SelectionMode::face : component_selection_mode(mode);
 	const bool component_mode = mode != SelectionMode::object;
-	bool component_hit = pick_nearest_object(objects, ray, options, hit_index, hit);
+	bool component_hit = false;
+	if (component_mode) {
+		if (const std::optional<SourceWireComponentPick> source_wire_hit =
+					pick_active_source_wire_component(
+						objects,
+						mode,
+						ray,
+						options,
+						-1,
+						remove_selection_value)) {
+			hit_index = source_wire_hit->object_index;
+			hit = source_wire_hit->hit;
+			component_hit = true;
+		}
+	}
+	if (!component_hit) {
+		component_hit = pick_nearest_object(objects, ray, options, hit_index, hit);
+	}
 	if (!component_hit && component_mode && allow_component_fallback) {
 		options.mode = quader_poly::SelectionMode::face;
 		pick_nearest_object(objects, ray, options, hit_index, hit);
@@ -1374,7 +1625,20 @@ bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& m
 	quader_poly::PickResult hit;
 	quader_poly::PickOptions options = pick_options;
 	options.mode = quader_poly::SelectionMode::edge;
-	if (!pick_nearest_object(objects, ray, options, hit_index, hit) || hit.kind != quader_poly::ElementKind::edge) {
+	bool component_hit = false;
+	if (const std::optional<SourceWireComponentPick> source_wire_hit =
+				pick_active_source_wire_component(
+					objects,
+					SelectionMode::edge,
+					ray,
+					options,
+					-1,
+					remove_selection_value)) {
+		hit_index = source_wire_hit->object_index;
+		hit = source_wire_hit->hit;
+		component_hit = true;
+	}
+	if ((!component_hit && !pick_nearest_object(objects, ray, options, hit_index, hit)) || hit.kind != quader_poly::ElementKind::edge) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
 		}
@@ -1449,7 +1713,20 @@ bool pick_select_all_vertices(std::vector<PolygonObject>& objects, SelectionMode
 	quader_poly::PickResult hit;
 	quader_poly::PickOptions options = pick_options;
 	options.mode = quader_poly::SelectionMode::vertex;
-	if (!pick_nearest_object(objects, ray, options, hit_index, hit) || hit.kind != quader_poly::ElementKind::vertex) {
+	bool component_hit = false;
+	if (const std::optional<SourceWireComponentPick> source_wire_hit =
+				pick_active_source_wire_component(
+					objects,
+					SelectionMode::vertex,
+					ray,
+					options,
+					-1,
+					remove_selection_value)) {
+		hit_index = source_wire_hit->object_index;
+		hit = source_wire_hit->hit;
+		component_hit = true;
+	}
+	if ((!component_hit && !pick_nearest_object(objects, ray, options, hit_index, hit)) || hit.kind != quader_poly::ElementKind::vertex) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
 		}
