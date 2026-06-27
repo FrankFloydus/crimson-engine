@@ -628,10 +628,7 @@ SelectionOverlayFrame build_selection_overlay_frame(
 				}
 				const std::unordered_set<std::uint64_t>* hidden_line_edges = hidden_hover_line_edges.empty() ? nullptr : &hidden_hover_line_edges;
 				const std::unordered_set<quader_poly::ElementId>* hidden_triangle_faces = hidden_hover_mask_faces.empty() ? nullptr : &hidden_hover_mask_faces;
-				const SelectionOverlayLayer selected_triangle_layer = overlay_selection_covers_all_faces(object.document, object.selection) ?
-					SelectionOverlayLayer::selected_xray_face :
-					SelectionOverlayLayer::selected_visible_face;
-				append_face_selection(object.id, object.document, object.selection, selected_triangle_layer, SelectionOverlayLayer::selected_face_edge, &frame.triangles, &frame.lines, hidden_line_edges, hidden_triangle_faces);
+				append_face_selection(object.id, object.document, object.selection, SelectionOverlayLayer::selected_visible_face, SelectionOverlayLayer::selected_face_edge, &frame.triangles, &frame.lines, hidden_line_edges, hidden_triangle_faces);
 				append_face_selection(object.id, object.document, object.selection, SelectionOverlayLayer::selected_face_mask, SelectionOverlayLayer::selected_face_edge, &frame.triangles, nullptr, nullptr, hidden_triangle_faces);
 				append_face_selection(object.id, object.document, object.selection, SelectionOverlayLayer::selected_visible_face, SelectionOverlayLayer::selected_edge, nullptr, &frame.lines, hidden_line_edges);
 			} else if (mode == SelectionMode::edge) {

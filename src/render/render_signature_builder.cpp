@@ -206,11 +206,20 @@ std::uint64_t RenderSignatureBuilder::overlayLayerSignature(
     RenderSignatureBuilder signature;
     signature.addValue(static_cast<std::uint32_t>(layer));
     for (const ViewportOverlayTriangle& triangle : frame.triangles) {
-        if (triangle.layer != layer) {
+        if (triangle.layer != layer &&
+                !(triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
+                    (layer == ViewportOverlayLayer::SourceWire ||
+                     layer == ViewportOverlayLayer::SelectedFaceEdge ||
+                     layer == ViewportOverlayLayer::SelectedEdge ||
+                     layer == ViewportOverlayLayer::HoverFaceEdge ||
+                     layer == ViewportOverlayLayer::HoverEdge ||
+                     layer == ViewportOverlayLayer::SelectedVertex ||
+                     layer == ViewportOverlayLayer::HoverVertex))) {
             continue;
         }
         signature.addValue(static_cast<std::uint32_t>(triangle.layer))
                 .addValue(triangle.color)
+                .addValue(triangle.element.objectId)
                 .addVec3(triangle.a)
                 .addVec3(triangle.b)
                 .addVec3(triangle.c);

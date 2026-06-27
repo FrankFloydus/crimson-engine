@@ -12,10 +12,151 @@
 #include "render/overlay/overlay_point_mesh_builder.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <unordered_map>
 #include <utility>
 
 namespace quader {
+namespace {
+
+constexpr float kOverlayVisibilityEpsilon = 0.000001f;
+
+bool overlayLayerUsesDepthStampVisibility(ViewportOverlayLayer layer) {
+    return layer == ViewportOverlayLayer::SourceWire ||
+            layer == ViewportOverlayLayer::SelectedFaceEdge ||
+            layer == ViewportOverlayLayer::SelectedEdge ||
+            layer == ViewportOverlayLayer::HoverFaceEdge ||
+            layer == ViewportOverlayLayer::HoverEdge ||
+            layer == ViewportOverlayLayer::SelectedVertex ||
+            layer == ViewportOverlayLayer::HoverVertex;
+}
+
+QVec3 pointOnLine(QVec3 a, QVec3 b, float t) {
+    return a + ((b - a) * t);
+}
+
+QVec3 cameraForward(const ViewportOverlayCamera& camera) {
+    QVec3 forward = normalize(camera.forward);
+    if (length_squared(forward) <= kOverlayVisibilityEpsilon) {
+        forward = {0.0f, 0.0f, -1.0f};
+    }
+    return forward;
+}
+
+bool intersectRayTriangle(
+        QVec3 origin,
+        QVec3 direction,
+        const ViewportOverlayTriangle& triangle,
+        float& outDistance) {
+    const QVec3 edge1 = triangle.b - triangle.a;
+    const QVec3 edge2 = triangle.c - triangle.a;
+    const QVec3 p = cross(direction, edge2);
+    const float determinant = dot(edge1, p);
+    if (std::abs(determinant) <= kOverlayVisibilityEpsilon) {
+        return false;
+    }
+    const float invDeterminant = 1.0f / determinant;
+    const QVec3 t = origin - triangle.a;
+    const float u = dot(t, p) * invDeterminant;
+    if (u < 0.0f || u > 1.0f) {
+        return false;
+    }
+    const QVec3 q = cross(t, edge1);
+    const float v = dot(direction, q) * invDeterminant;
+    if (v < 0.0f || u + v > 1.0f) {
+        return false;
+    }
+    const float distance = dot(edge2, q) * invDeterminant;
+    if (distance <= 0.0001f) {
+        return false;
+    }
+    outDistance = distance;
+    return true;
+}
+
+} // namespace
+
+class OverlayDepthStampVisibilityFilter {
+public:
+    explicit OverlayDepthStampVisibilityFilter(const ViewportOverlayFrame& frame)
+    {
+        for (const ViewportOverlayTriangle& triangle : frame.triangles) {
+            if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
+                    triangle.element.objectId >= 0) {
+                stampsByObject_[triangle.element.objectId].push_back(&triangle);
+            }
+        }
+    }
+
+    [[nodiscard]] bool empty() const {
+        return stampsByObject_.empty();
+    }
+
+    [[nodiscard]] bool lineVisible(const ViewportOverlayLine& line, const ViewportOverlayCamera& camera) const {
+        const std::vector<const ViewportOverlayTriangle*>* stamps = stampsFor(line.element.objectId);
+        if (stamps == nullptr) {
+            return true;
+        }
+        return pointVisible(pointOnLine(line.start, line.end, 0.2f), camera, *stamps) &&
+                pointVisible(pointOnLine(line.start, line.end, 0.5f), camera, *stamps) &&
+                pointVisible(pointOnLine(line.start, line.end, 0.8f), camera, *stamps);
+    }
+
+    [[nodiscard]] bool pointVisible(const ViewportOverlayPoint& point, const ViewportOverlayCamera& camera) const {
+        const std::vector<const ViewportOverlayTriangle*>* stamps = stampsFor(point.element.objectId);
+        return stamps == nullptr || pointVisible(point.position, camera, *stamps);
+    }
+
+private:
+    [[nodiscard]] const std::vector<const ViewportOverlayTriangle*>* stampsFor(int objectId) const {
+        const auto found = stampsByObject_.find(objectId);
+        return found == stampsByObject_.end() ? nullptr : &found->second;
+    }
+
+    [[nodiscard]] static bool pointVisible(
+            QVec3 point,
+            const ViewportOverlayCamera& rawCamera,
+            const std::vector<const ViewportOverlayTriangle*>& stamps) {
+        const ViewportOverlayCamera camera = OverlayCameraProjector::sanitizedCamera(rawCamera);
+        const QVec3 forward = cameraForward(camera);
+        QVec3 origin;
+        QVec3 direction;
+        float targetDistance = 0.0f;
+        if (camera.projection == ViewportOverlayProjection::Orthographic) {
+            targetDistance = dot(point - camera.eye, forward);
+            if (targetDistance <= 0.0001f) {
+                return true;
+            }
+            origin = point - (forward * targetDistance);
+            direction = forward;
+        } else {
+            const QVec3 toPoint = point - camera.eye;
+            targetDistance = length(toPoint);
+            if (targetDistance <= 0.0001f) {
+                return true;
+            }
+            origin = camera.eye;
+            direction = toPoint / targetDistance;
+        }
+
+        const float tolerance = std::max(0.001f, targetDistance * 0.00025f);
+        const float maxDistance = targetDistance - tolerance;
+        if (maxDistance <= 0.0001f) {
+            return true;
+        }
+        for (const ViewportOverlayTriangle* triangle : stamps) {
+            float hitDistance = 0.0f;
+            if (intersectRayTriangle(origin, direction, *triangle, hitDistance) &&
+                    hitDistance < maxDistance) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::unordered_map<int, std::vector<const ViewportOverlayTriangle*>> stampsByObject_;
+};
 
 std::uint64_t OverlayRenderableBuilder::frameSignature(const ViewportOverlayFrame& frame) {
     return RenderSignatureBuilder::overlayFrameSignature(frame);
@@ -96,7 +237,8 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
         }
     }
 
-    const std::vector<const ViewportOverlayLine*> lines = linesForLayer(frame, layer);
+    const OverlayDepthStampVisibilityFilter visibility(frame);
+    const std::vector<const ViewportOverlayLine*> lines = linesForLayer(frame, layer, camera, visibility);
     const std::vector<LineBatchKey> lineKeys = lineBatchKeys(lines, layer);
     for (const LineBatchKey& key : lineKeys) {
         std::vector<const ViewportOverlayLine*> batchLines;
@@ -121,7 +263,7 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
         });
     }
 
-    const std::vector<const ViewportOverlayPoint*> points = pointsForLayer(frame, layer);
+    const std::vector<const ViewportOverlayPoint*> points = pointsForLayer(frame, layer, camera, visibility);
     appendPointPass(plan, points, camera, layer, blendOrder, true);
     appendPointPass(plan, points, camera, layer, blendOrder, false);
     return plan;
@@ -129,11 +271,14 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
 
 std::vector<const ViewportOverlayLine*> OverlayRenderableBuilder::linesForLayer(
         const ViewportOverlayFrame& frame,
-        ViewportOverlayLayer layer) {
+        ViewportOverlayLayer layer,
+        const ViewportOverlayCamera& camera,
+        const OverlayDepthStampVisibilityFilter& visibility) {
     std::vector<const ViewportOverlayLine*> lines;
     lines.reserve(frame.lines.size());
     for (const ViewportOverlayLine& line : frame.lines) {
-        if (line.layer == layer) {
+        if (line.layer == layer &&
+                (!overlayLayerUsesDepthStampVisibility(layer) || visibility.lineVisible(line, camera))) {
             lines.push_back(&line);
         }
     }
@@ -142,11 +287,14 @@ std::vector<const ViewportOverlayLine*> OverlayRenderableBuilder::linesForLayer(
 
 std::vector<const ViewportOverlayPoint*> OverlayRenderableBuilder::pointsForLayer(
         const ViewportOverlayFrame& frame,
-        ViewportOverlayLayer layer) {
+        ViewportOverlayLayer layer,
+        const ViewportOverlayCamera& camera,
+        const OverlayDepthStampVisibilityFilter& visibility) {
     std::vector<const ViewportOverlayPoint*> points;
     points.reserve(frame.points.size());
     for (const ViewportOverlayPoint& point : frame.points) {
-        if (point.layer == layer) {
+        if (point.layer == layer &&
+                (!overlayLayerUsesDepthStampVisibility(layer) || visibility.pointVisible(point, camera))) {
             points.push_back(&point);
         }
     }
