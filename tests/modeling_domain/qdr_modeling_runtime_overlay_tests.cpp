@@ -286,6 +286,8 @@ void selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire()
 	const quader_editor_core::SelectionOverlayStyle style;
 	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == 0U,
 		"selected object active wire should not be emitted as ordinary source/candidate wire");
+	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) == 0U,
+		"selected object active wire should not emit the component source-wire depth stamp");
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_edge) == 12U,
 		"selected object active wire should use the draw-on-top selected edge layer");
 	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::selected_edge, style.selected_edge_color_abgr) == 12U,
@@ -298,21 +300,31 @@ void selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire()
 
 void selected_mesh_source_wire_uses_source_color_in_component_mode()
 {
-	quader_editor_core::EditorSession session;
-	require_test(session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
-		"selected mesh source-wire color fixture should create a box");
-	session.set_selection_mode(quader_editor_core::SelectionMode::face);
+	for (const quader_editor_core::SelectionMode mode : {
+			 quader_editor_core::SelectionMode::face,
+			 quader_editor_core::SelectionMode::edge,
+			 quader_editor_core::SelectionMode::vertex,
+		 }) {
+		quader_editor_core::EditorSession session;
+		require_test(session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
+			"selected mesh source-wire color fixture should create a box");
+		session.set_selection_mode(mode);
 
-	const quader_editor_core::SelectionOverlayFrame frame =
-		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), {});
-	const quader_editor_core::SelectionOverlayStyle style;
-	const std::size_t source_wire_count = line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire);
-	require_test(source_wire_count > 0U,
-		"component mode selected mesh should still draw active source wire");
-	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == source_wire_count,
-		"component mode selected mesh source wire should use ordinary source-wire color");
-	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.selected_edge_color_abgr) == 0U,
-		"component mode selected mesh source wire should not use selected-wire color");
+		const quader_editor_core::SelectionOverlayFrame frame =
+			quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), {});
+		const quader_editor_core::SelectionOverlayStyle style;
+		const std::size_t source_wire_count = line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire);
+		require_test(source_wire_count == 12U,
+			"component mode selected mesh should keep the active mesh topology source wire visible");
+		require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+			"component mode selected mesh should stamp the mesh depth for inverted source-wire interiors");
+		require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == source_wire_count,
+			"component mode selected mesh source wire should use ordinary source-wire color");
+		require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.selected_edge_color_abgr) == 0U,
+			"component mode selected mesh source wire should not use selected-wire color");
+		require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_edge) == 0U,
+			"component mode selected mesh should not promote the full mesh source wire to draw-on-top selected edges");
+	}
 }
 
 void selected_component_does_not_cut_holes_in_active_mesh_source_wire()
@@ -332,6 +344,8 @@ void selected_component_does_not_cut_holes_in_active_mesh_source_wire()
 	const quader_editor_core::SelectionOverlayStyle style;
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 12U,
 		"selected component overlays should keep the full active mesh topology source wire");
+	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+		"selected component overlays should keep the source-wire depth stamp");
 	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == 12U,
 		"active mesh topology source wire should keep ordinary source-wire color under selected highlights");
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::selected_face_edge) >= 4U,
@@ -424,8 +438,25 @@ void inverted_open_cube_inner_edge_hover_uses_selected_deselect_color()
 			style);
 	require_test(frame.hover_target_selected,
 		"inverted open cube selected edge hover should become a remove-preview hover");
+	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire) > 0U,
+		"inverted open cube should keep active mesh source-wire lines for inner edges");
+	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+		"inverted open cube should stamp active mesh depth for inner source-wire edges");
 	require_test(line_count_for_layer_and_color(frame, quader_editor_core::SelectionOverlayLayer::hover_edge, style.hover_selected_line_color_abgr) == 1U,
 		"inverted open cube selected edge hover should draw the deselect hover color");
+
+	quader_editor_core::SelectionMode mode = quader_editor_core::SelectionMode::edge;
+	int active_object_id = fixture.object.id;
+	require_test(
+		quader_editor_core::pick_select(
+			objects,
+			mode,
+			quader_editor_core::SelectionEditOperation::remove,
+			fixture.inner_edge_ray,
+			active_object_id),
+		"inverted open cube edge remove should use the selected active source-wire edge");
+	require_test(objects.front().selection.edges.empty(),
+		"inverted open cube edge remove should deselect the selected active source-wire edge");
 }
 
 void component_deselect_keeps_active_mesh_source_wire_visible()
@@ -452,6 +483,8 @@ void component_deselect_keeps_active_mesh_source_wire_visible()
 		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), {});
 	require_test(line_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 12U,
 		"removing the last component should keep the active mesh source wire visible");
+	require_test(triangle_count_for_layer(frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+		"removing the last component should keep the active mesh source-wire depth stamp");
 }
 
 void component_hover_source_wire_candidate_is_sticky_until_replaced()
@@ -473,6 +506,8 @@ void component_hover_source_wire_candidate_is_sticky_until_replaced()
 		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), first_hover.hover);
 	const std::size_t first_source_wire_count = line_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire);
 	require_test(first_source_wire_count > 0, "component hover candidate should draw source wire");
+	require_test(triangle_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+		"component hover candidate should stamp source-wire depth");
 	const quader_editor_core::SelectionOverlayStyle style;
 	require_test(line_count_for_layer_and_color(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire, style.source_wire_color_abgr) == first_source_wire_count,
 		"component hover candidate source wire should keep the ordinary source-wire color");
@@ -489,6 +524,8 @@ void component_hover_source_wire_candidate_is_sticky_until_replaced()
 		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), empty_hover.hover);
 	require_test(line_count_for_layer(empty_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == first_source_wire_count,
 		"empty hover should preserve candidate source-wire lines");
+	require_test(triangle_count_for_layer(empty_frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+		"empty hover should preserve candidate source-wire depth stamp");
 
 	const quader_editor_core::SelectionHoverUpdateResult second_hover = quader_editor_core::update_selection_hover(
 		session.objects(),
@@ -498,6 +535,52 @@ void component_hover_source_wire_candidate_is_sticky_until_replaced()
 		false);
 	require_test(second_hover.hover.candidate_object_id == 2,
 		"hovering a different component object should replace the source-wire candidate");
+}
+
+void object_hover_source_wire_candidate_is_sticky_until_replaced()
+{
+	quader_editor_core::EditorSession session = two_box_session();
+	session.clear_selection();
+	session.set_selection_mode(quader_editor_core::SelectionMode::object);
+
+	const quader_editor_core::SelectionHoverUpdateResult first_hover = quader_editor_core::update_selection_hover(
+		session.objects(),
+		session.selection_mode(),
+		{},
+		{ { 0.0F, 0.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } },
+		false);
+	require_test(first_hover.changed && first_hover.hover.object_id == 1 && first_hover.hover.candidate_object_id == 1,
+		"object hover should tag the hovered mesh as the source-wire candidate");
+
+	const quader_editor_core::SelectionOverlayFrame first_frame =
+		quader_editor_core::build_selection_hover_overlay_frame(session.objects(), session.selection_mode(), first_hover.hover);
+	const std::size_t first_source_wire_count = line_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire);
+	require_test(first_source_wire_count > 0,
+		"object hover candidate should draw source wire in the hover frame");
+
+	const quader_editor_core::SelectionHoverUpdateResult empty_hover = quader_editor_core::update_selection_hover(
+		session.objects(),
+		session.selection_mode(),
+		first_hover.hover,
+		{ { 64.0F, 64.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } },
+		false);
+	require_test(empty_hover.hover.kind == quader_editor_core::SelectionHoverKind::none &&
+			empty_hover.hover.object_id == -1 &&
+			empty_hover.hover.candidate_object_id == 1,
+		"empty object hover should keep the previous mesh source-wire candidate");
+	const quader_editor_core::SelectionOverlayFrame empty_frame =
+		quader_editor_core::build_selection_hover_overlay_frame(session.objects(), session.selection_mode(), empty_hover.hover);
+	require_test(line_count_for_layer(empty_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == first_source_wire_count,
+		"empty object hover should preserve candidate source-wire lines in the hover frame");
+
+	const quader_editor_core::SelectionHoverUpdateResult second_hover = quader_editor_core::update_selection_hover(
+		session.objects(),
+		session.selection_mode(),
+		empty_hover.hover,
+		{ { 5.0F, 0.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } },
+		false);
+	require_test(second_hover.hover.object_id == 2 && second_hover.hover.candidate_object_id == 2,
+		"hovering a different mesh should replace the object source-wire candidate");
 }
 
 void vertex_mode_hover_candidate_exposes_unselected_handles()
@@ -806,6 +889,7 @@ TEST_CASE("qdr_editor_core_overlay_tests", "[editor-core-overlay]")
 	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();
 	component_deselect_keeps_active_mesh_source_wire_visible();
 	component_hover_source_wire_candidate_is_sticky_until_replaced();
+	object_hover_source_wire_candidate_is_sticky_until_replaced();
 	vertex_mode_hover_candidate_exposes_unselected_handles();
 	hover_only_overlay_omits_selected_base_geometry();
 	selected_component_hover_keeps_normal_hover_primitives();

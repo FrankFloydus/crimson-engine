@@ -95,7 +95,7 @@ TEST_CASE("host contract describes viewport overlay presentation policy", "[host
 
 	REQUIRE(presentation.draw_order_layer_ids.size() == 15U);
 	CHECK(same_text(presentation.draw_order_layer_ids.front(), "selected_visible_face"));
-	CHECK(same_text(presentation.draw_order_layer_ids[2], "source_wire"));
+	CHECK(same_text(presentation.draw_order_layer_ids[4], "source_wire"));
 	CHECK(same_text(presentation.draw_order_layer_ids[13], "hover_vertex"));
 	CHECK(same_text(presentation.draw_order_layer_ids.back(), "snap_target_vertex"));
 

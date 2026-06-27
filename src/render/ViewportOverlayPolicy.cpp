@@ -26,6 +26,11 @@ bool viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer layer) {
             layer == ViewportOverlayLayer::HoverFace;
 }
 
+bool viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer layer) {
+    (void)layer;
+    return false;
+}
+
 bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
     return layer == ViewportOverlayLayer::ToolPlane ||
             layer == ViewportOverlayLayer::ToolHandle ||
@@ -210,6 +215,7 @@ std::uint32_t viewportOverlayColorFor(ViewportOverlayLayer layer, std::uint32_t 
     case ViewportOverlayLayer::SelectedEdge:
         return kOverlaySelectionWireColor;
     case ViewportOverlayLayer::SourceWire:
+    case ViewportOverlayLayer::SourceWireDepthStamp:
         return viewportOverlayIsNativeSelectionWireColor(originalRgba) ? kOverlaySelectionWireColor : kOverlaySourceWireColor;
     case ViewportOverlayLayer::OpenEdge:
         return kOverlayOpenEdgeColor;

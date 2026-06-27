@@ -198,6 +198,57 @@ bool source_wire_component_is_selected(const PolygonObject& object, const quader
 	return false;
 }
 
+bool source_wire_face_contains_edge(const quader_poly::Face& face, quader_poly::Edge edge)
+{
+	const quader_poly::Edge normalized = quader_poly::make_edge(edge.a, edge.b);
+	if (face.vertices.size() < 2) {
+		return false;
+	}
+	for (std::size_t index = 0; index < face.vertices.size(); ++index) {
+		const quader_poly::ElementId a = face.vertices[index];
+		const quader_poly::ElementId b = face.vertices[(index + 1) % face.vertices.size()];
+		if (quader_poly::make_edge(a, b) == normalized) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool source_wire_face_contains_vertex(const quader_poly::Face& face, quader_poly::ElementId vertex_id)
+{
+	return std::ranges::find(face.vertices, vertex_id) != face.vertices.end();
+}
+
+bool source_wire_component_is_on_face(const quader_poly::Face& face, const quader_poly::PickResult& hit)
+{
+	if (hit.kind == quader_poly::ElementKind::vertex) {
+		return source_wire_face_contains_vertex(face, hit.vertex_id);
+	}
+	if (hit.kind == quader_poly::ElementKind::edge) {
+		return source_wire_face_contains_edge(face, hit.edge);
+	}
+	return true;
+}
+
+bool source_wire_component_is_occluded_by_object_faces(
+		const PolygonObject& object,
+		const quader_poly::Ray& ray,
+		const quader_poly::PickOptions& options,
+		const quader_poly::PickResult& hit)
+{
+	if (source_wire_component_is_selected(object, hit)) {
+		return false;
+	}
+	quader_poly::PickOptions face_options = options;
+	face_options.mode = quader_poly::SelectionMode::face;
+	const quader_poly::PickResult surface_hit = quader_poly::pick_element(object.document, ray, face_options);
+	if (!surface_hit.hit || hit.distance <= surface_hit.distance + 0.001F) {
+		return false;
+	}
+	const quader_poly::Face* surface_face = quader_poly::find_face(object.document, surface_hit.face_id);
+	return surface_face == nullptr || !source_wire_component_is_on_face(*surface_face, hit);
+}
+
 bool source_wire_candidate_is_better(
 		const SourceWireComponentPick& candidate,
 		const std::optional<SourceWireComponentPick>& best)
@@ -318,6 +369,9 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 				hit.vertex_id = vertex.id;
 				hit.distance = closest.ray_distance;
 				hit.position = vertex.position;
+				if (source_wire_component_is_occluded_by_object_faces(object, pick_ray, options, hit)) {
+					continue;
+				}
 				keep_source_wire_candidate(
 					best_selected,
 					best_unselected,
@@ -367,6 +421,9 @@ std::optional<SourceWireComponentPick> pick_active_source_wire_component(
 				closest.segment_point.y,
 				closest.segment_point.z,
 			};
+			if (source_wire_component_is_occluded_by_object_faces(object, pick_ray, options, hit)) {
+				continue;
+			}
 			keep_source_wire_candidate(
 				best_selected,
 				best_unselected,
@@ -457,9 +514,9 @@ bool pick_nearest_object(
 	hit = quader_poly::PickResult();
 	hit.distance = std::numeric_limits<float>::max();
 	const std::optional<PickHitRecord> surface_hit =
-			objects.size() > 1U && (options.mode == quader_poly::SelectionMode::vertex || options.mode == quader_poly::SelectionMode::edge) ?
-				nearest_surface_hit(objects, ray, options, object_bounds, face_geometry) :
-				std::optional<PickHitRecord> {};
+			(options.mode == quader_poly::SelectionMode::vertex || options.mode == quader_poly::SelectionMode::edge) ?
+			nearest_surface_hit(objects, ray, options, object_bounds, face_geometry) :
+			std::optional<PickHitRecord> {};
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
 		if (!ray_intersects_object_pick_bounds(
 					objects[index],
@@ -1246,7 +1303,7 @@ SelectionHoverUpdateResult update_selection_hover(
 	QDR_PROFILE_SCOPE("qdr_editor_core.update_selection_hover");
 	pick_options.pick_backfaces = true;
 	SelectionHoverState next;
-	next.candidate_object_id = mode == SelectionMode::object ? -1 : current_hover.candidate_object_id;
+	next.candidate_object_id = current_hover.candidate_object_id;
 
 	if (mode == SelectionMode::object) {
 		int hit_index = -1;
@@ -1255,6 +1312,9 @@ SelectionHoverUpdateResult update_selection_hover(
 		options.mode = quader_poly::SelectionMode::face;
 		if (pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry) && hit_index >= 0) {
 			next.object_id = objects[hit_index].id;
+			if (next.object_id > 0) {
+				next.candidate_object_id = next.object_id;
+			}
 		}
 	} else if (!objects.empty()) {
 		int hit_index = -1;

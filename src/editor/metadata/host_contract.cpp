@@ -909,6 +909,8 @@ constexpr int checked_overlay_layer_index(quader_editor_core::SelectionOverlayLa
 		return 13;
 	case Layer::diagnostic_edge:
 		return 14;
+	case Layer::source_wire_depth_stamp:
+		return -1;
 	}
 	return -1;
 }

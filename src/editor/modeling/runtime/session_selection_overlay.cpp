@@ -200,11 +200,38 @@ bool overlay_selection_covers_all_faces(const quader_poly::Document& document, c
 	return true;
 }
 
-void append_hover_source_wire(
+void append_source_wire_depth_stamp(
 		SelectionOverlayFrame& frame,
 		const PolygonObject& object,
 		const SelectionOverlayStyle& style)
 {
+	quader_poly::Selection selection = overlay_all_face_selection(object.document);
+	if (selection.faces.empty()) {
+		return;
+	}
+	const quader_poly::OverlayData overlay = quader_poly::build_overlay(object.document, selection);
+	for (const quader_poly::OverlayTriangle& triangle : overlay.triangles) {
+		frame.triangles.push_back({
+			SelectionOverlayLayer::source_wire_depth_stamp,
+			triangle.a,
+			triangle.b,
+			triangle.c,
+			style.source_wire_color_abgr,
+			object.id,
+			triangle.face_id,
+		});
+	}
+}
+
+void append_hover_source_wire(
+		SelectionOverlayFrame& frame,
+		const PolygonObject& object,
+		const SelectionOverlayStyle& style,
+		bool stamp_depth = false)
+{
+	if (stamp_depth) {
+		append_source_wire_depth_stamp(frame, object, style);
+	}
 	for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
 		const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
 		const quader_poly::Vertex* b = quader_poly::find_vertex(object.document, edge.b);
@@ -536,8 +563,9 @@ SelectionOverlayFrame build_selection_overlay_frame(
 
 	auto object_draws_source_wire = [&](const PolygonObject& object) {
 		const bool selected_object = object.selected;
+		const int object_mode_wire_id = hover.candidate_object_id > 0 ? hover.candidate_object_id : hover.object_id;
 		const bool hovered_object = object.id > 0 &&
-			((mode == SelectionMode::object && object.id == hover.object_id) ||
+			((mode == SelectionMode::object && object.id == object_mode_wire_id) ||
 				(mode != SelectionMode::object && object.id == hover.candidate_object_id));
 		return selected_object || hovered_object;
 	};
@@ -545,6 +573,9 @@ SelectionOverlayFrame build_selection_overlay_frame(
 	for (const PolygonObject& object : objects) {
 		if (!object_draws_source_wire(object)) {
 			continue;
+		}
+		if (mode != SelectionMode::object) {
+			append_source_wire_depth_stamp(frame, object, style);
 		}
 		for (const quader_poly::Edge edge : quader_poly::document_edges(object.document)) {
 			const quader_poly::Vertex* a = quader_poly::find_vertex(object.document, edge.a);
@@ -686,14 +717,14 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	for (const PolygonObject& object : objects) {
 		const bool object_mode_hover =
 			mode == SelectionMode::object &&
-			hover.object_id > 0 &&
-			object.id == hover.object_id;
+			object.id > 0 &&
+			object.id == (hover.candidate_object_id > 0 ? hover.candidate_object_id : hover.object_id);
 		const bool component_candidate =
 			mode != SelectionMode::object &&
 			hover.candidate_object_id > 0 &&
 			object.id == hover.candidate_object_id;
 		if (!object.selected && (object_mode_hover || component_candidate)) {
-			append_hover_source_wire(frame, object, style);
+			append_hover_source_wire(frame, object, style, component_candidate);
 			if (mode == SelectionMode::vertex) {
 				for (const quader_poly::Vertex& vertex : object.document.vertices) {
 					frame.points.push_back({

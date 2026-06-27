@@ -44,15 +44,19 @@ adapters so OpenGL and Metal can be added later.
 
 ## Overlay Contract
 
-- Depth-tested: `OpenEdge`.
+- Depth-tested by default: `OpenEdge`.
 - Draw-on-top: `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
   `GroupBounds`, `DiagnosticEdge`, selected/hover/snap vertices, and tool line/handle overlays.
 - Active source-wire topology is interactive edit geometry: component hover and pick paths must test the
   visible active source-wire handles before falling back to shaded surface-depth picking.
 - Face fills use depth-stamped two-pass behavior.
+- `SourceWireDepthStamp` remains a non-rendered metadata layer. Do not use it to CPU-delete source-wire
+  edges during render extraction. Active source-wire topology should render as a crisp draw-on-top
+  editor wire, while picking/hover ownership decides which handles are interactive.
+- Object-mode selected mesh wires remain on the selected-edge path.
 - Native layer order is:
   `SelectedVisibleFace`, `SelectedFaceMask`, `WireframeBase`, `SelectedXrayFace`, `HoverFace`,
-  `SourceWire`, `OpenEdge`, `DiagnosticEdge`, `SelectedFaceEdge`, `SelectedEdge`, `GroupBounds`,
-  `HoverFaceEdge`, `HoverEdge`, `UnselectedVertex`, `SelectedVertex`, `HoverVertex`,
-  `SnapTargetVertex`, `ToolPlane`, `ToolPreviewFill`, `ToolPlaneLine`, `ToolPreviewLine`,
-  `ToolPreviewSeam`, `ToolHandle`.
+  `SourceWireDepthStamp`, `SourceWire`, `OpenEdge`, `DiagnosticEdge`, `SelectedFaceEdge`,
+  `SelectedEdge`, `GroupBounds`, `HoverFaceEdge`, `HoverEdge`, `UnselectedVertex`, `SelectedVertex`,
+  `HoverVertex`, `SnapTargetVertex`, `ToolPlane`, `ToolPreviewFill`, `ToolPlaneLine`,
+  `ToolPreviewLine`, `ToolPreviewSeam`, `ToolHandle`.

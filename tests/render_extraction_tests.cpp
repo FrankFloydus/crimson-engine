@@ -336,10 +336,162 @@ TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirec
             OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
 
     ASSERT_EQ(plan.lineBatches.size(), 1u);
-    const OverlayLineMesh& mesh = plan.lineBatches.front().mesh;
+    const OverlayLineBatch& batch = plan.lineBatches.front();
+    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
+    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depthCulling);
+    const OverlayLineMesh& mesh = batch.mesh;
     ASSERT_EQ(mesh.vertices.size(), 4u);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.x - mesh.vertices[3].position.x), 0.0001f);
     EXPECT_GT(std::fabs(mesh.vertices[0].position.y - mesh.vertices[3].position.y), 0.0001f);
+}
+
+TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsDoNotFilterTopologyLines) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 1},
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -2.0f},
+            .end = {0.5f, 0.0f, -2.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 1},
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {-0.75f, -0.25f, -1.0f},
+            .b = {0.75f, -0.25f, -1.0f},
+            .c = {0.0f, 0.75f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = 1},
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineBatch& batch = plan.lineBatches.front();
+    EXPECT_EQ(batch.mesh.vertices.size(), 8u);
+    EXPECT_EQ(batch.mesh.indices.size(), 12u);
+    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
+    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depthCulling);
+    EXPECT_FALSE(batch.state.depthWrite);
+    for (const OverlayLineVertex& vertex : batch.mesh.vertices) {
+        EXPECT_EQ(vertex.color, rgba8SrgbToLinear(rgba8(255, 224, 92, 235)));
+    }
+}
+
+TEST(OverlayLineMeshBuilderTests, SourceWireDrawsInvertedInternalEdges) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 1},
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {-0.5f, 0.0f, -1.0f},
+            .b = {0.5f, 0.0f, -1.0f},
+            .c = {0.0f, 0.5f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = 1},
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {0.5f, 0.0f, -1.0f},
+            .b = {-0.5f, 0.0f, -1.0f},
+            .c = {0.0f, -0.5f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = 1},
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineBatch& batch = plan.lineBatches.front();
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
+    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depthCulling);
+}
+
+TEST(OverlayLineMeshBuilderTests, SourceWireDrawsBackFacingBoundaryEdges) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, -0.5f, -1.0f},
+            .end = {0.5f, -0.5f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 1},
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {-0.5f, -0.5f, -1.0f},
+            .b = {0.5f, -0.5f, -1.0f},
+            .c = {0.0f, -1.0f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = 1},
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineBatch& batch = plan.lineBatches.front();
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
+    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depthCulling);
+}
+
+TEST(OverlayLineMeshBuilderTests, SourceWireUsesOneOnTopBatchBesideDepthStamps) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 1},
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.5f, -1.0f},
+            .end = {0.5f, 0.5f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 2},
+    });
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {-0.5f, 0.0f, -1.0f},
+            .b = {0.5f, 0.0f, -1.0f},
+            .c = {0.0f, 0.25f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = 1},
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    EXPECT_EQ(plan.lineBatches[0].mesh.vertices.size(), 8u);
+    EXPECT_FLOAT_EQ(plan.lineBatches[0].depthBias, 0.0f);
+    EXPECT_EQ(plan.lineBatches[0].state.depthFunc, OverlayDepthFunc::Always);
+    EXPECT_FALSE(plan.lineBatches[0].state.depthCulling);
 }
 
 TEST(OverlayLineMeshBuilderTests, ExtendsLineCapsInScreenSpace) {
@@ -465,6 +617,24 @@ TEST(OverlayFaceFillBuilderTests, CreatesDepthStampedFaceFillPasses) {
     EXPECT_TRUE(plan.faceFillBatches[1].state.colorWrite);
     EXPECT_EQ(plan.faceFillBatches[1].state.depthFunc, OverlayDepthFunc::Equal);
     EXPECT_EQ(plan.faceFillBatches[1].mesh.vertices[0].color, rgba8SrgbToLinear(rgba8(255, 172, 31, 8)));
+}
+
+TEST(OverlayFaceFillBuilderTests, SourceWireDepthStampDoesNotRenderDepthPass) {
+    ViewportOverlayFrame frame;
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = {-1.0f, 0.0f, -1.0f},
+            .b = {1.0f, 0.0f, -1.0f},
+            .c = {0.0f, 1.0f, -1.0f},
+            .color = rgba8(255, 224, 92, 235),
+    });
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWireDepthStamp);
+
+    EXPECT_TRUE(plan.faceFillBatches.empty());
+    EXPECT_TRUE(plan.lineBatches.empty());
+    EXPECT_TRUE(plan.pointBatches.empty());
 }
 
 TEST(OverlayPointMeshBuilderTests, BuildsOutlineAndFillPointPasses) {

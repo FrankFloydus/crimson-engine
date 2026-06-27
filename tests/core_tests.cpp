@@ -4200,6 +4200,7 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeLayerDrawOrder) {
             ViewportOverlayLayer::WireframeBase,
             ViewportOverlayLayer::SelectedXrayFace,
             ViewportOverlayLayer::HoverFace,
+            ViewportOverlayLayer::SourceWireDepthStamp,
             ViewportOverlayLayer::SourceWire,
             ViewportOverlayLayer::OpenEdge,
             ViewportOverlayLayer::DiagnosticEdge,
@@ -4263,6 +4264,8 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::SelectedXrayFace));
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::SelectedFaceMask));
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::HoverFace));
+    EXPECT_FALSE(viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer::SourceWireDepthStamp));
+    EXPECT_FALSE(viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer::SourceWireDepthStamp));
 
     EXPECT_TRUE(viewportOverlayLayerWritesTransientHoverSuppressionMask(ViewportOverlayLayer::HoverFace));
     EXPECT_TRUE(viewportOverlayLayerWritesTransientHoverSuppressionMask(ViewportOverlayLayer::HoverEdge));
@@ -4289,6 +4292,8 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::SelectedEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::HoverEdge, 3.0f), 3.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::OpenEdge, 2.0f), 2.0f);
+    EXPECT_FLOAT_EQ(viewportOverlayDepthBias(ViewportOverlayLayer::SourceWire, ViewportOverlayGeometryKind::Lines),
+            0.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::GroupBounds, 0.0f), 1.5f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::ToolPlaneLine, 1.0f), 1.0f);
     EXPECT_FLOAT_EQ(viewportOverlayLineWidthPixels(ViewportOverlayLayer::ToolHandle, 2.0f), 2.0f);
@@ -4490,6 +4495,7 @@ TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::source_wire:"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:"), std::string::npos);
     EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:"), std::string::npos);
+    EXPECT_NE(source.find("case quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp:"), std::string::npos);
     EXPECT_NE(source.find("lineStyleRole"), std::string::npos);
     EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"), std::string::npos);
     EXPECT_NE(source.find("appendProjectedOverlayLines"), std::string::npos);
@@ -8454,6 +8460,42 @@ TEST(DocumentCommandServiceTests, AssetAwareServiceRejectsDanglingAssetReference
     EXPECT_EQ(result.message, "Material asset does not exist");
 }
 
+TEST(DocumentCommandServiceTests, SetMaterialComparesFullMaterialComponentState) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history, &assets);
+
+    const AssetId baseMaterial = assets.addMaterial(makeDefaultQuaderMaterial("Base Material"));
+    const AssetId slotMaterial = assets.addMaterial(makeDefaultQuaderMaterial("Slot Material"));
+    ASSERT_NE(baseMaterial, InvalidAssetId);
+    ASSERT_NE(slotMaterial, InvalidAssetId);
+
+    const EntityId entity = scene.createEntity("Slotted Material", EntityKind::Mesh);
+    scene.setMaterial(entity, MaterialComponent{
+            .material = baseMaterial,
+            .materialSlots = {{2u, slotMaterial}},
+    });
+
+    const DocumentCommandResult result = commands.setMaterial(entity, baseMaterial);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.material(entity), nullptr);
+    EXPECT_EQ(scene.material(entity)->material, baseMaterial);
+    EXPECT_TRUE(scene.material(entity)->materialSlots.empty());
+
+    ASSERT_TRUE(history.undo().ok);
+    ASSERT_NE(scene.material(entity), nullptr);
+    EXPECT_EQ(scene.material(entity)->material, baseMaterial);
+    ASSERT_TRUE(scene.material(entity)->materialSlots.contains(2u));
+    EXPECT_EQ(scene.material(entity)->materialSlots.at(2u), slotMaterial);
+
+    ASSERT_TRUE(history.redo().ok);
+    ASSERT_NE(scene.material(entity), nullptr);
+    EXPECT_EQ(scene.material(entity)->material, baseMaterial);
+    EXPECT_TRUE(scene.material(entity)->materialSlots.empty());
+}
+
 TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleCommands) {
     SceneDocument scene;
     EditorHistoryService history;
@@ -10560,7 +10602,14 @@ TEST(ModelingSessionServiceTests, InstantOperationsRefreshSceneObjectsAndSelecti
     ASSERT_NE(duplicateMaterial, nullptr);
     EXPECT_EQ(duplicateMaterial->material, defaultMaterial);
 
-    const ModelingCommandResult deleted = service.executeInstantOperation(ModelingInstantOperationId::DeleteSelection);
+    const ModelingCommandResult legacyDelete =
+            service.executeInstantOperation(ModelingInstantOperationId::DeleteSelection);
+    EXPECT_FALSE(legacyDelete.ok);
+    EXPECT_FALSE(legacyDelete.changed);
+    EXPECT_EQ(scene.entities().size(), 2u);
+
+    EditorHistoryService history;
+    const CommandResult deleted = history.execute(service.createDeleteSelectionCommand());
     ASSERT_TRUE(deleted.ok) << deleted.message;
     EXPECT_TRUE(deleted.changed);
     EXPECT_EQ(scene.entities().size(), 1u);

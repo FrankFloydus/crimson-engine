@@ -47,6 +47,7 @@ inline constexpr std::array<ViewportOverlayLayer, kViewportOverlayLayerCount> kV
         ViewportOverlayLayer::WireframeBase,
         ViewportOverlayLayer::SelectedXrayFace,
         ViewportOverlayLayer::HoverFace,
+        ViewportOverlayLayer::SourceWireDepthStamp,
         ViewportOverlayLayer::SourceWire,
         ViewportOverlayLayer::OpenEdge,
         ViewportOverlayLayer::DiagnosticEdge,
@@ -128,6 +129,7 @@ inline constexpr float kOverlayVertexOutlineSizePixels = 1.0f;
 
 int viewportOverlayDrawOrder(ViewportOverlayLayer layer);
 bool viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer layer);
+bool viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer layer);
 bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer);
 bool viewportOverlayLineDrawsOnTop(ViewportOverlayLayer layer);
 bool viewportOverlayPointDrawsOnTop(ViewportOverlayLayer layer);

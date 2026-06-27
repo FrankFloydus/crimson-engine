@@ -67,11 +67,19 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
         const ViewportOverlayCamera& camera,
         ViewportOverlayLayer layer) {
     OverlayLayerBuildPlan plan;
-    std::uint16_t blendOrder = static_cast<std::uint16_t>(viewportOverlayDrawOrder(layer) * 64);
+    if (layer == ViewportOverlayLayer::SourceWireDepthStamp) {
+        return plan;
+    }
 
+    std::uint16_t blendOrder = static_cast<std::uint16_t>(viewportOverlayDrawOrder(layer) * 64);
     OverlayFaceFillMesh faceFillMesh = OverlayFaceFillBuilder::buildLayer(frame, layer);
     if (!faceFillMesh.empty()) {
-        if (viewportOverlayLayerUsesDepthStampedFaceFill(layer)) {
+        if (viewportOverlayLayerUsesDepthOnlyFaceFill(layer)) {
+            plan.faceFillBatches.push_back({
+                    .mesh = std::move(faceFillMesh),
+                    .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
+            });
+        } else if (viewportOverlayLayerUsesDepthStampedFaceFill(layer)) {
             plan.faceFillBatches.push_back({
                     .mesh = faceFillMesh,
                     .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
@@ -94,21 +102,23 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
         std::vector<const ViewportOverlayLine*> batchLines;
         batchLines.reserve(lines.size());
         for (const ViewportOverlayLine* line : lines) {
-            if (line->color == key.color &&
-                    viewportOverlayLineWidthPixels(layer, line->widthPixels) == key.widthPixels) {
-                batchLines.push_back(line);
+            if (line->color != key.color ||
+                    viewportOverlayLineWidthPixels(layer, line->widthPixels) != key.widthPixels) {
+                continue;
             }
+            batchLines.push_back(line);
         }
         const float depthBias = viewportOverlayDepthBias(layer, ViewportOverlayGeometryKind::Lines);
         OverlayLineMesh mesh = OverlayLineMeshBuilder::build(batchLines, camera, key.widthPixels, depthBias);
-        if (!mesh.empty()) {
-            plan.lineBatches.push_back({
-                    .mesh = std::move(mesh),
-                    .state = makeState(layer, ViewportOverlayGeometryKind::Lines, blendOrder++),
-                    .widthPixels = key.widthPixels,
-                    .depthBias = depthBias,
-            });
+        if (mesh.empty()) {
+            continue;
         }
+        plan.lineBatches.push_back({
+                .mesh = std::move(mesh),
+                .state = makeState(layer, ViewportOverlayGeometryKind::Lines, blendOrder++),
+                .widthPixels = key.widthPixels,
+                .depthBias = depthBias,
+        });
     }
 
     const std::vector<const ViewportOverlayPoint*> points = pointsForLayer(frame, layer);

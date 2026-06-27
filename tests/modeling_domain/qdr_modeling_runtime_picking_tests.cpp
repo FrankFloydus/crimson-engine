@@ -114,6 +114,27 @@ quader_editor_core::PolygonObject adjacent_face_object()
 	return object;
 }
 
+quader_editor_core::PolygonObject occluded_back_edge_object()
+{
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	quader_poly::Document& document = object.document;
+	const quader_poly::ElementId front0 = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.2F });
+	const quader_poly::ElementId front1 = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.2F });
+	const quader_poly::ElementId front2 = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.2F });
+	const quader_poly::ElementId front3 = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.2F });
+	const quader_poly::ElementId back0 = quader_poly::add_vertex(document, { -0.5F, -0.05F, 0.0F });
+	const quader_poly::ElementId back1 = quader_poly::add_vertex(document, { 0.5F, -0.05F, 0.0F });
+	const quader_poly::ElementId back2 = quader_poly::add_vertex(document, { 0.5F, 0.05F, 0.0F });
+	const quader_poly::ElementId back3 = quader_poly::add_vertex(document, { -0.5F, 0.05F, 0.0F });
+	[[maybe_unused]] const quader_poly::ElementId front_face =
+		quader_poly::add_face(document, std::array { front0, front1, front2, front3 }, 0U);
+	[[maybe_unused]] const quader_poly::ElementId back_face =
+		quader_poly::add_face(document, std::array { back0, back1, back2, back3 }, 0U);
+	object.selected = true;
+	return object;
+}
+
 quader_editor_core::PickObjectBounds pick_bounds_for_object(const quader_editor_core::PolygonObject& object)
 {
 	quader_editor_core::PickObjectBounds bounds;
@@ -231,8 +252,33 @@ void component_hover_preserves_candidate_on_miss()
 			current_hover,
 			miss_ray(),
 			false);
-	require_test(object_miss.changed && object_miss.hover.candidate_object_id == -1,
-		"object hover misses should clear component candidate state");
+	require_test(!object_miss.changed && object_miss.hover.candidate_object_id == 7,
+		"object hover misses should keep the previous mesh source-wire candidate");
+}
+
+void component_hover_rejects_single_mesh_occluded_source_edges()
+{
+	const std::vector<quader_editor_core::PolygonObject> objects { occluded_back_edge_object() };
+	quader_editor_core::SelectionHoverState current_hover;
+	current_hover.candidate_object_id = 7;
+	quader_poly::PickOptions options;
+	options.mode = quader_poly::SelectionMode::edge;
+	options.edge_radius = 0.12F;
+	options.pick_backfaces = true;
+
+	const quader_editor_core::SelectionHoverUpdateResult hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			current_hover,
+			{ { 0.0F, -0.05F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+			false,
+			options);
+
+	require_test(hover.hover.candidate_object_id == 7,
+		"occluded source-edge hover should keep the sticky component candidate");
+	require_test(hover.hover.kind == quader_editor_core::SelectionHoverKind::none,
+		"occluded source-edge hover should not expose an edge hidden behind the same mesh surface");
 }
 
 void hover_can_use_precomputed_object_bounds()
@@ -615,6 +661,7 @@ TEST_CASE("qdr_editor_core_picking_tests", "[editor-core-picking]")
 {
 	hover_tracks_face_candidates_and_selected_feedback();
 	component_hover_preserves_candidate_on_miss();
+	component_hover_rejects_single_mesh_occluded_source_edges();
 	hover_can_use_precomputed_object_bounds();
 	hover_can_use_precomputed_face_geometry();
 	open_mesh_hover_picks_visible_back_sides();

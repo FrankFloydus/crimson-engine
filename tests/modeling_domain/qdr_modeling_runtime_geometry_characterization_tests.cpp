@@ -246,7 +246,7 @@ void overlay_occluder_visibility_is_stable()
 	require_test(occluder.line_segment_is_visible({ -0.5F, 0.0F, 1.0F }, { 0.5F, 0.0F, 1.0F }, front_camera()),
 		"overlay occluder should keep line segments in front of the mesh visible");
 	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::source_wire),
-		"source-wire overlay lines should be preserved for renderer depth testing");
+		"source-wire overlay lines should be preserved as draw-on-top topology handles");
 	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::selected_edge),
 		"selected edge overlay lines should stay visible through occluders");
 	require_test(!quader_editor_core::OverlayVisibilityOccluder::line_layer_uses_visibility(quader_editor_core::SelectionOverlayLayer::selected_face_edge),
@@ -340,14 +340,14 @@ void overlay_visibility_preserves_edit_wire_layers()
 		},
 	};
 	require_test(!quader_editor_core::selection_overlay_lines_use_visibility(lines),
-		"editor-core overlay visibility policy should not camera-cull renderer-depth-tested wire layers");
+		"editor-core overlay visibility policy should not camera-cull edit wire layers");
 
 	const std::vector<quader_editor_core::SelectionOverlayLine> visible =
 		occluder.visible_lines(lines, front_camera());
 	require_test(visible.size() == 4,
 		"editor-core overlay visibility filtering should preserve current edit wire layers");
 	require_test(visible[0].layer == quader_editor_core::SelectionOverlayLayer::source_wire,
-		"source wire behind the occluder should be preserved for renderer depth testing");
+		"source wire behind the occluder should be preserved as draw-on-top topology");
 	require_test(visible[1].layer == quader_editor_core::SelectionOverlayLayer::selected_edge,
 		"selected edges behind the occluder should be preserved as x-ray handles");
 	require_test(visible[2].layer == quader_editor_core::SelectionOverlayLayer::selected_face_edge,

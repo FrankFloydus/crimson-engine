@@ -51,6 +51,8 @@ ViewportOverlayLayer fromRuntime(quader_editor_core::SelectionOverlayLayer layer
         return ViewportOverlayLayer::SnapTargetVertex;
     case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:
         return ViewportOverlayLayer::DiagnosticEdge;
+    case quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp:
+        return ViewportOverlayLayer::SourceWireDepthStamp;
     }
     return ViewportOverlayLayer::SourceWire;
 }
@@ -67,6 +69,8 @@ ViewportOverlayStyleRole triangleStyleRole(
         return viewportOverlayIsNativeRemoveColor(colorAbgr)
                 ? ViewportOverlayStyleRole::RemoveSelectionFace
                 : ViewportOverlayStyleRole::HoverFace;
+    case quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp:
+        return ViewportOverlayStyleRole::SourceWire;
     default:
         return ViewportOverlayStyleRole::ExplicitColor;
     }

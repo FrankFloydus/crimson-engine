@@ -120,6 +120,7 @@ enum class SelectionOverlayLayer {
 	open_edge = 12,
 	snap_target_vertex = 13,
 	diagnostic_edge = 14,
+	source_wire_depth_stamp = 15,
 };
 
 /**
