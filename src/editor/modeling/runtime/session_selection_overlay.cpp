@@ -563,11 +563,10 @@ SelectionOverlayFrame build_selection_overlay_frame(
 
 	auto object_draws_source_wire = [&](const PolygonObject& object) {
 		const bool selected_object = object.selected;
-		const int object_mode_wire_id = hover.candidate_object_id > 0 ? hover.candidate_object_id : hover.object_id;
-		const bool hovered_object = object.id > 0 &&
-			((mode == SelectionMode::object && object.id == object_mode_wire_id) ||
-				(mode != SelectionMode::object && object.id == hover.candidate_object_id));
-		return selected_object || hovered_object;
+		const bool component_hovered_object = mode != SelectionMode::object &&
+			object.id > 0 &&
+			object.id == hover.candidate_object_id;
+		return selected_object || component_hovered_object;
 	};
 
 	for (const PolygonObject& object : objects) {
@@ -712,15 +711,11 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
 
 	for (const PolygonObject& object : objects) {
-		const bool object_mode_hover =
-			mode == SelectionMode::object &&
-			object.id > 0 &&
-			object.id == (hover.candidate_object_id > 0 ? hover.candidate_object_id : hover.object_id);
 		const bool component_candidate =
 			mode != SelectionMode::object &&
 			hover.candidate_object_id > 0 &&
 			object.id == hover.candidate_object_id;
-		if (!object.selected && (object_mode_hover || component_candidate)) {
+		if (!object.selected && component_candidate) {
 			append_hover_source_wire(frame, object, style, component_candidate);
 			if (mode == SelectionMode::vertex) {
 				for (const quader_poly::Vertex& vertex : object.document.vertices) {

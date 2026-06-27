@@ -537,7 +537,7 @@ void component_hover_source_wire_candidate_is_sticky_until_replaced()
 		"hovering a different component object should replace the source-wire candidate");
 }
 
-void object_hover_source_wire_candidate_is_sticky_until_replaced()
+void object_hover_does_not_emit_source_wire_until_selection()
 {
 	quader_editor_core::EditorSession session = two_box_session();
 	session.clear_selection();
@@ -550,13 +550,16 @@ void object_hover_source_wire_candidate_is_sticky_until_replaced()
 		{ { 0.0F, 0.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } },
 		false);
 	require_test(first_hover.changed && first_hover.hover.object_id == 1 && first_hover.hover.candidate_object_id == 1,
-		"object hover should tag the hovered mesh as the source-wire candidate");
+		"object hover should still track the hovered mesh for click selection");
 
 	const quader_editor_core::SelectionOverlayFrame first_frame =
 		quader_editor_core::build_selection_hover_overlay_frame(session.objects(), session.selection_mode(), first_hover.hover);
-	const std::size_t first_source_wire_count = line_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire);
-	require_test(first_source_wire_count > 0,
-		"object hover candidate should draw source wire in the hover frame");
+	require_test(line_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
+		"object hover should not draw mesh source wire before click selection");
+	const quader_editor_core::SelectionOverlayFrame first_base_frame =
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), first_hover.hover);
+	require_test(line_count_for_layer(first_base_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
+		"object hover should not draw mesh source wire in the base selection overlay");
 
 	const quader_editor_core::SelectionHoverUpdateResult empty_hover = quader_editor_core::update_selection_hover(
 		session.objects(),
@@ -567,11 +570,15 @@ void object_hover_source_wire_candidate_is_sticky_until_replaced()
 	require_test(empty_hover.hover.kind == quader_editor_core::SelectionHoverKind::none &&
 			empty_hover.hover.object_id == -1 &&
 			empty_hover.hover.candidate_object_id == 1,
-		"empty object hover should keep the previous mesh source-wire candidate");
+		"empty object hover may keep the previous candidate without drawing it");
 	const quader_editor_core::SelectionOverlayFrame empty_frame =
 		quader_editor_core::build_selection_hover_overlay_frame(session.objects(), session.selection_mode(), empty_hover.hover);
-	require_test(line_count_for_layer(empty_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == first_source_wire_count,
-		"empty object hover should preserve candidate source-wire lines in the hover frame");
+	require_test(line_count_for_layer(empty_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
+		"empty object hover should not preserve mesh source-wire lines in the hover frame");
+	const quader_editor_core::SelectionOverlayFrame empty_base_frame =
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), empty_hover.hover);
+	require_test(line_count_for_layer(empty_base_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
+		"empty object hover should not preserve mesh source-wire lines in the base selection overlay");
 
 	const quader_editor_core::SelectionHoverUpdateResult second_hover = quader_editor_core::update_selection_hover(
 		session.objects(),
@@ -888,7 +895,7 @@ TEST(QdrModelingRuntimeOverlayTests, QdrEditorCoreOverlayTests) {
 	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();
 	component_deselect_keeps_active_mesh_source_wire_visible();
 	component_hover_source_wire_candidate_is_sticky_until_replaced();
-	object_hover_source_wire_candidate_is_sticky_until_replaced();
+	object_hover_does_not_emit_source_wire_until_selection();
 	vertex_mode_hover_candidate_exposes_unselected_handles();
 	hover_only_overlay_omits_selected_base_geometry();
 	selected_component_hover_keeps_normal_hover_primitives();
