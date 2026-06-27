@@ -6,8 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "BehaviorScenario.h"
 
-#if QUADER_TEST_HAS_PROGRAMMATIC_API
-
 #include "BehaviorExpect.h"
 #include "api/QuaderApiTypeConversions.h"
 #include "assets/AssetRegistry.h"
@@ -719,5 +717,3 @@ SnapshotExpect BehaviorThen::snapshot(const BehaviorSnapshot& snapshot) const {
 }
 
 } // namespace quader::test
-
-#endif

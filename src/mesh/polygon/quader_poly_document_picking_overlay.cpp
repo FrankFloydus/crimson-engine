@@ -65,15 +65,34 @@ bool face_is_front_facing_from_ray(quader::QVec3 normal, const Ray& ray)
     return dot(normal, ray.direction) < -epsilon;
 }
 
-bool face_hit_is_better(const FaceRayHit& candidate, const std::optional<FaceRayHit>& nearest)
+bool face_hit_is_better(const FaceRayHit& candidate, const std::optional<FaceRayHit>& nearest, const PickOptions& options)
 {
     if (!nearest.has_value()) {
         return true;
     }
-    if (candidate.front_facing != nearest->front_facing) {
+    if (options.prefer_front_facing_faces && candidate.front_facing != nearest->front_facing) {
         return candidate.front_facing;
     }
-    return candidate.distance < nearest->distance;
+    if (std::abs(candidate.distance - nearest->distance) > epsilon) {
+        return candidate.distance < nearest->distance;
+    }
+    return !options.prefer_front_facing_faces &&
+        candidate.front_facing &&
+        !nearest->front_facing;
+}
+
+float face_hit_query_max_distance(
+    const std::optional<FaceRayHit>& nearest,
+    bool front_facing,
+    const PickOptions& options)
+{
+    if (!nearest.has_value()) {
+        return std::numeric_limits<float>::infinity();
+    }
+    if (options.prefer_front_facing_faces && front_facing != nearest->front_facing) {
+        return std::numeric_limits<float>::infinity();
+    }
+    return nearest->distance;
 }
 
 std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle> triangles, const Ray& ray, const PickOptions& options = {})
@@ -95,7 +114,7 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
         };
         const quader_geometry::QRayBoundedTriangleQueryOptions<float> query_options {
             0.0F,
-            nearest.has_value() && front_facing == nearest->front_facing ? nearest->distance : std::numeric_limits<float>::infinity(),
+            face_hit_query_max_distance(nearest, front_facing, options),
             picking_epsilon,
         };
         const quader_geometry::QRayBoundedTriangleHit<float> hit =
@@ -105,7 +124,7 @@ std::optional<FaceRayHit> nearest_face_ray_hit(std::span<const PickFaceTriangle>
                 triangle_pick_bounds(triangle),
                 query_options);
         const FaceRayHit candidate { triangle.face_id, hit.triangle_hit.distance, front_facing };
-        if (hit.hit && face_hit_is_better(candidate, nearest)) {
+        if (hit.hit && face_hit_is_better(candidate, nearest, options)) {
             nearest = candidate;
         }
     }
@@ -242,7 +261,7 @@ std::optional<FaceRayHit> nearest_face_ray_hit(const Document& document, const R
             float distance = 0.0F;
             quader::QVec3 position;
             if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
-                face_hit_is_better({ face.id, distance, front_facing }, nearest)) {
+                face_hit_is_better({ face.id, distance, front_facing }, nearest, options)) {
                 nearest = FaceRayHit { face.id, distance, front_facing };
             }
         }
@@ -452,7 +471,7 @@ PickResult pick_element(const Document& document, const Ray& local_ray, const Pi
             if (ray_intersects_triangle(ray, a->position, b->position, c->position, distance, position) &&
                 face_hit_is_better({ face.id, distance, front_facing }, best.hit ? std::optional<FaceRayHit> {
                     FaceRayHit { best.face_id, best.distance, best_front_facing }
-                } : std::optional<FaceRayHit> {})) {
+                } : std::optional<FaceRayHit> {}, options)) {
                 best = {
                     true,
                     ElementKind::face,

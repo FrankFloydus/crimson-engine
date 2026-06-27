@@ -6,7 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include <editor/interactions/transform_drag.h>
 #include <editor/interactions/tool_identity.h>
 #include <editor/interactions/viewport_projection.h>
 #include <editor/modeling/runtime/tool_constants.h>
@@ -26,64 +25,6 @@ enum class ViewportNavigationMode {
 	orbit,
 	pan,
 	fly,
-};
-
-/**
- * Enumerates ViewportMouseButton values used by the modeling layer.
- */
-enum class ViewportMouseButton {
-	none,
-	left,
-	middle,
-	right,
-	wheel_up,
-	wheel_down,
-	other,
-};
-
-/**
- * Enumerates ViewportInteractionAction values used by the modeling layer.
- */
-enum class ViewportInteractionAction {
-	none,
-	consume,
-	begin_fly_and_look,
-	update_fly_look,
-	end_fly,
-	begin_middle_navigation,
-	end_navigation,
-	update_pan,
-	update_orbit,
-	update_hover,
-	update_cut_hover,
-	update_poly_hover,
-	update_box_hover,
-	update_move_drag,
-	commit_move_drag,
-	update_transform_drag,
-	commit_transform_drag,
-	clear_move_candidate,
-	begin_move_candidate_drag,
-	wait_move_candidate_drag,
-	clear_selection_box,
-	update_selection_box,
-	zoom,
-	adjust_extrude_cuts,
-	route_select_button,
-	route_cut_button,
-	route_poly_button,
-	route_transform_button,
-	route_box_button,
-	route_move_button,
-	polygon_update_box_base,
-	polygon_cancel_box_base,
-	polygon_update_box_height,
-	polygon_begin_box_base,
-	polygon_commit_box_height,
-	polygon_begin_box_height,
-	polygon_begin_move_drag,
-	polygon_begin_transform_drag,
-	polygon_pick_select,
 };
 
 /**
@@ -130,50 +71,6 @@ struct ViewportNavigationResult {
 	double camera_size = 0.0;
 	bool orthogonal_snap = false;
 	quader_poly::Transform3 unsnapped_camera_transform;
-};
-
-/**
- * Stores the Viewport Interaction State data contract used by the modal modeling interaction layer.
- */
-struct ViewportInteractionState {
-	bool polygon_session = false;
-	bool fly_active = false;
-	bool can_begin_fly = false;
-	bool move_drag_active = false;
-	bool transform_drag_active = false;
-	bool move_candidate_active = false;
-	bool move_candidate_wait_for_drag_threshold = false;
-	bool selection_box_active = false;
-	bool cut_active = false;
-	bool box_active = false;
-	bool box_dragging_base = false;
-	bool box_height_preview = false;
-	bool navigating = false;
-	ViewportNavigationMode navigation_mode = ViewportNavigationMode::none;
-	ViewportInteractionTool active_tool = ViewportInteractionTool::select;
-	bool has_selection = false;
-	bool extrude_tool_active = false;
-	ModalMoveDragTool move_drag_tool = ModalMoveDragTool::move;
-};
-
-/**
- * Represents a Viewport Motion Input value used by the modal modeling interaction layer.
- */
-struct ViewportMotionInput {
-	bool left_down = false;
-	bool middle_down = false;
-	bool right_down = false;
-	bool relative_is_zero = false;
-	double move_candidate_drag_distance = 0.0;
-	double move_candidate_drag_threshold = selection_box_default_drag_threshold;
-};
-
-/**
- * Represents a Viewport Button Input value used by the modal modeling interaction layer.
- */
-struct ViewportButtonInput {
-	ViewportMouseButton button = ViewportMouseButton::none;
-	bool pressed = false;
 };
 
 /**
@@ -356,8 +253,6 @@ ViewportNavigationResult viewport_fly_move(const ViewportFlyMoveInput& input);
 ViewportNavigationResult viewport_frame_bounds(const ViewportFrameBoundsInput& input);
 ViewportNavigationResult viewport_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxis axis, int sign);
 ViewportNavigationResult viewport_step_view_axis(const ViewportCameraState& camera, quader::QVec3 pivot, ViewAxisStepDirection direction);
-ViewportInteractionAction plan_viewport_motion(const ViewportInteractionState& state, const ViewportMotionInput& input);
-ViewportInteractionAction plan_viewport_button(const ViewportInteractionState& state, const ViewportButtonInput& input);
 ViewCubePrimitives build_view_cube_primitives(const ViewCubePrimitiveInput& input);
 ViewCubeHit pick_view_cube(const ViewCubePickInput& input);
 bool view_cube_hits_match(const ViewCubeHit& left, const ViewCubeHit& right);

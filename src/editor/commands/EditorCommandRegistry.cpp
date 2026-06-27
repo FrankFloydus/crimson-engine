@@ -18,13 +18,6 @@ void EditorCommandRegistry::registerCommand(EditorCommandRegistration command) {
     commands_.push_back(std::move(command));
 }
 
-void EditorCommandRegistry::registerAlias(std::string aliasId, std::string targetId) {
-    if (aliasId.empty() || targetId.empty() || contains(aliasId)) {
-        return;
-    }
-    aliases_.emplace_back(std::move(aliasId), std::move(targetId));
-}
-
 void EditorCommandRegistry::registerPrefix(std::string prefix, PrefixHandler handler) {
     if (prefix.empty() || !handler) {
         return;
@@ -36,10 +29,7 @@ void EditorCommandRegistry::registerPrefix(std::string prefix, PrefixHandler han
 }
 
 bool EditorCommandRegistry::contains(std::string_view commandId) const {
-    return find(commandId) != nullptr ||
-            std::any_of(aliases_.begin(), aliases_.end(), [&](const auto& alias) {
-                return alias.first == commandId;
-            });
+    return find(commandId) != nullptr;
 }
 
 std::optional<QuaderApiVoidResult> EditorCommandRegistry::execute(std::string_view commandId) const {
@@ -95,25 +85,11 @@ std::string EditorCommandRegistry::shortcutFor(std::string_view commandId) const
     return {};
 }
 
-std::string EditorCommandRegistry::canonicalCommandId(std::string_view commandId) const {
-    return std::string(resolveAlias(commandId));
-}
-
 const EditorCommandRegistration* EditorCommandRegistry::find(std::string_view commandId) const {
-    commandId = resolveAlias(commandId);
     const auto found = std::find_if(commands_.begin(), commands_.end(), [&](const EditorCommandRegistration& command) {
         return command.id == commandId;
     });
     return found == commands_.end() ? nullptr : &(*found);
-}
-
-std::string_view EditorCommandRegistry::resolveAlias(std::string_view commandId) const {
-    for (const auto& alias : aliases_) {
-        if (alias.first == commandId) {
-            return alias.second;
-        }
-    }
-    return commandId;
 }
 
 } // namespace quader

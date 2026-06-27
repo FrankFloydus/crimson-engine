@@ -9,7 +9,6 @@
 #include "BehaviorSnapshot.h"
 #include "ModelingTestEvents.h"
 
-#if QUADER_TEST_HAS_PROGRAMMATIC_API
 #include "api/QuaderCommandIds.h"
 #include "api/QuaderEditorApi.h"
 #include "api/QuaderApiSessionInternalAccess.h"
@@ -22,11 +21,8 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#endif
 
 namespace quader::test {
-
-#if QUADER_TEST_HAS_PROGRAMMATIC_API
 
 class BehaviorGiven;
 class BehaviorWhen;
@@ -204,18 +200,5 @@ public:
 private:
     const BehaviorScenario& scenario_;
 };
-
-#else
-
-/**
- * Owns Behavior Scenario behavior within the behavior test DSL.
- */
-class BehaviorScenario final {
-public:
-    static BehaviorScenario newProject() { return {}; }
-    [[nodiscard]] bool programmaticApiAvailable() const { return false; }
-};
-
-#endif
 
 } // namespace quader::test

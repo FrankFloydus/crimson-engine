@@ -17,24 +17,45 @@ policy, history policy, and execution path through that contract.
   `ModelingCommandToolCatalog.cpp`; only commands with custom behavior get a file under
   `src/editor/commands/modeling`.
 - Native service-backed instant commands use `CustomInstantCommandTool` or a narrower existing base.
+- Native runtime-backed instant commands use `RuntimeCommandTool` when they execute an
+  `EditorRuntimeCommandId` directly, such as mirror and flip operations.
 - Polygon context actions use catalog-owned `ContextActionTool` rows.
 - Preview/modal operation commands use catalog-owned `PreviewOperationCommandTool` rows unless they
   need custom behavior.
 
-Examples:
+Representative commands include:
 
 - `delete_selection`
 - `duplicate_meshes`
-- `combine_meshes`
-- `dissolve_edges`
-- `merge_vertices_to_center`
-- `bridge_edges`
-- `radial_align_faces`
 - `apply_active_material`
-- `bevel_edges`
-- `thicken_faces`
-- `slice_quad`
-- `merge_by_distance`
+- preview/modal operations such as `bevel_edges`, `thicken_faces`, and `slice_quad`
+
+`delete_selection` is a split-route command. Component-mode deletion belongs to
+`DeleteSelectionTool` and `ModelingSessionService::deleteComponentSelection()`. Object, group, and
+selected scene-group-root deletion must use the scene-aware document command route. Do not put
+delete selection back into `ModelingInstantOperationCatalog` or recreate a generic
+`ModelingSessionService::deleteSelection()` path.
+
+## Public Command Bridge
+
+- Descriptor metadata owns the public command bridge: `publicCommandId`, `registersPublicCommand`,
+  and `hostShortcutTargetId`.
+- Use shared edit commands such as `edit.delete` when the operation is also a global editor command.
+- Generated modeling action command IDs come from `QuaderCommandsApi::commandIdForModelingAction()`.
+  Viewport tool activation command IDs come from `commandIdForToolActivation()`.
+- Do not reintroduce legacy compatibility aliases such as `history.*`, `modeling.action.*`, or
+  `modeling.*`, and do not add registry alias/canonicalization APIs unless a task explicitly asks
+  for a migration layer.
+
+## Picking Rules
+
+- Selection and hover picking policy belongs in modeling runtime picking owners. Do not duplicate
+  source-wire-first testing, surface occlusion, pick-radius normalization, or editor surface pick
+  policy in tools, UI, or API call sites.
+- Editor surface picking should use the shared editor policy: backfaces are pickable, but authored
+  front-facing faces are not preferred over nearer visible surfaces.
+- Keep pick options that affect cached face geometry, including `prefer_front_facing_faces`, in
+  picking-cache signatures.
 
 ## Rules
 

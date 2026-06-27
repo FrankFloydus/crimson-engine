@@ -1200,10 +1200,6 @@ public:
     Impl(SceneDocument& scene, AssetRegistry& assets)
         : scene_(scene), assets_(assets), sceneSyncService_(objectRegistry_) {}
 
-    [[nodiscard]] bool runtimeAvailable() const {
-        return true;
-    }
-
     [[nodiscard]] ModelingCommandDescriptor boxToolCommand() const {
         return makeBoxToolDescriptor();
     }
@@ -1680,7 +1676,15 @@ public:
         return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::clear_selection, false);
     }
 
-    ModelingCommandResult deleteSelection() {
+    ModelingCommandResult deleteComponentSelection() {
+        const ModelingSelectionSummary summary = selectionSummary();
+        if (summary.mode == ModelingSelectionMode::Object || summary.mode == ModelingSelectionMode::Group) {
+            return {
+                    .ok = false,
+                    .changed = false,
+                    .message = "Delete selection must use the scene-aware command route.",
+            };
+        }
         return executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId::delete_selection, true);
     }
 
@@ -2052,6 +2056,10 @@ public:
     }
 
     ModelingCommandResult executeContextAction(std::string_view actionId) {
+        if (actionId == std::string_view("delete_selection")) {
+            return {.ok = false, .message = "Delete selection must use the command route."};
+        }
+
         const ModelingContextActionResolution action =
                 contextActionService_.resolveExecutableAction(selectionSummary(), actionId, modalToolOwnsViewport());
         if (!action.ok) {
@@ -2118,10 +2126,6 @@ public:
     ModelingCommandResult executeInstantOperation(
             ModelingInstantOperationId operation,
             bool preserveDuplicateSceneIdentity = true) {
-        if (operation == ModelingInstantOperationId::DeleteSelection) {
-            return deleteSelection();
-        }
-
         const std::vector<ModelingObjectSceneIdentity> duplicateSceneIdentities =
                 operation == ModelingInstantOperationId::DuplicateMeshes && preserveDuplicateSceneIdentity
                 ? captureSelectedDuplicateSceneIdentities()
@@ -3599,10 +3603,6 @@ ModelingSessionService::~ModelingSessionService() = default;
 ModelingSessionService::ModelingSessionService(ModelingSessionService&&) noexcept = default;
 ModelingSessionService& ModelingSessionService::operator=(ModelingSessionService&&) noexcept = default;
 
-bool ModelingSessionService::runtimeAvailable() const {
-    return impl_->runtimeAvailable();
-}
-
 ModelingCommandDescriptor ModelingSessionService::boxToolCommand() const {
     return impl_->boxToolCommand();
 }
@@ -3695,8 +3695,8 @@ bool ModelingSessionService::hasSelectedSceneGroupRoot() const {
     return impl_->hasSelectedSceneGroupRoot();
 }
 
-ModelingCommandResult ModelingSessionService::deleteSelection() {
-    return impl_->deleteSelection();
+ModelingCommandResult ModelingSessionService::deleteComponentSelection() {
+    return impl_->deleteComponentSelection();
 }
 
 ModelingCommandResult ModelingSessionService::copySelection() {

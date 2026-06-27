@@ -135,6 +135,45 @@ quader_editor_core::PolygonObject occluded_back_edge_object()
 	return object;
 }
 
+/**
+ * Stores backfacing exterior and interior source-wire pick fixture data.
+ */
+struct BackfacingOccludedInteriorFixture {
+	quader_editor_core::PolygonObject object;
+	quader_poly::ElementId near_face = quader_poly::invalid_element_id;
+	quader_poly::ElementId interior_face = quader_poly::invalid_element_id;
+	quader_poly::Edge interior_edge;
+	quader_poly::ElementId interior_vertex = quader_poly::invalid_element_id;
+	quader_poly::Ray outside_ray;
+	quader_poly::Ray inside_ray;
+};
+
+BackfacingOccludedInteriorFixture backfacing_occluded_interior_fixture()
+{
+	BackfacingOccludedInteriorFixture fixture;
+	fixture.object.id = 7;
+	quader_poly::Document& document = fixture.object.document;
+
+	const quader_poly::ElementId near0 = quader_poly::add_vertex(document, { -1.0F, -1.0F, 0.2F });
+	const quader_poly::ElementId near1 = quader_poly::add_vertex(document, { -1.0F, 1.0F, 0.2F });
+	const quader_poly::ElementId near2 = quader_poly::add_vertex(document, { 1.0F, 1.0F, 0.2F });
+	const quader_poly::ElementId near3 = quader_poly::add_vertex(document, { 1.0F, -1.0F, 0.2F });
+	fixture.near_face = quader_poly::add_face(document, std::array { near0, near1, near2, near3 }, 0U);
+
+	const quader_poly::ElementId far0 = quader_poly::add_vertex(document, { -0.5F, -0.05F, 0.0F });
+	const quader_poly::ElementId far1 = quader_poly::add_vertex(document, { 0.5F, -0.05F, 0.0F });
+	const quader_poly::ElementId far2 = quader_poly::add_vertex(document, { 0.5F, 0.05F, 0.0F });
+	const quader_poly::ElementId far3 = quader_poly::add_vertex(document, { -0.5F, 0.05F, 0.0F });
+	fixture.interior_face = quader_poly::add_face(document, std::array { far0, far1, far2, far3 }, 0U);
+	fixture.interior_edge = quader_poly::make_edge(far0, far1);
+	fixture.interior_vertex = far0;
+
+	fixture.object.selected = true;
+	fixture.outside_ray = { { 0.0F, -0.05F, 5.0F }, { 0.0F, 0.0F, -1.0F } };
+	fixture.inside_ray = { { 0.0F, -0.05F, 0.1F }, { 0.0F, 0.0F, -1.0F } };
+	return fixture;
+}
+
 quader_editor_core::PickObjectBounds pick_bounds_for_object(const quader_editor_core::PolygonObject& object)
 {
 	quader_editor_core::PickObjectBounds bounds;
@@ -279,6 +318,100 @@ void component_hover_rejects_single_mesh_occluded_source_edges()
 		"occluded source-edge hover should keep the sticky component candidate");
 	require_test(hover.hover.kind == quader_editor_core::SelectionHoverKind::none,
 		"occluded source-edge hover should not expose an edge hidden behind the same mesh surface");
+}
+
+void flipped_surface_picking_uses_nearest_face_not_farthest_frontface()
+{
+	const BackfacingOccludedInteriorFixture fixture = backfacing_occluded_interior_fixture();
+	const std::vector<quader_editor_core::PolygonObject> objects { fixture.object };
+	quader_poly::PickOptions options;
+	options.mode = quader_poly::SelectionMode::face;
+	options.pick_backfaces = true;
+	options.prefer_front_facing_faces = false;
+
+	const std::optional<quader_editor_core::PickHitRecord> outside_hit =
+		quader_editor_core::pick_nearest(objects, { fixture.outside_ray, options });
+	require_test(outside_hit.has_value() &&
+			outside_hit->kind == quader_poly::ElementKind::face &&
+			outside_hit->face_id == fixture.near_face,
+		"outside flipped face picking should hit the nearest exterior/back-facing surface");
+
+	const std::optional<quader_editor_core::PickHitRecord> inside_hit =
+		quader_editor_core::pick_nearest(objects, { fixture.inside_ray, options });
+	require_test(inside_hit.has_value() &&
+			inside_hit->kind == quader_poly::ElementKind::face &&
+			inside_hit->face_id == fixture.interior_face,
+		"inside flipped face picking should hit the visible interior surface");
+
+	std::vector<quader_editor_core::PickObjectFaceGeometry> geometry =
+		quader_editor_core::build_pick_face_geometry(objects, options);
+	const std::vector<quader_editor_core::PickObjectBounds> bounds { pick_bounds_for_object(objects.front()) };
+	const std::optional<quader_editor_core::PickHitRecord> cached_outside_hit =
+		quader_editor_core::pick_nearest(objects, { fixture.outside_ray, options }, bounds, geometry);
+	require_test(cached_outside_hit.has_value() && cached_outside_hit->face_id == fixture.near_face,
+		"cached outside flipped face picking should use the nearest exterior/back-facing surface");
+}
+
+void flipped_source_wire_hover_rejects_occluded_interior_handles_from_outside()
+{
+	const BackfacingOccludedInteriorFixture fixture = backfacing_occluded_interior_fixture();
+	const std::vector<quader_editor_core::PolygonObject> objects { fixture.object };
+	quader_editor_core::SelectionHoverState current_hover;
+	current_hover.candidate_object_id = fixture.object.id;
+
+	quader_poly::PickOptions edge_options;
+	edge_options.mode = quader_poly::SelectionMode::edge;
+	edge_options.edge_radius = 0.12F;
+	edge_options.pick_backfaces = true;
+	const quader_editor_core::SelectionHoverUpdateResult outside_edge_hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			current_hover,
+			fixture.outside_ray,
+			false,
+			edge_options);
+	require_test(outside_edge_hover.hover.kind == quader_editor_core::SelectionHoverKind::none,
+		"outside source-wire hover should not pick an interior edge occluded by a flipped surface");
+
+	const quader_editor_core::SelectionHoverUpdateResult inside_edge_hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::edge,
+			current_hover,
+			fixture.inside_ray,
+			false,
+			edge_options);
+	require_test(inside_edge_hover.hover.kind == quader_editor_core::SelectionHoverKind::edge &&
+			inside_edge_hover.hover.edge == fixture.interior_edge,
+		"inside source-wire hover should pick the visible interior edge");
+
+	quader_poly::PickOptions vertex_options;
+	vertex_options.mode = quader_poly::SelectionMode::vertex;
+	vertex_options.vertex_radius = 0.12F;
+	vertex_options.pick_backfaces = true;
+	const quader_editor_core::SelectionHoverUpdateResult outside_vertex_hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::vertex,
+			current_hover,
+			{ { -0.5F, -0.05F, 5.0F }, { 0.0F, 0.0F, -1.0F } },
+			false,
+			vertex_options);
+	require_test(outside_vertex_hover.hover.kind == quader_editor_core::SelectionHoverKind::none,
+		"outside source-wire hover should not pick an interior vertex occluded by a flipped surface");
+
+	const quader_editor_core::SelectionHoverUpdateResult inside_vertex_hover =
+		quader_editor_core::update_selection_hover(
+			objects,
+			quader_editor_core::SelectionMode::vertex,
+			current_hover,
+			{ { -0.5F, -0.05F, 0.1F }, { 0.0F, 0.0F, -1.0F } },
+			false,
+			vertex_options);
+	require_test(inside_vertex_hover.hover.kind == quader_editor_core::SelectionHoverKind::vertex &&
+			inside_vertex_hover.hover.vertex_id == fixture.interior_vertex,
+		"inside source-wire hover should pick the visible interior vertex");
 }
 
 void hover_can_use_precomputed_object_bounds()
@@ -662,6 +795,8 @@ TEST_CASE("qdr_editor_core_picking_tests", "[editor-core-picking]")
 	hover_tracks_face_candidates_and_selected_feedback();
 	component_hover_preserves_candidate_on_miss();
 	component_hover_rejects_single_mesh_occluded_source_edges();
+	flipped_surface_picking_uses_nearest_face_not_farthest_frontface();
+	flipped_source_wire_hover_rejects_occluded_interior_handles_from_outside();
 	hover_can_use_precomputed_object_bounds();
 	hover_can_use_precomputed_face_geometry();
 	open_mesh_hover_picks_visible_back_sides();

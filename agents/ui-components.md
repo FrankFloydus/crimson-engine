@@ -56,5 +56,4 @@ controls, chrome controls, panel headers, tab controls, or any generated RML mar
 - Add focused tests for each component's generated tree and behavior attributes.
 - Update shell/resource guardrails when moving markup from `.rml` files into components.
 - Add new `.cpp` files to `quader_core` in `CMakeLists.txt`.
-- When changing `resources/ui/**`, rebuild the `quader` target as well as relevant tests because
-  runtime resources are copied by the app target.
+- When changing `resources/ui/**`, follow the resource rebuild rules in `ui-localization.md`.

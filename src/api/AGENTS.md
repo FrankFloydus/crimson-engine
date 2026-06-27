@@ -20,5 +20,8 @@ Read `../../agents/public-api-and-scripting.md` before changing this package.
   internals, and mutable service pointers.
 - Prefer `QuaderCommand::*`, `QuaderObjectHandle`, `QuaderSceneBatch`, and
   `QuaderApiResult`/`QuaderApiVoidResult` helpers in public-facing surfaces and examples.
+- Command execution should use typed `QuaderCommand` values or canonical command IDs returned by
+  `QuaderCommandsApi` helpers. Do not reintroduce legacy command aliases or registry
+  canonicalization for `history.*`, `modeling.action.*`, or `modeling.*` routes.
 - When changing public behavior, update API/behavior guardrail tests and public docs/examples when
   the user-facing contract changes.

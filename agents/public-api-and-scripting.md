@@ -50,6 +50,9 @@ Prefer these public API ergonomics for C++ callers:
   examples. Legacy field access can remain in older internal code.
 - `QuaderCommandsApi` and `QuaderPreferencesApi` for keybinding reads, updates, removals, resets,
   conflicts, and future rebinding UI. Do not let UI code parse or persist shortcut JSON directly.
+- Command IDs should route through typed `QuaderCommand` values or canonical command IDs returned by
+  helpers such as `commandIdForModelingAction()` and `commandIdForToolActivation()`. Do not
+  reintroduce legacy command aliases such as `history.*`, `modeling.action.*`, or `modeling.*`.
 
 ## Keep Low-Level When
 
@@ -66,6 +69,12 @@ If a new UI/test/script needs behavior that the public API does not expose yet, 
 owner behavior first, then expose it through a public API method. Do not bypass the API from
 UI/tests/scripts because the method is missing.
 
+## C++ Automation Rules
+
+`QuaderScript` is the current C++ automation DSL. It must keep using public API calls and result
+helpers, not owner services or raw runtime internals. Add examples and tests through the compiled
+public API path instead of conditional stubs.
+
 ## Scripting Rules
 
 Lua must call public API bindings, not raw C++ internals.
@@ -74,7 +83,7 @@ Lua bindings must not expose:
 
 - `SceneDocument`;
 - `AssetRegistry`;
-- SDK `EditorSession`;
+- internal `quader_editor_core::EditorSession` or absorbed modeling runtime internals;
 - `ModelingSessionService`;
 - UI, render, platform, ECS, or raw backend internals;
 - mutable internal pointers.
@@ -113,6 +122,8 @@ end)
 
 - Public headers under `src/api` must avoid backend/internal owner headers.
 - `src/api` must not call raw SDK execution shortcuts outside approved execution services.
+- `src/api` must not add command alias/canonicalization layers unless an explicit migration task
+  requires them.
 - Public examples must start from `QuaderEditorApi`, `QuaderApi`, `QuaderObjectHandle`,
   `QuaderScript`, or future Lua `quader`.
 - Lua binding code may bind only public API types and approved value structs.

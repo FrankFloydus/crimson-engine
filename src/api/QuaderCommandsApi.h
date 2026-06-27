@@ -69,8 +69,6 @@ public:
 
     QuaderApiVoidResult execute(std::string_view commandId);
     QuaderApiVoidResult execute(QuaderCommandId commandId);
-    QuaderApiVoidResult executeModelingAction(std::string_view actionId);
-    QuaderApiVoidResult executeToolActivation(std::string_view toolId);
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string commandIdForModelingAction(std::string_view actionId) const;
     [[nodiscard]] std::string commandIdForToolActivation(std::string_view toolId) const;

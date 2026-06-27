@@ -234,20 +234,6 @@ private:
 };
 
 /**
- * Applies Delete Selection History Command behavior as a command in the editor coordination layer.
- */
-class DeleteSelectionHistoryCommand final : public ModelingMementoCommand {
-public:
-    explicit DeleteSelectionHistoryCommand(ModelingSessionService& modeling)
-        : ModelingMementoCommand(modeling, "Delete Selection") {}
-
-private:
-    ModelingCommandResult executeInitial() override {
-        return modeling().deleteSelection();
-    }
-};
-
-/**
  * Applies Paste Selection History Command behavior as a command in the editor coordination layer.
  */
 class PasteSelectionHistoryCommand final : public ModelingMementoCommand {

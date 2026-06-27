@@ -101,11 +101,11 @@ including stable ordering, separators, and preview/tool visibility conditions.
 Hosts still render their own controls and decide docking, animation, focus,
 persistence, and engine-specific menu APIs.
 
-`qdr_host_contract_consumer_smoke_tests` exercises this package like a tiny
-custom host shell: it builds menus, toolbars, settings panels, shortcut targets,
-gesture targets, tool groups, and preference-backed panels from public
-descriptors only. It is a descriptor proof, not the final custom-engine
-modeling-session sample.
+`qdr_editor_metadata_consumer_smoke_tests` exercises this package like a tiny
+custom host shell inside the `quader_modeling_domain_tests` aggregate: it builds
+menus, toolbars, settings panels, shortcut targets, gesture targets, tool groups,
+and preference-backed panels from public descriptors only. It is a descriptor
+proof, not the final custom-engine modeling-session sample.
 
 `qdr_custom_engine_modeling_runtime_smoke_tests` complements that descriptor
 proof from the absorbed modeling-domain side: it links app-owned editor metadata,

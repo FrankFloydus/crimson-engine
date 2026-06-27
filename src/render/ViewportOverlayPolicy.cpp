@@ -32,7 +32,11 @@ bool viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer layer) {
 }
 
 bool viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer layer) {
-    return layer == ViewportOverlayLayer::ToolPlane ||
+    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
+            layer == ViewportOverlayLayer::SelectedXrayFace ||
+            layer == ViewportOverlayLayer::SelectedFaceMask ||
+            layer == ViewportOverlayLayer::HoverFace ||
+            layer == ViewportOverlayLayer::ToolPlane ||
             layer == ViewportOverlayLayer::ToolHandle ||
             layer == ViewportOverlayLayer::ToolPreviewFill;
 }

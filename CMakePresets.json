@@ -2,18 +2,6 @@
   "version": 6,
   "configurePresets": [
     {
-      "name": "vs2022",
-      "displayName": "Visual Studio 2022 x64",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/vs2022",
-      "cacheVariables": {
-        "CMAKE_TOOLCHAIN_FILE": "$env{USERPROFILE}/vcpkg/scripts/buildsystems/vcpkg.cmake",
-        "VCPKG_TARGET_TRIPLET": "x64-windows",
-        "QUADER_BUILD_TESTS": "ON"
-      }
-    },
-    {
       "name": "vs2026",
       "displayName": "Visual Studio 2026 x64",
       "generator": "Visual Studio 18 2026",
@@ -27,20 +15,6 @@
     }
   ],
   "buildPresets": [
-    {
-      "name": "vs2022-debug",
-      "configurePreset": "vs2022",
-      "configuration": "Debug",
-      "jobs": 24,
-      "nativeToolOptions": ["/nodeReuse:false"]
-    },
-    {
-      "name": "vs2022-release",
-      "configurePreset": "vs2022",
-      "configuration": "Release",
-      "jobs": 24,
-      "nativeToolOptions": ["/nodeReuse:false"]
-    },
     {
       "name": "vs2026-debug",
       "configurePreset": "vs2026",
@@ -57,17 +31,6 @@
     }
   ],
   "testPresets": [
-    {
-      "name": "vs2022-debug",
-      "configurePreset": "vs2022",
-      "configuration": "Debug",
-      "execution": {
-        "jobs": 24
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
     {
       "name": "vs2026-debug",
       "configurePreset": "vs2026",

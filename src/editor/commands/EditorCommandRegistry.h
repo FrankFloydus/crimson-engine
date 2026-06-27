@@ -36,14 +36,12 @@ public:
     using PrefixHandler = std::function<QuaderApiVoidResult(std::string_view suffix)>;
 
     void registerCommand(EditorCommandRegistration command);
-    void registerAlias(std::string aliasId, std::string targetId);
     void registerPrefix(std::string prefix, PrefixHandler handler);
 
     [[nodiscard]] bool contains(std::string_view commandId) const;
     [[nodiscard]] std::optional<QuaderApiVoidResult> execute(std::string_view commandId) const;
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
-    [[nodiscard]] std::string canonicalCommandId(std::string_view commandId) const;
 
 private:
     /**
@@ -55,10 +53,8 @@ private:
     };
 
     [[nodiscard]] const EditorCommandRegistration* find(std::string_view commandId) const;
-    [[nodiscard]] std::string_view resolveAlias(std::string_view commandId) const;
 
     std::vector<EditorCommandRegistration> commands_;
-    std::vector<std::pair<std::string, std::string>> aliases_;
     std::vector<PrefixRoute> prefixes_;
 };
 

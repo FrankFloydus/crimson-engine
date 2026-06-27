@@ -4264,6 +4264,10 @@ TEST(ViewportOverlayPolicyTests, MatchesDepthAndHoverSuppressionContract) {
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::SelectedXrayFace));
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::SelectedFaceMask));
     EXPECT_TRUE(viewportOverlayLayerUsesDepthStampedFaceFill(ViewportOverlayLayer::HoverFace));
+    EXPECT_TRUE(viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer::SelectedVisibleFace));
+    EXPECT_TRUE(viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer::SelectedXrayFace));
+    EXPECT_TRUE(viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer::SelectedFaceMask));
+    EXPECT_TRUE(viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer::HoverFace));
     EXPECT_FALSE(viewportOverlayLayerUsesDepthOnlyFaceFill(ViewportOverlayLayer::SourceWireDepthStamp));
     EXPECT_FALSE(viewportOverlayTriangleIsTwoSided(ViewportOverlayLayer::SourceWireDepthStamp));
 

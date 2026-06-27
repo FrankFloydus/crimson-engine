@@ -28,10 +28,16 @@ adapters so OpenGL and Metal can be added later.
 - Keep layer draw order, colors, alpha, widths, point sizes, and depth/draw-on-top decisions
   centralized there.
 - Do not scatter overlay color constants through unrelated files.
-- `SceneRenderBridge` renders face/fill triangle overlays and GPU screen-space wire/vertex overlays.
+- Runtime selection overlays flow through `ModelingOverlayService`, `SelectionOverlayProjection`,
+  `QuaderRenderApiRuntimeAccess::syncSelectionOverlay`, and then `SceneRenderBridge`.
+- `SceneRenderBridge` submits overlay frames through `OverlayRenderableCache` and
+  `OverlayProxyFactory`; extraction and build policy belong in `src/render/overlay/**`, especially
+  `ViewportSceneOverlayBuilder`, `OverlayRenderableBuilder`, and `ViewportOverlayStyleResolver`.
 - Do not reintroduce raw Filament `LINES`/`POINTS`, UI-backend wire fallbacks, or unfeathered
   triangle-strip shortcuts for selection overlays.
 - Wire and vertex overlays are screen-space quads.
+- `ViewportOverlayStyleResolver` applies `ViewportSettings` colors, sizes, and selection-mode scoped
+  overrides. Do not bypass it with one-off render constants.
 - Overlay materials live at:
   - `resources/materials/quader_overlay_line.mat`
   - `resources/materials/quader_overlay_point.mat`
@@ -44,19 +50,32 @@ adapters so OpenGL and Metal can be added later.
 
 ## Overlay Contract
 
-- Depth-tested by default: `OpenEdge`.
+- Depth-tested overlay layers include `WireframeBase`, `OpenEdge`, and unselected vertices unless
+  `ViewportOverlayPolicy` marks the layer/geometry draw-on-top.
 - Draw-on-top: `SourceWire`, `SelectedFaceEdge`, `SelectedEdge`, `HoverFaceEdge`, `HoverEdge`,
-  `GroupBounds`, `DiagnosticEdge`, selected/hover/snap vertices, and tool line/handle overlays.
+  `GroupBounds`, `DiagnosticEdge`, selected/hover/snap vertices, tool line/handle overlays, and
+  tool fill layers such as `ToolPlane` and `ToolPreviewFill`.
 - Active source-wire topology is interactive edit geometry: component hover and pick paths must test the
   visible active source-wire handles before falling back to shaded surface-depth picking.
-- Face fills use depth-stamped two-pass behavior.
+- Active `SourceWire` handles are tested first, but accepted only when not occluded by the nearest
+  visible surface hit. Editor surface picking enables backfaces and disables authored-front-face
+  preference: `pick_backfaces = true`, `prefer_front_facing_faces = false`.
+- `SelectedVisibleFace`, `SelectedXrayFace`, `SelectedFaceMask`, and `HoverFace` use depth-stamped
+  two-pass, two-sided face fills: depth-only `GE` pass, then equal-depth color pass, no triangle
+  culling. Do not restore backface culling for selected or hover face fills.
 - `SourceWireDepthStamp` remains a non-rendered metadata layer. Do not use it to CPU-delete source-wire
-  edges during render extraction. Active source-wire topology should render as a crisp draw-on-top
-  editor wire, while picking/hover ownership decides which handles are interactive.
+  edges during render extraction. It may appear as frame triangle metadata, but
+  `OverlayRenderableBuilder` must emit no render batches for `SourceWireDepthStamp`. Active
+  source-wire topology should render as a crisp draw-on-top editor wire, while picking/hover
+  ownership decides which handles are interactive.
 - Object-mode selected mesh wires remain on the selected-edge path.
-- Native layer order is:
-  `SelectedVisibleFace`, `SelectedFaceMask`, `WireframeBase`, `SelectedXrayFace`, `HoverFace`,
-  `SourceWireDepthStamp`, `SourceWire`, `OpenEdge`, `DiagnosticEdge`, `SelectedFaceEdge`,
-  `SelectedEdge`, `GroupBounds`, `HoverFaceEdge`, `HoverEdge`, `UnselectedVertex`, `SelectedVertex`,
-  `HoverVertex`, `SnapTargetVertex`, `ToolPlane`, `ToolPreviewFill`, `ToolPlaneLine`,
-  `ToolPreviewLine`, `ToolPreviewSeam`, `ToolHandle`.
+- Native layer order lives in `kViewportOverlayDrawOrder` and is guarded by tests. Do not copy the
+  full order into a second source of truth.
+
+## Picking And Caches
+
+- Runtime source-wire picking lives in `src/editor/modeling/runtime/session_picking.cpp`.
+- `PickingCacheProjection` world-transforms pickable objects, filters invisible or unselectable
+  scene entities, and includes every pick option that affects cached face geometry in its signature.
+- `ModelingSelectionService` owns picking-cache invalidation. Do not duplicate picking cache
+  invalidation or source-wire-first policies in UI, API, or tool call sites.

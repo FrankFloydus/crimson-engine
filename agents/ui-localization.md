@@ -22,7 +22,8 @@ Use `UI` casing for UI infrastructure types:
   backend-neutral panel architecture is intentionally introduced.
 - UI shell code owns presentation, backend integration, and input routing only.
 - Do not make UI code reach sideways into app globals.
-- For user-intent mutations, prefer `QuaderApi` or future `QuaderEditorApi`.
+- For whole-editor UI intent, prefer `QuaderEditorApi`. Use `QuaderApi` only for
+  document/modeling-only paths that do not need runtime editor domains.
 - `UISystem` wires lifecycle, settings, localization, RmlUi, and `ViewportHost`, but it should not
   grow into the owner of panel domain behavior, viewport workspace state, or renderer algorithms.
 - RmlUi backend hosts own generic Rml context, resource loading, event translation, rendering, and

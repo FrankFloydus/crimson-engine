@@ -8,8 +8,6 @@
 
 #include "BehaviorScenario.h"
 
-#if QUADER_TEST_HAS_PROGRAMMATIC_API
-
 #include <cstddef>
 #include <initializer_list>
 #include <optional>
@@ -194,5 +192,3 @@ private:
 };
 
 } // namespace quader::test
-
-#endif

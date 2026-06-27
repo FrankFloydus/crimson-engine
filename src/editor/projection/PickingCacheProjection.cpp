@@ -118,6 +118,7 @@ std::uint64_t PickingCacheProjection::objectFaceGeometrySignature(
     hash = mixPickGeometryHash(hash, pickOptions.has_hidden_material_slot);
     hash = mixPickGeometryHash(hash, pickOptions.hidden_material_slot);
     hash = mixPickGeometryHash(hash, pickOptions.pick_backfaces);
+    hash = mixPickGeometryHash(hash, pickOptions.prefer_front_facing_faces);
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.vertices.size()));
     hash = mixPickGeometryHash(hash, static_cast<std::uint64_t>(object.document.faces.size()));
     for (const quader_poly::Vertex& vertex : object.document.vertices) {

@@ -337,6 +337,25 @@ void backface_enabled_face_picking_prefers_front_facing_authored_side()
         "cached backface-enabled face picking should use the same front-facing preference");
 }
 
+void backface_enabled_face_picking_can_prefer_nearest_surface()
+{
+    const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
+    PickOptions options;
+    options.mode = SelectionMode::face;
+    options.pick_backfaces = true;
+    options.prefer_front_facing_faces = false;
+    const Ray ray { { 0.0F, 0.0F, -2.0F }, { 0.0F, 0.0F, 1.0F } };
+
+    const PickResult uncached = pick_element(fixture.document, ray, options);
+    require_test(uncached.hit && uncached.face_id == fixture.near_backfacing_face,
+        "nearest-surface face picking should prefer a nearer backface over a farther authored front side");
+
+    const std::vector<PickFaceTriangle> face_geometry = build_face_pick_geometry(fixture.document, options);
+    const PickResult cached = pick_face_geometry(face_geometry, ray, options);
+    require_test(cached.hit && cached.face_id == fixture.near_backfacing_face,
+        "cached nearest-surface face picking should match uncached face picking");
+}
+
 void backface_enabled_component_picking_prefers_front_facing_incident_side_on_overlap()
 {
     const BackfacePreferenceFixture fixture = make_backface_preference_fixture();
@@ -529,6 +548,7 @@ TEST_CASE("qdr_poly_geometry_characterization_tests", "[poly-geometry-characteri
     characterizes_edge_pick_radius_and_tie_break();
     characterizes_component_occlusion_by_front_face();
     backface_enabled_face_picking_prefers_front_facing_authored_side();
+    backface_enabled_face_picking_can_prefer_nearest_surface();
     backface_enabled_component_picking_prefers_front_facing_incident_side_on_overlap();
     characterizes_concave_ngon_renderability();
     characterizes_edge_factor_from_ray();

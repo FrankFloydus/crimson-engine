@@ -25,7 +25,6 @@ struct CommandToolDescriptor {
     bool rebuildsMeshOnSuccess = true;
     std::string_view publicCommandId;
     bool registersPublicCommand = true;
-    std::string_view publicCompatibilityAlias;
     std::string_view hostShortcutTargetId;
 };
 

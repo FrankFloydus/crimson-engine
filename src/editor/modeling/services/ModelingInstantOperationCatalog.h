@@ -21,7 +21,7 @@ namespace quader {
  * Stores one catalog-owned instant modeling operation contract shared by command routing and runtime execution.
  */
 struct ModelingInstantOperationCatalogEntry {
-    ModelingInstantOperationId operation = ModelingInstantOperationId::DeleteSelection;
+    ModelingInstantOperationId operation = ModelingInstantOperationId::DuplicateMeshes;
     std::string_view id;
     std::string_view operationId;
     std::string_view commandLabel;
@@ -31,7 +31,6 @@ struct ModelingInstantOperationCatalogEntry {
     bool rebuildsMeshOnSuccess = true;
     std::string_view publicCommandId;
     bool registersPublicCommand = true;
-    std::string_view publicCompatibilityAlias;
 };
 
 [[nodiscard]] std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCatalog();

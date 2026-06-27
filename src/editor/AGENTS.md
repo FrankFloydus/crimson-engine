@@ -19,6 +19,9 @@ for viewport tool behavior.
 - Modeling operations execute through modeling command/runtime services; do not call raw polygon
   operations from UI/test/script code to bypass missing editor behavior.
 - `ModelingSessionService` remains a thin adapter over real owners.
+- `delete_selection` is a split-route command. Component deletion goes through
+  `DeleteSelectionTool` and `ModelingSessionService::deleteComponentSelection()`. Object/group
+  deletion and selected scene-group-root deletion go through the scene-aware document command route.
 - Tool state machines belong under editor tools/interactions, not UI panels.
 - Add synthetic behavior coverage for selection, history, tools, transform previews, overlays, and
   modeling workflows whenever those states can be inspected headlessly.

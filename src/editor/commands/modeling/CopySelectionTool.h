@@ -25,7 +25,6 @@ public:
                 .rebuildsMeshOnSuccess = false,
                 .publicCommandId = "edit.copy",
                 .registersPublicCommand = false,
-                .publicCompatibilityAlias = "modeling.copy_selection",
                 .hostShortcutTargetId = "copy_meshes",
         };
     }

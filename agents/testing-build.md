@@ -21,6 +21,8 @@ file except through prior written authorization from Francesco Di Blasi.
 - Prefer synthetic tests that verify undo/redo, revision stamps, selection sync, cache invalidation,
   mesh/material component settings, viewport derived state, and command aliases after the shared
   owner path runs.
+- Programmatic API and `BehaviorScenario` tests are always built in the app test target. Do not add
+  `QUADER_TEST_HAS_PROGRAMMATIC_API` guards, skipped stubs, or fallback scenario shells.
 
 ## Expected Commands
 
@@ -35,8 +37,9 @@ cmake --build --preset vs2026-debug
 ctest --preset vs2026-debug
 ```
 
-Former SDK tests are migrated into the normal app test target. Do not add SDK-specific configure,
-build, or test presets back to the native app.
+The native test suite is split into the GoogleTest `quader_tests` target and the Catch2
+`quader_modeling_domain_tests` aggregate. Both run through `ctest --preset vs2026-debug`. Do not
+add SDK-specific configure, build, or test presets back to the native app.
 
 If PowerShell inherits conflicting `PATH`/`Path` entries and CMake cannot find tools, use:
 
@@ -50,7 +53,12 @@ cmd /c "set PATH=& set Path=$p& cmake --build --preset vs2026-debug --target qua
 
 - Vulkan backend initializes.
 - Main SDL window opens without a separate console window.
-- RmlUi shell appears as one full-window viewport panel.
+- RmlUi MainLayout shell appears with toolbar/chrome, central viewport host, configured side/bottom
+  dock surfaces, and status bar.
 - The viewport texture renders app-created polygon meshes with the default material.
 - Window resize keeps the viewport texture visible without stale or blank UI content.
 - MMB orbits, Shift+MMB pans, mouse wheel zooms.
+
+Use `quader_tests`/`ctest` for headless behavior, rebuild the `quader` target for
+resources/materials/runtime UI changes, and use `tools/boot_smoke.ps1` for GPU/window/RmlUi smoke
+checks with screenshot and log-copy output when a visual runtime check is required.

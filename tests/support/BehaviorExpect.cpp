@@ -6,8 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "BehaviorExpect.h"
 
-#if QUADER_TEST_HAS_PROGRAMMATIC_API
-
 #include "assets/AssetRegistry.h"
 #include "editor/modeling/services/ModelingSessionService.h"
 #include "math/GlmBridge.h"
@@ -673,5 +671,3 @@ SnapshotExpect& SnapshotExpect::meshVertexCount(std::string_view alias, std::siz
 }
 
 } // namespace quader::test
-
-#endif

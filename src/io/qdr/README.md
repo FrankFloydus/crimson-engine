@@ -41,8 +41,9 @@ Real fixture-backed golden, migration, and malformed-file coverage lives in
 `tests/modeling_domain/qdr_io_document_tests.cpp` with fixtures under
 `tests/modeling_domain/fixtures/io`.
 Compatibility coverage for the session-state adapter lives in
-`tests/modeling_domain/qdr_runtime_io_compat_tests.cpp` and is registered as the
-`qdr_runtime_io_compat_tests` CTest target. Live editor runtime fields remain
+`tests/modeling_domain/qdr_runtime_io_compat_tests.cpp` and is registered into
+the `quader_modeling_domain_tests` aggregate. Native project reader/writer
+coverage lives in `tests/io_qdr_tests.cpp`. Live editor runtime fields remain
 excluded from the durable schema.
 
 Engine asset formats wrap or import/export this portable data.

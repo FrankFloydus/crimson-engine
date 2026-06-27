@@ -10,7 +10,8 @@ file except through prior written authorization from Francesco Di Blasi.
 
 These files are private implementation helpers for the compiled document sources.
 
-`qdr_document` now compiles all document behavior from normal `.cpp` files. Do not add new permanent `.inc` implementation shards.
+`quader_modeling_polygon` compiles document behavior from normal `.cpp` files. Do not add new
+permanent `.inc` implementation shards.
 
 Current helper boundaries:
 
@@ -22,4 +23,6 @@ Current helper boundaries:
 - narrow helper headers cover topology/validation, hull/plane, knife, UV, picking, and bridge/surface helpers
 - operation helper behavior lives in compiled `quader_poly_document_*_helpers.cpp` sources. Keep OpenMesh implementation types in `quader_poly_document_openmesh_helpers.cpp`.
 
-The overlay APIs remain legacy document-owned entry points because overlay styling belongs in editor-core. Keep any future overlay policy movement in editor-core rather than growing document presentation rules.
+Document overlay APIs emit primitive geometry only. Overlay styling, layer policy, render state, and
+projection belong in `src/editor/projection`, `src/editor/modeling/services`, and `src/render/**`;
+do not grow document presentation rules here.

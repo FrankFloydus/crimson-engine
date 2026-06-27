@@ -34,24 +34,23 @@ Avoid starting public examples with:
 - `SceneDocument`;
 - `AssetRegistry`;
 - `ModelingSessionService`;
-- SDK `EditorSession`;
+- internal `quader_editor_core::EditorSession` or absorbed modeling runtime internals;
 - `SceneRenderBridge`;
 - UI, render, platform, and backend internals.
 
 Internal docs may explain those systems, but must be clearly labeled as internals.
 
-Recommended public docs/examples:
+Current public docs/examples:
 
 ```text
-README.md
 docs/api-overview.md
 docs/editor-scripting-lua.md
-docs/internal-architecture.md
 examples/create_box.cpp
 examples/script_modeling_workflow.cpp
-examples/custom_document_builder.cpp
 examples/lua/README.md
 ```
+
+Treat additional public docs/examples as backlog unless the files are created in the same change.
 
 Do not add executable Lua examples until the native app actually ships a Lua runtime and binding
 layer.

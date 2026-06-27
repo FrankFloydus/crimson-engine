@@ -285,7 +285,7 @@ EditorSelectionBoxBaseline EditorSelectionService::captureBoxSelectionBaseline()
     baseline.mode = modeling_.selectionMode();
     baseline.sceneSelection = scene_.selectedEntities();
     baseline.activeEntity = scene_.primarySelection();
-    if (modeling_.runtimeAvailable() && baseline.mode != ModelingSelectionMode::Group) {
+    if (baseline.mode != ModelingSelectionMode::Group) {
         baseline.modelingSelection = modeling_.captureBoxSelectionBaseline();
     }
     return baseline;
@@ -297,11 +297,7 @@ ModelingSelectionSummary EditorSelectionService::pickSelect(const ModelingPickSe
         return scenePickSelection(nearestGroupAncestor(hitMesh), ModelingSelectionMode::Group, request);
     }
 
-    if (modeling_.runtimeAvailable()) {
-        return modeling_.pickSelect(request);
-    }
-
-    return scenePickSelection(pickMeshEntityByBounds(request.ray), ModelingSelectionMode::Object, request);
+    return modeling_.pickSelect(request);
 }
 
 ModelingSelectionSummary EditorSelectionService::boxSelect(const ModelingBoxSelectRequest& request) {
@@ -329,18 +325,13 @@ ModelingSelectionSummary EditorSelectionService::boxSelect(
         return sceneBoxSelection(groups, ModelingSelectionMode::Group, request.edit, baseline);
     }
 
-    if (modeling_.runtimeAvailable()) {
-        if (baseline != nullptr &&
-                baseline->modelingSelection.has_value() &&
-                baseline->modelingSelection->valid() &&
-                baseline->mode == modeling_.selectionMode()) {
-            return modeling_.boxSelect(request, *baseline->modelingSelection);
-        }
-        return modeling_.boxSelect(request);
+    if (baseline != nullptr &&
+            baseline->modelingSelection.has_value() &&
+            baseline->modelingSelection->valid() &&
+            baseline->mode == modeling_.selectionMode()) {
+        return modeling_.boxSelect(request, *baseline->modelingSelection);
     }
-
-    const std::vector<EntityId> entities = boxPickMeshEntitiesByBounds(request);
-    return sceneBoxSelection(entities, ModelingSelectionMode::Object, request.edit, baseline);
+    return modeling_.boxSelect(request);
 }
 
 ModelingCommandResult EditorSelectionService::updateHover(const ModelingHoverRequest& request) {

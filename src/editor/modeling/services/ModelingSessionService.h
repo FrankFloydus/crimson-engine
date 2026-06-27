@@ -63,7 +63,6 @@ public:
     ModelingSessionService(ModelingSessionService&&) noexcept;
     ModelingSessionService& operator=(ModelingSessionService&&) noexcept;
 
-    [[nodiscard]] bool runtimeAvailable() const;
     [[nodiscard]] ModelingCommandDescriptor boxToolCommand() const;
     [[nodiscard]] ModelingCommandDescriptor createBoxFromBoundsCommand() const;
     [[nodiscard]] std::vector<ModelingObjectRecord> objects() const;
@@ -86,7 +85,7 @@ public:
     ModelingCommandResult clearSelection();
     std::unique_ptr<IUndoableCommand> createDeleteSelectionCommand();
     [[nodiscard]] bool hasSelectedSceneGroupRoot() const;
-    ModelingCommandResult deleteSelection();
+    ModelingCommandResult deleteComponentSelection();
     ModelingCommandResult copySelection();
     ModelingCommandResult pasteSelection();
     ModelingCommandResult repeatLastAction();

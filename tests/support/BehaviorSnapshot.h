@@ -18,15 +18,6 @@
 #include <unordered_map>
 #include <vector>
 
-#ifndef QUADER_TEST_HAS_PROGRAMMATIC_API
-#if defined(QUADER_TEST_ENABLE_PROGRAMMATIC_API) && QUADER_TEST_ENABLE_PROGRAMMATIC_API && __has_include("api/QuaderApi.h")
-#define QUADER_TEST_HAS_PROGRAMMATIC_API 1
-#include "api/QuaderApi.h"
-#else
-#define QUADER_TEST_HAS_PROGRAMMATIC_API 0
-#endif
-#endif
-
 namespace quader::test {
 
 /**

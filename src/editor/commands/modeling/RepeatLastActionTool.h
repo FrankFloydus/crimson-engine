@@ -25,7 +25,6 @@ public:
                 .rebuildsMeshOnSuccess = true,
                 .publicCommandId = "edit.repeat_last_action",
                 .registersPublicCommand = false,
-                .publicCompatibilityAlias = "modeling.repeat_last_action",
         };
     }
 

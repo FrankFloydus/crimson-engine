@@ -52,6 +52,12 @@ the behavior. Find the current app behavior, tests, or project history that defi
 the same logic into the current architecture while preserving ordering, state transitions, side
 effects, cache invalidation, and error handling.
 
+## Hard-Resolved Task Memory
+
+After this file, read root `memory.md` for non-trivial or regression-prone work. When resolving a
+hard-to-rediscover task, update `memory.md` with the invariant, owners, fix, and verification.
+Current code, tests, AGENTS files, and the user request override memory.
+
 ## Domain Routing
 
 - API, scripting, command palette, automation, public examples:
@@ -67,7 +73,8 @@ effects, cache invalidation, and error handling.
   read `INPUT_KEYBINDINGS.md`, `agents/public-api-and-scripting.md`, and the relevant owner
   domain file. For viewport navigation input, also read `agents/viewport-tools.md`.
 - Modeling tools, Polygon-backed operations, component selection, transform previews:
-  read `agents/modeling-tools.md`, `agents/public-api-and-scripting.md`.
+  read `agents/modeling-tools.md`, `agents/public-api-and-scripting.md`; also read
+  `agents/rendering-overlays.md` for hover, source-wire picking, overlays, or face fills.
 - Viewport tools, camera, navigation, shortcuts, gizmos, modal tool input:
   read `agents/viewport-tools.md`; if the task touches input routing, shortcut contexts, or user
   customization, also read `INPUT_KEYBINDINGS.md`.
@@ -93,15 +100,10 @@ specialized subtree, read the nearest nested `AGENTS.md` before editing.
 
 ## Public API Rule
 
-Use the public API when code expresses user/editor intent:
-
-```cpp
-editor.modeling().createBox(...);
-editor.object(object).rename("Wall").select();
-editor.scene().batch("Arrange").setTransform(entity, moved).commit();
-editor.commands().execute(QuaderCommand::HistoryUndo);
-editor.mainViewport().setShadingMode(QuaderShadingMode::Wireframe);
-```
+Use the public API when code expresses user/editor intent, such as
+`editor.modeling().createBox(...)`, `editor.scene().batch(...)`,
+`editor.commands().execute(QuaderCommand::HistoryUndo)`, or
+`editor.mainViewport().setShadingMode(...)`.
 
 Prefer typed command IDs from `QuaderCommand` in C++ call sites. Stable string command IDs remain
 the script/command-palette representation. Prefer `QuaderObjectHandle` and `QuaderSceneBatch` for
@@ -137,15 +139,9 @@ More build/test/smoke details live in `agents/testing-build.md`.
 When a change would normally need manual verification of editor behavior, first try to turn that
 workflow into a fast, headless synthetic behavior test. Use the public API or
 `tests/support/BehaviorScenario` to express real user/editor intent, then inspect document,
-selection, mesh, history, overlay, or viewport state. Examples include creating a box, entering
-face/edge/vertex mode, picking by ray, dragging a transform gizmo through
-`beginTransformDrag`/`updateTransformDrag`/`commitTransformDrag`, and asserting the compiled mesh
-bounds/topology and selection summary.
+selection, mesh, history, overlay, or viewport state.
 
 Keep manual smoke checks for real GPU/window/driver behavior only: Vulkan swapchain creation,
-dockspace/window appearance, actual material rendering, and pixel output until a render readback
-harness exists. Do not leave "open the app and click it" as the only coverage for selection,
-commands, modeling operations, transform previews, tool lifecycles, overlays, or history when
-those states can be inspected programmatically. Do not add save/load or QDR roundtrip behavior
-tests until the editor save/load surface exists; once it does, cover it with the same synthetic
-state-inspection style instead of manual verification.
+RmlUi MainLayout/window chrome appearance, actual material rendering, and pixel output until a
+render readback harness exists. Do not leave manual clicking as the only coverage for state that can
+be inspected programmatically. More detail lives in `agents/testing-build.md`.

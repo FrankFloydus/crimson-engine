@@ -153,9 +153,6 @@ QuaderApiVoidResult QuaderModelingApi::setSelectionMode(QuaderSelectionMode mode
 }
 
 bool QuaderModelingApi::canExecuteTool(std::string_view toolId) const {
-    if (toolId == "delete_selection" && projectSession(session_).modeling().hasSelectedSceneGroupRoot()) {
-        return true;
-    }
     return mutations_.canRunTrackedModelingTool(toolId);
 }
 

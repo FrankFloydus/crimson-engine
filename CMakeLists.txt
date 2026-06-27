@@ -46,6 +46,7 @@ set(QUADER_MODELING_TOOL_SOURCES
     src/editor/commands/modeling/ClearSelectionTool.cpp
     src/editor/commands/modeling/CommitBoxPreviewCommand.cpp
     src/editor/commands/modeling/SceneAwareDeleteSelectionCommand.cpp
+    src/editor/commands/modeling/DeleteSelectionTool.cpp
     src/editor/commands/modeling/CopySelectionTool.cpp
     src/editor/commands/modeling/FlipHorizontalTool.cpp
     src/editor/commands/modeling/FlipVerticalTool.cpp
@@ -489,8 +490,7 @@ if(QUADER_BUILD_TESTS)
     )
     target_compile_definitions(quader_tests
         PRIVATE
-            QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-            QUADER_TEST_ENABLE_PROGRAMMATIC_API=1)
+            QUADER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(quader_tests PRIVATE quader_runtime GTest::gtest GTest::gtest_main)
     add_test(NAME quader_tests COMMAND quader_tests)
 

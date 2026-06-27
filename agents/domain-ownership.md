@@ -80,6 +80,11 @@ belongs under `src/editor/modeling/**`, viewport tool state machines belong unde
 owners; it must not own public history, command semantics, bidirectional selection sync, or scene
 identity.
 
+`EditorSelectionService` owns editor selection intent. Group selection may use scene group ancestry,
+but object/component picking and box selection delegate to the modeling runtime and
+`ModelingSelectionBoxBaseline`. Do not add UI or `ViewportHost` scene-bounds fallback selection
+paths, and do not reintroduce `runtimeAvailable()` gates around modeling runtime selection.
+
 ## Viewport
 
 Viewport pointer, modal, transform, camera, and drawing interactions belong in `src/viewport/**` and

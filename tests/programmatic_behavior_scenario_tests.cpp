@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#if QUADER_TEST_HAS_PROGRAMMATIC_API
 namespace {
 
 /// Describes one synthetic component gizmo workflow so the same behavior can be
@@ -94,12 +93,8 @@ void runComponentTransformDragCase(ComponentPickCase testCase) {
 }
 
 } // namespace
-#endif
 
 TEST(ProgrammaticBehaviorScenarioTests, ShiftDuplicatePreviewUsesAbsoluteDeltasAndKeepsDuplicatePickable) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     auto s = quader::test::BehaviorScenario::newProject();
 
     s.given()
@@ -129,13 +124,9 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftDuplicatePreviewUsesAbsoluteDeltasA
     s.then().selection()
             .objectCount(1)
             .activeAlias("source.copy");
-#endif
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepComponentSelectionsAndMutateMesh) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     for (const ComponentPickCase testCase : {
                  ComponentPickCase{
                          .mode = quader::QuaderSelectionMode::Face,
@@ -185,13 +176,9 @@ TEST(ProgrammaticBehaviorScenarioTests, ComponentGizmoMoveRotateScaleKeepCompone
          }) {
         runComponentTransformDragCase(testCase);
     }
-#endif
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, FaceGizmoDragMovesOnlyPickedFaceAndKeepsComponentSelection) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     auto s = quader::test::BehaviorScenario::newProject();
 
     s.given()
@@ -212,13 +199,9 @@ TEST(ProgrammaticBehaviorScenarioTests, FaceGizmoDragMovesOnlyPickedFaceAndKeeps
     s.then().mesh("box")
             .boundsMinNear({-1.0f, -1.0f, -1.0f})
             .boundsMaxNear({3.0f, 1.0f, 1.0f});
-#endif
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveExtrudesAndShiftFaceScaleInsetsThroughGizmoDrag) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     {
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
@@ -268,13 +251,9 @@ TEST(ProgrammaticBehaviorScenarioTests, ShiftFaceMoveExtrudesAndShiftFaceScaleIn
                 .activeAlias("box");
         s.then().mesh("box").verticesGreaterThan(before.meshes.front());
     }
-#endif
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreserveComponentAuthority) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     {
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
@@ -342,13 +321,9 @@ TEST(ProgrammaticBehaviorScenarioTests, RayPickingAndContextClickSemanticsPreser
                 .objectCount(1)
                 .activeAlias("right");
     }
-#endif
 }
 
 TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDistinctDataLayers) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     {
         auto s = quader::test::BehaviorScenario::newProject();
         s.given()
@@ -398,5 +373,4 @@ TEST(ProgrammaticBehaviorScenarioTests, SelectionAndHoverOverlaysAreBoundedDisti
                 .pointBoundsCenterNear(quader::ViewportOverlayLayer::SelectedVertex, {1.0f, 1.0f, 1.0f})
                 .finiteCoordinates();
     }
-#endif
 }

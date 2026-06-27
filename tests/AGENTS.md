@@ -16,8 +16,8 @@ Read `../agents/testing-build.md` before changing tests.
 - Use public APIs and `tests/support/BehaviorScenario` to express real user/editor intent.
 - Cover selection, commands, modeling operations, transform previews, tool lifecycles, overlays,
   viewport state, and history with synthetic behavior tests when state can be inspected.
-- Keep manual smoke checks for Vulkan/window/dockspace/material/pixel behavior until render readback
-  coverage exists.
+- Keep manual smoke checks for Vulkan/window/RmlUi MainLayout chrome/material/pixel behavior until
+  render readback coverage exists.
 - Do not add save/load or QDR roundtrip behavior tests for editor workflows until the editor
   save/load surface exists.
 - When adding test files, update the owning CMake test target.

@@ -279,11 +279,11 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFrameSelection), "Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFocusOrigin), "Shift+Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportSpawnWindow), "F12");
-    EXPECT_EQ(editor.commands().shortcutFor("history.undo"), "Ctrl+Z");
-    EXPECT_EQ(editor.commands().shortcutFor("modeling.action.delete_selection"), "");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
     EXPECT_EQ(
             editor.commands().commandIdForModelingAction("delete_selection"),
             std::string(quader::QuaderCommand::DeleteSelection.string()));
+    EXPECT_EQ(editor.commands().shortcutFor(editor.commands().commandIdForModelingAction("delete_selection")), "Backspace");
     EXPECT_EQ(
             editor.commands().commandIdForModelingAction("invert_mesh"),
             std::string(quader::QuaderCommand::ModelingInvertMesh.string()));
@@ -293,7 +293,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_FALSE(editor.commands().execute("__missing_command__"));
     EXPECT_EQ(editor.commands().execute("__missing_command__").errorMessage(), "Unknown command id.");
     EXPECT_EQ(
-            editor.commands().execute("modeling.action.__missing_action__").errorMessage(),
+            editor.commands().execute("modeling.__missing_action__").errorMessage(),
             "Unknown command id.");
 
     quader::QuaderCreateBoxArgs args;
@@ -408,7 +408,7 @@ TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
     ASSERT_TRUE(updated.ok()) << updated.errorMessage();
     EXPECT_TRUE(updated.changed());
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Alt+Z");
-    EXPECT_EQ(editor.commands().shortcutFor("history.undo"), "Ctrl+Alt+Z");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Alt+Z");
     EXPECT_NE(readTextFile(path).find("\"key\": \"Ctrl+Alt+Z\""), std::string::npos);
 
     quader::ProjectSession reloadedSession;
@@ -1119,33 +1119,34 @@ TEST(EditorApiTests, ProjectDirtyStateAggregatesProjectSceneAssetAndModelingCont
     EXPECT_TRUE(editor.project().dirty());
 }
 
-TEST(EditorApiTests, LegacyModelingActionCommandIdsRouteThroughCommandRegistry) {
+TEST(EditorApiTests, RetiredModelingActionCommandAliasesDoNotRouteThroughCommandRegistry) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
-    quader::QuaderCreateBoxArgs args;
-    args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
-    args.name = "Legacy Action Box";
-
-    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created = editor.modeling().createBox(args);
-    ASSERT_TRUE(created.ok()) << created.errorMessage();
-    ASSERT_TRUE(editor.selection().selectObject(created.value()).ok());
-
-    const quader::QuaderApiVoidResult duplicate =
-            editor.commands().execute("modeling.action.duplicate_meshes");
-    ASSERT_TRUE(duplicate.ok()) << duplicate.errorMessage();
-    EXPECT_TRUE(duplicate.changed());
-    EXPECT_EQ(editor.query().entities().size(), 2u);
-
-    const quader::QuaderApiVoidResult undo = editor.commands().execute("history.undo");
-    ASSERT_TRUE(undo.ok()) << undo.errorMessage();
-    EXPECT_EQ(editor.query().entities().size(), 1u);
-
-    const quader::QuaderApiVoidResult deleteSelection =
-            editor.commands().execute("modeling.action.delete_selection");
-    ASSERT_TRUE(deleteSelection.ok()) << deleteSelection.errorMessage();
-    EXPECT_TRUE(deleteSelection.changed());
-    EXPECT_TRUE(editor.query().entities().empty());
+    EXPECT_EQ(
+            editor.commands().commandIdForModelingAction("duplicate_meshes"),
+            std::string(quader::QuaderCommand::DuplicateSelection.string()));
+    EXPECT_EQ(
+            editor.commands().execute("modeling.action.duplicate_meshes").errorMessage(),
+            "Unknown command id.");
+    EXPECT_EQ(
+            editor.commands().execute("modeling.duplicate_meshes").errorMessage(),
+            "Unknown command id.");
+    for (const std::string_view retiredCommandId : {
+                 std::string_view{"modeling.action.delete_selection"},
+                 std::string_view{"modeling.delete_selection"},
+                 std::string_view{"history.undo"},
+                 std::string_view{"history.redo"},
+                 std::string_view{"history.repeat_last_action"},
+                 std::string_view{"selection.clear"},
+                 std::string_view{"selection.select_all"},
+                 std::string_view{"selection.invert"},
+                 std::string_view{"scene.group_selection"},
+                 std::string_view{"scene.ungroup_selection"},
+         }) {
+        EXPECT_EQ(editor.commands().execute(retiredCommandId).errorMessage(), "Unknown command id.")
+                << retiredCommandId;
+    }
 }
 
 TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
@@ -1182,10 +1183,6 @@ TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
                     });
             for (const quader::QuaderActionItem& action : actions) {
                 SCOPED_TRACE(action.actionId);
-                const std::string legacy = "modeling.action." + action.actionId;
-                CommandTestHarness legacyRouteHarness;
-                EXPECT_NE(legacyRouteHarness.editor.commands().execute(legacy).errorMessage(), "Unknown command id.")
-                        << legacy;
                 const std::string command = commandIdForContextAction(harness.editor, action);
                 EXPECT_FALSE(command.empty()) << action.actionId;
                 CommandTestHarness commandRouteHarness;
@@ -1276,33 +1273,32 @@ TEST(EditorApiTests, EnabledContextMenuOperationsExecuteThroughCommandRegistry) 
     EXPECT_GT(successfulActionCount, 0);
 }
 
-TEST(EditorApiTests, DeleteCommandAliasesRemoveSameObjectAndExposeSameUndoLabel) {
-    for (const std::string_view commandId : {
-                 quader::QuaderCommand::DeleteSelection.string(),
-                 std::string_view{"modeling.delete_selection"},
-                 std::string_view{"modeling.action.delete_selection"},
-         }) {
-        CommandTestHarness harness;
-        const quader::QuaderModelingObjectRef first = createSelectedBox(harness.editor, "Delete Alias First");
-        const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
-                harness.editor.modeling().createBox(
-                        quader::QuaderBounds{.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
-                        "Delete Alias Second");
-        ASSERT_TRUE(second.ok()) << second.errorMessage();
-        ASSERT_TRUE(harness.editor.selection().selectObject(first).ok());
+TEST(EditorApiTests, DeleteCommandRouteRemovesSameObjectAndExposesUndoLabel) {
+    CommandTestHarness harness;
+    EXPECT_EQ(
+            harness.editor.commands().commandIdForModelingAction("delete_selection"),
+            std::string(quader::QuaderCommand::DeleteSelection.string()));
 
-        const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(commandId);
-        ASSERT_TRUE(deleted.ok()) << commandId << ": " << deleted.errorMessage();
-        EXPECT_TRUE(deleted.changed());
-        EXPECT_FALSE(harness.editor.query().entity(first.entity).has_value());
-        EXPECT_TRUE(harness.editor.query().entity(second.value().entity).has_value());
-        EXPECT_EQ(harness.editor.query().history().undoLabel, "Delete Selection");
+    const quader::QuaderModelingObjectRef first = createSelectedBox(harness.editor, "Delete Route First");
+    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> second =
+            harness.editor.modeling().createBox(
+                    quader::QuaderBounds{.min = {4.0f, -1.0f, -1.0f}, .max = {6.0f, 1.0f, 1.0f}},
+                    "Delete Route Second");
+    ASSERT_TRUE(second.ok()) << second.errorMessage();
+    ASSERT_TRUE(harness.editor.selection().selectObject(first).ok());
 
-        const quader::QuaderApiVoidResult undo = harness.editor.history().undo();
-        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
-        EXPECT_TRUE(harness.editor.query().entity(first.entity).has_value());
-        EXPECT_TRUE(harness.editor.query().entity(second.value().entity).has_value());
-    }
+    const quader::QuaderApiVoidResult deleted =
+            harness.editor.commands().execute(quader::QuaderCommand::DeleteSelection);
+    ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
+    EXPECT_TRUE(deleted.changed());
+    EXPECT_FALSE(harness.editor.query().entity(first.entity).has_value());
+    EXPECT_TRUE(harness.editor.query().entity(second.value().entity).has_value());
+    EXPECT_EQ(harness.editor.query().history().undoLabel, "Delete Selection");
+
+    const quader::QuaderApiVoidResult undo = harness.editor.history().undo();
+    ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+    EXPECT_TRUE(harness.editor.query().entity(first.entity).has_value());
+    EXPECT_TRUE(harness.editor.query().entity(second.value().entity).has_value());
 }
 
 TEST(EditorApiTests, RightClickPickOnUnselectedObjectChangesSelectionBeforeContextDelete) {
@@ -1883,13 +1879,14 @@ TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPu
     EXPECT_FALSE(entityNamed(editor, "Chronology Box").has_value());
 }
 
-TEST(EditorApiTests, AppCommandAliasesAndDirectOperationsShareChronologicalUndoStack) {
+TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
     const quader::QuaderModelingObjectRef original = createSelectedBox(editor, "Chronology Command Box");
 
-    const quader::QuaderApiVoidResult duplicated = editor.commands().execute("modeling.action.duplicate_meshes");
+    const quader::QuaderApiVoidResult duplicated = editor.commands().execute(
+            editor.commands().commandIdForModelingAction("duplicate_meshes"));
     ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
     ASSERT_EQ(editor.query().entities().size(), 2u);
     EXPECT_EQ(editor.query().history().undoLabel, "Duplicate Meshes");
@@ -1996,7 +1993,7 @@ TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
     EXPECT_NE(duplicateSnapshot->mesh, source.mesh);
 }
 
-TEST(EditorApiTests, DuplicateMeshesContextActionPreservesSceneOnlyDuplicateState) {
+TEST(EditorApiTests, DuplicateMeshesActionCommandPreservesSceneOnlyDuplicateState) {
     quader::ProjectSession session;
     quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -2023,7 +2020,7 @@ TEST(EditorApiTests, DuplicateMeshesContextActionPreservesSceneOnlyDuplicateStat
 
     ASSERT_TRUE(editor.selection().selectObject(source).ok());
     const quader::QuaderApiVoidResult duplicated =
-            editor.commands().execute("modeling.action.duplicate_meshes");
+            editor.commands().execute(editor.commands().commandIdForModelingAction("duplicate_meshes"));
     ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
 
     const std::vector<quader::EntityId> selected = selectedEntities(editor);

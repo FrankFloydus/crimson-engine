@@ -391,9 +391,10 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
         return documentCommandMissingEntityResult();
     }
 
+    const MaterialComponent after{.material = material};
     std::optional<MaterialComponent> before;
     if (const MaterialComponent* currentMaterial = scene_.material(entity)) {
-        if (currentMaterial->material == material) {
+        if (*currentMaterial == after) {
             return documentCommandUnchangedResult();
         }
         before = *currentMaterial;
@@ -405,7 +406,7 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
                     scene_,
                     entity,
                     before,
-                    MaterialComponent{.material = material}));
+                    after));
 }
 
 DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, MeshComponent mesh) {

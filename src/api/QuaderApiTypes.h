@@ -620,6 +620,7 @@ enum class QuaderOverlayLayer {
     ToolHandle = 20,
     GroupBounds = 21,
     WireframeBase = 22,
+    SourceWireDepthStamp = 23,
 };
 
 /**

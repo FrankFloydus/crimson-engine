@@ -49,10 +49,6 @@ std::string commandIdForToolActivation(std::string_view toolId) {
     return prefixedCommandId("tools.activate.", toolId);
 }
 
-std::string legacyActionAlias(std::string_view actionId) {
-    return prefixedCommandId("modeling.action.", actionId);
-}
-
 std::filesystem::path defaultKeybindingsPath() {
     if (const char* localAppData = std::getenv("LOCALAPPDATA")) {
         return std::filesystem::path(localAppData) / "Quader" / "keybindings.json";
@@ -96,8 +92,6 @@ public:
 
     QuaderApiVoidResult execute(std::string_view commandId);
     QuaderApiVoidResult execute(QuaderCommandId commandId);
-    QuaderApiVoidResult executeModelingAction(std::string_view actionId);
-    QuaderApiVoidResult executeToolActivation(std::string_view toolId);
     [[nodiscard]] std::vector<QuaderCommandDescriptor> available() const;
     [[nodiscard]] std::string commandIdForModelingAction(std::string_view actionId) const;
     [[nodiscard]] std::string commandIdForToolActivation(std::string_view toolId) const;
@@ -170,8 +164,6 @@ private:
             std::string shortcut = {},
             std::function<bool()> enabled = {},
             bool visible = true);
-    void registerAlias(std::string aliasId, QuaderCommandId targetId);
-    void registerAlias(std::string aliasId, std::string targetId);
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
     [[nodiscard]] std::string canonicalTargetId(std::string_view commandId) const;
 
@@ -196,14 +188,6 @@ QuaderCommandsApi::Impl::Impl(QuaderApi& api, QuaderProjectApi& project, QuaderV
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::execute(QuaderCommandId commandId) {
     return execute(commandId.string());
-}
-
-QuaderApiVoidResult QuaderCommandsApi::Impl::executeModelingAction(std::string_view actionId) {
-    return execute(commandIdForModelingAction(actionId));
-}
-
-QuaderApiVoidResult QuaderCommandsApi::Impl::executeToolActivation(std::string_view toolId) {
-    return execute(commandIdForToolActivation(toolId));
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::execute(std::string_view commandId) {
@@ -231,11 +215,6 @@ std::string QuaderCommandsApi::Impl::commandIdForToolActivation(std::string_view
 }
 
 std::string QuaderCommandsApi::Impl::shortcutFor(std::string_view commandId) const {
-    if (registry_.contains(commandId) &&
-            registry_.canonicalCommandId(commandId) != commandId &&
-            registry_.shortcutFor(commandId).empty()) {
-        return {};
-    }
     return keybindings_.shortcutFor(canonicalTargetId(commandId));
 }
 
@@ -583,23 +562,11 @@ void QuaderCommandsApi::Impl::registerCommands() {
             [this] { return viewports_.spawnWindow(); },
             "F12");
 
-    registerAlias("history.undo", QuaderCommand::EditUndo);
-    registerAlias("history.redo", QuaderCommand::EditRedo);
-    registerAlias("history.repeat_last_action", QuaderCommand::EditRepeatLastAction);
-    registerAlias("selection.clear", QuaderCommand::EditClearSelection);
-    registerAlias("selection.select_all", QuaderCommand::EditSelectAll);
-    registerAlias("selection.invert", QuaderCommand::EditInvertSelection);
-    registerAlias("scene.group_selection", QuaderCommand::GroupSelection);
-    registerAlias("scene.ungroup_selection", QuaderCommand::UngroupSelection);
     for (const CommandTool* tool : modelingCommandTools()) {
         if (tool == nullptr) {
             continue;
         }
         const std::string commandId = commandIdForModelingAction(tool->id());
-        registerAlias(legacyActionAlias(tool->id()), commandId);
-        if (!tool->publicCompatibilityAlias().empty()) {
-            registerAlias(std::string(tool->publicCompatibilityAlias()), commandId);
-        }
         if (!modelingActionRegistersDedicatedCommand(*tool)) {
             continue;
         }
@@ -741,14 +708,6 @@ void QuaderCommandsApi::Impl::registerCommand(
     });
 }
 
-void QuaderCommandsApi::Impl::registerAlias(std::string aliasId, QuaderCommandId targetId) {
-    registerAlias(std::move(aliasId), std::string(targetId.string()));
-}
-
-void QuaderCommandsApi::Impl::registerAlias(std::string aliasId, std::string targetId) {
-    registry_.registerAlias(std::move(aliasId), std::move(targetId));
-}
-
 QuaderApiVoidResult QuaderCommandsApi::Impl::failure(std::string message) const {
     return {
             .ok = false,
@@ -760,9 +719,6 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::failure(std::string message) const 
 }
 
 std::string QuaderCommandsApi::Impl::canonicalTargetId(std::string_view commandId) const {
-    if (registry_.contains(commandId)) {
-        return registry_.canonicalCommandId(commandId);
-    }
     return std::string(commandId);
 }
 
@@ -773,14 +729,6 @@ QuaderCommandsApi::~QuaderCommandsApi() = default;
 
 QuaderApiVoidResult QuaderCommandsApi::execute(QuaderCommandId commandId) {
     return impl_->execute(commandId);
-}
-
-QuaderApiVoidResult QuaderCommandsApi::executeModelingAction(std::string_view actionId) {
-    return impl_->executeModelingAction(actionId);
-}
-
-QuaderApiVoidResult QuaderCommandsApi::executeToolActivation(std::string_view toolId) {
-    return impl_->executeToolActivation(toolId);
 }
 
 QuaderApiVoidResult QuaderCommandsApi::execute(std::string_view commandId) {

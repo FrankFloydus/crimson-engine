@@ -25,7 +25,6 @@ public:
                 .rebuildsMeshOnSuccess = true,
                 .publicCommandId = "edit.apply_material",
                 .registersPublicCommand = false,
-                .publicCompatibilityAlias = "modeling.assign_material",
         };
     }
 

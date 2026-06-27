@@ -40,7 +40,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -294,18 +293,9 @@ void syncInputRouterFromEditorState(
 
 void activateViewportToolFromRouter(
         QuaderEditorApi& editor,
-        SceneDocument& document,
+        ModelingSessionService& modeling,
         ViewportInputRouter& inputRouter) {
     LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter.state().activeTool));
-    const bool preserveGroupSelection =
-            inputRouter.state().selectionMode == ViewportSelectionMode::Group ||
-            editor.selection().summary().mode == QuaderSelectionMode::Group;
-    const std::vector<EntityId> selectedBeforeToolActivation = preserveGroupSelection
-            ? document.selectedEntities()
-            : std::vector<EntityId>{};
-    const EntityId activeBeforeToolActivation = preserveGroupSelection
-            ? document.primarySelection()
-            : InvalidEntityId;
     inputRouter.clearModalDragState();
     const ViewportTool* activeTool = inputRouter.activeTool();
     const QuaderApiVoidResult command = activeTool != nullptr ?
@@ -319,21 +309,8 @@ void activateViewportToolFromRouter(
         LOG_ERROR("Viewport tool activation failed: {}", command.message.empty() ? "Command failed." : command.message);
         inputRouter.setActiveTool(ViewportToolId::Select);
         (void)editor.tools().activate(ViewportToolId::Select);
-    } else if (preserveGroupSelection) {
-        const QuaderApiVoidResult restoreSelection =
-                editor.selection().selectObjects(
-                        std::span<const EntityId>(
-                                selectedBeforeToolActivation.data(),
-                                selectedBeforeToolActivation.size()),
-                        activeBeforeToolActivation);
-        if (!restoreSelection.ok) {
-            LOG_ERROR("Group selection restore after tool activation failed: {}", restoreSelection.message);
-        }
-        (void)editor.selection().setMode(QuaderSelectionMode::Group);
-        inputRouter.setSelectionMode(ViewportSelectionMode::Group);
-    } else {
-        inputRouter.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(editor.selection().summary().mode)));
     }
+    syncInputRouterFromEditorState(inputRouter, editor, modeling);
     inputRouter.clearModalToolState();
 }
 
@@ -969,7 +946,7 @@ void ViewportHost::handleViewportFrameSurface(
     syncInputRouterFromEditorState(inputRouter, editor, modeling);
     const ViewportInputResult result = inputRouter.handleFrame(input, camera);
     if (result.toolChanged) {
-        activateViewportToolFromRouter(editor, document, inputRouter);
+        activateViewportToolFromRouter(editor, modeling, inputRouter);
     }
     if (result.gridPresetChanged) {
         workspace.setGridPreset(inputRouter.state().gridPreset);

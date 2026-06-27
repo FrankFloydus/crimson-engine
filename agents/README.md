@@ -10,8 +10,9 @@ file except through prior written authorization from Francesco Di Blasi.
 
 This folder contains domain-specific instructions for agents working in the native Quader app.
 
-Read `../AGENTS.md` first, then read only the files needed for the current task. Prefer this routing
-over loading every instruction file.
+Read `../AGENTS.md` first, then root `../memory.md` when it exists and the task is non-trivial or
+touches a historically subtle system. Then read only the domain files needed for the current task.
+Prefer this routing over loading every instruction file.
 
 ## Files
 

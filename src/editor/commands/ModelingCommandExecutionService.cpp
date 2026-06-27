@@ -74,8 +74,9 @@ ModelingCommandResult fromCommandResult(CommandResult result) {
 
 bool shouldUseSceneAwareDelete(ModelingSessionService& modeling) {
     const ModelingSelectionSummary summary = modeling.selectionSummary();
-    return summary.mode == ModelingSelectionMode::Object ||
-            summary.mode == ModelingSelectionMode::Group ||
+    return (summary.hasSelection &&
+            (summary.mode == ModelingSelectionMode::Object ||
+             summary.mode == ModelingSelectionMode::Group)) ||
             modeling.hasSelectedSceneGroupRoot();
 }
 
@@ -134,9 +135,8 @@ ModelingCommandResult ModelingCommandExecutionService::beginPreview(
         ModelingSessionService& modeling,
         EditorSelectionService& selection,
         std::string_view actionId) {
-    (void)selection;
-    if (actionId == "delete_selection" && shouldUseSceneAwareDelete(modeling)) {
-        return fromCommandResult(history.execute(modeling.createDeleteSelectionCommand()));
+    if (actionId == std::string_view("delete_selection")) {
+        return execute(history, modeling, selection, actionId);
     }
 
     const std::vector<ModelingActionItem> actions = modeling.contextActions(ModelingActionQuery{
@@ -183,6 +183,9 @@ ModelingCommandAvailability ModelingCommandExecutionService::availability(
         ModelingSessionService& modeling,
         std::string_view toolId,
         EditorSelectionService* selection) const {
+    if (toolId == std::string_view("delete_selection") && shouldUseSceneAwareDelete(modeling)) {
+        return ModelingCommandAvailability::available();
+    }
     return dispatcher_.availability(toolId, modeling, selection);
 }
 

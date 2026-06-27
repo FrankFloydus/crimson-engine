@@ -9,9 +9,6 @@
 #include <gtest/gtest.h>
 
 TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -34,13 +31,9 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     EXPECT_TRUE(selection.hasSelection);
     EXPECT_EQ(selection.selectedObjectCount, 1u);
     EXPECT_EQ(selection.activeObjectId, created.value.modelingObjectId);
-#endif
 }
 
 TEST(ProgrammaticApiTests, InvalidToolIdReturnsFailedUnchangedStatus) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -50,13 +43,9 @@ TEST(ProgrammaticApiTests, InvalidToolIdReturnsFailedUnchangedStatus) {
     EXPECT_FALSE(result.changed);
     EXPECT_FALSE(result.message.empty());
     EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
-#endif
 }
 
 TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -77,13 +66,9 @@ TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
     EXPECT_FALSE(failed.ok);
     EXPECT_FALSE(failed.changed);
     EXPECT_EQ(failed.mutationKind, quader::QuaderMutationKind::None);
-#endif
 }
 
 TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -96,13 +81,9 @@ TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
     EXPECT_FALSE(failed.ok);
     EXPECT_FALSE(failed.changed);
     EXPECT_EQ(failed.mutationKind, quader::QuaderMutationKind::None);
-#endif
 }
 
 TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -111,13 +92,9 @@ TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.changed);
     EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
-#endif
 }
 
 TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -151,13 +128,9 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
     ASSERT_TRUE(redone.ok) << redone.message;
     EXPECT_EQ(api.query().entities().size(), 1u);
     EXPECT_EQ(api.selection().summary().selectedVertexCount, 1u);
-#endif
 }
 
 TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -173,13 +146,9 @@ TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
     EXPECT_FALSE(result.steps.front().status.changed);
     EXPECT_NE(result.steps.front().status.message.find("missing"), std::string::npos);
     EXPECT_TRUE(result.finalSnapshot.entities.empty());
-#endif
 }
 
 TEST(ProgrammaticApiTests, ScriptAggregatesChangedStatusAcrossLaterNoOp) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -193,13 +162,9 @@ TEST(ProgrammaticApiTests, ScriptAggregatesChangedStatusAcrossLaterNoOp) {
     EXPECT_TRUE(result.changed());
     EXPECT_NE(result.mutationKind, quader::QuaderMutationKind::None);
     EXPECT_FALSE(result.finalSnapshot.entities.empty());
-#endif
 }
 
 TEST(ProgrammaticApiTests, ScriptRollsBackChangedStepsAcrossLaterFailure) {
-#if !QUADER_TEST_HAS_PROGRAMMATIC_API
-    GTEST_SKIP() << "QuaderApi tests are disabled until the production API target is linked into quader_tests.";
-#else
     quader::ProjectSession session;
     quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
 
@@ -217,5 +182,4 @@ TEST(ProgrammaticApiTests, ScriptRollsBackChangedStepsAcrossLaterFailure) {
     EXPECT_TRUE(result.finalSnapshot.entities.empty());
     EXPECT_TRUE(result.objects.empty());
     EXPECT_FALSE(api.history().canUndo());
-#endif
 }

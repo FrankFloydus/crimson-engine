@@ -9,6 +9,7 @@
 #include "editor/commands/modeling/AssignMaterialTool.h"
 #include "editor/commands/modeling/ClearSelectionTool.h"
 #include "editor/commands/modeling/CopySelectionTool.h"
+#include "editor/commands/modeling/DeleteSelectionTool.h"
 #include "editor/commands/modeling/FlipHorizontalTool.h"
 #include "editor/commands/modeling/FlipVerticalTool.h"
 #include "editor/commands/modeling/InvertSelectionTool.h"
@@ -110,7 +111,6 @@ private:
             .rebuildsMeshOnSuccess = entry.rebuildsMeshOnSuccess,
             .publicCommandId = entry.publicCommandId,
             .registersPublicCommand = entry.registersPublicCommand,
-            .publicCompatibilityAlias = entry.publicCompatibilityAlias,
     };
 }
 
@@ -118,8 +118,7 @@ private:
         const quader_host_contract::HostActionDescriptor& action,
         bool rebuildsMeshOnSuccess = true,
         std::string_view publicCommandId = {},
-        bool registersPublicCommand = true,
-        std::string_view publicCompatibilityAlias = {}) {
+        bool registersPublicCommand = true) {
     assert(action.kind == quader_host_contract::HostActionKind::operation);
     return {
             .id = action.id,
@@ -130,7 +129,6 @@ private:
             .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
             .publicCommandId = publicCommandId,
             .registersPublicCommand = registersPublicCommand,
-            .publicCompatibilityAlias = publicCompatibilityAlias,
     };
 }
 
@@ -173,6 +171,10 @@ private:
     });
 }
 
+[[nodiscard]] bool commandToolOwnsHostActionId(std::string_view actionId) {
+    return actionId == std::string_view("delete_selection") || instantOperationCatalogOwnsActionId(actionId);
+}
+
 [[nodiscard]] CommandToolDescriptor contextDescriptorFromHostAction(
         const quader_host_contract::HostActionDescriptor& action) {
     if (action.id == std::string_view("apply_active_material")) {
@@ -180,8 +182,7 @@ private:
                 action,
                 true,
                 "edit.apply_material",
-                false,
-                "modeling.apply_active_material");
+                false);
     }
     return contextDescriptor(action);
 }
@@ -214,6 +215,7 @@ std::span<const InstantCommandTool* const> modelingServiceInstantCommandTools() 
     static const SelectAllTool selectAll;
     static const InvertSelectionTool invertSelection;
     static const ClearSelectionTool clearSelection;
+    static const DeleteSelectionTool deleteSelection;
     static const CopySelectionTool copySelection;
     static const PasteSelectionTool pasteSelection;
     static const RepeatLastActionTool repeatLastAction;
@@ -224,10 +226,11 @@ std::span<const InstantCommandTool* const> modelingServiceInstantCommandTools() 
     static const FlipHorizontalTool flipHorizontal;
     static const FlipVerticalTool flipVertical;
 
-    static const std::array<const InstantCommandTool*, 12> tools{{
+    static const std::array<const InstantCommandTool*, 13> tools{{
             &selectAll,
             &invertSelection,
             &clearSelection,
+            &deleteSelection,
             &copySelection,
             &pasteSelection,
             &repeatLastAction,
@@ -261,7 +264,7 @@ std::span<const ContextActionTool* const> modelingContextActionTools() {
         for (const quader_host_contract::HostActionDescriptor& action : quader_host_contract::action_catalog()) {
             if (action.kind != quader_host_contract::HostActionKind::operation ||
                     action.preview_kind != quader_host_contract::HostPreviewKind::none ||
-                    instantOperationCatalogOwnsActionId(action.id)) {
+                    commandToolOwnsHostActionId(action.id)) {
                 continue;
             }
             result.push_back(std::make_unique<CatalogContextActionTool>(

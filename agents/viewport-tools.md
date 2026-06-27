@@ -40,12 +40,20 @@ For viewport keyboard, mouse, shortcut, user rebinding, or context work, also re
   `UISystem` should consume that service for UI/render orchestration instead of introducing
   new long-lived layout, camera, shading, or grid fields.
 - `QuaderViewportApi` should expose user/editor viewport intent through the workspace service.
-  Runtime hooks are for host/render actions that cannot be represented as core viewport state,
-  such as future screenshot/readback integrations.
+  Runtime hooks are for host/render actions that cannot be represented as core viewport state, such
+  as frame selection, focus origin, spawned viewport windows, and screenshot capture.
+- The embedded RmlUi viewport host uses a single-pane presentation, while
+  `ViewportWorkspaceService` also owns auxiliary/windowed viewport camera, render, and visibility
+  state. `ViewportHost` owns native viewport windows, swapchains, input routing, and cleanup for
+  spawned viewports.
 - Viewport input should flow through canonical keybinding owners: platform events become
   `ViewportInputFrame` in `ViewportHost`, keybindings resolve through `QuaderCommandsApi` and
   `QuaderKeybindingService`, and `ViewportInputRouter` consumes semantic actions such as orbit,
   pan, fly, zoom, and reset fly speed. Do not add hardcoded key/button collisions in viewport tools.
+- Viewport button/motion planning belongs in `ViewportInputRouter` and `src/editor/viewport`
+  interaction controllers. Do not reintroduce `ViewportInteractionAction`,
+  `plan_viewport_motion()`, or `plan_viewport_button()` in
+  `editor/interactions/viewport_navigation`.
 - Use keybinding `when` contexts for same-key behavior. For example, tool hotkeys can use
   `!navigation.active`, while navigation-specific bindings remain active during fly/orbit/pan.
 - Active mouse drags must keep the chord captured at drag start. Do not recompute drag modifiers

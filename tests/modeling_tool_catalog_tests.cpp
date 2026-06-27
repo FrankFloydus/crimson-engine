@@ -14,6 +14,7 @@
 #include "editor/commands/InstantOperationCommandTool.h"
 #include "editor/commands/PreviewOperationCommandTool.h"
 #include "editor/commands/modeling/AssignMaterialTool.h"
+#include "editor/commands/modeling/DeleteSelectionTool.h"
 #include "editor/commands/modeling/FlipHorizontalTool.h"
 #include "editor/commands/modeling/MirrorSelectionTool.h"
 #include "editor/commands/modeling/SelectAllTool.h"
@@ -64,6 +65,10 @@ bool instantOperationCatalogOwnsActionId(std::string_view actionId) {
     return false;
 }
 
+bool commandToolOwnsHostActionId(std::string_view actionId) {
+    return actionId == std::string_view("delete_selection") || instantOperationCatalogOwnsActionId(actionId);
+}
+
 TEST(ModelingToolCatalogTests, ContainsEveryInstantOperationCommandTool) {
     const std::span<const InstantCommandTool* const> tools = modelingInstantOperationCommandTools();
     ASSERT_EQ(tools.size(), modelingInstantOperationCatalog().size());
@@ -97,6 +102,7 @@ TEST(ModelingToolCatalogTests, CommandFamiliesExposeTheApprovedHierarchy) {
 
     static_assert(std::is_base_of_v<CustomInstantCommandTool, SelectAllTool>);
     static_assert(std::is_base_of_v<CustomInstantCommandTool, AssignMaterialTool>);
+    static_assert(std::is_base_of_v<CustomInstantCommandTool, DeleteSelectionTool>);
     static_assert(std::is_base_of_v<RuntimeCommandTool, MirrorSelectionTool>);
     static_assert(std::is_base_of_v<RuntimeCommandTool, FlipHorizontalTool>);
 }
@@ -136,19 +142,16 @@ TEST(ModelingToolCatalogTests, PublicCommandBridgeMetadataLivesOnCommandDescript
     ASSERT_NE(deleteSelection, nullptr);
     EXPECT_EQ(deleteSelection->publicCommandId(), std::string_view("edit.delete"));
     EXPECT_FALSE(deleteSelection->registersPublicCommand());
-    EXPECT_EQ(deleteSelection->publicCompatibilityAlias(), std::string_view("modeling.delete_selection"));
 
     const CommandTool* duplicate = findModelingCommandTool("duplicate_meshes");
     ASSERT_NE(duplicate, nullptr);
     EXPECT_EQ(duplicate->publicCommandId(), std::string_view("edit.duplicate"));
     EXPECT_FALSE(duplicate->registersPublicCommand());
-    EXPECT_EQ(duplicate->publicCompatibilityAlias(), std::string_view("modeling.duplicate_meshes"));
 
     const CommandTool* applyActiveMaterial = findModelingCommandTool("apply_active_material");
     ASSERT_NE(applyActiveMaterial, nullptr);
     EXPECT_EQ(applyActiveMaterial->publicCommandId(), std::string_view("edit.apply_material"));
     EXPECT_FALSE(applyActiveMaterial->registersPublicCommand());
-    EXPECT_EQ(applyActiveMaterial->publicCompatibilityAlias(), std::string_view("modeling.apply_active_material"));
 
     const CommandTool* combineMeshes = findModelingCommandTool("combine_meshes");
     ASSERT_NE(combineMeshes, nullptr);
@@ -164,7 +167,7 @@ TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
             continue;
         }
         if (action.preview_kind == quader_host_contract::HostPreviewKind::none &&
-                !instantOperationCatalogOwnsActionId(action.id)) {
+                !commandToolOwnsHostActionId(action.id)) {
             ++expectedContextActions;
         }
         if (action.preview_kind != quader_host_contract::HostPreviewKind::none) {

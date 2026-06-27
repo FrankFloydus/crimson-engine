@@ -160,7 +160,7 @@ struct ModelingCommandDescriptor {
  * Stores the Modeling Instant Operation Descriptor data contract used by the modeling domain.
  */
 struct ModelingInstantOperationDescriptor {
-    ModelingInstantOperationId operation = ModelingInstantOperationId::DeleteSelection;
+    ModelingInstantOperationId operation = ModelingInstantOperationId::DuplicateMeshes;
     std::string id;
     std::string label;
     bool enabled = false;

@@ -10,9 +10,8 @@ file except through prior written authorization from Francesco Di Blasi.
 
 - Use CMake and vcpkg manifest mode.
 - Do not vendor SDL, UI backend libraries, spdlog, GoogleTest, or a new Filament SDK into this repo.
-- Use the Filament SDK path provided by `FILAMENT_SDK_ROOT`.
-- Default Filament SDK path:
-  `C:\Users\Drako\Desktop\quader-windows\_SOURCES\filament-v1.71.6-windows`.
+- Use the Filament SDK path provided by `FILAMENT_SDK_ROOT` or the CMake cache override.
+- The source-adjacent default is `../_SOURCES/filament-v1.71.6-windows` relative to this repo.
 - Keep dependency version notes and license evidence under `thirdparty/`, especially
   `thirdparty/THIRD_PARTY_MANIFEST.md` and `thirdparty/licenses/`. Do not add a separate SDK
   license-evidence tree.
@@ -29,3 +28,10 @@ Avoid GPL, AGPL, LGPL with unclear linking obligations, SSPL, BUSL, copyleft, or
 dependencies unless explicitly approved.
 
 Lua/sol2 or any scripting dependency must pass this check before integration.
+
+## Local Source Dependencies
+
+OpenMesh and Catch2 use pinned local-source-or-explicit-fetch policy in CMake. Prefer local
+checkouts through `QUADER_OPENMESH_SOURCE_DIR` and `QUADER_CATCH2_SOURCE_DIR`; enable network fetch
+options only for one-off development builds. GTE Mathematics is vendored under `thirdparty/` with
+license evidence and must stay private to geometry implementation boundaries.

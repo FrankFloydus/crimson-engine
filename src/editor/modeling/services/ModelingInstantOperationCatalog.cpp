@@ -20,8 +20,7 @@ namespace {
         ModelingActionAvailabilityRule availability,
         quader_editor_core::EditorOperationId runtimeOperation,
         std::string_view publicCommandId = {},
-        bool registersPublicCommand = true,
-        std::string_view publicCompatibilityAlias = {}) {
+        bool registersPublicCommand = true) {
     return {
             .operation = operation,
             .id = id,
@@ -32,35 +31,7 @@ namespace {
             .runtimeOperation = runtimeOperation,
             .publicCommandId = publicCommandId,
             .registersPublicCommand = registersPublicCommand,
-            .publicCompatibilityAlias = publicCompatibilityAlias,
     };
-}
-
-[[nodiscard]] ModelingInstantOperationCatalogEntry commandOnlyEntry(
-        ModelingInstantOperationId operation,
-        std::string_view id,
-        std::string_view commandLabel,
-        std::string_view liveLabel,
-        ModelingActionAvailabilityRule availability,
-        std::string_view publicCommandId = {},
-        bool registersPublicCommand = true,
-        std::string_view publicCompatibilityAlias = {}) {
-    return {
-            .operation = operation,
-            .id = id,
-            .operationId = id,
-            .commandLabel = commandLabel,
-            .liveLabel = liveLabel,
-            .availability = availability,
-            .runtimeOperation = std::nullopt,
-            .publicCommandId = publicCommandId,
-            .registersPublicCommand = registersPublicCommand,
-            .publicCompatibilityAlias = publicCompatibilityAlias,
-    };
-}
-
-[[nodiscard]] ModelingActionAvailabilityRule anySelection() {
-    return {.requirement = ModelingActionSelectionRequirement::AnySelection};
 }
 
 [[nodiscard]] ModelingActionAvailabilityRule modeSelection(
@@ -119,15 +90,6 @@ std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCa
     using RuntimeId = quader_editor_core::EditorOperationId;
 
     static const std::array entries{
-            commandOnlyEntry(
-                    ModelingInstantOperationId::DeleteSelection,
-                    "delete_selection",
-                    "Delete",
-                    "Delete",
-                    anySelection(),
-                    "edit.delete",
-                    false,
-                    "modeling.delete_selection"),
             runtimeEntry(
                     ModelingInstantOperationId::DuplicateMeshes,
                     "duplicate_meshes",
@@ -136,8 +98,7 @@ std::span<const ModelingInstantOperationCatalogEntry> modelingInstantOperationCa
                     objectSelection(),
                     RuntimeId::duplicate_meshes,
                     "edit.duplicate",
-                    false,
-                    "modeling.duplicate_meshes"),
+                    false),
             runtimeEntry(
                     ModelingInstantOperationId::CombineMeshes,
                     "combine_meshes",

@@ -25,7 +25,6 @@ public:
                 .rebuildsMeshOnSuccess = true,
                 .publicCommandId = "edit.paste",
                 .registersPublicCommand = false,
-                .publicCompatibilityAlias = "modeling.paste_selection",
                 .hostShortcutTargetId = "paste_meshes",
         };
     }

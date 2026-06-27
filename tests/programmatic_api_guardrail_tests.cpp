@@ -581,7 +581,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
             "modeling.syncSceneSelectionFromModeling(",
             "modeling.selectAll(",
             "modeling.clearSelection(",
-            "modeling.deleteSelection(",
+            "modeling.deleteComponentSelection(",
             "modeling.applyActiveMaterial(",
             "context.modeling.executeInstantOperation(",
             "context.modeling.executeContextAction(",
@@ -605,7 +605,7 @@ TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotAddRawModelingMutations
             "context.modeling.syncSceneSelectionFromModeling(",
             "context.modeling.selectAll(",
             "context.modeling.clearSelection(",
-            "context.modeling.deleteSelection(",
+            "context.modeling.deleteComponentSelection(",
             "context.modeling.applyActiveMaterial(",
     };
 
@@ -929,9 +929,15 @@ TEST(ProgrammaticApiGuardrailTests, PublicModelingCommandBridgeIsDescriptorDrive
     EXPECT_EQ(commandsApi.find("ModelingActionCommandBridgeDescriptor"), std::string::npos);
     EXPECT_EQ(commandsApi.find("modelingActionCommandBridgeCatalog"), std::string::npos);
     EXPECT_EQ(commandsApi.find("fixedCommandIdForModelingAction"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("modeling.action."), std::string::npos);
+    EXPECT_EQ(commandsApi.find("publicCompatibilityAlias"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("registerAlias"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("canonicalCommandId"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("executeModelingAction"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("executeToolActivation"), std::string::npos);
     EXPECT_NE(commandsApi.find("tool->publicCommandTargetId()"), std::string::npos);
-    EXPECT_NE(commandsApi.find("tool->publicCompatibilityAlias()"), std::string::npos);
     EXPECT_NE(commandDescriptor.find("publicCommandId"), std::string::npos);
     EXPECT_NE(commandDescriptor.find("registersPublicCommand"), std::string::npos);
+    EXPECT_EQ(commandDescriptor.find("publicCompatibilityAlias"), std::string::npos);
     EXPECT_NE(commandCatalog.find(".publicCommandId = entry.publicCommandId"), std::string::npos);
 }

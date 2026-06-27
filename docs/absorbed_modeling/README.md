@@ -41,10 +41,16 @@ The modeling-domain CMake targets are:
 - `quader_geometry`
 - `quader_modeling_polygon`
 - `quader_modeling_runtime`
+- `quader_modeling`
+- `quader_qdr_shared_io`
 - `quader_qdr_document_io`
 - `quader_qdr_runtime_io`
 - `quader_editor_metadata`
 - `quader_modeling_domain_tests`
+
+`quader_modeling_domain_tests` is the aggregate Catch2 executable for modeling-domain sources; the
+individual `qdr_*` labels in `cmake/QuaderModeling.cmake` are source-registration groups, not
+standalone CTest tests.
 
 `quader_modeling_polygon` can use OpenMesh-backed topology operations when
 `QUADER_USE_OPENMESH_TOPOLOGY=ON` is set, which is the default. Builds should provide a local

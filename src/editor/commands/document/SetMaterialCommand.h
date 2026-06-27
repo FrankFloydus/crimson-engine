@@ -32,7 +32,7 @@ public:
     }
 
     DocumentCommandResult redo() override {
-        if (before_.has_value() && before_->material == after_.material) {
+        if (before_.has_value() && *before_ == after_) {
             return documentCommandUnchangedResult();
         }
         return apply(after_);

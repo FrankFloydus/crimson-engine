@@ -28,7 +28,7 @@ public:
 
     [[nodiscard]] bool hasInstantOperation() const { return instantOperation().has_value(); }
     [[nodiscard]] ModelingInstantOperationId operation() const {
-        return instantOperation().value_or(ModelingInstantOperationId::DeleteSelection);
+        return instantOperation().value();
     }
 
     [[nodiscard]] ModelingCommandAvailability availability(const ModelingCommandExecutionContext& context) const override {
