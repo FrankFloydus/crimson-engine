@@ -55,7 +55,9 @@ function Get-ChangedPaths {
     }
 
     Push-Location $SourceRoot
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = "Continue"
         $paths = @()
         $diff = & git diff --name-only --diff-filter=ACMRTUXB $BaseRef -- 2>$null
         if ($LASTEXITCODE -ne 0) {
@@ -63,10 +65,11 @@ function Get-ChangedPaths {
         }
         $paths += $diff
         if (-not $NoUntracked) {
-            $paths += (& git ls-files --others --exclude-standard)
+            $paths += (& git ls-files --others --exclude-standard 2>$null)
         }
         return $paths | ForEach-Object { Normalize-RepoPath $_ } | Where-Object { $_ -ne "" } | Sort-Object -Unique
     } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
 }
@@ -128,6 +131,56 @@ function Add-ModelingDomainFilter {
     Add-Unique $script:Reasons $Reason
 }
 
+function Add-ModelingLoopFilter {
+    param([string]$Target, [string]$Filter, [string]$Reason)
+    if (-not $script:ModelingLoopFilters.ContainsKey($Target)) {
+        $script:ModelingLoopFilters[$Target] = New-Object "System.Collections.Generic.List[string]"
+    }
+    $filters = [System.Collections.Generic.List[string]]($script:ModelingLoopFilters[$Target])
+    Add-Unique $filters $Filter
+    Add-Unique $script:ModelingLoopTargets $Target
+    Add-Unique $script:BuildTargets $Target
+    Add-Unique $script:Reasons $Reason
+}
+
+function Add-PolygonModelingLoopFilter {
+    param([string]$Filter, [string]$Reason)
+    Add-ModelingLoopFilter "quader_modeling_domain_polygon_loop_tests" $Filter $Reason
+}
+
+function Add-RuntimeModelingLoopFilter {
+    param([string]$Filter, [string]$Reason)
+    Add-ModelingLoopFilter "quader_modeling_domain_runtime_loop_tests" $Filter $Reason
+}
+
+function Add-MetadataModelingLoopFilter {
+    param([string]$Filter, [string]$Reason)
+    Add-ModelingLoopFilter "quader_modeling_domain_metadata_loop_tests" $Filter $Reason
+}
+
+function Get-ModelingLoopTargetForTestPath {
+    param([string]$Path)
+    if ($Path -match '^tests/modeling_domain/editor_metadata/') {
+        return "quader_modeling_domain_metadata_loop_tests"
+    }
+    if ($Path -match '^tests/modeling_domain/tool/' -or
+            $Path -match '^tests/modeling_domain/operation/qdr_modeling_runtime_' -or
+            $Path -match '^tests/modeling_domain/qdr_modeling_runtime_' -or
+            $Path -match '^tests/modeling_domain/qdr_custom_engine_modeling_runtime_' -or
+            $Path -match '^tests/modeling_domain/qdr_runtime_io_' -or
+            $Path -match '^tests/modeling_domain/qdr_modeling_domain_smoke\.cpp$') {
+        return "quader_modeling_domain_runtime_loop_tests"
+    }
+    if ($Path -match '^tests/modeling_domain/operation/qdr_document_' -or
+            $Path -match '^tests/modeling_domain/qdr_geometry_' -or
+            $Path -match '^tests/modeling_domain/qdr_poly_' -or
+            $Path -match '^tests/modeling_domain/qdr_document_' -or
+            $Path -match '^tests/modeling_domain/qdr_io_document_') {
+        return "quader_modeling_domain_polygon_loop_tests"
+    }
+    return ""
+}
+
 function Add-BuildTarget {
     param([string]$Target, [string]$Reason)
     Add-Unique $script:BuildTargets $Target
@@ -151,6 +204,16 @@ function Add-TestFilePlan {
     $suiteFilters = Get-GTestSuites @($Path)
     $filter = Join-GTestFilter $suiteFilters
     if ($Path.StartsWith("tests/modeling_domain/")) {
+        $loopTarget = Get-ModelingLoopTargetForTestPath $Path
+        $testFilter = $filter
+        if ($testFilter -eq "") {
+            $testFilter = "Qdr*"
+        }
+        if ($loopTarget -ne "") {
+            Add-ModelingLoopFilter $loopTarget $testFilter "changed modeling-domain test source"
+            return
+        }
+
         Add-BuildTarget "quader_modeling_domain_tests" "changed modeling-domain test source"
         if ($filter -ne "") {
             Add-ModelingDomainFilter $filter "run suites declared by changed modeling-domain test source"
@@ -261,43 +324,47 @@ function Add-PathPlan {
 
     if ($Path -match '^src/mesh/geometry/') {
         Add-BuildTarget "quader_geometry" "geometry source changed"
-        Add-BuildTarget "quader_modeling_domain_tests" "geometry source changed"
-        Add-ModelingDomainFilter "QdrGeometryTests.*:QdrPolyGeometryCharacterizationTests.*" "geometry-domain tests"
+        Add-PolygonModelingLoopFilter "QdrGeometryTests.*:QdrPolyGeometryCharacterizationTests.*" "geometry-domain tests"
         return
     }
 
     if ($Path -match '^src/mesh/polygon/') {
         Add-BuildTarget "quader_modeling_polygon" "polygon document source changed"
-        Add-BuildTarget "quader_modeling_domain_tests" "polygon document source changed"
-        Add-ModelingDomainFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "polygon and document-operation tests"
+        Add-PolygonModelingLoopFilter "QdrDocument*:QdrPoly*:QdrDocumentOperation*" "polygon and document-operation tests"
         return
     }
 
     if ($Path -match '^src/io/qdr/') {
         Add-BuildTarget "quader_qdr_document_io" "QDR IO source changed"
         Add-BuildTarget "quader_qdr_runtime_io" "QDR IO source changed"
-        Add-BuildTarget "quader_modeling_domain_tests" "QDR IO source changed"
         Add-BuildTarget "quader_tests" "QDR IO source changed"
-        Add-ModelingDomainFilter "QdrIoDocumentTests.*:QdrRuntimeIoCompatTests.*" "QDR modeling-domain IO tests"
+        Add-PolygonModelingLoopFilter "QdrIoDocumentTests.*" "QDR document IO modeling-domain tests"
+        Add-RuntimeModelingLoopFilter "QdrRuntimeIoCompatTests.*" "QDR runtime IO modeling-domain tests"
         Add-QuaderTestsFilter "Qdr*:ProjectionOwnershipGuardrailTests.*" "QDR app IO tests"
         return
     }
 
     if ($Path -match '^src/editor/(modeling/runtime|interactions|modeling/operations)/') {
         Add-BuildTarget "quader_modeling_runtime" "modeling runtime source changed"
-        Add-BuildTarget "quader_modeling_domain_tests" "modeling runtime source changed"
-        Add-ModelingDomainFilter "QdrModelingRuntime*:QdrEditorMetadata*" "modeling runtime and metadata tests"
+        Add-RuntimeModelingLoopFilter "QdrModelingRuntime*" "modeling runtime tests"
+        Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "modeling metadata tests affected by runtime descriptors"
         return
     }
 
     if ($Path -match '^src/editor/(modeling/services|projection|selection|commands/modeling|commands/modeling_)') {
         Add-BuildTarget "quader_modeling" "editor modeling service or command source changed"
         Add-BuildTarget "quader_guardrail_tests" "editor modeling service or command source changed"
-        Add-BuildTarget "quader_modeling_domain_tests" "editor modeling service or command source changed"
         Add-BuildTarget "quader_tests" "editor modeling service or command source changed"
-        Add-ModelingDomainFilter "QdrModelingRuntime*:QdrEditorMetadata*" "modeling runtime tests"
+        Add-RuntimeModelingLoopFilter "QdrModelingRuntime*" "modeling runtime tests"
+        Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "modeling metadata tests affected by editor modeling descriptors"
         Add-GuardrailTestsFilter "ProgrammaticApiGuardrailTests.*" "modeling/API source-policy guardrails"
         Add-QuaderTestsFilter "ModelingSessionService*:ModelingToolCatalogTests.*:SelectionModeAdapterTests.*:EditorApiTests.*Modeling*:EditorApiTests.*Selection*:EditorApiTests.*History*:ProgrammaticBehaviorScenarioTests.*:ProgrammaticApiTests.*:GroupingPublicApiTests.*" "app modeling/API behavior tests"
+        return
+    }
+
+    if ($Path -match '^src/editor/metadata/') {
+        Add-BuildTarget "quader_editor_metadata" "editor metadata source changed"
+        Add-MetadataModelingLoopFilter "QdrEditorMetadata*" "editor metadata modeling-domain tests"
         return
     }
 
@@ -395,6 +462,24 @@ function Remove-RedundantBuildTargets {
         "quader_qdr_document_io",
         "quader_qdr_runtime_io"
     )
+    $polygonLoopDependencies = @(
+        "quader_modeling_polygon",
+        "quader_geometry",
+        "quader_qdr_shared_io",
+        "quader_qdr_document_io"
+    )
+    $runtimeLoopDependencies = @(
+        "quader_modeling_runtime",
+        "quader_modeling_polygon",
+        "quader_geometry",
+        "quader_editor_metadata",
+        "quader_qdr_shared_io",
+        "quader_qdr_document_io",
+        "quader_qdr_runtime_io"
+    )
+    $metadataLoopDependencies = @(
+        "quader_editor_metadata"
+    )
 
     $covered = @()
     if ($result.Contains("quader")) {
@@ -405,6 +490,15 @@ function Remove-RedundantBuildTargets {
     }
     if ($result.Contains("quader_modeling_domain_tests")) {
         $covered += $modelingDomainDependencies
+    }
+    if ($result.Contains("quader_modeling_domain_polygon_loop_tests")) {
+        $covered += $polygonLoopDependencies
+    }
+    if ($result.Contains("quader_modeling_domain_runtime_loop_tests")) {
+        $covered += $runtimeLoopDependencies
+    }
+    if ($result.Contains("quader_modeling_domain_metadata_loop_tests")) {
+        $covered += $metadataLoopDependencies
     }
 
     foreach ($target in ($covered | Sort-Object -Unique)) {
@@ -452,6 +546,8 @@ $script:BuildTargets = New-Object "System.Collections.Generic.List[string]"
 $script:GuardrailTestsFilters = New-Object "System.Collections.Generic.List[string]"
 $script:QuaderTestsFilters = New-Object "System.Collections.Generic.List[string]"
 $script:ModelingDomainFilters = New-Object "System.Collections.Generic.List[string]"
+$script:ModelingLoopTargets = New-Object "System.Collections.Generic.List[string]"
+$script:ModelingLoopFilters = @{}
 $script:Reasons = New-Object "System.Collections.Generic.List[string]"
 $script:NeedsConfigure = $false
 $script:NeedsFullCtest = $false
@@ -479,12 +575,19 @@ if (-not $NoTest) {
     if ($ModelingDomainFilters.Count -gt 0) {
         Add-Unique $script:BuildTargets "quader_modeling_domain_tests"
     }
+    foreach ($target in $ModelingLoopTargets) {
+        Add-Unique $script:BuildTargets $target
+    }
 }
 $buildTargets = @(Remove-RedundantBuildTargets @($BuildTargets))
 
 $guardrailTestsFilter = Join-GTestFilter @($GuardrailTestsFilters)
 $quaderTestsFilter = Join-GTestFilter @($QuaderTestsFilters)
 $modelingDomainFilter = Join-GTestFilter @($ModelingDomainFilters)
+$modelingLoopJoinedFilters = @{}
+foreach ($target in @($ModelingLoopTargets | Sort-Object -Unique)) {
+    $modelingLoopJoinedFilters[$target] = Join-GTestFilter @($script:ModelingLoopFilters[$target])
+}
 
 $commands = New-Object "System.Collections.Generic.List[object]"
 if (-not $NoConfigure -and $NeedsConfigure) {
@@ -507,6 +610,12 @@ if (-not $NoTest) {
         }
         if ($modelingDomainFilter -ne "") {
             $commands.Add(@((Join-Path $BuildDir "quader_modeling_domain_tests.exe"), "--gtest_color=no", "--gtest_filter=$modelingDomainFilter"))
+        }
+        foreach ($target in @($ModelingLoopTargets | Sort-Object -Unique)) {
+            $filter = $modelingLoopJoinedFilters[$target]
+            if ($filter -ne "") {
+                $commands.Add(@((Join-Path $BuildDir "$target.exe"), "--gtest_color=no", "--gtest_filter=$filter"))
+            }
         }
     }
 }

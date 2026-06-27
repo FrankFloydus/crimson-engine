@@ -583,6 +583,15 @@ TEST(BuildGuardrailTests, ModelingDomainTestsUseCategorizedExplicitSourceRegistr
 
     expectContains(modeling, "function(quader_add_modeling_domain_test_source category target)");
     expectContains(modeling, "Unknown modeling-domain test category");
+    expectContains(modeling, "function(quader_add_modeling_domain_loop_target target)");
+    expectContains(modeling, "add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})");
+    expectContains(modeling, "quader_modeling_domain_polygon_loop_tests");
+    expectContains(modeling, "quader_modeling_domain_runtime_loop_tests");
+    expectContains(modeling, "quader_modeling_domain_metadata_loop_tests");
+    expectContains(modeling, "add_test(NAME ${target} COMMAND ${target})");
+    expectMissing(modeling, "add_test(NAME quader_modeling_domain_polygon_loop_tests");
+    expectMissing(modeling, "add_test(NAME quader_modeling_domain_runtime_loop_tests");
+    expectMissing(modeling, "add_test(NAME quader_modeling_domain_metadata_loop_tests");
     expectMissing(modeling, "function(quader_add_polygon_domain_test");
     expectMissing(modeling, "function(quader_add_modeling_runtime_domain_test");
     expectMissing(modeling, "function(quader_add_editor_metadata_domain_test");
@@ -621,6 +630,9 @@ TEST(BuildGuardrailTests, AbsorbedModelingDocsNameRealModelingDomainTargets) {
             "quader_qdr_runtime_io",
             "quader_editor_metadata",
             "quader_modeling_domain_tests",
+            "quader_modeling_domain_polygon_loop_tests",
+            "quader_modeling_domain_runtime_loop_tests",
+            "quader_modeling_domain_metadata_loop_tests",
     };
     for (const std::string& target : documentedTargets) {
         expectContains(docs, "`" + target + "`");
@@ -779,8 +791,12 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "quader_guardrail_tests.exe");
     expectContains(tool, "quader_tests.exe");
     expectContains(tool, "quader_modeling_domain_tests.exe");
+    expectContains(tool, "quader_modeling_domain_polygon_loop_tests");
+    expectContains(tool, "quader_modeling_domain_runtime_loop_tests");
+    expectContains(tool, "quader_modeling_domain_metadata_loop_tests");
     expectContains(tool, "--gtest_filter=");
     expectContains(tool, "GuardrailTestsFilters");
+    expectContains(tool, "ModelingLoopFilters");
     expectContains(tool, "Add-PathPlan");
     expectContains(tool, "Remove-RedundantBuildTargets");
     expectContains(tool, "AGENTS\\.md");
@@ -792,10 +808,12 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "src/ui/");
     expectContains(tool, "src/mesh/polygon/");
     expectContains(tool, "modeling/runtime");
+    expectContains(tool, "src/editor/metadata/");
     expectContains(tool, "resources/locales/");
     expectContains(tool, "CMakeLists");
 
     expectContains(testingBuild, "tools/affected_check.ps1");
+    expectContains(testingBuild, "quader_modeling_domain_polygon_loop_tests");
     expectContains(testingBuild, "-MeasureFull");
     expectContains(testingBuild, "-ChangedPath");
     expectContains(testingBuild, "before -> after");

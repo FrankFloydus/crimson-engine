@@ -162,6 +162,9 @@ Invariant:
   intended edit, not unrelated local changes.
 - Route pure source-policy scans through `quader_guardrail_tests`; do not force `quader_tests` to
   compile/link for docs, tooling, CMake policy, or API/source-boundary guardrails.
+- Modeling-domain loop targets are developer-only `EXCLUDE_FROM_ALL` executables used by the
+  affected workflow. Do not register them with CTest; full verification stays on the aggregate
+  `quader_modeling_domain_tests` entry.
 - Use `-MeasureFull` when a task needs a concrete before -> after comparison.
 - Use `-IncludeApp` when manual in-app verification or runtime resource copying is part of the
   change.
@@ -170,6 +173,7 @@ Affected owners/files:
 
 - `tools/affected_check.ps1`
 - `CMakeLists.txt`
+- `cmake/QuaderModeling.cmake`
 - `agents/testing-build.md`
 - `tests/build_guardrail_tests.cpp`
 
@@ -179,8 +183,12 @@ Resolved approach:
   polygon/geometry, QDR, resources, docs, tools, CMake, and direct test-source edits.
 - Split pure source-policy scans into one lightweight `quader_guardrail_tests` executable so docs
   and tooling changes do not pay the app/runtime test link cost.
-- Kept the workflow in the existing `build/vs2026` tree and added only one lightweight guardrail
-  executable instead of many test shards or artifact folders.
+- Kept the workflow in the existing `build/vs2026` tree and added one lightweight guardrail
+  executable plus three modeling-domain loop executables instead of per-test artifacts or extra
+  artifact folders.
+- Split modeling-domain test sources into shared category object buckets and assembled developer
+  loops for polygon/document, runtime/QDR runtime, and editor metadata checks while preserving the
+  aggregate `quader_modeling_domain_tests` CTest target.
 - Added a guardrail so the tool keeps printing the full baseline, affected workflow, filtered
   GoogleTest commands, and before -> after comparison support.
 
@@ -190,5 +198,8 @@ Verification:
 - Render-overlay sample timing: full baseline 51.36s -> affected workflow 4.22s, 47.14s saved.
 - Tooling-only sample after the guardrail split and filter tightening: full baseline 54.03s ->
   affected workflow 2.43s, 51.60s saved.
+- Runtime modeling test-source sample after loop targets:
+  `tests/modeling_domain/operation/qdr_modeling_runtime_operation_command_tests.cpp`, full baseline
+  52.13s -> affected workflow 3.24s, 48.89s saved.
 - `powershell -NoProfile -ExecutionPolicy Bypass -File tools\affected_check.ps1 -NoUntracked -ChangedPath tools/affected_check.ps1,agents/testing-build.md,tests/build_guardrail_tests.cpp`
 - `ctest --preset vs2026-debug --output-on-failure`

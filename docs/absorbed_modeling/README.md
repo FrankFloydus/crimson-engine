@@ -47,10 +47,17 @@ The modeling-domain CMake targets are:
 - `quader_qdr_runtime_io`
 - `quader_editor_metadata`
 - `quader_modeling_domain_tests`
+- `quader_modeling_domain_polygon_loop_tests`
+- `quader_modeling_domain_runtime_loop_tests`
+- `quader_modeling_domain_metadata_loop_tests`
 
 `quader_modeling_domain_tests` is the aggregate GoogleTest executable for modeling-domain sources; the
 individual `qdr_*` labels in `cmake/QuaderModeling.cmake` are source-registration groups, not
 standalone CTest tests.
+
+The `quader_modeling_domain_*_loop_tests` targets are developer-only `EXCLUDE_FROM_ALL` executables
+used by `tools/affected_check.ps1` for narrow prototyping loops. They are not CTest entries; full
+verification continues to run the aggregate `quader_modeling_domain_tests` target.
 
 `quader_modeling_polygon` can use OpenMesh-backed topology operations when
 `QUADER_USE_OPENMESH_TOPOLOGY=ON` is set, which is the default. Builds should provide a local

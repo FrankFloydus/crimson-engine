@@ -43,6 +43,12 @@ source-policy scans, `quader_tests` for app/runtime behavior, and the GoogleTest
 `ctest --preset vs2026-debug`. Do not add SDK-specific configure, build, or test presets back to the
 native app.
 
+Modeling-domain prototyping loops may build developer-only `EXCLUDE_FROM_ALL` targets:
+`quader_modeling_domain_polygon_loop_tests`, `quader_modeling_domain_runtime_loop_tests`, and
+`quader_modeling_domain_metadata_loop_tests`. These exist so `tools/affected_check.ps1` can compile
+and run only the relevant modeling-domain bucket. Do not register them with CTest; full verification
+stays on the aggregate `quader_modeling_domain_tests` entry.
+
 ## Affected Build/Test Workflow
 
 For prototyping or agent loops, prefer the affected workflow before full verification:

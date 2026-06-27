@@ -254,30 +254,31 @@ if(QUADER_BUILD_PERFORMANCE_BENCHMARKS)
     target_link_libraries(qdr_performance_baseline PRIVATE quader_modeling_polygon quader_modeling_runtime quader_modeling_profile)
 endif()
 
+set(QUADER_MODELING_DOMAIN_TEST_CATEGORIES
+    smoke
+    geometry
+    polygon
+    runtime
+    editor_metadata
+    qdr_document
+    qdr_runtime)
+
 function(quader_add_modeling_domain_test_source category target)
-    set(_quader_modeling_domain_categories
-        smoke
-        geometry
-        polygon
-        runtime
-        editor_metadata
-        qdr_document
-        qdr_runtime)
-    if(NOT category IN_LIST _quader_modeling_domain_categories)
+    if(NOT category IN_LIST QUADER_MODELING_DOMAIN_TEST_CATEGORIES)
         message(FATAL_ERROR "Unknown modeling-domain test category: ${category}")
     endif()
     if(ARGC LESS 3)
         message(FATAL_ERROR "Modeling-domain test ${target} must register at least one source.")
     endif()
     list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCES ${ARGN})
+    list(APPEND QUADER_MODELING_DOMAIN_TEST_${category}_SOURCES ${ARGN})
     list(APPEND QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST "${category}:${target}")
     set(QUADER_MODELING_DOMAIN_TEST_SOURCES "${QUADER_MODELING_DOMAIN_TEST_SOURCES}" PARENT_SCOPE)
+    set(QUADER_MODELING_DOMAIN_TEST_${category}_SOURCES "${QUADER_MODELING_DOMAIN_TEST_${category}_SOURCES}" PARENT_SCOPE)
     set(QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST "${QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST}" PARENT_SCOPE)
 endfunction()
 
-function(quader_add_modeling_domain_gtest_target target)
-    find_package(GTest CONFIG REQUIRED)
-    add_executable(${target} ${QUADER_MODELING_DOMAIN_TEST_SOURCES})
+function(quader_configure_modeling_domain_test_compile target)
     target_compile_features(${target} PRIVATE cxx_std_20)
     target_compile_definitions(${target}
         PRIVATE
@@ -292,6 +293,10 @@ function(quader_add_modeling_domain_gtest_target target)
             "${CMAKE_CURRENT_SOURCE_DIR}/src/editor/modeling"
             "${QUADER_MODELING_DOMAIN_TEST_ROOT}"
             "${QUADER_MODELING_DOMAIN_TEST_ROOT}/operation")
+    target_link_libraries(${target} PRIVATE GTest::gtest)
+endfunction()
+
+function(quader_link_modeling_domain_test target)
     target_link_libraries(${target}
         PRIVATE
             quader_geometry
@@ -302,11 +307,33 @@ function(quader_add_modeling_domain_gtest_target target)
             quader_qdr_runtime_io
             GTest::gtest
             GTest::gtest_main)
+endfunction()
+
+function(quader_add_modeling_domain_test_object_library target)
+    find_package(GTest CONFIG REQUIRED)
+    add_library(${target} OBJECT EXCLUDE_FROM_ALL ${ARGN})
+    quader_configure_modeling_domain_test_compile(${target})
+endfunction()
+
+function(quader_add_modeling_domain_gtest_target target)
+    find_package(GTest CONFIG REQUIRED)
+    add_executable(${target} ${ARGN})
+    quader_link_modeling_domain_test(${target})
     add_test(NAME ${target} COMMAND ${target})
+endfunction()
+
+function(quader_add_modeling_domain_loop_target target)
+    find_package(GTest CONFIG REQUIRED)
+    add_executable(${target} EXCLUDE_FROM_ALL ${ARGN})
+    target_link_libraries(${target} PRIVATE GTest::gtest GTest::gtest_main)
 endfunction()
 
 if(QUADER_BUILD_TESTS)
     set(QUADER_MODELING_DOMAIN_TEST_SOURCES)
+    set(QUADER_MODELING_DOMAIN_TEST_SOURCE_MANIFEST)
+    foreach(_quader_modeling_domain_category IN LISTS QUADER_MODELING_DOMAIN_TEST_CATEGORIES)
+        set(QUADER_MODELING_DOMAIN_TEST_${_quader_modeling_domain_category}_SOURCES)
+    endforeach()
 
     quader_add_modeling_domain_test_source(smoke qdr_modeling_domain_smoke
         tests/modeling_domain/qdr_modeling_domain_smoke.cpp)
@@ -474,5 +501,41 @@ if(QUADER_BUILD_TESTS)
         quader_add_modeling_domain_test_source(runtime "${_quader_runtime_tool_test_target}" "${_quader_runtime_tool_test_source}")
     endforeach()
 
-    quader_add_modeling_domain_gtest_target(quader_modeling_domain_tests)
+    set(_quader_modeling_domain_test_objects)
+    foreach(_quader_modeling_domain_category IN LISTS QUADER_MODELING_DOMAIN_TEST_CATEGORIES)
+        set(_quader_modeling_domain_object_target "quader_modeling_domain_${_quader_modeling_domain_category}_test_objects")
+        quader_add_modeling_domain_test_object_library(${_quader_modeling_domain_object_target}
+            ${QUADER_MODELING_DOMAIN_TEST_${_quader_modeling_domain_category}_SOURCES})
+        list(APPEND _quader_modeling_domain_test_objects $<TARGET_OBJECTS:${_quader_modeling_domain_object_target}>)
+    endforeach()
+
+    quader_add_modeling_domain_gtest_target(quader_modeling_domain_tests
+        ${_quader_modeling_domain_test_objects})
+
+    quader_add_modeling_domain_loop_target(quader_modeling_domain_polygon_loop_tests
+        $<TARGET_OBJECTS:quader_modeling_domain_geometry_test_objects>
+        $<TARGET_OBJECTS:quader_modeling_domain_polygon_test_objects>
+        $<TARGET_OBJECTS:quader_modeling_domain_qdr_document_test_objects>)
+    target_link_libraries(quader_modeling_domain_polygon_loop_tests
+        PRIVATE
+            quader_geometry
+            quader_modeling_polygon
+            quader_qdr_document_io)
+    quader_add_modeling_domain_loop_target(quader_modeling_domain_runtime_loop_tests
+        $<TARGET_OBJECTS:quader_modeling_domain_smoke_test_objects>
+        $<TARGET_OBJECTS:quader_modeling_domain_runtime_test_objects>
+        $<TARGET_OBJECTS:quader_modeling_domain_qdr_runtime_test_objects>)
+    target_link_libraries(quader_modeling_domain_runtime_loop_tests
+        PRIVATE
+            quader_geometry
+            quader_modeling_polygon
+            quader_modeling_runtime
+            quader_editor_metadata
+            quader_qdr_document_io
+            quader_qdr_runtime_io)
+    quader_add_modeling_domain_loop_target(quader_modeling_domain_metadata_loop_tests
+        $<TARGET_OBJECTS:quader_modeling_domain_editor_metadata_test_objects>)
+    target_link_libraries(quader_modeling_domain_metadata_loop_tests
+        PRIVATE
+            quader_editor_metadata)
 endif()
