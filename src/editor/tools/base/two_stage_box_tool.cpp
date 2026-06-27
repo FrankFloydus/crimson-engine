@@ -92,6 +92,30 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
     bool actionConsumed = false;
     bool activeToolSyncRequested = false;
 
+    auto finishFootprintAndCommit = [&]() {
+        preview = context.modeling.updateBoxFootprint(boxEvent);
+        logPreviewFailure("Box footprint finalize update", preview);
+        if (preview.ok) {
+            preview = context.modeling.beginBoxHeight(boxEvent);
+            logPreviewFailure("Box height begin", preview);
+        }
+        if (preview.ok) {
+            const std::string name = boxContext.nextMeshName ? boxContext.nextMeshName() : std::string{"Mesh"};
+            if (commitPreview(boxContext, name)) {
+                if (context.setSelectionMode) {
+                    context.setSelectionMode(ViewportSelectionMode::Object);
+                }
+                if (context.setAppSelectionMode) {
+                    context.setAppSelectionMode(ModelingSelectionMode::Object);
+                }
+                activeToolSyncRequested = true;
+            }
+        }
+        preview = {};
+        invalidate(context);
+        actionConsumed = true;
+    };
+
     if (pointer.hovered &&
             !pointer.leftDown &&
             !pointer.suppressHoverWork &&
@@ -103,31 +127,21 @@ ViewportToolResult TwoStageBoxTool::handleEvent(
 
     if (pointer.leftClicked && !pointer.gizmoConsumed && !pointer.navigationActive) {
         if (preview.dragState == ModelingBoxDragState::Footprint) {
-            preview = context.modeling.updateBoxFootprint(boxEvent);
-            logPreviewFailure("Box footprint finalize update", preview);
-            if (preview.ok) {
-                preview = context.modeling.beginBoxHeight(boxEvent);
-                logPreviewFailure("Box height begin", preview);
-            }
-            if (preview.ok) {
-                const std::string name = boxContext.nextMeshName ? boxContext.nextMeshName() : std::string{"Mesh"};
-                if (commitPreview(boxContext, name)) {
-                    if (context.setSelectionMode) {
-                        context.setSelectionMode(ViewportSelectionMode::Object);
-                    }
-                    if (context.setAppSelectionMode) {
-                        context.setAppSelectionMode(ModelingSelectionMode::Object);
-                    }
-                    activeToolSyncRequested = true;
-                }
-            }
-            preview = {};
+            finishFootprintAndCommit();
         } else {
             preview = context.modeling.beginBoxFootprint(boxEvent);
             logPreviewFailure("Box footprint begin", preview);
+            invalidate(context);
+            actionConsumed = true;
         }
-        invalidate(context);
-        actionConsumed = true;
+    }
+
+    if (!actionConsumed &&
+            pointer.leftReleased &&
+            preview.dragState == ModelingBoxDragState::Footprint &&
+            !pointer.gizmoConsumed &&
+            !pointer.navigationActive) {
+        finishFootprintAndCommit();
     }
 
     if (!actionConsumed &&

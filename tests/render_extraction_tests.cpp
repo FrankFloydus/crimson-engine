@@ -103,6 +103,53 @@ std::size_t triangleCountFor(const ViewportOverlayFrame& frame, ViewportOverlayL
             }));
 }
 
+void appendSourceWireDepthStampTriangle(
+        ViewportOverlayFrame& frame,
+        int objectId,
+        QVec3 a,
+        QVec3 b,
+        QVec3 c,
+        bool insideOut) {
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
+            .a = a,
+            .b = insideOut ? c : b,
+            .c = insideOut ? b : c,
+            .color = rgba8(255, 224, 92, 235),
+            .element = {.objectId = objectId},
+    });
+}
+
+void appendSourceWireDepthStampQuad(
+        ViewportOverlayFrame& frame,
+        int objectId,
+        QVec3 a,
+        QVec3 b,
+        QVec3 c,
+        QVec3 d,
+        bool insideOut) {
+    appendSourceWireDepthStampTriangle(frame, objectId, a, b, c, insideOut);
+    appendSourceWireDepthStampTriangle(frame, objectId, a, c, d, insideOut);
+}
+
+void appendSourceWireDepthStampBox(ViewportOverlayFrame& frame, int objectId, bool insideOut) {
+    const QVec3 frontBottomLeft{-1.0f, -1.0f, -1.0f};
+    const QVec3 frontBottomRight{1.0f, -1.0f, -1.0f};
+    const QVec3 frontTopRight{1.0f, 1.0f, -1.0f};
+    const QVec3 frontTopLeft{-1.0f, 1.0f, -1.0f};
+    const QVec3 backBottomLeft{-1.0f, -1.0f, -3.0f};
+    const QVec3 backBottomRight{1.0f, -1.0f, -3.0f};
+    const QVec3 backTopRight{1.0f, 1.0f, -3.0f};
+    const QVec3 backTopLeft{-1.0f, 1.0f, -3.0f};
+
+    appendSourceWireDepthStampQuad(frame, objectId, frontBottomLeft, frontBottomRight, frontTopRight, frontTopLeft, insideOut);
+    appendSourceWireDepthStampQuad(frame, objectId, backBottomLeft, backTopLeft, backTopRight, backBottomRight, insideOut);
+    appendSourceWireDepthStampQuad(frame, objectId, frontBottomRight, backBottomRight, backTopRight, frontTopRight, insideOut);
+    appendSourceWireDepthStampQuad(frame, objectId, frontBottomLeft, frontTopLeft, backTopLeft, backBottomLeft, insideOut);
+    appendSourceWireDepthStampQuad(frame, objectId, frontTopLeft, frontTopRight, backTopRight, backTopLeft, insideOut);
+    appendSourceWireDepthStampQuad(frame, objectId, frontBottomLeft, backBottomLeft, backBottomRight, frontBottomRight, insideOut);
+}
+
 } // namespace
 
 TEST(RenderSignatureBuilderTests, CentralizesMaterialMeshAndOverlaySignatures) {
@@ -346,7 +393,7 @@ TEST(OverlayLineMeshBuilderTests, ExpandsDiagonalLinesPerpendicularToScreenDirec
     EXPECT_GT(std::fabs(mesh.vertices[0].position.y - mesh.vertices[3].position.y), 0.0001f);
 }
 
-TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsDoNotFilterTopologyLines) {
+TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsCullOutwardOccludedHandles) {
     ViewportOverlayFrame frame;
     frame.lines.push_back({
             .layer = ViewportOverlayLayer::SourceWire,
@@ -364,22 +411,15 @@ TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsDoNotFilterTopologyLines)
             .widthPixels = 2.0f,
             .element = {.objectId = 1},
     });
-    frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::SourceWireDepthStamp,
-            .a = {-0.75f, -0.25f, -1.0f},
-            .b = {0.75f, -0.25f, -1.0f},
-            .c = {0.0f, 0.75f, -1.0f},
-            .color = rgba8(255, 224, 92, 235),
-            .element = {.objectId = 1},
-    });
+    appendSourceWireDepthStampBox(frame, 1, false);
 
     const OverlayLayerBuildPlan plan =
             OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
 
     ASSERT_EQ(plan.lineBatches.size(), 1u);
     const OverlayLineBatch& batch = plan.lineBatches.front();
-    EXPECT_EQ(batch.mesh.vertices.size(), 8u);
-    EXPECT_EQ(batch.mesh.indices.size(), 12u);
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    EXPECT_EQ(batch.mesh.indices.size(), 6u);
     EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
     EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
     EXPECT_FALSE(batch.state.depthCulling);
@@ -387,6 +427,30 @@ TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsDoNotFilterTopologyLines)
     for (const OverlayLineVertex& vertex : batch.mesh.vertices) {
         EXPECT_EQ(vertex.color, rgba8SrgbToLinear(rgba8(255, 224, 92, 235)));
     }
+}
+
+TEST(OverlayLineMeshBuilderTests, SourceWireDepthStampsKeepInsideOutTopologyVisible) {
+    ViewportOverlayFrame frame;
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -2.0f},
+            .end = {0.5f, 0.0f, -2.0f},
+            .color = rgba8(255, 224, 92, 235),
+            .widthPixels = 2.0f,
+            .element = {.objectId = 1},
+    });
+    appendSourceWireDepthStampBox(frame, 1, true);
+
+    const OverlayLayerBuildPlan plan =
+            OverlayRenderableBuilder::buildLayer(frame, testOverlayCamera(), ViewportOverlayLayer::SourceWire);
+
+    ASSERT_EQ(plan.lineBatches.size(), 1u);
+    const OverlayLineBatch& batch = plan.lineBatches.front();
+    EXPECT_EQ(batch.mesh.vertices.size(), 4u);
+    EXPECT_EQ(batch.mesh.indices.size(), 6u);
+    EXPECT_FLOAT_EQ(batch.depthBias, 0.0f);
+    EXPECT_EQ(batch.state.depthFunc, OverlayDepthFunc::Always);
+    EXPECT_FALSE(batch.state.depthCulling);
 }
 
 TEST(OverlayLineMeshBuilderTests, SourceWireDrawsInvertedInternalEdges) {

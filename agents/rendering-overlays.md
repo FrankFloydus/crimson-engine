@@ -13,6 +13,10 @@ Vulkan is the first runtime backend. Do not introduce OpenGL-only assumptions in
 Backend-specific behavior belongs behind `RenderSystem`, `PlatformWindow`, or explicit backend
 adapters so OpenGL and Metal can be added later.
 
+For selection/source-wire overlays, also read `docs/overlay-handling.md` before changing behavior.
+That document records the current object/component mode matrix, source-wire depth-stamp contract,
+inverted-mesh visualization rules, and regression test map.
+
 ## Render Ownership
 
 - `SceneDocument` is editor truth.

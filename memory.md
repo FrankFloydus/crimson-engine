@@ -89,6 +89,8 @@ Affected owners/files:
 - `tests/modeling_domain/qdr_poly_geometry_characterization_tests.cpp`
 - `tests/render_extraction_tests.cpp`
 - `tests/core_tests.cpp`
+- `docs/overlay-handling.md`
+- `agents/rendering-overlays.md`
 
 Resolved approach:
 
@@ -103,6 +105,9 @@ Resolved approach:
   the existing depth-stamped two-pass fill pipeline.
 - Added render extraction and policy tests asserting selected/hover face fills use no triangle
   culling and two-sided transparency.
+- Added `docs/overlay-handling.md` and explicit overlay status tests for the final object-mode
+  x-ray, component-mode source-wire, source-wire depth-stamp, inside-out visibility, and
+  outside-vs-inside picking contracts.
 
 Verification:
 

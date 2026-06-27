@@ -313,15 +313,6 @@ TEST(ViewportToolRuntimeTests, BoxToolCommitUsesCommandOwnedTransaction) {
             .leftReleased = true,
     });
     ASSERT_TRUE(result.handled);
-    ASSERT_FALSE(result.activeToolChanged);
-    ASSERT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Footprint);
-    EXPECT_EQ(commitCount, 0);
-
-    result = dispatchFrame(ViewportPointerToolEvent{
-            .hovered = true,
-            .leftClicked = true,
-    });
-    ASSERT_TRUE(result.handled);
     ASSERT_TRUE(result.activeToolChanged);
     EXPECT_EQ(modalState.boxPreview.dragState, ModelingBoxDragState::Idle);
     EXPECT_EQ(commitCount, 1);

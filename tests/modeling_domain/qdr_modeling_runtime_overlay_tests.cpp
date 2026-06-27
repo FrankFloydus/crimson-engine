@@ -327,6 +327,50 @@ void selected_mesh_source_wire_uses_source_color_in_component_mode()
 	}
 }
 
+void component_modes_do_not_emit_object_xray_fill()
+{
+	for (const quader_editor_core::SelectionMode mode : {
+			 quader_editor_core::SelectionMode::face,
+			 quader_editor_core::SelectionMode::edge,
+			 quader_editor_core::SelectionMode::vertex,
+		 }) {
+		quader_editor_core::EditorSession selected_session;
+		require_test(selected_session.create_box_from_bounds({ -1.0F, -1.0F, -1.0F }, { 1.0F, 1.0F, 1.0F }).changed,
+			"component no-xray selected fixture should create a box");
+		selected_session.set_selection_mode(mode);
+
+		const quader_editor_core::SelectionOverlayFrame selected_frame =
+			quader_editor_core::build_selection_overlay_frame(selected_session.objects(), selected_session.selection_mode(), {});
+		require_test(line_count_for_layer(selected_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 12U,
+			"component modes should keep the selected mesh source wire visible");
+		require_test(triangle_count_for_layer(selected_frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+			"component modes should keep source-wire depth-stamp metadata for inverted mesh visualization");
+		require_test(triangle_count_for_layer(selected_frame, quader_editor_core::SelectionOverlayLayer::selected_xray_face) == 0U,
+			"component modes must not emit object-mode x-ray face fill for the active mesh");
+
+		quader_editor_core::EditorSession hover_session = two_box_session();
+		hover_session.clear_selection();
+		hover_session.set_selection_mode(mode);
+		const quader_editor_core::SelectionHoverUpdateResult hover = quader_editor_core::update_selection_hover(
+			hover_session.objects(),
+			hover_session.selection_mode(),
+			{},
+			{ { 0.0F, 0.0F, -4.0F }, { 0.0F, 0.0F, 1.0F } },
+			false);
+		require_test(hover.hover.candidate_object_id == 1,
+			"component no-xray hover fixture should track the hovered source-wire candidate");
+
+		const quader_editor_core::SelectionOverlayFrame hover_frame =
+			quader_editor_core::build_selection_overlay_frame(hover_session.objects(), hover_session.selection_mode(), hover.hover);
+		require_test(line_count_for_layer(hover_frame, quader_editor_core::SelectionOverlayLayer::source_wire) > 0U,
+			"component hover candidates should keep source-wire visualization");
+		require_test(triangle_count_for_layer(hover_frame, quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp) > 0U,
+			"component hover candidates should keep source-wire depth-stamp metadata");
+		require_test(triangle_count_for_layer(hover_frame, quader_editor_core::SelectionOverlayLayer::selected_xray_face) == 0U,
+			"component hover candidates must not emit object-mode x-ray face fill");
+	}
+}
+
 void selected_component_does_not_cut_holes_in_active_mesh_source_wire()
 {
 	quader_editor_core::EditorSession session;
@@ -890,6 +934,7 @@ void diagnostic_edges_mark_crossing_edges()
 TEST(QdrModelingRuntimeOverlayTests, QdrEditorCoreOverlayTests) {
 	selected_object_overlay_uses_xray_fill_and_draw_on_top_active_wire();
 	selected_mesh_source_wire_uses_source_color_in_component_mode();
+	component_modes_do_not_emit_object_xray_fill();
 	selected_component_does_not_cut_holes_in_active_mesh_source_wire();
 	selected_inner_edge_hover_uses_active_source_wire_selected_color();
 	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();
