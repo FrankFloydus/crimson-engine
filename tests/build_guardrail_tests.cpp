@@ -855,6 +855,38 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(testingBuild, "before -> after");
 }
 
+TEST(BuildGuardrailTests, TestingDocsExplainPlacementAndSelectionRules) {
+    const std::string testingBuild = readSourceFile("agents/testing-build.md");
+    const std::string testsGuide = readSourceFile("tests/AGENTS.md");
+    const std::string modelingGuide = readSourceFile("tests/modeling_domain/AGENTS.md");
+
+    expectContains(testingBuild, "## Test Placement");
+    expectContains(testingBuild, "## Test Selection");
+    expectContains(testingBuild, "quader_guardrail_tests");
+    expectContains(testingBuild, "quader_tests");
+    expectContains(testingBuild, "quader_modeling_domain_tests");
+    expectContains(testingBuild, "tests/modeling_domain/operation/qdr_document_operation_<feature>_tests.cpp");
+    expectContains(testingBuild, "qdr_modeling_runtime_operation_<feature>_tests.cpp");
+    expectContains(testingBuild, "tools/affected_check.ps1 -PlanOnly -ChangedPath");
+    expectContains(testingBuild, "--gtest_filter=SuiteName.*");
+    expectContains(testingBuild, "-MeasureFull");
+
+    expectContains(testsGuide, "## Placement Rules");
+    expectContains(testsGuide, "Root `tests/*_tests.cpp` files belong to `quader_tests`");
+    expectContains(testsGuide, "Root guardrail files belong to `quader_guardrail_tests`");
+    expectContains(testsGuide, "Modeling-domain behavior belongs under `tests/modeling_domain/`");
+    expectContains(testsGuide, "## Selection Rules");
+
+    expectContains(modelingGuide, "## Placement Rules");
+    expectContains(modelingGuide, "qdr_document_operation_<feature>_tests.cpp");
+    expectContains(modelingGuide, "qdr_modeling_runtime_operation_<feature>_tests.cpp");
+    expectContains(modelingGuide, "qdr_modeling_runtime_tool_<feature>_tests.cpp");
+    expectContains(modelingGuide, "## Selection Rules");
+    expectContains(modelingGuide, "quader_modeling_domain_polygon_loop_tests");
+    expectContains(modelingGuide, "quader_modeling_domain_runtime_loop_tests");
+    expectContains(modelingGuide, "quader_modeling_domain_metadata_loop_tests");
+}
+
 TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
 

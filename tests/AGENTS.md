@@ -21,3 +21,24 @@ Read `../agents/testing-build.md` before changing tests.
 - Do not add save/load or QDR roundtrip behavior tests for editor workflows until the editor
   save/load surface exists.
 - When adding test files, update the owning CMake test target.
+
+## Placement Rules
+
+- Root `tests/*_tests.cpp` files belong to `quader_tests` and should cover app/runtime/editor
+  behavior: public API workflows, `BehaviorScenario`, commands, selection/history, viewport state,
+  render extraction data, UI models, localization, and app services. Register new files in
+  `CMakeLists.txt`.
+- Root guardrail files belong to `quader_guardrail_tests` and should cover source-policy,
+  architecture, dependency, naming, docs, CMake, and tooling invariants.
+- Modeling-domain behavior belongs under `tests/modeling_domain/` and is registered in
+  `cmake/QuaderModeling.cmake`, not `CMakeLists.txt`.
+- Shared root test helpers belong under `tests/support/`. Keep helper changes small because they
+  intentionally force broader affected test runs.
+
+## Selection Rules
+
+- Use `tools/affected_check.ps1 -PlanOnly -ChangedPath <path>` before choosing a broad test set.
+- For a new or edited test file, first build the owning target and run its declared GoogleTest suite
+  with `--gtest_filter=SuiteName.*`.
+- Run full `ctest --preset vs2026-debug --output-on-failure` before pushing changes that touch
+  CMake, shared test support, dependency policy, affected-check routing, or multiple owners.

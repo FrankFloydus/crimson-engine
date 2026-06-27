@@ -53,6 +53,66 @@ source-policy scans, `quader_tests` for app/runtime behavior, and the GoogleTest
 `ctest --preset vs2026-debug`. Do not add SDK-specific configure, build, or test presets back to the
 native app.
 
+## Test Placement
+
+Choose the test owner from the behavior being protected, not from the file that happened to change.
+
+- Put source-policy, architecture, dependency, naming, docs, CMake, and tooling invariants in
+  `tests/*guardrail_tests.cpp`, usually `tests/build_guardrail_tests.cpp`,
+  `tests/programmatic_api_guardrail_tests.cpp`, or `tests/oop_architecture_guardrail_tests.cpp`.
+  These build in `quader_guardrail_tests`.
+- Put user/editor behavior that goes through `QuaderEditorApi`, `QuaderApi`, commands,
+  `BehaviorScenario`, runtime UI models, render extraction data, localization, viewport state, or
+  app services in root `tests/*_tests.cpp`. These build in `quader_tests`; register new files in
+  `CMakeLists.txt`.
+- Put polygon/document internals, geometry, polygon operations, QDR document IO, and low-level
+  modeling invariants under `tests/modeling_domain/`. Operation tests should live in
+  `tests/modeling_domain/operation/qdr_document_operation_<feature>_tests.cpp` and build in
+  `quader_modeling_domain_tests`.
+- Put runtime modeling operations, runtime command contracts, session behavior, tool lifecycles,
+  modeling overlays/picking, repeat/undo/redo, and runtime QDR compatibility under
+  `tests/modeling_domain/operation/` or `tests/modeling_domain/tool/`. Runtime operation tests
+  should use `qdr_modeling_runtime_operation_<feature>_tests.cpp`.
+- Put metadata catalog/schema/placement checks under `tests/modeling_domain/editor_metadata/`.
+- Put shared app-test helpers under `tests/support/`; put modeling-domain-only helpers and fixtures
+  under `tests/modeling_domain/` or `tests/modeling_domain/fixtures/`. Shared helper changes
+  intentionally fan out to broader test runs.
+- Keep manual smoke checks only for behavior that still needs a real GPU/window/driver/pixel path:
+  Vulkan swapchain creation, RmlUi MainLayout chrome appearance, material rendering, and screenshot
+  or log verification through `tools/boot_smoke.ps1`.
+
+When adding a new test file, register it in the owning CMake target immediately. Root app tests and
+guardrails are listed in `CMakeLists.txt`; modeling-domain tests are categorized in
+`cmake/QuaderModeling.cmake`. Do not leave tests unbuilt, skipped, or hidden behind local-only
+compile definitions.
+
+## Test Selection
+
+Use the smallest test set that covers the changed owner, then run full `ctest` before pushing risky
+or cross-cutting changes.
+
+- First ask the planner:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -PlanOnly -ChangedPath path/to/changed_file.cpp
+```
+
+- Then run the affected workflow with explicit `-ChangedPath` values when the worktree is dirty or
+  the intended change is narrower than the whole diff.
+- For a new or edited GoogleTest file, build its owning target and run the declared suite with
+  `--gtest_filter=SuiteName.*` before broadening.
+- For direct polygon operation source edits, prefer the polygon loop target plus the matching
+  `QdrDocumentOperation...` suite. For direct runtime operation source edits, prefer the runtime loop
+  target plus the matching `QdrModelingRuntimeOperation...` suite and metadata loop when operation
+  descriptors can change.
+- For public API, command, scene, selection, history, viewport, UI, render, resource, or app service
+  changes, use `tools/affected_check.ps1`; it already maps those source areas to the relevant
+  build targets and GoogleTest filters.
+- For CMake, dependency, test-infrastructure, or affected-check changes, expect the plan to escalate
+  to configure, all three test targets, and `ctest --preset vs2026-debug --output-on-failure`.
+- Use `-MeasureFull` whenever the task claims a compile/test speed improvement and record the
+  concrete before -> after result in the relevant task summary or `memory.md` entry.
+
 `QUADER_ENABLE_PCH` is enabled by default and adds private target-local precompiled headers with
 stable C++ standard-library headers only. Keep project headers, SDK headers, and GoogleTest out of
 the common PCH list unless a separate measurement proves the benefit and the affected owner agrees.
