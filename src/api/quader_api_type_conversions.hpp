@@ -61,12 +61,82 @@ inline QuaderTransform toApiTransform(const TransformComponent& transform) {
     };
 }
 
+inline MeshCollisionType toSceneMeshCollisionType(QuaderMeshCollisionType type) {
+    switch (type) {
+    case QuaderMeshCollisionType::Box:
+        return MeshCollisionType::Box;
+    case QuaderMeshCollisionType::Sphere:
+        return MeshCollisionType::Sphere;
+    case QuaderMeshCollisionType::Cylinder:
+        return MeshCollisionType::Cylinder;
+    case QuaderMeshCollisionType::ConvexHull:
+        return MeshCollisionType::ConvexHull;
+    case QuaderMeshCollisionType::Mesh:
+        return MeshCollisionType::Mesh;
+    }
+    return MeshCollisionType::Box;
+}
+
+inline QuaderMeshCollisionType toApiMeshCollisionType(MeshCollisionType type) {
+    switch (type) {
+    case MeshCollisionType::Box:
+        return QuaderMeshCollisionType::Box;
+    case MeshCollisionType::Sphere:
+        return QuaderMeshCollisionType::Sphere;
+    case MeshCollisionType::Cylinder:
+        return QuaderMeshCollisionType::Cylinder;
+    case MeshCollisionType::ConvexHull:
+        return QuaderMeshCollisionType::ConvexHull;
+    case MeshCollisionType::Mesh:
+        return QuaderMeshCollisionType::Mesh;
+    }
+    return QuaderMeshCollisionType::Box;
+}
+
+inline MeshPhysicsBodyType toSceneMeshPhysicsBodyType(QuaderMeshPhysicsBodyType type) {
+    switch (type) {
+    case QuaderMeshPhysicsBodyType::StaticBody:
+        return MeshPhysicsBodyType::StaticBody;
+    case QuaderMeshPhysicsBodyType::RigidBody:
+        return MeshPhysicsBodyType::RigidBody;
+    }
+    return MeshPhysicsBodyType::StaticBody;
+}
+
+inline QuaderMeshPhysicsBodyType toApiMeshPhysicsBodyType(MeshPhysicsBodyType type) {
+    switch (type) {
+    case MeshPhysicsBodyType::StaticBody:
+        return QuaderMeshPhysicsBodyType::StaticBody;
+    case MeshPhysicsBodyType::RigidBody:
+        return QuaderMeshPhysicsBodyType::RigidBody;
+    }
+    return QuaderMeshPhysicsBodyType::StaticBody;
+}
+
 inline MeshComponent toSceneMeshComponent(const QuaderMeshComponent& component) {
-    return {.mesh = component.mesh};
+    return {
+            .mesh = component.mesh,
+            .editorOnly = component.editorOnly,
+            .castShadows = component.castShadows,
+            .doubleSided = component.doubleSided,
+            .generateCollisions = component.generateCollisions,
+            .collisionType = toSceneMeshCollisionType(component.collisionType),
+            .displayCollision = component.displayCollision,
+            .bodyType = toSceneMeshPhysicsBodyType(component.bodyType),
+    };
 }
 
 inline QuaderMeshComponent toApiMeshComponent(const MeshComponent& component) {
-    return {.mesh = component.mesh};
+    return {
+            .mesh = component.mesh,
+            .editorOnly = component.editorOnly,
+            .castShadows = component.castShadows,
+            .doubleSided = component.doubleSided,
+            .generateCollisions = component.generateCollisions,
+            .collisionType = toApiMeshCollisionType(component.collisionType),
+            .displayCollision = component.displayCollision,
+            .bodyType = toApiMeshPhysicsBodyType(component.bodyType),
+    };
 }
 
 inline ModelingBounds toModelingBounds(const QuaderBounds& bounds) {
@@ -198,11 +268,48 @@ inline QuaderActiveSelectionKind toApiActiveSelectionKind(ModelingActiveSelectio
     return QuaderActiveSelectionKind::None;
 }
 
+inline ModelingActiveSelectionKind toModelingActiveSelectionKind(QuaderActiveSelectionKind kind) {
+    switch (kind) {
+    case QuaderActiveSelectionKind::None:
+        return ModelingActiveSelectionKind::None;
+    case QuaderActiveSelectionKind::Object:
+        return ModelingActiveSelectionKind::Object;
+    case QuaderActiveSelectionKind::Vertex:
+        return ModelingActiveSelectionKind::Vertex;
+    case QuaderActiveSelectionKind::Edge:
+        return ModelingActiveSelectionKind::Edge;
+    case QuaderActiveSelectionKind::Face:
+        return ModelingActiveSelectionKind::Face;
+    case QuaderActiveSelectionKind::Light:
+        return ModelingActiveSelectionKind::Light;
+    }
+    return ModelingActiveSelectionKind::None;
+}
+
 inline QuaderSelectionSummary toApiSelectionSummary(const ModelingSelectionSummary& summary) {
     return {
             .mode = toApiSelectionMode(summary.mode),
             .hasSelection = summary.hasSelection,
             .activeKind = toApiActiveSelectionKind(summary.activeKind),
+            .activeObjectId = summary.activeObjectId,
+            .activeVertexId = summary.activeVertexId,
+            .activeEdgeA = summary.activeEdgeA,
+            .activeEdgeB = summary.activeEdgeB,
+            .activeFaceId = summary.activeFaceId,
+            .selectedObjectCount = summary.selectedObjectCount,
+            .selectedVertexCount = summary.selectedVertexCount,
+            .selectedEdgeCount = summary.selectedEdgeCount,
+            .selectedFaceCount = summary.selectedFaceCount,
+            .contentRevision = summary.contentRevision,
+            .selectionRevision = summary.selectionRevision,
+    };
+}
+
+inline ModelingSelectionSummary toModelingSelectionSummary(const QuaderSelectionSummary& summary) {
+    return {
+            .mode = toModelingSelectionMode(summary.mode),
+            .hasSelection = summary.hasSelection,
+            .activeKind = toModelingActiveSelectionKind(summary.activeKind),
             .activeObjectId = summary.activeObjectId,
             .activeVertexId = summary.activeVertexId,
             .activeEdgeA = summary.activeEdgeA,
@@ -401,9 +508,29 @@ inline ModelingHoverRequest toModelingHoverRequest(const QuaderHoverRequest& req
     };
 }
 
+inline QuaderHoverRequest toApiHoverRequest(const ModelingHoverRequest& request) {
+    return {
+            .ray = toApiRay(request.ray),
+            .selectedModifierPressed = request.selectedModifierPressed,
+            .vertexRadius = request.vertexRadius,
+            .edgeRadius = request.edgeRadius,
+    };
+}
+
 inline QuaderHoverTarget toApiHoverTarget(const ModelingHoverTarget& target) {
     return {
             .kind = toApiActiveSelectionKind(target.kind),
+            .objectId = target.objectId,
+            .vertexId = target.vertexId,
+            .edgeA = target.edgeA,
+            .edgeB = target.edgeB,
+            .faceId = target.faceId,
+    };
+}
+
+inline ModelingHoverTarget toModelingHoverTarget(const QuaderHoverTarget& target) {
+    return {
+            .kind = toModelingActiveSelectionKind(target.kind),
             .objectId = target.objectId,
             .vertexId = target.vertexId,
             .edgeA = target.edgeA,
@@ -416,6 +543,14 @@ inline QuaderHoverSummary toApiHoverSummary(const ModelingHoverSummary& summary)
     return {
             .changed = summary.changed,
             .target = toApiHoverTarget(summary.target),
+            .targetSelected = summary.targetSelected,
+    };
+}
+
+inline ModelingHoverSummary toModelingHoverSummary(const QuaderHoverSummary& summary) {
+    return {
+            .changed = summary.changed,
+            .target = toModelingHoverTarget(summary.target),
             .targetSelected = summary.targetSelected,
     };
 }

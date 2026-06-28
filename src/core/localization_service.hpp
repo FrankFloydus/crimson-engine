@@ -47,6 +47,10 @@ public:
     bool selectLocale(std::string_view locale);
     [[nodiscard]] std::string localeDisplayName(std::string_view locale) const;
     [[nodiscard]] std::string text(std::string_view key, std::string_view fallback) const;
+    [[nodiscard]] std::string imguiLabel(
+            std::string_view key,
+            std::string_view stableId,
+            std::string_view fallback) const;
     [[nodiscard]] std::string format(std::string_view key,
             std::string_view fallback,
             std::initializer_list<std::pair<std::string_view, std::string_view>> replacements) const;

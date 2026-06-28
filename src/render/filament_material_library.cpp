@@ -29,8 +29,8 @@ bool FilamentMaterialLibrary::initialize(filament::Engine& engine, const std::fi
         overlayLineMaterial_ = load(executableDir / "materials" / "quader_overlay_line.filamat");
         LOG_INFO("Loading overlay point material");
         overlayPointMaterial_ = load(executableDir / "materials" / "quader_overlay_point.filamat");
-        LOG_INFO("Loading RmlUi material");
-        rmlUiMaterial_ = load(executableDir / "materials" / "rmlui.filamat");
+        LOG_INFO("Loading ImGui material");
+        imguiMaterial_ = load(executableDir / "materials" / "imgui.filamat");
         LOG_INFO("Loading ground grid material");
         groundGridMaterial_ = load(executableDir / "materials" / "ground_grid.filamat");
     } catch (const std::exception& error) {
@@ -51,7 +51,7 @@ void FilamentMaterialLibrary::shutdown() {
     destroy(vertexColorOverlayMaterial_);
     destroy(overlayLineMaterial_);
     destroy(overlayPointMaterial_);
-    destroy(rmlUiMaterial_);
+    destroy(imguiMaterial_);
     destroy(groundGridMaterial_);
     engine_ = nullptr;
 }

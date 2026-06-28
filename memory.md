@@ -9,6 +9,54 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-28 - ImGui Borderless Resize Must Redraw During Native Live Resize
+
+Task/context: the `feature/imgui-shell` branch restored custom borderless chrome with ImGui. Window
+resize had two regressions: growing from a small window lagged or snapped on mouse-up, while
+shrinking later clipped the UI until mouse-up.
+
+Root cause/invariants:
+
+- On Windows, native move/resize runs a modal loop where normal `SDL_PollEvent()` rendering can
+  stall. Growing needs redraws for newly exposed pixels; shrinking needs redraws from native size
+  messages even when no expose event is generated.
+- Do not drive live borderless resize with per-motion `SDL_SetWindowPosition` plus
+  `SDL_SetWindowSize` on Windows. Use native hit testing (`WM_NCHITTEST`) so Windows owns resize
+  geometry, and keep the SDL size path only as fallback.
+- `SDL_FlushEvent(SDL_EVENT_MOUSE_MOTION)` is wrong for this path: it drops live resize input and
+  couples resize progress to render cadence.
+- During live resize, avoid exact viewport render-target reallocation on every pixel; keep drawing
+  the current viewport texture and exact-resize again when the resize loop ends.
+
+Affected owners/files:
+
+- `src/app/app.cpp`
+- `src/app/app.hpp`
+- `src/platform/platform_window.cpp`
+- `src/platform/platform_window.hpp`
+- `src/ui/ui_context.hpp`
+- `src/ui/ui_system.cpp`
+- `src/ui/ui_system.hpp`
+- `src/ui/viewport_panel.cpp`
+
+Resolved approach:
+
+- Added one guarded `App::renderFrame()` path used by both the normal loop and live resize redraws.
+- Added `SDL_AddEventWatch` handling for `SDL_EVENT_WINDOW_EXPOSED` with `data1 == 1` so growing
+  windows repaint during SDL/Windows live resize.
+- Enabled Win32 `WM_NCHITTEST` for resize edges and the draggable titlebar (`HT*` and `HTCAPTION`)
+  so native Windows resize owns live geometry.
+- Added a platform live-resize callback from `WM_SIZE`, `WM_WINDOWPOSCHANGED`, and
+  `WM_EXITSIZEMOVE` so shrinking windows repaint during the native modal resize loop.
+- Added `PlatformWindow::chromeResizeActive()` and UI render-resize suspension so viewport render
+  targets are not reallocated every pixel while the chrome resize is active.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader`
+- Manual smoke in `build\vs2026\Debug\quader.exe`: grow from small window and shrink from large
+  window both repaint during drag instead of lagging, clipping, or snapping only on mouse-up.
+
 ## 2026-06-28 - Undo Cancels Active Tool Previews Before Document History
 
 Task/context: Ctrl+Z during an active modeling preview could consume document history first, making

@@ -889,10 +889,36 @@ struct QuaderMaterialAsset {
 };
 
 /**
+ * Enumerates Quader Mesh Collision Type values used by the public Quader API surface.
+ */
+enum class QuaderMeshCollisionType {
+    Box,
+    Sphere,
+    Cylinder,
+    ConvexHull,
+    Mesh,
+};
+
+/**
+ * Enumerates Quader Mesh Physics Body Type values used by the public Quader API surface.
+ */
+enum class QuaderMeshPhysicsBodyType {
+    StaticBody,
+    RigidBody,
+};
+
+/**
  * Represents a Quader Mesh Component value used by the public Quader API surface.
  */
 struct QuaderMeshComponent {
     AssetId mesh = InvalidAssetId;
+    bool editorOnly = false;
+    bool castShadows = true;
+    bool doubleSided = false;
+    bool generateCollisions = true;
+    QuaderMeshCollisionType collisionType = QuaderMeshCollisionType::Box;
+    bool displayCollision = false;
+    QuaderMeshPhysicsBodyType bodyType = QuaderMeshPhysicsBodyType::StaticBody;
 };
 
 /**

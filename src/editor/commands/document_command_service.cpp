@@ -420,7 +420,7 @@ DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, 
     if (!currentMesh) {
         return documentCommandMissingEntityResult();
     }
-    if (documentCommandEntityIsModelingOwned(scene_, entity)) {
+    if (documentCommandEntityIsModelingOwned(scene_, entity) && currentMesh->mesh != mesh.mesh) {
         return documentCommandModelingOwnedEntityResult();
     }
     if (documentCommandSameMeshComponent(*currentMesh, mesh)) {

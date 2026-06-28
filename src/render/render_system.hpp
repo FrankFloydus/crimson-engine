@@ -87,7 +87,7 @@ public:
     filament::Material& vertexColorOverlayMaterial() { return materialLibrary_.vertexColorOverlay(); }
     filament::Material& overlayLineMaterial() { return materialLibrary_.overlayLine(); }
     filament::Material& overlayPointMaterial() { return materialLibrary_.overlayPoint(); }
-    filament::Material& rmlUiMaterial() { return materialLibrary_.rmlUi(); }
+    filament::Material& imguiMaterial() { return materialLibrary_.imgui(); }
     filament::Material& groundGridMaterial() { return materialLibrary_.groundGrid(); }
     TextureRegistry& textures() { return textureRegistry_; }
 

@@ -8973,6 +8973,52 @@ TEST(DocumentCommandServiceTests, AssetAwareServiceRejectsDanglingAssetReference
     EXPECT_EQ(result.message, "Material asset does not exist");
 }
 
+TEST(DocumentCommandServiceTests, ModelingOwnedMeshComponentAllowsMetadataButRejectsMeshAssetReplacement) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history, &assets);
+
+    const AssetId sourceMesh = assets.addMesh(MeshAsset{});
+    const AssetId replacementMesh = assets.addMesh(MeshAsset{});
+    ASSERT_NE(sourceMesh, InvalidAssetId);
+    ASSERT_NE(replacementMesh, InvalidAssetId);
+
+    const EntityId entity = scene.createEntity("Modeling Owned Mesh", EntityKind::Mesh);
+    scene.setMesh(entity, MeshComponent{.mesh = sourceMesh});
+    scene.setModelingObject(entity, ModelingObjectComponent{.objectId = 42});
+
+    MeshComponent metadata = *scene.mesh(entity);
+    metadata.doubleSided = true;
+    metadata.generateCollisions = false;
+    metadata.collisionType = MeshCollisionType::ConvexHull;
+    metadata.displayCollision = true;
+    metadata.bodyType = MeshPhysicsBodyType::RigidBody;
+    DocumentCommandResult result = commands.setMeshComponent(entity, metadata);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    ASSERT_NE(scene.mesh(entity), nullptr);
+    EXPECT_EQ(scene.mesh(entity)->mesh, sourceMesh);
+    EXPECT_TRUE(scene.mesh(entity)->doubleSided);
+    EXPECT_FALSE(scene.mesh(entity)->generateCollisions);
+    EXPECT_EQ(scene.mesh(entity)->collisionType, MeshCollisionType::ConvexHull);
+    EXPECT_TRUE(scene.mesh(entity)->displayCollision);
+    EXPECT_EQ(scene.mesh(entity)->bodyType, MeshPhysicsBodyType::RigidBody);
+
+    ASSERT_TRUE(history.undo().ok);
+    ASSERT_NE(scene.mesh(entity), nullptr);
+    EXPECT_EQ(scene.mesh(entity)->mesh, sourceMesh);
+    EXPECT_FALSE(scene.mesh(entity)->doubleSided);
+    EXPECT_TRUE(scene.mesh(entity)->generateCollisions);
+
+    MeshComponent replacement = *scene.mesh(entity);
+    replacement.mesh = replacementMesh;
+    result = commands.setMeshComponent(entity, replacement);
+    EXPECT_FALSE(result.ok);
+    EXPECT_NE(result.message.find("modeling object"), std::string::npos);
+    EXPECT_EQ(scene.mesh(entity)->mesh, sourceMesh);
+}
+
 TEST(DocumentCommandServiceTests, SetMaterialComparesFullMaterialComponentState) {
     SceneDocument scene;
     AssetRegistry assets;

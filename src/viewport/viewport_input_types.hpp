@@ -56,6 +56,12 @@ struct ViewportInputFrame {
     bool operationPreviewActive = false;
     bool modalToolFinalizePressed = false;
     bool modalToolModeCyclePressed = false;
+    bool middlePressed = false;
+    bool middleDown = false;
+    bool middleReleased = false;
+    bool rightPressed = false;
+    bool rightDown = false;
+    bool rightReleased = false;
     float mouseWheel = 0.0f;
     float deltaSeconds = 1.0f / 60.0f;
     QVec2 mouseScreen = {};

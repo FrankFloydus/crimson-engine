@@ -218,6 +218,18 @@ std::string LocalizationService::text(std::string_view key, std::string_view fal
     return fallback.empty() ? std::string(key) : std::string(fallback);
 }
 
+std::string LocalizationService::imguiLabel(
+        std::string_view key,
+        std::string_view stableId,
+        std::string_view fallback) const {
+    std::string label = text(key, fallback);
+    if (!stableId.empty()) {
+        label.append("##");
+        label.append(stableId);
+    }
+    return label;
+}
+
 std::string LocalizationService::format(
         std::string_view key,
         std::string_view fallback,

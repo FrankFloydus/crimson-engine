@@ -36,7 +36,7 @@ public:
     filament::Material& vertexColorOverlay() { return *vertexColorOverlayMaterial_; }
     filament::Material& overlayLine() { return *overlayLineMaterial_; }
     filament::Material& overlayPoint() { return *overlayPointMaterial_; }
-    filament::Material& rmlUi() { return *rmlUiMaterial_; }
+    filament::Material& imgui() { return *imguiMaterial_; }
     filament::Material& groundGrid() { return *groundGridMaterial_; }
 
 private:
@@ -48,7 +48,7 @@ private:
     filament::Material* vertexColorOverlayMaterial_ = nullptr;
     filament::Material* overlayLineMaterial_ = nullptr;
     filament::Material* overlayPointMaterial_ = nullptr;
-    filament::Material* rmlUiMaterial_ = nullptr;
+    filament::Material* imguiMaterial_ = nullptr;
     filament::Material* groundGridMaterial_ = nullptr;
 };
 

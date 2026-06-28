@@ -7,9 +7,10 @@
     "glm",
     "sdl3",
     {
-      "name": "rmlui",
+      "name": "imgui",
       "features": [
-        "freetype"
+        "docking-experimental",
+        "sdl3-binding"
       ]
     },
     "gtest",

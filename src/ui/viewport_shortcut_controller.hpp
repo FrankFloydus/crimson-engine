@@ -1,4 +1,4 @@
-////////////////////////////////////////////////////////////////////////////////
+﻿////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
 // This file is part of Quader and is protected proprietary source code.
 // No permission is granted to use, copy, modify, distribute, or sublicense this
@@ -7,7 +7,7 @@
 #pragma once
 
 #include "editor/modeling/modeling_types.hpp"
-#include "viewport/viewport_input_types.hpp"
+#include "viewport/viewport_input_router.hpp"
 
 namespace quader {
 
@@ -15,7 +15,7 @@ class QuaderEditorApi;
 class ModelingSessionService;
 
 /**
- * Stores the Viewport Shortcut Controller Result data contract used by the editor presentation layer.
+ * Stores the Viewport Shortcut Controller Result data contract used by the ImGui editor presentation layer.
  */
 struct ViewportShortcutControllerResult {
     bool consumed = false;
@@ -25,7 +25,7 @@ struct ViewportShortcutControllerResult {
 };
 
 /**
- * Coordinates Viewport Shortcut Controller state transitions for the editor presentation layer.
+ * Coordinates Viewport Shortcut Controller state transitions for the ImGui editor presentation layer.
  */
 class ViewportShortcutController {
 public:
@@ -34,10 +34,6 @@ public:
             const ModelingToolSettingsTarget& toolSettingsTarget,
             QuaderEditorApi& editor,
             ModelingSessionService& modeling) const;
-
-    [[nodiscard]] ViewportShortcutControllerResult handleModelingShortcut(
-            const ViewportInputResult& inputResult,
-            QuaderEditorApi& editor) const;
 
     [[nodiscard]] ViewportShortcutControllerResult handleModelingShortcut(
             const ViewportInputResult& inputResult,

@@ -14,6 +14,8 @@
 #include "render/scene_render_bridge.hpp"
 #include "ui/ui_system.hpp"
 
+#include <SDL3/SDL_events.h>
+
 #include <filesystem>
 #include <memory>
 
@@ -43,6 +45,9 @@ public:
 private:
     void createStartupScene();
     void handleWindowChromeAction(WindowChromeAction action);
+    bool renderFrame(const FrameTiming& frameTiming);
+    [[nodiscard]] bool shouldRenderLiveResizeEvent(const SDL_Event& event) const;
+    static bool SDLCALL liveResizeEventWatch(void* userdata, SDL_Event* event);
 
     AppFrameClock frameClock_;
     PlatformWindow window_;
@@ -54,6 +59,9 @@ private:
     AssetId defaultMaterial_ = InvalidAssetId;
     bool running_ = false;
     bool shutdownComplete_ = false;
+    bool renderingFrame_ = false;
+    bool liveResizeFrameRendered_ = false;
+    bool eventWatchInstalled_ = false;
 };
 
 } // namespace quader

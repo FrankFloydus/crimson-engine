@@ -22,12 +22,14 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <windowsx.h>
 #include <dwmapi.h>
 #endif
 
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -76,13 +78,27 @@ LRESULT nativeChromeHitTestCodeForHit(SDL_HitTestResult hit) {
         return HTBOTTOMLEFT;
     case SDL_HITTEST_RESIZE_LEFT:
         return HTLEFT;
+    case SDL_HITTEST_DRAGGABLE:
+        return HTCAPTION;
     default:
         return HTCLIENT;
     }
 }
 
 bool isNativeChromeResizeHit(SDL_HitTestResult hit) {
-    return nativeChromeHitTestCodeForHit(hit) != HTCLIENT;
+    switch (hit) {
+    case SDL_HITTEST_RESIZE_TOPLEFT:
+    case SDL_HITTEST_RESIZE_TOP:
+    case SDL_HITTEST_RESIZE_TOPRIGHT:
+    case SDL_HITTEST_RESIZE_RIGHT:
+    case SDL_HITTEST_RESIZE_BOTTOMRIGHT:
+    case SDL_HITTEST_RESIZE_BOTTOM:
+    case SDL_HITTEST_RESIZE_BOTTOMLEFT:
+    case SDL_HITTEST_RESIZE_LEFT:
+        return true;
+    default:
+        return false;
+    }
 }
 
 std::optional<DWORD> readDwmRegistryDword(const wchar_t* valueName) {
@@ -432,6 +448,12 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
     if (hit == SDL_HITTEST_NORMAL) {
         return false;
     }
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr &&
+            (isNativeChromeResizeHit(hit) || hit == SDL_HITTEST_DRAGGABLE)) {
+        return true;
+    }
+#endif
     if (event.button.clicks > 1) {
         if (hit == SDL_HITTEST_DRAGGABLE) {
             toggleMaximizeRestore();
@@ -446,6 +468,19 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
 
 bool PlatformWindow::maximized() const {
     return window_ && (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) != 0u;
+}
+
+bool PlatformWindow::chromeResizeActive() const {
+#if defined(_WIN32)
+    if (nativeResizeActive_) {
+        return true;
+    }
+#endif
+    return chromeInteraction_.active && chromeInteraction_.hit != SDL_HITTEST_DRAGGABLE;
+}
+
+void PlatformWindow::setLiveResizeFrameCallback(LiveResizeFrameCallback callback) {
+    liveResizeFrameCallback_ = std::move(callback);
 }
 
 void PlatformWindow::installBorderlessChrome() {
@@ -578,6 +613,20 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
         return DefWindowProcW(hwnd, message, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam));
     };
 
+    if (borderlessChrome_ && !chromeInteraction_.active && message == WM_NCHITTEST) {
+        const SDL_HitTestResult hit = nativeChromeHitTestFromScreenPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        const LRESULT hitCode = nativeChromeHitTestCodeForHit(hit);
+        if (hitCode != HTCLIENT) {
+            return hitCode;
+        }
+    }
+
+    if (borderlessChrome_) {
+        if (message == WM_SIZING) {
+            nativeResizeActive_ = true;
+        }
+    }
+
     if (borderlessChrome_ && !chromeInteraction_.active &&
             (message == WM_SETCURSOR || message == WM_MOUSEMOVE || message == WM_NCMOUSEMOVE)) {
         POINT cursorPoint{};
@@ -616,7 +665,26 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
         }
     }
 
-    return callPreviousWindowProc();
+    const bool redrawNativeResizeFrame =
+            borderlessChrome_ &&
+            nativeResizeActive_ &&
+            (message == WM_SIZE || message == WM_WINDOWPOSCHANGED);
+    const bool endNativeResize =
+            borderlessChrome_ &&
+            nativeResizeActive_ &&
+            message == WM_EXITSIZEMOVE;
+
+    const std::intptr_t result = callPreviousWindowProc();
+
+    if (redrawNativeResizeFrame) {
+        requestLiveResizeFrame();
+    }
+    if (endNativeResize) {
+        nativeResizeActive_ = false;
+        requestLiveResizeFrame();
+    }
+
+    return result;
 }
 
 SDL_HitTestResult PlatformWindow::nativeChromeHitTestFromScreenPoint(int screenX, int screenY) const {
@@ -777,6 +845,23 @@ void PlatformWindow::updateChromeInteraction(float globalMouseX, float globalMou
             .edge = chromeInteraction_.hit,
     });
 
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        HWND hwnd = static_cast<HWND>(nativeChromeWindowHandle_);
+        if (SetWindowPos(
+                    hwnd,
+                    nullptr,
+                    frame.x,
+                    frame.y,
+                    frame.width,
+                    frame.height,
+                    SWP_NOZORDER | SWP_NOACTIVATE)) {
+            return;
+        }
+        LOG_WARN("SetWindowPos failed during borderless resize: {}", GetLastError());
+    }
+#endif
+
     if (!SDL_SetWindowPosition(window_, frame.x, frame.y)) {
         LOG_WARN("SDL_SetWindowPosition failed during borderless resize: {}", SDL_GetError());
     }
@@ -817,6 +902,13 @@ void PlatformWindow::cancelChromeInteraction() {
     setChromeCursor(SDL_HITTEST_NORMAL);
     refreshPixelSize();
     refreshNativeChrome();
+}
+
+void PlatformWindow::requestLiveResizeFrame() {
+    refreshPixelSize();
+    if (liveResizeFrameCallback_) {
+        liveResizeFrameCallback_();
+    }
 }
 
 void PlatformWindow::updateChromeHoverCursor(float windowMouseX, float windowMouseY) {

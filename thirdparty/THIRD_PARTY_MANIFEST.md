@@ -11,19 +11,11 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
 | OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
 | SDL3 | https://www.libsdl.org | vcpkg `3.4.8` | Zlib AND MIT AND Apache-2.0, see `licenses/sdl3-Zlib-MIT-Apache-2.0.txt` | Native windowing, events, and platform input. |
-| RmlUi | https://github.com/mikke89/RmlUi | vcpkg `6.2` | MIT, see `licenses/rmlui-MIT.txt` | RmlUi-backed native UI shell and viewport presentation. |
-| itlib | https://github.com/iboB/itlib | vcpkg `1.12.2` | MIT, see `licenses/itlib-MIT.txt` | RmlUi transitive dependency. |
-| robin-hood-hashing | https://github.com/martinus/robin-hood-hashing | vcpkg `3.11.5` | MIT, see `licenses/robin-hood-hashing-MIT.txt` | RmlUi transitive dependency. |
-| FreeType | https://freetype.org/ | vcpkg `2.14.3` | FreeType License or GPL-2.0-or-later; Quader uses the FreeType License option, see `licenses/freetype-FTL-OR-GPL-2.0-or-later.txt` | RmlUi font backend. |
-| Brotli | https://github.com/google/brotli | vcpkg `1.2.0` | MIT, see `licenses/brotli-MIT.txt` | FreeType transitive compression dependency. |
-| bzip2 | https://sourceware.org/bzip2/ | vcpkg `1.0.8` | bzip2 license, see `licenses/bzip2-Bzip2.txt` | FreeType transitive compression dependency. |
-| libpng | http://www.libpng.org/pub/png/libpng.html | vcpkg `1.6.58` | libpng license, see `licenses/libpng-Libpng-2.0.txt` | FreeType transitive image dependency. |
-| zlib | https://zlib.net/ | vcpkg `1.3.2` | zlib license, see `licenses/zlib-Zlib.txt` | libpng/FreeType transitive compression dependency. |
+| Dear ImGui | https://github.com/ocornut/imgui | vcpkg `1.92.8` | MIT, see `licenses/imgui-MIT.txt` | Immediate-mode editor shell, dockspace, panels, and SDL3 input backend. |
 | GoogleTest | https://github.com/google/googletest | vcpkg `1.17.0` | BSD 3-Clause, see `licenses/gtest-BSD-3-Clause.txt` | Native C++ tests. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
 | spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
 | {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
-| Nova Mono | https://github.com/google/fonts/tree/main/ofl/novamono | Google Fonts commit `e2ff3c28d1ce433a95ee071a0861b2a75235ef9b`, font copied to `resources/fonts/NovaMono.ttf` | SIL Open Font License 1.1, see `licenses/google-fonts-nova-mono-OFL-1.1.txt` | Secondary text in compact toolbar buttons. |
 | Tracy Profiler | https://github.com/wolfpld/tracy | external checkout when `QUADER_ENABLE_TRACY=ON` | BSD 3-Clause, see the external checkout `LICENSE` | Optional diagnostic instrumentation for local performance captures. |
 
 ## OpenMesh Source Policy

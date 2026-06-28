@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace quader {
@@ -68,6 +69,8 @@ struct PlatformWindowChromeResizeDrag {
  */
 class PlatformWindow {
 public:
+    using LiveResizeFrameCallback = std::function<void()>;
+
     PlatformWindow() = default;
     ~PlatformWindow();
 
@@ -87,7 +90,9 @@ public:
     void minimize();
     void toggleMaximizeRestore();
     [[nodiscard]] bool processChromeEvent(const SDL_Event& event);
+    [[nodiscard]] bool chromeResizeActive() const;
     [[nodiscard]] bool maximized() const;
+    void setLiveResizeFrameCallback(LiveResizeFrameCallback callback);
 
 private:
     void installBorderlessChrome();
@@ -98,6 +103,7 @@ private:
     void updateChromeInteraction(float globalMouseX, float globalMouseY);
     void endChromeInteraction();
     void cancelChromeInteraction();
+    void requestLiveResizeFrame();
     void updateChromeHoverCursor(float windowMouseX, float windowMouseY);
     void releaseChromeResizeCursor();
     void setChromeCursor(SDL_HitTestResult hit);
@@ -138,9 +144,11 @@ private:
     bool borderlessChrome_ = false;
     bool chromeMouseCaptured_ = false;
     bool chromeResizeCursorActive_ = false;
+    LiveResizeFrameCallback liveResizeFrameCallback_;
 #if defined(_WIN32)
     void* nativeChromeWindowHandle_ = nullptr;
     std::intptr_t previousNativeChromeWindowProc_ = 0;
+    bool nativeResizeActive_ = false;
 #endif
     std::array<SDL_Cursor*, SDL_SYSTEM_CURSOR_COUNT> chromeCursors_{};
 };

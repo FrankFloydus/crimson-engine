@@ -1,4 +1,4 @@
-////////////////////////////////////////////////////////////////////////////////
+﻿////////////////////////////////////////////////////////////////////////////////
 // Copyright (c) 2026 Francesco Di Blasi. All rights reserved.
 // This file is part of Quader and is protected proprietary source code.
 // No permission is granted to use, copy, modify, distribute, or sublicense this
@@ -6,7 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "ui/components/organisms/main_layout_model.hpp"
+#include "ui/ui_panel.hpp"
 
 #include <filesystem>
 #include <string>
@@ -14,16 +14,17 @@
 namespace quader {
 
 /**
- * Represents an UI Settings Paths value used by the editor presentation layer.
+ * Represents an UI Settings Paths value used by the ImGui editor presentation layer.
  */
 struct UISettingsPaths {
     std::filesystem::path directory;
+    std::filesystem::path imguiIniFile;
     std::filesystem::path settingsFile;
     std::filesystem::path viewportSettingsFile;
 };
 
 /**
- * Owns UI Settings behavior within the editor presentation layer.
+ * Owns UI Settings behavior within the ImGui editor presentation layer.
  */
 class UISettings {
 public:
@@ -33,15 +34,19 @@ public:
 
     bool save(const std::filesystem::path& path) const;
 
+    bool isPanelVisible(UIPanelId id) const;
+    void setPanelVisible(UIPanelId id, bool visible);
+    bool navigationGizmoVisible() const { return navigationGizmoVisible_; }
+    void setNavigationGizmoVisible(bool visible) { navigationGizmoVisible_ = visible; }
     const std::string& locale() const { return locale_; }
     void setLocale(std::string locale);
-    const MainLayoutModel& mainLayout() const { return mainLayout_; }
-    MainLayoutModel& mainLayout() { return mainLayout_; }
-    void setMainLayout(MainLayoutModel layout);
 
 private:
     std::string locale_ = "en-US";
-    MainLayoutModel mainLayout_ = MainLayoutModel::defaults();
+    bool outlinerVisible_ = true;
+    bool inspectorVisible_ = true;
+    bool consoleVisible_ = false;
+    bool navigationGizmoVisible_ = true;
 };
 
 } // namespace quader
