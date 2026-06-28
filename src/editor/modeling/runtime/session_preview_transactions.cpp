@@ -84,6 +84,32 @@ bool EditorSession::discard_preview_transactions(bool restore_transform_preview)
 	return restored_transform_preview || restored_preview;
 }
 
+bool EditorSession::restore_preview_transaction_base_for_edit(PreviewTransactionKind expected_kind)
+{
+	if (!preview_transaction_.active ||
+			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
+		return false;
+	}
+	set_state(preview_transaction_.base_state);
+	preview_transaction_.changed = state_revisions_differ(
+		preview_transaction_.base_state,
+		preview_transaction_.history_state);
+	return true;
+}
+
+bool EditorSession::capture_preview_transaction_base_after_edit(PreviewTransactionKind expected_kind)
+{
+	if (!preview_transaction_.active ||
+			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
+		return false;
+	}
+	preview_transaction_.base_state = state_;
+	preview_transaction_.changed = state_revisions_differ(
+		preview_transaction_.base_state,
+		preview_transaction_.history_state);
+	return true;
+}
+
 CommandResult EditorSession::begin_edge_bevel_preview(const quader_poly::EdgeBevelSettings& settings)
 {
 	QDR_PROFILE_SCOPE("qdr_editor_core.begin_edge_bevel_preview");

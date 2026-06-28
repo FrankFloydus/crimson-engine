@@ -118,6 +118,8 @@ inline constexpr QuaderCommandId ModelingMergeByDistance{"modeling.merge_by_dist
 inline constexpr QuaderCommandId ModelingFlipHorizontal{"modeling.flip_horizontal"};
 inline constexpr QuaderCommandId ModelingFlipVertical{"modeling.flip_vertical"};
 inline constexpr QuaderCommandId ModelingApplyActiveMaterial{"edit.apply_material"};
+inline constexpr QuaderCommandId ModelingApplyActivePreview{"modeling.apply_active_preview"};
+inline constexpr QuaderCommandId ModelingCancelActivePreview{"modeling.cancel_active_preview"};
 
 inline constexpr QuaderCommandId ToolsActivateSelect{"tools.activate.select"};
 inline constexpr QuaderCommandId ToolsActivateMove{"tools.activate.move"};
@@ -219,6 +221,8 @@ inline constexpr QuaderCommandId TypedCommandIds[] = {
         ModelingFlipHorizontal,
         ModelingFlipVertical,
         ModelingApplyActiveMaterial,
+        ModelingApplyActivePreview,
+        ModelingCancelActivePreview,
         ToolsActivateSelect,
         ToolsActivateMove,
         ToolsActivateExtend,

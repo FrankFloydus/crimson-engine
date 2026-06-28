@@ -220,17 +220,54 @@ TEST(QdrDocumentOperationSliceQuadTests, SliceQuadPropagatesSelectedCubeFaceBoun
 	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }
 
-TEST(QdrDocumentOperationSliceQuadTests, SliceQuadRejectsNonQuadSelectedFacesWithoutPartialEdits) {
+TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSlicesSelectedTriangleFaces) {
 	ElementId triangle_face = invalid_element_id;
 	Document document = make_triangle_document(triangle_face);
 	Selection selection = qdr_test::face_selection({ triangle_face }, triangle_face);
 
 	const OperationResult result = slice_selected_quads(document, selection, 1, 1);
 
-	EXPECT_FALSE(result.changed);
-	EXPECT_TRUE(document.faces.size() == 1U);
-	EXPECT_TRUE(document.vertices.size() == 3U);
+	EXPECT_TRUE(result.changed);
+	EXPECT_GT(document.faces.size(), 1U);
+	EXPECT_GT(document.vertices.size(), 3U);
 	EXPECT_TRUE(selection.mode == SelectionMode::face);
-	EXPECT_TRUE(selection.faces.size() == 1U);
-	EXPECT_TRUE(selection.faces.front() == triangle_face);
+	EXPECT_GT(selection.faces.size(), 1U);
+	EXPECT_TRUE(selection.has_active);
+	for (const Face& face : document.faces) {
+		EXPECT_TRUE(face.material_slot == 3U);
+		EXPECT_TRUE(face.uvs.empty());
+		EXPECT_FALSE(qdr_test::face_has_repeated_vertices(face));
+	}
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
+}
+
+TEST(QdrDocumentOperationSliceQuadTests, SliceQuadSupportsMixedQuadAndTriangleFaceSelections) {
+	Document document;
+	const ElementId qa = add_vertex(document, { -1.0F, -1.0F, 0.0F });
+	const ElementId qb = add_vertex(document, { 1.0F, -1.0F, 0.0F });
+	const ElementId qc = add_vertex(document, { 1.0F, 1.0F, 0.0F });
+	const ElementId qd = add_vertex(document, { -1.0F, 1.0F, 0.0F });
+	const ElementId quad_face = add_face(document, std::array<ElementId, 4> { qa, qb, qc, qd }, 5U);
+	const ElementId ta = add_vertex(document, { 3.0F, -1.0F, 0.0F });
+	const ElementId tb = add_vertex(document, { 5.0F, -1.0F, 0.0F });
+	const ElementId tc = add_vertex(document, { 4.0F, 1.0F, 0.0F });
+	const ElementId triangle_face = add_face(document, std::array<ElementId, 3> { ta, tb, tc }, 7U);
+	ASSERT_TRUE(quad_face != invalid_element_id);
+	ASSERT_TRUE(triangle_face != invalid_element_id);
+	Selection selection = qdr_test::face_selection({ quad_face, triangle_face }, triangle_face);
+
+	const OperationResult result = slice_selected_quads(document, selection, 1, 1);
+
+	EXPECT_TRUE(result.changed);
+	EXPECT_GT(document.faces.size(), 5U);
+	EXPECT_GT(document.vertices.size(), 7U);
+	EXPECT_TRUE(selection.mode == SelectionMode::face);
+	EXPECT_GT(selection.faces.size(), 5U);
+	EXPECT_TRUE(std::ranges::any_of(document.faces, [](const Face& face) {
+		return face.material_slot == 5U;
+	}));
+	EXPECT_TRUE(std::ranges::any_of(document.faces, [](const Face& face) {
+		return face.material_slot == 7U;
+	}));
+	EXPECT_TRUE(qdr_test::every_face_compiles_to_triangles(document));
 }

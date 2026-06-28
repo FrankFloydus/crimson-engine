@@ -481,7 +481,7 @@ TEST(ModelingSessionServiceSplitTests, ClickPickSelectionUsesSelectionServiceCac
     const std::string runtimePicking = readSourceFile("src/editor/modeling/runtime/session_picking.cpp");
     const std::string runtimeHeader = readSourceFile("src/editor/modeling/runtime/session.hpp");
 
-    EXPECT_NE(facade.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, request)"), std::string::npos);
+    EXPECT_NE(facade.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, effectiveRequest)"), std::string::npos);
     EXPECT_EQ(facade.find("quader_editor_core::pick_select_all_faces(\n                    pickingObjects"), std::string::npos);
     EXPECT_EQ(facade.find("quader_editor_core::pick_select_edge_loop(\n                    pickingObjects"), std::string::npos);
     EXPECT_EQ(facade.find("quader_editor_core::pick_select_all_vertices(\n                    pickingObjects"), std::string::npos);

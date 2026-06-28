@@ -1318,6 +1318,8 @@ public:
 	[[nodiscard]] PreviewTransactionStatus preview_transaction_status() const;
 	void clear_preview_transaction();
 	bool discard_preview_transactions(bool restore_transform_preview = false);
+	bool restore_preview_transaction_base_for_edit(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
+	bool capture_preview_transaction_base_after_edit(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);
 	CommandResult begin_bridge_preview(int steps = 1);
 	CommandResult begin_bridge_preview(BridgeOperationSettings settings);
 	CommandResult update_bridge_preview(int steps = 1);

@@ -53,6 +53,7 @@ struct ViewportInputFrame {
     bool panNavigationActive = false;
     bool modalToolActive = false;
     bool activeToolOwnsViewport = false;
+    bool operationPreviewActive = false;
     bool modalToolFinalizePressed = false;
     bool modalToolModeCyclePressed = false;
     float mouseWheel = 0.0f;

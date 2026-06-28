@@ -36,23 +36,14 @@ ViewportShortcutControllerResult ViewportShortcutController::handleOperationPrev
         return {};
     }
 
-    if (inputResult.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
-        const QuaderApiVoidResult command = editor.modeling().commitPreview("Apply Tool Preview");
+    const std::optional<std::string> previewCommandId =
+            viewportOperationPreviewCommandTargetIdForRouterShortcut(inputResult.shortcut);
+    if (previewCommandId.has_value()) {
+        const QuaderApiVoidResult command = editor.commands().execute(*previewCommandId);
         if (!command.ok) {
-            LOG_ERROR("Tool preview apply failed: {}", command.message.empty() ? "Command failed." : command.message);
-        }
-        return {
-                .consumed = true,
-                .commandExecuted = true,
-                .invalidateHover = true,
-                .markOverlayDirty = true,
-        };
-    }
-
-    if (inputResult.shortcut.kind == ViewportShortcutKind::CancelActiveTool) {
-        const QuaderApiVoidResult command = editor.modeling().cancelPreview();
-        if (!command.ok) {
-            LOG_ERROR("Tool preview cancel failed: {}", command.message.empty() ? "Command failed." : command.message);
+            LOG_ERROR("Tool preview shortcut failed ({}): {}",
+                    *previewCommandId,
+                    command.message.empty() ? "Command failed." : command.message);
         }
         return {
                 .consumed = true,

@@ -581,7 +581,7 @@ void component_hover_source_wire_candidate_is_sticky_until_replaced()
 		"hovering a different component object should replace the source-wire candidate");
 }
 
-void object_hover_emits_source_wire_candidate_before_selection()
+void object_hover_tracks_candidate_without_source_wire_before_selection()
 {
 	quader_editor_core::EditorSession session = two_box_session();
 	session.clear_selection();
@@ -598,12 +598,22 @@ void object_hover_emits_source_wire_candidate_before_selection()
 
 	const quader_editor_core::SelectionOverlayFrame first_frame =
 		quader_editor_core::build_selection_hover_overlay_frame(session.objects(), session.selection_mode(), first_hover.hover);
-	require_test(line_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire) > 0U,
-		"object hover should draw mesh source wire before click selection");
+	require_test(line_count_for_layer(first_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
+		"object hover should not draw mesh source wire before click selection");
 	const quader_editor_core::SelectionOverlayFrame first_base_frame =
 		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), first_hover.hover);
 	require_test(line_count_for_layer(first_base_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
 		"object hover should not draw mesh source wire in the base selection overlay");
+
+	session.set_selected_object_ids({ 1 }, 1);
+	const quader_editor_core::SelectionOverlayFrame selected_frame =
+		quader_editor_core::build_selection_overlay_frame(session.objects(), session.selection_mode(), {});
+	require_test(line_count_for_layer(selected_frame, quader_editor_core::SelectionOverlayLayer::selected_edge) > 0U,
+		"selected object should draw selected mesh wire");
+	require_test(line_count_for_layer(selected_frame, quader_editor_core::SelectionOverlayLayer::source_wire) == 0U,
+		"selected object should not draw ordinary source wire in mesh mode");
+	session.clear_selection();
+	session.set_selection_mode(quader_editor_core::SelectionMode::object);
 
 	const quader_editor_core::SelectionHoverUpdateResult empty_hover = quader_editor_core::update_selection_hover(
 		session.objects(),
@@ -940,7 +950,7 @@ TEST(QdrModelingRuntimeOverlayTests, QdrEditorCoreOverlayTests) {
 	inverted_open_cube_inner_edge_hover_uses_selected_deselect_color();
 	component_deselect_keeps_active_mesh_source_wire_visible();
 	component_hover_source_wire_candidate_is_sticky_until_replaced();
-	object_hover_emits_source_wire_candidate_before_selection();
+	object_hover_tracks_candidate_without_source_wire_before_selection();
 	vertex_mode_hover_candidate_exposes_unselected_handles();
 	hover_only_overlay_omits_selected_base_geometry();
 	selected_component_hover_keeps_normal_hover_primitives();

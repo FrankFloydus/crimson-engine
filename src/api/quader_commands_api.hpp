@@ -54,6 +54,7 @@ struct QuaderViewportKeybindingContext {
     bool panNavigationActive = false;
     bool modalToolActive = false;
     bool activeToolOwnsViewport = false;
+    bool operationPreviewActive = false;
 };
 
 /**

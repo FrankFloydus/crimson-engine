@@ -10,17 +10,17 @@
 
 #include <mesh/polygon/internal/quader_poly_document_bridge_surface_helpers.hpp>
 #include <mesh/polygon/internal/quader_poly_document_hull_plane_helpers.hpp>
+#include <mesh/polygon/internal/quader_poly_document_knife_helpers.hpp>
 #include <mesh/polygon/internal/quader_poly_document_topology_helpers.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
-#include <map>
-#include <memory>
 #include <optional>
 #include <set>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -61,47 +61,57 @@ const Face* find_original_face(const std::vector<Face>& faces, ElementId face_id
 }
 
 /**
- * Represents a Quad Slice Basis value used by the polygon document and mesh editing core.
+ * Stores a projected vertex in a stable face-local Slice Quad grid.
  */
-struct QuadSliceBasis {
-    std::array<ElementId, 4> vertices {};
-    std::array<quader::QVec3, 4> positions {};
+struct SliceGridVertex {
+    ElementId id = invalid_element_id;
+    quader::QVec3 position;
+    float u = 0.0F;
+    float v = 0.0F;
 };
 
 /**
- * Represents an Edge Split Point value used by the polygon document and mesh editing core.
+ * Stores the stable planar frame used to generate Slice Quad grid cuts.
  */
-struct EdgeSplitPoint {
-    float factor = 0.0F;
-    ElementId vertex_id = invalid_element_id;
+struct SliceFaceFrame {
+    ElementId face_id = invalid_element_id;
+    quader::QVec3 center;
+    quader::QVec3 normal;
+    quader::QVec3 u_axis;
+    quader::QVec3 v_axis;
+    std::vector<SliceGridVertex> vertices;
+    float min_u = 0.0F;
+    float max_u = 0.0F;
+    float min_v = 0.0F;
+    float max_v = 0.0F;
 };
 
-using EdgeSplitMap = std::map<std::pair<ElementId, ElementId>, std::vector<EdgeSplitPoint>>;
+/**
+ * Stores a clipped Slice Quad grid line endpoint.
+ */
+struct SliceLineEndpoint {
+    float along = 0.0F;
+    quader::QVec3 position;
+};
 
-std::pair<ElementId, ElementId> edge_split_key(ElementId a, ElementId b)
+std::optional<SliceFaceFrame> stable_slice_face_frame(const Document& document, const Face& face)
 {
-    const Edge edge = make_edge(a, b);
-    return { edge.a, edge.b };
-}
-
-std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, const Face& face)
-{
-    if (face.vertices.size() != 4U) {
+    if (face.vertices.size() < 3U) {
         return std::nullopt;
     }
 
-    std::array<Vertex, 4> source_vertices {};
     quader::QVec3 center;
-    for (std::size_t index = 0; index < source_vertices.size(); ++index) {
-        const ElementId vertex_id = face.vertices[index];
+    std::vector<Vertex> source_vertices;
+    source_vertices.reserve(face.vertices.size());
+    for (const ElementId vertex_id : face.vertices) {
         const Vertex* vertex = find_vertex(document, vertex_id);
         if (vertex == nullptr) {
             return std::nullopt;
         }
-        source_vertices[index] = *vertex;
+        source_vertices.push_back(*vertex);
         center += vertex->position;
     }
-    center = center / 4.0F;
+    center = center / static_cast<float>(source_vertices.size());
 
     const quader::QVec3 normal = normalize_or_zero(face_normal(document, face));
     if (length_squared(normal) <= epsilon) {
@@ -154,197 +164,270 @@ std::optional<QuadSliceBasis> stable_quad_slice_basis(const Document& document, 
         v_axis = v_axis * -1.0F;
     }
 
-    /**
-     * Represents a Scored Vertex value used by the polygon document and mesh editing core.
-     */
-    struct ScoredVertex {
-        ElementId id = invalid_element_id;
-        quader::QVec3 position;
-        float u = 0.0F;
-        float v = 0.0F;
-    };
-
-    std::array<ScoredVertex, 4> scored {};
-    for (std::size_t index = 0; index < source_vertices.size(); ++index) {
-        const quader::QVec3 offset = source_vertices[index].position - center;
-        scored[index] = {
-            source_vertices[index].id,
-            source_vertices[index].position,
-            dot(offset, u_axis),
-            dot(offset, v_axis),
-        };
-    }
-
-    std::ranges::sort(scored, [](const ScoredVertex& left, const ScoredVertex& right) {
-        if (std::abs(left.v - right.v) > epsilon) {
-            return left.v < right.v;
+    SliceFaceFrame frame;
+    frame.face_id = face.id;
+    frame.center = center;
+    frame.normal = normal;
+    frame.u_axis = u_axis;
+    frame.v_axis = v_axis;
+    frame.vertices.reserve(source_vertices.size());
+    bool initialized_bounds = false;
+    for (const Vertex& vertex : source_vertices) {
+        const quader::QVec3 offset = vertex.position - center;
+        if (std::abs(dot(offset, normal)) > 0.001F) {
+            return std::nullopt;
         }
-        return left.u < right.u;
-    });
-    if (scored[0].u > scored[1].u) {
-        std::swap(scored[0], scored[1]);
-    }
-    if (scored[2].u > scored[3].u) {
-        std::swap(scored[2], scored[3]);
-    }
-
-    QuadSliceBasis basis;
-    basis.vertices = { scored[0].id, scored[1].id, scored[3].id, scored[2].id };
-    basis.positions = { scored[0].position, scored[1].position, scored[3].position, scored[2].position };
-    return basis;
-}
-
-quader::QVec3 bilinear_quad_point(quader::QVec3 a, quader::QVec3 b, quader::QVec3 c, quader::QVec3 d, float x_factor, float y_factor)
-{
-    const quader::QVec3 top = a + ((b - a) * x_factor);
-    const quader::QVec3 bottom = d + ((c - d) * x_factor);
-    return top + ((bottom - top) * y_factor);
-}
-
-ElementId boundary_split_vertex(
-    Document& document,
-    EdgeSplitMap& edge_splits,
-    ElementId from,
-    ElementId to,
-    float factor_from_start,
-    quader::QVec3 position)
-{
-    if (factor_from_start <= epsilon) {
-        return from;
-    }
-    if (factor_from_start >= 1.0F - epsilon) {
-        return to;
-    }
-
-    const Edge edge = make_edge(from, to);
-    const float factor = edge.a == from ? factor_from_start : 1.0F - factor_from_start;
-    std::vector<EdgeSplitPoint>& split_points = edge_splits[edge_split_key(edge.a, edge.b)];
-    for (const EdgeSplitPoint& split_point : split_points) {
-        if (std::abs(split_point.factor - factor) <= 0.0001F) {
-            return split_point.vertex_id;
+        const float u = dot(offset, u_axis);
+        const float v = dot(offset, v_axis);
+        frame.vertices.push_back({ vertex.id, vertex.position, u, v });
+        if (!initialized_bounds) {
+            frame.min_u = frame.max_u = u;
+            frame.min_v = frame.max_v = v;
+            initialized_bounds = true;
+        } else {
+            frame.min_u = std::min(frame.min_u, u);
+            frame.max_u = std::max(frame.max_u, u);
+            frame.min_v = std::min(frame.min_v, v);
+            frame.max_v = std::max(frame.max_v, v);
         }
     }
-
-    const ElementId vertex_id = add_vertex(document, position);
-    split_points.push_back({ factor, vertex_id });
-    return vertex_id;
+    if (frame.max_u - frame.min_u <= epsilon || frame.max_v - frame.min_v <= epsilon) {
+        return std::nullopt;
+    }
+    return frame;
 }
 
-ElementId boundary_grid_vertex(
-    Document& document,
-    EdgeSplitMap& edge_splits,
-    const QuadSliceBasis& basis,
-    int x,
-    int y,
-    int columns,
-    int rows,
-    quader::QVec3 position)
+bool point_on_segment_2d(float px, float py, float ax, float ay, float bx, float by)
 {
-    if (y == 0) {
-        return boundary_split_vertex(
-            document,
-            edge_splits,
-            basis.vertices[0],
-            basis.vertices[1],
-            static_cast<float>(x) / static_cast<float>(columns),
-            position);
+    const float ab_x = bx - ax;
+    const float ab_y = by - ay;
+    const float ap_x = px - ax;
+    const float ap_y = py - ay;
+    const float cross_2d = (ab_x * ap_y) - (ab_y * ap_x);
+    if (std::abs(cross_2d) > 0.0001F) {
+        return false;
     }
-    if (x == columns) {
-        return boundary_split_vertex(
-            document,
-            edge_splits,
-            basis.vertices[1],
-            basis.vertices[2],
-            static_cast<float>(y) / static_cast<float>(rows),
-            position);
+    const float dot_2d = (ap_x * ab_x) + (ap_y * ab_y);
+    if (dot_2d < -0.0001F) {
+        return false;
     }
-    if (y == rows) {
-        return boundary_split_vertex(
-            document,
-            edge_splits,
-            basis.vertices[3],
-            basis.vertices[2],
-            static_cast<float>(x) / static_cast<float>(columns),
-            position);
-    }
-    if (x == 0) {
-        return boundary_split_vertex(
-            document,
-            edge_splits,
-            basis.vertices[0],
-            basis.vertices[3],
-            static_cast<float>(y) / static_cast<float>(rows),
-            position);
-    }
-    return invalid_element_id;
+    const float length_2d = (ab_x * ab_x) + (ab_y * ab_y);
+    return dot_2d <= length_2d + 0.0001F;
 }
 
-std::vector<ElementId> split_vertices_for_face_edge(
-    const EdgeSplitMap& edge_splits,
-    ElementId from,
-    ElementId to)
+bool point_on_frame_boundary(const SliceFaceFrame& frame, float u, float v)
 {
-    const Edge edge = make_edge(from, to);
-    const auto found = edge_splits.find(edge_split_key(edge.a, edge.b));
-    if (found == edge_splits.end()) {
-        return {};
+    for (std::size_t index = 0; index < frame.vertices.size(); ++index) {
+        const SliceGridVertex& a = frame.vertices[index];
+        const SliceGridVertex& b = frame.vertices[(index + 1U) % frame.vertices.size()];
+        if (point_on_segment_2d(u, v, a.u, a.v, b.u, b.v)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool point_in_or_on_frame(const SliceFaceFrame& frame, float u, float v)
+{
+    if (point_on_frame_boundary(frame, u, v)) {
+        return true;
     }
 
-    std::vector<EdgeSplitPoint> split_points = found->second;
-    std::ranges::sort(split_points, [from, edge](const EdgeSplitPoint& left, const EdgeSplitPoint& right) {
-        return edge.a == from ? left.factor < right.factor : left.factor > right.factor;
-    });
-
-    std::vector<ElementId> vertices;
-    vertices.reserve(split_points.size());
-    for (const EdgeSplitPoint& split_point : split_points) {
-        if (split_point.factor <= epsilon || split_point.factor >= 1.0F - epsilon) {
+    bool inside = false;
+    for (std::size_t index = 0, previous = frame.vertices.size() - 1U;
+            index < frame.vertices.size();
+            previous = index++) {
+        const SliceGridVertex& a = frame.vertices[index];
+        const SliceGridVertex& b = frame.vertices[previous];
+        const bool crosses = (a.v > v) != (b.v > v);
+        if (!crosses) {
             continue;
         }
-        vertices.push_back(split_point.vertex_id);
+        const float intersect_u = ((b.u - a.u) * (v - a.v) / (b.v - a.v)) + a.u;
+        if (u < intersect_u) {
+            inside = !inside;
+        }
     }
-    return vertices;
+    return inside;
 }
 
-void propagate_boundary_splits_to_neighbor_faces(
-    Document& document,
-    const std::set<ElementId>& selected_face_ids,
-    const EdgeSplitMap& edge_splits)
+std::vector<SliceLineEndpoint> line_polygon_intersections(
+    const SliceFaceFrame& frame,
+    bool vertical,
+    float coordinate)
 {
-    if (edge_splits.empty()) {
+    std::vector<SliceLineEndpoint> intersections;
+    for (std::size_t index = 0; index < frame.vertices.size(); ++index) {
+        const SliceGridVertex& a = frame.vertices[index];
+        const SliceGridVertex& b = frame.vertices[(index + 1U) % frame.vertices.size()];
+        const float a_cross = vertical ? a.u : a.v;
+        const float b_cross = vertical ? b.u : b.v;
+        const float a_along = vertical ? a.v : a.u;
+        const float b_along = vertical ? b.v : b.u;
+        const float a_delta = a_cross - coordinate;
+        const float b_delta = b_cross - coordinate;
+
+        if (std::abs(a_delta) <= 0.0001F && std::abs(b_delta) <= 0.0001F) {
+            intersections.push_back({ a_along, a.position });
+            intersections.push_back({ b_along, b.position });
+            continue;
+        }
+        if (coordinate < std::min(a_cross, b_cross) - 0.0001F ||
+                coordinate > std::max(a_cross, b_cross) + 0.0001F ||
+                std::abs(b_cross - a_cross) <= 0.0001F) {
+            continue;
+        }
+
+        const float factor = std::clamp((coordinate - a_cross) / (b_cross - a_cross), 0.0F, 1.0F);
+        const float along = a_along + ((b_along - a_along) * factor);
+        intersections.push_back({ along, a.position + ((b.position - a.position) * factor) });
+    }
+
+    std::ranges::sort(intersections, [](const SliceLineEndpoint& left, const SliceLineEndpoint& right) {
+        return left.along < right.along;
+    });
+    std::vector<SliceLineEndpoint> unique;
+    unique.reserve(intersections.size());
+    for (const SliceLineEndpoint& endpoint : intersections) {
+        if (!unique.empty() && std::abs(unique.back().along - endpoint.along) <= 0.0001F) {
+            continue;
+        }
+        unique.push_back(endpoint);
+    }
+    return unique;
+}
+
+void add_grid_segment_targets(
+    const SliceFaceFrame& frame,
+    const SliceLineEndpoint& first,
+    const SliceLineEndpoint& second,
+    std::vector<KnifePointTarget>& targets,
+    std::vector<KnifeStrokeSegment>& segments)
+{
+    if (length_squared(second.position - first.position) <= epsilon) {
         return;
     }
+    const std::uint32_t first_index = static_cast<std::uint32_t>(targets.size());
+    targets.push_back({
+        .kind = KnifePointTargetKind::face_point,
+        .face_id = frame.face_id,
+        .position = first.position,
+    });
+    const std::uint32_t second_index = static_cast<std::uint32_t>(targets.size());
+    targets.push_back({
+        .kind = KnifePointTargetKind::face_point,
+        .face_id = frame.face_id,
+        .position = second.position,
+    });
+    segments.push_back({ first_index, second_index });
+}
 
-    for (Face& face : document.faces) {
-        if (selected_face_ids.contains(face.id) || face.vertices.size() < 2U) {
+std::size_t append_grid_line_segments(
+    const SliceFaceFrame& frame,
+    bool vertical,
+    float coordinate,
+    std::vector<KnifePointTarget>& targets,
+    std::vector<KnifeStrokeSegment>& segments)
+{
+    const std::size_t segment_count_before = segments.size();
+    const std::vector<SliceLineEndpoint> intersections = line_polygon_intersections(frame, vertical, coordinate);
+    for (std::size_t index = 0; index + 1U < intersections.size(); ++index) {
+        const SliceLineEndpoint& first = intersections[index];
+        const SliceLineEndpoint& second = intersections[index + 1U];
+        if (second.along - first.along <= 0.0001F) {
             continue;
         }
-
-        std::vector<ElementId> expanded_vertices;
-        expanded_vertices.reserve(face.vertices.size());
-        bool changed = false;
-        for (std::size_t index = 0; index < face.vertices.size(); ++index) {
-            const ElementId from = face.vertices[index];
-            const ElementId to = face.vertices[(index + 1U) % face.vertices.size()];
-            expanded_vertices.push_back(from);
-            const std::vector<ElementId> split_vertices = split_vertices_for_face_edge(edge_splits, from, to);
-            if (!split_vertices.empty()) {
-                changed = true;
-                expanded_vertices.insert(expanded_vertices.end(), split_vertices.begin(), split_vertices.end());
-            }
+        const float midpoint_along = (first.along + second.along) * 0.5F;
+        const float midpoint_u = vertical ? coordinate : midpoint_along;
+        const float midpoint_v = vertical ? midpoint_along : coordinate;
+        if (!point_in_or_on_frame(frame, midpoint_u, midpoint_v) ||
+                point_on_frame_boundary(frame, midpoint_u, midpoint_v)) {
+            continue;
         }
+        add_grid_segment_targets(frame, first, second, targets, segments);
+    }
+    return segments.size() - segment_count_before;
+}
 
-        if (changed) {
-            face.vertices = std::move(expanded_vertices);
-            face.uvs.clear();
+std::size_t append_grid_segments(
+    const SliceFaceFrame& frame,
+    int x_slices,
+    int y_slices,
+    std::vector<KnifePointTarget>& targets,
+    std::vector<KnifeStrokeSegment>& segments)
+{
+    std::size_t added_segments = 0;
+    const int columns = x_slices + 1;
+    const int rows = y_slices + 1;
+    for (int column = 1; column < columns; ++column) {
+        const float factor = static_cast<float>(column) / static_cast<float>(columns);
+        const float u = frame.min_u + ((frame.max_u - frame.min_u) * factor);
+        added_segments += append_grid_line_segments(frame, true, u, targets, segments);
+    }
+    for (int row = 1; row < rows; ++row) {
+        const float factor = static_cast<float>(row) / static_cast<float>(rows);
+        const float v = frame.min_v + ((frame.max_v - frame.min_v) * factor);
+        added_segments += append_grid_line_segments(frame, false, v, targets, segments);
+    }
+    return added_segments;
+}
+
+std::optional<std::pair<float, float>> project_to_frame(const SliceFaceFrame& frame, quader::QVec3 position)
+{
+    const quader::QVec3 offset = position - frame.center;
+    if (std::abs(dot(offset, frame.normal)) > 0.001F) {
+        return std::nullopt;
+    }
+    return std::pair<float, float> { dot(offset, frame.u_axis), dot(offset, frame.v_axis) };
+}
+
+bool face_lies_inside_source_frame(const Document& document, const Face& face, const SliceFaceFrame& frame)
+{
+    if (face.vertices.size() < 3U) {
+        return false;
+    }
+
+    quader::QVec3 center;
+    std::size_t valid_vertex_count = 0;
+    for (const ElementId vertex_id : face.vertices) {
+        const Vertex* vertex = find_vertex(document, vertex_id);
+        if (vertex == nullptr) {
+            return false;
+        }
+        const std::optional<std::pair<float, float>> projected = project_to_frame(frame, vertex->position);
+        if (!projected.has_value() || !point_in_or_on_frame(frame, projected->first, projected->second)) {
+            return false;
+        }
+        center += vertex->position;
+        ++valid_vertex_count;
+    }
+    center = center / static_cast<float>(valid_vertex_count);
+    const std::optional<std::pair<float, float>> projected_center = project_to_frame(frame, center);
+    return projected_center.has_value() &&
+        point_in_or_on_frame(frame, projected_center->first, projected_center->second);
+}
+
+std::vector<ElementId> generated_face_selection(const Document& document, std::span<const SliceFaceFrame> source_frames)
+{
+    std::vector<ElementId> face_ids;
+    for (const Face& face : document.faces) {
+        for (const SliceFaceFrame& frame : source_frames) {
+            if (!face_lies_inside_source_frame(document, face, frame)) {
+                continue;
+            }
+            if (std::find(face_ids.begin(), face_ids.end(), face.id) == face_ids.end()) {
+                face_ids.push_back(face.id);
+            }
+            break;
         }
     }
+    return face_ids;
 }
 
 OperationResult slice_selected_quads_impl(Document& document, Selection& selection, int x_slices, int y_slices)
 {
     if (selection.mode != SelectionMode::face || selection.faces.empty()) {
-        return { false, "Select quad faces before slicing." };
+        return { false, "Select faces before slicing." };
     }
 
     x_slices = normalize_quad_slice_count(x_slices);
@@ -353,10 +436,7 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
         return { false, "Slice Quad needs at least one slice." };
     }
 
-    const int columns = x_slices + 1;
-    const int rows = y_slices + 1;
-    Document candidate = document;
-    const std::vector<Face> original_faces = candidate.faces;
+    const std::vector<Face> original_faces = document.faces;
     std::set<ElementId> selected_face_ids;
     for (ElementId face_id : selection.faces) {
         if (face_id != invalid_element_id) {
@@ -364,9 +444,9 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
         }
     }
 
-    std::vector<Face> sliced_faces;
-    std::vector<ElementId> generated_face_ids;
-    EdgeSplitMap boundary_edge_splits;
+    std::vector<SliceFaceFrame> source_frames;
+    std::vector<KnifePointTarget> targets;
+    std::vector<KnifeStrokeSegment> segments;
     bool found_selected_face = false;
     for (ElementId face_id : selected_face_ids) {
         const Face* face = find_original_face(original_faces, face_id);
@@ -374,88 +454,32 @@ OperationResult slice_selected_quads_impl(Document& document, Selection& selecti
             continue;
         }
         found_selected_face = true;
-        if (face->vertices.size() != 4U) {
-            return { false, "Slice Quad only works on selected quad faces." };
+        std::optional<SliceFaceFrame> frame = stable_slice_face_frame(document, *face);
+        if (!frame.has_value()) {
+            return { false, "Slice Quad could not resolve the selected face plane." };
         }
-
-        const std::optional<QuadSliceBasis> slice_basis = stable_quad_slice_basis(candidate, *face);
-        if (!slice_basis.has_value()) {
-            return { false, "Slice Quad could not resolve the selected quad vertices." };
+        const std::size_t face_segment_count = append_grid_segments(*frame, x_slices, y_slices, targets, segments);
+        if (face_segment_count == 0U) {
+            return { false, "Slice Quad did not create any face cuts." };
         }
-        const quader::QVec3 source_normal = face_normal(candidate, *face);
-
-        std::vector<ElementId> grid(static_cast<std::size_t>(columns + 1) * static_cast<std::size_t>(rows + 1), invalid_element_id);
-        const auto grid_index = [columns](int x, int y) {
-            return static_cast<std::size_t>(y * (columns + 1) + x);
-        };
-        for (int y = 0; y <= rows; ++y) {
-            for (int x = 0; x <= columns; ++x) {
-                ElementId vertex_id = invalid_element_id;
-                if (x == 0 && y == 0) {
-                    vertex_id = slice_basis->vertices[0];
-                } else if (x == columns && y == 0) {
-                    vertex_id = slice_basis->vertices[1];
-                } else if (x == columns && y == rows) {
-                    vertex_id = slice_basis->vertices[2];
-                } else if (x == 0 && y == rows) {
-                    vertex_id = slice_basis->vertices[3];
-                } else {
-                    const float x_factor = static_cast<float>(x) / static_cast<float>(columns);
-                    const float y_factor = static_cast<float>(y) / static_cast<float>(rows);
-                    const quader::QVec3 position =
-                        bilinear_quad_point(
-                            slice_basis->positions[0],
-                            slice_basis->positions[1],
-                            slice_basis->positions[2],
-                            slice_basis->positions[3],
-                            x_factor,
-                            y_factor);
-                    vertex_id = (x == 0 || x == columns || y == 0 || y == rows) ?
-                        boundary_grid_vertex(candidate, boundary_edge_splits, *slice_basis, x, y, columns, rows, position) :
-                        add_vertex(candidate, position);
-                }
-                grid[grid_index(x, y)] = vertex_id;
-            }
-        }
-
-        bool used_source_face_id = false;
-        for (int y = 0; y < rows; ++y) {
-            for (int x = 0; x < columns; ++x) {
-                Face sliced_face;
-                sliced_face.id = used_source_face_id ? candidate.next_face_id++ : face->id;
-                used_source_face_id = true;
-                sliced_face.vertices = {
-                    grid[grid_index(x, y)],
-                    grid[grid_index(x + 1, y)],
-                    grid[grid_index(x + 1, y + 1)],
-                    grid[grid_index(x, y + 1)],
-                };
-                sliced_face.material_slot = face->material_slot;
-                sliced_face.uvs.clear();
-                orient_face_toward_normal(candidate, sliced_face, source_normal);
-                generated_face_ids.push_back(sliced_face.id);
-                sliced_faces.push_back(std::move(sliced_face));
-            }
-        }
+        source_frames.push_back(std::move(*frame));
     }
 
-    if (!found_selected_face || sliced_faces.empty()) {
-        return { false, "Select quad faces before slicing." };
+    if (!found_selected_face || targets.size() < 2U || segments.empty()) {
+        return { false, "Select faces before slicing." };
     }
 
-    propagate_boundary_splits_to_neighbor_faces(candidate, selected_face_ids, boundary_edge_splits);
-    std::erase_if(candidate.faces, [&selected_face_ids](const Face& face) {
-        return selected_face_ids.contains(face.id);
-    });
-    candidate.faces.insert(candidate.faces.end(), sliced_faces.begin(), sliced_faces.end());
-    prune_invalid_faces(candidate);
-    prune_unused_vertices(candidate);
-    restore_source_face_orientation(document, candidate);
-    if (!every_face_triangulates(candidate)) {
-        return { false, "Slice Quad would create invalid face geometry." };
+    KnifeStrokeCandidate candidate = build_knife_stroke_candidate(document, targets, segments);
+    if (!candidate.changed) {
+        return { false, candidate.message.empty() ? std::string("Slice Quad could not split the selected faces.") : candidate.message };
     }
 
-    document = std::move(candidate);
+    std::vector<ElementId> generated_face_ids = generated_face_selection(candidate.document, source_frames);
+    if (generated_face_ids.empty()) {
+        return { false, "Slice Quad could not resolve the generated face selection." };
+    }
+
+    document = std::move(candidate.document);
     selection.clear();
     selection.mode = SelectionMode::face;
     selection.faces = std::move(generated_face_ids);

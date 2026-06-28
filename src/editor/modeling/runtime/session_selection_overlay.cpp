@@ -711,15 +711,6 @@ SelectionOverlayFrame build_selection_hover_overlay_frame(
 	frame.hover_target_selected = hover.selected_modifier_pressed && selected_hover_target;
 
 	for (const PolygonObject& object : objects) {
-		const bool object_candidate =
-			mode == SelectionMode::object &&
-			!object.selected &&
-			hover.object_id > 0 &&
-			object.id == hover.object_id;
-		if (object_candidate) {
-			append_hover_source_wire(frame, object, style);
-		}
-
 		const bool component_candidate =
 			mode != SelectionMode::object &&
 			hover.candidate_object_id > 0 &&

@@ -71,6 +71,7 @@ QuaderKeybindingContext viewportKeybindingContext(
     context.set("navigation.panActive", inputContext.panNavigationActive);
     context.set("modalTool.active", inputContext.modalToolActive);
     context.set("activeTool.ownsViewport", inputContext.activeToolOwnsViewport);
+    context.set("operationPreview.active", inputContext.operationPreviewActive);
     context.set("activeTool." + std::string(viewportToolId(state.activeTool)), true);
     context.set("selectionMode." + std::string(viewportSelectionModeId(state.selectionMode)), true);
     return context;
@@ -529,6 +530,14 @@ void QuaderCommandsApi::Impl::registerCommands() {
             "apply_active_material",
             "Apply Material");
     registerCommand(
+            QuaderCommand::ModelingApplyActivePreview,
+            "Apply Active Preview",
+            [this] { return api_.modeling().commitPreview("Apply Tool Preview"); });
+    registerCommand(
+            QuaderCommand::ModelingCancelActivePreview,
+            "Cancel Active Preview",
+            [this] { return api_.modeling().cancelPreview(); });
+    registerCommand(
             QuaderCommand::ProjectNew,
             "New Project",
             [this] { return project_.newProject(); },
@@ -652,6 +661,19 @@ void QuaderCommandsApi::Impl::registerDefaultKeybindings() {
 void QuaderCommandsApi::Impl::registerViewportDefaultKeybindings() {
     constexpr std::string_view viewportContext = "viewportFocus && !textInputActive";
     constexpr std::string_view viewportShortcutContext = "viewportFocus && !textInputActive && !navigation.active";
+    constexpr std::string_view operationPreviewContext =
+            "viewportFocus && !textInputActive && !navigation.active && operationPreview.active";
+
+    keybindings_.addDefaultKeybinding(
+            std::string(QuaderCommand::ModelingApplyActivePreview.string()),
+            "Space",
+            std::string(operationPreviewContext),
+            20);
+    keybindings_.addDefaultKeybinding(
+            std::string(QuaderCommand::ModelingCancelActivePreview.string()),
+            "Escape",
+            std::string(operationPreviewContext),
+            20);
 
     keybindings_.addDefaultKeybinding(
             viewportInputActionTargetId("cancel_active_tool"),

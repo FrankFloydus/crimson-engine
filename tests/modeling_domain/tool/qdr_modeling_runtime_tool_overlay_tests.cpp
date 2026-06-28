@@ -7,6 +7,10 @@
 #include "test_support.hpp"
 
 #include <editor/interactions/interaction_api.hpp>
+#include <editor/modeling/runtime/session.hpp>
+
+#include <algorithm>
+#include <vector>
 
 TEST(QdrModelingRuntimeToolOverlayTests, SelectionOverlayLookupIncludesSelectedAndHoverTargets) {
 	quader_editor_core::RectangleSelectionState selection;
@@ -85,4 +89,43 @@ TEST(QdrModelingRuntimeToolOverlayTests, SelectionOverlayPolicyDistinguishesDens
 	policy = quader_editor_core::selection_overlay_policy(request);
 	EXPECT_TRUE(policy.suppress_selected_object_feedback);
 	EXPECT_FALSE(policy.should_build_lookup);
+}
+
+TEST(QdrModelingRuntimeToolOverlayTests, ObjectModeHoverDoesNotDrawMeshWireUntilSelected) {
+	quader_editor_core::PolygonObject object;
+	object.id = 7;
+	object.document = quader_poly::make_cube(quader_poly::CubePrimitiveSpec {});
+
+	quader_editor_core::SelectionHoverState hover;
+	hover.object_id = object.id;
+	hover.kind = quader_editor_core::SelectionHoverKind::object;
+	hover.candidate_object_id = object.id;
+
+	const quader_editor_core::SelectionOverlayFrame hover_frame =
+		quader_editor_core::build_selection_hover_overlay_frame(
+			std::vector<quader_editor_core::PolygonObject> { object },
+			quader_editor_core::SelectionMode::object,
+			hover);
+	EXPECT_TRUE(hover_frame.lines.empty());
+	EXPECT_TRUE(hover_frame.triangles.empty());
+	EXPECT_TRUE(hover_frame.points.empty());
+
+	object.selected = true;
+	const quader_editor_core::SelectionOverlayFrame selected_frame =
+		quader_editor_core::build_selection_overlay_frame(
+			std::vector<quader_editor_core::PolygonObject> { object },
+			quader_editor_core::SelectionMode::object,
+			{});
+	EXPECT_TRUE(std::any_of(
+		selected_frame.lines.begin(),
+		selected_frame.lines.end(),
+		[](const quader_editor_core::SelectionOverlayLine& line) {
+			return line.layer == quader_editor_core::SelectionOverlayLayer::selected_edge;
+		}));
+	EXPECT_FALSE(std::any_of(
+		selected_frame.lines.begin(),
+		selected_frame.lines.end(),
+		[](const quader_editor_core::SelectionOverlayLine& line) {
+			return line.layer == quader_editor_core::SelectionOverlayLayer::source_wire;
+		}));
 }

@@ -391,6 +391,134 @@ void expectVec3Near(QVec3 actual, QVec3 expected) {
     EXPECT_NEAR(actual.z, expected.z, 0.001f);
 }
 
+double meshPositionFingerprint(const MeshAsset& mesh) {
+    double value = 0.0;
+    for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
+        const QVec3& position = mesh.vertices[index].position;
+        const double weight = static_cast<double>(index + 1);
+        value += weight * (
+                static_cast<double>(position.x * position.x) * 0.31 +
+                static_cast<double>(position.y * position.y) * 0.53 +
+                static_cast<double>(position.z * position.z) * 0.71);
+    }
+    return value;
+}
+
+int previewElementId(quader_poly::ElementId id) {
+    return static_cast<int>(id);
+}
+
+std::pair<int, int> previewEdgePair(quader_poly::Edge edge) {
+    return {previewElementId(edge.a), previewElementId(edge.b)};
+}
+
+/**
+ * Stores closed-edge fixture data for edge-bevel preview selection rebuild tests.
+ */
+struct PreviewClosedEdgeFixture {
+    quader_poly::Document document;
+    std::pair<int, int> firstEdge = {-1, -1};
+    std::pair<int, int> secondEdge = {-1, -1};
+};
+
+PreviewClosedEdgeFixture makePreviewClosedEdgeFixture() {
+    PreviewClosedEdgeFixture fixture;
+    fixture.document = quader_poly::make_cube(quader_poly::CubePrimitiveSpec{});
+    const std::vector<quader_poly::Edge> edges = quader_poly::document_edges(fixture.document);
+    EXPECT_GE(edges.size(), 2u);
+    if (edges.size() >= 2u) {
+        fixture.firstEdge = previewEdgePair(edges[0]);
+        fixture.secondEdge = previewEdgePair(edges[1]);
+    }
+    return fixture;
+}
+
+/**
+ * Stores two disconnected quad faces for face-preview selection rebuild tests.
+ */
+struct PreviewParallelQuadFixture {
+    quader_poly::Document document;
+    int frontFace = -1;
+    int backFace = -1;
+};
+
+void appendPreviewParallelQuadPair(
+        quader_poly::Document& document,
+        float xOffset,
+        int& frontFace,
+        int& backFace) {
+    const quader_poly::ElementId a = quader_poly::add_vertex(document, {-1.0f + xOffset, -1.0f, -1.0f});
+    const quader_poly::ElementId b = quader_poly::add_vertex(document, {1.0f + xOffset, -1.0f, -1.0f});
+    const quader_poly::ElementId c = quader_poly::add_vertex(document, {1.0f + xOffset, 1.0f, -1.0f});
+    const quader_poly::ElementId d = quader_poly::add_vertex(document, {-1.0f + xOffset, 1.0f, -1.0f});
+    const quader_poly::ElementId e = quader_poly::add_vertex(document, {-1.0f + xOffset, -1.0f, 1.0f});
+    const quader_poly::ElementId f = quader_poly::add_vertex(document, {1.0f + xOffset, -1.0f, 1.0f});
+    const quader_poly::ElementId g = quader_poly::add_vertex(document, {1.0f + xOffset, 1.0f, 1.0f});
+    const quader_poly::ElementId h = quader_poly::add_vertex(document, {-1.0f + xOffset, 1.0f, 1.0f});
+    const quader_poly::ElementId firstFace = quader_poly::add_face(document, std::array{a, b, c, d});
+    const quader_poly::ElementId secondFace = quader_poly::add_face(document, std::array{h, g, f, e});
+    EXPECT_NE(firstFace, quader_poly::invalid_element_id);
+    EXPECT_NE(secondFace, quader_poly::invalid_element_id);
+    frontFace = previewElementId(firstFace);
+    backFace = previewElementId(secondFace);
+}
+
+PreviewParallelQuadFixture makePreviewParallelQuadFixture(float xOffset = 0.0f) {
+    PreviewParallelQuadFixture fixture;
+    appendPreviewParallelQuadPair(fixture.document, xOffset, fixture.frontFace, fixture.backFace);
+    return fixture;
+}
+
+/**
+ * Stores two independent bridgeable face pairs for bridge preview selection rebuild tests.
+ */
+struct PreviewBridgeFixture {
+    quader_poly::Document document;
+    int firstFrontFace = -1;
+    int firstBackFace = -1;
+    int secondFrontFace = -1;
+    int secondBackFace = -1;
+};
+
+PreviewBridgeFixture makePreviewBridgeFixture() {
+    PreviewBridgeFixture fixture;
+    appendPreviewParallelQuadPair(fixture.document, 0.0f, fixture.firstFrontFace, fixture.firstBackFace);
+    appendPreviewParallelQuadPair(fixture.document, 5.0f, fixture.secondFrontFace, fixture.secondBackFace);
+    return fixture;
+}
+
+/**
+ * Stores independent near-vertex pairs for merge-by-distance preview selection rebuild tests.
+ */
+struct PreviewMergeDistanceFixture {
+    quader_poly::Document document;
+    int firstNearA = -1;
+    int firstNearB = -1;
+    int secondNearA = -1;
+    int secondNearB = -1;
+};
+
+PreviewMergeDistanceFixture makePreviewMergeDistanceFixture() {
+    PreviewMergeDistanceFixture fixture;
+    auto addPair = [&](float xOffset, int& nearA, int& nearB) {
+        const quader_poly::ElementId a = quader_poly::add_vertex(fixture.document, {xOffset, 0.0f, 0.0f});
+        const quader_poly::ElementId b = quader_poly::add_vertex(fixture.document, {xOffset + 1.0f, 0.0f, 0.0f});
+        const quader_poly::ElementId c = quader_poly::add_vertex(fixture.document, {xOffset, 1.0f, 0.0f});
+        const quader_poly::ElementId d = quader_poly::add_vertex(fixture.document, {xOffset, 1.1f, 0.0f});
+        const quader_poly::ElementId e = quader_poly::add_vertex(fixture.document, {xOffset - 1.0f, 1.0f, 0.0f});
+        const quader_poly::ElementId f = quader_poly::add_vertex(fixture.document, {xOffset - 1.0f, 0.0f, 0.0f});
+        const quader_poly::ElementId firstFace = quader_poly::add_face(fixture.document, std::array{a, b, c});
+        const quader_poly::ElementId secondFace = quader_poly::add_face(fixture.document, std::array{d, e, f});
+        EXPECT_NE(firstFace, quader_poly::invalid_element_id);
+        EXPECT_NE(secondFace, quader_poly::invalid_element_id);
+        nearA = previewElementId(c);
+        nearB = previewElementId(d);
+    };
+    addPair(0.0f, fixture.firstNearA, fixture.firstNearB);
+    addPair(5.0f, fixture.secondNearA, fixture.secondNearB);
+    return fixture;
+}
+
 ModelingViewportCamera testOrthographicViewportCamera() {
     return {
             .orthographic = true,
@@ -5072,7 +5200,7 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
     EXPECT_NE(splitSource.find("ModelingSelectionService::applyPickSelection("), std::string::npos);
-    EXPECT_NE(source.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, request)"), std::string::npos);
+    EXPECT_NE(source.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, effectiveRequest)"), std::string::npos);
     EXPECT_NE(splitSource.find("cachedPickObjectBounds(session, scene, objectRegistry)"), std::string::npos);
     EXPECT_NE(splitSource.find("cachedPickFaceGeometry(session, scene, objectRegistry, pickOptions)"), std::string::npos);
     EXPECT_NE(splitSource.find("pickingCache_.faceGeometryEntries"), std::string::npos);
@@ -9256,18 +9384,6 @@ TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndL
 
     const std::optional<MeshAsset> previewBefore = service.compileObjectMesh(box.object.modelingObjectId);
     ASSERT_TRUE(previewBefore.has_value());
-    auto meshPositionFingerprint = [](const MeshAsset& mesh) {
-        double value = 0.0;
-        for (std::size_t index = 0; index < mesh.vertices.size(); ++index) {
-            const QVec3& position = mesh.vertices[index].position;
-            const double weight = static_cast<double>(index + 1);
-            value += weight * (
-                    static_cast<double>(position.x * position.x) * 0.31 +
-                    static_cast<double>(position.y * position.y) * 0.53 +
-                    static_cast<double>(position.z * position.z) * 0.71);
-        }
-        return value;
-    };
 
     ModelingInteractionSettings settings = service.interactionSettings();
     settings.edgeBevelWidth = 0.25;
@@ -9282,6 +9398,364 @@ TEST(ModelingSessionServiceTests, PreviewActionsExposeOnlyActiveToolSettingsAndL
     const ModelingCommandResult cancel = service.cancelActiveOperationPreview();
     EXPECT_TRUE(cancel.ok) << cancel.message;
     EXPECT_FALSE(service.toolSettingsTarget().active);
+}
+
+TEST(ModelingSessionServiceTests, EdgeBevelPreviewRebuildsAfterDirectAddEdgeSelectionWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    PreviewClosedEdgeFixture fixture = makePreviewClosedEdgeFixture();
+
+    const ModelingCreateBoxResult mesh = service.createMesh({
+            .document = fixture.document,
+            .name = "Edge Bevel Preview Add Edge Mesh",
+    });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+
+    ModelingInteractionSettings settings = service.interactionSettings();
+    settings.edgeBevelWidth = 0.1;
+    ASSERT_TRUE(service.setInteractionSettings(settings).ok);
+
+    ModelingCommandResult selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Edge,
+            .edges = {fixture.firstEdge},
+            .activeKind = ModelingActiveSelectionKind::Edge,
+            .activeEdge = fixture.firstEdge,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    ASSERT_TRUE(selected.changed);
+
+    const ModelingCommandResult begin = service.executeContextAction("bevel_edges");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> firstPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(firstPreview.has_value());
+
+    selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Edge,
+            .edges = {fixture.secondEdge},
+            .edit = ModelingSelectionEdit::Add,
+            .activeKind = ModelingActiveSelectionKind::Edge,
+            .activeEdge = fixture.secondEdge,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    EXPECT_TRUE(selected.changed);
+    EXPECT_GT(service.selectionSummary().selectedEdgeCount, 1u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> addedPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(addedPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*firstPreview), meshPositionFingerprint(*addedPreview));
+}
+
+TEST(ModelingSessionServiceTests, ThickenPreviewRebuildsAfterDirectAddFaceSelectionWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    PreviewParallelQuadFixture fixture = makePreviewParallelQuadFixture();
+
+    const ModelingCreateBoxResult mesh = service.createMesh({
+            .document = fixture.document,
+            .name = "Thicken Preview Add Face Mesh",
+    });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+
+    ModelingCommandResult selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Face,
+            .faces = {fixture.frontFace},
+            .activeKind = ModelingActiveSelectionKind::Face,
+            .activeFace = fixture.frontFace,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    ASSERT_TRUE(selected.changed);
+
+    const ModelingCommandResult begin = service.executeContextAction("thicken_faces");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> firstPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(firstPreview.has_value());
+
+    selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Face,
+            .faces = {fixture.backFace},
+            .edit = ModelingSelectionEdit::Add,
+            .activeKind = ModelingActiveSelectionKind::Face,
+            .activeFace = fixture.backFace,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    EXPECT_TRUE(selected.changed);
+    EXPECT_GT(service.selectionSummary().selectedFaceCount, 1u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> addedPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(addedPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*firstPreview), meshPositionFingerprint(*addedPreview));
+}
+
+TEST(ModelingSessionServiceTests, BridgePreviewRebuildsAfterDirectReplaceFaceSelectionWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    PreviewBridgeFixture fixture = makePreviewBridgeFixture();
+
+    const ModelingCreateBoxResult mesh = service.createMesh({
+            .document = fixture.document,
+            .name = "Bridge Preview Replace Face Mesh",
+    });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+
+    ModelingCommandResult selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Face,
+            .faces = {fixture.firstFrontFace, fixture.firstBackFace},
+            .activeKind = ModelingActiveSelectionKind::Face,
+            .activeFace = fixture.firstBackFace,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    ASSERT_TRUE(selected.changed);
+
+    const ModelingCommandResult begin = service.executeContextAction("interpolated_bridge_faces");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> firstPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(firstPreview.has_value());
+
+    selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Face,
+            .faces = {fixture.secondFrontFace, fixture.secondBackFace},
+            .activeKind = ModelingActiveSelectionKind::Face,
+            .activeFace = fixture.secondBackFace,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    EXPECT_TRUE(selected.changed);
+    EXPECT_GE(service.selectionSummary().selectedFaceCount, 2u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> replacedPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(replacedPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*firstPreview), meshPositionFingerprint(*replacedPreview));
+}
+
+TEST(ModelingSessionServiceTests, MergeByDistancePreviewRebuildsAfterDirectAddVertexSelectionWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+    PreviewMergeDistanceFixture fixture = makePreviewMergeDistanceFixture();
+
+    const ModelingCreateBoxResult mesh = service.createMesh({
+            .document = fixture.document,
+            .name = "Merge Distance Preview Add Vertex Mesh",
+    });
+    ASSERT_TRUE(mesh.ok) << mesh.message;
+
+    ModelingCommandResult selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Vertex,
+            .vertices = {fixture.firstNearA, fixture.firstNearB},
+            .activeKind = ModelingActiveSelectionKind::Vertex,
+            .activeVertex = fixture.firstNearB,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    ASSERT_TRUE(selected.changed);
+
+    const ModelingCommandResult begin = service.executeContextAction("merge_by_distance");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> firstPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(firstPreview.has_value());
+
+    selected = service.setComponentSelection({
+            .modelingObjectId = mesh.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Vertex,
+            .vertices = {fixture.secondNearA, fixture.secondNearB},
+            .edit = ModelingSelectionEdit::Add,
+            .activeKind = ModelingActiveSelectionKind::Vertex,
+            .activeVertex = fixture.secondNearB,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    EXPECT_TRUE(selected.changed);
+    EXPECT_GT(service.selectionSummary().selectedVertexCount, 0u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> addedPreview = service.compileObjectMesh(mesh.object.modelingObjectId);
+    ASSERT_TRUE(addedPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*firstPreview), meshPositionFingerprint(*addedPreview));
+}
+
+TEST(ModelingSessionServiceTests, SliceQuadPreviewRebuildsAfterFacePickWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Slice Preview Rebuild Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingSelectionSummary frontPicked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(frontPicked.selectedFaceCount, 1u);
+
+    const ModelingCommandResult begin = service.executeContextAction("slice_quad");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> frontPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(frontPreview.has_value());
+
+    const ModelingSelectionSummary sidePicked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {5.0f, 0.0f, 0.0f}, .direction = {-1.0f, 0.0f, 0.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(sidePicked.selectedFaceCount, 4u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+    const std::optional<QVec3> sideCenter = service.selectionCenter();
+    ASSERT_TRUE(sideCenter.has_value());
+    EXPECT_NEAR(sideCenter->x, 1.0f, 0.001f);
+
+    const std::optional<MeshAsset> sidePreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(sidePreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*frontPreview), meshPositionFingerprint(*sidePreview));
+}
+
+TEST(ModelingSessionServiceTests, SliceQuadPreviewRebuildsAfterAddFacePickWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Slice Preview Add Face Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingSelectionSummary frontPicked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(frontPicked.selectedFaceCount, 1u);
+
+    const ModelingCommandResult begin = service.executeContextAction("slice_quad");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> frontPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(frontPreview.has_value());
+    const MeshComponent* frontSceneMeshComponent = scene.mesh(box.object.entity);
+    ASSERT_NE(frontSceneMeshComponent, nullptr);
+    const MeshAsset* frontScenePreview = assets.mesh(frontSceneMeshComponent->mesh);
+    ASSERT_NE(frontScenePreview, nullptr);
+    const double frontScenePreviewFingerprint = meshPositionFingerprint(*frontScenePreview);
+
+    const ModelingSelectionSummary added = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {5.0f, 0.0f, 0.0f}, .direction = {-1.0f, 0.0f, 0.0f}},
+            .clickCount = 1,
+            .shiftPressed = true,
+    });
+    EXPECT_GT(added.selectedFaceCount, 4u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> addPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(addPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*frontPreview), meshPositionFingerprint(*addPreview));
+    const MeshComponent* addSceneMeshComponent = scene.mesh(box.object.entity);
+    ASSERT_NE(addSceneMeshComponent, nullptr);
+    const MeshAsset* addScenePreview = assets.mesh(addSceneMeshComponent->mesh);
+    ASSERT_NE(addScenePreview, nullptr);
+    EXPECT_NE(frontScenePreviewFingerprint, meshPositionFingerprint(*addScenePreview));
+}
+
+TEST(ModelingSessionServiceTests, SliceQuadPreviewRebuildsAfterDirectAddFaceSelectionWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Slice Preview Direct Add Face Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+
+    ModelingCommandResult selected = service.setComponentSelection({
+            .modelingObjectId = box.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Face,
+            .faces = {1},
+            .activeKind = ModelingActiveSelectionKind::Face,
+            .activeFace = 1,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    ASSERT_TRUE(selected.changed);
+
+    const ModelingCommandResult begin = service.executeContextAction("slice_quad");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> firstPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(firstPreview.has_value());
+
+    selected = service.setComponentSelection({
+            .modelingObjectId = box.object.modelingObjectId,
+            .mode = ModelingSelectionMode::Face,
+            .faces = {2},
+            .edit = ModelingSelectionEdit::Add,
+            .activeKind = ModelingActiveSelectionKind::Face,
+            .activeFace = 2,
+    });
+    ASSERT_TRUE(selected.ok) << selected.message;
+    EXPECT_TRUE(selected.changed);
+    const ModelingSelectionSummary summary = service.selectionSummary();
+    EXPECT_EQ(summary.mode, ModelingSelectionMode::Face);
+    EXPECT_GT(summary.selectedFaceCount, 1u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> addedPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(addedPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*firstPreview), meshPositionFingerprint(*addedPreview));
+}
+
+TEST(ModelingSessionServiceTests, SliceQuadPreviewRebuildsAfterFaceBoxSelectWhileActive) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult box = service.createBoxFromBounds({
+        .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+        .name = "Slice Preview Box Select Box",
+    });
+    ASSERT_TRUE(box.ok) << box.message;
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+
+    const ModelingSelectionSummary frontPicked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(frontPicked.selectedFaceCount, 1u);
+
+    const ModelingCommandResult begin = service.executeContextAction("slice_quad");
+    ASSERT_TRUE(begin.ok) << begin.message;
+    const std::optional<MeshAsset> frontPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(frontPreview.has_value());
+
+    ModelingViewportCamera sideCamera = testOrthographicViewportCamera();
+    sideCamera.origin = {10.0f, 0.0f, 0.0f};
+    sideCamera.xAxis = {0.0f, 1.0f, 0.0f};
+    sideCamera.yAxis = {0.0f, 0.0f, 1.0f};
+    sideCamera.zAxis = {1.0f, 0.0f, 0.0f};
+    sideCamera.orthographicSize = 4.0;
+
+    const ModelingSelectionSummary boxSelected = service.boxSelect(ModelingBoxSelectRequest{
+            .camera = sideCamera,
+            .start = {20.0f, 20.0f},
+            .end = {80.0f, 80.0f},
+            .edit = ModelingSelectionEdit::Replace,
+            .rule = ModelingBoxSelectionRule::Contain,
+    });
+    EXPECT_GT(boxSelected.selectedFaceCount, 4u);
+    EXPECT_TRUE(service.toolSettingsTarget().operationPreviewActive);
+
+    const std::optional<MeshAsset> boxPreview = service.compileObjectMesh(box.object.modelingObjectId);
+    ASSERT_TRUE(boxPreview.has_value());
+    EXPECT_NE(meshPositionFingerprint(*frontPreview), meshPositionFingerprint(*boxPreview));
 }
 
 TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisabledForOneFace) {
@@ -10288,20 +10762,13 @@ TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMesh
     });
     ASSERT_TRUE(hover.ok) << hover.message;
     const ViewportOverlayFrame hoverFrame = service.selectionOverlayFrame();
-    std::optional<SceneBounds> hoverWireBounds;
-    for (const ViewportOverlayLine& line : hoverFrame.lines) {
-        if (line.layer != ViewportOverlayLayer::SourceWire) {
-            continue;
-        }
-        if (!hoverWireBounds) {
-            hoverWireBounds = SceneBounds{.min = line.start, .max = line.start};
-        } else {
-            includePoint(*hoverWireBounds, line.start);
-        }
-        includePoint(*hoverWireBounds, line.end);
-    }
-    ASSERT_TRUE(hoverWireBounds.has_value());
-    EXPECT_NEAR(boundsCenter(*hoverWireBounds).x, 4.0f, 0.001f);
+    const bool hoverHasSourceWire = std::any_of(
+            hoverFrame.lines.begin(),
+            hoverFrame.lines.end(),
+            [](const ViewportOverlayLine& line) {
+                return line.layer == ViewportOverlayLayer::SourceWire;
+            });
+    EXPECT_FALSE(hoverHasSourceWire);
 
     const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
             .ray = {
@@ -10314,6 +10781,22 @@ TEST(ModelingSessionServiceTests, PickAndHoverRespectSceneTransformsForLocalMesh
     ASSERT_EQ(scene.selectedEntities().size(), 1u);
     EXPECT_EQ(scene.selectedEntities().front(), right.object.entity);
     EXPECT_EQ(picked.activeObjectId, right.object.modelingObjectId);
+
+    const ViewportOverlayFrame selectedFrame = service.selectionOverlayFrame();
+    std::optional<SceneBounds> selectedWireBounds;
+    for (const ViewportOverlayLine& line : selectedFrame.lines) {
+        if (line.layer != ViewportOverlayLayer::SelectedEdge) {
+            continue;
+        }
+        if (!selectedWireBounds) {
+            selectedWireBounds = SceneBounds{.min = line.start, .max = line.start};
+        } else {
+            includePoint(*selectedWireBounds, line.start);
+        }
+        includePoint(*selectedWireBounds, line.end);
+    }
+    ASSERT_TRUE(selectedWireBounds.has_value());
+    EXPECT_NEAR(boundsCenter(*selectedWireBounds).x, 4.0f, 0.001f);
 }
 
 TEST(ModelingSessionServiceTests, VertexHoverCandidatePointsRespectSceneTransforms) {

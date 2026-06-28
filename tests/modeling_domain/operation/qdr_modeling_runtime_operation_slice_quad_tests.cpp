@@ -8,6 +8,18 @@
 
 #include <editor/modeling/operations/operation_schema.hpp>
 
+namespace {
+
+quader_poly::ElementId find_face_with_normal(const quader_poly::Document& document, quader::QVec3 direction)
+{
+	const auto face = std::ranges::find_if(document.faces, [&document, direction](const quader_poly::Face& candidate) {
+		return dot(face_normal(document, candidate), direction) > 0.5F;
+	});
+	return face == document.faces.end() ? quader_poly::invalid_element_id : face->id;
+}
+
+} // namespace
+
 TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadOperationSchemaOwnsIntegerSliceRanges) {
 	const quader_editor_core::SliceQuadOperationSchema schema = quader_editor_core::slice_quad_operation_schema();
 
@@ -109,4 +121,46 @@ TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadPreviewsGeneratedFaceGr
 		EXPECT_TRUE(session.preview_transaction_status().active);
 		EXPECT_TRUE(session.preview_transaction_status().kind == quader_editor_core::PreviewTransactionKind::slice_quad);
 	}
+}
+
+TEST(QdrModelingRuntimeOperationSliceQuadTests, SliceQuadPreviewBaseCanBeRebuiltFromAChangedFaceSelectionBeforeExplicitFinish) {
+	quader_editor_core::PolygonObject object = qdr_test::make_object(1, quader_poly::make_cube({}));
+	quader_editor_core::EditorSession session({ object });
+	const quader_poly::ElementId top_face =
+		find_face_with_normal(session.objects().front().document, { 0.0F, 1.0F, 0.0F });
+	const quader_poly::ElementId right_face =
+		find_face_with_normal(session.objects().front().document, { 1.0F, 0.0F, 0.0F });
+	ASSERT_TRUE(top_face != quader_poly::invalid_element_id);
+	ASSERT_TRUE(right_face != quader_poly::invalid_element_id);
+	session.set_component_selection(
+		1,
+		qdr_test::face_selection({ top_face }, top_face),
+		quader_editor_core::SelectionMode::face);
+
+	ASSERT_TRUE(session.begin_slice_quad_preview(1, 0).changed);
+	EXPECT_TRUE(session.preview_transaction_status().active);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == 7U);
+
+	ASSERT_TRUE(session.restore_preview_transaction_base_for_edit(
+		quader_editor_core::PreviewTransactionKind::slice_quad));
+	EXPECT_TRUE(session.objects().front().document.faces.size() == 6U);
+	session.set_component_selection(
+		1,
+		qdr_test::face_selection({ right_face }, right_face),
+		quader_editor_core::SelectionMode::face);
+	ASSERT_TRUE(session.capture_preview_transaction_base_after_edit(
+		quader_editor_core::PreviewTransactionKind::slice_quad));
+	ASSERT_TRUE(session.update_slice_quad_preview(1, 0).changed);
+
+	EXPECT_TRUE(session.preview_transaction_status().active);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == 7U);
+	EXPECT_TRUE(qdr_test::selected_face_count(session) == 2U);
+
+	const quader_editor_core::PreviewTransactionFinishResult cancel =
+		session.cancel_preview_transaction(quader_editor_core::PreviewTransactionKind::slice_quad);
+	EXPECT_TRUE(cancel.restored);
+	EXPECT_FALSE(session.preview_transaction_status().active);
+	EXPECT_TRUE(session.objects().front().document.faces.size() == 6U);
+	EXPECT_TRUE(qdr_test::selected_face_count(session) == 1U);
+	EXPECT_TRUE(session.objects().front().selection.active_face == top_face);
 }

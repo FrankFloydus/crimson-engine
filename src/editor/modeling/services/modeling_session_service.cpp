@@ -1401,6 +1401,45 @@ public:
                 settingsForOperation(*operation, interactionSettingsService_.settings()));
     }
 
+    [[nodiscard]] std::optional<quader_editor_core::PreviewTransactionKind> editableOperationPreviewKind() const {
+        const quader_editor_core::PreviewTransactionStatus preview = session_.preview_transaction_status();
+        if (!preview.active || !operationForPreviewKind(preview.kind).has_value()) {
+            return std::nullopt;
+        }
+        if (preview.kind == quader_editor_core::PreviewTransactionKind::thicken &&
+                session_.selection_mode() == quader_editor_core::SelectionMode::object) {
+            return std::nullopt;
+        }
+        return preview.kind;
+    }
+
+    [[nodiscard]] bool restoreActiveOperationPreviewBaseForSelectionEdit() {
+        const std::optional<quader_editor_core::PreviewTransactionKind> previewKind = editableOperationPreviewKind();
+        if (!previewKind.has_value()) {
+            return false;
+        }
+        const bool restored = session_.restore_preview_transaction_base_for_edit(*previewKind);
+        if (restored) {
+            selectionService_.invalidatePickingCache();
+        }
+        return restored;
+    }
+
+    void refreshActiveOperationPreviewAfterSelectionEdit(bool restoredPreviewBase, bool selectionChanged) {
+        if (!restoredPreviewBase) {
+            return;
+        }
+        const std::optional<quader_editor_core::PreviewTransactionKind> previewKind = editableOperationPreviewKind();
+        if (!previewKind.has_value()) {
+            syncSceneSelectionFromModeling();
+            return;
+        }
+        if (selectionChanged) {
+            (void)session_.capture_preview_transaction_base_after_edit(*previewKind);
+        }
+        (void)updateActiveOperationPreviewSettings();
+    }
+
     ModelingCommandResult executeContextAction(std::string_view actionId) {
         if (actionId == std::string_view("delete_selection")) {
             return {.ok = false, .message = "Delete selection must use the command route."};
@@ -1829,19 +1868,47 @@ public:
     }
 
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request) {
-        if (selectionService_.applyPickSelection(session_, scene_, objectRegistry_, request)) {
+        const bool restoredPreviewBase = restoreActiveOperationPreviewBaseForSelectionEdit();
+        ModelingPickSelectRequest effectiveRequest = request;
+        if (restoredPreviewBase) {
+            effectiveRequest.preserveSelectionOnMiss = true;
+        }
+        const std::uint64_t selectionBefore = session_.state().selection_revision;
+        const bool selectionApplied =
+                selectionService_.applyPickSelection(session_, scene_, objectRegistry_, effectiveRequest);
+        const bool selectionChanged = session_.state().selection_revision != selectionBefore;
+        if (restoredPreviewBase) {
+            refreshActiveOperationPreviewAfterSelectionEdit(restoredPreviewBase, selectionChanged);
+            return selectionSummary();
+        }
+        if (selectionApplied) {
             syncSceneSelectionFromModeling();
         }
         return selectionSummary();
     }
 
     ModelingSelectionSummary boxSelect(const ModelingBoxSelectRequest& request) {
-        return boxSelect(request, selectionService_.rectangleSelectionState(session_));
+        const bool restoredPreviewBase = restoreActiveOperationPreviewBaseForSelectionEdit();
+        return boxSelectFromBaseline(
+                request,
+                selectionService_.rectangleSelectionState(session_),
+                restoredPreviewBase);
     }
 
     ModelingSelectionSummary boxSelect(
             const ModelingBoxSelectRequest& request,
             const quader_editor_core::RectangleSelectionState& baselineSelection) {
+        const bool restoredPreviewBase = restoreActiveOperationPreviewBaseForSelectionEdit();
+        const quader_editor_core::RectangleSelectionState effectiveBaseline = restoredPreviewBase
+                ? selectionService_.rectangleSelectionState(session_)
+                : baselineSelection;
+        return boxSelectFromBaseline(request, effectiveBaseline, restoredPreviewBase);
+    }
+
+    ModelingSelectionSummary boxSelectFromBaseline(
+            const ModelingBoxSelectRequest& request,
+            const quader_editor_core::RectangleSelectionState& baselineSelection,
+            bool restoredPreviewBase) {
         std::vector<quader_editor_core::PolygonObject> pickingObjects = sceneTransformedObjectsForPicking();
         const quader_editor_core::RectangleProjectedHitsRequest hitsRequest =
                 selectionService_.rectangleProjectedHitsRequest(
@@ -1855,7 +1922,13 @@ public:
         rectangleRequest.hits = quader_editor_core::rectangle_hits_from_projected_candidates(hitsRequest);
         const quader_editor_core::RectangleSelectionResult result =
                 quader_editor_core::apply_rectangle_selection(rectangleRequest);
+        const std::uint64_t selectionBefore = session_.state().selection_revision;
         (void)selectionService_.applyRectangleSelection(session_, result.selection);
+        const bool selectionChanged = session_.state().selection_revision != selectionBefore;
+        if (restoredPreviewBase) {
+            refreshActiveOperationPreviewAfterSelectionEdit(restoredPreviewBase, selectionChanged);
+            return selectionSummary();
+        }
         syncSceneSelectionFromModeling();
         invalidateSelectionOverlayCaches();
         return selectionSummary();
@@ -2451,9 +2524,17 @@ public:
     }
 
     ModelingCommandResult setComponentSelection(const ModelingComponentSelectionRequest& request) {
+        const bool restoredPreviewBase = restoreActiveOperationPreviewBaseForSelectionEdit();
+        auto failAfterPreviewRestore = [&](std::string message) {
+            if (restoredPreviewBase) {
+                refreshActiveOperationPreviewAfterSelectionEdit(restoredPreviewBase, false);
+            }
+            return ModelingCommandResult{.ok = false, .message = std::move(message)};
+        };
+
         quader_editor_core::PolygonObject* object = findObject(session_, request.modelingObjectId);
         if (object == nullptr) {
-            return {.ok = false, .message = "Selection target mesh was not found."};
+            return failAfterPreviewRestore("Selection target mesh was not found.");
         }
 
         const quader_editor_core::SelectionMode mode = appSelectionModeToRuntime(request.mode);
@@ -2466,14 +2547,19 @@ public:
         ComponentSelectionEditResult selectionEdit =
                 validatedComponentSelectionEdit(*object, request, mode, currentSelection);
         if (!selectionEdit.ok) {
-            return {.ok = false, .message = std::string(selectionEdit.message)};
+            return failAfterPreviewRestore(std::string(selectionEdit.message));
         }
 
         const std::uint64_t selectionBefore = session_.state().selection_revision;
         session_.set_component_selection(request.modelingObjectId, std::move(selectionEdit.selection), mode);
+        const bool selectionChanged = session_.state().selection_revision != selectionBefore;
+        if (restoredPreviewBase) {
+            refreshActiveOperationPreviewAfterSelectionEdit(restoredPreviewBase, selectionChanged);
+            return {.ok = true, .changed = selectionChanged};
+        }
         syncSceneSelectionFromModeling();
         invalidateSelectionOverlayCaches();
-        return {.ok = true, .changed = session_.state().selection_revision != selectionBefore};
+        return {.ok = true, .changed = selectionChanged};
     }
 
     ModelingCommandResult moveSelection(QVec3 delta) {

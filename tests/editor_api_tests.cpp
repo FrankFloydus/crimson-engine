@@ -263,6 +263,8 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFocusOrigin), "Shift+Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportSpawnWindow), "F12");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportViewPerspective), "P");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ModelingApplyActivePreview), "Space");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ModelingCancelActivePreview), "Escape");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ToolsActivatePoly), "");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
     EXPECT_EQ(
@@ -804,6 +806,45 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
             editor.commands().dispatchViewportInputBinding(perspective->front(), state, true, false);
     EXPECT_EQ(perspectiveDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
     EXPECT_EQ(perspectiveDispatch.commandId, quader::QuaderCommand::ViewportViewPerspective.string());
+
+    EXPECT_TRUE(hasKeybinding(rules, quader::QuaderCommand::ModelingApplyActivePreview.string(), "Space"));
+    EXPECT_TRUE(hasKeybinding(rules, quader::QuaderCommand::ModelingCancelActivePreview.string(), "Escape"));
+
+    const std::optional<std::vector<quader::QuaderInputChord>> space =
+            quader::quaderInputParseShortcut("Space");
+    ASSERT_TRUE(space.has_value());
+    ASSERT_EQ(space->size(), 1u);
+    const quader::QuaderViewportKeybindingDispatch spaceWithoutPreview =
+            editor.commands().dispatchViewportInputBinding(space->front(), state, true, false);
+    ASSERT_EQ(spaceWithoutPreview.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(spaceWithoutPreview.shortcut.kind, quader::ViewportShortcutKind::ToggleMaximized);
+    const quader::QuaderViewportKeybindingDispatch spaceWithPreview =
+            editor.commands().dispatchViewportInputBinding(
+                    space->front(),
+                    state,
+                    true,
+                    false,
+                    quader::QuaderViewportKeybindingContext{.operationPreviewActive = true});
+    EXPECT_EQ(spaceWithPreview.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(spaceWithPreview.commandId, quader::QuaderCommand::ModelingApplyActivePreview.string());
+
+    const std::optional<std::vector<quader::QuaderInputChord>> escape =
+            quader::quaderInputParseShortcut("Escape");
+    ASSERT_TRUE(escape.has_value());
+    ASSERT_EQ(escape->size(), 1u);
+    const quader::QuaderViewportKeybindingDispatch escapeWithoutPreview =
+            editor.commands().dispatchViewportInputBinding(escape->front(), state, true, false);
+    ASSERT_EQ(escapeWithoutPreview.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(escapeWithoutPreview.shortcut.kind, quader::ViewportShortcutKind::CancelActiveTool);
+    const quader::QuaderViewportKeybindingDispatch escapeWithPreview =
+            editor.commands().dispatchViewportInputBinding(
+                    escape->front(),
+                    state,
+                    true,
+                    false,
+                    quader::QuaderViewportKeybindingContext{.operationPreviewActive = true});
+    EXPECT_EQ(escapeWithPreview.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(escapeWithPreview.commandId, quader::QuaderCommand::ModelingCancelActivePreview.string());
 }
 
 TEST(EditorApiTests, DefaultKeybindingProjectionDoesNotDuplicateRuleTuples) {
@@ -1219,6 +1260,119 @@ TEST(EditorApiTests, EnabledContextMenuOperationsExecuteThroughCommandRegistry) 
     }
     EXPECT_GT(routedActionCount, 0);
     EXPECT_GT(successfulActionCount, 0);
+}
+
+TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
+    {
+        CommandTestHarness harness;
+        const quader::QuaderModelingObjectRef box = createSelectedBox(harness.editor, "Slice Apply Command Box");
+        ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+        quader::QuaderPickSelectRequest pickFace;
+        pickFace.ray = {
+                .origin = {0.0f, 0.0f, 5.0f},
+                .direction = {0.0f, 0.0f, -1.0f},
+        };
+        const quader::QuaderApiResult<quader::QuaderSelectionSummary> picked =
+                harness.editor.selection().pickSelect(pickFace);
+        ASSERT_TRUE(picked.ok()) << picked.errorMessage();
+        ASSERT_EQ(picked.value().selectedFaceCount, 1u);
+        const std::optional<quader::QuaderMeshSnapshot> before = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(before.has_value());
+
+        const quader::QuaderApiVoidResult preview =
+                harness.editor.commands().execute(harness.editor.commands().commandIdForModelingAction("slice_quad"));
+        ASSERT_TRUE(preview.ok()) << preview.errorMessage();
+        EXPECT_TRUE(preview.changed());
+        const std::optional<quader::QuaderMeshSnapshot> previewMesh = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(previewMesh.has_value());
+        EXPECT_GT(previewMesh->vertexCount, before->vertexCount);
+        EXPECT_GT(previewMesh->primitiveCount, before->primitiveCount);
+
+        quader::QuaderPickSelectRequest missPick;
+        missPick.ray = {
+                .origin = {100.0f, 100.0f, 100.0f},
+                .direction = {1.0f, 0.0f, 0.0f},
+        };
+        const quader::QuaderApiResult<quader::QuaderSelectionSummary> missed =
+                harness.editor.selection().pickSelect(missPick);
+        ASSERT_TRUE(missed.ok()) << missed.errorMessage();
+        EXPECT_EQ(missed.value().selectedFaceCount, 4u);
+        const std::optional<quader::QuaderMeshSnapshot> previewAfterMiss = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(previewAfterMiss.has_value());
+        EXPECT_EQ(previewAfterMiss->vertexCount, previewMesh->vertexCount);
+        EXPECT_EQ(previewAfterMiss->primitiveCount, previewMesh->primitiveCount);
+
+        const quader::QuaderApiVoidResult apply =
+                harness.editor.commands().execute(quader::QuaderCommand::ModelingApplyActivePreview);
+        ASSERT_TRUE(apply.ok()) << apply.errorMessage();
+        EXPECT_TRUE(apply.changed());
+        EXPECT_EQ(harness.editor.query().history().undoLabel, "Apply Tool Preview");
+        const std::optional<quader::QuaderMeshSnapshot> committed = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(committed.has_value());
+        EXPECT_EQ(committed->vertexCount, previewMesh->vertexCount);
+        EXPECT_EQ(committed->primitiveCount, previewMesh->primitiveCount);
+        EXPECT_FALSE(harness.editor.commands().execute(quader::QuaderCommand::ModelingApplyActivePreview).ok());
+    }
+
+    {
+        CommandTestHarness harness;
+        const quader::QuaderModelingObjectRef box = createSelectedBox(harness.editor, "Slice Cancel Command Box");
+        ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+        quader::QuaderPickSelectRequest pickFace;
+        pickFace.ray = {
+                .origin = {0.0f, 0.0f, 5.0f},
+                .direction = {0.0f, 0.0f, -1.0f},
+        };
+        const quader::QuaderApiResult<quader::QuaderSelectionSummary> picked =
+                harness.editor.selection().pickSelect(pickFace);
+        ASSERT_TRUE(picked.ok()) << picked.errorMessage();
+        ASSERT_EQ(picked.value().selectedFaceCount, 1u);
+        const std::optional<quader::QuaderMeshSnapshot> before = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(before.has_value());
+
+        const quader::QuaderApiVoidResult preview =
+                harness.editor.commands().execute(harness.editor.commands().commandIdForModelingAction("slice_quad"));
+        ASSERT_TRUE(preview.ok()) << preview.errorMessage();
+        const std::optional<quader::QuaderMeshSnapshot> previewMesh = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(previewMesh.has_value());
+        EXPECT_GT(previewMesh->vertexCount, before->vertexCount);
+
+        const quader::QuaderApiVoidResult cancel =
+                harness.editor.commands().execute(quader::QuaderCommand::ModelingCancelActivePreview);
+        ASSERT_TRUE(cancel.ok()) << cancel.errorMessage();
+        EXPECT_TRUE(cancel.changed());
+        const std::optional<quader::QuaderMeshSnapshot> restored = harness.editor.query().mesh(box.mesh);
+        ASSERT_TRUE(restored.has_value());
+        EXPECT_EQ(restored->vertexCount, before->vertexCount);
+        EXPECT_EQ(restored->primitiveCount, before->primitiveCount);
+        EXPECT_FALSE(harness.editor.commands().execute(quader::QuaderCommand::ModelingCancelActivePreview).ok());
+    }
+}
+
+TEST(EditorApiTests, SliceQuadPreviewRebuildsAfterDirectFaceAddWithoutUi) {
+    CommandTestHarness harness;
+    const quader::QuaderModelingObjectRef box = createSelectedBox(harness.editor, "Slice Direct Add Command Box");
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(harness.editor.selection().selectFace(box, 1).ok());
+
+    const quader::QuaderApiVoidResult preview =
+            harness.editor.commands().execute(harness.editor.commands().commandIdForModelingAction("slice_quad"));
+    ASSERT_TRUE(preview.ok()) << preview.errorMessage();
+    const std::optional<quader::QuaderMeshSnapshot> oneFacePreview = harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(oneFacePreview.has_value());
+
+    const quader::QuaderApiVoidResult addFace =
+            harness.editor.selection().selectFace(box, 2, quader::QuaderSelectionEdit::Add);
+    ASSERT_TRUE(addFace.ok()) << addFace.errorMessage();
+    EXPECT_TRUE(addFace.changed());
+    const quader::QuaderSelectionSummary summary = harness.editor.selection().summary();
+    EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Face);
+    EXPECT_GT(summary.selectedFaceCount, 1u);
+
+    const std::optional<quader::QuaderMeshSnapshot> twoFacePreview = harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(twoFacePreview.has_value());
+    EXPECT_GT(twoFacePreview->vertexCount, oneFacePreview->vertexCount);
+    EXPECT_GT(twoFacePreview->primitiveCount, oneFacePreview->primitiveCount);
 }
 
 TEST(EditorApiTests, DeleteCommandRouteRemovesSameObjectAndExposesUndoLabel) {

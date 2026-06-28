@@ -607,6 +607,18 @@ inline std::optional<std::string> viewportCommandTargetIdForRouterShortcut(
     return std::nullopt;
 }
 
+inline std::optional<std::string> viewportOperationPreviewCommandTargetIdForRouterShortcut(
+        const ViewportShortcut& shortcut) {
+    switch (shortcut.kind) {
+    case ViewportShortcutKind::ToggleMaximized:
+        return std::string(QuaderCommand::ModelingApplyActivePreview.string());
+    case ViewportShortcutKind::CancelActiveTool:
+        return std::string(QuaderCommand::ModelingCancelActivePreview.string());
+    default:
+        return std::nullopt;
+    }
+}
+
 inline bool viewportRouterShortcutForTargetId(
         std::string_view targetId,
         ViewportShortcut& shortcut) {

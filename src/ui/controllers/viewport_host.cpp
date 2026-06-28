@@ -645,6 +645,7 @@ QuaderViewportKeybindingContext keybindingContextFromInput(const ViewportInputFr
             .panNavigationActive = input.panNavigationActive,
             .modalToolActive = input.modalToolActive,
             .activeToolOwnsViewport = input.activeToolOwnsViewport,
+            .operationPreviewActive = input.operationPreviewActive,
     };
 }
 
@@ -991,6 +992,7 @@ void ViewportHost::handleViewportFrameSurface(
         ViewportInputSurfaceState& inputState,
         QVec2 leftClickLocal,
         ViewportWindowInstance* windowedInstance) {
+    input.operationPreviewActive = modeling.toolSettingsTarget().operationPreviewActive;
     resolveKeybindingsForFrame(editor, workspace, component, inputRouter.state(), input);
     syncInputRouterFromEditorState(inputRouter, editor, modeling);
     const ViewportInputResult result = inputRouter.handleFrame(input, camera);

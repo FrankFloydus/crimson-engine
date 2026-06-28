@@ -196,6 +196,51 @@ TEST(ViewportInteractionControllerTests, ClickFrameSelectsComponentThroughViewpo
     EXPECT_EQ(harness.editor.selection().hoverSummary().target.kind, quader::QuaderActiveSelectionKind::None);
 }
 
+TEST(ViewportInteractionControllerTests, ShiftClickRebuildsSliceQuadPreviewThroughViewportFallback) {
+    ViewportInteractionHarness harness;
+    const quader::QuaderModelingObjectRef box = createUnitBox(harness);
+
+    ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(harness.editor.selection().selectFace(box, 1).ok());
+    harness.router.setSelectionMode(quader::ViewportSelectionMode::Face);
+
+    const quader::QuaderApiVoidResult preview =
+            harness.editor.commands().execute(harness.editor.commands().commandIdForModelingAction("slice_quad"));
+    ASSERT_TRUE(preview.ok()) << preview.errorMessage();
+    const std::optional<quader::QuaderMeshSnapshot> oneFacePreview = harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(oneFacePreview.has_value());
+
+    harness.camera.setViewDirection({-1.0f, 0.0f, 0.0f});
+    const quader::ViewportScreenPoint sideFace = harness.camera.projectWorldPoint({1.0f, 0.0f, 0.0f});
+    ASSERT_TRUE(sideFace.visible);
+    harness.input.modifiers.shift = true;
+    harness.input.operationPreviewActive = true;
+    harness.input.mouseLocal = sideFace.position;
+    harness.input.mouseScreen = sideFace.position;
+
+    const quader::ViewportBeforeToolInteractionResult beforeTool =
+            harness.controller.handleBeforeActiveTool(harness.editor, harness.frame(true, true, false, sideFace.position));
+    EXPECT_FALSE(beforeTool.gizmoConsumed);
+    harness.controller.handleAfterActiveTool(
+            harness.editor,
+            harness.frame(true, true, false, sideFace.position),
+            quader::ViewportToolResult{},
+            beforeTool);
+    harness.controller.handleAfterActiveTool(
+            harness.editor,
+            harness.frame(false, false, true, sideFace.position),
+            quader::ViewportToolResult{},
+            quader::ViewportBeforeToolInteractionResult{});
+
+    const quader::QuaderSelectionSummary summary = harness.editor.selection().summary();
+    EXPECT_EQ(summary.mode, quader::QuaderSelectionMode::Face);
+    EXPECT_GT(summary.selectedFaceCount, 1u);
+    const std::optional<quader::QuaderMeshSnapshot> twoFacePreview = harness.editor.query().mesh(box.mesh);
+    ASSERT_TRUE(twoFacePreview.has_value());
+    EXPECT_GT(twoFacePreview->vertexCount, oneFacePreview->vertexCount);
+    EXPECT_GT(twoFacePreview->primitiveCount, oneFacePreview->primitiveCount);
+}
+
 TEST(ViewportInteractionControllerTests, DragFrameBoxSelectsThroughViewportFallback) {
     ViewportInteractionHarness harness;
     (void)createUnitBox(harness);

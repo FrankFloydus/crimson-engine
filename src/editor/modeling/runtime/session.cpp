@@ -2289,11 +2289,11 @@ CommandResult slice_selected_quads(std::vector<PolygonObject>& objects, Selectio
 		return error_result("Slice Quad only works in face mode.");
 	}
 	if (!has_selection(objects, mode, active_object_id)) {
-		return error_result("Select quad faces before slicing.");
+		return error_result("Select faces before slicing.");
 	}
 
 	bool changed = false;
-	std::string last_message = "Select quad faces before slicing.";
+	std::string last_message = "Select faces before slicing.";
 	for (PolygonObject& object : objects) {
 		if (!object.selected || object.selection.faces.empty()) {
 			continue;
