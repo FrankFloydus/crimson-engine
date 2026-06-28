@@ -6,9 +6,12 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/selection_overlay_projection.hpp"
 
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
+
+#include <optional>
 
 #include <mesh/polygon/document.hpp>
 
@@ -178,35 +181,35 @@ ViewportOverlayElementRef runtimeElementRef(
 QVec3 transformObjectPoint(
         int objectId,
         QVec3 point,
-        const std::unordered_map<int, EntityId>& entityByObject,
+        const ModelingObjectRuntimeMap& objectRegistry,
         const SceneDocument& scene) {
-    const auto entity = entityByObject.find(objectId);
-    if (entity == entityByObject.end()) {
+    const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId);
+    if (!entity.has_value()) {
         return point;
     }
-    const TransformComponent* transform = scene.transform(entity->second);
+    const TransformComponent* transform = scene.transform(*entity);
     if (transform == nullptr) {
         return point;
     }
-    return transformPoint(scene.worldTransformMatrix(entity->second), point);
+    return transformPoint(scene.worldTransformMatrix(*entity), point);
 }
 
 bool objectEffectivelyVisible(
         int objectId,
-        const std::unordered_map<int, EntityId>& entityByObject,
+        const ModelingObjectRuntimeMap& objectRegistry,
         const SceneDocument& scene) {
     if (objectId < 0) {
         return true;
     }
-    const auto entity = entityByObject.find(objectId);
-    return entity != entityByObject.end() && scene.isEffectivelyVisible(entity->second);
+    const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId);
+    return entity.has_value() && scene.isEffectivelyVisible(*entity);
 }
 
 } // namespace
 
 ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
         const quader_editor_core::SelectionOverlayFrame& frame,
-        const std::unordered_map<int, EntityId>& entityByObject,
+        const ModelingObjectRuntimeMap& objectRegistry,
         const SceneDocument& scene) {
     ViewportOverlayFrame result;
     result.triangles.reserve(frame.triangles.size());
@@ -215,16 +218,16 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
     result.hoverTargetSelected = frame.hover_target_selected;
 
     for (const quader_editor_core::SelectionOverlayTriangle& triangle : frame.triangles) {
-        if (!objectEffectivelyVisible(triangle.object_id, entityByObject, scene)) {
+        if (!objectEffectivelyVisible(triangle.object_id, objectRegistry, scene)) {
             continue;
         }
         const ViewportOverlayLayer layer = fromRuntime(triangle.layer);
         const ViewportOverlayStyleRole role = triangleStyleRole(triangle.layer, triangle.color_abgr);
         result.triangles.push_back(ViewportOverlayTriangle{
                 .layer = layer,
-                .a = transformObjectPoint(triangle.object_id, fromRuntime(triangle.a), entityByObject, scene),
-                .b = transformObjectPoint(triangle.object_id, fromRuntime(triangle.b), entityByObject, scene),
-                .c = transformObjectPoint(triangle.object_id, fromRuntime(triangle.c), entityByObject, scene),
+                .a = transformObjectPoint(triangle.object_id, fromRuntime(triangle.a), objectRegistry, scene),
+                .b = transformObjectPoint(triangle.object_id, fromRuntime(triangle.b), objectRegistry, scene),
+                .c = transformObjectPoint(triangle.object_id, fromRuntime(triangle.c), objectRegistry, scene),
                 .color = viewportOverlayColorFor(layer, triangle.color_abgr),
                 .styleRole = role,
                 .source = overlaySourceForRole(role),
@@ -232,15 +235,15 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
         });
     }
     for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
-        if (!objectEffectivelyVisible(line.object_id, entityByObject, scene)) {
+        if (!objectEffectivelyVisible(line.object_id, objectRegistry, scene)) {
             continue;
         }
         const ViewportOverlayLayer layer = fromRuntime(line.layer);
         const ViewportOverlayStyleRole role = lineStyleRole(line.layer, line.color_abgr);
         result.lines.push_back(ViewportOverlayLine{
                 .layer = layer,
-                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), entityByObject, scene),
-                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), entityByObject, scene),
+                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), objectRegistry, scene),
+                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), objectRegistry, scene),
                 .color = viewportOverlayColorFor(layer, line.color_abgr),
                 .widthPixels = line.width_pixels,
                 .styleRole = role,
@@ -253,14 +256,14 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
         });
     }
     for (const quader_editor_core::SelectionOverlayPoint& point : frame.points) {
-        if (!objectEffectivelyVisible(point.object_id, entityByObject, scene)) {
+        if (!objectEffectivelyVisible(point.object_id, objectRegistry, scene)) {
             continue;
         }
         const ViewportOverlayLayer layer = fromRuntime(point.layer);
         const ViewportOverlayStyleRole role = pointStyleRole(point.layer, point.color_abgr);
         result.points.push_back(ViewportOverlayPoint{
                 .layer = layer,
-                .position = transformObjectPoint(point.object_id, fromRuntime(point.position), entityByObject, scene),
+                .position = transformObjectPoint(point.object_id, fromRuntime(point.position), objectRegistry, scene),
                 .color = viewportOverlayColorFor(layer, point.color_abgr),
                 .sizePixels = point.size_pixels,
                 .styleRole = role,
@@ -274,20 +277,20 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
 void SelectionOverlayProjection::appendProjectedOverlayLines(
         ViewportOverlayFrame& frame,
         const std::vector<quader_editor_core::SelectionOverlayLine>& lines,
-        const std::unordered_map<int, EntityId>& entityByObject,
+        const ModelingObjectRuntimeMap& objectRegistry,
         const SceneDocument& scene,
         ViewportOverlayLayer layer,
         ViewportOverlayStyleRole styleRole,
         ViewportOverlaySource source) {
     frame.lines.reserve(frame.lines.size() + lines.size());
     for (const quader_editor_core::SelectionOverlayLine& line : lines) {
-        if (!objectEffectivelyVisible(line.object_id, entityByObject, scene)) {
+        if (!objectEffectivelyVisible(line.object_id, objectRegistry, scene)) {
             continue;
         }
         frame.lines.push_back(ViewportOverlayLine{
                 .layer = layer,
-                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), entityByObject, scene),
-                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), entityByObject, scene),
+                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), objectRegistry, scene),
+                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), objectRegistry, scene),
                 .color = viewportOverlayColorFor(layer, line.color_abgr),
                 .widthPixels = line.width_pixels,
                 .styleRole = styleRole,

@@ -356,8 +356,8 @@ bool MainLayoutSashRegistry::normalizeMeasuredBounds(
         const int measuredMaxSidebarWidthDp = std::max(
                 measured_.mainWidthDp - kMainLayoutViewportMinSizeDp - auxiliaryWidthForPrimaryClamp,
                 kMainLayoutSidebarMinWidthDp);
-        if (model.sidebar.widthDp > measuredMaxSidebarWidthDp) {
-            model.sidebar.widthDp = measuredMaxSidebarWidthDp;
+        if (model.sidebar.widthDp > measuredMaxSidebarWidthDp &&
+                controller.clampSidebarWidthForMeasuredBounds(DockLocation::Sidebar, measuredMaxSidebarWidthDp)) {
             changed = true;
         }
 
@@ -367,8 +367,10 @@ bool MainLayoutSashRegistry::normalizeMeasuredBounds(
         const int measuredMaxAuxiliarySidebarWidthDp = std::max(
                 measured_.mainWidthDp - kMainLayoutViewportMinSizeDp - primaryWidthForAuxiliaryClamp,
                 kMainLayoutSidebarMinWidthDp);
-        if (model.auxiliarySidebar.widthDp > measuredMaxAuxiliarySidebarWidthDp) {
-            model.auxiliarySidebar.widthDp = measuredMaxAuxiliarySidebarWidthDp;
+        if (model.auxiliarySidebar.widthDp > measuredMaxAuxiliarySidebarWidthDp &&
+                controller.clampSidebarWidthForMeasuredBounds(
+                        DockLocation::AuxiliaryBar,
+                        measuredMaxAuxiliarySidebarWidthDp)) {
             changed = true;
         }
     }

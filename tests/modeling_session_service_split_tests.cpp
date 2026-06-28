@@ -443,8 +443,19 @@ TEST(ModelingSessionServiceSplitTests, ObjectRuntimeMapStaysOutOfServiceBucket) 
     EXPECT_EQ(serviceAggregate.find("ModelingObjectRegistry"), std::string::npos);
     EXPECT_EQ(services.find("ModelingObjectRuntimeMap::"), std::string::npos);
     const std::string runtimeMapHeader = readSourceFile("src/editor/modeling/runtime/modeling_object_runtime_map.hpp");
-    EXPECT_EQ(runtimeMapHeader.find("\n    std::unordered_map<int, EntityId>& entitiesByObject()"), std::string::npos);
-    EXPECT_EQ(runtimeMapHeader.find("\n    std::unordered_map<EntityId, int>& objectsByEntity()"), std::string::npos);
+    const std::string projectionSource = readSourceFile("src/editor/projection/selection_overlay_projection.cpp");
+    const std::string pickingProjectionSource = readSourceFile("src/editor/projection/picking_cache_projection.cpp");
+    const std::string meshSyncSource = readSourceFile("src/editor/modeling/services/modeling_mesh_sync_service.cpp");
+    EXPECT_EQ(runtimeMapHeader.find("entitiesByObject()"), std::string::npos);
+    EXPECT_EQ(runtimeMapHeader.find("objectsByEntity()"), std::string::npos);
+    EXPECT_EQ(services.find("entitiesByObject()"), std::string::npos);
+    EXPECT_EQ(services.find("objectsByEntity()"), std::string::npos);
+    EXPECT_EQ(projectionSource.find("entitiesByObject()"), std::string::npos);
+    EXPECT_EQ(pickingProjectionSource.find("entitiesByObject()"), std::string::npos);
+    EXPECT_EQ(meshSyncSource.find("entitiesByObject()"), std::string::npos);
+    EXPECT_NE(runtimeMapHeader.find("objectEntityBindingsByModelingObject()"), std::string::npos);
+    EXPECT_NE(runtimeMapHeader.find("entityForModelingObject(int modelingObjectId)"), std::string::npos);
+    EXPECT_NE(runtimeMapHeader.find("modelingObjectForEntity(EntityId entity)"), std::string::npos);
     EXPECT_NE(runtimeMapHeader.find("void bind(int modelingObjectId, EntityId entity)"), std::string::npos);
     EXPECT_NE(runtimeMapHeader.find("void unbindObject(int modelingObjectId)"), std::string::npos);
 }
@@ -462,6 +473,24 @@ TEST(ModelingSessionServiceSplitTests, ObjectSelectionMappingLivesInSelectionPro
     EXPECT_NE(projection.find("applyRuntimeObjectSelection("), std::string::npos);
     EXPECT_NE(projection.find("applyExactSceneSelection("), std::string::npos);
     EXPECT_EQ(projection.find("orderedSelected.front()"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, ClickPickSelectionUsesSelectionServiceCachedInputs) {
+    const std::string facade = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string selectionService = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
+    const std::string runtimePicking = readSourceFile("src/editor/modeling/runtime/session_picking.cpp");
+    const std::string runtimeHeader = readSourceFile("src/editor/modeling/runtime/session.hpp");
+
+    EXPECT_NE(facade.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, request)"), std::string::npos);
+    EXPECT_EQ(facade.find("quader_editor_core::pick_select_all_faces(\n                    pickingObjects"), std::string::npos);
+    EXPECT_EQ(facade.find("quader_editor_core::pick_select_edge_loop(\n                    pickingObjects"), std::string::npos);
+    EXPECT_EQ(facade.find("quader_editor_core::pick_select_all_vertices(\n                    pickingObjects"), std::string::npos);
+    EXPECT_NE(selectionService.find("ModelingSelectionService::applyPickSelection("), std::string::npos);
+    EXPECT_NE(selectionService.find("cachedPickObjectBounds(session, scene, objectRegistry)"), std::string::npos);
+    EXPECT_NE(selectionService.find("cachedPickFaceGeometry(session, scene, objectRegistry, pickOptions)"), std::string::npos);
+    EXPECT_NE(selectionService.find("pickBounds,\n                pickFaceGeometry"), std::string::npos);
+    EXPECT_NE(runtimeHeader.find("std::span<const PickObjectBounds> object_bounds"), std::string::npos);
+    EXPECT_NE(runtimePicking.find("pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry)"), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, SelectionCenterWorldProjectionLivesInSelectionProjectionService) {
@@ -493,8 +522,11 @@ TEST(ModelingSessionServiceSplitTests, DuplicateSceneIdentityLivesInRuntimeMapAn
     EXPECT_NE(facade.find("captureSelectedDuplicateSceneIdentities()"), std::string::npos);
     EXPECT_NE(facade.find("meshSyncService_.applySceneIdentityToDuplicateEntity("), std::string::npos);
     EXPECT_NE(runtimeMap.find("captureSceneIdentitiesForModelingObjects("), std::string::npos);
+    EXPECT_NE(runtimeMap.find("objectEntityBindingsByModelingObject("), std::string::npos);
+    EXPECT_NE(runtimeMap.find("std::sort(bindings.begin(), bindings.end()"), std::string::npos);
     EXPECT_NE(meshSync.find("applySceneIdentityToDuplicateEntity("), std::string::npos);
-    EXPECT_NE(meshSync.find("std::sort(entitiesByObject.begin(), entitiesByObject.end()"), std::string::npos);
+    EXPECT_NE(meshSync.find("objectEntityBindingsByModelingObject()"), std::string::npos);
+    EXPECT_EQ(meshSync.find("std::sort(entitiesByObject.begin(), entitiesByObject.end()"), std::string::npos);
     EXPECT_LT(
             meshSync.find("existingMaterial != nullptr && existingMaterial->material != InvalidAssetId"),
             meshSync.find("materialBySlot.find(materialSlot)"));
@@ -867,12 +899,32 @@ TEST(ModelingSessionServiceSplitTests, InstantOperationSettingsComeFromSharedOpe
     EXPECT_TRUE(recalculateSettings.outside);
 }
 
+TEST(ModelingSessionServiceSplitTests, ToolSettingMutationComesFromOperationSettingsOwner) {
+    ModelingInteractionSettings settings;
+
+    EXPECT_TRUE(applyModelingInteractionSetting(settings, "edge_bevel", "width", 2.5));
+    EXPECT_DOUBLE_EQ(settings.edgeBevelWidth, 2.5);
+
+    EXPECT_TRUE(applyModelingInteractionSetting(settings, "edge_bevel", "edge_bevel_segments", 5.0));
+    EXPECT_EQ(settings.edgeBevelSegments, 5);
+
+    EXPECT_TRUE(applyModelingInteractionSetting(settings, "thicken", "from_center", 1.0));
+    EXPECT_TRUE(settings.thickenFromCenter);
+
+    EXPECT_TRUE(applyModelingInteractionSetting(settings, "", "distance", 0.0625));
+    EXPECT_DOUBLE_EQ(settings.mergeByDistanceTolerance, 0.0625);
+
+    EXPECT_FALSE(applyModelingInteractionSetting(settings, "edge_bevel", "tolerance", 0.25));
+    EXPECT_FALSE(applyModelingInteractionSetting(settings, "edge_bevel", "__missing__", 1.0));
+}
+
 TEST(ModelingSessionServiceSplitTests, InstantOperationSettingsMappingHasSingleOwner) {
     const std::string catalogHeader =
             readSourceFile("src/editor/modeling/services/modeling_instant_operation_catalog.hpp");
     const std::string catalog = readSourceFile("src/editor/modeling/services/modeling_instant_operation_catalog.cpp");
     const std::string services = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
     const std::string operationSettings = readSourceFile("src/editor/modeling/services/modeling_operation_settings.cpp");
+    const std::string toolsApi = readSourceFile("src/api/quader_tools_api.cpp");
 
     EXPECT_EQ(catalogHeader.find("RuntimeOperationSettingsKind"), std::string::npos);
     EXPECT_EQ(catalog.find("RuntimeOperationSettingsKind"), std::string::npos);
@@ -883,6 +935,24 @@ TEST(ModelingSessionServiceSplitTests, InstantOperationSettingsMappingHasSingleO
     EXPECT_NE(operationSettings.find("schema->settings_kind"), std::string::npos);
     EXPECT_EQ(operationSettings.find("case quader_editor_core::EditorOperationId::connect_vertices"), std::string::npos);
     EXPECT_EQ(operationSettings.find("case quader_editor_core::EditorOperationId::delete_selection"), std::string::npos);
+    EXPECT_NE(toolsApi.find("applyModelingInteractionSetting(settings, toolId, name, value)"), std::string::npos);
+    EXPECT_EQ(toolsApi.find("edgeBevelWidth = value"), std::string::npos);
+    EXPECT_EQ(toolsApi.find("mergeByDistanceTolerance = value"), std::string::npos);
+}
+
+TEST(ModelingSessionServiceSplitTests, HostOperationMetadataUsesSchemaOptionDescriptorCatalog) {
+    const std::string operationSchema =
+            readSourceFile("src/editor/modeling/operations/operation_schema.hpp");
+    const std::string hostContract = readSourceFile("src/editor/metadata/host_contract.cpp");
+
+    EXPECT_NE(operationSchema.find("struct EditorOperationOptionDescriptor"), std::string::npos);
+    EXPECT_NE(operationSchema.find("operation_option_descriptor_catalog()"), std::string::npos);
+    EXPECT_NE(hostContract.find("operation_option_descriptor_catalog()"), std::string::npos);
+    EXPECT_NE(hostContract.find("operation_preference("), std::string::npos);
+    EXPECT_EQ(hostContract.find("static const std::array<HostOptionDescriptor"), std::string::npos);
+    EXPECT_EQ(hostContract.find("operation_int_preference("), std::string::npos);
+    EXPECT_EQ(hostContract.find("operation_float_preference("), std::string::npos);
+    EXPECT_EQ(hostContract.find("operation_bool_preference("), std::string::npos);
 }
 
 TEST(ModelingSessionServiceSplitTests, FacadeDelegatesToSplitServicesThroughPublicApi) {

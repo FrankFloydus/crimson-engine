@@ -8,6 +8,9 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | earcut.hpp | https://github.com/mapbox/earcut.hpp | vendored header | ISC, see `licenses/earcut-hpp-ISC.txt` | Polygon triangulation. |
 | nlohmann/json | https://github.com/nlohmann/json | `v3.12.0` single header | MIT, see `licenses/nlohmann-json-MIT.txt` | Portable `.qdr` JSON persistence. |
 | Geometric Tools Engine Mathematics | https://github.com/davideberly/GeometricTools | `GTE-version-8.2` / `e095b84018766274f1546a7baa12c257fd18f7d8`, vendored at `thirdparty/geometrictools/gte-8.2-e095b84018766274f1546a7baa12c257fd18f7d8/GTE/Mathematics` | Boost Software License 1.0, see `licenses/geometrictools-BSL-1.0.txt` | Robust native geometry and modeling runtime helpers. Only GTE Mathematics headers are vendored; Graphics, Applications, GPU, and Samples are excluded. |
+| EnTT | https://github.com/skypjack/entt | vcpkg `3.16.0` | MIT, see `licenses/entt-MIT.txt` | Entity-component storage for scene/runtime data. |
+| OpenGL Mathematics (GLM) | https://glm.g-truc.net | vcpkg `1.0.3` | MIT or Happy Bunny License (Modified MIT), see `licenses/glm-MIT.txt` | Vector, matrix, and transform math. |
+| SDL3 | https://www.libsdl.org | vcpkg `3.4.8` | Zlib AND MIT AND Apache-2.0, see `licenses/sdl3-Zlib-MIT-Apache-2.0.txt` | Native windowing, events, and platform input. |
 | RmlUi | https://github.com/mikke89/RmlUi | vcpkg `6.2` | MIT, see `licenses/rmlui-MIT.txt` | RmlUi-backed native UI shell and viewport presentation. |
 | itlib | https://github.com/iboB/itlib | vcpkg `1.12.2` | MIT, see `licenses/itlib-MIT.txt` | RmlUi transitive dependency. |
 | robin-hood-hashing | https://github.com/martinus/robin-hood-hashing | vcpkg `3.11.5` | MIT, see `licenses/robin-hood-hashing-MIT.txt` | RmlUi transitive dependency. |
@@ -16,7 +19,10 @@ Quader native app dependencies must remain compatible with proprietary/non-free 
 | bzip2 | https://sourceware.org/bzip2/ | vcpkg `1.0.8` | bzip2 license, see `licenses/bzip2-Bzip2.txt` | FreeType transitive compression dependency. |
 | libpng | http://www.libpng.org/pub/png/libpng.html | vcpkg `1.6.58` | libpng license, see `licenses/libpng-Libpng-2.0.txt` | FreeType transitive image dependency. |
 | zlib | https://zlib.net/ | vcpkg `1.3.2` | zlib license, see `licenses/zlib-Zlib.txt` | libpng/FreeType transitive compression dependency. |
+| GoogleTest | https://github.com/google/googletest | vcpkg `1.17.0` | BSD 3-Clause, see `licenses/gtest-BSD-3-Clause.txt` | Native C++ tests. |
 | lodepng | https://github.com/lvandeve/lodepng | vcpkg `2021-12-04` | zlib license, see `licenses/lodepng-Zlib.txt` | PNG image loading support. |
+| spdlog | https://github.com/gabime/spdlog | vcpkg `1.17.0` | MIT, see `licenses/spdlog-MIT.txt` | Runtime logging. |
+| {fmt} | https://github.com/fmtlib/fmt | vcpkg `12.1.0` | MIT, see `licenses/fmt-MIT.txt` | spdlog default formatting backend. |
 | Nova Mono | https://github.com/google/fonts/tree/main/ofl/novamono | Google Fonts commit `e2ff3c28d1ce433a95ee071a0861b2a75235ef9b`, font copied to `resources/fonts/NovaMono.ttf` | SIL Open Font License 1.1, see `licenses/google-fonts-nova-mono-OFL-1.1.txt` | Secondary text in compact toolbar buttons. |
 | Tracy Profiler | https://github.com/wolfpld/tracy | external checkout when `QUADER_ENABLE_TRACY=ON` | BSD 3-Clause, see the external checkout `LICENSE` | Optional diagnostic instrumentation for local performance captures. |
 

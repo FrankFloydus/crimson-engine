@@ -45,6 +45,11 @@ public:
             const SceneDocument& scene,
             const ModelingObjectRuntimeMap& objectMap,
             quader_poly::PickOptions pickOptions = {}) const;
+    bool applyPickSelection(
+            quader_editor_core::EditorSession& session,
+            const SceneDocument& scene,
+            const ModelingObjectRuntimeMap& objectMap,
+            const ModelingPickSelectRequest& request) const;
     [[nodiscard]] quader_editor_core::RectangleSelectionState rectangleSelectionState(
             const quader_editor_core::EditorSession& session) const;
     [[nodiscard]] quader_editor_core::RectangleSelectionUniverse rectangleSelectionUniverse(

@@ -7,6 +7,7 @@
 #include "scene/document/project_document.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace quader {
@@ -283,6 +284,84 @@ ProjectDocumentIdentityReport ProjectDocument::validateObjectIdentityInvariants(
         }
     }
 
+    return report;
+}
+
+ProjectDocumentAssetReferenceReport ProjectDocument::validateAssetReferences() const {
+    ProjectDocumentAssetReferenceReport report;
+    for (const EntityId entity : scene_.entities()) {
+        if (const MeshComponent* mesh = scene_.mesh(entity);
+                mesh != nullptr && (mesh->mesh == InvalidAssetId || assets_.mesh(mesh->mesh) == nullptr)) {
+            report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                    .entity = entity,
+                    .asset = mesh->mesh,
+                    .message = "entity references a missing mesh asset.",
+            });
+        }
+        if (const MaterialComponent* material = scene_.material(entity);
+                material != nullptr && assets_.material(material->material) == nullptr) {
+            report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                    .entity = entity,
+                    .asset = material->material,
+                    .message = "entity references a missing material asset.",
+            });
+        }
+        if (const MaterialComponent* material = scene_.material(entity)) {
+            for (const auto& [slot, materialId] : material->materialSlots) {
+                (void)slot;
+                if (materialId == InvalidAssetId || assets_.material(materialId) == nullptr) {
+                    report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                            .entity = entity,
+                            .asset = materialId,
+                            .message = "entity material slot references a missing material asset.",
+                    });
+                }
+            }
+        }
+    }
+
+    for (const ProjectObjectRecord& record : objectRecords()) {
+        ProjectDocumentAssetReferenceReport recordReport = validateAssetReferences(record);
+        report.issues.insert(
+                report.issues.end(),
+                std::make_move_iterator(recordReport.issues.begin()),
+                std::make_move_iterator(recordReport.issues.end()));
+    }
+    return report;
+}
+
+ProjectDocumentAssetReferenceReport ProjectDocument::validateAssetReferences(ProjectObjectRecord record) const {
+    ProjectDocumentAssetReferenceReport report;
+    if (record.id == InvalidEditorObjectId) {
+        report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                .entity = record.sceneEntity,
+                .objectId = record.id,
+                .message = "contains an object record without a stable object id.",
+        });
+    }
+    if (record.sceneEntity == InvalidEntityId || !scene_.exists(record.sceneEntity)) {
+        report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                .entity = record.sceneEntity,
+                .objectId = record.id,
+                .message = "object record points at a missing scene entity.",
+        });
+    }
+    if (record.mesh != InvalidAssetId && assets_.mesh(record.mesh) == nullptr) {
+        report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                .entity = record.sceneEntity,
+                .objectId = record.id,
+                .asset = record.mesh,
+                .message = "object record references a missing mesh asset.",
+        });
+    }
+    if (record.material != InvalidAssetId && assets_.material(record.material) == nullptr) {
+        report.issues.push_back(ProjectDocumentAssetReferenceIssue{
+                .entity = record.sceneEntity,
+                .objectId = record.id,
+                .asset = record.material,
+                .message = "object record references a missing material asset.",
+        });
+    }
     return report;
 }
 

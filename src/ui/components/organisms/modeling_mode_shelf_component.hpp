@@ -68,7 +68,7 @@ struct ModelingModeShelfState {
     std::vector<std::string> overflowControlIds;
     std::vector<ModelingModeShelfCommand> activeStripCommands;
     std::optional<std::string> activeTabControlId;
-    std::string overflowButtonLabel = "More";
+    std::string overflowButtonLabel;
     bool overflowMenuOpen = false;
 };
 

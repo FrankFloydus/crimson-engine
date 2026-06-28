@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "editor/interactions/tool_identity.hpp"
 #include "editor/tools/viewport_tool.hpp"
 
 #include <span>
@@ -23,6 +24,7 @@ namespace quader {
 [[nodiscard]] bool viewportToolBlocksFocusShortcuts(ViewportToolId tool);
 [[nodiscard]] bool viewportToolSupportsTransformGizmo(ViewportToolId tool);
 [[nodiscard]] ModelingTransformTool viewportToolTransformTool(ViewportToolId tool);
+[[nodiscard]] quader_editor_core::ViewportInteractionTool viewportToolInteractionTool(ViewportToolId tool);
 [[nodiscard]] ModelingViewportTool modelingViewportToolFor(ViewportToolId tool);
 [[nodiscard]] ViewportToolId viewportToolForModeling(ModelingViewportTool tool);
 

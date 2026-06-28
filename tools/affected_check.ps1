@@ -458,7 +458,7 @@ function Add-PathPlan {
 
     if ($Path -match '^docs/') {
         Add-BuildTarget "quader_guardrail_tests" "docs or agent instructions changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:ProgrammaticApiGuardrailTests.PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile:ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders" "guard docs/instruction routing"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.ProjectOwnedCommentCapableFilesCarryProprietaryBanner:ProgrammaticApiGuardrailTests.PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile:ProgrammaticApiGuardrailTests.PublicExamplesAndDocsDoNotStartFromInternalOwnerHeaders:ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface" "guard docs/instruction routing"
         if ($Path -eq "docs/absorbed_modeling/README.md") {
             Add-GuardrailTestsFilter "BuildGuardrailTests.AbsorbedModelingDocsNameRealModelingDomainTargets:BuildGuardrailTests.AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary" "guard absorbed modeling docs"
         }

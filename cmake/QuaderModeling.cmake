@@ -210,6 +210,7 @@ target_link_libraries(quader_editor_metadata PRIVATE quader_modeling_runtime)
 
 add_library(quader_qdr_shared_io STATIC
     src/io/qdr/qdr_atomic_write.cpp
+    src/io/qdr/qdr_root.cpp
     src/io/qdr/qdr_polygon_document_codec.cpp)
 quader_enable_common_pch(quader_qdr_shared_io)
 target_compile_features(quader_qdr_shared_io PUBLIC cxx_std_20)

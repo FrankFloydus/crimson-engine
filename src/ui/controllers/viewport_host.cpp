@@ -7,6 +7,7 @@
 #include "ui/controllers/viewport_host.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "editor/input/quader_input_binding.hpp"
@@ -336,7 +337,7 @@ ViewportToolResult dispatchActiveViewportToolFrame(
         return modelingBoxEvent(
                 camera,
                 input,
-                viewportGridWorldSizeForPreset(inputRouter.state().gridPreset));
+                viewportGridWorldSizeForPreset(input.gridPreset));
     };
     boxToolContext.commitPreview = [&](std::string name, AssetId material) {
         const QuaderApiResult<QuaderModelingObjectRef> command =
@@ -366,7 +367,7 @@ ViewportToolResult dispatchActiveViewportToolFrame(
                 settings,
                 localMouse,
                 input.viewportSize,
-                viewportGridWorldSizeForPreset(inputRouter.state().gridPreset),
+                viewportGridWorldSizeForPreset(input.gridPreset),
                 input.modifiers,
                 dragging);
     };
@@ -578,6 +579,48 @@ void syncFlyDirectionFromNavigationBindings(ViewportInputFrame& input) {
 
 QuaderViewportKeybindingContext keybindingContextFromInput(const ViewportInputFrame& input);
 
+std::optional<ViewportView> viewportViewForCommandId(std::string_view commandId) {
+    if (commandId == QuaderCommand::ViewportViewPerspective.string()) {
+        return ViewportView::Perspective;
+    }
+    if (commandId == QuaderCommand::ViewportViewTop.string()) {
+        return ViewportView::Top;
+    }
+    if (commandId == QuaderCommand::ViewportViewBottom.string()) {
+        return ViewportView::Bottom;
+    }
+    if (commandId == QuaderCommand::ViewportViewLeft.string()) {
+        return ViewportView::Left;
+    }
+    if (commandId == QuaderCommand::ViewportViewRight.string()) {
+        return ViewportView::Side;
+    }
+    if (commandId == QuaderCommand::ViewportViewFront.string()) {
+        return ViewportView::Front;
+    }
+    if (commandId == QuaderCommand::ViewportViewBack.string()) {
+        return ViewportView::Back;
+    }
+    return std::nullopt;
+}
+
+bool applyViewportViewCommandToSurface(
+        ViewportWorkspaceService& workspace,
+        const ViewportComponent& component,
+        std::string_view commandId) {
+    const std::optional<ViewportView> view = viewportViewForCommandId(commandId);
+    if (!view) {
+        return false;
+    }
+
+    if (component.surface == ViewportComponentSurface::Window) {
+        (void)workspace.setAuxiliaryViewportView(component.stableId, *view);
+        return true;
+    }
+    (void)workspace.setView(component.pane, *view);
+    return true;
+}
+
 bool resolveViewportInputActionForChord(
         QuaderEditorApi& editor,
         const ViewportToolState& state,
@@ -607,6 +650,8 @@ QuaderViewportKeybindingContext keybindingContextFromInput(const ViewportInputFr
 
 bool applyViewportKeybindingDispatch(
         QuaderEditorApi& editor,
+        ViewportWorkspaceService& workspace,
+        const ViewportComponent& component,
         const QuaderViewportKeybindingDispatch& dispatch,
         ViewportInputFrame& input) {
     switch (dispatch.kind) {
@@ -617,9 +662,11 @@ bool applyViewportKeybindingDispatch(
         input.resolvedShortcuts.push_back(dispatch.shortcut);
         return true;
     case QuaderViewportKeybindingDispatch::Kind::Command:
-        logCommandFailure(
-                "Keybinding command",
-                editor.commands().execute(dispatch.commandId));
+        if (!applyViewportViewCommandToSurface(workspace, component, dispatch.commandId)) {
+            logCommandFailure(
+                    "Keybinding command",
+                    editor.commands().execute(dispatch.commandId));
+        }
         input.resolvedShortcuts.push_back(ViewportShortcut{});
         return true;
     case QuaderViewportKeybindingDispatch::Kind::NoMatch:
@@ -646,6 +693,8 @@ std::string formatWindowedViewportTitle(std::string_view titleFormat, int index)
 
 void resolveKeybindingsForFrame(
         QuaderEditorApi& editor,
+        ViewportWorkspaceService& workspace,
+        const ViewportComponent& component,
         const ViewportToolState& state,
         ViewportInputFrame& input) {
     input.resolvedShortcuts.clear();
@@ -688,7 +737,7 @@ void resolveKeybindingsForFrame(
                 input.viewportFocused,
                 input.textInputActive,
                 keybindingContext);
-        if (applyViewportKeybindingDispatch(editor, dispatch, input)) {
+        if (applyViewportKeybindingDispatch(editor, workspace, component, dispatch, input)) {
             return;
         }
     }
@@ -703,7 +752,7 @@ void resolveKeybindingsForFrame(
  */
 struct ViewportHost::ViewportWindowInstance {
     PlatformWindow window;
-    filament::SwapChain* swapChain = nullptr;
+    RenderAdditionalSwapChain swapChain;
     ViewportComponent component;
     ViewportRenderer renderer;
     ViewportInputRouter inputRouter;
@@ -907,9 +956,9 @@ void ViewportHost::handleFrame(
     }
 
     syncInputRouterFromEditorState(inputRouter_, editor, modeling);
-    inputRouter_.setGridPreset(workspace.gridPreset());
+    inputRouter_.syncGridPresetSnapshot(workspace.gridPreset());
     ViewportCameraController& camera = workspace.camera(mainViewport_.pane);
-    ViewportInputFrame input = buildViewportInputFrame();
+    ViewportInputFrame input = buildViewportInputFrame(workspace.gridPreset());
     handleViewportFrameSurface(
             editor,
             workspace,
@@ -942,14 +991,16 @@ void ViewportHost::handleViewportFrameSurface(
         ViewportInputSurfaceState& inputState,
         QVec2 leftClickLocal,
         ViewportWindowInstance* windowedInstance) {
-    resolveKeybindingsForFrame(editor, inputRouter.state(), input);
+    resolveKeybindingsForFrame(editor, workspace, component, inputRouter.state(), input);
     syncInputRouterFromEditorState(inputRouter, editor, modeling);
     const ViewportInputResult result = inputRouter.handleFrame(input, camera);
     if (result.toolChanged) {
         activateViewportToolFromRouter(editor, modeling, inputRouter);
     }
     if (result.gridPresetChanged) {
-        workspace.setGridPreset(inputRouter.state().gridPreset);
+        (void)workspace.setGridPreset(result.requestedGridPreset);
+        inputRouter.syncGridPresetSnapshot(workspace.gridPreset());
+        input.gridPreset = workspace.gridPreset();
     }
     if (result.focusDocumentRequested) {
         logCommandFailure("Frame selection", editor.viewports().frameSelection(component.pane));
@@ -1055,7 +1106,7 @@ void ViewportHost::renderViewports(RenderSystem& renderSystem) {
 void ViewportHost::renderWindowedViewports(RenderSystem& renderSystem) {
     for (const std::unique_ptr<ViewportWindowInstance>& viewport : windowedViewports_) {
         ViewportWindowInstance& instance = *viewport;
-        if (instance.swapChain == nullptr || !renderSystem.beginFrame(instance.swapChain)) {
+        if (!instance.swapChain || !renderSystem.beginFrame(instance.swapChain.get())) {
             continue;
         }
 
@@ -1361,51 +1412,75 @@ void ViewportHost::clearAllInputState(ViewportInputSurfaceState& input) {
     clearTransientInputState(input);
 }
 
-ViewportInputFrame ViewportHost::buildViewportInputFrame() const {
-    const float scaleX = windowWidth_ > 0 ? static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_) : 1.0f;
-    const float scaleY = windowHeight_ > 0 ? static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_) : 1.0f;
+ViewportInputFrame ViewportHost::projectViewportInputFrame(
+        const ViewportInputFrameProjectionRequest& request) {
+    const ViewportInputSurfaceState& surface = *request.input;
+    const ViewportInputRouter& inputRouter = *request.inputRouter;
+    const float scaleX = request.windowWidth > 0
+            ? static_cast<float>(request.framebufferWidth) / static_cast<float>(request.windowWidth)
+            : 1.0f;
+    const float scaleY = request.windowHeight > 0
+            ? static_cast<float>(request.framebufferHeight) / static_cast<float>(request.windowHeight)
+            : 1.0f;
     const QVec2 mousePixel = {
-            mainInput_.mouseWindow.x * scaleX,
-            mainInput_.mouseWindow.y * scaleY,
+            surface.mouseWindow.x * scaleX,
+            surface.mouseWindow.y * scaleY,
     };
     const QVec2 mouseLocal = {
-            mousePixel.x - static_cast<float>(mainViewportFrame_.left),
-            mousePixel.y - static_cast<float>(mainViewportFrame_.top),
+            mousePixel.x - static_cast<float>(request.viewportFrame.left),
+            mousePixel.y - static_cast<float>(request.viewportFrame.top),
     };
-    const QVec2 mouseDelta = relativeMouseCaptured_
-            ? mainInput_.relativeMouseDelta
-            : QVec2{mainInput_.mouseDeltaWindow.x * scaleX, mainInput_.mouseDeltaWindow.y * scaleY};
+    const QVec2 mouseDelta = request.relativeMouseCaptured
+            ? surface.relativeMouseDelta
+            : QVec2{surface.mouseDeltaWindow.x * scaleX, surface.mouseDeltaWindow.y * scaleY};
     const bool hovered = mouseLocal.x >= 0.0f &&
             mouseLocal.y >= 0.0f &&
-            mouseLocal.x <= static_cast<float>(mainViewportFrame_.width) &&
-            mouseLocal.y <= static_cast<float>(mainViewportFrame_.height);
+            mouseLocal.x <= static_cast<float>(request.viewportFrame.width) &&
+            mouseLocal.y <= static_cast<float>(request.viewportFrame.height);
     ViewportInputFrame input;
-    input.viewportHovered = hovered || inputRouter_.navigating();
+    input.viewportHovered = hovered || inputRouter.navigating();
     input.viewportFocused = true;
-    input.textInputActive = textInputActive_;
-    input.navigationActive = inputRouter_.navigating();
-    input.flyNavigationActive = inputRouter_.flyNavigating();
-    input.orbitNavigationActive = inputRouter_.orbitNavigating();
-    input.panNavigationActive = inputRouter_.panNavigating();
-    input.modalToolActive = inputRouter_.hasActiveModalPreview();
-    input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
-    input.mouseWheel = input.viewportHovered ? mainInput_.wheelY : 0.0f;
-    input.deltaSeconds = static_cast<float>(std::max(currentFrameTiming_.deltaSeconds, 0.0));
+    input.textInputActive = request.textInputActive;
+    input.navigationActive = inputRouter.navigating();
+    input.flyNavigationActive = inputRouter.flyNavigating();
+    input.orbitNavigationActive = inputRouter.orbitNavigating();
+    input.panNavigationActive = inputRouter.panNavigating();
+    input.modalToolActive = inputRouter.hasActiveModalPreview();
+    input.activeToolOwnsViewport = inputRouter.activeToolOwnsViewport();
+    input.mouseWheel = input.viewportHovered ? surface.wheelY : 0.0f;
+    input.deltaSeconds = static_cast<float>(std::max(request.deltaSeconds, 0.0));
     input.mouseScreen = mousePixel;
     input.mouseLocal = mouseLocal;
     input.mouseDelta = mouseDelta;
     input.viewportSize = {
-            static_cast<float>(mainViewportFrame_.width),
-            static_cast<float>(mainViewportFrame_.height),
+            static_cast<float>(request.viewportFrame.width),
+            static_cast<float>(request.viewportFrame.height),
     };
-    const ViewportModifiers modifiers = currentModifiers(mainInput_);
-    input.modifiers = modifiers;
-    input.pressedInputChords = mainInput_.pressedInputChords;
-    input.releasedInputChords = mainInput_.releasedInputChords;
-    appendActiveMouseDragChords(mainInput_.mouseDragChordsDown, input.activeInputChords);
-    appendActiveKeyboardChords(mainInput_.keyboardKeysDown, modifiers, input.activeInputChords);
-    appendWheelChords(input.mouseWheel, modifiers, input.wheelInputChords);
+    input.gridPreset = request.gridPreset;
+    input.modifiers = request.modifiers;
+    input.pressedInputChords = surface.pressedInputChords;
+    input.releasedInputChords = surface.releasedInputChords;
+    appendActiveMouseDragChords(surface.mouseDragChordsDown, input.activeInputChords);
+    appendActiveKeyboardChords(surface.keyboardKeysDown, request.modifiers, input.activeInputChords);
+    appendWheelChords(input.mouseWheel, request.modifiers, input.wheelInputChords);
     return input;
+}
+
+ViewportInputFrame ViewportHost::buildViewportInputFrame(int gridPreset) const {
+    return projectViewportInputFrame(ViewportInputFrameProjectionRequest{
+            .input = &mainInput_,
+            .inputRouter = &inputRouter_,
+            .viewportFrame = mainViewportFrame_,
+            .windowWidth = windowWidth_,
+            .windowHeight = windowHeight_,
+            .framebufferWidth = framebufferWidth_,
+            .framebufferHeight = framebufferHeight_,
+            .relativeMouseCaptured = relativeMouseCaptured_,
+            .deltaSeconds = currentFrameTiming_.deltaSeconds,
+            .textInputActive = textInputActive_,
+            .modifiers = currentModifiers(mainInput_),
+            .gridPreset = gridPreset,
+    });
 }
 
 ViewportModifiers ViewportHost::currentModifiers(const ViewportInputSurfaceState& input) const {
@@ -1487,7 +1562,6 @@ void ViewportHost::spawnWindowedViewport() {
     SDL_GetWindowSize(instance->window.sdlWindow(), &instance->windowWidth, &instance->windowHeight);
     instance->windowWidth = std::max(1, instance->windowWidth);
     instance->windowHeight = std::max(1, instance->windowHeight);
-    instance->inputRouter.setGridPreset(inputRouter_.state().gridPreset);
     instance->renderer.initialize(
             renderSystem_->engine(),
             renderSystem_->scene(),
@@ -1598,8 +1672,8 @@ void ViewportHost::handleWindowedViewportFrames(
         });
         ViewportCameraController& camera = workspaceState.camera;
         syncInputRouterFromEditorState(instance.inputRouter, editor, modeling);
-        instance.inputRouter.setGridPreset(workspace.gridPreset());
-        ViewportInputFrame input = buildWindowedViewportInputFrame(instance);
+        instance.inputRouter.syncGridPresetSnapshot(workspace.gridPreset());
+        ViewportInputFrame input = buildWindowedViewportInputFrame(instance, workspace.gridPreset());
         const float scaleX = instance.windowWidth > 0
                 ? static_cast<float>(instance.framebufferWidth) / static_cast<float>(instance.windowWidth)
                 : 1.0f;
@@ -1686,51 +1760,28 @@ void ViewportHost::flushRemovedWindowedViewportWorkspaceState(ViewportWorkspaceS
     removedWindowedViewportIds_.clear();
 }
 
-ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(const ViewportWindowInstance& instance) const {
-    const float scaleX = instance.windowWidth > 0
-            ? static_cast<float>(instance.framebufferWidth) / static_cast<float>(instance.windowWidth)
-            : 1.0f;
-    const float scaleY = instance.windowHeight > 0
-            ? static_cast<float>(instance.framebufferHeight) / static_cast<float>(instance.windowHeight)
-            : 1.0f;
-    const QVec2 mousePixel = {
-            instance.input.mouseWindow.x * scaleX,
-            instance.input.mouseWindow.y * scaleY,
-    };
-    const QVec2 mouseDelta = instance.relativeMouseCaptured
-            ? instance.input.relativeMouseDelta
-            : QVec2{instance.input.mouseDeltaWindow.x * scaleX, instance.input.mouseDeltaWindow.y * scaleY};
-    const bool hovered = mousePixel.x >= 0.0f &&
-            mousePixel.y >= 0.0f &&
-            mousePixel.x <= static_cast<float>(instance.framebufferWidth) &&
-            mousePixel.y <= static_cast<float>(instance.framebufferHeight);
-    ViewportInputFrame input;
-    input.viewportHovered = hovered || instance.inputRouter.navigating();
-    input.viewportFocused = true;
-    input.textInputActive = textInputActive_;
-    input.navigationActive = instance.inputRouter.navigating();
-    input.flyNavigationActive = instance.inputRouter.flyNavigating();
-    input.orbitNavigationActive = instance.inputRouter.orbitNavigating();
-    input.panNavigationActive = instance.inputRouter.panNavigating();
-    input.modalToolActive = instance.inputRouter.hasActiveModalPreview();
-    input.activeToolOwnsViewport = instance.inputRouter.activeToolOwnsViewport();
-    input.mouseWheel = input.viewportHovered ? instance.input.wheelY : 0.0f;
-    input.deltaSeconds = static_cast<float>(std::max(instance.frameTiming.deltaSeconds, 0.0));
-    input.mouseScreen = mousePixel;
-    input.mouseLocal = mousePixel;
-    input.mouseDelta = mouseDelta;
-    input.viewportSize = {
-            static_cast<float>(instance.framebufferWidth),
-            static_cast<float>(instance.framebufferHeight),
-    };
-    const ViewportModifiers modifiers = currentModifiers(instance.input);
-    input.modifiers = modifiers;
-    input.pressedInputChords = instance.input.pressedInputChords;
-    input.releasedInputChords = instance.input.releasedInputChords;
-    appendActiveMouseDragChords(instance.input.mouseDragChordsDown, input.activeInputChords);
-    appendActiveKeyboardChords(instance.input.keyboardKeysDown, modifiers, input.activeInputChords);
-    appendWheelChords(input.mouseWheel, modifiers, input.wheelInputChords);
-    return input;
+ViewportInputFrame ViewportHost::buildWindowedViewportInputFrame(
+        const ViewportWindowInstance& instance,
+        int gridPreset) const {
+    return projectViewportInputFrame(ViewportInputFrameProjectionRequest{
+            .input = &instance.input,
+            .inputRouter = &instance.inputRouter,
+            .viewportFrame = {
+                    .left = 0,
+                    .top = 0,
+                    .width = instance.framebufferWidth,
+                    .height = instance.framebufferHeight,
+            },
+            .windowWidth = instance.windowWidth,
+            .windowHeight = instance.windowHeight,
+            .framebufferWidth = instance.framebufferWidth,
+            .framebufferHeight = instance.framebufferHeight,
+            .relativeMouseCaptured = instance.relativeMouseCaptured,
+            .deltaSeconds = instance.frameTiming.deltaSeconds,
+            .textInputActive = textInputActive_,
+            .modifiers = currentModifiers(instance.input),
+            .gridPreset = gridPreset,
+    });
 }
 
 void ViewportHost::setWindowedViewportCursorCaptured(ViewportWindowInstance& instance, bool captured) {
@@ -1775,10 +1826,7 @@ std::uint8_t ViewportHost::nextWindowedViewportLayerIndex() const {
 void ViewportHost::shutdownWindowedViewport(ViewportWindowInstance& instance) {
     setWindowedViewportCursorCaptured(instance, false);
     instance.renderer.shutdown();
-    if (renderSystem_ && instance.swapChain) {
-        renderSystem_->destroyAdditionalSwapChain(instance.swapChain);
-        instance.swapChain = nullptr;
-    }
+    instance.swapChain.reset();
     instance.window.destroy();
 }
 

@@ -8,6 +8,7 @@
 
 #include "ui/components/common/ui_drag_drop.hpp"
 #include "ui/components/organisms/main_layout_model.hpp"
+#include "viewport/viewport_layout.hpp"
 
 #include <optional>
 #include <string>
@@ -64,13 +65,28 @@ struct MainLayoutInteractionState {
     std::optional<MainLayoutDockDragPresentation> dockDrag;
 };
 
+/// Stores one viewport-view dropdown option projected into the main layout.
+struct MainLayoutViewportViewDropdownOption {
+    ViewportView view = ViewportView::Perspective;
+    std::string label;
+    std::string shortcut;
+};
+
+/// Stores viewport chrome presentation state for the main layout.
+struct MainLayoutViewportPresentation {
+    ViewportView currentView = ViewportView::Perspective;
+    bool viewDropdownOpen = false;
+    std::vector<MainLayoutViewportViewDropdownOption> viewDropdownOptions;
+};
+
 /**
  * Projects the viewport/sidebar main layout into RML for the active RmlUi backend.
  */
 std::string buildMainLayoutRml(
         const MainLayoutModel& model,
         const MainLayoutLabels& labels = {},
-        const MainLayoutInteractionState& interaction = {});
+        const MainLayoutInteractionState& interaction = {},
+        const MainLayoutViewportPresentation& viewport = {});
 
 [[nodiscard]] std::string mainLayoutPanelElementId(std::string_view panelId);
 [[nodiscard]] std::string_view mainLayoutLabelForPanel(
@@ -87,5 +103,8 @@ std::string buildMainLayoutRml(
 [[nodiscard]] std::string mainLayoutBottomDockContentElementId();
 [[nodiscard]] std::string mainLayoutBottomDockResizerElementId();
 [[nodiscard]] std::string mainLayoutBottomSplitResizerElementId(std::string_view panelId);
+[[nodiscard]] std::string mainLayoutViewportViewDropdownElementId();
+[[nodiscard]] std::vector<std::string> mainLayoutViewportDropdownPointerBypassElementIds(
+        const MainLayoutViewportPresentation& viewport);
 
 } // namespace quader

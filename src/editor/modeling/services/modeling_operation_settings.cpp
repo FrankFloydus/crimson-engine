@@ -6,7 +6,25 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_operation_settings.hpp"
 
+#include <initializer_list>
+
 namespace quader {
+namespace {
+
+bool sameOperation(std::string_view requestedToolId, std::string_view operationId) {
+    return requestedToolId.empty() || requestedToolId == operationId;
+}
+
+bool matchesAny(std::string_view name, std::initializer_list<std::string_view> acceptedNames) {
+    for (const std::string_view accepted : acceptedNames) {
+        if (name == accepted) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
 
 const char* fallbackToolSettingsLabel(ModelingToolSettingsTargetKind kind) {
     switch (kind) {
@@ -77,6 +95,70 @@ quader_editor_core::EditorOperationSettings settingsForOperation(
         return quader_editor_core::SelectionOperationSettings{};
     }
     return quader_editor_core::SelectionOperationSettings{};
+}
+
+bool applyModelingInteractionSetting(
+        ModelingInteractionSettings& interactionSettings,
+        std::string_view toolId,
+        std::string_view name,
+        double value) {
+    const quader_editor_core::BridgeOperationSchema bridge = quader_editor_core::bridge_operation_schema();
+    if (sameOperation(toolId, bridge.operation_id) &&
+            matchesAny(name, {bridge.steps.id, "bridge_steps"})) {
+        interactionSettings.bridgeSteps = static_cast<int>(value);
+        return true;
+    }
+
+    const quader_editor_core::EdgeBevelOperationSchema edgeBevel = quader_editor_core::edge_bevel_operation_schema();
+    if (sameOperation(toolId, edgeBevel.operation_id) &&
+            matchesAny(name, {edgeBevel.width.id, "amount", "edge_bevel_width"})) {
+        interactionSettings.edgeBevelWidth = value;
+        return true;
+    }
+    if (sameOperation(toolId, edgeBevel.operation_id) &&
+            matchesAny(name, {edgeBevel.profile.id, "edge_bevel_profile"})) {
+        interactionSettings.edgeBevelProfile = value;
+        return true;
+    }
+    if (sameOperation(toolId, edgeBevel.operation_id) &&
+            matchesAny(name, {edgeBevel.segments.id, "edge_bevel_segments"})) {
+        interactionSettings.edgeBevelSegments = static_cast<int>(value);
+        return true;
+    }
+
+    const quader_editor_core::ThickenOperationSchema thicken = quader_editor_core::thicken_operation_schema();
+    if (sameOperation(toolId, thicken.operation_id) &&
+            matchesAny(name, {thicken.thickness.id, "amount"})) {
+        interactionSettings.thickenThickness = value;
+        return true;
+    }
+    if (sameOperation(toolId, thicken.operation_id) &&
+            matchesAny(name, {thicken.from_center.id})) {
+        interactionSettings.thickenFromCenter = value != 0.0;
+        return true;
+    }
+
+    const quader_editor_core::SliceQuadOperationSchema sliceQuad = quader_editor_core::slice_quad_operation_schema();
+    if (sameOperation(toolId, sliceQuad.operation_id) &&
+            matchesAny(name, {sliceQuad.x_slices.id})) {
+        interactionSettings.sliceQuadXSlices = static_cast<int>(value);
+        return true;
+    }
+    if (sameOperation(toolId, sliceQuad.operation_id) &&
+            matchesAny(name, {sliceQuad.y_slices.id})) {
+        interactionSettings.sliceQuadYSlices = static_cast<int>(value);
+        return true;
+    }
+
+    const quader_editor_core::MergeByDistanceOperationSchema mergeByDistance =
+            quader_editor_core::merge_by_distance_operation_schema();
+    if (sameOperation(toolId, mergeByDistance.operation_id) &&
+            matchesAny(name, {mergeByDistance.tolerance.id, "distance"})) {
+        interactionSettings.mergeByDistanceTolerance = value;
+        return true;
+    }
+
+    return false;
 }
 
 ModelingToolSettingsTargetKind toolSettingsTargetKindForPreview(

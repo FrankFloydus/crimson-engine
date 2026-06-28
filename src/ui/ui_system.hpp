@@ -103,6 +103,10 @@ private:
     void rebuildMainLayoutHitRegions();
     bool activateModelingModeShelfControl(std::string_view controlId);
     void applyPendingModelingModeShelfIntents(QuaderEditorApi& editor);
+    bool handleDropdownToggle(std::string_view dropdownId);
+    bool handleDropdownSelection(const UIDropdownSelection& selection);
+    void applyPendingViewportViewSelection(QuaderEditorApi& editor);
+    bool syncViewportPresentation(QuaderEditorApi& editor);
     bool handleMainLayoutPointerEvent(const SDL_Event& event);
     std::optional<std::pair<float, float>> mainLayoutPointerFramebufferPosition(const SDL_Event& event) const;
     std::optional<ResizableSplitHandle> mainLayoutSplitHandle(std::string_view handleId) const;
@@ -128,6 +132,7 @@ private:
     [[nodiscard]] bool pointerEventInsideMainViewport(const SDL_Event& event) const;
     [[nodiscard]] bool pointerEventInsideRmlElement(const SDL_Event& event, std::string_view elementId) const;
     [[nodiscard]] bool pointerEventInsideModelingModeShelf(const SDL_Event& event) const;
+    [[nodiscard]] bool pointerEventInsideViewportDropdown(const SDL_Event& event) const;
     [[nodiscard]] bool pointerEventShouldBypassViewport(const SDL_Event& event) const;
     bool isMainLayoutPanelVisible(std::string_view panel) const;
     bool setMainLayoutPanelVisible(std::string_view panel, bool visible);
@@ -140,6 +145,8 @@ private:
     MainLayoutController mainLayoutController_;
     ModelingModeShelfController modelingModeShelfController_;
     MainLayoutLabels mainLayoutLabels_;
+    MainLayoutViewportPresentation viewportPresentation_;
+    std::optional<ViewportView> pendingViewportViewSelection_;
     ViewportHost viewportHost_;
     UISettingsPaths settingsPaths_;
     UISettings uiSettings_;

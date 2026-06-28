@@ -9,8 +9,10 @@
 #include <mesh/polygon/document.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 namespace quader_editor_core {
@@ -114,6 +116,40 @@ struct BoolOperationOptionSchema {
 	std::string_view label;
 	bool default_value = false;
 	bool visible = true;
+};
+
+/**
+ * Enumerates EditorOperationOptionValueKind values used by the modeling runtime domain.
+ */
+enum class EditorOperationOptionValueKind {
+	integer,
+	floating,
+	boolean,
+};
+
+/**
+ * Stores flattened operation option metadata owned by the operation schema layer.
+ */
+struct EditorOperationOptionDescriptor {
+	EditorOperationId operation = EditorOperationId::bridge;
+	std::string_view operation_id;
+	std::string_view operation_label;
+	std::string_view preference_group_id;
+	std::string_view preference_id;
+	std::string_view option_id;
+	std::string_view label;
+	EditorOperationOptionValueKind value_kind = EditorOperationOptionValueKind::integer;
+	int default_integer = 0;
+	int minimum_integer = 0;
+	int maximum_integer = 0;
+	int integer_step = 1;
+	double default_number = 0.0;
+	double minimum_number = 0.0;
+	double maximum_number = 0.0;
+	double number_step = 0.01;
+	bool default_bool = false;
+	bool visible = true;
+	bool hard_limits = true;
 };
 
 /**
@@ -338,6 +374,121 @@ inline constexpr DuplicateMeshesOperationSchema duplicate_meshes_operation_schem
 		"duplicate_meshes",
 		"Duplicate Meshes",
 	};
+}
+
+inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
+		EditorOperationId operation,
+		std::string_view operation_id,
+		std::string_view operation_label,
+		std::string_view preference_group_id,
+		std::string_view preference_id,
+		const IntOperationOptionSchema& schema)
+{
+	return {
+		operation,
+		operation_id,
+		operation_label,
+		preference_group_id,
+		preference_id,
+		schema.id,
+		schema.label,
+		EditorOperationOptionValueKind::integer,
+		schema.default_value,
+		schema.minimum,
+		schema.maximum,
+		schema.step,
+		0.0,
+		0.0,
+		0.0,
+		0.01,
+		false,
+		true,
+		schema.hard_limits,
+	};
+}
+
+inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
+		EditorOperationId operation,
+		std::string_view operation_id,
+		std::string_view operation_label,
+		std::string_view preference_group_id,
+		std::string_view preference_id,
+		const FloatOperationOptionSchema& schema)
+{
+	return {
+		operation,
+		operation_id,
+		operation_label,
+		preference_group_id,
+		preference_id,
+		schema.id,
+		schema.label,
+		EditorOperationOptionValueKind::floating,
+		0,
+		0,
+		0,
+		1,
+		schema.default_value,
+		schema.minimum,
+		schema.maximum,
+		schema.step,
+		false,
+		true,
+		schema.hard_limits,
+	};
+}
+
+inline constexpr EditorOperationOptionDescriptor operation_option_descriptor(
+		EditorOperationId operation,
+		std::string_view operation_id,
+		std::string_view operation_label,
+		std::string_view preference_group_id,
+		std::string_view preference_id,
+		const BoolOperationOptionSchema& schema)
+{
+	return {
+		operation,
+		operation_id,
+		operation_label,
+		preference_group_id,
+		preference_id,
+		schema.id,
+		schema.label,
+		EditorOperationOptionValueKind::boolean,
+		0,
+		0,
+		0,
+		1,
+		0.0,
+		0.0,
+		0.0,
+		0.01,
+		schema.default_value,
+		schema.visible,
+		false,
+	};
+}
+
+inline std::span<const EditorOperationOptionDescriptor> operation_option_descriptor_catalog()
+{
+	constexpr BridgeOperationSchema bridge = bridge_operation_schema();
+	constexpr EdgeBevelOperationSchema edge_bevel = edge_bevel_operation_schema();
+	constexpr ThickenOperationSchema thicken = thicken_operation_schema();
+	constexpr SliceQuadOperationSchema slice_quad = slice_quad_operation_schema();
+	constexpr MergeByDistanceOperationSchema merge_by_distance = merge_by_distance_operation_schema();
+
+	static constexpr std::array<EditorOperationOptionDescriptor, 9> descriptors {{
+		operation_option_descriptor(bridge.id, bridge.operation_id, bridge.label, "operation.bridge", "operation.bridge.steps", bridge.steps),
+		operation_option_descriptor(edge_bevel.id, edge_bevel.operation_id, edge_bevel.label, "operation.edge_bevel", "operation.edge_bevel.width", edge_bevel.width),
+		operation_option_descriptor(edge_bevel.id, edge_bevel.operation_id, edge_bevel.label, "operation.edge_bevel", "operation.edge_bevel.profile", edge_bevel.profile),
+		operation_option_descriptor(edge_bevel.id, edge_bevel.operation_id, edge_bevel.label, "operation.edge_bevel", "operation.edge_bevel.segments", edge_bevel.segments),
+		operation_option_descriptor(thicken.id, thicken.operation_id, thicken.label, "operation.thicken", "operation.thicken.thickness", thicken.thickness),
+		operation_option_descriptor(thicken.id, thicken.operation_id, thicken.label, "operation.thicken", "operation.thicken.from_center", thicken.from_center),
+		operation_option_descriptor(slice_quad.id, slice_quad.operation_id, slice_quad.label, "operation.slice_quad", "operation.slice_quad.x_slices", slice_quad.x_slices),
+		operation_option_descriptor(slice_quad.id, slice_quad.operation_id, slice_quad.label, "operation.slice_quad", "operation.slice_quad.y_slices", slice_quad.y_slices),
+		operation_option_descriptor(merge_by_distance.id, merge_by_distance.operation_id, merge_by_distance.label, "operation.merge_by_distance", "operation.merge_by_distance.tolerance", merge_by_distance.tolerance),
+	}};
+	return descriptors;
 }
 
 inline int normalize_operation_int(const IntOperationOptionSchema& schema, int value)

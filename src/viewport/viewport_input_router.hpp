@@ -30,7 +30,7 @@ public:
     void reset();
     void setActiveTool(ViewportToolId tool);
     void setSelectionMode(ViewportSelectionMode mode);
-    void setGridPreset(int preset);
+    void syncGridPresetSnapshot(int preset);
     bool activeToolOwnsViewport() const;
     bool activeToolBlocksViewportFocusShortcuts() const;
     bool activeToolAllowsSelectionFallback() const;

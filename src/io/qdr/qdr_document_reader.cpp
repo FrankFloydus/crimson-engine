@@ -10,13 +10,13 @@
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/qdr/qdr_format.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
+#include "io/qdr/qdr_root.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -35,34 +35,10 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
-std::string stringFromView(std::string_view value) {
-    return std::string(value.data(), value.size());
-}
-
 void requireObject(const json& value, std::string_view label) {
     if (!value.is_object()) {
         throw std::runtime_error(std::string(label) + " must be an object.");
     }
-}
-
-std::string readFormatHeader(const json& root) {
-    const auto it = root.find("format");
-    if (it == root.end() || !it->is_string()) {
-        throw std::runtime_error("QDR document is missing a string format header.");
-    }
-    return it->get<std::string>();
-}
-
-int readVersionHeader(const json& root) {
-    const auto it = root.find("version");
-    if (it == root.end() || !it->is_number_integer()) {
-        throw std::runtime_error("QDR document is missing an integer version header.");
-    }
-    const long long version = it->get<long long>();
-    if (version < std::numeric_limits<int>::min() || version > std::numeric_limits<int>::max()) {
-        throw std::runtime_error("QDR document version header is outside the supported integer range.");
-    }
-    return static_cast<int>(version);
 }
 
 QVec2 vec2FromJson(const json& value) {
@@ -338,39 +314,9 @@ void validateMaterialAssetForQdr(const AssetRegistry& assets, const MaterialDocu
     }
 }
 
-void validateEntityAssetReferences(const ProjectDocument& document) {
-    for (const EntityId entity : document.scene().entities()) {
-        if (const MeshComponent* mesh = document.scene().mesh(entity);
-                mesh != nullptr && (mesh->mesh == InvalidAssetId || document.assets().mesh(mesh->mesh) == nullptr)) {
-            throw std::runtime_error("QDR project document entity references a missing mesh asset.");
-        }
-        if (const MaterialComponent* material = document.scene().material(entity);
-                material != nullptr && document.assets().material(material->material) == nullptr) {
-            throw std::runtime_error("QDR project document entity references a missing material asset.");
-        }
-        if (const MaterialComponent* material = document.scene().material(entity)) {
-            for (const auto& [slot, materialId] : material->materialSlots) {
-                (void)slot;
-                if (materialId == InvalidAssetId || document.assets().material(materialId) == nullptr) {
-                    throw std::runtime_error("QDR project document entity material slot references a missing material asset.");
-                }
-            }
-        }
-    }
-}
-
-void validateObjectRecordReferences(const ProjectDocument& document, const ProjectObjectRecord& record) {
-    if (record.id == InvalidEditorObjectId) {
-        throw std::runtime_error("QDR project document contains an object record without a stable object id.");
-    }
-    if (record.sceneEntity == InvalidEntityId || !document.scene().exists(record.sceneEntity)) {
-        throw std::runtime_error("QDR project object record points at a missing scene entity.");
-    }
-    if (record.mesh != InvalidAssetId && document.assets().mesh(record.mesh) == nullptr) {
-        throw std::runtime_error("QDR project object record references a missing mesh asset.");
-    }
-    if (record.material != InvalidAssetId && document.assets().material(record.material) == nullptr) {
-        throw std::runtime_error("QDR project object record references a missing material asset.");
+void requireValidAssetReferencesForQdr(const ProjectDocumentAssetReferenceReport& report) {
+    if (!report.ok()) {
+        throw std::runtime_error("QDR project document " + report.issues.front().message);
     }
 }
 
@@ -482,13 +428,13 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         }
     }
 
-    validateEntityAssetReferences(document);
+    requireValidAssetReferencesForQdr(document.validateAssetReferences());
 
     std::set<EditorObjectId> objectRecordIds;
     std::set<EntityId> objectRecordEntities;
     for (const json& recordJson : payload.value("objects", json::array())) {
         const ProjectObjectRecord record = objectRecordFromJson(recordJson);
-        validateObjectRecordReferences(document, record);
+        requireValidAssetReferencesForQdr(document.validateAssetReferences(record));
         if (!objectRecordIds.insert(record.id).second) {
             throw std::runtime_error("QDR project document contains duplicate object record ids.");
         }
@@ -609,18 +555,18 @@ QdrProjectReadResult legacyReadResult(std::string_view text) {
 }
 
 QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
-    requireObject(root, "QDR document root");
-    const std::string format = readFormatHeader(root);
-    if (format != stringFromView(kQdrFormatName)) {
-        return {false, {}, "Unsupported Quader file format: " + format, false};
+    quader_io::require_qdr_root_object(root);
+    const quader_io::QdrRootHeader header = quader_io::read_qdr_root_header(root);
+    if (header.format != quader_io::qdr_string_from_view(kQdrFormatName)) {
+        return {false, {}, "Unsupported Quader file format: " + header.format, false};
     }
 
-    const int version = readVersionHeader(root);
+    const int version = header.version;
     if (version < kQdrMinSupportedFormatVersion || version > kQdrProjectFormatVersion) {
         return {false, {}, "Unsupported Quader file version: " + std::to_string(version), false};
     }
 
-    const auto documentPayload = root.find(stringFromView(kQdrDocumentPayloadKey));
+    const auto documentPayload = root.find(quader_io::qdr_string_from_view(kQdrDocumentPayloadKey));
     if (documentPayload != root.end()) {
         if (!documentPayload->is_object()) {
             return {false, {}, "QDR document payload must be an object.", false};
@@ -632,7 +578,7 @@ QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
                 return {false, {}, "QDR project document payload kind must be a string.", false};
             }
             const std::string kindText = kind->get<std::string>();
-            if (kindText != stringFromView(kQdrProjectDocumentKind)) {
+            if (kindText != quader_io::qdr_string_from_view(kQdrProjectDocumentKind)) {
                 return {false, {}, "Unsupported QDR project document payload kind: " + kindText, false};
             }
             if (version != kQdrProjectFormatVersion) {
@@ -648,7 +594,7 @@ QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
         return legacyReadResult(text);
     }
 
-    if (root.find(stringFromView(kQdrLegacySessionPayloadKey)) != root.end()) {
+    if (root.find(quader_io::qdr_string_from_view(kQdrLegacySessionPayloadKey)) != root.end()) {
         return legacyReadResult(text);
     }
 

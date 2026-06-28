@@ -12,6 +12,9 @@
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/metadata/host_contract.hpp>
 
+#include <optional>
+#include <string_view>
+
 namespace quader {
 
 inline ViewportSelectionMode appSelectionModeToViewport(ModelingSelectionMode mode) {
@@ -89,6 +92,45 @@ inline quader_host_contract::HostSelectionMode appSelectionModeToHostContract(Mo
         return quader_host_contract::HostSelectionMode::group;
     }
     return quader_host_contract::HostSelectionMode::object;
+}
+
+inline ModelingSelectionMode hostSelectionModeToApp(quader_host_contract::HostSelectionMode mode) {
+    switch (mode) {
+    case quader_host_contract::HostSelectionMode::vertex:
+        return ModelingSelectionMode::Vertex;
+    case quader_host_contract::HostSelectionMode::edge:
+        return ModelingSelectionMode::Edge;
+    case quader_host_contract::HostSelectionMode::face:
+        return ModelingSelectionMode::Face;
+    case quader_host_contract::HostSelectionMode::object:
+        return ModelingSelectionMode::Object;
+    case quader_host_contract::HostSelectionMode::group:
+        return ModelingSelectionMode::Group;
+    }
+    return ModelingSelectionMode::Object;
+}
+
+inline ViewportSelectionMode hostSelectionModeToViewport(quader_host_contract::HostSelectionMode mode) {
+    return appSelectionModeToViewport(hostSelectionModeToApp(mode));
+}
+
+inline std::string_view hostSelectionModeId(quader_host_contract::HostSelectionMode mode) {
+    for (const quader_host_contract::HostSelectionModeDescriptor& descriptor :
+            quader_host_contract::selection_mode_catalog()) {
+        if (descriptor.mode == mode) {
+            return descriptor.id;
+        }
+    }
+    return {};
+}
+
+inline std::optional<quader_host_contract::HostSelectionMode> hostSelectionModeFromId(
+        std::string_view id) {
+    if (const quader_host_contract::HostSelectionModeDescriptor* descriptor =
+                quader_host_contract::find_selection_mode_descriptor(id)) {
+        return descriptor->mode;
+    }
+    return std::nullopt;
 }
 
 } // namespace quader

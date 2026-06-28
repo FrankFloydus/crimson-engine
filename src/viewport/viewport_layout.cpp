@@ -185,6 +185,31 @@ std::string_view viewportViewStableId(ViewportView view) {
     return "perspective";
 }
 
+std::optional<ViewportView> viewportViewFromStableId(std::string_view stableId) {
+    if (stableId == "perspective") {
+        return ViewportView::Perspective;
+    }
+    if (stableId == "top") {
+        return ViewportView::Top;
+    }
+    if (stableId == "bottom") {
+        return ViewportView::Bottom;
+    }
+    if (stableId == "front") {
+        return ViewportView::Front;
+    }
+    if (stableId == "back") {
+        return ViewportView::Back;
+    }
+    if (stableId == "right") {
+        return ViewportView::Side;
+    }
+    if (stableId == "left") {
+        return ViewportView::Left;
+    }
+    return std::nullopt;
+}
+
 std::string_view viewportViewLabel(ViewportView view) {
     switch (view) {
     case ViewportView::Perspective:

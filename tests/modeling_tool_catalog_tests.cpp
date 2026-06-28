@@ -4,6 +4,7 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
+#include "api/quader_command_ids.hpp"
 #include "editor/commands/modeling_command_tool_catalog.hpp"
 
 #include "editor/commands/activate_viewport_tool_action_tool.hpp"
@@ -140,17 +141,17 @@ TEST(ModelingToolCatalogTests, RegisteredToolsExposeConsistentDescriptorsAndPoli
 TEST(ModelingToolCatalogTests, PublicCommandBridgeMetadataLivesOnCommandDescriptors) {
     const CommandTool* deleteSelection = findModelingCommandTool("delete_selection");
     ASSERT_NE(deleteSelection, nullptr);
-    EXPECT_EQ(deleteSelection->publicCommandId(), std::string_view("edit.delete"));
+    EXPECT_EQ(deleteSelection->publicCommandId(), QuaderCommand::DeleteSelection.string());
     EXPECT_FALSE(deleteSelection->registersPublicCommand());
 
     const CommandTool* duplicate = findModelingCommandTool("duplicate_meshes");
     ASSERT_NE(duplicate, nullptr);
-    EXPECT_EQ(duplicate->publicCommandId(), std::string_view("edit.duplicate"));
+    EXPECT_EQ(duplicate->publicCommandId(), QuaderCommand::DuplicateSelection.string());
     EXPECT_FALSE(duplicate->registersPublicCommand());
 
     const CommandTool* applyActiveMaterial = findModelingCommandTool("apply_active_material");
     ASSERT_NE(applyActiveMaterial, nullptr);
-    EXPECT_EQ(applyActiveMaterial->publicCommandId(), std::string_view("edit.apply_material"));
+    EXPECT_EQ(applyActiveMaterial->publicCommandId(), QuaderCommand::ApplyMaterial.string());
     EXPECT_FALSE(applyActiveMaterial->registersPublicCommand());
 
     const CommandTool* combineMeshes = findModelingCommandTool("combine_meshes");

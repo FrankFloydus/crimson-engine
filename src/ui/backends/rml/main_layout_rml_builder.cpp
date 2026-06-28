@@ -7,14 +7,17 @@
 #include "ui/backends/rml/main_layout_rml_builder.hpp"
 
 #include "ui/backends/rml/rml_markup_writer.hpp"
+#include "ui/components/atoms/ui_dropdown_component.hpp"
 #include "ui/components/common/resizable_split.hpp"
 #include "ui/components/organisms/viewport_component.hpp"
 #include "ui/controllers/main_layout_sash_registry.hpp"
 #include "ui/core/ui_element.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -23,11 +26,59 @@ namespace {
 constexpr int kResizeOverlaySizeDp = kResizableSplitDefaultHitThicknessDp;
 constexpr int kResizeOverlayHalfDp = kResizeOverlaySizeDp / 2;
 
-void appendViewport(std::ostringstream& rml) {
+std::vector<MainLayoutViewportViewDropdownOption> defaultViewportDropdownOptions() {
+    return {
+            {ViewportView::Perspective, std::string(viewportViewLabel(ViewportView::Perspective)), {}},
+            {ViewportView::Top, std::string(viewportViewLabel(ViewportView::Top)), {}},
+            {ViewportView::Bottom, std::string(viewportViewLabel(ViewportView::Bottom)), {}},
+            {ViewportView::Left, std::string(viewportViewLabel(ViewportView::Left)), {}},
+            {ViewportView::Side, std::string(viewportViewLabel(ViewportView::Side)), {}},
+            {ViewportView::Front, std::string(viewportViewLabel(ViewportView::Front)), {}},
+            {ViewportView::Back, std::string(viewportViewLabel(ViewportView::Back)), {}},
+    };
+}
+
+std::string viewportDropdownLabelForView(
+        const std::vector<MainLayoutViewportViewDropdownOption>& options,
+        ViewportView view) {
+    const auto found = std::find_if(options.begin(), options.end(), [view](const MainLayoutViewportViewDropdownOption& option) {
+        return option.view == view;
+    });
+    return found == options.end() ? std::string(viewportViewLabel(view)) : found->label;
+}
+
+UIElement buildViewportDropdownOverlay(const MainLayoutViewportPresentation& presentation) {
+    std::vector<MainLayoutViewportViewDropdownOption> options = presentation.viewDropdownOptions.empty() ?
+            defaultViewportDropdownOptions() :
+            presentation.viewDropdownOptions;
+
+    UIDropdownModel dropdown;
+    dropdown.elementId = mainLayoutViewportViewDropdownElementId();
+    dropdown.selectedLabel = viewportDropdownLabelForView(options, presentation.currentView);
+    dropdown.classes.push_back("viewport-view-dropdown");
+    dropdown.open = presentation.viewDropdownOpen;
+    dropdown.options.reserve(options.size());
+    for (const MainLayoutViewportViewDropdownOption& option : options) {
+        dropdown.options.push_back(UIDropdownOption{
+                .id = std::string(viewportViewStableId(option.view)),
+                .label = option.label,
+                .keybinding = option.shortcut,
+                .selected = option.view == presentation.currentView,
+        });
+    }
+
+    return UIElement::div()
+            .id("viewport-overlay-controls")
+            .addClass("viewport-overlay-controls")
+            .child(UIDropdownComponent(std::move(dropdown)).render());
+}
+
+void appendViewport(std::ostringstream& rml, const MainLayoutViewportPresentation& viewportPresentation) {
     UIElement viewport = UIElement::div()
             .id("viewport-host")
             .addClass("viewport-host")
             .addClass("bg-gray-950")
+            .child(buildViewportDropdownOverlay(viewportPresentation))
             .child(UIElement::img()
                            .id("main-viewport")
                            .addClass("viewport-surface")
@@ -509,10 +560,37 @@ std::string mainLayoutBottomSplitResizerElementId(std::string_view panelId) {
     return "main-layout-bottom-split-resizer-" + std::string(panelId);
 }
 
+std::string mainLayoutViewportViewDropdownElementId() {
+    return "main-viewport-view-dropdown";
+}
+
+std::vector<std::string> mainLayoutViewportDropdownPointerBypassElementIds(
+        const MainLayoutViewportPresentation& viewport) {
+    std::vector<std::string> elementIds = {
+            mainLayoutViewportViewDropdownElementId(),
+            uiDropdownInputElementId(mainLayoutViewportViewDropdownElementId()),
+    };
+    if (!viewport.viewDropdownOpen) {
+        return elementIds;
+    }
+
+    const std::vector<MainLayoutViewportViewDropdownOption> options = viewport.viewDropdownOptions.empty() ?
+            defaultViewportDropdownOptions() :
+            viewport.viewDropdownOptions;
+    elementIds.push_back(uiDropdownSurfaceElementId(mainLayoutViewportViewDropdownElementId()));
+    for (const MainLayoutViewportViewDropdownOption& option : options) {
+        elementIds.push_back(uiDropdownOptionElementId(
+                mainLayoutViewportViewDropdownElementId(),
+                viewportViewStableId(option.view)));
+    }
+    return elementIds;
+}
+
 std::string buildMainLayoutRml(
         const MainLayoutModel& model,
         const MainLayoutLabels& labels,
-        const MainLayoutInteractionState& interaction) {
+        const MainLayoutInteractionState& interaction,
+        const MainLayoutViewportPresentation& viewport) {
     std::ostringstream rml;
     const std::vector<std::string_view> sidebarPanels =
             mainLayoutVisiblePanelsInLocation(model, DockLocation::Sidebar);
@@ -560,7 +638,7 @@ std::string buildMainLayoutRml(
         << "\" class=\"main-layout-editor-column bg-gray-950\">";
     rml << "<div id=\"" << mainLayoutModelingModeShelfSlotElementId()
         << "\" class=\"modeling-mode-shelf-slot\"></div>";
-    appendViewport(rml);
+    appendViewport(rml, viewport);
     if (bottomVisible) {
         appendBottomDock(rml, model, labels, interaction, bottomPanels);
     }

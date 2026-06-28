@@ -9,6 +9,7 @@
 #include "editor/modeling/modeling_types.hpp"
 
 #include <optional>
+#include <string_view>
 
 #include <editor/modeling/operations/operation_command.hpp>
 #include <editor/modeling/runtime/session.hpp>
@@ -20,6 +21,11 @@ namespace quader {
 [[nodiscard]] quader_editor_core::EditorOperationSettings settingsForOperation(
         quader_editor_core::EditorOperationId operation,
         const ModelingInteractionSettings& interactionSettings);
+[[nodiscard]] bool applyModelingInteractionSetting(
+        ModelingInteractionSettings& interactionSettings,
+        std::string_view toolId,
+        std::string_view name,
+        double value);
 [[nodiscard]] ModelingToolSettingsTargetKind toolSettingsTargetKindForPreview(
         quader_editor_core::PreviewTransactionKind kind);
 [[nodiscard]] std::optional<quader_editor_core::EditorOperationId> operationForPreviewKind(

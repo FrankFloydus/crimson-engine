@@ -77,6 +77,9 @@ bool intersectRayTriangle(
 
 } // namespace
 
+/**
+ * Filters source-wire overlay primitives against depth-stamp triangles for object-local visibility.
+ */
 class OverlayDepthStampVisibilityFilter {
 public:
     explicit OverlayDepthStampVisibilityFilter(const ViewportOverlayFrame& frame)
@@ -120,6 +123,9 @@ public:
     }
 
 private:
+    /**
+     * Caches depth-stamp triangles and aggregate orientation for one modeling object.
+     */
     struct StampSet {
         std::vector<const ViewportOverlayTriangle*> triangles;
         QVec3 centroid{};

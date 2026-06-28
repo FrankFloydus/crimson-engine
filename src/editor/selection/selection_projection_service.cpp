@@ -108,9 +108,9 @@ std::vector<EntityId> sceneEntitiesForRuntimeObjects(
     std::vector<EntityId> entities;
     entities.reserve(objectIds.size());
     for (const int objectId : objectIds) {
-        const auto entity = objectRegistry.entitiesByObject().find(objectId);
-        if (entity != objectRegistry.entitiesByObject().end()) {
-            entities.push_back(entity->second);
+        const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId);
+        if (entity.has_value()) {
+            entities.push_back(*entity);
         }
     }
     return entities;
@@ -120,10 +120,9 @@ EntityId activeSceneEntityForRuntimeObject(
         int activeObjectId,
         const std::unordered_set<EntityId>& desiredSelection,
         const ModelingObjectRuntimeMap& objectRegistry) {
-    const auto activeEntity = objectRegistry.entitiesByObject().find(activeObjectId);
-    if (activeEntity != objectRegistry.entitiesByObject().end() &&
-            desiredSelection.contains(activeEntity->second)) {
-        return activeEntity->second;
+    const std::optional<EntityId> activeEntity = objectRegistry.entityForModelingObject(activeObjectId);
+    if (activeEntity.has_value() && desiredSelection.contains(*activeEntity)) {
+        return *activeEntity;
     }
     return InvalidEntityId;
 }

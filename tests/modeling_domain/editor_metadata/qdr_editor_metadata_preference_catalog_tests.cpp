@@ -204,3 +204,17 @@ TEST(QdrEditorMetadataPreferenceCatalogTests, HostContractPreferenceGroupsCanDri
 		}
 	}
 }
+
+TEST(QdrEditorMetadataPreferenceCatalogTests, OperationPreferenceGroupsCoverSchemaOwnedOptionDescriptorCatalog) {
+	for (const qec::EditorOperationOptionDescriptor& schema : qec::operation_option_descriptor_catalog()) {
+		const qhc::HostPreferenceDescriptor& preference = require_preference(schema.preference_id);
+		EXPECT_TRUE(same_text(preference.group_id, schema.preference_group_id));
+		EXPECT_TRUE(same_text(preference.related_operation_id, schema.operation_id));
+		EXPECT_TRUE(same_text(preference.related_option_id, schema.option_id));
+
+		const qhc::HostPreferenceGroupDescriptor& group = require_group(schema.preference_group_id);
+		EXPECT_TRUE(same_text(group.label, schema.operation_label));
+		EXPECT_TRUE(group.scope == qhc::HostPreferenceScope::operation);
+		EXPECT_TRUE(group_contains(group, schema.preference_id));
+	}
+}

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_project_api.hpp"
 
+#include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "scene/document/project_session.hpp"
 
@@ -62,18 +63,7 @@ QuaderProjectMetadata QuaderProjectApi::metadata() const {
 }
 
 QuaderApiVoidResult QuaderProjectApi::unsupported(std::string message) const {
-    ProjectSession& session = projectSession(session_);
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-            .revisions = {
-                    .projectRevision = session.document().revision(),
-                    .sceneRevision = session.scene().revision(),
-                    .assetRevision = session.assets().revision(),
-            },
-    };
+    return quaderApiFailureStatus(projectSession(session_), std::move(message));
 }
 
 } // namespace quader

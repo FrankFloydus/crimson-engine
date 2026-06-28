@@ -29,6 +29,33 @@ enum class SwapChainPresentationColorSpace {
     Srgb,
 };
 
+class RenderSystem;
+
+/**
+ * Owns one additional Filament swapchain through the RenderSystem that created it.
+ */
+class RenderAdditionalSwapChain {
+public:
+    RenderAdditionalSwapChain() = default;
+    RenderAdditionalSwapChain(const RenderAdditionalSwapChain&) = delete;
+    RenderAdditionalSwapChain& operator=(const RenderAdditionalSwapChain&) = delete;
+    RenderAdditionalSwapChain(RenderAdditionalSwapChain&& other) noexcept;
+    RenderAdditionalSwapChain& operator=(RenderAdditionalSwapChain&& other) noexcept;
+    ~RenderAdditionalSwapChain();
+
+    [[nodiscard]] filament::SwapChain* get() const { return swapChain_; }
+    [[nodiscard]] explicit operator bool() const { return swapChain_ != nullptr; }
+    void reset();
+
+private:
+    friend class RenderSystem;
+
+    RenderAdditionalSwapChain(RenderSystem& owner, filament::SwapChain* swapChain);
+
+    RenderSystem* owner_ = nullptr;
+    filament::SwapChain* swapChain_ = nullptr;
+};
+
 /**
  * Owns Render System behavior within the render extraction and Filament resource layer.
  */
@@ -48,7 +75,7 @@ public:
     bool beginFrame();
     bool beginFrame(filament::SwapChain* swapChain);
     void endFrame();
-    filament::SwapChain* createAdditionalSwapChain(
+    RenderAdditionalSwapChain createAdditionalSwapChain(
             void* nativeWindow,
             SwapChainPresentationColorSpace colorSpace = SwapChainPresentationColorSpace::Native);
     void destroyAdditionalSwapChain(filament::SwapChain* swapChain);

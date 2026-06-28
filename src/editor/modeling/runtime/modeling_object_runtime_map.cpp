@@ -50,14 +50,6 @@ bool ModelingObjectRuntimeMap::empty() const {
     return entitiesByObject_.empty();
 }
 
-const std::unordered_map<int, EntityId>& ModelingObjectRuntimeMap::entitiesByObject() const {
-    return entitiesByObject_;
-}
-
-const std::unordered_map<EntityId, int>& ModelingObjectRuntimeMap::objectsByEntity() const {
-    return objectsByEntity_;
-}
-
 std::optional<EntityId> ModelingObjectRuntimeMap::entityForModelingObject(int modelingObjectId) const {
     const auto it = entitiesByObject_.find(modelingObjectId);
     if (it == entitiesByObject_.end()) {
@@ -72,6 +64,14 @@ std::optional<int> ModelingObjectRuntimeMap::modelingObjectForEntity(EntityId en
         return std::nullopt;
     }
     return it->second;
+}
+
+std::vector<std::pair<int, EntityId>> ModelingObjectRuntimeMap::objectEntityBindingsByModelingObject() const {
+    std::vector<std::pair<int, EntityId>> bindings(entitiesByObject_.begin(), entitiesByObject_.end());
+    std::sort(bindings.begin(), bindings.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first < rhs.first;
+    });
+    return bindings;
 }
 
 std::optional<ModelingObjectSceneIdentity> ModelingObjectRuntimeMap::sceneIdentityForModelingObject(

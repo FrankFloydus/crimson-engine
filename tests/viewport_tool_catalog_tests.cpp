@@ -8,6 +8,7 @@
 #include "api/quader_api_session_internal_access.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "assets/asset_registry.hpp"
+#include "editor/interactions/tool_identity.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/metadata/host_contract.hpp"
 #include "scene/scene_document.hpp"
@@ -51,6 +52,8 @@ TEST(ViewportToolCatalogTests, CatalogContainsExpectedInteractiveToolContracts) 
         EXPECT_EQ(tool->blocksViewportFocusShortcuts(), descriptor.blocksViewportFocusShortcuts);
         EXPECT_EQ(tool->supportsTransformGizmo(), descriptor.supportsTransformGizmo);
         EXPECT_EQ(viewportToolSupportsTransformGizmo(descriptor.tool), descriptor.supportsTransformGizmo);
+        EXPECT_EQ(viewportToolInteractionTool(descriptor.tool),
+                quader_editor_core::viewport_interaction_tool_from_id(descriptor.id));
     }
 }
 
@@ -70,6 +73,9 @@ TEST(ViewportToolCatalogTests, ExposesToolMetadataAndConversions) {
     EXPECT_EQ(modelingViewportToolFor(ViewportToolId::Extrude), ModelingViewportTool::Extrude);
     EXPECT_EQ(viewportToolTransformTool(ViewportToolId::Rotate), ModelingTransformTool::Rotate);
     EXPECT_EQ(viewportToolTransformTool(ViewportToolId::Scale), ModelingTransformTool::Scale);
+    EXPECT_EQ(viewportToolInteractionTool(ViewportToolId::Move), quader_editor_core::ViewportInteractionTool::move);
+    EXPECT_EQ(viewportToolInteractionTool(ViewportToolId::Rotate), quader_editor_core::ViewportInteractionTool::rotate);
+    EXPECT_EQ(viewportToolInteractionTool(ViewportToolId::Scale), quader_editor_core::ViewportInteractionTool::scale);
     EXPECT_EQ(modelingViewportToolFor(ViewportToolId::Cut), ModelingViewportTool::Cut);
     EXPECT_EQ(viewportToolForModeling(ModelingViewportTool::Extend), ViewportToolId::Extend);
     EXPECT_EQ(viewportToolForModeling(ModelingViewportTool::Extrude), ViewportToolId::Extrude);
@@ -437,9 +443,12 @@ TEST(ViewportToolGuardrailTests, TransformGizmoEligibilityLivesInViewportToolMet
 
     EXPECT_NE(descriptor.find("supportsTransformGizmo"), std::string::npos);
     EXPECT_NE(catalog.find("viewportToolSupportsTransformGizmo"), std::string::npos);
+    EXPECT_NE(catalog.find("viewportToolInteractionTool"), std::string::npos);
     EXPECT_NE(interaction.find("viewportToolSupportsTransformGizmo(tool)"), std::string::npos);
+    EXPECT_NE(interaction.find("viewportToolInteractionTool(tool)"), std::string::npos);
     EXPECT_EQ(interaction.find("bool supportsTransformGizmo("), std::string::npos);
     EXPECT_EQ(interaction.find("return tool == ViewportToolId::Move"), std::string::npos);
+    EXPECT_EQ(interaction.find("ViewportInteractionTool::move"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, HostViewportAdapterUsesViewportToolDescriptors) {

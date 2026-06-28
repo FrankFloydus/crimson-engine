@@ -195,8 +195,8 @@ bool ViewportToolRuntime::handleShortcut(
         result.maximizedToggleRequested = true;
         return true;
     case ViewportShortcutKind::SetGridPreset:
-        result.gridPresetChanged = state.gridPreset != viewportClampGridPreset(shortcut.gridPreset);
-        state.gridPreset = viewportClampGridPreset(shortcut.gridPreset);
+        result.requestedGridPreset = viewportClampGridPreset(shortcut.gridPreset);
+        result.gridPresetChanged = state.gridPreset != result.requestedGridPreset;
         return true;
     case ViewportShortcutKind::CancelActiveTool:
         result.cancelRequested = true;

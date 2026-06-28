@@ -114,6 +114,8 @@ public:
     [[nodiscard]] ViewportWorkspaceAuxiliaryViewportState* auxiliaryViewport(std::string_view stableId);
     [[nodiscard]] const ViewportWorkspaceAuxiliaryViewportState* auxiliaryViewport(std::string_view stableId) const;
     [[nodiscard]] std::size_t auxiliaryViewportCount() const { return auxiliaryViewports_.size(); }
+    [[nodiscard]] ViewportView auxiliaryViewportView(std::string_view stableId) const;
+    bool setAuxiliaryViewportView(std::string_view stableId, ViewportView view);
     void setAuxiliaryViewportVisible(std::string_view stableId, bool visible);
     [[nodiscard]] bool auxiliaryViewportVisible(std::string_view stableId) const;
     bool setAuxiliaryViewportRenderSize(std::string_view stableId, QVec2 size);

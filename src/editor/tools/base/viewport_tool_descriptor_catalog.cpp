@@ -126,7 +126,6 @@ constexpr std::array<ToolDescriptor, 12> kViewportToolDescriptors {{
                 .modelingTool = ModelingViewportTool::Poly,
                 .id = "poly",
                 .label = "Poly",
-                .shortcut = "P",
                 .kind = ToolKind::Modal,
                 .menuGroup = ToolMenuGroup::Modeling,
                 .ownsViewport = true,

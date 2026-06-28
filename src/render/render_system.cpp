@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 namespace quader {
 namespace {
@@ -43,6 +44,38 @@ std::uint64_t swapChainFlagsFor(filament::Engine& engine, SwapChainPresentationC
 }
 
 } // namespace
+
+RenderAdditionalSwapChain::RenderAdditionalSwapChain(
+        RenderSystem& owner,
+        filament::SwapChain* swapChain)
+    : owner_(&owner)
+    , swapChain_(swapChain) {}
+
+RenderAdditionalSwapChain::RenderAdditionalSwapChain(RenderAdditionalSwapChain&& other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr))
+    , swapChain_(std::exchange(other.swapChain_, nullptr)) {}
+
+RenderAdditionalSwapChain& RenderAdditionalSwapChain::operator=(RenderAdditionalSwapChain&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    reset();
+    owner_ = std::exchange(other.owner_, nullptr);
+    swapChain_ = std::exchange(other.swapChain_, nullptr);
+    return *this;
+}
+
+RenderAdditionalSwapChain::~RenderAdditionalSwapChain() {
+    reset();
+}
+
+void RenderAdditionalSwapChain::reset() {
+    if (owner_ != nullptr && swapChain_ != nullptr) {
+        owner_->destroyAdditionalSwapChain(swapChain_);
+    }
+    owner_ = nullptr;
+    swapChain_ = nullptr;
+}
 
 RenderSystem::~RenderSystem() {
     shutdown();
@@ -134,17 +167,17 @@ void RenderSystem::endFrame() {
     }
 }
 
-filament::SwapChain* RenderSystem::createAdditionalSwapChain(
+RenderAdditionalSwapChain RenderSystem::createAdditionalSwapChain(
         void* nativeWindow,
         SwapChainPresentationColorSpace colorSpace) {
     if (!engine_ || nativeWindow == nullptr) {
-        return nullptr;
+        return {};
     }
 
     const std::uint64_t flags = swapChainFlagsFor(*engine_, colorSpace);
     filament::SwapChain* swapChain = engine_->createSwapChain(nativeWindow, flags);
     LOG_INFO("Filament additional swapchain created for native window {} with flags {}", nativeWindow, flags);
-    return swapChain;
+    return RenderAdditionalSwapChain(*this, swapChain);
 }
 
 void RenderSystem::destroyAdditionalSwapChain(filament::SwapChain* swapChain) {

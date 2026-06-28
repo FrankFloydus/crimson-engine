@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 
 namespace quader {
 namespace {
@@ -80,16 +81,16 @@ std::vector<quader_editor_core::PolygonObject> PickingCacheProjection::sceneTran
     std::vector<quader_editor_core::PolygonObject> transformed;
     transformed.reserve(objects.size());
     for (quader_editor_core::PolygonObject object : objects) {
-        const auto entity = objectMap.entitiesByObject().find(object.id);
-        if (entity == objectMap.entitiesByObject().end()) {
+        const std::optional<EntityId> entity = objectMap.entityForModelingObject(object.id);
+        if (!entity.has_value()) {
             continue;
         }
-        const VisibilityComponent* visibility = scene.visibility(entity->second);
-        if (!scene.isEffectivelyVisible(entity->second) ||
+        const VisibilityComponent* visibility = scene.visibility(*entity);
+        if (!scene.isEffectivelyVisible(*entity) ||
                 (visibility != nullptr && !visibility->selectable)) {
             continue;
         }
-        const QMat4 worldFromObject = scene.worldTransformMatrix(entity->second);
+        const QMat4 worldFromObject = scene.worldTransformMatrix(*entity);
         for (quader_poly::Vertex& vertex : object.document.vertices) {
             vertex.position = toRuntime(transformPoint(worldFromObject, fromRuntime(vertex.position)));
         }

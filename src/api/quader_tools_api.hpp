@@ -29,14 +29,6 @@ public:
     [[nodiscard]] std::string activeTool() const;
 
 private:
-    [[nodiscard]] QuaderRevisionStamp currentRevisions() const;
-    [[nodiscard]] QuaderApiVoidResult statusFrom(
-            bool ok,
-            bool changed,
-            std::string message,
-            std::string_view label) const;
-    [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
-
     QuaderApiSession session_;
     QuaderToolsRuntimeHooks hooks_;
 };

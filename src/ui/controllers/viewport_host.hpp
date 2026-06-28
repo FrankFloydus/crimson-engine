@@ -131,6 +131,24 @@ private:
         std::vector<QuaderInputChord> releasedInputChords;
     };
 
+    /**
+     * Stores the host state needed to project either main or windowed viewport input into one frame.
+     */
+    struct ViewportInputFrameProjectionRequest {
+        const ViewportInputSurfaceState* input = nullptr;
+        const ViewportInputRouter* inputRouter = nullptr;
+        ViewportFrameRect viewportFrame;
+        int windowWidth = 1;
+        int windowHeight = 1;
+        std::uint32_t framebufferWidth = 1u;
+        std::uint32_t framebufferHeight = 1u;
+        bool relativeMouseCaptured = false;
+        double deltaSeconds = 0.0;
+        bool textInputActive = false;
+        ViewportModifiers modifiers = {};
+        int gridPreset = 6;
+    };
+
     struct ViewportWindowInstance;
 
     void updateWindowMetrics();
@@ -162,7 +180,9 @@ private:
     static void clearTransientInputState(ViewportInputSurfaceState& input);
     static void clearHeldInputState(ViewportInputSurfaceState& input);
     static void clearAllInputState(ViewportInputSurfaceState& input);
-    ViewportInputFrame buildViewportInputFrame() const;
+    [[nodiscard]] static ViewportInputFrame projectViewportInputFrame(
+            const ViewportInputFrameProjectionRequest& request);
+    ViewportInputFrame buildViewportInputFrame(int gridPreset) const;
     ViewportModifiers currentModifiers(const ViewportInputSurfaceState& input) const;
     void clearTransientInput();
     void spawnWindowedViewport();
@@ -197,7 +217,9 @@ private:
             ViewportWorkspaceService& workspace,
             const ViewportWindowInstance& instance) const;
     void flushRemovedWindowedViewportWorkspaceState(ViewportWorkspaceService& workspace);
-    ViewportInputFrame buildWindowedViewportInputFrame(const ViewportWindowInstance& instance) const;
+    ViewportInputFrame buildWindowedViewportInputFrame(
+            const ViewportWindowInstance& instance,
+            int gridPreset) const;
     void setWindowedViewportCursorCaptured(ViewportWindowInstance& instance, bool captured);
     void clearWindowedViewportTransientInput(ViewportWindowInstance& instance);
     std::uint8_t nextWindowedViewportLayerIndex() const;

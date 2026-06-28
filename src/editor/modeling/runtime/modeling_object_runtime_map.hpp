@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace quader {
@@ -43,10 +44,9 @@ class ModelingObjectRuntimeMap {
 public:
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] bool empty() const;
-    [[nodiscard]] const std::unordered_map<int, EntityId>& entitiesByObject() const;
-    [[nodiscard]] const std::unordered_map<EntityId, int>& objectsByEntity() const;
     [[nodiscard]] std::optional<EntityId> entityForModelingObject(int modelingObjectId) const;
     [[nodiscard]] std::optional<int> modelingObjectForEntity(EntityId entity) const;
+    [[nodiscard]] std::vector<std::pair<int, EntityId>> objectEntityBindingsByModelingObject() const;
     [[nodiscard]] std::optional<ModelingObjectSceneIdentity> sceneIdentityForModelingObject(int modelingObjectId) const;
     [[nodiscard]] std::unordered_map<int, ModelingObjectSceneIdentity> captureSceneIdentitiesForModelingObjects(
             const SceneDocument& scene,

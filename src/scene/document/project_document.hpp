@@ -62,6 +62,25 @@ struct ProjectDocumentIdentityReport {
 };
 
 /**
+ * Stores one Project Document asset/reference issue.
+ */
+struct ProjectDocumentAssetReferenceIssue {
+    EntityId entity = InvalidEntityId;
+    EditorObjectId objectId = InvalidEditorObjectId;
+    AssetId asset = InvalidAssetId;
+    std::string message;
+};
+
+/**
+ * Stores Project Document asset/reference validation results.
+ */
+struct ProjectDocumentAssetReferenceReport {
+    std::vector<ProjectDocumentAssetReferenceIssue> issues;
+
+    [[nodiscard]] bool ok() const { return issues.empty(); }
+};
+
+/**
  * Owns Project Document behavior within the editor document ownership layer.
  */
 class ProjectDocument {
@@ -93,6 +112,8 @@ public:
     void forgetEntity(EntityId entity);
     std::vector<ProjectObjectRecord> objectRecords() const;
     ProjectDocumentIdentityReport validateObjectIdentityInvariants() const;
+    ProjectDocumentAssetReferenceReport validateAssetReferences() const;
+    ProjectDocumentAssetReferenceReport validateAssetReferences(ProjectObjectRecord record) const;
 
     std::uint64_t revision() const;
 

@@ -69,6 +69,56 @@ filament::math::mat4f groundGridTransform(const ViewportGridPlacement& grid) {
     return filament::math::mat4f::translation(origin);
 }
 
+/**
+ * Rolls back partially-created ground-grid render resources until the renderer owns them.
+ */
+struct GroundGridCreationGuard {
+    filament::Engine& engine;
+    filament::Scene& scene;
+    filament::VertexBuffer* vertexBuffer = nullptr;
+    filament::IndexBuffer* indexBuffer = nullptr;
+    filament::MaterialInstance* materialInstance = nullptr;
+    utils::Entity entity;
+    bool sceneAdded = false;
+    bool renderableCreated = false;
+    bool transformCreated = false;
+    bool released = false;
+
+    ~GroundGridCreationGuard() {
+        if (released) {
+            return;
+        }
+        if (entity) {
+            if (sceneAdded) {
+                scene.remove(entity);
+            }
+            if (renderableCreated) {
+                engine.getRenderableManager().destroy(entity);
+            }
+            if (transformCreated) {
+                engine.getTransformManager().destroy(entity);
+            }
+        }
+        if (materialInstance) {
+            engine.destroy(materialInstance);
+        }
+        if (vertexBuffer) {
+            engine.destroy(vertexBuffer);
+        }
+        if (indexBuffer) {
+            engine.destroy(indexBuffer);
+        }
+        if (entity) {
+            utils::EntityManager::get().destroy(entity);
+            entity.clear();
+        }
+    }
+
+    void release() {
+        released = true;
+    }
+};
+
 } // namespace
 
 ViewportGridRenderer::~ViewportGridRenderer() {
@@ -168,36 +218,54 @@ void ViewportGridRenderer::createGroundGrid() {
     };
     const std::vector<std::uint32_t> indices = {0, 2, 1, 0, 3, 2};
 
-    groundGridVertexBuffer_ = filament::VertexBuffer::Builder()
+    GroundGridCreationGuard creationGuard{*engine_, *scene_};
+    creationGuard.vertexBuffer = filament::VertexBuffer::Builder()
             .vertexCount(static_cast<std::uint32_t>(vertices.size()))
             .bufferCount(1)
             .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(GroundGridVertex, position), sizeof(GroundGridVertex))
             .build(*engine_);
-    groundGridVertexBuffer_->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
-    groundGridMeshWidth_ = kViewportGridDefaultPlaneSize;
-    groundGridMeshHeight_ = kViewportGridDefaultPlaneSize;
+    if (creationGuard.vertexBuffer == nullptr) {
+        return;
+    }
+    creationGuard.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
 
-    groundGridIndexBuffer_ = filament::IndexBuffer::Builder()
+    creationGuard.indexBuffer = filament::IndexBuffer::Builder()
             .indexCount(static_cast<std::uint32_t>(indices.size()))
             .bufferType(filament::IndexBuffer::IndexType::UINT)
             .build(*engine_);
-    groundGridIndexBuffer_->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(indices));
+    if (creationGuard.indexBuffer == nullptr) {
+        return;
+    }
+    creationGuard.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(indices));
 
-    groundGridMaterialInstance_ = groundGridMaterial_->createInstance();
-    groundGridEntity_ = utils::EntityManager::get().create();
+    creationGuard.materialInstance = groundGridMaterial_->createInstance();
+    if (creationGuard.materialInstance == nullptr) {
+        return;
+    }
+    creationGuard.entity = utils::EntityManager::get().create();
     filament::RenderableManager::Builder(1)
             .geometry(0, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                    groundGridVertexBuffer_, groundGridIndexBuffer_)
-            .material(0, groundGridMaterialInstance_)
+                    creationGuard.vertexBuffer, creationGuard.indexBuffer)
+            .material(0, creationGuard.materialInstance)
             .layerMask(kViewportAllLayerMask, gridLayerMask_)
             .boundingBox(groundGridBounds())
             .castShadows(false)
             .receiveShadows(false)
-            .build(*engine_, groundGridEntity_);
+            .build(*engine_, creationGuard.entity);
+    creationGuard.renderableCreated = true;
 
-    scene_->addEntity(groundGridEntity_);
-    engine_->getTransformManager().create(groundGridEntity_);
+    scene_->addEntity(creationGuard.entity);
+    creationGuard.sceneAdded = true;
+    engine_->getTransformManager().create(creationGuard.entity);
+    creationGuard.transformCreated = true;
+    groundGridVertexBuffer_ = creationGuard.vertexBuffer;
+    groundGridIndexBuffer_ = creationGuard.indexBuffer;
+    groundGridMaterialInstance_ = creationGuard.materialInstance;
+    groundGridEntity_ = creationGuard.entity;
+    groundGridMeshWidth_ = kViewportGridDefaultPlaneSize;
+    groundGridMeshHeight_ = kViewportGridDefaultPlaneSize;
     visible_ = true;
+    creationGuard.release();
 }
 
 void ViewportGridRenderer::updateGroundGridMesh(float width, float height) {

@@ -57,6 +57,13 @@ inline constexpr QuaderCommandId SelectionInvert{"edit.invert_selection"};
 inline constexpr QuaderCommandId ViewportFrameSelection{"viewport.frame_selection"};
 inline constexpr QuaderCommandId ViewportFocusOrigin{"viewport.focus_origin"};
 inline constexpr QuaderCommandId ViewportSpawnWindow{"viewport.spawn_window"};
+inline constexpr QuaderCommandId ViewportViewPerspective{"viewport.view.perspective"};
+inline constexpr QuaderCommandId ViewportViewTop{"viewport.view.top"};
+inline constexpr QuaderCommandId ViewportViewBottom{"viewport.view.bottom"};
+inline constexpr QuaderCommandId ViewportViewLeft{"viewport.view.left"};
+inline constexpr QuaderCommandId ViewportViewRight{"viewport.view.right"};
+inline constexpr QuaderCommandId ViewportViewFront{"viewport.view.front"};
+inline constexpr QuaderCommandId ViewportViewBack{"viewport.view.back"};
 
 inline constexpr QuaderCommandId ModelingDeleteSelection{"edit.delete"};
 inline constexpr QuaderCommandId ModelingDuplicateMeshes{"edit.duplicate"};
@@ -152,6 +159,13 @@ inline constexpr QuaderCommandId TypedCommandIds[] = {
         ViewportFrameSelection,
         ViewportFocusOrigin,
         ViewportSpawnWindow,
+        ViewportViewPerspective,
+        ViewportViewTop,
+        ViewportViewBottom,
+        ViewportViewLeft,
+        ViewportViewRight,
+        ViewportViewFront,
+        ViewportViewBack,
         ModelingDeleteSelection,
         ModelingDuplicateMeshes,
         ModelingBridge,

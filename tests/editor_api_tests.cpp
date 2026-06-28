@@ -5,14 +5,9 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
-#include "api/quader_api_session_internal_access.hpp"
-#include "assets/material_document.hpp"
-#include "assets/mesh_asset.hpp"
+#include "core/public_command_targets.hpp"
 #include "editor/input/quader_keybinding_service.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
-#include "editor/modeling/services/modeling_session_service.hpp"
-#include "scene/components.hpp"
-#include "scene/document/project_session.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
@@ -115,12 +110,12 @@ const quader::QuaderActionItem* findActionItem(
 /// Owns an isolated editor session for command routing tests that need fresh
 /// history, selection, and scene state per assertion path.
 struct CommandTestHarness {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor;
+    quader::QuaderStandaloneEditor standalone;
+    quader::QuaderEditorApi& editor;
 
     CommandTestHarness()
-        : session()
-        , editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session)) {}
+        : standalone(quader::createStandaloneEditor())
+        , editor(standalone.editor()) {}
 };
 
 quader::QuaderModelingObjectRef createSelectedBox(quader::QuaderEditorApi& editor, std::string name = "Command Box") {
@@ -200,18 +195,6 @@ quader::QuaderMeshAsset triangleMesh(std::string name) {
     return mesh;
 }
 
-quader::MeshAsset sessionTriangleMesh(std::string name) {
-    quader::MeshAsset mesh;
-    mesh.name = std::move(name);
-    mesh.vertices = {
-            {.position = {0.0f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}},
-            {.position = {1.0f, 0.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {1.0f, 0.0f}},
-            {.position = {0.0f, 0.0f, 1.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 1.0f}},
-    };
-    mesh.indices = {0, 1, 2};
-    return mesh;
-}
-
 bool sameViewportShortcut(const quader::ViewportShortcut& left, const quader::ViewportShortcut& right) {
     return left.kind == right.kind &&
             left.context == right.context &&
@@ -247,8 +230,8 @@ void expectSameApiStatus(
 } // namespace
 
 TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(keybindingTestPath("aggregate")).ok());
 
     EXPECT_FALSE(editor.project().dirty());
@@ -279,6 +262,8 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFrameSelection), "Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFocusOrigin), "Shift+Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportSpawnWindow), "F12");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportViewPerspective), "P");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ToolsActivatePoly), "");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
     EXPECT_EQ(
             editor.commands().commandIdForModelingAction("delete_selection"),
@@ -287,13 +272,20 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_EQ(
             editor.commands().commandIdForModelingAction("invert_mesh"),
             std::string(quader::QuaderCommand::ModelingInvertMesh.string()));
-    EXPECT_EQ(editor.commands().commandIdForModelingAction("bridge_edges"), "modeling.bridge_edges");
-    EXPECT_EQ(editor.commands().commandIdForToolActivation("knife"), "tools.activate.knife");
+    EXPECT_EQ(
+            editor.commands().commandIdForModelingAction("bridge_edges"),
+            quader::quaderModelingCommandTargetId("bridge_edges"));
+    EXPECT_EQ(
+            editor.commands().commandIdForToolActivation("knife"),
+            quader::quaderToolActivationCommandTargetId("knife"));
     EXPECT_FALSE(editor.commands().execute("__missing_command__").ok());
     EXPECT_FALSE(editor.commands().execute("__missing_command__"));
     EXPECT_EQ(editor.commands().execute("__missing_command__").errorMessage(), "Unknown command id.");
     EXPECT_EQ(
             editor.commands().execute("modeling.__missing_action__").errorMessage(),
+            "Unknown command id.");
+    EXPECT_EQ(
+            editor.commands().execute(quader::quaderToolActivationCommandTargetId("__missing_tool__")).errorMessage(),
             "Unknown command id.");
 
     quader::QuaderCreateBoxArgs args;
@@ -313,10 +305,10 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
 
 TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
     auto compareProjectCommand = [](quader::QuaderCommandId commandId, auto directCall) {
-        quader::ProjectSession commandSession;
-        quader::QuaderEditorApi commandEditor(quader::QuaderApiSessionInternalAccess::fromProjectSession(commandSession));
-        quader::ProjectSession directSession;
-        quader::QuaderEditorApi directEditor(quader::QuaderApiSessionInternalAccess::fromProjectSession(directSession));
+        CommandTestHarness commandHarness;
+        quader::QuaderEditorApi& commandEditor = commandHarness.editor;
+        CommandTestHarness directHarness;
+        quader::QuaderEditorApi& directEditor = directHarness.editor;
 
         const quader::QuaderApiVoidResult commandResult = commandEditor.commands().execute(commandId);
         const quader::QuaderApiVoidResult directResult = directCall(directEditor.project());
@@ -337,31 +329,29 @@ TEST(EditorApiTests, ProjectDocumentCommandsRouteThroughProjectApi) {
     });
 }
 
-TEST(EditorApiTests, ProjectSessionOwnsStandaloneMeshReplacementPolicy) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+TEST(EditorApiTests, PublicAssetApiOwnsStandaloneMeshReplacementPolicy) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
-    const quader::AssetId standaloneMesh = session.assets().addMesh(sessionTriangleMesh("Standalone"));
-    const quader::EntityId standaloneEntity = session.scene().createEntity("Standalone Mesh", quader::EntityKind::Mesh);
-    session.scene().setMesh(standaloneEntity, quader::MeshComponent{.mesh = standaloneMesh});
+    const quader::QuaderApiResult<quader::QuaderAssetRef> standaloneMesh =
+            editor.assets().addStandaloneMesh(triangleMesh("Standalone"));
+    ASSERT_TRUE(standaloneMesh.ok()) << standaloneMesh.errorMessage();
 
-    const quader::ProjectAssetMutationResult replaced =
-            session.replaceStandaloneMesh(standaloneMesh, sessionTriangleMesh("Replacement"));
-    ASSERT_TRUE(replaced.ok) << replaced.message;
-    EXPECT_TRUE(replaced.changed);
-    ASSERT_NE(session.assets().mesh(standaloneMesh), nullptr);
-    EXPECT_EQ(session.assets().mesh(standaloneMesh)->name, "Replacement");
+    quader::QuaderMeshAsset replacement = triangleMesh("Replacement");
+    replacement.vertices.push_back({.position = {0.0f, 1.0f, 0.0f}, .normal = {0.0f, 1.0f, 0.0f}, .uv = {0.0f, 0.0f}});
+    const quader::QuaderApiVoidResult replaced =
+            editor.assets().replaceStandaloneMesh(standaloneMesh.value().id, replacement);
+    ASSERT_TRUE(replaced.ok()) << replaced.errorMessage();
+    EXPECT_TRUE(replaced.changed());
+    const std::optional<quader::QuaderMeshSnapshot> meshSnapshot = editor.query().mesh(standaloneMesh.value().id);
+    ASSERT_TRUE(meshSnapshot.has_value());
+    EXPECT_EQ(meshSnapshot->vertexCount, replacement.vertices.size());
 
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> modelingObject =
             editor.modeling().createBox(
                     quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
                     "Modeling Owned");
     ASSERT_TRUE(modelingObject.ok()) << modelingObject.errorMessage();
-
-    const quader::ProjectAssetMutationResult ownerRejected =
-            session.replaceStandaloneMesh(modelingObject.value().mesh, sessionTriangleMesh("Rejected"));
-    EXPECT_FALSE(ownerRejected.ok);
-    EXPECT_NE(ownerRejected.message.find("modeling object"), std::string::npos);
 
     const quader::QuaderApiVoidResult apiRejected =
             editor.assets().replaceStandaloneMesh(modelingObject.value().mesh, triangleMesh("Rejected"));
@@ -370,12 +360,13 @@ TEST(EditorApiTests, ProjectSessionOwnsStandaloneMeshReplacementPolicy) {
 }
 
 TEST(EditorApiTests, SceneCommandsRejectModelingOwnedEntityStructuralAndMeshMutations) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Modeling Owned Guard");
-    const quader::AssetId replacementMesh = session.assets().addMesh(sessionTriangleMesh("Standalone Replacement"));
-    ASSERT_NE(replacementMesh, quader::InvalidAssetId);
+    const quader::QuaderApiResult<quader::QuaderAssetRef> replacementMesh =
+            editor.assets().addStandaloneMesh(triangleMesh("Standalone Replacement"));
+    ASSERT_TRUE(replacementMesh.ok()) << replacementMesh.errorMessage();
 
     const quader::QuaderApiVoidResult destroyed = editor.scene().destroy(box.entity);
     EXPECT_FALSE(destroyed.ok());
@@ -388,7 +379,7 @@ TEST(EditorApiTests, SceneCommandsRejectModelingOwnedEntityStructuralAndMeshMuta
     EXPECT_NE(duplicated.errorMessage().find("modeling object"), std::string::npos);
 
     const quader::QuaderApiVoidResult replaced =
-            editor.scene().setMeshComponent(box.entity, quader::QuaderMeshComponent{.mesh = replacementMesh});
+            editor.scene().setMeshComponent(box.entity, quader::QuaderMeshComponent{.mesh = replacementMesh.value().id});
     EXPECT_FALSE(replaced.ok());
     EXPECT_NE(replaced.errorMessage().find("modeling object"), std::string::npos);
     const std::optional<quader::QuaderEntitySnapshot> snapshot = editor.query().entity(box.entity);
@@ -399,8 +390,8 @@ TEST(EditorApiTests, SceneCommandsRejectModelingOwnedEntityStructuralAndMeshMuta
 
 TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
     const std::filesystem::path path = keybindingTestPath("command");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
     const quader::QuaderApiVoidResult updated =
@@ -411,8 +402,8 @@ TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Alt+Z");
     EXPECT_NE(readTextFile(path).find("\"key\": \"Ctrl+Alt+Z\""), std::string::npos);
 
-    quader::ProjectSession reloadedSession;
-    quader::QuaderEditorApi reloaded(quader::QuaderApiSessionInternalAccess::fromProjectSession(reloadedSession));
+    CommandTestHarness reloadedHarness;
+    quader::QuaderEditorApi& reloaded = reloadedHarness.editor;
     ASSERT_TRUE(reloaded.commands().setKeybindingStoragePath(path).ok());
     EXPECT_EQ(reloaded.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Alt+Z");
 
@@ -422,8 +413,8 @@ TEST(EditorApiTests, PreferencesPersistAndResolveCustomCommandShortcuts) {
 
 TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
     const std::filesystem::path path = keybindingTestPath("conflicts");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
     ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditUndo, "Ctrl+Alt+Z").ok());
@@ -441,8 +432,8 @@ TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
 
 TEST(EditorApiTests, ShortcutMutationsReportNoOpChangedStatus) {
     const std::filesystem::path path = keybindingTestPath("shortcut-noops");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
@@ -518,8 +509,8 @@ TEST(EditorApiTests, PersistedKeybindingsRejectUnknownTargets) {
         file << "[{\"command\":\"missing.command\",\"key\":\"Ctrl+M\"}]\n";
     }
 
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     const quader::QuaderApiVoidResult loaded = editor.commands().setKeybindingStoragePath(unknownPath);
     EXPECT_FALSE(loaded.ok());
     EXPECT_NE(loaded.errorMessage().find("unknown command id"), std::string::npos);
@@ -530,8 +521,8 @@ TEST(EditorApiTests, PersistedKeybindingsRejectUnknownTargets) {
         file << "[{\"command\":\"-missing.command\"}]\n";
     }
 
-    quader::ProjectSession removalSession;
-    quader::QuaderEditorApi removalEditor(quader::QuaderApiSessionInternalAccess::fromProjectSession(removalSession));
+    CommandTestHarness removalHarness;
+    quader::QuaderEditorApi& removalEditor = removalHarness.editor;
     const quader::QuaderApiVoidResult loadedRemoval =
             removalEditor.commands().setKeybindingStoragePath(unknownRemovalPath);
     EXPECT_FALSE(loadedRemoval.ok());
@@ -540,13 +531,14 @@ TEST(EditorApiTests, PersistedKeybindingsRejectUnknownTargets) {
 
 TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
     const std::filesystem::path path = keybindingTestPath("viewport");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     quader::ViewportToolState state;
     quader::ViewportShortcut shortcut;
-    EXPECT_EQ(editor.commands().shortcutFor("viewport.selection_mode.face"), "Keypad3");
+    const std::string faceSelectionTarget = quader::quaderViewportSelectionModeTargetId("face");
+    EXPECT_EQ(editor.commands().shortcutFor(faceSelectionTarget), "Keypad3");
     ASSERT_TRUE(editor.commands().resolveViewportShortcut(
             quader::ViewportKey::Number3,
             {},
@@ -557,8 +549,8 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
     EXPECT_EQ(shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
     EXPECT_EQ(shortcut.selectionMode, quader::ViewportSelectionMode::Face);
 
-    ASSERT_TRUE(editor.preferences().setShortcut("viewport.selection_mode.face", "Ctrl+3").ok());
-    EXPECT_EQ(editor.commands().shortcutFor("viewport.selection_mode.face"), "Ctrl+3");
+    ASSERT_TRUE(editor.preferences().setShortcut(faceSelectionTarget, "Ctrl+3").ok());
+    EXPECT_EQ(editor.commands().shortcutFor(faceSelectionTarget), "Ctrl+3");
     shortcut = {};
     EXPECT_FALSE(editor.commands().resolveViewportShortcut(
             quader::ViewportKey::Number3,
@@ -576,8 +568,8 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
             shortcut));
     EXPECT_EQ(shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
     EXPECT_EQ(shortcut.selectionMode, quader::ViewportSelectionMode::Face);
-    ASSERT_TRUE(editor.preferences().resetShortcut("viewport.selection_mode.face").ok());
-    EXPECT_EQ(editor.commands().shortcutFor("viewport.selection_mode.face"), "Keypad3");
+    ASSERT_TRUE(editor.preferences().resetShortcut(faceSelectionTarget).ok());
+    EXPECT_EQ(editor.commands().shortcutFor(faceSelectionTarget), "Keypad3");
 
     ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditUndo, "Ctrl+U").ok());
     const quader::QuaderViewportKeybindingDispatch dispatch = editor.commands().dispatchViewportKeybinding(
@@ -613,8 +605,8 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsApplyThroughPublicSelectionAp
             ModeCase{quader::ViewportSelectionMode::Group, quader::QuaderSelectionMode::Group},
     };
 
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     const quader::ViewportShortcutController controller;
 
     for (const ModeCase& mode : cases) {
@@ -637,8 +629,8 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsApplyThroughPublicSelectionAp
 
 TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
     const std::filesystem::path path = keybindingTestPath("input-chords");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     quader::ViewportToolState state;
@@ -676,8 +668,8 @@ TEST(EditorApiTests, InputBindingsSupportPunctuationAndMouseChords) {
 
 TEST(EditorApiTests, ViewportNavigationActionsUseMouseInputBindings) {
     const std::filesystem::path path = keybindingTestPath("navigation-bindings");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     quader::ViewportToolState state;
@@ -759,8 +751,8 @@ TEST(EditorApiTests, ViewportKeyChordConversionUsesSharedInputAdapter) {
 
 TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     const std::filesystem::path path = keybindingTestPath("viewport-host-catalog");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     const std::vector<quader::QuaderKeybindingRule> rules = editor.commands().keybindings();
@@ -803,11 +795,20 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     }
 
     EXPECT_GT(checked, 0);
+
+    const std::optional<std::vector<quader::QuaderInputChord>> perspective =
+            quader::quaderInputParseShortcut("P");
+    ASSERT_TRUE(perspective.has_value());
+    ASSERT_EQ(perspective->size(), 1u);
+    const quader::QuaderViewportKeybindingDispatch perspectiveDispatch =
+            editor.commands().dispatchViewportInputBinding(perspective->front(), state, true, false);
+    EXPECT_EQ(perspectiveDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(perspectiveDispatch.commandId, quader::QuaderCommand::ViewportViewPerspective.string());
 }
 
 TEST(EditorApiTests, DefaultKeybindingProjectionDoesNotDuplicateRuleTuples) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     std::unordered_set<std::string> seen;
     for (const quader::QuaderKeybindingRule& rule : editor.commands().keybindings()) {
@@ -818,8 +819,8 @@ TEST(EditorApiTests, DefaultKeybindingProjectionDoesNotDuplicateRuleTuples) {
 
 TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution) {
     const std::filesystem::path path = keybindingTestPath("viewport-action-catalog");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     const std::vector<quader::QuaderKeybindingRule> rules = editor.commands().keybindings();
@@ -868,8 +869,8 @@ TEST(EditorApiTests, ViewportNavigationActionCatalogDrivesDefaultsAndResolution)
 
 TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
     const std::filesystem::path path = keybindingTestPath("modal-tool-bindings");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     quader::ViewportToolState state;
@@ -953,8 +954,8 @@ TEST(EditorApiTests, ViewportModalToolGesturesUseKeybindingTargets) {
 
 TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcuts) {
     const std::filesystem::path path = keybindingTestPath("navigation-contexts");
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
 
     quader::ViewportToolState state;
@@ -1033,95 +1034,42 @@ TEST(EditorApiTests, ViewportKeybindingContextsSeparateNavigationFromToolShortcu
     EXPECT_EQ(action, quader::ViewportInputActionKind::FlyForward);
 }
 
-TEST(EditorApiTests, ProjectDirtyStateAggregatesProjectSceneAssetAndModelingContentRevisions) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+TEST(EditorApiTests, PublicMutationsMarkStandaloneProjectDirty) {
+    auto expectDirtyAfter = [](auto mutate) {
+        CommandTestHarness harness;
+        quader::QuaderEditorApi& editor = harness.editor;
+        EXPECT_FALSE(editor.project().dirty());
+        mutate(editor);
+        EXPECT_TRUE(editor.project().dirty());
+    };
 
-    EXPECT_FALSE(editor.project().dirty());
-
-    session.document().rename("Dirty Project");
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    quader::QuaderCreateEntityArgs entityArgs;
-    entityArgs.name = "Dirty Entity";
-    const quader::QuaderApiResult<quader::QuaderEntityRef> entity =
-            editor.scene().createEntity(entityArgs);
-    ASSERT_TRUE(entity.ok()) << entity.errorMessage();
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    quader::QuaderTransform moved;
-    moved.position = {1.0f, 2.0f, 3.0f};
-    const quader::QuaderApiVoidResult transformed =
-            editor.scene().setTransform(entity.value().id, moved);
-    ASSERT_TRUE(transformed.ok()) << transformed.errorMessage();
-    EXPECT_TRUE(transformed.changed());
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    const quader::QuaderApiVoidResult hidden = editor.scene().setVisible(entity.value().id, false);
-    ASSERT_TRUE(hidden.ok()) << hidden.errorMessage();
-    EXPECT_TRUE(hidden.changed());
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    const quader::QuaderApiVoidResult locked = editor.scene().setLocked(entity.value().id, true);
-    ASSERT_TRUE(locked.ok()) << locked.errorMessage();
-    EXPECT_TRUE(locked.changed());
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    quader::QuaderMaterialArgs materialArgs;
-    materialArgs.name = "Dirty Material";
-    materialArgs.baseColor = {0.8f, 0.7f, 0.6f};
-    const quader::QuaderApiResult<quader::QuaderAssetRef> material =
-            editor.assets().addMaterial(materialArgs);
-    ASSERT_TRUE(material.ok()) << material.errorMessage();
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    const quader::QuaderApiVoidResult assigned =
-            editor.assets().assignMaterialToEntity(entity.value().id, material.value().id);
-    ASSERT_TRUE(assigned.ok()) << assigned.errorMessage();
-    EXPECT_TRUE(assigned.changed());
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    const quader::QuaderApiVoidResult recolored =
-            editor.assets().setMaterialBaseColor(material.value().id, {0.1f, 0.2f, 0.3f});
-    ASSERT_TRUE(recolored.ok()) << recolored.errorMessage();
-    EXPECT_TRUE(recolored.changed());
-    EXPECT_TRUE(editor.project().dirty());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
-            editor.modeling().createBox(
-                    quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-                    "Dirty Modeling Box");
-    ASSERT_TRUE(box.ok()) << box.errorMessage();
-    ASSERT_TRUE(editor.selection().selectObject(box.value()).ok());
-    session.markClean();
-    EXPECT_FALSE(editor.project().dirty());
-
-    const quader::QuaderApiVoidResult movedSelection =
-            editor.modeling().moveSelection({0.25f, 0.0f, 0.0f});
-    ASSERT_TRUE(movedSelection.ok()) << movedSelection.errorMessage();
-    EXPECT_TRUE(movedSelection.changed());
-    EXPECT_TRUE(editor.project().dirty());
+    expectDirtyAfter([](quader::QuaderEditorApi& editor) {
+        quader::QuaderCreateEntityArgs entityArgs;
+        entityArgs.name = "Dirty Entity";
+        const quader::QuaderApiResult<quader::QuaderEntityRef> entity =
+                editor.scene().createEntity(entityArgs);
+        ASSERT_TRUE(entity.ok()) << entity.errorMessage();
+    });
+    expectDirtyAfter([](quader::QuaderEditorApi& editor) {
+        quader::QuaderMaterialArgs materialArgs;
+        materialArgs.name = "Dirty Material";
+        materialArgs.baseColor = {0.8f, 0.7f, 0.6f};
+        const quader::QuaderApiResult<quader::QuaderAssetRef> material =
+                editor.assets().addMaterial(materialArgs);
+        ASSERT_TRUE(material.ok()) << material.errorMessage();
+    });
+    expectDirtyAfter([](quader::QuaderEditorApi& editor) {
+        const quader::QuaderApiResult<quader::QuaderModelingObjectRef> box =
+                editor.modeling().createBox(
+                        quader::QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                        "Dirty Modeling Box");
+        ASSERT_TRUE(box.ok()) << box.errorMessage();
+    });
 }
 
 TEST(EditorApiTests, RetiredModelingActionCommandAliasesDoNotRouteThroughCommandRegistry) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     EXPECT_EQ(
             editor.commands().commandIdForModelingAction("duplicate_meshes"),
@@ -1150,8 +1098,8 @@ TEST(EditorApiTests, RetiredModelingActionCommandAliasesDoNotRouteThroughCommand
 }
 
 TEST(EditorApiTests, CommandRegistryCoversEveryAppOperationAndViewportTool) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
     const std::unordered_set<std::string> ids = availableCommandIds(editor);
     const std::unordered_set<std::string> typedIds = typedCommandIds();
 
@@ -1555,8 +1503,8 @@ TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
 }
 
 TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderApiVoidResult unsupportedLayout =
             editor.viewports().setLayout(quader::ViewportLayoutId::FourQuad);
@@ -1583,6 +1531,8 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
 
     EXPECT_TRUE(viewport.setView(quader::ViewportView::Top).ok());
     EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Top);
+    EXPECT_TRUE(editor.commands().execute(quader::QuaderCommand::ViewportViewPerspective).ok());
+    EXPECT_EQ(editor.viewports().view(quader::ViewportPaneId::Perspective), quader::ViewportView::Perspective);
 
     EXPECT_TRUE(viewport.camera().focusOrigin().ok());
     EXPECT_FALSE(viewport.camera().frameSelection().ok());
@@ -1590,8 +1540,8 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
 }
 
 TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicApi) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> created =
             editor.modeling().createBox(
@@ -1657,8 +1607,8 @@ TEST(EditorApiTests, ObjectHandlesSelectionConveniencesAndSceneBatchesUsePublicA
 }
 
 TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderCreateEntityArgs args;
     args.name = "Repeated Batch Entity";
@@ -1703,8 +1653,8 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
 }
 
 TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingParentTransform) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderCreateEntityArgs parentArgs;
     parentArgs.name = "Batch Reparent Parent";
@@ -1754,8 +1704,8 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
 }
 
 TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParentTransform) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderCreateEntityArgs parentArgs;
     parentArgs.name = "Batch Reparent Local Parent";
@@ -1805,8 +1755,8 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
 }
 
 TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> first =
             editor.modeling().createBox(
@@ -1848,8 +1798,8 @@ TEST(EditorApiTests, SelectionApiExposesTypedTargetsThroughPublicQueries) {
 }
 
 TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPublicHistory) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
@@ -1880,8 +1830,8 @@ TEST(EditorApiTests, MixedModelingAndSceneHistoryReplaysChronologicallyThroughPu
 }
 
 TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderModelingObjectRef original = createSelectedBox(editor, "Chronology Command Box");
 
@@ -1931,8 +1881,8 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
 }
 
 TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderCreateEntityArgs parentArgs;
     parentArgs.name = "Duplicate State Parent";
@@ -1994,8 +1944,8 @@ TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
 }
 
 TEST(EditorApiTests, DuplicateMeshesActionCommandPreservesSceneOnlyDuplicateState) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderCreateEntityArgs parentArgs;
     parentArgs.name = "Duplicate Action Parent";
@@ -2041,8 +1991,8 @@ TEST(EditorApiTests, DuplicateMeshesActionCommandPreservesSceneOnlyDuplicateStat
 }
 
 TEST(EditorApiTests, PublicNoopOperationsPreserveRedoUntilChangedAppCommand) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Redo Noop Box");
     const quader::QuaderApiVoidResult renamed = editor.scene().rename(box.entity, "Redo Noop Renamed");
@@ -2063,12 +2013,12 @@ TEST(EditorApiTests, PublicNoopOperationsPreserveRedoUntilChangedAppCommand) {
 }
 
 TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
     quader::QuaderMaterialAsset invalidMaterial;
     invalidMaterial.name = "Dangling Texture Material";
-    invalidMaterial.textureSlots.emplace(quader::MaterialTextureSlot::BaseColor, 9000u);
+    invalidMaterial.textureSlots.emplace("baseColor", 9000u);
     const quader::QuaderApiResult<quader::QuaderAssetRef> added =
             editor.assets().addMaterial(invalidMaterial);
     EXPECT_FALSE(added.ok());
@@ -2100,11 +2050,6 @@ TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
     const quader::QuaderApiVoidResult aliasedSlot =
             editor.assets().setMaterialTexture(validMaterial.value().id, "baseColor", textureRef.value().id);
     ASSERT_TRUE(aliasedSlot.ok()) << aliasedSlot.errorMessage();
-    const quader::MaterialDocument* storedMaterial = session.assets().material(validMaterial.value().id);
-    ASSERT_NE(storedMaterial, nullptr);
-    ASSERT_TRUE(storedMaterial->textureSlots.contains(quader::MaterialTextureSlot::BaseColor));
-    EXPECT_EQ(storedMaterial->textureSlots.at(quader::MaterialTextureSlot::BaseColor), textureRef.value().id);
-    EXPECT_FALSE(storedMaterial->textureSlots.contains("baseColor"));
 
     const quader::QuaderApiVoidResult unsupportedSlot =
             editor.assets().setMaterialTexture(validMaterial.value().id, "normalTexture", textureRef.value().id);
@@ -2127,39 +2072,29 @@ TEST(EditorApiTests, PublicAssetMutationsRejectDanglingReferences) {
     EXPECT_EQ(missingMeshResult.errorMessage(), "Mesh asset does not exist");
 }
 
-TEST(EditorApiTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
-    quader::ProjectSession session;
-    quader::QuaderEditorApi editor(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+TEST(EditorApiTests, DirectApiStatusesUseFullRevisionStamp) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
 
-    const auto hidden = session.modeling().createBoxFromBounds({
-            .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-            .name = "Hidden Modeling Box",
-    });
-    ASSERT_TRUE(hidden.ok) << hidden.message;
-    ASSERT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
+    const quader::QuaderRevisionStamp initial = editor.revisions();
+    const quader::QuaderApiVoidResult projectUnsupported = editor.project().save();
+    EXPECT_FALSE(projectUnsupported.ok());
+    EXPECT_EQ(projectUnsupported.revisions.projectRevision, initial.projectRevision);
+    EXPECT_EQ(projectUnsupported.revisions.sceneRevision, initial.sceneRevision);
+    EXPECT_EQ(projectUnsupported.revisions.assetRevision, initial.assetRevision);
+    EXPECT_EQ(projectUnsupported.revisions.modelingContentRevision, initial.modelingContentRevision);
+    EXPECT_EQ(projectUnsupported.revisions.modelingSelectionRevision, initial.modelingSelectionRevision);
 
-    EXPECT_FALSE(editor.history().canUndo());
-    EXPECT_FALSE(editor.history().canRedo());
+    const quader::QuaderApiVoidResult unknownSetting = editor.tools().setSetting("edge_bevel", "__missing__", 1.0);
+    EXPECT_FALSE(unknownSetting.ok());
+    EXPECT_EQ(unknownSetting.mutationKind, quader::QuaderMutationKind::None);
+    EXPECT_EQ(unknownSetting.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
 
-    const quader::QuaderApiVoidResult directUndo = editor.history().undo();
-    EXPECT_FALSE(directUndo.ok());
-    EXPECT_FALSE(directUndo.changed());
-    EXPECT_EQ(directUndo.errorMessage(), "No command to undo");
-    EXPECT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
-
-    const quader::QuaderApiVoidResult commandUndo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
-    EXPECT_FALSE(commandUndo.ok());
-    EXPECT_FALSE(commandUndo.changed());
-    EXPECT_EQ(commandUndo.errorMessage(), "Command is disabled.");
-    EXPECT_EQ(commandUndo.revisions.sceneRevision, editor.revisions().sceneRevision);
-    EXPECT_EQ(commandUndo.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
-    EXPECT_TRUE(entityNamed(editor, "Hidden Modeling Box").has_value());
-
-    const quader::QuaderApiVoidResult unknownTool = editor.tools().activate("__missing_tool__");
-    EXPECT_FALSE(unknownTool.ok());
-    EXPECT_EQ(unknownTool.errorMessage(), "Unknown viewport tool.");
-    EXPECT_EQ(unknownTool.revisions.sceneRevision, editor.revisions().sceneRevision);
-    EXPECT_EQ(unknownTool.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
+    const quader::QuaderApiVoidResult updatedSetting = editor.tools().setSetting("edge_bevel", "width", 0.25);
+    EXPECT_TRUE(updatedSetting.ok()) << updatedSetting.errorMessage();
+    EXPECT_EQ(updatedSetting.mutationKind, quader::QuaderMutationKind::Modeling);
+    EXPECT_EQ(updatedSetting.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
+    EXPECT_EQ(updatedSetting.revisions.modelingSelectionRevision, editor.revisions().modelingSelectionRevision);
 }
 
 TEST(EditorApiTests, PublicHistoryUndoRedoMatchesCommandApiStatus) {

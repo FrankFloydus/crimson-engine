@@ -9,6 +9,7 @@
 #include "support/guardrail_file_scan.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <regex>
 #include <string>
@@ -307,6 +308,128 @@ std::size_t countOccurrences(std::string_view source, std::string_view needle) {
         offset += needle.size();
     }
     return count;
+}
+
+/**
+ * Describes manifest and license evidence required for a project dependency.
+ */
+struct ThirdPartyLicenseExpectation {
+    std::string_view packageId;
+    std::string_view manifestNeedle;
+    std::string_view licensePath;
+    bool directVcpkgDependency;
+};
+
+const std::vector<ThirdPartyLicenseExpectation>& thirdPartyLicenseExpectations() {
+    static const std::vector<ThirdPartyLicenseExpectation> expectations = {
+            {"", "OpenMesh", "licenses/openmesh-BSD-3-Clause.txt", false},
+            {"", "earcut.hpp", "licenses/earcut-hpp-ISC.txt", false},
+            {"", "nlohmann/json", "licenses/nlohmann-json-MIT.txt", false},
+            {"", "Geometric Tools Engine Mathematics", "licenses/geometrictools-BSL-1.0.txt", false},
+            {"entt", "EnTT", "licenses/entt-MIT.txt", true},
+            {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
+            {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
+            {"rmlui", "RmlUi", "licenses/rmlui-MIT.txt", true},
+            {"", "itlib", "licenses/itlib-MIT.txt", false},
+            {"", "robin-hood-hashing", "licenses/robin-hood-hashing-MIT.txt", false},
+            {"", "FreeType", "licenses/freetype-FTL-OR-GPL-2.0-or-later.txt", false},
+            {"", "Brotli", "licenses/brotli-MIT.txt", false},
+            {"", "bzip2", "licenses/bzip2-Bzip2.txt", false},
+            {"", "libpng", "licenses/libpng-Libpng-2.0.txt", false},
+            {"", "zlib", "licenses/zlib-Zlib.txt", false},
+            {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
+            {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
+            {"spdlog", "spdlog", "licenses/spdlog-MIT.txt", true},
+            {"", "{fmt}", "licenses/fmt-MIT.txt", false},
+            {"", "Nova Mono", "licenses/google-fonts-nova-mono-OFL-1.1.txt", false},
+    };
+    return expectations;
+}
+
+void skipJsonWhitespace(const std::string& source, std::size_t& offset) {
+    while (offset < source.size() && std::isspace(static_cast<unsigned char>(source[offset])) != 0) {
+        ++offset;
+    }
+}
+
+std::string parseJsonString(const std::string& source, std::size_t& offset) {
+    std::string value;
+    EXPECT_LT(offset, source.size());
+    EXPECT_EQ(source[offset], '"');
+    ++offset;
+    while (offset < source.size()) {
+        const char current = source[offset++];
+        if (current == '"') {
+            break;
+        }
+        if (current == '\\' && offset < source.size()) {
+            value.push_back(source[offset++]);
+            continue;
+        }
+        value.push_back(current);
+    }
+    return value;
+}
+
+std::vector<std::string> directVcpkgDependencies() {
+    const std::string manifest = readSourceFile("vcpkg.json");
+    const std::size_t dependenciesKey = manifest.find("\"dependencies\"");
+    EXPECT_NE(dependenciesKey, std::string::npos);
+    const std::size_t dependenciesStart = manifest.find('[', dependenciesKey);
+    EXPECT_NE(dependenciesStart, std::string::npos);
+
+    std::vector<std::string> dependencies;
+    int arrayDepth = 1;
+    int objectDepth = 0;
+    std::size_t offset = dependenciesStart + 1;
+    while (offset < manifest.size() && arrayDepth > 0) {
+        const char current = manifest[offset];
+        if (current == '"') {
+            const int stringArrayDepth = arrayDepth;
+            const int stringObjectDepth = objectDepth;
+            std::string token = parseJsonString(manifest, offset);
+            if (stringArrayDepth == 1 && stringObjectDepth == 0) {
+                dependencies.push_back(std::move(token));
+                continue;
+            }
+            if (stringArrayDepth == 1 && stringObjectDepth == 1 && token == "name") {
+                skipJsonWhitespace(manifest, offset);
+                EXPECT_LT(offset, manifest.size());
+                EXPECT_EQ(manifest[offset], ':');
+                ++offset;
+                skipJsonWhitespace(manifest, offset);
+                if (offset < manifest.size() && manifest[offset] == '"') {
+                    dependencies.push_back(parseJsonString(manifest, offset));
+                }
+            }
+            continue;
+        }
+        if (current == '[') {
+            ++arrayDepth;
+        } else if (current == ']') {
+            --arrayDepth;
+        } else if (current == '{') {
+            ++objectDepth;
+        } else if (current == '}') {
+            --objectDepth;
+        }
+        ++offset;
+    }
+
+    std::sort(dependencies.begin(), dependencies.end());
+    dependencies.erase(std::unique(dependencies.begin(), dependencies.end()), dependencies.end());
+    return dependencies;
+}
+
+const ThirdPartyLicenseExpectation* expectationForDirectVcpkgDependency(std::string_view packageId) {
+    const std::vector<ThirdPartyLicenseExpectation>& expectations = thirdPartyLicenseExpectations();
+    const auto found = std::find_if(
+            expectations.begin(),
+            expectations.end(),
+            [&](const ThirdPartyLicenseExpectation& expectation) {
+                return expectation.directVcpkgDependency && expectation.packageId == packageId;
+            });
+    return found == expectations.end() ? nullptr : &(*found);
 }
 
 } // namespace
@@ -805,6 +928,7 @@ TEST(BuildGuardrailTests, BootSmokeFailsOnLoggedErrorsAndRequiresLogCopy) {
 TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogleTestRuns) {
     const std::string tool = readSourceFile("tools/affected_check.ps1");
     const std::string testingBuild = readSourceFile("agents/testing-build.md");
+    const std::string docsRoute = sourceSlice(tool, "if ($Path -match '^docs/')", "if ($Path -match '^tools/')");
 
     expectContains(tool, "Before full workflow");
     expectContains(tool, "After affected workflow");
@@ -847,6 +971,7 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "src/editor/metadata/");
     expectContains(tool, "resources/locales/");
     expectContains(tool, "CMakeLists");
+    expectContains(docsRoute, "ProgrammaticApiGuardrailTests.PublicExamplesStartFromEditorApiOrScriptSurface");
 
     expectContains(testingBuild, "tools/affected_check.ps1");
     expectContains(testingBuild, "quader_modeling_domain_polygon_loop_tests");
@@ -1080,43 +1205,26 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {
     const std::string manifest = readSourceFile("thirdparty/THIRD_PARTY_MANIFEST.md");
 
-    expectContains(manifest, "OpenMesh");
-    expectContains(manifest, "licenses/openmesh-BSD-3-Clause.txt");
     for (const std::string& needle : retiredModelingTestFrameworkNeedles()) {
         expectMissing(manifest, needle);
     }
-    expectContains(manifest, "earcut.hpp");
-    expectContains(manifest, "licenses/earcut-hpp-ISC.txt");
-    expectContains(manifest, "nlohmann/json");
-    expectContains(manifest, "licenses/nlohmann-json-MIT.txt");
-    expectContains(manifest, "Geometric Tools Engine Mathematics");
-    expectContains(manifest, "licenses/geometrictools-BSL-1.0.txt");
-    expectContains(manifest, "RmlUi");
-    expectContains(manifest, "licenses/rmlui-MIT.txt");
-    expectContains(manifest, "licenses/itlib-MIT.txt");
-    expectContains(manifest, "licenses/robin-hood-hashing-MIT.txt");
-    expectContains(manifest, "licenses/freetype-FTL-OR-GPL-2.0-or-later.txt");
-    expectContains(manifest, "licenses/brotli-MIT.txt");
-    expectContains(manifest, "licenses/bzip2-Bzip2.txt");
-    expectContains(manifest, "licenses/libpng-Libpng-2.0.txt");
-    expectContains(manifest, "licenses/zlib-Zlib.txt");
-    expectContains(manifest, "licenses/lodepng-Zlib.txt");
-    expectContains(manifest, "Nova Mono");
-    expectContains(manifest, "licenses/google-fonts-nova-mono-OFL-1.1.txt");
 
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/openmesh-BSD-3-Clause.txt").empty());
     EXPECT_FALSE(std::filesystem::exists(sourcePath(joined("thirdparty/licenses/cat", "ch2-BSL-1.0.txt"))));
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/earcut-hpp-ISC.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/nlohmann-json-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/geometrictools-BSL-1.0.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/rmlui-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/itlib-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/robin-hood-hashing-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/freetype-FTL-OR-GPL-2.0-or-later.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/brotli-MIT.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/bzip2-Bzip2.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/libpng-Libpng-2.0.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/zlib-Zlib.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/lodepng-Zlib.txt").empty());
-    EXPECT_FALSE(readSourceFile("thirdparty/licenses/google-fonts-nova-mono-OFL-1.1.txt").empty());
+
+    for (const ThirdPartyLicenseExpectation& expectation : thirdPartyLicenseExpectations()) {
+        expectContains(manifest, std::string(expectation.manifestNeedle));
+        expectContains(manifest, std::string(expectation.licensePath));
+        EXPECT_FALSE(readSourceFile("thirdparty/" + std::string(expectation.licensePath)).empty())
+                << expectation.licensePath;
+    }
+
+    const std::vector<std::string> directDependencies = directVcpkgDependencies();
+    EXPECT_FALSE(directDependencies.empty());
+    for (const std::string& packageId : directDependencies) {
+        const ThirdPartyLicenseExpectation* expectation = expectationForDirectVcpkgDependency(packageId);
+        ASSERT_NE(expectation, nullptr) << "Add third-party manifest/license evidence for direct vcpkg dependency: "
+                                       << packageId;
+        expectContains(manifest, std::string(expectation->manifestNeedle));
+        expectContains(manifest, std::string(expectation->licensePath));
+    }
 }

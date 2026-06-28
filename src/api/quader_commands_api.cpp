@@ -10,6 +10,7 @@
 #include "api/quader_project_api.hpp"
 #include "api/quader_tools_api.hpp"
 #include "api/quader_viewport_api.hpp"
+#include "core/public_command_targets.hpp"
 #include "editor/commands/editor_command_registry.hpp"
 #include "editor/commands/modeling_command_tool_catalog.hpp"
 #include "editor/input/quader_keybinding_service.hpp"
@@ -27,18 +28,12 @@
 namespace quader {
 namespace {
 
-std::string prefixedCommandId(std::string_view prefix, std::string_view suffix) {
-    std::string commandId(prefix);
-    commandId.append(suffix);
-    return commandId;
-}
-
 std::string commandIdForModelingAction(std::string_view actionId) {
     if (const CommandTool* tool = findModelingCommandTool(actionId)) {
         return tool->publicCommandTargetId();
     }
 
-    return prefixedCommandId("modeling.", actionId);
+    return quaderModelingCommandTargetId(actionId);
 }
 
 bool modelingActionRegistersDedicatedCommand(const CommandTool& tool) {
@@ -46,7 +41,7 @@ bool modelingActionRegistersDedicatedCommand(const CommandTool& tool) {
 }
 
 std::string commandIdForToolActivation(std::string_view toolId) {
-    return prefixedCommandId("tools.activate.", toolId);
+    return quaderToolActivationCommandTargetId(toolId);
 }
 
 std::filesystem::path defaultKeybindingsPath() {
@@ -150,6 +145,11 @@ private:
     void registerCommands();
     void registerDefaultKeybindings();
     void registerViewportDefaultKeybindings();
+    void registerViewportViewCommand(
+            QuaderCommandId id,
+            std::string label,
+            ViewportView view,
+            std::string shortcut = {});
     void registerCommand(
             QuaderCommandId id,
             std::string label,
@@ -165,7 +165,6 @@ private:
             std::function<bool()> enabled = {},
             bool visible = true);
     [[nodiscard]] QuaderApiVoidResult failure(std::string message) const;
-    [[nodiscard]] std::string canonicalTargetId(std::string_view commandId) const;
 
     QuaderApi& api_;
     QuaderProjectApi& project_;
@@ -215,7 +214,7 @@ std::string QuaderCommandsApi::Impl::commandIdForToolActivation(std::string_view
 }
 
 std::string QuaderCommandsApi::Impl::shortcutFor(std::string_view commandId) const {
-    return keybindings_.shortcutFor(canonicalTargetId(commandId));
+    return keybindings_.shortcutFor(std::string(commandId));
 }
 
 std::string QuaderCommandsApi::Impl::shortcutFor(QuaderCommandId commandId) const {
@@ -361,7 +360,7 @@ bool QuaderCommandsApi::Impl::hasPendingKeybindingChord() const {
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::setShortcut(std::string_view commandId, std::string shortcut) {
-    const std::string targetId = canonicalTargetId(commandId);
+    const std::string targetId(commandId);
     std::string when;
     for (const QuaderKeybindingRule& rule : keybindings_.keybindings()) {
         if (rule.targetId == targetId) {
@@ -388,7 +387,7 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::setShortcut(QuaderCommandId command
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::removeShortcut(std::string_view commandId) {
-    const std::string targetId = canonicalTargetId(commandId);
+    const std::string targetId(commandId);
     const QuaderKeybindingMutationResult mutation = keybindings_.removeUserShortcut(targetId);
     if (!mutation.ok) {
         return failure(mutation.message);
@@ -407,7 +406,7 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::removeShortcut(QuaderCommandId comm
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::resetShortcut(std::string_view commandId) {
-    const std::string targetId = canonicalTargetId(commandId);
+    const std::string targetId(commandId);
     const QuaderKeybindingMutationResult mutation = keybindings_.resetUserShortcut(targetId);
     if (!mutation.ok) {
         return failure(mutation.message);
@@ -561,6 +560,35 @@ void QuaderCommandsApi::Impl::registerCommands() {
             "New Viewport Window",
             [this] { return viewports_.spawnWindow(); },
             "F12");
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewPerspective,
+            "Perspective View",
+            ViewportView::Perspective,
+            "P");
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewTop,
+            "Top View",
+            ViewportView::Top);
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewBottom,
+            "Bottom View",
+            ViewportView::Bottom);
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewLeft,
+            "Left View",
+            ViewportView::Left);
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewRight,
+            "Right View",
+            ViewportView::Side);
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewFront,
+            "Front View",
+            ViewportView::Front);
+    registerViewportViewCommand(
+            QuaderCommand::ViewportViewBack,
+            "Back View",
+            ViewportView::Back);
 
     for (const CommandTool* tool : modelingCommandTools()) {
         if (tool == nullptr) {
@@ -593,9 +621,20 @@ void QuaderCommandsApi::Impl::registerCommands() {
                 });
     }
 
-    registry_.registerPrefix("tools.activate.", [this](std::string_view toolId) {
-        return tools_.activate(toolId);
-    });
+}
+
+void QuaderCommandsApi::Impl::registerViewportViewCommand(
+        QuaderCommandId id,
+        std::string label,
+        ViewportView view,
+        std::string shortcut) {
+    registerCommand(
+            id,
+            std::move(label),
+            [this, view] {
+                return viewports_.setView(ViewportPaneId::Perspective, view);
+            },
+            std::move(shortcut));
 }
 
 void QuaderCommandsApi::Impl::registerDefaultKeybindings() {
@@ -716,10 +755,6 @@ QuaderApiVoidResult QuaderCommandsApi::Impl::failure(std::string message) const 
             .mutationKind = QuaderMutationKind::None,
             .revisions = api_.revisions(),
     };
-}
-
-std::string QuaderCommandsApi::Impl::canonicalTargetId(std::string_view commandId) const {
-    return std::string(commandId);
 }
 
 QuaderCommandsApi::QuaderCommandsApi(QuaderApi& api, QuaderProjectApi& project, QuaderViewportApi& viewports, QuaderToolsApi& tools)

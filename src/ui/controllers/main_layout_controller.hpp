@@ -21,6 +21,7 @@ public:
 
     [[nodiscard]] bool resizeSidebar(int widthDp);
     [[nodiscard]] bool resizeSidebar(DockLocation location, int widthDp);
+    [[nodiscard]] bool clampSidebarWidthForMeasuredBounds(DockLocation location, int maxWidthDp);
     [[nodiscard]] bool resizeOutlinerPanel(int heightDp);
     [[nodiscard]] bool resizeSidePanelStack(DockLocation location, std::string_view leadingPanelId, int heightDp);
     [[nodiscard]] bool resizeBottomDock(int heightDp);

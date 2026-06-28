@@ -19,6 +19,9 @@
 
 namespace quader {
 
+class ModelingObjectRuntimeMap;
+class SceneDocument;
+
 /**
  * Caches Selection Overlay Cache derived state for the modeling application service layer.
  */
@@ -90,6 +93,17 @@ public:
             const quader_editor_core::EditorSession& session,
             const quader_editor_core::EditorRuntime& runtime,
             const quader_editor_core::SelectionHoverState& hover) const;
+    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame(
+            const quader_editor_core::EditorSession& session,
+            const quader_editor_core::EditorRuntime& runtime,
+            const SceneDocument& scene,
+            const ModelingObjectRuntimeMap& objectRegistry,
+            const std::vector<quader_editor_core::PolygonObject>& previewObjects) const;
+    [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes(
+            const quader_editor_core::EditorRuntime& runtime,
+            const SceneDocument& scene,
+            const ModelingObjectRuntimeMap& objectRegistry,
+            const std::vector<quader_editor_core::PolygonObject>& previewObjects) const;
 
 private:
     /**

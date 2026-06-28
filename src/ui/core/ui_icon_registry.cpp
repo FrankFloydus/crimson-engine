@@ -12,7 +12,7 @@
 namespace quader {
 namespace {
 
-constexpr std::array<UIIconDefinition, 8> kIconDefinitions = {
+constexpr std::array<UIIconDefinition, 9> kIconDefinitions = {
         UIIconDefinition{
                 .id = UIIconId::ChromeMinimize,
                 .name = "chrome-minimize",
@@ -83,6 +83,16 @@ constexpr std::array<UIIconDefinition, 8> kIconDefinitions = {
                 .hoverResourcePath = "quader://icons/mesh_sel_icon_hover.png",
                 .width = "24dp",
                 .height = "25dp",
+                .preserveResourceColor = true,
+        },
+        UIIconDefinition{
+                .id = UIIconId::ArrowDown,
+                .name = "arrow-down",
+                .className = "ui-icon-arrow-down",
+                .provider = UIIconProvider::ImageResource,
+                .resourcePath = "quader://icons/arrow_down_icon.png",
+                .width = "16dp",
+                .height = "16dp",
                 .preserveResourceColor = true,
         },
 };

@@ -1427,7 +1427,9 @@ bool pick_select(
 		const quader_poly::Ray& ray,
 		int& active_object_id,
 		quader_poly::PickOptions pick_options,
-		bool allow_component_fallback)
+		bool allow_component_fallback,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry)
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool add_selection_value = operation == SelectionEditOperation::add;
@@ -1461,11 +1463,11 @@ bool pick_select(
 		}
 	}
 	if (!component_hit) {
-		component_hit = pick_nearest_object(objects, ray, options, hit_index, hit);
+		component_hit = pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry);
 	}
 	if (!component_hit && component_mode && allow_component_fallback) {
 		options.mode = quader_poly::SelectionMode::face;
-		pick_nearest_object(objects, ray, options, hit_index, hit);
+		pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry);
 	}
 
 	if (hit_index < 0) {
@@ -1607,7 +1609,9 @@ bool pick_select_all_faces(
 		SelectionEditOperation operation,
 		const quader_poly::Ray& ray,
 		int& active_object_id,
-		quader_poly::PickOptions pick_options)
+		quader_poly::PickOptions pick_options,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry)
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
@@ -1623,7 +1627,7 @@ bool pick_select_all_faces(
 	quader_poly::PickResult hit;
 	quader_poly::PickOptions options = pick_options;
 	options.mode = quader_poly::SelectionMode::face;
-	if (!pick_nearest_object(objects, ray, options, hit_index, hit)) {
+	if (!pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry)) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
 		}
@@ -1675,7 +1679,15 @@ bool pick_select_all_faces(
 	return true;
 }
 
-bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options)
+bool pick_select_edge_loop(
+		std::vector<PolygonObject>& objects,
+		SelectionMode& mode,
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		int& active_object_id,
+		quader_poly::PickOptions pick_options,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry)
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
@@ -1704,7 +1716,7 @@ bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& m
 		hit = source_wire_hit->hit;
 		component_hit = true;
 	}
-	if ((!component_hit && !pick_nearest_object(objects, ray, options, hit_index, hit)) || hit.kind != quader_poly::ElementKind::edge) {
+	if ((!component_hit && !pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry)) || hit.kind != quader_poly::ElementKind::edge) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
 		}
@@ -1763,7 +1775,15 @@ bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& m
 	return true;
 }
 
-bool pick_select_all_vertices(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options)
+bool pick_select_all_vertices(
+		std::vector<PolygonObject>& objects,
+		SelectionMode& mode,
+		SelectionEditOperation operation,
+		const quader_poly::Ray& ray,
+		int& active_object_id,
+		quader_poly::PickOptions pick_options,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry)
 {
 	const bool replace_selection = operation == SelectionEditOperation::replace;
 	const bool remove_selection_value = operation == SelectionEditOperation::remove;
@@ -1792,7 +1812,7 @@ bool pick_select_all_vertices(std::vector<PolygonObject>& objects, SelectionMode
 		hit = source_wire_hit->hit;
 		component_hit = true;
 	}
-	if ((!component_hit && !pick_nearest_object(objects, ray, options, hit_index, hit)) || hit.kind != quader_poly::ElementKind::vertex) {
+	if ((!component_hit && !pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry)) || hit.kind != quader_poly::ElementKind::vertex) {
 		if (replace_selection) {
 			clear_selection(objects, active_object_id);
 		}

@@ -4,13 +4,29 @@
 // No permission is granted to use, copy, modify, distribute, or sublicense this
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
-#include "support/behavior_scenario.hpp"
+#include "api/quader_editor_api.hpp"
 
 #include <gtest/gtest.h>
 
+namespace {
+
+/**
+ * Owns a public standalone editor and exposes its whole-editor API for programmatic API tests.
+ */
+struct ProgrammaticApiHarness {
+    quader::QuaderStandaloneEditor standalone;
+    quader::QuaderApi& api;
+
+    ProgrammaticApiHarness()
+        : standalone(quader::createStandaloneEditor())
+        , api(standalone.editor().api()) {}
+};
+
+} // namespace
+
 TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     quader::QuaderCreateBoxArgs args;
     args.bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}};
@@ -21,7 +37,7 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     ASSERT_TRUE(created.ok) << created.message;
     EXPECT_TRUE(created.changed);
     EXPECT_NE(created.value.entity, quader::InvalidEntityId);
-    EXPECT_NE(created.value.modelingObjectId, quader::InvalidModelingObjectId);
+    EXPECT_NE(created.value.modelingObjectId, quader::InvalidQuaderModelingObjectId);
     EXPECT_NE(created.value.mesh, quader::InvalidAssetId);
 
     const quader::QuaderSelectionSummary selection = api.selection().summary();
@@ -34,8 +50,8 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
 }
 
 TEST(ProgrammaticApiTests, InvalidToolIdReturnsFailedUnchangedStatus) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     const quader::QuaderApiStatus result = api.modeling().executeTool("__missing_tool__");
 
@@ -46,8 +62,8 @@ TEST(ProgrammaticApiTests, InvalidToolIdReturnsFailedUnchangedStatus) {
 }
 
 TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     quader::QuaderCreateEntityArgs args;
     args.name = "Document Entity";
@@ -69,8 +85,8 @@ TEST(ProgrammaticApiTests, DocumentNoOpAndFailureReportNoChangedMutationKind) {
 }
 
 TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     const quader::QuaderApiVoidResult unchanged = api.modeling().updatePreview({});
     EXPECT_TRUE(unchanged.ok) << unchanged.message;
@@ -84,8 +100,8 @@ TEST(ProgrammaticApiTests, ModelingNoOpAndFailureReportNoChangedMutationKind) {
 }
 
 TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     const quader::QuaderApiVoidResult result = api.history().undo();
 
@@ -95,8 +111,8 @@ TEST(ProgrammaticApiTests, EmptyHistoryFailureReportsNoChangedMutationKind) {
 }
 
 TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     quader::QuaderBounds bounds;
     bounds.min = {-1.0f, -1.0f, -1.0f};
@@ -131,8 +147,8 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
 }
 
 TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     const quader::QuaderScriptResult result = api.script("bad script")
             .select("missing")
@@ -149,8 +165,8 @@ TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
 }
 
 TEST(ProgrammaticApiTests, ScriptAggregatesChangedStatusAcrossLaterNoOp) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     const quader::QuaderScriptResult result = api.script("changed then noop")
             .createBox("box", {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Script Box")
@@ -165,8 +181,8 @@ TEST(ProgrammaticApiTests, ScriptAggregatesChangedStatusAcrossLaterNoOp) {
 }
 
 TEST(ProgrammaticApiTests, ScriptRollsBackChangedStepsAcrossLaterFailure) {
-    quader::ProjectSession session;
-    quader::QuaderApi api(quader::QuaderApiSessionInternalAccess::fromProjectSession(session));
+    ProgrammaticApiHarness harness;
+    quader::QuaderApi& api = harness.api;
 
     const quader::QuaderScriptResult result = api.script("changed then missing alias")
             .createBox("box", {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}}, "Script Box")

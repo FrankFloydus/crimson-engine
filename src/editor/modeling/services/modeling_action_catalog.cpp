@@ -121,22 +121,6 @@ ModelingActiveSelectionKind fromHostActiveKind(quader_host_contract::HostActiveS
     return ModelingActiveSelectionKind::None;
 }
 
-ModelingSelectionMode fromHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
-    switch (mode) {
-    case quader_host_contract::HostSelectionMode::vertex:
-        return ModelingSelectionMode::Vertex;
-    case quader_host_contract::HostSelectionMode::edge:
-        return ModelingSelectionMode::Edge;
-    case quader_host_contract::HostSelectionMode::face:
-        return ModelingSelectionMode::Face;
-    case quader_host_contract::HostSelectionMode::object:
-        return ModelingSelectionMode::Object;
-    case quader_host_contract::HostSelectionMode::group:
-        return ModelingSelectionMode::Group;
-    }
-    return ModelingSelectionMode::Object;
-}
-
 ModelingActionKind fromHostKind(quader_host_contract::HostActionKind kind) {
     return kind == quader_host_contract::HostActionKind::tool
             ? ModelingActionKind::Tool
@@ -171,22 +155,6 @@ const quader_host_contract::HostOperationPanelDescriptor* panelForMode(ModelingS
     return nullptr;
 }
 
-std::string selectionModeId(quader_host_contract::HostSelectionMode mode) {
-    switch (mode) {
-    case quader_host_contract::HostSelectionMode::vertex:
-        return "vertex";
-    case quader_host_contract::HostSelectionMode::edge:
-        return "edge";
-    case quader_host_contract::HostSelectionMode::face:
-        return "face";
-    case quader_host_contract::HostSelectionMode::object:
-        return "object";
-    case quader_host_contract::HostSelectionMode::group:
-        return "group";
-    }
-    return {};
-}
-
 bool selectionRequirementSatisfied(
         const ModelingSelectionSummary& summary,
         const ModelingActionAvailabilityRule& rule) {
@@ -211,7 +179,7 @@ ModelingActionAvailabilityRule ruleFromHostAvailability(
         const quader_host_contract::HostActionAvailabilityDescriptor& availability) {
     return {
             .requirement = ModelingActionSelectionRequirement::SelectionMode,
-            .mode = fromHostSelectionMode(availability.selection_mode),
+            .mode = hostSelectionModeToApp(availability.selection_mode),
             .minimumSelectedVertices = availability.minimum_selected_vertices,
             .minimumSelectedEdges = availability.minimum_selected_edges,
             .exactSelectedEdges = availability.exact_selected_edges,
@@ -345,7 +313,7 @@ ModelingActionSet ModelingActionCatalog::actionSetFor(
         ModelingActionPanel panel;
         panel.panelId = "viewport_context_menu";
         panel.label = "Context Actions";
-        panel.selectionModeId = selectionModeId(appSelectionModeToHostContract(summary.mode));
+        panel.selectionModeId = std::string(hostSelectionModeId(appSelectionModeToHostContract(summary.mode)));
         panel.visibility = ModelingActionVisibility::Enabled;
 
         if (const quader_host_contract::HostOperationPanelDescriptor* hostPanel = panelForMode(summary.mode)) {
@@ -369,7 +337,7 @@ ModelingActionSet ModelingActionCatalog::actionSetFor(
         ModelingActionPanel panel;
         panel.panelId = std::string(hostPanel.id);
         panel.label = std::string(hostPanel.label);
-        panel.selectionModeId = selectionModeId(hostPanel.selection_mode);
+        panel.selectionModeId = std::string(hostSelectionModeId(hostPanel.selection_mode));
         panel.visibility = activePanel ? ModelingActionVisibility::Enabled : ModelingActionVisibility::Hidden;
         appendHostPanelActions(panel.actions, hostPanel, summary, query);
 

@@ -87,7 +87,7 @@ ViewportDragMode navigationModeForAction(ViewportInputActionKind action, const V
 
 ViewportInputRouter::ViewportInputRouter()
     : toolRuntime_(std::make_unique<ViewportToolRuntime>()) {
-    state_.gridPreset = viewportDefaultGridPreset();
+    syncGridPresetSnapshot(viewportDefaultGridPreset());
     toolRuntime_->syncActiveTool(state_.activeTool);
 }
 
@@ -251,7 +251,7 @@ void ViewportInputRouter::setSelectionMode(ViewportSelectionMode mode) {
     state_.selectionMode = mode;
 }
 
-void ViewportInputRouter::setGridPreset(int preset) {
+void ViewportInputRouter::syncGridPresetSnapshot(int preset) {
     state_.gridPreset = viewportClampGridPreset(preset);
 }
 

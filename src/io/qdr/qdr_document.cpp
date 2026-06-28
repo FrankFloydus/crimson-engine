@@ -8,13 +8,13 @@
 
 #include "io/qdr/qdr_atomic_write.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
+#include "io/qdr/qdr_root.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -27,57 +27,9 @@ namespace {
 
 using json = nlohmann::ordered_json;
 
-std::string string_from_view(std::string_view value)
-{
-	return std::string(value.data(), value.size());
-}
-
 std::string qdr_format_name_string()
 {
-	return string_from_view(qdr_format_name);
-}
-
-void require_root_object(const json& root)
-{
-	if (!root.is_object()) {
-		throw std::runtime_error("QDR document root must be an object.");
-	}
-}
-
-std::string read_format_header(const json& root)
-{
-	const auto iterator = root.find("format");
-	if (iterator == root.end()) {
-		throw std::runtime_error("QDR document is missing its format header.");
-	}
-	if (!iterator->is_string()) {
-		throw std::runtime_error("QDR document format header must be a string.");
-	}
-	return iterator->get<std::string>();
-}
-
-int read_version_header(const json& root)
-{
-	const auto iterator = root.find("version");
-	if (iterator == root.end()) {
-		throw std::runtime_error("QDR document is missing its version header.");
-	}
-	if (!iterator->is_number_integer()) {
-		throw std::runtime_error("QDR document version header must be an integer.");
-	}
-	if (iterator->is_number_unsigned()) {
-		const auto value = iterator->get<unsigned long long>();
-		if (value > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
-			throw std::runtime_error("QDR document version header is outside the supported integer range.");
-		}
-		return static_cast<int>(value);
-	}
-	const auto value = iterator->get<long long>();
-	if (value < static_cast<long long>(std::numeric_limits<int>::min()) ||
-		value > static_cast<long long>(std::numeric_limits<int>::max())) {
-		throw std::runtime_error("QDR document version header is outside the supported integer range.");
-	}
-	return static_cast<int>(value);
+	return qdr_string_from_view(qdr_format_name);
 }
 
 std::string selection_mode_name(QdrSelectionMode mode)
@@ -541,13 +493,7 @@ QdrDocument qdr_document_from_json(const json& value)
 
 const json& document_payload_from_root(const json& root)
 {
-	if (root.contains(string_from_view(qdr_document_payload_key))) {
-		return root.at(string_from_view(qdr_document_payload_key));
-	}
-	if (root.contains(string_from_view(qdr_legacy_session_payload_key))) {
-		return root.at(string_from_view(qdr_legacy_session_payload_key));
-	}
-	throw std::runtime_error("QDR document is missing its document payload.");
+	return qdr_payload_from_root(root, qdr_document_payload_key, qdr_legacy_session_payload_key);
 }
 
 const json& migrate_document_payload_to_current(const json& root, int version)
@@ -584,7 +530,7 @@ std::string serialize_document(const QdrDocument& document)
 	json root {
 		{ "format", qdr_format_name_string() },
 		{ "version", qdr_format_version },
-		{ string_from_view(qdr_document_payload_key), {
+		{ qdr_string_from_view(qdr_document_payload_key), {
 			{ "nextObjectId", document.next_object_id },
 			{ "nextLightId", document.next_light_id },
 			{ "activeObjectId", document.active_object_id },
@@ -603,13 +549,13 @@ QdrReadResult deserialize_document(std::string_view text)
 {
 	try {
 		const json root = json::parse(text.begin(), text.end());
-		require_root_object(root);
-		const std::string format = read_format_header(root);
-		if (format != qdr_format_name_string()) {
-			return { false, {}, "Unsupported Quader file format: " + format };
+		require_qdr_root_object(root);
+		const QdrRootHeader header = read_qdr_root_header(root);
+		if (header.format != qdr_format_name_string()) {
+			return { false, {}, "Unsupported Quader file format: " + header.format };
 		}
 
-		const int version = read_version_header(root);
+		const int version = header.version;
 		if (!is_supported_document_version(version)) {
 			return { false, {}, "Unsupported Quader file version: " + std::to_string(version) };
 		}

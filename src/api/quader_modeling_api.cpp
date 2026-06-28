@@ -7,6 +7,7 @@
 #include "api/quader_modeling_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
+#include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
@@ -43,18 +44,12 @@ QuaderApiResult<QuaderTransformDragPreview> resultFromTransformDragPreview(
     result.ok = preview.ok;
     result.changed = preview.changed;
     result.message = preview.message;
-    result.mutationKind =
-            preview.changed ? QuaderMutationKind::Modeling :
-            preview.active ? QuaderMutationKind::Runtime :
-            QuaderMutationKind::None;
-    const ModelingSelectionSummary summary = session.modeling().selectionSummary();
-    result.revisions = {
-            .projectRevision = session.document().revision(),
-            .sceneRevision = session.scene().revision(),
-            .assetRevision = session.assets().revision(),
-            .modelingContentRevision = summary.contentRevision,
-            .modelingSelectionRevision = summary.selectionRevision,
-    };
+    result.mutationKind = quaderApiPreviewMutationKind(
+            preview.ok,
+            preview.changed,
+            preview.active,
+            QuaderMutationKind::Modeling);
+    result.revisions = quaderApiCurrentRevisions(session);
     result.value = toApiTransformDragPreview(preview);
     return result;
 }

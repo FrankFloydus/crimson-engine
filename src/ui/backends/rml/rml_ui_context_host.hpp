@@ -8,6 +8,7 @@
 
 #include "render/rml_filament_renderer.hpp"
 #include "render/texture_registry.hpp"
+#include "ui/components/atoms/ui_dropdown_component.hpp"
 
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_video.h>
@@ -85,6 +86,8 @@ public:
     void setElementInnerRml(const std::string& elementId, const std::string& innerRml);
     [[nodiscard]] std::optional<RmlElementRect> measureElementById(const std::string& elementId) const;
     [[nodiscard]] std::optional<WindowChromeAction> takeWindowChromeAction();
+    [[nodiscard]] std::optional<std::string> takeDropdownToggle();
+    [[nodiscard]] std::optional<UIDropdownSelection> takeDropdownSelection();
     [[nodiscard]] std::optional<std::string> takeModelingModeShelfControlSelection();
     [[nodiscard]] std::optional<std::string> takeModelingModeShelfCommand();
     [[nodiscard]] bool initialized() const { return initialized_; }
@@ -98,11 +101,14 @@ private:
     std::unique_ptr<Rml::FileInterface> fileInterface_;
     std::unique_ptr<Rml::EventListener> debugPaletteCopyListener_;
     std::unique_ptr<Rml::EventListener> windowChromeActionListener_;
+    std::unique_ptr<Rml::EventListener> dropdownSelectionListener_;
     std::unique_ptr<Rml::EventListener> modelingModeShelfControlSelectionListener_;
     Rml::Context* context_ = nullptr;
     Rml::Context* debuggerContext_ = nullptr;
     Rml::ElementDocument* document_ = nullptr;
     std::optional<WindowChromeAction> pendingWindowChromeAction_;
+    std::optional<std::string> pendingDropdownToggle_;
+    std::optional<UIDropdownSelection> pendingDropdownSelection_;
     std::optional<std::string> pendingModelingModeShelfControlSelection_;
     std::optional<std::string> pendingModelingModeShelfCommand_;
     float dpRatio_ = 1.0f;

@@ -33,6 +33,19 @@ bool MainLayoutController::resizeSidebar(DockLocation location, int widthDp) {
     return true;
 }
 
+bool MainLayoutController::clampSidebarWidthForMeasuredBounds(DockLocation location, int maxWidthDp) {
+    if (!mainLayoutLocationIsSideDock(location)) {
+        return false;
+    }
+    MainLayoutSideDockModel& sideDock = mainLayoutSideDock(model_, location);
+    const int clamped = std::min(sideDock.widthDp, mainLayoutClampedSidebarWidthDp(maxWidthDp));
+    if (sideDock.widthDp == clamped) {
+        return false;
+    }
+    sideDock.widthDp = clamped;
+    return true;
+}
+
 bool MainLayoutController::resizeOutlinerPanel(int heightDp) {
     const int clamped = mainLayoutClampedOutlinerHeightDp(heightDp);
     if (model_.outlinerHeightDp == clamped) {

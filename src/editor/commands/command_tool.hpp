@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "core/public_command_targets.hpp"
 #include "editor/modeling/modeling_types.hpp"
 #include "editor/commands/command_tool_descriptor.hpp"
 
@@ -100,9 +101,7 @@ public:
         if (!fixedId.empty()) {
             return std::string(fixedId);
         }
-        std::string commandId("modeling.");
-        commandId.append(id());
-        return commandId;
+        return quaderModelingCommandTargetId(id());
     }
 
     [[nodiscard]] bool enabled(ModelingSessionService& modeling) const {

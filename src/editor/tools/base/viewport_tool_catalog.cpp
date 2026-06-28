@@ -106,6 +106,18 @@ ModelingTransformTool viewportToolTransformTool(ViewportToolId tool) {
     return item != nullptr ? item->transformTool() : ModelingTransformTool::Move;
 }
 
+quader_editor_core::ViewportInteractionTool viewportToolInteractionTool(ViewportToolId tool) {
+    const ViewportTool* item = findViewportTool(tool);
+    if (item == nullptr) {
+        return quader_editor_core::ViewportInteractionTool::select;
+    }
+    const quader_editor_core::ViewportInteractionTool runtimeTool =
+            quader_editor_core::viewport_interaction_tool_from_id(item->id());
+    return runtimeTool == quader_editor_core::ViewportInteractionTool::unknown
+            ? quader_editor_core::ViewportInteractionTool::select
+            : runtimeTool;
+}
+
 ModelingViewportTool modelingViewportToolFor(ViewportToolId tool) {
     const ViewportTool* item = findViewportTool(tool);
     return item != nullptr ? item->modelingTool() : ModelingViewportTool::Select;

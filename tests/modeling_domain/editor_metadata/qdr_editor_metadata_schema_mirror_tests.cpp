@@ -77,6 +77,36 @@ void check_bool_option(const qhc::HostOptionDescriptor& option, const qec::BoolO
 	EXPECT_TRUE(option.visible == schema.visible);
 }
 
+void check_option_descriptor(
+		const qhc::HostOptionDescriptor& option,
+		const qec::EditorOperationOptionDescriptor& schema)
+{
+	EXPECT_TRUE(same_text(option.id, schema.option_id));
+	EXPECT_TRUE(same_text(option.label, schema.label));
+	EXPECT_TRUE(option.default_integer == schema.default_integer);
+	EXPECT_TRUE(option.minimum_integer == schema.minimum_integer);
+	EXPECT_TRUE(option.maximum_integer == schema.maximum_integer);
+	EXPECT_TRUE(option.integer_step == schema.integer_step);
+	EXPECT_TRUE(option.default_number == schema.default_number);
+	EXPECT_TRUE(option.minimum_number == schema.minimum_number);
+	EXPECT_TRUE(option.maximum_number == schema.maximum_number);
+	EXPECT_TRUE(option.number_step == schema.number_step);
+	EXPECT_TRUE(option.default_bool == schema.default_bool);
+	EXPECT_TRUE(option.visible == schema.visible);
+	EXPECT_TRUE(option.hard_limits == schema.hard_limits);
+	switch (schema.value_kind) {
+	case qec::EditorOperationOptionValueKind::integer:
+		EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::integer);
+		break;
+	case qec::EditorOperationOptionValueKind::floating:
+		EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::floating);
+		break;
+	case qec::EditorOperationOptionValueKind::boolean:
+		EXPECT_TRUE(option.value_kind == qhc::HostOptionValueKind::boolean);
+		break;
+	}
+}
+
 } // namespace
 
 TEST(QdrEditorMetadataSchemaMirrorTests, HostContractExposesEditorCoreOperationOptionSchemasAsDescriptors) {
@@ -108,4 +138,11 @@ TEST(QdrEditorMetadataSchemaMirrorTests, HostContractExposesEditorCoreOperationO
 	const qhc::HostOperationDescriptor& merge_by_distance_descriptor = require_operation(merge_by_distance.operation_id);
 	EXPECT_TRUE(merge_by_distance_descriptor.options.size() == 1U);
 	check_float_option(require_option(merge_by_distance_descriptor, merge_by_distance.tolerance.id), merge_by_distance.tolerance);
+}
+
+TEST(QdrEditorMetadataSchemaMirrorTests, HostOperationOptionsCoverSchemaOwnedOptionDescriptorCatalog) {
+	for (const qec::EditorOperationOptionDescriptor& schema : qec::operation_option_descriptor_catalog()) {
+		const qhc::HostOperationDescriptor& operation = require_operation(schema.operation_id);
+		check_option_descriptor(require_option(operation, schema.option_id), schema);
+	}
 }

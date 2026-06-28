@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_api_mutation_runner.hpp"
 
+#include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/history/modeling_memento_command.hpp"
@@ -17,14 +18,6 @@
 #include <utility>
 
 namespace quader {
-namespace {
-
-QuaderMutationKind changedMutationKind(bool ok, bool changed, QuaderMutationKind kind) {
-    return ok && changed ? kind : QuaderMutationKind::None;
-}
-
-} // namespace
-
 QuaderApiMutationRunner::QuaderApiMutationRunner(
         ProjectSession& session,
         EditorHistoryService& history,
@@ -36,14 +29,7 @@ QuaderApiMutationRunner::QuaderApiMutationRunner(
     , modelingCommands_(modelingCommands) {}
 
 QuaderRevisionStamp QuaderApiMutationRunner::currentRevisions() const {
-    const ModelingSelectionSummary modeling = session_.modeling().selectionSummary();
-    return {
-            .projectRevision = session_.document().revision(),
-            .sceneRevision = session_.scene().revision(),
-            .assetRevision = session_.assets().revision(),
-            .modelingContentRevision = modeling.contentRevision,
-            .modelingSelectionRevision = modeling.selectionRevision,
-    };
+    return quaderApiCurrentRevisions(session_);
 }
 
 EditorTransaction QuaderApiMutationRunner::beginTransaction(std::string label) {
@@ -164,23 +150,11 @@ QuaderApiVoidResult QuaderApiMutationRunner::cancelModelingPreview() {
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runAssetResult(bool changed, std::string_view label) {
-    return {
-            .ok = true,
-            .changed = changed,
-            .message = changed ? std::string{} : std::string(label),
-            .mutationKind = changed ? QuaderMutationKind::Asset : QuaderMutationKind::None,
-            .revisions = currentRevisions(),
-    };
+    return quaderApiVoidStatus(session_, true, changed, {}, QuaderMutationKind::Asset, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runAssetFailure(std::string message) {
-    return {
-            .ok = false,
-            .changed = false,
-            .message = std::move(message),
-            .mutationKind = QuaderMutationKind::None,
-            .revisions = currentRevisions(),
-    };
+    return quaderApiFailureStatus(session_, std::move(message));
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::undo() {
@@ -202,26 +176,26 @@ QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
         CommandResult result,
         QuaderMutationKind kind,
         std::string_view fallbackMessage) const {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = result.message.empty() ? std::string(fallbackMessage) : std::move(result.message),
-            .mutationKind = changedMutationKind(result.ok, result.changed, kind),
-            .revisions = currentRevisions(),
-    };
+    return quaderApiVoidStatus(
+            session_,
+            result.ok,
+            result.changed,
+            std::move(result.message),
+            kind,
+            fallbackMessage);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
         ModelingCommandResult result,
         QuaderMutationKind kind,
         std::string_view fallbackMessage) const {
-    return {
-            .ok = result.ok,
-            .changed = result.changed,
-            .message = result.message.empty() ? std::string(fallbackMessage) : std::move(result.message),
-            .mutationKind = changedMutationKind(result.ok, result.changed, kind),
-            .revisions = currentRevisions(),
-    };
+    return quaderApiVoidStatus(
+            session_,
+            result.ok,
+            result.changed,
+            std::move(result.message),
+            kind,
+            fallbackMessage);
 }
 
 } // namespace quader

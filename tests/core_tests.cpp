@@ -9,6 +9,7 @@
 #include "assets/material_document.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "core/public_command_targets.hpp"
 #include "core/undo_redo_manager.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/scene_transform_preview_transaction.hpp"
@@ -33,6 +34,7 @@
 #include "editor/metadata/host_contract.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/light_renderable_cache.hpp"
 #include "render/material_binding_service.hpp"
@@ -67,6 +69,7 @@
 #include "ui/backends/rml/rml_markup_writer.hpp"
 #include "ui/components/atoms/ui_button_component.hpp"
 #include "ui/components/atoms/ui_chrome_button_component.hpp"
+#include "ui/components/atoms/ui_dropdown_component.hpp"
 #include "ui/components/atoms/ui_toolbar_button_component.hpp"
 #include "ui/components/common/dock_layout_model.hpp"
 #include "ui/components/common/resizable_split.hpp"
@@ -1397,6 +1400,37 @@ TEST(MainLayoutSashRegistryTests, SidebarsAndBottomDockSnapCollapseThroughMainLa
     EXPECT_TRUE(layout.bottomDock.collapsed);
 }
 
+TEST(MainLayoutSashRegistryTests, MeasuredSidebarClampsRouteThroughControllerWithoutUncollapse) {
+    MainLayoutModel layout = MainLayoutModel::defaults();
+    layout.sidebar.widthDp = 900;
+    layout.sidebar.collapsed = true;
+    layout.auxiliarySidebar.widthDp = 900;
+    layout.auxiliarySidebar.collapsed = false;
+    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
+    MainLayoutController controller(layout);
+
+    MainLayoutSashRegistry registry;
+    registry.setMeasuredLayout({
+            .mainWidthDp = 700,
+            .mainHeightDp = 700,
+            .sideDockHeightDp = 700,
+            .bottomDockTrackWidthDp = 700,
+    });
+
+    EXPECT_TRUE(registry.normalizeMeasuredBounds(layout, controller));
+    EXPECT_TRUE(layout.sidebar.collapsed);
+    EXPECT_EQ(layout.sidebar.widthDp, kMainLayoutSidebarMinWidthDp);
+    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
+    EXPECT_EQ(layout.auxiliarySidebar.widthDp, 580);
+
+    const std::string controllerSource = readSourceFile("src/ui/controllers/main_layout_controller.cpp");
+    const std::string sashSource = readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
+    EXPECT_NE(controllerSource.find("clampSidebarWidthForMeasuredBounds"), std::string::npos);
+    EXPECT_NE(sashSource.find("controller.clampSidebarWidthForMeasuredBounds"), std::string::npos);
+    EXPECT_EQ(sashSource.find("model.sidebar.widthDp ="), std::string::npos);
+    EXPECT_EQ(sashSource.find("model.auxiliarySidebar.widthDp ="), std::string::npos);
+}
+
 TEST(MainLayoutSashRegistryTests, ViewportMinimumSizeComesFromMainLayoutModel) {
     const std::string modelHeader = readSourceFile("src/ui/components/organisms/main_layout_model.hpp");
     const std::string sashSource = readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
@@ -2230,6 +2264,11 @@ TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
     EXPECT_NE(rml.find("id=\"modeling-mode-shelf-slot\" class=\"modeling-mode-shelf-slot\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-viewport\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"viewport-overlay-controls\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown\""), std::string::npos);
+    EXPECT_NE(rml.find("data-ui-dropdown-toggle=\"main-viewport-view-dropdown\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-dropdown-input-label\">Perspective</span>"), std::string::npos);
+    EXPECT_EQ(rml.find("id=\"main-viewport-view-dropdown-surface\""), std::string::npos);
     EXPECT_EQ(rml.find("id=\"viewport-selection-marquee-layer\""), std::string::npos);
     EXPECT_NE(rml.find("src=\"quader://viewport/main\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-layout-sidebar\" class=\"main-layout-sidebar main-layout-primary-sidebar main-layout-side-dock-right min-w-40 bg-gray-950 border-gray-600\""),
@@ -2251,6 +2290,40 @@ TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
     EXPECT_EQ(rml.find("<rml>"), std::string::npos);
     EXPECT_LT(rml.find("id=\"main-layout-editor-column\""), rml.find("id=\"modeling-mode-shelf-slot\""));
     EXPECT_LT(rml.find("id=\"modeling-mode-shelf-slot\""), rml.find("id=\"viewport-host\""));
+}
+
+TEST(MainLayoutRmlBuilderTests, ProjectsViewportViewDropdownOptionsAndShortcutLabels) {
+    const MainLayoutModel layout = MainLayoutModel::defaults();
+    const MainLayoutViewportPresentation viewport{
+            .currentView = ViewportView::Side,
+            .viewDropdownOpen = true,
+            .viewDropdownOptions = {
+                    {.view = ViewportView::Perspective, .label = "Perspective", .shortcut = "P"},
+                    {.view = ViewportView::Top, .label = "Top"},
+                    {.view = ViewportView::Bottom, .label = "Bottom"},
+                    {.view = ViewportView::Left, .label = "Left"},
+                    {.view = ViewportView::Side, .label = "Right"},
+                    {.view = ViewportView::Front, .label = "Front"},
+                    {.view = ViewportView::Back, .label = "Back"},
+            },
+    };
+
+    const std::string rml = buildMainLayoutRml(layout, {}, {}, viewport);
+
+    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown-surface\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-dropdown-input-label\">Right</span>"), std::string::npos);
+    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown-option-perspective\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown-option-right\""), std::string::npos);
+    EXPECT_NE(rml.find("data-ui-dropdown-option=\"right\""), std::string::npos);
+    EXPECT_NE(rml.find("aria-selected=\"true\"><span class=\"ui-dropdown-option-label\">Right</span>"),
+            std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-dropdown-option-keybinding text-gray-300\">P</span>"), std::string::npos);
+    EXPECT_LT(rml.find("data-ui-dropdown-option=\"perspective\""), rml.find("data-ui-dropdown-option=\"top\""));
+    EXPECT_LT(rml.find("data-ui-dropdown-option=\"top\""), rml.find("data-ui-dropdown-option=\"bottom\""));
+    EXPECT_LT(rml.find("data-ui-dropdown-option=\"bottom\""), rml.find("data-ui-dropdown-option=\"left\""));
+    EXPECT_LT(rml.find("data-ui-dropdown-option=\"left\""), rml.find("data-ui-dropdown-option=\"right\""));
+    EXPECT_LT(rml.find("data-ui-dropdown-option=\"right\""), rml.find("data-ui-dropdown-option=\"front\""));
+    EXPECT_LT(rml.find("data-ui-dropdown-option=\"front\""), rml.find("data-ui-dropdown-option=\"back\""));
 }
 
 TEST(MainLayoutRmlBuilderTests, MarksActiveResizerDuringDrag) {
@@ -2799,9 +2872,11 @@ TEST(UIIconRegistryTests, RendersSemanticIconsThroughCurrentResourceProvider) {
     const UIIconRegistry& registry = UIIconRegistry::instance();
     const UIIconDefinition* closeIcon = registry.find(UIIconId::ChromeClose);
     const UIIconDefinition* meshIcon = registry.find(UIIconId::Mesh);
+    const UIIconDefinition* arrowIcon = registry.find(UIIconId::ArrowDown);
 
     ASSERT_NE(closeIcon, nullptr);
     ASSERT_NE(meshIcon, nullptr);
+    ASSERT_NE(arrowIcon, nullptr);
     EXPECT_EQ(closeIcon->name, "chrome-close");
     EXPECT_EQ(closeIcon->className, "ui-icon-chrome-close");
     EXPECT_EQ(closeIcon->provider, UIIconProvider::ImageResource);
@@ -2809,6 +2884,8 @@ TEST(UIIconRegistryTests, RendersSemanticIconsThroughCurrentResourceProvider) {
     EXPECT_EQ(meshIcon->name, "mesh");
     EXPECT_EQ(meshIcon->className, "ui-icon-mesh");
     EXPECT_EQ(meshIcon->resourcePath, "quader://icons/mesh_icon.png");
+    EXPECT_EQ(arrowIcon->name, "arrow-down");
+    EXPECT_EQ(arrowIcon->resourcePath, "quader://icons/arrow_down_icon.png");
     EXPECT_EQ(uiIconProviderClass(closeIcon->provider), "ui-icon-resource-image");
 
     EXPECT_EQ(
@@ -2849,6 +2926,39 @@ TEST(UIButtonComponentTests, RendersStatefulLabeledIconButtonsThroughBaseClass) 
             "data-ui-toggle=\"on\" data-test-action=\"run\"><span class=\"ui-icon ui-icon-resource-image "
             "ui-icon-chrome-close ui-button-icon\" data-ui-icon=\"chrome-close\"></span><span "
             "class=\"ui-button-label\">Run</span></button>");
+}
+
+TEST(UIDropdownComponentTests, RendersInputSurfaceAndAlignedKeybindingCells) {
+    const UIDropdownComponent dropdown(UIDropdownModel{
+            .elementId = "viewport-view",
+            .selectedLabel = "Top",
+            .classes = {"viewport-view-dropdown"},
+            .options = {
+                    {.id = "perspective", .label = "Perspective", .keybinding = "P"},
+                    {.id = "top", .label = "Top", .selected = true},
+            },
+            .open = true,
+    });
+
+    const std::string rml = writeRmlMarkup(dropdown.render());
+
+    EXPECT_NE(rml.find("id=\"viewport-view\" class=\"ui-dropdown viewport-view-dropdown\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"viewport-view-input\""), std::string::npos);
+    EXPECT_NE(rml.find("data-ui-dropdown-toggle=\"viewport-view\""), std::string::npos);
+    EXPECT_NE(rml.find("aria-expanded=\"true\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-dropdown-input-label\">Top</span>"), std::string::npos);
+    EXPECT_NE(rml.find("data-ui-icon=\"arrow-down\""), std::string::npos);
+    EXPECT_NE(rml.find("id=\"viewport-view-surface\""), std::string::npos);
+    EXPECT_NE(rml.find("data-ui-dropdown-option=\"perspective\""), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-dropdown-option-keybinding text-gray-300\">P</span>"), std::string::npos);
+    EXPECT_NE(rml.find("class=\"ui-dropdown-option-keybinding text-gray-300\"></span>"), std::string::npos);
+
+    const UIDropdownComponent closedDropdown(UIDropdownModel{
+            .elementId = "closed-dropdown",
+            .selectedLabel = "Perspective",
+            .options = {{.id = "perspective", .label = "Perspective"}},
+    });
+    EXPECT_EQ(writeRmlMarkup(closedDropdown.render()).find("closed-dropdown-surface"), std::string::npos);
 }
 
 TEST(UIToolbarButtonComponentTests, RendersIconLabelAndSecondaryText) {
@@ -3033,10 +3143,10 @@ TEST(ModelingModeShelfComponentTests, BuildsTabbedShelfShellOnly) {
             },
     };
     const std::vector<ModelingModeShelfCommand> commands = {
-            {.id = "bridge", .commandId = "modeling.bridge", .label = "Bridge"},
-            {.id = "collapse", .commandId = "modeling.collapse", .label = "Collapse", .secondaryText = "Shift+Z"},
-            {.id = "thicken", .commandId = "modeling.thicken", .label = "Thicken", .secondaryText = "T"},
-            {.id = "flip-normal", .commandId = "modeling.flip-normal", .label = "Flip Normal", .secondaryText = "F"},
+            {.id = "bridge", .commandId = quaderModelingCommandTargetId("bridge"), .label = "Bridge"},
+            {.id = "collapse", .commandId = quaderModelingCommandTargetId("collapse"), .label = "Collapse", .secondaryText = "Shift+Z"},
+            {.id = "thicken", .commandId = quaderModelingCommandTargetId("thicken"), .label = "Thicken", .secondaryText = "T"},
+            {.id = "flip-normal", .commandId = quaderModelingCommandTargetId("flip-normal"), .label = "Flip Normal", .secondaryText = "F"},
     };
 
     for (const ModelingModeShelfControl& control : controls) {
@@ -3247,6 +3357,7 @@ TEST(UIUtilityTokensTests, AppUITokensStayTailwindLikeAndDpBased) {
     EXPECT_NE(tokenConfig.find("\"colors\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"gray\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"purple\""), std::string::npos);
+    EXPECT_NE(tokenConfig.find("\"800\": \"#3B2952\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"950\": \"#120F18\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"fontFamily\""), std::string::npos);
     EXPECT_NE(tokenConfig.find("\"fontWeight\""), std::string::npos);
@@ -3711,6 +3822,7 @@ TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
     EXPECT_NE(modelingModeShelfHeader.find("ModelingModeShelfControlLabelVisibility"), std::string::npos);
     EXPECT_NE(modelingModeShelfHeader.find("overflowControlIds"), std::string::npos);
     EXPECT_NE(modelingModeShelfHeader.find("modelingModeShelfOverflowButtonElementId"), std::string::npos);
+    EXPECT_EQ(modelingModeShelfHeader.find("overflowButtonLabel = \""), std::string::npos);
     EXPECT_NE(windowChromeControlsHeader.find("class WindowChromeControlsComponent final : public UIComponent"),
             std::string::npos);
     EXPECT_NE(mainLayoutSashRegistryHeader.find("class MainLayoutSashRegistry"), std::string::npos);
@@ -3945,11 +4057,20 @@ TEST(UISystemTests, WindowedViewportComponentsAreBoundedAndNonExperimental) {
     EXPECT_NE(viewportHostSource.find("totalViewportCount = 1u + windowedViewports_.size()"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("totalViewportCount >= kMaxViewportComponents"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("nextWindowedViewportLayerIndex()"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("RenderAdditionalSwapChain swapChain"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderSystem_->createAdditionalSwapChain"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("renderSystem.beginFrame(instance.swapChain.get())"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("instance.swapChain.reset()"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("filament::SwapChain* swapChain = nullptr"), std::string::npos);
+    EXPECT_EQ(viewportHostSource.find("renderSystem_->destroyAdditionalSwapChain(instance.swapChain)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("SwapChainPresentationColorSpace::Srgb"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("ViewportRenderSurface::Swapchain"), std::string::npos);
     EXPECT_NE(renderSystemHeader.find("enum class SwapChainPresentationColorSpace"), std::string::npos);
+    EXPECT_NE(renderSystemHeader.find("class RenderAdditionalSwapChain"), std::string::npos);
+    EXPECT_NE(renderSystemHeader.find("RenderAdditionalSwapChain(const RenderAdditionalSwapChain&) = delete"),
+            std::string::npos);
     EXPECT_NE(renderSystemSource.find("filament::SwapChain::CONFIG_SRGB_COLORSPACE"), std::string::npos);
+    EXPECT_NE(renderSystemSource.find("RenderAdditionalSwapChain::reset()"), std::string::npos);
     EXPECT_NE(uiSystemHeader.find("renderWindowedViewports(RenderSystem& renderSystem)"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportHost_.renderWindowedViewports(renderSystem)"), std::string::npos);
     EXPECT_NE(appSource.find("ui_.renderWindowedViewports(renderSystem_)"), std::string::npos);
@@ -4503,8 +4624,9 @@ TEST(ModelingSessionServiceOverlayTests, MapsRuntimeOverlayLayersExplicitly) {
     EXPECT_NE(source.find("lineStyleRole"), std::string::npos);
     EXPECT_NE(source.find("ViewportOverlayStyleRole::SelectedSourceWire"), std::string::npos);
     EXPECT_NE(source.find("appendProjectedOverlayLines"), std::string::npos);
-    EXPECT_NE(modelingService.find("runtime_.knife_state().preview_lines"), std::string::npos);
-    EXPECT_NE(modelingService.find("ViewportOverlayLayer::ToolPreviewLine"), std::string::npos);
+    EXPECT_EQ(modelingService.find("runtime_.knife_state().preview_lines"), std::string::npos);
+    EXPECT_NE(overlayService.find("runtime.knife_state().preview_lines"), std::string::npos);
+    EXPECT_NE(overlayService.find("ViewportOverlayLayer::ToolPreviewLine"), std::string::npos);
     EXPECT_EQ(overlayService.find("knife.preview_lines.begin()"), std::string::npos);
 }
 
@@ -4715,6 +4837,25 @@ TEST(RenderProxyLifecycleTests, RenderableProxyHandlesAreMoveOnly) {
     EXPECT_NE(lightCacheHeader.find("LightProxy(const LightProxy&) = delete"), std::string::npos);
     EXPECT_NE(lightCacheHeader.find("LightProxy(LightProxy&& other) noexcept"), std::string::npos);
     EXPECT_NE(lightCacheSource.find("lightProxies_.emplace(entityId, std::move(proxy))"), std::string::npos);
+    EXPECT_NE(lightCacheSource.find("LightProxyCreationGuard creationGuard"), std::string::npos);
+    EXPECT_NE(lightCacheSource.find("creationGuard.release()"), std::string::npos);
+}
+
+TEST(RenderProxyLifecycleTests, FilamentResourceCreationUsesRenderOwnedGuards) {
+    const std::string lightCacheSource = readSourceFile("src/render/light_renderable_cache.cpp");
+    const std::string gridRendererSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
+    const std::string renderTargetSource = readSourceFile("src/render/viewport_render_target.cpp");
+
+    EXPECT_NE(lightCacheSource.find("LightProxyCreationGuard creationGuard"), std::string::npos);
+    EXPECT_NE(lightCacheSource.find("creationGuard.release()"), std::string::npos);
+    EXPECT_NE(gridRendererSource.find("struct GroundGridCreationGuard"), std::string::npos);
+    EXPECT_NE(gridRendererSource.find("creationGuard.vertexBuffer"), std::string::npos);
+    EXPECT_NE(gridRendererSource.find("creationGuard.release()"), std::string::npos);
+    EXPECT_NE(renderTargetSource.find("struct RenderTargetCreationGuard"), std::string::npos);
+    EXPECT_NE(renderTargetSource.find("creationGuard.colorTexture"), std::string::npos);
+    EXPECT_NE(renderTargetSource.find("creationGuard.release()"), std::string::npos);
+    EXPECT_LT(renderTargetSource.find("textureRegistry_->registerTexture(creationGuard.colorTexture"),
+            renderTargetSource.find("creationGuard.release()"));
 }
 
 TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
@@ -4913,15 +5054,16 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
 
     EXPECT_NE(overlayHeader.find("SelectionOverlayCache selectionOverlayCache_"), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.matches("), std::string::npos);
-    EXPECT_NE(source.find("contentRevision,\n                    selectionRevision,\n                    sceneRevision"), std::string::npos);
-    EXPECT_NE(source.find("selectionMode,\n                    overlaySignature,\n                    hover"), std::string::npos);
+    EXPECT_NE(splitSource.find("contentRevision,\n                selectionRevision,\n                sceneRevision"), std::string::npos);
+    EXPECT_NE(splitSource.find("selectionMode,\n                overlaySignature,\n                hover"), std::string::npos);
     EXPECT_NE(source.find("return overlayService_.selectionOverlaySignature(runtime_);"), std::string::npos);
     EXPECT_EQ(source.find("selectionOverlayToolSignature()"), std::string::npos);
     EXPECT_NE(splitSource.find("ModelingOverlayService::selectionOverlaySignature("), std::string::npos);
     EXPECT_NE(splitSource.find("runtime.cut_state()"), std::string::npos);
     EXPECT_NE(splitSource.find("runtime.mirror_state()"), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.frame()"), std::string::npos);
-    EXPECT_NE(source.find("SelectionOverlayProjection::projectSelectionOverlayFrame("), std::string::npos);
+    EXPECT_NE(splitSource.find("SelectionOverlayProjection::projectSelectionOverlayFrame("), std::string::npos);
+    EXPECT_EQ(source.find("SelectionOverlayProjection::projectSelectionOverlayFrame("), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayCache_.store("), std::string::npos);
     EXPECT_NE(splitSource.find("selectionOverlayBaseFrame(session)"), std::string::npos);
     EXPECT_NE(overlayHeader.find("overlayBaseCache_"), std::string::npos);
@@ -4929,6 +5071,10 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(splitSource.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
     EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
+    EXPECT_NE(splitSource.find("ModelingSelectionService::applyPickSelection("), std::string::npos);
+    EXPECT_NE(source.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, request)"), std::string::npos);
+    EXPECT_NE(splitSource.find("cachedPickObjectBounds(session, scene, objectRegistry)"), std::string::npos);
+    EXPECT_NE(splitSource.find("cachedPickFaceGeometry(session, scene, objectRegistry, pickOptions)"), std::string::npos);
     EXPECT_NE(splitSource.find("pickingCache_.faceGeometryEntries"), std::string::npos);
     EXPECT_NE(splitSource.find("PickingCacheProjection::objectFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
     const std::string pickingProjection = readSourceFile("src/editor/projection/picking_cache_projection.cpp");
@@ -5129,8 +5275,11 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(viewportHostSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportInputFrame input = buildViewportInputFrame()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("resolveKeybindingsForFrame(editor, inputRouter.state(), input)"), std::string::npos);
+    EXPECT_NE(viewportHostHeader.find("ViewportInputFrameProjectionRequest"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("ViewportHost::projectViewportInputFrame("), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("ViewportInputFrame input = buildViewportInputFrame(workspace.gridPreset())"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("resolveKeybindingsForFrame(editor, workspace, component, inputRouter.state(), input)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("applyViewportViewCommandToSurface(workspace, component, dispatch.commandId)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find(".finalizePressed = input.modalToolFinalizePressed"), std::string::npos);
     EXPECT_NE(viewportHostSource.find(".modeCyclePressed = input.modalToolModeCyclePressed"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("case ViewportInputActionKind::ModalToolFinalize:"), std::string::npos);
@@ -5174,10 +5323,10 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(viewportHostSource.find("case SDL_EVENT_WINDOW_FOCUS_LOST:"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("inputRouter_.reset()"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("input.mouseDragChordsDown[*mouseButton] = dragChord"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(mainInput_.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(instance.input.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(mainInput_.keyboardKeysDown, modifiers, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(instance.input.keyboardKeysDown, modifiers, input.activeInputChords)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(surface.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(surface.keyboardKeysDown, request.modifiers, input.activeInputChords)"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find(".input = &mainInput_"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find(".input = &instance.input"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("#include \"editor/input/quader_input_binding.hpp\""), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("#include \"editor/input/viewport_input_binding_adapter.hpp\""), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("viewportKeyForQuaderKeyCode(keyCode)"), std::string::npos);
@@ -5206,7 +5355,8 @@ TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
     EXPECT_NE(rmlHostSource.find("context_->GetFocusElement()"), std::string::npos);
     EXPECT_NE(uiSystemSource.find("viewportHost_.setTextInputActive(rmlHost_.textInputActive())"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("void ViewportHost::setTextInputActive(bool active)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.textInputActive = textInputActive_"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find("input.textInputActive = request.textInputActive"), std::string::npos);
+    EXPECT_NE(viewportHostSource.find(".textInputActive = textInputActive_"), std::string::npos);
     EXPECT_EQ(viewportHostSource.find("input.textInputActive = false"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
     EXPECT_NE(viewportHostSource.find("input.mouseLocal = mouseLocal"), std::string::npos);
@@ -5921,8 +6071,19 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
     EXPECT_EQ(workspace.gridPreset(), static_cast<int>(quader_host_contract::grid_preset_catalog().size()));
 
     ViewportInputRouter router;
-    router.setGridPreset(999);
+    router.syncGridPresetSnapshot(999);
     EXPECT_EQ(router.state().gridPreset, static_cast<int>(quader_host_contract::grid_preset_catalog().size()));
+
+    const std::string routerSource = readSourceFile("src/viewport/viewport_input_router.cpp");
+    const std::string runtimeSource = readSourceFile("src/editor/tools/viewport_tool_runtime.cpp");
+    const std::string hostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+
+    EXPECT_NE(routerSource.find("void ViewportInputRouter::syncGridPresetSnapshot(int preset)"), std::string::npos);
+    EXPECT_NE(runtimeSource.find("result.requestedGridPreset = viewportClampGridPreset(shortcut.gridPreset)"), std::string::npos);
+    EXPECT_EQ(runtimeSource.find("state.gridPreset = viewportClampGridPreset(shortcut.gridPreset)"), std::string::npos);
+    EXPECT_NE(hostSource.find("workspace.setGridPreset(result.requestedGridPreset)"), std::string::npos);
+    EXPECT_EQ(hostSource.find("inputRouter_.setGridPreset(workspace.gridPreset())"), std::string::npos);
+    EXPECT_EQ(hostSource.find("instance.inputRouter.setGridPreset(workspace.gridPreset())"), std::string::npos);
 }
 
 TEST(ViewportWorkspaceServiceTests, WorkspaceFocusDistancesUseHostViewportDefaults) {
@@ -5989,6 +6150,11 @@ TEST(ViewportWorkspaceServiceTests, AuxiliaryViewportRecordsOwnWindowedCameraAnd
     ASSERT_NE(workspace.auxiliaryViewport("viewport-2"), nullptr);
     EXPECT_EQ(workspace.auxiliaryViewport("viewport-2")->renderSize.x, 640.0f);
     EXPECT_EQ(workspace.auxiliaryViewport("viewport-2")->renderSize.y, 360.0f);
+    EXPECT_EQ(workspace.auxiliaryViewportView("viewport-2"), ViewportView::Perspective);
+    EXPECT_TRUE(workspace.setAuxiliaryViewportView("viewport-2", ViewportView::Left));
+    EXPECT_EQ(workspace.auxiliaryViewportView("viewport-2"), ViewportView::Left);
+    EXPECT_FALSE(workspace.setAuxiliaryViewportView("viewport-2", ViewportView::Left));
+    EXPECT_FALSE(workspace.setAuxiliaryViewportView("missing", ViewportView::Top));
     workspace.setAuxiliaryViewportVisible("viewport-2", true);
     EXPECT_TRUE(workspace.auxiliaryViewportVisible("viewport-2"));
 
@@ -6827,11 +6993,14 @@ TEST(ViewportInputRouterTests, GridPresetShortcutReportsOnlyActualChanges) {
     ViewportInputResult result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_TRUE(result.gridPresetChanged);
-    EXPECT_EQ(router.state().gridPreset, 7);
+    EXPECT_EQ(result.requestedGridPreset, 7);
+    EXPECT_EQ(router.state().gridPreset, viewportDefaultGridPreset());
 
+    router.syncGridPresetSnapshot(result.requestedGridPreset);
     result = router.handleFrame(input, camera);
     EXPECT_TRUE(result.shortcutHandled);
     EXPECT_FALSE(result.gridPresetChanged);
+    EXPECT_EQ(result.requestedGridPreset, 7);
     EXPECT_EQ(router.state().gridPreset, 7);
 }
 
@@ -7694,6 +7863,43 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
     EXPECT_EQ(document.revision(), 4u);
 }
 
+TEST(ProjectDocumentTests, ValidatesAssetReferencesAtDocumentOwner) {
+    ProjectDocument document(ProjectDocumentRecord{
+            .id = 21,
+            .name = "Reference Validation Project",
+    });
+    const EntityId entity = document.scene().createEntity("Missing Mesh", EntityKind::Mesh);
+    document.scene().setMesh(entity, MeshComponent{.mesh = 404u});
+    document.scene().setMaterial(entity, MaterialComponent{
+            .material = 405u,
+            .materialSlots = {{2u, 406u}},
+    });
+
+    const ProjectDocumentAssetReferenceReport sceneReport = document.validateAssetReferences();
+    ASSERT_FALSE(sceneReport.ok());
+    ASSERT_GE(sceneReport.issues.size(), 3u);
+    EXPECT_NE(sceneReport.issues[0].message.find("missing mesh asset"), std::string::npos);
+    EXPECT_NE(sceneReport.issues[1].message.find("missing material asset"), std::string::npos);
+
+    const ProjectDocumentAssetReferenceReport recordReport = document.validateAssetReferences(ProjectObjectRecord{
+            .id = 99u,
+            .sceneEntity = InvalidEntityId,
+            .mesh = 404u,
+            .material = 405u,
+    });
+    ASSERT_FALSE(recordReport.ok());
+    EXPECT_NE(recordReport.issues.front().message.find("object record points at a missing scene entity"),
+            std::string::npos);
+
+    const std::string projectDocumentSource = readSourceFile("src/scene/document/project_document.cpp");
+    const std::string qdrReaderSource = readSourceFile("src/io/qdr/qdr_document_reader.cpp");
+    EXPECT_NE(projectDocumentSource.find("ProjectDocument::validateAssetReferences"), std::string::npos);
+    EXPECT_NE(qdrReaderSource.find("document.validateAssetReferences()"), std::string::npos);
+    EXPECT_NE(qdrReaderSource.find("document.validateAssetReferences(record)"), std::string::npos);
+    EXPECT_EQ(qdrReaderSource.find("document.assets().mesh(mesh->mesh)"), std::string::npos);
+    EXPECT_EQ(qdrReaderSource.find("document.assets().material(material->material)"), std::string::npos);
+}
+
 TEST(ProjectDocumentTests, RejectsEditorObjectIdCollisionsBetweenSceneEntities) {
     ProjectDocument document(ProjectDocumentRecord{
             .id = 19,
@@ -7833,6 +8039,132 @@ TEST(ProjectDocumentTests, ExplicitObjectRecordSyncParticipatesInProjectSessionD
     EXPECT_FALSE(session.dirty());
     EXPECT_FALSE(session.document().synchronizeObjectRecordsWithScene());
     EXPECT_FALSE(session.dirty());
+}
+
+TEST(ProjectSessionTests, DirtyStateAggregatesProjectSceneAssetAndModelingContentRevisions) {
+    ProjectSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::fromProjectSession(session));
+
+    EXPECT_FALSE(editor.project().dirty());
+
+    session.document().rename("Dirty Project");
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    QuaderCreateEntityArgs entityArgs;
+    entityArgs.name = "Dirty Entity";
+    const QuaderApiResult<QuaderEntityRef> entity = editor.scene().createEntity(entityArgs);
+    ASSERT_TRUE(entity.ok()) << entity.errorMessage();
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    QuaderTransform moved;
+    moved.position = {1.0f, 2.0f, 3.0f};
+    const QuaderApiVoidResult transformed = editor.scene().setTransform(entity.value().id, moved);
+    ASSERT_TRUE(transformed.ok()) << transformed.errorMessage();
+    EXPECT_TRUE(transformed.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const QuaderApiVoidResult hidden = editor.scene().setVisible(entity.value().id, false);
+    ASSERT_TRUE(hidden.ok()) << hidden.errorMessage();
+    EXPECT_TRUE(hidden.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const QuaderApiVoidResult locked = editor.scene().setLocked(entity.value().id, true);
+    ASSERT_TRUE(locked.ok()) << locked.errorMessage();
+    EXPECT_TRUE(locked.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    QuaderMaterialArgs materialArgs;
+    materialArgs.name = "Dirty Material";
+    materialArgs.baseColor = {0.8f, 0.7f, 0.6f};
+    const QuaderApiResult<QuaderAssetRef> material = editor.assets().addMaterial(materialArgs);
+    ASSERT_TRUE(material.ok()) << material.errorMessage();
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const QuaderApiVoidResult assigned =
+            editor.assets().assignMaterialToEntity(entity.value().id, material.value().id);
+    ASSERT_TRUE(assigned.ok()) << assigned.errorMessage();
+    EXPECT_TRUE(assigned.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const QuaderApiVoidResult recolored =
+            editor.assets().setMaterialBaseColor(material.value().id, {0.1f, 0.2f, 0.3f});
+    ASSERT_TRUE(recolored.ok()) << recolored.errorMessage();
+    EXPECT_TRUE(recolored.changed());
+    EXPECT_TRUE(editor.project().dirty());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const QuaderApiResult<QuaderModelingObjectRef> box =
+            editor.modeling().createBox(
+                    QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+                    "Dirty Modeling Box");
+    ASSERT_TRUE(box.ok()) << box.errorMessage();
+    ASSERT_TRUE(editor.selection().selectObject(box.value()).ok());
+    session.markClean();
+    EXPECT_FALSE(editor.project().dirty());
+
+    const QuaderApiVoidResult movedSelection = editor.modeling().moveSelection({0.25f, 0.0f, 0.0f});
+    ASSERT_TRUE(movedSelection.ok()) << movedSelection.errorMessage();
+    EXPECT_TRUE(movedSelection.changed());
+    EXPECT_TRUE(editor.project().dirty());
+}
+
+TEST(ProjectSessionTests, PublicHistoryIgnoresUntrackedModelingSessionHistory) {
+    ProjectSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::fromProjectSession(session));
+    const auto entityNamed = [&](std::string_view name) {
+        const std::vector<QuaderEntitySnapshot> entities = editor.query().entities();
+        return std::find_if(
+                entities.begin(),
+                entities.end(),
+                [&](const QuaderEntitySnapshot& snapshot) {
+                    return snapshot.name == name;
+                }) != entities.end();
+    };
+
+    const auto hidden = session.modeling().createBoxFromBounds({
+            .bounds = {.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
+            .name = "Hidden Modeling Box",
+    });
+    ASSERT_TRUE(hidden.ok) << hidden.message;
+    ASSERT_TRUE(entityNamed("Hidden Modeling Box"));
+
+    EXPECT_FALSE(editor.history().canUndo());
+    EXPECT_FALSE(editor.history().canRedo());
+
+    const QuaderApiVoidResult directUndo = editor.history().undo();
+    EXPECT_FALSE(directUndo.ok());
+    EXPECT_FALSE(directUndo.changed());
+    EXPECT_EQ(directUndo.errorMessage(), "No command to undo");
+    EXPECT_TRUE(entityNamed("Hidden Modeling Box"));
+
+    const QuaderApiVoidResult commandUndo = editor.commands().execute(QuaderCommand::HistoryUndo);
+    EXPECT_FALSE(commandUndo.ok());
+    EXPECT_FALSE(commandUndo.changed());
+    EXPECT_EQ(commandUndo.errorMessage(), "Command is disabled.");
+    EXPECT_EQ(commandUndo.revisions.sceneRevision, editor.revisions().sceneRevision);
+    EXPECT_EQ(commandUndo.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
+    EXPECT_TRUE(entityNamed("Hidden Modeling Box"));
+
+    const QuaderApiVoidResult unknownTool = editor.tools().activate("__missing_tool__");
+    EXPECT_FALSE(unknownTool.ok());
+    EXPECT_EQ(unknownTool.errorMessage(), "Unknown viewport tool.");
+    EXPECT_EQ(unknownTool.revisions.sceneRevision, editor.revisions().sceneRevision);
+    EXPECT_EQ(unknownTool.revisions.modelingContentRevision, editor.revisions().modelingContentRevision);
 }
 
 TEST(ProjectSessionTests, ServiceCreatesSessionsWithDocumentAssetsAndCommandsWiredTogether) {
@@ -8764,12 +9096,14 @@ TEST(ModelingSessionServiceTests, ExposesBoxCommandContract) {
     ModelingSessionService service(scene, assets);
 
     const ModelingCommandDescriptor box = service.boxToolCommand();
+    const ToolDescriptor* viewportBox = findViewportToolDescriptor(ModelingViewportTool::Box);
+    ASSERT_NE(viewportBox, nullptr);
 
     EXPECT_EQ(box.command, ModelingCommandId::ActivateBoxTool);
-    EXPECT_EQ(box.id, "box");
-    EXPECT_EQ(box.label, "Box");
-    EXPECT_EQ(box.shortcut, "B");
-    EXPECT_TRUE(box.viewportScoped);
+    EXPECT_EQ(box.id, std::string{viewportBox->id});
+    EXPECT_EQ(box.label, std::string{viewportBox->label});
+    EXPECT_EQ(box.shortcut, std::string{viewportBox->shortcut});
+    EXPECT_EQ(box.viewportScoped, viewportBox->ownsViewport);
     EXPECT_TRUE(box.rebuildsMeshOnSuccess);
 }
 

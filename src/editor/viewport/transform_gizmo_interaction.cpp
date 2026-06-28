@@ -24,28 +24,6 @@ bool componentSelectionMode(QuaderSelectionMode mode) {
             mode == QuaderSelectionMode::Face;
 }
 
-quader_editor_core::ViewportInteractionTool runtimeToolFor(ViewportToolId tool) {
-    switch (tool) {
-    case ViewportToolId::Move:
-        return quader_editor_core::ViewportInteractionTool::move;
-    case ViewportToolId::Rotate:
-        return quader_editor_core::ViewportInteractionTool::rotate;
-    case ViewportToolId::Scale:
-        return quader_editor_core::ViewportInteractionTool::scale;
-    case ViewportToolId::Select:
-    case ViewportToolId::Extend:
-    case ViewportToolId::Extrude:
-    case ViewportToolId::Box:
-    case ViewportToolId::InsertEdgeLoop:
-    case ViewportToolId::Knife:
-    case ViewportToolId::Cut:
-    case ViewportToolId::Poly:
-    case ViewportToolId::Mirror:
-        return quader_editor_core::ViewportInteractionTool::select;
-    }
-    return quader_editor_core::ViewportInteractionTool::select;
-}
-
 QuaderTransformAxis apiAxisFor(quader_editor_core::TransformAxis axis) {
     switch (axis) {
     case quader_editor_core::TransformAxis::x:
@@ -87,14 +65,14 @@ quader_editor_core::TransformGizmoFrameInput makeGizmoInput(
         quader_editor_core::TransformAxis activeAxis,
         quader_editor_core::TransformAxis hoverAxis) {
     quader_editor_core::TransformGizmoFrameInput input;
-    input.tool = runtimeToolFor(tool);
+    input.tool = viewportToolInteractionTool(tool);
     input.active_axis = activeAxis;
     input.hover_axis = hoverAxis;
     input.has_selection = true;
     input.has_pivot = true;
     input.pivot = pivot;
     input.camera = ViewportCameraAdapter::runtimeCamera(frame.camera, frame.input.viewportSize);
-    input.grid_size = viewportGridWorldSizeForPreset(frame.inputRouter.state().gridPreset);
+    input.grid_size = viewportGridWorldSizeForPreset(frame.input.gridPreset);
     input.gizmo_size_pixels = 68.0;
     input.pick_radius_pixels = 12.0;
     input.gizmo_scale = std::max(frame.settings.floatValue(ViewportFloatSettingId::GizmoSize), 0.1f);
@@ -178,7 +156,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
                                 .direction = dragRay.direction,
                         },
                         .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
-                        .gridSize = viewportGridWorldSizeForPreset(frame.inputRouter.state().gridPreset),
+                        .gridSize = viewportGridWorldSizeForPreset(frame.input.gridPreset),
                         .vertexSnapRadius = frame.settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
                         .precision = frame.input.modifiers.primary,
                 });
@@ -216,7 +194,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
                             .direction = startRay.direction,
                     },
                     .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
-                    .gridSize = viewportGridWorldSizeForPreset(frame.inputRouter.state().gridPreset),
+                    .gridSize = viewportGridWorldSizeForPreset(frame.input.gridPreset),
                     .vertexSnapRadius = frame.settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
                     .duplicateSelected = duplicateSelected,
             });

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -25,6 +26,7 @@ std::string_view viewportPaneStableId(ViewportPaneId paneId);
 std::string_view viewportPaneLabel(ViewportPaneId paneId);
 ViewportView viewportViewForPane(ViewportPaneId paneId);
 std::string_view viewportViewStableId(ViewportView view);
+std::optional<ViewportView> viewportViewFromStableId(std::string_view stableId);
 std::string_view viewportViewLabel(ViewportView view);
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId);
 std::vector<ViewportPanePlacement> viewportLayoutPlacements(ViewportLayoutId layoutId, const ViewportLayoutState& state);

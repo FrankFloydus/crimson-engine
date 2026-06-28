@@ -360,6 +360,38 @@ TEST(QdrDocumentIoTests, RejectsUnknownCanonicalProjectPayloadKindWithoutLegacyM
     EXPECT_NE(result.message.find("Unsupported QDR project document payload kind"), std::string::npos);
 }
 
+TEST(QdrDocumentIoTests, RootHeaderParsingUsesSharedHelperAcrossReaderSurfaces) {
+    QdrProjectReadResult missingRootProject = QdrDocumentReader::deserializeProjectDocument("[]");
+    EXPECT_FALSE(missingRootProject.ok);
+    EXPECT_NE(missingRootProject.message.find("root must be an object"), std::string::npos);
+
+    const std::string oversizedVersion = R"json({
+  "format": "quader.qdr",
+  "version": 2147483648,
+  "document": {}
+})json";
+    QdrProjectReadResult oversizedProject = QdrDocumentReader::deserializeProjectDocument(oversizedVersion);
+    EXPECT_FALSE(oversizedProject.ok);
+    EXPECT_NE(oversizedProject.message.find("outside the supported integer range"), std::string::npos);
+
+    const quader_io::QdrReadResult missingRootLegacy = quader_io::deserialize_document("[]");
+    EXPECT_FALSE(missingRootLegacy.ok);
+    EXPECT_NE(missingRootLegacy.message.find("root must be an object"), std::string::npos);
+
+    const quader_io::QdrReadResult oversizedLegacy = quader_io::deserialize_document(oversizedVersion);
+    EXPECT_FALSE(oversizedLegacy.ok);
+    EXPECT_NE(oversizedLegacy.message.find("outside the supported integer range"), std::string::npos);
+
+    const std::string qdrRootHeader = readSourceFile("src/io/qdr/qdr_root.hpp");
+    const std::string legacyReader = readSourceFile("src/io/qdr/qdr_document.cpp");
+    const std::string projectReader = readSourceFile("src/io/qdr/qdr_document_reader.cpp");
+    EXPECT_NE(qdrRootHeader.find("QdrRootHeader"), std::string::npos);
+    EXPECT_NE(legacyReader.find("read_qdr_root_header(root)"), std::string::npos);
+    EXPECT_NE(projectReader.find("read_qdr_root_header(root)"), std::string::npos);
+    EXPECT_EQ(legacyReader.find("read_version_header"), std::string::npos);
+    EXPECT_EQ(projectReader.find("readVersionHeader"), std::string::npos);
+}
+
 TEST(QdrDocumentIoTests, RejectsCanonicalProjectPayloadWithDanglingObjectRecordEntity) {
     ProjectDocument document(ProjectDocumentRecord{.id = 78u, .name = "Dangling Record"});
     const EntityId entity = document.scene().createEntityWithId(200u, "Object", EntityKind::Mesh);
@@ -908,7 +940,10 @@ TEST(ProjectionOwnershipGuardrailTests, ProjectionIsReadOnlyAndModelingOwnsScene
 
     const std::string facade =
             readSourceFile({"src", "editor", "modeling", "services", "modeling_session_service.cpp"});
-    EXPECT_NE(facade.find("SelectionOverlayProjection::projectSelectionOverlayFrame"), std::string::npos);
+    const std::string overlayService =
+            readSourceFile({"src", "editor", "modeling", "services", "modeling_session_services.cpp"});
+    EXPECT_EQ(facade.find("SelectionOverlayProjection::projectSelectionOverlayFrame"), std::string::npos);
+    EXPECT_NE(overlayService.find("SelectionOverlayProjection::projectSelectionOverlayFrame"), std::string::npos);
 }
 
 TEST(ProjectionOwnershipGuardrailTests, RenderDoesNotDependOnProjectionOrModelingOwners) {

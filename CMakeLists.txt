@@ -156,6 +156,7 @@ add_library(quader_core STATIC
     src/ui/backends/rml/rml_markup_writer.cpp
     src/ui/components/atoms/ui_button_component.cpp
     src/ui/components/atoms/ui_chrome_button_component.cpp
+    src/ui/components/atoms/ui_dropdown_component.cpp
     src/ui/components/atoms/ui_toolbar_button_component.cpp
     src/ui/components/common/dock_layout_model.cpp
     src/ui/components/common/ui_tab_rail_component.cpp

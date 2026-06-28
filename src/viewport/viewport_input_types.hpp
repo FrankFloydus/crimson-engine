@@ -61,6 +61,7 @@ struct ViewportInputFrame {
     QVec2 mouseDelta = {};
     QVec2 mouseLocal = {};
     QVec2 viewportSize = {};
+    int gridPreset = 6;
     ViewportModifiers modifiers = {};
     QVec3 flyLocalDirection = {};
     std::vector<QuaderInputChord> pressedInputChords;
@@ -92,6 +93,7 @@ struct ViewportInputResult {
     bool cancelRequested = false;
     bool focusDocumentRequested = false;
     bool maximizedToggleRequested = false;
+    int requestedGridPreset = 6;
     ViewportShortcut shortcut = {};
 };
 

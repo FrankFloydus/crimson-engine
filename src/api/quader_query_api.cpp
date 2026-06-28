@@ -7,6 +7,7 @@
 #include "api/quader_query_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
+#include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/history/editor_history_service.hpp"
@@ -219,14 +220,7 @@ QuaderOverlayFrame QuaderQueryApi::selectionOverlay() const {
 }
 
 QuaderRevisionStamp QuaderQueryApi::revisions() const {
-    const ModelingSelectionSummary summary = projectSession(session_).modeling().selectionSummary();
-    return {
-            .projectRevision = projectSession(session_).document().revision(),
-            .sceneRevision = projectSession(session_).scene().revision(),
-            .assetRevision = projectSession(session_).assets().revision(),
-            .modelingContentRevision = summary.contentRevision,
-            .modelingSelectionRevision = summary.selectionRevision,
-    };
+    return quaderApiCurrentRevisions(projectSession(session_));
 }
 
 QuaderApiSnapshot QuaderQueryApi::snapshot() const {

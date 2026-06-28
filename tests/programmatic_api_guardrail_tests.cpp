@@ -93,6 +93,7 @@ std::vector<std::filesystem::path> publicDocAndExampleFiles() {
 bool isInternalApiHeader(const std::filesystem::path& path) {
     const std::string relative = normalizedRelative(path);
     return relative == "src/api/quader_api_mutation_runner.hpp" ||
+            relative == "src/api/quader_api_status_internal.hpp" ||
             relative == "src/api/quader_api_session_internal_access.hpp" ||
             relative == "src/api/quader_api_type_conversions.hpp" ||
             relative == "src/api/quader_polygon_document_internal_access.hpp" ||
@@ -175,17 +176,8 @@ bool isDocumentationOnlyExample(const std::string& source) {
 }
 
 bool allowedPublicBehaviorHarnessUse(std::string_view relative, std::string_view line) {
-    if (relative == "tests/editor_api_tests.cpp") {
-        return line.find("\"scene/document/project_session.hpp\"") != std::string_view::npos ||
-                line.find("\"editor/modeling/services/modeling_session_service.hpp\"") != std::string_view::npos ||
-                line.find("session.document().rename(") != std::string_view::npos ||
-                line.find("session.markClean(") != std::string_view::npos ||
-                line.find("session.modeling().createBoxFromBounds(") != std::string_view::npos ||
-                line.find("session.assets().addMesh(") != std::string_view::npos ||
-                line.find("session.scene().createEntity(") != std::string_view::npos ||
-                line.find("session.scene().setMesh(") != std::string_view::npos ||
-                line.find("session.replaceStandaloneMesh(") != std::string_view::npos;
-    }
+    (void)relative;
+    (void)line;
     return false;
 }
 
@@ -767,12 +759,15 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
             "\"editor/modeling/services/modeling_session_service.hpp\"",
             "\"editor/selection/",
             "\"editor/tools/",
+            "\"api/quader_api_session_internal_access.hpp\"",
             "\"scene/scene_document.hpp\"",
             "\"scene/document/project_session.hpp\"",
             "ModelingSessionService",
             "DocumentCommandService",
             "SceneDocument",
             "AssetRegistry",
+            "ProjectSession",
+            "QuaderApiSessionInternalAccess",
             "session.scene().",
             "session.selection().",
             "session.modeling().",
@@ -940,4 +935,45 @@ TEST(ProgrammaticApiGuardrailTests, PublicModelingCommandBridgeIsDescriptorDrive
     EXPECT_NE(commandDescriptor.find("registersPublicCommand"), std::string::npos);
     EXPECT_EQ(commandDescriptor.find("publicCompatibilityAlias"), std::string::npos);
     EXPECT_NE(commandCatalog.find(".publicCommandId = entry.publicCommandId"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
+    const std::string commandsApi = readFile(sourceRoot() / "src/api/quader_commands_api.cpp");
+    const std::string commandTool = readFile(sourceRoot() / "src/editor/commands/command_tool.hpp");
+    const std::string viewportAdapter = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.hpp");
+    const std::string commandTargets = readFile(sourceRoot() / "src/core/public_command_targets.hpp");
+
+    EXPECT_NE(commandTargets.find("kQuaderModelingCommandTargetPrefix"), std::string::npos);
+    EXPECT_NE(commandTargets.find("kQuaderToolActivationCommandTargetPrefix"), std::string::npos);
+    EXPECT_NE(commandsApi.find("quaderModelingCommandTargetId"), std::string::npos);
+    EXPECT_NE(commandsApi.find("quaderToolActivationCommandTargetId"), std::string::npos);
+    EXPECT_NE(commandTool.find("quaderModelingCommandTargetId"), std::string::npos);
+    EXPECT_NE(viewportAdapter.find("quaderToolIdFromActivationCommandTarget"), std::string::npos);
+
+    EXPECT_EQ(commandsApi.find("canonicalTargetId"), std::string::npos);
+    EXPECT_EQ(commandsApi.find("registerPrefix(\"tools.activate."), std::string::npos);
+    EXPECT_EQ(commandTool.find("std::string commandId(\"modeling."), std::string::npos);
+    EXPECT_EQ(viewportAdapter.find("std::string commandId(\"tools.activate."), std::string::npos);
+    EXPECT_EQ(viewportAdapter.find("constexpr std::string_view toolPrefix = \"tools.activate."), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, ApiStatusStampsUseSharedInternalHelper) {
+    const std::string statusHelper = readFile(sourceRoot() / "src/api/quader_api_status_internal.hpp");
+    const std::string mutationRunner = readFile(sourceRoot() / "src/api/quader_api_mutation_runner.cpp");
+    const std::string toolsApi = readFile(sourceRoot() / "src/api/quader_tools_api.cpp");
+    const std::string queryApi = readFile(sourceRoot() / "src/api/quader_query_api.cpp");
+    const std::string modelingApi = readFile(sourceRoot() / "src/api/quader_modeling_api.cpp");
+    const std::string projectApi = readFile(sourceRoot() / "src/api/quader_project_api.cpp");
+
+    EXPECT_NE(statusHelper.find("quaderApiCurrentRevisions"), std::string::npos);
+    EXPECT_NE(mutationRunner.find("quaderApiVoidStatus"), std::string::npos);
+    EXPECT_NE(toolsApi.find("quaderApiVoidStatus"), std::string::npos);
+    EXPECT_NE(queryApi.find("quaderApiCurrentRevisions"), std::string::npos);
+    EXPECT_NE(modelingApi.find("quaderApiPreviewMutationKind"), std::string::npos);
+    EXPECT_NE(projectApi.find("quaderApiFailureStatus"), std::string::npos);
+
+    EXPECT_EQ(toolsApi.find("QuaderToolsApi::currentRevisions"), std::string::npos);
+    EXPECT_EQ(toolsApi.find(".modelingContentRevision = summary.contentRevision"), std::string::npos);
+    EXPECT_EQ(queryApi.find(".modelingContentRevision = summary.contentRevision"), std::string::npos);
+    EXPECT_EQ(modelingApi.find(".modelingContentRevision = summary.contentRevision"), std::string::npos);
 }

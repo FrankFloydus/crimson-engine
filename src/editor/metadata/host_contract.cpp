@@ -14,88 +14,80 @@
 #include <editor/interactions/tool_identity.hpp>
 #include <editor/modeling/runtime/tool_constants.hpp>
 
+#include <algorithm>
 #include <array>
+#include <iterator>
+#include <utility>
 #include <vector>
 
 namespace quader_host_contract {
 namespace {
 
-HostOptionDescriptor int_option(const quader_editor_core::IntOperationOptionSchema& schema)
+HostOptionDescriptor host_option(const quader_editor_core::EditorOperationOptionDescriptor& schema)
 {
 	HostOptionDescriptor option;
-	option.id = schema.id;
+	option.id = schema.option_id;
 	option.label = schema.label;
-	option.value_kind = HostOptionValueKind::integer;
-	option.default_integer = schema.default_value;
-	option.minimum_integer = schema.minimum;
-	option.maximum_integer = schema.maximum;
-	option.integer_step = schema.step;
-	option.hard_limits = schema.hard_limits;
-	return option;
-}
-
-HostOptionDescriptor float_option(const quader_editor_core::FloatOperationOptionSchema& schema)
-{
-	HostOptionDescriptor option;
-	option.id = schema.id;
-	option.label = schema.label;
-	option.value_kind = HostOptionValueKind::floating;
-	option.default_number = schema.default_value;
-	option.minimum_number = schema.minimum;
-	option.maximum_number = schema.maximum;
-	option.number_step = schema.step;
-	option.hard_limits = schema.hard_limits;
-	return option;
-}
-
-HostOptionDescriptor bool_option(const quader_editor_core::BoolOperationOptionSchema& schema)
-{
-	HostOptionDescriptor option;
-	option.id = schema.id;
-	option.label = schema.label;
-	option.value_kind = HostOptionValueKind::boolean;
-	option.default_bool = schema.default_value;
+	option.default_integer = schema.default_integer;
+	option.minimum_integer = schema.minimum_integer;
+	option.maximum_integer = schema.maximum_integer;
+	option.integer_step = schema.integer_step;
+	option.default_number = schema.default_number;
+	option.minimum_number = schema.minimum_number;
+	option.maximum_number = schema.maximum_number;
+	option.number_step = schema.number_step;
+	option.default_bool = schema.default_bool;
 	option.visible = schema.visible;
-	option.hard_limits = false;
+	option.hard_limits = schema.hard_limits;
+	switch (schema.value_kind) {
+	case quader_editor_core::EditorOperationOptionValueKind::integer:
+		option.value_kind = HostOptionValueKind::integer;
+		break;
+	case quader_editor_core::EditorOperationOptionValueKind::floating:
+		option.value_kind = HostOptionValueKind::floating;
+		break;
+	case quader_editor_core::EditorOperationOptionValueKind::boolean:
+		option.value_kind = HostOptionValueKind::boolean;
+		break;
+	}
 	return option;
+}
+
+/**
+ * Groups schema-owned operation options by operation ID for host metadata projection.
+ */
+struct HostOperationOptions {
+	std::string_view operation_id;
+	std::vector<HostOptionDescriptor> options;
+};
+
+std::vector<HostOperationOptions> build_operation_options()
+{
+	std::vector<HostOperationOptions> groups;
+	for (const quader_editor_core::EditorOperationOptionDescriptor& option :
+			quader_editor_core::operation_option_descriptor_catalog()) {
+		auto found = std::find_if(
+			groups.begin(),
+			groups.end(),
+			[&](const HostOperationOptions& group) {
+				return group.operation_id == option.operation_id;
+			});
+		if (found == groups.end()) {
+			groups.push_back(HostOperationOptions{option.operation_id, {}});
+			found = std::prev(groups.end());
+		}
+		found->options.push_back(host_option(option));
+	}
+	return groups;
 }
 
 std::span<const HostOptionDescriptor> options_for_operation(std::string_view id)
 {
-	static const std::array<HostOptionDescriptor, 1> bridge_options {{
-		int_option(quader_editor_core::bridge_operation_schema().steps),
-	}};
-	static const std::array<HostOptionDescriptor, 3> edge_bevel_options {{
-		float_option(quader_editor_core::edge_bevel_operation_schema().width),
-		float_option(quader_editor_core::edge_bevel_operation_schema().profile),
-		int_option(quader_editor_core::edge_bevel_operation_schema().segments),
-	}};
-	static const std::array<HostOptionDescriptor, 2> thicken_options {{
-		float_option(quader_editor_core::thicken_operation_schema().thickness),
-		bool_option(quader_editor_core::thicken_operation_schema().from_center),
-	}};
-	static const std::array<HostOptionDescriptor, 2> slice_quad_options {{
-		int_option(quader_editor_core::slice_quad_operation_schema().x_slices),
-		int_option(quader_editor_core::slice_quad_operation_schema().y_slices),
-	}};
-	static const std::array<HostOptionDescriptor, 1> merge_by_distance_options {{
-		float_option(quader_editor_core::merge_by_distance_operation_schema().tolerance),
-	}};
-
-	if (id == quader_editor_core::bridge_operation_schema().operation_id) {
-		return bridge_options;
-	}
-	if (id == quader_editor_core::edge_bevel_operation_schema().operation_id) {
-		return edge_bevel_options;
-	}
-	if (id == quader_editor_core::thicken_operation_schema().operation_id) {
-		return thicken_options;
-	}
-	if (id == quader_editor_core::slice_quad_operation_schema().operation_id) {
-		return slice_quad_options;
-	}
-	if (id == quader_editor_core::merge_by_distance_operation_schema().operation_id) {
-		return merge_by_distance_options;
+	static const std::vector<HostOperationOptions> groups = build_operation_options();
+	for (const HostOperationOptions& group : groups) {
+		if (group.operation_id == id) {
+			return {group.options.data(), group.options.size()};
+		}
 	}
 	return {};
 }
@@ -553,7 +545,7 @@ HostShortcutDescriptor shortcut(
 
 std::span<const HostShortcutDescriptor> shortcut_descriptors()
 {
-	static const std::array<HostShortcutDescriptor, 44> descriptors {{
+	static const std::array<HostShortcutDescriptor, 43> descriptors {{
 		shortcut("undo", HostShortcutContext::global, "Z", true, false, false,
 			HostShortcutTargetKind::editor_action, "undo"),
 		shortcut("redo_shift_z", HostShortcutContext::global, "Z", true, false, true,
@@ -613,8 +605,6 @@ std::span<const HostShortcutDescriptor> shortcut_descriptors()
 			HostShortcutTargetKind::tool, "select"),
 		shortcut("knife_tool", HostShortcutContext::viewport, "C", false, false, false,
 			HostShortcutTargetKind::action, "knife_tool"),
-		shortcut("poly_tool", HostShortcutContext::viewport, "P", false, false, false,
-			HostShortcutTargetKind::action, "poly_tool"),
 		shortcut("flip_mesh_normals", HostShortcutContext::viewport, "F", false, false, false,
 			HostShortcutTargetKind::action, "invert_mesh"),
 		shortcut("move_tool", HostShortcutContext::viewport, "W", false, false, false,
@@ -1082,63 +1072,52 @@ HostPreferenceDescriptor choice_preference(
 	return descriptor;
 }
 
-HostPreferenceDescriptor operation_int_preference(
-		std::string_view id,
-		const quader_editor_core::IntOperationOptionSchema& schema,
-		std::string_view group_id,
-		std::string_view operation_id)
+HostPreferenceDescriptor operation_preference(
+		const quader_editor_core::EditorOperationOptionDescriptor& schema)
 {
-	return int_preference(
-		id,
-		schema.label,
-		HostPreferenceScope::operation,
-		schema.default_value,
-		schema.minimum,
-		schema.maximum,
-		schema.step,
-		group_id,
-		operation_id,
-		schema.id,
-		schema.hard_limits);
+	switch (schema.value_kind) {
+	case quader_editor_core::EditorOperationOptionValueKind::integer:
+		return int_preference(
+			schema.preference_id,
+			schema.label,
+			HostPreferenceScope::operation,
+			schema.default_integer,
+			schema.minimum_integer,
+			schema.maximum_integer,
+			schema.integer_step,
+			schema.preference_group_id,
+			schema.operation_id,
+			schema.option_id,
+			schema.hard_limits);
+	case quader_editor_core::EditorOperationOptionValueKind::floating:
+		return float_preference(
+			schema.preference_id,
+			schema.label,
+			HostPreferenceScope::operation,
+			schema.default_number,
+			schema.minimum_number,
+			schema.maximum_number,
+			schema.number_step,
+			schema.preference_group_id,
+			schema.operation_id,
+			schema.option_id,
+			{},
+			schema.hard_limits);
+	case quader_editor_core::EditorOperationOptionValueKind::boolean:
+		return bool_preference(
+			schema.preference_id,
+			schema.label,
+			schema.default_bool,
+			schema.preference_group_id,
+			schema.operation_id,
+			schema.option_id,
+			schema.visible);
+	}
+	return {};
 }
 
-HostPreferenceDescriptor operation_float_preference(
-		std::string_view id,
-		const quader_editor_core::FloatOperationOptionSchema& schema,
-		std::string_view group_id,
-		std::string_view operation_id)
+std::vector<HostPreferenceDescriptor> build_preference_descriptors()
 {
-	return float_preference(
-		id,
-		schema.label,
-		HostPreferenceScope::operation,
-		schema.default_value,
-		schema.minimum,
-		schema.maximum,
-		schema.step,
-		group_id,
-		operation_id,
-		schema.id,
-		{},
-		schema.hard_limits);
-}
-
-HostPreferenceDescriptor operation_bool_preference(
-		std::string_view id,
-		const quader_editor_core::BoolOperationOptionSchema& schema,
-		std::string_view group_id,
-		std::string_view operation_id)
-{
-	return bool_preference(id, schema.label, schema.default_value, group_id, operation_id, schema.id, schema.visible);
-}
-
-std::span<const HostPreferenceDescriptor> preference_descriptors()
-{
-	const quader_editor_core::BridgeOperationSchema bridge = quader_editor_core::bridge_operation_schema();
-	const quader_editor_core::EdgeBevelOperationSchema edge_bevel = quader_editor_core::edge_bevel_operation_schema();
-	const quader_editor_core::ThickenOperationSchema thicken = quader_editor_core::thicken_operation_schema();
-	const quader_editor_core::SliceQuadOperationSchema slice_quad = quader_editor_core::slice_quad_operation_schema();
-	const quader_editor_core::MergeByDistanceOperationSchema merge_by_distance = quader_editor_core::merge_by_distance_operation_schema();
 	static const std::array<HostPreferenceChoiceDescriptor, 3> cut_mode_choices {{
 		{ "keep_back", "Discard Left",
 			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_back), false },
@@ -1148,81 +1127,120 @@ std::span<const HostPreferenceDescriptor> preference_descriptors()
 			quader_editor_core::cut_mode_id(quader_editor_core::CutMode::keep_both), true },
 	}};
 
-	static const std::array<HostPreferenceDescriptor, 45> descriptors {{
-		operation_int_preference("operation.bridge.steps", bridge.steps, "operation.bridge", bridge.operation_id),
-		operation_float_preference("operation.edge_bevel.width", edge_bevel.width, "operation.edge_bevel", edge_bevel.operation_id),
-		operation_float_preference("operation.edge_bevel.profile", edge_bevel.profile, "operation.edge_bevel", edge_bevel.operation_id),
-		operation_int_preference("operation.edge_bevel.segments", edge_bevel.segments, "operation.edge_bevel", edge_bevel.operation_id),
-		operation_float_preference("operation.thicken.thickness", thicken.thickness, "operation.thicken", thicken.operation_id),
-		operation_bool_preference("operation.thicken.from_center", thicken.from_center, "operation.thicken", thicken.operation_id),
-		operation_int_preference("operation.slice_quad.x_slices", slice_quad.x_slices, "operation.slice_quad", slice_quad.operation_id),
-		operation_int_preference("operation.slice_quad.y_slices", slice_quad.y_slices, "operation.slice_quad", slice_quad.operation_id),
-		operation_float_preference("operation.merge_by_distance.tolerance", merge_by_distance.tolerance, "operation.merge_by_distance", merge_by_distance.operation_id),
-		choice_preference("operation.cut.keep_mode", "Keep Mode", cut_mode_choices, "operation.cut"),
+	std::vector<HostPreferenceDescriptor> descriptors;
+	descriptors.reserve(45);
+	for (const quader_editor_core::EditorOperationOptionDescriptor& option :
+			quader_editor_core::operation_option_descriptor_catalog()) {
+		descriptors.push_back(operation_preference(option));
+	}
+	descriptors.push_back(choice_preference("operation.cut.keep_mode", "Keep Mode", cut_mode_choices, "operation.cut"));
 
-		color_preference("viewport.scene.background_color", "Background", color_rgba(13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0), "viewport.scene"),
-		color_preference("viewport.grid.minor_color", "Minor", color_rgba(0.8, 0.8, 0.8, 0.05), "viewport.grid"),
-		color_preference("viewport.grid.major_color", "Major", color_rgba(0.298, 0.298, 0.298, 0.459), "viewport.grid"),
-		color_preference("viewport.grid.x_axis_color", "X QAxis", color_rgba(1.0, 0.239, 0.0, 0.72), "viewport.grid"),
-		color_preference("viewport.grid.y_axis_color", "Y QAxis", color_rgba(0.29, 0.58, 0.0, 0.0), "viewport.grid"),
-		color_preference("viewport.grid.z_axis_color", "Z QAxis", color_rgba(0.059, 0.612, 1.0, 0.72), "viewport.grid"),
-		color_preference("viewport.selection.face_color", "Face Fill", color_from_abgr(0x081facffU), "viewport.selection", "selected_visible_face"),
-		color_preference("viewport.selection.wire_color", "Wire", color_from_abgr(0xff1fd3ffU), "viewport.selection", "selected_face_edge"),
-		color_preference("viewport.overlay.source_wire_color", "Source Wire", color_from_abgr(0xebffe05cU), "viewport.overlay", "source_wire"),
-		color_preference("viewport.overlay.open_edge_color", "Open Edge", color_from_abgr(0xff00ffffU), "viewport.overlay", "open_edge"),
-		color_preference("viewport.overlay.diagnostic_edge_color", "Diagnostic Edge", color_from_abgr(0xff0000ffU), "viewport.overlay", "diagnostic_edge"),
-		color_preference("viewport.overlay.hover_face_color", "Hover Face", color_from_abgr(0x161fff66U), "viewport.overlay", "hover_face"),
-		color_preference("viewport.overlay.hover_wire_color", "Hover Wire", color_from_abgr(0xff00ff51U), "viewport.overlay", "hover_edge"),
-		color_preference("viewport.overlay.remove_selection_face_color", "Remove Face", color_from_abgr(0x52ff6b1fU), "viewport.overlay", "hover_face"),
-		color_preference("viewport.overlay.remove_selection_wire_color", "Remove Wire", color_from_abgr(0xffff6b1fU), "viewport.overlay", "hover_edge"),
-		color_preference("viewport.vertices.vertex_color", "Vertex", color_from_abgr(0xffffe66bU), "viewport.vertices", "unselected_vertex"),
-		color_preference("viewport.vertices.selected_vertex_color", "Selected Vertex", color_from_abgr(0xff1fadffU), "viewport.vertices", "selected_vertex"),
-		color_preference("viewport.vertices.hover_vertex_color", "Hover Vertex", color_from_abgr(0xff38ff00U), "viewport.vertices", "hover_vertex"),
-		color_preference("viewport.vertices.remove_selection_vertex_color", "Remove Vertex", color_from_abgr(0xffff6b1fU), "viewport.vertices", "hover_vertex"),
-		float_preference("viewport.grid.minor_line_size", "Minor Line", HostPreferenceScope::viewport_style, 0.32, 0.25, 8.0, 0.0, "viewport.grid"),
-		float_preference("viewport.grid.major_line_size", "Major Line", HostPreferenceScope::viewport_style, 0.36, 0.25, 8.0, 0.0, "viewport.grid"),
-		float_preference("viewport.grid.axis_line_size", "QAxis Line", HostPreferenceScope::viewport_style, 0.65, 0.25, 8.0, 0.0, "viewport.grid"),
-		float_preference("viewport.overlay.source_wire_line_size", "Source Wire Size", HostPreferenceScope::viewport_style, 1.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "source_wire"),
-		float_preference("viewport.selection.face_wire_line_size", "Face Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_face_edge"),
-		float_preference("viewport.selection.edge_line_size", "Edge Line Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_edge"),
-		float_preference("viewport.overlay.hover_wire_line_size", "Hover Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "hover_edge"),
-		float_preference("viewport.overlay.open_edge_line_size", "Open Edge Size", HostPreferenceScope::viewport_style, 1.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "open_edge"),
-		float_preference("viewport.overlay.diagnostic_edge_line_size", "Diagnostic Edge Size", HostPreferenceScope::viewport_style, 4.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "diagnostic_edge"),
-		float_preference("viewport.vertices.vertex_size", "Vertex Size", HostPreferenceScope::viewport_style, 7.0, 2.0, 32.0, 0.0, "viewport.vertices", {}, {}, "unselected_vertex"),
-		float_preference("viewport.vertices.selected_growth", "Selected Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "selected_vertex"),
-		float_preference("viewport.vertices.hover_growth", "Hover Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "hover_vertex"),
-		float_preference("viewport.vertices.outline_size", "Outline Size", HostPreferenceScope::viewport_style, 1.0, 0.0, 12.0, 0.0, "viewport.vertices"),
-		float_preference("viewport.picking.vertex_radius", "Vertex Radius", HostPreferenceScope::viewport_picking, 0.3, 0.001, 2.0, 0.0, "viewport.picking"),
-		float_preference("viewport.picking.edge_radius", "Edge Radius", HostPreferenceScope::viewport_picking, 0.2, 0.001, 2.0, 0.0, "viewport.picking"),
-		float_preference("viewport.gizmo.size", "Size", HostPreferenceScope::viewport_interaction, 1.0, 0.5, 2.0, 0.0, "viewport.gizmo"),
-	}};
+	descriptors.push_back(color_preference("viewport.scene.background_color", "Background", color_rgba(13.0 / 255.0, 13.0 / 255.0, 13.0 / 255.0, 1.0), "viewport.scene"));
+	descriptors.push_back(color_preference("viewport.grid.minor_color", "Minor", color_rgba(0.8, 0.8, 0.8, 0.05), "viewport.grid"));
+	descriptors.push_back(color_preference("viewport.grid.major_color", "Major", color_rgba(0.298, 0.298, 0.298, 0.459), "viewport.grid"));
+	descriptors.push_back(color_preference("viewport.grid.x_axis_color", "X QAxis", color_rgba(1.0, 0.239, 0.0, 0.72), "viewport.grid"));
+	descriptors.push_back(color_preference("viewport.grid.y_axis_color", "Y QAxis", color_rgba(0.29, 0.58, 0.0, 0.0), "viewport.grid"));
+	descriptors.push_back(color_preference("viewport.grid.z_axis_color", "Z QAxis", color_rgba(0.059, 0.612, 1.0, 0.72), "viewport.grid"));
+	descriptors.push_back(color_preference("viewport.selection.face_color", "Face Fill", color_from_abgr(0x081facffU), "viewport.selection", "selected_visible_face"));
+	descriptors.push_back(color_preference("viewport.selection.wire_color", "Wire", color_from_abgr(0xff1fd3ffU), "viewport.selection", "selected_face_edge"));
+	descriptors.push_back(color_preference("viewport.overlay.source_wire_color", "Source Wire", color_from_abgr(0xebffe05cU), "viewport.overlay", "source_wire"));
+	descriptors.push_back(color_preference("viewport.overlay.open_edge_color", "Open Edge", color_from_abgr(0xff00ffffU), "viewport.overlay", "open_edge"));
+	descriptors.push_back(color_preference("viewport.overlay.diagnostic_edge_color", "Diagnostic Edge", color_from_abgr(0xff0000ffU), "viewport.overlay", "diagnostic_edge"));
+	descriptors.push_back(color_preference("viewport.overlay.hover_face_color", "Hover Face", color_from_abgr(0x161fff66U), "viewport.overlay", "hover_face"));
+	descriptors.push_back(color_preference("viewport.overlay.hover_wire_color", "Hover Wire", color_from_abgr(0xff00ff51U), "viewport.overlay", "hover_edge"));
+	descriptors.push_back(color_preference("viewport.overlay.remove_selection_face_color", "Remove Face", color_from_abgr(0x52ff6b1fU), "viewport.overlay", "hover_face"));
+	descriptors.push_back(color_preference("viewport.overlay.remove_selection_wire_color", "Remove Wire", color_from_abgr(0xffff6b1fU), "viewport.overlay", "hover_edge"));
+	descriptors.push_back(color_preference("viewport.vertices.vertex_color", "Vertex", color_from_abgr(0xffffe66bU), "viewport.vertices", "unselected_vertex"));
+	descriptors.push_back(color_preference("viewport.vertices.selected_vertex_color", "Selected Vertex", color_from_abgr(0xff1fadffU), "viewport.vertices", "selected_vertex"));
+	descriptors.push_back(color_preference("viewport.vertices.hover_vertex_color", "Hover Vertex", color_from_abgr(0xff38ff00U), "viewport.vertices", "hover_vertex"));
+	descriptors.push_back(color_preference("viewport.vertices.remove_selection_vertex_color", "Remove Vertex", color_from_abgr(0xffff6b1fU), "viewport.vertices", "hover_vertex"));
+	descriptors.push_back(float_preference("viewport.grid.minor_line_size", "Minor Line", HostPreferenceScope::viewport_style, 0.32, 0.25, 8.0, 0.0, "viewport.grid"));
+	descriptors.push_back(float_preference("viewport.grid.major_line_size", "Major Line", HostPreferenceScope::viewport_style, 0.36, 0.25, 8.0, 0.0, "viewport.grid"));
+	descriptors.push_back(float_preference("viewport.grid.axis_line_size", "QAxis Line", HostPreferenceScope::viewport_style, 0.65, 0.25, 8.0, 0.0, "viewport.grid"));
+	descriptors.push_back(float_preference("viewport.overlay.source_wire_line_size", "Source Wire Size", HostPreferenceScope::viewport_style, 1.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "source_wire"));
+	descriptors.push_back(float_preference("viewport.selection.face_wire_line_size", "Face Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_face_edge"));
+	descriptors.push_back(float_preference("viewport.selection.edge_line_size", "Edge Line Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.selection", {}, {}, "selected_edge"));
+	descriptors.push_back(float_preference("viewport.overlay.hover_wire_line_size", "Hover Wire Size", HostPreferenceScope::viewport_style, 2.5, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "hover_edge"));
+	descriptors.push_back(float_preference("viewport.overlay.open_edge_line_size", "Open Edge Size", HostPreferenceScope::viewport_style, 1.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "open_edge"));
+	descriptors.push_back(float_preference("viewport.overlay.diagnostic_edge_line_size", "Diagnostic Edge Size", HostPreferenceScope::viewport_style, 4.0, 0.25, 8.0, 0.0, "viewport.overlay", {}, {}, "diagnostic_edge"));
+	descriptors.push_back(float_preference("viewport.vertices.vertex_size", "Vertex Size", HostPreferenceScope::viewport_style, 7.0, 2.0, 32.0, 0.0, "viewport.vertices", {}, {}, "unselected_vertex"));
+	descriptors.push_back(float_preference("viewport.vertices.selected_growth", "Selected Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "selected_vertex"));
+	descriptors.push_back(float_preference("viewport.vertices.hover_growth", "Hover Growth", HostPreferenceScope::viewport_style, 0.5, 0.0, 12.0, 0.0, "viewport.vertices", {}, {}, "hover_vertex"));
+	descriptors.push_back(float_preference("viewport.vertices.outline_size", "Outline Size", HostPreferenceScope::viewport_style, 1.0, 0.0, 12.0, 0.0, "viewport.vertices"));
+	descriptors.push_back(float_preference("viewport.picking.vertex_radius", "Vertex Radius", HostPreferenceScope::viewport_picking, 0.3, 0.001, 2.0, 0.0, "viewport.picking"));
+	descriptors.push_back(float_preference("viewport.picking.edge_radius", "Edge Radius", HostPreferenceScope::viewport_picking, 0.2, 0.001, 2.0, 0.0, "viewport.picking"));
+	descriptors.push_back(float_preference("viewport.gizmo.size", "Size", HostPreferenceScope::viewport_interaction, 1.0, 0.5, 2.0, 0.0, "viewport.gizmo"));
 	return descriptors;
 }
 
-std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
+std::span<const HostPreferenceDescriptor> preference_descriptors()
 {
-	static constexpr std::array<std::string_view, 1> operation_bridge_preferences {{
-		"operation.bridge.steps",
-	}};
-	static constexpr std::array<std::string_view, 3> operation_edge_bevel_preferences {{
-		"operation.edge_bevel.width",
-		"operation.edge_bevel.profile",
-		"operation.edge_bevel.segments",
-	}};
-	static constexpr std::array<std::string_view, 2> operation_thicken_preferences {{
-		"operation.thicken.thickness",
-		"operation.thicken.from_center",
-	}};
-	static constexpr std::array<std::string_view, 2> operation_slice_quad_preferences {{
-		"operation.slice_quad.x_slices",
-		"operation.slice_quad.y_slices",
-	}};
-	static constexpr std::array<std::string_view, 1> operation_merge_by_distance_preferences {{
-		"operation.merge_by_distance.tolerance",
-	}};
-	static constexpr std::array<std::string_view, 1> operation_cut_preferences {{
-		"operation.cut.keep_mode",
-	}};
+	static const std::vector<HostPreferenceDescriptor> descriptors = build_preference_descriptors();
+	return {descriptors.data(), descriptors.size()};
+}
+
+/**
+ * Owns stable preference ID spans while building host preference group descriptors.
+ */
+struct HostPreferenceGroupStorage {
+	std::vector<std::vector<std::string_view>> preference_ids;
+	std::vector<HostPreferenceGroupDescriptor> descriptors;
+};
+
+void add_preference_group(
+		HostPreferenceGroupStorage& storage,
+		std::string_view id,
+		std::string_view label,
+		HostPreferenceScope scope,
+		std::vector<std::string_view> preference_ids)
+{
+	storage.preference_ids.push_back(std::move(preference_ids));
+	const std::vector<std::string_view>& ids = storage.preference_ids.back();
+	storage.descriptors.push_back({
+		id,
+		label,
+		scope,
+		{ids.data(), ids.size()},
+	});
+}
+
+HostPreferenceGroupStorage build_preference_group_descriptors()
+{
+	HostPreferenceGroupStorage storage;
+
+	/**
+	 * Collects operation-scoped preference IDs before storage-backed group descriptors are emitted.
+	 */
+	struct OperationPreferenceGroup {
+		std::string_view id;
+		std::string_view label;
+		std::vector<std::string_view> preference_ids;
+	};
+	std::vector<OperationPreferenceGroup> operation_groups;
+	for (const quader_editor_core::EditorOperationOptionDescriptor& option :
+			quader_editor_core::operation_option_descriptor_catalog()) {
+		auto found = std::find_if(
+			operation_groups.begin(),
+			operation_groups.end(),
+			[&](const OperationPreferenceGroup& group) {
+				return group.id == option.preference_group_id;
+			});
+		if (found == operation_groups.end()) {
+			operation_groups.push_back(OperationPreferenceGroup{option.preference_group_id, option.operation_label, {}});
+			found = std::prev(operation_groups.end());
+		}
+		found->preference_ids.push_back(option.preference_id);
+	}
+	for (OperationPreferenceGroup& group : operation_groups) {
+		add_preference_group(
+			storage,
+			group.id,
+			group.label,
+			HostPreferenceScope::operation,
+			std::move(group.preference_ids));
+	}
+	add_preference_group(storage, "operation.cut", "Cut", HostPreferenceScope::operation, {"operation.cut.keep_mode"});
+
 	static constexpr std::array<std::string_view, 1> viewport_scene_preferences {{
 		"viewport.scene.background_color",
 	}};
@@ -1273,22 +1291,20 @@ std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
 		"viewport.gizmo.size",
 	}};
 
-	static const std::array<HostPreferenceGroupDescriptor, 13> descriptors {{
-		{ "operation.bridge", "Bridge", HostPreferenceScope::operation, operation_bridge_preferences },
-		{ "operation.edge_bevel", "Edge Bevel", HostPreferenceScope::operation, operation_edge_bevel_preferences },
-		{ "operation.thicken", "Thicken", HostPreferenceScope::operation, operation_thicken_preferences },
-		{ "operation.slice_quad", "Slice Quad", HostPreferenceScope::operation, operation_slice_quad_preferences },
-		{ "operation.merge_by_distance", "Merge by Distance", HostPreferenceScope::operation, operation_merge_by_distance_preferences },
-		{ "operation.cut", "Cut", HostPreferenceScope::operation, operation_cut_preferences },
-		{ "viewport.scene", "Scene", HostPreferenceScope::viewport_style, viewport_scene_preferences },
-		{ "viewport.grid", "Grid", HostPreferenceScope::viewport_style, viewport_grid_preferences },
-		{ "viewport.selection", "Selection", HostPreferenceScope::viewport_style, viewport_selection_preferences },
-		{ "viewport.overlay", "Overlay", HostPreferenceScope::viewport_style, viewport_overlay_preferences },
-		{ "viewport.vertices", "Vertices", HostPreferenceScope::viewport_style, viewport_vertex_preferences },
-		{ "viewport.picking", "Picking", HostPreferenceScope::viewport_picking, viewport_picking_preferences },
-		{ "viewport.gizmo", "Gizmo", HostPreferenceScope::viewport_interaction, viewport_gizmo_preferences },
-	}};
-	return descriptors;
+	add_preference_group(storage, "viewport.scene", "Scene", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_scene_preferences.begin(), viewport_scene_preferences.end()));
+	add_preference_group(storage, "viewport.grid", "Grid", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_grid_preferences.begin(), viewport_grid_preferences.end()));
+	add_preference_group(storage, "viewport.selection", "Selection", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_selection_preferences.begin(), viewport_selection_preferences.end()));
+	add_preference_group(storage, "viewport.overlay", "Overlay", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_overlay_preferences.begin(), viewport_overlay_preferences.end()));
+	add_preference_group(storage, "viewport.vertices", "Vertices", HostPreferenceScope::viewport_style, std::vector<std::string_view>(viewport_vertex_preferences.begin(), viewport_vertex_preferences.end()));
+	add_preference_group(storage, "viewport.picking", "Picking", HostPreferenceScope::viewport_picking, std::vector<std::string_view>(viewport_picking_preferences.begin(), viewport_picking_preferences.end()));
+	add_preference_group(storage, "viewport.gizmo", "Gizmo", HostPreferenceScope::viewport_interaction, std::vector<std::string_view>(viewport_gizmo_preferences.begin(), viewport_gizmo_preferences.end()));
+	return storage;
+}
+
+std::span<const HostPreferenceGroupDescriptor> preference_group_descriptors()
+{
+	static const HostPreferenceGroupStorage storage = build_preference_group_descriptors();
+	return {storage.descriptors.data(), storage.descriptors.size()};
 }
 
 std::span<const std::string_view> overlay_draw_order_layer_ids()

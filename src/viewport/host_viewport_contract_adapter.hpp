@@ -7,7 +7,9 @@
 #pragma once
 
 #include "api/quader_command_ids.hpp"
+#include "core/public_command_targets.hpp"
 #include "editor/commands/modeling_command_tool_catalog.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "viewport/viewport_input_types.hpp"
 
@@ -108,13 +110,11 @@ inline std::string viewportInputActionTargetId(std::string_view suffix) {
 }
 
 inline std::string viewportSelectionModeTargetId(std::string_view mode) {
-    std::string targetId("viewport.selection_mode.");
-    targetId.append(mode);
-    return targetId;
+    return quaderViewportSelectionModeTargetId(mode);
 }
 
 inline std::string viewportGridPresetTargetId(int preset) {
-    return "viewport.grid_preset." + std::to_string(preset);
+    return quaderViewportGridPresetTargetId(preset);
 }
 
 inline ViewportShortcut viewportTargetShortcut(
@@ -436,24 +436,8 @@ inline bool viewportToolFromContractId(std::string_view id, ViewportToolId& tool
 }
 
 inline bool viewportSelectionModeFromContractId(std::string_view id, ViewportSelectionMode& mode) {
-    if (id == "vertex") {
-        mode = ViewportSelectionMode::Vertex;
-        return true;
-    }
-    if (id == "edge") {
-        mode = ViewportSelectionMode::Edge;
-        return true;
-    }
-    if (id == "face") {
-        mode = ViewportSelectionMode::Face;
-        return true;
-    }
-    if (id == "object") {
-        mode = ViewportSelectionMode::Object;
-        return true;
-    }
-    if (id == "group") {
-        mode = ViewportSelectionMode::Group;
+    if (const std::optional<quader_host_contract::HostSelectionMode> hostMode = hostSelectionModeFromId(id)) {
+        mode = hostSelectionModeToViewport(*hostMode);
         return true;
     }
     return false;
@@ -468,9 +452,7 @@ inline std::optional<std::string> viewportCommandTargetIdForContractTarget(std::
 
     ViewportToolId tool = ViewportToolId::Select;
     if (viewportToolFromContractId(targetId, tool)) {
-        std::string commandId("tools.activate.");
-        commandId.append(viewportToolContractId(tool));
-        return commandId;
+        return quaderToolActivationCommandTargetId(viewportToolContractId(tool));
     }
 
     ViewportSelectionMode mode = ViewportSelectionMode::Object;
@@ -521,10 +503,9 @@ inline bool viewportShortcutForCommandTargetId(
         }
     }
 
-    constexpr std::string_view toolPrefix = "tools.activate.";
-    if (targetId.starts_with(toolPrefix)) {
+    if (const std::optional<std::string_view> toolId = quaderToolIdFromActivationCommandTarget(targetId)) {
         ViewportToolId tool = ViewportToolId::Select;
-        if (!viewportToolFromContractId(targetId.substr(toolPrefix.size()), tool)) {
+        if (!viewportToolFromContractId(*toolId, tool)) {
             return false;
         }
         shortcut.kind = ViewportShortcutKind::ActivateTool;
@@ -533,10 +514,9 @@ inline bool viewportShortcutForCommandTargetId(
         return true;
     }
 
-    constexpr std::string_view selectionModePrefix = "viewport.selection_mode.";
-    if (targetId.starts_with(selectionModePrefix)) {
+    if (const std::optional<std::string_view> selectionModeId = quaderSelectionModeIdFromCommandTarget(targetId)) {
         ViewportSelectionMode mode = ViewportSelectionMode::Object;
-        if (!viewportSelectionModeFromContractId(targetId.substr(selectionModePrefix.size()), mode)) {
+        if (!viewportSelectionModeFromContractId(*selectionModeId, mode)) {
             return false;
         }
         shortcut.kind = ViewportShortcutKind::SetSelectionMode;
@@ -545,9 +525,8 @@ inline bool viewportShortcutForCommandTargetId(
         return true;
     }
 
-    constexpr std::string_view gridPresetPrefix = "viewport.grid_preset.";
-    if (targetId.starts_with(gridPresetPrefix)) {
-        const std::string presetText(targetId.substr(gridPresetPrefix.size()));
+    if (const std::optional<std::string_view> gridPresetId = quaderGridPresetIdFromCommandTarget(targetId)) {
+        const std::string presetText(*gridPresetId);
         try {
             shortcut.kind = ViewportShortcutKind::SetGridPreset;
             shortcut.context = ViewportShortcutContext::Viewport;
@@ -567,9 +546,9 @@ inline bool viewportTargetRequiresRouterDispatch(std::string_view targetId) {
             targetId == "viewport.cancel_active_tool" ||
             targetId == "viewport.toggle_maximized" ||
             targetId == "viewport.delete_popup" ||
-            targetId.starts_with("tools.activate.") ||
-            targetId.starts_with("viewport.selection_mode.") ||
-            targetId.starts_with("viewport.grid_preset.");
+            quaderToolIdFromActivationCommandTarget(targetId).has_value() ||
+            quaderSelectionModeIdFromCommandTarget(targetId).has_value() ||
+            quaderGridPresetIdFromCommandTarget(targetId).has_value();
 }
 
 inline bool viewportShortcutsMatch(

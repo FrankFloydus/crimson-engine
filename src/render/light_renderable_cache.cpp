@@ -129,11 +129,36 @@ LightRenderableCache::LightProxy LightRenderableCache::createLightProxy(
         const QMat4& worldTransform,
         std::uint64_t rebuildSignature,
         std::uint64_t transformSignature) {
+    /**
+     * Rolls back a partially-created light proxy until ownership is recorded in the cache.
+     */
+    struct LightProxyCreationGuard {
+        filament::Engine& engine;
+        filament::Scene& scene;
+        LightProxy& proxy;
+        bool released = false;
+
+        ~LightProxyCreationGuard() {
+            if (released || !proxy.entity) {
+                return;
+            }
+            scene.remove(proxy.entity);
+            engine.getLightManager().destroy(proxy.entity);
+            utils::EntityManager::get().destroy(proxy.entity);
+            proxy.entity.clear();
+        }
+
+        void release() {
+            released = true;
+        }
+    };
+
     LightProxy proxy;
     proxy.entity = utils::EntityManager::get().create();
     proxy.sourceEntity = entityId;
     proxy.rebuildSignature = rebuildSignature;
     proxy.transformSignature = transformSignature;
+    LightProxyCreationGuard creationGuard{*engine_, *scene_, proxy};
 
     filament::LightManager::Builder(toFilamentLightType(light.type))
             .color({light.color.x, light.color.y, light.color.z})
@@ -142,6 +167,7 @@ LightRenderableCache::LightProxy LightRenderableCache::createLightProxy(
             .castShadows(light.castsShadows)
             .build(*engine_, proxy.entity);
     scene_->addEntity(proxy.entity);
+    creationGuard.release();
     return proxy;
 }
 

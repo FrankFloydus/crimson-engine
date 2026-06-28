@@ -7,6 +7,7 @@
 #include "ui/ui_system.hpp"
 
 #include "api/quader_api_type_conversions.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
 #include "platform/sdl_event_utils.hpp"
@@ -24,6 +25,7 @@
 #include <SDL3/SDL_mouse.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <optional>
@@ -115,6 +117,66 @@ UIPixelRect bottomSplitResizerHitRectFromPane(
             .width = 1,
             .height = contentRect.height,
     };
+}
+
+constexpr std::array<ViewportView, 7> kViewportViewDropdownOrder = {
+        ViewportView::Perspective,
+        ViewportView::Top,
+        ViewportView::Bottom,
+        ViewportView::Left,
+        ViewportView::Side,
+        ViewportView::Front,
+        ViewportView::Back,
+};
+
+std::string viewportViewLocalizationKey(ViewportView view) {
+    std::string key = "viewport.view.";
+    key += viewportViewStableId(view);
+    return key;
+}
+
+QuaderCommandId viewportViewCommandId(ViewportView view) {
+    switch (view) {
+    case ViewportView::Perspective:
+        return QuaderCommand::ViewportViewPerspective;
+    case ViewportView::Top:
+        return QuaderCommand::ViewportViewTop;
+    case ViewportView::Bottom:
+        return QuaderCommand::ViewportViewBottom;
+    case ViewportView::Left:
+        return QuaderCommand::ViewportViewLeft;
+    case ViewportView::Side:
+        return QuaderCommand::ViewportViewRight;
+    case ViewportView::Front:
+        return QuaderCommand::ViewportViewFront;
+    case ViewportView::Back:
+        return QuaderCommand::ViewportViewBack;
+    }
+    return QuaderCommand::ViewportViewPerspective;
+}
+
+bool viewportDropdownOptionsEqual(
+        const std::vector<MainLayoutViewportViewDropdownOption>& lhs,
+        const std::vector<MainLayoutViewportViewDropdownOption>& rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < lhs.size(); ++index) {
+        if (lhs[index].view != rhs[index].view ||
+                lhs[index].label != rhs[index].label ||
+                lhs[index].shortcut != rhs[index].shortcut) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool viewportPresentationsEqual(
+        const MainLayoutViewportPresentation& lhs,
+        const MainLayoutViewportPresentation& rhs) {
+    return lhs.currentView == rhs.currentView &&
+            lhs.viewDropdownOpen == rhs.viewDropdownOpen &&
+            viewportDropdownOptionsEqual(lhs.viewDropdownOptions, rhs.viewDropdownOptions);
 }
 
 } // namespace
@@ -213,6 +275,22 @@ bool UISystem::processEvent(const SDL_Event& event) {
     }
 
     const bool rmlConsumed = rmlHost_.processEvent(event, scaleX, scaleY);
+    if (const std::optional<std::string> dropdownToggle = rmlHost_.takeDropdownToggle()) {
+        if (handleDropdownToggle(*dropdownToggle)) {
+            return true;
+        }
+    }
+    if (const std::optional<UIDropdownSelection> dropdownSelection = rmlHost_.takeDropdownSelection()) {
+        if (handleDropdownSelection(*dropdownSelection)) {
+            return true;
+        }
+    }
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
+            viewportPresentation_.viewDropdownOpen &&
+            !pointerEventInsideViewportDropdown(event)) {
+        viewportPresentation_.viewDropdownOpen = false;
+        mainLayoutDirty_ = true;
+    }
     if (const std::optional<std::string> selectedControl = rmlHost_.takeModelingModeShelfControlSelection()) {
         activateModelingModeShelfControl(*selectedControl);
         return true;
@@ -276,6 +354,10 @@ void UISystem::draw(QuaderEditorApi& editor,
     (void)quitRequested;
 
     applyPendingModelingModeShelfIntents(editor);
+    applyPendingViewportViewSelection(editor);
+    if (syncViewportPresentation(editor)) {
+        rebuildMainLayout();
+    }
     if (modelingModeShelfController_.syncEditorState(editor, localization_)) {
         rebuildModelingModeShelf();
     }
@@ -563,7 +645,9 @@ void UISystem::rebuildMainLayout() {
     rmlHost_.setElementInnerRml("chrome-window-controls", buildWindowChromeControlsInnerRml());
     rmlHost_.setElementInnerRml("toolbar-label", escapeRmlText(localization_.text("ui.shell.toolbar", "Toolbar")));
     rmlHost_.setElementInnerRml("statusbar-label", escapeRmlText(localization_.text("ui.shell.status", "Status")));
-    rmlHost_.setElementInnerRml("main-layout-slot", buildMainLayoutRml(mainLayout_, mainLayoutLabels_, interaction));
+    rmlHost_.setElementInnerRml(
+            "main-layout-slot",
+            buildMainLayoutRml(mainLayout_, mainLayoutLabels_, interaction, viewportPresentation_));
     rebuildModelingModeShelf();
     mainLayoutDirty_ = false;
 }
@@ -734,6 +818,66 @@ void UISystem::applyPendingModelingModeShelfIntents(QuaderEditorApi& editor) {
             LOG_WARN("Unable to execute modeling shelf command {}: {}", *commandId, result.errorMessage());
         }
     }
+}
+
+bool UISystem::handleDropdownToggle(std::string_view dropdownId) {
+    if (dropdownId != mainLayoutViewportViewDropdownElementId()) {
+        return false;
+    }
+    viewportPresentation_.viewDropdownOpen = !viewportPresentation_.viewDropdownOpen;
+    mainLayoutDirty_ = true;
+    return true;
+}
+
+bool UISystem::handleDropdownSelection(const UIDropdownSelection& selection) {
+    if (selection.dropdownId != mainLayoutViewportViewDropdownElementId()) {
+        return false;
+    }
+    const std::optional<ViewportView> selectedView = viewportViewFromStableId(selection.optionId);
+    if (!selectedView) {
+        return false;
+    }
+
+    pendingViewportViewSelection_ = *selectedView;
+    viewportPresentation_.viewDropdownOpen = false;
+    mainLayoutDirty_ = true;
+    return true;
+}
+
+void UISystem::applyPendingViewportViewSelection(QuaderEditorApi& editor) {
+    if (!pendingViewportViewSelection_) {
+        return;
+    }
+
+    const QuaderApiVoidResult result = editor.viewports().setView(
+            ViewportPaneId::Perspective,
+            *pendingViewportViewSelection_);
+    if (!result.ok()) {
+        LOG_WARN("Unable to apply viewport view selection: {}", result.errorMessage());
+    }
+    pendingViewportViewSelection_.reset();
+}
+
+bool UISystem::syncViewportPresentation(QuaderEditorApi& editor) {
+    MainLayoutViewportPresentation next;
+    next.currentView = editor.viewports().view(ViewportPaneId::Perspective);
+    next.viewDropdownOpen = viewportPresentation_.viewDropdownOpen;
+    next.viewDropdownOptions.reserve(kViewportViewDropdownOrder.size());
+    for (ViewportView view : kViewportViewDropdownOrder) {
+        const std::string key = viewportViewLocalizationKey(view);
+        next.viewDropdownOptions.push_back(MainLayoutViewportViewDropdownOption{
+                .view = view,
+                .label = localization_.text(key, viewportViewLabel(view)),
+                .shortcut = editor.commands().shortcutFor(viewportViewCommandId(view)),
+        });
+    }
+
+    if (viewportPresentationsEqual(viewportPresentation_, next)) {
+        return false;
+    }
+    viewportPresentation_ = std::move(next);
+    mainLayoutDirty_ = true;
+    return true;
 }
 
 void UISystem::rebuildMainLayoutHitRegions() {
@@ -1298,7 +1442,7 @@ bool UISystem::rmlConsumedEventBlocksViewport(const SDL_Event& event) const {
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
     case SDL_EVENT_MOUSE_WHEEL:
-        return !pointerEventInsideMainViewport(event);
+        return pointerEventInsideViewportDropdown(event) || !pointerEventInsideMainViewport(event);
     default:
         return false;
     }
@@ -1349,6 +1493,15 @@ bool UISystem::pointerEventInsideModelingModeShelf(const SDL_Event& event) const
     return false;
 }
 
+bool UISystem::pointerEventInsideViewportDropdown(const SDL_Event& event) const {
+    for (const std::string& elementId : mainLayoutViewportDropdownPointerBypassElementIds(viewportPresentation_)) {
+        if (pointerEventInsideRmlElement(event, elementId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool UISystem::pointerEventShouldBypassViewport(const SDL_Event& event) const {
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
@@ -1356,10 +1509,14 @@ bool UISystem::pointerEventShouldBypassViewport(const SDL_Event& event) const {
         if (viewportHost_.hasActivePointerGesture()) {
             return false;
         }
-        return pointerEventInsideModelingModeShelf(event) || !pointerEventInsideMainViewport(event);
+        return pointerEventInsideModelingModeShelf(event) ||
+                pointerEventInsideViewportDropdown(event) ||
+                !pointerEventInsideMainViewport(event);
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_WHEEL:
-        return pointerEventInsideModelingModeShelf(event) || !pointerEventInsideMainViewport(event);
+        return pointerEventInsideModelingModeShelf(event) ||
+                pointerEventInsideViewportDropdown(event) ||
+                !pointerEventInsideMainViewport(event);
     default:
         return false;
     }

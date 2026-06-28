@@ -30,12 +30,8 @@ std::unordered_map<std::uint32_t, AssetId> materialSlotsForLiveModelingNodes(
         const ModelingObjectRuntimeMap& objectMap,
         std::optional<AssetId>& firstModelingMaterial) {
     std::unordered_map<std::uint32_t, AssetId> materialBySlot;
-    std::vector<std::pair<int, EntityId>> entitiesByObject(
-            objectMap.entitiesByObject().begin(),
-            objectMap.entitiesByObject().end());
-    std::sort(entitiesByObject.begin(), entitiesByObject.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.first < rhs.first;
-    });
+    const std::vector<std::pair<int, EntityId>> entitiesByObject =
+            objectMap.objectEntityBindingsByModelingObject();
 
     for (const auto& [modelingObjectId, entity] : entitiesByObject) {
         (void)modelingObjectId;
@@ -120,9 +116,9 @@ void reconcileModelingObjectSceneNodes(
     for (const quader_editor_core::PolygonObject& object : session.objects()) {
         liveObjects.insert(object.id);
         const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
-        const auto existing = objectMap.entitiesByObject().find(object.id);
-        if (existing != objectMap.entitiesByObject().end() && scene.exists(existing->second)) {
-            syncMaterialSlotBindings(scene, existing->second, materialSlot, materialBySlot, firstModelingMaterial);
+        const std::optional<EntityId> existing = objectMap.entityForModelingObject(object.id);
+        if (existing.has_value() && scene.exists(*existing)) {
+            syncMaterialSlotBindings(scene, *existing, materialSlot, materialBySlot, firstModelingMaterial);
             continue;
         }
 
@@ -156,7 +152,7 @@ void reconcileModelingObjectSceneNodes(
     }
 
     std::vector<int> staleObjects;
-    for (const auto& [modelingObjectId, entity] : objectMap.entitiesByObject()) {
+    for (const auto& [modelingObjectId, entity] : objectMap.objectEntityBindingsByModelingObject()) {
         if (!liveObjects.contains(modelingObjectId)) {
             staleObjects.push_back(modelingObjectId);
         }
@@ -187,13 +183,13 @@ void projectModelingMeshesToScene(
     bool projectedAllObjects = true;
     for (const quader_editor_core::PolygonObject& object : session.objects()) {
         const std::uint32_t materialSlot = static_cast<std::uint32_t>(object.material_id);
-        const auto existing = objectRegistry.entitiesByObject().find(object.id);
-        if (existing == objectRegistry.entitiesByObject().end() || !scene.exists(existing->second)) {
+        const std::optional<EntityId> existing = objectRegistry.entityForModelingObject(object.id);
+        if (!existing.has_value() || !scene.exists(*existing)) {
             projectedAllObjects = false;
             continue;
         }
 
-        const EntityId entity = existing->second;
+        const EntityId entity = *existing;
         MeshAsset mesh = MeshProjectionService::compileObjectMesh(object);
         if (const NameComponent* name = scene.name(entity)) {
             mesh.name = name->name;

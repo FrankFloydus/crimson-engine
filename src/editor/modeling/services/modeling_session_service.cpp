@@ -11,26 +11,22 @@
 #include "editor/commands/document_command_service.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
-#include "editor/projection/mesh_projection_service.hpp"
-#include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/modeling/services/modeling_hierarchy_duplicate_service.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "editor/modeling/services/modeling_session_services.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/modeling/services/modeling_operation_settings.hpp"
+#include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
-#include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <iterator>
-#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -542,513 +538,6 @@ ModelingBoxDragState fromRuntime(quader_editor_core::BoxDragState state) {
     return ModelingBoxDragState::Idle;
 }
 
-/**
- * Stores the Drawn Plane Preview Frame data contract used by the modeling application service layer.
- */
-struct DrawnPlanePreviewFrame {
-    QVec3 lineStart;
-    QVec3 lineEnd;
-    QVec3 normal;
-    QVec3 side;
-    float lineLength = 0.0f;
-};
-
-bool buildDrawnPlanePreviewFrame(
-        QVec3 point0,
-        QVec3 point1,
-        QVec3 support,
-        DrawnPlanePreviewFrame& frame) {
-    const QVec3 line = point1 - point0;
-    const float lineLength = length(line);
-    if (lineLength <= 0.0001f) {
-        return false;
-    }
-
-    const QVec3 lineDirection = line / lineLength;
-    const QVec3 supportVector = support - point0;
-    QVec3 normal = cross(line, supportVector);
-    if (length(normal) <= 0.000001f) {
-        normal = cross(lineDirection, {0.0f, 1.0f, 0.0f});
-        if (length(normal) <= 0.000001f) {
-            normal = cross(lineDirection, {0.0f, 0.0f, 1.0f});
-        }
-    }
-    normal = normalize(normal);
-    if (length(normal) <= 0.000001f) {
-        return false;
-    }
-
-    QVec3 side = cross(normal, lineDirection);
-    if (length(side) <= 0.000001f) {
-        side = {0.0f, 1.0f, 0.0f};
-    }
-    side = normalize(side);
-    frame = {
-            .lineStart = point0,
-            .lineEnd = point1,
-            .normal = normal,
-            .side = side,
-            .lineLength = lineLength,
-    };
-    return true;
-}
-
-void appendDrawnPlaneToolOverlay(
-        ViewportOverlayFrame& frame,
-        std::span<const quader::QVec3> visiblePoints,
-        quader::QVec3 supportPoint,
-        bool hasLine) {
-    std::array<QVec3, 3> points{};
-    const std::size_t count = std::min<std::size_t>(visiblePoints.size(), points.size());
-    for (std::size_t index = 0; index < count; ++index) {
-        points[index] = fromRuntime(visiblePoints[index]);
-    }
-    if (count <= 0U) {
-        return;
-    }
-
-    for (std::size_t index = 0; index < count; ++index) {
-        frame.points.push_back({
-                .layer = ViewportOverlayLayer::ToolHandle,
-                .position = points[index],
-                .color = kOverlayToolHandleColor,
-                .sizePixels = 8.0f,
-                .styleRole = ViewportOverlayStyleRole::ToolHandle,
-                .source = ViewportOverlaySource::Tool,
-        });
-    }
-
-    if (!hasLine || count < 2U) {
-        return;
-    }
-
-    frame.lines.push_back({
-            .layer = ViewportOverlayLayer::ToolHandle,
-            .start = points[0],
-            .end = points[1],
-            .color = kOverlayToolHandleColor,
-            .widthPixels = 2.0f,
-            .styleRole = ViewportOverlayStyleRole::ToolHandle,
-            .source = ViewportOverlaySource::Tool,
-    });
-
-    DrawnPlanePreviewFrame planeFrame;
-    if (!buildDrawnPlanePreviewFrame(points[0], points[1], fromRuntime(supportPoint), planeFrame)) {
-        return;
-    }
-
-    const QVec3 side = planeFrame.side * planeFrame.lineLength;
-    const std::array<QVec3, 4> corners{{
-            planeFrame.lineStart,
-            planeFrame.lineEnd,
-            planeFrame.lineEnd + side,
-            planeFrame.lineStart + side,
-    }};
-
-    frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::ToolPlane,
-            .a = corners[0],
-            .b = corners[1],
-            .c = corners[2],
-            .color = kOverlayToolPlaneColor,
-            .styleRole = ViewportOverlayStyleRole::ToolPlaneFill,
-            .source = ViewportOverlaySource::Tool,
-    });
-    frame.triangles.push_back({
-            .layer = ViewportOverlayLayer::ToolPlane,
-            .a = corners[0],
-            .b = corners[2],
-            .c = corners[3],
-            .color = kOverlayToolPlaneColor,
-            .styleRole = ViewportOverlayStyleRole::ToolPlaneFill,
-            .source = ViewportOverlaySource::Tool,
-    });
-    for (std::size_t index = 0; index < corners.size(); ++index) {
-        frame.lines.push_back({
-                .layer = ViewportOverlayLayer::ToolPlaneLine,
-                .start = corners[index],
-                .end = corners[(index + 1U) % corners.size()],
-                .color = kOverlayToolPlaneLineColor,
-                .widthPixels = 1.0f,
-                .styleRole = ViewportOverlayStyleRole::ToolPlaneLine,
-                .source = ViewportOverlaySource::Tool,
-        });
-    }
-}
-
-float runtimeLengthSquared(quader::QVec3 value) {
-    return value.x * value.x + value.y * value.y + value.z * value.z;
-}
-
-quader::QVec3 drawnPlaneSupportPoint(
-        std::span<const quader::QVec3> visiblePoints,
-        quader::QVec3 faceNormal) {
-    if (visiblePoints.size() > 2U) {
-        return visiblePoints[2];
-    }
-    if (visiblePoints.size() > 1U && runtimeLengthSquared(faceNormal) > 0.000001f) {
-        return visiblePoints[0] + faceNormal;
-    }
-    return {};
-}
-
-/**
- * Represents a Preview Triangle Mesh value used by the modeling application service layer.
- */
-struct PreviewTriangleMesh {
-    std::vector<QVec3> vertices;
-    std::vector<std::uint32_t> indices;
-
-    [[nodiscard]] bool empty() const {
-        return vertices.empty() || indices.empty();
-    }
-};
-
-PreviewTriangleMesh previewMeshFromDocuments(const std::vector<quader_poly::Document>& documents) {
-    PreviewTriangleMesh mesh;
-    for (const quader_poly::Document& document : documents) {
-        const quader_poly::CompiledMesh compiled = quader_poly::compile_document(document);
-        const std::uint32_t vertexOffset = static_cast<std::uint32_t>(mesh.vertices.size());
-        mesh.vertices.reserve(mesh.vertices.size() + compiled.vertices.size());
-        mesh.indices.reserve(mesh.indices.size() + compiled.indices.size());
-        for (const quader_poly::CompiledVertex& vertex : compiled.vertices) {
-            mesh.vertices.push_back(fromRuntime(vertex.position));
-        }
-        for (const std::uint32_t index : compiled.indices) {
-            if (index < compiled.vertices.size()) {
-                mesh.indices.push_back(vertexOffset + index);
-            }
-        }
-    }
-    return mesh;
-}
-
-void appendPreviewMeshFill(
-        ViewportOverlayFrame& frame,
-        const PreviewTriangleMesh& mesh,
-        std::uint32_t color,
-        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewFill) {
-    if (mesh.empty()) {
-        return;
-    }
-
-    for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
-        const std::uint32_t ia = mesh.indices[index];
-        const std::uint32_t ib = mesh.indices[index + 1U];
-        const std::uint32_t ic = mesh.indices[index + 2U];
-        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
-            continue;
-        }
-        frame.triangles.push_back({
-                .layer = ViewportOverlayLayer::ToolPreviewFill,
-                .a = mesh.vertices[ia],
-                .b = mesh.vertices[ib],
-                .c = mesh.vertices[ic],
-                .color = color,
-                .styleRole = styleRole,
-                .source = ViewportOverlaySource::Tool,
-        });
-    }
-}
-
-constexpr float kCutPreviewPlaneQuantization = 0.0001f;
-constexpr float kCutPreviewFeatureEdgeCosine = 0.985f;
-
-/**
- * Stores the Cut Preview Point Key data contract used by the modeling application service layer.
- */
-struct CutPreviewPointKey {
-    long long x = 0;
-    long long y = 0;
-    long long z = 0;
-};
-
-long long quantizeCutPreviewCoordinate(float value) {
-    return static_cast<long long>(std::llround(value / kCutPreviewPlaneQuantization));
-}
-
-CutPreviewPointKey cutPreviewPointKey(QVec3 value) {
-    return {
-            .x = quantizeCutPreviewCoordinate(value.x),
-            .y = quantizeCutPreviewCoordinate(value.y),
-            .z = quantizeCutPreviewCoordinate(value.z),
-    };
-}
-
-bool cutPreviewPointKeyLess(const CutPreviewPointKey& left, const CutPreviewPointKey& right) {
-    if (left.x != right.x) {
-        return left.x < right.x;
-    }
-    if (left.y != right.y) {
-        return left.y < right.y;
-    }
-    return left.z < right.z;
-}
-
-/**
- * Stores the Cut Preview Edge Key data contract used by the modeling application service layer.
- */
-struct CutPreviewEdgeKey {
-    CutPreviewPointKey a;
-    CutPreviewPointKey b;
-
-    CutPreviewEdgeKey(QVec3 first, QVec3 second) {
-        CutPreviewPointKey firstKey = cutPreviewPointKey(first);
-        CutPreviewPointKey secondKey = cutPreviewPointKey(second);
-        if (cutPreviewPointKeyLess(secondKey, firstKey)) {
-            a = secondKey;
-            b = firstKey;
-        } else {
-            a = firstKey;
-            b = secondKey;
-        }
-    }
-
-    [[nodiscard]] bool operator<(const CutPreviewEdgeKey& other) const {
-        if (cutPreviewPointKeyLess(a, other.a)) {
-            return true;
-        }
-        if (cutPreviewPointKeyLess(other.a, a)) {
-            return false;
-        }
-        return cutPreviewPointKeyLess(b, other.b);
-    }
-};
-
-/**
- * Represents a Cut Preview Edge Accumulator value used by the modeling application service layer.
- */
-struct CutPreviewEdgeAccumulator {
-    QVec3 a;
-    QVec3 b;
-    QVec3 normal;
-    bool hasNormal = false;
-    bool hasCapTriangle = false;
-    bool hasSideTriangle = false;
-    bool feature = false;
-    int count = 0;
-
-    void add(QVec3 first, QVec3 second, bool onPlane, bool capTriangle, QVec3 triangleNormal) {
-        if (length(first - second) <= 0.000001f) {
-            return;
-        }
-        if (count == 0) {
-            a = first;
-            b = second;
-            normal = triangleNormal;
-            hasNormal = true;
-        } else if (hasNormal && std::fabs(dot(normal, triangleNormal)) < kCutPreviewFeatureEdgeCosine) {
-            feature = true;
-        }
-
-        ++count;
-        if (onPlane && capTriangle) {
-            hasCapTriangle = true;
-        }
-        if (!capTriangle) {
-            hasSideTriangle = true;
-        }
-    }
-
-    [[nodiscard]] bool seam() const {
-        return hasCapTriangle && hasSideTriangle;
-    }
-
-    [[nodiscard]] bool outline() const {
-        return count == 1 || feature;
-    }
-};
-
-float signedDistanceToPlane(QVec3 point, QVec3 planePoint, QVec3 planeNormal) {
-    return dot(point - planePoint, planeNormal);
-}
-
-float previewMeshBoundsMagnitude(const PreviewTriangleMesh& mesh) {
-    if (mesh.vertices.empty()) {
-        return 0.0f;
-    }
-
-    QVec3 min = mesh.vertices.front();
-    QVec3 max = mesh.vertices.front();
-    for (const QVec3 vertex : mesh.vertices) {
-        min.x = std::min(min.x, vertex.x);
-        min.y = std::min(min.y, vertex.y);
-        min.z = std::min(min.z, vertex.z);
-        max.x = std::max(max.x, vertex.x);
-        max.y = std::max(max.y, vertex.y);
-        max.z = std::max(max.z, vertex.z);
-    }
-    return length(max - min);
-}
-
-void addCutPreviewEdge(
-        std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator>& edges,
-        QVec3 a,
-        QVec3 b,
-        bool onPlane,
-        bool capTriangle,
-        QVec3 triangleNormal) {
-    if (length(a - b) <= 0.000001f) {
-        return;
-    }
-    edges[CutPreviewEdgeKey(a, b)].add(a, b, onPlane, capTriangle, triangleNormal);
-}
-
-std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> collectPreviewEdges(
-        const PreviewTriangleMesh& mesh,
-        std::optional<QVec3> planePoint,
-        QVec3 planeNormal) {
-    std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges;
-    if (mesh.empty()) {
-        return edges;
-    }
-
-    const bool hasPlane = planePoint.has_value() && length(planeNormal) > 0.000001f;
-    const QVec3 normalizedPlaneNormal = hasPlane ? normalize(planeNormal) : QVec3{};
-    const float planeScale = std::max(1.0f, previewMeshBoundsMagnitude(mesh));
-    const float planeEpsilon = std::max(kCutPreviewPlaneQuantization * 8.0f, planeScale * 0.00002f);
-
-    for (std::size_t index = 0; index + 2U < mesh.indices.size(); index += 3U) {
-        const std::uint32_t ia = mesh.indices[index];
-        const std::uint32_t ib = mesh.indices[index + 1U];
-        const std::uint32_t ic = mesh.indices[index + 2U];
-        if (ia >= mesh.vertices.size() || ib >= mesh.vertices.size() || ic >= mesh.vertices.size()) {
-            continue;
-        }
-
-        const QVec3 a = mesh.vertices[ia];
-        const QVec3 b = mesh.vertices[ib];
-        const QVec3 c = mesh.vertices[ic];
-        QVec3 triangleNormal = cross(b - a, c - a);
-        if (length(triangleNormal) <= 0.000001f) {
-            continue;
-        }
-        triangleNormal = normalize(triangleNormal);
-
-        float da = 1.0f;
-        float db = 1.0f;
-        float dc = 1.0f;
-        bool capTriangle = false;
-        if (hasPlane) {
-            da = signedDistanceToPlane(a, *planePoint, normalizedPlaneNormal);
-            db = signedDistanceToPlane(b, *planePoint, normalizedPlaneNormal);
-            dc = signedDistanceToPlane(c, *planePoint, normalizedPlaneNormal);
-            capTriangle = std::fabs(da) <= planeEpsilon &&
-                    std::fabs(db) <= planeEpsilon &&
-                    std::fabs(dc) <= planeEpsilon;
-        }
-
-        addCutPreviewEdge(edges, a, b, hasPlane && std::fabs(da) <= planeEpsilon && std::fabs(db) <= planeEpsilon, capTriangle, triangleNormal);
-        addCutPreviewEdge(edges, b, c, hasPlane && std::fabs(db) <= planeEpsilon && std::fabs(dc) <= planeEpsilon, capTriangle, triangleNormal);
-        addCutPreviewEdge(edges, c, a, hasPlane && std::fabs(dc) <= planeEpsilon && std::fabs(da) <= planeEpsilon, capTriangle, triangleNormal);
-    }
-    return edges;
-}
-
-void appendPreviewLine(
-        ViewportOverlayFrame& frame,
-        ViewportOverlayLayer layer,
-        QVec3 start,
-        QVec3 end,
-        std::uint32_t color,
-        float widthPixels,
-        ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::ToolPreviewLine) {
-    if (length(start - end) <= 0.000001f) {
-        return;
-    }
-    frame.lines.push_back({
-            .layer = layer,
-            .start = start,
-            .end = end,
-            .color = color,
-            .widthPixels = widthPixels,
-            .styleRole = styleRole,
-            .source = ViewportOverlaySource::Tool,
-    });
-}
-
-void appendCutPreviewResultLines(
-        ViewportOverlayFrame& frame,
-        const PreviewTriangleMesh& mesh,
-        QVec3 planePoint,
-        QVec3 planeNormal,
-        std::uint32_t outlineColor) {
-    const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
-            collectPreviewEdges(mesh, planePoint, planeNormal);
-    for (const auto& [key, edge] : edges) {
-        (void)key;
-        if (edge.outline()) {
-            appendPreviewLine(frame,
-                    ViewportOverlayLayer::ToolPreviewLine,
-                    edge.a,
-                    edge.b,
-                    outlineColor,
-                    1.15f,
-                    outlineColor == kOverlayCutPreviewKeepBothOutlineColor
-                            ? ViewportOverlayStyleRole::CutPreviewKeepBothOutline
-                            : ViewportOverlayStyleRole::CutPreviewDiscardOutline);
-        }
-        if (edge.seam()) {
-            appendPreviewLine(frame,
-                    ViewportOverlayLayer::ToolPreviewSeam,
-                    edge.a,
-                    edge.b,
-                    kOverlayCutPreviewSeamColor,
-                    2.25f,
-                    ViewportOverlayStyleRole::CutPreviewSeam);
-        }
-    }
-}
-
-void appendPreviewFeatureLines(
-        ViewportOverlayFrame& frame,
-        const PreviewTriangleMesh& mesh,
-        std::uint32_t color) {
-    const std::map<CutPreviewEdgeKey, CutPreviewEdgeAccumulator> edges =
-            collectPreviewEdges(mesh, std::nullopt, {});
-    for (const auto& [key, edge] : edges) {
-        (void)key;
-        if (!edge.outline()) {
-            continue;
-        }
-        appendPreviewLine(frame,
-                ViewportOverlayLayer::ToolPreviewLine,
-                edge.a,
-                edge.b,
-                color,
-                1.0f);
-    }
-}
-
-std::optional<MeshAsset> boxPreviewMeshFromDescriptor(const quader_editor_core::BoxPreviewDescriptor& preview) {
-    if (!preview.ok ||
-            preview.drag_state != quader_editor_core::BoxDragState::height ||
-            preview.bounds.empty) {
-        return std::nullopt;
-    }
-
-    const std::vector<quader::QVec3> corners = quader_editor_core::box_preview_corners(preview);
-    if (corners.size() != 8U) {
-        return std::nullopt;
-    }
-
-    std::vector<quader_editor_core::PolygonObject> objects;
-    int activeObjectId = -1;
-    quader_editor_core::SelectionMode selectionMode = quader_editor_core::SelectionMode::object;
-    const quader_editor_core::CommandResult result =
-            quader_editor_core::create_box_from_corners(objects, 1, corners, activeObjectId, selectionMode);
-    if (!result.ok || objects.empty()) {
-        return std::nullopt;
-    }
-
-    MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(objects.front().document);
-    mesh.name = "Box Preview";
-    if (mesh.vertices.empty() || mesh.indices.empty()) {
-        return std::nullopt;
-    }
-    return mesh;
-}
-
 const quader_editor_core::PolygonObject* findObject(
         const quader_editor_core::EditorSession& session,
         int modelingObjectId) {
@@ -1079,10 +568,6 @@ bool runtimeSelectionMatches(const quader_poly::Selection& left, const quader_po
             left.active_vertex == right.active_vertex &&
             left.active_edge == right.active_edge &&
             left.active_face == right.active_face;
-}
-
-quader_poly::PickOptions pickOptionsFromRequest(const ModelingPickSelectRequest& request) {
-    return quader_editor_core::selection_pick_options_from_radii(request.vertexRadius, request.edgeRadius);
 }
 
 quader_poly::PickOptions pickOptionsFromRequest(const ModelingHoverRequest& request) {
@@ -1118,12 +603,13 @@ ModelingBoxPreview fromRuntime(
 }
 
 ModelingCommandDescriptor makeBoxToolDescriptor() {
+    const ToolDescriptor* tool = findViewportToolDescriptor(ModelingViewportTool::Box);
     return ModelingCommandDescriptor{
             .command = ModelingCommandId::ActivateBoxTool,
-            .id = "box",
-            .label = "Box",
-            .shortcut = "B",
-            .viewportScoped = true,
+            .id = tool != nullptr ? std::string{tool->id} : std::string{},
+            .label = tool != nullptr ? std::string{tool->label} : std::string{},
+            .shortcut = tool != nullptr ? std::string{tool->shortcut} : std::string{},
+            .viewportScoped = tool != nullptr && tool->ownsViewport,
             .rebuildsMeshOnSuccess = true,
     };
 }
@@ -1294,160 +780,20 @@ public:
     }
 
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const {
-        const quader_editor_core::SelectionHoverState& hover = runtime_.hover();
-        const std::uint64_t contentRevision = session_.state().content_revision;
-        const std::uint64_t selectionRevision = session_.state().selection_revision;
-        const std::uint64_t sceneRevision = scene_.revision();
-        const quader_editor_core::SelectionMode selectionMode = session_.selection_mode();
-        const std::uint64_t overlaySignature = selectionOverlaySignature();
-        if (overlayService_.selectionFrameMatches(
-                    contentRevision,
-                    selectionRevision,
-                    sceneRevision,
-                    selectionMode,
-                    overlaySignature,
-                    hover)) {
-            return overlayService_.selectionFrame();
-        }
-
-        ViewportOverlayFrame frame = SelectionOverlayProjection::projectSelectionOverlayFrame(
-                overlayService_.selectionOverlayCurrentFrame(session_, runtime_, hover),
-                objectRegistry_.entitiesByObject(),
-                scene_);
-        SelectionOverlayProjection::appendProjectedOverlayLines(
-                frame,
-                runtime_.knife_state().preview_lines,
-                objectRegistry_.entitiesByObject(),
+        return overlayService_.selectionOverlayFrame(
+                session_,
+                runtime_,
                 scene_,
-                ViewportOverlayLayer::ToolPreviewLine,
-                ViewportOverlayStyleRole::ToolPreviewLine,
-                ViewportOverlaySource::Tool);
-        if (runtime_.transform_drag_active()) {
-            SelectionOverlayProjection::appendWorldSpaceOverlayPoints(frame,
-                    quader_editor_core::transform_drag_snap_overlay_points(runtime_.transform_drag_state()));
-        }
-        const quader_editor_core::CutToolState& cut = runtime_.cut_state();
-        if (quader_editor_core::cut_is_active(cut)) {
-            const std::vector<quader::QVec3> cutPoints =
-                    quader_editor_core::cut_overlay_points(cut, runtime_.cut_hover().position, runtime_.cut_hover().valid);
-            if (quader_editor_core::cut_can_preview(cut) && cut.preview_valid) {
-                const std::vector<quader_editor_core::PolygonObject> previewObjects =
-                        sceneTransformedObjectsForPicking();
-                const PreviewTriangleMesh keepMesh = previewMeshFromDocuments(runtime_.cut_preview_documents(
-                        previewObjects,
-                        quader_editor_core::CutPreviewMeshSide::keep));
-                const PreviewTriangleMesh discardMesh = previewMeshFromDocuments(runtime_.cut_preview_documents(
-                        previewObjects,
-                        quader_editor_core::CutPreviewMeshSide::discard));
-
-                if (cut.mode == quader_editor_core::CutMode::keep_both) {
-                    appendPreviewMeshFill(frame,
-                            keepMesh,
-                            kOverlayCutPreviewKeepFillColor,
-                            ViewportOverlayStyleRole::CutPreviewKeepFill);
-                    appendPreviewMeshFill(frame,
-                            discardMesh,
-                            kOverlayCutPreviewKeepBothDiscardFillColor,
-                            ViewportOverlayStyleRole::CutPreviewKeepBothDiscardFill);
-                } else {
-                    appendPreviewMeshFill(frame,
-                            discardMesh,
-                            kOverlayCutPreviewDiscardFillColor,
-                            ViewportOverlayStyleRole::CutPreviewDiscardFill);
-                }
-
-                const PreviewTriangleMesh& lineSource = !discardMesh.empty() ? discardMesh : keepMesh;
-                if (!lineSource.empty() && cutPoints.size() >= 2U) {
-                    const std::uint32_t outlineColor = cut.mode == quader_editor_core::CutMode::keep_both
-                            ? kOverlayCutPreviewKeepBothOutlineColor
-                            : kOverlayCutPreviewDiscardOutlineColor;
-                    appendCutPreviewResultLines(frame,
-                            lineSource,
-                            fromRuntime(cutPoints[0]),
-                            fromRuntime(cut.face_normal),
-                            outlineColor);
-                }
-            }
-            appendDrawnPlaneToolOverlay(
-                    frame,
-                    cutPoints,
-                    drawnPlaneSupportPoint(cutPoints, cut.face_normal),
-                    cutPoints.size() >= 2U);
-        }
-        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
-        if (quader_editor_core::mirror_is_active(mirror)) {
-            const std::vector<quader::QVec3> mirrorPoints =
-                    quader_editor_core::mirror_overlay_points(
-                            mirror,
-                            runtime_.mirror_hover().position,
-                            runtime_.mirror_hover().valid);
-            appendDrawnPlaneToolOverlay(
-                    frame,
-                    mirrorPoints,
-                    drawnPlaneSupportPoint(mirrorPoints, mirror.plane.face_normal),
-                    mirrorPoints.size() >= 2U);
-        }
-        overlayService_.storeSelectionFrame(
-                std::move(frame),
-                contentRevision,
-                selectionRevision,
-                sceneRevision,
-                selectionMode,
-                overlaySignature,
-                hover);
-        return overlayService_.selectionFrame();
+                objectRegistry_,
+                sceneTransformedObjectsForPicking());
     }
 
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const {
-        std::vector<ModelingToolPreviewMesh> previewMeshes;
-        if (const std::optional<MeshAsset> boxPreview =
-                        boxPreviewMeshFromDescriptor(runtime_.box_preview_descriptor(true))) {
-            previewMeshes.push_back(ModelingToolPreviewMesh{
-                    .sourceEntity = InvalidEntityId,
-                    .material = InvalidAssetId,
-                    .mesh = *boxPreview,
-            });
-        }
-
-        const quader_editor_core::MirrorToolState& mirror = runtime_.mirror_state();
-        if (!quader_editor_core::mirror_is_active(mirror) ||
-                !quader_editor_core::mirror_can_preview(mirror) ||
-                !mirror.preview_valid) {
-            return previewMeshes;
-        }
-
-        const std::vector<quader_editor_core::PolygonObject> previewObjects =
-                sceneTransformedObjectsForPicking();
-        const std::vector<quader_poly::Document> documents =
-                runtime_.mirror_preview_documents(previewObjects);
-        previewMeshes.reserve(previewMeshes.size() + documents.size());
-        std::size_t documentIndex = 0;
-        for (const int objectId : mirror.target_object_ids) {
-            if (documentIndex >= documents.size()) {
-                break;
-            }
-            MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(documents[documentIndex++]);
-            if (mesh.vertices.empty() || mesh.indices.empty()) {
-                continue;
-            }
-
-            EntityId sourceEntity = InvalidEntityId;
-            AssetId material = InvalidAssetId;
-            if (const auto entity = objectRegistry_.entitiesByObject().find(objectId);
-                    entity != objectRegistry_.entitiesByObject().end()) {
-                sourceEntity = entity->second;
-                if (const MaterialComponent* materialComponent = scene_.material(sourceEntity)) {
-                    material = materialComponent->material;
-                }
-            }
-
-            previewMeshes.push_back(ModelingToolPreviewMesh{
-                    .sourceEntity = sourceEntity,
-                    .material = material,
-                    .mesh = std::move(mesh),
-            });
-        }
-        return previewMeshes;
+        return overlayService_.toolPreviewMeshes(
+                runtime_,
+                scene_,
+                objectRegistry_,
+                sceneTransformedObjectsForPicking());
     }
 
     [[nodiscard]] std::unordered_set<int> liveModelingObjectIds() const {
@@ -2483,105 +1829,9 @@ public:
     }
 
     ModelingSelectionSummary pickSelect(const ModelingPickSelectRequest& request) {
-        std::vector<quader_editor_core::PolygonObject> pickingObjects = sceneTransformedObjectsForPicking();
-        quader_editor_core::SelectionMode mode = session_.selection_mode();
-        int activeObjectId = session_.active_object_id();
-        quader_editor_core::SelectionEditOperation operation =
-                quader_editor_core::selection_edit_operation_from_modifiers(
-                        request.controlPressed,
-                        request.shiftPressed);
-        const quader_poly::PickOptions pickOptions = pickOptionsFromRequest(request);
-        const quader_poly::Ray ray = toRuntime(request.ray);
-        const bool paintStroke = request.clickCount == 0;
-
-        if (paintStroke) {
-            if (mode != quader_editor_core::SelectionMode::object) {
-                if (operation == quader_editor_core::SelectionEditOperation::replace) {
-                    operation = quader_editor_core::SelectionEditOperation::add;
-                }
-                (void)quader_editor_core::pick_select(
-                        pickingObjects,
-                        mode,
-                        operation,
-                        ray,
-                        activeObjectId,
-                        pickOptions,
-                        false);
-                applyPickedSelection(pickingObjects, mode, activeObjectId);
-            }
+        if (selectionService_.applyPickSelection(session_, scene_, objectRegistry_, request)) {
             syncSceneSelectionFromModeling();
-            return selectionSummary();
         }
-
-        const bool multiClick = request.clickCount > 1;
-        if (request.preserveSelectionOnSelectedHit &&
-                operation == quader_editor_core::SelectionEditOperation::replace &&
-                !multiClick) {
-            const quader_editor_core::SelectionHoverUpdateResult hovered =
-                    quader_editor_core::update_selection_hover(
-                            pickingObjects,
-                            mode,
-                            {},
-                            ray,
-                            false,
-                            pickOptions,
-                            cachedPickObjectBounds(),
-                            cachedPickFaceGeometry(pickOptions));
-            bool hitAlreadySelected = false;
-            if (mode == quader_editor_core::SelectionMode::object && hovered.hover.object_id > 0) {
-                hitAlreadySelected = std::any_of(
-                        pickingObjects.begin(),
-                        pickingObjects.end(),
-                        [&](const quader_editor_core::PolygonObject& object) {
-                            return object.id == hovered.hover.object_id && object.selected;
-                        });
-            } else {
-                hitAlreadySelected =
-                        quader_editor_core::selection_hover_target_matches_selection(pickingObjects, mode, hovered.hover);
-            }
-            if (hitAlreadySelected) {
-                return selectionSummary();
-            }
-        }
-
-        bool hit = false;
-        if (multiClick && mode == quader_editor_core::SelectionMode::face) {
-            hit = quader_editor_core::pick_select_all_faces(
-                    pickingObjects,
-                    mode,
-                    operation,
-                    ray,
-                    activeObjectId,
-                    pickOptions);
-        } else if (multiClick && mode == quader_editor_core::SelectionMode::edge) {
-            hit = quader_editor_core::pick_select_edge_loop(
-                    pickingObjects,
-                    mode,
-                    operation,
-                    ray,
-                    activeObjectId,
-                    pickOptions);
-        } else if (multiClick && mode == quader_editor_core::SelectionMode::vertex) {
-            hit = quader_editor_core::pick_select_all_vertices(
-                    pickingObjects,
-                    mode,
-                    operation,
-                    ray,
-                    activeObjectId,
-                    pickOptions);
-        } else {
-            hit = quader_editor_core::pick_select(
-                    pickingObjects,
-                    mode,
-                    operation,
-                    ray,
-                    activeObjectId,
-                    pickOptions);
-        }
-        if (hit || !request.preserveSelectionOnMiss) {
-            applyPickedSelection(pickingObjects, mode, activeObjectId);
-        }
-        syncSceneSelectionFromModeling();
         return selectionSummary();
     }
 
@@ -3493,38 +2743,6 @@ private:
     [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry>& cachedPickFaceGeometry(
             quader_poly::PickOptions pickOptions = {}) const {
         return selectionService_.cachedPickFaceGeometry(session_, scene_, objectRegistry_, pickOptions);
-    }
-
-    void applyPickedSelection(
-            const std::vector<quader_editor_core::PolygonObject>& pickingObjects,
-            quader_editor_core::SelectionMode mode,
-            int activeObjectId) {
-        quader_editor_core::SessionState& state = session_.state();
-        bool changed = state.selection_mode != mode || state.active_object_id != activeObjectId;
-        for (quader_editor_core::PolygonObject& object : state.objects) {
-            const auto picked = std::find_if(
-                    pickingObjects.begin(),
-                    pickingObjects.end(),
-                    [&](const quader_editor_core::PolygonObject& candidate) {
-                        return candidate.id == object.id;
-                    });
-            const bool nextSelected = picked != pickingObjects.end() && picked->selected;
-            const quader_poly::Selection nextSelection =
-                    picked != pickingObjects.end() ? picked->selection : quader_poly::Selection{};
-            changed = changed ||
-                    object.selected != nextSelected ||
-                    !ModelingSelectionService::selectionMatches(object.selection, nextSelection);
-            object.selected = nextSelected;
-            object.selection = nextSelection;
-        }
-        if (!changed) {
-            return;
-        }
-        state.selection_mode = mode;
-        state.active_object_id = activeObjectId;
-        quader_editor_core::normalize_active_object_id(state.objects, state.active_object_id);
-        state.dirty = true;
-        ++state.selection_revision;
     }
 
     ModelingCommandResult executeRuntimeNoSettings(quader_editor_core::EditorRuntimeCommandId commandId, bool mayChangeContent) {

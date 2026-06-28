@@ -9,13 +9,13 @@
 #include "core/types.hpp"
 #include "render/viewport_overlay_frame.hpp"
 
-#include <unordered_map>
 #include <vector>
 
 #include <editor/modeling/runtime/session.hpp>
 
 namespace quader {
 
+class ModelingObjectRuntimeMap;
 class SceneDocument;
 
 /**
@@ -25,12 +25,12 @@ class SelectionOverlayProjection final {
 public:
     [[nodiscard]] static ViewportOverlayFrame projectSelectionOverlayFrame(
             const quader_editor_core::SelectionOverlayFrame& frame,
-            const std::unordered_map<int, EntityId>& entityByObject,
+            const ModelingObjectRuntimeMap& objectRegistry,
             const SceneDocument& scene);
     static void appendProjectedOverlayLines(
             ViewportOverlayFrame& frame,
             const std::vector<quader_editor_core::SelectionOverlayLine>& lines,
-            const std::unordered_map<int, EntityId>& entityByObject,
+            const ModelingObjectRuntimeMap& objectRegistry,
             const SceneDocument& scene,
             ViewportOverlayLayer layer,
             ViewportOverlayStyleRole styleRole,

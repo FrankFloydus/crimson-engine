@@ -23,6 +23,7 @@ enum class UIIconId {
     EdgeSelection,
     FaceSelection,
     MeshSelection,
+    ArrowDown,
 };
 
 /// Identifies the concrete asset provider behind a semantic icon.

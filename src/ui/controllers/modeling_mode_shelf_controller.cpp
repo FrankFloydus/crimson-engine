@@ -10,6 +10,7 @@
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "editor/metadata/host_contract.hpp"
+#include "editor/modeling/services/selection_mode_adapter.hpp"
 
 #include <algorithm>
 #include <span>
@@ -26,56 +27,10 @@ std::string modelingActionLabelKey(std::string_view actionId) {
     return key;
 }
 
-std::optional<ModelingSelectionMode> modelingSelectionModeFromHostSelectionMode(
-        quader_host_contract::HostSelectionMode mode) {
-    using quader_host_contract::HostSelectionMode;
-    switch (mode) {
-    case HostSelectionMode::object:
-        return ModelingSelectionMode::Object;
-    case HostSelectionMode::vertex:
-        return ModelingSelectionMode::Vertex;
-    case HostSelectionMode::edge:
-        return ModelingSelectionMode::Edge;
-    case HostSelectionMode::face:
-        return ModelingSelectionMode::Face;
-    case HostSelectionMode::group:
-        return std::nullopt;
-    }
-    return std::nullopt;
-}
-
-std::string_view shelfControlIdForHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
-    using quader_host_contract::HostSelectionMode;
-    switch (mode) {
-    case HostSelectionMode::object:
-        return "object";
-    case HostSelectionMode::vertex:
-        return "vertex";
-    case HostSelectionMode::edge:
-        return "edge";
-    case HostSelectionMode::face:
-        return "face";
-    case HostSelectionMode::group:
-        return {};
-    }
-    return {};
-}
-
-std::string_view shelfLabelKeyForHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
-    using quader_host_contract::HostSelectionMode;
-    switch (mode) {
-    case HostSelectionMode::object:
-        return "ui.modeling_shelf.tab.object";
-    case HostSelectionMode::vertex:
-        return "ui.modeling_shelf.tab.vertex";
-    case HostSelectionMode::edge:
-        return "ui.modeling_shelf.tab.edge";
-    case HostSelectionMode::face:
-        return "ui.modeling_shelf.tab.face";
-    case HostSelectionMode::group:
-        return {};
-    }
-    return {};
+std::string shelfLabelKeyForHostSelectionMode(quader_host_contract::HostSelectionMode mode) {
+    std::string key("ui.modeling_shelf.tab.");
+    key.append(hostSelectionModeId(mode));
+    return key;
 }
 
 std::string_view shelfFallbackLabelForHostSelectionMode(
@@ -189,10 +144,10 @@ ModelingSelectionSummary toModelingSelectionSummary(const QuaderSelectionSummary
 std::optional<ModelingModeShelfControl> controlFromOperationPanel(
         const quader_host_contract::HostOperationPanelDescriptor& panel,
         const LocalizationService& localization) {
-    if (!modelingSelectionModeFromHostSelectionMode(panel.selection_mode)) {
+    if (hostSelectionModeToApp(panel.selection_mode) == ModelingSelectionMode::Group) {
         return std::nullopt;
     }
-    const std::string_view controlId = shelfControlIdForHostSelectionMode(panel.selection_mode);
+    const std::string_view controlId = hostSelectionModeId(panel.selection_mode);
     if (controlId.empty()) {
         return std::nullopt;
     }
@@ -355,10 +310,8 @@ std::vector<ModelingModeShelfControl> ModelingModeShelfController::controls(
 std::optional<std::string_view> ModelingModeShelfController::controlIdForSelectionMode(
         ModelingSelectionMode mode) const {
     for (const quader_host_contract::HostOperationPanelDescriptor* panel : operationPanelsForModelingShelf()) {
-        if (const std::optional<ModelingSelectionMode> panelMode =
-                    modelingSelectionModeFromHostSelectionMode(panel->selection_mode);
-                panelMode && *panelMode == mode) {
-            return shelfControlIdForHostSelectionMode(panel->selection_mode);
+        if (hostSelectionModeToApp(panel->selection_mode) == mode) {
+            return hostSelectionModeId(panel->selection_mode);
         }
     }
     return std::nullopt;
@@ -367,8 +320,8 @@ std::optional<std::string_view> ModelingModeShelfController::controlIdForSelecti
 std::optional<ModelingSelectionMode> ModelingModeShelfController::selectionModeForControlId(
         std::string_view controlId) const {
     for (const quader_host_contract::HostOperationPanelDescriptor* panel : operationPanelsForModelingShelf()) {
-        if (shelfControlIdForHostSelectionMode(panel->selection_mode) == controlId) {
-            return modelingSelectionModeFromHostSelectionMode(panel->selection_mode);
+        if (hostSelectionModeId(panel->selection_mode) == controlId) {
+            return hostSelectionModeToApp(panel->selection_mode);
         }
     }
     return std::nullopt;

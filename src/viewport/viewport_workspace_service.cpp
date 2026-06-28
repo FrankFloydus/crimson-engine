@@ -300,6 +300,23 @@ const ViewportWorkspaceAuxiliaryViewportState* ViewportWorkspaceService::auxilia
     return found == auxiliaryViewports_.end() ? nullptr : &*found;
 }
 
+ViewportView ViewportWorkspaceService::auxiliaryViewportView(std::string_view stableId) const {
+    const ViewportWorkspaceAuxiliaryViewportState* state = auxiliaryViewport(stableId);
+    return state == nullptr ? ViewportView::Perspective : viewportViewForCamera(state->camera);
+}
+
+bool ViewportWorkspaceService::setAuxiliaryViewportView(std::string_view stableId, ViewportView view) {
+    ViewportWorkspaceAuxiliaryViewportState* state = auxiliaryViewport(stableId);
+    if (state == nullptr) {
+        return false;
+    }
+    if (viewportViewForCamera(state->camera) == view) {
+        return false;
+    }
+    resetViewportCameraForView(state->camera, view);
+    return true;
+}
+
 void ViewportWorkspaceService::setAuxiliaryViewportVisible(std::string_view stableId, bool visible) {
     if (ViewportWorkspaceAuxiliaryViewportState* state = auxiliaryViewport(stableId)) {
         state->visibleThisFrame = visible;

@@ -330,6 +330,52 @@ private:
     std::optional<std::string>& pendingCommand_;
 };
 
+/**
+ * Captures generic retained dropdown toggles and option selections.
+ */
+class DropdownSelectionListener final : public Rml::EventListener {
+public:
+    DropdownSelectionListener(
+            std::optional<std::string>& pendingToggle,
+            std::optional<UIDropdownSelection>& pendingSelection)
+        : pendingToggle_(pendingToggle)
+        , pendingSelection_(pendingSelection) {}
+
+    void ProcessEvent(Rml::Event& event) override {
+        for (Rml::Element* element = event.GetTargetElement(); element != nullptr; element = element->GetParentNode()) {
+            const Rml::String option = element->GetAttribute<Rml::String>(
+                    kUIDropdownOptionAttribute.data(),
+                    "");
+            if (!option.empty()) {
+                const Rml::String dropdown = element->GetAttribute<Rml::String>(
+                        kUIDropdownAttribute.data(),
+                        "");
+                if (!dropdown.empty()) {
+                    pendingSelection_ = UIDropdownSelection{
+                            .dropdownId = dropdown,
+                            .optionId = option,
+                    };
+                    event.StopPropagation();
+                    return;
+                }
+            }
+
+            const Rml::String toggle = element->GetAttribute<Rml::String>(
+                    kUIDropdownToggleAttribute.data(),
+                    "");
+            if (!toggle.empty()) {
+                pendingToggle_ = toggle;
+                event.StopPropagation();
+                return;
+            }
+        }
+    }
+
+private:
+    std::optional<std::string>& pendingToggle_;
+    std::optional<UIDropdownSelection>& pendingSelection_;
+};
+
 int rmlModifiersFromSdl() {
     const SDL_Keymod mod = SDL_GetModState();
     int result = 0;
@@ -481,6 +527,9 @@ bool RmlUiContextHost::initialize(
 
     windowChromeActionListener_ = std::make_unique<WindowChromeActionListener>(pendingWindowChromeAction_);
     document_->AddEventListener("click", windowChromeActionListener_.get());
+    dropdownSelectionListener_ =
+            std::make_unique<DropdownSelectionListener>(pendingDropdownToggle_, pendingDropdownSelection_);
+    document_->AddEventListener("click", dropdownSelectionListener_.get());
     modelingModeShelfControlSelectionListener_ =
             std::make_unique<ModelingModeShelfControlSelectionListener>(
                     pendingModelingModeShelfControlSelection_,
@@ -517,14 +566,20 @@ void RmlUiContextHost::shutdown() {
         if (windowChromeActionListener_) {
             document_->RemoveEventListener("click", windowChromeActionListener_.get());
         }
+        if (dropdownSelectionListener_) {
+            document_->RemoveEventListener("click", dropdownSelectionListener_.get());
+        }
         if (modelingModeShelfControlSelectionListener_) {
             document_->RemoveEventListener("click", modelingModeShelfControlSelectionListener_.get());
         }
     }
     debugPaletteCopyListener_.reset();
     windowChromeActionListener_.reset();
+    dropdownSelectionListener_.reset();
     modelingModeShelfControlSelectionListener_.reset();
     pendingWindowChromeAction_.reset();
+    pendingDropdownToggle_.reset();
+    pendingDropdownSelection_.reset();
     pendingModelingModeShelfControlSelection_.reset();
     pendingModelingModeShelfCommand_.reset();
     document_ = nullptr;
@@ -709,6 +764,18 @@ std::optional<WindowChromeAction> RmlUiContextHost::takeWindowChromeAction() {
     std::optional<WindowChromeAction> action = pendingWindowChromeAction_;
     pendingWindowChromeAction_.reset();
     return action;
+}
+
+std::optional<std::string> RmlUiContextHost::takeDropdownToggle() {
+    std::optional<std::string> dropdownId = std::move(pendingDropdownToggle_);
+    pendingDropdownToggle_.reset();
+    return dropdownId;
+}
+
+std::optional<UIDropdownSelection> RmlUiContextHost::takeDropdownSelection() {
+    std::optional<UIDropdownSelection> selection = std::move(pendingDropdownSelection_);
+    pendingDropdownSelection_.reset();
+    return selection;
 }
 
 std::optional<std::string> RmlUiContextHost::takeModelingModeShelfControlSelection() {
