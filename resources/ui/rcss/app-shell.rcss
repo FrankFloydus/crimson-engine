@@ -166,13 +166,11 @@ body {
 }
 
 .modeling-mode-shelf-content {
-    position: absolute;
-    left: 0dp;
-    right: 0dp;
-    top: 100%;
+    position: relative;
     display: flex;
     flex-direction: row;
     align-items: center;
+    width: 100%;
     flex-grow: 0;
     flex-shrink: 0;
     overflow: hidden;
@@ -256,18 +254,20 @@ body {
 
 .viewport-overlay-controls {
     position: absolute;
-    top: 12dp;
-    right: 12dp;
+    top: 20dp;
+    left: 0dp;
     display: flex;
     flex-direction: row;
     align-items: flex-start;
     justify-content: flex-end;
+    width: 100%;
     overflow: visible;
     z-index: 10;
 }
 
 .viewport-view-dropdown {
     width: 160dp;
+    margin-right: 20dp;
 }
 
 .ui-dropdown {

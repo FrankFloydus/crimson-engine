@@ -285,6 +285,8 @@ void appendSideDock(
         << dockLocationName(location)
         << "\" style=\"width: "
         << mainLayoutSideDockWidthDp(model, location)
+        << "dp; flex-basis: "
+        << mainLayoutSideDockWidthDp(model, location)
         << "dp; flex-grow: 0; flex-shrink: 0;\">";
 
     const bool bothPanelsVisible = panels.size() > 1;

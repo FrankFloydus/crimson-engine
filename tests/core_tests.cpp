@@ -2401,6 +2401,12 @@ TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
     EXPECT_NE(rml.find("src=\"quader://viewport/main\""), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-layout-sidebar\" class=\"main-layout-sidebar main-layout-primary-sidebar main-layout-side-dock-right min-w-40 bg-gray-950 border-gray-600\""),
             std::string::npos);
+    const std::string defaultSideDockFlex =
+            "width: " + std::to_string(kMainLayoutSidebarDefaultWidthDp) +
+            "dp; flex-basis: " + std::to_string(kMainLayoutSidebarDefaultWidthDp) +
+            "dp; flex-grow: 0; flex-shrink: 0;";
+    EXPECT_NE(rml.find(defaultSideDockFlex),
+            std::string::npos);
     EXPECT_NE(rml.find("data-main-layout-dock-location=\"Sidebar\""), std::string::npos);
     EXPECT_NE(rml.find("main-layout-panel min-h-30 bg-gray-950"), std::string::npos);
     EXPECT_NE(rml.find("id=\"main-layout-panel-outliner-header\""), std::string::npos);
@@ -2452,6 +2458,49 @@ TEST(MainLayoutRmlBuilderTests, ProjectsViewportViewDropdownOptionsAndShortcutLa
     EXPECT_LT(rml.find("data-ui-dropdown-option=\"left\""), rml.find("data-ui-dropdown-option=\"right\""));
     EXPECT_LT(rml.find("data-ui-dropdown-option=\"right\""), rml.find("data-ui-dropdown-option=\"front\""));
     EXPECT_LT(rml.find("data-ui-dropdown-option=\"front\""), rml.find("data-ui-dropdown-option=\"back\""));
+}
+
+TEST(MainLayoutRmlBuilderTests, ViewportDropdownOverlayAnchorsInsideViewportContent) {
+    const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
+
+    const std::size_t shelfContent = shellRcss.find(".modeling-mode-shelf-content {");
+    const std::size_t shelfContentFill = shellRcss.find(".modeling-mode-shelf-content-fill {");
+    ASSERT_NE(shelfContent, std::string::npos);
+    ASSERT_NE(shelfContentFill, std::string::npos);
+    ASSERT_LT(shelfContent, shelfContentFill);
+    const std::string shelfContentBlock = shellRcss.substr(shelfContent, shelfContentFill - shelfContent);
+    EXPECT_NE(shelfContentBlock.find("position: relative;"), std::string::npos);
+    EXPECT_NE(shelfContentBlock.find("width: 100%;"), std::string::npos);
+    EXPECT_EQ(shelfContentBlock.find("top: 100%;"), std::string::npos);
+
+    const std::size_t host = shellRcss.find(".viewport-host {");
+    const std::size_t surface = shellRcss.find(".viewport-surface {");
+    ASSERT_NE(host, std::string::npos);
+    ASSERT_NE(surface, std::string::npos);
+    ASSERT_LT(host, surface);
+    const std::string hostBlock = shellRcss.substr(host, surface - host);
+    EXPECT_NE(hostBlock.find("position: relative;"), std::string::npos);
+    EXPECT_NE(hostBlock.find("overflow: hidden;"), std::string::npos);
+
+    const std::size_t overlay = shellRcss.find(".viewport-overlay-controls {");
+    const std::size_t dropdown = shellRcss.find(".viewport-view-dropdown {");
+    ASSERT_NE(overlay, std::string::npos);
+    ASSERT_NE(dropdown, std::string::npos);
+    ASSERT_LT(overlay, dropdown);
+    const std::string overlayBlock = shellRcss.substr(overlay, dropdown - overlay);
+    EXPECT_NE(overlayBlock.find("position: absolute;"), std::string::npos);
+    EXPECT_NE(overlayBlock.find("top: 20dp;"), std::string::npos);
+    EXPECT_NE(overlayBlock.find("left: 0dp;"), std::string::npos);
+    EXPECT_EQ(overlayBlock.find("right: 20dp;"), std::string::npos);
+    EXPECT_NE(overlayBlock.find("justify-content: flex-end;"), std::string::npos);
+    EXPECT_NE(overlayBlock.find("width: 100%;"), std::string::npos);
+
+    const std::size_t dropdownEnd = shellRcss.find(".ui-dropdown {");
+    ASSERT_NE(dropdownEnd, std::string::npos);
+    ASSERT_LT(dropdown, dropdownEnd);
+    const std::string dropdownBlock = shellRcss.substr(dropdown, dropdownEnd - dropdown);
+    EXPECT_NE(dropdownBlock.find("width: 160dp;"), std::string::npos);
+    EXPECT_NE(dropdownBlock.find("margin-right: 20dp;"), std::string::npos);
 }
 
 TEST(MainLayoutRmlBuilderTests, MarksActiveResizerDuringDrag) {
