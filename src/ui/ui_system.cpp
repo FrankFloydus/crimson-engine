@@ -42,6 +42,8 @@ namespace {
 constexpr float kWindowChromeHeight = 48.0f;
 constexpr float kWindowChromeControlsWidth = 120.0f;
 constexpr float kWindowChromeButtonWidth = 40.0f;
+constexpr float kStaticBottomBarHeight = 28.0f;
+constexpr float kStaticBottomBarAccentHeight = 3.0f;
 
 ImVec4 uiColor(int red, int green, int blue, float alpha = 1.0f) {
     return {
@@ -157,6 +159,55 @@ QuaderApiVoidResult runtimeFailure(std::string message) {
             .message = std::move(message),
             .mutationKind = QuaderMutationKind::None,
     };
+}
+
+void drawStaticBottomBar(const ImGuiViewport& viewport) {
+    ImGui::SetNextWindowPos({viewport.Pos.x, viewport.Pos.y + std::max(0.0f, viewport.Size.y - kStaticBottomBarHeight)});
+    ImGui::SetNextWindowSize({std::max(1.0f, viewport.Size.x), kStaticBottomBarHeight});
+    ImGui::SetNextWindowViewport(viewport.ID);
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoScrollWithMouse |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoNavFocus;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, uiColor(18, 19, 22));
+    ImGui::Begin("Quader Static Bottom Bar", nullptr, flags);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+
+    const ImVec2 min = ImGui::GetWindowPos();
+    const ImVec2 max{min.x + ImGui::GetWindowWidth(), min.y + kStaticBottomBarHeight};
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    drawList->AddRectFilled(min, max, uiPackedColor(18, 19, 22));
+    drawList->AddLine(min, {max.x, min.y}, uiPackedColor(72, 74, 82));
+    drawList->AddRectFilled(
+            {min.x, max.y - kStaticBottomBarAccentHeight},
+            max,
+            uiPackedColor(118, 92, 168));
+
+    const float textY = min.y + std::floor((kStaticBottomBarHeight - ImGui::GetFontSize()) * 0.5f);
+    drawList->AddText({min.x + 12.0f, textY}, uiPackedColor(216, 216, 216), "Ready");
+
+    const char* rightLabel = "Quader";
+    const ImVec2 rightLabelSize = ImGui::CalcTextSize(rightLabel);
+    drawList->AddText(
+            {std::max(min.x + 72.0f, max.x - rightLabelSize.x - 12.0f), textY},
+            uiPackedColor(150, 154, 163),
+            rightLabel);
+
+    ImGui::End();
 }
 
 } // namespace
@@ -365,6 +416,7 @@ void UISystem::draw(QuaderEditorApi& editor,
         saveSettings();
     }
     toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
+    drawStaticBottomBar(*ImGui::GetMainViewport());
     std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
     std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
     renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
@@ -497,18 +549,20 @@ void UISystem::drawDockspace(
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float chromeHeight = customChrome_ ? kWindowChromeHeight : 0.0f;
     ImGui::SetNextWindowPos({viewport->Pos.x, viewport->Pos.y + chromeHeight});
-    ImGui::SetNextWindowSize({viewport->Size.x, std::max(1.0f, viewport->Size.y - chromeHeight)});
+    ImGui::SetNextWindowSize({viewport->Size.x, std::max(1.0f, viewport->Size.y - chromeHeight - kStaticBottomBarHeight)});
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking |
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::Begin("Main Dockspace", nullptr, flags);
-    ImGui::PopStyleVar(2);
+    ImGui::PopStyleVar(3);
 
     const MainMenuBarResult menuResult = mainMenuBar_.draw({
             .quitRequested = quitRequested,
@@ -538,7 +592,7 @@ void UISystem::drawDockspace(
     ImGui::PushStyleVar(
             ImGuiStyleVar_WindowMinSize,
             ImVec2(std::max(savedWindowMinSize.x, style_.sidebarMinWidth), savedWindowMinSize.y));
-    ImGui::DockSpace(dockspaceId, {0.0f, 0.0f}, ImGuiDockNodeFlags_AutoHideTabBar);
+    ImGui::DockSpace(dockspaceId, dockspaceSize, ImGuiDockNodeFlags_AutoHideTabBar);
     ImGui::PopStyleVar();
     enforceSidebarDockMinimums();
 

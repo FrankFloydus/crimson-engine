@@ -1053,6 +1053,46 @@ TEST(BuildGuardrailTests, UITokenConfigResourceIsPackagedWithRuntime) {
     EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-ui.tokens.json").empty());
 }
 
+TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
+    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string styleSource = readSourceFile("src/ui/ui_style_tokens.cpp");
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
+
+    const std::size_t dockspacePadding =
+            uiSystemSource.find("ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f})");
+    const std::size_t dockspaceBegin = uiSystemSource.find("ImGui::Begin(\"Main Dockspace\"");
+    ASSERT_NE(dockspacePadding, std::string::npos);
+    ASSERT_NE(dockspaceBegin, std::string::npos);
+    EXPECT_LT(dockspacePadding, dockspaceBegin);
+    expectContains(uiSystemSource, "ImGui::PopStyleVar(3)");
+    expectContains(uiSystemSource, "kStaticBottomBarHeight = 28.0f");
+    expectContains(uiSystemSource, "drawStaticBottomBar");
+    expectContains(uiSystemSource, "viewport.Size.y - kStaticBottomBarHeight");
+    expectContains(uiSystemSource, "viewport->Size.y - chromeHeight - kStaticBottomBarHeight");
+    expectContains(uiSystemSource, "ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse");
+    expectContains(uiSystemSource, "ImGuiWindowFlags_NoInputs");
+    expectContains(uiSystemSource, "ImGui::Begin(\"Quader Static Bottom Bar\"");
+    expectContains(uiSystemSource, "ImGui::DockSpace(dockspaceId, dockspaceSize");
+    expectContains(uiSystemSource, "uiPackedColor(118, 92, 168)");
+    expectMissing(uiSystemSource, "availableDockspaceSize.y - kStaticBottomBarHeight");
+    expectMissing(uiSystemSource, "ImGui::Dummy(barSize)");
+
+    expectContains(styleSource, "style.FrameBorderSize = 1.0f");
+    expectContains(styleSource, "colors[ImGuiCol_Border] = styleColor(72, 74, 82)");
+    expectContains(styleSource, "colors[ImGuiCol_FrameBg] = styleColor(23, 24, 27)");
+    expectContains(styleSource, "colors[ImGuiCol_FrameBgHovered] = styleColor(38, 40, 45)");
+    expectContains(styleSource, "colors[ImGuiCol_FrameBgActive] = styleColor(50, 54, 61)");
+    expectContains(styleSource, "colors[ImGuiCol_CheckMark] = styleColor(236, 241, 245)");
+    expectMissing(styleSource, "style.FrameBorderSize = 0.0f");
+
+    expectContains(viewportPanelSource, "viewportChromeComboWidthForText");
+    expectContains(viewportPanelSource, "ImGui::CalcTextSize");
+    expectContains(viewportPanelSource, "kViewportChromeViews");
+    expectContains(viewportPanelSource, "kViewportChromeShadingModes");
+    expectMissing(viewportPanelSource, "constexpr float kViewComboWidth = 112.0f");
+    expectMissing(viewportPanelSource, "constexpr float kShadingComboWidth = 104.0f");
+}
+
 TEST(BuildGuardrailTests, RuntimeUiDoesNotReintroduceImGui) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string manifest = readSourceFile("vcpkg.json");
@@ -1200,6 +1240,34 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(rmlHostSource, "WindowChromeActionListener");
     expectContains(rmlHostSource, "kChromeWindowActionAttribute");
     expectContains(chromeButtonHeader, "data-chrome-window-action");
+}
+
+TEST(WindowGuardrailTests, BorderlessMaximizeUsesMonitorWorkArea) {
+    const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
+
+    expectContains(platformSource, "nativeMonitorWorkArea");
+    expectContains(platformSource, "applyBorderlessChromeMaximizedWorkArea");
+    expectContains(platformSource, "applyBorderlessChromeMaximizedClientArea");
+    expectContains(platformSource, "WM_GETMINMAXINFO");
+    expectContains(platformSource, "WM_NCCALCSIZE");
+    expectContains(platformSource, "NCCALCSIZE_PARAMS");
+    expectContains(platformSource, "ShowWindow(hwnd, SW_MAXIMIZE)");
+    expectContains(platformSource, "ShowWindow(hwnd, SW_RESTORE)");
+    expectContains(platformSource, "MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)");
+    expectContains(platformSource, "GetMonitorInfoW(monitor, &monitorInfo)");
+    expectContains(platformSource, "monitorInfo.rcWork");
+    expectContains(platformSource, "monitorInfo.rcMonitor");
+    expectContains(platformSource, "minMaxInfo.ptMaxPosition.x = workArea.left - monitorArea.left");
+    expectContains(platformSource, "minMaxInfo.ptMaxSize.y = workArea.bottom - workArea.top");
+    expectContains(platformSource, "minMaxInfo.ptMaxTrackSize.y = minMaxInfo.ptMaxSize.y");
+    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
+    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CXPADDEDBORDER");
+    expectContains(platformSource, "params.rgrc[0] = area->work");
+    expectContains(platformSource, "message == WM_SIZE || message == WM_WINDOWPOSCHANGED");
+    expectMissing(platformSource, "constrainBorderlessChromeMaximizedFrame");
+    expectMissing(platformSource, "SDL_SyncWindow failed after borderless maximize work-area constraint");
+    expectMissing(platformSource, "message == WM_WINDOWPOSCHANGED && IsZoomed(hwnd) != FALSE");
+    expectContains(platformSource, "minMaxInfo.ptMinTrackSize.x = std::max<LONG>(minMaxInfo.ptMinTrackSize.x, kPlatformWindowMinimumWidth)");
 }
 
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {

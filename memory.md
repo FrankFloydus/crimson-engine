@@ -57,6 +57,63 @@ Verification:
 - Manual smoke in `build\vs2026\Debug\quader.exe`: grow from small window and shrink from large
   window both repaint during drag instead of lagging, clipping, or snapping only on mouse-up.
 
+## 2026-06-28 - ImGui Shell Flush Viewport, Visible Checkboxes, And Work-Area Maximize
+
+Task/context: the ImGui shell had visible gutters around docked viewport/panels, clipped viewport
+combo labels, invisible unchecked checkboxes, mismatched checked checkbox colors, and a black strip
+near the Windows 11 taskbar when maximized.
+
+Root cause/invariants:
+
+- The ImGui dockspace host must push zero `WindowPadding` before `DockSpace`; otherwise the dock node
+  inherits the global 8px window padding and leaves viewport/panel gutters, including a bottom strip.
+- Viewport chrome combo widths must be measured from localized labels with the active frame padding,
+  not fixed constants such as 112/104px.
+- Global ImGui checkbox/input frames need a visible 1px border and a frame background distinct from
+  the panel background; checked ticks should be neutral/light on a coherent dark frame, not a purple
+  tick on a blue/purple active frame.
+- Borderless Win32 maximize must handle `WM_GETMINMAXINFO` and `WM_NCCALCSIZE`: the maximize bounds
+  come from the monitor `rcWork`, and the maximized client area must be computed during non-client
+  sizing so drawable content never extends behind the taskbar.
+- Do not fix borderless maximize by calling `SetWindowPos` after `ShowWindow(SW_MAXIMIZE)` or from
+  `WM_WINDOWPOSCHANGED`; it fights the native maximize transaction, can flicker, and can fail on
+  later maximize/restore cycles.
+- A fixed shell bottom bar must be a separate viewport-aligned ImGui window and the dockspace host
+  height must reserve its height. Do not draw it as content inside the dockspace host with `Dummy`,
+  because that creates whole-app scrolling and gaps between panels and the bar.
+
+Affected owners/files:
+
+- `src/ui/ui_system.cpp`
+- `src/ui/viewport_panel.cpp`
+- `src/ui/ui_style_tokens.cpp`
+- `src/platform/platform_window.cpp`
+- `tests/build_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Added local zero-padding style scope around the main ImGui dockspace host.
+- Replaced fixed viewport combo widths with measured max widths across localized view/shading labels.
+- Set `FrameBorderSize = 1`, raised frame border/background contrast, and changed checkmarks to a
+  near-white color.
+- Added Win32 `WM_GETMINMAXINFO` handling for borderless chrome maximized work-area sizing.
+- Added Win32 `WM_NCCALCSIZE` handling, matching the Electron/Chromium pattern, so the maximized
+  frameless client area is the monitor work area instead of a later-corrected outer frame.
+- Added a fixed static ImGui bottom bar for visual maximize/taskbar verification, with the dockspace
+  host reserving the bar height and disabling host scrolling.
+- Added focused guardrails for the active ImGui shell/style invariants and work-area maximize path.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible:WindowGuardrailTests.BorderlessMaximizeUsesMonitorWorkArea`
+- Native Win32 smoke: launch `build\vs2026\Debug\quader.exe --borderless-window`, run four
+  `ShowWindow(SW_MAXIMIZE)` / `ShowWindow(SW_RESTORE)` cycles, and verify the screen-space client
+  rect stays inside `MONITORINFO.rcWork` on every maximize.
+- Screenshot/pixel smoke: maximized client rect equals `MONITORINFO.rcWork`, the bottom bar accent
+  is visible at the client bottom, and no whole-app scrollbar or gap appears above the bar.
+
 ## 2026-06-28 - Undo Cancels Active Tool Previews Before Document History
 
 Task/context: Ctrl+Z during an active modeling preview could consume document history first, making

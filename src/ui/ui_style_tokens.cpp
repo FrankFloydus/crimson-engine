@@ -37,7 +37,7 @@ void applyUIStyle(const UIStyleTokens& tokens) {
     style.ScrollbarRounding = 4.0f;
     style.TabRounding = 4.0f;
     style.WindowBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f;
+    style.FrameBorderSize = 1.0f;
     style.WindowMenuButtonPosition = ImGuiDir_Left;
 
     ImVec4* colors = style.Colors;
@@ -46,10 +46,10 @@ void applyUIStyle(const UIStyleTokens& tokens) {
     colors[ImGuiCol_WindowBg] = styleColor(15, 15, 15);
     colors[ImGuiCol_ChildBg] = styleColor(15, 15, 15);
     colors[ImGuiCol_PopupBg] = styleColor(15, 15, 15);
-    colors[ImGuiCol_Border] = styleColor(40, 40, 40);
-    colors[ImGuiCol_FrameBg] = styleColor(15, 15, 15);
-    colors[ImGuiCol_FrameBgHovered] = styleColor(59, 41, 82);
-    colors[ImGuiCol_FrameBgActive] = styleColor(36, 23, 52);
+    colors[ImGuiCol_Border] = styleColor(72, 74, 82);
+    colors[ImGuiCol_FrameBg] = styleColor(23, 24, 27);
+    colors[ImGuiCol_FrameBgHovered] = styleColor(38, 40, 45);
+    colors[ImGuiCol_FrameBgActive] = styleColor(50, 54, 61);
     colors[ImGuiCol_TitleBg] = styleColor(25, 25, 25);
     colors[ImGuiCol_TitleBgActive] = styleColor(25, 25, 25);
     colors[ImGuiCol_TitleBgCollapsed] = styleColor(20, 20, 20);
@@ -67,7 +67,7 @@ void applyUIStyle(const UIStyleTokens& tokens) {
     colors[ImGuiCol_Separator] = styleColor(40, 40, 40);
     colors[ImGuiCol_SeparatorHovered] = styleColor(183, 139, 233);
     colors[ImGuiCol_SeparatorActive] = styleColor(154, 100, 216);
-    colors[ImGuiCol_CheckMark] = styleColor(183, 139, 233);
+    colors[ImGuiCol_CheckMark] = styleColor(236, 241, 245);
     colors[ImGuiCol_SliderGrab] = styleColor(183, 139, 233);
     colors[ImGuiCol_SliderGrabActive] = styleColor(154, 100, 216);
     colors[ImGuiCol_ResizeGrip] = styleColor(91, 91, 91, 0.35f);

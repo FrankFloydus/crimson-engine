@@ -41,6 +41,11 @@ constexpr float kChromeDragRestoreThreshold = 4.0f;
 constexpr wchar_t kDwmRegistryKey[] = L"SOFTWARE\\Microsoft\\Windows\\DWM";
 constexpr wchar_t kBorderlessChromeWindowProp[] = L"QuaderPlatformWindowChrome";
 
+struct NativeMonitorWorkArea {
+    RECT monitor;
+    RECT work;
+};
+
 HCURSOR nativeChromeCursorForHit(SDL_HitTestResult hit) {
     switch (hit) {
     case SDL_HITTEST_RESIZE_TOPLEFT:
@@ -130,6 +135,72 @@ std::optional<COLORREF> systemAccentBorderColor() {
     }
 
     return RGB(GetRValue(*accentColor), GetGValue(*accentColor), GetBValue(*accentColor));
+}
+
+std::optional<NativeMonitorWorkArea> nativeMonitorWorkArea(HWND hwnd) {
+    HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (monitor == nullptr) {
+        return std::nullopt;
+    }
+
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (!GetMonitorInfoW(monitor, &monitorInfo)) {
+        return std::nullopt;
+    }
+
+    return NativeMonitorWorkArea{
+            .monitor = monitorInfo.rcMonitor,
+            .work = monitorInfo.rcWork,
+    };
+}
+
+void applyBorderlessChromeMaximizedWorkArea(HWND hwnd, MINMAXINFO& minMaxInfo) {
+    const std::optional<NativeMonitorWorkArea> area = nativeMonitorWorkArea(hwnd);
+    if (!area) {
+        return;
+    }
+
+    const RECT& workArea = area->work;
+    const RECT& monitorArea = area->monitor;
+    minMaxInfo.ptMaxPosition.x = workArea.left - monitorArea.left;
+    minMaxInfo.ptMaxPosition.y = workArea.top - monitorArea.top;
+    minMaxInfo.ptMaxSize.x = workArea.right - workArea.left;
+    minMaxInfo.ptMaxSize.y = workArea.bottom - workArea.top;
+    minMaxInfo.ptMaxTrackSize.x = minMaxInfo.ptMaxSize.x;
+    minMaxInfo.ptMaxTrackSize.y = minMaxInfo.ptMaxSize.y;
+    minMaxInfo.ptMinTrackSize.x = std::max<LONG>(minMaxInfo.ptMinTrackSize.x, kPlatformWindowMinimumWidth);
+    minMaxInfo.ptMinTrackSize.y = std::max<LONG>(minMaxInfo.ptMinTrackSize.y, kPlatformWindowMinimumHeight);
+}
+
+int nativeChromeMaximizedResizeFrameThicknessX(HWND hwnd) {
+    const UINT dpi = GetDpiForWindow(hwnd);
+    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
+
+int nativeChromeMaximizedResizeFrameThicknessY(HWND hwnd) {
+    const UINT dpi = GetDpiForWindow(hwnd);
+    return GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
+
+bool applyBorderlessChromeMaximizedClientArea(HWND hwnd, NCCALCSIZE_PARAMS& params) {
+    if (IsZoomed(hwnd) == FALSE) {
+        return false;
+    }
+
+    const std::optional<NativeMonitorWorkArea> area = nativeMonitorWorkArea(hwnd);
+    if (area) {
+        params.rgrc[0] = area->work;
+        return true;
+    }
+
+    const int frameThicknessX = std::max(0, nativeChromeMaximizedResizeFrameThicknessX(hwnd));
+    const int frameThicknessY = std::max(0, nativeChromeMaximizedResizeFrameThicknessY(hwnd));
+    params.rgrc[0].left += frameThicknessX;
+    params.rgrc[0].top += frameThicknessY;
+    params.rgrc[0].right -= frameThicknessX;
+    params.rgrc[0].bottom -= frameThicknessY;
+    return true;
 }
 #endif
 
@@ -365,6 +436,27 @@ void PlatformWindow::toggleMaximizeRestore() {
         return;
     }
 
+#if defined(_WIN32)
+    if (borderlessChrome_ && nativeChromeWindowHandle_ != nullptr) {
+        HWND hwnd = static_cast<HWND>(nativeChromeWindowHandle_);
+        if (IsZoomed(hwnd) != FALSE) {
+            ShowWindow(hwnd, SW_RESTORE);
+            if (!SDL_SyncWindow(window_)) {
+                LOG_WARN("SDL_SyncWindow failed after native borderless restore: {}", SDL_GetError());
+            }
+            refreshPixelSize();
+            return;
+        }
+
+        ShowWindow(hwnd, SW_MAXIMIZE);
+        if (!SDL_SyncWindow(window_)) {
+            LOG_WARN("SDL_SyncWindow failed after native borderless maximize: {}", SDL_GetError());
+        }
+        refreshPixelSize();
+        return;
+    }
+#endif
+
     if (maximized()) {
         if (!SDL_RestoreWindow(window_)) {
             LOG_WARN("SDL_RestoreWindow failed: {}", SDL_GetError());
@@ -467,6 +559,11 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
 }
 
 bool PlatformWindow::maximized() const {
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        return IsZoomed(static_cast<HWND>(nativeChromeWindowHandle_)) != FALSE;
+    }
+#endif
     return window_ && (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) != 0u;
 }
 
@@ -613,6 +710,18 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
         return DefWindowProcW(hwnd, message, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam));
     };
 
+    if (borderlessChrome_ && message == WM_GETMINMAXINFO && lParam != 0) {
+        const std::intptr_t result = callPreviousWindowProc();
+        applyBorderlessChromeMaximizedWorkArea(hwnd, *reinterpret_cast<MINMAXINFO*>(lParam));
+        return result;
+    }
+
+    if (borderlessChrome_ && message == WM_NCCALCSIZE && wParam != 0 && lParam != 0) {
+        if (applyBorderlessChromeMaximizedClientArea(hwnd, *reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam))) {
+            return 0;
+        }
+    }
+
     if (borderlessChrome_ && !chromeInteraction_.active && message == WM_NCHITTEST) {
         const SDL_HitTestResult hit = nativeChromeHitTestFromScreenPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
         const LRESULT hitCode = nativeChromeHitTestCodeForHit(hit);
@@ -667,7 +776,7 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
 
     const bool redrawNativeResizeFrame =
             borderlessChrome_ &&
-            nativeResizeActive_ &&
+            (nativeResizeActive_ || IsZoomed(hwnd) != FALSE) &&
             (message == WM_SIZE || message == WM_WINDOWPOSCHANGED);
     const bool endNativeResize =
             borderlessChrome_ &&

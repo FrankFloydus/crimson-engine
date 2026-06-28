@@ -143,6 +143,16 @@ std::string localizedViewportViewLabel(const LocalizationService& localization, 
     return localization.text(viewportViewLocalizationKey(view), std::string(viewportViewLabel(view)));
 }
 
+constexpr std::array<ViewportView, 7> kViewportChromeViews{{
+        ViewportView::Perspective,
+        ViewportView::Top,
+        ViewportView::Bottom,
+        ViewportView::Front,
+        ViewportView::Back,
+        ViewportView::Side,
+        ViewportView::Left,
+}};
+
 std::string_view viewportShadingModeStableId(ViewportShadingMode mode) {
     switch (mode) {
     case ViewportShadingMode::Wireframe:
@@ -175,6 +185,34 @@ std::string viewportShadingModeLocalizationKey(ViewportShadingMode mode) {
 
 std::string localizedViewportShadingModeLabel(const LocalizationService& localization, ViewportShadingMode mode) {
     return localization.text(viewportShadingModeLocalizationKey(mode), std::string(viewportShadingModeLabel(mode)));
+}
+
+constexpr std::array<ViewportShadingMode, 3> kViewportChromeShadingModes{{
+        ViewportShadingMode::Wireframe,
+        ViewportShadingMode::Shaded,
+        ViewportShadingMode::Rendered,
+}};
+
+float viewportChromeComboWidthForText(const std::string& label) {
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 labelSize = ImGui::CalcTextSize(label.data(), label.data() + label.size());
+    return std::ceil(labelSize.x + ImGui::GetFrameHeight() + style.FramePadding.x * 2.0f + 10.0f);
+}
+
+float viewportViewComboWidth(const LocalizationService& localization) {
+    float width = 0.0f;
+    for (const ViewportView view : kViewportChromeViews) {
+        width = std::max(width, viewportChromeComboWidthForText(localizedViewportViewLabel(localization, view)));
+    }
+    return width;
+}
+
+float viewportShadingComboWidth(const LocalizationService& localization) {
+    float width = 0.0f;
+    for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
+        width = std::max(width, viewportChromeComboWidthForText(localizedViewportShadingModeLabel(localization, mode)));
+    }
+    return width;
 }
 
 std::optional<int> hitDrawnPlaneCapturedPoint(
@@ -869,16 +907,21 @@ bool ViewportPanel::drawPaneChrome(
             0,
             1.0f);
 
-    constexpr float kComboHeight = 24.0f;
-    constexpr float kViewComboWidth = 112.0f;
-    constexpr float kShadingComboWidth = 104.0f;
+    constexpr float kComboHeight = 28.0f;
     constexpr float kComboGap = 6.0f;
+    ImGui::PushID(static_cast<int>(viewportPaneIndex(paneState.id)));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(16, 18, 21, 210));
+
+    const float viewDesiredWidth = viewportViewComboWidth(localization);
+    const float shadingDesiredWidth = viewportShadingComboWidth(localization);
     const float availableWidth = std::max(0.0f, itemSize.x - 16.0f);
-    const bool compact = availableWidth < kViewComboWidth + kShadingComboWidth + kComboGap;
-    const float shadingWidth = compact ? std::min(kShadingComboWidth, availableWidth) : kShadingComboWidth;
+    const bool compact = availableWidth < viewDesiredWidth + shadingDesiredWidth + kComboGap;
+    const float shadingWidth = compact ? std::min(shadingDesiredWidth, availableWidth) : shadingDesiredWidth;
     const float viewWidth = compact
             ? std::max(0.0f, availableWidth - shadingWidth - kComboGap)
-            : kViewComboWidth;
+            : viewDesiredWidth;
     const float comboGap = viewWidth >= 44.0f ? kComboGap : 0.0f;
     const ImVec2 comboPos{
             itemMax.x - 8.0f - viewWidth - comboGap - shadingWidth,
@@ -888,26 +931,13 @@ bool ViewportPanel::drawPaneChrome(
     bool consumesInput = chromeRect.Contains(ImGui::GetMousePos());
 
     ImGui::SetCursorScreenPos(comboPos);
-    ImGui::PushID(static_cast<int>(viewportPaneIndex(paneState.id)));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(7.0f, 3.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(16, 18, 21, 210));
     if (viewWidth >= 44.0f) {
         ImGui::SetNextItemWidth(viewWidth);
         const ViewportView currentView = viewportWorkspace.view(paneState.id);
         const std::string preview = localizedViewportViewLabel(localization, currentView);
         if (ImGui::BeginCombo("##ViewportView", preview.c_str(), ImGuiComboFlags_HeightSmall)) {
             consumesInput = true;
-            constexpr std::array<ViewportView, 7> views{{
-                    ViewportView::Perspective,
-                    ViewportView::Top,
-                    ViewportView::Bottom,
-                    ViewportView::Front,
-                    ViewportView::Back,
-                    ViewportView::Side,
-                    ViewportView::Left,
-            }};
-            for (const ViewportView view : views) {
+            for (const ViewportView view : kViewportChromeViews) {
                 const bool selected = currentView == view;
                 const std::string label = localizedViewportViewLabel(localization, view);
                 if (ImGui::Selectable(label.c_str(), selected)) {
@@ -925,12 +955,7 @@ bool ViewportPanel::drawPaneChrome(
     const std::string shadingPreview = localizedViewportShadingModeLabel(localization, paneWorkspace.shading);
     if (ImGui::BeginCombo("##ViewportShading", shadingPreview.c_str(), ImGuiComboFlags_HeightSmall)) {
         consumesInput = true;
-        constexpr std::array<ViewportShadingMode, 3> modes{{
-                ViewportShadingMode::Wireframe,
-                ViewportShadingMode::Shaded,
-                ViewportShadingMode::Rendered,
-        }};
-        for (const ViewportShadingMode mode : modes) {
+        for (const ViewportShadingMode mode : kViewportChromeShadingModes) {
             const bool selected = paneWorkspace.shading == mode;
             const std::string label = localizedViewportShadingModeLabel(localization, mode);
             if (ImGui::Selectable(label.c_str(), selected)) {
