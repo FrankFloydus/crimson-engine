@@ -33,6 +33,11 @@ public:
         : ModelingMementoCommand(modeling, std::move(label)) {}
 
 private:
+    ModelingSessionMemento captureBeforeMemento() override {
+        ModelingSessionMemento previewHistory = modeling().captureActivePreviewHistoryMemento();
+        return previewHistory.valid() ? std::move(previewHistory) : modeling().captureHistoryMemento();
+    }
+
     ModelingCommandResult executeInitial() override {
         return modeling().commitActiveOperationPreview();
     }

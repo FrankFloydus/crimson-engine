@@ -37,7 +37,7 @@ QuaderApiVoidResult QuaderHistoryApi::repeatLastAction() {
 }
 
 bool QuaderHistoryApi::canUndo() const {
-    return projectSession(session_).history().canUndo();
+    return mutations_.canUndo();
 }
 
 bool QuaderHistoryApi::canRedo() const {

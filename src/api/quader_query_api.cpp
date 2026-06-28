@@ -144,6 +144,22 @@ std::optional<QuaderMeshSnapshot> QuaderQueryApi::mesh(AssetId id) const {
     return meshSnapshotFor(id, *mesh);
 }
 
+std::optional<QuaderMaterialAsset> QuaderQueryApi::material(AssetId id) const {
+    const MaterialDocument* material = projectSession(session_).assets().material(id);
+    if (material == nullptr) {
+        return std::nullopt;
+    }
+    return toApiMaterialAsset(*material);
+}
+
+std::optional<QuaderTextureAsset> QuaderQueryApi::texture(AssetId id) const {
+    const TextureAsset* texture = projectSession(session_).assets().texture(id);
+    if (texture == nullptr) {
+        return std::nullopt;
+    }
+    return toApiTextureAsset(*texture);
+}
+
 std::vector<QuaderModelingObjectRecord> QuaderQueryApi::modelingObjects() const {
     const std::vector<ModelingObjectRecord> records = projectSession(session_).modeling().objects();
     std::vector<QuaderModelingObjectRecord> result;

@@ -173,6 +173,10 @@ QuaderApiVoidResult QuaderModelingApi::cancelPreview() {
     return mutations_.cancelModelingPreview();
 }
 
+bool QuaderModelingApi::canCancelActiveToolOrPreview() const {
+    return projectSession(session_).modeling().canCancelActiveToolOrPreview();
+}
+
 QuaderApiVoidResult QuaderModelingApi::beginTransformPreview(bool duplicateSelected) {
     return mutations_.runModelingResult(
             projectSession(session_).modeling().beginTransformPreview(duplicateSelected),

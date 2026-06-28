@@ -44,6 +44,7 @@ public:
     QuaderApiVoidResult updatePreview(const QuaderPreviewSettings& settings);
     QuaderApiVoidResult commitPreview(std::string label = {});
     QuaderApiVoidResult cancelPreview();
+    [[nodiscard]] bool canCancelActiveToolOrPreview() const;
 
     QuaderApiVoidResult beginTransformPreview(bool duplicateSelected = false);
     QuaderApiVoidResult updateTransformTranslate(QVec3 delta);

@@ -9,6 +9,58 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-28 - Undo Cancels Active Tool Previews Before Document History
+
+Task/context: Ctrl+Z during an active modeling preview could consume document history first, making
+the object disappear; finalized preview operations such as Slice Quad could undo only to the
+post-preview selected faces instead of the pre-operation mesh and selection.
+
+Root cause/invariants:
+
+- Public undo is a command/history intent, but the API mutation boundary must first cancel active
+  runtime ownership: operation previews, transform previews/drags, scene transform previews, and
+  modal viewport tools. Command registration should still ask the history API for availability.
+- Preview commit history must capture the preview transaction base state as the undo "before"
+  memento. Capturing after the preview has already mutated the live session records the wrong
+  boundary and makes undo restore the committed preview state.
+- Texture/material identity must survive preview cancel, finalized topology undo/redo, and
+  delete/restore stacks.
+
+Affected owners/files:
+
+- `src/api/quader_api_mutation_runner.*`
+- `src/api/quader_history_api.cpp`
+- `src/api/quader_commands_api.cpp`
+- `src/editor/history/modeling_memento_command.hpp`
+- `src/editor/history/modeling_preview_command_service.hpp`
+- `src/editor/modeling/runtime/session.*`
+- `src/editor/modeling/services/modeling_session_service.*`
+- `tests/editor_api_tests.cpp`
+
+Resolved approach:
+
+- Added active-preview/tool cancellation to `QuaderApiMutationRunner::undo()` and surfaced the same
+  decision through `QuaderApiMutationRunner::canUndo()` so Ctrl+Z is enabled while a runtime cancel
+  is possible without adding split modeling-history routes in command registration.
+- Exposed the active preview transaction history state through the modeling session service and let
+  preview/transform commit commands override their before-memento capture with that base state.
+- Added public query accessors for material and texture assets so behavior tests can assert texture
+  preservation through history stacks.
+- Added focused editor API regressions for bevel-preview undo cancel, Slice Quad finalized undo, and
+  a mixed undo/redo stack covering texture assignment, preview cancel, slice undo/redo, delete,
+  redo, and restore.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory:EditorApiTests.HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection:EditorApiTests.MixedUndoRedoPreviewStackPreservesTexturedMaterial`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=*:ProgrammaticApiGuardrailTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=*:EditorApiTests.*:EditorApiTests.*History*:EditorApiTests.*Modeling*:EditorApiTests.*Selection*:GroupingPublicApiTests.*:ModelingSessionService*:ModelingToolCatalogTests.*:ProgrammaticApiTests.*:ProgrammaticBehaviorScenarioTests.*:SelectionModeAdapterTests.*`
+- `build\vs2026\Debug\quader_modeling_domain_tests.exe --gtest_color=no --gtest_filter=*`
+- `build\vs2026\Debug\quader_modeling_domain_metadata_loop_tests.exe --gtest_color=no --gtest_filter=QdrEditorMetadata*`
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntime*`
+- `ctest --preset vs2026-debug --output-on-failure`
+
 ## 2026-06-27 - Modeling Tests Are GoogleTest-Only
 
 Task/context: the modeling-domain test harness was migrated permanently to GoogleTest and the old

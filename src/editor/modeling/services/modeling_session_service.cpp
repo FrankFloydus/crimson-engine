@@ -796,13 +796,22 @@ public:
                 sceneTransformedObjectsForPicking());
     }
 
-    [[nodiscard]] std::unordered_set<int> liveModelingObjectIds() const {
+    [[nodiscard]] static std::unordered_set<int> liveModelingObjectIds(
+            const std::vector<quader_editor_core::PolygonObject>& objects) {
         std::unordered_set<int> ids;
-        ids.reserve(session_.objects().size());
-        for (const quader_editor_core::PolygonObject& object : session_.objects()) {
+        ids.reserve(objects.size());
+        for (const quader_editor_core::PolygonObject& object : objects) {
             ids.insert(object.id);
         }
         return ids;
+    }
+
+    [[nodiscard]] ModelingSessionMemento captureHistoryMementoForState(
+            const quader_editor_core::SessionState& state) const {
+        const std::unordered_set<int> liveIds = liveModelingObjectIds(state.objects);
+        return ModelingSessionMemento(std::make_shared<ModelingSessionMemento::Impl>(
+                state,
+                objectRegistry_.captureSceneIdentitiesForModelingObjects(scene_, liveIds)));
     }
 
     void refreshLiveSceneIdentities() {
@@ -815,10 +824,13 @@ public:
     }
 
     [[nodiscard]] ModelingSessionMemento captureHistoryMemento() const {
-        const std::unordered_set<int> liveIds = liveModelingObjectIds();
-        return ModelingSessionMemento(std::make_shared<ModelingSessionMemento::Impl>(
-                session_.state(),
-                objectRegistry_.captureSceneIdentitiesForModelingObjects(scene_, liveIds)));
+        return captureHistoryMementoForState(session_.state());
+    }
+
+    [[nodiscard]] ModelingSessionMemento captureActivePreviewHistoryMemento() const {
+        const std::optional<quader_editor_core::SessionState> state =
+                session_.preview_transaction_history_state();
+        return state.has_value() ? captureHistoryMementoForState(*state) : ModelingSessionMemento();
     }
 
     ModelingCommandResult restoreHistoryMemento(const ModelingSessionMemento& memento) {
@@ -1279,7 +1291,14 @@ public:
 
     [[nodiscard]] bool modalToolOwnsViewport() const {
         return modalToolRuntime_.ownsViewport(fromRuntimeViewportTool(runtime_.active_tool()));
-        return false;
+    }
+
+    [[nodiscard]] bool canCancelActiveToolOrPreview() const {
+        return toolSettingsTarget().operationPreviewActive ||
+                runtime_.transform_drag_active() ||
+                hasTransformPreview() ||
+                sceneTransformDragService_.previewActive() ||
+                modalToolOwnsViewport();
     }
 
     [[nodiscard]] ModelingActionQuery effectiveActionQuery(ModelingActionQuery query) const {
@@ -2963,6 +2982,10 @@ ModelingSessionMemento ModelingSessionService::captureHistoryMemento() const {
     return impl_->captureHistoryMemento();
 }
 
+ModelingSessionMemento ModelingSessionService::captureActivePreviewHistoryMemento() const {
+    return impl_->captureActivePreviewHistoryMemento();
+}
+
 ModelingCommandResult ModelingSessionService::restoreHistoryMemento(const ModelingSessionMemento& memento) {
     return impl_->restoreHistoryMemento(memento);
 }
@@ -3029,6 +3052,10 @@ ModelingCommandResult ModelingSessionService::applyActiveMaterial(std::uint32_t 
 
 bool ModelingSessionService::modalToolOwnsViewport() const {
     return impl_->modalToolOwnsViewport();
+}
+
+bool ModelingSessionService::canCancelActiveToolOrPreview() const {
+    return impl_->canCancelActiveToolOrPreview();
 }
 
 ModelingToolStatus ModelingSessionService::toolStatus() const {

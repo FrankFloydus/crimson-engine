@@ -76,6 +76,7 @@ public:
     [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const;
     [[nodiscard]] ModelingSessionMemento captureHistoryMemento() const;
+    [[nodiscard]] ModelingSessionMemento captureActivePreviewHistoryMemento() const;
     ModelingCommandResult restoreHistoryMemento(const ModelingSessionMemento& memento);
 
     ModelingCommandResult duplicateSelectedHierarchyForGroupDrag(DocumentCommandService& documentCommands);
@@ -93,6 +94,7 @@ public:
     ModelingCommandResult flipSelection(ModelingFlipOrientation orientation);
     ModelingCommandResult applyActiveMaterial(std::uint32_t materialSlot = 0);
     [[nodiscard]] bool modalToolOwnsViewport() const;
+    [[nodiscard]] bool canCancelActiveToolOrPreview() const;
     [[nodiscard]] ModelingToolStatus toolStatus() const;
     [[nodiscard]] ModelingToolSettingsTarget toolSettingsTarget() const;
     [[nodiscard]] ModelingInteractionSettings interactionSettings() const;

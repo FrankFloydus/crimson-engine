@@ -1316,6 +1316,7 @@ public:
 	HistoryRestoreResult undo();
 	HistoryRestoreResult redo();
 	[[nodiscard]] PreviewTransactionStatus preview_transaction_status() const;
+	[[nodiscard]] std::optional<SessionState> preview_transaction_history_state(PreviewTransactionKind expected_kind = PreviewTransactionKind::none) const;
 	void clear_preview_transaction();
 	bool discard_preview_transactions(bool restore_transform_preview = false);
 	bool restore_preview_transaction_base_for_edit(PreviewTransactionKind expected_kind = PreviewTransactionKind::none);

@@ -42,10 +42,10 @@ public:
             return modelingMementoCommandResult(modeling_.restoreHistoryMemento(after_));
         }
 
-        before_ = modeling_.captureHistoryMemento();
+        before_ = captureBeforeMemento();
         CommandResult result = modelingMementoCommandResult(executeInitial());
         if (result.ok && result.changed) {
-            after_ = modeling_.captureHistoryMemento();
+            after_ = captureAfterMemento();
             executed_ = true;
         }
         return result;
@@ -59,6 +59,14 @@ protected:
 
     [[nodiscard]] ModelingSessionService& modeling() { return modeling_; }
     [[nodiscard]] const ModelingSessionService& modeling() const { return modeling_; }
+
+    [[nodiscard]] virtual ModelingSessionMemento captureBeforeMemento() {
+        return modeling_.captureHistoryMemento();
+    }
+
+    [[nodiscard]] virtual ModelingSessionMemento captureAfterMemento() {
+        return modeling_.captureHistoryMemento();
+    }
 
 private:
     virtual ModelingCommandResult executeInitial() = 0;
@@ -360,6 +368,11 @@ public:
         : ModelingMementoCommand(modeling, "Transform Preview") {}
 
 private:
+    ModelingSessionMemento captureBeforeMemento() override {
+        ModelingSessionMemento previewHistory = modeling().captureActivePreviewHistoryMemento();
+        return previewHistory.valid() ? std::move(previewHistory) : modeling().captureHistoryMemento();
+    }
+
     ModelingCommandResult executeInitial() override {
         return modeling().commitTransformPreview();
     }

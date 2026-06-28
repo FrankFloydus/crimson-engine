@@ -21,6 +21,15 @@ PreviewTransactionStatus EditorSession::preview_transaction_status() const
 	};
 }
 
+std::optional<SessionState> EditorSession::preview_transaction_history_state(PreviewTransactionKind expected_kind) const
+{
+	if (!preview_transaction_.active ||
+			(expected_kind != PreviewTransactionKind::none && preview_transaction_.kind != expected_kind)) {
+		return std::nullopt;
+	}
+	return preview_transaction_.history_state;
+}
+
 void EditorSession::clear_preview_transaction()
 {
 	preview_transaction_ = {};

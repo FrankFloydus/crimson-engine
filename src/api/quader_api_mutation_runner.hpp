@@ -60,6 +60,7 @@ public:
     QuaderApiVoidResult cancelModelingPreview();
     QuaderApiVoidResult runAssetResult(bool changed, std::string_view label);
     QuaderApiVoidResult runAssetFailure(std::string message);
+    [[nodiscard]] bool canUndo() const;
     QuaderApiVoidResult undo();
     QuaderApiVoidResult redo();
     QuaderApiVoidResult repeatLastAction();
@@ -73,6 +74,7 @@ private:
             ModelingCommandResult result,
             QuaderMutationKind kind,
             std::string_view fallbackMessage = {}) const;
+    [[nodiscard]] ModelingCommandResult cancelActiveToolOrPreviewForUndo();
 
     ProjectSession& session_;
     EditorHistoryService& history_;

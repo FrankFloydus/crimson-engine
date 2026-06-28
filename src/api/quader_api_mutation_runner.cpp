@@ -157,7 +157,18 @@ QuaderApiVoidResult QuaderApiMutationRunner::runAssetFailure(std::string message
     return quaderApiFailureStatus(session_, std::move(message));
 }
 
+bool QuaderApiMutationRunner::canUndo() const {
+    if (session_.modeling().canCancelActiveToolOrPreview()) {
+        return true;
+    }
+    return history_.canUndo();
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::undo() {
+    if (session_.modeling().canCancelActiveToolOrPreview()) {
+        const ModelingCommandResult cancel = cancelActiveToolOrPreviewForUndo();
+        return statusFrom(cancel, QuaderMutationKind::Runtime, "Undo");
+    }
     return statusFrom(editorCommands_.undo(), QuaderMutationKind::Document, "Undo");
 }
 
@@ -196,6 +207,19 @@ QuaderApiVoidResult QuaderApiMutationRunner::statusFrom(
             std::move(result.message),
             kind,
             fallbackMessage);
+}
+
+ModelingCommandResult QuaderApiMutationRunner::cancelActiveToolOrPreviewForUndo() {
+    if (session_.modeling().toolSettingsTarget().operationPreviewActive) {
+        return modelingCommands_.cancelPreview(session_.modeling());
+    }
+
+    ModelingCommandResult cancel = session_.modeling().cancelTransformDrag();
+    if (!cancel.ok || cancel.changed) {
+        return cancel;
+    }
+
+    return session_.modeling().cancelActiveModalTool();
 }
 
 } // namespace quader

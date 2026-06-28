@@ -25,6 +25,8 @@ public:
     [[nodiscard]] std::vector<QuaderEntitySnapshot> entityTree() const;
     [[nodiscard]] std::optional<QuaderEntitySnapshot> entity(EntityId id) const;
     [[nodiscard]] std::optional<QuaderMeshSnapshot> mesh(AssetId id) const;
+    [[nodiscard]] std::optional<QuaderMaterialAsset> material(AssetId id) const;
+    [[nodiscard]] std::optional<QuaderTextureAsset> texture(AssetId id) const;
     [[nodiscard]] std::vector<QuaderModelingObjectRecord> modelingObjects() const;
     [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForEntity(EntityId entity) const;
     [[nodiscard]] std::optional<QuaderModelingObjectRef> modelingObjectForId(

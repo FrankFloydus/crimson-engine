@@ -128,6 +128,86 @@ quader::QuaderModelingObjectRef createSelectedBox(quader::QuaderEditorApi& edito
     return created.value();
 }
 
+/// Captures material and texture ids used by undo/redo preservation regressions.
+struct TexturedMaterialRefs {
+    quader::AssetId material = quader::InvalidAssetId;
+    quader::AssetId baseColorTexture = quader::InvalidAssetId;
+    quader::AssetId roughnessTexture = quader::InvalidAssetId;
+};
+
+TexturedMaterialRefs createTexturedMaterial(quader::QuaderEditorApi& editor, std::string name) {
+    quader::QuaderTextureAsset baseColor;
+    baseColor.name = name + " Base";
+    baseColor.usage = quader::QuaderTextureUsage::BaseColor;
+    baseColor.width = 8;
+    baseColor.height = 8;
+    baseColor.generated = true;
+    const quader::QuaderApiResult<quader::QuaderAssetRef> baseColorTexture =
+            editor.assets().addTexture(std::move(baseColor));
+    if (!baseColorTexture.ok()) {
+        ADD_FAILURE() << baseColorTexture.errorMessage();
+        return {};
+    }
+
+    quader::QuaderTextureAsset roughness;
+    roughness.name = name + " Roughness";
+    roughness.usage = quader::QuaderTextureUsage::Roughness;
+    roughness.colorSpace = quader::QuaderTextureColorSpace::Linear;
+    roughness.width = 4;
+    roughness.height = 4;
+    roughness.generated = true;
+    const quader::QuaderApiResult<quader::QuaderAssetRef> roughnessTexture =
+            editor.assets().addTexture(std::move(roughness));
+    if (!roughnessTexture.ok()) {
+        ADD_FAILURE() << roughnessTexture.errorMessage();
+        return {};
+    }
+
+    quader::QuaderMaterialAsset material;
+    material.name = std::move(name);
+    material.textureSlots.emplace("baseColorTexture", baseColorTexture.value().id);
+    material.textureSlots.emplace("roughnessTexture", roughnessTexture.value().id);
+    const quader::QuaderApiResult<quader::QuaderAssetRef> materialRef =
+            editor.assets().addMaterial(std::move(material));
+    if (!materialRef.ok()) {
+        ADD_FAILURE() << materialRef.errorMessage();
+        return {};
+    }
+
+    return {
+            .material = materialRef.value().id,
+            .baseColorTexture = baseColorTexture.value().id,
+            .roughnessTexture = roughnessTexture.value().id,
+    };
+}
+
+void expectEntityTextured(
+        const quader::QuaderEditorApi& editor,
+        quader::EntityId entity,
+        const TexturedMaterialRefs& refs) {
+    const std::optional<quader::QuaderEntitySnapshot> snapshot = editor.query().entity(entity);
+    ASSERT_TRUE(snapshot.has_value());
+    ASSERT_TRUE(snapshot->hasMaterial);
+    EXPECT_EQ(snapshot->material, refs.material);
+
+    const std::optional<quader::QuaderMaterialAsset> material = editor.query().material(refs.material);
+    ASSERT_TRUE(material.has_value());
+    ASSERT_TRUE(material->textureSlots.contains("baseColorTexture"));
+    ASSERT_TRUE(material->textureSlots.contains("roughnessTexture"));
+    EXPECT_EQ(material->textureSlots.at("baseColorTexture"), refs.baseColorTexture);
+    EXPECT_EQ(material->textureSlots.at("roughnessTexture"), refs.roughnessTexture);
+
+    const std::optional<quader::QuaderTextureAsset> baseColor = editor.query().texture(refs.baseColorTexture);
+    ASSERT_TRUE(baseColor.has_value());
+    EXPECT_EQ(baseColor->usage, quader::QuaderTextureUsage::BaseColor);
+    EXPECT_EQ(baseColor->colorSpace, quader::QuaderTextureColorSpace::Srgb);
+
+    const std::optional<quader::QuaderTextureAsset> roughness = editor.query().texture(refs.roughnessTexture);
+    ASSERT_TRUE(roughness.has_value());
+    EXPECT_EQ(roughness->usage, quader::QuaderTextureUsage::Roughness);
+    EXPECT_EQ(roughness->colorSpace, quader::QuaderTextureColorSpace::Linear);
+}
+
 quader::QuaderViewportCamera apiOrthographicCamera() {
     return {
             .orthographic = true,
@@ -1347,6 +1427,198 @@ TEST(EditorApiTests, ActivePreviewCommandsApplyAndCancelSliceQuadWithoutUi) {
         EXPECT_EQ(restored->primitiveCount, before->primitiveCount);
         EXPECT_FALSE(harness.editor.commands().execute(quader::QuaderCommand::ModelingCancelActivePreview).ok());
     }
+}
+
+TEST(EditorApiTests, HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Undo Bevel Preview Box");
+    ASSERT_TRUE(editor.selection().setMode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().selectAll().ok());
+    ASSERT_GT(editor.selection().summary().selectedEdgeCount, 0u);
+
+    const std::optional<quader::QuaderMeshSnapshot> before = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(before.has_value());
+    const quader::QuaderHistorySnapshot historyBeforePreview = editor.query().history();
+
+    const quader::QuaderApiVoidResult preview =
+            editor.commands().execute(editor.commands().commandIdForModelingAction("bevel_edges"));
+    ASSERT_TRUE(preview.ok()) << preview.errorMessage();
+    EXPECT_TRUE(preview.changed());
+    EXPECT_TRUE(editor.modeling().canCancelActiveToolOrPreview());
+    const std::optional<quader::QuaderMeshSnapshot> previewMesh = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(previewMesh.has_value());
+    EXPECT_GT(previewMesh->primitiveCount, before->primitiveCount);
+
+    const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+    EXPECT_TRUE(undo.changed());
+    EXPECT_FALSE(editor.modeling().canCancelActiveToolOrPreview());
+    EXPECT_TRUE(entityNamed(editor, "Undo Bevel Preview Box").has_value());
+    EXPECT_EQ(editor.query().history().undoLabel, historyBeforePreview.undoLabel);
+
+    const std::optional<quader::QuaderMeshSnapshot> restored = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->vertexCount, before->vertexCount);
+    EXPECT_EQ(restored->primitiveCount, before->primitiveCount);
+}
+
+TEST(EditorApiTests, HistoryUndoAfterSliceQuadFinalizeRestoresPreOperationMeshAndSelection) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Undo Slice Quad Box");
+    ASSERT_TRUE(editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().selectFace(box, 1).ok());
+    ASSERT_EQ(editor.selection().summary().selectedFaceCount, 1u);
+
+    const std::optional<quader::QuaderMeshSnapshot> before = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(before.has_value());
+    const quader::QuaderHistorySnapshot historyBeforePreview = editor.query().history();
+
+    const quader::QuaderApiVoidResult preview =
+            editor.commands().execute(editor.commands().commandIdForModelingAction("slice_quad"));
+    ASSERT_TRUE(preview.ok()) << preview.errorMessage();
+    const std::optional<quader::QuaderMeshSnapshot> previewMesh = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(previewMesh.has_value());
+    EXPECT_GT(previewMesh->vertexCount, before->vertexCount);
+    EXPECT_GT(previewMesh->primitiveCount, before->primitiveCount);
+
+    const quader::QuaderApiVoidResult apply =
+            editor.commands().execute(quader::QuaderCommand::ModelingApplyActivePreview);
+    ASSERT_TRUE(apply.ok()) << apply.errorMessage();
+    EXPECT_EQ(editor.query().history().undoLabel, "Apply Tool Preview");
+    const quader::QuaderSelectionSummary committedSelection = editor.selection().summary();
+    EXPECT_GT(committedSelection.selectedFaceCount, 1u);
+
+    const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+    EXPECT_TRUE(undo.changed());
+    EXPECT_TRUE(entityNamed(editor, "Undo Slice Quad Box").has_value());
+    EXPECT_EQ(editor.selection().summary().selectedFaceCount, 1u);
+    EXPECT_EQ(editor.query().history().undoLabel, historyBeforePreview.undoLabel);
+
+    const std::optional<quader::QuaderMeshSnapshot> restored = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(restored.has_value());
+    EXPECT_EQ(restored->vertexCount, before->vertexCount);
+    EXPECT_EQ(restored->primitiveCount, before->primitiveCount);
+}
+
+TEST(EditorApiTests, MixedUndoRedoPreviewStackPreservesTexturedMaterial) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    const quader::QuaderModelingObjectRef box = createSelectedBox(editor, "Mixed Stack Textured Box");
+    const TexturedMaterialRefs refs = createTexturedMaterial(editor, "Mixed Stack Material");
+    ASSERT_NE(refs.material, quader::InvalidAssetId);
+
+    const quader::QuaderApiVoidResult assigned = editor.assets().assignMaterialToEntity(box.entity, refs.material);
+    ASSERT_TRUE(assigned.ok()) << assigned.errorMessage();
+    EXPECT_TRUE(assigned.changed());
+    expectEntityTextured(editor, box.entity, refs);
+
+    const std::optional<quader::QuaderMeshSnapshot> original = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(original.has_value());
+
+    ASSERT_TRUE(editor.selection().setMode(quader::QuaderSelectionMode::Edge).ok());
+    ASSERT_TRUE(editor.selection().selectAll().ok());
+    const quader::QuaderApiVoidResult bevelPreview =
+            editor.commands().execute(editor.commands().commandIdForModelingAction("bevel_edges"));
+    ASSERT_TRUE(bevelPreview.ok()) << bevelPreview.errorMessage();
+    EXPECT_TRUE(editor.modeling().canCancelActiveToolOrPreview());
+    const std::optional<quader::QuaderMeshSnapshot> bevelPreviewMesh = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(bevelPreviewMesh.has_value());
+    EXPECT_GT(bevelPreviewMesh->primitiveCount, original->primitiveCount);
+
+    const quader::QuaderApiVoidResult cancelPreviewViaUndo =
+            editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(cancelPreviewViaUndo.ok()) << cancelPreviewViaUndo.errorMessage();
+    EXPECT_TRUE(cancelPreviewViaUndo.changed());
+    EXPECT_FALSE(editor.modeling().canCancelActiveToolOrPreview());
+    const std::optional<quader::QuaderMeshSnapshot> afterPreviewCancel = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(afterPreviewCancel.has_value());
+    EXPECT_EQ(afterPreviewCancel->vertexCount, original->vertexCount);
+    EXPECT_EQ(afterPreviewCancel->primitiveCount, original->primitiveCount);
+    expectEntityTextured(editor, box.entity, refs);
+
+    const quader::QuaderApiVoidResult undoMaterial = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undoMaterial.ok()) << undoMaterial.errorMessage();
+    EXPECT_TRUE(undoMaterial.changed());
+    const std::optional<quader::QuaderEntitySnapshot> unassigned = editor.query().entity(box.entity);
+    ASSERT_TRUE(unassigned.has_value());
+    EXPECT_FALSE(unassigned->hasMaterial);
+
+    const quader::QuaderApiVoidResult redoMaterial = editor.commands().execute(quader::QuaderCommand::HistoryRedo);
+    ASSERT_TRUE(redoMaterial.ok()) << redoMaterial.errorMessage();
+    EXPECT_TRUE(redoMaterial.changed());
+    expectEntityTextured(editor, box.entity, refs);
+
+    ASSERT_TRUE(editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
+    ASSERT_TRUE(editor.selection().clear().ok());
+    ASSERT_TRUE(editor.selection().selectFace(box, 1).ok());
+    ASSERT_EQ(editor.selection().summary().selectedFaceCount, 1u);
+    const std::optional<quader::QuaderMeshSnapshot> beforeSlice = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(beforeSlice.has_value());
+
+    const quader::QuaderApiVoidResult slicePreview =
+            editor.commands().execute(editor.commands().commandIdForModelingAction("slice_quad"));
+    ASSERT_TRUE(slicePreview.ok()) << slicePreview.errorMessage();
+    const quader::QuaderApiVoidResult applySlice =
+            editor.commands().execute(quader::QuaderCommand::ModelingApplyActivePreview);
+    ASSERT_TRUE(applySlice.ok()) << applySlice.errorMessage();
+    const std::optional<quader::QuaderMeshSnapshot> sliced = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(sliced.has_value());
+    EXPECT_GT(sliced->vertexCount, beforeSlice->vertexCount);
+    EXPECT_GT(sliced->primitiveCount, beforeSlice->primitiveCount);
+    EXPECT_GT(editor.selection().summary().selectedFaceCount, 1u);
+    expectEntityTextured(editor, box.entity, refs);
+
+    const quader::QuaderApiVoidResult undoSlice = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undoSlice.ok()) << undoSlice.errorMessage();
+    EXPECT_TRUE(undoSlice.changed());
+    const std::optional<quader::QuaderMeshSnapshot> afterSliceUndo = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(afterSliceUndo.has_value());
+    EXPECT_EQ(afterSliceUndo->vertexCount, beforeSlice->vertexCount);
+    EXPECT_EQ(afterSliceUndo->primitiveCount, beforeSlice->primitiveCount);
+    EXPECT_EQ(editor.selection().summary().selectedFaceCount, 1u);
+    expectEntityTextured(editor, box.entity, refs);
+
+    const quader::QuaderApiVoidResult redoSlice = editor.commands().execute(quader::QuaderCommand::HistoryRedo);
+    ASSERT_TRUE(redoSlice.ok()) << redoSlice.errorMessage();
+    EXPECT_TRUE(redoSlice.changed());
+    const std::optional<quader::QuaderMeshSnapshot> afterSliceRedo = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(afterSliceRedo.has_value());
+    EXPECT_EQ(afterSliceRedo->vertexCount, sliced->vertexCount);
+    EXPECT_EQ(afterSliceRedo->primitiveCount, sliced->primitiveCount);
+    EXPECT_GT(editor.selection().summary().selectedFaceCount, 1u);
+    expectEntityTextured(editor, box.entity, refs);
+
+    ASSERT_TRUE(editor.selection().setMode(quader::QuaderSelectionMode::Object).ok());
+    ASSERT_TRUE(editor.selection().selectObject(box).ok());
+    const quader::QuaderApiVoidResult deleteSelection =
+            editor.commands().execute(quader::QuaderCommand::DeleteSelection);
+    ASSERT_TRUE(deleteSelection.ok()) << deleteSelection.errorMessage();
+    EXPECT_TRUE(deleteSelection.changed());
+    EXPECT_FALSE(entityById(editor, box.entity).has_value());
+
+    const quader::QuaderApiVoidResult undoDelete = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undoDelete.ok()) << undoDelete.errorMessage();
+    EXPECT_TRUE(undoDelete.changed());
+    ASSERT_TRUE(entityById(editor, box.entity).has_value());
+    const std::optional<quader::QuaderMeshSnapshot> restoredAfterDelete = editor.query().mesh(box.mesh);
+    ASSERT_TRUE(restoredAfterDelete.has_value());
+    EXPECT_EQ(restoredAfterDelete->vertexCount, sliced->vertexCount);
+    EXPECT_EQ(restoredAfterDelete->primitiveCount, sliced->primitiveCount);
+    expectEntityTextured(editor, box.entity, refs);
+
+    const quader::QuaderApiVoidResult redoDelete = editor.commands().execute(quader::QuaderCommand::HistoryRedo);
+    ASSERT_TRUE(redoDelete.ok()) << redoDelete.errorMessage();
+    EXPECT_TRUE(redoDelete.changed());
+    EXPECT_FALSE(entityById(editor, box.entity).has_value());
+
+    const quader::QuaderApiVoidResult undoDeleteAgain = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undoDeleteAgain.ok()) << undoDeleteAgain.errorMessage();
+    EXPECT_TRUE(undoDeleteAgain.changed());
+    ASSERT_TRUE(entityById(editor, box.entity).has_value());
+    expectEntityTextured(editor, box.entity, refs);
 }
 
 TEST(EditorApiTests, SliceQuadPreviewRebuildsAfterDirectFaceAddWithoutUi) {
