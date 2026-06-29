@@ -63,15 +63,26 @@ ViewportOverlayLayer fromRuntime(quader_editor_core::SelectionOverlayLayer layer
 ViewportOverlayStyleRole triangleStyleRole(
         quader_editor_core::SelectionOverlayLayer layer,
         std::uint32_t colorAbgr) {
+    if (const std::optional<quader_editor_core::SelectionOverlayStyleRole> role =
+                quader_editor_core::selection_overlay_style_role_from_token(colorAbgr)) {
+        switch (*role) {
+        case quader_editor_core::SelectionOverlayStyleRole::selection_face:
+            return ViewportOverlayStyleRole::SelectionFace;
+        case quader_editor_core::SelectionOverlayStyleRole::hover_face:
+            return ViewportOverlayStyleRole::HoverFace;
+        case quader_editor_core::SelectionOverlayStyleRole::remove_selection_face:
+            return ViewportOverlayStyleRole::RemoveSelectionFace;
+        default:
+            break;
+        }
+    }
     switch (layer) {
     case quader_editor_core::SelectionOverlayLayer::selected_visible_face:
     case quader_editor_core::SelectionOverlayLayer::selected_xray_face:
     case quader_editor_core::SelectionOverlayLayer::selected_face_mask:
         return ViewportOverlayStyleRole::SelectionFace;
     case quader_editor_core::SelectionOverlayLayer::hover_face:
-        return viewportOverlayIsNativeRemoveColor(colorAbgr)
-                ? ViewportOverlayStyleRole::RemoveSelectionFace
-                : ViewportOverlayStyleRole::HoverFace;
+        return ViewportOverlayStyleRole::HoverFace;
     case quader_editor_core::SelectionOverlayLayer::source_wire_depth_stamp:
         return ViewportOverlayStyleRole::SourceWire;
     default:
@@ -82,19 +93,36 @@ ViewportOverlayStyleRole triangleStyleRole(
 ViewportOverlayStyleRole lineStyleRole(
         quader_editor_core::SelectionOverlayLayer layer,
         std::uint32_t colorAbgr) {
+    if (const std::optional<quader_editor_core::SelectionOverlayStyleRole> role =
+                quader_editor_core::selection_overlay_style_role_from_token(colorAbgr)) {
+        switch (*role) {
+        case quader_editor_core::SelectionOverlayStyleRole::source_wire:
+            return ViewportOverlayStyleRole::SourceWire;
+        case quader_editor_core::SelectionOverlayStyleRole::selection_wire:
+            return layer == quader_editor_core::SelectionOverlayLayer::source_wire
+                    ? ViewportOverlayStyleRole::SelectedSourceWire
+                    : ViewportOverlayStyleRole::SelectionWire;
+        case quader_editor_core::SelectionOverlayStyleRole::hover_wire:
+            return ViewportOverlayStyleRole::HoverWire;
+        case quader_editor_core::SelectionOverlayStyleRole::remove_selection_wire:
+            return ViewportOverlayStyleRole::RemoveSelectionWire;
+        case quader_editor_core::SelectionOverlayStyleRole::open_edge:
+            return ViewportOverlayStyleRole::OpenEdge;
+        case quader_editor_core::SelectionOverlayStyleRole::diagnostic_edge:
+            return ViewportOverlayStyleRole::DiagnosticEdge;
+        default:
+            break;
+        }
+    }
     switch (layer) {
     case quader_editor_core::SelectionOverlayLayer::source_wire:
-        return viewportOverlayIsNativeSelectionWireColor(colorAbgr)
-                ? ViewportOverlayStyleRole::SelectedSourceWire
-                : ViewportOverlayStyleRole::SourceWire;
+        return ViewportOverlayStyleRole::SourceWire;
     case quader_editor_core::SelectionOverlayLayer::selected_face_edge:
     case quader_editor_core::SelectionOverlayLayer::selected_edge:
         return ViewportOverlayStyleRole::SelectionWire;
     case quader_editor_core::SelectionOverlayLayer::hover_face_edge:
     case quader_editor_core::SelectionOverlayLayer::hover_edge:
-        return viewportOverlayIsNativeRemoveColor(colorAbgr)
-                ? ViewportOverlayStyleRole::RemoveSelectionWire
-                : ViewportOverlayStyleRole::HoverWire;
+        return ViewportOverlayStyleRole::HoverWire;
     case quader_editor_core::SelectionOverlayLayer::open_edge:
         return ViewportOverlayStyleRole::OpenEdge;
     case quader_editor_core::SelectionOverlayLayer::diagnostic_edge:
@@ -107,15 +135,30 @@ ViewportOverlayStyleRole lineStyleRole(
 ViewportOverlayStyleRole pointStyleRole(
         quader_editor_core::SelectionOverlayLayer layer,
         std::uint32_t colorAbgr) {
+    if (const std::optional<quader_editor_core::SelectionOverlayStyleRole> role =
+                quader_editor_core::selection_overlay_style_role_from_token(colorAbgr)) {
+        switch (*role) {
+        case quader_editor_core::SelectionOverlayStyleRole::vertex:
+            return ViewportOverlayStyleRole::Vertex;
+        case quader_editor_core::SelectionOverlayStyleRole::selected_vertex:
+            return ViewportOverlayStyleRole::SelectedVertex;
+        case quader_editor_core::SelectionOverlayStyleRole::hover_vertex:
+            return ViewportOverlayStyleRole::HoverVertex;
+        case quader_editor_core::SelectionOverlayStyleRole::remove_selection_wire:
+            return ViewportOverlayStyleRole::RemoveSelectionVertex;
+        case quader_editor_core::SelectionOverlayStyleRole::snap_target_vertex:
+            return ViewportOverlayStyleRole::SnapTargetVertex;
+        default:
+            break;
+        }
+    }
     switch (layer) {
     case quader_editor_core::SelectionOverlayLayer::unselected_vertex:
         return ViewportOverlayStyleRole::Vertex;
     case quader_editor_core::SelectionOverlayLayer::selected_vertex:
         return ViewportOverlayStyleRole::SelectedVertex;
     case quader_editor_core::SelectionOverlayLayer::hover_vertex:
-        return viewportOverlayIsNativeRemoveColor(colorAbgr)
-                ? ViewportOverlayStyleRole::RemoveSelectionVertex
-                : ViewportOverlayStyleRole::HoverVertex;
+        return ViewportOverlayStyleRole::HoverVertex;
     case quader_editor_core::SelectionOverlayLayer::snap_target_vertex:
         return ViewportOverlayStyleRole::SnapTargetVertex;
     default:
@@ -162,6 +205,44 @@ ViewportOverlaySource overlaySourceForRole(ViewportOverlayStyleRole role) {
         return ViewportOverlaySource::Selection;
     }
     return ViewportOverlaySource::Unknown;
+}
+
+std::uint32_t projectedColorFor(
+        ViewportOverlayLayer layer,
+        ViewportOverlayStyleRole role,
+        std::uint32_t authoredColor) {
+    switch (role) {
+    case ViewportOverlayStyleRole::SelectionFace:
+        return kOverlaySelectionFaceColor;
+    case ViewportOverlayStyleRole::SelectionWire:
+    case ViewportOverlayStyleRole::SelectedSourceWire:
+        return kOverlaySelectionWireColor;
+    case ViewportOverlayStyleRole::SourceWire:
+        return kOverlaySourceWireColor;
+    case ViewportOverlayStyleRole::Vertex:
+        return kOverlayVertexColor;
+    case ViewportOverlayStyleRole::SelectedVertex:
+        return kOverlaySelectedVertexColor;
+    case ViewportOverlayStyleRole::HoverFace:
+        return kOverlayHoverFaceColor;
+    case ViewportOverlayStyleRole::HoverWire:
+        return kOverlayHoverWireColor;
+    case ViewportOverlayStyleRole::HoverVertex:
+        return kOverlayHoverVertexColor;
+    case ViewportOverlayStyleRole::RemoveSelectionFace:
+        return kOverlayRemoveFaceColor;
+    case ViewportOverlayStyleRole::RemoveSelectionWire:
+    case ViewportOverlayStyleRole::RemoveSelectionVertex:
+        return kOverlayRemoveWireColor;
+    case ViewportOverlayStyleRole::OpenEdge:
+        return kOverlayOpenEdgeColor;
+    case ViewportOverlayStyleRole::DiagnosticEdge:
+        return kOverlayDiagnosticEdgeColor;
+    case ViewportOverlayStyleRole::SnapTargetVertex:
+        return kOverlayDiagnosticEdgeColor;
+    default:
+        return viewportOverlayColorFor(layer, authoredColor);
+    }
 }
 
 ViewportOverlayElementRef runtimeElementRef(
@@ -228,7 +309,7 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
                 .a = transformObjectPoint(triangle.object_id, fromRuntime(triangle.a), objectRegistry, scene),
                 .b = transformObjectPoint(triangle.object_id, fromRuntime(triangle.b), objectRegistry, scene),
                 .c = transformObjectPoint(triangle.object_id, fromRuntime(triangle.c), objectRegistry, scene),
-                .color = viewportOverlayColorFor(layer, triangle.color_abgr),
+                .color = projectedColorFor(layer, role, triangle.color_abgr),
                 .styleRole = role,
                 .source = overlaySourceForRole(role),
                 .element = runtimeElementRef(triangle.object_id, quader_poly::invalid_element_id, {}, triangle.face_id),
@@ -244,7 +325,7 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
                 .layer = layer,
                 .start = transformObjectPoint(line.object_id, fromRuntime(line.start), objectRegistry, scene),
                 .end = transformObjectPoint(line.object_id, fromRuntime(line.end), objectRegistry, scene),
-                .color = viewportOverlayColorFor(layer, line.color_abgr),
+                .color = projectedColorFor(layer, role, line.color_abgr),
                 .widthPixels = line.width_pixels,
                 .styleRole = role,
                 .source = overlaySourceForRole(role),
@@ -264,7 +345,7 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
         result.points.push_back(ViewportOverlayPoint{
                 .layer = layer,
                 .position = transformObjectPoint(point.object_id, fromRuntime(point.position), objectRegistry, scene),
-                .color = viewportOverlayColorFor(layer, point.color_abgr),
+                .color = projectedColorFor(layer, role, point.color_abgr),
                 .sizePixels = point.size_pixels,
                 .styleRole = role,
                 .source = overlaySourceForRole(role),
@@ -314,7 +395,7 @@ void SelectionOverlayProjection::appendWorldSpaceOverlayPoints(
         frame.points.push_back(ViewportOverlayPoint{
                 .layer = layer,
                 .position = fromRuntime(point.position),
-                .color = viewportOverlayColorFor(layer, point.color_abgr),
+                .color = projectedColorFor(layer, role, point.color_abgr),
                 .sizePixels = point.size_pixels,
                 .styleRole = role,
                 .source = overlaySourceForRole(role),

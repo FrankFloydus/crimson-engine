@@ -488,7 +488,17 @@ TEST(ModelingSessionServiceSplitTests, ClickPickSelectionUsesSelectionServiceCac
     EXPECT_NE(selectionService.find("ModelingSelectionService::applyPickSelection("), std::string::npos);
     EXPECT_NE(selectionService.find("cachedPickObjectBounds(session, scene, objectRegistry)"), std::string::npos);
     EXPECT_NE(selectionService.find("cachedPickFaceGeometry(session, scene, objectRegistry, pickOptions)"), std::string::npos);
-    EXPECT_NE(selectionService.find("pickBounds,\n                pickFaceGeometry"), std::string::npos);
+    EXPECT_NE(selectionService.find("quader_editor_core::apply_pick_selection("), std::string::npos);
+    EXPECT_EQ(selectionService.find("applyPickedSelectionToSession"), std::string::npos);
+    EXPECT_EQ(selectionService.find("sessionHasComponentSelection"), std::string::npos);
+    EXPECT_EQ(selectionService.find("pickSelectRequestHitsTarget"), std::string::npos);
+    EXPECT_EQ(selectionService.find("quader_editor_core::pick_select_all_faces("), std::string::npos);
+    EXPECT_EQ(selectionService.find("quader_editor_core::pick_select_edge_loop("), std::string::npos);
+    EXPECT_EQ(selectionService.find("quader_editor_core::pick_select_all_vertices("), std::string::npos);
+    EXPECT_NE(runtimeHeader.find("struct ApplyPickSelectionRequest"), std::string::npos);
+    EXPECT_NE(runtimeHeader.find("ApplyPickSelectionResult apply_pick_selection"), std::string::npos);
+    EXPECT_NE(runtimePicking.find("ApplyPickSelectionResult apply_pick_selection("), std::string::npos);
+    EXPECT_NE(runtimePicking.find("apply_picked_selection_to_session("), std::string::npos);
     EXPECT_NE(runtimeHeader.find("std::span<const PickObjectBounds> object_bounds"), std::string::npos);
     EXPECT_NE(runtimePicking.find("pick_nearest_object(objects, ray, options, hit_index, hit, object_bounds, face_geometry)"), std::string::npos);
 }
@@ -908,6 +918,9 @@ TEST(ModelingSessionServiceSplitTests, ToolSettingMutationComesFromOperationSett
     EXPECT_TRUE(applyModelingInteractionSetting(settings, "edge_bevel", "edge_bevel_segments", 5.0));
     EXPECT_EQ(settings.edgeBevelSegments, 5);
 
+    EXPECT_TRUE(applyModelingInteractionSetting(settings, "edge_bevel", "operation.edge_bevel.profile", 0.25));
+    EXPECT_DOUBLE_EQ(settings.edgeBevelProfile, 0.25);
+
     EXPECT_TRUE(applyModelingInteractionSetting(settings, "thicken", "from_center", 1.0));
     EXPECT_TRUE(settings.thickenFromCenter);
 
@@ -932,7 +945,13 @@ TEST(ModelingSessionServiceSplitTests, InstantOperationSettingsMappingHasSingleO
     EXPECT_EQ(services.find("settingsKind"), std::string::npos);
     EXPECT_NE(services.find("settingsForOperation(*entry->runtimeOperation, interactionSettings)"), std::string::npos);
     EXPECT_NE(operationSettings.find("command_schema_for_operation(operation)"), std::string::npos);
+    EXPECT_NE(operationSettings.find("operation_option_for_setting(toolId, name)"), std::string::npos);
     EXPECT_NE(operationSettings.find("schema->settings_kind"), std::string::npos);
+    EXPECT_EQ(operationSettings.find("bridge_operation_schema()"), std::string::npos);
+    EXPECT_EQ(operationSettings.find("edge_bevel_operation_schema()"), std::string::npos);
+    EXPECT_EQ(operationSettings.find("matchesAny("), std::string::npos);
+    EXPECT_EQ(operationSettings.find("\"edge_bevel_width\""), std::string::npos);
+    EXPECT_EQ(operationSettings.find("\"distance\""), std::string::npos);
     EXPECT_EQ(operationSettings.find("case quader_editor_core::EditorOperationId::connect_vertices"), std::string::npos);
     EXPECT_EQ(operationSettings.find("case quader_editor_core::EditorOperationId::delete_selection"), std::string::npos);
     EXPECT_NE(toolsApi.find("applyModelingInteractionSetting(settings, toolId, name, value)"), std::string::npos);
@@ -947,6 +966,9 @@ TEST(ModelingSessionServiceSplitTests, HostOperationMetadataUsesSchemaOptionDesc
 
     EXPECT_NE(operationSchema.find("struct EditorOperationOptionDescriptor"), std::string::npos);
     EXPECT_NE(operationSchema.find("operation_option_descriptor_catalog()"), std::string::npos);
+    EXPECT_NE(operationSchema.find("operation_option_for_setting("), std::string::npos);
+    EXPECT_NE(operationSchema.find("\"edge_bevel_width\""), std::string::npos);
+    EXPECT_NE(operationSchema.find("\"distance\""), std::string::npos);
     EXPECT_NE(hostContract.find("operation_option_descriptor_catalog()"), std::string::npos);
     EXPECT_NE(hostContract.find("operation_preference("), std::string::npos);
     EXPECT_EQ(hostContract.find("static const std::array<HostOptionDescriptor"), std::string::npos);

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_viewport_layout_types.hpp"
+
 namespace quader {
 
 /**
@@ -133,6 +135,7 @@ enum class ViewportShortcutKind {
     FocusOrigin,
     ToggleMaximized,
     SetGridPreset,
+    SetView,
     CancelActiveTool,
     DeletePopup,
     DeleteSelection,
@@ -193,6 +196,7 @@ struct ViewportShortcut {
     ViewportSelectionMode selectionMode = ViewportSelectionMode::Object;
     ViewportMirrorAxis mirrorAxis = ViewportMirrorAxis::X;
     int gridPreset = 0;
+    ViewportView view = ViewportView::Perspective;
 };
 
 /**

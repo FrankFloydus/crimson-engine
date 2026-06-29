@@ -17,7 +17,6 @@ namespace quader {
 class ConsolePanel final : public UIDockPanel {
 public:
     UIPanelId id() const override { return UIPanelId::Console; }
-    bool defaultVisible() const override { return false; }
 
 private:
     void drawContent(UIContext& context) override;

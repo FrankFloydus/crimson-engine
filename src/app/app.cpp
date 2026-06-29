@@ -29,9 +29,14 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     shutdownComplete_ = false;
     running_ = false;
     const std::filesystem::path executableDir = executablePath.parent_path();
+    windowSettingsPath_ = AppWindowSettings::resolvePath(executableDir);
+    windowSettings_ = AppWindowSettings::load(windowSettingsPath_);
 
     if (!window_.create("Quader", 1600, 960, {.borderless = options.borderlessWindow})) {
         return false;
+    }
+    if (windowSettings_.placement()) {
+        window_.applyPlacement(*windowSettings_.placement());
     }
 
     if (!renderSystem_.initialize(window_.nativeWindowHandle(), executableDir, RenderConfig{.backend = RendererBackend::Vulkan})) {
@@ -133,6 +138,7 @@ void App::shutdown() {
         eventWatchInstalled_ = false;
     }
     window_.setLiveResizeFrameCallback({});
+    saveWindowSettings();
     ui_.shutdown();
     editor_.reset();
     renderBridge_.shutdown();
@@ -171,6 +177,22 @@ void App::handleWindowChromeAction(WindowChromeAction action) {
     case WindowChromeAction::Close:
         running_ = false;
         break;
+    }
+}
+
+void App::saveWindowSettings() {
+    if (windowSettingsPath_.empty()) {
+        return;
+    }
+
+    const std::optional<PlatformWindowPlacement> placement = window_.placement();
+    if (!placement) {
+        return;
+    }
+
+    windowSettings_.setPlacement(*placement);
+    if (!windowSettings_.save(windowSettingsPath_)) {
+        LOG_WARN("Unable to save window settings to {}", windowSettingsPath_.string());
     }
 }
 

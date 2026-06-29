@@ -43,9 +43,9 @@ public:
 
 private:
     std::string locale_ = "en-US";
-    bool outlinerVisible_ = true;
-    bool inspectorVisible_ = true;
-    bool consoleVisible_ = false;
+    bool outlinerVisible_ = uiPanelDefaultVisible(UIPanelId::Outliner);
+    bool inspectorVisible_ = uiPanelDefaultVisible(UIPanelId::Inspector);
+    bool consoleVisible_ = uiPanelDefaultVisible(UIPanelId::Console);
     bool navigationGizmoVisible_ = true;
 };
 

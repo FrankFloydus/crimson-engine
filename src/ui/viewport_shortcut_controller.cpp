@@ -6,75 +6,23 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/viewport_shortcut_controller.hpp"
 
-#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "viewport/host_viewport_contract_adapter.hpp"
 
 #include <optional>
 
 namespace quader {
 namespace {
 
-QuaderCommandId commandForMirrorAxis(ViewportMirrorAxis axis) {
-    switch (axis) {
-    case ViewportMirrorAxis::X:
-        return QuaderCommand::ModelingMirrorSelectionX;
-    case ViewportMirrorAxis::Y:
-        return QuaderCommand::ModelingMirrorSelectionY;
-    case ViewportMirrorAxis::Z:
-        return QuaderCommand::ModelingMirrorSelectionZ;
-    }
-    return QuaderCommand::ModelingMirrorSelectionX;
-}
-
-std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
+std::optional<QuaderApiVoidResult> executeViewportShortcutCommand(
         QuaderEditorApi& editor,
         const ViewportShortcut& shortcut) {
-    switch (shortcut.kind) {
-    case ViewportShortcutKind::DeleteSelection:
-        return editor.commands().execute(QuaderCommand::DeleteSelection);
-    case ViewportShortcutKind::SelectAll:
-        return editor.commands().execute(QuaderCommand::EditSelectAll);
-    case ViewportShortcutKind::InvertSelection:
-        return editor.commands().execute(QuaderCommand::EditInvertSelection);
-    case ViewportShortcutKind::Copy:
-        return editor.commands().execute(QuaderCommand::CopySelection);
-    case ViewportShortcutKind::Paste:
-        return editor.commands().execute(QuaderCommand::PasteSelection);
-    case ViewportShortcutKind::Duplicate:
-        return editor.commands().execute(QuaderCommand::DuplicateSelection);
-    case ViewportShortcutKind::Undo:
-        return editor.commands().execute(QuaderCommand::EditUndo);
-    case ViewportShortcutKind::Redo:
-        return editor.commands().execute(QuaderCommand::EditRedo);
-    case ViewportShortcutKind::RepeatLastAction:
-        return editor.commands().execute(QuaderCommand::EditRepeatLastAction);
-    case ViewportShortcutKind::MergeActive:
-        return editor.commands().execute(QuaderCommand::ModelingMergeVerticesToActive);
-    case ViewportShortcutKind::MergeCenter:
-        return editor.commands().execute(QuaderCommand::ModelingMergeVerticesToCenter);
-    case ViewportShortcutKind::MirrorAxis:
-        return editor.commands().execute(commandForMirrorAxis(shortcut.mirrorAxis));
-    case ViewportShortcutKind::FlipMeshNormals:
-        return editor.commands().execute(QuaderCommand::ModelingInvertMesh);
-    case ViewportShortcutKind::FlipHorizontal:
-        return editor.commands().execute(QuaderCommand::ModelingFlipHorizontal);
-    case ViewportShortcutKind::FlipVertical:
-        return editor.commands().execute(QuaderCommand::ModelingFlipVertical);
-    case ViewportShortcutKind::ApplyMaterial:
-        return editor.commands().execute(QuaderCommand::ApplyMaterial);
-    case ViewportShortcutKind::None:
-    case ViewportShortcutKind::ActivateTool:
-    case ViewportShortcutKind::SetSelectionMode:
-    case ViewportShortcutKind::FocusDocument:
-    case ViewportShortcutKind::FocusOrigin:
-    case ViewportShortcutKind::ToggleMaximized:
-    case ViewportShortcutKind::SetGridPreset:
-    case ViewportShortcutKind::CancelActiveTool:
-    case ViewportShortcutKind::DeletePopup:
+    const std::optional<std::string> commandTarget = viewportCommandTargetIdForRouterShortcut(shortcut);
+    if (!commandTarget) {
         return std::nullopt;
     }
-    return std::nullopt;
+    return editor.commands().execute(*commandTarget);
 }
 
 } // namespace
@@ -82,53 +30,38 @@ std::optional<QuaderApiVoidResult> executeViewportModelingShortcut(
 ViewportShortcutControllerResult ViewportShortcutController::handleOperationPreviewShortcut(
         const ViewportInputResult& inputResult,
         const ModelingToolSettingsTarget& toolSettingsTarget,
-        QuaderEditorApi& editor,
-        ModelingSessionService& modeling) const {
-    (void)modeling;
+        QuaderEditorApi& editor) const {
     if (!inputResult.shortcutHandled || !toolSettingsTarget.operationPreviewActive) {
         return {};
     }
 
-    if (inputResult.shortcut.kind == ViewportShortcutKind::ToggleMaximized) {
-        const QuaderApiVoidResult command = editor.modeling().commitPreview("Apply Tool Preview");
-        if (!command.ok) {
-            LOG_ERROR("Tool preview apply failed: {}", command.message.empty() ? "Command failed." : command.message);
-        }
-        return {
-                .consumed = true,
-                .commandExecuted = true,
-                .invalidateHover = true,
-                .markOverlayDirty = true,
-        };
+    const std::optional<std::string> commandTarget =
+            viewportOperationPreviewCommandTargetIdForRouterShortcut(inputResult.shortcut);
+    if (!commandTarget) {
+        return {};
     }
 
-    if (inputResult.shortcut.kind == ViewportShortcutKind::CancelActiveTool) {
-        const QuaderApiVoidResult command = editor.modeling().cancelPreview();
-        if (!command.ok) {
-            LOG_ERROR("Tool preview cancel failed: {}", command.message.empty() ? "Command failed." : command.message);
-        }
-        return {
-                .consumed = true,
-                .commandExecuted = true,
-                .invalidateHover = true,
-                .markOverlayDirty = true,
-        };
+    const QuaderApiVoidResult command = editor.commands().execute(*commandTarget);
+    if (!command.ok) {
+        LOG_ERROR("Tool preview shortcut failed: {}", command.message.empty() ? "Command failed." : command.message);
     }
-
-    return {};
+    return {
+            .consumed = true,
+            .commandExecuted = true,
+            .invalidateHover = true,
+            .markOverlayDirty = true,
+    };
 }
 
 ViewportShortcutControllerResult ViewportShortcutController::handleModelingShortcut(
         const ViewportInputResult& inputResult,
-        QuaderEditorApi& editor,
-        ModelingSessionService& modeling) const {
-    (void)modeling;
+        QuaderEditorApi& editor) const {
     if (!inputResult.shortcutHandled) {
         return {};
     }
 
     const std::optional<QuaderApiVoidResult> command =
-            executeViewportModelingShortcut(editor, inputResult.shortcut);
+            executeViewportShortcutCommand(editor, inputResult.shortcut);
     if (!command) {
         return {};
     }

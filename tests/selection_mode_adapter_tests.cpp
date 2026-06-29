@@ -91,18 +91,19 @@ TEST(SelectionModeAdapterTests, ActionCatalogUsesGroupHostModeWithoutObjectPanel
 TEST(SelectionModeAdapterTests, SelectionModeIdsHaveOneHostCatalogAdapter) {
     const std::string adapter = readSourceFile("src/editor/modeling/services/selection_mode_adapter.hpp");
     const std::string actionCatalog = readSourceFile("src/editor/modeling/services/modeling_action_catalog.cpp");
-    const std::string shelfController = readSourceFile("src/ui/controllers/modeling_mode_shelf_controller.cpp");
-    const std::string viewportAdapter = readSourceFile("src/viewport/host_viewport_contract_adapter.hpp");
+    const std::string viewportPanel = readSourceFile("src/ui/viewport_panel.cpp");
+    const std::string viewportAdapter = readSourceFile("src/viewport/host_viewport_contract_adapter.cpp");
 
     EXPECT_NE(adapter.find("hostSelectionModeId("), std::string::npos);
     EXPECT_NE(adapter.find("hostSelectionModeFromId("), std::string::npos);
     EXPECT_NE(actionCatalog.find("hostSelectionModeId("), std::string::npos);
-    EXPECT_NE(shelfController.find("hostSelectionModeId("), std::string::npos);
+    EXPECT_NE(viewportPanel.find("appSelectionModeToViewport("), std::string::npos);
+    EXPECT_NE(viewportPanel.find("viewportSelectionModeToApp("), std::string::npos);
     EXPECT_NE(viewportAdapter.find("hostSelectionModeFromId("), std::string::npos);
 
     EXPECT_EQ(actionCatalog.find("std::string selectionModeId("), std::string::npos);
-    EXPECT_EQ(shelfController.find("shelfControlIdForHostSelectionMode"), std::string::npos);
-    EXPECT_EQ(shelfController.find("modelingSelectionModeFromHostSelectionMode"), std::string::npos);
+    EXPECT_EQ(viewportPanel.find("shelfControlIdForHostSelectionMode"), std::string::npos);
+    EXPECT_EQ(viewportPanel.find("modelingSelectionModeFromHostSelectionMode"), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("if (id == \"vertex\")"), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("if (id == \"edge\")"), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("if (id == \"face\")"), std::string::npos);

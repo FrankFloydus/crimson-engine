@@ -36,6 +36,7 @@ QuaderBounds apiBounds(const SceneBounds& bounds) {
 QuaderModelingObjectRef objectRefForEntity(const ProjectSession& session, EntityId entity) {
     QuaderModelingObjectRef ref;
     ref.entity = entity;
+    ref.entityUuid = session.scene().uuid(entity);
     ref.editorObjectId = session.scene().editorObjectId(entity);
     if (const ModelingObjectComponent* object = session.scene().modelingObject(entity)) {
         ref.modelingObjectId = object->objectId;
@@ -53,6 +54,7 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
     const SceneDocument& scene = session.scene();
     QuaderEntitySnapshot snapshot;
     snapshot.id = entity;
+    snapshot.uuid = scene.uuid(entity);
     snapshot.editorObjectId = scene.editorObjectId(entity);
     snapshot.kind = toApiEntityKind(scene.kind(entity));
     snapshot.parent = scene.parent(entity);

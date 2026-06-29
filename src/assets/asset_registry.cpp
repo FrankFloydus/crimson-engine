@@ -7,6 +7,7 @@
 #include "assets/asset_registry.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace quader {
@@ -128,6 +129,42 @@ bool AssetRegistry::updateMaterial(AssetId id, const std::function<void(Material
     }
     markDirty();
     return true;
+}
+
+AssetRegistryMutationResult AssetRegistry::setMaterialTexture(
+        AssetId material,
+        std::string_view slot,
+        AssetId texture) {
+    if (slot.empty()) {
+        return {.ok = false, .changed = false, .message = "Material texture slot is empty"};
+    }
+    const std::optional<std::string> textureSlot = canonicalMaterialTextureSlot(slot);
+    if (!textureSlot.has_value()) {
+        return {.ok = false, .changed = false, .message = "Unsupported material texture slot"};
+    }
+    if (texture == InvalidAssetId || textures_.get(texture) == nullptr) {
+        return {.ok = false, .changed = false, .message = "Texture asset does not exist"};
+    }
+
+    const MaterialDocument* existing = materials_.get(material);
+    if (existing == nullptr) {
+        return {.ok = false, .changed = false, .message = "Material asset does not exist"};
+    }
+    if (const auto current = existing->textureSlots.find(*textureSlot);
+            current != existing->textureSlots.end() && current->second == texture) {
+        return {.ok = true, .changed = false, .message = "Material unchanged"};
+    }
+
+    MaterialDocument updated = *existing;
+    setMaterialTextureSlot(updated, *textureSlot, texture);
+    const AssetRegistryValidationResult validation = validateMaterial(updated);
+    if (!validation.ok) {
+        return {.ok = false, .changed = false, .message = validation.message};
+    }
+    if (!replaceMaterial(material, std::move(updated))) {
+        return {.ok = false, .changed = false, .message = "Material asset does not exist"};
+    }
+    return {.ok = true, .changed = true, .message = "Material updated"};
 }
 
 AssetRegistryValidationResult AssetRegistry::validateMaterial(const MaterialDocument& material) const {

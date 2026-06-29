@@ -76,6 +76,7 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const Qua
     if (result.ok && result.changed) {
         result.value = QuaderEntityRef{
                 .id = createdEntity,
+                .uuid = session_.scene().uuid(createdEntity),
                 .editorObjectId = session_.scene().editorObjectId(createdEntity),
         };
     }

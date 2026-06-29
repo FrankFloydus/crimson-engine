@@ -10,6 +10,8 @@
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "io/qdr/qdr_document.hpp"
+#include "io/qdr/qdr_format.hpp"
+#include "io/qdr/qdr_project_codecs.hpp"
 #include "support/guardrail_file_scan.hpp"
 
 #include <gtest/gtest.h>
@@ -172,6 +174,8 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
 
     const EntityId group = document.scene().createEntityWithId(100u, "Group", EntityKind::Empty);
     const EntityId wall = document.scene().createEntityWithId(200u, "Wall", EntityKind::Mesh);
+    const std::string groupUuid = document.scene().uuid(group);
+    const std::string wallUuid = document.scene().uuid(wall);
     const EditorObjectId groupObject = document.scene().editorObjectId(group);
     document.scene().setParent(wall, group, false);
     document.scene().setTransform(wall, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
@@ -198,6 +202,8 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
 
     const std::string text = QdrDocumentWriter::serializeProjectDocument(document);
     EXPECT_NE(text.find("\"kind\": \"quader.project-document\""), std::string::npos);
+    EXPECT_NE(text.find("\"uuid\": \"" + groupUuid + "\""), std::string::npos);
+    EXPECT_NE(text.find("\"uuid\": \"" + wallUuid + "\""), std::string::npos);
     EXPECT_NE(text.find("\"editorObjectId\": " + std::to_string(groupObject)), std::string::npos);
     EXPECT_NE(text.find("\"editorObjectId\": 900"), std::string::npos);
     EXPECT_NE(text.find("\"textures\": ["), std::string::npos);
@@ -214,6 +220,10 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.name(), "Projection IO");
     EXPECT_TRUE(loaded.scene().exists(group));
     EXPECT_TRUE(loaded.scene().exists(wall));
+    EXPECT_EQ(loaded.scene().uuid(group), groupUuid);
+    EXPECT_EQ(loaded.scene().uuid(wall), wallUuid);
+    EXPECT_EQ(loaded.scene().entityForUuid(groupUuid), group);
+    EXPECT_EQ(loaded.scene().entityForUuid(wallUuid), wall);
     EXPECT_EQ(loaded.scene().editorObjectId(group), groupObject);
     EXPECT_EQ(loaded.scene().editorObjectId(wall), wallObject);
     EXPECT_EQ(loaded.scene().parent(wall), group);
@@ -866,6 +876,55 @@ TEST(QdrDocumentIoTests, QdrPolygonDocumentCodecAndAtomicWriteHaveSingleOwners) 
         EXPECT_EQ(legacy.find(token), std::string::npos) << token;
         EXPECT_NE(atomic.find(token), std::string::npos) << token;
     }
+}
+
+TEST(QdrDocumentIoTests, QdrFormatConstantsAndProjectCodecsHaveSingleOwners) {
+    EXPECT_EQ(quader_io::qdr_format_name, kQdrFormatName);
+    EXPECT_EQ(quader_io::qdr_document_payload_key, kQdrDocumentPayloadKey);
+    EXPECT_EQ(quader_io::qdr_legacy_session_payload_key, kQdrLegacySessionPayloadKey);
+    EXPECT_EQ(quader_io::qdr_min_supported_format_version, kQdrMinSupportedFormatVersion);
+    EXPECT_EQ(quader_io::qdr_format_version, kQdrLegacySessionFormatVersion);
+
+    EXPECT_EQ(qdrEntityKindName(EntityKind::Mesh), std::string_view("mesh"));
+    EXPECT_EQ(qdrEntityKindFromName("light"), EntityKind::Light);
+    EXPECT_EQ(qdrLightTypeName(LightType::Spot), std::string_view("spot"));
+    EXPECT_EQ(qdrLightTypeFromName("point"), LightType::Point);
+    EXPECT_EQ(qdrMeshCollisionTypeName(MeshCollisionType::ConvexHull), std::string_view("convexHull"));
+    EXPECT_EQ(qdrMeshCollisionTypeFromName("mesh"), MeshCollisionType::Mesh);
+    EXPECT_EQ(qdrMeshPhysicsBodyTypeName(MeshPhysicsBodyType::RigidBody), std::string_view("rigidBody"));
+    EXPECT_EQ(qdrMeshPhysicsBodyTypeFromName("missing"), MeshPhysicsBodyType::StaticBody);
+    EXPECT_EQ(qdrTextureUsageName(TextureUsage::BaseColor), std::string_view("baseColor"));
+    EXPECT_EQ(qdrTextureUsageFromName("roughness"), TextureUsage::Roughness);
+    EXPECT_EQ(qdrTextureColorSpaceName(TextureColorSpace::Linear), std::string_view("linear"));
+    EXPECT_EQ(qdrTextureColorSpaceFromName("srgb"), TextureColorSpace::Srgb);
+
+    const std::string cmake = readSourceFile("CMakeLists.txt");
+    const std::string legacyHeader = readSourceFile({"src", "io", "qdr", "qdr_document.hpp"});
+    const std::string reader = readSourceFile({"src", "io", "qdr", "qdr_document_reader.cpp"});
+    const std::string writer = readSourceFile({"src", "io", "qdr", "qdr_document_writer.cpp"});
+    const std::string codecHeader = readSourceFile({"src", "io", "qdr", "qdr_project_codecs.hpp"});
+    const std::string codec = readSourceFile({"src", "io", "qdr", "qdr_project_codecs.cpp"});
+
+    EXPECT_NE(cmake.find("src/io/qdr/qdr_project_codecs.cpp"), std::string::npos);
+    EXPECT_NE(legacyHeader.find("qdr_format_name = quader::kQdrFormatName"), std::string::npos);
+    EXPECT_NE(legacyHeader.find("qdr_document_payload_key = quader::kQdrDocumentPayloadKey"), std::string::npos);
+    EXPECT_NE(legacyHeader.find("qdr_format_version = quader::kQdrLegacySessionFormatVersion"), std::string::npos);
+
+    EXPECT_NE(reader.find("#include \"io/qdr/qdr_project_codecs.hpp\""), std::string::npos);
+    EXPECT_NE(writer.find("#include \"io/qdr/qdr_project_codecs.hpp\""), std::string::npos);
+    EXPECT_NE(reader.find("qdrEntityKindFromName("), std::string::npos);
+    EXPECT_NE(reader.find("qdrTextureUsageFromName("), std::string::npos);
+    EXPECT_NE(writer.find("qdrEntityKindName("), std::string::npos);
+    EXPECT_NE(writer.find("qdrTextureUsageName("), std::string::npos);
+
+    EXPECT_NE(codecHeader.find("qdrEntityKindName("), std::string::npos);
+    EXPECT_NE(codec.find("qdrEntityKindName("), std::string::npos);
+    EXPECT_EQ(reader.find("parseEntityKind("), std::string::npos);
+    EXPECT_EQ(reader.find("parseTextureUsage("), std::string::npos);
+    EXPECT_EQ(reader.find("parseTextureColorSpace("), std::string::npos);
+    EXPECT_EQ(writer.find("entityKindName("), std::string::npos);
+    EXPECT_EQ(writer.find("textureUsageName("), std::string::npos);
+    EXPECT_EQ(writer.find("textureColorSpaceName("), std::string::npos);
 }
 
 TEST(QdrDocumentIoTests, SceneSelectableMutationStaysSceneOwned) {

@@ -64,10 +64,10 @@ Current code, tests, AGENTS files, and the user request override memory.
   read `agents/public-api-and-scripting.md`, `agents/domain-ownership.md`,
   `agents/docs-public-examples.md`.
 - UI, panels, menus, localization, dock layout:
-  read `agents/ui-localization.md`; for retained components/buttons, also read
+  read `agents/ui-localization.md`; for UI controls/buttons, also read
   `agents/ui-components.md`; if the task mutates editor state, also read `agents/public-api-and-scripting.md`.
-  For RmlUi MainLayout shell work, also read `src/ui/AGENTS.md` and `resources/AGENTS.md` before
-  touching generated RML/RCSS, UI settings, viewport frame routing, or runtime UI resources.
+  For native ImGui shell work, also read `src/ui/AGENTS.md` and `resources/AGENTS.md` before
+  touching UI settings, viewport frame routing, or runtime UI resources.
 - Input, keybindings, shortcuts, user rebinding, keybinding contexts, mouse gestures, or shortcut
   persistence:
   read `INPUT_KEYBINDINGS.md`, `agents/public-api-and-scripting.md`, and the relevant owner
@@ -142,6 +142,6 @@ workflow into a fast, headless synthetic behavior test. Use the public API or
 selection, mesh, history, overlay, or viewport state.
 
 Keep manual smoke checks for real GPU/window/driver behavior only: Vulkan swapchain creation,
-RmlUi MainLayout/window chrome appearance, actual material rendering, and pixel output until a
+native window chrome/layout appearance, actual material rendering, and pixel output until a
 render readback harness exists. Do not leave manual clicking as the only coverage for state that can
 be inspected programmatically. More detail lives in `agents/testing-build.md`.

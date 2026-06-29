@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -24,6 +25,7 @@ namespace quader {
  */
 struct EntityRecord {
     EntityId id = InvalidEntityId;
+    std::string uuid;
     EditorObjectId editorObjectId = InvalidEditorObjectId;
     std::string name;
     EntityKind kind = EntityKind::Generic;
@@ -64,6 +66,7 @@ public:
     bool exists(EntityId id) const;
 
     bool renameEntity(EntityId id, std::string name);
+    bool setEntityUuid(EntityId id, std::string uuid);
     bool setEditorObjectId(EntityId id, EditorObjectId editorObjectId);
     bool setEntityKind(EntityId id, EntityKind kind);
     bool setVisible(EntityId id, bool visible);
@@ -82,6 +85,7 @@ public:
     void setLight(EntityId id, LightComponent light);
 
     const NameComponent* name(EntityId id) const;
+    const EntityUuidComponent* entityUuid(EntityId id) const;
     const EditorObjectIdentityComponent* editorObjectIdentity(EntityId id) const;
     const TransformComponent* transform(EntityId id) const;
     const EntityKindComponent* entityKind(EntityId id) const;
@@ -104,6 +108,8 @@ public:
     std::vector<EntityId> selectedEntities() const;
     EntityId primarySelection() const;
     EntityId parent(EntityId id) const;
+    std::string uuid(EntityId id) const;
+    EntityId entityForUuid(std::string_view uuid) const;
     EditorObjectId editorObjectId(EntityId id) const;
     EntityId entityForEditorObjectId(EditorObjectId editorObjectId) const;
     bool hasChildren(EntityId id) const;
@@ -145,6 +151,7 @@ private:
     entt::registry registry_;
     std::unordered_map<EntityId, entt::entity> entities_;
     std::unordered_map<std::uint32_t, EntityId> idsByEntity_;
+    std::unordered_map<std::string, EntityId> entityByUuid_;
     std::unordered_map<EditorObjectId, EntityId> entityByEditorObjectId_;
 };
 

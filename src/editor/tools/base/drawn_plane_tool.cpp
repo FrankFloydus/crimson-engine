@@ -10,6 +10,11 @@
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 
+#include <array>
+#include <optional>
+#include <string>
+#include <string_view>
+
 namespace quader {
 namespace {
 
@@ -23,6 +28,197 @@ void finishDrawnPlaneTool(ViewportToolContext& context) {
     if (context.setSelectionMode) {
         context.setSelectionMode(appSelectionModeToViewport(context.modeling.selectionSummary().mode));
     }
+}
+
+/**
+ * Distinguishes drawn-plane tools that share the same viewport lifecycle.
+ */
+enum class DrawnPlaneToolKind {
+    Cut,
+    Mirror,
+};
+
+DrawnPlaneToolKind drawnPlaneToolKind(ModelingViewportTool tool) {
+    return tool == ModelingViewportTool::Cut ? DrawnPlaneToolKind::Cut : DrawnPlaneToolKind::Mirror;
+}
+
+std::string_view drawnPlaneToolName(DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? "Cut" : "Mirror";
+}
+
+bool& drawnPlaneDragActive(ViewportModalToolState& state, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? state.cutDragActive : state.mirrorDragActive;
+}
+
+bool drawnPlaneDragging(const ModelingToolStatus& status, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? status.cutDragging : status.mirrorDragging;
+}
+
+bool drawnPlaneCanPreview(const ModelingToolStatus& status, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? status.cutCanPreview : status.mirrorCanPreview;
+}
+
+bool drawnPlanePreviewValid(const ModelingToolStatus& status, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? status.cutPreviewValid : status.mirrorPreviewValid;
+}
+
+const std::array<QVec3, 3>& drawnPlanePoints(const ModelingToolStatus& status, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? status.cutPoints : status.mirrorPoints;
+}
+
+int drawnPlaneCapturedPointCount(const ModelingToolStatus& status, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? status.cutCapturedPointCount : status.mirrorCapturedPointCount;
+}
+
+bool drawnPlaneHasLine(const ModelingToolStatus& status, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? status.cutHasLine : status.mirrorHasLine;
+}
+
+ModelingCommandResult updateDrawnPlaneHover(
+        ModelingSessionService& modeling,
+        DrawnPlaneToolKind kind,
+        const ModelingToolRayEvent& event) {
+    return kind == DrawnPlaneToolKind::Cut
+            ? modeling.updateCutHover(event)
+            : modeling.updateMirrorHover(event);
+}
+
+ModelingCommandResult beginDrawnPlanePointDrag(
+        ModelingSessionService& modeling,
+        DrawnPlaneToolKind kind,
+        int pointIndex) {
+    return kind == DrawnPlaneToolKind::Cut
+            ? modeling.beginCutPointDrag(pointIndex)
+            : modeling.beginMirrorPointDrag(pointIndex);
+}
+
+ModelingCommandResult beginDrawnPlaneLineDrag(
+        ModelingSessionService& modeling,
+        DrawnPlaneToolKind kind,
+        const ModelingToolRayEvent& event) {
+    return kind == DrawnPlaneToolKind::Cut
+            ? modeling.beginCutLineDrag(event)
+            : modeling.beginMirrorLineDrag(event);
+}
+
+ModelingCommandResult clickDrawnPlanePoint(
+        ModelingSessionService& modeling,
+        DrawnPlaneToolKind kind,
+        const ModelingToolRayEvent& event) {
+    return kind == DrawnPlaneToolKind::Cut
+            ? modeling.clickCut(event)
+            : modeling.clickMirror(event);
+}
+
+ModelingCommandResult endDrawnPlaneDrag(ModelingSessionService& modeling, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? modeling.endCutDrag() : modeling.endMirrorDrag();
+}
+
+ModelingCommandResult finalizeDrawnPlaneTool(ModelingSessionService& modeling, DrawnPlaneToolKind kind) {
+    return kind == DrawnPlaneToolKind::Cut ? modeling.finalizeCutTool() : modeling.finalizeMirrorTool();
+}
+
+void logDrawnPlaneCommitBlocked(DrawnPlaneToolKind kind, bool dragging) {
+    if (kind == DrawnPlaneToolKind::Cut) {
+        if (dragging) {
+            LOG_ERROR("Cut commit failed: finish the current drag before committing.");
+        } else {
+            LOG_ERROR("Cut commit failed: place a valid cut line first.");
+        }
+        return;
+    }
+    if (dragging) {
+        LOG_ERROR("Mirror commit failed: finish the current drag before committing.");
+    } else {
+        LOG_ERROR("Mirror commit failed: place a valid mirror line first.");
+    }
+}
+
+ViewportToolResult handleDrawnPlaneLifecycle(
+        ViewportToolContext& context,
+        const ViewportPointerToolEvent& pointer,
+        ViewportPointToolContext& pointContext,
+        DrawnPlaneToolKind kind) {
+    bool& dragActive = drawnPlaneDragActive(*context.modalState, kind);
+    const std::string_view toolName = drawnPlaneToolName(kind);
+
+    if (pointer.canInteract &&
+            !pointer.suppressHoverWork &&
+            !(pointer.leftDown && dragActive) &&
+            (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
+        handleResult(context,
+                std::string(toolName) + " hover",
+                updateDrawnPlaneHover(context.modeling, kind, pointContext.makeEventAt(pointer.mouseLocal, false)));
+    }
+    if (pointer.canInteract && pointer.leftClicked) {
+        const ModelingToolStatus before = context.modeling.toolStatus();
+        ModelingCommandResult command;
+        if (pointContext.hitDrawnPlaneCapturedPoint) {
+            if (const std::optional<int> pointIndex =
+                        pointContext.hitDrawnPlaneCapturedPoint(
+                                drawnPlanePoints(before, kind),
+                                drawnPlaneCapturedPointCount(before, kind))) {
+                command = beginDrawnPlanePointDrag(context.modeling, kind, *pointIndex);
+                handleResult(context, std::string(toolName) + " point drag begin", command);
+            }
+        }
+        if (!command.ok && command.message.empty() && pointContext.hitDrawnPlaneLine &&
+                pointContext.hitDrawnPlaneLine(
+                        drawnPlanePoints(before, kind),
+                        drawnPlaneCapturedPointCount(before, kind),
+                        drawnPlaneHasLine(before, kind))) {
+            command = beginDrawnPlaneLineDrag(
+                    context.modeling,
+                    kind,
+                    pointContext.makeEventAt(pointer.leftClickLocal, true));
+            handleResult(context, std::string(toolName) + " line drag begin", command);
+        } else if (!command.ok && command.message.empty()) {
+            command = clickDrawnPlanePoint(
+                    context.modeling,
+                    kind,
+                    pointContext.makeEventAt(pointer.leftClickLocal, false));
+            handleResult(context, std::string(toolName) + " point", command);
+        }
+        dragActive = command.ok && drawnPlaneDragging(context.modeling.toolStatus(), kind);
+    } else if (pointer.canInteract &&
+            pointer.leftDown &&
+            (dragActive || drawnPlaneDragging(context.modeling.toolStatus(), kind))) {
+        handleResult(context,
+                std::string(toolName) + " drag update",
+                updateDrawnPlaneHover(context.modeling, kind, pointContext.makeEventAt(pointer.mouseLocal, true)));
+        dragActive = drawnPlaneDragging(context.modeling.toolStatus(), kind);
+    }
+    if (pointer.leftReleased && (dragActive || drawnPlaneDragging(context.modeling.toolStatus(), kind))) {
+        const ModelingCommandResult command = endDrawnPlaneDrag(context.modeling, kind);
+        handleResult(context, std::string(toolName) + " drag end", command);
+        dragActive = false;
+    }
+    if (kind == DrawnPlaneToolKind::Cut && pointer.modeCyclePressed) {
+        handleResult(context, "Cut mode", context.modeling.cycleCutMode());
+    }
+
+    bool committed = false;
+    if (pointer.finalizePressed) {
+        const ModelingToolStatus status = context.modeling.toolStatus();
+        if (drawnPlaneDragging(status, kind)) {
+            logDrawnPlaneCommitBlocked(kind, true);
+        } else if (!drawnPlaneCanPreview(status, kind) || !drawnPlanePreviewValid(status, kind)) {
+            logDrawnPlaneCommitBlocked(kind, false);
+        } else {
+            const ModelingCommandResult command = finalizeDrawnPlaneTool(context.modeling, kind);
+            handleResult(context, std::string(toolName) + " commit", command);
+            if (command.ok) {
+                finishDrawnPlaneTool(context);
+                committed = true;
+            }
+        }
+    }
+    return {
+            .handled = true,
+            .modalStateChanged = true,
+            .activeToolChanged = committed,
+            .syncActiveToolFromModeling = committed,
+    };
 }
 
 } // namespace
@@ -40,138 +236,12 @@ ViewportToolResult DrawnPlaneTool::handleEvent(
 
     ViewportPointToolContext& pointContext = *context.point;
     const ViewportPointerToolEvent& pointer = event.pointer;
-    if (modelingTool() == ModelingViewportTool::Cut) {
-        if (pointer.canInteract &&
-                !pointer.suppressHoverWork &&
-                !(pointer.leftDown && context.modalState->cutDragActive) &&
-                (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
-            handleResult(context,
-                    "Cut hover",
-                    context.modeling.updateCutHover(pointContext.makeEventAt(pointer.mouseLocal, false)));
-        }
-        if (pointer.canInteract && pointer.leftClicked) {
-            const ModelingToolStatus before = context.modeling.toolStatus();
-            ModelingCommandResult command;
-            if (pointContext.hitDrawnPlaneCapturedPoint) {
-                if (const std::optional<int> pointIndex =
-                            pointContext.hitDrawnPlaneCapturedPoint(before.cutPoints, before.cutCapturedPointCount)) {
-                    command = context.modeling.beginCutPointDrag(*pointIndex);
-                    handleResult(context, "Cut point drag begin", command);
-                }
-            }
-            if (!command.ok && command.message.empty() && pointContext.hitDrawnPlaneLine &&
-                    pointContext.hitDrawnPlaneLine(before.cutPoints, before.cutCapturedPointCount, before.cutHasLine)) {
-                command = context.modeling.beginCutLineDrag(pointContext.makeEventAt(pointer.leftClickLocal, true));
-                handleResult(context, "Cut line drag begin", command);
-            } else if (!command.ok && command.message.empty()) {
-                command = context.modeling.clickCut(pointContext.makeEventAt(pointer.leftClickLocal, false));
-                handleResult(context, "Cut point", command);
-            }
-            context.modalState->cutDragActive = command.ok && context.modeling.toolStatus().cutDragging;
-        } else if (pointer.canInteract &&
-                pointer.leftDown &&
-                (context.modalState->cutDragActive || context.modeling.toolStatus().cutDragging)) {
-            handleResult(context,
-                    "Cut drag update",
-                    context.modeling.updateCutHover(pointContext.makeEventAt(pointer.mouseLocal, true)));
-            context.modalState->cutDragActive = context.modeling.toolStatus().cutDragging;
-        }
-        if (pointer.leftReleased && (context.modalState->cutDragActive || context.modeling.toolStatus().cutDragging)) {
-            const ModelingCommandResult command = context.modeling.endCutDrag();
-            handleResult(context, "Cut drag end", command);
-            context.modalState->cutDragActive = false;
-        }
-        if (pointer.modeCyclePressed) {
-            handleResult(context, "Cut mode", context.modeling.cycleCutMode());
-        }
-        bool committed = false;
-        if (pointer.finalizePressed) {
-            const ModelingToolStatus status = context.modeling.toolStatus();
-            if (status.cutDragging) {
-                LOG_ERROR("Cut commit failed: finish the current drag before committing.");
-            } else if (!status.cutCanPreview || !status.cutPreviewValid) {
-                LOG_ERROR("Cut commit failed: place a valid cut line first.");
-            } else {
-                const ModelingCommandResult command = context.modeling.finalizeCutTool();
-                handleResult(context, "Cut commit", command);
-                if (command.ok) {
-                    finishDrawnPlaneTool(context);
-                    committed = true;
-                }
-            }
-        }
-        return {
-                .handled = true,
-                .modalStateChanged = true,
-                .activeToolChanged = committed,
-                .syncActiveToolFromModeling = committed,
-        };
-    }
-
-    if (modelingTool() == ModelingViewportTool::Mirror) {
-        if (pointer.canInteract &&
-                !pointer.suppressHoverWork &&
-                !(pointer.leftDown && context.modalState->mirrorDragActive) &&
-                (!context.claimHover || context.claimHover(ModelingBoxDragState::Idle))) {
-            handleResult(context,
-                    "Mirror hover",
-                    context.modeling.updateMirrorHover(pointContext.makeEventAt(pointer.mouseLocal, false)));
-        }
-        if (pointer.canInteract && pointer.leftClicked) {
-            const ModelingToolStatus before = context.modeling.toolStatus();
-            ModelingCommandResult command;
-            if (pointContext.hitDrawnPlaneCapturedPoint) {
-                if (const std::optional<int> pointIndex =
-                            pointContext.hitDrawnPlaneCapturedPoint(before.mirrorPoints, before.mirrorCapturedPointCount)) {
-                    command = context.modeling.beginMirrorPointDrag(*pointIndex);
-                    handleResult(context, "Mirror point drag begin", command);
-                }
-            }
-            if (!command.ok && command.message.empty() && pointContext.hitDrawnPlaneLine &&
-                    pointContext.hitDrawnPlaneLine(before.mirrorPoints, before.mirrorCapturedPointCount, before.mirrorHasLine)) {
-                command = context.modeling.beginMirrorLineDrag(pointContext.makeEventAt(pointer.leftClickLocal, true));
-                handleResult(context, "Mirror line drag begin", command);
-            } else if (!command.ok && command.message.empty()) {
-                command = context.modeling.clickMirror(pointContext.makeEventAt(pointer.leftClickLocal, false));
-                handleResult(context, "Mirror point", command);
-            }
-            context.modalState->mirrorDragActive = command.ok && context.modeling.toolStatus().mirrorDragging;
-        } else if (pointer.canInteract &&
-                pointer.leftDown &&
-                (context.modalState->mirrorDragActive || context.modeling.toolStatus().mirrorDragging)) {
-            handleResult(context,
-                    "Mirror drag update",
-                    context.modeling.updateMirrorHover(pointContext.makeEventAt(pointer.mouseLocal, true)));
-            context.modalState->mirrorDragActive = context.modeling.toolStatus().mirrorDragging;
-        }
-        if (pointer.leftReleased &&
-                (context.modalState->mirrorDragActive || context.modeling.toolStatus().mirrorDragging)) {
-            const ModelingCommandResult command = context.modeling.endMirrorDrag();
-            handleResult(context, "Mirror drag end", command);
-            context.modalState->mirrorDragActive = false;
-        }
-        bool committed = false;
-        if (pointer.finalizePressed) {
-            const ModelingToolStatus status = context.modeling.toolStatus();
-            if (status.mirrorDragging) {
-                LOG_ERROR("Mirror commit failed: finish the current drag before committing.");
-            } else if (!status.mirrorCanPreview || !status.mirrorPreviewValid) {
-                LOG_ERROR("Mirror commit failed: place a valid mirror line first.");
-            } else {
-                const ModelingCommandResult command = context.modeling.finalizeMirrorTool();
-                handleResult(context, "Mirror commit", command);
-                if (command.ok) {
-                    finishDrawnPlaneTool(context);
-                    committed = true;
-                }
-            }
-        }
-        return {
-                .handled = true,
-                .modalStateChanged = true,
-                .activeToolChanged = committed,
-                .syncActiveToolFromModeling = committed,
-        };
+    if (modelingTool() == ModelingViewportTool::Cut || modelingTool() == ModelingViewportTool::Mirror) {
+        return handleDrawnPlaneLifecycle(
+                context,
+                pointer,
+                pointContext,
+                drawnPlaneToolKind(modelingTool()));
     }
 
     return ModalViewportTool::handleEvent(context, event);

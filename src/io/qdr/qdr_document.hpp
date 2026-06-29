@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "io/qdr/qdr_format.hpp"
+
 #include <mesh/polygon/document.hpp>
 
 #include <cstdint>
@@ -16,11 +18,11 @@
 
 namespace quader_io {
 
-inline constexpr std::string_view qdr_format_name = "quader.qdr";
-inline constexpr std::string_view qdr_document_payload_key = "document";
-inline constexpr std::string_view qdr_legacy_session_payload_key = "session";
-inline constexpr int qdr_min_supported_format_version = 1;
-inline constexpr int qdr_format_version = 3;
+inline constexpr std::string_view qdr_format_name = quader::kQdrFormatName;
+inline constexpr std::string_view qdr_document_payload_key = quader::kQdrDocumentPayloadKey;
+inline constexpr std::string_view qdr_legacy_session_payload_key = quader::kQdrLegacySessionPayloadKey;
+inline constexpr int qdr_min_supported_format_version = quader::kQdrMinSupportedFormatVersion;
+inline constexpr int qdr_format_version = quader::kQdrLegacySessionFormatVersion;
 
 /**
  * Enumerates QdrSelectionMode values used by the io layer.

@@ -74,7 +74,7 @@ std::set<std::string> localizationPlaceholderTokens(std::string_view text) {
 std::set<std::string> literalLocalizationKeysReferencedByUISource() {
     const std::filesystem::path uiRoot = sourcePath({"src", "ui"});
     const std::regex directLocalizationCall(
-            R"regex(localization\.(?:text|format)\(\s*"([^"]+)")regex");
+            R"regex((?:[A-Za-z_][A-Za-z0-9_]*\.)?localization_?\.(?:text|format|imguiLabel)\(\s*"([^"]+)")regex");
     std::set<std::string> keys;
 
     for (const std::filesystem::path& file : sourceFilesUnder(uiRoot)) {
@@ -92,6 +92,22 @@ std::set<std::string> literalLocalizationKeysReferencedByUISource() {
     }
 
     return keys;
+}
+
+TEST(LocalizationResourceTests, ShellRuntimeStringsRouteThroughLocaleKeys) {
+    const std::string uiSystem = readFile(sourcePath("src/ui/ui_system.cpp"));
+    const std::string shortcutController = readFile(sourcePath("src/ui/viewport_shortcut_controller.cpp"));
+
+    EXPECT_NE(uiSystem.find("ui.shell.status.ready"), std::string::npos);
+    EXPECT_NE(uiSystem.find("ui.runtime.unknown_panel"), std::string::npos);
+    EXPECT_NE(uiSystem.find("ui.runtime.unknown_locale"), std::string::npos);
+    EXPECT_NE(uiSystem.find("ui.runtime.preferences_saved"), std::string::npos);
+    EXPECT_NE(uiSystem.find("ui.runtime.viewport_panel_unavailable"), std::string::npos);
+    EXPECT_EQ(uiSystem.find("runtimeFailure(\"Unknown UI panel."), std::string::npos);
+    EXPECT_EQ(uiSystem.find("runtimeFailure(\"Unknown locale."), std::string::npos);
+    EXPECT_EQ(uiSystem.find("runtimeStatus(false, \"Preferences saved."), std::string::npos);
+    EXPECT_EQ(uiSystem.find("runtimeFailure(\"Viewport panel is not available."), std::string::npos);
+    EXPECT_EQ(shortcutController.find("Apply Tool Preview"), std::string::npos);
 }
 
 } // namespace

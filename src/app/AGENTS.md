@@ -16,8 +16,7 @@ file except through prior written authorization from Francesco Di Blasi.
 - App code wires services, startup/shutdown, frame flow, and top-level orchestration.
 - User/editor mutations should route through `QuaderEditorApi`, command services, or owner services.
 - Do not hide modeling, rendering, selection, or document logic in app startup code.
-- Preserve the RmlUi shell frame order: refresh window size, call `ui.prepareLayout(...)` so Rml
-  measurement updates the viewport frame, then let UI/viewport input consume that frame state before
-  viewport render prep and Rml render data registration.
+- Preserve the native UI frame order: process window events, draw/update ImGui UI, prepare viewport
+  render data, then render viewport surfaces inside the Filament frame.
 - Changes to window lifecycle, backend startup, or frame orchestration need a manual smoke check when
   they cannot be covered by headless tests.

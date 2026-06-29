@@ -198,6 +198,10 @@ bool ViewportToolRuntime::handleShortcut(
         result.requestedGridPreset = viewportClampGridPreset(shortcut.gridPreset);
         result.gridPresetChanged = state.gridPreset != result.requestedGridPreset;
         return true;
+    case ViewportShortcutKind::SetView:
+        result.requestedView = shortcut.view;
+        result.viewChanged = true;
+        return true;
     case ViewportShortcutKind::CancelActiveTool:
         result.cancelRequested = true;
         return true;

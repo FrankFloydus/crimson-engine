@@ -20,6 +20,7 @@ namespace quader {
 class EditorHistoryService;
 class QuaderEditorApi;
 class SceneDocument;
+class AssetRegistry;
 
 /**
  * Stores a captured scene transform target for a viewport transform drag.
@@ -60,7 +61,30 @@ public:
     DocumentCommandResult cancel();
     void reset();
 
+    QuaderApiVoidResult moveSelectedToPrimaryPosition(
+            QuaderEditorApi& editor,
+            SceneDocument& document,
+            EntityId primary,
+            QVec3 nextPrimaryPosition,
+            std::string label = "Transform Selection");
+    QuaderApiVoidResult rotateSelectedToPrimaryEulerAroundSelectionPivot(
+            QuaderEditorApi& editor,
+            SceneDocument& document,
+            const AssetRegistry& assets,
+            EntityId primary,
+            QVec3 nextPrimaryEulerRadians,
+            std::string label = "Transform Selection");
+    QuaderApiVoidResult scaleSelectedToPrimaryScaleAroundSelectionPivot(
+            QuaderEditorApi& editor,
+            SceneDocument& document,
+            const AssetRegistry& assets,
+            EntityId primary,
+            QVec3 nextPrimaryScale,
+            std::string label = "Transform Selection");
+
 private:
+    [[nodiscard]] bool captureTargets(SceneDocument& document, QVec3 worldPivot);
+
     std::optional<SceneTransformPreviewTransaction> preview_;
     std::vector<SceneTransformDragTarget> targets_;
     std::string label_ = "Transform Selection";

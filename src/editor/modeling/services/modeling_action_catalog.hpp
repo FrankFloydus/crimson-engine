@@ -14,6 +14,10 @@
 #include <string_view>
 #include <vector>
 
+namespace quader_host_contract {
+enum class HostPreviewKind;
+}
+
 namespace quader {
 
 /**
@@ -161,6 +165,8 @@ public:
             const ModelingSelectionSummary& summary,
             std::string_view operationId,
             const ModelingActionAvailabilityRule& rule);
+    [[nodiscard]] static ModelingActionPreviewKind previewKindFromHost(
+            quader_host_contract::HostPreviewKind kind);
 };
 
 } // namespace quader

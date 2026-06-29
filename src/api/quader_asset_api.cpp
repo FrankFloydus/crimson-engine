@@ -12,7 +12,6 @@
 #include "scene/document/project_session.hpp"
 
 #include <functional>
-#include <optional>
 #include <utility>
 
 namespace quader {
@@ -173,34 +172,15 @@ QuaderApiVoidResult QuaderAssetApi::setMaterialMetallic(AssetId material, float 
 }
 
 QuaderApiVoidResult QuaderAssetApi::setMaterialTexture(AssetId material, std::string slot, AssetId texture) {
-    if (slot.empty()) {
-        return mutations_.runAssetFailure("Material texture slot is empty");
+    const AssetRegistryMutationResult result =
+            projectSession(session_).assets().setMaterialTexture(material, slot, texture);
+    if (!result.ok) {
+        return mutations_.runAssetFailure(result.message);
     }
-    const std::optional<std::string> textureSlot = canonicalMaterialTextureSlot(slot);
-    if (!textureSlot.has_value()) {
-        return mutations_.runAssetFailure("Unsupported material texture slot");
-    }
-    if (texture == InvalidAssetId || projectSession(session_).assets().texture(texture) == nullptr) {
-        return mutations_.runAssetFailure("Texture asset does not exist");
-    }
-
-    return updateMaterialOrFail(
-            projectSession(session_),
-            mutations_,
-            material,
-            [textureSlot, texture](const MaterialDocument& document) {
-                const auto existing = document.textureSlots.find(*textureSlot);
-                return existing == document.textureSlots.end() || existing->second != texture;
-            },
-            [textureSlot, texture](MaterialDocument& document) {
-                setMaterialTextureSlot(document, *textureSlot, texture);
-            });
+    return mutations_.runAssetResult(result.changed, result.message);
 }
 
 QuaderApiVoidResult QuaderAssetApi::assignMaterialToEntity(EntityId entity, AssetId material) {
-    if (projectSession(session_).assets().material(material) == nullptr) {
-        return mutations_.runAssetFailure("Material asset does not exist");
-    }
     return mutations_.runDocumentResult(
             projectSession(session_).documentCommands().setMaterial(entity, material),
             "Assign Material");

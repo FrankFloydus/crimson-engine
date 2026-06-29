@@ -41,6 +41,9 @@ class EditorSelectionService;
 class ModelingSessionService;
 class TextureRegistry;
 
+/**
+ * Enumerates native window chrome actions requested by the ImGui shell.
+ */
 enum class WindowChromeAction {
     Minimize,
     ToggleMaximizeRestore,
@@ -85,7 +88,11 @@ public:
 
 private:
     void registerPanels(RenderSystem& renderSystem);
-    void drawWindowChrome();
+    MainMenuBarResult drawWindowChrome(
+            QuaderEditorApi& editor,
+            bool& quitRequested,
+            SceneDocument& document,
+            ModelingSessionService& modeling);
     void drawDockspace(
             QuaderEditorApi& editor,
             bool& quitRequested,

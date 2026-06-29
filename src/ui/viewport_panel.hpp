@@ -10,19 +10,18 @@
 #include "api/quader_api_types.hpp"
 #include "core/types.hpp"
 #include "editor/modeling/modeling_types.hpp"
+#include "editor/viewport/viewport_interaction_controller.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/viewport_renderer.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/navigation_gizmo.hpp"
 #include "ui/modal_tool_overlay_renderer.hpp"
-#include "ui/transform_gizmo_controller.hpp"
 #include "ui/ui_panel.hpp"
 #include "ui/viewport_context_menu_presenter.hpp"
 #include "ui/viewport_focus_controller.hpp"
 #include "ui/viewport_hover_controller.hpp"
 #include "ui/viewport_input_frame_builder.hpp"
 #include "ui/viewport_pane_overlay_cache.hpp"
-#include "ui/viewport_selection_controller.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_input_router.hpp"
@@ -157,18 +156,15 @@ private:
     ViewportContextMenuPresenter contextMenuPresenter_;
     ViewportShortcutController shortcutController_;
     ViewportHoverController hoverController_;
-    ViewportSelectionController selectionController_;
-    TransformGizmoController transformGizmoController_;
+    ViewportInteractionController interactionController_;
+    ViewportPaneId interactionPaneId_ = ViewportPaneId::Perspective;
     ModalToolOverlayRenderer modalToolOverlayRenderer_;
     ViewportPaneOverlayCache selectionOverlayCache_;
-    bool paintSelectionActive_ = false;
     QVec2 contextMenuRightPressScreen_ = {};
     QVec2 contextMenuRightDragDelta_ = {};
     bool contextMenuRightPressActive_ = false;
     NavigationGizmo navigationGizmo_;
     QVec2 flyCursorCaptureScreen_ = {};
-    bool selectionHoverClearIssued_ = false;
-    std::optional<QuaderHoverTarget> selectionHoverSuppressedTarget_;
     bool deleteObjectsPopupOpen_ = false;
     bool deleteObjectsPopupPositionPending_ = false;
     ImVec2 deleteObjectsPopupPosition_ = {};

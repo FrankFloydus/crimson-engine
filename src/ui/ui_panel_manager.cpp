@@ -71,15 +71,7 @@ void UIPanelManager::draw(UIContext& context) {
 }
 
 bool UIPanelManager::defaultVisibility(UIPanelId id) const {
-    switch (id) {
-    case UIPanelId::Viewport:
-    case UIPanelId::Outliner:
-    case UIPanelId::Inspector:
-        return true;
-    case UIPanelId::Console:
-        return false;
-    }
-    return true;
+    return uiPanelDefaultVisible(id);
 }
 
 } // namespace quader

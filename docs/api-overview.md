@@ -54,5 +54,5 @@ editor.scene().batch("Arrange blockout")
         .commit();
 ```
 
-Low-level document, SDK, render, UI, and platform services remain owner layers. Public examples
-should not start from those internals.
+Low-level document, absorbed modeling internals, render, UI, and platform services remain owner
+layers. Public examples should not start from those internals.

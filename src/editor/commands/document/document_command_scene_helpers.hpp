@@ -35,6 +35,7 @@ struct DocumentSelectionState {
  */
 struct DocumentEntitySnapshot {
     EntityId originalId = InvalidEntityId;
+    std::string uuid;
     EditorObjectId editorObjectId = InvalidEditorObjectId;
     EntityId originalParent = InvalidEntityId;
     std::string name;
@@ -151,6 +152,7 @@ inline std::optional<DocumentEntitySnapshot> documentCommandCaptureEntitySnapsho
 
     DocumentEntitySnapshot snapshot;
     snapshot.originalId = entity;
+    snapshot.uuid = scene.uuid(entity);
     snapshot.editorObjectId = scene.editorObjectId(entity);
     snapshot.originalParent = scene.parent(entity);
     snapshot.kind = scene.kind(entity);
@@ -243,6 +245,10 @@ inline EntityId documentCommandCreateEntityFromSnapshot(
                     snapshot.editorObjectId)
             : scene.createEntity(name.empty() ? snapshot.name : std::move(name), snapshot.kind);
     if (entity == InvalidEntityId) {
+        return InvalidEntityId;
+    }
+    if (preserveIdentity && !snapshot.uuid.empty() && !scene.setEntityUuid(entity, snapshot.uuid)) {
+        scene.destroyEntity(entity);
         return InvalidEntityId;
     }
     if (parent != InvalidEntityId && scene.exists(parent)) {

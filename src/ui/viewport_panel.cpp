@@ -16,6 +16,8 @@
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
+#include "render/overlay/viewport_selection_marquee_overlay_builder.hpp"
+#include "render/overlay/viewport_transform_gizmo_overlay_builder.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_entity_naming.hpp"
 #include "render/render_layers.hpp"
@@ -23,6 +25,7 @@
 #include "ui/ui_context.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
 #include "ui/viewport_pane_controller.hpp"
+#include "viewport/viewport_shading_mode_conversions.hpp"
 #include "ui/viewport_screen_geometry.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
@@ -45,16 +48,6 @@
 namespace quader {
 namespace {
 
-bool componentSelectionMode(ModelingSelectionMode mode) {
-    return mode == ModelingSelectionMode::Vertex ||
-            mode == ModelingSelectionMode::Edge ||
-            mode == ModelingSelectionMode::Face;
-}
-
-bool componentSelectionMode(QuaderSelectionMode mode) {
-    return componentSelectionMode(toModelingSelectionMode(mode));
-}
-
 ViewportOverlaySelectionContext overlaySelectionContext(ModelingSelectionMode mode) {
     switch (mode) {
     case ModelingSelectionMode::Vertex:
@@ -76,55 +69,6 @@ bool hasSelectedSceneGroupRoot(const SceneDocument& document) {
         if (document.kind(selected) == EntityKind::Empty && document.hasChildren(selected)) {
             return true;
         }
-    }
-    return false;
-}
-
-bool hoverTargetValid(const ModelingHoverTarget& target) {
-    return target.kind != ModelingActiveSelectionKind::None && target.objectId > 0;
-}
-
-bool hoverTargetValid(const QuaderHoverTarget& target) {
-    return target.kind != QuaderActiveSelectionKind::None && target.objectId > 0;
-}
-
-bool hoverTargetsMatch(const ModelingHoverTarget& left, const ModelingHoverTarget& right) {
-    if (left.kind != right.kind || left.objectId != right.objectId) {
-        return false;
-    }
-    switch (left.kind) {
-    case ModelingActiveSelectionKind::Object:
-        return true;
-    case ModelingActiveSelectionKind::Vertex:
-        return left.vertexId == right.vertexId;
-    case ModelingActiveSelectionKind::Edge:
-        return (left.edgeA == right.edgeA && left.edgeB == right.edgeB) ||
-                (left.edgeA == right.edgeB && left.edgeB == right.edgeA);
-    case ModelingActiveSelectionKind::Face:
-        return left.faceId == right.faceId;
-    case ModelingActiveSelectionKind::None:
-        break;
-    }
-    return false;
-}
-
-bool hoverTargetsMatch(const QuaderHoverTarget& left, const QuaderHoverTarget& right) {
-    if (left.kind != right.kind || left.objectId != right.objectId) {
-        return false;
-    }
-    switch (left.kind) {
-    case QuaderActiveSelectionKind::Object:
-        return true;
-    case QuaderActiveSelectionKind::Vertex:
-        return left.vertexId == right.vertexId;
-    case QuaderActiveSelectionKind::Edge:
-        return (left.edgeA == right.edgeA && left.edgeB == right.edgeB) ||
-                (left.edgeA == right.edgeB && left.edgeB == right.edgeA);
-    case QuaderActiveSelectionKind::Face:
-        return left.faceId == right.faceId;
-    case QuaderActiveSelectionKind::Light:
-    case QuaderActiveSelectionKind::None:
-        break;
     }
     return false;
 }
@@ -437,43 +381,6 @@ QuaderViewportKeybindingContext keybindingContextFromInput(const ViewportInputFr
     };
 }
 
-std::optional<ViewportView> viewportViewForCommandId(std::string_view commandId) {
-    if (commandId == QuaderCommand::ViewportViewPerspective.string()) {
-        return ViewportView::Perspective;
-    }
-    if (commandId == QuaderCommand::ViewportViewTop.string()) {
-        return ViewportView::Top;
-    }
-    if (commandId == QuaderCommand::ViewportViewBottom.string()) {
-        return ViewportView::Bottom;
-    }
-    if (commandId == QuaderCommand::ViewportViewLeft.string()) {
-        return ViewportView::Left;
-    }
-    if (commandId == QuaderCommand::ViewportViewRight.string()) {
-        return ViewportView::Side;
-    }
-    if (commandId == QuaderCommand::ViewportViewFront.string()) {
-        return ViewportView::Front;
-    }
-    if (commandId == QuaderCommand::ViewportViewBack.string()) {
-        return ViewportView::Back;
-    }
-    return std::nullopt;
-}
-
-bool applyViewportViewCommandToPane(
-        ViewportWorkspaceService& workspace,
-        ViewportPaneId pane,
-        std::string_view commandId) {
-    const std::optional<ViewportView> view = viewportViewForCommandId(commandId);
-    if (!view) {
-        return false;
-    }
-    (void)workspace.setView(pane, *view);
-    return true;
-}
-
 bool resolveViewportInputActionForChord(
         QuaderEditorApi& editor,
         const ViewportToolState& state,
@@ -491,8 +398,6 @@ bool resolveViewportInputActionForChord(
 
 bool applyViewportKeybindingDispatch(
         QuaderEditorApi& editor,
-        ViewportWorkspaceService& workspace,
-        ViewportPaneId pane,
         const QuaderViewportKeybindingDispatch& dispatch,
         ViewportInputFrame& input) {
     switch (dispatch.kind) {
@@ -503,9 +408,7 @@ bool applyViewportKeybindingDispatch(
         input.resolvedShortcuts.push_back(dispatch.shortcut);
         return true;
     case QuaderViewportKeybindingDispatch::Kind::Command:
-        if (!applyViewportViewCommandToPane(workspace, pane, dispatch.commandId)) {
-            logCommandFailure("Keybinding command", editor.commands().execute(dispatch.commandId));
-        }
+        logCommandFailure("Keybinding command", editor.commands().execute(dispatch.commandId));
         input.resolvedShortcuts.push_back(ViewportShortcut{});
         return true;
     case QuaderViewportKeybindingDispatch::Kind::NoMatch:
@@ -516,8 +419,6 @@ bool applyViewportKeybindingDispatch(
 
 void resolveKeybindingsForFrame(
         QuaderEditorApi& editor,
-        ViewportWorkspaceService& workspace,
-        ViewportPaneId pane,
         const ViewportToolState& state,
         ViewportInputFrame& input) {
     input.resolvedShortcuts.clear();
@@ -559,7 +460,7 @@ void resolveKeybindingsForFrame(
                 input.viewportFocused,
                 input.textInputActive,
                 keybindingContextFromInput(input));
-        if (applyViewportKeybindingDispatch(editor, workspace, pane, dispatch, input)) {
+        if (applyViewportKeybindingDispatch(editor, dispatch, input)) {
             return;
         }
     }
@@ -664,31 +565,6 @@ ViewportToolId fromModelingViewportTool(ModelingViewportTool tool) {
     return viewportToolForModeling(tool);
 }
 
-QuaderShadingMode toQuaderShadingMode(ViewportShadingMode mode) {
-    switch (mode) {
-    case ViewportShadingMode::Wireframe:
-        return QuaderShadingMode::Wireframe;
-    case ViewportShadingMode::Shaded:
-        return QuaderShadingMode::Solid;
-    case ViewportShadingMode::Rendered:
-        return QuaderShadingMode::Material;
-    }
-    return QuaderShadingMode::Solid;
-}
-
-ViewportShadingMode toViewportShadingMode(QuaderShadingMode mode) {
-    switch (mode) {
-    case QuaderShadingMode::Wireframe:
-        return ViewportShadingMode::Wireframe;
-    case QuaderShadingMode::Material:
-        return ViewportShadingMode::Rendered;
-    case QuaderShadingMode::Solid:
-    case QuaderShadingMode::XRay:
-        return ViewportShadingMode::Shaded;
-    }
-    return ViewportShadingMode::Shaded;
-}
-
 } // namespace
 
 ViewportPanel::ViewportPanel() {
@@ -763,6 +639,18 @@ void ViewportPanel::prepareViewports(
                     document,
                     assets);
         }
+        if (paneId == interactionPaneId_) {
+            const ViewportOverlayCamera overlayCamera =
+                    ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize);
+            if (const quader_editor_core::TransformGizmoFrame* gizmoFrame =
+                        interactionController_.transformGizmoFrame()) {
+                ViewportTransformGizmoOverlayBuilder::append(overlayFrame, *gizmoFrame, overlayCamera);
+            }
+            ViewportSelectionMarqueeOverlayBuilder::append(
+                    overlayFrame,
+                    overlayCamera,
+                    interactionController_.selectionMarquee());
+        }
         ViewportOverlayStyleResolver::apply(
                 overlayFrame,
                 settings,
@@ -803,11 +691,11 @@ void ViewportPanel::setGridPreset(int preset) {
 }
 
 QuaderShadingMode ViewportPanel::paneShadingMode(ViewportPaneId paneId) const {
-    return toQuaderShadingMode(workspace().shadingMode(paneId));
+    return quaderApiFromViewportShadingMode(workspace().shadingMode(paneId));
 }
 
 void ViewportPanel::setPaneShadingMode(ViewportPaneId paneId, QuaderShadingMode mode) {
-    const ViewportShadingMode next = toViewportShadingMode(mode);
+    const ViewportShadingMode next = quaderApiToViewportShadingMode(mode);
     if (workspace().setShadingMode(paneId, next)) {
         selectionOverlayCache_.markDirty();
     }
@@ -826,17 +714,9 @@ bool ViewportPanel::activateToolFromMenu(
         QuaderEditorApi& editor,
         SceneDocument& document,
         ModelingSessionService& modeling) {
+    (void)document;
     LOG_INFO("Tools menu requested viewport tool {}", viewportToolId(tool));
     const ViewportTool* toolDefinition = findViewportTool(tool);
-    const bool preserveGroupSelection =
-            inputRouter_.state().selectionMode == ViewportSelectionMode::Group ||
-            editor.selection().summary().mode == QuaderSelectionMode::Group;
-    const std::vector<EntityId> selectedBeforeToolActivation = preserveGroupSelection
-            ? document.selectedEntities()
-            : std::vector<EntityId>{};
-    const EntityId activeBeforeToolActivation = preserveGroupSelection
-            ? document.primarySelection()
-            : InvalidEntityId;
     const QuaderApiVoidResult command = toolDefinition != nullptr ?
             editor.tools().activate(tool) :
             QuaderApiVoidResult{
@@ -851,23 +731,9 @@ bool ViewportPanel::activateToolFromMenu(
     const ViewportToolId activeTool = fromModelingViewportTool(modeling.toolStatus().activeTool);
     LOG_INFO("Viewport tool activated from menu: requested {}, active {}", viewportToolId(tool), viewportToolId(activeTool));
     inputRouter_.setActiveTool(activeTool);
-    if (preserveGroupSelection) {
-        const QuaderApiVoidResult restoreSelection =
-                editor.selection().selectObjects(
-                        std::span<const EntityId>(selectedBeforeToolActivation.data(), selectedBeforeToolActivation.size()),
-                        activeBeforeToolActivation);
-        if (!restoreSelection.ok) {
-            LOG_ERROR("Group selection restore after menu tool activation failed: {}", restoreSelection.message);
-        }
-        (void)editor.selection().setMode(QuaderSelectionMode::Group);
-        inputRouter_.setSelectionMode(ViewportSelectionMode::Group);
-    } else {
-        inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(editor.selection().summary().mode)));
-    }
+    inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(editor.selection().summary().mode)));
     inputRouter_.clearModalToolState();
-    paintSelectionActive_ = false;
-    selectionHoverClearIssued_ = false;
-    selectionHoverSuppressedTarget_.reset();
+    interactionController_.reset();
     hoverController_.invalidate();
     selectionOverlayCache_.markDirty();
     return true;
@@ -1160,7 +1026,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     const std::vector<ViewportSplitHandle> splitHandles = activeSplitHandles();
     const bool splitConsumed = handleSplitInput(canvasMin, available, splitHandles);
     DrawPane* inputPane = nullptr;
-    const bool transformDragLocksInput = transformGizmoController_.dragLocksInput();
+    const bool transformDragLocksInput = interactionController_.dragging();
     const bool navigationGizmoDragLocksInput = navigationGizmo_.inputLocked();
     for (DrawPane& drawPane : drawPanes) {
         drawPane.chromeConsumesInput =
@@ -1174,7 +1040,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                 viewportWorkspace.focusPane(drawPane.pane->id);
             }
         }
-        if (transformDragLocksInput && drawPane.pane->id == transformGizmoController_.dragPaneId()) {
+        if (transformDragLocksInput && drawPane.pane->id == interactionPaneId_) {
             inputPane = &drawPane;
         } else if (navigationGizmoDragLocksInput && drawPane.pane->id == navigationGizmo_.lockedPaneId()) {
             inputPane = &drawPane;
@@ -1196,7 +1062,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     }
     if (inputPane != nullptr) {
         const bool inputOwnsActiveGizmoDrag =
-                transformDragLocksInput && inputPane->pane->id == transformGizmoController_.dragPaneId();
+                transformDragLocksInput && inputPane->pane->id == interactionPaneId_;
         const bool inputOwnsActiveNavigationGizmoDrag =
                 navigationGizmoDragLocksInput && inputPane->pane->id == navigationGizmo_.lockedPaneId();
         drawPaneContents(*inputPane->pane,
@@ -1247,21 +1113,11 @@ void ViewportPanel::drawPaneDecorations(
         ImVec2 itemSize) {
     ViewportCameraController& camera = workspace().camera(paneState.id);
     navigationGizmo_.draw(camera, paneState.id, itemMin, itemSize, {}, nullptr, nullptr, false);
-    (void)transformGizmoController_.draw({
-            .document = document,
-            .assets = assets,
-            .editor = &editor,
-            .modeling = modeling,
-            .selection = selection,
-            .inputRouter = inputRouter_,
-            .viewportSettings = activeViewportSettings(),
-            .camera = camera,
-            .paneId = paneState.id,
-            .itemMin = itemMin,
-            .itemSize = itemSize,
-            .suppressHoverWork = true,
-            .interactive = false,
-    });
+    (void)document;
+    (void)assets;
+    (void)modeling;
+    (void)selection;
+    (void)editor;
 }
 
 void ViewportPanel::refreshCachedSelectionOverlayFrame(
@@ -1345,10 +1201,10 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
     input.operationPreviewActive = toolSettingsTarget.operationPreviewActive;
     input.gridPreset = viewportWorkspace.gridPreset();
-    resolveKeybindingsForFrame(uiContext.editor, viewportWorkspace, paneState.id, inputRouter_.state(), input);
+    resolveKeybindingsForFrame(uiContext.editor, inputRouter_.state(), input);
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     const ViewportShortcutControllerResult operationPreviewShortcut =
-            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, uiContext.editor, modeling);
+            shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, uiContext.editor);
     const bool operationPreviewShortcutConsumed = operationPreviewShortcut.consumed;
     if (operationPreviewShortcut.invalidateHover) {
         hoverController_.invalidate();
@@ -1365,6 +1221,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     if (result.gridPresetChanged) {
         viewportWorkspace.setGridPreset(result.requestedGridPreset);
         inputRouter_.syncGridPresetSnapshot(viewportWorkspace.gridPreset());
+    }
+    if (result.viewChanged) {
+        (void)viewportWorkspace.setView(paneState.id, result.requestedView);
     }
     if (input.rightPressed && hovered && !input.modifiers.primary && !input.modifiers.shift && !input.modifiers.alt) {
         flyCursorCaptureScreen_ = input.mouseScreen;
@@ -1439,26 +1298,15 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             LOG_ERROR("Selection mode change failed: {}", command.message);
         }
         inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
-        paintSelectionActive_ = false;
         inputRouter_.clearModalDragState();
-        selectionHoverSuppressedTarget_.reset();
+        interactionController_.reset();
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     }
     if (result.toolChanged) {
         LOG_INFO("Viewport tool changed to {}", viewportToolId(inputRouter_.state().activeTool));
-        const bool preserveGroupSelection =
-                inputRouter_.state().selectionMode == ViewportSelectionMode::Group ||
-                uiContext.editor.selection().summary().mode == QuaderSelectionMode::Group;
-        const std::vector<EntityId> selectedBeforeToolActivation = preserveGroupSelection
-                ? document.selectedEntities()
-                : std::vector<EntityId>{};
-        const EntityId activeBeforeToolActivation = preserveGroupSelection
-                ? document.primarySelection()
-                : InvalidEntityId;
-        paintSelectionActive_ = false;
         inputRouter_.clearModalDragState();
-        selectionHoverSuppressedTarget_.reset();
+        interactionController_.reset();
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
         const ViewportTool* activeTool = inputRouter_.activeTool();
@@ -1474,26 +1322,14 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             inputRouter_.setActiveTool(ViewportToolId::Select);
             (void)uiContext.editor.tools().activate(ViewportToolId::Select);
         } else {
-            if (preserveGroupSelection) {
-                const QuaderApiVoidResult restoreSelection =
-                        uiContext.editor.selection().selectObjects(
-                                std::span<const EntityId>(selectedBeforeToolActivation.data(), selectedBeforeToolActivation.size()),
-                                activeBeforeToolActivation);
-                if (!restoreSelection.ok) {
-                    LOG_ERROR("Group selection restore after tool activation failed: {}", restoreSelection.message);
-                }
-                (void)uiContext.editor.selection().setMode(QuaderSelectionMode::Group);
-                inputRouter_.setSelectionMode(ViewportSelectionMode::Group);
-            } else {
-                inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
-            }
+            inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
         }
         inputRouter_.clearModalToolState();
     }
 
     if (!operationPreviewShortcutConsumed) {
         const ViewportShortcutControllerResult shortcut =
-                shortcutController_.handleModelingShortcut(result, uiContext.editor, modeling);
+                shortcutController_.handleModelingShortcut(result, uiContext.editor);
         if (shortcut.commandExecuted) {
             inputRouter_.setSelectionMode(appSelectionModeToViewport(toModelingSelectionMode(uiContext.editor.selection().summary().mode)));
         }
@@ -1539,21 +1375,15 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .tool = inputRouter_.state().activeTool,
                 .exitActiveModalTool = exitTool,
         });
-        paintSelectionActive_ = false;
-        selectionHoverSuppressedTarget_.reset();
+        interactionController_.reset();
         hoverController_.invalidate();
         selectionOverlayCache_.markDirty();
     };
 
     bool cancelConsumed = false;
-    const bool globalEscCancelRequested =
-            modalToolOwnsViewport() &&
-            !input.textInputActive &&
-            !result.flyNavigationActive &&
-            ImGui::IsKeyPressed(ImGuiKey_Escape, false);
-    if (!operationPreviewShortcutConsumed && (result.cancelRequested || globalEscCancelRequested)) {
-        if (transformGizmoController_.dragging()) {
-            (void)transformGizmoController_.cancelActiveDrag(document, modeling);
+    if (!operationPreviewShortcutConsumed && result.cancelRequested) {
+        if (interactionController_.dragging()) {
+            (void)interactionController_.cancelActiveDrag(uiContext.editor);
             selectionOverlayCache_.markDirty();
             cancelConsumed = true;
         }
@@ -1565,11 +1395,6 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     }
 
     const bool suppressHoverWork = result.navigationActive || result.cameraChanged;
-    const bool preserveContextMenuHover = shouldPreserveViewportContextMenuHover({
-            .rightPressTracked = contextMenuRightPressActive_,
-            .flyHudActive = result.flyHudActive,
-            .accumulatedDragDelta = contextMenuRightDragDelta_,
-    });
     const bool navigationGizmoConsumed = navigationGizmo_.draw(
             camera,
             paneState.id,
@@ -1581,25 +1406,6 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     if (suppressHoverWork || navigationGizmoConsumed || result.gridPresetChanged) {
         hoverController_.invalidate();
     }
-    const bool transformGizmoConsumed =
-            !cancelConsumed &&
-            transformGizmoController_.draw({
-                    .document = document,
-                    .assets = assets,
-                    .editor = &uiContext.editor,
-                    .modeling = modeling,
-                    .selection = uiContext.selection,
-                    .inputRouter = inputRouter_,
-                    .viewportSettings = activeViewportSettings(),
-                    .camera = camera,
-                    .paneId = paneState.id,
-                    .itemMin = itemMin,
-                    .itemSize = itemSize,
-                    .suppressHoverWork = suppressHoverWork,
-            });
-    const bool gizmoConsumed =
-            cancelConsumed ||
-            transformGizmoController_.suppressesHover(navigationGizmoConsumed, transformGizmoConsumed);
     const ImGuiIO& io = ImGui::GetIO();
     const bool leftClicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool leftDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
@@ -1609,6 +1415,25 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             QVec2{leftClickScreen.x - itemMin.x, leftClickScreen.y - itemMin.y} :
             input.mouseLocal;
     const int leftClickCount = std::max(1, ImGui::GetMouseClickedCount(ImGuiMouseButton_Left));
+    const ViewportInteractionFrame interactionFrame{
+            .inputRouter = inputRouter_,
+            .camera = camera,
+            .settings = activeViewportSettings(),
+            .input = input,
+            .inputResult = result,
+            .leftClickLocal = leftClickLocal,
+            .leftClickCount = leftClickCount,
+            .leftPressed = leftClicked,
+            .leftDown = leftDown,
+            .leftReleased = leftReleased,
+    };
+    const ViewportBeforeToolInteractionResult beforeTool =
+            cancelConsumed ? ViewportBeforeToolInteractionResult{} :
+            interactionController_.handleBeforeActiveTool(uiContext.editor, interactionFrame);
+    if (interactionController_.dragging() || beforeTool.gizmoConsumed) {
+        interactionPaneId_ = paneState.id;
+    }
+    const bool gizmoConsumed = cancelConsumed || navigationGizmoConsumed || beforeTool.gizmoConsumed;
     const ModelingToolStatus releaseToolStatus = modeling.toolStatus();
     const bool insertEdgeLoopDragRelease =
             releaseToolStatus.insertEdgeLoopDragging &&
@@ -1658,19 +1483,6 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 .selectionRevision = hoverSelectionSummary.selectionRevision,
         });
     };
-    auto makeSelectionHoverRequestAt = [&](QVec2 mouseLocal, bool selectedModifierPressed) {
-        const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
-        const ViewportSettings& settings = activeViewportSettings();
-        return QuaderHoverRequest{
-                .ray = {
-                        .origin = worldRay.origin,
-                        .direction = worldRay.direction,
-                },
-                .selectedModifierPressed = selectedModifierPressed,
-                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
-                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
-        };
-    };
     auto makeModelingToolEventAt = [&](QVec2 mouseLocal, bool dragging = false) {
         const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
         return ModelingToolRayEvent{
@@ -1701,27 +1513,6 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             selectionOverlayCache_.markDirty();
         }
     };
-    auto suppressSelectionHoverAfterSelection = [&](QVec2 mouseLocal, QuaderHoverTarget hoveredTargetBeforeSelection = {}) {
-        if (hoverTargetValid(hoveredTargetBeforeSelection)) {
-            selectionHoverSuppressedTarget_ = hoveredTargetBeforeSelection;
-        } else {
-            const QuaderHoverSummary hover =
-                    uiContext.editor.selection().previewHover(makeSelectionHoverRequestAt(mouseLocal, input.modifiers.primary));
-            if (hoverTargetValid(hover.target)) {
-                selectionHoverSuppressedTarget_ = hover.target;
-            } else {
-                selectionHoverSuppressedTarget_.reset();
-            }
-        }
-        const QuaderApiVoidResult clearHover = uiContext.editor.selection().clearHover();
-        if (clearHover.changed) {
-            selectionOverlayCache_.markDirty();
-        }
-        selectionHoverClearIssued_ = true;
-        hoverController_.invalidate();
-        selectionOverlayCache_.markDirty();
-    };
-
     const bool finalizePressed = input.modalToolFinalizePressed;
     const bool modeCyclePressed = input.modalToolModeCyclePressed;
 
@@ -1820,140 +1611,44 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         modalToolOverlayRenderer_.drawBoxPreview(ImGui::GetWindowDrawList(), boxPreview, camera, itemMin, itemSize);
     }
 
-    if (!activeToolFrameResult.handled) {
-        const bool selectionFallbackActive = inputRouter_.activeToolAllowsSelectionFallback();
-        if (selectionFallbackActive &&
-                leftClicked &&
-                !gizmoConsumed &&
-                !result.navigationActive) {
-            const QuaderHoverTarget hoveredBeforeSelection = uiContext.editor.selection().hoverSummary().target;
-            const ModelingSelectionSummary summary = selectionController_.pickSelection(
-                    uiContext.editor,
-                    inputRouter_,
-                    activeViewportSettings(),
-                    camera,
-                    input.mouseLocal,
-                    input.modifiers,
-                    leftClickCount);
-            paintSelectionActive_ = componentSelectionMode(summary.mode);
-            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
-        } else if (selectionFallbackActive &&
-                pendingContextMenuClick &&
-                !gizmoConsumed) {
-            const ModelingSelectionSummary summary =
-                    selectionController_.pickSelection(
-                            uiContext.editor,
-                            inputRouter_,
-                            activeViewportSettings(),
-                            camera,
-                            pendingContextMenuLocalMouse,
-                            {},
-                            1,
-                            true,
-                            true);
-            paintSelectionActive_ = componentSelectionMode(summary.mode);
-            selectionHoverClearIssued_ = false;
+    interactionController_.handleAfterActiveTool(
+            uiContext.editor,
+            interactionFrame,
+            activeToolFrameResult,
+            beforeTool);
+    selectionOverlayCache_.markDirty();
 
-            const ModelingActionQuery query{
-                    .surface = ModelingActionSurface::ViewportContextMenu,
-                    .modalToolOwnsViewport = modalToolOwnsViewport(),
-                    .includeDisabled = true,
-                    .includeHidden = false,
-            };
-            const std::vector<ModelingActionItem> actions =
-                    summary.hasSelection ? modeling.contextActions(query) : std::vector<ModelingActionItem>{};
-            pendingContextMenuRequest.targetHit = summary.hasSelection;
-            pendingContextMenuRequest.hasActions = !actions.empty();
-            if (shouldOpenViewportContextMenu(pendingContextMenuRequest)) {
-                ImGui::OpenPopup("ViewportOperationsContext");
-            }
-            hoverController_.invalidate();
-            selectionOverlayCache_.markDirty();
-        } else if (selectionFallbackActive &&
-                paintSelectionActive_ &&
-                leftDown &&
-                hovered &&
-                !gizmoConsumed &&
-                !suppressHoverWork) {
-            const QuaderHoverTarget hoveredBeforeSelection = uiContext.editor.selection().hoverSummary().target;
-            const ModelingSelectionSummary summary = selectionController_.pickSelection(
-                    uiContext.editor,
-                    inputRouter_,
-                    activeViewportSettings(),
-                    camera,
-                    input.mouseLocal,
-                    input.modifiers,
-                    0);
-            paintSelectionActive_ = componentSelectionMode(summary.mode);
-            suppressSelectionHoverAfterSelection(input.mouseLocal, hoveredBeforeSelection);
+    const bool selectionFallbackActive = inputRouter_.activeToolAllowsSelectionFallback();
+    if (!activeToolFrameResult.handled &&
+            selectionFallbackActive &&
+            pendingContextMenuClick &&
+            !gizmoConsumed) {
+        ViewportInputFrame contextInput = input;
+        contextInput.mouseLocal = pendingContextMenuLocalMouse;
+        const ViewportInteractionFrame contextFrame{
+                .inputRouter = inputRouter_,
+                .camera = camera,
+                .settings = activeViewportSettings(),
+                .input = contextInput,
+                .inputResult = result,
+        };
+        const QuaderSelectionSummary summary =
+                interactionController_.pickContextMenuTarget(uiContext.editor, contextFrame);
+        const ModelingActionQuery query{
+                .surface = ModelingActionSurface::ViewportContextMenu,
+                .modalToolOwnsViewport = modalToolOwnsViewport(),
+                .includeDisabled = true,
+                .includeHidden = false,
+        };
+        const std::vector<ModelingActionItem> actions =
+                summary.hasSelection ? modeling.contextActions(query) : std::vector<ModelingActionItem>{};
+        pendingContextMenuRequest.targetHit = summary.hasSelection;
+        pendingContextMenuRequest.hasActions = !actions.empty();
+        if (shouldOpenViewportContextMenu(pendingContextMenuRequest)) {
+            ImGui::OpenPopup("ViewportOperationsContext");
         }
-
-        if (leftReleased) {
-            paintSelectionActive_ = false;
-        }
-
-        const bool groupSelectionMode = uiContext.editor.selection().summary().mode == QuaderSelectionMode::Group;
-        if (groupSelectionMode && !selectionHoverClearIssued_) {
-            const QuaderApiVoidResult clearHover = uiContext.editor.selection().clearHover();
-            if (clearHover.changed) {
-                selectionOverlayCache_.markDirty();
-            }
-            selectionHoverClearIssued_ = true;
-            hoverController_.invalidate();
-        }
-
-        bool selectionHoverSuppressedThisFrame = false;
-        if (selectionFallbackActive &&
-                !groupSelectionMode &&
-                hovered &&
-                !suppressHoverWork &&
-                !gizmoConsumed &&
-                selectionHoverSuppressedTarget_.has_value()) {
-            const QuaderHoverSummary hover =
-                    uiContext.editor.selection().previewHover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary));
-            if (hoverTargetValid(hover.target) && hoverTargetsMatch(*selectionHoverSuppressedTarget_, hover.target)) {
-                if (!input.modifiers.primary) {
-                    const QuaderApiVoidResult clearHover = uiContext.editor.selection().clearHover();
-                    if (clearHover.changed) {
-                        selectionOverlayCache_.markDirty();
-                    }
-                    selectionHoverClearIssued_ = true;
-                    hoverController_.invalidate();
-                    selectionHoverSuppressedThisFrame = true;
-                }
-            } else {
-                selectionHoverSuppressedTarget_.reset();
-                hoverController_.invalidate();
-            }
-        }
-
-        if (selectionFallbackActive &&
-                !groupSelectionMode &&
-                hovered &&
-                !suppressHoverWork &&
-                !gizmoConsumed &&
-                !selectionHoverSuppressedThisFrame) {
-            const ViewportHoverWorkKey hoverWorkKey = makeViewportHoverWorkKey(gizmoConsumed);
-            if (hoverController_.claim(hoverWorkKey)) {
-                const QuaderApiResult<QuaderHoverSummary> hoverUpdate =
-                        uiContext.editor.selection().hover(makeSelectionHoverRequestAt(input.mouseLocal, input.modifiers.primary));
-                if (hoverUpdate.changed) {
-                    selectionOverlayCache_.markDirty();
-                }
-                selectionHoverClearIssued_ = false;
-            }
-        } else if ((!hovered || !selectionFallbackActive) &&
-                !preserveContextMenuHover) {
-            selectionHoverSuppressedTarget_.reset();
-            if (!selectionHoverClearIssued_) {
-                const QuaderApiVoidResult clearHover = uiContext.editor.selection().clearHover();
-                if (clearHover.changed) {
-                    selectionOverlayCache_.markDirty();
-                }
-                selectionHoverClearIssued_ = true;
-            }
-            hoverController_.invalidate();
-        }
+        hoverController_.invalidate();
+        selectionOverlayCache_.markDirty();
     }
 
     refreshCachedSelectionOverlayFrame(document, assets, modeling);

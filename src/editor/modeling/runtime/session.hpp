@@ -124,6 +124,63 @@ enum class SelectionOverlayLayer {
 };
 
 /**
+ * Enumerates semantic SelectionOverlayStyleRole values emitted by the modeling runtime.
+ */
+enum class SelectionOverlayStyleRole : std::uint32_t {
+	source_wire = 1,
+	selection_face = 2,
+	selection_wire = 3,
+	vertex = 4,
+	selected_vertex = 5,
+	hover_face = 6,
+	hover_wire = 7,
+	hover_vertex = 8,
+	remove_selection_face = 9,
+	remove_selection_wire = 10,
+	open_edge = 11,
+	snap_target_vertex = 12,
+	diagnostic_edge = 13,
+};
+
+inline constexpr std::uint32_t kSelectionOverlayStyleRoleTokenMask = 0x51000000U;
+inline constexpr std::uint32_t kSelectionOverlayStyleRoleTokenValueMask = 0x000000ffU;
+
+[[nodiscard]] inline constexpr std::uint32_t selection_overlay_style_token(SelectionOverlayStyleRole role)
+{
+	return kSelectionOverlayStyleRoleTokenMask |
+		(static_cast<std::uint32_t>(role) & kSelectionOverlayStyleRoleTokenValueMask);
+}
+
+[[nodiscard]] inline constexpr bool selection_overlay_style_token_is_semantic(std::uint32_t token)
+{
+	return (token & 0xffffff00U) == kSelectionOverlayStyleRoleTokenMask;
+}
+
+[[nodiscard]] inline constexpr std::optional<SelectionOverlayStyleRole> selection_overlay_style_role_from_token(std::uint32_t token)
+{
+	if (!selection_overlay_style_token_is_semantic(token)) {
+		return std::nullopt;
+	}
+	switch (static_cast<SelectionOverlayStyleRole>(token & kSelectionOverlayStyleRoleTokenValueMask)) {
+	case SelectionOverlayStyleRole::source_wire:
+	case SelectionOverlayStyleRole::selection_face:
+	case SelectionOverlayStyleRole::selection_wire:
+	case SelectionOverlayStyleRole::vertex:
+	case SelectionOverlayStyleRole::selected_vertex:
+	case SelectionOverlayStyleRole::hover_face:
+	case SelectionOverlayStyleRole::hover_wire:
+	case SelectionOverlayStyleRole::hover_vertex:
+	case SelectionOverlayStyleRole::remove_selection_face:
+	case SelectionOverlayStyleRole::remove_selection_wire:
+	case SelectionOverlayStyleRole::open_edge:
+	case SelectionOverlayStyleRole::snap_target_vertex:
+	case SelectionOverlayStyleRole::diagnostic_edge:
+		return static_cast<SelectionOverlayStyleRole>(token & kSelectionOverlayStyleRoleTokenValueMask);
+	}
+	return std::nullopt;
+}
+
+/**
  * Represents a Polygon Object value used by the modeling runtime domain.
  */
 struct PolygonObject {
@@ -261,20 +318,20 @@ struct SelectionOverlayPoint {
  * Represents a Selection Overlay Style value used by the modeling runtime domain.
  */
 struct SelectionOverlayStyle {
-	std::uint32_t source_wire_color_abgr = 0xebffe05cU;
-	std::uint32_t selection_face_color_abgr = 0x4d1fadffU;
-	std::uint32_t selected_edge_color_abgr = 0xff1fadffU;
-	std::uint32_t handle_color_abgr = 0xffffe66bU;
-	std::uint32_t selected_handle_color_abgr = 0xff1fadffU;
-	std::uint32_t hover_face_color_abgr = 0x4d52ff0fU;
-	std::uint32_t hover_face_edge_color_abgr = 0xff1fff66U;
-	std::uint32_t hover_edge_color_abgr = 0xff38ff00U;
-	std::uint32_t hover_vertex_color_abgr = 0xff38ff00U;
-	std::uint32_t hover_selected_face_color_abgr = 0x52ff6b1fU;
-	std::uint32_t hover_selected_line_color_abgr = 0xffff6b1fU;
-	std::uint32_t open_edge_color_abgr = 0xff00ffffU;
-	std::uint32_t snap_target_vertex_color_abgr = 0xff0000ffU;
-	std::uint32_t diagnostic_edge_color_abgr = 0xff0000ffU;
+	std::uint32_t source_wire_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::source_wire);
+	std::uint32_t selection_face_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::selection_face);
+	std::uint32_t selected_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::selection_wire);
+	std::uint32_t handle_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::vertex);
+	std::uint32_t selected_handle_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::selected_vertex);
+	std::uint32_t hover_face_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_face);
+	std::uint32_t hover_face_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_wire);
+	std::uint32_t hover_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_wire);
+	std::uint32_t hover_vertex_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::hover_vertex);
+	std::uint32_t hover_selected_face_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::remove_selection_face);
+	std::uint32_t hover_selected_line_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::remove_selection_wire);
+	std::uint32_t open_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::open_edge);
+	std::uint32_t snap_target_vertex_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::snap_target_vertex);
+	std::uint32_t diagnostic_edge_color_abgr = selection_overlay_style_token(SelectionOverlayStyleRole::diagnostic_edge);
 	float edge_line_width_pixels = 3.0F;
 	float single_edge_line_width_pixels = 3.0F;
 	float open_edge_line_width_pixels = 2.0F;
@@ -429,6 +486,30 @@ struct PolyToolResult {
 struct PickRequest {
 	quader_poly::Ray ray;
 	quader_poly::PickOptions options;
+};
+
+/**
+ * Stores the Apply Pick Selection Request data contract used by the modeling runtime domain.
+ */
+struct ApplyPickSelectionRequest {
+	SelectionEditOperation operation = SelectionEditOperation::replace;
+	quader_poly::Ray ray;
+	quader_poly::PickOptions pick_options;
+	int click_count = 1;
+	bool preserve_existing_component_selection_on_hit = false;
+	bool preserve_selection_on_selected_hit = false;
+	bool preserve_selection_on_miss = false;
+	std::span<const PickObjectBounds> object_bounds;
+	std::span<const PickObjectFaceGeometry> face_geometry;
+};
+
+/**
+ * Represents an Apply Pick Selection Result value used by the modeling runtime domain.
+ */
+struct ApplyPickSelectionResult {
+	bool applied = true;
+	bool changed = false;
+	bool hit = false;
 };
 
 /**
@@ -1183,6 +1264,10 @@ bool pick_select(
 	bool allow_component_fallback = true,
 	std::span<const PickObjectBounds> object_bounds = {},
 	std::span<const PickObjectFaceGeometry> face_geometry = {});
+ApplyPickSelectionResult apply_pick_selection(
+	EditorSession& session,
+	std::vector<PolygonObject> picking_objects,
+	const ApplyPickSelectionRequest& request);
 bool pick_select_face(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions());
 bool pick_select_all_faces(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions(), std::span<const PickObjectBounds> object_bounds = {}, std::span<const PickObjectFaceGeometry> face_geometry = {});
 bool pick_select_edge_loop(std::vector<PolygonObject>& objects, SelectionMode& mode, SelectionEditOperation operation, const quader_poly::Ray& ray, int& active_object_id, quader_poly::PickOptions pick_options = quader_poly::PickOptions(), std::span<const PickObjectBounds> object_bounds = {}, std::span<const PickObjectFaceGeometry> face_geometry = {});

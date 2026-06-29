@@ -192,9 +192,6 @@ TEST(ProgrammaticApiGuardrailTests, PublicApiHeadersAvoidRuntimeAndSdkInternals)
         EXPECT_FALSE(containsAny(source, {
                              "<filament/",
                              "\"filament/",
-                             "<RmlUi/",
-                             "\"RmlUi/",
-                             "Rml::",
                              "<SDL",
                              "\"SDL",
                              "<entt/",
@@ -634,10 +631,53 @@ TEST(ProgrammaticApiGuardrailTests, ViewportRoutesDoNotExecuteFixedRawModelingCo
 
 TEST(ProgrammaticApiGuardrailTests, ViewportShortcutControllerDoesNotRemapCommands) {
     const std::string source = readFile(sourceRoot() / "src/ui/viewport_shortcut_controller.cpp");
+    const std::string header = readFile(sourceRoot() / "src/ui/viewport_shortcut_controller.hpp");
 
     EXPECT_EQ(source.find("QuaderCommand::"), std::string::npos);
     EXPECT_EQ(source.find("executeViewportModelingShortcut"), std::string::npos);
     EXPECT_EQ(source.find("commandForMirrorAxis"), std::string::npos);
+    EXPECT_EQ(source.find("ModelingSessionService"), std::string::npos);
+    EXPECT_EQ(header.find("ModelingSessionService"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, ViewportShadingConversionUsesSharedApiHelper) {
+    const std::string viewportApi = readFile(sourceRoot() / "src/api/quader_viewport_api.cpp");
+    const std::string viewportPanel = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
+    const std::string conversionHelper = readFile(sourceRoot() / "src/viewport/viewport_shading_mode_conversions.hpp");
+
+    EXPECT_NE(conversionHelper.find("quaderApiToViewportShadingMode"), std::string::npos);
+    EXPECT_NE(conversionHelper.find("quaderApiFromViewportShadingMode"), std::string::npos);
+    EXPECT_EQ(viewportApi.find("ViewportShadingMode toViewportShadingMode"), std::string::npos);
+    EXPECT_EQ(viewportApi.find("QuaderShadingMode toQuaderShadingMode"), std::string::npos);
+    EXPECT_EQ(viewportPanel.find("ViewportShadingMode toViewportShadingMode"), std::string::npos);
+    EXPECT_EQ(viewportPanel.find("QuaderShadingMode toQuaderShadingMode"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, UiPanelRoutingUsesStableIdsAndNoDeadShowMenu) {
+    const std::string mainMenuHeader = readFile(sourceRoot() / "src/ui/main_menu_bar.hpp");
+    const std::string mainMenuSource = readFile(sourceRoot() / "src/ui/main_menu_bar.cpp");
+    const std::string settingsSource = readFile(sourceRoot() / "src/ui/ui_settings.cpp");
+    const std::string uiPanelHeader = readFile(sourceRoot() / "src/ui/ui_panel.hpp");
+
+    EXPECT_NE(uiPanelHeader.find("uiPanelStableId"), std::string::npos);
+    EXPECT_NE(uiPanelHeader.find("uiPanelDefaultVisible"), std::string::npos);
+    EXPECT_EQ(mainMenuHeader.find("ShowMenu"), std::string::npos);
+    EXPECT_EQ(mainMenuHeader.find("showMenu_"), std::string::npos);
+    EXPECT_EQ(mainMenuSource.find("void ShowMenu::draw"), std::string::npos);
+    EXPECT_EQ(mainMenuHeader.find("toolSettingsPanelOpen"), std::string::npos);
+    EXPECT_EQ(mainMenuHeader.find("UISettings& settings"), std::string::npos);
+    EXPECT_EQ(mainMenuSource.find("showPanel(uiPanelKey"), std::string::npos);
+    EXPECT_EQ(mainMenuSource.find("hidePanel(uiPanelKey"), std::string::npos);
+    EXPECT_EQ(settingsSource.find("file << uiPanelKey"), std::string::npos);
+    EXPECT_NE(settingsSource.find("uiPanelStableId(UIPanelId::Outliner)"), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, OutlinerUsesDocumentCommandRootSelectionOwner) {
+    const std::string outliner = readFile(sourceRoot() / "src/ui/outliner_panel.cpp");
+
+    EXPECT_NE(outliner.find("documentCommandSelectedRootEntities"), std::string::npos);
+    EXPECT_EQ(outliner.find("std::vector<EntityId> selectedRootEntities("), std::string::npos);
+    EXPECT_EQ(outliner.find("std::unordered_set<EntityId> selectedSet"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, UiAppAndViewportDoNotExposeRawHistoryOrDocumentCommandServices) {
@@ -771,6 +811,10 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
             "session.scene().",
             "session.selection().",
             "session.modeling().",
+            "session().scene().",
+            "session().selection().",
+            "session().modeling().",
+            "scenario.session()",
             "createBoxFromBounds(",
             "executeInstantOperation",
             "executeContextAction",
@@ -784,6 +828,11 @@ TEST(ProgrammaticApiGuardrailTests, PublicBehaviorTestsUseApiOrScenarioDsl) {
             EXPECT_TRUE(allowedPublicBehaviorHarnessUse(relative, line)) << relative << ": " << line;
         }
     }
+
+    const std::string behaviorScenario = readFile(sourceRoot() / "tests/support/behavior_scenario.hpp");
+    EXPECT_EQ(behaviorScenario.find("ProjectSession& session()"), std::string::npos);
+    EXPECT_EQ(behaviorScenario.find("const ProjectSession& session()"), std::string::npos);
+    EXPECT_NE(behaviorScenario.find("BehaviorWhen& dispatchViewportShortcut"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ModelingOperationTestsUseSharedRuntimeHelpers) {
@@ -940,7 +989,9 @@ TEST(ProgrammaticApiGuardrailTests, PublicModelingCommandBridgeIsDescriptorDrive
 TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
     const std::string commandsApi = readFile(sourceRoot() / "src/api/quader_commands_api.cpp");
     const std::string commandTool = readFile(sourceRoot() / "src/editor/commands/command_tool.hpp");
-    const std::string viewportAdapter = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.hpp");
+    const std::string commandRegistryHeader = readFile(sourceRoot() / "src/editor/commands/editor_command_registry.hpp");
+    const std::string commandRegistrySource = readFile(sourceRoot() / "src/editor/commands/editor_command_registry.cpp");
+    const std::string viewportAdapter = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.cpp");
     const std::string commandTargets = readFile(sourceRoot() / "src/core/public_command_targets.hpp");
 
     EXPECT_NE(commandTargets.find("kQuaderModelingCommandTargetPrefix"), std::string::npos);
@@ -951,10 +1002,34 @@ TEST(ProgrammaticApiGuardrailTests, PublicCommandTargetsUseSharedPrefixOwner) {
     EXPECT_NE(viewportAdapter.find("quaderToolIdFromActivationCommandTarget"), std::string::npos);
 
     EXPECT_EQ(commandsApi.find("canonicalTargetId"), std::string::npos);
+    EXPECT_EQ(commandRegistryHeader.find("registerPrefix"), std::string::npos);
+    EXPECT_EQ(commandRegistryHeader.find("PrefixRoute"), std::string::npos);
+    EXPECT_EQ(commandRegistrySource.find("registerPrefix"), std::string::npos);
+    EXPECT_EQ(commandRegistrySource.find("PrefixRoute"), std::string::npos);
     EXPECT_EQ(commandsApi.find("registerPrefix(\"tools.activate."), std::string::npos);
     EXPECT_EQ(commandTool.find("std::string commandId(\"modeling."), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("std::string commandId(\"tools.activate."), std::string::npos);
     EXPECT_EQ(viewportAdapter.find("constexpr std::string_view toolPrefix = \"tools.activate."), std::string::npos);
+}
+
+TEST(ProgrammaticApiGuardrailTests, HostViewportContractAdapterKeepsImplementationOutOfHeader) {
+    const std::string rootCMake = readFile(sourceRoot() / "CMakeLists.txt");
+    const std::string adapterHeader = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.hpp");
+    const std::string adapterSource = readFile(sourceRoot() / "src/viewport/host_viewport_contract_adapter.cpp");
+
+    EXPECT_NE(rootCMake.find("src/viewport/host_viewport_contract_adapter.cpp"), std::string::npos);
+    EXPECT_NE(adapterSource.find("std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog()"),
+            std::string::npos);
+    EXPECT_NE(adapterSource.find("#include \"api/quader_command_ids.hpp\""), std::string::npos);
+    EXPECT_NE(adapterSource.find("#include <editor/metadata/host_contract.hpp>"), std::string::npos);
+    EXPECT_NE(adapterHeader.find("std::span<const ViewportShortcutTargetDescriptor> viewportShortcutTargetCatalog();"),
+            std::string::npos);
+
+    EXPECT_EQ(adapterHeader.find("inline "), std::string::npos);
+    EXPECT_EQ(adapterHeader.find("#include \"api/quader_command_ids.hpp\""), std::string::npos);
+    EXPECT_EQ(adapterHeader.find("#include \"editor/commands/modeling_command_tool_catalog.hpp\""), std::string::npos);
+    EXPECT_EQ(adapterHeader.find("#include <editor/metadata/host_contract.hpp>"), std::string::npos);
+    EXPECT_EQ(adapterHeader.find("quader_host_contract::"), std::string::npos);
 }
 
 TEST(ProgrammaticApiGuardrailTests, ApiStatusStampsUseSharedInternalHelper) {

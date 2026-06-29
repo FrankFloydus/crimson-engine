@@ -14,6 +14,7 @@ namespace quader {
  * Represents an UI Icon Set value used by the ImGui editor presentation layer.
  */
 struct UIIconSet {
+    ImTextureID logo = ImTextureID_Invalid;
     ImTextureID mesh = ImTextureID_Invalid;
     ImTextureID empty = ImTextureID_Invalid;
     ImTextureID lock = ImTextureID_Invalid;

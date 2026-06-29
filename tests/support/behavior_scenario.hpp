@@ -53,8 +53,6 @@ public:
     [[nodiscard]] BehaviorWhen when();
     [[nodiscard]] BehaviorThen then();
 
-    [[nodiscard]] ProjectSession& session() { return session_; }
-    [[nodiscard]] const ProjectSession& session() const { return session_; }
     [[nodiscard]] QuaderEditorApi& editor() { return editor_; }
     [[nodiscard]] const QuaderEditorApi& editor() const { return editor_; }
     [[nodiscard]] QuaderApi& api() { return editor_.api(); }
@@ -88,6 +86,8 @@ private:
     void recordDrag(const QuaderTransformDragPreview& drag);
     void rememberSelectedCopyAlias();
     [[nodiscard]] QuaderModelingObjectRef objectForEntity(EntityId entity) const;
+    [[nodiscard]] QVec3 worldPosition(EntityId entity) const;
+    [[nodiscard]] ViewportOverlayFrame selectionOverlayFrame() const;
 
     ProjectSession session_;
     QuaderEditorApi editor_;
@@ -155,6 +155,7 @@ public:
     BehaviorWhen& cancelDrag();
 
     BehaviorWhen& executeTool(std::string_view toolId);
+    BehaviorWhen& dispatchViewportShortcut(const ViewportShortcut& shortcut);
     BehaviorWhen& execute(QuaderCommandId command);
     BehaviorWhen& execute(std::string_view commandId);
     BehaviorWhen& assignMaterialSlot(std::uint32_t materialSlot);

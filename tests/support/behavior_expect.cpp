@@ -105,10 +105,6 @@ std::optional<QuaderEntitySnapshot> findEntityAlias(const BehaviorScenario& scen
     return scenario.api().query().entity(scenario.entity(alias));
 }
 
-QVec3 worldPosition(const BehaviorScenario& scenario, EntityId entity) {
-    return transformPoint(scenario.session().scene().worldTransformMatrix(entity), {});
-}
-
 void includePoint(BehaviorBounds& bounds, QVec3 point) {
     bounds.min.x = std::min(bounds.min.x, point.x);
     bounds.min.y = std::min(bounds.min.y, point.y);
@@ -303,7 +299,7 @@ SceneExpect& SceneExpect::hasMaterial(std::string_view alias, AssetId material) 
 }
 
 SceneExpect& SceneExpect::worldPositionNear(std::string_view alias, QVec3 expected, float epsilon) {
-    expectVec3Near(worldPosition(scenario_, scenario_.entity(alias)), expected, epsilon);
+    expectVec3Near(scenario_.worldPosition(scenario_.entity(alias)), expected, epsilon);
     return *this;
 }
 
@@ -509,7 +505,7 @@ OverlayExpect& OverlayExpect::triangleCount(ViewportOverlayLayer layer, std::siz
 }
 
 OverlayExpect& OverlayExpect::pointBoundsCenterNear(ViewportOverlayLayer layer, QVec3 expected, float epsilon) {
-    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    const ViewportOverlayFrame frame = scenario_.selectionOverlayFrame();
     std::optional<BehaviorBounds> bounds;
     for (const ViewportOverlayPoint& point : frame.points) {
         if (point.layer != layer) {
@@ -529,7 +525,7 @@ OverlayExpect& OverlayExpect::pointBoundsCenterNear(ViewportOverlayLayer layer, 
 }
 
 OverlayExpect& OverlayExpect::lineBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon) {
-    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    const ViewportOverlayFrame frame = scenario_.selectionOverlayFrame();
     bool found = false;
     for (const ViewportOverlayLine& line : frame.lines) {
         if (line.layer != layer) {
@@ -550,7 +546,7 @@ OverlayExpect& OverlayExpect::lineBoundsWithin(ViewportOverlayLayer layer, Quade
 }
 
 OverlayExpect& OverlayExpect::triangleBoundsWithin(ViewportOverlayLayer layer, QuaderBounds bounds, float epsilon) {
-    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    const ViewportOverlayFrame frame = scenario_.selectionOverlayFrame();
     bool found = false;
     for (const ViewportOverlayTriangle& triangle : frame.triangles) {
         if (triangle.layer != layer) {
@@ -571,7 +567,7 @@ OverlayExpect& OverlayExpect::triangleBoundsWithin(ViewportOverlayLayer layer, Q
 }
 
 OverlayExpect& OverlayExpect::finiteCoordinates(float maxAbsCoordinate) {
-    const ViewportOverlayFrame frame = scenario_.session().modeling().selectionOverlayFrame();
+    const ViewportOverlayFrame frame = scenario_.selectionOverlayFrame();
     auto expectFinite = [&](QVec3 point) {
         EXPECT_TRUE(std::isfinite(point.x));
         EXPECT_TRUE(std::isfinite(point.y));

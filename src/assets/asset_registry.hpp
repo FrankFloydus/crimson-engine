@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace quader {
@@ -28,6 +29,15 @@ using TextureAssetStore = TypedAssetStore<TextureAsset, TextureAssetRevision>;
  */
 struct AssetRegistryValidationResult {
     bool ok = true;
+    std::string message;
+};
+
+/**
+ * Stores asset-registry mutation status for owner-level asset edits.
+ */
+struct AssetRegistryMutationResult {
+    bool ok = true;
+    bool changed = false;
     std::string message;
 };
 
@@ -48,6 +58,10 @@ public:
     bool updateMesh(AssetId id, const std::function<void(MeshAsset&)>& update);
     bool updateMaterial(AssetId id, const std::function<void(MaterialDocument&)>& update);
     bool updateTexture(AssetId id, const std::function<void(TextureAsset&)>& update);
+    [[nodiscard]] AssetRegistryMutationResult setMaterialTexture(
+            AssetId material,
+            std::string_view slot,
+            AssetId texture);
     [[nodiscard]] AssetRegistryValidationResult validateMaterial(const MaterialDocument& material) const;
 
     const MeshAsset* mesh(AssetId id) const;

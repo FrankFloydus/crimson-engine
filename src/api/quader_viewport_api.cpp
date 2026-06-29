@@ -7,6 +7,7 @@
 #include "api/quader_viewport_api.hpp"
 
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
+#include "viewport/viewport_shading_mode_conversions.hpp"
 #include "viewport/viewport_workspace_service.hpp"
 
 #include <memory>
@@ -18,7 +19,7 @@ namespace quader {
  */
 class QuaderViewportApi::Impl final {
 public:
-    ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly};
+    ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::MultiPane};
     QuaderViewportRuntimeHooks hooks;
 };
 
@@ -29,36 +30,6 @@ ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(QuaderViewpo
 const ViewportWorkspaceService& QuaderViewportApiRuntimeAccess::workspace(const QuaderViewportApi& api) {
     return api.impl_->workspace;
 }
-
-namespace {
-
-ViewportShadingMode toViewportShadingMode(QuaderShadingMode mode) {
-    switch (mode) {
-    case QuaderShadingMode::Wireframe:
-        return ViewportShadingMode::Wireframe;
-    case QuaderShadingMode::Material:
-        return ViewportShadingMode::Rendered;
-    case QuaderShadingMode::Solid:
-        return ViewportShadingMode::Shaded;
-    case QuaderShadingMode::XRay:
-        break;
-    }
-    return ViewportShadingMode::Shaded;
-}
-
-QuaderShadingMode toQuaderShadingMode(ViewportShadingMode mode) {
-    switch (mode) {
-    case ViewportShadingMode::Wireframe:
-        return QuaderShadingMode::Wireframe;
-    case ViewportShadingMode::Rendered:
-        return QuaderShadingMode::Material;
-    case ViewportShadingMode::Shaded:
-        return QuaderShadingMode::Solid;
-    }
-    return QuaderShadingMode::Solid;
-}
-
-} // namespace
 
 QuaderViewportApi::QuaderViewportApi()
     : impl_(std::make_unique<Impl>()) {}
@@ -78,7 +49,7 @@ ViewportLayoutId QuaderViewportApi::layout() const {
 
 QuaderApiVoidResult QuaderViewportApi::setLayout(ViewportLayoutId layout) {
     if (!impl_->workspace.supportsLayout(layout)) {
-        return unavailable("The embedded viewport host currently supports only the single-pane layout.");
+        return unavailable("The active viewport workspace policy does not support the requested layout.");
     }
     return runtimeStatus(impl_->workspace.setLayout(layout));
 }
@@ -96,14 +67,14 @@ QuaderApiVoidResult QuaderViewportApi::setGridPreset(int preset) {
 }
 
 QuaderShadingMode QuaderViewportApi::shadingMode(ViewportPaneId pane) const {
-    return toQuaderShadingMode(impl_->workspace.shadingMode(pane));
+    return quaderApiFromViewportShadingMode(impl_->workspace.shadingMode(pane));
 }
 
 QuaderApiVoidResult QuaderViewportApi::setShadingMode(ViewportPaneId pane, QuaderShadingMode mode) {
     if (mode == QuaderShadingMode::XRay) {
         return unavailable("XRay shading mode is not supported by the native viewport.");
     }
-    return runtimeStatus(impl_->workspace.setShadingMode(pane, toViewportShadingMode(mode)));
+    return runtimeStatus(impl_->workspace.setShadingMode(pane, quaderApiToViewportShadingMode(mode)));
 }
 
 ViewportView QuaderViewportApi::view(ViewportPaneId pane) const {

@@ -89,6 +89,7 @@ struct ViewportInputResult {
     bool toolChanged = false;
     bool selectionModeChanged = false;
     bool gridPresetChanged = false;
+    bool viewChanged = false;
     bool navigationActive = false;
     bool flyNavigationActive = false;
     bool flyCursorCaptureActive = false;
@@ -101,6 +102,7 @@ struct ViewportInputResult {
     bool focusDocumentRequested = false;
     bool maximizedToggleRequested = false;
     int requestedGridPreset = 6;
+    ViewportView requestedView = ViewportView::Perspective;
     ViewportShortcut shortcut = {};
 };
 

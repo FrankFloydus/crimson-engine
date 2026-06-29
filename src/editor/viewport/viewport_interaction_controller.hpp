@@ -27,7 +27,11 @@ public:
             const ViewportInteractionFrame& frame,
             const ViewportToolResult& toolResult,
             const ViewportBeforeToolInteractionResult& beforeTool);
+    [[nodiscard]] QuaderSelectionSummary pickContextMenuTarget(
+            QuaderEditorApi& editor,
+            const ViewportInteractionFrame& frame);
     [[nodiscard]] bool cancelActiveDrag(QuaderEditorApi& editor);
+    [[nodiscard]] bool dragging() const;
     void reset();
 
     [[nodiscard]] const quader_editor_core::TransformGizmoFrame* transformGizmoFrame() const;

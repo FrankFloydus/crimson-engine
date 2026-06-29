@@ -63,6 +63,7 @@ endfunction()
 find_package(spdlog CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
 find_package(EnTT CONFIG REQUIRED)
+find_package(stduuid CONFIG REQUIRED)
 
 if(QUADER_BUILD_TESTS)
     enable_testing()
@@ -100,9 +101,12 @@ set(QUADER_EDITOR_VIEWPORT_TOOL_SOURCES
 include(cmake/QuaderModeling.cmake)
 
 add_library(quader_modeling STATIC
+    src/editor/projection/cut_preview_overlay_projection.cpp
+    src/editor/projection/drawn_plane_overlay_projection.cpp
     src/editor/projection/mesh_projection_service.cpp
     src/editor/projection/picking_cache_projection.cpp
     src/editor/projection/selection_overlay_projection.cpp
+    src/editor/projection/tool_preview_mesh_projection.cpp
     src/editor/selection/selection_projection_service.cpp
     src/editor/modeling/runtime/modeling_object_runtime_map.cpp
     src/editor/modeling/services/modeling_action_catalog.cpp
@@ -141,6 +145,7 @@ add_library(quader_core STATIC
     src/core/logger.cpp
     src/core/q_str.cpp
     src/core/undo_redo_manager.cpp
+    src/core/user_config_paths.cpp
     src/editor/commands/document_command_service.cpp
     src/scene/document/project_document.cpp
     src/scene/document/project_session.cpp
@@ -149,12 +154,14 @@ add_library(quader_core STATIC
     src/editor/selection/editor_selection_service.cpp
     src/io/qdr/qdr_document_reader.cpp
     src/io/qdr/qdr_document_writer.cpp
+    src/io/qdr/qdr_project_codecs.cpp
     src/scene/scene_bounds.cpp
     src/scene/scene_document.cpp
     src/ui/console_model.cpp
     src/ui/viewport_context_menu_policy.cpp
     src/ui/ui_settings.cpp
     src/viewport/viewport_camera_controller.cpp
+    src/viewport/host_viewport_contract_adapter.cpp
     src/viewport/viewport_input_router.cpp
     src/viewport/viewport_layout.cpp
     src/viewport/viewport_settings.cpp
@@ -166,7 +173,7 @@ quader_enable_common_pch(quader_core)
 target_include_directories(quader_core
     PUBLIC src
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
-target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io)
+target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io PRIVATE stduuid)
 target_compile_definitions(quader_core
     PUBLIC
         GLM_ENABLE_EXPERIMENTAL)
@@ -305,6 +312,7 @@ quader_compile_material(ground_grid_material resources/materials/ground_grid.mat
 
 add_library(quader_runtime STATIC
     src/app/app_frame_clock.cpp
+    src/app/app_window_settings.cpp
     src/app/app.cpp
     src/editor/viewport/transform_gizmo_interaction.cpp
     src/editor/viewport/viewport_interaction_controller.cpp
@@ -339,6 +347,7 @@ add_library(quader_runtime STATIC
     src/render/overlay/viewport_overlay_style_resolver.cpp
     src/render/render_system.cpp
     src/render/render_signature_builder.cpp
+    src/render/scene_render_extraction.cpp
     src/render/scene_render_bridge.cpp
     src/render/scene_render_sync_service.cpp
     src/render/texture_binding_service.cpp
@@ -356,7 +365,6 @@ add_library(quader_runtime STATIC
     src/ui/navigation_gizmo.cpp
     src/ui/outliner_panel.cpp
     src/ui/tool_settings_panel.cpp
-    src/ui/transform_gizmo_controller.cpp
     src/ui/ui_panel_manager.cpp
     src/ui/ui_system.cpp
     src/ui/ui_style_tokens.cpp
@@ -366,7 +374,6 @@ add_library(quader_runtime STATIC
     src/ui/viewport_input_frame_builder.cpp
     src/ui/viewport_pane_controller.cpp
     src/ui/viewport_pane_overlay_cache.cpp
-    src/ui/viewport_selection_controller.cpp
     src/ui/viewport_shortcut_controller.cpp
     src/ui/viewport_settings_panel.cpp
     src/ui/viewport_panel.cpp

@@ -24,8 +24,8 @@ Quader input is split into four layers:
   user JSON persistence.
 - `src/api/QuaderCommandsApi.*` owns command ids, default keybindings, canonical command aliases,
   viewport shortcut/action mapping, keybinding storage path selection, and public API access.
-- `src/ui/controllers/viewport_host.cpp` translates platform events into a `ViewportInputFrame`;
-  `src/viewport/ViewportInputRouter.*` consumes semantic navigation input and resolved viewport
+- `src/ui/viewport_panel.cpp` translates platform events into a `ViewportInputFrame`;
+  `src/viewport/viewport_input_router.*` consumes semantic navigation input and resolved viewport
   shortcuts.
 
 Do not bypass these owners. If a missing capability is needed, add it to the owner first and then

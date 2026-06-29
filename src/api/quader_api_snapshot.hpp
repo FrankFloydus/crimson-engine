@@ -20,6 +20,7 @@ namespace quader {
  */
 struct QuaderEntitySnapshot {
     EntityId id = InvalidEntityId;
+    std::string uuid;
     QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
     std::string name;
     QuaderEntityKind kind = QuaderEntityKind::Generic;

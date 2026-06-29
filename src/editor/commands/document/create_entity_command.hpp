@@ -61,6 +61,14 @@ public:
         if (entity_ == InvalidEntityId) {
             return documentCommandInvalidRequestResult("Entity cannot be created");
         }
+        if (!uuid_.empty() && !scene().setEntityUuid(entity_, uuid_)) {
+            scene().destroyEntity(entity_);
+            entity_ = InvalidEntityId;
+            return documentCommandInvalidRequestResult("Entity identity cannot be restored");
+        }
+        if (uuid_.empty()) {
+            uuid_ = scene().uuid(entity_);
+        }
         editorObjectId_ = scene().editorObjectId(entity_);
         if (parent_ != InvalidEntityId && !scene().setParent(entity_, parent_, false)) {
             scene().destroyEntity(entity_);
@@ -80,6 +88,7 @@ private:
     TransformComponent transform_;
     bool selectCreated_ = false;
     EntityId entity_ = InvalidEntityId;
+    std::string uuid_;
     EditorObjectId editorObjectId_ = InvalidEditorObjectId;
     DocumentSelectionState beforeSelection_;
 };

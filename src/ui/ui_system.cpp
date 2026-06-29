@@ -29,6 +29,7 @@
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -39,11 +40,12 @@
 namespace quader {
 namespace {
 
-constexpr float kWindowChromeHeight = 48.0f;
-constexpr float kWindowChromeControlsWidth = 120.0f;
-constexpr float kWindowChromeButtonWidth = 40.0f;
+constexpr float kWindowChromeHeight = 35.0f;
+constexpr float kWindowChromeControlsWidth = 105.0f;
+constexpr float kWindowChromeButtonWidth = 35.0f;
 constexpr float kStaticBottomBarHeight = 28.0f;
 constexpr float kStaticBottomBarAccentHeight = 3.0f;
+constexpr float kChromeLogoSize = 16.0f;
 
 ImVec4 uiColor(int red, int green, int blue, float alpha = 1.0f) {
     return {
@@ -100,7 +102,7 @@ void clampDockedWindowWidth(const char* windowName, float minimumWidth) {
 
 std::optional<UIPanelId> panelIdFromName(std::string_view name) {
     for (const UIPanelId id : {UIPanelId::Viewport, UIPanelId::Outliner, UIPanelId::Inspector, UIPanelId::Console}) {
-        if (name == uiPanelKey(id)) {
+        if (name == uiPanelStableId(id) || name == uiPanelKey(id)) {
             return id;
         }
     }
@@ -114,7 +116,9 @@ bool chromeIconButton(const char* stableId, WindowChromeAction action, const ImV
     const bool active = ImGui::IsItemActive();
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
-    const ImVec2 center{(min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f};
+    const ImVec2 center{
+            std::floor((min.x + max.x) * 0.5f) + 0.5f,
+            std::floor((min.y + max.y) * 0.5f) + 0.5f};
     ImDrawList* drawList = ImGui::GetWindowDrawList();
 
     if (hovered || active) {
@@ -128,15 +132,16 @@ bool chromeIconButton(const char* stableId, WindowChromeAction action, const ImV
         drawList->AddRectFilled(min, max, background);
     }
 
-    const ImU32 iconColor = hovered || active ? uiPackedColor(247, 247, 247) : uiPackedColor(180, 180, 180);
-    const float thickness = 1.5f;
+    const ImU32 iconColor = hovered || active ? uiPackedColor(247, 247, 247) : uiPackedColor(188, 188, 188);
+    const float thickness = 1.25f;
+    const float half = 4.5f;
     if (action == WindowChromeAction::Minimize) {
-        drawList->AddLine({center.x - 5.0f, center.y + 4.0f}, {center.x + 5.0f, center.y + 4.0f}, iconColor, thickness);
+        drawList->AddLine({center.x - half, center.y + 3.5f}, {center.x + half, center.y + 3.5f}, iconColor, thickness);
     } else if (action == WindowChromeAction::ToggleMaximizeRestore) {
-        drawList->AddRect({center.x - 5.0f, center.y - 5.0f}, {center.x + 5.0f, center.y + 5.0f}, iconColor, 0.0f, 0, thickness);
+        drawList->AddRect({center.x - half, center.y - half}, {center.x + half, center.y + half}, iconColor, 0.0f, 0, thickness);
     } else {
-        drawList->AddLine({center.x - 5.0f, center.y - 5.0f}, {center.x + 5.0f, center.y + 5.0f}, iconColor, thickness);
-        drawList->AddLine({center.x + 5.0f, center.y - 5.0f}, {center.x - 5.0f, center.y + 5.0f}, iconColor, thickness);
+        drawList->AddLine({center.x - half, center.y - half}, {center.x + half, center.y + half}, iconColor, thickness);
+        drawList->AddLine({center.x + half, center.y - half}, {center.x - half, center.y + half}, iconColor, thickness);
     }
 
     ImGui::PopID();
@@ -161,7 +166,7 @@ QuaderApiVoidResult runtimeFailure(std::string message) {
     };
 }
 
-void drawStaticBottomBar(const ImGuiViewport& viewport) {
+void drawStaticBottomBar(const ImGuiViewport& viewport, const LocalizationService& localization) {
     ImGui::SetNextWindowPos({viewport.Pos.x, viewport.Pos.y + std::max(0.0f, viewport.Size.y - kStaticBottomBarHeight)});
     ImGui::SetNextWindowSize({std::max(1.0f, viewport.Size.x), kStaticBottomBarHeight});
     ImGui::SetNextWindowViewport(viewport.ID);
@@ -198,7 +203,8 @@ void drawStaticBottomBar(const ImGuiViewport& viewport) {
             uiPackedColor(118, 92, 168));
 
     const float textY = min.y + std::floor((kStaticBottomBarHeight - ImGui::GetFontSize()) * 0.5f);
-    drawList->AddText({min.x + 12.0f, textY}, uiPackedColor(216, 216, 216), "Ready");
+    const std::string ready = localization.text("ui.shell.status.ready", "Ready");
+    drawList->AddText({min.x + 12.0f, textY}, uiPackedColor(216, 216, 216), ready.c_str());
 
     const char* rightLabel = "Quader";
     const ImVec2 rightLabelSize = ImGui::CalcTextSize(rightLabel);
@@ -323,7 +329,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             .setPanelVisible = [this](std::string_view panel, bool visible) {
                 const std::optional<UIPanelId> id = panelIdFromName(panel);
                 if (!id.has_value()) {
-                    return runtimeFailure("Unknown UI panel.");
+                    return runtimeFailure(localization_.text("ui.runtime.unknown_panel", "Unknown UI panel."));
                 }
                 const bool before = panels_.isVisible(*id);
                 panels_.setVisible(*id, visible);
@@ -335,7 +341,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             .focusPanel = [this](std::string_view panel) {
                 const std::optional<UIPanelId> id = panelIdFromName(panel);
                 if (!id.has_value()) {
-                    return runtimeFailure("Unknown UI panel.");
+                    return runtimeFailure(localization_.text("ui.runtime.unknown_panel", "Unknown UI panel."));
                 }
                 focusedPanel_ = *id;
                 return runtimeStatus(true);
@@ -347,7 +353,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             },
             .setLocale = [this](std::string locale) {
                 if (!localization_.selectLocale(locale)) {
-                    return runtimeFailure("Unknown locale.");
+                    return runtimeFailure(localization_.text("ui.runtime.unknown_locale", "Unknown locale."));
                 }
                 const bool changed = settings_.locale() != localization_.currentLocale();
                 settings_.setLocale(localization_.currentLocale());
@@ -359,14 +365,16 @@ void UISystem::draw(QuaderEditorApi& editor,
             .save = [this]() {
                 saveSettings();
                 saveViewportSettings();
-                return runtimeStatus(false, "Preferences saved.");
+                return runtimeStatus(false, localization_.text("ui.runtime.preferences_saved", "Preferences saved."));
             },
             .navigationGizmoVisible = [this]() {
                 return viewportPanel_ != nullptr && viewportPanel_->navigationGizmoVisible();
             },
             .setNavigationGizmoVisible = [this](bool visible) {
                 if (viewportPanel_ == nullptr) {
-                    return runtimeFailure("Viewport panel is not available.");
+                    return runtimeFailure(localization_.text(
+                            "ui.runtime.viewport_panel_unavailable",
+                            "Viewport panel is not available."));
                 }
                 const bool before = viewportPanel_->navigationGizmoVisible();
                 viewportPanel_->setNavigationGizmoVisible(visible);
@@ -375,7 +383,10 @@ void UISystem::draw(QuaderEditorApi& editor,
                 return runtimeStatus(before != visible);
             },
     });
-    drawWindowChrome();
+    const MainMenuBarResult chromeMenuResult = drawWindowChrome(editor, quitRequested, document, modeling);
+    if (chromeMenuResult.settingsChanged) {
+        saveSettings();
+    }
     drawDockspace(editor, quitRequested, document, modeling);
 
     bool viewportCursorCaptureRequested = false;
@@ -416,7 +427,7 @@ void UISystem::draw(QuaderEditorApi& editor,
         saveSettings();
     }
     toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
-    drawStaticBottomBar(*ImGui::GetMainViewport());
+    drawStaticBottomBar(*ImGui::GetMainViewport(), localization_);
     std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
     std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
     renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
@@ -488,9 +499,14 @@ void UISystem::registerPanels(RenderSystem& renderSystem) {
     panels_.add(std::make_unique<ConsolePanel>());
 }
 
-void UISystem::drawWindowChrome() {
+MainMenuBarResult UISystem::drawWindowChrome(
+        QuaderEditorApi& editor,
+        bool& quitRequested,
+        SceneDocument& document,
+        ModelingSessionService& modeling) {
+    MainMenuBarResult menuResult;
     if (!customChrome_) {
-        return;
+        return menuResult;
     }
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -499,6 +515,7 @@ void UISystem::drawWindowChrome() {
     ImGui::SetNextWindowViewport(viewport->ID);
 
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_MenuBar |
             ImGuiWindowFlags_NoTitleBar |
             ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoResize |
@@ -512,33 +529,57 @@ void UISystem::drawWindowChrome() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(
+            ImGuiStyleVar_FramePadding,
+            {6.0f, std::max(0.0f, std::floor((kWindowChromeHeight - ImGui::GetFontSize()) * 0.5f) - 1.0f)});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {2.0f, 0.0f});
     ImGui::PushStyleColor(ImGuiCol_WindowBg, uiColor(25, 25, 25));
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, uiColor(25, 25, 25));
     ImGui::Begin("Quader Window Chrome", nullptr, flags);
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 min = ImGui::GetWindowPos();
     const ImVec2 max{min.x + ImGui::GetWindowWidth(), min.y + kWindowChromeHeight};
     drawList->AddLine({min.x, max.y - 1.0f}, {max.x, max.y - 1.0f}, uiPackedColor(46, 46, 46));
-    const float titleY = min.y + std::floor((kWindowChromeHeight - ImGui::GetFontSize()) * 0.5f);
-    drawList->AddText({min.x + 12.0f, titleY}, uiPackedColor(216, 216, 216), "Quader");
 
     const float controlsLeft = std::max(0.0f, ImGui::GetWindowWidth() - kWindowChromeControlsWidth);
-    ImGui::SetCursorPos({controlsLeft, 0.0f});
-    if (chromeIconButton("minimize", WindowChromeAction::Minimize, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
-        pendingChromeAction_ = WindowChromeAction::Minimize;
-    }
-    ImGui::SameLine(0.0f, 0.0f);
-    if (chromeIconButton("restore", WindowChromeAction::ToggleMaximizeRestore, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
-        pendingChromeAction_ = WindowChromeAction::ToggleMaximizeRestore;
-    }
-    ImGui::SameLine(0.0f, 0.0f);
-    if (chromeIconButton("close", WindowChromeAction::Close, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
-        pendingChromeAction_ = WindowChromeAction::Close;
+    if (ImGui::BeginMenuBar()) {
+        const float logoY = std::floor((kWindowChromeHeight - kChromeLogoSize) * 0.5f);
+        if (icons_.logo != ImTextureID_Invalid) {
+            ImGui::SetCursorPos({16.0f, logoY});
+            ImGui::Image(icons_.logo, {kChromeLogoSize, kChromeLogoSize});
+        }
+        ImGui::SetCursorPos({38.0f, 0.0f});
+        menuResult = mainMenuBar_.drawMenus({
+                .quitRequested = quitRequested,
+                .editor = editor,
+                .document = document,
+                .modeling = modeling,
+                .viewportPanel = viewportPanel_,
+                .panels = panels_,
+                .localization = localization_,
+                .viewportSettingsPanelOpen = settingsPanelOpen_,
+        });
+
+        ImGui::SetCursorPos({controlsLeft, 0.0f});
+        if (chromeIconButton("minimize", WindowChromeAction::Minimize, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
+            pendingChromeAction_ = WindowChromeAction::Minimize;
+        }
+        ImGui::SameLine(0.0f, 0.0f);
+        if (chromeIconButton("restore", WindowChromeAction::ToggleMaximizeRestore, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
+            pendingChromeAction_ = WindowChromeAction::ToggleMaximizeRestore;
+        }
+        ImGui::SameLine(0.0f, 0.0f);
+        if (chromeIconButton("close", WindowChromeAction::Close, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
+            pendingChromeAction_ = WindowChromeAction::Close;
+        }
+        ImGui::EndMenuBar();
     }
 
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(5);
     ImGui::End();
+    return menuResult;
 }
 
 void UISystem::drawDockspace(
@@ -552,11 +593,14 @@ void UISystem::drawDockspace(
     ImGui::SetNextWindowSize({viewport->Size.x, std::max(1.0f, viewport->Size.y - chromeHeight - kStaticBottomBarHeight)});
     ImGui::SetNextWindowViewport(viewport->ID);
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking |
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking |
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
             ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    if (!customChrome_) {
+        flags |= ImGuiWindowFlags_MenuBar;
+    }
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f});
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
@@ -564,20 +608,20 @@ void UISystem::drawDockspace(
     ImGui::Begin("Main Dockspace", nullptr, flags);
     ImGui::PopStyleVar(3);
 
-    const MainMenuBarResult menuResult = mainMenuBar_.draw({
-            .quitRequested = quitRequested,
-            .editor = editor,
-            .document = document,
-            .modeling = modeling,
-            .viewportPanel = viewportPanel_,
-            .panels = panels_,
-            .settings = settings_,
-            .localization = localization_,
-            .viewportSettingsPanelOpen = settingsPanelOpen_,
-            .toolSettingsPanelOpen = toolSettingsPanelOpen_,
-    });
-    if (menuResult.settingsChanged) {
-        saveSettings();
+    if (!customChrome_) {
+        const MainMenuBarResult menuResult = mainMenuBar_.draw({
+                .quitRequested = quitRequested,
+                .editor = editor,
+                .document = document,
+                .modeling = modeling,
+                .viewportPanel = viewportPanel_,
+                .panels = panels_,
+                .localization = localization_,
+                .viewportSettingsPanelOpen = settingsPanelOpen_,
+        });
+        if (menuResult.settingsChanged) {
+            saveSettings();
+        }
     }
 
     const ImGuiID dockspaceId = ImGui::GetID("QuaderDockspace");
@@ -669,8 +713,7 @@ void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, co
     iconEngine_ = &engine;
     iconTextureRegistry_ = &textures;
 
-    auto load = [&](const char* filename) {
-        const std::filesystem::path iconPath = executableDir / "icons" / filename;
+    auto loadPath = [&](const std::filesystem::path& iconPath) {
         std::vector<unsigned char> pixels;
         unsigned width = 0;
         unsigned height = 0;
@@ -701,7 +744,26 @@ void UISystem::loadIcons(filament::Engine& engine, TextureRegistry& textures, co
         iconTextureIds_.push_back(id);
         return id;
     };
+    auto load = [&](const char* filename) {
+        return loadPath(executableDir / "icons" / filename);
+    };
+    auto loadFirstAvailable = [&](std::initializer_list<std::filesystem::path> paths) {
+        for (const std::filesystem::path& path : paths) {
+            if (!std::filesystem::exists(path)) {
+                continue;
+            }
+            const ImTextureID texture = loadPath(path);
+            if (texture != ImTextureID_Invalid) {
+                return texture;
+            }
+        }
+        return ImTextureID_Invalid;
+    };
 
+    icons_.logo = loadFirstAvailable({
+            executableDir / "icons" / "quader-logo@2x.png",
+            executableDir / "icons" / "logo.png",
+    });
     icons_.mesh = load("mesh_icon.png");
     icons_.empty = load("empty_icon.png");
     icons_.lock = load("lock_icon.png");

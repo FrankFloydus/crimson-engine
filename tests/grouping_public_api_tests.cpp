@@ -7,10 +7,6 @@
 #include "support/behavior_expect.hpp"
 #include "support/behavior_scenario.hpp"
 
-#include "ui/viewport_shortcut_controller.hpp"
-#include "viewport/viewport_camera_controller.hpp"
-#include "viewport/viewport_input_router.hpp"
-
 #include <gtest/gtest.h>
 
 #include <string>
@@ -317,27 +313,11 @@ TEST(GroupingPublicApiTests, ViewportDeleteShortcutDeletesSelectedGroup) {
     scenario.when().groupSelection("group", "Shortcut Group");
     selectGroupForCommandDelete(scenario, "group");
 
-    ViewportInputRouter router;
-    ViewportCameraController camera;
-    ViewportInputFrame inputFrame;
-    inputFrame.viewportFocused = true;
-    inputFrame.viewportSize = {800.0f, 600.0f};
-    inputFrame.resolvedShortcuts = {{
+    scenario.when().dispatchViewportShortcut({
             .kind = ViewportShortcutKind::DeleteSelection,
             .context = ViewportShortcutContext::Global,
-    }};
-    const ViewportInputResult input = router.handleFrame(inputFrame, camera);
-    ASSERT_TRUE(input.shortcutHandled);
-    ASSERT_TRUE(input.consumed);
-    ASSERT_EQ(input.shortcut.kind, ViewportShortcutKind::DeleteSelection);
-
-    const ViewportShortcutController controller;
-    const ViewportShortcutControllerResult result =
-            controller.handleModelingShortcut(input, scenario.editor(), scenario.session().modeling());
-
-    EXPECT_TRUE(result.commandExecuted);
-    EXPECT_TRUE(result.invalidateHover);
-    EXPECT_TRUE(result.markOverlayDirty);
+    });
+    scenario.then().command().okChanged();
     scenario.then().scene()
             .namedMissing("Shortcut Group")
             .namedMissing("Shortcut Left")

@@ -329,19 +329,13 @@ const std::vector<ThirdPartyLicenseExpectation>& thirdPartyLicenseExpectations()
             {"entt", "EnTT", "licenses/entt-MIT.txt", true},
             {"glm", "OpenGL Mathematics (GLM)", "licenses/glm-MIT.txt", true},
             {"sdl3", "SDL3", "licenses/sdl3-Zlib-MIT-Apache-2.0.txt", true},
-            {"rmlui", "RmlUi", "licenses/rmlui-MIT.txt", true},
-            {"", "itlib", "licenses/itlib-MIT.txt", false},
-            {"", "robin-hood-hashing", "licenses/robin-hood-hashing-MIT.txt", false},
-            {"", "FreeType", "licenses/freetype-FTL-OR-GPL-2.0-or-later.txt", false},
-            {"", "Brotli", "licenses/brotli-MIT.txt", false},
-            {"", "bzip2", "licenses/bzip2-Bzip2.txt", false},
-            {"", "libpng", "licenses/libpng-Libpng-2.0.txt", false},
-            {"", "zlib", "licenses/zlib-Zlib.txt", false},
+            {"imgui", "Dear ImGui", "licenses/imgui-MIT.txt", true},
+            {"stduuid", "stduuid", "licenses/stduuid-MIT.txt", true},
             {"gtest", "GoogleTest", "licenses/gtest-BSD-3-Clause.txt", true},
             {"lodepng", "lodepng", "licenses/lodepng-Zlib.txt", true},
             {"spdlog", "spdlog", "licenses/spdlog-MIT.txt", true},
             {"", "{fmt}", "licenses/fmt-MIT.txt", false},
-            {"", "Nova Mono", "licenses/google-fonts-nova-mono-OFL-1.1.txt", false},
+            {"", "Tracy Profiler", "licenses/tracy-BSD-3-Clause.txt", false},
     };
     return expectations;
 }
@@ -549,7 +543,6 @@ TEST(BuildGuardrailTests, BuildOptionsAndDependencyPinsHaveSingleCMakeOwner) {
     expectMissing(pchHelper, "src/");
     expectMissing(pchHelper, "filament/");
     expectMissing(pchHelper, "SDL3/");
-    expectMissing(pchHelper, "RmlUi/");
     expectMissing(pchHelper, "gtest/");
 
     expectContains(options, "set(_QUADER_OPENMESH_COMMIT");
@@ -878,6 +871,41 @@ TEST(BuildGuardrailTests, AbsorbedModelingDocsDoNotDescribeAnSdkBuildBoundary) {
     }
 }
 
+TEST(BuildGuardrailTests, PublicDocsDoNotExposeStaleSdkBoundaryLanguage) {
+    const std::vector<std::filesystem::path> docs = {
+            "docs/api-overview.md",
+            "examples/lua/README.md",
+    };
+    const std::vector<std::string> forbidden = {
+            "SDK internals",
+            "document, SDK, UI",
+            "document, SDK, render",
+            "expose document, SDK",
+    };
+
+    for (const std::filesystem::path& doc : docs) {
+        const std::string source = readSourceFile(doc);
+        for (const std::string& needle : forbidden) {
+            EXPECT_EQ(source.find(needle), std::string::npos)
+                    << doc.generic_string() << " contains " << needle;
+        }
+    }
+}
+
+TEST(BuildGuardrailTests, DefaultMaterialMetadataMatchesRuntimePackagePath) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string hostContract = readSourceFile("src/editor/metadata/host_contract.cpp");
+
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/default/default_albedo.png");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/default/default_roughness.png");
+    expectContains(appSource, "materials/default/default_albedo.png");
+    expectContains(appSource, "materials/default/default_roughness.png");
+    expectContains(hostContract, "materials/default/default_albedo.png");
+    expectContains(hostContract, "materials/default/default_roughness.png");
+    expectMissing(hostContract, "assets/materials/default/");
+}
+
 TEST(BuildGuardrailTests, LocalMachinePathsUseEnvironmentBackedDefaults) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string options = readSourceFile("cmake/QuaderBuildOptions.cmake");
@@ -949,6 +977,13 @@ TEST(BuildGuardrailTests, AffectedCheckToolPrintsBeforeAfterAndUsesFilteredGoogl
     expectContains(tool, "ModelingLoopFilters");
     expectContains(tool, "Get-PolygonOperationFilterForSourcePath");
     expectContains(tool, "Get-RuntimeOperationFilterForSourcePath");
+    expectContains(tool, "Get-CMakeTargetSourcePaths");
+    expectContains(tool, "Get-CMakeTargetSourcePaths \"quader_guardrail_tests\"");
+    expectContains(tool, "Target '$TargetName' was not found in CMakeLists.txt.");
+    expectMissing(tool, "\"tests/agent_instruction_routing_tests.cpp\"");
+    expectMissing(tool, "\"tests/build_guardrail_tests.cpp\"");
+    expectMissing(tool, "\"tests/oop_architecture_guardrail_tests.cpp\"");
+    expectMissing(tool, "\"tests/programmatic_api_guardrail_tests.cpp\"");
     expectContains(tool, "fill_hole_from_edges");
     expectContains(tool, "apply_uv");
     expectContains(tool, "QdrDocumentOperationUv*");
@@ -1025,38 +1060,39 @@ TEST(BuildGuardrailTests, LocalizationResourcesArePackagedWithRuntime) {
     EXPECT_FALSE(readSourceFile("resources/locales/it-IT.lang").empty());
 }
 
-TEST(BuildGuardrailTests, UITokenConfigResourceIsPackagedWithRuntime) {
+TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
 
-    expectContains(rootCMake, "src/ui/debug_palette_view.cpp");
-    expectContains(rootCMake, "src/ui/ui_utility_tokens.cpp");
-    expectContains(rootCMake, "src/ui/backends/rml/main_layout_rml_builder.cpp");
-    expectContains(rootCMake, "src/ui/components/common/ui_tab_strip_model.cpp");
-    expectContains(rootCMake, "src/ui/components/organisms/main_layout_model.cpp");
-    expectContains(rootCMake, "src/ui/controllers/main_layout_controller.cpp");
-    expectContains(rootCMake, "src/ui/controllers/resizable_split_controller.cpp");
-    expectContains(rootCMake, "src/ui/controllers/ui_drag_drop_controller.cpp");
-    expectContains(rootCMake, "src/ui/backends/rml/rml_ui_context_host.cpp");
-    expectContains(rootCMake, "src/ui/controllers/viewport_host.cpp");
-    expectContains(rootCMake, "resources/ui/rml/viewport-shell.rml");
-    expectContains(rootCMake, "resources/ui/rcss/app-shell.rcss");
-    expectContains(rootCMake, "resources/ui/tokens/app-ui.tokens.json");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rml/viewport-shell.rml");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/rcss/app-shell.rcss");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/ui/tokens/app-ui.tokens.json");
-    expectContains(rootCMake, "resources/fonts/NovaMono.ttf");
-    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/NovaMono.ttf");
+    expectContains(rootCMake, "src/ui/ui_system.cpp");
+    expectContains(rootCMake, "src/ui/viewport_panel.cpp");
+    expectContains(rootCMake, "resources/materials/imgui.mat");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat");
+    expectContains(rootCMake, "resources/fonts/Inter.ttf");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/fonts/Inter.ttf");
+    expectContains(rootCMake, "resources/icons");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/icons");
     expectContains(rootCMake, "copy_if_different");
+    expectContains(rootCMake, "copy_directory");
 
-    EXPECT_FALSE(readSourceFile("resources/ui/rml/viewport-shell.rml").empty());
-    EXPECT_FALSE(readSourceFile("resources/ui/rcss/app-shell.rcss").empty());
-    EXPECT_FALSE(readSourceFile("resources/ui/tokens/app-ui.tokens.json").empty());
+    EXPECT_FALSE(readSourceFile("resources/materials/imgui.mat").empty());
+    EXPECT_FALSE(readSourceFile("resources/fonts/Inter.ttf").empty());
+    EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/logo.png")));
+    EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/quader-logo@2x.png")));
+    EXPECT_GT(std::filesystem::file_size(sourcePath("resources/icons/logo.png")), 512u);
+    EXPECT_GT(std::filesystem::file_size(sourcePath("resources/icons/quader-logo@2x.png")), 512u);
 }
 
 TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
     const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string mainMenuSource = readSourceFile("src/ui/main_menu_bar.cpp");
     const std::string styleSource = readSourceFile("src/ui/ui_style_tokens.cpp");
     const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
+    const std::string windowChromeSource =
+            sourceSlice(uiSystemSource, "MainMenuBarResult UISystem::drawWindowChrome", "void UISystem::drawDockspace");
+    const std::string staticBottomBarSource =
+            sourceSlice(uiSystemSource, "void drawStaticBottomBar", "void UISystem::draw");
+    const std::string chromeMenuItems =
+            sourceSlice(mainMenuSource, "MainMenuBarResult MainMenuBar::drawMenus", "} // namespace quader");
 
     const std::size_t dockspacePadding =
             uiSystemSource.find("ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0.0f, 0.0f})");
@@ -1074,6 +1110,17 @@ TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
     expectContains(uiSystemSource, "ImGui::Begin(\"Quader Static Bottom Bar\"");
     expectContains(uiSystemSource, "ImGui::DockSpace(dockspaceId, dockspaceSize");
     expectContains(uiSystemSource, "uiPackedColor(118, 92, 168)");
+    expectContains(uiSystemSource, "kWindowChromeHeight = 35.0f");
+    expectContains(uiSystemSource, "kWindowChromeControlsWidth");
+    expectContains(windowChromeSource, "ImGuiWindowFlags_MenuBar");
+    expectContains(windowChromeSource, "mainMenuBar_.drawMenus");
+    expectContains(uiSystemSource, "quader-logo@2x.png");
+    expectContains(mainMenuSource, "MainMenuBarResult MainMenuBar::drawMenus");
+    expectMissing(mainMenuSource, "drawInlinePopupMenu");
+    expectMissing(mainMenuSource, "ImGui::Button(label.c_str())");
+    expectMissing(staticBottomBarSource, "ImGuiWindowFlags_MenuBar");
+    expectMissing(chromeMenuItems, "BeginMenuBar(");
+    expectMissing(chromeMenuItems, "drawInline");
     expectMissing(uiSystemSource, "availableDockspaceSize.y - kStaticBottomBarHeight");
     expectMissing(uiSystemSource, "ImGui::Dummy(barSize)");
 
@@ -1093,13 +1140,25 @@ TEST(BuildGuardrailTests, ImGuiShellViewportAndControlStylingStayVisible) {
     expectMissing(viewportPanelSource, "constexpr float kShadingComboWidth = 104.0f");
 }
 
-TEST(BuildGuardrailTests, RuntimeUiDoesNotReintroduceImGui) {
+TEST(BuildGuardrailTests, ImGuiViewportApiKeepsMultiPaneLayoutWorkspace) {
+    const std::string viewportApiSource = readSourceFile("src/api/quader_viewport_api.cpp");
+    const std::string mainMenuSource = readSourceFile("src/ui/main_menu_bar.cpp");
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
+
+    expectContains(viewportApiSource, "ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::MultiPane}");
+    expectMissing(viewportApiSource, "ViewportWorkspaceService workspace{ViewportWorkspaceLayoutPolicy::SinglePaneOnly}");
+    expectContains(mainMenuSource, "context.editor.viewports().setLayout(option.id)");
+    expectContains(viewportPanelSource, "return workspace().activePanePlacements()");
+    expectContains(viewportPanelSource, "return workspace().activeSplitHandles()");
+}
+
+TEST(BuildGuardrailTests, RuntimeUiUsesNativeImGuiStackOnly) {
     const std::string rootCMake = readSourceFile("CMakeLists.txt");
     const std::string manifest = readSourceFile("vcpkg.json");
 
-    expectMissing(rootCMake, "imgui");
-    expectMissing(rootCMake, "ImGui");
-    expectMissing(manifest, "\"imgui\"");
+    expectContains(rootCMake, "find_package(imgui CONFIG REQUIRED)");
+    expectContains(rootCMake, "imgui::imgui");
+    expectContains(manifest, "\"imgui\"");
 
     for (const std::filesystem::path& relativePath : guardrailSourceFiles()) {
         const std::string path = relativePath.generic_string();
@@ -1108,8 +1167,9 @@ TEST(BuildGuardrailTests, RuntimeUiDoesNotReintroduceImGui) {
         }
 
         const std::string source = readSourceFile(relativePath);
-        expectMissing(source, "imgui");
-        expectMissing(source, "ImGui");
+        expectMissing(source, "src/ui/controllers");
+        expectMissing(source, "src/ui/components");
+        expectMissing(source, "src/ui/core");
     }
 }
 
@@ -1178,9 +1238,6 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
     const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
     const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/rml_ui_context_host.hpp");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
-    const std::string chromeButtonHeader = readSourceFile("src/ui/components/atoms/ui_chrome_button_component.hpp");
 
     expectContains(mainSource, "bool borderlessWindow = true");
     expectContains(mainSource, "--borderless-window");
@@ -1234,12 +1291,13 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectMissing(platformSource, "WM_NCLBUTTONDOWN");
     expectContains(rootCMake, "Dwmapi");
     expectContains(rootCMake, "Advapi32");
+    expectContains(uiSystemHeader, "enum class WindowChromeAction");
     expectContains(uiSystemHeader, "takeWindowChromeAction()");
-    expectContains(uiSystemSource, "rmlHost_.takeWindowChromeAction()");
-    expectContains(rmlHostHeader, "enum class WindowChromeAction");
-    expectContains(rmlHostSource, "WindowChromeActionListener");
-    expectContains(rmlHostSource, "kChromeWindowActionAttribute");
-    expectContains(chromeButtonHeader, "data-chrome-window-action");
+    expectContains(uiSystemHeader, "std::optional<WindowChromeAction> pendingChromeAction_");
+    expectContains(uiSystemSource, "chromeIconButton(\"minimize\", WindowChromeAction::Minimize");
+    expectContains(uiSystemSource, "chromeIconButton(\"restore\", WindowChromeAction::ToggleMaximizeRestore");
+    expectContains(uiSystemSource, "chromeIconButton(\"close\", WindowChromeAction::Close");
+    expectContains(uiSystemSource, "pendingChromeAction_ = WindowChromeAction::Close");
 }
 
 TEST(WindowGuardrailTests, BorderlessMaximizeUsesMonitorWorkArea) {
@@ -1268,6 +1326,54 @@ TEST(WindowGuardrailTests, BorderlessMaximizeUsesMonitorWorkArea) {
     expectMissing(platformSource, "SDL_SyncWindow failed after borderless maximize work-area constraint");
     expectMissing(platformSource, "message == WM_WINDOWPOSCHANGED && IsZoomed(hwnd) != FALSE");
     expectContains(platformSource, "minMaxInfo.ptMinTrackSize.x = std::max<LONG>(minMaxInfo.ptMinTrackSize.x, kPlatformWindowMinimumWidth)");
+}
+
+TEST(WindowGuardrailTests, WindowPlacementPersistenceAndResizeRecoveryStayOwned) {
+    const std::string rootCMake = readSourceFile("CMakeLists.txt");
+    const std::string appHeader = readSourceFile("src/app/app.hpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string appSettingsHeader = readSourceFile("src/app/app_window_settings.hpp");
+    const std::string appSettingsSource = readSourceFile("src/app/app_window_settings.cpp");
+    const std::string platformHeader = readSourceFile("src/platform/platform_window.hpp");
+    const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
+    const std::string uiSettingsSource = readSourceFile("src/ui/ui_settings.cpp");
+    const std::string configPathSource = readSourceFile("src/core/user_config_paths.cpp");
+
+    expectContains(rootCMake, "src/core/user_config_paths.cpp");
+    expectContains(rootCMake, "src/app/app_window_settings.cpp");
+    expectContains(appHeader, "AppWindowSettings windowSettings_");
+    expectContains(appHeader, "saveWindowSettings()");
+    expectContains(appSource, "AppWindowSettings::resolvePath(executableDir)");
+    expectContains(appSource, "AppWindowSettings::load(windowSettingsPath_)");
+    expectContains(appSource, "window_.applyPlacement(*windowSettings_.placement())");
+    expectContains(appSource, "window_.placement()");
+    expectContains(appSource, "windowSettings_.save(windowSettingsPath_)");
+    expectContains(appSettingsHeader, "std::optional<PlatformWindowPlacement>");
+    expectContains(appSettingsSource, "\"window_settings.ini\"");
+    expectContains(appSettingsSource, "\"NormalX\"");
+    expectContains(appSettingsSource, "\"NormalWidth\"");
+    expectContains(appSettingsSource, "\"Maximized\"");
+    expectContains(appSettingsSource, "quaderUserConfigDirectory(executableDir)");
+    expectContains(uiSettingsSource, "quaderUserConfigDirectory(executableDir)");
+    expectContains(configPathSource, "LOCALAPPDATA");
+    expectContains(configPathSource, "XDG_CONFIG_HOME");
+    expectContains(platformHeader, "struct PlatformWindowPlacement");
+    expectContains(platformHeader, "platformWindowChromeResizeBorderForSystemMetrics");
+    expectContains(platformHeader, "platformWindowRecoverFrameToDisplayWorkArea");
+    expectContains(platformHeader, "std::optional<PlatformWindowPlacement> placement() const");
+    expectContains(platformHeader, "applyPlacement(const PlatformWindowPlacement& placement)");
+    expectContains(platformHeader, "liveResizeFrameSizeValid_");
+    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CXSIZEFRAME");
+    expectContains(platformSource, "GetSystemMetricsForDpi(SM_CYSIZEFRAME");
+    expectContains(platformSource, "GetWindowPlacement(hwnd, &nativePlacement)");
+    expectContains(platformSource, "SetWindowPlacement(hwnd, &nativePlacement)");
+    expectContains(platformSource, "WPF_RESTORETOMAXIMIZED");
+    expectContains(platformSource, "SDL_GetDisplayUsableBounds");
+    expectContains(platformSource, "platformWindowRecoverFrameToDisplayWorkArea");
+    expectContains(platformSource, "WM_CANCELMODE");
+    expectContains(platformSource, "WM_CAPTURECHANGED");
+    expectContains(platformSource, "clearNativeResizeState()");
+    expectContains(platformSource, "requestLiveResizeFrame(true)");
 }
 
 TEST(DependencyLicenseGuardrailTests, AppThirdPartyManifestHasLicenseEvidence) {

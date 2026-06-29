@@ -362,6 +362,7 @@ struct ModelingPickSelectRequest {
     bool altPressed = false;
     bool preserveSelectionOnMiss = false;
     bool preserveSelectionOnSelectedHit = false;
+    bool preserveExistingComponentSelectionOnHit = false;
     double vertexRadius = 0.3;
     double edgeRadius = 0.2;
 };

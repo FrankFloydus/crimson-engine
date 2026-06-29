@@ -166,10 +166,12 @@ TEST(QdrModelingRuntimeToolMoveTests, MoveDragSnapsSelectedAnchorToVertexTargetO
 	EXPECT_TRUE(points.size() == 2U);
 	EXPECT_TRUE(points[0].layer == quader_editor_core::SelectionOverlayLayer::hover_vertex);
 	EXPECT_TRUE(points[0].object_id == 2);
-	EXPECT_TRUE(points[0].color_abgr == 0xff38ff00U);
+	EXPECT_TRUE(points[0].color_abgr == quader_editor_core::selection_overlay_style_token(
+		quader_editor_core::SelectionOverlayStyleRole::hover_vertex));
 	EXPECT_TRUE(points[1].layer == quader_editor_core::SelectionOverlayLayer::snap_target_vertex);
 	EXPECT_TRUE(points[1].object_id == 2);
-	EXPECT_TRUE(points[1].color_abgr == 0xff0000ffU);
+	EXPECT_TRUE(points[1].color_abgr == quader_editor_core::selection_overlay_style_token(
+		quader_editor_core::SelectionOverlayStyleRole::snap_target_vertex));
 }
 
 TEST(QdrModelingRuntimeToolMoveTests, MoveDragIgnoresVertexSnapWhenNoTargetIsInsideSnapRadius) {

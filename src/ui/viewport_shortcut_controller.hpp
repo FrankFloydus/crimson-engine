@@ -12,7 +12,6 @@
 namespace quader {
 
 class QuaderEditorApi;
-class ModelingSessionService;
 
 /**
  * Stores the Viewport Shortcut Controller Result data contract used by the ImGui editor presentation layer.
@@ -32,13 +31,11 @@ public:
     [[nodiscard]] ViewportShortcutControllerResult handleOperationPreviewShortcut(
             const ViewportInputResult& inputResult,
             const ModelingToolSettingsTarget& toolSettingsTarget,
-            QuaderEditorApi& editor,
-            ModelingSessionService& modeling) const;
+            QuaderEditorApi& editor) const;
 
     [[nodiscard]] ViewportShortcutControllerResult handleModelingShortcut(
             const ViewportInputResult& inputResult,
-            QuaderEditorApi& editor,
-            ModelingSessionService& modeling) const;
+            QuaderEditorApi& editor) const;
 };
 
 } // namespace quader

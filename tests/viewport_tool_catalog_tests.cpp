@@ -397,19 +397,33 @@ TEST(ViewportToolGuardrailTests, PointToolsUseFocusedContextInsteadOfBroadToolBa
     EXPECT_NE(drawnPlaneToolSource.find("ViewportPointToolContext& pointContext = *context.point"), std::string::npos);
 }
 
-TEST(ViewportToolGuardrailTests, RmlViewportHostProvidesPointToolContextToModalTools) {
+TEST(ViewportToolGuardrailTests, DrawnPlaneToolUsesSharedCutMirrorLifecycle) {
     const std::filesystem::path root = sourceRoot();
-    const std::string viewportHost =
-            readSourceFile(root / "src" / "ui" / "controllers" / "viewport_host.cpp");
+    const std::string drawnPlaneToolSource =
+            readSourceFile(root / "src" / "editor" / "tools" / "base" / "drawn_plane_tool.cpp");
 
-    EXPECT_NE(viewportHost.find("ViewportPointToolContext pointToolContext"), std::string::npos);
-    EXPECT_NE(viewportHost.find("pointToolContext.makeEventAt"), std::string::npos);
-    EXPECT_NE(viewportHost.find("pointToolContext.hitDrawnPlaneCapturedPoint"), std::string::npos);
-    EXPECT_NE(viewportHost.find("pointToolContext.hitDrawnPlaneLine"), std::string::npos);
-    EXPECT_NE(viewportHost.find(".point = &pointToolContext"), std::string::npos);
-    EXPECT_NE(viewportHost.find("modelingToolRayEvent("), std::string::npos);
-    EXPECT_NE(viewportHost.find("snapEnabled = !modifiers.primary"), std::string::npos);
-    EXPECT_NE(viewportHost.find("constrainAxis = modifiers.shift"), std::string::npos);
+    EXPECT_NE(drawnPlaneToolSource.find("enum class DrawnPlaneToolKind"), std::string::npos);
+    EXPECT_NE(drawnPlaneToolSource.find("handleDrawnPlaneLifecycle("), std::string::npos);
+    EXPECT_NE(drawnPlaneToolSource.find("beginDrawnPlanePointDrag("), std::string::npos);
+    EXPECT_NE(drawnPlaneToolSource.find("finalizeDrawnPlaneTool("), std::string::npos);
+    EXPECT_EQ(drawnPlaneToolSource.find("if (modelingTool() == ModelingViewportTool::Cut) {"), std::string::npos);
+    EXPECT_EQ(drawnPlaneToolSource.find("if (modelingTool() == ModelingViewportTool::Mirror) {"), std::string::npos);
+    EXPECT_EQ(drawnPlaneToolSource.find("context.modalState->cutDragActive = command.ok"), std::string::npos);
+    EXPECT_EQ(drawnPlaneToolSource.find("context.modalState->mirrorDragActive = command.ok"), std::string::npos);
+}
+
+TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalTools) {
+    const std::filesystem::path root = sourceRoot();
+    const std::string viewportPanel = readSourceFile(root / "src" / "ui" / "viewport_panel.cpp");
+
+    EXPECT_NE(viewportPanel.find("ViewportPointToolContext pointToolContext"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("pointToolContext.makeEventAt"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("pointToolContext.hitDrawnPlaneCapturedPoint"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("pointToolContext.hitDrawnPlaneLine"), std::string::npos);
+    EXPECT_NE(viewportPanel.find(".point = &pointToolContext"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("makeModelingToolEventAt"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("snapEnabled = !input.modifiers.primary"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("constrainAxis = input.modifiers.shift"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {
@@ -462,7 +476,7 @@ TEST(ViewportToolGuardrailTests, HostViewportAdapterUsesViewportToolDescriptors)
     EXPECT_FALSE(viewportToolAllowsSelectionFallback(ViewportToolId::Knife));
 
     const std::filesystem::path root = sourceRoot();
-    const std::string adapter = readSourceFile(root / "src" / "viewport" / "host_viewport_contract_adapter.hpp");
+    const std::string adapter = readSourceFile(root / "src" / "viewport" / "host_viewport_contract_adapter.cpp");
     EXPECT_NE(adapter.find("findViewportToolDescriptor(tool)"), std::string::npos);
     EXPECT_NE(adapter.find("findViewportToolDescriptor(id)"), std::string::npos);
     EXPECT_NE(adapter.find("quader_host_contract::find_action_descriptor(id)"), std::string::npos);

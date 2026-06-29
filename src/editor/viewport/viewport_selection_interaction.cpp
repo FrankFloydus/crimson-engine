@@ -68,6 +68,12 @@ bool liveBoxSelectionAllowed(QuaderSelectionEdit edit, QuaderSelectionMode mode)
     return true;
 }
 
+bool componentSelectionMode(QuaderSelectionMode mode) {
+    return mode == QuaderSelectionMode::Vertex ||
+            mode == QuaderSelectionMode::Edge ||
+            mode == QuaderSelectionMode::Face;
+}
+
 bool hoverTargetValid(const QuaderHoverTarget& target) {
     return target.kind != QuaderActiveSelectionKind::None && target.objectId > 0;
 }
@@ -100,7 +106,8 @@ QuaderPickSelectRequest makePickSelectRequest(
         ViewportModifiers modifiers,
         int clickCount,
         bool preserveSelectionOnMiss,
-        bool preserveSelectionOnSelectedHit) {
+        bool preserveSelectionOnSelectedHit,
+        bool preserveExistingComponentSelectionOnHit = false) {
     const ViewportRay worldRay = camera.rayFromViewportPoint(localMouse);
     return {
             .ray = {
@@ -114,6 +121,7 @@ QuaderPickSelectRequest makePickSelectRequest(
             .altPressed = modifiers.alt,
             .preserveSelectionOnMiss = preserveSelectionOnMiss,
             .preserveSelectionOnSelectedHit = preserveSelectionOnSelectedHit,
+            .preserveExistingComponentSelectionOnHit = preserveExistingComponentSelectionOnHit,
             .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
             .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
     };
@@ -158,7 +166,8 @@ QuaderSelectionSummary pickSelection(
         QVec2 localMouse,
         int clickCount,
         bool preserveSelectionOnMiss = false,
-        bool preserveSelectionOnSelectedHit = false) {
+        bool preserveSelectionOnSelectedHit = false,
+        bool preserveExistingComponentSelectionOnHit = false) {
     const QuaderApiResult<QuaderSelectionSummary> result =
             editor.selection().pickSelect(makePickSelectRequest(
                     frame.camera,
@@ -167,7 +176,8 @@ QuaderSelectionSummary pickSelection(
                     frame.input.modifiers,
                     clickCount,
                     preserveSelectionOnMiss,
-                    preserveSelectionOnSelectedHit));
+                    preserveSelectionOnSelectedHit,
+                    preserveExistingComponentSelectionOnHit));
     if (!result.ok) {
         LOG_ERROR("Viewport selection failed: {}", result.message.empty() ? "Selection failed." : result.message);
     }
@@ -212,6 +222,7 @@ void ViewportSelectionInteraction::reset() {
     committedMarquee_.reset();
     liveBoxSelection_.reset();
     hoverSuppressedTarget_.reset();
+    paintSelectionActive_ = false;
 }
 
 ViewportSelectionMarquee ViewportSelectionInteraction::marquee() const {
@@ -324,12 +335,13 @@ void ViewportSelectionInteraction::handleFrame(
             }
             suppressHoverAfterSelection(commit.end, hoveredBeforeSelection);
         } else if (canPick) {
-            (void)pickSelection(
+            const QuaderSelectionSummary summary = pickSelection(
                     editor,
                     frame.inputRouter,
                     frame,
                     frame.leftClickLocal,
                     std::max(1, frame.leftClickCount));
+            paintSelectionActive_ = componentSelectionMode(summary.mode);
             suppressHoverAfterSelection(frame.leftClickLocal, hoveredBeforeSelection);
         }
         boxEdit_ = QuaderSelectionEdit::Replace;
@@ -342,6 +354,19 @@ void ViewportSelectionInteraction::handleFrame(
         if (boxState_.active) {
             quader_editor_core::clear_selection_box(boxState_);
         }
+        paintSelectionActive_ = false;
+    }
+
+    if (!boxState_.active && canPick && paintSelectionActive_ && frame.leftDown) {
+        const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
+        const QuaderSelectionSummary summary = pickSelection(
+                editor,
+                frame.inputRouter,
+                frame,
+                frame.input.mouseLocal,
+                0);
+        paintSelectionActive_ = componentSelectionMode(summary.mode);
+        suppressHoverAfterSelection(frame.input.mouseLocal, hoveredBeforeSelection);
     }
 
     const bool boxDragging = boxState_.active && boxState_.dragging;
@@ -404,6 +429,24 @@ void ViewportSelectionInteraction::handleFrame(
         hoverSuppressedTarget_.reset();
         clearHover();
     }
+}
+
+QuaderSelectionSummary ViewportSelectionInteraction::pickContextMenuTarget(
+        QuaderEditorApi& editor,
+        const ViewportInteractionFrame& frame) {
+    const QuaderSelectionSummary summary = pickSelection(
+            editor,
+            frame.inputRouter,
+            frame,
+            frame.input.mouseLocal,
+            1,
+            true,
+            true,
+            true);
+    paintSelectionActive_ = componentSelectionMode(summary.mode);
+    hoverClearIssued_ = false;
+    hoverSuppressedTarget_.reset();
+    return summary;
 }
 
 } // namespace quader

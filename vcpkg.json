@@ -15,6 +15,7 @@
     },
     "gtest",
     "lodepng",
-    "spdlog"
+    "spdlog",
+    "stduuid"
   ]
 }

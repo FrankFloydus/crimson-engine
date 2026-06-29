@@ -1379,8 +1379,8 @@ std::span<const HostOverlayRenderPolicyDescriptor> overlay_render_policy_descrip
 std::span<const HostMaterialTextureAssetDescriptor> material_texture_asset_descriptors()
 {
 	static constexpr std::array<HostMaterialTextureAssetDescriptor, 2> descriptors {{
-		{ "default_albedo", "Default Albedo", HostMaterialTextureRole::base_color, "assets/materials/default/default_albedo.png" },
-		{ "default_roughness", "Default Roughness", HostMaterialTextureRole::roughness, "assets/materials/default/default_roughness.png" },
+		{ "default_albedo", "Default Albedo", HostMaterialTextureRole::base_color, "materials/default/default_albedo.png" },
+		{ "default_roughness", "Default Roughness", HostMaterialTextureRole::roughness, "materials/default/default_roughness.png" },
 	}};
 	return descriptors;
 }

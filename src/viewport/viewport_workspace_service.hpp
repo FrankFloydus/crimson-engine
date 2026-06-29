@@ -31,7 +31,7 @@ enum class ViewportShadingMode {
  * Enumerates Viewport Workspace Layout Policy values used by the viewport layer.
  */
 enum class ViewportWorkspaceLayoutPolicy {
-    // Current embedded Rml host policy; separate OS windowed viewports remain runtime-only.
+    // Host policy for integrations that expose only one embedded viewport surface.
     SinglePaneOnly,
     MultiPane,
 };

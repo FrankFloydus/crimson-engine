@@ -146,6 +146,7 @@ struct QuaderRevisionStamp {
  */
 struct QuaderEntityRef {
     EntityId id = InvalidEntityId;
+    std::string uuid;
     QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
 };
 
@@ -169,6 +170,7 @@ struct QuaderAssetRef {
  */
 struct QuaderModelingObjectRef {
     EntityId entity = InvalidEntityId;
+    std::string entityUuid;
     QuaderEditorObjectId editorObjectId = InvalidQuaderEditorObjectId;
     QuaderModelingObjectId modelingObjectId = InvalidQuaderModelingObjectId;
     AssetId mesh = InvalidAssetId;
@@ -397,6 +399,7 @@ struct QuaderPickSelectRequest {
     bool altPressed = false;
     bool preserveSelectionOnMiss = false;
     bool preserveSelectionOnSelectedHit = false;
+    bool preserveExistingComponentSelectionOnHit = false;
     double vertexRadius = 0.3;
     double edgeRadius = 0.2;
 };

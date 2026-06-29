@@ -15,6 +15,7 @@ inline constexpr std::string_view kQdrDocumentPayloadKey = "document";
 inline constexpr std::string_view kQdrLegacySessionPayloadKey = "session";
 inline constexpr std::string_view kQdrProjectDocumentKind = "quader.project-document";
 inline constexpr int kQdrProjectFormatVersion = 4;
+inline constexpr int kQdrLegacySessionFormatVersion = 3;
 inline constexpr int kQdrMinSupportedFormatVersion = 1;
 
 } // namespace quader

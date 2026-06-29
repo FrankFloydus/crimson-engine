@@ -32,7 +32,9 @@ public:
         }
 
         const std::string windowTitle = context.localization.imguiLabel(uiPanelLocalizationKey(id()), uiPanelKey(id()), title());
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, panelWindowPadding(context));
         if (!ImGui::Begin(windowTitle.c_str(), nullptr, windowFlags(context))) {
+            ImGui::PopStyleVar();
             ImGui::End();
             return;
         }
@@ -44,6 +46,7 @@ public:
         }
 
         drawContent(context);
+        ImGui::PopStyleVar();
         ImGui::End();
     }
 
@@ -54,6 +57,7 @@ protected:
         return 0.0f;
     }
     virtual ImGuiWindowFlags windowFlags(const UIContext& context) const { return context.style.panelWindowFlags; }
+    virtual ImVec2 panelWindowPadding(const UIContext& context) const { return context.style.windowPadding; }
     virtual bool routesPanelFocus() const { return true; }
 };
 

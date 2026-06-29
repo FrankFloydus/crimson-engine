@@ -7,6 +7,7 @@
 #include "assets/asset_registry.hpp"
 #include "assets/bake_service.hpp"
 #include "assets/material_document.hpp"
+#include "app/app_window_settings.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
 #include "core/public_command_targets.hpp"
@@ -32,8 +33,11 @@
 #include "editor/history/editor_history_service.hpp"
 #include "editor/history/modeling_memento_command.hpp"
 #include "editor/metadata/host_contract.hpp"
+#include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
+#include "editor/projection/selection_overlay_projection.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "editor/tools/viewport_tool.hpp"
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "render/filament_material_library.hpp"
 #include "render/light_renderable_cache.hpp"
@@ -43,7 +47,6 @@
 #include "render/overlay/viewport_overlay_style_resolver.hpp"
 #include "render/mesh_renderable_proxy.hpp"
 #include "render/render_system.hpp"
-#include "render/rml_filament_renderer.hpp"
 #include "render/scene_render_bridge.hpp"
 #include "render/scene_render_sync_service.hpp"
 #include "render/texture_binding_service.hpp"
@@ -65,32 +68,7 @@
 #include "api/quader_editor_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "ui/console_model.hpp"
-#include "ui/backends/rml/main_layout_rml_builder.hpp"
-#include "ui/backends/rml/rml_markup_writer.hpp"
-#include "ui/components/atoms/ui_button_component.hpp"
-#include "ui/components/atoms/ui_chrome_button_component.hpp"
-#include "ui/components/atoms/ui_dropdown_component.hpp"
-#include "ui/components/atoms/ui_toolbar_button_component.hpp"
-#include "ui/components/common/dock_layout_model.hpp"
-#include "ui/components/common/resizable_split.hpp"
-#include "ui/components/common/ui_drag_drop.hpp"
-#include "ui/components/common/ui_tab_strip_model.hpp"
-#include "ui/components/organisms/main_layout_model.hpp"
-#include "ui/components/organisms/modeling_mode_shelf_component.hpp"
-#include "ui/components/organisms/window_chrome_controls_component.hpp"
-#include "ui/core/ui_class_list.hpp"
-#include "ui/core/ui_element.hpp"
-#include "ui/core/ui_icon_registry.hpp"
-#include "ui/controllers/main_layout_controller.hpp"
-#include "ui/controllers/main_layout_dock_drag_controller.hpp"
-#include "ui/controllers/main_layout_dock_hit_region_builder.hpp"
-#include "ui/controllers/main_layout_sash_registry.hpp"
-#include "ui/controllers/modeling_mode_shelf_controller.hpp"
-#include "ui/controllers/resizable_split_controller.hpp"
-#include "ui/controllers/ui_drag_drop_controller.hpp"
-#include "ui/debug_palette_view.hpp"
 #include "ui/ui_settings.hpp"
-#include "ui/ui_utility_tokens.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
@@ -195,6 +173,14 @@ ViewportShortcut testGridShortcut(int preset) {
             .kind = ViewportShortcutKind::SetGridPreset,
             .context = ViewportShortcutContext::Viewport,
             .gridPreset = preset,
+    };
+}
+
+ViewportShortcut testViewShortcut(ViewportView view) {
+    return {
+            .kind = ViewportShortcutKind::SetView,
+            .context = ViewportShortcutContext::Viewport,
+            .view = view,
     };
 }
 
@@ -734,2828 +720,162 @@ TEST(ConsoleModelTests, RespectsMinimumSeverityLevels) {
     EXPECT_TRUE(ConsoleModel::filter(entries, {.minimumLevel = spdlog::level::off}).empty());
 }
 
-TEST(UISettingsTests, DefaultsKeepViewportShellLocale) {
+TEST(AppWindowSettingsTests, RoundTripsNormalBoundsAndMaximizedState) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_window_settings_round_trip.ini";
+    std::filesystem::remove(path);
+
+    AppWindowSettings settings = AppWindowSettings::defaults();
+    settings.setPlacement({
+            .normalFrame = {
+                    .x = -120,
+                    .y = 84,
+                    .width = 1440,
+                    .height = 900,
+            },
+            .maximized = true,
+    });
+
+    ASSERT_TRUE(settings.save(path));
+    const AppWindowSettings loaded = AppWindowSettings::load(path);
+
+    ASSERT_TRUE(loaded.placement().has_value());
+    EXPECT_EQ(loaded.placement()->normalFrame.x, -120);
+    EXPECT_EQ(loaded.placement()->normalFrame.y, 84);
+    EXPECT_EQ(loaded.placement()->normalFrame.width, 1440);
+    EXPECT_EQ(loaded.placement()->normalFrame.height, 900);
+    EXPECT_TRUE(loaded.placement()->maximized);
+}
+
+TEST(AppWindowSettingsTests, IgnoresIncompleteWindowPlacementFiles) {
+    const std::filesystem::path path =
+            std::filesystem::temp_directory_path() / "quader_window_settings_incomplete.ini";
+    std::filesystem::remove(path);
+
+    {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[Window]\n";
+        file << "NormalX=10\n";
+        file << "NormalY=20\n";
+        file << "Maximized=true\n";
+    }
+
+    const AppWindowSettings loaded = AppWindowSettings::load(path);
+    EXPECT_FALSE(loaded.placement().has_value());
+}
+
+TEST(UISettingsTests, DefaultsKeepPanelVisibilityLocaleAndNavigationGizmo) {
     const UISettings settings = UISettings::defaults();
 
     EXPECT_EQ(settings.locale(), "en-US");
-    EXPECT_EQ(settings.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(settings.mainLayout().sidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(settings.mainLayout().auxiliarySidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(settings.mainLayout().outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
-    EXPECT_EQ(settings.mainLayout().bottomDock.heightDp, kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(settings.mainLayout().sidebar.collapsed);
-    EXPECT_FALSE(settings.mainLayout().auxiliarySidebar.collapsed);
-    EXPECT_FALSE(settings.mainLayout().bottomDock.collapsed);
-    EXPECT_TRUE(mainLayoutPanelVisible(settings.mainLayout(), kMainLayoutPanelOutliner));
-    EXPECT_TRUE(mainLayoutPanelVisible(settings.mainLayout(), kMainLayoutPanelInspector));
-    ASSERT_TRUE(dockPanelLocation(settings.mainLayout().dockLayout, kMainLayoutPanelOutliner));
-    ASSERT_TRUE(dockPanelLocation(settings.mainLayout().dockLayout, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockPanelLocation(settings.mainLayout().dockLayout, kMainLayoutPanelOutliner), DockLocation::Sidebar);
-    EXPECT_EQ(*dockPanelLocation(settings.mainLayout().dockLayout, kMainLayoutPanelInspector), DockLocation::Sidebar);
-    ASSERT_TRUE(dockActivePanelId(settings.mainLayout().dockLayout, DockLocation::Sidebar));
-    EXPECT_EQ(*dockActivePanelId(settings.mainLayout().dockLayout, DockLocation::Sidebar), kMainLayoutPanelOutliner);
+    EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Viewport));
+    EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Outliner));
+    EXPECT_TRUE(settings.isPanelVisible(UIPanelId::Inspector));
+    EXPECT_FALSE(settings.isPanelVisible(UIPanelId::Console));
+    EXPECT_TRUE(settings.navigationGizmoVisible());
 }
 
-TEST(UISettingsTests, RoundTripsLocaleAndMainLayout) {
+TEST(UISettingsTests, RoundTripsPanelVisibilityLocaleAndNavigationGizmo) {
     const std::filesystem::path path =
             std::filesystem::temp_directory_path() / "quader_ui_settings_round_trip.ini";
     std::filesystem::remove(path);
 
     UISettings settings = UISettings::defaults();
-    settings.setLocale("it-IT");
-    MainLayoutModel layout = settings.mainLayout();
-    layout.sidebarSide = MainLayoutSidebarSide::Left;
-    layout.sidebar.widthDp = 333;
-    layout.auxiliarySidebar.widthDp = 277;
-    layout.outlinerHeightDp = 271;
-    layout.bottomDock.heightDp = 288;
-    layout.sidebar.collapsed = true;
-    layout.auxiliarySidebar.collapsed = true;
-    layout.bottomDock.collapsed = true;
-    ASSERT_TRUE(mainLayoutSetPanelVisible(layout, kMainLayoutPanelOutliner, false));
-    ASSERT_TRUE(dockMovePanelToLocationAtPanel(
-            layout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Sidebar,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::Before));
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-    ASSERT_TRUE(dockSplitPanelWithPanel(
-            layout.dockLayout,
-            kMainLayoutPanelOutliner,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector,
-            DockPanelInsertPosition::After));
-    ASSERT_TRUE(dockSetSplitPanelSizeDp(
-            layout.dockLayout,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector,
-            316));
-    settings.setMainLayout(layout);
+    settings.setLocale(" it-IT ");
+    settings.setPanelVisible(UIPanelId::Outliner, false);
+    settings.setPanelVisible(UIPanelId::Inspector, false);
+    settings.setPanelVisible(UIPanelId::Console, true);
+    settings.setNavigationGizmoVisible(false);
 
     ASSERT_TRUE(settings.save(path));
-    {
-        std::ifstream saved(path);
-        ASSERT_TRUE(saved.is_open());
-        const std::string savedText{
-                std::istreambuf_iterator<char>(saved),
-                std::istreambuf_iterator<char>()};
-        EXPECT_NE(savedText.find("DockSplitPanels=Panel:inspector=inspector@316|outliner"), std::string::npos);
-    }
-    const UISettings loaded = UISettings::load(path);
-
-    EXPECT_EQ(loaded.locale(), "it-IT");
-    EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Left);
-    EXPECT_EQ(loaded.mainLayout().sidebar.widthDp, 333);
-    EXPECT_EQ(loaded.mainLayout().auxiliarySidebar.widthDp, 277);
-    EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, 271);
-    EXPECT_EQ(loaded.mainLayout().bottomDock.heightDp, 288);
-    EXPECT_TRUE(loaded.mainLayout().sidebar.collapsed);
-    EXPECT_TRUE(loaded.mainLayout().auxiliarySidebar.collapsed);
-    EXPECT_TRUE(loaded.mainLayout().bottomDock.collapsed);
-    EXPECT_FALSE(mainLayoutPanelVisible(loaded.mainLayout(), kMainLayoutPanelOutliner));
-    EXPECT_TRUE(mainLayoutPanelVisible(loaded.mainLayout(), kMainLayoutPanelInspector));
-    ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector), DockLocation::Panel);
-    ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner));
-    EXPECT_EQ(*dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner), DockLocation::Panel);
-    ASSERT_TRUE(dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel), kMainLayoutPanelInspector);
-    ASSERT_GE(loaded.mainLayout().dockLayout.panels.size(), 2u);
-    EXPECT_EQ(loaded.mainLayout().dockLayout.panels[0].panelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(loaded.mainLayout().dockLayout.panels[1].panelId, kMainLayoutPanelOutliner);
-    const std::vector<std::string_view> loadedSplitPanels =
-            dockSplitPanelsInLocation(loaded.mainLayout().dockLayout, DockLocation::Panel);
-    ASSERT_EQ(loadedSplitPanels.size(), 2u);
-    EXPECT_EQ(loadedSplitPanels[0], kMainLayoutPanelInspector);
-    EXPECT_EQ(loadedSplitPanels[1], kMainLayoutPanelOutliner);
-    const std::vector<std::string_view> loadedBottomTabs =
-            dockTabPanelsInLocation(loaded.mainLayout().dockLayout, DockLocation::Panel);
-    ASSERT_EQ(loadedBottomTabs.size(), 1u);
-    EXPECT_EQ(loadedBottomTabs[0], kMainLayoutPanelInspector);
-    ASSERT_TRUE(dockSplitPanelSizeDp(
-            loaded.mainLayout().dockLayout,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(
-                    loaded.mainLayout().dockLayout,
-                    DockLocation::Panel,
-                    kMainLayoutPanelInspector),
-            316);
-
-    std::filesystem::remove(path);
-}
-
-TEST(UISettingsTests, LoadsLegacyLocaleOnlySettingsWithDefaultLayout) {
-    const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "quader_ui_settings_legacy_locale_only.ini";
-    {
-        std::ofstream file(path, std::ios::trunc);
-        ASSERT_TRUE(file.is_open());
-        file << "[Localization]\n";
-        file << "Locale=it-IT\n";
-    }
+    std::ifstream saved(path);
+    ASSERT_TRUE(saved.is_open());
+    const std::string savedText{
+            std::istreambuf_iterator<char>(saved),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(savedText.find("outliner=false"), std::string::npos);
+    EXPECT_NE(savedText.find("inspector=false"), std::string::npos);
+    EXPECT_NE(savedText.find("console=true"), std::string::npos);
+    EXPECT_EQ(savedText.find("Outliner="), std::string::npos);
+    EXPECT_EQ(savedText.find("Inspector="), std::string::npos);
+    EXPECT_EQ(savedText.find("Console="), std::string::npos);
+    saved.close();
 
     const UISettings loaded = UISettings::load(path);
 
     EXPECT_EQ(loaded.locale(), "it-IT");
-    EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(loaded.mainLayout().sidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(loaded.mainLayout().auxiliarySidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
-    EXPECT_EQ(loaded.mainLayout().bottomDock.heightDp, kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(loaded.mainLayout().sidebar.collapsed);
-    EXPECT_FALSE(loaded.mainLayout().auxiliarySidebar.collapsed);
-    EXPECT_FALSE(loaded.mainLayout().bottomDock.collapsed);
-    EXPECT_TRUE(mainLayoutPanelVisible(loaded.mainLayout(), kMainLayoutPanelOutliner));
-    EXPECT_TRUE(mainLayoutPanelVisible(loaded.mainLayout(), kMainLayoutPanelInspector));
-    ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner));
-    ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner), DockLocation::Sidebar);
-    EXPECT_EQ(*dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector), DockLocation::Sidebar);
+    EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Outliner));
+    EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Inspector));
+    EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
+    EXPECT_FALSE(loaded.navigationGizmoVisible());
 
     std::filesystem::remove(path);
 }
 
-TEST(UISettingsTests, IgnoresMalformedLayoutSettingsAndClampsSizes) {
+TEST(UISettingsTests, LoadsLegacyDisplayPanelKeysAndSavesStableKeys) {
     const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "quader_ui_settings_malformed_layout.ini";
-    {
-        std::ofstream file(path, std::ios::trunc);
-        ASSERT_TRUE(file.is_open());
-        file << "[MainLayout]\n";
-        file << "SidebarSide=Bottom\n";
-        file << "SidebarWidthDp=12\n";
-        file << "AuxiliarySidebarWidthDp=24\n";
-        file << "SidebarCollapsed=maybe\n";
-        file << "AuxiliarySidebarCollapsed=maybe\n";
-        file << "BottomDockCollapsed=yes\n";
-        file << "OutlinerHeightDp=-42\n";
-        file << "BottomDockHeightDp=-1\n";
-        file << "OutlinerVisible=what\n";
-        file << "InspectorVisible=0\n";
-        file << "OutlinerDockLocation=Nowhere\n";
-        file << "InspectorDockLocation=Panel\n";
-        file << "DockActivePanels=Panel:outliner,Panel:inspector,AuxiliaryBar:inspector\n";
-    }
-
-    const UISettings loaded = UISettings::load(path);
-
-    EXPECT_EQ(loaded.mainLayout().sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(loaded.mainLayout().sidebar.widthDp, kMainLayoutSidebarMinWidthDp);
-    EXPECT_EQ(loaded.mainLayout().auxiliarySidebar.widthDp, kMainLayoutSidebarMinWidthDp);
-    EXPECT_EQ(loaded.mainLayout().outlinerHeightDp, kMainLayoutPanelMinHeightDp);
-    EXPECT_EQ(loaded.mainLayout().bottomDock.heightDp, kMainLayoutPanelMinHeightDp);
-    EXPECT_FALSE(loaded.mainLayout().sidebar.collapsed);
-    EXPECT_FALSE(loaded.mainLayout().auxiliarySidebar.collapsed);
-    EXPECT_TRUE(loaded.mainLayout().bottomDock.collapsed);
-    EXPECT_TRUE(mainLayoutPanelVisible(loaded.mainLayout(), kMainLayoutPanelOutliner));
-    EXPECT_FALSE(mainLayoutPanelVisible(loaded.mainLayout(), kMainLayoutPanelInspector));
-    ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner));
-    ASSERT_TRUE(dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelOutliner), DockLocation::Sidebar);
-    EXPECT_EQ(*dockPanelLocation(loaded.mainLayout().dockLayout, kMainLayoutPanelInspector), DockLocation::Panel);
-    ASSERT_TRUE(dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel), kMainLayoutPanelInspector);
-
+            std::filesystem::temp_directory_path() / "quader_ui_settings_legacy_panel_keys.ini";
     std::filesystem::remove(path);
-}
 
-TEST(UISettingsTests, MigratesLegacyDisplayPanelNamesOnlyWhenLoadingSettings) {
-    const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "quader_ui_settings_legacy_panel_labels.ini";
     {
         std::ofstream file(path, std::ios::trunc);
         ASSERT_TRUE(file.is_open());
-        file << "[MainLayout]\n";
-        file << "DockPanelOrder=Inspector,Outliner,Viewport\n";
-        file << "DockActivePanels=Panel:Inspector,Sidebar:Outliner\n";
-        file << "DockSplitPanels=Panel:Inspector=Inspector@268|Outliner\n";
-        file << "InspectorDockLocation=Panel\n";
-        file << "OutlinerDockLocation=Panel\n";
+        file << "[Panels]\n";
+        file << "Outliner=false\n";
+        file << "Inspector=false\n";
+        file << "Console=true\n";
     }
 
     UISettings loaded = UISettings::load(path);
-
-    ASSERT_GE(loaded.mainLayout().dockLayout.panels.size(), 2u);
-    EXPECT_EQ(loaded.mainLayout().dockLayout.panels[0].panelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(loaded.mainLayout().dockLayout.panels[1].panelId, kMainLayoutPanelOutliner);
-    ASSERT_TRUE(dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(loaded.mainLayout().dockLayout, DockLocation::Panel), kMainLayoutPanelInspector);
-    const std::vector<std::string_view> splitPanels =
-            dockSplitPanelsInLocation(loaded.mainLayout().dockLayout, DockLocation::Panel);
-    ASSERT_EQ(splitPanels.size(), 2u);
-    EXPECT_EQ(splitPanels[0], kMainLayoutPanelInspector);
-    EXPECT_EQ(splitPanels[1], kMainLayoutPanelOutliner);
-    ASSERT_TRUE(dockSplitPanelSizeDp(
-            loaded.mainLayout().dockLayout,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(
-                    loaded.mainLayout().dockLayout,
-                    DockLocation::Panel,
-                    kMainLayoutPanelInspector),
-            268);
+    EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Outliner));
+    EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Inspector));
+    EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
 
     ASSERT_TRUE(loaded.save(path));
-    const std::string savedText = readSourceFile(path);
-    EXPECT_NE(savedText.find("DockPanelOrder=inspector,outliner"), std::string::npos);
-    EXPECT_NE(savedText.find("DockActivePanels=Panel:inspector"), std::string::npos);
-    EXPECT_NE(savedText.find("DockSplitPanels=Panel:inspector=inspector@268|outliner"), std::string::npos);
-    EXPECT_EQ(savedText.find("DockPanelOrder=Inspector"), std::string::npos);
-    EXPECT_EQ(savedText.find("DockPanelOrder=Outliner"), std::string::npos);
-    EXPECT_EQ(savedText.find("Panel:Inspector"), std::string::npos);
-    EXPECT_EQ(savedText.find("Sidebar:Outliner"), std::string::npos);
-    EXPECT_EQ(savedText.find("=Inspector@"), std::string::npos);
-    EXPECT_EQ(savedText.find("|Outliner"), std::string::npos);
+    std::ifstream saved(path);
+    ASSERT_TRUE(saved.is_open());
+    const std::string savedText{
+            std::istreambuf_iterator<char>(saved),
+            std::istreambuf_iterator<char>()};
+    EXPECT_NE(savedText.find("outliner=false"), std::string::npos);
+    EXPECT_NE(savedText.find("inspector=false"), std::string::npos);
+    EXPECT_NE(savedText.find("console=true"), std::string::npos);
+    EXPECT_EQ(savedText.find("Outliner="), std::string::npos);
+    EXPECT_EQ(savedText.find("Inspector="), std::string::npos);
+    EXPECT_EQ(savedText.find("Console="), std::string::npos);
+    saved.close();
 
     std::filesystem::remove(path);
 }
 
-TEST(UITabStripModelTests, NormalizesItemsAndKeepsActiveItemValid) {
-    UITabStripModel tabs = UITabStripModel::fromItems({"outliner", "inspector", "outliner"}, "inspector");
-
-    ASSERT_EQ(tabs.itemIds().size(), 2u);
-    EXPECT_EQ(tabs.itemIds()[0], "outliner");
-    EXPECT_EQ(tabs.itemIds()[1], "inspector");
-    ASSERT_TRUE(tabs.activeItemId());
-    EXPECT_EQ(*tabs.activeItemId(), "inspector");
-    EXPECT_TRUE(tabs.contains("outliner"));
-    EXPECT_FALSE(tabs.contains("console"));
-    EXPECT_TRUE(tabs.activateItem("outliner"));
-    ASSERT_TRUE(tabs.activeItemId());
-    EXPECT_EQ(*tabs.activeItemId(), "outliner");
-    EXPECT_FALSE(tabs.activateItem("missing"));
-    EXPECT_FALSE(tabs.activateItem("outliner"));
-
-    EXPECT_TRUE(tabs.setItems({"console", "problems"}, "missing"));
-    ASSERT_TRUE(tabs.activeItemId());
-    EXPECT_EQ(*tabs.activeItemId(), "console");
-    EXPECT_TRUE(tabs.setItems({}, "console"));
-    EXPECT_TRUE(tabs.empty());
-    EXPECT_FALSE(tabs.activeItemId());
-}
-
-TEST(DockLayoutModelTests, NormalizesKnownPanelsAndMovesBetweenLocations) {
-    DockLayoutModel model;
-    model.panels = {
-            {.panelId = std::string(kMainLayoutPanelInspector), .location = DockLocation::Panel},
-            {.panelId = "stale", .location = DockLocation::AuxiliaryBar},
-    };
-    model.activePanels = {
-            {.location = DockLocation::Panel, .panelId = "stale"},
-            {.location = DockLocation::AuxiliaryBar, .panelId = "stale"},
-    };
-
-    model = normalizedDockLayoutModel(
-            std::move(model),
-            mainLayoutDockablePanelIds(),
-            DockLocation::Sidebar);
-
-    EXPECT_EQ(model.panels.size(), 2u);
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelInspector);
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Sidebar));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Sidebar), kMainLayoutPanelOutliner);
-    EXPECT_FALSE(dockActivePanelId(model, DockLocation::AuxiliaryBar));
-    ASSERT_TRUE(dockPanelLocation(model, kMainLayoutPanelOutliner));
-    ASSERT_TRUE(dockPanelLocation(model, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockPanelLocation(model, kMainLayoutPanelOutliner), DockLocation::Sidebar);
-    EXPECT_EQ(*dockPanelLocation(model, kMainLayoutPanelInspector), DockLocation::Panel);
-    EXPECT_FALSE(dockPanelLocation(model, kMainLayoutPanelViewport));
-    EXPECT_TRUE(dockPanelIdIsKnown(model, kMainLayoutPanelOutliner));
-    EXPECT_FALSE(dockPanelIdIsKnown(model, "console"));
-    EXPECT_EQ(dockLocationName(DockLocation::AuxiliaryBar), "AuxiliaryBar");
-    ASSERT_TRUE(dockLocationFromName("Panel"));
-    EXPECT_EQ(*dockLocationFromName("Panel"), DockLocation::Panel);
-    EXPECT_FALSE(dockLocationFromName("Bottom"));
-
-    const std::vector<std::string_view> sidebarPanels = dockPanelsInLocation(model, DockLocation::Sidebar);
-    ASSERT_EQ(sidebarPanels.size(), 1u);
-    EXPECT_EQ(sidebarPanels.front(), kMainLayoutPanelOutliner);
-
-    EXPECT_TRUE(dockMovePanelToLocation(model, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelOutliner);
-    EXPECT_FALSE(dockActivePanelId(model, DockLocation::Sidebar));
-    const std::vector<std::string_view> panelPanels = dockPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(panelPanels.size(), 2u);
-    EXPECT_EQ(panelPanels[0], kMainLayoutPanelInspector);
-    EXPECT_EQ(panelPanels[1], kMainLayoutPanelOutliner);
-    EXPECT_TRUE(dockMovePanelToLocationAtPanel(
-            model,
-            kMainLayoutPanelOutliner,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector,
-            DockPanelInsertPosition::Before));
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelOutliner);
-    const std::vector<std::string_view> reorderedPanelPanels = dockPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(reorderedPanelPanels.size(), 2u);
-    EXPECT_EQ(reorderedPanelPanels[0], kMainLayoutPanelOutliner);
-    EXPECT_EQ(reorderedPanelPanels[1], kMainLayoutPanelInspector);
-    EXPECT_TRUE(dockSetActivePanel(model, DockLocation::Panel, kMainLayoutPanelInspector));
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelInspector);
-    EXPECT_FALSE(dockMovePanelToLocationAtPanel(
-            model,
-            kMainLayoutPanelOutliner,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector,
-            DockPanelInsertPosition::Before));
-    EXPECT_TRUE(dockMovePanelToLocation(model, kMainLayoutPanelOutliner, DockLocation::AuxiliaryBar));
-    ASSERT_TRUE(dockPanelLocation(model, kMainLayoutPanelOutliner));
-    EXPECT_EQ(*dockPanelLocation(model, kMainLayoutPanelOutliner), DockLocation::AuxiliaryBar);
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::AuxiliaryBar));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::AuxiliaryBar), kMainLayoutPanelOutliner);
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelInspector);
-    EXPECT_FALSE(dockSetActivePanel(model, DockLocation::Panel, kMainLayoutPanelInspector));
-    EXPECT_FALSE(dockSetActivePanel(model, DockLocation::Panel, kMainLayoutPanelOutliner));
-    const UITabStripModel panelTabs = dockTabStripForLocation(model, DockLocation::Panel);
-    ASSERT_TRUE(panelTabs.activeItemId());
-    EXPECT_EQ(*panelTabs.activeItemId(), kMainLayoutPanelInspector);
-    const std::vector<std::string_view> singlePanelBody = dockSplitPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(singlePanelBody.size(), 1u);
-    EXPECT_EQ(singlePanelBody.front(), kMainLayoutPanelInspector);
-    EXPECT_TRUE(dockSplitPanelWithPanel(
-            model,
-            kMainLayoutPanelOutliner,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector,
-            DockPanelInsertPosition::After));
-    const std::vector<std::string_view> splitPanelBody = dockSplitPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(splitPanelBody.size(), 2u);
-    EXPECT_EQ(splitPanelBody[0], kMainLayoutPanelInspector);
-    EXPECT_EQ(splitPanelBody[1], kMainLayoutPanelOutliner);
-    const std::vector<std::string_view> splitPanelTabs =
-            dockTabPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(splitPanelTabs.size(), 1u);
-    EXPECT_EQ(splitPanelTabs[0], kMainLayoutPanelInspector);
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelInspector);
-    EXPECT_FALSE(dockSetActivePanel(model, DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_FALSE(dockSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector));
-    EXPECT_TRUE(dockSetSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector, 284));
-    ASSERT_TRUE(dockSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector), 284);
-    EXPECT_FALSE(dockSetSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector, 284));
-    EXPECT_TRUE(dockSetSplitPanels(
-            model,
-            DockLocation::Panel,
-            {kMainLayoutPanelOutliner, kMainLayoutPanelInspector}));
-    const std::vector<std::string_view> retabbedSplitPanelTabs =
-            dockTabPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(retabbedSplitPanelTabs.size(), 1u);
-    EXPECT_EQ(retabbedSplitPanelTabs[0], kMainLayoutPanelOutliner);
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelOutliner);
-    ASSERT_TRUE(dockSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelInspector), 284);
-    EXPECT_FALSE(dockSplitPanelSizeDp(model, DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_TRUE(dockMovePanelToLocationAtPanel(
-            model,
-            kMainLayoutPanelInspector,
-            DockLocation::Panel,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::After));
-    const std::vector<std::string_view> detachedPanelTabs =
-            dockTabPanelsInLocation(model, DockLocation::Panel);
-    ASSERT_EQ(detachedPanelTabs.size(), 2u);
-    EXPECT_EQ(detachedPanelTabs[0], kMainLayoutPanelOutliner);
-    EXPECT_EQ(detachedPanelTabs[1], kMainLayoutPanelInspector);
-    EXPECT_TRUE(model.splitPanels.empty());
-    ASSERT_TRUE(dockActivePanelId(model, DockLocation::Panel));
-    EXPECT_EQ(*dockActivePanelId(model, DockLocation::Panel), kMainLayoutPanelInspector);
-    EXPECT_FALSE(dockMovePanelToLocation(model, "console", DockLocation::Panel));
-}
-
-TEST(MainLayoutModelTests, DefaultLayoutContainsViewportAndRightSidebarPanels) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-
-    EXPECT_EQ(layout.sidebarSide, MainLayoutSidebarSide::Right);
-    EXPECT_EQ(layout.sidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(layout.auxiliarySidebar.widthDp, kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
-    EXPECT_EQ(layout.bottomDock.heightDp, kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(layout.sidebar.collapsed);
-    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
-    EXPECT_FALSE(layout.bottomDock.collapsed);
-    EXPECT_TRUE(mainLayoutPanelVisible(layout, kMainLayoutPanelOutliner));
-    EXPECT_TRUE(mainLayoutPanelVisible(layout, kMainLayoutPanelInspector));
-    ASSERT_TRUE(dockPanelLocation(layout.dockLayout, kMainLayoutPanelOutliner));
-    ASSERT_TRUE(dockPanelLocation(layout.dockLayout, kMainLayoutPanelInspector));
-    EXPECT_EQ(*dockPanelLocation(layout.dockLayout, kMainLayoutPanelOutliner), DockLocation::Sidebar);
-    EXPECT_EQ(*dockPanelLocation(layout.dockLayout, kMainLayoutPanelInspector), DockLocation::Sidebar);
-    EXPECT_TRUE(mainLayoutPanelIdIsViewport(kMainLayoutPanelViewport));
-    EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelViewport));
-    EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelOutliner));
-    EXPECT_TRUE(mainLayoutPanelIdIsKnown(kMainLayoutPanelInspector));
-    EXPECT_FALSE(mainLayoutPanelIdIsViewport("Viewport"));
-    EXPECT_FALSE(mainLayoutPanelIdIsKnown("Outliner"));
-    EXPECT_FALSE(mainLayoutPanelIdIsKnown("Inspector"));
-    EXPECT_FALSE(mainLayoutCanonicalPanelId("Outliner"));
-    EXPECT_FALSE(mainLayoutCanonicalPanelId("Inspector"));
-    const std::optional<std::string_view> legacyOutliner = mainLayoutPanelIdFromLegacySettings("Outliner");
-    const std::optional<std::string_view> legacyInspector = mainLayoutPanelIdFromLegacySettings("Inspector");
-    ASSERT_TRUE(legacyOutliner);
-    ASSERT_TRUE(legacyInspector);
-    EXPECT_EQ(*legacyOutliner, kMainLayoutPanelOutliner);
-    EXPECT_EQ(*legacyInspector, kMainLayoutPanelInspector);
-    EXPECT_FALSE(mainLayoutPanelIdIsKnown("Console"));
-    EXPECT_EQ(mainLayoutOppositeSidebarSide(MainLayoutSidebarSide::Right), MainLayoutSidebarSide::Left);
-    ASSERT_TRUE(mainLayoutSidebarSideForDockLocation(layout, DockLocation::Sidebar));
-    EXPECT_EQ(*mainLayoutSidebarSideForDockLocation(layout, DockLocation::Sidebar), MainLayoutSidebarSide::Right);
-    ASSERT_TRUE(mainLayoutSidebarSideForDockLocation(layout, DockLocation::AuxiliaryBar));
-    EXPECT_EQ(*mainLayoutSidebarSideForDockLocation(layout, DockLocation::AuxiliaryBar), MainLayoutSidebarSide::Left);
-    ASSERT_TRUE(mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Left));
-    EXPECT_EQ(*mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Left), DockLocation::AuxiliaryBar);
-    ASSERT_TRUE(mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Right));
-    EXPECT_EQ(*mainLayoutDockLocationForSidebarSide(layout, MainLayoutSidebarSide::Right), DockLocation::Sidebar);
-    EXPECT_TRUE(mainLayoutLocationIsSideDock(DockLocation::Sidebar));
-    EXPECT_TRUE(mainLayoutLocationIsSideDock(DockLocation::AuxiliaryBar));
-    EXPECT_FALSE(mainLayoutLocationIsSideDock(DockLocation::Panel));
-    EXPECT_EQ(mainLayoutSideDockWidthDp(layout, DockLocation::Sidebar), kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_EQ(mainLayoutSideDockWidthDp(layout, DockLocation::AuxiliaryBar), kMainLayoutSidebarDefaultWidthDp);
-    EXPECT_FALSE(mainLayoutSideDockCollapsed(layout, DockLocation::Sidebar));
-    EXPECT_FALSE(mainLayoutSideDockCollapsed(layout, DockLocation::AuxiliaryBar));
-    EXPECT_EQ(mainLayoutBottomDockHeightDp(layout), kMainLayoutBottomDockDefaultHeightDp);
-    EXPECT_FALSE(mainLayoutBottomDockCollapsed(layout));
-
-    const MainLayoutPanelDescriptorList& descriptors = mainLayoutPanelDescriptors();
-    ASSERT_EQ(descriptors.size(), kMainLayoutPanelDescriptorCount);
-    ASSERT_TRUE(mainLayoutPanelDescriptor(kMainLayoutPanelOutliner));
-    EXPECT_EQ(mainLayoutPanelDescriptor(kMainLayoutPanelOutliner)->localeKey, "ui.panel.outliner");
-    EXPECT_EQ(mainLayoutPanelDescriptor(kMainLayoutPanelInspector)->fallbackLabel, "Inspector");
-    EXPECT_EQ(
-            mainLayoutPanelIdFromVisibilitySettingsKey("OutlinerVisible").value_or(std::string_view{}),
-            kMainLayoutPanelOutliner);
-    EXPECT_EQ(
-            mainLayoutPanelIdFromDockLocationSettingsKey("InspectorDockLocation").value_or(std::string_view{}),
-            kMainLayoutPanelInspector);
-    EXPECT_TRUE(mainLayoutPanelDescriptor(kMainLayoutPanelViewport));
-    EXPECT_FALSE(mainLayoutPanelDescriptor(kMainLayoutPanelViewport)->dockable);
-}
-
-TEST(MainLayoutControllerTests, ResizesSidebarAndPanelSplitWithClamps) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    MainLayoutController controller(layout);
-
-    EXPECT_TRUE(controller.resizeSidebar(12));
-    EXPECT_EQ(layout.sidebar.widthDp, kMainLayoutSidebarMinWidthDp);
-    EXPECT_TRUE(controller.resizeSidebar(800));
-    EXPECT_EQ(layout.sidebar.widthDp, 800);
-    EXPECT_TRUE(controller.resizeSidebar(280));
-    EXPECT_EQ(layout.sidebar.widthDp, 280);
-    EXPECT_TRUE(controller.resizeSidebar(DockLocation::AuxiliaryBar, 290));
-    EXPECT_EQ(layout.auxiliarySidebar.widthDp, 290);
-    EXPECT_FALSE(layout.sidebar.collapsed);
-    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
-    EXPECT_FALSE(controller.resizeSidebar(DockLocation::AuxiliaryBar, 290));
-
-    EXPECT_TRUE(controller.setSidebarCollapsed(true));
-    EXPECT_TRUE(layout.sidebar.collapsed);
-    EXPECT_TRUE(controller.resizeSidebar(300));
-    EXPECT_EQ(layout.sidebar.widthDp, 300);
-    EXPECT_FALSE(layout.sidebar.collapsed);
-    EXPECT_TRUE(controller.setSidebarCollapsed(DockLocation::AuxiliaryBar, true));
-    EXPECT_TRUE(layout.auxiliarySidebar.collapsed);
-    EXPECT_TRUE(controller.resizeSidebar(DockLocation::AuxiliaryBar, 310));
-    EXPECT_EQ(layout.auxiliarySidebar.widthDp, 310);
-    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
-    EXPECT_FALSE(controller.setSidebarCollapsed(DockLocation::Panel, true));
-    EXPECT_FALSE(controller.resizeSidebar(DockLocation::Panel, 300));
-
-    EXPECT_TRUE(controller.resizeOutlinerPanel(12));
-    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutPanelMinHeightDp);
-    EXPECT_TRUE(controller.resizeOutlinerPanel(10000));
-    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutPanelMaxHeightDp);
-    EXPECT_TRUE(controller.resizeOutlinerPanel(260));
-    EXPECT_EQ(layout.outlinerHeightDp, 260);
-
-    EXPECT_TRUE(controller.resizeSidePanelStack(DockLocation::Sidebar, kMainLayoutPanelOutliner, 12));
-    ASSERT_TRUE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelOutliner));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelOutliner),
-            kMainLayoutPanelMinHeightDp);
-    EXPECT_TRUE(controller.resizeSidePanelStack(DockLocation::Sidebar, kMainLayoutPanelOutliner, 10000));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelOutliner),
-            kMainLayoutPanelMaxHeightDp);
-    EXPECT_TRUE(controller.resizeSidePanelStack(DockLocation::Sidebar, kMainLayoutPanelOutliner, 280));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelOutliner),
-            280);
-    EXPECT_FALSE(controller.resizeSidePanelStack(DockLocation::Sidebar, kMainLayoutPanelInspector, 300));
-    EXPECT_FALSE(controller.resizeSidePanelStack(DockLocation::Panel, kMainLayoutPanelOutliner, 300));
-
-    EXPECT_TRUE(controller.resizeBottomDock(12));
-    EXPECT_EQ(layout.bottomDock.heightDp, kMainLayoutPanelMinHeightDp);
-    EXPECT_TRUE(controller.resizeBottomDock(10000));
-    EXPECT_EQ(layout.bottomDock.heightDp, kMainLayoutPanelMaxHeightDp);
-    EXPECT_TRUE(controller.setBottomDockCollapsed(true));
-    EXPECT_TRUE(layout.bottomDock.collapsed);
-    EXPECT_TRUE(controller.resizeBottomDock(288));
-    EXPECT_EQ(layout.bottomDock.heightDp, 288);
-    EXPECT_FALSE(layout.bottomDock.collapsed);
-    EXPECT_TRUE(controller.setBottomDockCollapsed(true));
-    EXPECT_FALSE(controller.setBottomDockCollapsed(true));
-}
-
-TEST(MainLayoutControllerTests, TogglesFixedPanelsAndPreparesSidebarFlip) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    MainLayoutController controller(layout);
-
-    EXPECT_TRUE(controller.setSidebarSide(MainLayoutSidebarSide::Left));
-    EXPECT_EQ(layout.sidebarSide, MainLayoutSidebarSide::Left);
-    EXPECT_FALSE(controller.setSidebarSide(MainLayoutSidebarSide::Left));
-
-    EXPECT_FALSE(controller.panelDockLocation("Inspector"));
-    EXPECT_TRUE(controller.movePanelToDockLocation(
-            kMainLayoutPanelInspector,
-            DockLocation::Sidebar,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::Before));
-    const std::vector<std::string_view> sidebarPanels = dockPanelsInLocation(layout.dockLayout, DockLocation::Sidebar);
-    ASSERT_EQ(sidebarPanels.size(), 2u);
-    EXPECT_EQ(sidebarPanels[0], kMainLayoutPanelInspector);
-    EXPECT_EQ(sidebarPanels[1], kMainLayoutPanelOutliner);
-    ASSERT_TRUE(controller.activeDockPanel(DockLocation::Sidebar));
-    EXPECT_EQ(*controller.activeDockPanel(DockLocation::Sidebar), kMainLayoutPanelInspector);
-    EXPECT_TRUE(controller.setActiveDockPanel(DockLocation::Sidebar, kMainLayoutPanelOutliner));
-    ASSERT_TRUE(controller.activeDockPanel(DockLocation::Sidebar));
-    EXPECT_EQ(*controller.activeDockPanel(DockLocation::Sidebar), kMainLayoutPanelOutliner);
-    EXPECT_FALSE(controller.setActiveDockPanel(DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_FALSE(controller.movePanelToDockLocation(
-            kMainLayoutPanelInspector,
-            DockLocation::Sidebar,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::Before));
-    EXPECT_FALSE(controller.movePanelToDockLocation("Inspector", DockLocation::Panel));
-    EXPECT_TRUE(controller.movePanelToDockLocation(kMainLayoutPanelInspector, DockLocation::Panel));
-    ASSERT_TRUE(controller.panelDockLocation(kMainLayoutPanelInspector));
-    EXPECT_EQ(*controller.panelDockLocation(kMainLayoutPanelInspector), DockLocation::Panel);
-    ASSERT_TRUE(controller.activeDockPanel(DockLocation::Panel));
-    EXPECT_EQ(*controller.activeDockPanel(DockLocation::Panel), kMainLayoutPanelInspector);
-    EXPECT_FALSE(controller.movePanelToDockLocation(kMainLayoutPanelInspector, DockLocation::Panel));
-    EXPECT_TRUE(controller.splitPanelWithDockPanel(
-            kMainLayoutPanelOutliner,
-            DockLocation::Panel,
-            kMainLayoutPanelInspector,
-            DockPanelInsertPosition::Before));
-    const std::vector<std::string_view> splitPanelBodies =
-            dockSplitPanelsInLocation(layout.dockLayout, DockLocation::Panel);
-    ASSERT_EQ(splitPanelBodies.size(), 2u);
-    EXPECT_EQ(splitPanelBodies[0], kMainLayoutPanelOutliner);
-    EXPECT_EQ(splitPanelBodies[1], kMainLayoutPanelInspector);
-    const std::vector<std::string_view> bottomPanelTabs =
-            dockTabPanelsInLocation(layout.dockLayout, DockLocation::Panel);
-    ASSERT_EQ(bottomPanelTabs.size(), 1u);
-    EXPECT_EQ(bottomPanelTabs[0], kMainLayoutPanelInspector);
-    ASSERT_TRUE(controller.activeDockPanel(DockLocation::Panel));
-    EXPECT_EQ(*controller.activeDockPanel(DockLocation::Panel), kMainLayoutPanelInspector);
-    EXPECT_FALSE(controller.setActiveDockPanel(DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_TRUE(controller.resizeBottomSplitPanel(kMainLayoutPanelOutliner, 24));
-    ASSERT_TRUE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner),
-            kMainLayoutBottomSplitPanelMinWidthDp);
-    EXPECT_TRUE(controller.resizeBottomSplitPanel(kMainLayoutPanelOutliner, 332));
-    ASSERT_TRUE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_EQ(*dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner), 332);
-    EXPECT_FALSE(controller.resizeBottomSplitPanel(kMainLayoutPanelInspector, 240));
-    EXPECT_FALSE(controller.resizeBottomSplitPanel(kMainLayoutPanelViewport, 240));
-    EXPECT_TRUE(controller.movePanelToDockLocation(kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
-    ASSERT_TRUE(controller.panelDockLocation(kMainLayoutPanelInspector));
-    EXPECT_EQ(*controller.panelDockLocation(kMainLayoutPanelInspector), DockLocation::AuxiliaryBar);
-    EXPECT_TRUE(layout.dockLayout.splitPanels.empty());
-    ASSERT_TRUE(controller.activeDockPanel(DockLocation::Panel));
-    EXPECT_EQ(*controller.activeDockPanel(DockLocation::Panel), kMainLayoutPanelOutliner);
-    EXPECT_FALSE(controller.movePanelToDockLocation(kMainLayoutPanelViewport, DockLocation::Panel));
-    EXPECT_FALSE(controller.movePanelToDockLocation("Console", DockLocation::Panel));
-    EXPECT_FALSE(controller.panelDockLocation(kMainLayoutPanelViewport));
-    EXPECT_FALSE(controller.panelDockLocation("Console"));
-
-    EXPECT_TRUE(controller.setPanelVisible(kMainLayoutPanelOutliner, false));
-    EXPECT_FALSE(controller.isPanelVisible(kMainLayoutPanelOutliner));
-    EXPECT_TRUE(controller.setPanelVisible(kMainLayoutPanelInspector, false));
-    EXPECT_FALSE(controller.isPanelVisible(kMainLayoutPanelInspector));
-    EXPECT_FALSE(controller.setPanelVisible("Console", true));
-}
-
-TEST(MainLayoutSashRegistryTests, BottomSplitUsesTrackWidthWhenMeasuredPaneIsTiny) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockSplitPanelWithPanel(
-            layout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Panel,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::After));
-    ASSERT_FALSE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner));
-
-    MainLayoutSashRegistry registry;
-    registry.setMeasuredLayout({
-            .mainWidthDp = 900,
-            .mainHeightDp = 620,
-            .sideDockHeightDp = 480,
-    });
-    registry.addBottomPanelSplitSash(
-            layout,
-            MainLayoutBottomSplitPaneMeasurement{
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .widthDp = 1,
-                    .availableWidthDp = 1,
-                    .trackWidthDp = 640,
-                    .splitIndex = 0,
-                    .splitCount = 2,
-            },
-            UIPixelRect{.left = 320, .top = 200, .width = 12, .height = 220});
-
-    const std::string handleId =
-            MainLayoutSashRegistry::bottomPanelSplitHandleId(kMainLayoutPanelOutliner);
-    const std::optional<ResizableSplitHandle> handle = registry.handle(handleId);
-    ASSERT_TRUE(handle.has_value());
-    EXPECT_EQ(handle->id, handleId);
-    EXPECT_EQ(handle->axis, ResizableSplitAxis::Horizontal);
-    EXPECT_EQ(handle->growth, ResizableSplitGrowthDirection::Positive);
-    EXPECT_EQ(handle->sizeDp, 320);
-    EXPECT_EQ(handle->containerSizeDp, 640);
-    ASSERT_TRUE(handle->oppositeMinSize.has_value());
-    EXPECT_EQ(handle->oppositeMinSize->unit, ResizableSplitSizeUnit::Dp);
-    EXPECT_EQ(handle->oppositeMinSize->value, static_cast<float>(kMainLayoutBottomSplitPanelMinWidthDp));
-
-    const std::vector<ResizableSplitHitRegion> hitRegions = registry.hitRegions();
-    ASSERT_EQ(hitRegions.size(), 1u);
-    EXPECT_EQ(hitRegions[0].id, handleId);
-    EXPECT_EQ(hitRegions[0].axis, ResizableSplitAxis::Horizontal);
-
-    MainLayoutController controller(layout);
-    EXPECT_TRUE(registry.applyResize(
-            layout,
-            controller,
-            ResizableSplitResizeResult{
-                    .id = handleId,
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .sizeDp = 360,
-                    .collapsed = false,
-            }));
-    ASSERT_TRUE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_EQ(*dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner), 360);
-}
-
-TEST(MainLayoutSashRegistryTests, BottomSplitCanGrowWhenRememberedPaneAndContentMeasureAtMinimum) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockSplitPanelWithPanel(
-            layout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Panel,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::After));
-    MainLayoutController controller(layout);
-    ASSERT_TRUE(controller.resizeBottomSplitPanel(
-            kMainLayoutPanelOutliner,
-            kMainLayoutBottomSplitPanelMinWidthDp));
-
-    MainLayoutSashRegistry registry;
-    registry.setMeasuredLayout({
-            .mainWidthDp = 1400,
-            .mainHeightDp = 620,
-            .sideDockHeightDp = 480,
-            .bottomDockTrackWidthDp = 1400,
-    });
-    registry.addBottomPanelSplitSash(
-            layout,
-            MainLayoutBottomSplitPaneMeasurement{
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .widthDp = kMainLayoutBottomSplitPanelMinWidthDp,
-                    .availableWidthDp = kMainLayoutBottomSplitPanelMinWidthDp,
-                    .trackWidthDp = 1400,
-                    .splitIndex = 0,
-                    .splitCount = 2,
-            },
-            UIPixelRect{.left = 120, .top = 200, .width = 12, .height = 220});
-
-    const std::string handleId =
-            MainLayoutSashRegistry::bottomPanelSplitHandleId(kMainLayoutPanelOutliner);
-    const std::optional<ResizableSplitHandle> handle = registry.handle(handleId);
-    ASSERT_TRUE(handle.has_value());
-    EXPECT_EQ(handle->sizeDp, kMainLayoutBottomSplitPanelMinWidthDp);
-    EXPECT_EQ(handle->containerSizeDp, 1400);
-
-    ResizableSplitController splitController;
-    splitController.beginDrag(*handle, 120.0f, 0.0f, 1.0f);
-    const std::optional<ResizableSplitResizeResult> resize =
-            splitController.updateDrag(520.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 520);
-    EXPECT_TRUE(registry.applyResize(layout, controller, *resize));
-    ASSERT_TRUE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner));
-    EXPECT_EQ(*dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Panel, kMainLayoutPanelOutliner), 520);
-}
-
-TEST(MainLayoutSashRegistryTests, SidebarsAndBottomDockSnapCollapseThroughMainLayoutSashes) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    MainLayoutController controller(layout);
-
-    MainLayoutSashRegistry registry;
-    registry.setMeasuredLayout({
-            .mainWidthDp = 1000,
-            .mainHeightDp = 700,
-            .sideDockHeightDp = 700,
-            .bottomDockTrackWidthDp = 760,
-    });
-    registry.addSideDockWidthSash(
-            layout,
-            DockLocation::Sidebar,
-            MainLayoutSidebarSide::Right,
-            UIPixelRect{.left = 760, .top = 0, .width = 12, .height = 700});
-
-    const std::optional<ResizableSplitHandle> sidebarHandle =
-            registry.handle(MainLayoutSashRegistry::sideDockWidthHandleId(DockLocation::Sidebar));
-    ASSERT_TRUE(sidebarHandle.has_value());
-    ASSERT_TRUE(sidebarHandle->oppositeMinSize.has_value());
-    EXPECT_EQ(sidebarHandle->oppositeMinSize->unit, ResizableSplitSizeUnit::Dp);
-    EXPECT_EQ(sidebarHandle->oppositeMinSize->value, static_cast<float>(kMainLayoutViewportMinSizeDp));
-    ResizableSplitController splitController;
-    splitController.beginDrag(*sidebarHandle, 0.0f, 0.0f, 1.0f);
-    std::optional<ResizableSplitResizeResult> resize = splitController.updateDrag(100.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_FALSE(resize->collapsed);
-    EXPECT_EQ(resize->sizeDp, kMainLayoutSidebarMinWidthDp);
-    EXPECT_TRUE(registry.applyResize(layout, controller, *resize));
-    EXPECT_FALSE(layout.sidebar.collapsed);
-
-    resize = splitController.updateDrag(190.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_TRUE(resize->collapsed);
-    EXPECT_TRUE(registry.applyResize(layout, controller, *resize));
-    EXPECT_TRUE(layout.sidebar.collapsed);
-
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-    MainLayoutSashRegistry bottomRegistry;
-    bottomRegistry.setMeasuredLayout({
-            .mainWidthDp = 1000,
-            .mainHeightDp = 700,
-            .sideDockHeightDp = 700,
-            .bottomDockTrackWidthDp = 760,
-    });
-    bottomRegistry.addBottomDockHeightSash(
-            layout,
-            UIPixelRect{.left = 0, .top = 460, .width = 760, .height = 12});
-
-    const std::optional<ResizableSplitHandle> bottomDockHandle =
-            bottomRegistry.handle(MainLayoutSashRegistry::bottomDockHeightHandleId());
-    ASSERT_TRUE(bottomDockHandle.has_value());
-    ASSERT_TRUE(bottomDockHandle->oppositeMinSize.has_value());
-    EXPECT_EQ(bottomDockHandle->oppositeMinSize->unit, ResizableSplitSizeUnit::Dp);
-    EXPECT_EQ(bottomDockHandle->oppositeMinSize->value, static_cast<float>(kMainLayoutViewportMinSizeDp));
-    splitController.beginDrag(*bottomDockHandle, 0.0f, 0.0f, 1.0f);
-    resize = splitController.updateDrag(0.0f, 140.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_FALSE(resize->collapsed);
-    EXPECT_EQ(resize->sizeDp, kMainLayoutPanelMinHeightDp);
-    EXPECT_TRUE(bottomRegistry.applyResize(layout, controller, *resize));
-    EXPECT_FALSE(layout.bottomDock.collapsed);
-
-    resize = splitController.updateDrag(0.0f, 190.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_TRUE(resize->collapsed);
-    EXPECT_TRUE(bottomRegistry.applyResize(layout, controller, *resize));
-    EXPECT_TRUE(layout.bottomDock.collapsed);
-}
-
-TEST(MainLayoutSashRegistryTests, MeasuredSidebarClampsRouteThroughControllerWithoutUncollapse) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.sidebar.widthDp = 900;
-    layout.sidebar.collapsed = true;
-    layout.auxiliarySidebar.widthDp = 900;
-    layout.auxiliarySidebar.collapsed = false;
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
-    MainLayoutController controller(layout);
-
-    MainLayoutSashRegistry registry;
-    registry.setMeasuredLayout({
-            .mainWidthDp = 700,
-            .mainHeightDp = 700,
-            .sideDockHeightDp = 700,
-            .bottomDockTrackWidthDp = 700,
-    });
-
-    EXPECT_TRUE(registry.normalizeMeasuredBounds(layout, controller));
-    EXPECT_TRUE(layout.sidebar.collapsed);
-    EXPECT_EQ(layout.sidebar.widthDp, kMainLayoutSidebarMinWidthDp);
-    EXPECT_FALSE(layout.auxiliarySidebar.collapsed);
-    EXPECT_EQ(layout.auxiliarySidebar.widthDp, 580);
-
-    const std::string controllerSource = readSourceFile("src/ui/controllers/main_layout_controller.cpp");
-    const std::string sashSource = readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
-    EXPECT_NE(controllerSource.find("clampSidebarWidthForMeasuredBounds"), std::string::npos);
-    EXPECT_NE(sashSource.find("controller.clampSidebarWidthForMeasuredBounds"), std::string::npos);
-    EXPECT_EQ(sashSource.find("model.sidebar.widthDp ="), std::string::npos);
-    EXPECT_EQ(sashSource.find("model.auxiliarySidebar.widthDp ="), std::string::npos);
-}
-
-TEST(MainLayoutSashRegistryTests, ViewportMinimumSizeComesFromMainLayoutModel) {
-    const std::string modelHeader = readSourceFile("src/ui/components/organisms/main_layout_model.hpp");
-    const std::string sashSource = readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
-
-    EXPECT_NE(modelHeader.find("kMainLayoutViewportMinSizeDp = 120"), std::string::npos);
-    EXPECT_EQ(modelHeader.find("kMainLayoutViewportMinWidthDp"), std::string::npos);
-    EXPECT_EQ(sashSource.find("constexpr int kMainLayoutViewportMin"), std::string::npos);
-    EXPECT_NE(sashSource.find("kMainLayoutViewportMinSizeDp + otherVisibleSideDockWidthDp"), std::string::npos);
-    EXPECT_NE(sashSource.find("oppositeMinSize = ResizableSplitSizeRule::dp(kMainLayoutViewportMinSizeDp)"),
-            std::string::npos);
-}
-
-TEST(MainLayoutSashRegistryTests, SidePanelStackResizesLeadingPanelInsteadOfOutlinerFallback) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocationAtPanel(
-            layout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Sidebar,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::Before));
-    MainLayoutController controller(layout);
-
-    MainLayoutSashRegistry registry;
-    registry.setMeasuredLayout({
-            .mainWidthDp = 1000,
-            .mainHeightDp = 700,
-            .sideDockHeightDp = 700,
-            .bottomDockTrackWidthDp = 760,
-    });
-    registry.addSidePanelStackSash(
-            layout,
-            UIPixelRect{.left = 760, .top = 300, .width = 240, .height = 12});
-
-    const std::optional<MainLayoutSashRegistry::ActiveSash> active =
-            registry.activeSash(MainLayoutSashRegistry::sidePanelStackHandleId());
-    ASSERT_TRUE(active.has_value());
-    EXPECT_EQ(active->location, DockLocation::Sidebar);
-    EXPECT_EQ(active->panelId, kMainLayoutPanelInspector);
-
-    const std::optional<ResizableSplitHandle> handle =
-            registry.handle(MainLayoutSashRegistry::sidePanelStackHandleId());
-    ASSERT_TRUE(handle.has_value());
-    EXPECT_EQ(handle->sizeDp, kMainLayoutOutlinerDefaultHeightDp);
-
-    EXPECT_TRUE(registry.applyResize(
-            layout,
-            controller,
-            ResizableSplitResizeResult{
-                    .id = MainLayoutSashRegistry::sidePanelStackHandleId(),
-                    .axis = ResizableSplitAxis::Vertical,
-                    .sizeDp = 276,
-                    .collapsed = false,
-            }));
-    ASSERT_TRUE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelInspector));
-    EXPECT_EQ(
-            *dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelInspector),
-            276);
-    EXPECT_FALSE(dockSplitPanelSizeDp(layout.dockLayout, DockLocation::Sidebar, kMainLayoutPanelOutliner));
-    EXPECT_EQ(layout.outlinerHeightDp, kMainLayoutOutlinerDefaultHeightDp);
-}
-
-TEST(UIDragDropControllerTests, PromotesCandidateAfterThresholdAndDropsWholeRectTarget) {
-    UIDragDropController controller;
-    controller.setSources({
-            {
-                    .sourceId = "outliner-source",
-                    .item = {
-                            .kind = UIDragDropItemKind::DockPanel,
-                            .stableId = "outliner",
-                            .itemIds = {"outliner"},
-                    },
-                    .rect = {.left = 10, .top = 10, .width = 80, .height = 30},
-            },
-    });
-    controller.setDropZones({
-            {
-                    .id = {.value = 7},
-                    .kind = UIDropZoneKind::DockSidebar,
-                    .rect = {.left = 120, .top = 0, .width = 60, .height = 120},
-                    .accepts = {UIDragDropItemKind::DockPanel},
-                    .rejectSameItem = false,
-                    .feedbackKind = UIDropFeedbackKind::Edge,
-            },
-    });
-
-    EXPECT_FALSE(controller.beginCandidate({.x = 0.0f, .y = 0.0f}));
-    ASSERT_TRUE(controller.beginCandidate({.x = 20.0f, .y = 20.0f}));
-    EXPECT_EQ(controller.phase(), UIDragDropPhase::Candidate);
-    EXPECT_TRUE(controller.active());
-    EXPECT_FALSE(controller.dragging());
-    ASSERT_TRUE(controller.activeItem().has_value());
-    EXPECT_EQ(controller.activeItem()->stableId, "outliner");
-    EXPECT_FALSE(controller.update({.x = 22.0f, .y = 20.0f}).has_value());
-    EXPECT_EQ(controller.phase(), UIDragDropPhase::Candidate);
-
-    const std::optional<UIDragDropTarget> target = controller.update({.x = 130.0f, .y = 20.0f});
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->zoneId.value, 7u);
-    EXPECT_EQ(target->kind, UIDropZoneKind::DockSidebar);
-    EXPECT_EQ(target->placement, UIDropPlacement::On);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Edge);
-    EXPECT_TRUE(controller.dragging());
-
-    const std::optional<UIDragDropResult> drop = controller.end({.x = 130.0f, .y = 20.0f});
-    ASSERT_TRUE(drop.has_value());
-    EXPECT_EQ(drop->item.stableId, "outliner");
-    EXPECT_EQ(drop->target.zoneId.value, 7u);
-    EXPECT_EQ(controller.phase(), UIDragDropPhase::Idle);
-    EXPECT_FALSE(controller.active());
-    EXPECT_FALSE(controller.target().has_value());
-}
-
-TEST(UIDragDropControllerTests, UsesLatestZonesDuringActiveDrag) {
-    UIDragDropController controller;
-    controller.setSources({
-            {
-                    .sourceId = "asset-source",
-                    .item = {
-                            .kind = UIDragDropItemKind::Asset,
-                            .stableId = "mat-a",
-                            .itemIds = {"mat-a"},
-                    },
-                    .rect = {.left = 0, .top = 0, .width = 40, .height = 40},
-            },
-    });
-
-    ASSERT_TRUE(controller.beginCandidate({.x = 10.0f, .y = 10.0f}));
-    EXPECT_FALSE(controller.update({.x = 100.0f, .y = 10.0f}).has_value());
-    EXPECT_TRUE(controller.dragging());
-
-    controller.setDropZones({
-            {
-                    .id = {.value = 2},
-                    .kind = UIDropZoneKind::ViewportFrame,
-                    .rect = {.left = 80, .top = 0, .width = 120, .height = 120},
-                    .accepts = {UIDragDropItemKind::Asset},
-                    .rejectSameItem = false,
-            },
-    });
-
-    const std::optional<UIDragDropTarget> target = controller.update({.x = 100.0f, .y = 10.0f});
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->zoneId.value, 2u);
-    EXPECT_EQ(target->kind, UIDropZoneKind::ViewportFrame);
-}
-
-TEST(UIDragDropControllerTests, EnforcesAcceptanceSelfRejectionAndBeforeAfterPlacement) {
-    UIDragDropController controller;
-    controller.setSources({
-            {
-                    .sourceId = "entity-a-source",
-                    .item = {
-                            .kind = UIDragDropItemKind::OutlinerEntity,
-                            .stableId = "entity-a",
-                            .itemIds = {"entity-a"},
-                    },
-                    .rect = {.left = 0, .top = 0, .width = 40, .height = 40},
-            },
-    });
-    controller.setDropZones({
-            {
-                    .id = {.value = 1},
-                    .kind = UIDropZoneKind::OutlinerRow,
-                    .rect = {.left = 100, .top = 0, .width = 100, .height = 100},
-                    .placementPolicy = UIDropPlacementPolicy::VerticalBeforeAfter,
-                    .accepts = {UIDragDropItemKind::Asset},
-                    .priority = 30,
-            },
-            {
-                    .id = {.value = 2},
-                    .kind = UIDropZoneKind::OutlinerRow,
-                    .rect = {.left = 100, .top = 0, .width = 100, .height = 100},
-                    .placementPolicy = UIDropPlacementPolicy::VerticalBeforeAfter,
-                    .accepts = {UIDragDropItemKind::OutlinerEntity},
-                    .representedItem = UIDragDropItem{
-                            .kind = UIDragDropItemKind::OutlinerEntity,
-                            .stableId = "entity-a",
-                            .itemIds = {"entity-a"},
-                    },
-                    .rejectSameItem = true,
-                    .priority = 20,
-            },
-            {
-                    .id = {.value = 3},
-                    .kind = UIDropZoneKind::OutlinerRow,
-                    .rect = {.left = 100, .top = 0, .width = 100, .height = 100},
-                    .placementPolicy = UIDropPlacementPolicy::VerticalBeforeAfter,
-                    .accepts = {UIDragDropItemKind::OutlinerEntity},
-                    .representedItem = UIDragDropItem{
-                            .kind = UIDragDropItemKind::OutlinerEntity,
-                            .stableId = "entity-b",
-                            .itemIds = {"entity-b"},
-                    },
-                    .priority = 10,
-            },
-    });
-
-    ASSERT_TRUE(controller.beginCandidate({.x = 10.0f, .y = 10.0f}));
-    std::optional<UIDragDropTarget> target = controller.update({.x = 120.0f, .y = 20.0f});
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->zoneId.value, 3u);
-    EXPECT_EQ(target->placement, UIDropPlacement::Before);
-
-    target = controller.update({.x = 120.0f, .y = 80.0f});
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->zoneId.value, 3u);
-    EXPECT_EQ(target->placement, UIDropPlacement::After);
-}
-
-TEST(UIDragDropControllerTests, OverlappingZonesUsePriorityThenRegistrationOrder) {
-    UIDragDropController controller;
-    controller.setSources({
-            {
-                    .sourceId = "asset-source",
-                    .item = {
-                            .kind = UIDragDropItemKind::Asset,
-                            .stableId = "mat-a",
-                            .itemIds = {"mat-a"},
-                    },
-                    .rect = {.left = 0, .top = 0, .width = 40, .height = 40},
-            },
-    });
-    controller.setDropZones({
-            {
-                    .id = {.value = 1},
-                    .kind = UIDropZoneKind::AssetFolder,
-                    .rect = {.left = 100, .top = 0, .width = 100, .height = 100},
-                    .accepts = {UIDragDropItemKind::Asset},
-                    .priority = 5,
-            },
-            {
-                    .id = {.value = 2},
-                    .kind = UIDropZoneKind::AssetFolder,
-                    .rect = {.left = 100, .top = 0, .width = 100, .height = 100},
-                    .accepts = {UIDragDropItemKind::Asset},
-                    .priority = 10,
-            },
-            {
-                    .id = {.value = 3},
-                    .kind = UIDropZoneKind::AssetFolder,
-                    .rect = {.left = 100, .top = 0, .width = 100, .height = 100},
-                    .accepts = {UIDragDropItemKind::Asset},
-                    .priority = 10,
-            },
-    });
-
-    ASSERT_TRUE(controller.beginCandidate({.x = 10.0f, .y = 10.0f}));
-    const std::optional<UIDragDropTarget> target = controller.update({.x = 120.0f, .y = 20.0f});
-
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->zoneId.value, 2u);
-}
-
-TEST(UIDragDropControllerTests, CancelClearsActiveItemAndTarget) {
-    UIDragDropController controller;
-    controller.setSources({
-            {
-                    .sourceId = "asset-source",
-                    .item = {
-                            .kind = UIDragDropItemKind::Asset,
-                            .stableId = "mat-a",
-                            .itemIds = {"mat-a"},
-                    },
-                    .rect = {.left = 0, .top = 0, .width = 40, .height = 40},
-            },
-    });
-    controller.setDropZones({
-            {
-                    .id = {.value = 1},
-                    .kind = UIDropZoneKind::ViewportFrame,
-                    .rect = {.left = 80, .top = 0, .width = 120, .height = 120},
-                    .accepts = {UIDragDropItemKind::Asset},
-                    .rejectSameItem = false,
-            },
-    });
-
-    ASSERT_TRUE(controller.beginCandidate({.x = 10.0f, .y = 10.0f}));
-    ASSERT_TRUE(controller.update({.x = 100.0f, .y = 20.0f}).has_value());
-    controller.cancel();
-
-    EXPECT_EQ(controller.phase(), UIDragDropPhase::Idle);
-    EXPECT_FALSE(controller.activeItem().has_value());
-    EXPECT_FALSE(controller.target().has_value());
-    EXPECT_FALSE(controller.update({.x = 100.0f, .y = 20.0f}).has_value());
-}
-
-TEST(MainLayoutDockDragControllerTests, DragsPanelHeaderToOppositeSidebarEdge) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setDockDropZones({
-            {
-                    .location = DockLocation::AuxiliaryBar,
-                    .rect = {.left = 0, .top = 0, .width = 64, .height = 600},
-            },
-    });
-
-    EXPECT_FALSE(controller.beginDragCandidate(20.0f, 20.0f));
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    EXPECT_TRUE(controller.active());
-    EXPECT_FALSE(controller.dragging());
-    EXPECT_EQ(controller.activePanelId(), kMainLayoutPanelOutliner);
-    EXPECT_FALSE(controller.updateDrag(722.0f, 52.0f).has_value());
-    EXPECT_FALSE(controller.dragging());
-
-    const std::optional<MainLayoutDockDropTarget> target = controller.updateDrag(20.0f, 52.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::AuxiliaryBar);
-    EXPECT_TRUE(target->targetPanelId.empty());
-    EXPECT_EQ(target->action, MainLayoutDockDropAction::MoveToDock);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Edge);
-    EXPECT_TRUE(controller.dragging());
-    ASSERT_TRUE(controller.target().has_value());
-    EXPECT_EQ(controller.target()->location, DockLocation::AuxiliaryBar);
-    EXPECT_TRUE(controller.target()->targetPanelId.empty());
-
-    const std::optional<MainLayoutDockDropResult> drop = controller.endDrag(20.0f, 52.0f);
-    ASSERT_TRUE(drop.has_value());
-    EXPECT_EQ(drop->panelId, kMainLayoutPanelOutliner);
-    EXPECT_EQ(drop->target.location, DockLocation::AuxiliaryBar);
-    EXPECT_TRUE(drop->target.targetPanelId.empty());
-    EXPECT_FALSE(controller.active());
-    EXPECT_FALSE(controller.dragging());
-    EXPECT_FALSE(controller.target().has_value());
-}
-
-TEST(MainLayoutDockDragControllerTests, DropsPanelBeforeOrAfterVisiblePanelTarget) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setPanelDropZones({
-            {
-                    .location = DockLocation::Sidebar,
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 240},
-            },
-            {
-                    .location = DockLocation::Sidebar,
-                    .panelId = std::string(kMainLayoutPanelInspector),
-                    .rect = {.left = 700, .top = 280, .width = 220, .height = 260},
-            },
-    });
-
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    EXPECT_FALSE(controller.updateDrag(720.0f, 120.0f).has_value());
-
-    std::optional<MainLayoutDockDropTarget> target = controller.updateDrag(720.0f, 300.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Sidebar);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::Before);
-    EXPECT_EQ(target->action, MainLayoutDockDropAction::InsertPanel);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Target);
-
-    target = controller.updateDrag(720.0f, 500.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Sidebar);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::After);
-
-    const std::optional<MainLayoutDockDropResult> drop = controller.endDrag(720.0f, 500.0f);
-    ASSERT_TRUE(drop.has_value());
-    EXPECT_EQ(drop->panelId, kMainLayoutPanelOutliner);
-    EXPECT_EQ(drop->target.location, DockLocation::Sidebar);
-    EXPECT_EQ(drop->target.targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(drop->target.position, DockPanelInsertPosition::After);
-    EXPECT_EQ(drop->target.action, MainLayoutDockDropAction::InsertPanel);
-}
-
-TEST(MainLayoutDockDragControllerTests, PanelDropZoneBeatsOverlappingSidebarDropZone) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setDockDropZones({
-            {
-                    .location = DockLocation::Sidebar,
-                    .rect = {.left = 680, .top = 0, .width = 280, .height = 600},
-            },
-    });
-    controller.setPanelDropZones({
-            {
-                    .location = DockLocation::Sidebar,
-                    .panelId = std::string(kMainLayoutPanelInspector),
-                    .rect = {.left = 700, .top = 280, .width = 220, .height = 260},
-            },
-    });
-
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    const std::optional<MainLayoutDockDropTarget> target = controller.updateDrag(720.0f, 300.0f);
-
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Sidebar);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::Before);
-}
-
-TEST(MainLayoutDockDragControllerTests, DraggingPanelOverItselfYieldsNoTarget) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setPanelDropZones({
-            {
-                    .location = DockLocation::Sidebar,
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 240},
-            },
-    });
-
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    EXPECT_FALSE(controller.updateDrag(720.0f, 120.0f).has_value());
-    EXPECT_FALSE(controller.target().has_value());
-}
-
-TEST(MainLayoutDockDragControllerTests, DragsPanelHeaderToBottomDockEdge) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setDockDropZones({
-            {
-                    .location = DockLocation::Panel,
-                    .rect = {.left = 0, .top = 540, .width = 920, .height = 60},
-            },
-    });
-
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    const std::optional<MainLayoutDockDropTarget> target = controller.updateDrag(460.0f, 570.0f);
-
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Panel);
-    EXPECT_TRUE(target->targetPanelId.empty());
-    EXPECT_EQ(target->action, MainLayoutDockDropAction::MoveToDock);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Edge);
-
-    const std::optional<MainLayoutDockDropResult> drop = controller.endDrag(460.0f, 570.0f);
-    ASSERT_TRUE(drop.has_value());
-    EXPECT_EQ(drop->panelId, kMainLayoutPanelOutliner);
-    EXPECT_EQ(drop->target.location, DockLocation::Panel);
-    EXPECT_TRUE(drop->target.targetPanelId.empty());
-}
-
-TEST(MainLayoutDockDragControllerTests, DropsPanelBeforeOrAfterBottomTabTarget) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setPanelDropZones({
-            {
-                    .location = DockLocation::Panel,
-                    .panelId = std::string(kMainLayoutPanelInspector),
-                    .rect = {.left = 280, .top = 360, .width = 180, .height = 32},
-                    .kind = MainLayoutPanelDropZoneKind::BottomTab,
-            },
-            {
-                    .location = DockLocation::Panel,
-                    .panelId = std::string(kMainLayoutPanelInspector),
-                    .rect = {.left = 460, .top = 360, .width = 120, .height = 32},
-                    .kind = MainLayoutPanelDropZoneKind::BottomTabTrailing,
-            },
-    });
-
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    std::optional<MainLayoutDockDropTarget> target = controller.updateDrag(300.0f, 376.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Panel);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::Before);
-    EXPECT_EQ(target->action, MainLayoutDockDropAction::InsertPanel);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Insertion);
-
-    target = controller.updateDrag(440.0f, 376.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Panel);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::After);
-
-    target = controller.updateDrag(520.0f, 376.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Panel);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::After);
-    EXPECT_EQ(target->action, MainLayoutDockDropAction::InsertPanel);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Insertion);
-}
-
-TEST(MainLayoutDockDragControllerTests, DropsPanelBeforeOrAfterBottomBodySplitTarget) {
-    MainLayoutDockDragController controller;
-    controller.setHitRegions({
-            {
-                    .panelId = std::string(kMainLayoutPanelOutliner),
-                    .rect = {.left = 700, .top = 40, .width = 220, .height = 32},
-            },
-    });
-    controller.setPanelDropZones({
-            {
-                    .location = DockLocation::Panel,
-                    .panelId = std::string(kMainLayoutPanelInspector),
-                    .rect = {.left = 280, .top = 392, .width = 320, .height = 160},
-                    .kind = MainLayoutPanelDropZoneKind::PanelBody,
-            },
-    });
-
-    ASSERT_TRUE(controller.beginDragCandidate(720.0f, 52.0f));
-    std::optional<MainLayoutDockDropTarget> target = controller.updateDrag(300.0f, 420.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->location, DockLocation::Panel);
-    EXPECT_EQ(target->targetPanelId, kMainLayoutPanelInspector);
-    EXPECT_EQ(target->position, DockPanelInsertPosition::Before);
-    EXPECT_EQ(target->action, MainLayoutDockDropAction::SplitPanel);
-    EXPECT_EQ(target->feedbackKind, UIDropFeedbackKind::Target);
-
-    target = controller.updateDrag(580.0f, 420.0f);
-    ASSERT_TRUE(target.has_value());
-    EXPECT_EQ(target->position, DockPanelInsertPosition::After);
-}
-
-TEST(MainLayoutDockHitRegionBuilderTests, BuildsDockDragRegionsFromMeasuredMainLayout) {
-    MainLayoutModel model = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(model.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-    model = normalizedMainLayoutModel(std::move(model));
-
-    const std::vector<std::pair<std::string, UIPixelRect>> measurements{
-            {"main-layout-slot", {.left = 0, .top = 0, .width = 1000, .height = 700}},
-            {mainLayoutEditorColumnElementId(), {.left = 0, .top = 0, .width = 760, .height = 700}},
-            {mainLayoutPanelHeaderElementId(kMainLayoutPanelOutliner),
-                    {.left = 760, .top = 40, .width = 220, .height = 32}},
-            {mainLayoutPanelElementId(kMainLayoutPanelOutliner),
-                    {.left = 760, .top = 72, .width = 220, .height = 300}},
-            {mainLayoutBottomDockContentElementId(), {.left = 0, .top = 452, .width = 760, .height = 200}},
-            {mainLayoutBottomDockTabStripElementId(), {.left = 0, .top = 420, .width = 760, .height = 32}},
-            {mainLayoutPanelTabElementId(kMainLayoutPanelInspector),
-                    {.left = 0, .top = 420, .width = 180, .height = 32}},
-            {mainLayoutPanelElementId(kMainLayoutPanelInspector),
-                    {.left = 0, .top = 452, .width = 600, .height = 200}},
-    };
-    const MainLayoutElementMeasure measureElement =
-            [&](std::string_view elementId) -> std::optional<UIPixelRect> {
-        for (const auto& [id, rect] : measurements) {
-            if (id == elementId) {
-                return rect;
-            }
-        }
-        return std::nullopt;
-    };
-
-    const MainLayoutDockHitRegions regions = buildMainLayoutDockHitRegions(model, measureElement, 1.0f);
-
-    ASSERT_EQ(regions.dockDropZones.size(), 1u);
-    EXPECT_EQ(regions.dockDropZones.front().location, DockLocation::AuxiliaryBar);
-    EXPECT_EQ(regions.dockDropZones.front().rect.width, 64);
-    EXPECT_EQ(regions.panelDragRegions.size(), 2u);
-
-    const auto hasDropZone = [&](std::string_view panelId, MainLayoutPanelDropZoneKind kind) {
-        return std::find_if(regions.panelDropZones.begin(), regions.panelDropZones.end(),
-                [&](const MainLayoutPanelDropZone& zone) {
-                    return zone.panelId == panelId && zone.kind == kind;
-                }) != regions.panelDropZones.end();
-    };
-    EXPECT_TRUE(hasDropZone(kMainLayoutPanelOutliner, MainLayoutPanelDropZoneKind::PanelBody));
-    EXPECT_TRUE(hasDropZone(kMainLayoutPanelInspector, MainLayoutPanelDropZoneKind::BottomTab));
-    EXPECT_TRUE(hasDropZone(kMainLayoutPanelInspector, MainLayoutPanelDropZoneKind::PanelBody));
-    EXPECT_TRUE(hasDropZone(kMainLayoutPanelInspector, MainLayoutPanelDropZoneKind::BottomTabTrailing));
-}
-
-TEST(ResizableSplitControllerTests, HitTestsInflatedRegionsByAxis) {
-    ResizableSplitController controller;
-    controller.setHitRegions({
-            {
-                    .id = "sidebar",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .rect = ResizableSplitController::inflatedHitRect(
-                            UIPixelRect{.left = 100, .top = 0, .width = 1, .height = 500},
-                            ResizableSplitAxis::Horizontal,
-                            12),
-            },
-            {
-                    .id = "panels",
-                    .axis = ResizableSplitAxis::Vertical,
-                    .rect = ResizableSplitController::inflatedHitRect(
-                            UIPixelRect{.left = 0, .top = 200, .width = 240, .height = 1},
-                            ResizableSplitAxis::Vertical,
-                            12),
-            },
-    });
-
-    const std::optional<ResizableSplitHitRegion> sidebar = controller.hitTest(96.0f, 20.0f);
-    ASSERT_TRUE(sidebar.has_value());
-    EXPECT_EQ(sidebar->id, "sidebar");
-    EXPECT_EQ(sidebar->axis, ResizableSplitAxis::Horizontal);
-
-    const std::optional<ResizableSplitHitRegion> panels = controller.hitTest(20.0f, 196.0f);
-    ASSERT_TRUE(panels.has_value());
-    EXPECT_EQ(panels->id, "panels");
-    EXPECT_EQ(panels->axis, ResizableSplitAxis::Vertical);
-
-    EXPECT_FALSE(controller.hitTest(20.0f, 20.0f).has_value());
-}
-
-TEST(ResizableSplitControllerTests, ResizesWithDirectionDpScaleAndClamps) {
-    ResizableSplitController controller;
-    controller.beginDrag(
-            {
-                    .id = "right-sidebar",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .growth = ResizableSplitGrowthDirection::Negative,
-                    .sizeDp = 240,
-                    .minSize = ResizableSplitSizeRule::dp(160),
-                    .maxSize = ResizableSplitSizeRule::dp(420),
-            },
-            400.0f,
-            0.0f,
-            2.0f);
-
-    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(360.0f, 0.0f, 2.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->id, "right-sidebar");
-    EXPECT_EQ(resize->sizeDp, 260);
-
-    resize = controller.updateDrag(1200.0f, 0.0f, 2.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 160);
-
-    controller.endDrag();
-    EXPECT_FALSE(controller.updateDrag(360.0f, 0.0f, 2.0f).has_value());
-
-    controller.beginDrag(
-            {
-                    .id = "top-panel",
-                    .axis = ResizableSplitAxis::Vertical,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 320,
-                    .minSize = ResizableSplitSizeRule::dp(120),
-                    .maxSize = ResizableSplitSizeRule::dp(900),
-            },
-            0.0f,
-            100.0f,
-            1.0f);
-    resize = controller.updateDrag(0.0f, 40.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 260);
-}
-
-TEST(ResizableSplitControllerTests, ClampsAgainstOppositeMinSizeInsideContainer) {
-    ResizableSplitController controller;
-    controller.beginDrag(
-            {
-                    .id = "sidebar-panels",
-                    .axis = ResizableSplitAxis::Vertical,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 320,
-                    .minSize = ResizableSplitSizeRule::dp(120),
-                    .maxSize = ResizableSplitSizeRule::dp(900),
-                    .oppositeMinSize = ResizableSplitSizeRule::dp(120),
-                    .containerSizeDp = 480,
-            },
-            0.0f,
-            100.0f,
-            1.0f);
-
-    const std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(0.0f, 1000.0f, 1.0f);
-
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 360);
-    EXPECT_FALSE(resize->collapsed);
-}
-
-TEST(ResizableSplitControllerTests, UsesContainerAndOppositeMinAsEffectiveMaxWhenUnbounded) {
-    ResizableSplitController controller;
-    controller.beginDrag(
-            {
-                    .id = "sidebar",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 240,
-                    .minSize = ResizableSplitSizeRule::dp(160),
-                    .oppositeMinSize = ResizableSplitSizeRule::dp(160),
-                    .containerSizeDp = 720,
-            },
-            100.0f,
-            0.0f,
-            1.0f);
-
-    const std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(1000.0f, 0.0f, 1.0f);
-
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 560);
-    EXPECT_FALSE(resize->collapsed);
-}
-
-TEST(ResizableSplitControllerTests, RebasesDragAfterClampToAvoidStickyEdges) {
-    ResizableSplitController controller;
-    controller.beginDrag(
-            {
-                    .id = "bottom-split",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 200,
-                    .minSize = ResizableSplitSizeRule::dp(120),
-                    .maxSize = ResizableSplitSizeRule::dp(220),
-                    .containerSizeDp = 480,
-            },
-            0.0f,
-            0.0f,
-            1.0f);
-
-    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(1000.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 220);
-
-    resize = controller.updateDrag(999.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 219);
-    EXPECT_FALSE(resize->collapsed);
-}
-
-TEST(ResizableSplitControllerTests, SupportsPercentBasedSizeRules) {
-    ResizableSplitController controller;
-    controller.beginDrag(
-            {
-                    .id = "percent",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 250,
-                    .minSize = ResizableSplitSizeRule::percent(20.0f),
-                    .maxSize = ResizableSplitSizeRule::percent(80.0f),
-                    .containerSizeDp = 500,
-            },
-            100.0f,
-            0.0f,
-            1.0f);
-
-    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(-1000.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 100);
-
-    resize = controller.updateDrag(1000.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_EQ(resize->sizeDp, 400);
-}
-
-TEST(ResizableSplitControllerTests, SupportsOptionalSnapCollapse) {
-    ResizableSplitController controller;
-    controller.beginDrag(
-            {
-                    .id = "sidebar",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 160,
-                    .minSize = ResizableSplitSizeRule::dp(160),
-                    .maxSize = ResizableSplitSizeRule::dp(420),
-                    .collapse = {
-                            .enabled = true,
-                            .collapsedSizeDp = 0,
-                    },
-            },
-            160.0f,
-            0.0f,
-            1.0f);
-
-    std::optional<ResizableSplitResizeResult> resize = controller.updateDrag(100.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_FALSE(resize->collapsed);
-    EXPECT_EQ(resize->sizeDp, 160);
-
-    resize = controller.updateDrag(50.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_TRUE(resize->collapsed);
-    EXPECT_EQ(resize->sizeDp, 0);
-
-    resize = controller.updateDrag(100.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_FALSE(resize->collapsed);
-    EXPECT_EQ(resize->sizeDp, 160);
-
-    controller.endDrag();
-    controller.beginDrag(
-            {
-                    .id = "sidebar",
-                    .axis = ResizableSplitAxis::Horizontal,
-                    .growth = ResizableSplitGrowthDirection::Positive,
-                    .sizeDp = 0,
-                    .minSize = ResizableSplitSizeRule::dp(160),
-                    .maxSize = ResizableSplitSizeRule::dp(420),
-                    .collapse = {
-                            .enabled = true,
-                            .collapsedSizeDp = 0,
-                    },
-            },
-            0.0f,
-            0.0f,
-            1.0f);
-
-    resize = controller.updateDrag(70.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_TRUE(resize->collapsed);
-
-    resize = controller.updateDrag(100.0f, 0.0f, 1.0f);
-    ASSERT_TRUE(resize.has_value());
-    EXPECT_FALSE(resize->collapsed);
-    EXPECT_EQ(resize->sizeDp, 160);
-}
-
-TEST(MainLayoutRmlBuilderTests, GeneratesCleanViewportRightSidebarAndResizers) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-    const std::string rml = buildMainLayoutRml(layout);
-
-    EXPECT_NE(rml.find("class=\"main-layout bg-gray-950 main-layout-sidebar-right\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-editor-column\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-slot\" class=\"modeling-mode-shelf-slot\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-viewport\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"viewport-overlay-controls\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown\""), std::string::npos);
-    EXPECT_NE(rml.find("data-ui-dropdown-toggle=\"main-viewport-view-dropdown\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-dropdown-input-label\">Perspective</span>"), std::string::npos);
-    EXPECT_EQ(rml.find("id=\"main-viewport-view-dropdown-surface\""), std::string::npos);
-    EXPECT_EQ(rml.find("id=\"viewport-selection-marquee-layer\""), std::string::npos);
-    EXPECT_NE(rml.find("src=\"quader://viewport/main\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-sidebar\" class=\"main-layout-sidebar main-layout-primary-sidebar main-layout-side-dock-right min-w-40 bg-gray-950 border-gray-600\""),
-            std::string::npos);
-    const std::string defaultSideDockFlex =
-            "width: " + std::to_string(kMainLayoutSidebarDefaultWidthDp) +
-            "dp; flex-basis: " + std::to_string(kMainLayoutSidebarDefaultWidthDp) +
-            "dp; flex-grow: 0; flex-shrink: 0;";
-    EXPECT_NE(rml.find(defaultSideDockFlex),
-            std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-dock-location=\"Sidebar\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel min-h-30 bg-gray-950"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-panel-outliner-header\""), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-drag-panel=\"outliner\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"main-layout-panel-title text-sm text-gray-200\">Outliner</span>"), std::string::npos);
-    EXPECT_EQ(rml.find("Rebind"), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"sidebar\""), std::string::npos);
-    EXPECT_EQ(rml.find("data-main-layout-resizer=\"auxiliary-sidebar\""), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-resizer-drag-line-vertical"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-resizer-drag-line-horizontal"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-resizer-active"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-tabbar"), std::string::npos);
-    EXPECT_EQ(rml.find("viewport-label"), std::string::npos);
-    EXPECT_EQ(rml.find("<rml>"), std::string::npos);
-    EXPECT_LT(rml.find("id=\"main-layout-editor-column\""), rml.find("id=\"modeling-mode-shelf-slot\""));
-    EXPECT_LT(rml.find("id=\"modeling-mode-shelf-slot\""), rml.find("id=\"viewport-host\""));
-}
-
-TEST(MainLayoutRmlBuilderTests, ProjectsViewportViewDropdownOptionsAndShortcutLabels) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-    const MainLayoutViewportPresentation viewport{
-            .currentView = ViewportView::Side,
-            .viewDropdownOpen = true,
-            .viewDropdownOptions = {
-                    {.view = ViewportView::Perspective, .label = "Perspective", .shortcut = "P"},
-                    {.view = ViewportView::Top, .label = "Top"},
-                    {.view = ViewportView::Bottom, .label = "Bottom"},
-                    {.view = ViewportView::Left, .label = "Left"},
-                    {.view = ViewportView::Side, .label = "Right"},
-                    {.view = ViewportView::Front, .label = "Front"},
-                    {.view = ViewportView::Back, .label = "Back"},
-            },
-    };
-
-    const std::string rml = buildMainLayoutRml(layout, {}, {}, viewport);
-
-    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown-surface\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-dropdown-input-label\">Right</span>"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown-option-perspective\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-viewport-view-dropdown-option-right\""), std::string::npos);
-    EXPECT_NE(rml.find("data-ui-dropdown-option=\"right\""), std::string::npos);
-    EXPECT_NE(rml.find("aria-selected=\"true\"><span class=\"ui-dropdown-option-label\">Right</span>"),
-            std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-dropdown-option-keybinding text-gray-300\">P</span>"), std::string::npos);
-    EXPECT_LT(rml.find("data-ui-dropdown-option=\"perspective\""), rml.find("data-ui-dropdown-option=\"top\""));
-    EXPECT_LT(rml.find("data-ui-dropdown-option=\"top\""), rml.find("data-ui-dropdown-option=\"bottom\""));
-    EXPECT_LT(rml.find("data-ui-dropdown-option=\"bottom\""), rml.find("data-ui-dropdown-option=\"left\""));
-    EXPECT_LT(rml.find("data-ui-dropdown-option=\"left\""), rml.find("data-ui-dropdown-option=\"right\""));
-    EXPECT_LT(rml.find("data-ui-dropdown-option=\"right\""), rml.find("data-ui-dropdown-option=\"front\""));
-    EXPECT_LT(rml.find("data-ui-dropdown-option=\"front\""), rml.find("data-ui-dropdown-option=\"back\""));
-}
-
-TEST(MainLayoutRmlBuilderTests, ViewportDropdownOverlayAnchorsInsideViewportContent) {
-    const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
-
-    const std::size_t shelfContent = shellRcss.find(".modeling-mode-shelf-content {");
-    const std::size_t shelfContentFill = shellRcss.find(".modeling-mode-shelf-content-fill {");
-    ASSERT_NE(shelfContent, std::string::npos);
-    ASSERT_NE(shelfContentFill, std::string::npos);
-    ASSERT_LT(shelfContent, shelfContentFill);
-    const std::string shelfContentBlock = shellRcss.substr(shelfContent, shelfContentFill - shelfContent);
-    EXPECT_NE(shelfContentBlock.find("position: relative;"), std::string::npos);
-    EXPECT_NE(shelfContentBlock.find("width: 100%;"), std::string::npos);
-    EXPECT_EQ(shelfContentBlock.find("top: 100%;"), std::string::npos);
-
-    const std::size_t host = shellRcss.find(".viewport-host {");
-    const std::size_t surface = shellRcss.find(".viewport-surface {");
-    ASSERT_NE(host, std::string::npos);
-    ASSERT_NE(surface, std::string::npos);
-    ASSERT_LT(host, surface);
-    const std::string hostBlock = shellRcss.substr(host, surface - host);
-    EXPECT_NE(hostBlock.find("position: relative;"), std::string::npos);
-    EXPECT_NE(hostBlock.find("overflow: hidden;"), std::string::npos);
-
-    const std::size_t overlay = shellRcss.find(".viewport-overlay-controls {");
-    const std::size_t dropdown = shellRcss.find(".viewport-view-dropdown {");
-    ASSERT_NE(overlay, std::string::npos);
-    ASSERT_NE(dropdown, std::string::npos);
-    ASSERT_LT(overlay, dropdown);
-    const std::string overlayBlock = shellRcss.substr(overlay, dropdown - overlay);
-    EXPECT_NE(overlayBlock.find("position: absolute;"), std::string::npos);
-    EXPECT_NE(overlayBlock.find("top: 20dp;"), std::string::npos);
-    EXPECT_NE(overlayBlock.find("left: 0dp;"), std::string::npos);
-    EXPECT_EQ(overlayBlock.find("right: 20dp;"), std::string::npos);
-    EXPECT_NE(overlayBlock.find("justify-content: flex-end;"), std::string::npos);
-    EXPECT_NE(overlayBlock.find("width: 100%;"), std::string::npos);
-
-    const std::size_t dropdownEnd = shellRcss.find(".ui-dropdown {");
-    ASSERT_NE(dropdownEnd, std::string::npos);
-    ASSERT_LT(dropdown, dropdownEnd);
-    const std::string dropdownBlock = shellRcss.substr(dropdown, dropdownEnd - dropdown);
-    EXPECT_NE(dropdownBlock.find("width: 160dp;"), std::string::npos);
-    EXPECT_NE(dropdownBlock.find("margin-right: 20dp;"), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, MarksActiveResizerDuringDrag) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-
-    const std::string sidebarRml = buildMainLayoutRml(
-            layout,
-            {},
-            {.activeResizer = MainLayoutActiveResizer::Sidebar});
-    EXPECT_NE(sidebarRml.find("main-layout-sidebar-resizer\" class=\"main-layout-sidebar-resizer main-layout-resizer-active"),
-            std::string::npos);
-
-    const std::string panelsRml = buildMainLayoutRml(
-            layout,
-            {},
-            {.activeResizer = MainLayoutActiveResizer::Panels});
-    EXPECT_NE(panelsRml.find("main-layout-panel-resizer\" class=\"main-layout-panel-resizer main-layout-resizer-active"),
-            std::string::npos);
-
-    MainLayoutModel bottomLayout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(
-            bottomLayout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Panel));
-    const std::string bottomRml = buildMainLayoutRml(
-            bottomLayout,
-            {},
-            {.activeResizer = MainLayoutActiveResizer::BottomDock});
-    EXPECT_NE(bottomRml.find("main-layout-bottom-dock-resizer\" class=\"main-layout-bottom-dock-resizer main-layout-resizer-active"),
-            std::string::npos);
-
-    MainLayoutModel auxiliaryLayout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(
-            auxiliaryLayout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::AuxiliaryBar));
-    const std::string auxiliaryRml = buildMainLayoutRml(
-            auxiliaryLayout,
-            {},
-            {.activeResizer = MainLayoutActiveResizer::AuxiliarySidebar});
-    EXPECT_NE(auxiliaryRml.find("main-layout-auxiliary-sidebar-resizer\" class=\"main-layout-sidebar-resizer main-layout-resizer-active"),
-            std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, MarksSidebarDropTargetDuringPanelHeaderDrag) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-    const std::string rml = buildMainLayoutRml(
-            layout,
-            {},
-            {
-                    .dockDropLocation = DockLocation::AuxiliaryBar,
-                    .dockDrag = MainLayoutDockDragPresentation{
-                            .panelId = std::string(kMainLayoutPanelOutliner),
-                            .previewLeftDp = 48,
-                            .previewTopDp = 64,
-                            .previewWidthDp = 220,
-                            .previewHeightDp = 32,
-                            .dragging = true,
-                    },
-            });
-
-    EXPECT_NE(rml.find("id=\"main-layout-sidebar-drop-indicator\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-sidebar-drop-indicator-left bg-purple-500"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-sidebar-drop-indicator-right bg-purple-500"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drag-source"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-header-drag-source"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-dock-drag-preview\""), std::string::npos);
-    EXPECT_NE(rml.find("left: 48dp; top: 64dp; width: 220dp; height: 32dp;"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-dock-drag-preview main-layout-panel-header bg-gray-900 border-gray-600"),
-            std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-title main-layout-dock-drag-preview-title text-sm text-gray-200\">Outliner</span>"),
-            std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, MarksPanelInsertionTargetDuringPanelHeaderDrag) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-    const std::string rml = buildMainLayoutRml(
-            layout,
-            {},
-            {
-                    .panelDrop = MainLayoutPanelDropPresentation{
-                            .panelId = std::string(kMainLayoutPanelInspector),
-                            .position = DockPanelInsertPosition::Before,
-                    },
-                    .dockDrag = MainLayoutDockDragPresentation{
-                            .panelId = std::string(kMainLayoutPanelOutliner),
-                            .previewLeftDp = 48,
-                            .previewTopDp = 64,
-                            .dragging = true,
-                    },
-            });
-
-    EXPECT_EQ(rml.find("id=\"main-layout-sidebar-drop-indicator\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drop-target"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drop-overlay main-layout-panel-drop-overlay-vertical main-layout-panel-drop-overlay-vertical-before bg-purple-500"),
-            std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-drop-overlay-vertical-after bg-purple-500"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drag-source"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-dock-drag-preview\""), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, MarksBottomDockDropTargetDuringPanelHeaderDrag) {
-    const MainLayoutModel layout = MainLayoutModel::defaults();
-    const std::string rml = buildMainLayoutRml(
-            layout,
-            {},
-            {
-                    .dockDropLocation = DockLocation::Panel,
-                    .dockDrag = MainLayoutDockDragPresentation{
-                            .panelId = std::string(kMainLayoutPanelOutliner),
-                            .previewLeftDp = 48,
-                            .previewTopDp = 64,
-                            .dragging = true,
-                    },
-            });
-
-    EXPECT_EQ(rml.find("id=\"main-layout-sidebar-drop-indicator\""), std::string::npos);
-    const std::size_t editorColumn = rml.find("id=\"main-layout-editor-column\"");
-    const std::size_t bottomIndicator = rml.find("id=\"main-layout-bottom-dock-drop-indicator\"");
-    ASSERT_NE(editorColumn, std::string::npos);
-    ASSERT_NE(bottomIndicator, std::string::npos);
-    EXPECT_LT(editorColumn, bottomIndicator);
-    EXPECT_NE(rml.find("main-layout-bottom-dock-drop-indicator bg-purple-500"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drag-source"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-dock-drag-preview\""), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, MarksBottomTabInsertionTargetDuringPanelHeaderDrag) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-
-    const std::string rml = buildMainLayoutRml(
-            layout,
-            {},
-            {
-                    .panelDrop = MainLayoutPanelDropPresentation{
-                            .location = DockLocation::Panel,
-                            .panelId = std::string(kMainLayoutPanelInspector),
-                            .position = DockPanelInsertPosition::After,
-                            .feedbackKind = UIDropFeedbackKind::Insertion,
-                    },
-                    .dockDrag = MainLayoutDockDragPresentation{
-                            .panelId = std::string(kMainLayoutPanelOutliner),
-                            .previewLeftDp = 48,
-                            .previewTopDp = 64,
-                            .dragging = true,
-                    },
-            });
-
-    EXPECT_NE(rml.find("id=\"main-layout-bottom-dock-tab-strip\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-panel-inspector-tab\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-tab-drop-target"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-tab-drop-insertion-line main-layout-tab-drop-insertion-line-after bg-purple-500"),
-            std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-tab-drop-overlay"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-drop-overlay-horizontal-after bg-purple-500"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-tab-drag-source"), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, MarksBottomPanelSplitTargetDuringPanelHeaderDrag) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-
-    const std::string rml = buildMainLayoutRml(
-            layout,
-            {},
-            {
-                    .panelDrop = MainLayoutPanelDropPresentation{
-                            .location = DockLocation::Panel,
-                            .panelId = std::string(kMainLayoutPanelInspector),
-                            .position = DockPanelInsertPosition::Before,
-                            .feedbackKind = UIDropFeedbackKind::Target,
-                    },
-                    .dockDrag = MainLayoutDockDragPresentation{
-                            .panelId = std::string(kMainLayoutPanelOutliner),
-                            .previewLeftDp = 48,
-                            .previewTopDp = 64,
-                            .dragging = true,
-                    },
-            });
-
-    EXPECT_NE(rml.find("id=\"main-layout-bottom-dock-content\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drop-target"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-drop-overlay main-layout-panel-drop-overlay-horizontal main-layout-panel-drop-overlay-horizontal-before bg-purple-500"),
-            std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-tab-drop-insertion-line"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-tab-drag-source"), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, CanProjectLeftSidebarAndHiddenPanels) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.sidebarSide = MainLayoutSidebarSide::Left;
-    ASSERT_TRUE(mainLayoutSetPanelVisible(layout, kMainLayoutPanelOutliner, false));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    EXPECT_NE(rml.find("class=\"main-layout bg-gray-950 main-layout-sidebar-left\""), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-outliner"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-inspector"), std::string::npos);
-    EXPECT_EQ(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
-    EXPECT_LT(rml.find("main-layout-sidebar"), rml.find("viewport-host"));
-}
-
-TEST(MainLayoutRmlBuilderTests, ProjectsReorderedSideStackWithLeadingPanelSplitSize) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    MainLayoutController controller(layout);
-    ASSERT_TRUE(controller.movePanelToDockLocation(
-            kMainLayoutPanelInspector,
-            DockLocation::Sidebar,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::Before));
-    ASSERT_TRUE(controller.resizeSidePanelStack(DockLocation::Sidebar, kMainLayoutPanelInspector, 276));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    const std::size_t inspector = rml.find("id=\"main-layout-panel-inspector\"");
-    const std::size_t outliner = rml.find("id=\"main-layout-panel-outliner\"");
-    ASSERT_NE(inspector, std::string::npos);
-    ASSERT_NE(outliner, std::string::npos);
-    EXPECT_LT(inspector, outliner);
-    EXPECT_NE(
-            rml.find("id=\"main-layout-panel-inspector\" class=\"main-layout-panel min-h-30 bg-gray-950 main-layout-panel-fixed\" style=\"height: 276dp; flex-grow: 0; flex-shrink: 0;\""),
-            std::string::npos);
-    EXPECT_EQ(
-            rml.find("id=\"main-layout-panel-outliner\" class=\"main-layout-panel min-h-30 bg-gray-950 main-layout-panel-fixed\""),
-            std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"panels\" style=\"top: 270dp;\""), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, ProjectsAuxiliaryBarOnOppositeSideOfPrimarySidebar) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.auxiliarySidebar.widthDp = 312;
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    const std::size_t auxiliary = rml.find("id=\"main-layout-auxiliary-sidebar\"");
-    const std::size_t viewport = rml.find("id=\"viewport-host\"");
-    const std::size_t primary = rml.find("id=\"main-layout-sidebar\"");
-    const std::size_t inspector = rml.find("id=\"main-layout-panel-inspector\"");
-    const std::size_t outliner = rml.find("id=\"main-layout-panel-outliner\"");
-    ASSERT_NE(auxiliary, std::string::npos);
-    ASSERT_NE(viewport, std::string::npos);
-    ASSERT_NE(primary, std::string::npos);
-    ASSERT_NE(inspector, std::string::npos);
-    ASSERT_NE(outliner, std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-dock-location=\"AuxiliaryBar\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-auxiliary-sidebar main-layout-side-dock-left"), std::string::npos);
-    EXPECT_NE(rml.find("width: 312dp"), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"auxiliary-sidebar\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-auxiliary-sidebar-resizer\""), std::string::npos);
-    EXPECT_LT(auxiliary, viewport);
-    EXPECT_LT(viewport, primary);
-    EXPECT_LT(inspector, viewport);
-    EXPECT_LT(viewport, outliner);
-    EXPECT_EQ(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, ProjectsPanelDockLocationIntoBottomDock) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.bottomDock.heightDp = 260;
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    const std::size_t editorColumn = rml.find("id=\"main-layout-editor-column\"");
-    const std::size_t viewport = rml.find("id=\"viewport-host\"");
-    const std::size_t bottomDock = rml.find("id=\"main-layout-bottom-dock\"");
-    const std::size_t outliner = rml.find("id=\"main-layout-panel-outliner\"");
-    const std::size_t inspector = rml.find("id=\"main-layout-panel-inspector\"");
-    const std::size_t inspectorTab = rml.find("id=\"main-layout-panel-inspector-tab\"");
-    ASSERT_NE(editorColumn, std::string::npos);
-    ASSERT_NE(viewport, std::string::npos);
-    ASSERT_NE(bottomDock, std::string::npos);
-    ASSERT_NE(outliner, std::string::npos);
-    ASSERT_NE(inspector, std::string::npos);
-    ASSERT_NE(inspectorTab, std::string::npos);
-    EXPECT_NE(rml.find("class=\"main-layout-bottom-dock bg-gray-950 border-gray-600\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-bottom-dock-tab-strip\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-bottom-dock-content\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-tab-active bg-gray-950"), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-tab-panel=\"inspector\""), std::string::npos);
-    EXPECT_NE(rml.find("height: 260dp"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-bottom-dock-resizer\""), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"bottom-dock\""), std::string::npos);
-    EXPECT_LT(editorColumn, viewport);
-    EXPECT_LT(viewport, bottomDock);
-    EXPECT_LT(bottomDock, outliner);
-    EXPECT_LT(bottomDock, inspectorTab);
-    EXPECT_LT(inspectorTab, inspector);
-    EXPECT_EQ(countOccurrences(rml, "id=\"main-layout-panel-inspector\""), 1u);
-    EXPECT_EQ(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, ProjectsMultiplePanelsInBottomDockOrder) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockMovePanelToLocationAtPanel(
-            layout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Panel,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::Before));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    const std::size_t bottomDock = rml.find("id=\"main-layout-bottom-dock\"");
-    const std::size_t tabStrip = rml.find("id=\"main-layout-bottom-dock-tab-strip\"");
-    const std::size_t inspectorTab = rml.find("id=\"main-layout-panel-inspector-tab\"");
-    const std::size_t outlinerTab = rml.find("id=\"main-layout-panel-outliner-tab\"");
-    const std::size_t inspector = rml.find("id=\"main-layout-panel-inspector\"");
-    ASSERT_NE(bottomDock, std::string::npos);
-    ASSERT_NE(tabStrip, std::string::npos);
-    ASSERT_NE(inspectorTab, std::string::npos);
-    ASSERT_NE(outlinerTab, std::string::npos);
-    ASSERT_NE(inspector, std::string::npos);
-    EXPECT_EQ(rml.find("id=\"main-layout-panel-outliner\""), std::string::npos);
-    EXPECT_LT(bottomDock, tabStrip);
-    EXPECT_LT(tabStrip, inspectorTab);
-    EXPECT_LT(inspectorTab, outlinerTab);
-    EXPECT_LT(outlinerTab, inspector);
-    EXPECT_NE(rml.find("main-layout-tab-active bg-gray-950"), std::string::npos);
-    EXPECT_EQ(countOccurrences(rml, "data-main-layout-tab-panel=\""), 2u);
-    EXPECT_EQ(countOccurrences(rml, "main-layout-bottom-panel-pane"), 1u);
-    EXPECT_EQ(rml.find("data-main-layout-resizer=\"panels\""), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, ProjectsBottomSplitPanelsHorizontally) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelOutliner, DockLocation::Panel));
-    ASSERT_TRUE(dockSplitPanelWithPanel(
-            layout.dockLayout,
-            kMainLayoutPanelInspector,
-            DockLocation::Panel,
-            kMainLayoutPanelOutliner,
-            DockPanelInsertPosition::After));
-    ASSERT_TRUE(dockSetSplitPanelSizeDp(
-            layout.dockLayout,
-            DockLocation::Panel,
-            kMainLayoutPanelOutliner,
-            288));
-
-    const std::string rml = buildMainLayoutRml(
-            layout,
-            {},
-            {
-                    .activeResizer = MainLayoutActiveResizer::BottomSplitPanel,
-                    .activeBottomSplitPanelId = std::string(kMainLayoutPanelOutliner),
-            });
-
-    const std::size_t content = rml.find("id=\"main-layout-bottom-dock-content\"");
-    const std::size_t outliner = rml.find("id=\"main-layout-panel-outliner\"");
-    const std::size_t resizer = rml.find("id=\"main-layout-bottom-split-resizer-outliner\"");
-    const std::size_t inspector = rml.find("id=\"main-layout-panel-inspector\"");
-    ASSERT_NE(content, std::string::npos);
-    ASSERT_NE(outliner, std::string::npos);
-    ASSERT_NE(resizer, std::string::npos);
-    ASSERT_NE(inspector, std::string::npos);
-    EXPECT_LT(content, outliner);
-    EXPECT_LT(outliner, resizer);
-    EXPECT_LT(resizer, inspector);
-    EXPECT_LT(outliner, inspector);
-    EXPECT_NE(rml.find("id=\"main-layout-panel-outliner-tab\""), std::string::npos);
-    EXPECT_EQ(rml.find("id=\"main-layout-panel-inspector-tab\""), std::string::npos);
-    EXPECT_EQ(countOccurrences(rml, "data-main-layout-tab-panel=\""), 1u);
-    EXPECT_EQ(countOccurrences(rml, "main-layout-bottom-panel-pane"), 2u);
-    EXPECT_EQ(countOccurrences(rml, "data-main-layout-resizer=\"bottom-split:"), 1u);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"bottom-split:outliner\""), std::string::npos);
-    EXPECT_EQ(rml.find("data-main-layout-resizer=\"bottom-split:inspector\""), std::string::npos);
-    EXPECT_NE(
-            rml.find("id=\"main-layout-panel-outliner\" class=\"main-layout-panel main-layout-panel-fixed"),
-            std::string::npos);
-    EXPECT_EQ(
-            rml.find("id=\"main-layout-panel-outliner\" class=\"main-layout-panel main-layout-panel-flex"),
-            std::string::npos);
-    EXPECT_NE(rml.find("width: 288dp; flex-basis: 288dp; flex-grow: 0; flex-shrink: 0;"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-bottom-split-resizer main-layout-resizer-active"), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-bottom-panel-active"), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, CollapsedSidebarKeepsEdgeResizerWithoutSidebarSurface) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.sidebar.collapsed = true;
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
-    EXPECT_EQ(rml.find("id=\"main-layout-sidebar\""), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-outliner"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-inspector"), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"sidebar\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-sidebar-resizer-collapsed-right"), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, CollapsedBottomDockKeepsEdgeResizerWithoutDockSurface) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.bottomDock.collapsed = true;
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::Panel));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
-    EXPECT_EQ(rml.find("id=\"main-layout-bottom-dock\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-outliner"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-inspector"), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"bottom-dock\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-bottom-dock-resizer-collapsed"), std::string::npos);
-}
-
-TEST(MainLayoutRmlBuilderTests, CollapsedAuxiliarySidebarKeepsEdgeResizerWithoutSideDockSurface) {
-    MainLayoutModel layout = MainLayoutModel::defaults();
-    layout.auxiliarySidebar.collapsed = true;
-    ASSERT_TRUE(dockMovePanelToLocation(layout.dockLayout, kMainLayoutPanelInspector, DockLocation::AuxiliaryBar));
-
-    const std::string rml = buildMainLayoutRml(layout);
-
-    EXPECT_NE(rml.find("id=\"viewport-host\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"main-layout-sidebar\""), std::string::npos);
-    EXPECT_EQ(rml.find("id=\"main-layout-auxiliary-sidebar\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-panel-outliner"), std::string::npos);
-    EXPECT_EQ(rml.find("main-layout-panel-inspector"), std::string::npos);
-    EXPECT_NE(rml.find("data-main-layout-resizer=\"auxiliary-sidebar\""), std::string::npos);
-    EXPECT_NE(rml.find("main-layout-sidebar-resizer-collapsed-left"), std::string::npos);
-}
-
-TEST(UIUtilityTokensTests, AppUITokenConfigPathUsesRuntimeUiTokenDirectory) {
-    const std::filesystem::path executableDir = "runtime";
-
-    EXPECT_EQ(
-            appUITokenConfigPath(executableDir),
-            executableDir / "ui" / "tokens" / "app-ui.tokens.json");
-}
-
-TEST(UIUtilityTokensTests, LoadsTailwindStyleTokenConfigInAuthorOrder) {
+TEST(UISettingsTests, IgnoresMalformedPanelVisibilityAndEmptyLocale) {
     const std::filesystem::path path =
-            std::filesystem::temp_directory_path() / "quader_ui_token_config.json";
+            std::filesystem::temp_directory_path() / "quader_ui_settings_malformed.ini";
+    std::filesystem::remove(path);
+
     {
-        std::ofstream file(path);
-        ASSERT_TRUE(file.is_open()) << path.string();
-        file << R"JSON({
-  "theme": {
-    "colors": {
-      "gray": {
-        "50": "#F7F7F7",
-        "100": "#D8D8D8"
-      },
-      "purple": {
-        "300": "#B78BE9"
-      }
-    },
-    "fontFamily": {
-      "ui": "Inter"
-    },
-    "fontWeight": {
-      "medium": 500
-    },
-    "fontSize": {
-      "sm": "14dp"
-    },
-    "spacing": {
-      "3": "12dp"
-    },
-    "borderRadius": {
-      "6": "6dp"
-    },
-    "extend": {
-      "colors": {
-        "accent": {
-          "500": "#ABCDEF"
-        }
-      },
-      "spacing": {
-        "4": "16dp"
-      }
-    }
-  }
-})JSON";
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << "[Panels]\n";
+        file << "Outliner=maybe\n";
+        file << "Inspector=0\n";
+        file << "Console=yes\n";
+        file << "[Show]\n";
+        file << "NavigationGizmo=no\n";
+        file << "[Localization]\n";
+        file << "Locale=   \n";
     }
 
-    const UITokenConfig tokens = loadUITokenConfig(path);
+    const UISettings loaded = UISettings::load(path);
 
-    ASSERT_EQ(tokens.colors.size(), 4u);
-    EXPECT_EQ(tokens.colors[0].name, "gray.50");
-    EXPECT_EQ(tokens.colors[0].hex, "#F7F7F7");
-    EXPECT_EQ(tokens.colors[1].name, "gray.100");
-    EXPECT_EQ(tokens.colors[1].hex, "#D8D8D8");
-    EXPECT_EQ(tokens.colors[2].name, "purple.300");
-    EXPECT_EQ(tokens.colors[2].hex, "#B78BE9");
-    EXPECT_EQ(tokens.colors[3].name, "accent.500");
-    EXPECT_EQ(tokens.colors[3].hex, "#ABCDEF");
-    const std::vector<UIUtilityToken> expectedUtilities{
-            {.name = "font-ui", .value = "Inter"},
-            {.name = "font-medium", .value = "500"},
-            {.name = "text-sm", .value = "14dp"},
-            {.name = "space-3", .value = "12dp"},
-            {.name = "-space-3", .value = "12dp"},
-            {.name = "size-3", .value = "12dp"},
-            {.name = "top-3", .value = "12dp"},
-            {.name = "right-3", .value = "12dp"},
-            {.name = "bottom-3", .value = "12dp"},
-            {.name = "left-3", .value = "12dp"},
-            {.name = "rounded-6", .value = "6dp"},
-            {.name = "space-4", .value = "16dp"},
-            {.name = "-space-4", .value = "16dp"},
-            {.name = "size-4", .value = "16dp"},
-            {.name = "top-4", .value = "16dp"},
-            {.name = "right-4", .value = "16dp"},
-            {.name = "bottom-4", .value = "16dp"},
-            {.name = "left-4", .value = "16dp"},
-    };
-    ASSERT_EQ(tokens.utilities.size(), expectedUtilities.size());
-    for (std::size_t index = 0; index < expectedUtilities.size(); ++index) {
-        EXPECT_EQ(tokens.utilities[index].name, expectedUtilities[index].name);
-        EXPECT_EQ(tokens.utilities[index].value, expectedUtilities[index].value);
-    }
+    EXPECT_EQ(loaded.locale(), "en-US");
+    EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Outliner));
+    EXPECT_FALSE(loaded.isPanelVisible(UIPanelId::Inspector));
+    EXPECT_TRUE(loaded.isPanelVisible(UIPanelId::Console));
+    EXPECT_FALSE(loaded.navigationGizmoVisible());
 
     std::filesystem::remove(path);
-}
-
-TEST(UIClassListTests, MaintainsOrderedDuplicateFreeClasses) {
-    UIClassList classes;
-    classes.add("chrome-icon-button").add("bg-gray-800").add("chrome-icon-button").addIf(false, "hidden");
-
-    EXPECT_TRUE(classes.contains("chrome-icon-button"));
-    EXPECT_FALSE(classes.contains("hidden"));
-    EXPECT_EQ(classes.toString(), "chrome-icon-button bg-gray-800");
-}
-
-TEST(RmlMarkupWriterTests, EscapesAttributesTextAndStyles) {
-    UIElement element = UIElement::div()
-            .id("root&panel")
-            .addClass("panel")
-            .attr("data-title", "A \"quoted\" title")
-            .style("height", "10dp")
-            .child(UIElement::span().text("A < B & C"));
-
-    EXPECT_EQ(
-            writeRmlMarkup(element),
-            "<div id=\"root&amp;panel\" class=\"panel\" data-title=\"A &quot;quoted&quot; title\" "
-            "style=\"height: 10dp;\"><span>A &lt; B &amp; C</span></div>");
-}
-
-TEST(UIIconRegistryTests, RendersSemanticIconsThroughCurrentResourceProvider) {
-    const UIIconRegistry& registry = UIIconRegistry::instance();
-    const UIIconDefinition* closeIcon = registry.find(UIIconId::ChromeClose);
-    const UIIconDefinition* meshIcon = registry.find(UIIconId::Mesh);
-    const UIIconDefinition* arrowIcon = registry.find(UIIconId::ArrowDown);
-
-    ASSERT_NE(closeIcon, nullptr);
-    ASSERT_NE(meshIcon, nullptr);
-    ASSERT_NE(arrowIcon, nullptr);
-    EXPECT_EQ(closeIcon->name, "chrome-close");
-    EXPECT_EQ(closeIcon->className, "ui-icon-chrome-close");
-    EXPECT_EQ(closeIcon->provider, UIIconProvider::ImageResource);
-    EXPECT_EQ(closeIcon->resourcePath, "quader://icons/close_icon.png");
-    EXPECT_EQ(meshIcon->name, "mesh");
-    EXPECT_EQ(meshIcon->className, "ui-icon-mesh");
-    EXPECT_EQ(meshIcon->resourcePath, "quader://icons/mesh_icon.png");
-    EXPECT_EQ(arrowIcon->name, "arrow-down");
-    EXPECT_EQ(arrowIcon->resourcePath, "quader://icons/arrow_down_icon.png");
-    EXPECT_EQ(uiIconProviderClass(closeIcon->provider), "ui-icon-resource-image");
-
-    EXPECT_EQ(
-            writeRmlMarkup(registry.renderIcon(UIIconId::ChromeClose, "toolbar-icon")),
-            "<span class=\"ui-icon ui-icon-resource-image ui-icon-chrome-close toolbar-icon\" "
-            "data-ui-icon=\"chrome-close\"></span>");
-}
-
-TEST(UIButtonComponentTests, RendersStatefulLabeledIconButtonsThroughBaseClass) {
-    /// Test-only button variant for exercising base button rendering.
-    class TestButton final : public UIButtonComponent {
-    public:
-        TestButton()
-            : UIButtonComponent("test-button") {
-            setIcon(UIIconId::ChromeClose, UIButtonIconPlacement::Left);
-            setLabel("Run");
-            setHovered(true);
-            setToggleButton(true);
-            setToggled(true);
-        }
-
-    protected:
-        void appendButtonClasses(UIElement& button) const override {
-            button.addClass("test-button");
-        }
-
-        void appendButtonAttributes(UIElement& button) const override {
-            UIButtonComponent::appendButtonAttributes(button);
-            button.data("test-action", "run");
-        }
-    };
-
-    const TestButton button;
-
-    EXPECT_EQ(
-            writeRmlMarkup(button.render()),
-            "<button id=\"test-button\" class=\"test-button\" data-ui-hover=\"true\" aria-pressed=\"true\" "
-            "data-ui-toggle=\"on\" data-test-action=\"run\"><span class=\"ui-icon ui-icon-resource-image "
-            "ui-icon-chrome-close ui-button-icon\" data-ui-icon=\"chrome-close\"></span><span "
-            "class=\"ui-button-label\">Run</span></button>");
-}
-
-TEST(UIDropdownComponentTests, RendersInputSurfaceAndAlignedKeybindingCells) {
-    const UIDropdownComponent dropdown(UIDropdownModel{
-            .elementId = "viewport-view",
-            .selectedLabel = "Top",
-            .classes = {"viewport-view-dropdown"},
-            .options = {
-                    {.id = "perspective", .label = "Perspective", .keybinding = "P"},
-                    {.id = "top", .label = "Top", .selected = true},
-            },
-            .open = true,
-    });
-
-    const std::string rml = writeRmlMarkup(dropdown.render());
-
-    EXPECT_NE(rml.find("id=\"viewport-view\" class=\"ui-dropdown viewport-view-dropdown\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"viewport-view-input\""), std::string::npos);
-    EXPECT_NE(rml.find("data-ui-dropdown-toggle=\"viewport-view\""), std::string::npos);
-    EXPECT_NE(rml.find("aria-expanded=\"true\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-dropdown-input-label\">Top</span>"), std::string::npos);
-    EXPECT_NE(rml.find("data-ui-icon=\"arrow-down\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"viewport-view-surface\""), std::string::npos);
-    EXPECT_NE(rml.find("data-ui-dropdown-option=\"perspective\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-dropdown-option-keybinding text-gray-300\">P</span>"), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-dropdown-option-keybinding text-gray-300\"></span>"), std::string::npos);
-
-    const UIDropdownComponent closedDropdown(UIDropdownModel{
-            .elementId = "closed-dropdown",
-            .selectedLabel = "Perspective",
-            .options = {{.id = "perspective", .label = "Perspective"}},
-    });
-    EXPECT_EQ(writeRmlMarkup(closedDropdown.render()).find("closed-dropdown-surface"), std::string::npos);
-}
-
-TEST(UIToolbarButtonComponentTests, RendersIconLabelAndSecondaryText) {
-    const UIToolbarButtonComponent button(UIToolbarButtonModel{
-            .elementId = "toolbar-vertices",
-            .icon = UIIconId::Mesh,
-            .label = "Vertices",
-            .secondaryText = "Shift+Z",
-    });
-
-    const std::string rml = writeRmlMarkup(button.render());
-
-    EXPECT_NE(rml.find("id=\"toolbar-vertices\" class=\"toolbar-button bg-gray-950 border-1 border-gray-700 rounded-6 min-w-8 h-8 m-0 text-gray-100 hover-bg-purple-900 active-bg-purple-900 hover-border-purple-700 active-border-purple-700 px-3\""),
-            std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-mesh toolbar-button-icon mr-2\" data-ui-icon=\"mesh\""),
-            std::string::npos);
-    EXPECT_NE(rml.find("class=\"toolbar-button-label text-md leading-md text-gray-100\">Vertices</span>"),
-            std::string::npos);
-    EXPECT_NE(rml.find("class=\"toolbar-button-secondary font-alt text-md leading-md ml-3_5 text-gray-300\">SHIFT+Z</span>"),
-            std::string::npos);
-
-    const UIToolbarButtonComponent iconButton(UIToolbarButtonModel{
-            .elementId = "toolbar-icon",
-            .icon = UIIconId::Mesh,
-    });
-    EXPECT_NE(writeRmlMarkup(iconButton.render()).find("toolbar-button-icon-only"), std::string::npos);
-}
-
-TEST(UIChromeButtonComponentTests, BuildsCurrentWindowChromeButtonsFromComponents) {
-    EXPECT_EQ(chromeButtonElementId(UIChromeButtonKind::Minimize), "chrome-minimize-button");
-    EXPECT_EQ(chromeButtonActionName(UIChromeButtonKind::Restore), "restore");
-    ASSERT_TRUE(chromeButtonKindForActionName("minimize").has_value());
-    EXPECT_EQ(*chromeButtonKindForActionName("minimize"), UIChromeButtonKind::Minimize);
-    EXPECT_EQ(chromeButtonKindForActionName("__missing__"), std::nullopt);
-    EXPECT_EQ(kChromeWindowActionDataKey, std::string_view("chrome-window-action"));
-    EXPECT_EQ(kChromeWindowActionAttribute, std::string_view("data-chrome-window-action"));
-    EXPECT_EQ(chromeButtonIconId(UIChromeButtonKind::Close), UIIconId::ChromeClose);
-
-    const std::string rml = buildWindowChromeControlsRml();
-    const std::string innerRml = buildWindowChromeControlsInnerRml();
-
-    EXPECT_NE(rml.find("<div id=\"chrome-window-controls\" class=\"chrome-window-controls\">"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"chrome-minimize-button\" class=\"chrome-icon-button bg-gray-800 hover-icon-gray-100 active-icon-gray-100 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"minimize\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"chrome-restore-button\" class=\"chrome-icon-button bg-gray-800 hover-icon-gray-100 active-icon-gray-100 hover-bg-gray-600 active-bg-gray-400\" data-chrome-window-action=\"restore\""), std::string::npos);
-    EXPECT_NE(rml.find("id=\"chrome-close-button\" class=\"chrome-icon-button bg-gray-800 hover-icon-gray-100 active-icon-gray-100 hover-bg-red-500 active-bg-red-600\" data-chrome-window-action=\"close\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-chrome-minimize ui-button-icon icon-gray-400\" data-ui-icon=\"chrome-minimize\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-chrome-restore ui-button-icon icon-gray-400\" data-ui-icon=\"chrome-restore\""), std::string::npos);
-    EXPECT_NE(rml.find("class=\"ui-icon ui-icon-resource-image ui-icon-chrome-close ui-button-icon icon-gray-400\" data-ui-icon=\"chrome-close\""), std::string::npos);
-    EXPECT_EQ(countOccurrences(rml, "data-chrome-window-action"), 3u);
-    EXPECT_EQ(countOccurrences(rml, "data-ui-icon"), 3u);
-    EXPECT_EQ(innerRml.find("id=\"chrome-window-controls\""), std::string::npos);
-    EXPECT_EQ(countOccurrences(innerRml, "data-chrome-window-action"), 3u);
-}
-
-TEST(ModelingModeShelfControllerTests, ControlsFollowOperationsTopBarPlacementOrder) {
-    const LocalizationService localization;
-    const ModelingModeShelfController controller;
-    const std::vector<ModelingModeShelfControl> controls = controller.controls(localization);
-
-    std::vector<const quader_host_contract::HostUiPlacementDescriptor*> placements;
-    for (const quader_host_contract::HostUiPlacementDescriptor& placement :
-            quader_host_contract::ui_placement_catalog()) {
-        if (placement.surface_id == std::string_view("operations_top_bar") &&
-                placement.target_kind == quader_host_contract::HostUiPlacementTargetKind::panel) {
-            placements.push_back(&placement);
-        }
-    }
-    std::stable_sort(placements.begin(), placements.end(), [](const auto* lhs, const auto* rhs) {
-        return lhs->order < rhs->order;
-    });
-
-    std::vector<std::string> expectedIds;
-    for (const quader_host_contract::HostUiPlacementDescriptor* placement : placements) {
-        const quader_host_contract::HostOperationPanelDescriptor* panel =
-                quader_host_contract::find_operation_panel_descriptor(placement->target_id);
-        ASSERT_NE(panel, nullptr) << placement->id;
-        using quader_host_contract::HostSelectionMode;
-        switch (panel->selection_mode) {
-        case HostSelectionMode::object:
-            expectedIds.emplace_back("object");
-            break;
-        case HostSelectionMode::vertex:
-            expectedIds.emplace_back("vertex");
-            break;
-        case HostSelectionMode::edge:
-            expectedIds.emplace_back("edge");
-            break;
-        case HostSelectionMode::face:
-            expectedIds.emplace_back("face");
-            break;
-        case HostSelectionMode::group:
-            break;
-        }
-    }
-
-    ASSERT_EQ(controls.size(), expectedIds.size());
-    for (std::size_t index = 0; index < controls.size(); ++index) {
-        EXPECT_EQ(controls[index].id, expectedIds[index]);
-        EXPECT_EQ(controls[index].behavior, ModelingModeShelfControlBehavior::OpensTabContent);
-    }
-
-    ASSERT_EQ(controller.controlIdForSelectionMode(ModelingSelectionMode::Object), std::optional<std::string_view>("object"));
-    ASSERT_EQ(controller.controlIdForSelectionMode(ModelingSelectionMode::Vertex), std::optional<std::string_view>("vertex"));
-    ASSERT_EQ(controller.controlIdForSelectionMode(ModelingSelectionMode::Edge), std::optional<std::string_view>("edge"));
-    ASSERT_EQ(controller.controlIdForSelectionMode(ModelingSelectionMode::Face), std::optional<std::string_view>("face"));
-    ASSERT_EQ(
-            controller.selectionModeForControlId("object"),
-            std::optional<ModelingSelectionMode>(ModelingSelectionMode::Object));
-    ASSERT_EQ(
-            controller.selectionModeForControlId("vertex"),
-            std::optional<ModelingSelectionMode>(ModelingSelectionMode::Vertex));
-    ASSERT_EQ(
-            controller.selectionModeForControlId("edge"),
-            std::optional<ModelingSelectionMode>(ModelingSelectionMode::Edge));
-    ASSERT_EQ(
-            controller.selectionModeForControlId("face"),
-            std::optional<ModelingSelectionMode>(ModelingSelectionMode::Face));
-
-    const std::string source = readSourceFile("src/ui/controllers/modeling_mode_shelf_controller.cpp");
-    EXPECT_NE(source.find("quader_host_contract::ui_placement_catalog()"), std::string::npos);
-    EXPECT_NE(source.find("quader_host_contract::find_operation_panel_descriptor("), std::string::npos);
-    EXPECT_EQ(source.find("struct ModelingModeShelfModeDescriptor"), std::string::npos);
-    EXPECT_EQ(source.find("modelingModeShelfModeDescriptors()"), std::string::npos);
-}
-
-TEST(ModelingModeShelfControllerTests, LocalizesDisabledActionReasonKeys) {
-    LocalizationService localization;
-    ASSERT_TRUE(localization.load(
-            std::filesystem::path(QUADER_SOURCE_DIR) / "resources" / "locales",
-            std::string(LocalizationService::DefaultLocale)));
-
-    ProjectSession session;
-    QuaderEditorApi editor(QuaderApiSessionInternalAccess::fromProjectSession(session));
-    const QuaderApiResult<QuaderModelingObjectRef> box = editor.modeling().createBox(
-            QuaderBounds{.min = {-1.0f, -1.0f, -1.0f}, .max = {1.0f, 1.0f, 1.0f}},
-            "Shelf Disabled Reason Box");
-    ASSERT_TRUE(box.ok()) << box.errorMessage();
-
-    ModelingModeShelfController controller;
-    ASSERT_TRUE(controller.syncEditorState(editor, localization));
-    const ModelingModeShelfState state = controller.buildState(localization);
-    const auto combine = std::find_if(
-            state.activeStripCommands.begin(),
-            state.activeStripCommands.end(),
-            [](const ModelingModeShelfCommand& command) {
-                return command.id == "combine_mesh";
-            });
-    ASSERT_NE(combine, state.activeStripCommands.end());
-    EXPECT_TRUE(combine->disabled);
-    EXPECT_EQ(combine->disabledReason, "Select at least 2 objects.");
-}
-
-TEST(ModelingModeShelfComponentTests, BuildsTabbedShelfShellOnly) {
-    const std::vector<ModelingModeShelfControl> controls = {
-            {
-                    .id = "object",
-                    .label = "Object",
-                    .icon = UIIconId::Mesh,
-                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-            {
-                    .id = "vertex",
-                    .label = "Vertices",
-                    .icon = UIIconId::Mesh,
-                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-            {
-                    .id = "edge",
-                    .label = "Edges",
-                    .icon = UIIconId::Mesh,
-                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-            {
-                    .id = "face",
-                    .label = "Faces",
-                    .icon = UIIconId::Mesh,
-                    .labelVisibility = ModelingModeShelfControlLabelVisibility::Active,
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-    };
-    const std::vector<ModelingModeShelfCommand> commands = {
-            {.id = "bridge", .commandId = quaderModelingCommandTargetId("bridge"), .label = "Bridge"},
-            {.id = "collapse", .commandId = quaderModelingCommandTargetId("collapse"), .label = "Collapse", .secondaryText = "Shift+Z"},
-            {.id = "thicken", .commandId = quaderModelingCommandTargetId("thicken"), .label = "Thicken", .secondaryText = "T"},
-            {.id = "flip-normal", .commandId = quaderModelingCommandTargetId("flip-normal"), .label = "Flip Normal", .secondaryText = "F"},
-    };
-
-    for (const ModelingModeShelfControl& control : controls) {
-        EXPECT_TRUE(modelingModeShelfControlOpensTabContent(control));
-    }
-    EXPECT_EQ(modelingModeShelfControlButtonElementId("face"), "modeling-mode-shelf-control-face");
-    EXPECT_EQ(modelingModeShelfControlMeasureElementId("face"), "modeling-mode-shelf-measure-control-face");
-    EXPECT_EQ(modelingModeShelfOverflowToggleControlId(), "__modeling-mode-shelf-overflow-toggle");
-    EXPECT_EQ(modelingModeShelfOverflowButtonElementId(), "modeling-mode-shelf-overflow-button");
-    EXPECT_EQ(modelingModeShelfControlBehaviorName(ModelingModeShelfControlBehavior::OpensTabContent), "opens-tab-content");
-    EXPECT_EQ(modelingModeShelfControlBehaviorName(ModelingModeShelfControlBehavior::Action), "action");
-    EXPECT_EQ(kModelingModeShelfControlDataKey, std::string_view("modeling-mode-shelf-control"));
-    EXPECT_EQ(kModelingModeShelfCommandAttribute, std::string_view("data-modeling-mode-shelf-command"));
-    const std::span<const std::string_view> bypassIds = modelingModeShelfPointerBypassElementIds();
-    ASSERT_EQ(bypassIds.size(), 4u);
-    EXPECT_NE(std::find(bypassIds.begin(), bypassIds.end(), "modeling-mode-shelf"), bypassIds.end());
-    EXPECT_NE(std::find(bypassIds.begin(), bypassIds.end(), "modeling-mode-shelf-toolbar"), bypassIds.end());
-    EXPECT_NE(std::find(bypassIds.begin(), bypassIds.end(), "modeling-mode-shelf-content"), bypassIds.end());
-    EXPECT_NE(std::find(bypassIds.begin(), bypassIds.end(), "modeling-mode-shelf-overflow-menu"), bypassIds.end());
-
-    const std::string toolbarRml = writeRmlMarkup(ModelingModeShelfToolbarComponent(ModelingModeShelfState{
-            .controls = controls,
-            .activeTabControlId = std::string("face"),
-    }).render());
-    EXPECT_EQ(countOccurrences(toolbarRml, "data-modeling-mode-shelf-control="), 4u);
-    EXPECT_EQ(countOccurrences(toolbarRml, "data-modeling-mode-shelf-control-behavior=\"opens-tab-content\""), 4u);
-    EXPECT_EQ(countOccurrences(toolbarRml, "data-modeling-mode-shelf-control-behavior=\"action\""), 0u);
-    EXPECT_EQ(countOccurrences(toolbarRml, "data-ui-icon=\"mesh\""), 8u);
-    EXPECT_EQ(toolbarRml.find(">Object</span>"), std::string::npos);
-    EXPECT_NE(toolbarRml.find(">Faces</span>"), std::string::npos);
-
-    const std::string rml = buildModelingModeShelfRml(ModelingModeShelfState{
-            .controls = controls,
-            .activeStripCommands = commands,
-            .activeTabControlId = std::string("face"),
-    });
-
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf\""), std::string::npos);
-    EXPECT_NE(rml.find("modeling-mode-shelf bg-gray-950"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-toolbar\""), std::string::npos);
-    EXPECT_NE(rml.find("modeling-mode-shelf-toolbar"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-strip\""), std::string::npos);
-    EXPECT_NE(rml.find("modeling-mode-shelf-measure-strip"), std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-measure-control-face\""),
-            std::string::npos);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-content\""), std::string::npos);
-    EXPECT_NE(rml.find("modeling-mode-shelf-content h-11 bg-gray-800"), std::string::npos);
-    EXPECT_NE(rml.find("data-modeling-mode-shelf-active-control=\"face\""), std::string::npos);
-    EXPECT_EQ(countOccurrences(rml, "data-modeling-mode-shelf-command="), 4u);
-    EXPECT_NE(rml.find("id=\"modeling-mode-shelf-command-bridge\""), std::string::npos);
-    EXPECT_NE(rml.find(">SHIFT+Z</span>"), std::string::npos);
-    EXPECT_EQ(countOccurrences(rml, "data-modeling-mode-shelf-control="), 4u);
-    EXPECT_EQ(countOccurrences(rml, "aria-pressed=\"true\""), 1u);
-    const std::size_t activeFace = rml.find("id=\"modeling-mode-shelf-control-face\"");
-    ASSERT_NE(activeFace, std::string::npos);
-    EXPECT_NE(rml.find("modeling-mode-shelf-tab-button-active", activeFace), std::string::npos);
-    EXPECT_EQ(rml.find(">Object</span>"), std::string::npos);
-    EXPECT_EQ(countOccurrences(rml, ">Faces</span>"), 2u);
-
-    const std::string closedRml = buildModelingModeShelfRml(ModelingModeShelfState{
-            .controls = controls,
-            .activeStripCommands = commands,
-            .activeTabControlId = std::nullopt,
-    });
-    EXPECT_EQ(closedRml.find("modeling-mode-shelf-content"), std::string::npos);
-    EXPECT_EQ(closedRml.find("data-modeling-mode-shelf-command="), std::string::npos);
-    EXPECT_EQ(countOccurrences(closedRml, "data-modeling-mode-shelf-control="), 4u);
-}
-
-TEST(ModelingModeShelfComponentTests, RendersOverflowToggleAndMenuFromState) {
-    const std::vector<ModelingModeShelfControl> controls = {
-            {
-                    .id = "object",
-                    .label = "Object",
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-            {
-                    .id = "vertex",
-                    .label = "Vertices",
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-            {
-                    .id = "edge",
-                    .label = "Edges",
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-            {
-                    .id = "face",
-                    .label = "Faces",
-                    .behavior = ModelingModeShelfControlBehavior::OpensTabContent,
-            },
-    };
-
-    const ModelingModeShelfState closedState{
-            .controls = controls,
-            .overflowControlIds = {"edge", "face"},
-            .activeTabControlId = std::string("face"),
-            .overflowButtonLabel = "More",
-            .overflowMenuOpen = false,
-    };
-    const std::string closedRml = buildModelingModeShelfRml(closedState);
-
-    EXPECT_NE(closedRml.find("id=\"modeling-mode-shelf-overflow-button\""),
-            std::string::npos);
-    EXPECT_NE(closedRml.find("data-modeling-mode-shelf-overflow-toggle=\"true\""),
-            std::string::npos);
-    EXPECT_NE(closedRml.find("aria-expanded=\"false\""),
-            std::string::npos);
-    EXPECT_EQ(closedRml.find("id=\"modeling-mode-shelf-control-edge\""),
-            std::string::npos);
-    EXPECT_EQ(closedRml.find("id=\"modeling-mode-shelf-overflow-menu\""),
-            std::string::npos);
-    EXPECT_EQ(countOccurrences(closedRml, "data-modeling-mode-shelf-control="), 2u);
-
-    ModelingModeShelfState openState = closedState;
-    openState.overflowMenuOpen = true;
-    const std::string openRml = buildModelingModeShelfRml(openState);
-
-    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-overflow-menu\" class=\"modeling-mode-shelf-overflow-menu bg-gray-950 p-1_5 border-1 border-gray-700 min-w-40 right-2 top-12\""),
-            std::string::npos);
-    EXPECT_NE(openRml.find("aria-expanded=\"true\""),
-            std::string::npos);
-    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-control-edge\""),
-            std::string::npos);
-    EXPECT_NE(openRml.find("id=\"modeling-mode-shelf-control-face\""),
-            std::string::npos);
-    EXPECT_EQ(countOccurrences(openRml, "data-modeling-mode-shelf-control="), 4u);
-    EXPECT_EQ(countOccurrences(openRml, "data-modeling-mode-shelf-overflow-toggle=\"true\""), 1u);
-}
-
-TEST(DebugPaletteViewTests, BuildsCopyablePaletteSwatchRml) {
-    const std::vector<DebugPaletteColorToken> colors = {
-            {.name = "gray.50", .hex = "#F7F7F7"},
-            {.name = "purple.950", .hex = "#120F18"},
-    };
-
-    const std::string rml = buildDebugPalettePageRml(colors);
-
-    EXPECT_NE(rml.find("id=\"debug-palette-page\""), std::string::npos);
-    EXPECT_EQ(rml.find("debug-keybind"), std::string::npos);
-    EXPECT_NE(rml.find("debug-palette-swatch"), std::string::npos);
-    EXPECT_NE(rml.find("font-ui bg-purple-950 text-gray-50 p-6"), std::string::npos);
-    EXPECT_NE(rml.find("bg-gray-50"), std::string::npos);
-    EXPECT_NE(rml.find("bg-purple-950"), std::string::npos);
-    EXPECT_NE(rml.find("gray.50"), std::string::npos);
-    EXPECT_NE(rml.find("purple.950"), std::string::npos);
-    EXPECT_NE(rml.find("data-copy-hex=\"#F7F7F7\""), std::string::npos);
-    EXPECT_NE(rml.find(">#120F18</button>"), std::string::npos);
-    EXPECT_NE(rml.find("hover-bg-gray-500 hover-border-gray-300 active-bg-gray-400 active-border-gray-200"),
-            std::string::npos);
-    EXPECT_EQ(rml.find("style=\"background-color:"), std::string::npos);
-}
-
-TEST(UIUtilityTokensTests, BuildsTailwindStyleRcssFromUtilityAndPaletteTokens) {
-    const std::vector<UIUtilityToken> utilityTokens = {
-            {.name = "font-ui", .value = "Inter"},
-            {.name = "font-alt", .value = "NovaMono"},
-            {.name = "font-medium", .value = "500"},
-            {.name = "text-sm", .value = "14dp"},
-            {.name = "leading-sm", .value = "18dp"},
-            {.name = "space-3", .value = "12dp"},
-            {.name = "size-8", .value = "32dp"},
-            {.name = "size-60", .value = "240dp"},
-            {.name = "border-1", .value = "1dp"},
-            {.name = "rounded-6", .value = "6dp"},
-    };
-    const std::vector<DebugPaletteColorToken> paletteColors = {
-            {.name = "gray.50", .hex = "#F7F7F7"},
-            {.name = "gray.500", .hex = "#3C3C3C"},
-    };
-
-    const std::string rcss = buildUIUtilityRcss(utilityTokens, paletteColors);
-
-    EXPECT_NE(rcss.find(".font-ui { font-family: Inter; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".font-alt { font-family: NovaMono; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".font-medium { font-weight: 500; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".text-sm { font-size: 14dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".leading-sm { line-height: 18dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".px-3 { padding-left: 12dp; padding-right: 12dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".mr-3 { margin-right: 12dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".size-8 { width: 32dp; height: 32dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".w-8 { width: 32dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".h-8 { height: 32dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".min-w-60 { min-width: 240dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".max-h-60 { max-height: 240dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".border-1 { border-width: 1dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".rounded-6 { border-radius: 6dp; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".bg-gray-50 { background-color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".hover-bg-gray-50:hover { background-color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".active-bg-gray-50:active { background-color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".text-gray-50 { color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".icon-gray-50 { image-color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".hover-icon-gray-50:hover .ui-icon { image-color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".active-icon-gray-50:active .ui-icon { image-color: #F7F7F7; }"), std::string::npos);
-    EXPECT_NE(rcss.find(".border-gray-500 { border-color: #3C3C3C; }"), std::string::npos);
-
-    const std::size_t hoverGray500 = rcss.find(".hover-bg-gray-500:hover { background-color: #3C3C3C; }");
-    const std::size_t activeGray50 = rcss.find(".active-bg-gray-50:active { background-color: #F7F7F7; }");
-    ASSERT_NE(hoverGray500, std::string::npos);
-    ASSERT_NE(activeGray50, std::string::npos);
-    EXPECT_LT(hoverGray500, activeGray50);
-}
-
-TEST(UIUtilityTokensTests, AppUITokensStayTailwindLikeAndDpBased) {
-    const std::string tokenConfig = readSourceFile("resources/ui/tokens/app-ui.tokens.json");
-
-    EXPECT_NE(tokenConfig.find("\"theme\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"colors\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"gray\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"purple\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"800\": \"#3B2952\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"950\": \"#120F18\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"fontFamily\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"fontWeight\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"fontSize\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"lineHeight\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"spacing\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"borderRadius\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"sm\": \"14dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"xxs\": \"10dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"3\": \"12dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"11\": \"45dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"13\": \"50dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"px\": \"1dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"60\": \"240dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"6\": \"6dp\""), std::string::npos);
-    EXPECT_NE(tokenConfig.find("\"medium\": 500"), std::string::npos);
-    EXPECT_EQ(tokenConfig.find("\"w-24\""), std::string::npos);
-    EXPECT_EQ(tokenConfig.find("\"h-6\""), std::string::npos);
-    EXPECT_EQ(tokenConfig.find("\"typography\""), std::string::npos);
-    EXPECT_EQ(tokenConfig.find("$type"), std::string::npos);
-    EXPECT_EQ(tokenConfig.find("$value"), std::string::npos);
 }
 
 TEST(PlatformWindowChromeTests, HitTestSupportsResizeEdgesToolbarDragAndWindowControls) {
@@ -3563,8 +883,9 @@ TEST(PlatformWindowChromeTests, HitTestSupportsResizeEdgesToolbarDragAndWindowCo
             .windowWidth = 800,
             .windowHeight = 600,
             .resizeBorder = 6,
-            .titleBarHeight = 48,
-            .rightControlsWidth = 120,
+            .titleBarHeight = 35,
+            .leftInteractiveWidth = 320,
+            .rightControlsWidth = 105,
     };
 
     auto hit = [&](int x, int y) {
@@ -3581,13 +902,52 @@ TEST(PlatformWindowChromeTests, HitTestSupportsResizeEdgesToolbarDragAndWindowCo
     EXPECT_EQ(hit(799, 300), SDL_HITTEST_RESIZE_RIGHT);
     EXPECT_EQ(hit(400, 599), SDL_HITTEST_RESIZE_BOTTOM);
     EXPECT_EQ(hit(0, 300), SDL_HITTEST_RESIZE_LEFT);
+    EXPECT_EQ(hit(80, 24), SDL_HITTEST_NORMAL);
     EXPECT_EQ(hit(400, 24), SDL_HITTEST_DRAGGABLE);
     EXPECT_EQ(hit(700, 24), SDL_HITTEST_NORMAL);
     EXPECT_EQ(hit(400, 60), SDL_HITTEST_NORMAL);
 
     hitTest.maximized = true;
-    EXPECT_EQ(hit(0, 0), SDL_HITTEST_DRAGGABLE);
+    EXPECT_EQ(hit(80, 24), SDL_HITTEST_NORMAL);
+    EXPECT_EQ(hit(400, 0), SDL_HITTEST_DRAGGABLE);
     EXPECT_EQ(hit(799, 599), SDL_HITTEST_NORMAL);
+}
+
+TEST(PlatformWindowChromeTests, ResizeBorderUsesSystemMetricsWhenLargerThanFallback) {
+    EXPECT_EQ(platformWindowChromeResizeBorderForSystemMetrics(6, 4, 4), 8);
+    EXPECT_EQ(platformWindowChromeResizeBorderForSystemMetrics(6, 1, 1), 6);
+    EXPECT_EQ(platformWindowChromeResizeBorderForSystemMetrics(0, 0, 0), 1);
+}
+
+TEST(PlatformWindowChromeTests, RecoversPersistedWindowFrameToVisibleWorkArea) {
+    const std::vector<PlatformWindowChromeFrame> workAreas = {
+            {.x = 0, .y = 0, .width = 1920, .height = 1040},
+            {.x = -1280, .y = 0, .width = 1280, .height = 984},
+    };
+
+    const PlatformWindowChromeFrame offscreen = platformWindowRecoverFrameToDisplayWorkArea(
+            {.x = 4000, .y = 2000, .width = 1600, .height = 900},
+            workAreas);
+    EXPECT_EQ(offscreen.x, 320);
+    EXPECT_EQ(offscreen.y, 140);
+    EXPECT_EQ(offscreen.width, 1600);
+    EXPECT_EQ(offscreen.height, 900);
+
+    const PlatformWindowChromeFrame secondary = platformWindowRecoverFrameToDisplayWorkArea(
+            {.x = -1200, .y = 100, .width = 900, .height = 700},
+            workAreas);
+    EXPECT_EQ(secondary.x, -1200);
+    EXPECT_EQ(secondary.y, 100);
+    EXPECT_EQ(secondary.width, 900);
+    EXPECT_EQ(secondary.height, 700);
+
+    const PlatformWindowChromeFrame oversized = platformWindowRecoverFrameToDisplayWorkArea(
+            {.x = 0, .y = 0, .width = 5000, .height = 3000},
+            workAreas);
+    EXPECT_EQ(oversized.x, 0);
+    EXPECT_EQ(oversized.y, 0);
+    EXPECT_EQ(oversized.width, 1920);
+    EXPECT_EQ(oversized.height, 1040);
 }
 
 TEST(PlatformWindowChromeTests, ManualResizeFrameSupportsEdgesAndCorners) {
@@ -3689,632 +1049,6 @@ TEST(SdlEventUtilsTests, ExtractsWindowIdsForRuntimeRoutedEvents) {
     event = {};
     event.type = SDL_EVENT_QUIT;
     EXPECT_FALSE(sdlEventWindowId(event).has_value());
-}
-
-TEST(UISystemTests, RmlShellOwnsMainLayoutAndMeasuredViewportPanel) {
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
-    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/rml_ui_context_host.hpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-    const std::string platformWindowSource = readSourceFile("src/platform/platform_window.cpp");
-    const std::string appSource = readSourceFile("src/app/app.cpp");
-    const std::string sdlEventUtilsSource = readSourceFile("src/platform/sdl_event_utils.cpp");
-    const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/viewport_component.hpp");
-    const std::string dockLayoutModelHeader = readSourceFile("src/ui/components/common/dock_layout_model.hpp");
-    const std::string mainLayoutModelHeader = readSourceFile("src/ui/components/organisms/main_layout_model.hpp");
-    const std::string mainLayoutControllerSource = readSourceFile("src/ui/controllers/main_layout_controller.cpp");
-    const std::string mainLayoutDockDragControllerHeader =
-            readSourceFile("src/ui/controllers/main_layout_dock_drag_controller.hpp");
-    const std::string mainLayoutDockDragControllerSource =
-            readSourceFile("src/ui/controllers/main_layout_dock_drag_controller.cpp");
-    const std::string mainLayoutDockHitRegionBuilderHeader =
-            readSourceFile("src/ui/controllers/main_layout_dock_hit_region_builder.hpp");
-    const std::string mainLayoutDockHitRegionBuilderSource =
-            readSourceFile("src/ui/controllers/main_layout_dock_hit_region_builder.cpp");
-    const std::string mainLayoutSashRegistryHeader =
-            readSourceFile("src/ui/controllers/main_layout_sash_registry.hpp");
-    const std::string mainLayoutSashRegistrySource =
-            readSourceFile("src/ui/controllers/main_layout_sash_registry.cpp");
-    const std::string uiGeometryHeader = readSourceFile("src/ui/components/common/ui_geometry.hpp");
-    const std::string uiDragDropHeader = readSourceFile("src/ui/components/common/ui_drag_drop.hpp");
-    const std::string uiTabStripModelHeader = readSourceFile("src/ui/components/common/ui_tab_strip_model.hpp");
-    const std::string uiDragDropControllerHeader = readSourceFile("src/ui/controllers/ui_drag_drop_controller.hpp");
-    const std::string uiDragDropControllerSource = readSourceFile("src/ui/controllers/ui_drag_drop_controller.cpp");
-    const std::string resizableSplitHeader = readSourceFile("src/ui/components/common/resizable_split.hpp");
-    const std::string resizableSplitControllerSource = readSourceFile("src/ui/controllers/resizable_split_controller.cpp");
-    const std::string uiButtonHeader = readSourceFile("src/ui/components/atoms/ui_button_component.hpp");
-    const std::string uiChromeButtonHeader = readSourceFile("src/ui/components/atoms/ui_chrome_button_component.hpp");
-    const std::string uiToolbarButtonHeader = readSourceFile("src/ui/components/atoms/ui_toolbar_button_component.hpp");
-    const std::string windowChromeControlsHeader =
-            readSourceFile("src/ui/components/organisms/window_chrome_controls_component.hpp");
-    const std::string modelingModeShelfHeader =
-            readSourceFile("src/ui/components/organisms/modeling_mode_shelf_component.hpp");
-    const std::string uiIconRegistrySource = readSourceFile("src/ui/core/ui_icon_registry.cpp");
-    const std::string uiUtilityTokensSource = readSourceFile("src/ui/ui_utility_tokens.cpp");
-    const std::string modelingModeShelfSource =
-            readSourceFile("src/ui/components/organisms/modeling_mode_shelf_component.cpp");
-    const std::string modelingModeShelfControllerSource =
-            readSourceFile("src/ui/controllers/modeling_mode_shelf_controller.cpp");
-    const std::string mainLayoutBuilderSource = readSourceFile("src/ui/backends/rml/main_layout_rml_builder.cpp");
-    const std::string shellRml = readSourceFile("resources/ui/rml/viewport-shell.rml");
-    const std::string shellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
-    const std::string cmakeSource = readSourceFile("CMakeLists.txt");
-
-    EXPECT_NE(uiSystemHeader.find("RmlUiContextHost rmlHost_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("MainLayoutModel mainLayout_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("MainLayoutController mainLayoutController_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("ResizableSplitController mainLayoutResizeController_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("MainLayoutDockDragController mainLayoutDockDragController_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("MainLayoutSashRegistry mainLayoutSashRegistry_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("DropForbidden"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("mainLayoutLeftPx_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("mainLayoutTopPx_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("mainLayoutDropForbiddenCursor_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("mainLayoutWidthDp_"), std::string::npos);
-    EXPECT_EQ(uiSystemHeader.find("mainLayoutSidebarHeightDp_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("ViewportHost viewportHost_"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("rmlHost_.initialize"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("buildWindowChromeControlsInnerRml()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("buildModelingModeShelfRml"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("updateModelingModeShelfOverflowFromRml"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfControlMeasureElementId"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfOverflowToggleControlId()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfController_.activateControl"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfController_.takePendingSelectionMode()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("editor.selection().setMode(toApiSelectionMode(*selectionMode))"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfController_.syncEditorState(editor, localization_)"), std::string::npos);
-    EXPECT_NE(modelingModeShelfControllerSource.find("selectionModeForControlId"), std::string::npos);
-    EXPECT_NE(modelingModeShelfControllerSource.find("pendingSelectionMode_"), std::string::npos);
-    EXPECT_NE(modelingModeShelfControllerSource.find("editor.modeling().selectionSummary()"), std::string::npos);
-    EXPECT_NE(modelingModeShelfControllerSource.find("selectionSummary_.mode"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("modelingModeShelfTabs_"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("modelingModeShelfContentOpen_"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("kModelingModeShelfButtonControlId"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("ui.modeling_shelf.button"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("modelingModeShelfTabControlIds"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("buildMainLayoutRml(mainLayout_"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("labels.panels.reserve(mainLayoutPanelDescriptors().size())"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainLayoutLabels_.viewport"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainLayoutLabels_.outliner"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainLayoutLabels_.inspector"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("QuaderApiVoidResult uiRuntimeStatus("), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("QuaderApiVoidResult uiRuntimeFailure("), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("localization.text(key, fallback)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("\"ui.runtime.preferences_saved\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("measureElementById(\"main-layout-slot\")"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayoutEditorColumnElementId()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayoutSideDockElementId(location)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayoutSideDockResizerElementId(location)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("addSideDockWidthSash"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("kMainLayoutAuxiliarySidebarResizer"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainLayoutOtherVisibleSideDockWidthDp"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainLayoutSideDockVisibleOnSide"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("mainLayoutSideDockVisibleOnSide"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("bool mainLayoutPanelVisibleInLocation"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("bool mainLayoutPanelVisibleInRenderedDock"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("int mainLayoutVisibleDockPanelCount"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("bool mainLayoutSideDockVisibleOnSide"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("!mainLayoutSideDockVisibleOnSide(model, MainLayoutSidebarSide::Left)"),
-            std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("!mainLayoutSideDockVisibleOnSide(model, MainLayoutSidebarSide::Right)"),
-            std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("mainLayoutPanelHeaderElementId(panelId)"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("mainLayoutPanelElementId(panelId)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("setPanelDropZones"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("beginMainLayoutDockDragCandidate"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("drop->target.location"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("setBottomDockCollapsed(false)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("movePanelToDockLocation(drop->panelId"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("drop->target.targetPanelId"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("updateMainLayoutDockDragPreviewPosition"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("kMainLayoutDockDragPreviewHotspotOffsetPx"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mouseX - static_cast<float>(mainLayoutLeftPx_)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mouseY - static_cast<float>(mainLayoutTopPx_)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("target ? MainLayoutCursorKind::Default : MainLayoutCursorKind::DropForbidden"),
-            std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayoutSashRegistry_.applyResize"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("setSidebarCollapsed(registration->location, true)"),
-            std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportHost_.handleFrame"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("<rml>"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("LoadDocumentFromMemory"), std::string::npos);
-    EXPECT_EQ(uiSystemHeader.find("RmlFilamentRenderer"), std::string::npos);
-    EXPECT_EQ(uiSystemHeader.find("ViewportRenderer"), std::string::npos);
-
-    EXPECT_NE(rmlHostSource.find("Rml::SetRenderInterface(&renderer_)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("Rml::SetFileInterface(fileInterface_.get())"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("context_->LoadDocument(documentPath.string())"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("debugPaletteSlot->SetInnerRML(debugPaletteRml)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("NovaMono.ttf"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("kChromeWindowActionAttribute"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("chromeButtonKindForActionName(action)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("kModelingModeShelfControlAttribute"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("kModelingModeShelfOverflowToggleAttribute"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("quader://ui/rcss/app-utility.generated.rcss"), std::string::npos);
-    EXPECT_NE(rmlHostHeader.find("measureElementById"), std::string::npos);
-    EXPECT_NE(rmlHostHeader.find("setElementInnerRml"), std::string::npos);
-    EXPECT_NE(rmlHostHeader.find("takeModelingModeShelfControlSelection"), std::string::npos);
-    EXPECT_EQ(rmlHostSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("sdlEventWindowId(event)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("SDL_GetWindowID(window_)"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("eventWindowId(const SDL_Event& event)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
-    EXPECT_NE(platformWindowSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
-    EXPECT_NE(appSource.find("#include \"platform/sdl_event_utils.hpp\""), std::string::npos);
-    EXPECT_NE(platformWindowSource.find("sdlEventWindowId(event)"), std::string::npos);
-    EXPECT_NE(appSource.find("sdlEventTargetsWindow(event, mainWindowId)"), std::string::npos);
-    EXPECT_NE(sdlEventUtilsSource.find("std::optional<SDL_WindowID> sdlEventWindowId"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/platform/sdl_event_utils.cpp"), std::string::npos);
-    for (const std::string* source : {&rmlHostSource, &uiSystemSource, &viewportHostSource, &platformWindowSource, &appSource}) {
-        EXPECT_EQ(source->find(".windowID"), std::string::npos);
-    }
-    EXPECT_EQ(rmlHostHeader.find("RmlMainLayoutEvent"), std::string::npos);
-    EXPECT_EQ(rmlHostSource.find("MainLayoutEventListener"), std::string::npos);
-
-    EXPECT_EQ(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("mousePixel.x - static_cast<float>(mainViewportFrame_.left)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.setSceneVisible(true)"), std::string::npos);
-    EXPECT_NE(viewportComponentHeader.find("kMainViewportTextureSource = \"quader://viewport/main\""), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("enum class DockLocation"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("enum class DockPanelInsertPosition"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("struct DockLayoutModel"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("struct DockLocationActivePanel"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("struct DockLocationSplitPanels"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockMovePanelToLocation"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockMovePanelToLocationAtPanel"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockReorderPanels"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockActivePanelId"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockSetActivePanel"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockTabStripForLocation"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockSplitPanelsInLocation"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockSplitPanelWithPanel"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("panelSizesDp"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockSplitPanelSizeDp"), std::string::npos);
-    EXPECT_NE(dockLayoutModelHeader.find("dockSetSplitPanelSizeDp"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("enum class MainLayoutSidebarSide"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutOppositeSidebarSide"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutSidebarSideForDockLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutDockLocationForSidebarSide"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutSideDockWidthDp"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("kMainLayoutPanelOutliner = \"outliner\""), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutCanonicalPanelId"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutBottomDockModel bottomDock"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutBottomDockCollapsed"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("kMainLayoutBottomSplitPanelMinWidthDp"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutClampedBottomSplitPanelWidthDp"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutSideDockModel"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutSideDockModel sidebar"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("MainLayoutSideDockModel auxiliarySidebar"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("DockLayoutModel dockLayout"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutSideDockCollapsed"), std::string::npos);
-    EXPECT_EQ(mainLayoutModelHeader.find("sidebarWidthDp"), std::string::npos);
-    EXPECT_EQ(mainLayoutModelHeader.find("auxiliarySidebarWidthDp"), std::string::npos);
-    EXPECT_EQ(mainLayoutModelHeader.find("sidebarCollapsed"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("struct MainLayoutPanelState"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("std::vector<MainLayoutPanelState> panelStates"), std::string::npos);
-    EXPECT_EQ(mainLayoutModelHeader.find("outlinerVisible"), std::string::npos);
-    EXPECT_EQ(mainLayoutModelHeader.find("inspectorVisible"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutPanelVisibleInLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutPanelVisibleInRenderedDock"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutVisiblePanelsInLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutVisibleTabPanelsInLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutSidePanelStackHeightDp"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("struct MainLayoutPanelDescriptor"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutPanelDescriptors"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutPanelIdFromVisibilitySettingsKey"), std::string::npos);
-    EXPECT_NE(mainLayoutModelHeader.find("mainLayoutPanelIdFromDockLocationSettingsKey"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("resizeSidebar"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("resizeOutlinerPanel"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("resizeSidePanelStack"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("setSidebarCollapsed"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("setPanelVisible"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("movePanelToDockLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("setActiveDockPanel"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("splitPanelWithDockPanel"), std::string::npos);
-    EXPECT_NE(mainLayoutControllerSource.find("resizeBottomSplitPanel"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("struct MainLayoutDockDragHitRegion"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("struct MainLayoutDockDropZone"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("struct MainLayoutPanelDropZone"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("enum class MainLayoutPanelDropZoneKind"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("MainLayoutPanelDropZoneKind kind"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("enum class MainLayoutDockDropAction"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("MainLayoutDockDropAction action"), std::string::npos);
-    EXPECT_EQ(mainLayoutDockDragControllerHeader.find("UIDropPlacementPolicy placementPolicy ="), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("UIDropFeedbackKind feedbackKind"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("struct MainLayoutDockDropTarget"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("struct MainLayoutDockDropResult"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerHeader.find("UIDragDropController dragDrop_"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("MainLayoutDockDragController::beginDragCandidate"),
-            std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("UIDropZoneKind::DockPanel"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("UIDropPlacementPolicy::VerticalBeforeAfter"),
-            std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("actionForPanelDropZone"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("placementPolicyForPanelDropZone"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("feedbackForPanelDropZone"), std::string::npos);
-    EXPECT_NE(mainLayoutDockDragControllerSource.find("MainLayoutDockDragController::targetForDropTarget"),
-            std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/main_layout_dock_drag_controller.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/main_layout_dock_hit_region_builder.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/main_layout_sash_registry.cpp"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderHeader.find("struct MainLayoutDockHitRegions"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderHeader.find("buildMainLayoutDockHitRegions"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("MainLayoutPanelDropZoneKind::BottomTab"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("MainLayoutPanelDropZoneKind::PanelBody"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("MainLayoutPanelDropZoneKind::BottomTabTrailing"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("mainLayoutPanelTabElementId"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/controllers/ui_drag_drop_controller.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/ui_button_component.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/ui_chrome_button_component.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/atoms/ui_toolbar_button_component.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/common/ui_tab_strip_model.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/modeling_mode_shelf_component.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/components/organisms/window_chrome_controls_component.cpp"), std::string::npos);
-    EXPECT_NE(cmakeSource.find("src/ui/core/ui_icon_registry.cpp"), std::string::npos);
-    EXPECT_NE(uiGeometryHeader.find("struct UIPixelPoint"), std::string::npos);
-    EXPECT_NE(uiGeometryHeader.find("struct UIPixelRect"), std::string::npos);
-    EXPECT_NE(uiTabStripModelHeader.find("class UITabStripModel"), std::string::npos);
-    EXPECT_NE(uiTabStripModelHeader.find("activateItem"), std::string::npos);
-    EXPECT_NE(uiDragDropHeader.find("enum class UIDragDropItemKind"), std::string::npos);
-    EXPECT_NE(uiDragDropHeader.find("enum class UIDropZoneKind"), std::string::npos);
-    EXPECT_NE(uiDragDropHeader.find("DockSurface"), std::string::npos);
-    EXPECT_NE(uiDragDropHeader.find("enum class UIDropPlacementPolicy"), std::string::npos);
-    EXPECT_NE(uiDragDropHeader.find("struct UIDropZoneRegion"), std::string::npos);
-    EXPECT_NE(uiDragDropControllerHeader.find("class UIDragDropController"), std::string::npos);
-    EXPECT_NE(uiDragDropControllerSource.find("UIDragDropController::beginCandidate"), std::string::npos);
-    EXPECT_NE(uiDragDropControllerSource.find("UIDragDropController::zoneAt"), std::string::npos);
-    EXPECT_NE(uiDragDropControllerSource.find("UIDragDropController::sameItem"), std::string::npos);
-    EXPECT_NE(uiDragDropControllerSource.find("UIDragDropController::placementForZone"), std::string::npos);
-    EXPECT_EQ(uiDragDropHeader.find("MainLayout"), std::string::npos);
-    EXPECT_EQ(uiDragDropControllerSource.find("MainLayout"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("#include \"ui/components/common/ui_geometry.hpp\""), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("enum class ResizableSplitAxis"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("enum class ResizableSplitSizeUnit"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("struct ResizableSplitHandle"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("struct ResizableSplitCollapseOptions"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("oppositeMinSize"), std::string::npos);
-    EXPECT_NE(resizableSplitHeader.find("containerSizeDp"), std::string::npos);
-    EXPECT_NE(resizableSplitControllerSource.find("ResizableSplitController::inflatedHitRect"), std::string::npos);
-    EXPECT_NE(resizableSplitControllerSource.find("ResizableSplitGrowthDirection::Positive"), std::string::npos);
-    EXPECT_NE(resizableSplitControllerSource.find("effectiveMaxSizeDp"), std::string::npos);
-    EXPECT_NE(uiButtonHeader.find("class UIButtonComponent : public UIComponent"), std::string::npos);
-    EXPECT_NE(uiButtonHeader.find("UIButtonIconPlacement"), std::string::npos);
-    EXPECT_NE(uiChromeButtonHeader.find("class UIChromeButtonComponent final : public UIButtonComponent"),
-            std::string::npos);
-    EXPECT_NE(uiToolbarButtonHeader.find("class UIToolbarButtonComponent : public UIButtonComponent"),
-            std::string::npos);
-    EXPECT_NE(uiToolbarButtonHeader.find("struct UIToolbarButtonModel"), std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("class ModelingModeShelfComponent final : public UIComponent"),
-            std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("class ModelingModeShelfToolbarComponent final : public UIComponent"),
-            std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("struct ModelingModeShelfControl"), std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("struct ModelingModeShelfCommand"), std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("std::optional<UIIconId> icon"), std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("ModelingModeShelfControlLabelVisibility"), std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("overflowControlIds"), std::string::npos);
-    EXPECT_NE(modelingModeShelfHeader.find("modelingModeShelfOverflowButtonElementId"), std::string::npos);
-    EXPECT_EQ(modelingModeShelfHeader.find("overflowButtonLabel = \""), std::string::npos);
-    EXPECT_NE(windowChromeControlsHeader.find("class WindowChromeControlsComponent final : public UIComponent"),
-            std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistryHeader.find("class MainLayoutSashRegistry"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistryHeader.find("MainLayoutSashMeasuredLayout"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistryHeader.find("bottomDockTrackWidthDp"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistryHeader.find("MainLayoutBottomSplitPaneMeasurement"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("bottomSplitEffectiveAvailableWidthDp"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("bottomSplitCurrentLeadingWidthDp"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("addBottomPanelSplitSash"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("applyResize"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("normalizeMeasuredBounds"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("ResizableSplitGrowthDirection::Positive"), std::string::npos);
-    EXPECT_NE(resizableSplitControllerSource.find("std::clamp"), std::string::npos);
-    EXPECT_EQ(uiSystemHeader.find("struct MainLayoutResizeDrag"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("horizontalHitRect"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("verticalHitRect"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("buildMainLayoutRml"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutEditorColumnElementId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutModelingModeShelfSlotElementId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-editor-column"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("DockLocation::Panel"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("DockLocation::AuxiliaryBar"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-bottom-dock"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-bottom-dock-tab-strip"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-bottom-dock-content"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-bottom-dock-resizer"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-bottom-split-resizer"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutBottomSplitResizerElementId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutSashRegistry::bottomPanelSplitHandleId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutSashRegistry::sidePanelStackHandleId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutSashRegistry::bottomDockHeightHandleId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutSashRegistry::sideDockWidthHandleId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutVisiblePanelsInLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutVisibleTabStripInLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutSidePanelStackHeightDp"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutPanelDescriptor(panelId)"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("panelVisibleInModel"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("visiblePanelsInLocation("), std::string::npos);
-    EXPECT_EQ(mainLayoutSashRegistrySource.find("resizeOutlinerPanel"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("resizeSidePanelStack"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("mainLayoutLeadingSidePanelStackPanelId"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("kMainLayoutBottomSplitResizerHandlePrefix"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("data-main-layout-resizer=\\\"panels\\\""), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-bottom-dock-drop-indicator"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-auxiliary-sidebar"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutSideDockElementId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("mainLayoutSideDockResizerElementId"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("appendPanelDragHandle"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("appendPanelDropOverlay"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("appendBottomDockTab"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("appendBottomPanelBody"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("appendBottomSplitResizer"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("UITabStripModel::fromItems"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("dockSplitPanelsInLocation"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("dockSplitPanelSizeDp"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("appendDockDragPreview"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutDockDragPresentation"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("data-main-layout-drag-panel"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-sidebar-drop-indicator"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-panel-drop-overlay"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("main-layout-tab-drop-insertion-line"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("data-main-layout-tab-panel"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("main-layout-panel-tabbar"), std::string::npos);
-    EXPECT_EQ(mainLayoutBuilderSource.find("viewport-label"), std::string::npos);
-
-    EXPECT_EQ(shellRml.find("id=\"topbar\""), std::string::npos);
-    EXPECT_EQ(shellRml.find("topbar-label"), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"toolbar\""), std::string::npos);
-    EXPECT_EQ(shellRml.find("id=\"modeling-mode-shelf-slot\""), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"main-layout-slot\""), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"statusbar\""), std::string::npos);
-    EXPECT_EQ(shellRml.find("shell-topbar"), std::string::npos);
-    EXPECT_NE(shellRml.find("shell-toolbar h-12 bg-gray-800 border-gray-600"), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"toolbar-content\" class=\"shell-toolbar-content pl-3\""), std::string::npos);
-    EXPECT_NE(shellRml.find("id=\"chrome-window-controls\" class=\"chrome-window-controls\""), std::string::npos);
-    EXPECT_EQ(shellRml.find("chrome-minimize-button"), std::string::npos);
-    EXPECT_EQ(shellRml.find("chrome-restore-button"), std::string::npos);
-    EXPECT_EQ(shellRml.find("chrome-close-button"), std::string::npos);
-    EXPECT_EQ(shellRml.find("chrome-icon-button-icon"), std::string::npos);
-    EXPECT_NE(shellRml.find("shell-statusbar h-10 px-3 bg-gray-900 border-gray-600"), std::string::npos);
-    EXPECT_EQ(shellRml.find("id=\"dock-interaction-slot\""), std::string::npos);
-    EXPECT_NE(shellRml.find("quader://ui/rcss/app-utility.generated.rcss"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".shell-toolbar-content"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".chrome-window-controls"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".chrome-icon-button"), std::string::npos);
-    EXPECT_NE(shellRcss.find("width: 40dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".ui-icon"), std::string::npos);
-    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-chrome-minimize\""), std::string::npos);
-    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-chrome-restore\""), std::string::npos);
-    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-chrome-close\""), std::string::npos);
-    EXPECT_EQ(shellRcss.find("image-color: #5B5B5B"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("image-color: #D8D8D8"), std::string::npos);
-    EXPECT_EQ(shellRcss.find(".chrome-icon-button:hover .ui-icon"), std::string::npos);
-    EXPECT_EQ(shellRcss.find(".chrome-icon-button:active .ui-icon"), std::string::npos);
-    EXPECT_NE(uiUtilityTokensSource.find("hover-icon-"), std::string::npos);
-    EXPECT_NE(uiUtilityTokensSource.find("active-icon-"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".toolbar-button"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".toolbar-button-secondary"), std::string::npos);
-    EXPECT_NE(uiIconRegistrySource.find(".className = \"ui-icon-mesh\""), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-slot"), std::string::npos);
-    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-toolbar\""), std::string::npos);
-    EXPECT_EQ(shellRcss.find("height: 50dp"), std::string::npos);
-    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-tab-button\""), std::string::npos);
-    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-tab-button-active\""), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-measure-strip"), std::string::npos);
-    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-overflow-button\""), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-overflow-menu"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".modeling-mode-shelf-content"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("height: 45dp"), std::string::npos);
-    EXPECT_NE(modelingModeShelfSource.find("\"modeling-mode-shelf-command-button\""), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-main-row"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-editor-column"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-bottom-dock"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-tab-strip"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-tab-active"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-tab-drop-insertion-line"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-bottom-dock-content"), std::string::npos);
-    EXPECT_NE(shellRcss.find("width: 100%"), std::string::npos);
-    EXPECT_NE(shellRcss.find("flex-direction: row"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-bottom-panel-pane"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-bottom-dock-resizer"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-bottom-split-resizer"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-bottom-dock-drop-indicator"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-sidebar"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-side-dock-left"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-side-dock-right"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-panel-header"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-panel-drag-source"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-panel-drop-overlay"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-dock-drag-preview"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-sidebar-drop-indicator"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-panel-resizer"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-resizer-drag-line"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".viewport-surface"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#2E2E2E"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#0F0F0F"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#9A64D8"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#3C3C3C"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#838383"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#5B5B5B"), std::string::npos);
-    EXPECT_EQ(shellRcss.find("#B4B4B4"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("bg-gray-600"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("bg-purple-500"), std::string::npos);
-    EXPECT_NE(shellRcss.find("transition: opacity 0.12s sine-out"), std::string::npos);
-    EXPECT_NE(shellRcss.find("width: 3dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find("height: 3dp"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-sidebar-resizer-collapsed"), std::string::npos);
-    EXPECT_NE(shellRcss.find(".main-layout-resizer-active .main-layout-resizer-drag-line"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::Sidebar"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::AuxiliarySidebar"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::Panels"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::BottomDock"), std::string::npos);
-    EXPECT_NE(mainLayoutBuilderSource.find("MainLayoutActiveResizer::BottomSplitPanel"), std::string::npos);
-    EXPECT_EQ(shellRcss.find(".dock-slot-preview"), std::string::npos);
-    EXPECT_EQ(shellRcss.find(".dock-drag-panel"), std::string::npos);
-    EXPECT_NE(shellRcss.find("#debug-palette-page"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("updateDockDragFeedback"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("std::vector<MainLayoutDockDropZone> dockDropZones"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("buildMainLayoutDockHitRegions(mainLayout_"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("setDockDropZones(std::move(dockHitRegions.dockDropZones))"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("mainLayoutPanelTabElementId(panelId)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("setActiveDockPanel(DockLocation::Panel"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("MainLayoutDockDropAction::SplitPanel"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("splitPanelWithDockPanel"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("MainLayoutPanelDropZoneKind::BottomTab"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("MainLayoutPanelDropZoneKind::PanelBody"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("MainLayoutPanelDropZoneKind::BottomTabTrailing"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find(".action = MainLayoutDockDropAction"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("UIDropPlacementPolicy::HorizontalBeforeAfter"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("UIDropFeedbackKind::Insertion"), std::string::npos);
-    EXPECT_NE(mainLayoutDockHitRegionBuilderSource.find("trailingTargetPanelId"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistryHeader.find("MainLayoutBottomSplitPaneMeasurement"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("kBottomPanelSplitHandlePrefix"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayoutBottomDockContentElementId"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayoutBottomDockElementId"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("bottomDockTrackWidthDp"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("bottomSplitResizerHitRectFromPane"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("measureElementById(mainLayoutBottomSplitResizerElementId"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("bottomPanelBodySplitDropZoneAdded"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("bottomPanelBodyDropZoneAdded"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainLayoutBottomSplitPaneMeasurements_"), std::string::npos);
-    EXPECT_NE(mainLayoutSashRegistrySource.find("resizeBottomSplitPanel"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("UIDropZoneKind"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("UIDropZoneRegion"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("UIDragDropController"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("dock-drop"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_SYSTEM_CURSOR_EW_RESIZE"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_SYSTEM_CURSOR_NS_RESIZE"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_SYSTEM_CURSOR_NOT_ALLOWED"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_CaptureMouse(true)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_EVENT_WINDOW_FOCUS_LOST"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("rmlConsumedEventBlocksViewport"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("setElementDisplay(\"viewport-panel\", debugPaletteVisible_ ? \"none\" : \"flex\")"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("Only the viewport panel is available in the RmlUi shell."), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("QuaderPreferencesRuntimeHooks"), std::string::npos);
-}
-
-TEST(UISystemTests, ModelingShelfPointerEventsDoNotFallThroughToViewport) {
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
-
-    EXPECT_NE(uiSystemHeader.find("pointerEventInsideRmlElement"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("pointerEventInsideModelingModeShelf"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("pointerEventShouldBypassViewport"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("pointerEventShouldBypassViewport(event)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("modelingModeShelfPointerBypassElementIds()"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("pointerEventInsideRmlElement(event, \"modeling-mode-shelf"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportHost_.hasActivePointerGesture()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("!pointerEventInsideMainViewport(event)"), std::string::npos);
-    EXPECT_LT(
-            uiSystemSource.find("pointerEventShouldBypassViewport(event)"),
-            uiSystemSource.find("viewportHost_.processEvent(event)"));
-}
-
-TEST(UISystemTests, WindowedViewportComponentsAreBoundedAndNonExperimental) {
-    const std::string appSource = readSourceFile("src/app/app.cpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/viewport_host.hpp");
-    const std::string viewportComponentHeader = readSourceFile("src/ui/components/organisms/viewport_component.hpp");
-    const std::string renderSystemHeader = readSourceFile("src/render/render_system.hpp");
-    const std::string renderSystemSource = readSourceFile("src/render/render_system.cpp");
-
-    EXPECT_NE(viewportComponentHeader.find("kMaxViewportComponents = 4u"), std::string::npos);
-    EXPECT_NE(viewportComponentHeader.find("enum class ViewportComponentSurface"), std::string::npos);
-    EXPECT_NE(viewportComponentHeader.find("windowedViewportComponent(std::uint8_t layerIndex)"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("struct ViewportWindowInstance"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("std::vector<std::unique_ptr<ViewportWindowInstance>> windowedViewports_"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("spawnWindowedViewport()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("totalViewportCount = 1u + windowedViewports_.size()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("totalViewportCount >= kMaxViewportComponents"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("nextWindowedViewportLayerIndex()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("RenderAdditionalSwapChain swapChain"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderSystem_->createAdditionalSwapChain"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderSystem.beginFrame(instance.swapChain.get())"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("instance.swapChain.reset()"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("filament::SwapChain* swapChain = nullptr"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("renderSystem_->destroyAdditionalSwapChain(instance.swapChain)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("SwapChainPresentationColorSpace::Srgb"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportRenderSurface::Swapchain"), std::string::npos);
-    EXPECT_NE(renderSystemHeader.find("enum class SwapChainPresentationColorSpace"), std::string::npos);
-    EXPECT_NE(renderSystemHeader.find("class RenderAdditionalSwapChain"), std::string::npos);
-    EXPECT_NE(renderSystemHeader.find("RenderAdditionalSwapChain(const RenderAdditionalSwapChain&) = delete"),
-            std::string::npos);
-    EXPECT_NE(renderSystemSource.find("filament::SwapChain::CONFIG_SRGB_COLORSPACE"), std::string::npos);
-    EXPECT_NE(renderSystemSource.find("RenderAdditionalSwapChain::reset()"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("renderWindowedViewports(RenderSystem& renderSystem)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportHost_.renderWindowedViewports(renderSystem)"), std::string::npos);
-    EXPECT_NE(appSource.find("ui_.renderWindowedViewports(renderSystem_)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("SDLK_F12"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find(".spawnWindow = std::move(spawnWindow)"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("setWindowedViewportTitleFormat(std::string titleFormat)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("formatWindowedViewportTitle("), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("\"ui.viewport.window.title\""), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportHost_.setWindowedViewportTitleFormat("), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("\"Quader Viewport \" +"), std::string::npos);
-
-    EXPECT_EQ(viewportHostSource.find("Experimental"), std::string::npos);
-    EXPECT_EQ(viewportHostHeader.find("Experimental"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("renderDetachedViewports"), std::string::npos);
-    EXPECT_EQ(uiSystemHeader.find("renderDetachedViewports"), std::string::npos);
-}
-
-TEST(UISystemTests, ViewportFrameRoutingHandlesPreviewShortcutsBeforeGenericShortcuts) {
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-    EXPECT_NE(viewportHostSource.find("handleViewportFrameSurface("), std::string::npos);
-    EXPECT_EQ(countOccurrences(viewportHostSource, "handleOperationPreviewShortcut("), 1u);
-    EXPECT_EQ(countOccurrences(viewportHostSource, "handleModelingShortcut(result, editor, modeling)"), 1u);
-    EXPECT_LT(
-            viewportHostSource.find("handleOperationPreviewShortcut("),
-            viewportHostSource.find("handleModelingShortcut(result, editor, modeling)"));
-    EXPECT_EQ(viewportHostSource.find("inputRouter_.handleFrame(input, camera)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("instance.inputRouter.handleFrame(input, camera)"), std::string::npos);
-}
-
-TEST(UISystemTests, WindowedViewportWorkspaceStateLivesInWorkspaceService) {
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/viewport_host.hpp");
-    const std::string workspaceHeader = readSourceFile("src/viewport/viewport_workspace_service.hpp");
-    const std::string workspaceSource = readSourceFile("src/viewport/viewport_workspace_service.cpp");
-
-    EXPECT_NE(workspaceHeader.find("ViewportWorkspaceAuxiliaryViewportState"), std::string::npos);
-    EXPECT_NE(workspaceHeader.find("ensureAuxiliaryViewport"), std::string::npos);
-    EXPECT_NE(workspaceSource.find("removeAuxiliaryViewport"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ensureWindowedViewportWorkspaceState"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("workspace.ensureAuxiliaryViewport"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("workspace.removeAuxiliaryViewport"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("workspaceState.camera"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("removedWindowedViewportIds_"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("ViewportCameraController camera;"), std::string::npos);
-}
-
-TEST(UISystemTests, DebugPalettePageIsShiftF1ToggledAndCopyable) {
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string uiSystemHeader = readSourceFile("src/ui/ui_system.hpp");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
-    const std::string debugPaletteSource = readSourceFile("src/ui/debug_palette_view.cpp");
-
-    EXPECT_NE(uiSystemSource.find("SDLK_F1"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_KMOD_SHIFT"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("toggleDebugPalette"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("rmlHost_.setElementDisplay(\"debug-palette-page\""), std::string::npos);
-    EXPECT_EQ(debugPaletteSource.find("debug-keybind"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("loadUITokenConfig(appUITokenConfigPath(executableDir))"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("buildUIUtilityRcss(uiTokens.utilities, uiTokens.colors)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("SDL_GetWindowDisplayScale(window_)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("rmlHost_.setDensityIndependentPixelRatio(rmlDpRatio_)"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("SDL_SetClipboardText"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("Rml::LoadFontFace"), std::string::npos);
-    EXPECT_NE(debugPaletteSource.find("debug-palette-swatch"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("debugPaletteVisible_"), std::string::npos);
-    EXPECT_NE(uiSystemHeader.find("rmlDpRatio_"), std::string::npos);
-
 }
 
 TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
@@ -4607,6 +1341,61 @@ TEST(ViewportOverlayPolicyTests, MatchesNativeColorsAndRuntimePointSizes) {
     EXPECT_FLOAT_EQ(viewportOverlayPointOutlineGrowthPixels(ViewportOverlayLayer::SelectedVertex), 1.0f);
     EXPECT_TRUE(viewportOverlayPointIsOutlineOnly(ViewportOverlayLayer::SnapTargetVertex));
     EXPECT_FLOAT_EQ(viewportOverlayPointInnerRadius(ViewportOverlayLayer::SnapTargetVertex), 0.62f);
+}
+
+TEST(ViewportOverlayPolicyTests, RuntimeSelectionOverlayDefaultsAreSemanticRoleTokens) {
+    const quader_editor_core::SelectionOverlayStyle style;
+    EXPECT_TRUE(quader_editor_core::selection_overlay_style_token_is_semantic(style.source_wire_color_abgr));
+    EXPECT_TRUE(quader_editor_core::selection_overlay_style_token_is_semantic(style.selection_face_color_abgr));
+    EXPECT_TRUE(quader_editor_core::selection_overlay_style_token_is_semantic(style.selected_edge_color_abgr));
+    EXPECT_TRUE(quader_editor_core::selection_overlay_style_token_is_semantic(style.hover_selected_line_color_abgr));
+    EXPECT_TRUE(quader_editor_core::selection_overlay_style_token_is_semantic(style.diagnostic_edge_color_abgr));
+
+    quader_editor_core::SelectionOverlayFrame frame;
+    frame.triangles.push_back({
+            .layer = quader_editor_core::SelectionOverlayLayer::hover_face,
+            .a = {0.0f, 0.0f, 0.0f},
+            .b = {1.0f, 0.0f, 0.0f},
+            .c = {0.0f, 1.0f, 0.0f},
+            .color_abgr = style.hover_selected_face_color_abgr,
+    });
+    frame.lines.push_back({
+            .layer = quader_editor_core::SelectionOverlayLayer::source_wire,
+            .start = {0.0f, 0.0f, 0.0f},
+            .end = {1.0f, 0.0f, 0.0f},
+            .color_abgr = style.source_wire_color_abgr,
+    });
+    frame.points.push_back({
+            .layer = quader_editor_core::SelectionOverlayLayer::hover_vertex,
+            .position = {0.0f, 0.0f, 0.0f},
+            .color_abgr = style.hover_selected_line_color_abgr,
+    });
+
+    ModelingObjectRuntimeMap objectRegistry;
+    SceneDocument scene;
+    ViewportOverlayFrame projected =
+            SelectionOverlayProjection::projectSelectionOverlayFrame(frame, objectRegistry, scene);
+
+    ASSERT_EQ(projected.triangles.size(), 1u);
+    EXPECT_EQ(projected.triangles[0].styleRole, ViewportOverlayStyleRole::RemoveSelectionFace);
+    EXPECT_EQ(projected.triangles[0].color, kOverlayRemoveFaceColor);
+    ASSERT_EQ(projected.lines.size(), 1u);
+    EXPECT_EQ(projected.lines[0].styleRole, ViewportOverlayStyleRole::SourceWire);
+    EXPECT_EQ(projected.lines[0].color, kOverlaySourceWireColor);
+    ASSERT_EQ(projected.points.size(), 1u);
+    EXPECT_EQ(projected.points[0].styleRole, ViewportOverlayStyleRole::RemoveSelectionVertex);
+    EXPECT_EQ(projected.points[0].color, kOverlayRemoveWireColor);
+
+    const std::string runtimeHeader = readSourceFile("src/editor/modeling/runtime/session.hpp");
+    const std::string projection = readSourceFile("src/editor/projection/selection_overlay_projection.cpp");
+    EXPECT_NE(runtimeHeader.find("SelectionOverlayStyleRole"), std::string::npos);
+    EXPECT_NE(runtimeHeader.find("selection_overlay_style_token("), std::string::npos);
+    EXPECT_EQ(runtimeHeader.find("0xebffe05cU"), std::string::npos);
+    EXPECT_EQ(runtimeHeader.find("0xff1fadffU"), std::string::npos);
+    EXPECT_EQ(runtimeHeader.find("0xffffe66bU"), std::string::npos);
+    EXPECT_NE(projection.find("selection_overlay_style_role_from_token("), std::string::npos);
+    EXPECT_EQ(projection.find("viewportOverlayIsNativeRemoveColor(colorAbgr)"), std::string::npos);
+    EXPECT_EQ(projection.find("viewportOverlayIsNativeSelectionWireColor(colorAbgr)"), std::string::npos);
 }
 
 TEST(ViewportOverlayStyleResolverTests, AppliesUserSettingsToRuntimeOverlayFrame) {
@@ -4930,19 +1719,32 @@ TEST(SceneRenderBridgeTests, BindsNormalsAndBuildsPrimitiveSpans) {
 
 TEST(SceneRenderBridgeTests, UsesAssetRevisionsForIncrementalMeshSync) {
     const std::string syncSource = readSourceFile("src/render/scene_render_sync_service.cpp");
+    const std::string extractionHeader = readSourceFile("src/render/scene_render_extraction.hpp");
+    const std::string extractionSource = readSourceFile("src/render/scene_render_extraction.cpp");
     const std::string cacheSource = readSourceFile("src/render/mesh_renderable_cache.cpp");
 
     EXPECT_NE(syncSource.find("syncedAssetRevision_"), std::string::npos);
     EXPECT_NE(syncSource.find("renderAssetRevisionsChanged"), std::string::npos);
+    EXPECT_NE(syncSource.find("buildSceneRenderExtractionPlan(document, assets, *materialBinding_)"), std::string::npos);
     EXPECT_NE(syncSource.find("meshCache_->needsRebuild"), std::string::npos);
-    EXPECT_NE(syncSource.find("materialBinding_->materialRevision"), std::string::npos);
+    EXPECT_NE(extractionHeader.find("struct SceneRenderExtractionPlan"), std::string::npos);
+    EXPECT_NE(extractionSource.find("materialBinding.materialRevision(assets, materialComponent)"), std::string::npos);
+    EXPECT_NE(extractionSource.find("document.isEffectivelyVisible(entityId)"), std::string::npos);
+    EXPECT_NE(extractionSource.find("document.worldTransformMatrix(entityId)"), std::string::npos);
     EXPECT_NE(cacheSource.find("existing->second.meshRevision != mesh.revision.value"), std::string::npos);
     EXPECT_NE(cacheSource.find("existing->second.materialRevision != materialRevision"), std::string::npos);
     EXPECT_NE(cacheSource.find("factory_->updateTransform(existing->second, worldTransform)"), std::string::npos);
+    const std::size_t changeStart = syncSource.find("bool SceneRenderSyncService::renderAssetRevisionsChanged");
+    ASSERT_NE(changeStart, std::string::npos);
     const std::size_t rebuildStart = syncSource.find("void SceneRenderSyncService::rebuild(");
     ASSERT_NE(rebuildStart, std::string::npos);
+    const std::string changeSource = syncSource.substr(changeStart, rebuildStart - changeStart);
+    EXPECT_EQ(changeSource.find("document.entities()"), std::string::npos);
+    EXPECT_EQ(changeSource.find("document.isEffectivelyVisible"), std::string::npos);
+    EXPECT_EQ(changeSource.find("assets.mesh("), std::string::npos);
+    EXPECT_EQ(changeSource.find("materialBinding_->materialRevision"), std::string::npos);
     const std::string rebuildSource = syncSource.substr(rebuildStart);
-    EXPECT_NE(rebuildSource.find("meshCache_->removeExcept(liveMeshEntities)"), std::string::npos);
+    EXPECT_NE(rebuildSource.find("meshCache_->removeExcept(plan.liveMeshEntities)"), std::string::npos);
     EXPECT_EQ(rebuildSource.find("meshProxies_.clear()"), std::string::npos);
 }
 
@@ -5052,17 +1854,14 @@ TEST(RenderProxyLifecycleTests, RenderResourceOwnersAreNonTransferable) {
     EXPECT_TRUE(renderOwnerIsNonTransferable<ViewportGridRenderer>());
     EXPECT_TRUE(renderOwnerIsNonTransferable<ViewportRenderTarget>());
     EXPECT_TRUE(renderOwnerIsNonTransferable<ViewportRenderer>());
-    EXPECT_TRUE(renderOwnerIsNonTransferable<RmlFilamentRenderer>());
 
     const std::string renderSystemHeader = readSourceFile("src/render/render_system.hpp");
     const std::string sceneRenderBridgeHeader = readSourceFile("src/render/scene_render_bridge.hpp");
     const std::string viewportRendererHeader = readSourceFile("src/render/viewport_renderer.hpp");
-    const std::string rmlRendererHeader = readSourceFile("src/render/rml_filament_renderer.hpp");
 
     EXPECT_NE(renderSystemHeader.find("RenderSystem(const RenderSystem&) = delete"), std::string::npos);
     EXPECT_NE(sceneRenderBridgeHeader.find("SceneRenderBridge(SceneRenderBridge&&) = delete"), std::string::npos);
     EXPECT_NE(viewportRendererHeader.find("ViewportRenderer(const ViewportRenderer&) = delete"), std::string::npos);
-    EXPECT_NE(rmlRendererHeader.find("RmlFilamentRenderer(RmlFilamentRenderer&&) = delete"), std::string::npos);
 }
 
 TEST(ViewportContextMenuPolicyTests, OpensForRightClickReleaseInsideViewportWithActions) {
@@ -5227,6 +2026,9 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     const std::string source = readSourceFile("src/editor/modeling/services/modeling_session_service.cpp");
     const std::string splitSource = readSourceFile("src/editor/modeling/services/modeling_session_services.cpp");
     const std::string overlayHeader = readSourceFile("src/editor/modeling/services/modeling_overlay_service.hpp");
+    const std::string drawnPlaneProjection = readSourceFile("src/editor/projection/drawn_plane_overlay_projection.cpp");
+    const std::string cutPreviewProjection = readSourceFile("src/editor/projection/cut_preview_overlay_projection.cpp");
+    const std::string toolPreviewProjection = readSourceFile("src/editor/projection/tool_preview_mesh_projection.cpp");
     const std::string selectionHeader = readSourceFile("src/editor/modeling/services/modeling_selection_service.hpp");
 
     EXPECT_NE(overlayHeader.find("SelectionOverlayCache selectionOverlayCache_"), std::string::npos);
@@ -5246,14 +2048,28 @@ TEST(ModelingSessionServiceTests, CachesSelectionOverlayFrameByRevisionAndHoverS
     EXPECT_NE(overlayHeader.find("overlayBaseCache_"), std::string::npos);
     EXPECT_NE(splitSource.find("build_selection_hover_overlay_frame"), std::string::npos);
     EXPECT_NE(splitSource.find("appendSelectedHoverFilteredBaseFrame"), std::string::npos);
+    EXPECT_NE(splitSource.find("DrawnPlaneOverlayProjection::append("), std::string::npos);
+    EXPECT_NE(splitSource.find("CutPreviewOverlayProjection::appendResultLines("), std::string::npos);
+    EXPECT_NE(splitSource.find("ToolPreviewMeshProjection::mirrorPreviewMeshes("), std::string::npos);
+    EXPECT_NE(drawnPlaneProjection.find("DrawnPlanePreviewFrame"), std::string::npos);
+    EXPECT_NE(cutPreviewProjection.find("CutPreviewEdgeAccumulator"), std::string::npos);
+    EXPECT_NE(toolPreviewProjection.find("ToolPreviewMeshProjection::boxPreviewMeshFromDescriptor"), std::string::npos);
+    EXPECT_EQ(splitSource.find("struct DrawnPlanePreviewFrame"), std::string::npos);
+    EXPECT_EQ(splitSource.find("struct CutPreviewEdgeAccumulator"), std::string::npos);
+    EXPECT_EQ(splitSource.find("previewMeshFromDocuments("), std::string::npos);
+    EXPECT_EQ(splitSource.find("std::optional<MeshAsset> boxPreviewMeshFromDescriptor"), std::string::npos);
     EXPECT_NE(source.find("cachedPickObjectBounds()"), std::string::npos);
     EXPECT_NE(source.find("cachedPickFaceGeometry(pickOptions)"), std::string::npos);
     EXPECT_NE(splitSource.find("ModelingSelectionService::applyPickSelection("), std::string::npos);
+    EXPECT_NE(splitSource.find("quader_editor_core::apply_pick_selection("), std::string::npos);
     EXPECT_NE(source.find("selectionService_.applyPickSelection(session_, scene_, objectRegistry_, effectiveRequest)"), std::string::npos);
     EXPECT_NE(splitSource.find("cachedPickObjectBounds(session, scene, objectRegistry)"), std::string::npos);
     EXPECT_NE(splitSource.find("cachedPickFaceGeometry(session, scene, objectRegistry, pickOptions)"), std::string::npos);
     EXPECT_NE(splitSource.find("pickingCache_.faceGeometryEntries"), std::string::npos);
     EXPECT_NE(splitSource.find("PickingCacheProjection::objectFaceGeometrySignature(objects[index], pickOptions)"), std::string::npos);
+    EXPECT_EQ(splitSource.find("applyPickedSelectionToSession"), std::string::npos);
+    EXPECT_EQ(splitSource.find("sessionHasComponentSelection"), std::string::npos);
+    EXPECT_EQ(splitSource.find("pickSelectRequestHitsTarget"), std::string::npos);
     const std::string pickingProjection = readSourceFile("src/editor/projection/picking_cache_projection.cpp");
     EXPECT_NE(pickingProjection.find("pickOptions.vertex_radius"), std::string::npos);
     EXPECT_NE(pickingProjection.find("pickOptions.edge_radius"), std::string::npos);
@@ -5286,7 +2102,7 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     const std::string coordinatorSource = readSourceFile("src/render/viewport_render_pass_coordinator.cpp");
     const std::string appSource = readSourceFile("src/app/app.cpp");
     const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
     const std::string overlayCacheSource = readSourceFile("src/render/overlay/overlay_renderable_cache.cpp");
     const std::string overlayProxyFactorySource = readSourceFile("src/render/overlay/overlay_proxy_factory.cpp");
 
@@ -5305,104 +2121,40 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
 
     const std::size_t prepareViewports =
             appSource.find("ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets())");
-    const std::size_t prepareLayout =
-            appSource.find("ui_.prepareLayout(window_.widthPixels(), window_.heightPixels())");
+    const std::size_t uiBeginFrame =
+            appSource.find("ui_.beginFrame(frameTiming)");
     const std::size_t prepareRenderData =
             appSource.find("ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels())");
     const std::size_t beginFrame = appSource.find("renderSystem_.beginFrame()");
     ASSERT_NE(prepareViewports, std::string::npos);
-    ASSERT_NE(prepareLayout, std::string::npos);
+    ASSERT_NE(uiBeginFrame, std::string::npos);
     ASSERT_NE(prepareRenderData, std::string::npos);
     ASSERT_NE(beginFrame, std::string::npos);
-    EXPECT_LT(prepareLayout, prepareViewports);
+    EXPECT_LT(uiBeginFrame, prepareViewports);
     EXPECT_LT(prepareViewports, prepareRenderData);
-    EXPECT_LT(prepareLayout, beginFrame);
+    EXPECT_LT(uiBeginFrame, beginFrame);
     EXPECT_LT(prepareViewports, beginFrame);
     EXPECT_LT(prepareRenderData, beginFrame);
 
-    EXPECT_NE(uiSystemSource.find("void UISystem::prepareLayout("), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("void UISystem::beginFrame("), std::string::npos);
     EXPECT_NE(uiSystemSource.find("void UISystem::prepareViewports("), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportHost_.prepareViewports(editor, renderBridge, document, assets)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportWorkspaceService& workspace"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("const SceneDocument& document"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("const AssetRegistry& assets"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.setSceneVisible(true)"), std::string::npos);
-    EXPECT_NE(
-            viewportHostSource.find("renderer_.setOverlayVisible(overlaySubmission.ok && overlaySubmission.value.visible)"),
-            std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
-    EXPECT_NE(
-            viewportHostSource.find("QuaderRenderApiRuntimeAccess::syncToolPreviews(editor.render(), renderBridge)"),
-            std::string::npos);
-    EXPECT_NE(viewportHostSource.find("QuaderRenderApiRuntimeAccess::syncSelectionOverlay("), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("viewportGridLayerMask(mainViewport_.layerIndex)"), std::string::npos);
+    EXPECT_NE(uiSystemSource.find("viewportPanel_->prepareViewports("), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportWorkspaceService& workspace"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("const SceneDocument& document"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("const AssetRegistry& assets"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.updateCamera(paneWorkspace.camera)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setSceneVisible"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame("), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("viewportGridLayerMask(viewportPaneIndex(paneId))"), std::string::npos);
     EXPECT_NE(overlayProxyFactorySource.find(".layerMask(kViewportAllLayerMask, layerMask)"), std::string::npos);
     EXPECT_NE(overlayCacheSource.find("void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot)"), std::string::npos);
-}
-
-TEST(RmlFilamentRendererTests, EncodesLinearViewportTexturesOnlyWhenRequested) {
-    const std::string rendererSource = readSourceFile("src/render/rml_filament_renderer.cpp");
-
-    EXPECT_NE(rendererSource.find("textureSources_.find(source)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("RmlFilamentRenderer::registerTextureSource"), std::string::npos);
-    EXPECT_NE(rendererSource.find("RmlFilamentRenderer::clearTextureSources"), std::string::npos);
-    EXPECT_NE(rendererSource.find("isRegisteredTextureSourceHandle(handle)"), std::string::npos);
-    EXPECT_EQ(rendererSource.find("kViewportTextureSource"), std::string::npos);
-    EXPECT_NE(rendererSource.find("sampleColorSpace = textures_->sampleColorSpace(renderTextureHandle)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("sampleColorSpace == TextureSampleColorSpace::LinearSrgb"), std::string::npos);
-    EXPECT_NE(rendererSource.find("setParameter(\"encodeToSrgb\", encodeToSrgb)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("GenerateTexture("), std::string::npos);
-    EXPECT_NE(rendererSource.find("LoadTexture(Rml::Vector2i& textureDimensions"), std::string::npos);
-    EXPECT_NE(rendererSource.find("Rml::GetFileInterface()"), std::string::npos);
-    EXPECT_NE(rendererSource.find("fileInterface->LoadFile(source, encodedTexture)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("lodepng::decode("), std::string::npos);
-    EXPECT_NE(rendererSource.find("premultiplyRgbaPixels(pixels)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("createOwnedTextureFromRgba("), std::string::npos);
-
-    const std::string materialSource = readSourceFile("resources/materials/rmlui.mat");
-
-    EXPECT_NE(materialSource.find("name : encodeToSrgb"), std::string::npos);
-    EXPECT_NE(materialSource.find("vec3 linearToSrgb(vec3 value)"), std::string::npos);
-    EXPECT_NE(materialSource.find("mix(sampled.rgb, linearToSrgb(sampled.rgb), clamp(materialParams.encodeToSrgb"), std::string::npos);
-}
-
-TEST(RmlFilamentRendererTests, PreservesRmlPremultipliedTextureAndVertexColorConventions) {
-    const std::string rendererSource = readSourceFile("src/render/rml_filament_renderer.cpp");
-    const std::string materialSource = readSourceFile("resources/materials/rmlui.mat");
-
-    EXPECT_NE(materialSource.find("flipUV : false"), std::string::npos);
-    EXPECT_NE(materialSource.find("material.baseColor = color;"), std::string::npos);
-    EXPECT_EQ(materialSource.find("vec4(color.rgb * color.a, color.a)"), std::string::npos);
-    EXPECT_EQ(rendererSource.find("translated.uv.y = 1.0f - translated.uv.y"), std::string::npos);
-}
-
-TEST(RmlFilamentRendererTests, DrawResourcesAreMoveOnlyAndDestroyedThroughOwnerHelper) {
-    const std::string rendererHeader = readSourceFile("src/render/rml_filament_renderer.hpp");
-    const std::string rendererSource = readSourceFile("src/render/rml_filament_renderer.cpp");
-
-    EXPECT_NE(rendererHeader.find("DrawResource(const DrawResource&) = delete"), std::string::npos);
-    EXPECT_NE(rendererHeader.find("DrawResource& operator=(const DrawResource&) = delete"), std::string::npos);
-    EXPECT_NE(rendererHeader.find("DrawResource(DrawResource&& other) noexcept"), std::string::npos);
-    EXPECT_NE(rendererHeader.find("DrawResource& operator=(DrawResource&& other) noexcept = delete"), std::string::npos);
-    EXPECT_NE(rendererHeader.find("class DrawResourceCreationGuard final"), std::string::npos);
-    EXPECT_NE(
-            rendererSource.find("RmlFilamentRenderer::DrawResourceCreationGuard::~DrawResourceCreationGuard"),
-            std::string::npos);
-    EXPECT_NE(rendererSource.find("creationGuard.release();"), std::string::npos);
-    EXPECT_NE(
-            rendererSource.find("void RmlFilamentRenderer::destroyDrawResource(DrawResource& resource)"),
-            std::string::npos);
-    EXPECT_EQ(rendererSource.find("destroyDrawResource(resource);\n            return;"), std::string::npos);
-    EXPECT_NE(rendererSource.find("frameResources_.push_back(std::move(resource))"), std::string::npos);
-    EXPECT_EQ(rendererSource.find("frameResources_.push_back(resource)"), std::string::npos);
 }
 
 TEST(RenderLifecycleTests, ResourceOwnersShutdownBeforeInitialize) {
     for (const char* relativePath : {
                  "src/render/scene_render_bridge.cpp",
                  "src/render/texture_binding_service.cpp",
-                 "src/render/rml_filament_renderer.cpp",
                  "src/render/viewport_grid_renderer.cpp",
          }) {
         const std::string source = readSourceFile(relativePath);
@@ -5430,195 +2182,6 @@ TEST(TextureRegistryTests, TracksPerTexturePresentationColorSpace) {
     EXPECT_NE(source.find("TextureSampleColorSpace::DisplaySrgb : it->second.sampleColorSpace"), std::string::npos);
 }
 
-TEST(UISystemTests, RmlViewportShellCapturesFlyNavigationInput) {
-    const std::string appSource = readSourceFile("src/app/app.cpp");
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-    const std::string viewportHostHeader = readSourceFile("src/ui/controllers/viewport_host.hpp");
-    const std::string rmlHostSource = readSourceFile("src/ui/backends/rml/rml_ui_context_host.cpp");
-    const std::string rmlHostHeader = readSourceFile("src/ui/backends/rml/rml_ui_context_host.hpp");
-    const std::string rmlBuilderSource = readSourceFile("src/ui/backends/rml/main_layout_rml_builder.cpp");
-    const std::string appShellRcss = readSourceFile("resources/ui/rcss/app-shell.rcss");
-    const std::string commandsSource = readSourceFile("src/api/quader_commands_api.cpp");
-    const std::string inputAdapterHeader = readSourceFile("src/editor/input/viewport_input_binding_adapter.hpp");
-    const std::string marqueeOverlayBuilderSource =
-            readSourceFile("src/render/overlay/viewport_selection_marquee_overlay_builder.cpp");
-
-    const std::size_t prepareLayout = appSource.find("ui_.prepareLayout(window_.widthPixels(), window_.heightPixels())");
-    const std::size_t draw = appSource.find("ui_.draw(*editor_");
-    ASSERT_NE(prepareLayout, std::string::npos);
-    ASSERT_NE(draw, std::string::npos);
-    EXPECT_LT(prepareLayout, draw);
-    EXPECT_NE(viewportHostSource.find("SDL_SetWindowRelativeMouseMode(window_, captured)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("SDL_GetRelativeMouseState(&deltaX, &deltaY)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("SDL_GetRelativeMouseState(&discardX, &discardY)"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("ViewportInputFrameProjectionRequest"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportHost::projectViewportInputFrame("), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportInputFrame input = buildViewportInputFrame(workspace.gridPreset())"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("resolveKeybindingsForFrame(editor, workspace, component, inputRouter.state(), input)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("applyViewportViewCommandToSurface(workspace, component, dispatch.commandId)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find(".finalizePressed = input.modalToolFinalizePressed"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find(".modeCyclePressed = input.modalToolModeCyclePressed"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("case ViewportInputActionKind::ModalToolFinalize:"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("case ViewportInputActionKind::ModalToolModeCycle:"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("inputKeyPressed(input, ViewportKey::Space)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("inputKeyPressed(input, ViewportKey::Enter)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("inputKeyPressed(input, ViewportKey::F)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("inputRouter.handleFrame(input, camera)"), std::string::npos);
-    const std::size_t activeInputResolution =
-            viewportHostSource.find("for (const QuaderInputChord& chord : input.activeInputChords)");
-    const std::size_t pressedInputResolution =
-            viewportHostSource.find("for (const QuaderInputChord& chord : input.pressedInputChords)");
-    ASSERT_NE(activeInputResolution, std::string::npos);
-    ASSERT_NE(pressedInputResolution, std::string::npos);
-    EXPECT_LT(activeInputResolution, pressedInputResolution);
-    EXPECT_NE(viewportHostSource.find("applyViewportKeybindingDispatch("), std::string::npos);
-    EXPECT_EQ(countOccurrences(viewportHostSource, "case QuaderViewportKeybindingDispatch::Kind::Command:"), 1u);
-    EXPECT_NE(viewportHostSource.find("setCursorCaptured(result.flyCursorCaptureActive)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("struct ViewportHost::ViewportWindowInstance"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportInputSurfaceState input;"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("struct ViewportModifierKeyState"), std::string::npos);
-    EXPECT_NE(viewportHostHeader.find("ViewportModifierKeyState modifierKeys"), std::string::npos);
-    EXPECT_EQ(viewportHostHeader.find("std::unordered_set<SDL_Keycode>"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("modifierKeysDown"), std::string::npos);
-    EXPECT_EQ(viewportHostHeader.find("modifierKeysDown"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("accumulateMouseButton("), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("accumulateKey(mainInput_"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("accumulateKey(instance.input"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("accumulateModifierKey(mainInput_, event.key.scancode, event.key.mod, event.key.down)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("accumulateModifierKey(instance.input, event.key.scancode, event.key.mod, event.key.down)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("applyModifierMask(input, modifiers)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("SDL_GetKeyboardState(nullptr)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("currentModifiers(mainInput_)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("currentModifiers(instance.input)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.modifierKeys.leftAlt"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("keyDown(SDL_SCANCODE_LALT)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("clearTransientInputState(mainInput_)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("clearTransientInputState(instance.input)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("clearAllInputState(mainInput_)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("clearAllInputState(instance.input)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("case SDL_EVENT_WINDOW_FOCUS_LOST:"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("inputRouter_.reset()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.mouseDragChordsDown[*mouseButton] = dragChord"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("appendActiveMouseDragChords(surface.mouseDragChordsDown, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("appendActiveKeyboardChords(surface.keyboardKeysDown, request.modifiers, input.activeInputChords)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find(".input = &mainInput_"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find(".input = &instance.input"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("#include \"editor/input/quader_input_binding.hpp\""), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("#include \"editor/input/viewport_input_binding_adapter.hpp\""), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("viewportKeyForQuaderKeyCode(keyCode)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("pressedKeys"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("shortcutResolverActive"), std::string::npos);
-    EXPECT_NE(commandsSource.find("#include \"editor/input/viewport_input_binding_adapter.hpp\""), std::string::npos);
-    EXPECT_NE(commandsSource.find("quaderInputChordForViewportKey(key, modifiers)"), std::string::npos);
-    EXPECT_NE(inputAdapterHeader.find("viewportKeyForQuaderKeyCode"), std::string::npos);
-    EXPECT_NE(inputAdapterHeader.find("quaderInputChordForViewportKey"), std::string::npos);
-    EXPECT_EQ(commandsSource.find("keyCodeForViewportKey("), std::string::npos);
-    EXPECT_EQ(commandsSource.find("inputChordForViewportKey("), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("viewportKeyFromKeyCode("), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("keysDown_.contains(ViewportKey::W)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("keysDown_.contains(ViewportKey::A)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("keysDown_.contains(ViewportKey::S)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("keysDown_.contains(ViewportKey::D)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("instance.keysDown.contains(ViewportKey::W)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("mainViewportContainsWindowPoint(event.button.x, event.button.y)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("middlePressed_"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("rightPressed_"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.middlePressed = input.middlePressed || acceptPress"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.rightPressed = input.rightPressed || acceptPress"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("context_->SetDimensions"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("context_->Render()"), std::string::npos);
-    EXPECT_NE(rmlHostHeader.find("textInputActive() const"), std::string::npos);
-    EXPECT_NE(rmlHostSource.find("context_->GetFocusElement()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportHost_.setTextInputActive(rmlHost_.textInputActive())"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("void ViewportHost::setTextInputActive(bool active)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.textInputActive = request.textInputActive"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find(".textInputActive = textInputActive_"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("input.textInputActive = false"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("renderer_.resize(mainViewportFrame_.width, mainViewportFrame_.height)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("input.mouseLocal = mouseLocal"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("buildToolOverlayFrame(inputRouter_, viewportInteractions_, overlayCamera)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("buildToolOverlayFrame(instance.inputRouter, instance.interactions, overlayCamera)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("ViewportSelectionMarqueeOverlayBuilder::append(toolOverlayFrame, overlayCamera, interactions.selectionMarquee())"), std::string::npos);
-    EXPECT_EQ(viewportHostHeader.find("selectionMarquee() const"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("ViewportSelectionMarquee ViewportHost::selectionMarquee() const"), std::string::npos);
-    EXPECT_EQ(rmlBuilderSource.find("viewport-selection-marquee"), std::string::npos);
-    EXPECT_EQ(appShellRcss.find("viewport-selection-marquee"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("refreshMeasuredViewportFrameForPointerEvent(event)"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("syncViewportSelectionMarqueeOverlay"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("viewport-selection-marquee-layer"), std::string::npos);
-    EXPECT_NE(marqueeOverlayBuilderSource.find("kOverlaySelectionMarqueeFillColor"), std::string::npos);
-    EXPECT_NE(marqueeOverlayBuilderSource.find("kOverlaySelectionMarqueeLineColor"), std::string::npos);
-    EXPECT_NE(marqueeOverlayBuilderSource.find("overlayFrame.triangles.push_back"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("mainViewport_.layerIndex"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("instance.component.layerIndex"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("viewportPaneIndex(instance.component.pane)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("logCommandFailure(\"Sync windowed selection overlay\", overlaySubmission)"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("instance.renderer.setOverlayVisible(false)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("rmlHost_.registerTextureSource("), std::string::npos);
-}
-
-TEST(UISystemTests, RmlViewportShellUsesWorkspaceSinglePanePolicyForV1) {
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-
-    EXPECT_EQ(viewportHostSource.find("workspace.setLayout(ViewportLayoutId::Single)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("workspace.focusPane(mainViewport_.pane)"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("workspace.clearPaneVisibility()"), std::string::npos);
-    EXPECT_NE(viewportHostSource.find("workspace.setPaneVisible(mainViewport_.pane, true)"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("mainMenuBar_.draw"), std::string::npos);
-}
-
-TEST(UISystemTests, RmlViewportShellLoadsViewportAndMainLayoutSettings) {
-    const std::string uiSystemSource = readSourceFile("src/ui/ui_system.cpp");
-    const std::string viewportHostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
-    const std::string uiSettingsSource = readSourceFile("src/ui/ui_settings.cpp");
-
-    EXPECT_NE(uiSystemSource.find("settingsPaths_ = UISettings::resolvePaths(executableDir)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("uiSettings_ = UISettings::load(settingsPaths_.settingsFile)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("mainLayout_ = uiSettings_.mainLayout()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("viewportSettings_ = ViewportSettings::load(settingsPaths_.viewportSettingsFile)"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("saveViewportSettings()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("saveUISettings()"), std::string::npos);
-    EXPECT_NE(uiSystemSource.find("uiSettings_.setMainLayout(mainLayout_)"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("SidebarSide="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("SidebarWidthDp="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("AuxiliarySidebarWidthDp="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("SidebarCollapsed="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("AuxiliarySidebarCollapsed="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("OutlinerHeightDp="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("BottomDockHeightDp="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutPanelDescriptors()"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("descriptor.visibilitySettingsKey"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("descriptor.dockLocationSettingsKey"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutPanelIdFromVisibilitySettingsKey(key)"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutPanelIdFromDockLocationSettingsKey(key)"), std::string::npos);
-    EXPECT_EQ(uiSettingsSource.find("key == \"OutlinerVisible\""), std::string::npos);
-    EXPECT_EQ(uiSettingsSource.find("key == \"InspectorVisible\""), std::string::npos);
-    EXPECT_EQ(uiSettingsSource.find("key == \"OutlinerDockLocation\""), std::string::npos);
-    EXPECT_EQ(uiSettingsSource.find("key == \"InspectorDockLocation\""), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("DockPanelOrder="), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutSidebarSideFromName(value)"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("dockLocationFromName(value)"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("dockReorderPanels"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutClampedSidebarWidthDp"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutClampedOutlinerHeightDp"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("mainLayoutClampedBottomDockHeightDp"), std::string::npos);
-    EXPECT_NE(uiSettingsSource.find("normalizedMainLayoutModel(std::move(layout))"), std::string::npos);
-    EXPECT_EQ(uiSettingsSource.find("DockLayoutJson"), std::string::npos);
-    EXPECT_EQ(viewportHostSource.find("renderBridge.setOverlayFrame("), std::string::npos);
-    EXPECT_NE(
-            viewportHostSource.find("QuaderRenderApiRuntimeAccess::syncToolPreviews(editor.render(), renderBridge)"),
-            std::string::npos);
-    EXPECT_NE(viewportHostSource.find("QuaderRenderApiRuntimeAccess::syncSelectionOverlay("), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("settingsPanelOpen_"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("toolSettingsPanelOpen_"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("viewportSettingsPanel_.draw"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("toolSettingsPanel_.draw"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("toolSettingsPanelOpenRequested"), std::string::npos);
-    EXPECT_EQ(uiSystemSource.find("requestToolSettingsPanel"), std::string::npos);
-}
-
 TEST(AppStartupTests, DoesNotCreateDefaultModelingMesh) {
     const std::string source = readSourceFile("src/app/app.cpp");
 
@@ -5642,6 +2205,11 @@ TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
     scene.setLight(light, LightComponent{});
 
     EXPECT_NE(sphere, light);
+    EXPECT_FALSE(scene.uuid(sphere).empty());
+    EXPECT_FALSE(scene.uuid(light).empty());
+    EXPECT_NE(scene.uuid(sphere), scene.uuid(light));
+    EXPECT_EQ(scene.entityForUuid(scene.uuid(sphere)), sphere);
+    EXPECT_EQ(scene.entityForUuid(scene.uuid(light)), light);
     EXPECT_TRUE(scene.exists(sphere));
     EXPECT_TRUE(scene.enttEntity(sphere) != entt::null);
     EXPECT_EQ(scene.entityId(scene.enttEntity(sphere)), sphere);
@@ -5663,6 +2231,7 @@ TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {
     const std::vector<EntityRecord> records = scene.entityRecords();
     ASSERT_EQ(records.size(), 2u);
     EXPECT_EQ(records[0].id, sphere);
+    EXPECT_EQ(records[0].uuid, scene.uuid(sphere));
     EXPECT_EQ(records[0].name, "Box");
     EXPECT_TRUE(records[0].selected);
     EXPECT_TRUE(records[0].hasMesh);
@@ -6253,14 +2822,13 @@ TEST(ViewportWorkspaceServiceTests, GridPresetIsClampedAtWorkspaceOwner) {
 
     const std::string routerSource = readSourceFile("src/viewport/viewport_input_router.cpp");
     const std::string runtimeSource = readSourceFile("src/editor/tools/viewport_tool_runtime.cpp");
-    const std::string hostSource = readSourceFile("src/ui/controllers/viewport_host.cpp");
+    const std::string viewportPanelSource = readSourceFile("src/ui/viewport_panel.cpp");
 
     EXPECT_NE(routerSource.find("void ViewportInputRouter::syncGridPresetSnapshot(int preset)"), std::string::npos);
     EXPECT_NE(runtimeSource.find("result.requestedGridPreset = viewportClampGridPreset(shortcut.gridPreset)"), std::string::npos);
     EXPECT_EQ(runtimeSource.find("state.gridPreset = viewportClampGridPreset(shortcut.gridPreset)"), std::string::npos);
-    EXPECT_NE(hostSource.find("workspace.setGridPreset(result.requestedGridPreset)"), std::string::npos);
-    EXPECT_EQ(hostSource.find("inputRouter_.setGridPreset(workspace.gridPreset())"), std::string::npos);
-    EXPECT_EQ(hostSource.find("instance.inputRouter.setGridPreset(workspace.gridPreset())"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("viewportWorkspace.setGridPreset(result.requestedGridPreset)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("inputRouter_.syncGridPresetSnapshot(viewportWorkspace.gridPreset())"), std::string::npos);
 }
 
 TEST(ViewportWorkspaceServiceTests, WorkspaceFocusDistancesUseHostViewportDefaults) {
@@ -7181,6 +3749,22 @@ TEST(ViewportInputRouterTests, GridPresetShortcutReportsOnlyActualChanges) {
     EXPECT_EQ(router.state().gridPreset, 7);
 }
 
+TEST(ViewportInputRouterTests, ViewShortcutReportsFocusedPaneRequest) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame input;
+    input.viewportFocused = true;
+    input.viewportSize = {800.0f, 600.0f};
+
+    setResolvedShortcut(input, testViewShortcut(ViewportView::Front));
+    const ViewportInputResult result = router.handleFrame(input, camera);
+
+    EXPECT_TRUE(result.shortcutHandled);
+    EXPECT_TRUE(result.viewChanged);
+    EXPECT_EQ(result.requestedView, ViewportView::Front);
+    EXPECT_EQ(result.shortcut.kind, ViewportShortcutKind::SetView);
+}
+
 TEST(ViewportInputRouterTests, ToolActivationSupportTracksNativeControllers) {
     EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Select));
     EXPECT_TRUE(viewportToolHasNativeController(ViewportTool::Move));
@@ -7954,6 +4538,46 @@ TEST(AssetRegistryTests, RejectsInvalidMaterialTextureReferencesAtRegistryBounda
     EXPECT_FALSE(registry.material(materialId)->textureSlots.contains("unsupported"));
 }
 
+TEST(AssetRegistryTests, MaterialTextureMutationOwnsSlotTextureAndReplacementValidation) {
+    AssetRegistry registry;
+    const AssetId material = registry.addMaterial(makeDefaultQuaderMaterial("Mutable Material"));
+    TextureAsset textureAsset;
+    textureAsset.name = "Base Color";
+    const AssetId texture = registry.addTexture(std::move(textureAsset));
+    ASSERT_NE(material, InvalidAssetId);
+    ASSERT_NE(texture, InvalidAssetId);
+
+    AssetRegistryMutationResult result = registry.setMaterialTexture(material, "baseColor", texture);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    EXPECT_EQ(result.message, "Material updated");
+    ASSERT_NE(registry.material(material), nullptr);
+    ASSERT_TRUE(registry.material(material)->textureSlots.contains(MaterialTextureSlot::BaseColor));
+    EXPECT_EQ(registry.material(material)->textureSlots.at(MaterialTextureSlot::BaseColor), texture);
+    EXPECT_FALSE(registry.material(material)->textureSlots.contains("baseColor"));
+
+    result = registry.setMaterialTexture(material, MaterialTextureSlot::BaseColor, texture);
+    EXPECT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(result.message, "Material unchanged");
+
+    result = registry.setMaterialTexture(material, "", texture);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Material texture slot is empty");
+
+    result = registry.setMaterialTexture(material, "normalTexture", texture);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Unsupported material texture slot");
+
+    result = registry.setMaterialTexture(material, MaterialTextureSlot::BaseColor, texture + 1000u);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Texture asset does not exist");
+
+    result = registry.setMaterialTexture(material + 1000u, MaterialTextureSlot::BaseColor, texture);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.message, "Material asset does not exist");
+}
+
 TEST(AssetProjectArchitectureTests, TypedStoreAliasesStampDocumentsWithoutAssetRegistryCeremony) {
     static_assert(std::is_same_v<MeshAssetStore, TypedAssetStore<MeshAsset, MeshAssetRevision>>);
     static_assert(std::is_same_v<MaterialAssetStore, TypedAssetStore<MaterialDocument, MaterialAssetRevision>>);
@@ -8706,6 +5330,139 @@ TEST(DocumentCommandTests, SceneTransformDragServiceFiltersTargetsAndRecordsScen
     EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 4.0f);
 }
 
+TEST(DocumentCommandTests, SceneTransformDragServiceInspectorMoveUsesSharedTargetPolicy) {
+    ProjectSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::fromProjectSession(session));
+    SceneDocument& scene = session.scene();
+
+    const EntityId parent = scene.createEntity("Parent");
+    const EntityId child = scene.createEntity("Child");
+    const EntityId locked = scene.createEntity("Locked");
+    ASSERT_TRUE(scene.setParent(child, parent, false));
+
+    TransformComponent childTransform;
+    childTransform.position = {1.0f, 0.0f, 0.0f};
+    scene.setTransform(child, childTransform);
+    TransformComponent lockedTransform;
+    lockedTransform.position = {7.0f, 0.0f, 0.0f};
+    scene.setTransform(locked, lockedTransform);
+    ASSERT_TRUE(scene.setLocked(locked, true));
+
+    ASSERT_TRUE(scene.setSelected(parent, true));
+    ASSERT_TRUE(scene.setSelected(child, true));
+    ASSERT_TRUE(scene.setSelected(locked, true));
+    ASSERT_TRUE(scene.setActiveSelection(parent));
+
+    SceneTransformDragService service;
+    const QuaderApiVoidResult result = service.moveSelectedToPrimaryPosition(
+            editor,
+            scene,
+            parent,
+            {3.0f, 0.0f, 0.0f},
+            "Set Transform");
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+
+    ASSERT_NE(scene.transform(parent), nullptr);
+    ASSERT_NE(scene.transform(child), nullptr);
+    ASSERT_NE(scene.transform(locked), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 3.0f);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+    EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 7.0f);
+    ASSERT_NE(session.history().undoLabel(), nullptr);
+    EXPECT_EQ(*session.history().undoLabel(), "Set Transform");
+
+    ASSERT_TRUE(session.history().undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 0.0f);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+    EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 7.0f);
+    ASSERT_TRUE(session.history().redo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(parent)->position.x, 3.0f);
+    EXPECT_FLOAT_EQ(scene.transform(child)->position.x, 1.0f);
+    EXPECT_FLOAT_EQ(scene.transform(locked)->position.x, 7.0f);
+}
+
+TEST(DocumentCommandTests, SceneTransformDragServiceInspectorRotateAndScalePinParentedSelectionPivot) {
+    constexpr float HalfPi = 1.57079632679f;
+
+    ProjectSession session;
+    QuaderEditorApi editor(QuaderApiSessionInternalAccess::fromProjectSession(session));
+    SceneDocument& scene = session.scene();
+    AssetRegistry& assets = session.assets();
+
+    MeshAsset mesh;
+    mesh.vertices = {
+            {.position = {0.0f, 1.0f, 0.0f}},
+            {.position = {0.0f, 3.0f, 0.0f}},
+    };
+    const AssetId meshId = assets.addMesh(std::move(mesh));
+
+    const EntityId parent = scene.createEntity("Parent");
+    TransformComponent parentTransform;
+    parentTransform.position = {10.0f, 0.0f, 0.0f};
+    scene.setTransform(parent, parentTransform);
+
+    const EntityId child = scene.createEntity("Child");
+    TransformComponent childTransform;
+    childTransform.position = {1.0f, 0.0f, 0.0f};
+    scene.setTransform(child, childTransform);
+    scene.setMesh(child, MeshComponent{.mesh = meshId});
+    ASSERT_TRUE(scene.setParent(child, parent, false));
+    ASSERT_TRUE(scene.setSelected(child, true));
+    ASSERT_TRUE(scene.setActiveSelection(child));
+
+    const auto selectedPivot = [&]() {
+        const std::optional<SceneBounds> bounds = selectedWorldBounds(scene, assets);
+        EXPECT_TRUE(bounds.has_value());
+        return bounds ? boundsCenter(*bounds) : QVec3{};
+    };
+    const QVec3 pivotBeforeRotate = selectedPivot();
+
+    SceneTransformDragService service;
+    QuaderApiVoidResult rotate = service.rotateSelectedToPrimaryEulerAroundSelectionPivot(
+            editor,
+            scene,
+            assets,
+            child,
+            {0.0f, 0.0f, HalfPi},
+            "Set Transform");
+    ASSERT_TRUE(rotate.ok) << rotate.message;
+    EXPECT_TRUE(rotate.changed);
+    const QVec3 pivotAfterRotate = selectedPivot();
+    EXPECT_NEAR(pivotAfterRotate.x, pivotBeforeRotate.x, 0.001f);
+    EXPECT_NEAR(pivotAfterRotate.y, pivotBeforeRotate.y, 0.001f);
+    EXPECT_NEAR(pivotAfterRotate.z, pivotBeforeRotate.z, 0.001f);
+    ASSERT_NE(scene.transform(child), nullptr);
+    EXPECT_NEAR(scene.transform(child)->position.x, 3.0f, 0.001f);
+    EXPECT_NEAR(scene.transform(child)->position.y, 2.0f, 0.001f);
+
+    ASSERT_TRUE(session.history().undo().ok);
+    ASSERT_NE(scene.transform(child), nullptr);
+    EXPECT_NEAR(scene.transform(child)->position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(scene.transform(child)->position.y, 0.0f, 0.001f);
+
+    const QVec3 pivotBeforeScale = selectedPivot();
+    QuaderApiVoidResult scale = service.scaleSelectedToPrimaryScaleAroundSelectionPivot(
+            editor,
+            scene,
+            assets,
+            child,
+            {2.0f, 3.0f, 4.0f},
+            "Set Transform");
+    ASSERT_TRUE(scale.ok) << scale.message;
+    EXPECT_TRUE(scale.changed);
+    const QVec3 pivotAfterScale = selectedPivot();
+    EXPECT_NEAR(pivotAfterScale.x, pivotBeforeScale.x, 0.001f);
+    EXPECT_NEAR(pivotAfterScale.y, pivotBeforeScale.y, 0.001f);
+    EXPECT_NEAR(pivotAfterScale.z, pivotBeforeScale.z, 0.001f);
+    ASSERT_NE(scene.transform(child), nullptr);
+    EXPECT_NEAR(scene.transform(child)->scale.x, 2.0f, 0.001f);
+    EXPECT_NEAR(scene.transform(child)->scale.y, 3.0f, 0.001f);
+    EXPECT_NEAR(scene.transform(child)->scale.z, 4.0f, 0.001f);
+    EXPECT_NEAR(scene.transform(child)->position.x, 1.0f, 0.001f);
+    EXPECT_NEAR(scene.transform(child)->position.y, -4.0f, 0.001f);
+}
+
 TEST(DocumentCommandTests, TypedEntityCommandsRoundTripHierarchySelectionAndTransforms) {
     SceneDocument scene;
     const EntityId parent = scene.createEntity("Parent");
@@ -8753,6 +5510,20 @@ TEST(DocumentCommandTests, TypedEntityCommandsRoundTripHierarchySelectionAndTran
     EXPECT_TRUE(scene.selectedEntities().empty());
 }
 
+TEST(DocumentCommandServiceTests, SceneBatchReparentUsesSceneOwnedReparentCommand) {
+    const std::string source = readSourceFile("src/editor/commands/document_command_service.cpp");
+    const std::size_t batchStart = source.find("DocumentCommandService::applySceneBatch");
+    ASSERT_NE(batchStart, std::string::npos);
+    const std::string batchSource = source.substr(batchStart);
+
+    EXPECT_NE(batchSource.find("std::make_unique<ReparentEntityCommand>("), std::string::npos);
+    EXPECT_NE(batchSource.find("operation.preserveWorldTransform"), std::string::npos);
+    EXPECT_EQ(batchSource.find("simulatedWorldMatrix"), std::string::npos);
+    EXPECT_EQ(batchSource.find("simulatedIsDescendantOf"), std::string::npos);
+    EXPECT_EQ(batchSource.find("sceneLocalMatrixFromWorldMatrix"), std::string::npos);
+    EXPECT_EQ(batchSource.find("worldTransformMatrix"), std::string::npos);
+}
+
 TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
     SceneDocument scene;
     UndoRedoManager undoRedo;
@@ -8769,6 +5540,8 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
     ASSERT_TRUE(result.ok) << result.message;
     EntityId created = createCommand->entity();
     ASSERT_NE(created, InvalidEntityId);
+    const std::string createdUuid = scene.uuid(created);
+    EXPECT_FALSE(createdUuid.empty());
     EXPECT_TRUE(scene.exists(created));
     EXPECT_EQ(scene.kind(created), EntityKind::Light);
     ASSERT_NE(scene.transform(created), nullptr);
@@ -8779,6 +5552,8 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
     ASSERT_TRUE(undoRedo.redo().ok);
     created = createCommand->entity();
     EXPECT_TRUE(scene.exists(created));
+    EXPECT_EQ(scene.uuid(created), createdUuid);
+    EXPECT_EQ(scene.entityForUuid(createdUuid), created);
 
     const EntityId source = scene.createEntity("Source", EntityKind::Mesh);
     scene.setMesh(source, MeshComponent{.mesh = 42});
@@ -8798,6 +5573,9 @@ TEST(DocumentCommandTests, TypedLifecycleCommandsRestoreSceneSnapshots) {
     ASSERT_TRUE(result.ok) << result.message;
     const EntityId duplicateRoot = duplicateCommand->duplicateEntity();
     ASSERT_TRUE(scene.exists(duplicateRoot));
+    const std::string duplicateUuid = scene.uuid(duplicateRoot);
+    EXPECT_FALSE(duplicateUuid.empty());
+    EXPECT_NE(duplicateUuid, scene.uuid(source));
     ASSERT_NE(scene.name(duplicateRoot), nullptr);
     EXPECT_EQ(scene.name(duplicateRoot)->name, "Source_1");
     ASSERT_NE(scene.mesh(duplicateRoot), nullptr);
@@ -8837,6 +5615,8 @@ TEST(DocumentCommandTests, DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem) {
     ASSERT_TRUE(scene.setParent(leaf, source, false));
     const EditorObjectId sourceObject = scene.editorObjectId(source);
     const EditorObjectId leafObject = scene.editorObjectId(leaf);
+    const std::string sourceUuid = scene.uuid(source);
+    const std::string leafUuid = scene.uuid(leaf);
 
     auto duplicate = std::make_unique<DuplicateEntityCommand>(scene, source);
     DuplicateEntityCommand* duplicateCommand = duplicate.get();
@@ -8849,10 +5629,14 @@ TEST(DocumentCommandTests, DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem) {
     const EntityId duplicateLeaf = scene.children(duplicateRoot).front();
     const EditorObjectId duplicateObject = scene.editorObjectId(duplicateRoot);
     const EditorObjectId duplicateLeafObject = scene.editorObjectId(duplicateLeaf);
+    const std::string duplicateUuid = scene.uuid(duplicateRoot);
+    const std::string duplicateLeafUuid = scene.uuid(duplicateLeaf);
     EXPECT_NE(duplicateObject, InvalidEditorObjectId);
     EXPECT_NE(duplicateLeafObject, InvalidEditorObjectId);
     EXPECT_NE(duplicateObject, sourceObject);
     EXPECT_NE(duplicateLeafObject, leafObject);
+    EXPECT_NE(duplicateUuid, sourceUuid);
+    EXPECT_NE(duplicateLeafUuid, leafUuid);
 
     ASSERT_TRUE(undoRedo.undo().ok);
     EXPECT_FALSE(scene.exists(duplicateRoot));
@@ -8864,6 +5648,10 @@ TEST(DocumentCommandTests, DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem) {
     const EntityId redoneLeaf = scene.children(redoneRoot).front();
     EXPECT_EQ(scene.editorObjectId(redoneRoot), duplicateObject);
     EXPECT_EQ(scene.editorObjectId(redoneLeaf), duplicateLeafObject);
+    EXPECT_EQ(scene.uuid(redoneRoot), duplicateUuid);
+    EXPECT_EQ(scene.uuid(redoneLeaf), duplicateLeafUuid);
+    EXPECT_EQ(scene.entityForUuid(duplicateUuid), redoneRoot);
+    EXPECT_EQ(scene.entityForUuid(duplicateLeafUuid), redoneLeaf);
 }
 
 TEST(DocumentCommandTests, DestroyUndoRestoresEditorObjectIdsForSubtrees) {
@@ -8875,6 +5663,8 @@ TEST(DocumentCommandTests, DestroyUndoRestoresEditorObjectIdsForSubtrees) {
     ASSERT_TRUE(scene.setParent(leaf, source, false));
     const EditorObjectId sourceObject = scene.editorObjectId(source);
     const EditorObjectId leafObject = scene.editorObjectId(leaf);
+    const std::string sourceUuid = scene.uuid(source);
+    const std::string leafUuid = scene.uuid(leaf);
 
     auto destroy = std::make_unique<DestroyEntityCommand>(scene, source);
     DestroyEntityCommand* destroyCommand = destroy.get();
@@ -8890,6 +5680,10 @@ TEST(DocumentCommandTests, DestroyUndoRestoresEditorObjectIdsForSubtrees) {
     const EntityId restoredLeaf = scene.children(restoredRoot).front();
     EXPECT_EQ(scene.editorObjectId(restoredRoot), sourceObject);
     EXPECT_EQ(scene.editorObjectId(restoredLeaf), leafObject);
+    EXPECT_EQ(scene.uuid(restoredRoot), sourceUuid);
+    EXPECT_EQ(scene.uuid(restoredLeaf), leafUuid);
+    EXPECT_EQ(scene.entityForUuid(sourceUuid), restoredRoot);
+    EXPECT_EQ(scene.entityForUuid(leafUuid), restoredLeaf);
 }
 
 TEST(DocumentCommandServiceTests, BatchesVisibilityAndTransforms) {
@@ -9055,6 +5849,32 @@ TEST(DocumentCommandServiceTests, SetMaterialComparesFullMaterialComponentState)
     EXPECT_TRUE(scene.material(entity)->materialSlots.empty());
 }
 
+TEST(DocumentCommandServiceTests, DefaultGroupNameStaysLiteralGroup) {
+    SceneDocument scene;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
+
+    const EntityId first = scene.createEntity("First");
+    const EntityId second = scene.createEntity("Second");
+    ASSERT_NE(first, InvalidEntityId);
+    ASSERT_NE(second, InvalidEntityId);
+
+    ASSERT_TRUE(commands.selectEntities({first}, first).ok);
+    const DocumentGroupSelectionResult firstGroup = commands.groupSelection();
+    ASSERT_TRUE(firstGroup.ok) << firstGroup.message;
+    ASSERT_TRUE(scene.exists(firstGroup.groupEntity));
+    ASSERT_NE(scene.name(firstGroup.groupEntity), nullptr);
+    EXPECT_EQ(scene.name(firstGroup.groupEntity)->name, "Group");
+
+    ASSERT_TRUE(commands.selectEntities({second}, second).ok);
+    const DocumentGroupSelectionResult secondGroup = commands.groupSelection();
+    ASSERT_TRUE(secondGroup.ok) << secondGroup.message;
+    ASSERT_TRUE(scene.exists(secondGroup.groupEntity));
+    ASSERT_NE(scene.name(secondGroup.groupEntity), nullptr);
+    EXPECT_EQ(scene.name(secondGroup.groupEntity)->name, "Group");
+    EXPECT_NE(firstGroup.groupEntity, secondGroup.groupEntity);
+}
+
 TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleCommands) {
     SceneDocument scene;
     EditorHistoryService history;
@@ -9092,6 +5912,8 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     ASSERT_TRUE(grouped.ok) << grouped.message;
     const EntityId group = grouped.groupEntity;
     ASSERT_TRUE(scene.exists(group));
+    const std::string groupUuid = scene.uuid(group);
+    EXPECT_FALSE(groupUuid.empty());
     EXPECT_EQ(scene.parent(first), group);
     EXPECT_EQ(scene.parent(second), group);
     EXPECT_EQ(scene.primarySelection(), group);
@@ -9106,6 +5928,8 @@ TEST(DocumentCommandServiceTests, CoversEntityHierarchySelectionAndLifecycleComm
     ASSERT_TRUE(history.redo().ok);
     const EntityId regrouped = scene.primarySelection();
     ASSERT_TRUE(scene.exists(regrouped));
+    EXPECT_EQ(scene.uuid(regrouped), groupUuid);
+    EXPECT_EQ(scene.entityForUuid(groupUuid), regrouped);
     EXPECT_EQ(scene.parent(first), regrouped);
     EXPECT_EQ(scene.parent(second), regrouped);
 
@@ -9903,7 +6727,7 @@ TEST(ModelingSessionServiceTests, ContextActionsExposeFacePanelAndKeepBridgeDisa
     EXPECT_TRUE(executed.ok) << executed.message;
 }
 
-TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsContextMenu) {
+TEST(ModelingSessionServiceTests, RmbMeshPickWithExistingFaceSelectionPreservesSelectionAndAllowsContextMenu) {
     SceneDocument scene;
     AssetRegistry assets;
     ModelingSessionService service(scene, assets);
@@ -9929,12 +6753,27 @@ TEST(ModelingSessionServiceTests, RmbMeshPickInFaceModeSelectsTargetAndAllowsCon
     });
     ASSERT_TRUE(multiPicked.hasSelection);
     ASSERT_EQ(multiPicked.selectedFaceCount, 2u);
+    const int activeObjectBeforeContext = multiPicked.activeObjectId;
+    const int activeFaceBeforeContext = multiPicked.activeFaceId;
+
+    const ModelingSelectionSummary rmbOnUnselectedWithExistingSelection = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {5.0f, 0.0f, 0.0f}, .direction = {-1.0f, 0.0f, 0.0f}},
+            .clickCount = 1,
+            .preserveSelectionOnMiss = true,
+            .preserveSelectionOnSelectedHit = true,
+            .preserveExistingComponentSelectionOnHit = true,
+    });
+    ASSERT_TRUE(rmbOnUnselectedWithExistingSelection.hasSelection);
+    EXPECT_EQ(rmbOnUnselectedWithExistingSelection.activeObjectId, activeObjectBeforeContext);
+    EXPECT_EQ(rmbOnUnselectedWithExistingSelection.activeFaceId, activeFaceBeforeContext);
+    EXPECT_EQ(rmbOnUnselectedWithExistingSelection.selectedFaceCount, 2u);
 
     const ModelingSelectionSummary rmbOnAlreadySelected = service.pickSelect(ModelingPickSelectRequest{
             .ray = {.origin = {0.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
             .clickCount = 1,
             .preserveSelectionOnMiss = true,
             .preserveSelectionOnSelectedHit = true,
+            .preserveExistingComponentSelectionOnHit = true,
     });
     ASSERT_TRUE(rmbOnAlreadySelected.hasSelection);
     EXPECT_EQ(rmbOnAlreadySelected.selectedFaceCount, 2u);
@@ -12879,16 +9718,42 @@ TEST(MaterialDocumentTests, MaterialTextureSlotPolicyOwnsAliasesAndSupportedSlot
 TEST(MaterialDocumentTests, MaterialTextureSlotPolicyOwnsApiQdrAndRenderSlotNormalization) {
     const std::string materialHeader = readSourceFile("src/assets/material_document.hpp");
     const std::string materialSource = readSourceFile("src/assets/material_document.cpp");
+    const std::string registryHeader = readSourceFile("src/assets/asset_registry.hpp");
+    const std::string registrySource = readSourceFile("src/assets/asset_registry.cpp");
     const std::string apiSource = readSourceFile("src/api/quader_asset_api.cpp");
+    const std::string documentCommandSource = readSourceFile("src/editor/commands/document_command_service.cpp");
     const std::string qdrReaderSource = readSourceFile("src/io/qdr/qdr_document_reader.cpp");
     const std::string qdrWriterSource = readSourceFile("src/io/qdr/qdr_document_writer.cpp");
     const std::string textureBindingSource = readSourceFile("src/render/texture_binding_service.cpp");
     const std::string renderSignatureSource = readSourceFile("src/render/render_signature_builder.cpp");
+    const std::size_t setTextureStart =
+            apiSource.find("QuaderApiVoidResult QuaderAssetApi::setMaterialTexture");
+    const std::size_t assignMaterialStart =
+            apiSource.find("QuaderApiVoidResult QuaderAssetApi::assignMaterialToEntity");
+    const std::size_t assignObjectStart =
+            apiSource.find("QuaderApiVoidResult QuaderAssetApi::assignMaterialToObject");
+    ASSERT_NE(setTextureStart, std::string::npos);
+    ASSERT_NE(assignMaterialStart, std::string::npos);
+    ASSERT_NE(assignObjectStart, std::string::npos);
+    const std::string setTextureSource =
+            apiSource.substr(setTextureStart, assignMaterialStart - setTextureStart);
+    const std::string assignMaterialSource =
+            apiSource.substr(assignMaterialStart, assignObjectStart - assignMaterialStart);
 
     EXPECT_NE(materialHeader.find("struct MaterialTextureSlotDescriptor"), std::string::npos);
     EXPECT_NE(materialSource.find("kMaterialTextureSlotDescriptors"), std::string::npos);
     EXPECT_NE(materialSource.find("normalizeMaterialTextureSlots"), std::string::npos);
-    EXPECT_NE(apiSource.find("canonicalMaterialTextureSlot"), std::string::npos);
+    EXPECT_NE(registryHeader.find("AssetRegistryMutationResult setMaterialTexture"), std::string::npos);
+    EXPECT_NE(registrySource.find("AssetRegistry::setMaterialTexture"), std::string::npos);
+    EXPECT_NE(registrySource.find("canonicalMaterialTextureSlot(slot)"), std::string::npos);
+    EXPECT_NE(registrySource.find("validateMaterial(updated)"), std::string::npos);
+    EXPECT_NE(setTextureSource.find(".assets().setMaterialTexture(material, slot, texture)"), std::string::npos);
+    EXPECT_NE(documentCommandSource.find("DocumentCommandService::setMaterial"), std::string::npos);
+    EXPECT_NE(documentCommandSource.find("assets_->material(material)"), std::string::npos);
+    EXPECT_EQ(setTextureSource.find("canonicalMaterialTextureSlot"), std::string::npos);
+    EXPECT_EQ(setTextureSource.find("setMaterialTextureSlot("), std::string::npos);
+    EXPECT_EQ(setTextureSource.find(".texture(texture)"), std::string::npos);
+    EXPECT_EQ(assignMaterialSource.find(".assets().material(material)"), std::string::npos);
     EXPECT_NE(qdrReaderSource.find("setMaterialTextureSlot(material, slot"), std::string::npos);
     EXPECT_NE(qdrWriterSource.find("materialTextureSlotDescriptors()"), std::string::npos);
     EXPECT_NE(textureBindingSource.find("materialTextureSlotAsset(*material, slotName)"), std::string::npos);

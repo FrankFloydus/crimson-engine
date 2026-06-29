@@ -9,9 +9,8 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
-#include "editor/commands/document/document_command_edits.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
-#include "scene/scene_bounds.hpp"
+#include "editor/transform/scene_transform_drag_service.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/transform_pivot.hpp"
 #include "ui/ui_context.hpp"
@@ -24,7 +23,6 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
-#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -35,8 +33,8 @@ namespace {
 
 constexpr float RadToDeg = 57.29577951308232f;
 constexpr float DegToRad = 0.017453292519943295f;
-constexpr float kInspectorLabelColumnWidth = 96.0f;
-constexpr float kTransformLabelColumnWidth = 74.0f;
+constexpr float kInspectorMinimumValueColumnWidth = 72.0f;
+constexpr float kTransformLabelColumnWidth = 70.0f;
 constexpr float kAxisTextColumnWidth = 12.0f;
 constexpr float kMinAxisInputWidth = 58.0f;
 
@@ -46,26 +44,6 @@ void copyNameToBuffer(const NameComponent* name, std::array<char, 128>& buffer) 
         return;
     }
     std::snprintf(buffer.data(), buffer.size(), "%s", name->name.c_str());
-}
-
-QVec3 componentScaleRatio(QVec3 next, QVec3 previous) {
-    auto ratio = [](float nextValue, float previousValue) {
-        const float denominator = std::abs(previousValue) <= 0.000001f ? 1.0f : previousValue;
-        return nextValue / denominator;
-    };
-    return {ratio(next.x, previous.x), ratio(next.y, previous.y), ratio(next.z, previous.z)};
-}
-
-QVec3 multiplyComponents(QVec3 left, QVec3 right) {
-    return {left.x * right.x, left.y * right.y, left.z * right.z};
-}
-
-QVec3 clampScale(QVec3 scale) {
-    return {
-            std::max(scale.x, 0.001f),
-            std::max(scale.y, 0.001f),
-            std::max(scale.z, 0.001f),
-    };
 }
 
 const char* selectionModeKey(ModelingSelectionMode mode) {
@@ -196,14 +174,16 @@ AxisDragFloatResult axisDragFloat3(const char* stableId,
     ImGui::PushID(stableId);
     const float availableWidth = ImGui::GetContentRegionAvail().x;
     const float axisChromeWidth = kAxisTextColumnWidth + ImGui::GetStyle().ItemInnerSpacing.x;
+    const float labelColumnWidth =
+            std::clamp(kTransformLabelColumnWidth, 0.0f, std::max(0.0f, availableWidth - 3.0f * (axisChromeWidth + kMinAxisInputWidth)));
     const float axisColumnWidth =
-            std::max((availableWidth - kTransformLabelColumnWidth) / 3.0f, axisChromeWidth + kMinAxisInputWidth);
+            std::max((availableWidth - labelColumnWidth) / 3.0f, axisChromeWidth + kMinAxisInputWidth);
     const float inputWidth = axisColumnWidth - axisChromeWidth;
     if (ImGui::BeginTable("##AxisDragFloat3", 4,
                 ImGuiTableFlags_SizingFixedFit |
                         ImGuiTableFlags_NoSavedSettings |
                         ImGuiTableFlags_NoPadOuterX)) {
-        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, kTransformLabelColumnWidth);
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, labelColumnWidth);
         ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
         ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
         ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
@@ -238,17 +218,22 @@ AxisDragFloatResult axisDragFloat3(const char* stableId,
 bool beginLabeledControlTable(const char* stableId) {
     ImGui::PushID(stableId);
     return ImGui::BeginTable("##InspectorLabeledControl", 2,
-            ImGuiTableFlags_SizingFixedFit |
+            ImGuiTableFlags_SizingStretchProp |
                     ImGuiTableFlags_NoSavedSettings |
                     ImGuiTableFlags_NoPadOuterX);
 }
 
 void setupLabeledControlColumns() {
-    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, kInspectorLabelColumnWidth);
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    const float valueWidth = std::clamp(
+            availableWidth * 0.36f,
+            kInspectorMinimumValueColumnWidth,
+            std::max(kInspectorMinimumValueColumnWidth, availableWidth - 120.0f));
+    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.0f);
     ImGui::TableSetupColumn(
             "Value",
             ImGuiTableColumnFlags_WidthFixed,
-            std::max(ImGui::GetContentRegionAvail().x - kInspectorLabelColumnWidth, kMinAxisInputWidth));
+            valueWidth);
     ImGui::TableNextRow();
 }
 
@@ -326,15 +311,6 @@ bool comboWithLeftLabel(const char* stableId,
     }
     return changed;
 }
-
-/**
- * Represents a Selected Transform Pivot value used by the ImGui editor presentation layer.
- */
-struct SelectedTransformPivot {
-    EntityId entity = InvalidEntityId;
-    TransformComponent transform;
-    QVec3 localPivot = {};
-};
 
 /**
  * Represents a Bool Aggregate value used by the ImGui editor presentation layer.
@@ -424,6 +400,14 @@ std::array<bool, 3> mixedScaleAxes(const SceneDocument& document,
 float InspectorPanel::minimumWidth(const UIContext& context) const {
     // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
     return context.style.sidebarMinWidth;
+}
+
+ImVec2 InspectorPanel::panelWindowPadding(const UIContext& context) const {
+    return {context.style.windowPadding.x, context.style.windowPadding.y};
+}
+
+ImGuiWindowFlags InspectorPanel::windowFlags(const UIContext& context) const {
+    return context.style.panelWindowFlags | ImGuiWindowFlags_AlwaysVerticalScrollbar;
 }
 
 void InspectorPanel::drawContent(UIContext& context) {
@@ -589,66 +573,8 @@ void InspectorPanel::drawContent(UIContext& context) {
                 return result;
             };
 
-            auto applyToSelectedTransforms = [&](auto mutate) {
-                std::vector<QuaderSceneTransformEdit> edits;
-                edits.reserve(selected.size());
-                for (const EntityId id : selected) {
-                    if (document.isEffectivelyLocked(id)) {
-                        continue;
-                    }
-                    if (const TransformComponent* current = document.transform(id)) {
-                        const TransformComponent before = *current;
-                        TransformComponent next = before;
-                        mutate(next);
-                        edits.push_back(QuaderSceneTransformEdit{
-                                .entity = id,
-                                .before = toApiTransform(before),
-                                .after = toApiTransform(next),
-                        });
-                    }
-                }
-                (void)context.editor.scene().setTransforms(std::span<const QuaderSceneTransformEdit>(edits.data(), edits.size()));
+            auto refreshPrimaryTransform = [&]() {
                 transform = document.transform(primary);
-            };
-
-            auto selectedTransformPivots = [&](QVec3 worldPivot) {
-                std::vector<SelectedTransformPivot> records;
-                records.reserve(selected.size());
-                for (const EntityId id : selected) {
-                    if (document.isEffectivelyLocked(id)) {
-                        continue;
-                    }
-                    if (const TransformComponent* current = document.transform(id)) {
-                        records.push_back(SelectedTransformPivot{
-                                .entity = id,
-                                .transform = *current,
-                                .localPivot = localPivotForWorldPoint(*current, worldPivot),
-                        });
-                    }
-                }
-                return records;
-            };
-
-            auto applyToSelectedTransformRecords = [&](QVec3 worldPivot, auto apply) {
-                const std::vector<SelectedTransformPivot> records = selectedTransformPivots(worldPivot);
-                std::vector<QuaderSceneTransformEdit> edits;
-                edits.reserve(records.size());
-                for (const SelectedTransformPivot& record : records) {
-                    TransformComponent next = record.transform;
-                    apply(next, record.localPivot, worldPivot);
-                    edits.push_back(QuaderSceneTransformEdit{
-                            .entity = record.entity,
-                            .before = toApiTransform(record.transform),
-                            .after = toApiTransform(next),
-                    });
-                }
-                (void)context.editor.scene().setTransforms(std::span<const QuaderSceneTransformEdit>(edits.data(), edits.size()));
-                transform = document.transform(primary);
-            };
-
-            auto selectedTransformPivot = [&]() {
-                const std::optional<SceneBounds> bounds = selectedWorldBounds(document, context.assets);
-                return bounds ? boundsCenter(*bounds) : transform->position;
             };
 
             float position[3] = {transform->position.x, transform->position.y, transform->position.z};
@@ -663,13 +589,16 @@ void InspectorPanel::drawContent(UIContext& context) {
             if (positionResult.deactivatedAfterEdit) {
                 const std::array<float, 3> finalPosition =
                         finalTransformEditValues(InspectorTransformEditKind::Position, position);
-                const QVec3 previous = transform->position;
                 const QVec3 nextPosition{finalPosition[0], finalPosition[1], finalPosition[2]};
-                const QVec3 delta = nextPosition - previous;
                 activeTransformEdit_.reset();
-                applyToSelectedTransforms([&](TransformComponent& next) {
-                    next.position = next.position + delta;
-                });
+                SceneTransformDragService transformService;
+                (void)transformService.moveSelectedToPrimaryPosition(
+                        context.editor,
+                        document,
+                        primary,
+                        nextPosition,
+                        "Set Transform");
+                refreshPrimaryTransform();
             }
 
             const QVec3 displayedRotation = positiveEulerRadians(transform->rotationEuler);
@@ -689,17 +618,21 @@ void InspectorPanel::drawContent(UIContext& context) {
             if (rotationResult.deactivatedAfterEdit) {
                 const std::array<float, 3> finalRotation =
                         finalTransformEditValues(InspectorTransformEditKind::Rotation, rotation);
-                const QVec3 previous = displayedRotation;
                 const QVec3 nextRotation{
                         finalRotation[0] * DegToRad,
                         finalRotation[1] * DegToRad,
                         finalRotation[2] * DegToRad,
                 };
-                const QVec3 delta = nextRotation - previous;
                 activeTransformEdit_.reset();
-                applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, QVec3 localPivot, QVec3 worldPivot) {
-                    applyWorldRotationDeltaAroundPivot(next, delta, localPivot, worldPivot);
-                });
+                SceneTransformDragService transformService;
+                (void)transformService.rotateSelectedToPrimaryEulerAroundSelectionPivot(
+                        context.editor,
+                        document,
+                        context.assets,
+                        primary,
+                        nextRotation,
+                        "Set Transform");
+                refreshPrimaryTransform();
             }
 
             float scale[3] = {transform->scale.x, transform->scale.y, transform->scale.z};
@@ -714,12 +647,16 @@ void InspectorPanel::drawContent(UIContext& context) {
             if (scaleResult.deactivatedAfterEdit) {
                 const std::array<float, 3> finalScale =
                         finalTransformEditValues(InspectorTransformEditKind::Scale, scale);
-                const QVec3 ratio = componentScaleRatio({finalScale[0], finalScale[1], finalScale[2]}, transform->scale);
                 activeTransformEdit_.reset();
-                applyToSelectedTransformRecords(selectedTransformPivot(), [&](TransformComponent& next, QVec3 localPivot, QVec3 worldPivot) {
-                    next.scale = clampScale(multiplyComponents(next.scale, ratio));
-                    pinLocalPivotToWorldPoint(next, localPivot, worldPivot);
-                });
+                SceneTransformDragService transformService;
+                (void)transformService.scaleSelectedToPrimaryScaleAroundSelectionPivot(
+                        context.editor,
+                        document,
+                        context.assets,
+                        primary,
+                        {finalScale[0], finalScale[1], finalScale[2]},
+                        "Set Transform");
+                refreshPrimaryTransform();
             }
         }
     }

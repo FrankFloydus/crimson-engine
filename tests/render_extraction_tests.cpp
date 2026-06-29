@@ -12,6 +12,7 @@
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_factory.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/scene_render_extraction.hpp"
 #include "render/render_layers.hpp"
 #include "render/viewport_render_pass_coordinator.hpp"
 #include "render/viewport_overlay_frame.hpp"
@@ -219,6 +220,63 @@ TEST(RenderSignatureBuilderTests, KeepsRenderHashPolicyInSingleOwner) {
         EXPECT_EQ(text.find("hashVec3"), std::string::npos);
         EXPECT_NE(text.find("RenderSignatureBuilder"), std::string::npos);
     }
+}
+
+TEST(SceneRenderExtractionTests, BuildsSharedVisibleMeshAndLightPlan) {
+    SceneDocument document;
+    AssetRegistry assets;
+    MaterialBindingService materialBinding;
+
+    const AssetId mesh = assets.addMesh(makeOverlayTriangleMesh());
+    const AssetId material = assets.addMaterial(makeDefaultQuaderMaterial("Render Material"));
+
+    const EntityId renderable = document.createEntity("Renderable", EntityKind::Mesh);
+    document.setMesh(renderable, MeshComponent{.mesh = mesh, .castShadows = false, .doubleSided = true});
+    document.setMaterial(renderable, MaterialComponent{.material = material});
+
+    const EntityId missingMesh = document.createEntity("Missing Mesh", EntityKind::Mesh);
+    document.setMesh(missingMesh, MeshComponent{.mesh = mesh + 1000u});
+
+    const EntityId hidden = document.createEntity("Hidden Mesh", EntityKind::Mesh);
+    document.setMesh(hidden, MeshComponent{.mesh = mesh});
+    document.setVisible(hidden, false);
+
+    const EntityId light = document.createEntity("Light", EntityKind::Light);
+    document.setLight(light, LightComponent{});
+
+    const SceneRenderExtractionPlan plan = buildSceneRenderExtractionPlan(document, assets, materialBinding);
+
+    ASSERT_EQ(plan.meshes.size(), 2u);
+    const auto renderableEntry = std::find_if(
+            plan.meshes.begin(),
+            plan.meshes.end(),
+            [renderable](const SceneRenderMeshEntry& entry) {
+                return entry.entityId == renderable;
+            });
+    ASSERT_NE(renderableEntry, plan.meshes.end());
+    EXPECT_TRUE(renderableEntry->renderable());
+    EXPECT_EQ(renderableEntry->meshId, mesh);
+    EXPECT_EQ(renderableEntry->materialId, material);
+    EXPECT_FALSE(renderableEntry->castShadows());
+    EXPECT_TRUE(renderableEntry->doubleSided());
+    EXPECT_EQ(renderableEntry->materialRevision,
+            materialBinding.materialRevision(assets, renderableEntry->materialComponent));
+    EXPECT_TRUE(plan.liveMeshEntities.contains(renderable));
+
+    const auto missingEntry = std::find_if(
+            plan.meshes.begin(),
+            plan.meshes.end(),
+            [missingMesh](const SceneRenderMeshEntry& entry) {
+                return entry.entityId == missingMesh;
+            });
+    ASSERT_NE(missingEntry, plan.meshes.end());
+    EXPECT_FALSE(missingEntry->renderable());
+    EXPECT_FALSE(plan.liveMeshEntities.contains(missingMesh));
+    EXPECT_FALSE(plan.liveMeshEntities.contains(hidden));
+
+    ASSERT_EQ(plan.lights.size(), 1u);
+    EXPECT_EQ(plan.lights.front().entityId, light);
+    EXPECT_TRUE(plan.liveLightEntities.contains(light));
 }
 
 TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {

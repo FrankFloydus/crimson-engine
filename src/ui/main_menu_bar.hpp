@@ -6,8 +6,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
-#include "ui/ui_settings.hpp"
-
 namespace quader {
 
 class LocalizationService;
@@ -27,10 +25,8 @@ struct MainMenuBarContext {
     ModelingSessionService& modeling;
     ViewportPanel* viewportPanel = nullptr;
     UIPanelManager& panels;
-    UISettings& settings;
     LocalizationService& localization;
     bool& viewportSettingsPanelOpen;
-    bool& toolSettingsPanelOpen;
 };
 
 /**
@@ -65,14 +61,6 @@ public:
 };
 
 /**
- * Owns Show Menu behavior within the ImGui editor presentation layer.
- */
-class ShowMenu {
-public:
-    void draw(MainMenuBarContext& context, MainMenuBarResult& result) const;
-};
-
-/**
  * Owns View Menu behavior within the ImGui editor presentation layer.
  */
 class ViewMenu {
@@ -94,12 +82,12 @@ public:
 class MainMenuBar {
 public:
     MainMenuBarResult draw(MainMenuBarContext context) const;
+    MainMenuBarResult drawMenus(MainMenuBarContext context) const;
 
 private:
     FileMenu fileMenu_;
     EditMenu editMenu_;
     ToolsMenu toolsMenu_;
-    ShowMenu showMenu_;
     ViewMenu viewMenu_;
     LayoutMenu layoutMenu_;
 };

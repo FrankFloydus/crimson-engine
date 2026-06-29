@@ -18,16 +18,6 @@ void EditorCommandRegistry::registerCommand(EditorCommandRegistration command) {
     commands_.push_back(std::move(command));
 }
 
-void EditorCommandRegistry::registerPrefix(std::string prefix, PrefixHandler handler) {
-    if (prefix.empty() || !handler) {
-        return;
-    }
-    prefixes_.push_back(PrefixRoute{
-            .prefix = std::move(prefix),
-            .handler = std::move(handler),
-    });
-}
-
 bool EditorCommandRegistry::contains(std::string_view commandId) const {
     return find(commandId) != nullptr;
 }
@@ -53,11 +43,6 @@ std::optional<QuaderApiVoidResult> EditorCommandRegistry::execute(std::string_vi
         return command->execute();
     }
 
-    for (const PrefixRoute& route : prefixes_) {
-        if (commandId.starts_with(route.prefix)) {
-            return route.handler(commandId.substr(route.prefix.size()));
-        }
-    }
     return std::nullopt;
 }
 

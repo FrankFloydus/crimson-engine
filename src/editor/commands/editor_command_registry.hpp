@@ -33,10 +33,7 @@ struct EditorCommandRegistration {
  */
 class EditorCommandRegistry final {
 public:
-    using PrefixHandler = std::function<QuaderApiVoidResult(std::string_view suffix)>;
-
     void registerCommand(EditorCommandRegistration command);
-    void registerPrefix(std::string prefix, PrefixHandler handler);
 
     [[nodiscard]] bool contains(std::string_view commandId) const;
     [[nodiscard]] std::optional<QuaderApiVoidResult> execute(std::string_view commandId) const;
@@ -44,18 +41,9 @@ public:
     [[nodiscard]] std::string shortcutFor(std::string_view commandId) const;
 
 private:
-    /**
-     * Represents a Prefix Route value used by the editor coordination layer.
-     */
-    struct PrefixRoute {
-        std::string prefix;
-        PrefixHandler handler;
-    };
-
     [[nodiscard]] const EditorCommandRegistration* find(std::string_view commandId) const;
 
     std::vector<EditorCommandRegistration> commands_;
-    std::vector<PrefixRoute> prefixes_;
 };
 
 } // namespace quader

@@ -40,6 +40,9 @@ public:
             const ViewportInteractionFrame& frame,
             const ViewportToolResult& toolResult,
             bool gizmoConsumed);
+    [[nodiscard]] QuaderSelectionSummary pickContextMenuTarget(
+            QuaderEditorApi& editor,
+            const ViewportInteractionFrame& frame);
     [[nodiscard]] ViewportSelectionMarquee marquee() const;
 
 private:
@@ -51,6 +54,7 @@ private:
     std::optional<ViewportSelectionMarquee> committedMarquee_;
     std::optional<ViewportSelectionMarquee> liveBoxSelection_;
     std::optional<QuaderHoverTarget> hoverSuppressedTarget_;
+    bool paintSelectionActive_ = false;
 };
 
 } // namespace quader

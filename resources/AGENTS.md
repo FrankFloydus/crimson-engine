@@ -14,20 +14,14 @@ materials/overlays.
 ## Resource Rules
 
 - User-facing UI text belongs in `resources/locales/*.lang`.
-- RmlUi shell resources under `resources/ui/**` are copied by the `quader` target post-build step.
-  After changing RML, RCSS, UI tokens, or locale files, rebuild `quader`; tests alone do not refresh
-  `build/vs2026/Debug/ui/**` or locales.
+- Runtime UI resources include icons, fonts, and ImGui/material outputs copied by the `quader`
+  target post-build step. After changing them, rebuild `quader`; tests alone do not refresh
+  `build/vs2026/Debug`.
 - If the running UI differs from source, inspect copied runtime files under `build/vs2026/Debug`.
-- Keep static RCSS tied to layout mechanics. Prefer generated palette/utility classes for visual
-  constants.
-- Treat MainLayout RML/RCSS IDs, data attributes, and class names as contracts with
-  `MainLayoutRmlBuilder`, `UISystem` measurement, drag/drop registration, and guardrail tests.
-- Keep the MainLayout bottom dock inside the editor column with the viewport.
-- Keep visual feedback in RCSS/RML; accepted targets, constraints, and collapse policy belong in UI
-  controllers/models.
-- Do not encode panel-specific behavior in static resources.
-- Material source changes under `resources/materials` must compile through configured Filament `matc.exe`.
-- Keep default material assets under the app-owned resources tree and preserve post-build copy paths.
-- Do not add third-party fonts, icons, textures, or material assets without license evidence under
-  `thirdparty/`.
+- Keep icon and font assets license-backed. Do not add third-party fonts, icons, textures, or
+  material assets without license evidence under `thirdparty/`.
+- Material source changes under `resources/materials` must compile through configured Filament
+  `matc.exe`.
+- Keep default material assets under the app-owned resources tree and preserve post-build copy
+  paths.
 - Update localization, render, or resource tests when resource contracts change.

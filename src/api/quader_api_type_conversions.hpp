@@ -484,6 +484,7 @@ inline ModelingPickSelectRequest toModelingPickSelectRequest(const QuaderPickSel
             .altPressed = request.altPressed,
             .preserveSelectionOnMiss = request.preserveSelectionOnMiss,
             .preserveSelectionOnSelectedHit = request.preserveSelectionOnSelectedHit,
+            .preserveExistingComponentSelectionOnHit = request.preserveExistingComponentSelectionOnHit,
             .vertexRadius = request.vertexRadius,
             .edgeRadius = request.edgeRadius,
     };

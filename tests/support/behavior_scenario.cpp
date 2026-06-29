@@ -10,7 +10,11 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "assets/asset_registry.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
+#include "math/glm_bridge.hpp"
 #include "scene/scene_bounds.hpp"
+#include "ui/viewport_shortcut_controller.hpp"
+#include "viewport/viewport_camera_controller.hpp"
+#include "viewport/viewport_input_router.hpp"
 
 #include <gtest/gtest.h>
 
@@ -275,6 +279,7 @@ void BehaviorScenario::rememberSelectedCopyAlias() {
 QuaderModelingObjectRef BehaviorScenario::objectForEntity(EntityId entity) const {
     QuaderModelingObjectRef result;
     result.entity = entity;
+    result.entityUuid = session_.scene().uuid(entity);
     result.editorObjectId = session_.scene().editorObjectId(entity);
     if (const ModelingObjectComponent* modeling = session_.scene().modelingObject(entity)) {
         result.modelingObjectId = modeling->objectId;
@@ -286,6 +291,14 @@ QuaderModelingObjectRef BehaviorScenario::objectForEntity(EntityId entity) const
         result.material = material->material;
     }
     return result;
+}
+
+QVec3 BehaviorScenario::worldPosition(EntityId entity) const {
+    return transformPoint(session_.scene().worldTransformMatrix(entity), {});
+}
+
+ViewportOverlayFrame BehaviorScenario::selectionOverlayFrame() const {
+    return session_.modeling().selectionOverlayFrame();
 }
 
 BehaviorGiven& BehaviorGiven::unitBox(std::string_view alias, std::string name) {
@@ -556,6 +569,27 @@ BehaviorWhen& BehaviorWhen::cancelDrag() {
 BehaviorWhen& BehaviorWhen::executeTool(std::string_view toolId) {
     const QuaderApiStatus status = scenario_.api().modeling().executeTool(toolId);
     scenario_.recordStatus(status);
+    return *this;
+}
+
+BehaviorWhen& BehaviorWhen::dispatchViewportShortcut(const ViewportShortcut& shortcut) {
+    ViewportInputRouter router;
+    ViewportCameraController camera;
+    ViewportInputFrame inputFrame;
+    inputFrame.viewportFocused = true;
+    inputFrame.viewportSize = {800.0f, 600.0f};
+    inputFrame.resolvedShortcuts = {shortcut};
+
+    const ViewportInputResult input = router.handleFrame(inputFrame, camera);
+    const ViewportShortcutControllerResult result =
+            ViewportShortcutController{}.handleModelingShortcut(input, scenario_.editor());
+    scenario_.recordStatus({
+            .ok = input.shortcutHandled && result.commandExecuted,
+            .changed = result.commandExecuted,
+            .message = result.commandExecuted ? std::string{} : "Viewport shortcut did not execute a command.",
+            .mutationKind = result.commandExecuted ? QuaderMutationKind::Document : QuaderMutationKind::None,
+            .revisions = scenario_.api().revisions(),
+    });
     return *this;
 }
 

@@ -15,6 +15,9 @@
 
 namespace quader {
 
+/**
+ * Enumerates active Inspector transform fields with staged drag-edit values.
+ */
 enum class InspectorTransformEditKind {
     Position,
     Rotation,
@@ -40,6 +43,8 @@ public:
 
 private:
     float minimumWidth(const UIContext& context) const override;
+    ImVec2 panelWindowPadding(const UIContext& context) const override;
+    ImGuiWindowFlags windowFlags(const UIContext& context) const override;
     void drawContent(UIContext& context) override;
 
     std::optional<InspectorTransformEditState> activeTransformEdit_;

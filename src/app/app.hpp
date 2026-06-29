@@ -7,6 +7,7 @@
 #pragma once
 
 #include "app/app_frame_clock.hpp"
+#include "app/app_window_settings.hpp"
 #include "core/types.hpp"
 #include "scene/document/project_session.hpp"
 #include "platform/platform_window.hpp"
@@ -45,6 +46,7 @@ public:
 private:
     void createStartupScene();
     void handleWindowChromeAction(WindowChromeAction action);
+    void saveWindowSettings();
     bool renderFrame(const FrameTiming& frameTiming);
     [[nodiscard]] bool shouldRenderLiveResizeEvent(const SDL_Event& event) const;
     static bool SDLCALL liveResizeEventWatch(void* userdata, SDL_Event* event);
@@ -56,6 +58,8 @@ private:
     UISystem ui_;
     ProjectSession projectSession_;
     std::unique_ptr<QuaderEditorApi> editor_;
+    std::filesystem::path windowSettingsPath_;
+    AppWindowSettings windowSettings_;
     AssetId defaultMaterial_ = InvalidAssetId;
     bool running_ = false;
     bool shutdownComplete_ = false;

@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -489,6 +490,49 @@ inline std::span<const EditorOperationOptionDescriptor> operation_option_descrip
 		operation_option_descriptor(merge_by_distance.id, merge_by_distance.operation_id, merge_by_distance.label, "operation.merge_by_distance", "operation.merge_by_distance.tolerance", merge_by_distance.tolerance),
 	}};
 	return descriptors;
+}
+
+inline bool operation_option_matches_setting_name(
+		const EditorOperationOptionDescriptor& descriptor,
+		std::string_view setting_name)
+{
+	if (setting_name == descriptor.option_id || setting_name == descriptor.preference_id) {
+		return true;
+	}
+	if (descriptor.operation == EditorOperationId::bridge && descriptor.option_id == "steps") {
+		return setting_name == "bridge_steps";
+	}
+	if (descriptor.operation == EditorOperationId::edge_bevel && descriptor.option_id == "width") {
+		return setting_name == "amount" || setting_name == "edge_bevel_width";
+	}
+	if (descriptor.operation == EditorOperationId::edge_bevel && descriptor.option_id == "profile") {
+		return setting_name == "edge_bevel_profile";
+	}
+	if (descriptor.operation == EditorOperationId::edge_bevel && descriptor.option_id == "segments") {
+		return setting_name == "edge_bevel_segments";
+	}
+	if (descriptor.operation == EditorOperationId::thicken && descriptor.option_id == "thickness") {
+		return setting_name == "amount";
+	}
+	if (descriptor.operation == EditorOperationId::merge_by_distance && descriptor.option_id == "tolerance") {
+		return setting_name == "distance";
+	}
+	return false;
+}
+
+inline std::optional<EditorOperationOptionDescriptor> operation_option_for_setting(
+		std::string_view operation_id,
+		std::string_view setting_name)
+{
+	for (const EditorOperationOptionDescriptor& descriptor : operation_option_descriptor_catalog()) {
+		if (!operation_id.empty() && descriptor.operation_id != operation_id) {
+			continue;
+		}
+		if (operation_option_matches_setting_name(descriptor, setting_name)) {
+			return descriptor;
+		}
+	}
+	return std::nullopt;
 }
 
 inline int normalize_operation_int(const IntOperationOptionSchema& schema, int value)

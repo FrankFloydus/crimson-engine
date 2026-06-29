@@ -23,7 +23,6 @@
 #include "editor/commands/document/set_visibility_command.hpp"
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "scene/scene_document.hpp"
-#include "scene/scene_transform.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -507,66 +506,6 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
         return inserted->second;
     };
 
-    auto localMatrixFor = [&](EntityId entity) -> std::optional<QMat4> {
-        std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state = simulatedState(entity);
-        if (!state.has_value()) {
-            return std::nullopt;
-        }
-        return composeTransform(state->get().transform.spatialTransform());
-    };
-
-    std::function<std::optional<QMat4>(EntityId, std::vector<EntityId>&)> simulatedWorldMatrix =
-            [&](EntityId entity, std::vector<EntityId>& stack) -> std::optional<QMat4> {
-        if (entity == InvalidEntityId) {
-            return sceneTransformIdentityMatrix();
-        }
-        if (std::find(stack.begin(), stack.end(), entity) != stack.end()) {
-            return std::nullopt;
-        }
-        std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state = simulatedState(entity);
-        if (!state.has_value()) {
-            return std::nullopt;
-        }
-        std::optional<QMat4> local = localMatrixFor(entity);
-        if (!local.has_value()) {
-            return std::nullopt;
-        }
-        stack.push_back(entity);
-        const EntityId parent = state->get().parent;
-        const std::optional<QMat4> parentWorld = parent == InvalidEntityId
-                ? std::optional<QMat4>{sceneTransformIdentityMatrix()}
-                : simulatedWorldMatrix(parent, stack);
-        stack.pop_back();
-        if (!parentWorld.has_value()) {
-            return std::nullopt;
-        }
-        return sceneTransformMultiply(*parentWorld, *local);
-    };
-
-    auto simulatedWorldMatrixFor = [&](EntityId entity) -> std::optional<QMat4> {
-        std::vector<EntityId> stack;
-        return simulatedWorldMatrix(entity, stack);
-    };
-
-    auto simulatedIsDescendantOf = [&](EntityId entity, EntityId possibleAncestor) {
-        if (entity == InvalidEntityId || possibleAncestor == InvalidEntityId) {
-            return false;
-        }
-        EntityId current = entity;
-        std::size_t guard = scene_.entities().size() + operations.size() + 1u;
-        while (current != InvalidEntityId && guard-- > 0u) {
-            if (current == possibleAncestor) {
-                return true;
-            }
-            std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state = simulatedState(current);
-            if (!state.has_value()) {
-                return false;
-            }
-            current = state->get().parent;
-        }
-        return false;
-    };
-
     for (const DocumentSceneBatchOperation& operation : operations) {
         if (operation.entity == InvalidEntityId || !scene_.exists(operation.entity)) {
             return failure("Batch entity does not exist.");
@@ -594,9 +533,6 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
             if (operation.parent != InvalidEntityId && !scene_.exists(operation.parent)) {
                 return failure("Batch parent entity does not exist.");
             }
-            if (operation.parent == operation.entity || simulatedIsDescendantOf(operation.parent, operation.entity)) {
-                return failure("Entity cannot be reparented");
-            }
             std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state =
                     simulatedState(operation.entity);
             if (!state.has_value()) {
@@ -606,27 +542,12 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
                 break;
             }
 
-            TransformComponent afterTransform = state->get().transform;
-            if (operation.preserveWorldTransform) {
-                const std::optional<QMat4> childWorld = simulatedWorldMatrixFor(operation.entity);
-                const std::optional<QMat4> parentWorld = simulatedWorldMatrixFor(operation.parent);
-                if (!childWorld.has_value() || !parentWorld.has_value()) {
-                    return failure("Batch entity cannot be reparented.");
-                }
-                afterTransform = transformComponentFromMatrix(
-                        sceneLocalMatrixFromWorldMatrix(*parentWorld, *childWorld),
-                        state->get().transform.rotationEuler);
-            }
-
             commands.push_back(std::make_unique<ReparentEntityCommand>(
                     scene_,
                     operation.entity,
-                    state->get().parent,
                     operation.parent,
-                    state->get().transform,
-                    afterTransform));
+                    operation.preserveWorldTransform));
             state->get().parent = operation.parent;
-            state->get().transform = afterTransform;
             break;
         }
         case DocumentSceneBatchOperationKind::SetTransform: {

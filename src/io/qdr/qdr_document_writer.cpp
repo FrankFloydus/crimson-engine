@@ -11,6 +11,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_format.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
+#include "io/qdr/qdr_project_codecs.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -43,96 +44,6 @@ json transformToJson(const TransformComponent& transform) {
             {"rotationEuler", vec3ToJson(transform.rotationEuler)},
             {"scale", vec3ToJson(transform.scale)},
     };
-}
-
-std::string entityKindName(EntityKind kind) {
-    switch (kind) {
-    case EntityKind::Empty:
-        return "empty";
-    case EntityKind::Mesh:
-        return "mesh";
-    case EntityKind::Light:
-        return "light";
-    case EntityKind::Generic:
-        return "generic";
-    }
-    return "generic";
-}
-
-std::string lightTypeName(LightType type) {
-    switch (type) {
-    case LightType::Directional:
-        return "directional";
-    case LightType::Point:
-        return "point";
-    case LightType::Spot:
-        return "spot";
-    }
-    return "directional";
-}
-
-std::string collisionTypeName(MeshCollisionType type) {
-    switch (type) {
-    case MeshCollisionType::Box:
-        return "box";
-    case MeshCollisionType::Sphere:
-        return "sphere";
-    case MeshCollisionType::Cylinder:
-        return "cylinder";
-    case MeshCollisionType::ConvexHull:
-        return "convexHull";
-    case MeshCollisionType::Mesh:
-        return "mesh";
-    }
-    return "box";
-}
-
-std::string physicsBodyTypeName(MeshPhysicsBodyType type) {
-    switch (type) {
-    case MeshPhysicsBodyType::StaticBody:
-        return "staticBody";
-    case MeshPhysicsBodyType::RigidBody:
-        return "rigidBody";
-    }
-    return "staticBody";
-}
-
-std::string textureUsageName(TextureUsage usage) {
-    switch (usage) {
-    case TextureUsage::BaseColor:
-        return "baseColor";
-    case TextureUsage::Normal:
-        return "normal";
-    case TextureUsage::Roughness:
-        return "roughness";
-    case TextureUsage::Metallic:
-        return "metallic";
-    case TextureUsage::Curvature:
-        return "curvature";
-    case TextureUsage::Thickness:
-        return "thickness";
-    case TextureUsage::AmbientOcclusion:
-        return "ambientOcclusion";
-    case TextureUsage::Position:
-        return "position";
-    case TextureUsage::Id:
-        return "id";
-    case TextureUsage::Mask:
-        return "mask";
-    case TextureUsage::Unknown:
-        return "unknown";
-    }
-    return "unknown";
-}
-
-std::string textureColorSpaceName(TextureColorSpace colorSpace) {
-    switch (colorSpace) {
-    case TextureColorSpace::Linear:
-        return "linear";
-    case TextureColorSpace::Srgb:
-        return "srgb";
-    }
-    return "srgb";
 }
 
 json meshToJson(AssetId id, const MeshAsset& mesh) {
@@ -173,8 +84,8 @@ json textureToJson(AssetId id, const TextureAsset& texture) {
     return json{
             {"id", id},
             {"name", texture.name},
-            {"usage", textureUsageName(texture.usage)},
-            {"colorSpace", textureColorSpaceName(texture.colorSpace)},
+            {"usage", stringFromView(qdrTextureUsageName(texture.usage))},
+            {"colorSpace", stringFromView(qdrTextureColorSpaceName(texture.colorSpace))},
             {"width", texture.width},
             {"height", texture.height},
             {"sourcePath", texture.sourcePath.generic_string()},
@@ -207,15 +118,15 @@ json meshComponentToJson(const MeshComponent& mesh) {
             {"castShadows", mesh.castShadows},
             {"doubleSided", mesh.doubleSided},
             {"generateCollisions", mesh.generateCollisions},
-            {"collisionType", collisionTypeName(mesh.collisionType)},
+            {"collisionType", stringFromView(qdrMeshCollisionTypeName(mesh.collisionType))},
             {"displayCollision", mesh.displayCollision},
-            {"bodyType", physicsBodyTypeName(mesh.bodyType)},
+            {"bodyType", stringFromView(qdrMeshPhysicsBodyTypeName(mesh.bodyType))},
     };
 }
 
 json lightToJson(const LightComponent& light) {
     return json{
-            {"type", lightTypeName(light.type)},
+            {"type", stringFromView(qdrLightTypeName(light.type))},
             {"color", vec3ToJson(light.color)},
             {"intensity", light.intensity},
             {"castsShadows", light.castsShadows},
@@ -225,9 +136,10 @@ json lightToJson(const LightComponent& light) {
 json entityToJson(const SceneDocument& scene, EntityId entity) {
     json value{
             {"id", entity},
+            {"uuid", scene.uuid(entity)},
             {"editorObjectId", scene.editorObjectId(entity)},
             {"name", scene.name(entity) ? scene.name(entity)->name : std::string{}},
-            {"kind", entityKindName(scene.kind(entity))},
+            {"kind", stringFromView(qdrEntityKindName(scene.kind(entity)))},
             {"parent", scene.parent(entity)},
     };
     if (const TransformComponent* transform = scene.transform(entity)) {

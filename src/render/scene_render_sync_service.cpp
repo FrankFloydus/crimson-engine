@@ -10,8 +10,7 @@
 #include "core/logger.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_cache.hpp"
-
-#include <unordered_set>
+#include "render/scene_render_extraction.hpp"
 
 namespace quader {
 
@@ -68,33 +67,24 @@ bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegi
 }
 
 bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const {
-    for (const EntityId entityId : document.entities()) {
-        if (!document.isEffectivelyVisible(entityId)) {
-            continue;
-        }
-        const MeshComponent* meshComponent = document.mesh(entityId);
-        if (!meshComponent) {
-            continue;
-        }
-        const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
-        if (!mesh || mesh->vertices.empty() || mesh->indices.empty()) {
-            if (meshCache_->contains(entityId)) {
+    const SceneRenderExtractionPlan plan =
+            buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
+    for (const SceneRenderMeshEntry& meshEntry : plan.meshes) {
+        if (!meshEntry.renderable()) {
+            if (meshCache_->contains(meshEntry.entityId)) {
                 return true;
             }
             continue;
         }
 
-        const MaterialComponent* materialComponent = document.material(entityId);
-        const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
-        const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, materialComponent);
         if (meshCache_->needsRebuild(
-                    entityId,
-                    meshComponent->mesh,
-                    *mesh,
-                    materialId,
-                    meshComponent->castShadows,
-                    meshComponent->doubleSided,
-                    materialRevision)) {
+                    meshEntry.entityId,
+                    meshEntry.meshId,
+                    *meshEntry.mesh,
+                    meshEntry.materialId,
+                    meshEntry.castShadows(),
+                    meshEntry.doubleSided(),
+                    meshEntry.materialRevision)) {
             return true;
         }
     }
@@ -102,47 +92,34 @@ bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& do
 }
 
 void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetRegistry& assets) {
-    std::unordered_set<EntityId> liveMeshEntities;
-    std::unordered_set<EntityId> liveLightEntities;
+    const SceneRenderExtractionPlan plan =
+            buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
 
-    for (const EntityId entityId : document.entities()) {
-        if (!document.isEffectivelyVisible(entityId)) {
+    for (const SceneRenderMeshEntry& meshEntry : plan.meshes) {
+        if (!meshEntry.renderable()) {
+            meshCache_->remove(meshEntry.entityId);
+            LOG_WARN("Skipping render entity {} because its mesh asset is missing or empty", meshEntry.entityId);
             continue;
         }
 
-        const QMat4 worldTransform = document.worldTransformMatrix(entityId);
-
-        if (const auto* meshComponent = document.mesh(entityId)) {
-            const MeshAsset* mesh = assets.mesh(meshComponent->mesh);
-            if (!mesh || mesh->vertices.empty() || mesh->indices.empty()) {
-                meshCache_->remove(entityId);
-                LOG_WARN("Skipping render entity {} because its mesh asset is missing or empty", entityId);
-            } else {
-                liveMeshEntities.insert(entityId);
-                const MaterialComponent* materialComponent = document.material(entityId);
-                const AssetId materialId = materialComponent ? materialComponent->material : InvalidAssetId;
-                const std::uint64_t materialRevision = materialBinding_->materialRevision(assets, materialComponent);
-                meshCache_->syncMesh(entityId,
-                        meshComponent->mesh,
-                        *mesh,
-                        materialId,
-                        materialComponent,
-                        assets,
-                        worldTransform,
-                        meshComponent->castShadows,
-                        meshComponent->doubleSided,
-                        materialRevision);
-            }
-        }
-
-        if (const auto* light = document.light(entityId)) {
-            liveLightEntities.insert(entityId);
-            lightCache_.syncLight(entityId, *light, worldTransform);
-        }
+        meshCache_->syncMesh(meshEntry.entityId,
+                meshEntry.meshId,
+                *meshEntry.mesh,
+                meshEntry.materialId,
+                meshEntry.materialComponent,
+                assets,
+                meshEntry.worldTransform,
+                meshEntry.castShadows(),
+                meshEntry.doubleSided(),
+                meshEntry.materialRevision);
     }
 
-    meshCache_->removeExcept(liveMeshEntities);
-    lightCache_.removeExcept(liveLightEntities);
+    for (const SceneRenderLightEntry& lightEntry : plan.lights) {
+        lightCache_.syncLight(lightEntry.entityId, *lightEntry.light, lightEntry.worldTransform);
+    }
+
+    meshCache_->removeExcept(plan.liveMeshEntities);
+    lightCache_.removeExcept(plan.liveLightEntities);
 }
 
 } // namespace quader

@@ -28,8 +28,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace quader {
 namespace {
@@ -41,6 +43,9 @@ constexpr float kChromeDragRestoreThreshold = 4.0f;
 constexpr wchar_t kDwmRegistryKey[] = L"SOFTWARE\\Microsoft\\Windows\\DWM";
 constexpr wchar_t kBorderlessChromeWindowProp[] = L"QuaderPlatformWindowChrome";
 
+/**
+ * Stores monitor and work-area rectangles used for native borderless maximize.
+ */
 struct NativeMonitorWorkArea {
     RECT monitor;
     RECT work;
@@ -128,6 +133,24 @@ bool accentColorOnTitleBarsEnabled() {
     return readDwmRegistryDword(L"ColorPrevalence").value_or(0u) != 0u;
 }
 
+PlatformWindowChromeFrame frameFromRect(const RECT& rect) {
+    return {
+            .x = static_cast<int>(rect.left),
+            .y = static_cast<int>(rect.top),
+            .width = std::max(1, static_cast<int>(rect.right - rect.left)),
+            .height = std::max(1, static_cast<int>(rect.bottom - rect.top)),
+    };
+}
+
+RECT rectFromFrame(PlatformWindowChromeFrame frame) {
+    RECT rect{};
+    rect.left = static_cast<LONG>(frame.x);
+    rect.top = static_cast<LONG>(frame.y);
+    rect.right = static_cast<LONG>(frame.x + std::max(1, frame.width));
+    rect.bottom = static_cast<LONG>(frame.y + std::max(1, frame.height));
+    return rect;
+}
+
 std::optional<COLORREF> systemAccentBorderColor() {
     const std::optional<DWORD> accentColor = readDwmRegistryDword(L"AccentColor");
     if (!accentColor) {
@@ -175,12 +198,18 @@ void applyBorderlessChromeMaximizedWorkArea(HWND hwnd, MINMAXINFO& minMaxInfo) {
 
 int nativeChromeMaximizedResizeFrameThicknessX(HWND hwnd) {
     const UINT dpi = GetDpiForWindow(hwnd);
-    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    return platformWindowChromeResizeBorderForSystemMetrics(
+            0,
+            GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi),
+            GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi));
 }
 
 int nativeChromeMaximizedResizeFrameThicknessY(HWND hwnd) {
     const UINT dpi = GetDpiForWindow(hwnd);
-    return GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    return platformWindowChromeResizeBorderForSystemMetrics(
+            0,
+            GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi),
+            GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi));
 }
 
 bool applyBorderlessChromeMaximizedClientArea(HWND hwnd, NCCALCSIZE_PARAMS& params) {
@@ -203,6 +232,51 @@ bool applyBorderlessChromeMaximizedClientArea(HWND hwnd, NCCALCSIZE_PARAMS& para
     return true;
 }
 #endif
+
+std::vector<PlatformWindowChromeFrame> displayWorkAreas() {
+    std::vector<PlatformWindowChromeFrame> areas;
+    int displayCount = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
+    if (displays == nullptr || displayCount <= 0) {
+        if (displays != nullptr) {
+            SDL_free(displays);
+        }
+        return areas;
+    }
+
+    areas.reserve(static_cast<std::size_t>(displayCount));
+    for (int index = 0; index < displayCount; ++index) {
+        SDL_Rect rect{};
+        if (SDL_GetDisplayUsableBounds(displays[index], &rect) && rect.w > 0 && rect.h > 0) {
+            areas.push_back({
+                    .x = rect.x,
+                    .y = rect.y,
+                    .width = rect.w,
+                    .height = rect.h,
+            });
+        }
+    }
+    SDL_free(displays);
+    return areas;
+}
+
+std::int64_t intersectionArea(PlatformWindowChromeFrame frame, PlatformWindowChromeFrame area) {
+    const int left = std::max(frame.x, area.x);
+    const int top = std::max(frame.y, area.y);
+    const int right = std::min(frame.x + std::max(1, frame.width), area.x + std::max(1, area.width));
+    const int bottom = std::min(frame.y + std::max(1, frame.height), area.y + std::max(1, area.height));
+    if (right <= left || bottom <= top) {
+        return 0;
+    }
+    return static_cast<std::int64_t>(right - left) * static_cast<std::int64_t>(bottom - top);
+}
+
+int clampWindowOrigin(int origin, int size, int areaOrigin, int areaSize) {
+    if (size >= areaSize) {
+        return areaOrigin;
+    }
+    return std::clamp(origin, areaOrigin, areaOrigin + areaSize - size);
+}
 
 bool acquireSdlVideo() {
     SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
@@ -271,9 +345,11 @@ SDL_HitTestResult platformWindowChromeHitTestResult(const PlatformWindowChromeHi
     }
 
     const int titleBarHeight = std::max(0, hitTest.titleBarHeight);
+    const int leftInteractiveWidth = std::clamp(hitTest.leftInteractiveWidth, 0, windowWidth);
     const int rightControlsWidth = std::max(0, hitTest.rightControlsWidth);
     const int draggableRight = std::max(0, windowWidth - rightControlsWidth);
-    if (pointY < titleBarHeight && pointX < draggableRight) {
+    const int draggableLeft = std::min(leftInteractiveWidth, draggableRight);
+    if (pointY < titleBarHeight && pointX >= draggableLeft && pointX < draggableRight) {
         return SDL_HITTEST_DRAGGABLE;
     }
 
@@ -341,6 +417,41 @@ PlatformWindowChromeFrame platformWindowChromeResizeFrame(const PlatformWindowCh
     };
 }
 
+int platformWindowChromeResizeBorderForSystemMetrics(int fallbackBorder, int sizeFrame, int paddedBorder) {
+    return std::max({1, fallbackBorder, std::max(0, sizeFrame) + std::max(0, paddedBorder)});
+}
+
+PlatformWindowChromeFrame platformWindowRecoverFrameToDisplayWorkArea(
+        PlatformWindowChromeFrame frame,
+        std::span<const PlatformWindowChromeFrame> displayWorkAreas) {
+    frame.width = std::max(kPlatformWindowMinimumWidth, frame.width);
+    frame.height = std::max(kPlatformWindowMinimumHeight, frame.height);
+    if (displayWorkAreas.empty()) {
+        return frame;
+    }
+
+    const PlatformWindowChromeFrame* targetArea = &displayWorkAreas.front();
+    std::int64_t bestArea = 0;
+    for (const PlatformWindowChromeFrame& workArea : displayWorkAreas) {
+        if (workArea.width <= 0 || workArea.height <= 0) {
+            continue;
+        }
+        const std::int64_t area = intersectionArea(frame, workArea);
+        if (area > bestArea) {
+            bestArea = area;
+            targetArea = &workArea;
+        }
+    }
+
+    const int maxWidth = std::max(kPlatformWindowMinimumWidth, targetArea->width);
+    const int maxHeight = std::max(kPlatformWindowMinimumHeight, targetArea->height);
+    frame.width = std::clamp(frame.width, kPlatformWindowMinimumWidth, maxWidth);
+    frame.height = std::clamp(frame.height, kPlatformWindowMinimumHeight, maxHeight);
+    frame.x = clampWindowOrigin(frame.x, frame.width, targetArea->x, std::max(1, targetArea->width));
+    frame.y = clampWindowOrigin(frame.y, frame.height, targetArea->y, std::max(1, targetArea->height));
+    return frame;
+}
+
 PlatformWindow::~PlatformWindow() {
     destroy();
 }
@@ -381,6 +492,9 @@ bool PlatformWindow::create(const char* title, int width, int height, PlatformWi
 
 void PlatformWindow::destroy() {
     if (window_) {
+#if defined(_WIN32)
+        clearNativeResizeState();
+#endif
         cancelChromeInteraction();
         uninstallNativeChromeCursorHook();
         SDL_DestroyWindow(window_);
@@ -445,6 +559,7 @@ void PlatformWindow::toggleMaximizeRestore() {
                 LOG_WARN("SDL_SyncWindow failed after native borderless restore: {}", SDL_GetError());
             }
             refreshPixelSize();
+            requestLiveResizeFrame(true);
             return;
         }
 
@@ -453,6 +568,7 @@ void PlatformWindow::toggleMaximizeRestore() {
             LOG_WARN("SDL_SyncWindow failed after native borderless maximize: {}", SDL_GetError());
         }
         refreshPixelSize();
+        requestLiveResizeFrame(true);
         return;
     }
 #endif
@@ -461,12 +577,108 @@ void PlatformWindow::toggleMaximizeRestore() {
         if (!SDL_RestoreWindow(window_)) {
             LOG_WARN("SDL_RestoreWindow failed: {}", SDL_GetError());
         }
+        requestLiveResizeFrame(true);
         return;
     }
 
     if (!SDL_MaximizeWindow(window_)) {
         LOG_WARN("SDL_MaximizeWindow failed: {}", SDL_GetError());
     }
+    requestLiveResizeFrame(true);
+}
+
+std::optional<PlatformWindowPlacement> PlatformWindow::placement() const {
+    if (!window_) {
+        return std::nullopt;
+    }
+
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        HWND hwnd = static_cast<HWND>(nativeChromeWindowHandle_);
+        WINDOWPLACEMENT nativePlacement{};
+        nativePlacement.length = sizeof(nativePlacement);
+        if (GetWindowPlacement(hwnd, &nativePlacement)) {
+            return PlatformWindowPlacement{
+                    .normalFrame = frameFromRect(nativePlacement.rcNormalPosition),
+                    .maximized = nativePlacement.showCmd == SW_SHOWMAXIMIZED ||
+                            (nativePlacement.flags & WPF_RESTORETOMAXIMIZED) != 0u ||
+                            IsZoomed(hwnd) != FALSE,
+            };
+        }
+        LOG_WARN("GetWindowPlacement failed while saving window placement: {}", GetLastError());
+    }
+#endif
+
+    int x = 0;
+    int y = 0;
+    int width = 1;
+    int height = 1;
+    if (!SDL_GetWindowPosition(window_, &x, &y)) {
+        LOG_WARN("SDL_GetWindowPosition failed while saving window placement: {}", SDL_GetError());
+    }
+    if (!SDL_GetWindowSize(window_, &width, &height)) {
+        LOG_WARN("SDL_GetWindowSize failed while saving window placement: {}", SDL_GetError());
+    }
+    return PlatformWindowPlacement{
+            .normalFrame = {
+                    .x = x,
+                    .y = y,
+                    .width = std::max(1, width),
+                    .height = std::max(1, height),
+            },
+            .maximized = maximized(),
+    };
+}
+
+void PlatformWindow::applyPlacement(const PlatformWindowPlacement& placement) {
+    if (!window_) {
+        return;
+    }
+
+    const std::vector<PlatformWindowChromeFrame> workAreas = displayWorkAreas();
+    const PlatformWindowChromeFrame recoveredFrame =
+            platformWindowRecoverFrameToDisplayWorkArea(placement.normalFrame, workAreas);
+
+#if defined(_WIN32)
+    if (nativeChromeWindowHandle_ != nullptr) {
+        HWND hwnd = static_cast<HWND>(nativeChromeWindowHandle_);
+        WINDOWPLACEMENT nativePlacement{};
+        nativePlacement.length = sizeof(nativePlacement);
+        if (!GetWindowPlacement(hwnd, &nativePlacement)) {
+            nativePlacement.length = sizeof(nativePlacement);
+        }
+        nativePlacement.flags = 0;
+        nativePlacement.showCmd = SW_SHOWNORMAL;
+        nativePlacement.rcNormalPosition = rectFromFrame(recoveredFrame);
+        if (!SetWindowPlacement(hwnd, &nativePlacement)) {
+            LOG_WARN("SetWindowPlacement failed while applying window placement: {}", GetLastError());
+        }
+        if (placement.maximized) {
+            ShowWindow(hwnd, SW_MAXIMIZE);
+        }
+        if (!SDL_SyncWindow(window_)) {
+            LOG_WARN("SDL_SyncWindow failed after applying native window placement: {}", SDL_GetError());
+        }
+        refreshPixelSize();
+        requestLiveResizeFrame(true);
+        return;
+    }
+#endif
+
+    if (!SDL_SetWindowSize(window_, recoveredFrame.width, recoveredFrame.height)) {
+        LOG_WARN("SDL_SetWindowSize failed while applying window placement: {}", SDL_GetError());
+    }
+    if (!SDL_SetWindowPosition(window_, recoveredFrame.x, recoveredFrame.y)) {
+        LOG_WARN("SDL_SetWindowPosition failed while applying window placement: {}", SDL_GetError());
+    }
+    if (placement.maximized && !SDL_MaximizeWindow(window_)) {
+        LOG_WARN("SDL_MaximizeWindow failed while applying window placement: {}", SDL_GetError());
+    }
+    if (!SDL_SyncWindow(window_)) {
+        LOG_WARN("SDL_SyncWindow failed after applying window placement: {}", SDL_GetError());
+    }
+    refreshPixelSize();
+    requestLiveResizeFrame(true);
 }
 
 bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
@@ -505,6 +717,8 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
             return true;
         case SDL_EVENT_WINDOW_MOUSE_LEAVE:
         case SDL_EVENT_WINDOW_FOCUS_LOST:
+        case SDL_EVENT_WINDOW_MINIMIZED:
+        case SDL_EVENT_WINDOW_HIDDEN:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             cancelChromeInteraction();
             return true;
@@ -731,7 +945,9 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
     }
 
     if (borderlessChrome_) {
-        if (message == WM_SIZING) {
+        if (message == WM_ENTERSIZEMOVE) {
+            resetLiveResizeFrameCoalescing();
+        } else if (message == WM_SIZING) {
             nativeResizeActive_ = true;
         }
     }
@@ -767,6 +983,8 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
         case WM_MOUSELEAVE:
         case WM_NCMOUSELEAVE:
         case WM_KILLFOCUS:
+        case WM_CANCELMODE:
+        case WM_CAPTURECHANGED:
             releaseChromeResizeCursor();
             break;
         default:
@@ -777,23 +995,46 @@ std::intptr_t PlatformWindow::handleNativeChromeWindowMessage(
     const bool redrawNativeResizeFrame =
             borderlessChrome_ &&
             (nativeResizeActive_ || IsZoomed(hwnd) != FALSE) &&
-            (message == WM_SIZE || message == WM_WINDOWPOSCHANGED);
-    const bool endNativeResize =
+            (message == WM_SIZE || message == WM_WINDOWPOSCHANGED || message == WM_DPICHANGED);
+    const bool clearNativeResize =
             borderlessChrome_ &&
             nativeResizeActive_ &&
-            message == WM_EXITSIZEMOVE;
+            (message == WM_EXITSIZEMOVE ||
+                    message == WM_CANCELMODE ||
+                    message == WM_CAPTURECHANGED ||
+                    message == WM_KILLFOCUS ||
+                    message == WM_NCDESTROY);
 
     const std::intptr_t result = callPreviousWindowProc();
 
     if (redrawNativeResizeFrame) {
         requestLiveResizeFrame();
     }
-    if (endNativeResize) {
-        nativeResizeActive_ = false;
-        requestLiveResizeFrame();
+    if (clearNativeResize) {
+        clearNativeResizeState();
+        requestLiveResizeFrame(true);
     }
 
     return result;
+}
+
+int PlatformWindow::nativeChromeResizeBorderForWindow(void* windowHandle) const {
+    HWND hwnd = static_cast<HWND>(windowHandle);
+    if (hwnd == nullptr) {
+        return std::max(1, chromeHitTest_.resizeBorder);
+    }
+
+    const UINT dpi = GetDpiForWindow(hwnd);
+    return platformWindowChromeResizeBorderForSystemMetrics(
+            chromeHitTest_.resizeBorder,
+            GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi),
+            GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi));
+}
+
+void PlatformWindow::clearNativeResizeState() {
+    nativeResizeActive_ = false;
+    resetLiveResizeFrameCoalescing();
+    releaseChromeResizeCursor();
 }
 
 SDL_HitTestResult PlatformWindow::nativeChromeHitTestFromScreenPoint(int screenX, int screenY) const {
@@ -814,7 +1055,8 @@ SDL_HitTestResult PlatformWindow::nativeChromeHitTestFromScreenPoint(int screenX
         return SDL_HITTEST_NORMAL;
     }
 
-    const int outsideResizeBand = std::max(1, chromeHitTest_.resizeBorder);
+    const int resizeBorder = nativeChromeResizeBorderForWindow(hwnd);
+    const int outsideResizeBand = std::max(1, resizeBorder);
     if (clientPoint.x < -outsideResizeBand ||
             clientPoint.y < -outsideResizeBand ||
             clientPoint.x >= width + outsideResizeBand ||
@@ -825,6 +1067,7 @@ SDL_HitTestResult PlatformWindow::nativeChromeHitTestFromScreenPoint(int screenX
     PlatformWindowChromeHitTest hitTest = chromeHitTest_;
     hitTest.windowWidth = width;
     hitTest.windowHeight = height;
+    hitTest.resizeBorder = resizeBorder;
     hitTest.pointX = std::clamp(static_cast<int>(clientPoint.x), 0, std::max(0, width - 1));
     hitTest.pointY = std::clamp(static_cast<int>(clientPoint.y), 0, std::max(0, height - 1));
     hitTest.maximized = IsZoomed(hwnd) != FALSE;
@@ -985,6 +1228,7 @@ void PlatformWindow::endChromeInteraction() {
     }
 
     chromeInteraction_ = {};
+    resetLiveResizeFrameCoalescing();
     if (chromeMouseCaptured_) {
         if (!SDL_CaptureMouse(false)) {
             LOG_WARN("SDL_CaptureMouse release failed for borderless window chrome: {}", SDL_GetError());
@@ -1002,6 +1246,7 @@ void PlatformWindow::cancelChromeInteraction() {
     }
 
     chromeInteraction_ = {};
+    resetLiveResizeFrameCoalescing();
     if (chromeMouseCaptured_) {
         if (!SDL_CaptureMouse(false)) {
             LOG_WARN("SDL_CaptureMouse release failed for borderless window chrome: {}", SDL_GetError());
@@ -1013,11 +1258,26 @@ void PlatformWindow::cancelChromeInteraction() {
     refreshNativeChrome();
 }
 
-void PlatformWindow::requestLiveResizeFrame() {
+void PlatformWindow::requestLiveResizeFrame(bool force) {
     refreshPixelSize();
+    if (!force &&
+            liveResizeFrameSizeValid_ &&
+            liveResizeFrameWidthPixels_ == widthPixels_ &&
+            liveResizeFrameHeightPixels_ == heightPixels_) {
+        return;
+    }
+    liveResizeFrameSizeValid_ = true;
+    liveResizeFrameWidthPixels_ = widthPixels_;
+    liveResizeFrameHeightPixels_ = heightPixels_;
     if (liveResizeFrameCallback_) {
         liveResizeFrameCallback_();
     }
+}
+
+void PlatformWindow::resetLiveResizeFrameCoalescing() {
+    liveResizeFrameSizeValid_ = false;
+    liveResizeFrameWidthPixels_ = 0;
+    liveResizeFrameHeightPixels_ = 0;
 }
 
 void PlatformWindow::updateChromeHoverCursor(float windowMouseX, float windowMouseY) {

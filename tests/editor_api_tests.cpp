@@ -8,6 +8,7 @@
 #include "core/public_command_targets.hpp"
 #include "editor/input/quader_keybinding_service.hpp"
 #include "editor/input/viewport_input_binding_adapter.hpp"
+#include "support/behavior_scenario.hpp"
 #include "ui/viewport_shortcut_controller.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 
@@ -319,7 +320,7 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
 
     const std::vector<quader::QuaderCommandDescriptor> commands = editor.commands().available();
     EXPECT_NE(std::find_if(commands.begin(), commands.end(), [](const quader::QuaderCommandDescriptor& command) {
-                  return command.id == "edit.undo";
+                  return command.id == quader::QuaderCommand::EditUndo.string();
               }),
             commands.end());
     const std::optional<quader::QuaderCommandDescriptor> duplicate =
@@ -509,7 +510,9 @@ TEST(EditorApiTests, KeybindingConflictsAndRemovalSupportRebindingUi) {
 
     ASSERT_TRUE(editor.preferences().removeShortcut(quader::QuaderCommand::EditUndo).ok());
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "");
-    EXPECT_NE(readTextFile(path).find("\"command\": \"-edit.undo\""), std::string::npos);
+    const std::string removedUndoCommand =
+            "\"command\": \"-" + std::string(quader::QuaderCommand::EditUndo.string()) + "\"";
+    EXPECT_NE(readTextFile(path).find(removedUndoCommand), std::string::npos);
 }
 
 TEST(EditorApiTests, ShortcutMutationsReportNoOpChangedStatus) {
@@ -673,18 +676,17 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
             shortcut));
 }
 
-TEST(EditorApiTests, ViewportSelectionModeShortcutsApplyThroughPublicSelectionApi) {
+TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
     /// Maps one viewport shortcut mode to the public modeling selection mode it should apply.
     struct ModeCase {
         quader::ViewportSelectionMode viewportMode;
-        quader::QuaderSelectionMode modelingMode;
     };
     constexpr std::array cases{
-            ModeCase{quader::ViewportSelectionMode::Vertex, quader::QuaderSelectionMode::Vertex},
-            ModeCase{quader::ViewportSelectionMode::Edge, quader::QuaderSelectionMode::Edge},
-            ModeCase{quader::ViewportSelectionMode::Face, quader::QuaderSelectionMode::Face},
-            ModeCase{quader::ViewportSelectionMode::Object, quader::QuaderSelectionMode::Object},
-            ModeCase{quader::ViewportSelectionMode::Group, quader::QuaderSelectionMode::Group},
+            ModeCase{quader::ViewportSelectionMode::Vertex},
+            ModeCase{quader::ViewportSelectionMode::Edge},
+            ModeCase{quader::ViewportSelectionMode::Face},
+            ModeCase{quader::ViewportSelectionMode::Object},
+            ModeCase{quader::ViewportSelectionMode::Group},
     };
 
     CommandTestHarness harness;
@@ -693,19 +695,31 @@ TEST(EditorApiTests, ViewportSelectionModeShortcutsApplyThroughPublicSelectionAp
 
     for (const ModeCase& mode : cases) {
         SCOPED_TRACE(static_cast<int>(mode.viewportMode));
+        const std::string target =
+                quader::viewportSelectionModeTargetId(quader::viewportSelectionModeId(mode.viewportMode));
+        const std::optional<std::vector<quader::QuaderInputChord>> parsed =
+                quader::quaderInputParseShortcut(editor.commands().shortcutFor(target));
+        ASSERT_TRUE(parsed.has_value()) << target;
+        ASSERT_EQ(parsed->size(), 1u) << target;
+
+        const quader::QuaderViewportKeybindingDispatch dispatch =
+                editor.commands().dispatchViewportInputBinding(parsed->front(), {}, true, false);
+        ASSERT_EQ(dispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+        EXPECT_EQ(dispatch.shortcut.kind, quader::ViewportShortcutKind::SetSelectionMode);
+        EXPECT_EQ(dispatch.shortcut.selectionMode, mode.viewportMode);
+
         quader::ViewportInputResult input;
         input.shortcutHandled = true;
         input.selectionModeChanged = true;
-        input.shortcut.kind = quader::ViewportShortcutKind::SetSelectionMode;
-        input.shortcut.selectionMode = mode.viewportMode;
+        input.shortcut = dispatch.shortcut;
 
         const quader::ViewportShortcutControllerResult result =
                 controller.handleModelingShortcut(input, editor);
 
-        EXPECT_TRUE(result.commandExecuted);
-        EXPECT_TRUE(result.invalidateHover);
-        EXPECT_TRUE(result.markOverlayDirty);
-        EXPECT_EQ(editor.selection().summary().mode, mode.modelingMode);
+        EXPECT_FALSE(result.commandExecuted);
+        EXPECT_FALSE(result.invalidateHover);
+        EXPECT_FALSE(result.markOverlayDirty);
+        EXPECT_EQ(editor.selection().summary().mode, quader::QuaderSelectionMode::Object);
     }
 }
 
@@ -884,8 +898,9 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     ASSERT_EQ(perspective->size(), 1u);
     const quader::QuaderViewportKeybindingDispatch perspectiveDispatch =
             editor.commands().dispatchViewportInputBinding(perspective->front(), state, true, false);
-    EXPECT_EQ(perspectiveDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
-    EXPECT_EQ(perspectiveDispatch.commandId, quader::QuaderCommand::ViewportViewPerspective.string());
+    ASSERT_EQ(perspectiveDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(perspectiveDispatch.shortcut.kind, quader::ViewportShortcutKind::SetView);
+    EXPECT_EQ(perspectiveDispatch.shortcut.view, quader::ViewportView::Perspective);
 
     EXPECT_TRUE(hasKeybinding(rules, quader::QuaderCommand::ModelingApplyActivePreview.string(), "Space"));
     EXPECT_TRUE(hasKeybinding(rules, quader::QuaderCommand::ModelingCancelActivePreview.string(), "Escape"));
@@ -1849,7 +1864,7 @@ TEST(EditorApiTests, GroupModeBoxSelectsContainingGroupByViewportRectangle) {
     EXPECT_FALSE(rightGroupSnapshot->selected);
 }
 
-TEST(EditorApiTests, RightClickPickOnUnselectedFaceChangesComponentSelectionBeforeContextDelete) {
+TEST(EditorApiTests, RightClickPickWithExistingFaceSelectionPreservesComponentSelectionBeforeContextDelete) {
     CommandTestHarness harness;
     const quader::QuaderModelingObjectRef left = createSelectedBox(harness.editor, "Context Face Left");
     const quader::QuaderApiResult<quader::QuaderModelingObjectRef> right =
@@ -1858,7 +1873,31 @@ TEST(EditorApiTests, RightClickPickOnUnselectedFaceChangesComponentSelectionBefo
                     "Context Face Right");
     ASSERT_TRUE(right.ok()) << right.errorMessage();
     ASSERT_TRUE(harness.editor.selection().setMode(quader::QuaderSelectionMode::Face).ok());
-    ASSERT_TRUE(harness.editor.selection().selectFace(left, 0).ok());
+    quader::QuaderPickSelectRequest pickLeftFront;
+    pickLeftFront.ray = {
+            .origin = {0.0f, 0.0f, 5.0f},
+            .direction = {0.0f, 0.0f, -1.0f},
+    };
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> pickedLeftFront =
+            harness.editor.selection().pickSelect(pickLeftFront);
+    ASSERT_TRUE(pickedLeftFront.ok()) << pickedLeftFront.errorMessage();
+    ASSERT_EQ(pickedLeftFront.value().activeObjectId, left.modelingObjectId);
+    ASSERT_EQ(pickedLeftFront.value().selectedFaceCount, 1u);
+
+    quader::QuaderPickSelectRequest pickLeftBack;
+    pickLeftBack.ray = {
+            .origin = {0.0f, 0.0f, -5.0f},
+            .direction = {0.0f, 0.0f, 1.0f},
+    };
+    pickLeftBack.shiftPressed = true;
+    const quader::QuaderApiResult<quader::QuaderSelectionSummary> pickedLeftBack =
+            harness.editor.selection().pickSelect(pickLeftBack);
+    ASSERT_TRUE(pickedLeftBack.ok()) << pickedLeftBack.errorMessage();
+    ASSERT_EQ(pickedLeftBack.value().activeObjectId, left.modelingObjectId);
+    ASSERT_EQ(pickedLeftBack.value().selectedFaceCount, 2u);
+    const int activeFaceBeforeContext = pickedLeftBack.value().activeFaceId;
+    const std::optional<quader::QuaderMeshAsset> leftBefore = harness.editor.query().compiledObjectMesh(left);
+    ASSERT_TRUE(leftBefore.has_value());
     const std::optional<quader::QuaderMeshAsset> rightBefore = harness.editor.query().compiledObjectMesh(right.value());
     ASSERT_TRUE(rightBefore.has_value());
 
@@ -1869,20 +1908,25 @@ TEST(EditorApiTests, RightClickPickOnUnselectedFaceChangesComponentSelectionBefo
     };
     rightClickPick.preserveSelectionOnMiss = true;
     rightClickPick.preserveSelectionOnSelectedHit = true;
+    rightClickPick.preserveExistingComponentSelectionOnHit = true;
     const quader::QuaderApiResult<quader::QuaderSelectionSummary> picked =
             harness.editor.selection().pickSelect(rightClickPick);
     ASSERT_TRUE(picked.ok()) << picked.errorMessage();
     EXPECT_EQ(picked.value().mode, quader::QuaderSelectionMode::Face);
-    EXPECT_EQ(picked.value().activeObjectId, right.value().modelingObjectId);
-    EXPECT_EQ(picked.value().selectedFaceCount, 1u);
+    EXPECT_EQ(picked.value().activeObjectId, left.modelingObjectId);
+    EXPECT_EQ(picked.value().activeFaceId, activeFaceBeforeContext);
+    EXPECT_EQ(picked.value().selectedFaceCount, 2u);
 
     const quader::QuaderApiVoidResult deleted = harness.editor.commands().execute(quader::QuaderCommand::DeleteSelection);
     ASSERT_TRUE(deleted.ok()) << deleted.errorMessage();
     EXPECT_TRUE(harness.editor.query().entity(left.entity).has_value());
     EXPECT_TRUE(harness.editor.query().entity(right.value().entity).has_value());
+    const std::optional<quader::QuaderMeshAsset> leftAfter = harness.editor.query().compiledObjectMesh(left);
+    ASSERT_TRUE(leftAfter.has_value());
+    EXPECT_LT(leftAfter->indices.size(), leftBefore->indices.size());
     const std::optional<quader::QuaderMeshAsset> rightAfter = harness.editor.query().compiledObjectMesh(right.value());
     ASSERT_TRUE(rightAfter.has_value());
-    EXPECT_LT(rightAfter->indices.size(), rightBefore->indices.size());
+    EXPECT_EQ(rightAfter->indices.size(), rightBefore->indices.size());
 }
 
 TEST(EditorApiTests, GroupModeRightClickPickSelectsGroupBeforeContextDelete) {
@@ -1932,11 +1976,11 @@ TEST(EditorApiTests, ViewportHandlesUseWorkspaceWithoutRuntimeHooks) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
 
-    const quader::QuaderApiVoidResult unsupportedLayout =
+    const quader::QuaderApiVoidResult quadLayout =
             editor.viewports().setLayout(quader::ViewportLayoutId::FourQuad);
-    EXPECT_FALSE(unsupportedLayout.ok());
-    EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::Single);
-    EXPECT_EQ(editor.viewports().activePaneCount(), 1u);
+    EXPECT_TRUE(quadLayout.ok()) << quadLayout.errorMessage();
+    EXPECT_EQ(editor.viewports().layout(), quader::ViewportLayoutId::FourQuad);
+    EXPECT_EQ(editor.viewports().activePaneCount(), 4u);
 
     EXPECT_TRUE(editor.viewports().setGridPreset(4).ok());
     EXPECT_EQ(editor.viewports().gridPreset(), 4);

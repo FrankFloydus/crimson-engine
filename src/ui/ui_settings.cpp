@@ -7,11 +7,12 @@
 #include "ui/ui_settings.hpp"
 
 #include "core/q_str.hpp"
+#include "core/user_config_paths.hpp"
 
-#include <cstdlib>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -22,21 +23,8 @@ bool parseBool(std::string value, bool fallback) {
     return parsed.value_or(fallback);
 }
 
-std::filesystem::path localAppDataDirectory(const std::filesystem::path& executableDir) {
-#ifdef _WIN32
-    if (const char* localAppData = std::getenv("LOCALAPPDATA")) {
-        if (localAppData[0] != '\0') {
-            return std::filesystem::path(localAppData) / "Quader";
-        }
-    }
-#else
-    if (const char* configHome = std::getenv("XDG_CONFIG_HOME")) {
-        if (configHome[0] != '\0') {
-            return std::filesystem::path(configHome) / "Quader";
-        }
-    }
-#endif
-    return executableDir;
+bool panelSettingsKeyMatches(UIPanelId id, std::string_view key) {
+    return key == uiPanelStableId(id) || key == uiPanelKey(id);
 }
 
 } // namespace
@@ -66,11 +54,11 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
         const std::string key = QStr::trimAsciiWhitespace(split->before);
         const std::string value = QStr::trimAsciiWhitespace(split->after);
-        if (key == uiPanelKey(UIPanelId::Outliner)) {
+        if (panelSettingsKeyMatches(UIPanelId::Outliner, key)) {
             settings.outlinerVisible_ = parseBool(value, settings.outlinerVisible_);
-        } else if (key == uiPanelKey(UIPanelId::Inspector)) {
+        } else if (panelSettingsKeyMatches(UIPanelId::Inspector, key)) {
             settings.inspectorVisible_ = parseBool(value, settings.inspectorVisible_);
-        } else if (key == uiPanelKey(UIPanelId::Console)) {
+        } else if (panelSettingsKeyMatches(UIPanelId::Console, key)) {
             settings.consoleVisible_ = parseBool(value, settings.consoleVisible_);
         } else if (key == "NavigationGizmo") {
             settings.navigationGizmoVisible_ = parseBool(value, settings.navigationGizmoVisible_);
@@ -84,7 +72,7 @@ UISettings UISettings::load(const std::filesystem::path& path) {
 
 UISettingsPaths UISettings::resolvePaths(const std::filesystem::path& executableDir) {
     UISettingsPaths paths;
-    paths.directory = localAppDataDirectory(executableDir);
+    paths.directory = quaderUserConfigDirectory(executableDir);
     paths.imguiIniFile = paths.directory / "quader_ui.ini";
     paths.settingsFile = paths.directory / "ui_settings.ini";
     paths.viewportSettingsFile = paths.directory / "viewport_settings.ini";
@@ -101,9 +89,9 @@ bool UISettings::save(const std::filesystem::path& path) const {
     }
 
     file << "[Panels]\n";
-    file << uiPanelKey(UIPanelId::Outliner) << '=' << (outlinerVisible_ ? "true" : "false") << '\n';
-    file << uiPanelKey(UIPanelId::Inspector) << '=' << (inspectorVisible_ ? "true" : "false") << '\n';
-    file << uiPanelKey(UIPanelId::Console) << '=' << (consoleVisible_ ? "true" : "false") << '\n';
+    file << uiPanelStableId(UIPanelId::Outliner) << '=' << (outlinerVisible_ ? "true" : "false") << '\n';
+    file << uiPanelStableId(UIPanelId::Inspector) << '=' << (inspectorVisible_ ? "true" : "false") << '\n';
+    file << uiPanelStableId(UIPanelId::Console) << '=' << (consoleVisible_ ? "true" : "false") << '\n';
     file << "\n[Show]\n";
     file << "NavigationGizmo=" << (navigationGizmoVisible_ ? "true" : "false") << '\n';
     file << "\n[Localization]\n";

@@ -262,6 +262,7 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::duplicate(EntityId entity) {
     if (result.ok && result.changed) {
         result.value = QuaderEntityRef{
                 .id = duplicateEntity,
+                .uuid = projectSession(session_).scene().uuid(duplicateEntity),
                 .editorObjectId = projectSession(session_).scene().editorObjectId(duplicateEntity),
         };
     }
@@ -280,6 +281,7 @@ QuaderApiResult<QuaderDuplicateHierarchyResult> QuaderSceneApi::duplicateSelecte
         for (const EntityId duplicate : duplicateRoots) {
             result.value.rootEntities.push_back(QuaderEntityRef{
                     .id = duplicate,
+                    .uuid = projectSession(session_).scene().uuid(duplicate),
                     .editorObjectId = projectSession(session_).scene().editorObjectId(duplicate),
             });
         }
@@ -298,6 +300,7 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::groupSelection(std::string grou
     if (result.ok && result.changed) {
         result.value = QuaderEntityRef{
                 .id = groupEntity,
+                .uuid = projectSession(session_).scene().uuid(groupEntity),
                 .editorObjectId = projectSession(session_).scene().editorObjectId(groupEntity),
         };
     }

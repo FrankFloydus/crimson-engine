@@ -8,7 +8,12 @@
 
 #include "scene/scene_transform.hpp"
 
+#include <stduuid/uuid.h>
+
 #include <algorithm>
+#include <array>
+#include <random>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -20,6 +25,33 @@ std::uint32_t entityKey(entt::entity entity) {
 
 void removeChild(std::vector<EntityId>& children, EntityId child) {
     children.erase(std::remove(children.begin(), children.end(), child), children.end());
+}
+
+std::mt19937& entityUuidRandomEngine() {
+    thread_local std::mt19937 engine = [] {
+        std::random_device randomDevice;
+        std::array<std::uint32_t, 8> seedData{};
+        for (std::uint32_t& value : seedData) {
+            value = randomDevice();
+        }
+        std::seed_seq seed(seedData.begin(), seedData.end());
+        return std::mt19937(seed);
+    }();
+    return engine;
+}
+
+std::string generateUniqueEntityUuid(const std::unordered_map<std::string, EntityId>& existing) {
+    uuids::uuid_random_generator generator{entityUuidRandomEngine()};
+    for (;;) {
+        const std::string uuid = uuids::to_string(generator());
+        if (!uuid.empty() && !existing.contains(uuid)) {
+            return uuid;
+        }
+    }
+}
+
+bool validEntityUuid(std::string_view uuid) {
+    return uuids::uuid::from_string(uuid).has_value();
 }
 
 } // namespace
@@ -36,6 +68,8 @@ EntityId SceneDocument::createEntity(std::string name, EntityKind kind, EditorOb
     }
     const entt::entity entity = registry_.create();
     registry_.emplace<EntityIdentityComponent>(entity, EntityIdentityComponent{.id = id});
+    const std::string uuid = generateUniqueEntityUuid(entityByUuid_);
+    registry_.emplace<EntityUuidComponent>(entity, EntityUuidComponent{.uuid = uuid});
     registry_.emplace<EditorObjectIdentityComponent>(entity, EditorObjectIdentityComponent{.id = objectId});
     registry_.emplace<NameComponent>(entity, NameComponent{.name = std::move(name)});
     registry_.emplace<TransformComponent>(entity, TransformComponent{});
@@ -46,6 +80,7 @@ EntityId SceneDocument::createEntity(std::string name, EntityKind kind, EditorOb
     registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
     entities_.emplace(id, entity);
     idsByEntity_.emplace(entityKey(entity), id);
+    entityByUuid_.emplace(uuid, id);
     entityByEditorObjectId_.emplace(objectId, id);
     markDirty();
     return id;
@@ -69,6 +104,8 @@ EntityId SceneDocument::createEntityWithId(
     }
     const entt::entity entity = registry_.create();
     registry_.emplace<EntityIdentityComponent>(entity, EntityIdentityComponent{.id = id});
+    const std::string uuid = generateUniqueEntityUuid(entityByUuid_);
+    registry_.emplace<EntityUuidComponent>(entity, EntityUuidComponent{.uuid = uuid});
     registry_.emplace<EditorObjectIdentityComponent>(entity, EditorObjectIdentityComponent{.id = objectId});
     registry_.emplace<NameComponent>(entity, NameComponent{.name = std::move(name)});
     registry_.emplace<TransformComponent>(entity, TransformComponent{});
@@ -79,6 +116,7 @@ EntityId SceneDocument::createEntityWithId(
     registry_.emplace<SelectionComponent>(entity, SelectionComponent{});
     entities_.emplace(id, entity);
     idsByEntity_.emplace(entityKey(entity), id);
+    entityByUuid_.emplace(uuid, id);
     entityByEditorObjectId_.emplace(objectId, id);
     markDirty();
     return id;
@@ -108,6 +146,9 @@ bool SceneDocument::destroyEntity(EntityId id) {
         if (const EditorObjectIdentityComponent* identity = editorObjectIdentity(entityId)) {
             entityByEditorObjectId_.erase(identity->id);
         }
+        if (const EntityUuidComponent* identity = entityUuid(entityId)) {
+            entityByUuid_.erase(identity->uuid);
+        }
         registry_.destroy(entity);
         entities_.erase(entityId);
         idsByEntity_.erase(entityKey(entity));
@@ -129,6 +170,36 @@ bool SceneDocument::renameEntity(EntityId id, std::string name) {
         return true;
     }
     return false;
+}
+
+bool SceneDocument::setEntityUuid(EntityId id, std::string uuid) {
+    if (uuid.empty() || !validEntityUuid(uuid)) {
+        return false;
+    }
+    const entt::entity entity = requireEntity(id);
+    if (entity == entt::null) {
+        return false;
+    }
+    if (const auto existing = entityByUuid_.find(uuid); existing != entityByUuid_.end() && existing->second != id) {
+        return false;
+    }
+
+    EntityUuidComponent* identity = registry_.try_get<EntityUuidComponent>(entity);
+    if (identity != nullptr && identity->uuid == uuid) {
+        return true;
+    }
+    if (identity != nullptr && !identity->uuid.empty()) {
+        entityByUuid_.erase(identity->uuid);
+        identity->uuid = std::move(uuid);
+    } else {
+        registry_.emplace_or_replace<EntityUuidComponent>(entity, EntityUuidComponent{.uuid = std::move(uuid)});
+        identity = registry_.try_get<EntityUuidComponent>(entity);
+    }
+    if (identity != nullptr) {
+        entityByUuid_[identity->uuid] = id;
+    }
+    markDirty();
+    return true;
 }
 
 bool SceneDocument::setEditorObjectId(EntityId id, EditorObjectId editorObjectId) {
@@ -397,6 +468,11 @@ const NameComponent* SceneDocument::name(EntityId id) const {
     return entity == entt::null ? nullptr : registry_.try_get<NameComponent>(entity);
 }
 
+const EntityUuidComponent* SceneDocument::entityUuid(EntityId id) const {
+    const entt::entity entity = requireEntity(id);
+    return entity == entt::null ? nullptr : registry_.try_get<EntityUuidComponent>(entity);
+}
+
 const EditorObjectIdentityComponent* SceneDocument::editorObjectIdentity(EntityId id) const {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<EditorObjectIdentityComponent>(entity);
@@ -553,6 +629,19 @@ EntityId SceneDocument::parent(EntityId id) const {
         return component->parent;
     }
     return InvalidEntityId;
+}
+
+std::string SceneDocument::uuid(EntityId id) const {
+    const EntityUuidComponent* identity = entityUuid(id);
+    return identity == nullptr ? std::string{} : identity->uuid;
+}
+
+EntityId SceneDocument::entityForUuid(std::string_view uuid) const {
+    const auto existing = entityByUuid_.find(std::string(uuid));
+    if (existing == entityByUuid_.end() || !exists(existing->second)) {
+        return InvalidEntityId;
+    }
+    return existing->second;
 }
 
 EditorObjectId SceneDocument::editorObjectId(EntityId id) const {
@@ -722,6 +811,7 @@ EntityId SceneDocument::firstSelectedEntity() const {
 EntityRecord SceneDocument::makeEntityRecord(EntityId id, int depth, EntityId active) const {
     EntityRecord record;
     record.id = id;
+    record.uuid = uuid(id);
     record.editorObjectId = editorObjectId(id);
     record.kind = kind(id);
     record.parent = parent(id);

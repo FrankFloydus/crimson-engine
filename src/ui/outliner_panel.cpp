@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
+#include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "scene/scene_document.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/ui_style_tokens.hpp"
@@ -19,7 +20,6 @@
 #include <span>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace quader {
@@ -71,30 +71,6 @@ std::vector<EntityId> entityRangeSelection(
     return {clicked};
 }
 
-std::vector<EntityId> selectedRootEntities(const SceneDocument& document) {
-    const std::vector<EntityId> selected = document.selectedEntities();
-    std::unordered_set<EntityId> selectedSet(selected.begin(), selected.end());
-    std::vector<EntityId> roots;
-    for (const EntityId entity : document.entityTreeOrder()) {
-        if (!selectedSet.contains(entity)) {
-            continue;
-        }
-        bool ancestorSelected = false;
-        EntityId parent = document.parent(entity);
-        while (parent != InvalidEntityId) {
-            if (selectedSet.contains(parent)) {
-                ancestorSelected = true;
-                break;
-            }
-            parent = document.parent(parent);
-        }
-        if (!ancestorSelected) {
-            roots.push_back(entity);
-        }
-    }
-    return roots;
-}
-
 bool selectOnly(UIContext& context, const std::vector<EntityId>& entities, EntityId active = InvalidEntityId) {
     QuaderApiVoidResult result = context.editor.selection().selectObjects(
             std::span<const EntityId>(entities.data(), entities.size()),
@@ -109,7 +85,7 @@ bool selectCurrentSceneSelection(UIContext& context) {
 
 void groupSelection(UIContext& context) {
     SceneDocument& document = context.document;
-    const std::vector<EntityId> roots = selectedRootEntities(document);
+    const std::vector<EntityId> roots = documentCommandSelectedRootEntities(document);
     if (roots.empty()) {
         return;
     }
@@ -144,7 +120,7 @@ void ungroupSelection(UIContext& context) {
 
 void deleteSelection(UIContext& context) {
     SceneDocument& document = context.document;
-    const std::vector<EntityId> roots = selectedRootEntities(document);
+    const std::vector<EntityId> roots = documentCommandSelectedRootEntities(document);
     if (roots.empty()) {
         return;
     }
@@ -227,6 +203,14 @@ void drawHierarchyGuides(
 float OutlinerPanel::minimumWidth(const UIContext& context) const {
     // UIDockPanel applies setNextWindowMinWidth(context.style.sidebarMinWidth) before opening the window.
     return context.style.sidebarMinWidth;
+}
+
+ImVec2 OutlinerPanel::panelWindowPadding(const UIContext& context) const {
+    return {context.style.windowPadding.x, context.style.windowPadding.y};
+}
+
+ImGuiWindowFlags OutlinerPanel::windowFlags(const UIContext& context) const {
+    return context.style.panelWindowFlags | ImGuiWindowFlags_AlwaysVerticalScrollbar;
 }
 
 void OutlinerPanel::drawContent(UIContext& context) {

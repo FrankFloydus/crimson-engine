@@ -127,24 +127,6 @@ ModelingActionKind fromHostKind(quader_host_contract::HostActionKind kind) {
             : ModelingActionKind::Operation;
 }
 
-ModelingActionPreviewKind fromHostPreview(quader_host_contract::HostPreviewKind kind) {
-    switch (kind) {
-    case quader_host_contract::HostPreviewKind::bridge:
-        return ModelingActionPreviewKind::Bridge;
-    case quader_host_contract::HostPreviewKind::edge_bevel:
-        return ModelingActionPreviewKind::EdgeBevel;
-    case quader_host_contract::HostPreviewKind::thicken:
-        return ModelingActionPreviewKind::Thicken;
-    case quader_host_contract::HostPreviewKind::slice_quad:
-        return ModelingActionPreviewKind::SliceQuad;
-    case quader_host_contract::HostPreviewKind::merge_by_distance:
-        return ModelingActionPreviewKind::MergeByDistance;
-    case quader_host_contract::HostPreviewKind::none:
-        return ModelingActionPreviewKind::None;
-    }
-    return ModelingActionPreviewKind::None;
-}
-
 const quader_host_contract::HostOperationPanelDescriptor* panelForMode(ModelingSelectionMode mode) {
     const quader_host_contract::HostSelectionMode hostMode = appSelectionModeToHostContract(mode);
     for (const quader_host_contract::HostOperationPanelDescriptor& panel : quader_host_contract::operation_panel_catalog()) {
@@ -272,7 +254,7 @@ ModelingActionItem actionFromHostDescriptor(
             .toolId = std::string(descriptor.tool_id),
             .label = std::string(descriptor.label),
             .kind = fromHostKind(descriptor.kind),
-            .previewKind = fromHostPreview(descriptor.preview_kind),
+            .previewKind = ModelingActionCatalog::previewKindFromHost(descriptor.preview_kind),
             .visibility = availability.visibility,
             .disabledReason = std::move(availability.disabledReason),
             .disabledReasonKey = std::move(availability.disabledReasonKey),
@@ -405,6 +387,25 @@ ModelingActionAvailabilityResult ModelingActionCatalog::evaluateOperationAvailab
         return *hostResult;
     }
     return evaluateAvailabilityRule(summary, rule);
+}
+
+ModelingActionPreviewKind ModelingActionCatalog::previewKindFromHost(
+        quader_host_contract::HostPreviewKind kind) {
+    switch (kind) {
+    case quader_host_contract::HostPreviewKind::bridge:
+        return ModelingActionPreviewKind::Bridge;
+    case quader_host_contract::HostPreviewKind::edge_bevel:
+        return ModelingActionPreviewKind::EdgeBevel;
+    case quader_host_contract::HostPreviewKind::thicken:
+        return ModelingActionPreviewKind::Thicken;
+    case quader_host_contract::HostPreviewKind::slice_quad:
+        return ModelingActionPreviewKind::SliceQuad;
+    case quader_host_contract::HostPreviewKind::merge_by_distance:
+        return ModelingActionPreviewKind::MergeByDistance;
+    case quader_host_contract::HostPreviewKind::none:
+        return ModelingActionPreviewKind::None;
+    }
+    return ModelingActionPreviewKind::None;
 }
 
 } // namespace quader

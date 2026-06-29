@@ -138,13 +138,13 @@ TEST(QdrEditorMetadataPresentationMaterialTests, HostContractDefaultMaterialReci
 		qhc::find_material_texture_asset_descriptor("default_albedo");
 	EXPECT_TRUE(albedo != nullptr);
 	EXPECT_TRUE(albedo->role == qhc::HostMaterialTextureRole::base_color);
-	EXPECT_TRUE(same_text(albedo->package_relative_path, "assets/materials/default/default_albedo.png"));
+	EXPECT_TRUE(same_text(albedo->package_relative_path, "materials/default/default_albedo.png"));
 
 	const qhc::HostMaterialTextureAssetDescriptor *roughness =
 		qhc::find_material_texture_asset_descriptor("default_roughness");
 	EXPECT_TRUE(roughness != nullptr);
 	EXPECT_TRUE(roughness->role == qhc::HostMaterialTextureRole::roughness);
-	EXPECT_TRUE(same_text(roughness->package_relative_path, "assets/materials/default/default_roughness.png"));
+	EXPECT_TRUE(same_text(roughness->package_relative_path, "materials/default/default_roughness.png"));
 
 	const qhc::HostMaterialGeneratedTextureDescriptor *metallic_smoothness =
 		qhc::find_material_generated_texture_descriptor("default_metallic_smoothness");

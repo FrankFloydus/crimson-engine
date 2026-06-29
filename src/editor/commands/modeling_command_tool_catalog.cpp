@@ -20,6 +20,7 @@
 #include "editor/commands/context_operation_command_tool.hpp"
 #include "editor/commands/instant_operation_command_tool.hpp"
 #include "editor/commands/preview_operation_command_tool.hpp"
+#include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 
 #include <editor/metadata/host_contract.hpp>
@@ -132,24 +133,6 @@ private:
     };
 }
 
-[[nodiscard]] ModelingActionPreviewKind previewKindFromHostAction(quader_host_contract::HostPreviewKind kind) {
-    switch (kind) {
-    case quader_host_contract::HostPreviewKind::none:
-        return ModelingActionPreviewKind::None;
-    case quader_host_contract::HostPreviewKind::bridge:
-        return ModelingActionPreviewKind::Bridge;
-    case quader_host_contract::HostPreviewKind::edge_bevel:
-        return ModelingActionPreviewKind::EdgeBevel;
-    case quader_host_contract::HostPreviewKind::thicken:
-        return ModelingActionPreviewKind::Thicken;
-    case quader_host_contract::HostPreviewKind::slice_quad:
-        return ModelingActionPreviewKind::SliceQuad;
-    case quader_host_contract::HostPreviewKind::merge_by_distance:
-        return ModelingActionPreviewKind::MergeByDistance;
-    }
-    return ModelingActionPreviewKind::None;
-}
-
 [[nodiscard]] CommandToolDescriptor previewDescriptor(
         const quader_host_contract::HostActionDescriptor& action,
         bool rebuildsMeshOnSuccess = true) {
@@ -159,7 +142,7 @@ private:
             .operationId = action.operation_id,
             .label = action.label,
             .kind = CommandToolKind::Preview,
-            .previewKind = previewKindFromHostAction(action.preview_kind),
+            .previewKind = ModelingActionCatalog::previewKindFromHost(action.preview_kind),
             .rebuildsMeshOnSuccess = rebuildsMeshOnSuccess,
     };
 }

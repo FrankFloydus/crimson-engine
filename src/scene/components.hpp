@@ -30,6 +30,13 @@ struct EntityIdentityComponent {
 };
 
 /**
+ * Represents a stable UUID assigned to a scene entity.
+ */
+struct EntityUuidComponent {
+    std::string uuid;
+};
+
+/**
  * Represents an Editor Object Identity Component value used by the scene graph document layer.
  */
 struct EditorObjectIdentityComponent {

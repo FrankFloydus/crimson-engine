@@ -42,10 +42,10 @@ For viewport keyboard, mouse, shortcut, user rebinding, or context work, also re
 - `QuaderViewportApi` should expose user/editor viewport intent through the workspace service.
   Runtime hooks are for host/render actions that cannot be represented as core viewport state, such
   as frame selection, focus origin, spawned viewport windows, and screenshot capture.
-- The embedded RmlUi viewport host uses a single-pane presentation, while
-  `ViewportWorkspaceService` also owns auxiliary/windowed viewport camera, render, and visibility
-  state. `ViewportHost` owns native viewport windows, swapchains, input routing, and cleanup for
-  spawned viewports.
+- `ViewportPanel` presents the workspace panes in the native ImGui shell, while
+  `ViewportWorkspaceService` owns pane camera, render, layout, and visibility state. Keep viewport
+  window/surface lifetime, input routing, and cleanup in the UI/platform owners that directly own
+  those resources.
 - Viewport input should flow through canonical keybinding owners: platform events become
   `ViewportInputFrame` in `ViewportHost`, keybindings resolve through `QuaderCommandsApi` and
   `QuaderKeybindingService`, and `ViewportInputRouter` consumes semantic actions such as orbit,

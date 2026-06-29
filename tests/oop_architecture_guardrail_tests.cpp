@@ -272,20 +272,18 @@ TEST(OopArchitectureGuardrailTests, UiShellDoesNotOwnToolImplementations) {
 
 TEST(OopArchitectureGuardrailTests, UiShellLeavesSceneOverlayExtractionToRenderBuilder) {
     const std::string uiSystem = readFile(sourceRoot() / "src/ui/ui_system.cpp");
-    const std::string viewportHost = readFile(sourceRoot() / "src/ui/controllers/viewport_host.cpp");
-    const std::string uiShell = uiSystem + viewportHost;
+    const std::string viewportPanel = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
+    const std::string uiShell = uiSystem + viewportPanel;
     const std::string builder = readFile(sourceRoot() / "src/render/overlay/viewport_scene_overlay_builder.cpp");
 
     EXPECT_NE(builder.find("appendHierarchySelectionWires"), std::string::npos);
     EXPECT_NE(builder.find("appendGroupSelectionCages"), std::string::npos);
     EXPECT_NE(builder.find("appendSceneWireframeOverlay"), std::string::npos);
     EXPECT_NE(builder.find("stripWireframeObjectFaceFills"), std::string::npos);
-    EXPECT_NE(viewportHost.find("QuaderRenderApiRuntimeAccess::syncSelectionOverlay("), std::string::npos);
-    EXPECT_NE(viewportHost.find("overlaySubmission.value.visible"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("ViewportSceneOverlayBuilder::buildSelectionFrame("), std::string::npos);
+    EXPECT_NE(viewportPanel.find("ViewportSceneOverlayBuilder::buildWireframeFrame("), std::string::npos);
 
     for (std::string_view forbidden : {
-                 "ViewportSceneOverlayBuilder::buildSelectionFrame(",
-                 "ViewportSceneOverlayBuilder::buildWireframeFrame(",
                  "appendMeshSelectionWire",
                  "appendHierarchySelectionWires",
                  "appendGroupSelectionCages",
@@ -327,19 +325,41 @@ TEST(OopArchitectureGuardrailTests, ViewportMaximizedStateBelongsToWorkspaceServ
 TEST(OopArchitectureGuardrailTests, SceneTransformDragServiceOwnsTransformPreviewTransactions) {
     EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/transform_gizmo_controller.hpp"));
     EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/transform_gizmo_controller.cpp"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/viewport_selection_controller.hpp"));
+    EXPECT_FALSE(std::filesystem::exists(sourceRoot() / "src/ui/viewport_selection_controller.cpp"));
 
     const std::string serviceSource =
             readFile(sourceRoot() / "src/editor/transform/scene_transform_drag_service.cpp");
     const std::string modelingSource =
             readFile(sourceRoot() / "src/editor/modeling/services/modeling_session_service.cpp");
+    const std::string inspectorSource = readFile(sourceRoot() / "src/ui/inspector_panel.cpp");
+    const std::string viewportPanelHeader = readFile(sourceRoot() / "src/ui/viewport_panel.hpp");
+    const std::string viewportPanelSource = readFile(sourceRoot() / "src/ui/viewport_panel.cpp");
 
     EXPECT_NE(serviceSource.find("SceneTransformPreviewTransaction"), std::string::npos);
     EXPECT_NE(serviceSource.find("hasSelectedAncestor(document, entity)"), std::string::npos);
     EXPECT_NE(serviceSource.find("documentLocalPivotForWorldPoint(document, entity, worldPivot)"), std::string::npos);
+    EXPECT_NE(serviceSource.find("selectedTransformPivot("), std::string::npos);
+    EXPECT_NE(serviceSource.find("pinTargetLocalPivotToWorldPoint("), std::string::npos);
     EXPECT_NE(serviceSource.find("editor.scene().batch(label)"), std::string::npos);
     EXPECT_NE(modelingSource.find("sceneTransformDragService_.begin("), std::string::npos);
     EXPECT_NE(modelingSource.find("sceneTransformDragService_.previewWorldTransformDelta("), std::string::npos);
     EXPECT_NE(modelingSource.find("sceneTransformDragService_.commit(*history)"), std::string::npos);
+    EXPECT_NE(inspectorSource.find("SceneTransformDragService transformService"), std::string::npos);
+    EXPECT_NE(inspectorSource.find("moveSelectedToPrimaryPosition("), std::string::npos);
+    EXPECT_NE(inspectorSource.find("rotateSelectedToPrimaryEulerAroundSelectionPivot("), std::string::npos);
+    EXPECT_NE(inspectorSource.find("scaleSelectedToPrimaryScaleAroundSelectionPivot("), std::string::npos);
+    EXPECT_EQ(inspectorSource.find("QuaderSceneTransformEdit"), std::string::npos);
+    EXPECT_EQ(inspectorSource.find(".scene().setTransforms("), std::string::npos);
+    EXPECT_EQ(inspectorSource.find("SelectedTransformPivot"), std::string::npos);
+    EXPECT_EQ(inspectorSource.find("localPivotForWorldPoint("), std::string::npos);
+    EXPECT_EQ(inspectorSource.find("selectedWorldBounds(document, context.assets)"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("ViewportInteractionController interactionController_"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("interactionController_.handleBeforeActiveTool"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("interactionController_.handleAfterActiveTool"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("interactionController_.transformGizmoFrame()"), std::string::npos);
+    EXPECT_EQ(viewportPanelHeader.find("TransformGizmoController"), std::string::npos);
+    EXPECT_EQ(viewportPanelHeader.find("ViewportSelectionController"), std::string::npos);
 }
 
 TEST(OopArchitectureGuardrailTests, EditorSessionOwnsSharedPreviewTransactionLifecycle) {

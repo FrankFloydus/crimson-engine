@@ -78,7 +78,7 @@ Choose the test owner from the behavior being protected, not from the file that 
   under `tests/modeling_domain/` or `tests/modeling_domain/fixtures/`. Shared helper changes
   intentionally fan out to broader test runs.
 - Keep manual smoke checks only for behavior that still needs a real GPU/window/driver/pixel path:
-  Vulkan swapchain creation, RmlUi MainLayout chrome appearance, material rendering, and screenshot
+  Vulkan swapchain creation, native window chrome/layout appearance, material rendering, and screenshot
   or log verification through `tools/boot_smoke.ps1`.
 
 When adding a new test file, register it in the owning CMake target immediately. Root app tests and
@@ -158,12 +158,11 @@ cmd /c "set PATH=& set Path=$p& cmake --build --preset vs2026-debug --target qua
 
 - Vulkan backend initializes.
 - Main SDL window opens without a separate console window.
-- RmlUi MainLayout shell appears with toolbar/chrome, central viewport host, configured side/bottom
-  dock surfaces, and status bar.
+- Native ImGui shell appears with custom chrome, top menu, docked panels, viewport, and status bar.
 - The viewport texture renders app-created polygon meshes with the default material.
 - Window resize keeps the viewport texture visible without stale or blank UI content.
 - MMB orbits, Shift+MMB pans, mouse wheel zooms.
 
 Use `quader_tests`/`ctest` for headless behavior, rebuild the `quader` target for
-resources/materials/runtime UI changes, and use `tools/boot_smoke.ps1` for GPU/window/RmlUi smoke
+resources/materials/runtime UI changes, and use `tools/boot_smoke.ps1` for GPU/window smoke
 checks with screenshot and log-copy output when a visual runtime check is required.

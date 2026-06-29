@@ -8,7 +8,6 @@
 
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
-#include "scene/scene_entity_naming.hpp"
 
 #include <string>
 #include <utility>
@@ -62,12 +61,18 @@ public:
         beforeSelection_ = documentCommandCaptureSelection(scene());
         rootPlacements_ = documentCommandCapturePlacements(scene(), roots_);
         const EntityId commonParent = documentCommandCommonParent(scene(), roots_);
-        const std::string name = groupName_.empty()
-                ? SceneEntityNaming::nextNameForKind(scene(), SceneEntityKind::Empty)
-                : groupName_;
+        const std::string name = groupName_.empty() ? std::string("Group") : groupName_;
         group_ = scene().createEntityWithId(group_, name, EntityKind::Empty, groupObjectId_);
         if (group_ == InvalidEntityId) {
             return documentCommandInvalidRequestResult("Group entity cannot be created");
+        }
+        if (!groupUuid_.empty() && !scene().setEntityUuid(group_, groupUuid_)) {
+            scene().destroyEntity(group_);
+            group_ = InvalidEntityId;
+            return documentCommandInvalidRequestResult("Group entity identity cannot be restored");
+        }
+        if (groupUuid_.empty()) {
+            groupUuid_ = scene().uuid(group_);
         }
         groupObjectId_ = scene().editorObjectId(group_);
         scene().setTransform(group_, groupTransform_);
@@ -92,6 +97,7 @@ private:
     std::vector<DocumentEntityPlacement> rootPlacements_;
     DocumentSelectionState beforeSelection_;
     EntityId group_ = InvalidEntityId;
+    std::string groupUuid_;
     EditorObjectId groupObjectId_ = InvalidEditorObjectId;
 };
 

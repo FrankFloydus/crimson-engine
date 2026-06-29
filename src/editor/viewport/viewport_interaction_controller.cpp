@@ -24,8 +24,18 @@ void ViewportInteractionController::handleAfterActiveTool(
     selection_.handleFrame(editor, frame, toolResult, beforeTool.gizmoConsumed);
 }
 
+QuaderSelectionSummary ViewportInteractionController::pickContextMenuTarget(
+        QuaderEditorApi& editor,
+        const ViewportInteractionFrame& frame) {
+    return selection_.pickContextMenuTarget(editor, frame);
+}
+
 bool ViewportInteractionController::cancelActiveDrag(QuaderEditorApi& editor) {
     return transformGizmo_.cancelActiveDrag(editor);
+}
+
+bool ViewportInteractionController::dragging() const {
+    return transformGizmo_.dragging();
 }
 
 void ViewportInteractionController::reset() {

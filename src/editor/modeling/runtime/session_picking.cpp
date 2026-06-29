@@ -1859,4 +1859,214 @@ bool pick_select_all_vertices(
 	return true;
 }
 
+namespace {
+
+bool session_has_component_selection(const EditorSession& session, SelectionMode mode)
+{
+	if (mode == SelectionMode::object) {
+		return false;
+	}
+	for (const PolygonObject& object : session.objects()) {
+		if (!object.selected) {
+			continue;
+		}
+		if (mode == SelectionMode::vertex && !object.selection.vertices.empty()) {
+			return true;
+		}
+		if (mode == SelectionMode::edge && !object.selection.edges.empty()) {
+			return true;
+		}
+		if (mode == SelectionMode::face && !object.selection.faces.empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool pick_selection_request_hits_target(
+		const std::vector<PolygonObject>& picking_objects,
+		SelectionMode mode,
+		const quader_poly::Ray& ray,
+		const quader_poly::PickOptions& pick_options,
+		std::span<const PickObjectBounds> object_bounds,
+		std::span<const PickObjectFaceGeometry> face_geometry)
+{
+	const SelectionHoverUpdateResult hovered =
+			update_selection_hover(
+					picking_objects,
+					mode,
+					{},
+					ray,
+					false,
+					pick_options,
+					object_bounds,
+					face_geometry);
+	return hovered.hover.object_id > 0;
+}
+
+bool apply_picked_selection_to_session(
+		EditorSession& session,
+		const std::vector<PolygonObject>& picking_objects,
+		SelectionMode mode,
+		int active_object_id)
+{
+	SessionState& state = session.state();
+	bool changed = state.selection_mode != mode || state.active_object_id != active_object_id;
+	for (PolygonObject& object : state.objects) {
+		const auto picked = std::find_if(
+				picking_objects.begin(),
+				picking_objects.end(),
+				[&](const PolygonObject& candidate) {
+					return candidate.id == object.id;
+				});
+		const bool next_selected = picked != picking_objects.end() && picked->selected;
+		const quader_poly::Selection next_selection =
+				picked != picking_objects.end() ? picked->selection : quader_poly::Selection{};
+		changed = changed ||
+				object.selected != next_selected ||
+				!polygon_selection_matches(object.selection, next_selection);
+		object.selected = next_selected;
+		object.selection = next_selection;
+	}
+	if (!changed) {
+		return false;
+	}
+	state.selection_mode = mode;
+	state.active_object_id = active_object_id;
+	normalize_active_object_id(state.objects, state.active_object_id);
+	state.dirty = true;
+	++state.selection_revision;
+	return true;
+}
+
+} // namespace
+
+ApplyPickSelectionResult apply_pick_selection(
+		EditorSession& session,
+		std::vector<PolygonObject> picking_objects,
+		const ApplyPickSelectionRequest& request)
+{
+	ApplyPickSelectionResult result;
+	SelectionMode mode = session.selection_mode();
+	int active_object_id = session.active_object_id();
+	SelectionEditOperation operation = request.operation;
+	const bool paint_stroke = request.click_count == 0;
+
+	if (paint_stroke) {
+		if (mode != SelectionMode::object) {
+			if (operation == SelectionEditOperation::replace) {
+				operation = SelectionEditOperation::add;
+			}
+			result.hit = pick_select(
+					picking_objects,
+					mode,
+					operation,
+					request.ray,
+					active_object_id,
+					request.pick_options,
+					false,
+					request.object_bounds,
+					request.face_geometry);
+			result.changed = apply_picked_selection_to_session(session, picking_objects, mode, active_object_id);
+		}
+		return result;
+	}
+
+	const bool multi_click = request.click_count > 1;
+	if (request.preserve_existing_component_selection_on_hit &&
+			operation == SelectionEditOperation::replace &&
+			!multi_click &&
+			session_has_component_selection(session, mode) &&
+			pick_selection_request_hits_target(
+					picking_objects,
+					mode,
+					request.ray,
+					request.pick_options,
+					request.object_bounds,
+					request.face_geometry)) {
+		result.applied = false;
+		result.hit = true;
+		return result;
+	}
+
+	if (request.preserve_selection_on_selected_hit &&
+			operation == SelectionEditOperation::replace &&
+			!multi_click) {
+		const SelectionHoverUpdateResult hovered =
+				update_selection_hover(
+						picking_objects,
+						mode,
+						{},
+						request.ray,
+						false,
+						request.pick_options,
+						request.object_bounds,
+						request.face_geometry);
+		bool hit_already_selected = false;
+		if (mode == SelectionMode::object && hovered.hover.object_id > 0) {
+			hit_already_selected = std::any_of(
+					picking_objects.begin(),
+					picking_objects.end(),
+					[&](const PolygonObject& object) {
+						return object.id == hovered.hover.object_id && object.selected;
+					});
+		} else {
+			hit_already_selected =
+					selection_hover_target_matches_selection(picking_objects, mode, hovered.hover);
+		}
+		if (hit_already_selected) {
+			result.applied = false;
+			result.hit = true;
+			return result;
+		}
+	}
+
+	if (multi_click && mode == SelectionMode::face) {
+		result.hit = pick_select_all_faces(
+				picking_objects,
+				mode,
+				operation,
+				request.ray,
+				active_object_id,
+				request.pick_options,
+				request.object_bounds,
+				request.face_geometry);
+	} else if (multi_click && mode == SelectionMode::edge) {
+		result.hit = pick_select_edge_loop(
+				picking_objects,
+				mode,
+				operation,
+				request.ray,
+				active_object_id,
+				request.pick_options,
+				request.object_bounds,
+				request.face_geometry);
+	} else if (multi_click && mode == SelectionMode::vertex) {
+		result.hit = pick_select_all_vertices(
+				picking_objects,
+				mode,
+				operation,
+				request.ray,
+				active_object_id,
+				request.pick_options,
+				request.object_bounds,
+				request.face_geometry);
+	} else {
+		result.hit = pick_select(
+				picking_objects,
+				mode,
+				operation,
+				request.ray,
+				active_object_id,
+				request.pick_options,
+				true,
+				request.object_bounds,
+				request.face_geometry);
+	}
+	if (result.hit || !request.preserve_selection_on_miss) {
+		result.changed = apply_picked_selection_to_session(session, picking_objects, mode, active_object_id);
+	}
+	return result;
+}
+
 } // namespace quader_editor_core

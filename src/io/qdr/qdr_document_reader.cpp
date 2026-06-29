@@ -10,6 +10,7 @@
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/qdr/qdr_format.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
+#include "io/qdr/qdr_project_codecs.hpp"
 #include "io/qdr/qdr_root.hpp"
 
 #include <nlohmann/json.hpp>
@@ -70,93 +71,6 @@ TransformComponent transformFromJson(const json& value) {
     return transform;
 }
 
-EntityKind parseEntityKind(const std::string& value) {
-    if (value == "empty") {
-        return EntityKind::Empty;
-    }
-    if (value == "mesh") {
-        return EntityKind::Mesh;
-    }
-    if (value == "light") {
-        return EntityKind::Light;
-    }
-    return EntityKind::Generic;
-}
-
-LightType parseLightType(const std::string& value) {
-    if (value == "point") {
-        return LightType::Point;
-    }
-    if (value == "spot") {
-        return LightType::Spot;
-    }
-    return LightType::Directional;
-}
-
-MeshCollisionType parseCollisionType(const std::string& value) {
-    if (value == "sphere") {
-        return MeshCollisionType::Sphere;
-    }
-    if (value == "cylinder") {
-        return MeshCollisionType::Cylinder;
-    }
-    if (value == "convexHull") {
-        return MeshCollisionType::ConvexHull;
-    }
-    if (value == "mesh") {
-        return MeshCollisionType::Mesh;
-    }
-    return MeshCollisionType::Box;
-}
-
-MeshPhysicsBodyType parsePhysicsBodyType(const std::string& value) {
-    if (value == "rigidBody") {
-        return MeshPhysicsBodyType::RigidBody;
-    }
-    return MeshPhysicsBodyType::StaticBody;
-}
-
-TextureUsage parseTextureUsage(const std::string& value) {
-    if (value == "baseColor") {
-        return TextureUsage::BaseColor;
-    }
-    if (value == "normal") {
-        return TextureUsage::Normal;
-    }
-    if (value == "roughness") {
-        return TextureUsage::Roughness;
-    }
-    if (value == "metallic") {
-        return TextureUsage::Metallic;
-    }
-    if (value == "curvature") {
-        return TextureUsage::Curvature;
-    }
-    if (value == "thickness") {
-        return TextureUsage::Thickness;
-    }
-    if (value == "ambientOcclusion") {
-        return TextureUsage::AmbientOcclusion;
-    }
-    if (value == "position") {
-        return TextureUsage::Position;
-    }
-    if (value == "id") {
-        return TextureUsage::Id;
-    }
-    if (value == "mask") {
-        return TextureUsage::Mask;
-    }
-    return TextureUsage::Unknown;
-}
-
-TextureColorSpace parseTextureColorSpace(const std::string& value) {
-    if (value == "linear") {
-        return TextureColorSpace::Linear;
-    }
-    return TextureColorSpace::Srgb;
-}
-
 QVec3 fromRuntime(quader::QVec3 value) {
     return {value.x, value.y, value.z};
 }
@@ -204,8 +118,8 @@ MeshAsset meshFromJson(const json& value) {
 TextureAsset textureFromJson(const json& value) {
     TextureAsset texture;
     texture.name = value.value("name", std::string("Texture"));
-    texture.usage = parseTextureUsage(value.value("usage", std::string("unknown")));
-    texture.colorSpace = parseTextureColorSpace(value.value("colorSpace", std::string("srgb")));
+    texture.usage = qdrTextureUsageFromName(value.value("usage", std::string("unknown")));
+    texture.colorSpace = qdrTextureColorSpaceFromName(value.value("colorSpace", std::string("srgb")));
     texture.width = value.value("width", 0u);
     texture.height = value.value("height", 0u);
     texture.sourcePath = std::filesystem::path(value.value("sourcePath", std::string{}));
@@ -237,9 +151,9 @@ MeshComponent meshComponentFromJson(const json& value) {
     mesh.castShadows = value.value("castShadows", true);
     mesh.doubleSided = value.value("doubleSided", false);
     mesh.generateCollisions = value.value("generateCollisions", true);
-    mesh.collisionType = parseCollisionType(value.value("collisionType", std::string("box")));
+    mesh.collisionType = qdrMeshCollisionTypeFromName(value.value("collisionType", std::string("box")));
     mesh.displayCollision = value.value("displayCollision", false);
-    mesh.bodyType = parsePhysicsBodyType(value.value("bodyType", std::string("staticBody")));
+    mesh.bodyType = qdrMeshPhysicsBodyTypeFromName(value.value("bodyType", std::string("staticBody")));
     return mesh;
 }
 
@@ -261,7 +175,7 @@ MaterialComponent materialComponentFromJson(const json& value) {
 
 LightComponent lightFromJson(const json& value) {
     LightComponent light;
-    light.type = parseLightType(value.value("type", std::string("directional")));
+    light.type = qdrLightTypeFromName(value.value("type", std::string("directional")));
     light.color = vec3FromJson(value.value("color", json::object()), {1.0f, 1.0f, 1.0f});
     light.intensity = value.value("intensity", 80000.0f);
     light.castsShadows = value.value("castsShadows", false);
@@ -366,10 +280,15 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
                 ? entityJson.value("editorObjectId", InvalidEditorObjectId)
                 : InvalidEditorObjectId;
         const std::string name = entityJson.value("name", std::string("Entity"));
-        const EntityKind kind = parseEntityKind(entityJson.value("kind", std::string("generic")));
+        const EntityKind kind = qdrEntityKindFromName(entityJson.value("kind", std::string("generic")));
         const EntityId entity = document.scene().createEntityWithId(requestedId, name, kind, editorObjectId);
         if (entity == InvalidEntityId) {
             throw std::runtime_error("QDR document contains a duplicate or invalid entity id.");
+        }
+        if (const auto uuidJson = entityJson.find("uuid");
+                uuidJson != entityJson.end() && uuidJson->is_string() &&
+                !document.scene().setEntityUuid(entity, uuidJson->get<std::string>())) {
+            throw std::runtime_error("QDR document contains a duplicate or invalid entity uuid.");
         }
         if (hasExplicitEditorObjectId) {
             entitiesWithExplicitEditorObjectIds.insert(entity);

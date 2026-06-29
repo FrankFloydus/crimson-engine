@@ -32,7 +32,7 @@ Does not own:
 - scene identity, grouping, hierarchy, or document command history;
 - render overlay style, Filament resources, or GPU submission;
 - viewport workspace state, native windows, swapchains, or physical input capture;
-- UI layout, RmlUi resources, localization, or panel behavior.
+- UI layout, runtime UI resources, localization, or panel behavior.
 
 Selection and hover behavior should stay inspectable with headless modeling-domain tests. Real
 window, GPU, and pixel-output behavior belongs to render/UI smoke checks until render readback

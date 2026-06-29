@@ -9,6 +9,93 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-29 - ImGui Viewport Layouts Require MultiPane Public Workspace
+
+Task/context: the ImGui shell layout menu and viewport panel still contained the restored multi-pane
+draw path, but choosing any layout other than Single stayed single-pane.
+
+Root cause/invariant:
+
+- The earlier ImGui path owned `ViewportPanel::setViewportLayout()` directly and rendered
+  placements from `ViewportLayoutState`.
+- After `ViewportWorkspaceService` became the viewport owner, `QuaderViewportApi` was left
+  constructing its workspace with `ViewportWorkspaceLayoutPolicy::SinglePaneOnly`, a policy from the
+  temporary single-pane host. The current ImGui menu routes through
+  `editor.viewports().setLayout(...)`, so the API rejected multi-pane before `ViewportPanel` could
+  draw the restored placements.
+- Keep `SinglePaneOnly` available only for hosts that actually expose one embedded viewport surface;
+  the active native ImGui editor API workspace must be `MultiPane`.
+
+Affected owners/files:
+
+- `src/api/quader_viewport_api.cpp`
+- `src/viewport/viewport_workspace_service.hpp`
+- `src/ui/main_menu_bar.cpp`
+- `src/ui/viewport_panel.cpp`
+- `tests/editor_api_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Changed the public/editor viewport API workspace default back to `ViewportWorkspaceLayoutPolicy::MultiPane`.
+- Kept layout state in `ViewportWorkspaceService`; `MainMenuBar` continues to call the public API,
+  and `ViewportPanel` continues to consume `activePanePlacements()` and `activeSplitHandles()` from
+  the workspace.
+- Updated the public API viewport test expectation from rejected FourQuad/single-pane to accepted
+  FourQuad/four active panes, and added a focused build guardrail for the active ImGui layout route.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.ImGuiViewportApiKeepsMultiPaneLayoutWorkspace`
+- Older affected `quader_tests` verification was previously blocked by stale test sources; the
+  native UI cleanup removed those stale backend references.
+
+## 2026-06-29 - Win32 Resize State And Window Placement Persistence
+
+Task/context: nightly window slice B tightened borderless Win32 resize behavior and added persisted
+native window placement.
+
+Root cause/invariants:
+
+- Borderless Win32 resize hit testing must use the current DPI-scaled system frame and padded-border
+  metrics, not only the fixed fallback hit band.
+- Native resize state must clear on normal exit and on cancellation paths such as `WM_CANCELMODE`,
+  `WM_CAPTURECHANGED`, focus loss, and destruction; otherwise viewport resize suspension can stay
+  active after Windows aborts the modal resize.
+- Persist the normal window bounds separately from maximized state. When restoring, recover the
+  normal frame into a visible display work area before applying maximize.
+
+Affected owners/files:
+
+- `src/platform/platform_window.*`
+- `src/app/app.*`
+- `src/app/app_window_settings.*`
+- `src/core/user_config_paths.*`
+- `src/ui/ui_settings.cpp`
+- `tests/build_guardrail_tests.cpp`
+- `tests/core_tests.cpp`
+
+Resolved approach:
+
+- Added `PlatformWindowPlacement`, native `GetWindowPlacement`/`SetWindowPlacement` use on Win32,
+  display-work-area recovery, DPI/system-metric resize borders, duplicate live-resize frame
+  coalescing, and forced final redraws on resize end/cancel/maximize/restore.
+- Added app-owned `window_settings.ini` serialization for normal bounds and maximized state, while
+  moving the shared product config directory lookup into `quaderUserConfigDirectory`.
+- Added focused guardrail coverage plus behavior tests for settings round-trip, resize border
+  metrics, and offscreen recovery.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader`
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned`
+- `cmake --build --preset vs2026-debug --target quader_modeling_domain_tests`
+- Older `quader_tests` verification was previously blocked by stale test sources; the native UI
+  cleanup removed those stale backend references.
+
 ## 2026-06-28 - ImGui Borderless Resize Must Redraw During Native Live Resize
 
 Task/context: the `feature/imgui-shell` branch restored custom borderless chrome with ImGui. Window
@@ -300,7 +387,7 @@ Resolved approach:
 - Updated CMake, docs, examples, source includes, and tests to the new paths.
 - Repaired mechanical rewrite fallout in member names such as `history_status`, `has_selection`,
   `has_projection`, and `hard_normal_edges`.
-- Restored the external RmlUi vendor include to `RmlUi/Core/Types.h`.
+- Restored a mechanically rewritten external vendor include path during the header-extension rename.
 
 Verification:
 
@@ -379,7 +466,7 @@ Invariant:
 - `QUADER_ENABLE_PCH` owns the opt-out switch in `cmake/QuaderBuildOptions.cmake`.
 - Common PCH is private and target-local. Do not publish PCH through target interfaces.
 - Keep the common PCH list to stable C++ standard-library headers. Do not add project owner
-  headers, Filament/SDL/RmlUi SDK headers, or GoogleTest without a separate measured change.
+  headers, Filament/SDL SDK headers, or GoogleTest without a separate measured change.
 
 Affected owners/files:
 
@@ -444,3 +531,100 @@ Verification:
   `src/render/viewport_renderer.cpp`, `vs2026-debug` `quader` build 7.90s ->
   `ninja-msvc-debug` `quader` build 2.98s, 4.92s saved. The first-time Ninja tree build is not
   included in this warm prototyping comparison.
+
+## 2026-06-29 - Native Window Shell, Layout Restore, And Stable Entity Identity
+
+Task/context: native standalone app needed Windows 11 borderless maximize fixes, persisted window
+placement, restored multi-pane viewport layouts, UI chrome/sidebar polish, RMB context selection
+preservation, literal default group naming, stable entity UUIDs, and removal of the retired retained
+UI stack references.
+
+Invariant:
+
+- Borderless maximize is owned by `PlatformWindow` on Windows. Keep `WM_GETMINMAXINFO` clamped to
+  the monitor work area and `WM_NCCALCSIZE` constrained for zoomed client bounds so the app does not
+  cover the Windows taskbar.
+- Persisted window placement is owned by `AppWindowSettings`; recover saved normal bounds to a
+  visible display work area before applying them.
+- The native editor uses the ImGui shell only. Do not reintroduce generated UI controller/resource
+  paths or stale retained-UI documentation.
+- Viewport layout restoration belongs to `ViewportWorkspaceService` with the standalone app using
+  `ViewportWorkspaceLayoutPolicy::MultiPane`.
+- RMB context picking with a valid component selection must preserve the existing component
+  selection when the hit is on another unselected component, then open the context menu against that
+  preserved selection.
+- New groups default to the literal name `Group`.
+- Every scene entity has a stable UUID component; QDR I/O and public snapshots preserve and expose
+  it, while duplicated entities receive distinct UUIDs and undo/redo restores created identities.
+
+Affected owners/files:
+
+- `src/platform/platform_window.*`
+- `src/app/app_window_settings.*`
+- `src/core/user_config_paths.*`
+- `src/ui/ui_system.*`, `src/ui/main_menu_bar.*`, `src/ui/viewport_panel.cpp`,
+  `src/ui/inspector_panel.*`, `src/ui/outliner_panel.*`
+- `src/ui/viewport_selection_controller.*`, `src/ui/viewport_shortcut_controller.cpp`
+- `src/viewport/viewport_workspace_service.hpp`, `src/api/quader_viewport_api.cpp`
+- `src/scene/scene_document.*`, `src/scene/components.hpp`, `src/io/qdr/qdr_document_*`
+- `src/editor/commands/document/*`
+- UI/docs guardrails and AGENTS/docs files.
+
+Resolved approach:
+
+- Matched Electron's Windows frameless-window lesson locally: work-area max bounds plus client-area
+  insets/constraints for maximized borderless windows, without relying on one-time resize hacks.
+- Added placement persistence under the user config directory.
+- Restored multi-pane workspace policy for the standalone app.
+- Made the custom chrome 35 px, moved the menu beside the logo, removed the old menu strip, kept a
+  static bottom bar for maximize verification, and tightened sidebar/dropdown/checkbox sizing and
+  colors.
+- Added `stduuid` through vcpkg/CMake/license manifest and stored UUIDs on scene entities and QDR.
+- Replaced stale docs with current native ImGui/app guidance and removed explicit retired UI stack
+  references.
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=UISettingsTests.*:AppWindowSettingsTests.*:PlatformWindowChromeTests.*:SceneDocumentTests.CreatesStableEntitiesAndComponents:DocumentCommandTests.TypedLifecycleCommandsRestoreSceneSnapshots:DocumentCommandTests.DuplicateMintsEditorObjectIdsOnceAndRedoReusesThem:DocumentCommandTests.DestroyUndoRestoresEditorObjectIdsForSubtrees:DocumentCommandServiceTests.DefaultGroupNameStaysLiteralGroup:DocumentCommandServiceTests.CoversEntityHierarchySelectionAndLifecycleCommands:QdrDocumentIoTests.WritesAndReadsProjectDocumentPayloadWithStableIdsAndBindings:EditorApiTests.ViewportHandlesUseWorkspaceWithoutRuntimeHooks:EditorApiTests.ViewportSelectionModeShortcutsApplyThroughPublicSelectionApi:EditorApiTests.RightClickPickWithExistingFaceSelectionPreservesComponentSelectionBeforeContextDelete:ModelingSessionServiceTests.RmbMeshPickWithExistingFaceSelectionPreservesSelectionAndAllowsContextMenu`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.ProjectOwnedTextDoesNotReferenceOldCppPathNames:BuildGuardrailTests.SourceBuildAndTestsDoNotUseOldSdkIncludeOrPackagePaths:BuildGuardrailTests.TestingDocsExplainPlacementAndSelectionRules:BuildGuardrailTests.LocalizationResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible:BuildGuardrailTests.ImGuiViewportApiKeepsMultiPaneLayoutWorkspace:BuildGuardrailTests.RuntimeUiUsesNativeImGuiStackOnly:WindowGuardrailTests.BorderlessWindowModeIsDefault:WindowGuardrailTests.BorderlessMaximizeUsesMonitorWorkArea:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned:DependencyLicenseGuardrailTests.*:ProgrammaticApiGuardrailTests.PublicBehaviorTestsUseApiOrScenarioDsl:ProgrammaticApiGuardrailTests.PublicDocsExamplesManifestClassifiesEveryDocsAndExamplesFile:SelectionModeAdapterGuardrailTests.*:ViewportToolGuardrailTests.ViewportPanelProvidesPointToolContextToModalTools`
+- Explicit retired UI stack string search over source/docs returned no matches outside ignored build
+  and third-party/license folders.
+
+## 2026-06-29 - Daily DRY/OOP Drift Audit Completion
+
+Task/context: exhaustive daily DRY/OOP drift audit across API/commands, modeling/projection,
+viewport/input/tools, UI/layout/localization, render/assets/scene, QDR I/O, docs/build/tests, with
+six parallel audit subagents and main repo-wide inspection.
+
+Invariant:
+
+- `refactor.md` is the current-run source of truth and must not contain unchecked actionable items
+  before completion.
+- Inspector one-shot transform edits must route through `SceneTransformDragService`; `InspectorPanel`
+  may stage UI field values but must not build `QuaderSceneTransformEdit` batches, compute selected
+  transform pivots, filter locked/selected-descendant targets, or pin local pivots itself.
+- Viewport shading conversion helpers that include viewport owners live under `src/viewport`, not
+  public API headers.
+- Modeling selection, drawn-plane lifecycle, overlay/projection, scene render extraction, material
+  texture mutation, QDR root/header/project codecs, scene-batch reparenting, and docs/build
+  guardrail policy each have one owner recorded in `refactor.md`.
+
+Resolved approach:
+
+- Completed all actionable `refactor.md` items A01-A09, U01-U07, M01-M05, R01-R05, and T01-T07.
+- Final U07 fix moved inspector-style move/rotate/scale commits into `SceneTransformDragService`,
+  including selected-target filtering, selected-bounds pivot resolution, scale ratio/clamp policy,
+  parent-aware pivot pinning, and public API batch commit. `InspectorPanel` now only calls the
+  transform owner.
+- Moved `quaderApiToViewportShadingMode`/`quaderApiFromViewportShadingMode` to
+  `src/viewport/viewport_shading_mode_conversions.hpp` after the public API guardrail caught the
+  internal viewport include under `src/api`.
+
+Verification:
+
+- `cmake --preset vs2026`
+- `cmake --build --preset vs2026-debug`
+- `ctest --preset vs2026-debug`
+- `powershell -ExecutionPolicy Bypass -File tools\boot_smoke.ps1 -Exe build\vs2026\Debug\quader.exe -ScreenshotPath build\vs2026\Debug\daily-dry-oop-boot-smoke.png -LogCopyPath build\vs2026\Debug\daily-dry-oop-boot-smoke.log -TimeoutSeconds 30`

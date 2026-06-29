@@ -337,6 +337,7 @@ std::vector<QuaderModelingObjectRecord> QuaderModelingApi::objects() const {
 QuaderModelingObjectRef QuaderModelingApi::refFromRecord(const QuaderModelingObjectRecord& record) const {
     QuaderModelingObjectRef ref;
     ref.entity = record.entity;
+    ref.entityUuid = projectSession(session_).scene().uuid(record.entity);
     ref.editorObjectId = projectSession(session_).scene().editorObjectId(record.entity);
     ref.modelingObjectId = record.modelingObjectId;
     ref.mesh = record.mesh;

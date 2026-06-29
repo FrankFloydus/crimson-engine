@@ -12,4 +12,4 @@ Lua examples are intentionally placeholders for now. The native app does not shi
 Lua bindings yet.
 
 When Lua is enabled, examples in this folder should start from the public `quader` scripting object
-and must not expose document, SDK, UI, render, platform, ECS, or backend internals.
+and must not expose document, absorbed modeling, UI, render, platform, ECS, or backend internals.

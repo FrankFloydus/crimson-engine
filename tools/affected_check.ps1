@@ -26,6 +26,7 @@ $ErrorActionPreference = "Stop"
 
 $SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $script:CMakePresetsDocument = $null
+$script:CMakeTargetSourceCache = @{}
 
 function Get-CMakePresetsDocument {
     if ($null -ne $script:CMakePresetsDocument) {
@@ -225,14 +226,37 @@ function Get-TestFileFilter {
     return Join-GTestFilter @(Get-GTestSuites @($Path))
 }
 
+function Get-CMakeTargetSourcePaths {
+    param([string]$TargetName)
+
+    if ($script:CMakeTargetSourceCache.ContainsKey($TargetName)) {
+        return @($script:CMakeTargetSourceCache[$TargetName])
+    }
+
+    $cmakePath = Join-Path $SourceRoot "CMakeLists.txt"
+    if (-not (Test-Path $cmakePath -PathType Leaf)) {
+        throw "CMakeLists.txt was not found at '$cmakePath'."
+    }
+
+    $source = Get-Content $cmakePath -Raw
+    $pattern = "add_executable\s*\(\s*$([regex]::Escape($TargetName))(?<body>.*?)\)"
+    $match = [regex]::Match($source, $pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $match.Success) {
+        throw "Target '$TargetName' was not found in CMakeLists.txt."
+    }
+
+    $paths = New-Object "System.Collections.Generic.List[string]"
+    foreach ($sourceMatch in [regex]::Matches($match.Groups["body"].Value, '(?m)^\s*([A-Za-z0-9_./-]+\.(?:cpp|hpp|h|cxx|cc))\s*$')) {
+        Add-Unique $paths (Normalize-RepoPath $sourceMatch.Groups[1].Value)
+    }
+
+    $script:CMakeTargetSourceCache[$TargetName] = @($paths | Sort-Object -Unique)
+    return @($script:CMakeTargetSourceCache[$TargetName])
+}
+
 function Test-IsGuardrailTestPath {
     param([string]$Path)
-    return @(
-        "tests/agent_instruction_routing_tests.cpp",
-        "tests/build_guardrail_tests.cpp",
-        "tests/oop_architecture_guardrail_tests.cpp",
-        "tests/programmatic_api_guardrail_tests.cpp"
-    ).Contains($Path)
+    return @(Get-CMakeTargetSourcePaths "quader_guardrail_tests").Contains($Path)
 }
 
 function Add-QuaderTestsFilter {
@@ -502,12 +526,12 @@ function Add-PathPlan {
         return
     }
 
-    if ($Path -match '^resources/(ui|fonts|icons|materials|modeling_assets)/') {
+    if ($Path -match '^resources/(fonts|icons|materials|modeling_assets)/') {
         Add-BuildTarget "quader" "runtime resource changed"
         Add-BuildTarget "quader_guardrail_tests" "runtime resource changed"
         Add-BuildTarget "quader_tests" "runtime resource changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.UITokenConfigResourceIsPackagedWithRuntime:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "verify runtime resource packaging"
-        Add-QuaderTestsFilter "MainLayout*:UI*:Ui*" "verify runtime resource behavior"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "verify runtime resource packaging"
+        Add-QuaderTestsFilter "UI*:Ui*:Viewport*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*" "verify runtime resource behavior"
         return
     }
 
@@ -594,7 +618,7 @@ function Add-PathPlan {
         Add-BuildTarget "quader_guardrail_tests" "render source changed"
         Add-BuildTarget "quader_tests" "render source changed"
         Add-GuardrailTestsFilter "BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime" "render source-policy guardrails"
-        Add-QuaderTestsFilter "Render*:RenderExtractionTests.*:Viewport*:Overlay*:SceneRenderBridge*:RmlFilamentRendererTests.*:TextureRegistryTests.*:LightRenderableCacheTests.*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*:ModelingSessionService*Overlay*:ModelingSessionService*Hover*:ModelingSessionService*Pick*" "render and viewport extraction tests"
+        Add-QuaderTestsFilter "Render*:RenderExtractionTests.*:Viewport*:Overlay*:SceneRenderBridge*:TextureRegistryTests.*:LightRenderableCacheTests.*:GroundGridMaterialTests.*:QuaderMeshMaterialTests.*:ModelingSessionService*Overlay*:ModelingSessionService*Hover*:ModelingSessionService*Pick*" "render and viewport extraction tests"
         return
     }
 
@@ -602,8 +626,8 @@ function Add-PathPlan {
         Add-BuildTarget "quader_runtime" "UI source changed"
         Add-BuildTarget "quader_guardrail_tests" "UI source changed"
         Add-BuildTarget "quader_tests" "UI source changed"
-        Add-GuardrailTestsFilter "BuildGuardrailTests.UITokenConfigResourceIsPackagedWithRuntime" "UI source-policy guardrails"
-        Add-QuaderTestsFilter "MainLayout*:UI*:Ui*:DockLayout*:ResizableSplit*:UIDragDrop*:UITab*:Rml*:ModelingModeShelf*:DebugPalette*:Console*:Localization*:PlatformWindow*:Window*:Sdl*:Viewport*" "UI shell and viewport host tests"
+        Add-GuardrailTestsFilter "BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible" "UI source-policy guardrails"
+        Add-QuaderTestsFilter "UI*:Ui*:Console*:Localization*:PlatformWindow*:Window*:Sdl*:Viewport*:NavigationGizmo*" "UI shell and viewport tests"
         return
     }
 

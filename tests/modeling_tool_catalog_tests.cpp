@@ -19,6 +19,7 @@
 #include "editor/commands/modeling/flip_horizontal_tool.hpp"
 #include "editor/commands/modeling/mirror_selection_tool.hpp"
 #include "editor/commands/modeling/select_all_tool.hpp"
+#include "editor/modeling/services/modeling_action_catalog.hpp"
 #include "editor/modeling/services/modeling_instant_operation_catalog.hpp"
 #include "support/guardrail_file_scan.hpp"
 
@@ -38,24 +39,6 @@ namespace {
 
 using test::guardrail::readSourceFile;
 using test::guardrail::sourceRoot;
-
-ModelingActionPreviewKind previewKindFromHostAction(quader_host_contract::HostPreviewKind kind) {
-    switch (kind) {
-    case quader_host_contract::HostPreviewKind::none:
-        return ModelingActionPreviewKind::None;
-    case quader_host_contract::HostPreviewKind::bridge:
-        return ModelingActionPreviewKind::Bridge;
-    case quader_host_contract::HostPreviewKind::edge_bevel:
-        return ModelingActionPreviewKind::EdgeBevel;
-    case quader_host_contract::HostPreviewKind::thicken:
-        return ModelingActionPreviewKind::Thicken;
-    case quader_host_contract::HostPreviewKind::slice_quad:
-        return ModelingActionPreviewKind::SliceQuad;
-    case quader_host_contract::HostPreviewKind::merge_by_distance:
-        return ModelingActionPreviewKind::MergeByDistance;
-    }
-    return ModelingActionPreviewKind::None;
-}
 
 bool instantOperationCatalogOwnsActionId(std::string_view actionId) {
     for (const ModelingInstantOperationCatalogEntry& entry : modelingInstantOperationCatalog()) {
@@ -179,7 +162,7 @@ TEST(ModelingToolCatalogTests, HostOperationActionIdsResolveToCommandTools) {
         ASSERT_NE(tool, nullptr) << action.id;
         EXPECT_EQ(tool->operationId(), action.operation_id) << action.id;
         EXPECT_EQ(tool->label(), action.label) << action.id;
-        EXPECT_EQ(tool->previewKind(), previewKindFromHostAction(action.preview_kind)) << action.id;
+        EXPECT_EQ(tool->previewKind(), ModelingActionCatalog::previewKindFromHost(action.preview_kind)) << action.id;
         if (action.preview_kind == quader_host_contract::HostPreviewKind::none) {
             EXPECT_NE(tool->kind(), CommandToolKind::Preview) << action.id;
         } else {
@@ -243,13 +226,20 @@ TEST(ModelingToolCatalogTests, DispatcherUsesCatalogAndHistoryPolicy) {
 TEST(ModelingToolCatalogTests, HostActionCommandToolsAreDerivedFromActionCatalog) {
     const std::filesystem::path root = sourceRoot();
     const std::string source = readSourceFile(root / "src" / "editor" / "commands" / "modeling_command_tool_catalog.cpp");
+    const std::string hostPreviewSwitchCase =
+            std::string("case quader_host_contract::") + "HostPreviewKind::";
 
     EXPECT_NE(source.find("quader_host_contract::action_catalog()"), std::string::npos);
     EXPECT_NE(source.find("instantOperationCatalogOwnsActionId("), std::string::npos);
+    EXPECT_NE(source.find("ModelingActionCatalog::previewKindFromHost("), std::string::npos);
     EXPECT_EQ(source.find("contextDescriptorFromHostAction(\""), std::string::npos);
     EXPECT_EQ(source.find("previewDescriptorFromHostAction("), std::string::npos);
+    EXPECT_EQ(source.find(hostPreviewSwitchCase), std::string::npos);
     EXPECT_EQ(source.find("static const std::array<const ContextActionTool*"), std::string::npos);
     EXPECT_EQ(source.find("static const std::array<const PreviewCommandTool*"), std::string::npos);
+
+    const std::string testSource = readSourceFile(root / "tests" / "modeling_tool_catalog_tests.cpp");
+    EXPECT_EQ(testSource.find(hostPreviewSwitchCase), std::string::npos);
 }
 
 } // namespace

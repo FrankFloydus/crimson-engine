@@ -20,6 +20,8 @@ public:
 
 private:
     float minimumWidth(const UIContext& context) const override;
+    ImVec2 panelWindowPadding(const UIContext& context) const override;
+    ImGuiWindowFlags windowFlags(const UIContext& context) const override;
     void drawContent(UIContext& context) override;
 
     EntityId outlinerAnchor_ = InvalidEntityId;

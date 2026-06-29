@@ -11,6 +11,8 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <span>
 #include <string>
 
 namespace quader {
@@ -34,8 +36,9 @@ struct PlatformWindowChromeHitTest {
     int pointX = 0;
     int pointY = 0;
     int resizeBorder = 6;
-    int titleBarHeight = 48;
-    int rightControlsWidth = 120;
+    int titleBarHeight = 35;
+    int leftInteractiveWidth = 320;
+    int rightControlsWidth = 105;
     bool maximized = false;
 };
 
@@ -61,8 +64,20 @@ struct PlatformWindowChromeResizeDrag {
     SDL_HitTestResult edge = SDL_HITTEST_NORMAL;
 };
 
+/**
+ * Stores persisted normal window placement plus native maximized state.
+ */
+struct PlatformWindowPlacement {
+    PlatformWindowChromeFrame normalFrame{0, 0, 1600, 960};
+    bool maximized = false;
+};
+
 [[nodiscard]] SDL_HitTestResult platformWindowChromeHitTestResult(const PlatformWindowChromeHitTest& hitTest);
 [[nodiscard]] PlatformWindowChromeFrame platformWindowChromeResizeFrame(const PlatformWindowChromeResizeDrag& drag);
+[[nodiscard]] int platformWindowChromeResizeBorderForSystemMetrics(int fallbackBorder, int sizeFrame, int paddedBorder);
+[[nodiscard]] PlatformWindowChromeFrame platformWindowRecoverFrameToDisplayWorkArea(
+        PlatformWindowChromeFrame frame,
+        std::span<const PlatformWindowChromeFrame> displayWorkAreas);
 
 /**
  * Owns Platform Window behavior within the platform integration layer.
@@ -89,6 +104,8 @@ public:
     void refreshNativeChrome();
     void minimize();
     void toggleMaximizeRestore();
+    [[nodiscard]] std::optional<PlatformWindowPlacement> placement() const;
+    void applyPlacement(const PlatformWindowPlacement& placement);
     [[nodiscard]] bool processChromeEvent(const SDL_Event& event);
     [[nodiscard]] bool chromeResizeActive() const;
     [[nodiscard]] bool maximized() const;
@@ -103,7 +120,8 @@ private:
     void updateChromeInteraction(float globalMouseX, float globalMouseY);
     void endChromeInteraction();
     void cancelChromeInteraction();
-    void requestLiveResizeFrame();
+    void requestLiveResizeFrame(bool force = false);
+    void resetLiveResizeFrameCoalescing();
     void updateChromeHoverCursor(float windowMouseX, float windowMouseY);
     void releaseChromeResizeCursor();
     void setChromeCursor(SDL_HitTestResult hit);
@@ -120,6 +138,8 @@ private:
             std::uintptr_t wParam,
             std::intptr_t lParam);
     [[nodiscard]] SDL_HitTestResult nativeChromeHitTestFromScreenPoint(int screenX, int screenY) const;
+    [[nodiscard]] int nativeChromeResizeBorderForWindow(void* windowHandle) const;
+    void clearNativeResizeState();
 #endif
 
     /// Tracks the active native chrome drag or resize gesture.
@@ -144,6 +164,9 @@ private:
     bool borderlessChrome_ = false;
     bool chromeMouseCaptured_ = false;
     bool chromeResizeCursorActive_ = false;
+    bool liveResizeFrameSizeValid_ = false;
+    std::uint32_t liveResizeFrameWidthPixels_ = 0;
+    std::uint32_t liveResizeFrameHeightPixels_ = 0;
     LiveResizeFrameCallback liveResizeFrameCallback_;
 #if defined(_WIN32)
     void* nativeChromeWindowHandle_ = nullptr;
