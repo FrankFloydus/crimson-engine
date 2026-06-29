@@ -10,6 +10,7 @@
 #include "editor/commands/document/scene_command.hpp"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace quader {
@@ -39,6 +40,18 @@ public:
             return documentCommandUnchangedResult();
         }
         return apply(after_);
+    }
+
+    bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) override {
+        if (mergeKey.empty()) {
+            return false;
+        }
+        const auto* newer = dynamic_cast<const ApplyEntityTransformCommand*>(&newerCommand);
+        if (newer == nullptr || &newer->scene() != &scene() || newer->entity_ != entity_) {
+            return false;
+        }
+        after_ = newer->after_;
+        return true;
     }
 
 private:

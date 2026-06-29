@@ -66,7 +66,9 @@ public:
 
 private:
     MeshRenderableFactory* factory_ = nullptr;
-    std::unordered_map<EntityId, MeshRenderableProxy> meshProxies_;
+    std::unordered_map<EntityId, MeshRenderableProxy> renderedMeshProxies_;
+    std::unordered_map<EntityId, MeshRenderableProxy> shadedMeshProxies_;
+    std::unordered_map<EntityId, MeshRenderableProxy> overlayDepthMeshProxies_;
 };
 
 } // namespace quader

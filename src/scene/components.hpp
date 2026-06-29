@@ -185,8 +185,112 @@ enum class LightType {
 struct LightComponent {
     LightType type = LightType::Directional;
     QVec3 color = {1.0f, 1.0f, 1.0f};
-    float intensity = 80000.0f;
+    float intensity = 1.0f;
+    float range = 10.0f;
     bool castsShadows = false;
+
+    [[nodiscard]] bool operator==(const LightComponent& other) const {
+        return type == other.type &&
+                color.x == other.color.x &&
+                color.y == other.color.y &&
+                color.z == other.color.z &&
+                intensity == other.intensity &&
+                range == other.range &&
+                castsShadows == other.castsShadows;
+    }
+};
+
+/**
+ * Stores scene-wide environment settings on the real scene root entity.
+ */
+struct SceneEnvironmentSettings {
+    std::string environmentId = "lightroom_14b";
+    bool enabled = true;
+    bool showBackground = true;
+    float intensity = 1.0f;
+    float backgroundIntensity = 1.0f;
+    float rotationY = 0.0f;
+
+    [[nodiscard]] bool operator==(const SceneEnvironmentSettings& other) const {
+        return environmentId == other.environmentId &&
+                enabled == other.enabled &&
+                showBackground == other.showBackground &&
+                intensity == other.intensity &&
+                backgroundIntensity == other.backgroundIntensity &&
+                rotationY == other.rotationY;
+    }
+};
+
+/**
+ * Stores scene-wide camera exposure settings on the real scene root entity.
+ */
+struct SceneCameraSettings {
+    float aperture = 16.0f;
+    float shutterSpeed = 1.0f / 125.0f;
+    float sensitivity = 100.0f;
+    float nearPlane = 0.05f;
+    float farPlane = 1000.0f;
+
+    [[nodiscard]] bool operator==(const SceneCameraSettings& other) const {
+        return aperture == other.aperture &&
+                shutterSpeed == other.shutterSpeed &&
+                sensitivity == other.sensitivity &&
+                nearPlane == other.nearPlane &&
+                farPlane == other.farPlane;
+    }
+};
+
+/**
+ * Selects the scene-wide rendered viewport tone mapping operator.
+ */
+enum class SceneToneMapping {
+    Linear,
+    AcesLegacy,
+    Aces,
+    Filmic,
+    DisplayRange,
+};
+
+/**
+ * Stores scene-wide viewport post-process settings on the real scene root entity.
+ */
+struct ScenePostProcessSettings {
+    bool enabled = true;
+    bool antiAliasing = true;
+    bool ambientOcclusion = false;
+    float ambientOcclusionIntensity = 1.0f;
+    float ambientOcclusionRadius = 0.3f;
+    bool bloom = false;
+    float bloomStrength = 0.1f;
+    bool dithering = true;
+    SceneToneMapping toneMapping = SceneToneMapping::Aces;
+
+    [[nodiscard]] bool operator==(const ScenePostProcessSettings& other) const {
+        return enabled == other.enabled &&
+                antiAliasing == other.antiAliasing &&
+                ambientOcclusion == other.ambientOcclusion &&
+                ambientOcclusionIntensity == other.ambientOcclusionIntensity &&
+                ambientOcclusionRadius == other.ambientOcclusionRadius &&
+                bloom == other.bloom &&
+                bloomStrength == other.bloomStrength &&
+                dithering == other.dithering &&
+                toneMapping == other.toneMapping;
+    }
+};
+
+/**
+ * Marks the real scene root entity and stores global scene render settings.
+ */
+struct SceneSettingsComponent {
+    SceneEnvironmentSettings environment;
+    SceneCameraSettings camera;
+    ScenePostProcessSettings postProcess;
+
+    [[nodiscard]] bool operator==(const SceneSettingsComponent& other) const {
+        return environment == other.environment &&
+                camera == other.camera &&
+                postProcess == other.postProcess;
+    }
 };
 
 } // namespace quader

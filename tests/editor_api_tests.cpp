@@ -44,6 +44,57 @@ std::optional<quader::QuaderEntitySnapshot> entityById(
     return editor.query().entity(id);
 }
 
+std::optional<quader::QuaderEntitySnapshot> sceneRoot(const quader::QuaderEditorApi& editor) {
+    for (const quader::QuaderEntitySnapshot& snapshot : editor.query().entities()) {
+        if (snapshot.isSceneRoot) {
+            return snapshot;
+        }
+    }
+    return std::nullopt;
+}
+
+std::size_t userEntityCount(const quader::QuaderEditorApi& editor) {
+    std::size_t count = 0;
+    for (const quader::QuaderEntitySnapshot& snapshot : editor.query().entities()) {
+        if (!snapshot.isSceneRoot) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+quader::QuaderSceneSettings sceneRootSettings(const quader::QuaderEditorApi& editor) {
+    const std::optional<quader::QuaderEntitySnapshot> root = sceneRoot(editor);
+    EXPECT_TRUE(root.has_value());
+    EXPECT_TRUE(root.has_value() && root->hasSceneSettings);
+    return root.has_value() ? root->sceneSettings : quader::QuaderSceneSettings{};
+}
+
+void expectSceneSettingsEq(
+        const quader::QuaderSceneSettings& actual,
+        const quader::QuaderSceneSettings& expected) {
+    EXPECT_EQ(actual.environment.environmentId, expected.environment.environmentId);
+    EXPECT_EQ(actual.environment.enabled, expected.environment.enabled);
+    EXPECT_EQ(actual.environment.showBackground, expected.environment.showBackground);
+    EXPECT_FLOAT_EQ(actual.environment.intensity, expected.environment.intensity);
+    EXPECT_FLOAT_EQ(actual.environment.backgroundIntensity, expected.environment.backgroundIntensity);
+    EXPECT_FLOAT_EQ(actual.environment.rotationY, expected.environment.rotationY);
+    EXPECT_FLOAT_EQ(actual.camera.aperture, expected.camera.aperture);
+    EXPECT_FLOAT_EQ(actual.camera.shutterSpeed, expected.camera.shutterSpeed);
+    EXPECT_FLOAT_EQ(actual.camera.sensitivity, expected.camera.sensitivity);
+    EXPECT_FLOAT_EQ(actual.camera.nearPlane, expected.camera.nearPlane);
+    EXPECT_FLOAT_EQ(actual.camera.farPlane, expected.camera.farPlane);
+    EXPECT_EQ(actual.postProcess.enabled, expected.postProcess.enabled);
+    EXPECT_EQ(actual.postProcess.antiAliasing, expected.postProcess.antiAliasing);
+    EXPECT_EQ(actual.postProcess.ambientOcclusion, expected.postProcess.ambientOcclusion);
+    EXPECT_FLOAT_EQ(actual.postProcess.ambientOcclusionIntensity, expected.postProcess.ambientOcclusionIntensity);
+    EXPECT_FLOAT_EQ(actual.postProcess.ambientOcclusionRadius, expected.postProcess.ambientOcclusionRadius);
+    EXPECT_EQ(actual.postProcess.bloom, expected.postProcess.bloom);
+    EXPECT_FLOAT_EQ(actual.postProcess.bloomStrength, expected.postProcess.bloomStrength);
+    EXPECT_EQ(actual.postProcess.dithering, expected.postProcess.dithering);
+    EXPECT_EQ(actual.postProcess.toneMapping, expected.postProcess.toneMapping);
+}
+
 std::vector<quader::EntityId> selectedEntities(const quader::QuaderEditorApi& editor) {
     std::vector<quader::EntityId> selected;
     for (const quader::QuaderEntitySnapshot& snapshot : editor.query().entities()) {
@@ -294,6 +345,27 @@ bool hasKeybinding(
     });
 }
 
+bool hasKeybindingWhen(
+        const std::vector<quader::QuaderKeybindingRule>& rules,
+        std::string_view targetId,
+        std::string_view shortcut,
+        std::string_view when) {
+    return std::any_of(rules.begin(), rules.end(), [&](const quader::QuaderKeybindingRule& rule) {
+        return rule.targetId == targetId && rule.shortcut == shortcut && rule.when == when;
+    });
+}
+
+quader::QuaderInputChord singleInputChord(std::string_view shortcut) {
+    const std::optional<std::vector<quader::QuaderInputChord>> parsed =
+            quader::quaderInputParseShortcut(shortcut);
+    EXPECT_TRUE(parsed.has_value()) << shortcut;
+    if (!parsed || parsed->empty()) {
+        return {};
+    }
+    EXPECT_EQ(parsed->size(), 1u) << shortcut;
+    return parsed->front();
+}
+
 void expectSameApiStatus(
         const quader::QuaderApiVoidResult& actual,
         const quader::QuaderApiVoidResult& expected) {
@@ -335,11 +407,15 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     EXPECT_TRUE(commandDescriptor(editor, quader::QuaderCommand::ProjectOpen).has_value());
     EXPECT_TRUE(commandDescriptor(editor, quader::QuaderCommand::ProjectSave).has_value());
     EXPECT_TRUE(commandDescriptor(editor, quader::QuaderCommand::ProjectSaveAs).has_value());
+    EXPECT_TRUE(commandDescriptor(editor, quader::QuaderCommand::SceneCreatePointLight).has_value());
+    EXPECT_TRUE(commandDescriptor(editor, quader::QuaderCommand::SceneCreateDirectionalLight).has_value());
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::EditUndo), "Ctrl+Z");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectNew), "Ctrl+N");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectOpen), "Ctrl+O");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectSave), "Ctrl+S");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ProjectSaveAs), "");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::SceneCreatePointLight), "");
+    EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::SceneCreateDirectionalLight), "");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFrameSelection), "Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportFocusOrigin), "Shift+Home");
     EXPECT_EQ(editor.commands().shortcutFor(quader::QuaderCommand::ViewportSpawnWindow), "F12");
@@ -379,7 +455,8 @@ TEST(EditorApiTests, AggregatesDocumentApisAndCommandRouting) {
     ASSERT_TRUE(created.ok()) << created.errorMessage();
     EXPECT_TRUE(created.changed());
     EXPECT_NE(created.value().entity, quader::InvalidEntityId);
-    EXPECT_EQ(editor.query().entities().size(), 1u);
+    ASSERT_TRUE(sceneRoot(editor).has_value());
+    EXPECT_EQ(userEntityCount(editor), 1u);
 
     const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
     EXPECT_TRUE(undo.ok()) << undo.errorMessage();
@@ -619,6 +696,7 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+    createSelectedBox(editor, "Undo Shortcut Box");
 
     quader::ViewportToolState state;
     quader::ViewportShortcut shortcut;
@@ -674,6 +752,67 @@ TEST(EditorApiTests, ViewportKeybindingsResolveContextAndUserOverrides) {
             true,
             true,
             shortcut));
+}
+
+TEST(EditorApiTests, GlobalCommandKeybindingsResolveWithoutViewportFocus) {
+    const std::filesystem::path path = keybindingTestPath("global-command-shortcuts");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+    createSelectedBox(editor, "Global Undo Shortcut Box");
+
+    quader::ViewportToolState state;
+    const quader::QuaderViewportKeybindingDispatch undoDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Z"), state, false, false);
+    ASSERT_EQ(undoDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(undoDispatch.commandId, quader::QuaderCommand::EditUndo.string());
+
+    ASSERT_TRUE(editor.commands().execute(quader::QuaderCommand::HistoryUndo).ok());
+
+    const quader::QuaderViewportKeybindingDispatch redoDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Y"), state, false, false);
+    ASSERT_EQ(redoDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(redoDispatch.commandId, quader::QuaderCommand::EditRedo.string());
+
+    const quader::QuaderViewportKeybindingDispatch shiftRedoDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Shift+Z"), state, false, false);
+    ASSERT_EQ(shiftRedoDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(shiftRedoDispatch.commandId, quader::QuaderCommand::EditRedo.string());
+
+    ASSERT_TRUE(editor.commands().execute(quader::QuaderCommand::HistoryRedo).ok());
+
+    ASSERT_TRUE(editor.preferences().setShortcut(quader::QuaderCommand::EditUndo, "Ctrl+Alt+Z").ok());
+    const quader::QuaderViewportKeybindingDispatch reboundUndoDispatch =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Alt+Z"), state, false, false);
+    ASSERT_EQ(reboundUndoDispatch.kind, quader::QuaderViewportKeybindingDispatch::Kind::Command);
+    EXPECT_EQ(reboundUndoDispatch.commandId, quader::QuaderCommand::EditUndo.string());
+}
+
+TEST(EditorApiTests, GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlyShortcuts) {
+    const std::filesystem::path path = keybindingTestPath("global-command-context");
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+
+    quader::ViewportToolState state;
+    const quader::QuaderViewportKeybindingDispatch unavailableUndo =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Z"), state, false, false);
+    EXPECT_EQ(unavailableUndo.kind, quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+    const quader::QuaderViewportKeybindingDispatch textInputUndo =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("Ctrl+Z"), state, false, true);
+    EXPECT_EQ(textInputUndo.kind, quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+    const quader::QuaderViewportKeybindingDispatch perspectiveWithoutViewportFocus =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("P"), state, false, false);
+    EXPECT_EQ(perspectiveWithoutViewportFocus.kind, quader::QuaderViewportKeybindingDispatch::Kind::NoMatch);
+
+    const quader::QuaderViewportKeybindingDispatch perspectiveWithViewportFocus =
+            editor.commands().dispatchViewportInputBinding(singleInputChord("P"), state, true, false);
+    ASSERT_EQ(
+            perspectiveWithViewportFocus.kind,
+            quader::QuaderViewportKeybindingDispatch::Kind::ViewportShortcut);
+    EXPECT_EQ(perspectiveWithViewportFocus.shortcut.kind, quader::ViewportShortcutKind::SetView);
 }
 
 TEST(EditorApiTests, ViewportSelectionModeShortcutsResolveAsRouterIntents) {
@@ -850,8 +989,28 @@ TEST(EditorApiTests, ViewportHostShortcutCatalogDrivesCommandKeybindings) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
     ASSERT_TRUE(editor.commands().setKeybindingStoragePath(path).ok());
+    createSelectedBox(editor, "Shortcut History A");
+    createSelectedBox(editor, "Shortcut History B");
+    ASSERT_TRUE(editor.history().undo().ok());
+    ASSERT_TRUE(editor.history().canUndo());
+    ASSERT_TRUE(editor.history().canRedo());
 
     const std::vector<quader::QuaderKeybindingRule> rules = editor.commands().keybindings();
+    EXPECT_TRUE(hasKeybindingWhen(
+            rules,
+            quader::QuaderCommand::EditUndo.string(),
+            "Ctrl+Z",
+            "!textInputActive && canUndo"));
+    EXPECT_TRUE(hasKeybindingWhen(
+            rules,
+            quader::QuaderCommand::EditRedo.string(),
+            "Ctrl+Y",
+            "!textInputActive && canRedo"));
+    EXPECT_TRUE(hasKeybindingWhen(
+            rules,
+            quader::QuaderCommand::EditRedo.string(),
+            "Ctrl+Shift+Z",
+            "!textInputActive && canRedo"));
     quader::ViewportToolState state;
     int checked = 0;
     for (const quader::ViewportShortcutBindingDescriptor& descriptor : quader::viewportShortcutBindingCatalog()) {
@@ -1455,12 +1614,15 @@ TEST(EditorApiTests, HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory) 
     const std::optional<quader::QuaderMeshSnapshot> before = editor.query().mesh(box.mesh);
     ASSERT_TRUE(before.has_value());
     const quader::QuaderHistorySnapshot historyBeforePreview = editor.query().history();
+    EXPECT_EQ(historyBeforePreview.canUndo, editor.history().canUndo());
 
     const quader::QuaderApiVoidResult preview =
             editor.commands().execute(editor.commands().commandIdForModelingAction("bevel_edges"));
     ASSERT_TRUE(preview.ok()) << preview.errorMessage();
     EXPECT_TRUE(preview.changed());
     EXPECT_TRUE(editor.modeling().canCancelActiveToolOrPreview());
+    EXPECT_TRUE(editor.history().canUndo());
+    EXPECT_TRUE(editor.query().history().canUndo);
     const std::optional<quader::QuaderMeshSnapshot> previewMesh = editor.query().mesh(box.mesh);
     ASSERT_TRUE(previewMesh.has_value());
     EXPECT_GT(previewMesh->primitiveCount, before->primitiveCount);
@@ -2122,6 +2284,302 @@ TEST(EditorApiTests, SceneBatchUsesPendingStateForRepeatedEntityEdits) {
     EXPECT_EQ(snapshot->transform.position.x, 2.0f);
 }
 
+TEST(EditorApiTests, ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    quader::QuaderCreatePointLightArgs args;
+    args.name = "Key Light";
+    args.transform.position = {1.0f, 2.0f, 3.0f};
+    args.light.color = {1.0f, 0.75f, 0.5f};
+    args.light.intensity = 950.0f;
+    args.light.range = 14.0f;
+    args.light.castsShadows = true;
+    args.selectCreated = true;
+
+    const quader::QuaderApiResult<quader::QuaderEntityRef> created = editor.scene().createPointLight(args);
+    ASSERT_TRUE(created.ok()) << created.errorMessage();
+    ASSERT_NE(created.value().id, quader::InvalidEntityId);
+
+    std::optional<quader::QuaderEntitySnapshot> snapshot = entityById(editor, created.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->name, "Key Light");
+    EXPECT_EQ(snapshot->kind, quader::QuaderEntityKind::Light);
+    EXPECT_TRUE(snapshot->hasLight);
+    EXPECT_EQ(snapshot->light.type, quader::QuaderLightType::Point);
+    EXPECT_FLOAT_EQ(snapshot->light.color.y, 0.75f);
+    EXPECT_FLOAT_EQ(snapshot->light.intensity, 950.0f);
+    EXPECT_FLOAT_EQ(snapshot->light.range, 14.0f);
+    EXPECT_TRUE(snapshot->light.castsShadows);
+    EXPECT_FLOAT_EQ(snapshot->transform.position.z, 3.0f);
+    EXPECT_TRUE(snapshot->selected);
+    EXPECT_TRUE(snapshot->active);
+
+    quader::QuaderLightComponent edited = snapshot->light;
+    edited.color = {0.25f, 0.5f, 1.0f};
+    edited.intensity = 1200.0f;
+    edited.range = 6.5f;
+    edited.castsShadows = false;
+    const quader::QuaderApiVoidResult setLight = editor.scene().setLightComponent(created.value().id, edited);
+    ASSERT_TRUE(setLight.ok()) << setLight.errorMessage();
+    EXPECT_TRUE(setLight.changed());
+
+    snapshot = entityById(editor, created.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FLOAT_EQ(snapshot->light.color.z, 1.0f);
+    EXPECT_FLOAT_EQ(snapshot->light.intensity, 1200.0f);
+    EXPECT_FLOAT_EQ(snapshot->light.range, 6.5f);
+    EXPECT_FALSE(snapshot->light.castsShadows);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    snapshot = entityById(editor, created.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FLOAT_EQ(snapshot->light.color.z, 0.5f);
+    EXPECT_FLOAT_EQ(snapshot->light.range, 14.0f);
+    EXPECT_TRUE(snapshot->light.castsShadows);
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    snapshot = entityById(editor, created.value().id);
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_FLOAT_EQ(snapshot->light.color.z, 1.0f);
+    EXPECT_FLOAT_EQ(snapshot->light.range, 6.5f);
+    EXPECT_FALSE(snapshot->light.castsShadows);
+}
+
+TEST(EditorApiTests, ScenePointLightLiveEditsApplyImmediatelyAndCoalesceByMergeKey) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    quader::QuaderCreatePointLightArgs args;
+    args.light.intensity = 950.0f;
+    args.light.range = 14.0f;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> created = editor.scene().createPointLight(args);
+    ASSERT_TRUE(created.ok()) << created.errorMessage();
+
+    const std::optional<quader::QuaderEntitySnapshot> beforeSnapshot = entityById(editor, created.value().id);
+    ASSERT_TRUE(beforeSnapshot.has_value());
+    const quader::QuaderLightComponent before = beforeSnapshot->light;
+
+    quader::QuaderLightComponent middle = before;
+    middle.intensity = 1100.0f;
+    quader::QuaderApiVoidResult set = editor.scene().setLightComponent(
+            created.value().id,
+            middle,
+            quader::QuaderSceneEditOptions{.mergeKey = "inspector.light.intensity.gesture"});
+    ASSERT_TRUE(set.ok()) << set.errorMessage();
+    EXPECT_TRUE(set.changed());
+    EXPECT_FLOAT_EQ(entityById(editor, created.value().id)->light.intensity, 1100.0f);
+
+    quader::QuaderLightComponent after = middle;
+    after.intensity = 1400.0f;
+    set = editor.scene().setLightComponent(
+            created.value().id,
+            after,
+            quader::QuaderSceneEditOptions{.mergeKey = "inspector.light.intensity.gesture"});
+    ASSERT_TRUE(set.ok()) << set.errorMessage();
+    EXPECT_TRUE(set.changed());
+    EXPECT_FLOAT_EQ(entityById(editor, created.value().id)->light.intensity, 1400.0f);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    EXPECT_FLOAT_EQ(entityById(editor, created.value().id)->light.intensity, before.intensity);
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    EXPECT_FLOAT_EQ(entityById(editor, created.value().id)->light.intensity, after.intensity);
+}
+
+TEST(EditorApiTests, SceneCreatePointLightCommandCreatesSelectedPointLight) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    const quader::QuaderApiVoidResult result =
+            editor.commands().execute(quader::QuaderCommand::SceneCreatePointLight);
+    ASSERT_TRUE(result.ok()) << result.errorMessage();
+    EXPECT_TRUE(result.changed());
+
+    const std::optional<quader::QuaderEntitySnapshot> snapshot = entityNamed(editor, "Point Light");
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->kind, quader::QuaderEntityKind::Light);
+    EXPECT_TRUE(snapshot->hasLight);
+    EXPECT_EQ(snapshot->light.type, quader::QuaderLightType::Point);
+    EXPECT_TRUE(snapshot->selected);
+    EXPECT_TRUE(snapshot->active);
+    ASSERT_TRUE(sceneRoot(editor).has_value());
+    EXPECT_EQ(snapshot->parent, sceneRoot(editor)->id);
+}
+
+TEST(EditorApiTests, SceneCreateDirectionalLightCommandCreatesSelectedDirectionalLight) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+
+    const quader::QuaderApiVoidResult result =
+            editor.commands().execute(quader::QuaderCommand::SceneCreateDirectionalLight);
+    ASSERT_TRUE(result.ok()) << result.errorMessage();
+    EXPECT_TRUE(result.changed());
+
+    const std::optional<quader::QuaderEntitySnapshot> snapshot = entityNamed(editor, "Directional Light");
+    ASSERT_TRUE(snapshot.has_value());
+    EXPECT_EQ(snapshot->kind, quader::QuaderEntityKind::Light);
+    EXPECT_TRUE(snapshot->hasLight);
+    EXPECT_EQ(snapshot->light.type, quader::QuaderLightType::Directional);
+    EXPECT_TRUE(snapshot->selected);
+    EXPECT_TRUE(snapshot->active);
+    ASSERT_TRUE(sceneRoot(editor).has_value());
+    EXPECT_EQ(snapshot->parent, sceneRoot(editor)->id);
+}
+
+TEST(EditorApiTests, ScenePointLightSelectionFeedsQuerySummaryAndCenterInComponentMode) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    ASSERT_TRUE(editor.selection().setMode(quader::QuaderSelectionMode::Face).ok);
+
+    quader::QuaderCreatePointLightArgs args;
+    args.transform.position = {2.0f, 3.0f, 4.0f};
+    args.selectCreated = true;
+    const quader::QuaderApiResult<quader::QuaderEntityRef> light = editor.scene().createPointLight(args);
+    ASSERT_TRUE(light.ok()) << light.errorMessage();
+
+    const quader::QuaderSelectionSummary selection = editor.query().selection();
+    EXPECT_TRUE(selection.hasSelection);
+    EXPECT_EQ(selection.mode, quader::QuaderSelectionMode::Object);
+    EXPECT_EQ(selection.activeKind, quader::QuaderActiveSelectionKind::Light);
+    EXPECT_EQ(selection.selectedObjectCount, 1u);
+
+    const std::optional<quader::QVec3> center = editor.query().selectionCenter();
+    ASSERT_TRUE(center.has_value());
+    EXPECT_FLOAT_EQ(center->x, 2.0f);
+    EXPECT_FLOAT_EQ(center->y, 3.0f);
+    EXPECT_FLOAT_EQ(center->z, 4.0f);
+}
+
+TEST(EditorApiTests, SceneSettingsPropertiesUndoAndRedoIndividually) {
+    auto exercise = [](std::string_view label, auto mutate) {
+        SCOPED_TRACE(std::string(label));
+        CommandTestHarness harness;
+        quader::QuaderEditorApi& editor = harness.editor;
+        const std::optional<quader::QuaderEntitySnapshot> root = sceneRoot(editor);
+        ASSERT_TRUE(root.has_value());
+        ASSERT_TRUE(root->hasSceneSettings);
+
+        const quader::QuaderSceneSettings before = root->sceneSettings;
+        quader::QuaderSceneSettings edited = before;
+        mutate(edited);
+
+        const quader::QuaderApiVoidResult set = editor.scene().setSceneSettings(root->id, edited);
+        ASSERT_TRUE(set.ok()) << set.errorMessage();
+        EXPECT_TRUE(set.changed());
+        expectSceneSettingsEq(sceneRootSettings(editor), edited);
+
+        const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+        EXPECT_TRUE(undo.changed());
+        expectSceneSettingsEq(sceneRootSettings(editor), before);
+
+        const quader::QuaderApiVoidResult redo = editor.commands().execute(quader::QuaderCommand::HistoryRedo);
+        ASSERT_TRUE(redo.ok()) << redo.errorMessage();
+        EXPECT_TRUE(redo.changed());
+        expectSceneSettingsEq(sceneRootSettings(editor), edited);
+    };
+
+    exercise("environment.environmentId", [](quader::QuaderSceneSettings& settings) {
+        settings.environment.environmentId = "pillars_2k";
+    });
+    exercise("environment.enabled", [](quader::QuaderSceneSettings& settings) {
+        settings.environment.enabled = false;
+    });
+    exercise("environment.showBackground", [](quader::QuaderSceneSettings& settings) {
+        settings.environment.showBackground = false;
+    });
+    exercise("environment.intensity", [](quader::QuaderSceneSettings& settings) {
+        settings.environment.intensity = 2.5f;
+    });
+    exercise("environment.backgroundIntensity", [](quader::QuaderSceneSettings& settings) {
+        settings.environment.backgroundIntensity = 0.35f;
+    });
+    exercise("environment.rotationY", [](quader::QuaderSceneSettings& settings) {
+        settings.environment.rotationY = 1.25f;
+    });
+    exercise("camera.aperture", [](quader::QuaderSceneSettings& settings) {
+        settings.camera.aperture = 8.0f;
+    });
+    exercise("camera.shutterSpeed", [](quader::QuaderSceneSettings& settings) {
+        settings.camera.shutterSpeed = 1.0f / 60.0f;
+    });
+    exercise("camera.sensitivity", [](quader::QuaderSceneSettings& settings) {
+        settings.camera.sensitivity = 400.0f;
+    });
+    exercise("camera.nearPlane", [](quader::QuaderSceneSettings& settings) {
+        settings.camera.nearPlane = 0.2f;
+    });
+    exercise("camera.farPlane", [](quader::QuaderSceneSettings& settings) {
+        settings.camera.farPlane = 2500.0f;
+    });
+    exercise("postProcess.enabled", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.enabled = false;
+    });
+    exercise("postProcess.antiAliasing", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.antiAliasing = false;
+    });
+    exercise("postProcess.ambientOcclusion", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.ambientOcclusion = true;
+    });
+    exercise("postProcess.ambientOcclusionIntensity", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.ambientOcclusionIntensity = 3.0f;
+    });
+    exercise("postProcess.ambientOcclusionRadius", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.ambientOcclusionRadius = 1.4f;
+    });
+    exercise("postProcess.bloom", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.bloom = true;
+    });
+    exercise("postProcess.bloomStrength", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.bloomStrength = 0.7f;
+    });
+    exercise("postProcess.dithering", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.dithering = false;
+    });
+    exercise("postProcess.toneMapping", [](quader::QuaderSceneSettings& settings) {
+        settings.postProcess.toneMapping = quader::QuaderToneMapping::DisplayRange;
+    });
+}
+
+TEST(EditorApiTests, SceneSettingsLiveEditsApplyImmediatelyAndCoalesceByMergeKey) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    ASSERT_FALSE(editor.history().canUndo());
+
+    const std::optional<quader::QuaderEntitySnapshot> root = sceneRoot(editor);
+    ASSERT_TRUE(root.has_value());
+    ASSERT_TRUE(root->hasSceneSettings);
+    const quader::QuaderSceneSettings before = root->sceneSettings;
+
+    quader::QuaderSceneSettings middle = before;
+    middle.environment.intensity = 2.0f;
+    quader::QuaderApiVoidResult set = editor.scene().setSceneSettings(
+            root->id,
+            middle,
+            quader::QuaderSceneEditOptions{.mergeKey = "inspector.environment.intensity.gesture"});
+    ASSERT_TRUE(set.ok()) << set.errorMessage();
+    EXPECT_TRUE(set.changed());
+    expectSceneSettingsEq(sceneRootSettings(editor), middle);
+
+    quader::QuaderSceneSettings after = middle;
+    after.environment.intensity = 3.0f;
+    set = editor.scene().setSceneSettings(
+            root->id,
+            after,
+            quader::QuaderSceneEditOptions{.mergeKey = "inspector.environment.intensity.gesture"});
+    ASSERT_TRUE(set.ok()) << set.errorMessage();
+    EXPECT_TRUE(set.changed());
+    expectSceneSettingsEq(sceneRootSettings(editor), after);
+
+    ASSERT_TRUE(editor.history().undo().ok());
+    expectSceneSettingsEq(sceneRootSettings(editor), before);
+    EXPECT_FALSE(editor.history().canUndo());
+
+    ASSERT_TRUE(editor.history().redo().ok());
+    expectSceneSettingsEq(sceneRootSettings(editor), after);
+}
+
 TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingParentTransform) {
     CommandTestHarness harness;
     quader::QuaderEditorApi& editor = harness.editor;
@@ -2159,7 +2617,8 @@ TEST(EditorApiTests, SceneBatchReparentPreservesWorldTransformAgainstPendingPare
     childSnapshot = entityById(editor, child.value().id);
     ASSERT_TRUE(parentSnapshot.has_value());
     ASSERT_TRUE(childSnapshot.has_value());
-    EXPECT_EQ(childSnapshot->parent, quader::InvalidEntityId);
+    ASSERT_TRUE(sceneRoot(editor).has_value());
+    EXPECT_EQ(childSnapshot->parent, sceneRoot(editor)->id);
     EXPECT_NEAR(parentSnapshot->transform.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(childSnapshot->transform.position.x, 2.0f, 0.001f);
 
@@ -2210,7 +2669,8 @@ TEST(EditorApiTests, SceneBatchReparentCanKeepLocalTransformAgainstPendingParent
     childSnapshot = entityById(editor, child.value().id);
     ASSERT_TRUE(parentSnapshot.has_value());
     ASSERT_TRUE(childSnapshot.has_value());
-    EXPECT_EQ(childSnapshot->parent, quader::InvalidEntityId);
+    ASSERT_TRUE(sceneRoot(editor).has_value());
+    EXPECT_EQ(childSnapshot->parent, sceneRoot(editor)->id);
     EXPECT_NEAR(parentSnapshot->transform.position.x, 0.0f, 0.001f);
     EXPECT_NEAR(childSnapshot->transform.position.x, 2.0f, 0.001f);
 
@@ -2308,7 +2768,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     const quader::QuaderApiVoidResult duplicated = editor.commands().execute(
             editor.commands().commandIdForModelingAction("duplicate_meshes"));
     ASSERT_TRUE(duplicated.ok()) << duplicated.errorMessage();
-    ASSERT_EQ(editor.query().entities().size(), 2u);
+    ASSERT_EQ(userEntityCount(editor), 2u);
     EXPECT_EQ(editor.query().history().undoLabel, "Duplicate Meshes");
 
     quader::QuaderTransform moved;
@@ -2327,7 +2787,7 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     EXPECT_EQ(editor.query().history().undoLabel, "Delete Selection");
 
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_EQ(editor.query().entities().size(), 2u);
+    EXPECT_EQ(userEntityCount(editor), 2u);
     EXPECT_EQ(editor.query().history().redoLabel, "Delete Selection");
 
     ASSERT_TRUE(editor.history().undo().ok());
@@ -2337,17 +2797,17 @@ TEST(EditorApiTests, AppCommandsAndDirectOperationsShareChronologicalUndoStack) 
     EXPECT_EQ(editor.query().history().redoLabel, "Set Transform");
 
     ASSERT_TRUE(editor.history().undo().ok());
-    EXPECT_EQ(editor.query().entities().size(), 1u);
+    EXPECT_EQ(userEntityCount(editor), 1u);
     EXPECT_EQ(editor.query().history().redoLabel, "Duplicate Meshes");
 
     ASSERT_TRUE(editor.history().redo().ok());
-    EXPECT_EQ(editor.query().entities().size(), 2u);
+    EXPECT_EQ(userEntityCount(editor), 2u);
     ASSERT_TRUE(editor.history().redo().ok());
     originalSnapshot = entityById(editor, original.entity);
     ASSERT_TRUE(originalSnapshot.has_value());
     EXPECT_NEAR(originalSnapshot->transform.position.x, 3.0f, 0.001f);
     ASSERT_TRUE(editor.history().redo().ok());
-    EXPECT_LT(editor.query().entities().size(), 2u);
+    EXPECT_LT(userEntityCount(editor), 2u);
 }
 
 TEST(EditorApiTests, DuplicateMeshesHistoryRestoresSceneOnlyDuplicateState) {
@@ -2591,4 +3051,20 @@ TEST(EditorApiTests, PublicHistoryUndoRedoMatchesCommandApiStatus) {
             commandHistory.editor.commands().execute(quader::QuaderCommand::HistoryRedo);
     expectSameApiStatus(commandRedo, directRedo);
     EXPECT_TRUE(entityNamed(commandHistory.editor, "Command History Box").has_value());
+}
+
+TEST(EditorApiTests, HistoryUndoUsesDocumentHistoryWhenOnlyIdleModalToolIsActive) {
+    CommandTestHarness harness;
+    quader::QuaderEditorApi& editor = harness.editor;
+    createSelectedBox(editor, "Idle Modal Undo Box");
+    ASSERT_TRUE(editor.history().canUndo());
+
+    const quader::QuaderApiVoidResult activateBox = editor.tools().activate(quader::ViewportToolId::Box);
+    ASSERT_TRUE(activateBox.ok()) << activateBox.errorMessage();
+    EXPECT_TRUE(editor.modeling().canCancelActiveToolOrPreview());
+
+    const quader::QuaderApiVoidResult undo = editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+    ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+    EXPECT_TRUE(undo.changed());
+    EXPECT_FALSE(entityNamed(editor, "Idle Modal Undo Box").has_value());
 }

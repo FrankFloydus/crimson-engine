@@ -31,6 +31,10 @@ UndoRedoResult noRedoResult() {
 } // namespace
 
 UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> command) {
+    return execute(std::move(command), {});
+}
+
+UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options) {
     if (!command) {
         return {
                 .ok = false,
@@ -44,7 +48,18 @@ UndoRedoResult UndoRedoManager::execute(std::unique_ptr<IUndoableCommand> comman
         return result;
     }
 
-    undoStack_.push_back(std::move(command));
+    if (!options.mergeKey.empty() &&
+            !undoStack_.empty() &&
+            undoStack_.back().mergeKey == options.mergeKey &&
+            undoStack_.back().command->mergeWith(*command, options.mergeKey)) {
+        redoStack_.clear();
+        return result;
+    }
+
+    undoStack_.push_back(StackEntry{
+            .command = std::move(command),
+            .mergeKey = std::move(options.mergeKey),
+    });
     redoStack_.clear();
     return result;
 }
@@ -58,7 +73,10 @@ UndoRedoResult UndoRedoManager::recordExecuted(std::unique_ptr<IUndoableCommand>
         };
     }
 
-    undoStack_.push_back(std::move(command));
+    undoStack_.push_back(StackEntry{
+            .command = std::move(command),
+            .mergeKey = {},
+    });
     redoStack_.clear();
     return commandChangedResult();
 }
@@ -68,15 +86,15 @@ UndoRedoResult UndoRedoManager::undo() {
         return noUndoResult();
     }
 
-    std::unique_ptr<IUndoableCommand> command = std::move(undoStack_.back());
+    StackEntry entry = std::move(undoStack_.back());
     undoStack_.pop_back();
-    UndoRedoResult result = command->undo();
+    UndoRedoResult result = entry.command->undo();
     if (!result.ok) {
-        undoStack_.push_back(std::move(command));
+        undoStack_.push_back(std::move(entry));
         return result;
     }
 
-    redoStack_.push_back(std::move(command));
+    redoStack_.push_back(std::move(entry));
     return result;
 }
 
@@ -85,15 +103,15 @@ UndoRedoResult UndoRedoManager::redo() {
         return noRedoResult();
     }
 
-    std::unique_ptr<IUndoableCommand> command = std::move(redoStack_.back());
+    StackEntry entry = std::move(redoStack_.back());
     redoStack_.pop_back();
-    UndoRedoResult result = command->redo();
+    UndoRedoResult result = entry.command->redo();
     if (!result.ok) {
-        redoStack_.push_back(std::move(command));
+        redoStack_.push_back(std::move(entry));
         return result;
     }
 
-    undoStack_.push_back(std::move(command));
+    undoStack_.push_back(std::move(entry));
     return result;
 }
 
@@ -101,14 +119,14 @@ const std::string* UndoRedoManager::undoLabel() const {
     if (undoStack_.empty()) {
         return nullptr;
     }
-    return &undoStack_.back()->label();
+    return &undoStack_.back().command->label();
 }
 
 const std::string* UndoRedoManager::redoLabel() const {
     if (redoStack_.empty()) {
         return nullptr;
     }
-    return &redoStack_.back()->label();
+    return &redoStack_.back().command->label();
 }
 
 void UndoRedoManager::clear() {

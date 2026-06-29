@@ -34,15 +34,23 @@ public:
 
     bool setSceneVisible(bool visible);
 
+    bool setSceneLayerMask(std::uint8_t layerMask);
+
+    std::uint8_t sceneVisibleLayerMask() const;
+    std::uint8_t overlayVisibleLayerMask() const;
     std::uint8_t visibleLayerMask() const;
 
-    void applyVisibleLayers(filament::View* view) const;
-    void render(filament::Renderer& renderer, filament::View* view, filament::RenderTarget* renderTarget) const;
+    void applyVisibleLayers(filament::View* sceneView, filament::View* overlayView) const;
+    void render(filament::Renderer& renderer,
+            filament::View* sceneView,
+            filament::View* overlayView,
+            filament::RenderTarget* renderTarget) const;
 
 private:
     bool groundGridVisible_ = true;
     bool overlayVisible_ = false;
     bool sceneVisible_ = true;
+    std::uint8_t sceneLayerMask_ = kViewportShadedSceneLayerMask;
     ViewportSettingColor backgroundColor_ = {0.0f, 0.0f, 0.0f, 1.0f};
     std::uint8_t gridLayerMask_ = 0x04u;
 };

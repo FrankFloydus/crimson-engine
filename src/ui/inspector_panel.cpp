@@ -274,6 +274,105 @@ bool checkboxWithLeftLabel(const char* stableId, const char* label, bool* value)
     return changed;
 }
 
+void updateContinuousEditTracker(const char* stableId,
+        UIContinuousEditTracker& activeEdit,
+        EntityId primary,
+        std::span<const EntityId> selection,
+        std::span<float> values,
+        UIContinuousEditResult& result) {
+    if (result.shouldApply() || result.activated) {
+        result.mergeKey = activeEdit.ensureMergeKey(stableId, primary, selection);
+    }
+    if (result.activated || result.changed) {
+        activeEdit.stage(stableId, primary, selection, std::span<const float>(values.data(), values.size()));
+    }
+    if (result.deactivatedAfterEdit) {
+        const std::vector<float> finalValues =
+                activeEdit.finalValues(stableId, primary, selection, std::span<const float>(values.data(), values.size()));
+        std::copy(finalValues.begin(), finalValues.end(), values.begin());
+        activeEdit.reset();
+    } else if (result.deactivated) {
+        activeEdit.reset();
+    }
+}
+
+UIContinuousEditResult dragFloatWithLeftLabel(const char* stableId,
+        const char* label,
+        float* value,
+        UIContinuousEditTracker& activeEdit,
+        EntityId primary,
+        std::span<const EntityId> selection,
+        float speed,
+        float minValue,
+        float maxValue,
+        const char* format = "%.3f") {
+    std::array<float, 1> staged{*value};
+    activeEdit.applyActiveValues(stableId, primary, selection, std::span<float>(staged.data(), staged.size()));
+    *value = staged[0];
+
+    UIContinuousEditResult result;
+    if (beginLabeledControlTable(stableId)) {
+        setupLabeledControlColumns();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        result.changed = ImGui::DragFloat("##value", value, speed, minValue, maxValue, format);
+        result.activated = ImGui::IsItemActivated();
+        result.deactivated = ImGui::IsItemDeactivated();
+        result.deactivatedAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
+        endLabeledControlTable();
+    } else {
+        ImGui::PopID();
+    }
+
+    staged[0] = *value;
+    updateContinuousEditTracker(stableId, activeEdit, primary, selection, std::span<float>(staged.data(), staged.size()), result);
+    *value = staged[0];
+    return result;
+}
+
+UIContinuousEditResult colorEdit3WithLeftLabel(const char* stableId,
+        const char* label,
+        float values[3],
+        UIContinuousEditTracker& activeEdit,
+        EntityId primary,
+        std::span<const EntityId> selection) {
+    std::array<float, 3> staged{values[0], values[1], values[2]};
+    activeEdit.applyActiveValues(stableId, primary, selection, std::span<float>(staged.data(), staged.size()));
+    values[0] = staged[0];
+    values[1] = staged[1];
+    values[2] = staged[2];
+
+    UIContinuousEditResult result;
+    if (beginLabeledControlTable(stableId)) {
+        setupLabeledControlColumns();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        result.changed = ImGui::ColorEdit3(
+                "##value",
+                values,
+                ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
+        result.activated = ImGui::IsItemActivated();
+        result.deactivated = ImGui::IsItemDeactivated();
+        result.deactivatedAfterEdit = ImGui::IsItemDeactivatedAfterEdit();
+        endLabeledControlTable();
+    } else {
+        ImGui::PopID();
+    }
+
+    staged = {values[0], values[1], values[2]};
+    updateContinuousEditTracker(stableId, activeEdit, primary, selection, std::span<float>(staged.data(), staged.size()), result);
+    values[0] = staged[0];
+    values[1] = staged[1];
+    values[2] = staged[2];
+    return result;
+}
+
 template <typename Enum>
 bool comboWithLeftLabel(const char* stableId,
         const char* label,
@@ -309,6 +408,318 @@ bool comboWithLeftLabel(const char* stableId,
         ImGui::PopID();
     }
     return changed;
+}
+
+void drawSceneSettingsInspector(
+        UIContext& context,
+        EntityId entity,
+        std::span<const EntityId> selection,
+        UIContinuousEditTracker& activeEdit,
+        SceneSettingsComponent settings,
+        LocalizationService& localization) {
+    auto applySettings = [&](SceneSettingsComponent next, std::string mergeKey = {}) {
+        next.environment.intensity = std::max(next.environment.intensity, 0.0f);
+        next.environment.backgroundIntensity = std::max(next.environment.backgroundIntensity, 0.0f);
+        next.camera.aperture = std::max(next.camera.aperture, 0.01f);
+        next.camera.shutterSpeed = std::max(next.camera.shutterSpeed, 0.000001f);
+        next.camera.sensitivity = std::max(next.camera.sensitivity, 1.0f);
+        next.camera.nearPlane = std::max(next.camera.nearPlane, 0.001f);
+        next.camera.farPlane = std::max(next.camera.farPlane, next.camera.nearPlane + 0.001f);
+        next.postProcess.ambientOcclusionIntensity =
+                std::max(next.postProcess.ambientOcclusionIntensity, 0.0f);
+        next.postProcess.ambientOcclusionRadius =
+                std::max(next.postProcess.ambientOcclusionRadius, 0.0f);
+        next.postProcess.bloomStrength = std::max(next.postProcess.bloomStrength, 0.0f);
+        (void)context.editor.scene().setSceneSettings(
+                entity,
+                toApiSceneSettings(next),
+                QuaderSceneEditOptions{.mergeKey = std::move(mergeKey)});
+    };
+
+    const std::string environmentLabel = localization.text("ui.inspector.environment", "Environment");
+    if (ImGui::CollapsingHeader(environmentLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::string presetLabel = localization.text("ui.inspector.environment_preset", "Preset");
+        std::string environmentId = settings.environment.environmentId;
+        const std::vector<std::pair<std::string, std::string>> environmentOptions{
+                {"lightroom_14b", localization.text("ui.inspector.environment.lightroom_14b", "Lightroom 14b")},
+                {"default_env", localization.text("ui.inspector.environment.default_env", "Default Studio")},
+                {"pillars_2k", localization.text("ui.inspector.environment.pillars_2k", "Pillars 2K")},
+                {"venetian_crossroads_2k", localization.text("ui.inspector.environment.venetian_crossroads_2k", "Venetian Crossroads 2K")},
+        };
+        if (comboWithLeftLabel("environment_preset", presetLabel.c_str(), &environmentId, environmentOptions)) {
+            settings.environment.environmentId = environmentId;
+            applySettings(settings);
+        }
+
+        bool enabled = settings.environment.enabled;
+        const std::string enabledLabel = localization.text("ui.inspector.enabled", "Enabled");
+        if (checkboxWithLeftLabel("environment_enabled", enabledLabel.c_str(), &enabled)) {
+            settings.environment.enabled = enabled;
+            applySettings(settings);
+        }
+
+        bool showBackground = settings.environment.showBackground;
+        const std::string backgroundLabel = localization.text("ui.inspector.background", "Background");
+        if (checkboxWithLeftLabel("environment_background", backgroundLabel.c_str(), &showBackground)) {
+            settings.environment.showBackground = showBackground;
+            applySettings(settings);
+        }
+
+        float intensity = settings.environment.intensity;
+        const std::string intensityLabel = localization.text("ui.inspector.intensity", "Intensity");
+        const UIContinuousEditResult intensityEdit = dragFloatWithLeftLabel(
+                "environment_intensity",
+                intensityLabel.c_str(),
+                &intensity,
+                activeEdit,
+                entity,
+                selection,
+                0.01f,
+                0.0f,
+                16.0f,
+                "%.3f");
+        if (intensityEdit.shouldApply()) {
+            settings.environment.intensity = intensity;
+            applySettings(settings, intensityEdit.mergeKey);
+        }
+
+        float backgroundIntensity = settings.environment.backgroundIntensity;
+        const std::string backgroundIntensityLabel =
+                localization.text("ui.inspector.background_intensity", "Background Intensity");
+        const UIContinuousEditResult backgroundIntensityEdit = dragFloatWithLeftLabel(
+                "environment_background_intensity",
+                backgroundIntensityLabel.c_str(),
+                &backgroundIntensity,
+                activeEdit,
+                entity,
+                selection,
+                0.01f,
+                0.0f,
+                16.0f,
+                "%.3f");
+        if (backgroundIntensityEdit.shouldApply()) {
+            settings.environment.backgroundIntensity = backgroundIntensity;
+            applySettings(settings, backgroundIntensityEdit.mergeKey);
+        }
+
+        float rotationY = settings.environment.rotationY * RadToDeg;
+        const std::string rotationLabel = localization.text("ui.inspector.rotation", "Rotation");
+        const UIContinuousEditResult rotationEdit = dragFloatWithLeftLabel(
+                "environment_rotation",
+                rotationLabel.c_str(),
+                &rotationY,
+                activeEdit,
+                entity,
+                selection,
+                0.5f,
+                -360.0f,
+                360.0f,
+                "%.2f");
+        if (rotationEdit.shouldApply()) {
+            settings.environment.rotationY = rotationY * DegToRad;
+            applySettings(settings, rotationEdit.mergeKey);
+        }
+    }
+
+    const std::string cameraLabel = localization.text("ui.inspector.camera", "Camera");
+    if (ImGui::CollapsingHeader(cameraLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        float aperture = settings.camera.aperture;
+        const std::string apertureLabel = localization.text("ui.inspector.aperture", "Aperture");
+        const UIContinuousEditResult apertureEdit = dragFloatWithLeftLabel(
+                "camera_aperture",
+                apertureLabel.c_str(),
+                &aperture,
+                activeEdit,
+                entity,
+                selection,
+                0.05f,
+                0.01f,
+                128.0f,
+                "%.2f");
+        if (apertureEdit.shouldApply()) {
+            settings.camera.aperture = aperture;
+            applySettings(settings, apertureEdit.mergeKey);
+        }
+
+        float shutterSpeed = settings.camera.shutterSpeed;
+        const std::string shutterLabel = localization.text("ui.inspector.shutter_speed", "Shutter");
+        const UIContinuousEditResult shutterEdit = dragFloatWithLeftLabel(
+                "camera_shutter",
+                shutterLabel.c_str(),
+                &shutterSpeed,
+                activeEdit,
+                entity,
+                selection,
+                0.0001f,
+                0.000001f,
+                10.0f,
+                "%.6f");
+        if (shutterEdit.shouldApply()) {
+            settings.camera.shutterSpeed = shutterSpeed;
+            applySettings(settings, shutterEdit.mergeKey);
+        }
+
+        float sensitivity = settings.camera.sensitivity;
+        const std::string sensitivityLabel = localization.text("ui.inspector.sensitivity", "ISO");
+        const UIContinuousEditResult sensitivityEdit = dragFloatWithLeftLabel(
+                "camera_sensitivity",
+                sensitivityLabel.c_str(),
+                &sensitivity,
+                activeEdit,
+                entity,
+                selection,
+                1.0f,
+                1.0f,
+                51200.0f,
+                "%.0f");
+        if (sensitivityEdit.shouldApply()) {
+            settings.camera.sensitivity = sensitivity;
+            applySettings(settings, sensitivityEdit.mergeKey);
+        }
+
+        float nearPlane = settings.camera.nearPlane;
+        const std::string nearLabel = localization.text("ui.inspector.near_plane", "Near");
+        const UIContinuousEditResult nearEdit = dragFloatWithLeftLabel(
+                "camera_near",
+                nearLabel.c_str(),
+                &nearPlane,
+                activeEdit,
+                entity,
+                selection,
+                0.001f,
+                0.001f,
+                10000.0f,
+                "%.4f");
+        if (nearEdit.shouldApply()) {
+            settings.camera.nearPlane = nearPlane;
+            applySettings(settings, nearEdit.mergeKey);
+        }
+
+        float farPlane = settings.camera.farPlane;
+        const std::string farLabel = localization.text("ui.inspector.far_plane", "Far");
+        const UIContinuousEditResult farEdit = dragFloatWithLeftLabel(
+                "camera_far",
+                farLabel.c_str(),
+                &farPlane,
+                activeEdit,
+                entity,
+                selection,
+                1.0f,
+                0.001f,
+                1000000.0f,
+                "%.2f");
+        if (farEdit.shouldApply()) {
+            settings.camera.farPlane = farPlane;
+            applySettings(settings, farEdit.mergeKey);
+        }
+    }
+
+    const std::string postProcessLabel = localization.text("ui.inspector.post_process", "Post Process");
+    if (ImGui::CollapsingHeader(postProcessLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        bool enabled = settings.postProcess.enabled;
+        const std::string enabledLabel = localization.text("ui.inspector.enabled", "Enabled");
+        if (checkboxWithLeftLabel("post_process_enabled", enabledLabel.c_str(), &enabled)) {
+            settings.postProcess.enabled = enabled;
+            applySettings(settings);
+        }
+
+        bool antiAliasing = settings.postProcess.antiAliasing;
+        const std::string aaLabel = localization.text("ui.inspector.anti_aliasing", "Anti-Aliasing");
+        if (checkboxWithLeftLabel("post_process_aa", aaLabel.c_str(), &antiAliasing)) {
+            settings.postProcess.antiAliasing = antiAliasing;
+            applySettings(settings);
+        }
+
+        bool dithering = settings.postProcess.dithering;
+        const std::string ditheringLabel = localization.text("ui.inspector.dithering", "Dithering");
+        if (checkboxWithLeftLabel("post_process_dithering", ditheringLabel.c_str(), &dithering)) {
+            settings.postProcess.dithering = dithering;
+            applySettings(settings);
+        }
+
+        SceneToneMapping toneMapping = settings.postProcess.toneMapping;
+        const std::string toneMappingLabel = localization.text("ui.inspector.tone_mapping", "Tone Mapping");
+        const std::vector<std::pair<SceneToneMapping, std::string>> toneMappingOptions{
+                {SceneToneMapping::Linear, localization.text("ui.inspector.tone_mapping.linear", "Linear")},
+                {SceneToneMapping::AcesLegacy, localization.text("ui.inspector.tone_mapping.aces_legacy", "ACES Legacy")},
+                {SceneToneMapping::Aces, localization.text("ui.inspector.tone_mapping.aces", "ACES")},
+                {SceneToneMapping::Filmic, localization.text("ui.inspector.tone_mapping.filmic", "Filmic")},
+                {SceneToneMapping::DisplayRange, localization.text("ui.inspector.tone_mapping.display_range", "Display Range")},
+        };
+        if (comboWithLeftLabel("post_process_tone_mapping", toneMappingLabel.c_str(), &toneMapping, toneMappingOptions)) {
+            settings.postProcess.toneMapping = toneMapping;
+            applySettings(settings);
+        }
+
+        bool ambientOcclusion = settings.postProcess.ambientOcclusion;
+        const std::string aoLabel = localization.text("ui.inspector.ambient_occlusion", "Ambient Occlusion");
+        if (checkboxWithLeftLabel("post_process_ao", aoLabel.c_str(), &ambientOcclusion)) {
+            settings.postProcess.ambientOcclusion = ambientOcclusion;
+            applySettings(settings);
+        }
+        if (settings.postProcess.ambientOcclusion) {
+            float aoIntensity = settings.postProcess.ambientOcclusionIntensity;
+            const std::string aoIntensityLabel =
+                    localization.text("ui.inspector.ambient_occlusion_intensity", "AO Intensity");
+            const UIContinuousEditResult aoIntensityEdit = dragFloatWithLeftLabel(
+                    "post_process_ao_intensity",
+                    aoIntensityLabel.c_str(),
+                    &aoIntensity,
+                    activeEdit,
+                    entity,
+                    selection,
+                    0.01f,
+                    0.0f,
+                    8.0f,
+                    "%.3f");
+            if (aoIntensityEdit.shouldApply()) {
+                settings.postProcess.ambientOcclusionIntensity = aoIntensity;
+                applySettings(settings, aoIntensityEdit.mergeKey);
+            }
+
+            float aoRadius = settings.postProcess.ambientOcclusionRadius;
+            const std::string aoRadiusLabel = localization.text("ui.inspector.ambient_occlusion_radius", "AO Radius");
+            const UIContinuousEditResult aoRadiusEdit = dragFloatWithLeftLabel(
+                    "post_process_ao_radius",
+                    aoRadiusLabel.c_str(),
+                    &aoRadius,
+                    activeEdit,
+                    entity,
+                    selection,
+                    0.01f,
+                    0.0f,
+                    10.0f,
+                    "%.3f");
+            if (aoRadiusEdit.shouldApply()) {
+                settings.postProcess.ambientOcclusionRadius = aoRadius;
+                applySettings(settings, aoRadiusEdit.mergeKey);
+            }
+        }
+
+        bool bloom = settings.postProcess.bloom;
+        const std::string bloomLabel = localization.text("ui.inspector.bloom", "Bloom");
+        if (checkboxWithLeftLabel("post_process_bloom", bloomLabel.c_str(), &bloom)) {
+            settings.postProcess.bloom = bloom;
+            applySettings(settings);
+        }
+        float bloomStrength = settings.postProcess.bloomStrength;
+        const std::string bloomStrengthLabel = localization.text("ui.inspector.bloom_strength", "Bloom Strength");
+        const UIContinuousEditResult bloomStrengthEdit = dragFloatWithLeftLabel(
+                "post_process_bloom_strength",
+                bloomStrengthLabel.c_str(),
+                &bloomStrength,
+                activeEdit,
+                entity,
+                selection,
+                0.01f,
+                0.0f,
+                1.0f,
+                "%.3f");
+        if (bloomStrengthEdit.shouldApply()) {
+            settings.postProcess.bloomStrength = bloomStrength;
+            applySettings(settings, bloomStrengthEdit.mergeKey);
+        }
+    }
 }
 
 /**
@@ -425,6 +836,7 @@ void InspectorPanel::drawContent(UIContext& context) {
     const std::string facesPrefix = localization.text("ui.inspector.faces", "Faces");
     if (selected.empty()) {
         activeTransformEdit_.reset();
+        activeContinuousEdit_.reset();
         if (selection.hasSelection) {
             const std::string mode = localization.text(selectionModeKey(selection.mode), selectionModeFallback(selection.mode));
             const std::string active = localization.text(activeSelectionKindKey(selection.activeKind), activeSelectionKindFallback(selection.activeKind));
@@ -448,6 +860,8 @@ void InspectorPanel::drawContent(UIContext& context) {
             (activeTransformEdit_->primary != primary || activeTransformEdit_->selection != selected)) {
         activeTransformEdit_.reset();
     }
+    activeContinuousEdit_.resetIfEntityScopeChanged(primary, std::span<const EntityId>(selected.data(), selected.size()));
+    const bool primaryIsSceneRoot = document.isSceneRoot(primary);
     if (componentSelectionMode(selection.mode)) {
         const std::string active = localization.text(activeSelectionKindKey(selection.activeKind), activeSelectionKindFallback(selection.activeKind));
         ImGui::Text("%s: %s", activePrefix.c_str(), active.c_str());
@@ -466,20 +880,33 @@ void InspectorPanel::drawContent(UIContext& context) {
         std::array<char, 128> nameBuffer;
         copyNameToBuffer(document.name(primary), nameBuffer);
         const std::string nameLabel = localization.text("ui.inspector.name", "Name");
-        if (inputTextWithLeftLabel("name", nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
-                    ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
-            (void)context.editor.scene().rename(primary, nameBuffer.data());
+        if (primaryIsSceneRoot) {
+            (void)inputTextWithLeftLabel("name", nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
+                    ImGuiInputTextFlags_ReadOnly);
+        } else {
+            if (inputTextWithLeftLabel("name", nameLabel.c_str(), nameBuffer.data(), nameBuffer.size(),
+                        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+                (void)context.editor.scene().rename(primary, nameBuffer.data());
+            }
         }
     }
 
-    const BoolAggregate visibilityAggregate = aggregateVisibility(document, selected);
+    std::vector<EntityId> editableSelected;
+    editableSelected.reserve(selected.size());
+    for (const EntityId id : selected) {
+        if (!document.isSceneRoot(id)) {
+            editableSelected.push_back(id);
+        }
+    }
+
+    const BoolAggregate visibilityAggregate = aggregateVisibility(document, editableSelected);
     if (visibilityAggregate.hasValue) {
         bool hidden = !visibilityAggregate.allTrue;
         const std::string hiddenLabel = localization.text("ui.inspector.hidden", "Hidden");
         if (checkboxWithLeftLabel("hidden", hiddenLabel.c_str(), &hidden)) {
             std::vector<QuaderSceneVisibilityEdit> edits;
-            edits.reserve(selected.size());
-            for (const EntityId id : selected) {
+            edits.reserve(editableSelected.size());
+            for (const EntityId id : editableSelected) {
                 if (const VisibilityComponent* current = document.visibility(id)) {
                     edits.push_back(QuaderSceneVisibilityEdit{
                             .entity = id,
@@ -496,14 +923,14 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
     }
 
-    const BoolAggregate lockAggregate = aggregateLock(document, selected);
+    const BoolAggregate lockAggregate = aggregateLock(document, editableSelected);
     if (lockAggregate.hasValue) {
         bool locked = lockAggregate.allTrue;
         const std::string lockedLabel = localization.text("ui.inspector.locked", "Locked");
         if (checkboxWithLeftLabel("locked", lockedLabel.c_str(), &locked)) {
             std::vector<QuaderSceneLockEdit> edits;
-            edits.reserve(selected.size());
-            for (const EntityId id : selected) {
+            edits.reserve(editableSelected.size());
+            for (const EntityId id : editableSelected) {
                 if (const LockComponent* current = document.lock(id)) {
                     edits.push_back(QuaderSceneLockEdit{
                             .entity = id,
@@ -660,6 +1087,19 @@ void InspectorPanel::drawContent(UIContext& context) {
         }
     }
 
+    if (selected.size() == 1u && primaryIsSceneRoot) {
+        if (const SceneSettingsComponent* settings = document.sceneSettings(primary)) {
+            drawSceneSettingsInspector(
+                    context,
+                    primary,
+                    std::span<const EntityId>(selected.data(), selected.size()),
+                    activeContinuousEdit_,
+                    *settings,
+                    localization);
+        }
+        return;
+    }
+
     if (selected.size() == 1u) {
         if (const MeshComponent* currentMesh = document.mesh(primary)) {
             MeshComponent mesh = *currentMesh;
@@ -733,6 +1173,96 @@ void InspectorPanel::drawContent(UIContext& context) {
                 if (comboWithLeftLabel("body_type", bodyTypeLabel.c_str(), &bodyType, bodyOptions)) {
                     mesh.bodyType = bodyType;
                     applyMeshComponent(mesh);
+                }
+            }
+        }
+
+        if (const LightComponent* currentLight = document.light(primary)) {
+            LightComponent light = *currentLight;
+            auto applyLightComponent = [&](LightComponent next, std::string mergeKey = {}) {
+                next.range = std::max(next.range, 0.001f);
+                next.intensity = std::max(next.intensity, 0.0f);
+                (void)context.editor.scene().setLightComponent(
+                        primary,
+                        toApiLightComponent(next),
+                        QuaderSceneEditOptions{.mergeKey = std::move(mergeKey)});
+            };
+
+            const std::string lightLabel = localization.text("ui.inspector.light", "Light");
+            if (ImGui::CollapsingHeader(lightLabel.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                LightType type = light.type;
+                const std::string typeLabel = localization.text("ui.inspector.light_type", "Type");
+                const std::vector<std::pair<LightType, std::string>> typeOptions{
+                        {LightType::Directional, localization.text("ui.inspector.light_type.directional", "Directional")},
+                        {LightType::Point, localization.text("ui.inspector.light_type.point", "Point")},
+                        {LightType::Spot, localization.text("ui.inspector.light_type.spot", "Spot")},
+                };
+                if (comboWithLeftLabel("light_type", typeLabel.c_str(), &type, typeOptions)) {
+                    light.type = type;
+                    applyLightComponent(light);
+                }
+
+                float color[3] = {light.color.x, light.color.y, light.color.z};
+                const std::string colorLabel = localization.text("ui.inspector.color", "Color");
+                const UIContinuousEditResult colorEdit = colorEdit3WithLeftLabel(
+                        "light_color",
+                        colorLabel.c_str(),
+                        color,
+                        activeContinuousEdit_,
+                        primary,
+                        std::span<const EntityId>(selected.data(), selected.size()));
+                if (colorEdit.shouldApply()) {
+                    light.color = {
+                            std::clamp(color[0], 0.0f, 1.0f),
+                            std::clamp(color[1], 0.0f, 1.0f),
+                            std::clamp(color[2], 0.0f, 1.0f),
+                    };
+                    applyLightComponent(light, colorEdit.mergeKey);
+                }
+
+                float intensity = light.intensity;
+                const std::string intensityLabel = localization.text("ui.inspector.intensity", "Intensity");
+                const UIContinuousEditResult intensityEdit = dragFloatWithLeftLabel(
+                        "light_intensity",
+                        intensityLabel.c_str(),
+                        &intensity,
+                        activeContinuousEdit_,
+                        primary,
+                        std::span<const EntityId>(selected.data(), selected.size()),
+                        0.01f,
+                        0.0f,
+                        16.0f,
+                        "%.3f");
+                if (intensityEdit.shouldApply()) {
+                    light.intensity = intensity;
+                    applyLightComponent(light, intensityEdit.mergeKey);
+                }
+
+                if (light.type == LightType::Point || light.type == LightType::Spot) {
+                    float range = light.range;
+                    const std::string rangeLabel = localization.text("ui.inspector.range", "Range");
+                    const UIContinuousEditResult rangeEdit = dragFloatWithLeftLabel(
+                            "light_range",
+                            rangeLabel.c_str(),
+                            &range,
+                            activeContinuousEdit_,
+                            primary,
+                            std::span<const EntityId>(selected.data(), selected.size()),
+                            0.1f,
+                            0.001f,
+                            10000.0f,
+                            "%.2f");
+                    if (rangeEdit.shouldApply()) {
+                        light.range = range;
+                        applyLightComponent(light, rangeEdit.mergeKey);
+                    }
+                }
+
+                bool castShadows = light.castsShadows;
+                const std::string castShadowsLabel = localization.text("ui.inspector.cast_shadows", "Cast Shadows");
+                if (checkboxWithLeftLabel("light_cast_shadows", castShadowsLabel.c_str(), &castShadows)) {
+                    light.castsShadows = castShadows;
+                    applyLightComponent(light);
                 }
             }
         }

@@ -226,6 +226,9 @@ set(QUADER_FILAMENT_LIB_NAMES
     geometry
     smol-v
     ibl
+    ktxreader
+    image
+    basis_transcoder
     abseil
     camutils
     shaders
@@ -304,6 +307,7 @@ quader_require_existing_path("${QUADER_DEFAULT_ALBEDO_TEXTURE}" "app-owned defau
 quader_require_existing_path("${QUADER_DEFAULT_ROUGHNESS_TEXTURE}" "app-owned default material roughness texture")
 
 quader_compile_material(quader_mesh_material resources/materials/quader_mesh.mat quader_mesh)
+quader_compile_material(quader_mesh_lit_material resources/materials/quader_mesh_lit.mat quader_mesh_lit)
 quader_compile_material(vertex_color_overlay_material resources/materials/vertex_color_overlay.mat vertex_color_overlay)
 quader_compile_material(quader_overlay_line_material resources/materials/quader_overlay_line.mat quader_overlay_line)
 quader_compile_material(quader_overlay_point_material resources/materials/quader_overlay_point.mat quader_overlay_point)
@@ -324,6 +328,7 @@ add_library(quader_runtime STATIC
     src/platform/sdl_input_adapter.cpp
     src/render/filament_utils.cpp
     src/render/filament_buffer_descriptor_factory.cpp
+    src/render/filament_environment_library.cpp
     src/render/filament_material_library.cpp
     src/render/imgui_filament_renderer.cpp
     src/api/quader_editor_api.cpp
@@ -399,6 +404,7 @@ if(WIN32)
 endif()
 add_dependencies(quader_runtime
     quader_mesh_material
+    quader_mesh_lit_material
     vertex_color_overlay_material
     quader_overlay_line_material
     quader_overlay_point_material
@@ -409,6 +415,7 @@ add_executable(quader WIN32 src/main.cpp)
 target_link_libraries(quader PRIVATE quader_runtime)
 add_dependencies(quader
     quader_mesh_material
+    quader_mesh_lit_material
     vertex_color_overlay_material
     quader_overlay_line_material
     quader_overlay_point_material
@@ -435,10 +442,14 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/materials/default"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/fonts"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/icons"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/ibl"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:quader>/locales"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${quader_mesh_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${quader_mesh_lit_material_OUTPUT}"
+            "$<TARGET_FILE_DIR:quader>/materials/quader_mesh_lit.filamat"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${vertex_color_overlay_material_OUTPUT}"
             "$<TARGET_FILE_DIR:quader>/materials/vertex_color_overlay.filamat"
@@ -463,6 +474,9 @@ add_custom_command(TARGET quader POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
             "$<TARGET_FILE_DIR:quader>/icons"
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/ibl"
+            "$<TARGET_FILE_DIR:quader>/ibl"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/locales"
             "$<TARGET_FILE_DIR:quader>/locales"

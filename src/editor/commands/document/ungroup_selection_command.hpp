@@ -126,6 +126,7 @@ private:
 
     bool isUngroupable(EntityId entity) const {
         return scene().exists(entity) &&
+                !scene().isSceneRoot(entity) &&
                 scene().kind(entity) == EntityKind::Empty &&
                 scene().hasChildren(entity);
     }

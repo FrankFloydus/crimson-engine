@@ -121,6 +121,7 @@ bool RenderSystem::initialize(void* nativeWindow, const std::filesystem::path& e
     if (!materialLibrary_.initialize(*engine_, executableDir)) {
         return fail("Unable to initialize Filament material library");
     }
+    environmentLibrary_.initialize(*engine_, *scene_, executableDir);
 
     return true;
 }
@@ -131,12 +132,8 @@ void RenderSystem::shutdown() {
     }
 
     textureRegistry_.clear();
+    environmentLibrary_.shutdown();
     materialLibrary_.shutdown();
-    if (skybox_) {
-        scene_->setSkybox(nullptr);
-        engine_->destroy(skybox_);
-        skybox_ = nullptr;
-    }
     if (scene_) {
         engine_->destroy(scene_);
         scene_ = nullptr;
@@ -186,6 +183,13 @@ void RenderSystem::destroyAdditionalSwapChain(filament::SwapChain* swapChain) {
     }
 
     engine_->destroy(swapChain);
+}
+
+void RenderSystem::applySceneSettings(const SceneSettingsComponent& settings) {
+    if (!engine_ || !scene_) {
+        return;
+    }
+    environmentLibrary_.apply(settings.environment);
 }
 
 } // namespace quader

@@ -176,7 +176,11 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         const QMat4& worldTransform,
         bool castShadows,
         bool doubleSided,
-        std::uint64_t materialRevision) {
+        std::uint64_t materialRevision,
+        std::uint8_t layerMask,
+        bool editorUnlit,
+        bool depthOnly,
+        std::uint8_t channel) {
     MeshRenderableProxy proxy;
     MeshRenderableCreationGuard creationGuard(*engine_, *scene_, proxy);
     proxy.entity = utils::EntityManager::get().create();
@@ -225,7 +229,12 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         const AssetId primitiveMaterialId = material ? material->materialForSlot(primitive.materialSlot) : InvalidAssetId;
         const MaterialDocument* primitiveMaterial = assets.material(primitiveMaterialId);
         filament::MaterialInstance* materialInstance =
-                materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided);
+                materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided, editorUnlit);
+        if (depthOnly && materialInstance) {
+            materialInstance->setColorWrite(false);
+            materialInstance->setDepthWrite(true);
+            materialInstance->setDepthCulling(true);
+        }
         proxy.materialSlots.push_back(primitive.materialSlot);
         proxy.materialInstances.push_back(materialInstance);
         builder.geometry(primitiveIndex,
@@ -237,8 +246,10 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         builder.material(primitiveIndex, materialInstance);
     }
     builder.boundingBox(computeBounds(mesh))
+            .layerMask(kViewportAllLayerMask, layerMask)
+            .channel(channel)
             .castShadows(castShadows)
-            .receiveShadows(false)
+            .receiveShadows(!editorUnlit && !depthOnly)
             .build(*engine_, proxy.entity);
 
     engine_->getTransformManager().create(proxy.entity);

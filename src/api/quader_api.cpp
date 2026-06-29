@@ -29,7 +29,7 @@ public:
         , selection(apiSession, mutations)
         , assets(apiSession, mutations)
         , historyApi(apiSession, mutations)
-        , query(apiSession) {}
+        , query(apiSession, mutations) {}
 
     QuaderApiSession session;
     ProjectSession& projectSession;

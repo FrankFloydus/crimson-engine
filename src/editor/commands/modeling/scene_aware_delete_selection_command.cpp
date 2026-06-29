@@ -320,7 +320,7 @@ private:
 
 bool sceneAwareDeleteHasSelectedSceneGroupRoot(const SceneDocument& scene) {
     for (const EntityId root : documentCommandSelectedRootEntities(scene)) {
-        if (scene.kind(root) == EntityKind::Empty && scene.hasChildren(root)) {
+        if (!scene.isSceneRoot(root) && scene.kind(root) == EntityKind::Empty && scene.hasChildren(root)) {
             return true;
         }
     }

@@ -16,6 +16,7 @@
 #include "ui/inspector_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/ui_context.hpp"
+#include "ui/viewport_input_frame_builder.hpp"
 
 #include <filament/Texture.h>
 #include <imgui.h>
@@ -168,6 +169,44 @@ QuaderApiVoidResult runtimeFailure(std::string message) {
             .message = std::move(message),
             .mutationKind = QuaderMutationKind::None,
     };
+}
+
+bool dispatchFocusedPanelCommandShortcut(
+        QuaderEditorApi& editor,
+        const ViewportToolState& viewportToolState,
+        UIPanelId focusedPanel,
+        bool commandShortcutConsumed) {
+    if (commandShortcutConsumed || focusedPanel == UIPanelId::Viewport) {
+        return false;
+    }
+
+    const ImGuiKeyboardInputChords keyboard = collectImGuiKeyboardInputChords();
+    if (keyboard.textInputActive) {
+        editor.commands().resetPendingKeybindingChord();
+        return false;
+    }
+
+    for (const QuaderInputChord& chord : keyboard.pressed) {
+        const QuaderViewportKeybindingDispatch dispatch =
+                editor.commands().dispatchViewportInputBinding(chord, viewportToolState, false, false);
+        if (dispatch.kind == QuaderViewportKeybindingDispatch::Kind::PendingChord) {
+            return true;
+        }
+        if (dispatch.kind != QuaderViewportKeybindingDispatch::Kind::Command) {
+            continue;
+        }
+
+        const QuaderApiVoidResult result = editor.commands().execute(dispatch.commandId);
+        if (!result.ok) {
+            LOG_ERROR(
+                    "Global command shortcut '{}' failed: {}",
+                    dispatch.commandId,
+                    result.message.empty() ? "Command failed." : result.message);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 void drawStaticBottomBar(const ImGuiViewport& viewport, const LocalizationService& localization) {
@@ -400,6 +439,7 @@ void UISystem::draw(QuaderEditorApi& editor,
     QVec2 viewportCursorCapturePoint = {};
     const UIPanelId previousFocusedPanel = focusedPanel_;
     bool panelFocusChanged = false;
+    bool commandShortcutConsumed = false;
     bool settingsChanged = false;
     UIContext context{
             .editor = editor,
@@ -424,6 +464,7 @@ void UISystem::draw(QuaderEditorApi& editor,
             .previousFocusedPanel = previousFocusedPanel,
             .focusedPanelStorage = &focusedPanel_,
             .panelFocusChanged = &panelFocusChanged,
+            .commandShortcutConsumed = &commandShortcutConsumed,
             .settingsChanged = &settingsChanged,
     };
     panels_.draw(context);
@@ -434,6 +475,13 @@ void UISystem::draw(QuaderEditorApi& editor,
         saveSettings();
     }
     toolSettingsPanel_.draw(context, toolSettingsPanelOpen_);
+    if (viewportPanel_ != nullptr) {
+        (void)dispatchFocusedPanelCommandShortcut(
+                editor,
+                viewportPanel_->toolState(),
+                focusedPanel_,
+                commandShortcutConsumed);
+    }
     drawStaticBottomBar(*ImGui::GetMainViewport(), localization_);
     std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
     std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;

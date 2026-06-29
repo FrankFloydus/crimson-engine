@@ -1,0 +1,44 @@
+material {
+    name : QuaderDefaultMeshLit,
+    shadingModel : lit,
+    requires : [
+        uv0
+    ],
+    parameters : [
+        {
+            type : sampler2d,
+            name : baseColorTexture
+        },
+        {
+            type : sampler2d,
+            name : roughnessTexture
+        },
+        {
+            type : float4,
+            name : baseColorFactor
+        },
+        {
+            type : float,
+            name : metallicFactor
+        },
+        {
+            type : float,
+            name : roughnessFactor
+        }
+    ]
+}
+
+fragment {
+    void material(inout MaterialInputs material) {
+        prepareMaterial(material);
+
+        vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y);
+        vec4 baseSample = texture(materialParams_baseColorTexture, uv);
+        float roughnessSample = texture(materialParams_roughnessTexture, uv).r;
+        vec3 baseColor = baseSample.rgb * materialParams.baseColorFactor.rgb;
+
+        material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a);
+        material.roughness = clamp(roughnessSample * materialParams.roughnessFactor, 0.04, 1.0);
+        material.metallic = clamp(materialParams.metallicFactor, 0.0, 1.0);
+    }
+}

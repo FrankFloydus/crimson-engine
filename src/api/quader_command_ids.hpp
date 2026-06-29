@@ -46,6 +46,9 @@ inline constexpr QuaderCommandId ProjectOpen{"project.open"};
 inline constexpr QuaderCommandId ProjectSave{"project.save"};
 inline constexpr QuaderCommandId ProjectSaveAs{"project.save_as"};
 
+inline constexpr QuaderCommandId SceneCreatePointLight{"scene.create_point_light"};
+inline constexpr QuaderCommandId SceneCreateDirectionalLight{"scene.create_directional_light"};
+
 inline constexpr QuaderCommandId HistoryUndo{"edit.undo"};
 inline constexpr QuaderCommandId HistoryRedo{"edit.redo"};
 inline constexpr QuaderCommandId HistoryRepeatLastAction{"edit.repeat_last_action"};
@@ -152,6 +155,8 @@ inline constexpr QuaderCommandId TypedCommandIds[] = {
         ProjectOpen,
         ProjectSave,
         ProjectSaveAs,
+        SceneCreatePointLight,
+        SceneCreateDirectionalLight,
         HistoryUndo,
         HistoryRedo,
         HistoryRepeatLastAction,

@@ -63,6 +63,12 @@ bool rayIntersectsBounds(QVec3 origin, QVec3 direction, const SceneBounds& bound
     return tMax >= 0.0f;
 }
 
+bool hasSceneOnlySelection(const SceneDocument& scene, const std::vector<EntityId>& selected) {
+    return std::any_of(selected.begin(), selected.end(), [&](EntityId entity) {
+        return scene.modelingObject(entity) == nullptr;
+    });
+}
+
 DocumentCommandResult mergeModelingSelectionChange(
         DocumentCommandResult result,
         const ModelingSelectionSummary& before,
@@ -207,7 +213,7 @@ EditorSelectionService::EditorSelectionService(
     , modeling_(modeling) {}
 
 EditorSelectionState EditorSelectionService::state() const {
-    const ModelingSelectionSummary currentSummary = modeling_.selectionSummary();
+    const ModelingSelectionSummary currentSummary = summary();
     return {
             .mode = currentSummary.mode,
             .summary = currentSummary,
@@ -218,11 +224,18 @@ EditorSelectionState EditorSelectionService::state() const {
 }
 
 EditorSelectionTarget EditorSelectionService::target() const {
-    return targetFromSummary(modeling_.selectionSummary());
+    return targetFromSummary(summary());
 }
 
 ModelingSelectionSummary EditorSelectionService::summary() const {
-    return modeling_.selectionSummary();
+    const ModelingSelectionSummary current = modeling_.selectionSummary();
+    const std::vector<EntityId> selected = scene_.selectedEntities();
+    if (!selected.empty() && hasSceneOnlySelection(scene_, selected)) {
+        return sceneSummaryFor(current.mode == ModelingSelectionMode::Group
+                ? ModelingSelectionMode::Group
+                : ModelingSelectionMode::Object);
+    }
+    return current;
 }
 
 ModelingHoverSummary EditorSelectionService::hoverSummary() const {
@@ -628,7 +641,7 @@ std::vector<EntityId> EditorSelectionService::boxPickMeshEntitiesByBounds(const 
 EntityId EditorSelectionService::nearestGroupAncestor(EntityId entity) const {
     EntityId parent = scene_.parent(entity);
     while (parent != InvalidEntityId) {
-        if (scene_.kind(parent) == EntityKind::Empty) {
+        if (!scene_.isSceneRoot(parent) && scene_.kind(parent) == EntityKind::Empty) {
             return parent;
         }
         parent = scene_.parent(parent);
@@ -638,10 +651,14 @@ EntityId EditorSelectionService::nearestGroupAncestor(EntityId entity) const {
 
 ModelingSelectionSummary EditorSelectionService::sceneSummaryFor(ModelingSelectionMode mode) const {
     const std::vector<EntityId> selected = scene_.selectedEntities();
+    const EntityId active = scene_.primarySelection();
+    const bool activeIsLight = active != InvalidEntityId && scene_.light(active) != nullptr;
     return {
             .mode = mode,
             .hasSelection = !selected.empty(),
-            .activeKind = selected.empty() ? ModelingActiveSelectionKind::None : ModelingActiveSelectionKind::Object,
+            .activeKind = selected.empty()
+                    ? ModelingActiveSelectionKind::None
+                    : (activeIsLight ? ModelingActiveSelectionKind::Light : ModelingActiveSelectionKind::Object),
             .selectedObjectCount = static_cast<std::uint32_t>(selected.size()),
             .contentRevision = modeling_.selectionSummary().contentRevision,
             .selectionRevision = scene_.revision(),

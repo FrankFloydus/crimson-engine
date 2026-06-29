@@ -19,13 +19,18 @@ constexpr float kMeshTextureAnisotropy = 8.0f;
 
 } // namespace
 
-void MaterialBindingService::initialize(filament::Material& meshMaterial, TextureBindingService& textureBinding) {
-    meshMaterial_ = &meshMaterial;
+void MaterialBindingService::initialize(
+        filament::Material& shadedMeshMaterial,
+        filament::Material& renderedMeshMaterial,
+        TextureBindingService& textureBinding) {
+    shadedMeshMaterial_ = &shadedMeshMaterial;
+    renderedMeshMaterial_ = &renderedMeshMaterial;
     textureBinding_ = &textureBinding;
 }
 
 void MaterialBindingService::shutdown() {
-    meshMaterial_ = nullptr;
+    shadedMeshMaterial_ = nullptr;
+    renderedMeshMaterial_ = nullptr;
     textureBinding_ = nullptr;
 }
 
@@ -36,8 +41,9 @@ std::uint64_t MaterialBindingService::materialRevision(const AssetRegistry& asse
 filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(
         const AssetRegistry& assets,
         const MaterialDocument* material,
-        bool doubleSided) const {
-    if (!meshMaterial_ || !textureBinding_) {
+        bool doubleSided,
+        bool editorUnlit) const {
+    if (!shadedMeshMaterial_ || !renderedMeshMaterial_ || !textureBinding_) {
         return nullptr;
     }
 
@@ -47,20 +53,23 @@ filament::MaterialInstance* MaterialBindingService::createMeshMaterialInstance(
             filament::TextureSampler::WrapMode::REPEAT);
     sampler.setAnisotropy(kMeshTextureAnisotropy);
 
-    filament::MaterialInstance* materialInstance = meshMaterial_->createInstance();
+    filament::Material& meshMaterial = editorUnlit ? *shadedMeshMaterial_ : *renderedMeshMaterial_;
+    filament::MaterialInstance* materialInstance = meshMaterial.createInstance();
     materialInstance->setCullingMode(doubleSided
                     ? filament::MaterialInstance::CullingMode::NONE
                     : filament::MaterialInstance::CullingMode::BACK);
     materialInstance->setParameter(MaterialTextureSlot::BaseColor,
             textureBinding_->resolveTexture(assets, material, MaterialTextureSlot::BaseColor, textureBinding_->fallbackAlbedoTexture()),
             sampler);
-    materialInstance->setParameter(MaterialTextureSlot::Roughness,
-            textureBinding_->resolveTexture(assets, material, MaterialTextureSlot::Roughness, textureBinding_->fallbackRoughnessTexture()),
-            sampler);
     const QVec3 baseColor = material ? material->baseColor : QVec3{1.0f, 1.0f, 1.0f};
     materialInstance->setParameter("baseColorFactor", filament::math::float4{baseColor.x, baseColor.y, baseColor.z, 1.0f});
-    materialInstance->setParameter("metallicFactor", material ? material->metallic : 0.0f);
-    materialInstance->setParameter("roughnessFactor", material ? material->roughness : 1.0f);
+    if (!editorUnlit) {
+        materialInstance->setParameter(MaterialTextureSlot::Roughness,
+                textureBinding_->resolveTexture(assets, material, MaterialTextureSlot::Roughness, textureBinding_->fallbackRoughnessTexture()),
+                sampler);
+        materialInstance->setParameter("metallicFactor", material ? material->metallic : 0.0f);
+        materialInstance->setParameter("roughnessFactor", material ? material->roughness : 1.0f);
+    }
     return materialInstance;
 }
 

@@ -14,12 +14,14 @@
 
 namespace quader {
 
+class QuaderApiMutationRunner;
+
 /**
  * Exposes Quader Query API operations through the public Quader API surface.
  */
 class QuaderQueryApi final {
 public:
-    explicit QuaderQueryApi(QuaderApiSession session);
+    QuaderQueryApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     [[nodiscard]] std::vector<QuaderEntitySnapshot> entities() const;
     [[nodiscard]] std::vector<QuaderEntitySnapshot> entityTree() const;
@@ -43,6 +45,7 @@ public:
 
 private:
     QuaderApiSession session_;
+    QuaderApiMutationRunner& mutations_;
 };
 
 } // namespace quader

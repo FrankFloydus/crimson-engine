@@ -129,7 +129,55 @@ json lightToJson(const LightComponent& light) {
             {"type", stringFromView(qdrLightTypeName(light.type))},
             {"color", vec3ToJson(light.color)},
             {"intensity", light.intensity},
+            {"range", light.range},
             {"castsShadows", light.castsShadows},
+    };
+}
+
+std::string_view sceneToneMappingName(SceneToneMapping toneMapping) {
+    switch (toneMapping) {
+    case SceneToneMapping::Linear:
+        return "linear";
+    case SceneToneMapping::AcesLegacy:
+        return "acesLegacy";
+    case SceneToneMapping::Aces:
+        return "aces";
+    case SceneToneMapping::Filmic:
+        return "filmic";
+    case SceneToneMapping::DisplayRange:
+        return "displayRange";
+    }
+    return "aces";
+}
+
+json sceneSettingsToJson(const SceneSettingsComponent& settings) {
+    return json{
+            {"environment", json{
+                    {"environmentId", settings.environment.environmentId},
+                    {"enabled", settings.environment.enabled},
+                    {"showBackground", settings.environment.showBackground},
+                    {"intensity", settings.environment.intensity},
+                    {"backgroundIntensity", settings.environment.backgroundIntensity},
+                    {"rotationY", settings.environment.rotationY},
+            }},
+            {"camera", json{
+                    {"aperture", settings.camera.aperture},
+                    {"shutterSpeed", settings.camera.shutterSpeed},
+                    {"sensitivity", settings.camera.sensitivity},
+                    {"nearPlane", settings.camera.nearPlane},
+                    {"farPlane", settings.camera.farPlane},
+            }},
+            {"postProcess", json{
+                    {"enabled", settings.postProcess.enabled},
+                    {"antiAliasing", settings.postProcess.antiAliasing},
+                    {"ambientOcclusion", settings.postProcess.ambientOcclusion},
+                    {"ambientOcclusionIntensity", settings.postProcess.ambientOcclusionIntensity},
+                    {"ambientOcclusionRadius", settings.postProcess.ambientOcclusionRadius},
+                    {"bloom", settings.postProcess.bloom},
+                    {"bloomStrength", settings.postProcess.bloomStrength},
+                    {"dithering", settings.postProcess.dithering},
+                    {"toneMapping", stringFromView(sceneToneMappingName(settings.postProcess.toneMapping))},
+            }},
     };
 }
 
@@ -180,6 +228,10 @@ json entityToJson(const SceneDocument& scene, EntityId entity) {
     }
     if (const LightComponent* light = scene.light(entity)) {
         value["light"] = lightToJson(*light);
+    }
+    if (const SceneSettingsComponent* settings = scene.sceneSettings(entity)) {
+        value["sceneRoot"] = scene.isSceneRoot(entity);
+        value["sceneSettings"] = sceneSettingsToJson(*settings);
     }
     return value;
 }

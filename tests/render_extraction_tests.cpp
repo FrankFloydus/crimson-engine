@@ -104,6 +104,15 @@ std::size_t triangleCountFor(const ViewportOverlayFrame& frame, ViewportOverlayL
             }));
 }
 
+std::size_t pointCountFor(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer) {
+    return static_cast<std::size_t>(std::count_if(
+            frame.points.begin(),
+            frame.points.end(),
+            [layer](const ViewportOverlayPoint& point) {
+                return point.layer == layer;
+            }));
+}
+
 void appendSourceWireDepthStampTriangle(
         ViewportOverlayFrame& frame,
         int objectId,
@@ -293,6 +302,29 @@ TEST(LightRenderableCacheTests, SeparatesRebuildAndTransformSignatures) {
     LightComponent recoloredLight = light;
     recoloredLight.color.x = 0.25f;
     EXPECT_NE(LightRenderableCache::lightSignature(recoloredLight), rebuildSignature);
+
+    LightComponent rangedLight = light;
+    rangedLight.range = 25.0f;
+    EXPECT_NE(LightRenderableCache::lightSignature(rangedLight), rebuildSignature);
+}
+
+TEST(LightRenderableCacheTests, ConvertsEditorIntensityToViewportFilamentUnits) {
+    LightComponent point;
+    point.type = LightType::Point;
+    point.intensity = 1.0f;
+    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(point), 10000000.0f);
+
+    LightComponent brighterPoint = point;
+    brighterPoint.intensity = 2.5f;
+    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(brighterPoint), 25000000.0f);
+
+    LightComponent spot = point;
+    spot.type = LightType::Spot;
+    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(spot), 10000000.0f);
+
+    LightComponent directional = point;
+    directional.type = LightType::Directional;
+    EXPECT_FLOAT_EQ(LightRenderableCache::filamentIntensity(directional), 100000.0f);
 }
 
 TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
@@ -302,8 +334,15 @@ TEST(LightRenderableCacheTests, OwnsIncrementalLightSyncPolicy) {
 
     EXPECT_NE(header.find("rebuildSignature"), std::string::npos);
     EXPECT_NE(header.find("transformSignature"), std::string::npos);
+    EXPECT_NE(header.find("filamentIntensity"), std::string::npos);
+    EXPECT_NE(source.find("kGodotPunctualLightLumensPerIntensity = 1000.0f"), std::string::npos);
+    EXPECT_NE(source.find("kViewportPunctualLightExposureCompensation = 10000.0f"), std::string::npos);
     EXPECT_NE(source.find("needsRebuild(entityId, light)"), std::string::npos);
     EXPECT_NE(source.find("updateLightTransform(existing->second, worldTransform)"), std::string::npos);
+    EXPECT_NE(source.find(".intensity(filamentIntensity(light))"), std::string::npos);
+    EXPECT_NE(source.find(".position(positionFromMatrix(worldTransform))"), std::string::npos);
+    EXPECT_NE(source.find(".falloff(lightFalloffRadius(light))"), std::string::npos);
+    EXPECT_NE(source.find("lightManager.setPosition(instance, positionFromMatrix(worldTransform))"), std::string::npos);
     EXPECT_NE(syncSource.find("lightCache_.syncLight"), std::string::npos);
     EXPECT_EQ(syncSource.find("lightSignature"), std::string::npos);
     EXPECT_EQ(syncSource.find("updateLightTransform"), std::string::npos);
@@ -338,6 +377,41 @@ TEST(ViewportSceneOverlayBuilderTests, AddsHierarchySelectionWiresAndGroupBounds
                 (line.color == kOverlayGroupBoundsColor &&
                         line.styleRole == ViewportOverlayStyleRole::GroupBounds &&
                         line.source == ViewportOverlaySource::GroupBounds);
+    }));
+}
+
+TEST(ViewportSceneOverlayBuilderTests, AddsSelectedLightMarker) {
+    SceneDocument document;
+    AssetRegistry assets;
+    const EntityId light = document.createEntity("Point Light", EntityKind::Light);
+    document.setTransform(light, TransformComponent{.position = {2.0f, 3.0f, 4.0f}});
+    document.setLight(light, LightComponent{.type = LightType::Point});
+    ASSERT_TRUE(document.setSelected(light, true));
+    const EntityId unselectedLight = document.createEntity("Unselected Point Light", EntityKind::Light);
+    document.setLight(unselectedLight, LightComponent{.type = LightType::Point});
+    const EntityId hiddenLight = document.createEntity("Hidden Point Light", EntityKind::Light);
+    document.setLight(hiddenLight, LightComponent{.type = LightType::Point});
+    document.setVisible(hiddenLight, false);
+    ASSERT_TRUE(document.setSelected(hiddenLight, true));
+    const EntityId selectedDirectional = document.createEntity("Selected Directional Light", EntityKind::Light);
+    document.setLight(selectedDirectional, LightComponent{.type = LightType::Directional});
+    ASSERT_TRUE(document.setSelected(selectedDirectional, true));
+
+    const ViewportOverlayFrame frame =
+            ViewportSceneOverlayBuilder::buildSelectionFrame(ViewportOverlayFrame{}, document, assets);
+
+    EXPECT_EQ(pointCountFor(frame, ViewportOverlayLayer::SelectedVertex), 2u);
+    ASSERT_EQ(frame.points.size(), 2u);
+    const auto pointMarker = std::find_if(frame.points.begin(), frame.points.end(), [](const ViewportOverlayPoint& point) {
+        return point.position.x == 2.0f && point.position.y == 3.0f && point.position.z == 4.0f;
+    });
+    ASSERT_NE(pointMarker, frame.points.end());
+    EXPECT_EQ(pointMarker->source, ViewportOverlaySource::Selection);
+    EXPECT_EQ(pointMarker->styleRole, ViewportOverlayStyleRole::SelectedVertex);
+    EXPECT_EQ(lineCountFor(frame, ViewportOverlayLayer::SelectedEdge), 5u);
+    EXPECT_TRUE(std::all_of(frame.lines.begin(), frame.lines.end(), [](const ViewportOverlayLine& line) {
+        return line.source == ViewportOverlaySource::Selection &&
+                line.styleRole == ViewportOverlayStyleRole::SelectionWire;
     }));
 }
 
@@ -913,16 +987,40 @@ TEST(SceneRenderBridgeExtractionTests, DelegatesOverlayAndPreviewProxyOwnership)
     EXPECT_EQ(source.find("destroyToolPreviewMeshes"), std::string::npos);
 }
 
-TEST(ViewportRenderPassCoordinatorTests, KeepsGridLayerVisibleForOverlayPasses) {
+TEST(ViewportRenderPassCoordinatorTests, SeparatesSceneAndOverlayLayerMasks) {
     ViewportRenderPassCoordinator coordinator;
     const std::uint8_t gridLayerMask = viewportGridLayerMask(2);
     coordinator.initialize(gridLayerMask);
 
-    EXPECT_EQ(coordinator.visibleLayerMask(), static_cast<std::uint8_t>(kViewportSceneLayerMask | gridLayerMask));
+    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.visibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask | gridLayerMask));
 
     EXPECT_TRUE(coordinator.setGridVisible(false));
-    EXPECT_EQ(coordinator.visibleLayerMask(), kViewportSceneLayerMask);
+    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), 0u);
+    EXPECT_EQ(coordinator.visibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
 
     EXPECT_TRUE(coordinator.setOverlayVisible(true));
-    EXPECT_EQ(coordinator.visibleLayerMask(), static_cast<std::uint8_t>(kViewportSceneLayerMask | gridLayerMask));
+    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask));
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.visibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportShadedSceneLayerMask | kViewportToolPreviewLayerMask | gridLayerMask));
+
+    EXPECT_TRUE(coordinator.setSceneLayerMask(kViewportRenderedSceneLayerMask));
+    EXPECT_EQ(coordinator.sceneVisibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask | kViewportToolPreviewLayerMask));
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.visibleLayerMask(),
+            static_cast<std::uint8_t>(kViewportRenderedSceneLayerMask | kViewportToolPreviewLayerMask | gridLayerMask));
+
+    EXPECT_TRUE(coordinator.setSceneVisible(false));
+    EXPECT_EQ(coordinator.sceneVisibleLayerMask(), 0u);
+    EXPECT_EQ(coordinator.overlayVisibleLayerMask(), gridLayerMask);
+    EXPECT_EQ(coordinator.visibleLayerMask(), gridLayerMask);
 }

@@ -400,7 +400,8 @@ bool resolveViewportInputActionForChord(
 bool applyViewportKeybindingDispatch(
         QuaderEditorApi& editor,
         const QuaderViewportKeybindingDispatch& dispatch,
-        ViewportInputFrame& input) {
+        ViewportInputFrame& input,
+        bool* commandShortcutConsumed) {
     switch (dispatch.kind) {
     case QuaderViewportKeybindingDispatch::Kind::PendingChord:
         input.resolvedShortcuts.push_back(ViewportShortcut{});
@@ -410,6 +411,9 @@ bool applyViewportKeybindingDispatch(
         return true;
     case QuaderViewportKeybindingDispatch::Kind::Command:
         logCommandFailure("Keybinding command", editor.commands().execute(dispatch.commandId));
+        if (commandShortcutConsumed != nullptr) {
+            *commandShortcutConsumed = true;
+        }
         input.resolvedShortcuts.push_back(ViewportShortcut{});
         return true;
     case QuaderViewportKeybindingDispatch::Kind::NoMatch:
@@ -421,7 +425,8 @@ bool applyViewportKeybindingDispatch(
 void resolveKeybindingsForFrame(
         QuaderEditorApi& editor,
         const ViewportToolState& state,
-        ViewportInputFrame& input) {
+        ViewportInputFrame& input,
+        bool* commandShortcutConsumed) {
     input.resolvedShortcuts.clear();
     input.navigationBindings = {};
     if (!input.viewportFocused || input.textInputActive) {
@@ -461,7 +466,7 @@ void resolveKeybindingsForFrame(
                 input.viewportFocused,
                 input.textInputActive,
                 keybindingContextFromInput(input));
-        if (applyViewportKeybindingDispatch(editor, dispatch, input)) {
+        if (applyViewportKeybindingDispatch(editor, dispatch, input, commandShortcutConsumed)) {
             return;
         }
     }
@@ -625,8 +630,19 @@ void ViewportPanel::prepareViewports(
         if (!paneState.initialized || !paneWorkspace.visibleThisFrame) {
             continue;
         }
+        if (const EntityId root = document.sceneRoot(); root != InvalidEntityId) {
+            if (const SceneSettingsComponent* settings = document.sceneSettings(root)) {
+                paneState.renderer.applySceneSettings(
+                        *settings,
+                        paneWorkspace.shading == ViewportShadingMode::Rendered);
+            }
+        }
         paneState.renderer.updateCamera(paneWorkspace.camera);
         paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings);
+        paneState.renderer.setSceneLayerMask(paneWorkspace.shading == ViewportShadingMode::Rendered
+                        ? kViewportRenderedSceneLayerMask
+                        : kViewportShadedSceneLayerMask);
+        paneState.renderer.setShadowingEnabled(paneWorkspace.shading == ViewportShadingMode::Rendered);
         paneState.renderer.setSceneVisible(paneWorkspace.shading != ViewportShadingMode::Wireframe);
         paneState.renderer.setOverlayVisible(true);
         ViewportOverlayFrame overlayFrame = selectionOverlayCache_.valid() ? selectionOverlayCache_.frame() : ViewportOverlayFrame{};
@@ -1205,7 +1221,11 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
     input.operationPreviewActive = toolSettingsTarget.operationPreviewActive;
     input.gridPreset = viewportWorkspace.gridPreset();
-    resolveKeybindingsForFrame(uiContext.editor, inputRouter_.state(), input);
+    resolveKeybindingsForFrame(
+            uiContext.editor,
+            inputRouter_.state(),
+            input,
+            uiContext.commandShortcutConsumed);
     const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
     const ViewportShortcutControllerResult operationPreviewShortcut =
             shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, uiContext.editor);

@@ -16,7 +16,8 @@ SceneRenderBridge::~SceneRenderBridge() {
 
 void SceneRenderBridge::initialize(filament::Engine& engine,
         filament::Scene& scene,
-        filament::Material& meshMaterial,
+        filament::Material& shadedMeshMaterial,
+        filament::Material& renderedMeshMaterial,
         filament::Material& overlayMaterial,
         filament::Material& overlayLineMaterial,
         filament::Material& overlayPointMaterial,
@@ -25,7 +26,7 @@ void SceneRenderBridge::initialize(filament::Engine& engine,
     engine_ = &engine;
     scene_ = &scene;
     textureBinding_.initialize(engine, std::move(resourceRoot));
-    materialBinding_.initialize(meshMaterial, textureBinding_);
+    materialBinding_.initialize(shadedMeshMaterial, renderedMeshMaterial, textureBinding_);
     meshFactory_.initialize(engine, scene, materialBinding_);
     meshCache_.initialize(meshFactory_);
     toolPreviewCache_.initialize(meshFactory_, materialBinding_);

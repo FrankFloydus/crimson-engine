@@ -8,6 +8,7 @@
 
 #include "core/command_result.hpp"
 #include "core/i_undoable_command.hpp"
+#include "core/undo_redo_execute_options.hpp"
 
 #include <memory>
 #include <string>
@@ -32,6 +33,7 @@ public:
     EditorTransaction& operator=(EditorTransaction&& other) noexcept;
 
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
+    CommandResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
     CommandResult commit();
     CommandResult cancel();
     CommandResult discard();
@@ -40,9 +42,14 @@ public:
     [[nodiscard]] bool empty() const { return commands_.empty(); }
 
 private:
+    struct TransactionCommand {
+        std::unique_ptr<IUndoableCommand> command;
+        std::string mergeKey;
+    };
+
     EditorHistoryService* history_ = nullptr;
     std::string label_;
-    std::vector<std::unique_ptr<IUndoableCommand>> commands_;
+    std::vector<TransactionCommand> commands_;
 };
 
 /**
@@ -59,6 +66,7 @@ public:
     EditorHistoryService& operator=(EditorHistoryService&&) noexcept;
 
     CommandResult execute(std::unique_ptr<IUndoableCommand> command);
+    CommandResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
     CommandResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
     CommandResult undo();
     CommandResult redo();

@@ -105,6 +105,15 @@ std::optional<QuaderEntitySnapshot> findEntityAlias(const BehaviorScenario& scen
     return scenario.api().query().entity(scenario.entity(alias));
 }
 
+EntityId sceneRootEntity(const BehaviorScenario& scenario) {
+    for (const QuaderEntitySnapshot& snapshot : scenario.api().query().entities()) {
+        if (snapshot.isSceneRoot) {
+            return snapshot.id;
+        }
+    }
+    return InvalidEntityId;
+}
+
 void includePoint(BehaviorBounds& bounds, QVec3 point) {
     bounds.min.x = std::min(bounds.min.x, point.x);
     bounds.min.y = std::min(bounds.min.y, point.y);
@@ -204,7 +213,7 @@ SceneExpect& SceneExpect::noParent(std::string_view alias) {
     if (!snapshot.has_value()) {
         return *this;
     }
-    EXPECT_EQ(snapshot->parent, InvalidEntityId);
+    EXPECT_EQ(snapshot->parent, sceneRootEntity(scenario_));
     return *this;
 }
 

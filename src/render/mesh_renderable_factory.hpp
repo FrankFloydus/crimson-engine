@@ -10,6 +10,7 @@
 #include "core/types.hpp"
 #include "math/types.hpp"
 #include "render/mesh_renderable_proxy.hpp"
+#include "render/render_layers.hpp"
 #include "scene/scene_document.hpp"
 
 #include <filament/Engine.h>
@@ -47,7 +48,11 @@ public:
             const QMat4& worldTransform,
             bool castShadows,
             bool doubleSided,
-            std::uint64_t materialRevision);
+            std::uint64_t materialRevision,
+            std::uint8_t layerMask = kViewportRenderedSceneLayerMask,
+            bool editorUnlit = false,
+            bool depthOnly = false,
+            std::uint8_t channel = kViewportDefaultRenderableChannel);
     void updateTransform(const MeshRenderableProxy& proxy, const QMat4& worldTransform);
     void destroy(MeshRenderableProxy& proxy);
 

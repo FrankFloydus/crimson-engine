@@ -13,10 +13,15 @@
 #include <filament/LightManager.h>
 #include <utils/EntityManager.h>
 
+#include <algorithm>
 #include <utility>
 
 namespace quader {
 namespace {
+
+constexpr float kGodotPunctualLightLumensPerIntensity = 1000.0f;
+constexpr float kViewportPunctualLightExposureCompensation = 10000.0f;
+constexpr float kGodotDirectionalLightLuxPerIntensity = 100000.0f;
 
 filament::LightManager::Type toFilamentLightType(LightType type) {
     switch (type) {
@@ -31,7 +36,19 @@ filament::LightManager::Type toFilamentLightType(LightType type) {
 }
 
 filament::math::float3 directionFromMatrix(const QMat4& transform) {
-    return toFilament(normalize(transformVector(transform, {0.0f, -1.0f, 1.0f})));
+    QVec3 direction = transformVector(transform, {0.0f, -1.0f, 0.0f});
+    if (length(direction) <= 0.000001f) {
+        direction = {0.0f, -1.0f, 0.0f};
+    }
+    return toFilament(normalize(direction));
+}
+
+filament::math::float3 positionFromMatrix(const QMat4& transform) {
+    return toFilament(transformPoint(transform, {}));
+}
+
+float lightFalloffRadius(const LightComponent& light) {
+    return std::max(light.range, 0.001f);
 }
 
 } // namespace
@@ -123,6 +140,22 @@ std::uint64_t LightRenderableCache::lightTransformSignature(const QMat4& worldTr
     return RenderSignatureBuilder::lightTransformSignature(worldTransform);
 }
 
+float LightRenderableCache::filamentIntensity(const LightComponent& light) {
+    const float energy = std::max(light.intensity, 0.0f);
+    switch (light.type) {
+    case LightType::Directional:
+        return energy * kGodotDirectionalLightLuxPerIntensity;
+    case LightType::Point:
+    case LightType::Spot:
+        return energy *
+                kGodotPunctualLightLumensPerIntensity *
+                kViewportPunctualLightExposureCompensation;
+    }
+    return energy *
+            kGodotPunctualLightLumensPerIntensity *
+            kViewportPunctualLightExposureCompensation;
+}
+
 LightRenderableCache::LightProxy LightRenderableCache::createLightProxy(
         EntityId entityId,
         const LightComponent& light,
@@ -160,12 +193,14 @@ LightRenderableCache::LightProxy LightRenderableCache::createLightProxy(
     proxy.transformSignature = transformSignature;
     LightProxyCreationGuard creationGuard{*engine_, *scene_, proxy};
 
-    filament::LightManager::Builder(toFilamentLightType(light.type))
-            .color({light.color.x, light.color.y, light.color.z})
-            .intensity(light.intensity)
+    filament::LightManager::Builder builder(toFilamentLightType(light.type));
+    builder.color({light.color.x, light.color.y, light.color.z})
+            .intensity(filamentIntensity(light))
+            .position(positionFromMatrix(worldTransform))
             .direction(directionFromMatrix(worldTransform))
-            .castShadows(light.castsShadows)
-            .build(*engine_, proxy.entity);
+            .falloff(lightFalloffRadius(light))
+            .castShadows(light.castsShadows);
+    builder.build(*engine_, proxy.entity);
     scene_->addEntity(proxy.entity);
     creationGuard.release();
     return proxy;
@@ -181,6 +216,7 @@ void LightRenderableCache::updateLightTransform(const LightProxy& proxy, const Q
     if (!instance) {
         return;
     }
+    lightManager.setPosition(instance, positionFromMatrix(worldTransform));
     lightManager.setDirection(instance, directionFromMatrix(worldTransform));
 }
 

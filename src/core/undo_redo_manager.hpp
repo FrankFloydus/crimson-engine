@@ -8,6 +8,7 @@
 
 #include "core/command_result.hpp"
 #include "core/i_undoable_command.hpp"
+#include "core/undo_redo_execute_options.hpp"
 
 #include <memory>
 #include <string>
@@ -21,6 +22,7 @@ namespace quader {
 class UndoRedoManager {
 public:
     UndoRedoResult execute(std::unique_ptr<IUndoableCommand> command);
+    UndoRedoResult execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options);
     UndoRedoResult recordExecuted(std::unique_ptr<IUndoableCommand> command);
 
     UndoRedoResult undo();
@@ -34,8 +36,13 @@ public:
     void clear();
 
 private:
-    std::vector<std::unique_ptr<IUndoableCommand>> undoStack_;
-    std::vector<std::unique_ptr<IUndoableCommand>> redoStack_;
+    struct StackEntry {
+        std::unique_ptr<IUndoableCommand> command;
+        std::string mergeKey;
+    };
+
+    std::vector<StackEntry> undoStack_;
+    std::vector<StackEntry> redoStack_;
 };
 
 } // namespace quader

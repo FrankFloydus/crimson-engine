@@ -51,6 +51,7 @@ struct UIContext {
     UIPanelId previousFocusedPanel = UIPanelId::Viewport;
     UIPanelId* focusedPanelStorage = nullptr;
     bool* panelFocusChanged = nullptr;
+    bool* commandShortcutConsumed = nullptr;
     bool* settingsChanged = nullptr;
 
     void requestPanelFocus(UIPanelId panel) const {
@@ -62,6 +63,12 @@ struct UIContext {
             if (panelFocusChanged != nullptr) {
                 *panelFocusChanged = true;
             }
+        }
+    }
+
+    void markCommandShortcutConsumed() const {
+        if (commandShortcutConsumed != nullptr) {
+            *commandShortcutConsumed = true;
         }
     }
 };

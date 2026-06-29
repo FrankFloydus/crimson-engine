@@ -341,6 +341,9 @@ inline std::vector<EntityId> documentCommandSelectedRootEntities(const SceneDocu
         if (!selectedSet.contains(entity)) {
             continue;
         }
+        if (scene.isSceneRoot(entity)) {
+            continue;
+        }
 
         bool ancestorSelected = false;
         EntityId parent = scene.parent(entity);

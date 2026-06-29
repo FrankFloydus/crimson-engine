@@ -7,8 +7,10 @@
 #include "api/quader_query_api.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 
+#include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
+#include "editor/selection/editor_selection_service.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/history/editor_history_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
@@ -84,6 +86,15 @@ QuaderEntitySnapshot entitySnapshotFor(const ProjectSession& session, EntityId e
         snapshot.hasMaterial = true;
         snapshot.material = material->material;
     }
+    if (const LightComponent* light = scene.light(entity)) {
+        snapshot.hasLight = true;
+        snapshot.light = toApiLightComponent(*light);
+    }
+    if (const SceneSettingsComponent* settings = scene.sceneSettings(entity)) {
+        snapshot.isSceneRoot = scene.isSceneRoot(entity);
+        snapshot.hasSceneSettings = true;
+        snapshot.sceneSettings = toApiSceneSettings(*settings);
+    }
     if (const ModelingObjectComponent* object = scene.modelingObject(entity)) {
         snapshot.hasModelingObject = true;
         snapshot.modelingObjectId = object->objectId;
@@ -108,8 +119,9 @@ QuaderMeshSnapshot meshSnapshotFor(AssetId id, const MeshAsset& mesh) {
 
 } // namespace
 
-QuaderQueryApi::QuaderQueryApi(QuaderApiSession session)
-    : session_(session) {}
+QuaderQueryApi::QuaderQueryApi(QuaderApiSession session, QuaderApiMutationRunner& mutations)
+    : session_(session)
+    , mutations_(mutations) {}
 
 std::vector<QuaderEntitySnapshot> QuaderQueryApi::entities() const {
     std::vector<QuaderEntitySnapshot> result;
@@ -200,11 +212,19 @@ std::optional<QuaderMeshAsset> QuaderQueryApi::compiledObjectMesh(QuaderModeling
 }
 
 std::optional<QVec3> QuaderQueryApi::selectionCenter() const {
-    return projectSession(session_).modeling().selectionCenter();
+    ProjectSession& session = projectSession(session_);
+    const QuaderSelectionSummary summary = selection();
+    if (summary.activeKind == QuaderActiveSelectionKind::Object ||
+            summary.activeKind == QuaderActiveSelectionKind::Light) {
+        if (const std::optional<SceneBounds> bounds = selectedWorldBounds(session.scene(), session.assets())) {
+            return boundsCenter(*bounds);
+        }
+    }
+    return session.modeling().selectionCenter();
 }
 
 QuaderSelectionSummary QuaderQueryApi::selection() const {
-    return toApiSelectionSummary(projectSession(session_).modeling().selectionSummary());
+    return toApiSelectionSummary(projectSession(session_).selection().summary());
 }
 
 QuaderToolStatus QuaderQueryApi::toolStatus() const {
@@ -222,7 +242,7 @@ QuaderAssetSnapshot QuaderQueryApi::assets() const {
 
 QuaderHistorySnapshot QuaderQueryApi::history() const {
     QuaderHistorySnapshot result;
-    result.canUndo = projectSession(session_).history().canUndo();
+    result.canUndo = mutations_.canUndo();
     result.canRedo = projectSession(session_).history().canRedo();
     if (const std::string* label = projectSession(session_).history().undoLabel()) {
         result.undoLabel = *label;

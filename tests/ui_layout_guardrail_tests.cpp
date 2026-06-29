@@ -35,6 +35,13 @@ std::size_t countOccurrences(std::string_view source, std::string_view needle) {
     return count;
 }
 
+void expectContinuousHelperLiveApplies(std::string_view source, std::string_view helper) {
+    const std::size_t helperCount = countOccurrences(source, helper);
+    EXPECT_GT(helperCount, 0u) << helper;
+    EXPECT_GE(countOccurrences(source, ".shouldApply()"), helperCount) << helper;
+    EXPECT_GE(countOccurrences(source, ".mergeKey"), helperCount) << helper;
+}
+
 } // namespace
 
 TEST(UiLayoutGuardrailTests, SidebarPanelsDoNotForceEmptyVerticalScrollbars) {
@@ -74,6 +81,68 @@ TEST(UiLayoutGuardrailTests, InspectorTransformAxisInputsStretchInsideSidebarWid
     expectContains(axisDragFloat3, "kMinAxisInputWidth");
     EXPECT_EQ(countOccurrences(axisDragFloat3, "-FLT_MIN"), 3u);
     expectMissing(axisDragFloat3, "ImGuiTableFlags_SizingFixedFit");
+}
+
+TEST(UiLayoutGuardrailTests, InspectorLightEditsRouteThroughPublicSceneApi) {
+    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+    const std::string lightSection = sourceSlice(
+            inspector,
+            "if (const LightComponent* currentLight = document.light(primary))",
+            "if (selected.size() > 1u)");
+
+    expectContains(lightSection, "context.editor.scene().setLightComponent");
+    expectContains(lightSection, "toApiLightComponent");
+    expectMissing(inspector, "document.setLight(");
+}
+
+TEST(UiLayoutGuardrailTests, InspectorSceneSettingsEditThroughPublicSceneApi) {
+    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+    const std::string sceneSettingsSection = sourceSlice(
+            inspector,
+            "void drawSceneSettingsInspector",
+            "struct BoolAggregate");
+
+    expectContains(sceneSettingsSection, "context.editor.scene().setSceneSettings");
+    expectContains(sceneSettingsSection, "toApiSceneSettings");
+    expectContains(sceneSettingsSection, "post_process_tone_mapping");
+    expectContains(sceneSettingsSection, "post_process_dithering");
+    expectContains(sceneSettingsSection, "camera_near");
+    expectContains(sceneSettingsSection, "camera_far");
+    expectMissing(inspector, "document.setSceneSettings(");
+}
+
+TEST(UiLayoutGuardrailTests, InspectorContinuousInputsLiveApplyWithMergeKeys) {
+    const std::string inspector = readSourceFile({"src", "ui", "inspector_panel.cpp"});
+    const std::string inspectorHeader = readSourceFile({"src", "ui", "inspector_panel.hpp"});
+    const std::string tracker = readSourceFile({"src", "ui", "ui_continuous_edit_tracker.hpp"});
+    const std::string continuousHelpers = sourceSlice(
+            inspector,
+            "void updateContinuousEditTracker",
+            "template <typename Enum>");
+    const std::string sceneSettingsSection = sourceSlice(
+            inspector,
+            "void drawSceneSettingsInspector",
+            "struct BoolAggregate");
+    const std::string lightSection = sourceSlice(
+            inspector,
+            "if (const LightComponent* currentLight = document.light(primary))",
+            "if (selected.size() > 1u)");
+
+    expectContains(inspectorHeader, "UIContinuousEditTracker activeContinuousEdit_");
+    expectContains(tracker, "class UIContinuousEditTracker");
+    expectContains(tracker, "std::string mergeKey");
+    expectContains(tracker, "bool shouldApply() const");
+    expectContains(tracker, "ensureMergeKey");
+    expectContains(continuousHelpers, "ImGui::IsItemDeactivatedAfterEdit()");
+    expectContains(continuousHelpers, "activeEdit.stage");
+    expectContains(continuousHelpers, "result.mergeKey = activeEdit.ensureMergeKey");
+    expectMissing(continuousHelpers, "result.commit");
+    expectContains(sceneSettingsSection, "QuaderSceneEditOptions{.mergeKey = std::move(mergeKey)}");
+    expectContains(lightSection, "QuaderSceneEditOptions{.mergeKey = std::move(mergeKey)}");
+
+    expectContinuousHelperLiveApplies(sceneSettingsSection, "dragFloatWithLeftLabel(");
+    expectContinuousHelperLiveApplies(lightSection, "dragFloatWithLeftLabel(");
+    expectContinuousHelperLiveApplies(lightSection, "colorEdit3WithLeftLabel(");
 }
 
 TEST(UiLayoutGuardrailTests, CustomChromeKeepsCurrentLogoAndTopMenuSpacing) {
@@ -123,7 +192,20 @@ TEST(UiLayoutGuardrailTests, MainMenuDropdownsUsePopupPaddingAndVerticalSpacing)
     EXPECT_EQ(countOccurrences(mainMenu, "ImGui::BeginMenu("), 1u);
     EXPECT_EQ(countOccurrences(mainMenu, "ImGui::EndMenu();"), 1u);
     expectContains(mainMenuHeader, "bool popupOpen = false;");
+    expectContains(mainMenuHeader, "CreateMenu createMenu_;");
     expectContains(mainMenu, "result.popupOpen");
+    expectContains(mainMenu, "result.popupOpen = toolsMenu_.draw(context) || result.popupOpen;");
+    expectContains(mainMenu, "result.popupOpen = createMenu_.draw(context) || result.popupOpen;");
+    EXPECT_LT(
+            mainMenu.find("result.popupOpen = toolsMenu_.draw(context) || result.popupOpen;"),
+            mainMenu.find("result.popupOpen = createMenu_.draw(context) || result.popupOpen;"));
+    EXPECT_LT(
+            mainMenu.find("result.popupOpen = createMenu_.draw(context) || result.popupOpen;"),
+            mainMenu.find("result.popupOpen = viewMenu_.draw(context, result) || result.popupOpen;"));
+    expectContains(mainMenu, "ui.menu.create.point_light");
+    expectContains(mainMenu, "QuaderCommand::SceneCreatePointLight");
+    expectContains(mainMenu, "ui.menu.create.directional_light");
+    expectContains(mainMenu, "QuaderCommand::SceneCreateDirectionalLight");
     expectContains(uiSystemHeader, "closeMenuPopupForPassThroughClick()");
     expectContains(uiSystemHeader, "bool mainMenuPopupOpen_ = false;");
     expectContains(uiSystem, "#include \"ui/imgui_popup_utils.hpp\"");

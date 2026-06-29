@@ -1065,6 +1065,10 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
 
     expectContains(rootCMake, "src/ui/ui_system.cpp");
     expectContains(rootCMake, "src/ui/viewport_panel.cpp");
+    expectContains(rootCMake, "resources/materials/quader_mesh.mat");
+    expectContains(rootCMake, "resources/materials/quader_mesh_lit.mat");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/quader_mesh.filamat");
+    expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/quader_mesh_lit.filamat");
     expectContains(rootCMake, "resources/materials/imgui.mat");
     expectContains(rootCMake, "$<TARGET_FILE_DIR:quader>/materials/imgui.filamat");
     expectContains(rootCMake, "resources/fonts/Inter.ttf");
@@ -1075,6 +1079,8 @@ TEST(BuildGuardrailTests, ImGuiRuntimeResourcesArePackagedWithRuntime) {
     expectContains(rootCMake, "copy_directory");
 
     EXPECT_FALSE(readSourceFile("resources/materials/imgui.mat").empty());
+    EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh.mat").empty());
+    EXPECT_FALSE(readSourceFile("resources/materials/quader_mesh_lit.mat").empty());
     EXPECT_FALSE(readSourceFile("resources/fonts/Inter.ttf").empty());
     EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/logo.png")));
     EXPECT_TRUE(std::filesystem::exists(sourcePath("resources/icons/quader-logo@2x.png")));

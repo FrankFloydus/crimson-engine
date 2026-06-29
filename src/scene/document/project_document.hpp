@@ -28,6 +28,14 @@ struct ProjectDocumentRecord {
 };
 
 /**
+ * Selects whether a ProjectDocument constructor should immediately synthesize the real scene root.
+ */
+enum class ProjectDocumentRootPolicy {
+    EnsureSceneRoot,
+    DeferSceneRoot,
+};
+
+/**
  * Stores the Project Object Record data contract used by the editor document ownership layer.
  */
 struct ProjectObjectRecord {
@@ -85,8 +93,10 @@ struct ProjectDocumentAssetReferenceReport {
  */
 class ProjectDocument {
 public:
-    ProjectDocument();
-    explicit ProjectDocument(ProjectDocumentRecord record);
+    explicit ProjectDocument(ProjectDocumentRootPolicy rootPolicy = ProjectDocumentRootPolicy::EnsureSceneRoot);
+    explicit ProjectDocument(
+            ProjectDocumentRecord record,
+            ProjectDocumentRootPolicy rootPolicy = ProjectDocumentRootPolicy::EnsureSceneRoot);
     ProjectDocument(const ProjectDocument&) = delete;
     ProjectDocument& operator=(const ProjectDocument&) = delete;
     ProjectDocument(ProjectDocument&&) noexcept = default;
@@ -114,6 +124,7 @@ public:
     ProjectDocumentIdentityReport validateObjectIdentityInvariants() const;
     ProjectDocumentAssetReferenceReport validateAssetReferences() const;
     ProjectDocumentAssetReferenceReport validateAssetReferences(ProjectObjectRecord record) const;
+    EntityId ensureSceneRoot();
 
     std::uint64_t revision() const;
 

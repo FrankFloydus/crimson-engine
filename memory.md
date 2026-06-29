@@ -9,6 +9,215 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-29 - Undo Must Not Be Swallowed By Idle Modal Tools
+
+Task/context: after moving entities with the viewport transform gizmo, Ctrl+Z could appear to do
+nothing because undo was allowed to route through the broad "cancel active tool or preview" path.
+
+Root cause/invariant:
+
+- `QuaderApiMutationRunner` owns editor-history undo routing.
+- Ctrl+Z may cancel live operation previews and transform drags because those mutate temporary
+  editor state before a document history item exists.
+- Idle modal tools such as Box/Cut/Mirror owning the viewport must not consume document undo. Escape
+  and the explicit cancel command own modal-tool cancellation.
+- If a pre-undo cancel attempt reports `changed=false`, the undo route must fall through to the
+  shared document history stack when one is available.
+
+Affected owners/files:
+
+- `src/api/quader_api_mutation_runner.cpp`
+- `src/editor/modeling/services/modeling_session_service.*`
+- `tests/editor_api_tests.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+
+Resolved approach:
+
+- Added `ModelingSessionService::canCancelActivePreviewForUndo()` for the narrower preview/drag
+  predicate used by history undo.
+- `QuaderApiMutationRunner::undo()` now uses that predicate and falls through to document history
+  when cancel returns unchanged.
+- Added regression coverage for idle modal tool + document undo, and for viewport gizmo drags on
+  both mesh objects and point lights restoring through `HistoryUndo`.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.HistoryUndoUsesDocumentHistoryWhenOnlyIdleModalToolIsActive:EditorApiTests.HistoryUndoCancelsActiveBevelPreviewBeforeDocumentHistory:EditorApiTests.MixedUndoRedoPreviewStackPreservesTexturedMaterial:EditorApiTests.PublicHistoryUndoRedoMatchesCommandApiStatus:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedPointLightThroughViewportFrames:ModelingSessionServiceTests.PublicTransformDragObjectSelectionRecordsSceneTransformHistory`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-29 - Scene Settings Fields Must Stay Undoable
+
+Task/context: scene-root Environment/IBL, Camera, and Post Process settings are edited from the
+inspector and must each participate in normal undo/redo.
+
+Root cause/invariant:
+
+- Scene-global render settings live on the real scene root as one `SceneSettingsComponent`.
+- UI edits must copy current settings, change the intended field, and route through
+  `context.editor.scene().setSceneSettings(...)`; UI must not call `SceneDocument::setSceneSettings`
+  directly.
+- `SetSceneSettingsCommand` must compare and restore the full settings struct, so adding a new
+  environment, camera, or post-process field requires updating API conversion, equality, QDR IO, and
+  `EditorApiTests.SceneSettingsPropertiesUndoAndRedoIndividually`.
+
+Affected owners/files:
+
+- `src/scene/components.hpp`
+- `src/api/quader_api_type_conversions.hpp`
+- `src/editor/commands/document/set_scene_settings_command.hpp`
+- `src/ui/inspector_panel.cpp`
+- `tests/editor_api_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+
+Verification:
+
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.SceneSettingsPropertiesUndoAndRedoIndividually`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.InspectorSceneSettingsEditThroughPublicSceneApi:UiLayoutGuardrailTests.InspectorLightEditsRouteThroughPublicSceneApi`
+
+## 2026-06-29 - Undo/Redo Shortcuts Are Editor-Global
+
+Task/context: Ctrl+Z/Ctrl+Y worked only after focusing the viewport. Inspector/property edits were
+undoable through history, but keyboard dispatch never reached the history command while a panel
+owned focus.
+
+Root cause/invariant:
+
+- `QuaderCommandsApi` owns default shortcut contexts. Editor-global command shortcuts must use a
+  global `!textInputActive` context, not `viewportFocus`.
+- Viewport-only commands and router shortcuts still require `viewportFocus && !textInputActive &&
+  !navigation.active`.
+- `UISystem` owns top-level shell input dispatch. When a non-viewport panel owns focus, it must
+  route pressed chords through the command API and execute only command matches. Do not hard-code
+  Ctrl+Z/Ctrl+Y in UI code.
+- Active text input must keep blocking editor-global shortcut dispatch so text widgets keep normal
+  editing behavior.
+
+Affected owners/files:
+
+- `src/api/quader_commands_api.cpp`
+- `src/ui/ui_context.hpp`
+- `src/ui/ui_system.cpp`
+- `src/ui/viewport_panel.cpp`
+- `src/ui/viewport_input_frame_builder.*`
+- `tests/editor_api_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.GlobalCommandKeybindingsResolveWithoutViewportFocus:EditorApiTests.GlobalCommandKeybindingsDoNotStealTextInputOrViewportOnlyShortcuts:EditorApiTests.ViewportKeybindingsResolveContextAndUserOverrides:EditorApiTests.InputBindingsSupportPunctuationAndMouseChords:EditorApiTests.ViewportHostShortcutCatalogDrivesCommandKeybindings:EditorApiTests.DefaultKeybindingProjectionDoesNotDuplicateRuleTuples`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-29 - Continuous UI Edits Are One Undo Gesture
+
+Task/context: dragging inspector values such as IBL intensity created one undo command per ImGui
+change frame, so Ctrl+Z walked intermediate values instead of restoring the pre-drag state.
+
+Root cause/invariant:
+
+- Public API/document commands intentionally record one history item per call unless an owner
+  explicitly opts into coalescing. Do not add blind history merging that collapses separate scripts,
+  commands, or user intents.
+- Continuous inspector controls (`Drag*`, `Slider*`, `ColorEdit*`, live text-style inputs) must apply
+  live changes through the authoritative public API path and pass one stable merge key for the
+  active gesture. History keeps the first `before` value and replaces the final `after` value, so one
+  undo restores the pre-drag state without delaying viewport/render updates.
+- `IsItemDeactivatedAfterEdit()` is a lifecycle/reset/final-value signal for the UI helper; it must
+  not be the only moment when document/render state changes.
+- Discrete controls such as checkboxes, combos, buttons, and menu items can commit immediately.
+- Merge keys are gesture-scoped and are stored with undo stack entries. Commands of the same
+  type/entity must not merge when the previous stack entry was created with a different key.
+- Query history snapshots must use the same public history availability owner as keyboard undo, so
+  active previews that Ctrl+Z can cancel are reported as undoable.
+
+Affected owners/files:
+
+- `src/ui/ui_continuous_edit_tracker.hpp`
+- `src/ui/inspector_panel.*`
+- `src/core/i_undoable_command.hpp`
+- `src/core/undo_redo_execute_options.hpp`
+- `src/core/undo_redo_manager.*`
+- `src/editor/history/editor_history_service.*`
+- `src/api/quader_commands_api.cpp`
+- `src/api/quader_query_api.*`
+- `tests/core_tests.cpp`
+- `tests/editor_api_tests.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Added `UIContinuousEditTracker` and converted scene-root Environment/Camera/Post Process drags and
+  light color/intensity/range controls to apply live via `setSceneSettings` or `setLightComponent`
+  while passing the active gesture merge key.
+- Added opt-in history coalescing with `UndoRedoExecuteOptions::mergeKey`; transform, light, and
+  scene-settings before/after commands can merge only with the same command type/entity when the
+  previous stack entry and the new call use the same non-empty key.
+- Default undo/redo keybinding contexts now include `canUndo`/`canRedo`, including host-provided
+  `Ctrl+Shift+Z`, so disabled shortcuts do not dispatch failed commands.
+- `QuaderQueryApi::history()` now uses `QuaderApiMutationRunner::canUndo()` for public undo
+  availability.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=DocumentCommandTests.UndoRedoManagerCoalescesOnlyExplicitMergeKeys:DocumentCommandTests.EditorTransactionsCoalesceExplicitMergeKeysBeforeCommit:DocumentCommandTests.SceneBeforeAfterCommandsSupportExplicitMergeKeys:EditorApiTests.ScenePointLightLiveEditsApplyImmediatelyAndCoalesceByMergeKey:EditorApiTests.SceneSettingsLiveEditsApplyImmediatelyAndCoalesceByMergeKey:EditorApiTests.ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory:EditorApiTests.SceneSettingsPropertiesUndoAndRedoIndividually`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.InspectorContinuousInputsLiveApplyWithMergeKeys:UiLayoutGuardrailTests.InspectorSceneSettingsEditThroughPublicSceneApi:UiLayoutGuardrailTests.InspectorLightEditsRouteThroughPublicSceneApi:ProgrammaticApiGuardrailTests.EditorHistoryBoundaryHidesCoreUndoRedoManager:ProgrammaticApiGuardrailTests.PublicHistoryDoesNotFallbackToModelingHistory`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.DefaultKeybindingProjectionDoesNotDuplicateRuleTuples:EditorApiTests.PublicHistoryUndoRedoMatchesCommandApiStatus:EditorApiTests.HistoryUndoUsesDocumentHistoryWhenOnlyIdleModalToolIsActive`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-29 - Point Lights Are Scene Entities With Viewport Gizmos
+
+Task/context: the first Filament point-light implementation rendered a selected light in the
+inspector, but W/R/S activation could clear the scene-only selection, the transform gizmo did not
+appear, and the selected light had no viewport marker. User-facing intensity also needed values in
+the thousands to affect the viewport.
+
+Root cause/invariants:
+
+- Point lights are scene entities, not modeling runtime objects. Selection/query/gizmo paths must
+  route through the scene-aware editor selection service for scene-only entities while preserving
+  component selection summaries for modeling mesh selections.
+- Activating transform tools must not sync away scene-only transform selections. Preserve selected
+  transformable scene entities through runtime tool activation when the modeling runtime has no
+  active selection.
+- Transform drag begin must accept scene-only transform selections and use scene bounds when the
+  modeling runtime has no selection bounds.
+- Selected point lights need an editor overlay marker even when they have no mesh renderable.
+- User-facing punctual light intensity is Godot-style energy; viewport Filament lumens use the
+  Godot base conversion plus a viewport exposure compensation factor until engine-specific export
+  mappings are introduced.
+
+Affected owners/files:
+
+- `src/editor/selection/editor_selection_service.cpp`
+- `src/api/quader_query_api.cpp`
+- `src/editor/modeling/services/modeling_session_service.cpp`
+- `src/render/overlay/viewport_scene_overlay_builder.cpp`
+- `src/render/light_renderable_cache.cpp`
+- `tests/editor_api_tests.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Resolved approach:
+
+- `QuaderQueryApi` now asks `ProjectSession::selection()` for summaries/centers, and the editor
+  selection service reports `Light` only for scene-only selections so component selections keep
+  their modeling summaries.
+- Runtime tool activation preserves scene-only transform selections; transform drag begin routes
+  scene-only drags as object-mode scene transform previews and falls back to selected scene bounds.
+- The scene overlay builder adds a selected point-light marker and small axis ticks at the light
+  transform origin.
+- Point/spot intensity `1.0` maps to `10,000,000` Filament lumens in the viewport:
+  `1000` Godot-equivalent lumens times `10000` viewport exposure compensation.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader quader_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=EditorApiTests.ScenePointLightSelectionFeedsQuerySummaryAndCenterInComponentMode:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedPointLightThroughViewportFrames:ViewportSceneOverlayBuilderTests.AddsSelectedLightMarker:LightRenderableCacheTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames:ViewportSceneOverlayBuilderTests.*:EditorApiTests.SceneCreatePointLightCommandCreatesSelectedPointLight`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportToolGuardrailTests.TransformGizmoEligibilityLivesInViewportToolMetadata:ModelingSessionServiceSplitTests.*`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.InspectorLightEditsRouteThroughPublicSceneApi:UiLayoutGuardrailTests.MainMenuDropdownsUsePopupPaddingAndVerticalSpacing`
+
 ## 2026-06-29 - ImGui Viewport Layouts Require MultiPane Public Workspace
 
 Task/context: the ImGui shell layout menu and viewport panel still contained the restored multi-pane
@@ -670,3 +879,262 @@ Verification:
 - `cmake --build --preset vs2026-debug`
 - `ctest --preset vs2026-debug`
 - `powershell -ExecutionPolicy Bypass -File tools\boot_smoke.ps1 -Exe build\vs2026\Debug\quader.exe -ScreenshotPath build\vs2026\Debug\daily-dry-oop-boot-smoke.png -LogCopyPath build\vs2026\Debug\daily-dry-oop-boot-smoke.log -TimeoutSeconds 30`
+
+## 2026-06-29 - Native Point Light First Implementation
+
+Task/context: first native Filament point light path with movable scene entity, inspector-editable
+properties, shadow caster state, and rendered viewport material/shadow visibility.
+
+Invariant:
+
+- `SceneDocument` owns durable light state via `LightComponent`; UI/API must edit lights through
+  `QuaderEditorApi` and document commands, not `SceneDocument::setLight` directly.
+- Filament light entities and their position/falloff/shadow mapping stay owned by
+  `LightRenderableCache`; public API/UI never cache Filament handles.
+- Mesh material rendering uses separate compiled materials: `resources/materials/quader_mesh.mat`
+  stays unlit for Shaded/tool-preview editor rendering, while
+  `resources/materials/quader_mesh_lit.mat` is the lit/PBR material for Rendered mode lights and
+  shadows.
+- Shaded viewport mode must not depend on scene lighting. The shared Filament scene contains
+  separate rendered and shaded mesh proxies; viewport panes select a scene layer instead of mutating
+  shared material state.
+- Current configured Filament SDK exposes point-light position/falloff and `castShadows`; its public
+  docs list shadow casting support for directional/sun/spot/focused spot, so true point-shadow
+  output depends on the SDK internals/version while Quader preserves the caster state and passes it
+  through.
+- Quader stores light intensity as a Godot-style user-facing energy scalar. For point/spot lights,
+  `1.0` uses Godot's default `1000 lm` as the base, then applies a `10000x` viewport exposure
+  compensation before calling Filament `Builder::intensity(float)`, for `10,000,000` Filament
+  lumens. Do not apply `1 / (4*pi)` because Filament converts point-light lumens to candela
+  internally. Directional `1.0` maps to Godot's default `100000 lx` at the same render boundary.
+
+Affected owners/files:
+
+- `src/scene/components.hpp`
+- `src/editor/commands/document/*`, `src/editor/commands/document_command_service.*`
+- `src/api/quader_api_types.hpp`, `src/api/quader_scene_api.*`, `src/api/quader_commands_api.cpp`,
+  `src/api/quader_query_api.cpp`
+- `src/render/light_renderable_cache.cpp`, `src/render/mesh_renderable_factory.cpp`,
+  `src/render/mesh_renderable_cache.*`, `src/render/material_binding_service.*`,
+  `src/render/filament_material_library.*`, `src/render/viewport_renderer.cpp`,
+  `src/render/viewport_render_pass_coordinator.*`, `src/render/render_signature_builder.cpp`
+- `src/ui/inspector_panel.cpp`, `src/ui/main_menu_bar.*`, `src/ui/viewport_panel.cpp`,
+  `resources/locales/*.lang`
+- `src/io/qdr/qdr_document_reader.cpp`, `src/io/qdr/qdr_document_writer.cpp`
+
+Resolved approach:
+
+- Added point-light creation and light-component edit commands with undo/redo and optional
+  select-created behavior.
+- Exposed `QuaderLightComponent`, `QuaderCreatePointLightArgs`, `scene.createPointLight`,
+  `scene.setLightComponent`, light snapshots, and typed command `scene.create_point_light`.
+- Added light range/falloff persistence in scene, render signatures, public snapshots, and QDR.
+- Updated `LightRenderableCache` to set Filament point/spot position from entity world transform and
+  range through `falloff`, while keeping rebuild/transform signatures separate.
+- Added a separate lit mesh material, bound roughness/metallic only for Rendered proxies, enabled
+  Rendered mesh shadow receiving, and made viewport shadowing explicit.
+- Added dual mesh proxy layers so Shaded mode renders textured material color through a true unlit
+  material while Rendered mode uses the lit/shadowing material.
+- Added inspector controls for light type, color, intensity, range, and cast shadows through the
+  public scene API.
+- Added `LightRenderableCache::filamentIntensity` as the single Godot-style intensity to Filament
+  lumen/lux conversion point, including the punctual-light viewport exposure compensation.
+- Added the main-menu `Create > Point Light` entry, routed through
+  `QuaderCommand::SceneCreatePointLight`.
+
+Verification:
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File tools/affected_check.ps1 -PlanOnly -ChangedPath src/render/light_renderable_cache.cpp,src/ui/inspector_panel.cpp,src/api/quader_scene_api.cpp,resources/materials/quader_mesh.mat,tests/editor_api_tests.cpp`
+- `cmake --build --preset vs2026-debug --target quader quader_guardrail_tests quader_tests quader_modeling_domain_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible:ProgrammaticApiGuardrailTests.*:UiLayoutGuardrailTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=Console*:EditorApiTests.*:GroundGridMaterialTests.*:GroupingPublicApiTests.*:LightRenderableCacheTests.*:Localization*:ModelingSessionService*Hover*:ModelingSessionService*Overlay*:ModelingSessionService*Pick*:NavigationGizmo*:Overlay*:PlatformWindow*:ProgrammaticApiTests.*:ProgrammaticBehaviorScenarioTests.*:QuaderMeshMaterialTests.*:Render*:RenderExtractionTests.*:SceneRenderBridge*:Sdl*:TextureRegistryTests.*:UI*:Viewport*:Window*`
+- `ctest --preset vs2026-debug --output-on-failure`
+- Follow-up shaded/menu fix:
+  `cmake --build --preset vs2026-debug --target quader quader_guardrail_tests quader_tests quader_modeling_domain_tests`
+- Follow-up shaded/menu fix:
+  `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.*`
+- Follow-up shaded/menu fix:
+  `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QuaderMeshMaterialTests.*:SceneRenderBridgeTests.*:ViewportRenderPassCoordinatorTests.*:ViewportRendererTests.*:EditorApiTests.ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory:EditorApiTests.SceneCreatePointLightCommandCreatesSelectedPointLight:QdrDocumentIoTests.WritesAndReadsProjectDocumentPayloadWithStableIdsAndBinaryAssetLinks:DocumentCommandServiceTests.CreatePointLightAndSetLightComponentAreUndoable`
+- Follow-up shaded/menu fix: `ctest --preset vs2026-debug --output-on-failure`
+- Follow-up shaded runtime fix:
+  `cmake --preset vs2026`
+- Follow-up shaded runtime fix:
+  `cmake --build --preset vs2026-debug --target quader quader_guardrail_tests quader_tests quader_modeling_domain_tests`
+- Follow-up shaded runtime fix:
+  `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:UiLayoutGuardrailTests.MainMenuDropdownsUsePopupPaddingAndVerticalSpacing`
+- Follow-up shaded runtime fix:
+  `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QuaderMeshMaterialTests.*:SceneRenderBridgeTests.*:ViewportRenderPassCoordinatorTests.*:ViewportRendererTests.*:EditorApiTests.SceneCreatePointLightCommandCreatesSelectedPointLight`
+- Follow-up shaded runtime fix: `ctest --preset vs2026-debug --output-on-failure`
+- Follow-up shaded runtime fix:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File tools\boot_smoke.ps1 -Exe build\vs2026\Debug\quader.exe -ScreenshotPath build\vs2026\Debug\shaded-rendered-material-split-boot-smoke.png -LogCopyPath build\vs2026\Debug\shaded-rendered-material-split-boot-smoke.log -TimeoutSeconds 30 -AllowMissingLog`
+- Follow-up light intensity unit fix:
+  `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests`
+- Follow-up light intensity unit fix:
+  `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=LightRenderableCacheTests.*:RenderExtractionTests.*:EditorApiTests.ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory:EditorApiTests.SceneCreatePointLightCommandCreatesSelectedPointLight:QdrDocumentIoTests.*`
+- Follow-up light intensity unit fix:
+  `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.InspectorLightEditsRouteThroughPublicSceneApi:UiLayoutGuardrailTests.MainMenuDropdownsUsePopupPaddingAndVerticalSpacing`
+- Follow-up light intensity unit fix:
+  `cmake --build --preset vs2026-debug --target quader`
+- Follow-up light intensity unit fix:
+  `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=DocumentCommandServiceTests.CreatePointLightAndSetLightComponentAreUndoable:LightRenderableCacheTests.*:EditorApiTests.ScenePointLightApiCreatesSnapshotsAndEditsThroughHistory:EditorApiTests.SceneCreatePointLightCommandCreatesSelectedPointLight`
+
+## Real Scene Root, Scene Settings, IBL, And Directional Lights
+
+Invariant:
+
+- New projects and migrated QDR documents must contain exactly one real scene-root entity named
+  `scene`, marked by `SceneSettingsComponent`. The root is selectable and transformable, cannot be
+  destroyed/reparented/renamed by editor commands, and public API snapshots expose it with
+  `isSceneRoot`.
+- Public editor create paths parent new scene entities, modeling objects, point lights, and
+  directional lights under the root when callers do not pass an explicit parent. Low-level
+  `SceneDocument` creation stays owner-level and does not silently consult `ProjectDocument`.
+- Root-level user entities are children of `scene`, so behavior-test `noParent()` means no
+  user-authored parent, not `InvalidEntityId`.
+- Scene-wide render settings live on the real root and are edited through the public scene API and
+  undoable document commands. Rendered mode applies IBL, skybox background, camera exposure, and
+  post-process settings per viewport; Shaded mode remains the editor's unlit material view.
+- Directional lights use the same light component/API/persistence path as point lights and are
+  represented in selected viewport overlays by a marker plus direction line.
+
+Affected owners/files:
+
+- Scene/data ownership: `src/scene/components.hpp`, `src/scene/scene_document.*`,
+  `src/scene/document/project_document.*`, `src/scene/document/project_session.cpp`
+- Command/API ownership: `src/editor/commands/document_command_service.*`,
+  `src/editor/commands/document/set_scene_settings_command.hpp`, `src/api/quader_api_types.hpp`,
+  `src/api/quader_scene_api.*`, `src/api/quader_commands_api.cpp`,
+  `src/api/quader_query_api.cpp`
+- Render ownership: `src/render/filament_environment_library.*`, `src/render/render_system.*`,
+  `src/render/viewport_renderer.*`, `src/render/overlay/viewport_scene_overlay_builder.cpp`
+- UI/persistence/resources: `src/ui/inspector_panel.cpp`, `src/ui/main_menu_bar.*`,
+  `src/ui/outliner_panel.cpp`, `src/ui/viewport_panel.cpp`, `src/io/qdr/qdr_document_reader.cpp`,
+  `src/io/qdr/qdr_document_writer.cpp`, `resources/ibl/*`, `resources/locales/*.lang`
+
+Resolved approach:
+
+- Added `SceneSettingsComponent` as the root marker plus Environment, Camera, and Post Process
+  settings structs. `ProjectDocument::ensureSceneRoot()` creates/migrates the real root and
+  reparents existing top-level entities during project/session/QDR hydration.
+- Added undoable scene-settings command and inspector sections on the selected root for
+  Environment, Camera, and Post Process.
+- Added Filament environment library using bundled KTX IBL/skybox assets from the Filament material
+  demo asset set, copied under runtime `ibl/`, and wired it to Rendered-mode viewports.
+- Added public directional-light create args/API/command/menu item/localization and selected
+  directional-light overlay representation.
+- Updated QDR read/write so scene-root markers and settings persist, while legacy payloads migrate
+  into a document with the new root.
+- Updated tests and behavior helpers so API snapshots include the root and root-level entities
+  parent under `scene`.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug`
+- `ctest --preset vs2026-debug`
+
+## 2026-06-29 - Default Rendered Material Roughness And Lighting Notes
+
+Task/context: Rendered viewport material looked like glass and an outward-normal, single-sided open
+box still appeared lit inside.
+
+Root cause/invariants:
+
+- `resources/modeling_assets/materials/default/default_roughness.png` is an engine-neutral packed
+  material asset whose red channel is black while useful default gloss/smoothness data lives outside
+  the Filament roughness-red convention. Binding it directly to `quader_mesh_lit.mat`, which samples
+  `roughnessTexture.r`, forces the default material to near-mirror roughness even though
+  `MaterialDocument::roughness` defaults to `1.0`.
+- The startup default Quader material should bind only the default albedo texture and rely on the
+  render fallback white roughness texture plus scalar roughness `1.0`. Do not rewrite QDR material
+  loading or saved material texture slots, because explicit persisted roughness data must remain
+  authored data.
+- Mesh material culling follows the authored `MeshComponent::doubleSided` state through a single
+  Filament material culling mode. Do not reintroduce separate shadow-only no-culling unless there is
+  a dedicated, tested engine-export reason for it.
+- Filament 1.71 SDK documentation does not promise point-light shadow maps; direct shadow
+  validation should use directional/sun/spot lights unless Quader adds a separate point-shadow
+  strategy. IBL/environment lighting is not shadowed by mesh shadow maps, so enclosed interiors can
+  still receive environment light unless environment intensity/AO is adjusted.
+
+Affected owners/files:
+
+- `src/app/app.cpp`
+- `src/render/material_binding_service.cpp`
+- `tests/core_tests.cpp`
+
+Resolved approach:
+
+- Startup still registers the default roughness texture asset for metadata/package consistency but
+  no longer binds it to the startup default material. The default material binds the albedo texture
+  only, leaving rendered roughness to the white fallback and scalar factor.
+- `MaterialBindingService` keeps the previous single culling-mode behavior for mesh material
+  instances.
+- Added guardrail assertions that startup default material creation does not bind the packed
+  roughness texture and that material instances avoid the reverted separate color/shadow culling.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QuaderMeshMaterialTests.*:SceneRenderBridgeTests.*:ViewportRendererTests.*:LightRenderableCacheTests.*:RenderExtractionTests.*:RenderSystemTests.*:RenderLifecycleTests.*:RenderProxyLifecycleTests.*`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:WindowGuardrailTests.*`
+- `cmake --build --preset vs2026-debug --target quader` was blocked by a running
+  `quader.exe` holding the output executable open.
+
+## 2026-06-29 - Viewport Overlays Are Post-Process-Free Editor Passes
+
+Task/context: Rendered mode post-processing and FXAA degraded transform gizmos and editor overlays.
+
+Invariants:
+
+- Gizmos, selection wires/fills, source wires, light markers, marquee overlays, and the editor grid
+  are editor presentation, not scene content. Scene lights, shadows, bloom, tone mapping, dithering,
+  FXAA, and IBL intensity must not affect them.
+- Viewport panes use a shared Filament scene, so per-pane overlays stay on the same per-pane
+  editor/grid layer mask. Do not move them to the single global overlay layer unless a separate
+  multi-viewport isolation strategy is added.
+- Filament visibility layers are an 8-bit public/internal contract (`View::setVisibleLayers`,
+  `RenderableManager::Builder::layerMask`, renderable/scene SoA `LAYERS`, skybox masks, and shadow
+  visibility paths all use `uint8_t`). Do not fork Filament just to expose 32 editor/category bits;
+  future overlay categories should use Quader-owned pass/scene/policy structure instead of more
+  Filament layer bits.
+- `ViewportRenderPassCoordinator` owns pass ordering and visible layer masks. Scene view renders
+  scene/tool-preview layers first with the background clear. Overlay view renders the per-pane
+  editor layer second with `clear=false`, then restores the renderer clear state. Filament clears
+  depth/stencil at the start of every `Renderer::render(view)` call, so the overlay view cannot
+  inherit scene depth through `Renderer::ClearOptions`. The overlay pass must instead receive
+  invisible depth-only scene mesh proxies before drawing grid/editor geometry; otherwise the grid
+  draws over opaque scene meshes and makes materials look transparent.
+- `ViewportRenderer` owns the two Filament views. Scene settings are applied only to the scene view;
+  the overlay view must keep post-processing, anti-aliasing, dithering, color grading, and shadowing
+  disabled, and it must use translucent view blending when composed over the scene view.
+
+Affected owners/files:
+
+- `src/render/viewport_renderer.*`
+- `src/render/viewport_render_pass_coordinator.*`
+- `tests/core_tests.cpp`
+- `tests/render_extraction_tests.cpp`
+
+Resolved approach:
+
+- Added a second Filament `View` per viewport for overlays, sharing the same scene, camera, viewport
+  size, and render target as the scene view.
+- Split scene and overlay visible layer masks. The scene view sees only rendered/shaded scene layers
+  plus tool preview; the overlay view sees the pane's editor/grid layer when the grid or overlays are
+  visible.
+- Rendered scene pass runs first with normal clear/post-process. Overlay pass runs second with no
+  clear, translucent view blending, and no post-process/shadowing, then restores renderer clear
+  options. `MeshRenderableCache` creates overlay depth-only mesh proxies on the existing per-pane
+  editor layer bits and early render channel 0; those proxies write depth with color writes disabled,
+  receive no shadows, and cast no shadows. The grid remains in this editor pass so it is not lit or
+  post-processed, but it depth-tests against reconstructed scene depth.
+- Reverted the experimental separate color/shadow material culling behavior; mesh material culling
+  again follows a single Filament material culling mode.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests quader_guardrail_tests quader`
+  rebuilt runtime/tests; the final `quader.exe` link was blocked by a running user-launched
+  `quader.exe` instance holding the output executable open.
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QuaderMeshMaterialTests.*:SceneRenderBridgeTests.*:ViewportRendererTests.*:ViewportRenderPassCoordinatorTests.*:OverlayRenderableCacheTests.*:RenderExtractionTests.*`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime:WindowGuardrailTests.*:UiLayoutGuardrailTests.*`

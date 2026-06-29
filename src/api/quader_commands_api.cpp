@@ -51,6 +51,56 @@ std::filesystem::path defaultKeybindingsPath() {
     return std::filesystem::path("keybindings.json");
 }
 
+constexpr std::string_view globalCommandKeybindingContext() {
+    return "!textInputActive";
+}
+
+constexpr std::string_view undoCommandKeybindingContext() {
+    return "!textInputActive && canUndo";
+}
+
+constexpr std::string_view redoCommandKeybindingContext() {
+    return "!textInputActive && canRedo";
+}
+
+constexpr std::string_view viewportCommandKeybindingContext() {
+    return "viewportFocus && !textInputActive && !navigation.active";
+}
+
+std::string_view defaultKeybindingContextForCommand(std::string_view commandId) {
+    if (commandId == QuaderCommand::EditUndo.string()) {
+        return undoCommandKeybindingContext();
+    }
+    if (commandId == QuaderCommand::EditRedo.string()) {
+        return redoCommandKeybindingContext();
+    }
+    ViewportShortcut shortcut;
+    if (viewportShortcutForCommandTargetId(commandId, shortcut) &&
+            shortcut.context == ViewportShortcutContext::Viewport) {
+        return viewportCommandKeybindingContext();
+    }
+    return globalCommandKeybindingContext();
+}
+
+std::string_view defaultKeybindingContextForContractTarget(std::string_view targetId) {
+    const std::optional<std::string> commandTarget = viewportCommandTargetIdForContractTarget(targetId);
+    if (commandTarget) {
+        const std::string_view commandTargetView(commandTarget->data(), commandTarget->size());
+        if (commandTargetView == QuaderCommand::EditUndo.string()) {
+            return undoCommandKeybindingContext();
+        }
+        if (commandTargetView == QuaderCommand::EditRedo.string()) {
+            return redoCommandKeybindingContext();
+        }
+    }
+    ViewportShortcut shortcut;
+    if (viewportShortcutFromContractTarget(targetId, shortcut) &&
+            shortcut.context == ViewportShortcutContext::Global) {
+        return globalCommandKeybindingContext();
+    }
+    return viewportCommandKeybindingContext();
+}
+
 QuaderKeybindingContext viewportKeybindingContext(
         const ViewportToolState& state,
         bool viewportFocused,
@@ -557,6 +607,24 @@ void QuaderCommandsApi::Impl::registerCommands() {
             "Save Project As",
             [this] { return project_.saveAs({}); });
     registerCommand(
+            QuaderCommand::SceneCreatePointLight,
+            "Create Point Light",
+            [this] {
+                QuaderCreatePointLightArgs args;
+                args.selectCreated = true;
+                const QuaderApiResult<QuaderEntityRef> result = api_.scene().createPointLight(args);
+                return quaderApiStatusFromResult(result);
+            });
+    registerCommand(
+            QuaderCommand::SceneCreateDirectionalLight,
+            "Create Directional Light",
+            [this] {
+                QuaderCreateDirectionalLightArgs args;
+                args.selectCreated = true;
+                const QuaderApiResult<QuaderEntityRef> result = api_.scene().createDirectionalLight(args);
+                return quaderApiStatusFromResult(result);
+            });
+    registerCommand(
             QuaderCommand::ViewportFrameSelection,
             "Frame Selection",
             [this] { return viewports_.frameSelection(); });
@@ -647,11 +715,14 @@ void QuaderCommandsApi::Impl::registerViewportViewCommand(
 }
 
 void QuaderCommandsApi::Impl::registerDefaultKeybindings() {
-    constexpr std::string_view editableContext = "viewportFocus && !textInputActive && !navigation.active";
     for (const QuaderCommandDescriptor& command : registry_.available()) {
         keybindings_.registerTarget(command.id);
         if (!command.shortcut.empty()) {
-            keybindings_.addDefaultKeybinding(command.id, command.shortcut, std::string(editableContext), 0);
+            keybindings_.addDefaultKeybinding(
+                    command.id,
+                    command.shortcut,
+                    std::string(defaultKeybindingContextForCommand(command.id)),
+                    0);
         }
     }
 
@@ -660,7 +731,6 @@ void QuaderCommandsApi::Impl::registerDefaultKeybindings() {
 
 void QuaderCommandsApi::Impl::registerViewportDefaultKeybindings() {
     constexpr std::string_view viewportContext = "viewportFocus && !textInputActive";
-    constexpr std::string_view viewportShortcutContext = "viewportFocus && !textInputActive && !navigation.active";
     constexpr std::string_view operationPreviewContext =
             "viewportFocus && !textInputActive && !navigation.active && operationPreview.active";
 
@@ -678,17 +748,17 @@ void QuaderCommandsApi::Impl::registerViewportDefaultKeybindings() {
     keybindings_.addDefaultKeybinding(
             viewportInputActionTargetId("cancel_active_tool"),
             "Escape",
-            std::string(viewportShortcutContext),
+            std::string(viewportCommandKeybindingContext()),
             10);
     keybindings_.addDefaultKeybinding(
             viewportInputActionTargetId("toggle_maximized"),
             "Space",
-            std::string(viewportShortcutContext),
+            std::string(viewportCommandKeybindingContext()),
             10);
     keybindings_.addDefaultKeybinding(
             viewportInputActionTargetId("delete_popup"),
             "X",
-            std::string(viewportShortcutContext),
+            std::string(viewportCommandKeybindingContext()),
             10);
     for (const ViewportInputActionBindingDescriptor& descriptor : viewportInputActionBindingCatalog()) {
         keybindings_.addDefaultKeybinding(
@@ -706,22 +776,22 @@ void QuaderCommandsApi::Impl::registerViewportDefaultKeybindings() {
         keybindings_.addDefaultKeybinding(
                 *targetId,
                 descriptor.shortcut,
-                std::string(viewportShortcutContext),
+                std::string(defaultKeybindingContextForContractTarget(descriptor.targetId)),
                 10);
     }
 
-    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("vertex"), "1", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("edge"), "2", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("face"), "3", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("object"), "4", std::string(viewportShortcutContext), 5);
-    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("group"), "5", std::string(viewportShortcutContext), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("vertex"), "1", std::string(viewportCommandKeybindingContext()), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("edge"), "2", std::string(viewportCommandKeybindingContext()), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("face"), "3", std::string(viewportCommandKeybindingContext()), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("object"), "4", std::string(viewportCommandKeybindingContext()), 5);
+    keybindings_.addDefaultKeybinding(viewportSelectionModeTargetId("group"), "5", std::string(viewportCommandKeybindingContext()), 5);
 
     const std::vector<ViewportGridShortcutBindingDescriptor> presets = viewportGridShortcutBindingCatalog();
     for (const ViewportGridShortcutBindingDescriptor& preset : presets) {
         keybindings_.addDefaultKeybinding(
                 viewportGridPresetTargetId(preset.preset),
                 preset.shortcut,
-                std::string(viewportShortcutContext),
+                std::string(viewportCommandKeybindingContext()),
                 10);
     }
 
@@ -730,7 +800,7 @@ void QuaderCommandsApi::Impl::registerViewportDefaultKeybindings() {
             keybindings_.addDefaultKeybinding(
                     viewportGridPresetTargetId(preset),
                     "F" + std::to_string(preset),
-                    std::string(viewportShortcutContext),
+                    std::string(viewportCommandKeybindingContext()),
                     10);
         }
     }

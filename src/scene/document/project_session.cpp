@@ -14,12 +14,14 @@
 namespace quader {
 
 ProjectSession::ProjectSession() {
+    (void)document_.ensureSceneRoot();
     rebuildServices();
     markClean();
 }
 
 ProjectSession::ProjectSession(ProjectDocument document)
     : document_(std::move(document)) {
+    (void)document_.ensureSceneRoot();
     rebuildServices();
     markClean();
 }

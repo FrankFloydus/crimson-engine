@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "ui/main_menu_bar.hpp"
 
+#include "api/quader_command_ids.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/localization_service.hpp"
 #include "ui/ui_panel_manager.hpp"
@@ -113,6 +114,21 @@ void drawToolsMenuContents(MainMenuBarContext& context) {
     }
 }
 
+void drawCreateMenuContents(MainMenuBarContext& context) {
+    const std::string pointLightLabel =
+            context.localization.imguiLabel("ui.menu.create.point_light", "ui.menu.create.point_light", "Point Light");
+    if (ImGui::MenuItem(pointLightLabel.c_str())) {
+        (void)context.editor.commands().execute(QuaderCommand::SceneCreatePointLight);
+    }
+    const std::string directionalLightLabel = context.localization.imguiLabel(
+            "ui.menu.create.directional_light",
+            "ui.menu.create.directional_light",
+            "Directional Light");
+    if (ImGui::MenuItem(directionalLightLabel.c_str())) {
+        (void)context.editor.commands().execute(QuaderCommand::SceneCreateDirectionalLight);
+    }
+}
+
 void drawViewMenuContents(MainMenuBarContext& context, MainMenuBarResult& result) {
     bool navigationGizmoVisible =
             context.viewportPanel != nullptr && context.viewportPanel->navigationGizmoVisible();
@@ -190,6 +206,17 @@ bool ToolsMenu::draw(MainMenuBarContext& context) const {
     return true;
 }
 
+bool CreateMenu::draw(MainMenuBarContext& context) const {
+    const std::string label = context.localization.imguiLabel("ui.menu.create", "ui.menu.create", "Create");
+    if (!beginMenuWithPopupSpacing(label)) {
+        return false;
+    }
+
+    drawCreateMenuContents(context);
+    endMenuWithPopupSpacing();
+    return true;
+}
+
 bool ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
     const std::string label = context.localization.imguiLabel("ui.menu.view", "ui.menu.view", "View");
     if (!beginMenuWithPopupSpacing(label)) {
@@ -228,6 +255,7 @@ MainMenuBarResult MainMenuBar::drawMenus(MainMenuBarContext context) const {
     result.popupOpen = fileMenu_.draw(context) || result.popupOpen;
     result.popupOpen = editMenu_.draw(context) || result.popupOpen;
     result.popupOpen = toolsMenu_.draw(context) || result.popupOpen;
+    result.popupOpen = createMenu_.draw(context) || result.popupOpen;
     result.popupOpen = viewMenu_.draw(context, result) || result.popupOpen;
     result.popupOpen = layoutMenu_.draw(context) || result.popupOpen;
     const std::string helpLabel = context.localization.imguiLabel("ui.menu.help", "ui.menu.help", "Help");

@@ -9,6 +9,7 @@
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
+#include "core/undo_redo_execute_options.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/commands/document/document_command_edits.hpp"
 #include "editor/selection/editor_selection_service.hpp"
@@ -92,6 +93,12 @@ std::vector<DocumentLockEdit> toDocumentLockEdits(std::span<const QuaderSceneLoc
         });
     }
     return documentEdits;
+}
+
+UndoRedoExecuteOptions toUndoRedoOptions(QuaderSceneEditOptions options) {
+    return UndoRedoExecuteOptions{
+            .mergeKey = std::move(options.mergeKey),
+    };
 }
 
 } // namespace
@@ -178,6 +185,15 @@ QuaderApiResult<QuaderEntityRef> QuaderSceneApi::createEntity(const QuaderCreate
     return mutations_.createEntity(args);
 }
 
+QuaderApiResult<QuaderEntityRef> QuaderSceneApi::createPointLight(const QuaderCreatePointLightArgs& args) {
+    return mutations_.createPointLight(args);
+}
+
+QuaderApiResult<QuaderEntityRef> QuaderSceneApi::createDirectionalLight(
+        const QuaderCreateDirectionalLightArgs& args) {
+    return mutations_.createDirectionalLight(args);
+}
+
 QuaderApiVoidResult QuaderSceneApi::destroy(EntityId entity) {
     return mutations_.runDocumentResult(projectSession(session_).documentCommands().destroyEntity(entity), "Destroy Entity");
 }
@@ -237,6 +253,30 @@ QuaderApiVoidResult QuaderSceneApi::setMeshComponent(EntityId entity, QuaderMesh
     return mutations_.runDocumentResult(
             projectSession(session_).documentCommands().setMeshComponent(entity, toSceneMeshComponent(mesh)),
             "Set Mesh Component");
+}
+
+QuaderApiVoidResult QuaderSceneApi::setLightComponent(
+        EntityId entity,
+        QuaderLightComponent light,
+        QuaderSceneEditOptions options) {
+    return mutations_.runDocumentResult(
+            projectSession(session_).documentCommands().setLightComponent(
+                    entity,
+                    toSceneLightComponent(light),
+                    toUndoRedoOptions(std::move(options))),
+            "Set Light Component");
+}
+
+QuaderApiVoidResult QuaderSceneApi::setSceneSettings(
+        EntityId entity,
+        QuaderSceneSettings settings,
+        QuaderSceneEditOptions options) {
+    return mutations_.runDocumentResult(
+            projectSession(session_).documentCommands().setSceneSettings(
+                    entity,
+                    toSceneSettingsComponent(settings),
+                    toUndoRedoOptions(std::move(options))),
+            "Set Scene Settings");
 }
 
 QuaderApiVoidResult QuaderSceneApi::select(std::span<const EntityId> entities, EntityId active) {

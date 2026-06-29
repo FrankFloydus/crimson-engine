@@ -49,6 +49,7 @@ public:
 
     [[nodiscard]] static std::uint64_t lightSignature(const LightComponent& light);
     [[nodiscard]] static std::uint64_t lightTransformSignature(const QMat4& worldTransform);
+    [[nodiscard]] static float filamentIntensity(const LightComponent& light);
 
 private:
     /**

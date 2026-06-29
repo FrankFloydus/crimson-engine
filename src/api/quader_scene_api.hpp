@@ -38,6 +38,13 @@ struct QuaderSceneVisibilityEdit {
 };
 
 /**
+ * Describes optional history behavior for live scene edits.
+ */
+struct QuaderSceneEditOptions {
+    std::string mergeKey;
+};
+
+/**
  * Represents a scene lock edit used by the public Quader API surface.
  */
 struct QuaderSceneLockEdit {
@@ -101,6 +108,9 @@ public:
     QuaderSceneApi(QuaderApiSession session, QuaderApiMutationRunner& mutations);
 
     QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
+    QuaderApiResult<QuaderEntityRef> createPointLight(const QuaderCreatePointLightArgs& args = QuaderCreatePointLightArgs{});
+    QuaderApiResult<QuaderEntityRef> createDirectionalLight(
+            const QuaderCreateDirectionalLightArgs& args = QuaderCreateDirectionalLightArgs{});
     QuaderApiVoidResult destroy(EntityId entity);
     QuaderApiVoidResult rename(EntityId entity, std::string name);
     QuaderApiVoidResult reparent(EntityId entity, EntityId parent, bool preserveWorldTransform = true);
@@ -111,6 +121,14 @@ public:
     QuaderApiVoidResult setLocked(EntityId entity, bool locked);
     QuaderApiVoidResult setLocks(std::span<const QuaderSceneLockEdit> edits);
     QuaderApiVoidResult setMeshComponent(EntityId entity, QuaderMeshComponent mesh);
+    QuaderApiVoidResult setLightComponent(
+            EntityId entity,
+            QuaderLightComponent light,
+            QuaderSceneEditOptions options = {});
+    QuaderApiVoidResult setSceneSettings(
+            EntityId entity,
+            QuaderSceneSettings settings,
+            QuaderSceneEditOptions options = {});
     QuaderApiVoidResult select(std::span<const EntityId> entities, EntityId active = InvalidEntityId);
     QuaderApiVoidResult select(std::initializer_list<EntityId> entities, EntityId active = InvalidEntityId);
     QuaderApiVoidResult select(EntityId entity);

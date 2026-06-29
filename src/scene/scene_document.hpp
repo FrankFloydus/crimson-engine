@@ -40,6 +40,8 @@ struct EntityRecord {
     bool hasChildren = false;
     bool hasMesh = false;
     bool hasLight = false;
+    bool isSceneRoot = false;
+    bool hasSceneSettings = false;
     bool hasModelingObject = false;
 };
 
@@ -83,6 +85,7 @@ public:
     void setMaterial(EntityId id, MaterialComponent material);
     bool clearMaterial(EntityId id);
     void setLight(EntityId id, LightComponent light);
+    bool setSceneSettings(EntityId id, SceneSettingsComponent settings);
 
     const NameComponent* name(EntityId id) const;
     const EntityUuidComponent* entityUuid(EntityId id) const;
@@ -97,8 +100,11 @@ public:
     const MeshComponent* mesh(EntityId id) const;
     const MaterialComponent* material(EntityId id) const;
     const LightComponent* light(EntityId id) const;
+    const SceneSettingsComponent* sceneSettings(EntityId id) const;
 
     std::vector<EntityId> entities() const;
+    EntityId sceneRoot() const;
+    bool isSceneRoot(EntityId id) const;
     std::vector<EntityId> rootEntities() const;
     std::vector<EntityId> children(EntityId id) const;
     std::vector<EntityId> descendants(EntityId id, bool includeSelf = true) const;

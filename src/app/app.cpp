@@ -58,6 +58,7 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     renderBridge_.initialize(renderSystem_.engine(),
             renderSystem_.scene(),
             renderSystem_.quaderMeshMaterial(),
+            renderSystem_.quaderMeshLitMaterial(),
             renderSystem_.vertexColorOverlayMaterial(),
             renderSystem_.overlayLineMaterial(),
             renderSystem_.overlayPointMaterial(),
@@ -168,9 +169,10 @@ void App::createStartupScene() {
     roughness.usage = TextureUsage::Roughness;
     roughness.colorSpace = TextureColorSpace::Linear;
     roughness.sourcePath = "materials/default/default_roughness.png";
-    const AssetId roughnessTexture = projectSession_.assets().addTexture(std::move(roughness));
+    projectSession_.assets().addTexture(std::move(roughness));
 
-    MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader", albedoTexture, roughnessTexture);
+    MaterialDocument defaultMaterial = makeDefaultQuaderMaterial("Default Quader");
+    setMaterialTextureSlot(defaultMaterial, MaterialTextureSlot::BaseColor, albedoTexture);
     defaultMaterial_ = projectSession_.assets().addMaterial(std::move(defaultMaterial));
 }
 
@@ -235,6 +237,11 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
         return false;
     }
     (void)QuaderRenderApiRuntimeAccess::syncScene(editor_->render(), renderBridge_);
+    if (const EntityId root = projectSession_.scene().sceneRoot(); root != InvalidEntityId) {
+        if (const SceneSettingsComponent* settings = projectSession_.scene().sceneSettings(root)) {
+            renderSystem_.applySceneSettings(*settings);
+        }
+    }
 
     ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
     ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());

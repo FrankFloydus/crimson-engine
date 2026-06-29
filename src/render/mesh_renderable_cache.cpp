@@ -6,9 +6,40 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/mesh_renderable_cache.hpp"
 
+#include "render/render_layers.hpp"
+
 #include <utility>
 
 namespace quader {
+namespace {
+
+bool meshProxyNeedsRebuild(
+        const std::unordered_map<EntityId, MeshRenderableProxy>& proxies,
+        EntityId entityId,
+        AssetId meshId,
+        const MeshAsset& mesh,
+        AssetId materialId,
+        bool castShadows,
+        bool doubleSided,
+        std::uint64_t materialRevision) {
+    const auto existing = proxies.find(entityId);
+    return existing == proxies.end() ||
+            existing->second.mesh != meshId ||
+            existing->second.meshRevision != mesh.revision.value ||
+            existing->second.material != materialId ||
+            existing->second.castShadows != castShadows ||
+            existing->second.doubleSided != doubleSided ||
+            existing->second.materialRevision != materialRevision;
+}
+
+void destroyProxyMap(MeshRenderableFactory& factory, std::unordered_map<EntityId, MeshRenderableProxy>& proxies) {
+    for (auto& [id, proxy] : proxies) {
+        factory.destroy(proxy);
+    }
+    proxies.clear();
+}
+
+} // namespace
 
 MeshRenderableCache::~MeshRenderableCache() {
     shutdown();
@@ -23,15 +54,16 @@ void MeshRenderableCache::shutdown() {
         return;
     }
 
-    for (auto& [id, proxy] : meshProxies_) {
-        factory_->destroy(proxy);
-    }
-    meshProxies_.clear();
+    destroyProxyMap(*factory_, renderedMeshProxies_);
+    destroyProxyMap(*factory_, shadedMeshProxies_);
+    destroyProxyMap(*factory_, overlayDepthMeshProxies_);
     factory_ = nullptr;
 }
 
 bool MeshRenderableCache::contains(EntityId entityId) const {
-    return meshProxies_.contains(entityId);
+    return renderedMeshProxies_.contains(entityId) ||
+            shadedMeshProxies_.contains(entityId) ||
+            overlayDepthMeshProxies_.contains(entityId);
 }
 
 bool MeshRenderableCache::needsRebuild(EntityId entityId,
@@ -41,14 +73,33 @@ bool MeshRenderableCache::needsRebuild(EntityId entityId,
         bool castShadows,
         bool doubleSided,
         std::uint64_t materialRevision) const {
-    const auto existing = meshProxies_.find(entityId);
-    return existing == meshProxies_.end() ||
-            existing->second.mesh != meshId ||
-            existing->second.meshRevision != mesh.revision.value ||
-            existing->second.material != materialId ||
-            existing->second.castShadows != castShadows ||
-            existing->second.doubleSided != doubleSided ||
-            existing->second.materialRevision != materialRevision;
+    return meshProxyNeedsRebuild(
+                    renderedMeshProxies_,
+                    entityId,
+                    meshId,
+                    mesh,
+                    materialId,
+                    castShadows,
+                    doubleSided,
+                    materialRevision) ||
+            meshProxyNeedsRebuild(
+                    shadedMeshProxies_,
+                    entityId,
+                    meshId,
+                    mesh,
+                    materialId,
+                    false,
+                    doubleSided,
+                    materialRevision) ||
+            meshProxyNeedsRebuild(
+                    overlayDepthMeshProxies_,
+                    entityId,
+                    meshId,
+                    mesh,
+                    materialId,
+                    false,
+                    doubleSided,
+                    materialRevision);
 }
 
 void MeshRenderableCache::syncMesh(EntityId entityId,
@@ -67,7 +118,7 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
 
     if (needsRebuild(entityId, meshId, mesh, materialId, castShadows, doubleSided, materialRevision)) {
         remove(entityId);
-        MeshRenderableProxy proxy = factory_->create(
+        MeshRenderableProxy renderedProxy = factory_->create(
                 entityId,
                 meshId,
                 mesh,
@@ -76,13 +127,48 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
                 worldTransform,
                 castShadows,
                 doubleSided,
-                materialRevision);
-        meshProxies_.emplace(entityId, std::move(proxy));
+                materialRevision,
+                kViewportRenderedSceneLayerMask,
+                false);
+        renderedMeshProxies_.emplace(entityId, std::move(renderedProxy));
+        MeshRenderableProxy shadedProxy = factory_->create(
+                entityId,
+                meshId,
+                mesh,
+                material,
+                assets,
+                worldTransform,
+                false,
+                doubleSided,
+                materialRevision,
+                kViewportShadedSceneLayerMask,
+                true);
+        shadedMeshProxies_.emplace(entityId, std::move(shadedProxy));
+        MeshRenderableProxy overlayDepthProxy = factory_->create(
+                entityId,
+                meshId,
+                mesh,
+                material,
+                assets,
+                worldTransform,
+                false,
+                doubleSided,
+                materialRevision,
+                kViewportPerPaneEditorLayerMask,
+                true,
+                true,
+                kViewportOverlayDepthChannel);
+        overlayDepthMeshProxies_.emplace(entityId, std::move(overlayDepthProxy));
         return;
     }
 
-    auto existing = meshProxies_.find(entityId);
-    if (existing != meshProxies_.end()) {
+    if (auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
+        factory_->updateTransform(existing->second, worldTransform);
+    }
+    if (auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
+        factory_->updateTransform(existing->second, worldTransform);
+    }
+    if (auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
         factory_->updateTransform(existing->second, worldTransform);
     }
 }
@@ -92,12 +178,18 @@ void MeshRenderableCache::remove(EntityId entityId) {
         return;
     }
 
-    const auto existing = meshProxies_.find(entityId);
-    if (existing == meshProxies_.end()) {
-        return;
+    if (const auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
+        factory_->destroy(existing->second);
+        renderedMeshProxies_.erase(existing);
     }
-    factory_->destroy(existing->second);
-    meshProxies_.erase(existing);
+    if (const auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
+        factory_->destroy(existing->second);
+        shadedMeshProxies_.erase(existing);
+    }
+    if (const auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
+        factory_->destroy(existing->second);
+        overlayDepthMeshProxies_.erase(existing);
+    }
 }
 
 void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveMeshEntities) {
@@ -105,10 +197,26 @@ void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveM
         return;
     }
 
-    for (auto it = meshProxies_.begin(); it != meshProxies_.end();) {
+    for (auto it = renderedMeshProxies_.begin(); it != renderedMeshProxies_.end();) {
         if (!liveMeshEntities.contains(it->first)) {
             factory_->destroy(it->second);
-            it = meshProxies_.erase(it);
+            it = renderedMeshProxies_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = shadedMeshProxies_.begin(); it != shadedMeshProxies_.end();) {
+        if (!liveMeshEntities.contains(it->first)) {
+            factory_->destroy(it->second);
+            it = shadedMeshProxies_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = overlayDepthMeshProxies_.begin(); it != overlayDepthMeshProxies_.end();) {
+        if (!liveMeshEntities.contains(it->first)) {
+            factory_->destroy(it->second);
+            it = overlayDepthMeshProxies_.erase(it);
         } else {
             ++it;
         }

@@ -348,22 +348,23 @@ void OutlinerPanel::drawContent(UIContext& context) {
             }
         }
         if (ImGui::BeginPopup("EntityContext")) {
+            const bool canMutateHierarchy = !record.isSceneRoot;
             const std::string deleteLabel = context.localization.imguiLabel("ui.outliner.delete", "ui.outliner.delete", "Delete");
-            if (ImGui::MenuItem(deleteLabel.c_str())) {
+            if (ImGui::MenuItem(deleteLabel.c_str(), nullptr, false, canMutateHierarchy)) {
                 pendingAction = PendingOutlinerAction::Delete;
                 pendingTarget = record.id;
             }
             const std::string duplicateLabel = context.localization.imguiLabel("ui.outliner.duplicate", "ui.outliner.duplicate", "Duplicate");
-            if (ImGui::MenuItem(duplicateLabel.c_str())) {
+            if (ImGui::MenuItem(duplicateLabel.c_str(), nullptr, false, canMutateHierarchy)) {
                 pendingAction = PendingOutlinerAction::Duplicate;
                 pendingTarget = record.id;
             }
             const std::string groupLabel = context.localization.imguiLabel("ui.outliner.group", "ui.outliner.group", "Group");
-            if (ImGui::MenuItem(groupLabel.c_str())) {
+            if (ImGui::MenuItem(groupLabel.c_str(), nullptr, false, canMutateHierarchy)) {
                 pendingAction = PendingOutlinerAction::Group;
                 pendingTarget = record.id;
             }
-            const bool canUngroup = record.kind == EntityKind::Empty && record.hasChildren;
+            const bool canUngroup = canMutateHierarchy && record.kind == EntityKind::Empty && record.hasChildren;
             const std::string ungroupLabel = context.localization.imguiLabel("ui.outliner.ungroup", "ui.outliner.ungroup", "Ungroup");
             if (ImGui::MenuItem(ungroupLabel.c_str(), nullptr, false, canUngroup)) {
                 pendingAction = PendingOutlinerAction::Ungroup;

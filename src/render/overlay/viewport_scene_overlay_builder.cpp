@@ -268,6 +268,76 @@ void appendGroupSelectionCages(
     }
 }
 
+void appendSelectedLightMarkers(ViewportOverlayFrame& frame, const SceneDocument& document) {
+    constexpr float kLightMarkerRadius = 0.28f;
+    constexpr float kLightMarkerPointSize = 13.0f;
+    constexpr float kDirectionalLightLength = 0.85f;
+    const std::array<QVec3, 3> axes{{
+            {kLightMarkerRadius, 0.0f, 0.0f},
+            {0.0f, kLightMarkerRadius, 0.0f},
+            {0.0f, 0.0f, kLightMarkerRadius},
+    }};
+
+    for (const EntityId selected : document.selectedEntities()) {
+        const LightComponent* light = document.light(selected);
+        if (light == nullptr || !document.isEffectivelyVisible(selected)) {
+            continue;
+        }
+        const QMat4 world = document.worldTransformMatrix(selected);
+        const QVec3 position = transformPoint(world, {});
+        frame.points.push_back(ViewportOverlayPoint{
+                .layer = ViewportOverlayLayer::SelectedVertex,
+                .position = position,
+                .color = kOverlaySelectedVertexColor,
+                .sizePixels = kLightMarkerPointSize,
+                .styleRole = ViewportOverlayStyleRole::SelectedVertex,
+                .source = ViewportOverlaySource::Selection,
+                .outlineGrowthPixels = 2.0f,
+        });
+
+        if (light->type == LightType::Directional) {
+            QVec3 direction = normalize(transformVector(world, {0.0f, -1.0f, 0.0f}));
+            if (length(direction) <= 0.000001f) {
+                direction = {0.0f, -1.0f, 0.0f};
+            }
+            const QVec3 tip = position + direction * kDirectionalLightLength;
+            frame.lines.push_back(ViewportOverlayLine{
+                    .layer = ViewportOverlayLayer::SelectedEdge,
+                    .start = position,
+                    .end = tip,
+                    .color = kOverlaySelectionWireColor,
+                    .widthPixels = 0.0f,
+                    .styleRole = ViewportOverlayStyleRole::SelectionWire,
+                    .source = ViewportOverlaySource::Selection,
+            });
+            const QVec3 right = normalize(cross(direction, {0.0f, 1.0f, 0.0f}));
+            const QVec3 tick = length(right) <= 0.000001f ? QVec3{kLightMarkerRadius, 0.0f, 0.0f} : right * kLightMarkerRadius;
+            frame.lines.push_back(ViewportOverlayLine{
+                    .layer = ViewportOverlayLayer::SelectedEdge,
+                    .start = tip - tick,
+                    .end = tip + tick,
+                    .color = kOverlaySelectionWireColor,
+                    .widthPixels = 0.0f,
+                    .styleRole = ViewportOverlayStyleRole::SelectionWire,
+                    .source = ViewportOverlaySource::Selection,
+            });
+            continue;
+        }
+
+        for (const QVec3 axis : axes) {
+            frame.lines.push_back(ViewportOverlayLine{
+                    .layer = ViewportOverlayLayer::SelectedEdge,
+                    .start = position - axis,
+                    .end = position + axis,
+                    .color = kOverlaySelectionWireColor,
+                    .widthPixels = 0.0f,
+                    .styleRole = ViewportOverlayStyleRole::SelectionWire,
+                    .source = ViewportOverlaySource::Selection,
+            });
+        }
+    }
+}
+
 void appendSceneWireframeOverlay(
         ViewportOverlayFrame& frame,
         const SceneDocument& document,
@@ -316,6 +386,7 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::buildSelectionFrame(
         const AssetRegistry& assets) {
     appendHierarchySelectionWires(baseFrame, document, assets);
     appendGroupSelectionCages(baseFrame, document, assets);
+    appendSelectedLightMarkers(baseFrame, document);
     return baseFrame;
 }
 

@@ -10,6 +10,7 @@
 #include "render/viewport_grid_renderer.hpp"
 #include "render/viewport_render_target.hpp"
 #include "render/viewport_render_pass_coordinator.hpp"
+#include "scene/components.hpp"
 #include "viewport/viewport_camera_controller.hpp"
 #include "viewport/viewport_settings.hpp"
 
@@ -55,12 +56,15 @@ public:
 
     void resize(std::uint32_t width, std::uint32_t height);
     void updateCamera(const ViewportCameraController& controller);
+    void applySceneSettings(const SceneSettingsComponent& settings, bool renderedMode);
     void updateGroundGrid(const ViewportCameraController& controller,
             float gridWorldSpacing,
             const ViewportSettings& settings,
             bool visible = true);
     void setOverlayVisible(bool visible);
     void setSceneVisible(bool visible);
+    void setSceneLayerMask(std::uint8_t layerMask);
+    void setShadowingEnabled(bool enabled);
     void render(filament::Renderer& renderer);
 
     RenderTextureHandle textureHandle() const { return renderTarget_.textureHandle(); }
@@ -69,12 +73,16 @@ public:
 
 private:
     void updateVisibleLayers();
+    void applyToneMapping(SceneToneMapping toneMapping, bool enabled);
+    void destroyColorGrading();
 
     filament::Engine* engine_ = nullptr;
     filament::Scene* scene_ = nullptr;
     TextureRegistry* textureRegistry_ = nullptr;
     filament::View* view_ = nullptr;
+    filament::View* overlayView_ = nullptr;
     filament::Camera* camera_ = nullptr;
+    filament::ColorGrading* colorGrading_ = nullptr;
     utils::Entity cameraEntity_;
     ViewportGridRenderer gridRenderer_;
     ViewportRenderPassCoordinator renderPassCoordinator_;
@@ -82,6 +90,10 @@ private:
     ViewportRenderSurface surface_ = ViewportRenderSurface::Texture;
     std::uint32_t width_ = 1u;
     std::uint32_t height_ = 1u;
+    float cameraNearPlane_ = 0.05f;
+    float cameraFarPlane_ = 1000.0f;
+    SceneToneMapping colorGradingToneMapping_ = SceneToneMapping::Aces;
+    bool hasColorGradingToneMapping_ = false;
 };
 
 } // namespace quader

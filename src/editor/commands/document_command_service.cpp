@@ -10,6 +10,7 @@
 #include "editor/commands/document/apply_entity_transform_command.hpp"
 #include "editor/commands/document/batch_document_command.hpp"
 #include "editor/commands/document/create_entity_command.hpp"
+#include "editor/commands/document/create_light_command.hpp"
 #include "editor/commands/document/destroy_entity_command.hpp"
 #include "editor/commands/document/duplicate_entity_command.hpp"
 #include "editor/commands/document/duplicate_selected_hierarchy_command.hpp"
@@ -18,8 +19,10 @@
 #include "editor/commands/document/reparent_entity_command.hpp"
 #include "editor/commands/document/select_entities_command.hpp"
 #include "editor/commands/document/set_lock_command.hpp"
+#include "editor/commands/document/set_light_component_command.hpp"
 #include "editor/commands/document/set_material_command.hpp"
 #include "editor/commands/document/set_mesh_component_command.hpp"
+#include "editor/commands/document/set_scene_settings_command.hpp"
 #include "editor/commands/document/set_visibility_command.hpp"
 #include "editor/commands/document/ungroup_selection_command.hpp"
 #include "scene/scene_document.hpp"
@@ -41,6 +44,13 @@ DocumentCommandResult executeDocumentCommand(
     return history.execute(std::move(command));
 }
 
+DocumentCommandResult executeDocumentCommand(
+        EditorHistoryService& history,
+        std::unique_ptr<IUndoableCommand> command,
+        UndoRedoExecuteOptions options) {
+    return history.execute(std::move(command), std::move(options));
+}
+
 void assignDocumentCommandStatus(DocumentCommandResult& target, DocumentCommandResult source) {
     target.ok = source.ok;
     target.changed = source.changed;
@@ -53,6 +63,24 @@ bool documentCommandEntityIsModelingOwned(const SceneDocument& scene, EntityId e
 
 DocumentCommandResult documentCommandModelingOwnedEntityResult() {
     return documentCommandInvalidRequestResult("Entity is owned by a modeling object; use modeling commands");
+}
+
+DocumentCommandResult documentCommandSceneRootProtectedResult() {
+    return documentCommandInvalidRequestResult("Scene root cannot be changed by this command");
+}
+
+EntityId normalizedCreateParent(const SceneDocument& scene, EntityId parent) {
+    if (parent != InvalidEntityId) {
+        return parent;
+    }
+    return scene.sceneRoot();
+}
+
+EntityId normalizedHierarchyParent(const SceneDocument& scene, EntityId entity, EntityId parent) {
+    if (parent != InvalidEntityId || scene.isSceneRoot(entity)) {
+        return parent;
+    }
+    return scene.sceneRoot();
 }
 
 std::vector<DocumentTransformEdit> normalizedTransformEdits(
@@ -81,7 +109,10 @@ std::vector<DocumentVisibilityEdit> normalizedVisibilityEdits(
     std::vector<DocumentVisibilityEdit> result;
     result.reserve(edits.size());
     for (const DocumentVisibilityEdit& edit : edits) {
-        if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || edit.before == edit.after) {
+        if (edit.entity == InvalidEntityId ||
+                !scene.exists(edit.entity) ||
+                scene.isSceneRoot(edit.entity) ||
+                edit.before == edit.after) {
             continue;
         }
         result.push_back(edit);
@@ -98,7 +129,10 @@ std::vector<DocumentLockEdit> normalizedLockEdits(
     std::vector<DocumentLockEdit> result;
     result.reserve(edits.size());
     for (const DocumentLockEdit& edit : edits) {
-        if (edit.entity == InvalidEntityId || !scene.exists(edit.entity) || edit.before == edit.after) {
+        if (edit.entity == InvalidEntityId ||
+                !scene.exists(edit.entity) ||
+                scene.isSceneRoot(edit.entity) ||
+                edit.before == edit.after) {
             continue;
         }
         result.push_back(edit);
@@ -135,6 +169,12 @@ DocumentCreateEntityResult DocumentCommandService::createEntity(
         EntityKind kind,
         EntityId parent,
         TransformComponent transform) {
+    parent = normalizedCreateParent(scene_, parent);
+    if (parent != InvalidEntityId && !scene_.exists(parent)) {
+        DocumentCreateEntityResult result;
+        assignDocumentCommandStatus(result, documentCommandInvalidRequestResult("Parent entity does not exist"));
+        return result;
+    }
     auto command = std::make_unique<CreateEntityCommand>(
             scene_,
             std::move(name),
@@ -154,6 +194,9 @@ DocumentCommandResult DocumentCommandService::destroyEntity(EntityId entity) {
     if (!scene_.exists(entity)) {
         return documentCommandMissingEntityResult();
     }
+    if (scene_.isSceneRoot(entity)) {
+        return documentCommandSceneRootProtectedResult();
+    }
     if (documentCommandEntityIsModelingOwned(scene_, entity)) {
         return documentCommandModelingOwnedEntityResult();
     }
@@ -169,6 +212,10 @@ DocumentCommandResult DocumentCommandService::reparentEntity(
     if (!scene_.exists(entity)) {
         return documentCommandMissingEntityResult();
     }
+    if (scene_.isSceneRoot(entity)) {
+        return documentCommandSceneRootProtectedResult();
+    }
+    parent = normalizedHierarchyParent(scene_, entity, parent);
     if (parent != InvalidEntityId && !scene_.exists(parent)) {
         return documentCommandInvalidRequestResult("Parent entity does not exist");
     }
@@ -208,6 +255,11 @@ DocumentDuplicateEntityResult DocumentCommandService::duplicateEntity(EntityId e
         assignDocumentCommandStatus(result, documentCommandMissingEntityResult());
         return result;
     }
+    if (scene_.isSceneRoot(entity)) {
+        DocumentDuplicateEntityResult result;
+        assignDocumentCommandStatus(result, documentCommandSceneRootProtectedResult());
+        return result;
+    }
     if (documentCommandEntityIsModelingOwned(scene_, entity)) {
         DocumentDuplicateEntityResult result;
         assignDocumentCommandStatus(result, documentCommandModelingOwnedEntityResult());
@@ -242,7 +294,7 @@ DocumentDuplicateHierarchyResult DocumentCommandService::duplicateHierarchyWithE
     std::vector<EntityId> existingRoots;
     existingRoots.reserve(roots.size());
     for (const EntityId root : roots) {
-        if (root != InvalidEntityId && scene_.exists(root) && seenRoots.insert(root).second) {
+        if (root != InvalidEntityId && scene_.exists(root) && !scene_.isSceneRoot(root) && seenRoots.insert(root).second) {
             existingRoots.push_back(root);
         }
     }
@@ -278,6 +330,66 @@ DocumentDuplicateHierarchyResult DocumentCommandService::duplicateHierarchyWithE
     return result;
 }
 
+DocumentCreateEntityResult DocumentCommandService::createPointLight(
+        std::string name,
+        LightComponent light,
+        EntityId parent,
+        TransformComponent transform,
+        bool selectCreated) {
+    light.type = LightType::Point;
+    parent = normalizedCreateParent(scene_, parent);
+    if (parent != InvalidEntityId && !scene_.exists(parent)) {
+        DocumentCreateEntityResult result;
+        assignDocumentCommandStatus(result, documentCommandInvalidRequestResult("Parent entity does not exist"));
+        return result;
+    }
+    auto command = std::make_unique<CreateLightCommand>(
+            scene_,
+            "Create Point Light",
+            std::move(name),
+            light,
+            parent,
+            transform,
+            selectCreated);
+    CreateLightCommand* createdCommand = command.get();
+    DocumentCreateEntityResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.entity = createdCommand->entity();
+    }
+    return result;
+}
+
+DocumentCreateEntityResult DocumentCommandService::createDirectionalLight(
+        std::string name,
+        LightComponent light,
+        EntityId parent,
+        TransformComponent transform,
+        bool selectCreated) {
+    light.type = LightType::Directional;
+    parent = normalizedCreateParent(scene_, parent);
+    if (parent != InvalidEntityId && !scene_.exists(parent)) {
+        DocumentCreateEntityResult result;
+        assignDocumentCommandStatus(result, documentCommandInvalidRequestResult("Parent entity does not exist"));
+        return result;
+    }
+    auto command = std::make_unique<CreateLightCommand>(
+            scene_,
+            "Create Directional Light",
+            std::move(name),
+            light,
+            parent,
+            transform,
+            selectCreated);
+    CreateLightCommand* createdCommand = command.get();
+    DocumentCreateEntityResult result;
+    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    if (result.ok && result.changed) {
+        result.entity = createdCommand->entity();
+    }
+    return result;
+}
+
 DocumentCommandResult DocumentCommandService::selectEntities(std::vector<EntityId> entities, EntityId active) {
     return executeDocumentCommand(
             history_,
@@ -305,6 +417,9 @@ DocumentCommandResult DocumentCommandService::renameEntity(EntityId entity, std:
     }
     if (currentName->name == name) {
         return documentCommandUnchangedResult();
+    }
+    if (scene_.isSceneRoot(entity)) {
+        return documentCommandSceneRootProtectedResult();
     }
 
     const std::string before = currentName->name;
@@ -389,6 +504,9 @@ DocumentCommandResult DocumentCommandService::setMaterial(EntityId entity, Asset
     if (!scene_.exists(entity)) {
         return documentCommandMissingEntityResult();
     }
+    if (scene_.isSceneRoot(entity)) {
+        return documentCommandSceneRootProtectedResult();
+    }
 
     const MaterialComponent after{.material = material};
     std::optional<MaterialComponent> before;
@@ -429,6 +547,48 @@ DocumentCommandResult DocumentCommandService::setMeshComponent(EntityId entity, 
     return executeDocumentCommand(
             history_,
             std::make_unique<SetMeshComponentCommand>(scene_, entity, *currentMesh, mesh));
+}
+
+DocumentCommandResult DocumentCommandService::setLightComponent(
+        EntityId entity,
+        LightComponent light,
+        UndoRedoExecuteOptions options) {
+    const LightComponent* currentLight = scene_.light(entity);
+    if (!currentLight) {
+        if (!scene_.exists(entity)) {
+            return documentCommandMissingEntityResult();
+        }
+        return documentCommandInvalidRequestResult("Entity does not have a light component");
+    }
+    if (documentCommandSameLightComponent(*currentLight, light)) {
+        return documentCommandUnchangedResult();
+    }
+
+    return executeDocumentCommand(
+            history_,
+            std::make_unique<SetLightComponentCommand>(scene_, entity, *currentLight, light),
+            std::move(options));
+}
+
+DocumentCommandResult DocumentCommandService::setSceneSettings(
+        EntityId entity,
+        SceneSettingsComponent settings,
+        UndoRedoExecuteOptions options) {
+    const SceneSettingsComponent* currentSettings = scene_.sceneSettings(entity);
+    if (!currentSettings) {
+        if (!scene_.exists(entity)) {
+            return documentCommandMissingEntityResult();
+        }
+        return documentCommandInvalidRequestResult("Entity does not have scene settings");
+    }
+    if (documentCommandSameSceneSettings(*currentSettings, settings)) {
+        return documentCommandUnchangedResult();
+    }
+
+    return executeDocumentCommand(
+            history_,
+            std::make_unique<SetSceneSettingsCommand>(scene_, entity, *currentSettings, std::move(settings)),
+            std::move(options));
 }
 
 DocumentCommandResult DocumentCommandService::setTransform(EntityId entity, TransformComponent transform) {
@@ -513,6 +673,9 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
 
         switch (operation.kind) {
         case DocumentSceneBatchOperationKind::Rename: {
+            if (scene_.isSceneRoot(operation.entity)) {
+                return failure("Scene root cannot be renamed.");
+            }
             std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state =
                     simulatedState(operation.entity);
             if (!state.has_value()) {
@@ -530,7 +693,11 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
             break;
         }
         case DocumentSceneBatchOperationKind::Reparent: {
-            if (operation.parent != InvalidEntityId && !scene_.exists(operation.parent)) {
+            if (scene_.isSceneRoot(operation.entity)) {
+                return failure("Scene root cannot be reparented.");
+            }
+            const EntityId parent = normalizedHierarchyParent(scene_, operation.entity, operation.parent);
+            if (parent != InvalidEntityId && !scene_.exists(parent)) {
                 return failure("Batch parent entity does not exist.");
             }
             std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state =
@@ -538,16 +705,16 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
             if (!state.has_value()) {
                 return failure("Batch entity cannot be reparented.");
             }
-            if (state->get().parent == operation.parent) {
+            if (state->get().parent == parent) {
                 break;
             }
 
             commands.push_back(std::make_unique<ReparentEntityCommand>(
                     scene_,
                     operation.entity,
-                    operation.parent,
+                    parent,
                     operation.preserveWorldTransform));
-            state->get().parent = operation.parent;
+            state->get().parent = parent;
             break;
         }
         case DocumentSceneBatchOperationKind::SetTransform: {
@@ -570,6 +737,9 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
             break;
         }
         case DocumentSceneBatchOperationKind::SetVisible: {
+            if (scene_.isSceneRoot(operation.entity)) {
+                return failure("Scene root visibility cannot be changed.");
+            }
             std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state =
                     simulatedState(operation.entity);
             if (!state.has_value()) {
@@ -587,6 +757,9 @@ DocumentCommandResult DocumentCommandService::applySceneBatch(
             break;
         }
         case DocumentSceneBatchOperationKind::SetLocked: {
+            if (scene_.isSceneRoot(operation.entity)) {
+                return failure("Scene root lock cannot be changed.");
+            }
             std::optional<std::reference_wrapper<DocumentSceneBatchEntityState>> state =
                     simulatedState(operation.entity);
             if (!state.has_value()) {

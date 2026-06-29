@@ -33,9 +33,14 @@ struct QuaderEntitySnapshot {
     bool active = false;
     bool hasMesh = false;
     bool hasMaterial = false;
+    bool hasLight = false;
+    bool isSceneRoot = false;
+    bool hasSceneSettings = false;
     bool hasModelingObject = false;
     AssetId mesh = InvalidAssetId;
     AssetId material = InvalidAssetId;
+    QuaderLightComponent light;
+    QuaderSceneSettings sceneSettings;
     QuaderModelingObjectId modelingObjectId = InvalidQuaderModelingObjectId;
 };
 

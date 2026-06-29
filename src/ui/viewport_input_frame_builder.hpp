@@ -12,8 +12,27 @@
 #include <imgui.h>
 
 #include <optional>
+#include <vector>
 
 namespace quader {
+
+/**
+ * Stores canonical keyboard input collected from the current ImGui frame.
+ */
+struct ImGuiKeyboardInputChords {
+    bool textInputActive = false;
+    ViewportModifiers modifiers = {};
+    std::vector<QuaderInputChord> pressed;
+    std::vector<QuaderInputChord> active;
+};
+
+[[nodiscard]] QuaderInputChord keyboardInputChord(QuaderKeyCode key, ViewportModifiers modifiers);
+[[nodiscard]] QuaderInputChord mouseInputChord(
+        QuaderMouseButton button,
+        QuaderInputGesture gesture,
+        ViewportModifiers modifiers);
+[[nodiscard]] QuaderInputChord wheelInputChord(QuaderInputGesture gesture, ViewportModifiers modifiers);
+[[nodiscard]] ImGuiKeyboardInputChords collectImGuiKeyboardInputChords();
 
 /**
  * Stores the Viewport Input Frame Build Request data contract used by the ImGui editor presentation layer.

@@ -30,21 +30,26 @@ public:
     MaterialBindingService(MaterialBindingService&&) = delete;
     MaterialBindingService& operator=(MaterialBindingService&&) = delete;
 
-    void initialize(filament::Material& meshMaterial, TextureBindingService& textureBinding);
+    void initialize(
+            filament::Material& shadedMeshMaterial,
+            filament::Material& renderedMeshMaterial,
+            TextureBindingService& textureBinding);
     void shutdown();
 
     bool initialized() const {
-        return meshMaterial_ != nullptr && textureBinding_ != nullptr;
+        return shadedMeshMaterial_ != nullptr && renderedMeshMaterial_ != nullptr && textureBinding_ != nullptr;
     }
 
     std::uint64_t materialRevision(const AssetRegistry& assets, const MaterialComponent* material) const;
     filament::MaterialInstance* createMeshMaterialInstance(
             const AssetRegistry& assets,
             const MaterialDocument* material,
-            bool doubleSided) const;
+            bool doubleSided,
+            bool editorUnlit = false) const;
 
 private:
-    filament::Material* meshMaterial_ = nullptr;
+    filament::Material* shadedMeshMaterial_ = nullptr;
+    filament::Material* renderedMeshMaterial_ = nullptr;
     TextureBindingService* textureBinding_ = nullptr;
 };
 

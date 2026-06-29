@@ -47,6 +47,18 @@ public:
     DocumentDuplicateHierarchyResult duplicateHierarchyWithExistingClones(
             std::vector<EntityId> roots,
             std::unordered_map<EntityId, EntityId> existingClonesBySource);
+    DocumentCreateEntityResult createPointLight(
+            std::string name,
+            LightComponent light,
+            EntityId parent = InvalidEntityId,
+            TransformComponent transform = TransformComponent{},
+            bool selectCreated = false);
+    DocumentCreateEntityResult createDirectionalLight(
+            std::string name,
+            LightComponent light,
+            EntityId parent = InvalidEntityId,
+            TransformComponent transform = TransformComponent{},
+            bool selectCreated = false);
     DocumentCommandResult selectEntities(std::vector<EntityId> entities, EntityId active = InvalidEntityId);
     DocumentCommandResult applyEntityTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult renameEntity(EntityId entity, std::string name);
@@ -56,6 +68,14 @@ public:
     DocumentCommandResult setLocks(std::vector<DocumentLockEdit> edits);
     DocumentCommandResult setMaterial(EntityId entity, AssetId material);
     DocumentCommandResult setMeshComponent(EntityId entity, MeshComponent mesh);
+    DocumentCommandResult setLightComponent(
+            EntityId entity,
+            LightComponent light,
+            UndoRedoExecuteOptions options = {});
+    DocumentCommandResult setSceneSettings(
+            EntityId entity,
+            SceneSettingsComponent settings,
+            UndoRedoExecuteOptions options = {});
     DocumentCommandResult setTransform(EntityId entity, TransformComponent transform);
     DocumentCommandResult setTransforms(std::vector<DocumentTransformEdit> edits);
     DocumentCommandResult applySceneBatch(std::string label, std::vector<DocumentSceneBatchOperation> operations);

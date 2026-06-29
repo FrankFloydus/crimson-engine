@@ -23,6 +23,8 @@ bool FilamentMaterialLibrary::initialize(filament::Engine& engine, const std::fi
     try {
         LOG_INFO("Loading Quader mesh material");
         quaderMeshMaterial_ = load(executableDir / "materials" / "quader_mesh.filamat");
+        LOG_INFO("Loading Quader lit mesh material");
+        quaderMeshLitMaterial_ = load(executableDir / "materials" / "quader_mesh_lit.filamat");
         LOG_INFO("Loading vertex color overlay material");
         vertexColorOverlayMaterial_ = load(executableDir / "materials" / "vertex_color_overlay.filamat");
         LOG_INFO("Loading overlay line material");
@@ -48,6 +50,7 @@ void FilamentMaterialLibrary::shutdown() {
     }
 
     destroy(quaderMeshMaterial_);
+    destroy(quaderMeshLitMaterial_);
     destroy(vertexColorOverlayMaterial_);
     destroy(overlayLineMaterial_);
     destroy(overlayPointMaterial_);

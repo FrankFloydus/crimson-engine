@@ -8,6 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <vector>
+
 namespace {
 
 /**
@@ -21,6 +24,27 @@ struct ProgrammaticApiHarness {
         : standalone(quader::createStandaloneEditor())
         , api(standalone.editor().api()) {}
 };
+
+std::size_t userEntityCount(const std::vector<quader::QuaderEntitySnapshot>& entities) {
+    std::size_t count = 0;
+    for (const quader::QuaderEntitySnapshot& entity : entities) {
+        if (!entity.isSceneRoot) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::size_t userEntityCount(const quader::QuaderApi& api) {
+    return userEntityCount(api.query().entities());
+}
+
+bool hasSceneRoot(const quader::QuaderApi& api) {
+    const std::vector<quader::QuaderEntitySnapshot> entities = api.query().entities();
+    return std::any_of(entities.begin(), entities.end(), [](const quader::QuaderEntitySnapshot& entity) {
+        return entity.isSceneRoot;
+    });
+}
 
 } // namespace
 
@@ -41,7 +65,8 @@ TEST(ProgrammaticApiTests, QuaderApiCreatesBoxAndSynchronizesSnapshots) {
     EXPECT_NE(created.value.mesh, quader::InvalidAssetId);
 
     const quader::QuaderSelectionSummary selection = api.selection().summary();
-    EXPECT_EQ(api.query().entities().size(), 1u);
+    EXPECT_TRUE(hasSceneRoot(api));
+    EXPECT_EQ(userEntityCount(api), 1u);
     EXPECT_EQ(api.modeling().objects().size(), 1u);
     EXPECT_EQ(api.query().assets().meshCount, 1u);
     EXPECT_TRUE(selection.hasSelection);
@@ -129,7 +154,7 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
     ASSERT_TRUE(result.ok());
     ASSERT_EQ(result.steps.size(), 5u);
     ASSERT_TRUE(result.objects.contains("box"));
-    EXPECT_EQ(result.finalSnapshot.entities.size(), 1u);
+    EXPECT_EQ(userEntityCount(result.finalSnapshot.entities), 1u);
     EXPECT_TRUE(result.finalSnapshot.selection.hasSelection);
     EXPECT_EQ(result.finalSnapshot.selection.selectedVertexCount, 1u);
     ASSERT_TRUE(api.history().canUndo());
@@ -137,12 +162,12 @@ TEST(ProgrammaticApiTests, ScriptRunsThroughPublicApiAndReturnsFinalSnapshot) {
 
     const quader::QuaderApiVoidResult undone = api.history().undo();
     ASSERT_TRUE(undone.ok) << undone.message;
-    EXPECT_TRUE(api.query().entities().empty());
+    EXPECT_EQ(userEntityCount(api), 0u);
     EXPECT_TRUE(api.history().canRedo());
 
     const quader::QuaderApiVoidResult redone = api.history().redo();
     ASSERT_TRUE(redone.ok) << redone.message;
-    EXPECT_EQ(api.query().entities().size(), 1u);
+    EXPECT_EQ(userEntityCount(api), 1u);
     EXPECT_EQ(api.selection().summary().selectedVertexCount, 1u);
 }
 
@@ -161,7 +186,7 @@ TEST(ProgrammaticApiTests, ScriptStopsAtMissingAliasAndReportsStep) {
     EXPECT_FALSE(result.steps.front().status.ok);
     EXPECT_FALSE(result.steps.front().status.changed);
     EXPECT_NE(result.steps.front().status.message.find("missing"), std::string::npos);
-    EXPECT_TRUE(result.finalSnapshot.entities.empty());
+    EXPECT_EQ(userEntityCount(result.finalSnapshot.entities), 0u);
 }
 
 TEST(ProgrammaticApiTests, ScriptAggregatesChangedStatusAcrossLaterNoOp) {
@@ -195,7 +220,7 @@ TEST(ProgrammaticApiTests, ScriptRollsBackChangedStepsAcrossLaterFailure) {
     EXPECT_FALSE(result.changed());
     EXPECT_EQ(result.mutationKind, quader::QuaderMutationKind::None);
     EXPECT_NE(result.errorMessage().find("missing"), std::string::npos);
-    EXPECT_TRUE(result.finalSnapshot.entities.empty());
+    EXPECT_EQ(userEntityCount(result.finalSnapshot.entities), 0u);
     EXPECT_TRUE(result.objects.empty());
     EXPECT_FALSE(api.history().canUndo());
 }

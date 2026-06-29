@@ -143,6 +143,7 @@ std::uint64_t RenderSignatureBuilder::lightSignature(const LightComponent& light
     signature.addValue(static_cast<std::uint32_t>(light.type))
             .addVec3(light.color)
             .addFloat(light.intensity)
+            .addFloat(light.range)
             .addBool(light.castsShadows);
     return signature.value();
 }

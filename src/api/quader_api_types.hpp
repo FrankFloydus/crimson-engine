@@ -61,6 +61,15 @@ enum class QuaderEntityKind {
 };
 
 /**
+ * Enumerates Quader Light Type values used by the public Quader API surface.
+ */
+enum class QuaderLightType {
+    Directional,
+    Point,
+    Spot,
+};
+
+/**
  * Represents a Quader Transform value used by the public Quader API surface.
  */
 struct QuaderTransform {
@@ -756,6 +765,97 @@ struct QuaderCreateEntityArgs {
     QuaderEntityKind kind = QuaderEntityKind::Generic;
     EntityId parent = InvalidEntityId;
     QuaderTransform transform;
+};
+
+/**
+ * Represents a Quader Light Component value used by the public Quader API surface.
+ */
+struct QuaderLightComponent {
+    QuaderLightType type = QuaderLightType::Point;
+    QVec3 color = {1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float range = 10.0f;
+    bool castsShadows = false;
+};
+
+/**
+ * Stores public scene environment settings.
+ */
+struct QuaderSceneEnvironmentSettings {
+    std::string environmentId = "lightroom_14b";
+    bool enabled = true;
+    bool showBackground = true;
+    float intensity = 1.0f;
+    float backgroundIntensity = 1.0f;
+    float rotationY = 0.0f;
+};
+
+/**
+ * Stores public scene camera exposure settings.
+ */
+struct QuaderSceneCameraSettings {
+    float aperture = 16.0f;
+    float shutterSpeed = 1.0f / 125.0f;
+    float sensitivity = 100.0f;
+    float nearPlane = 0.05f;
+    float farPlane = 1000.0f;
+};
+
+/**
+ * Selects the public rendered viewport tone mapping operator.
+ */
+enum class QuaderToneMapping {
+    Linear,
+    AcesLegacy,
+    Aces,
+    Filmic,
+    DisplayRange,
+};
+
+/**
+ * Stores public scene post-process settings.
+ */
+struct QuaderScenePostProcessSettings {
+    bool enabled = true;
+    bool antiAliasing = true;
+    bool ambientOcclusion = false;
+    float ambientOcclusionIntensity = 1.0f;
+    float ambientOcclusionRadius = 0.3f;
+    bool bloom = false;
+    float bloomStrength = 0.1f;
+    bool dithering = true;
+    QuaderToneMapping toneMapping = QuaderToneMapping::Aces;
+};
+
+/**
+ * Stores public scene root settings.
+ */
+struct QuaderSceneSettings {
+    QuaderSceneEnvironmentSettings environment;
+    QuaderSceneCameraSettings camera;
+    QuaderScenePostProcessSettings postProcess;
+};
+
+/**
+ * Stores the Quader Create Point Light Args data contract used by the public Quader API surface.
+ */
+struct QuaderCreatePointLightArgs {
+    std::string name = "Point Light";
+    EntityId parent = InvalidEntityId;
+    QuaderTransform transform;
+    QuaderLightComponent light;
+    bool selectCreated = false;
+};
+
+/**
+ * Stores the Quader Create Directional Light Args data contract used by the public Quader API surface.
+ */
+struct QuaderCreateDirectionalLightArgs {
+    std::string name = "Directional Light";
+    EntityId parent = InvalidEntityId;
+    QuaderTransform transform;
+    QuaderLightComponent light{.type = QuaderLightType::Directional};
+    bool selectCreated = false;
 };
 
 /**

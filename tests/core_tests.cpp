@@ -310,7 +310,8 @@ public:
             bool* failUndo = nullptr,
             bool* failRedo = nullptr,
             bool undoChanged = true,
-            bool redoChanged = true)
+            bool redoChanged = true,
+            std::string mergeKey = {})
         : label_(std::move(label))
         , value_(value)
         , before_(before)
@@ -318,7 +319,8 @@ public:
         , failUndo_(failUndo)
         , failRedo_(failRedo)
         , undoChanged_(undoChanged)
-        , redoChanged_(redoChanged) {}
+        , redoChanged_(redoChanged)
+        , mergeKey_(std::move(mergeKey)) {}
 
     [[nodiscard]] const std::string& label() const override { return label_; }
 
@@ -344,6 +346,20 @@ public:
         };
     }
 
+    bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) override {
+        const auto* newer = dynamic_cast<const TestValueCommand*>(&newerCommand);
+        if (newer == nullptr ||
+                mergeKey.empty() ||
+                mergeKey_ != mergeKey ||
+                newer->mergeKey_ != mergeKey ||
+                &newer->value_ != &value_) {
+            return false;
+        }
+        after_ = newer->after_;
+        redoChanged_ = redoChanged_ || newer->redoChanged_;
+        return true;
+    }
+
 private:
     std::string label_;
     int& value_;
@@ -353,6 +369,7 @@ private:
     bool* failRedo_ = nullptr;
     bool undoChanged_ = true;
     bool redoChanged_ = true;
+    std::string mergeKey_;
 };
 
 void expectColorNear(ViewportSettingColor actual, ViewportSettingColor expected) {
@@ -1155,7 +1172,10 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
 
 TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
     const std::string source = readSourceFile("resources/materials/ground_grid.mat");
+    const std::string gridRendererSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
 
+    EXPECT_NE(source.find("shadingModel : unlit"), std::string::npos);
+    EXPECT_NE(source.find("depthWrite : false"), std::string::npos);
     EXPECT_NE(source.find("getUserWorldPosition()"), std::string::npos);
     EXPECT_EQ(source.find("getWorldPosition()"), std::string::npos);
     EXPECT_NE(source.find("localPosition"), std::string::npos);
@@ -1166,6 +1186,8 @@ TEST(GroundGridMaterialTests, UsesUserWorldAnchoring) {
     EXPECT_NE(source.find("vec4(color * alpha, alpha)"), std::string::npos);
     EXPECT_EQ(source.find("getUV0()"), std::string::npos);
     EXPECT_EQ(source.find("planeCenter"), std::string::npos);
+    EXPECT_NE(gridRendererSource.find(".castShadows(false)"), std::string::npos);
+    EXPECT_NE(gridRendererSource.find(".receiveShadows(false)"), std::string::npos);
 }
 
 TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
@@ -1177,17 +1199,26 @@ TEST(QuaderMeshMaterialTests, UsesOverlaySelectionInsteadOfStandaloneTint) {
     EXPECT_EQ(source.find("color,"), std::string::npos);
 }
 
-TEST(QuaderMeshMaterialTests, UsesUnlitTextureTransformTimesColor) {
-    const std::string source = readSourceFile("resources/materials/quader_mesh.mat");
+TEST(QuaderMeshMaterialTests, UsesLitTextureTransformTimesColorAndPbrFactors) {
+    const std::string shadedSource = readSourceFile("resources/materials/quader_mesh.mat");
+    const std::string source = readSourceFile("resources/materials/quader_mesh_lit.mat");
 
-    EXPECT_NE(source.find("shadingModel : unlit"), std::string::npos);
+    EXPECT_NE(shadedSource.find("shadingModel : unlit"), std::string::npos);
+    EXPECT_NE(shadedSource.find("vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y)"), std::string::npos);
+    EXPECT_NE(shadedSource.find("texture(materialParams_baseColorTexture, uv)"), std::string::npos);
+    EXPECT_NE(shadedSource.find("material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a)"), std::string::npos);
+    EXPECT_EQ(shadedSource.find("roughnessTexture"), std::string::npos);
+    EXPECT_EQ(shadedSource.find("editorUnlit"), std::string::npos);
+    EXPECT_NE(source.find("shadingModel : lit"), std::string::npos);
     EXPECT_EQ(source.find("doubleSided : true"), std::string::npos);
     EXPECT_NE(source.find("vec2 uv = vec2(getUV0().x, 1.0 - getUV0().y)"), std::string::npos);
     EXPECT_NE(source.find("texture(materialParams_baseColorTexture, uv)"), std::string::npos);
+    EXPECT_NE(source.find("texture(materialParams_roughnessTexture, uv).r"), std::string::npos);
     EXPECT_NE(source.find("baseSample.rgb * materialParams.baseColorFactor.rgb"), std::string::npos);
     EXPECT_NE(source.find("material.baseColor = vec4(baseColor, baseSample.a * materialParams.baseColorFactor.a)"), std::string::npos);
-    EXPECT_EQ(source.find("roughnessValue"), std::string::npos);
-    EXPECT_EQ(source.find("mix(1.0, roughnessValue"), std::string::npos);
+    EXPECT_NE(source.find("material.roughness = clamp(roughnessSample * materialParams.roughnessFactor"), std::string::npos);
+    EXPECT_NE(source.find("material.metallic = clamp(materialParams.metallicFactor"), std::string::npos);
+    EXPECT_EQ(source.find("editorUnlit"), std::string::npos);
 }
 
 TEST(OverlayMaterialTests, PremultipliesVertexAlphaForTransparentFaceFill) {
@@ -1964,6 +1995,9 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     const std::string textureSource = readSourceFile("src/render/texture_binding_service.cpp");
     const std::string materialSource = readSourceFile("src/render/material_binding_service.cpp");
     const std::string factorySource = readSourceFile("src/render/mesh_renderable_factory.cpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string materialLibrarySource = readSourceFile("src/render/filament_material_library.cpp");
+    const std::string sceneBridgeSource = readSourceFile("src/render/scene_render_bridge.cpp");
 
     EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Srgb)"), std::string::npos);
     EXPECT_NE(textureSource.find("createSolidTexture(255, 255, 255, 255, TextureColorSpace::Linear)"), std::string::npos);
@@ -1972,11 +2006,25 @@ TEST(SceneRenderBridgeTests, UsesExplicitTextureColorSpaceForMaterialUploads) {
     EXPECT_NE(textureSource.find("mipLevelCount(width, height)"), std::string::npos);
     EXPECT_NE(textureSource.find("Texture::Usage::GEN_MIPMAPPABLE"), std::string::npos);
     EXPECT_NE(textureSource.find("generateMipmaps(*engine_)"), std::string::npos);
-    EXPECT_NE(materialSource.find("setCullingMode(doubleSided"), std::string::npos);
+    EXPECT_NE(materialSource.find("materialInstance->setCullingMode(doubleSided"), std::string::npos);
+    EXPECT_EQ(materialSource.find("colorCulling"), std::string::npos);
+    EXPECT_EQ(materialSource.find("setCullingMode(\n            colorCulling"), std::string::npos);
     EXPECT_NE(materialSource.find("filament::MaterialInstance::CullingMode::NONE"), std::string::npos);
     EXPECT_NE(materialSource.find(": filament::MaterialInstance::CullingMode::BACK"), std::string::npos);
     EXPECT_EQ(materialSource.find("setCullingMode(filament::MaterialInstance::CullingMode::BACK);"), std::string::npos);
-    EXPECT_NE(factorySource.find("materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided)"), std::string::npos);
+    EXPECT_NE(appSource.find("projectSession_.assets().addTexture(std::move(roughness));"), std::string::npos);
+    EXPECT_NE(appSource.find("setMaterialTextureSlot(defaultMaterial, MaterialTextureSlot::BaseColor, albedoTexture)"), std::string::npos);
+    EXPECT_EQ(appSource.find("makeDefaultQuaderMaterial(\"Default Quader\", albedoTexture"), std::string::npos);
+    EXPECT_EQ(appSource.find("const AssetId roughnessTexture = projectSession_.assets().addTexture"), std::string::npos);
+    EXPECT_NE(appSource.find("renderSystem_.quaderMeshMaterial()"), std::string::npos);
+    EXPECT_NE(appSource.find("renderSystem_.quaderMeshLitMaterial()"), std::string::npos);
+    EXPECT_NE(materialLibrarySource.find("materials\" / \"quader_mesh.filamat\""), std::string::npos);
+    EXPECT_NE(materialLibrarySource.find("materials\" / \"quader_mesh_lit.filamat\""), std::string::npos);
+    EXPECT_NE(sceneBridgeSource.find("materialBinding_.initialize(shadedMeshMaterial, renderedMeshMaterial, textureBinding_)"), std::string::npos);
+    EXPECT_NE(factorySource.find("materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided, editorUnlit)"), std::string::npos);
+    EXPECT_NE(materialSource.find("editorUnlit ? *shadedMeshMaterial_ : *renderedMeshMaterial_"), std::string::npos);
+    EXPECT_NE(materialSource.find("if (!editorUnlit)"), std::string::npos);
+    EXPECT_EQ(materialSource.find("materialInstance->setParameter(\"editorUnlit\""), std::string::npos);
     EXPECT_EQ(factorySource.find(".culling(!doubleSided)"), std::string::npos);
     EXPECT_NE(textureSource.find("TextureCacheKey cacheKey"), std::string::npos);
     EXPECT_NE(textureSource.find(".colorSpace = texture->colorSpace"), std::string::npos);
@@ -2084,6 +2132,39 @@ TEST(SceneRenderBridgeTests, ConvertsSceneOverlayColorsToLinearBeforeViewportEnc
     EXPECT_NE(source.find("linearColor"), std::string::npos);
 }
 
+TEST(SceneRenderBridgeTests, MeshRenderablesReceiveShadowsAndViewportEnablesShadowing) {
+    const std::string meshFactory = readSourceFile({"src", "render", "mesh_renderable_factory.cpp"});
+    const std::string meshCache = readSourceFile({"src", "render", "mesh_renderable_cache.cpp"});
+    const std::string viewportRenderer = readSourceFile({"src", "render", "viewport_renderer.cpp"});
+    const std::string viewportPanel = readSourceFile({"src", "ui", "viewport_panel.cpp"});
+
+    EXPECT_NE(meshFactory.find(".castShadows(castShadows)"), std::string::npos);
+    EXPECT_NE(meshFactory.find(".receiveShadows(!editorUnlit && !depthOnly)"), std::string::npos);
+    EXPECT_NE(meshFactory.find("materialInstance->setColorWrite(false)"), std::string::npos);
+    EXPECT_NE(meshFactory.find("materialInstance->setDepthWrite(true)"), std::string::npos);
+    EXPECT_NE(meshFactory.find("materialInstance->setDepthCulling(true)"), std::string::npos);
+    EXPECT_NE(meshFactory.find(".channel(channel)"), std::string::npos);
+    EXPECT_NE(meshCache.find("kViewportRenderedSceneLayerMask"), std::string::npos);
+    EXPECT_NE(meshCache.find("kViewportShadedSceneLayerMask"), std::string::npos);
+    EXPECT_NE(meshCache.find("kViewportPerPaneEditorLayerMask"), std::string::npos);
+    EXPECT_NE(meshCache.find("kViewportOverlayDepthChannel"), std::string::npos);
+    EXPECT_NE(meshCache.find("renderedMeshProxies_"), std::string::npos);
+    EXPECT_NE(meshCache.find("shadedMeshProxies_"), std::string::npos);
+    EXPECT_NE(meshCache.find("overlayDepthMeshProxies_"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("view_->setShadowingEnabled(true)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("view_->setShadowType(filament::ShadowType::PCF)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("overlayView_->setPostProcessingEnabled(false)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("overlayView_->setAntiAliasing(filament::AntiAliasing::NONE)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("overlayView_->setDithering(filament::Dithering::NONE)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("overlayView_->setColorGrading(nullptr)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("overlayView_->setShadowingEnabled(false)"), std::string::npos);
+    EXPECT_NE(viewportRenderer.find("overlayView_->setBlendMode(filament::View::BlendMode::TRANSLUCENT)"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("paneState.renderer.setSceneLayerMask"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("kViewportRenderedSceneLayerMask"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("kViewportShadedSceneLayerMask"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("paneState.renderer.setShadowingEnabled(paneWorkspace.shading == ViewportShadingMode::Rendered)"), std::string::npos);
+}
+
 TEST(ViewportRendererTests, PresentsLinearViewportTextureThroughUiEncoder) {
     const std::string source = readSourceFile("src/render/viewport_render_target.cpp");
     const std::string gridSource = readSourceFile("src/render/viewport_grid_renderer.cpp");
@@ -2115,9 +2196,13 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_EQ(renderFunction.find("scene_->remove"), std::string::npos);
     EXPECT_NE(rendererSource.find("gridRenderer_.update(controller, width(), height(), gridWorldSpacing, settings, visible)"), std::string::npos);
     EXPECT_NE(gridRendererSource.find(".layerMask(kViewportAllLayerMask, gridLayerMask_)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("renderPassCoordinator_.applyVisibleLayers(view_)"), std::string::npos);
-    EXPECT_NE(rendererSource.find("renderPassCoordinator_.render(renderer, view_, renderTarget_.renderTarget())"), std::string::npos);
-    EXPECT_NE(coordinatorSource.find("view->setVisibleLayers(kViewportAllLayerMask, visibleLayerMask())"), std::string::npos);
+    EXPECT_NE(rendererSource.find("renderPassCoordinator_.applyVisibleLayers(view_, overlayView_)"), std::string::npos);
+    EXPECT_NE(rendererSource.find("renderPassCoordinator_.render(renderer, view_, overlayView_, renderTarget_.renderTarget())"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("sceneView->setVisibleLayers(kViewportAllLayerMask, sceneVisibleLayerMask())"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("overlayView->setVisibleLayers(kViewportAllLayerMask, overlayVisibleLayerMask())"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("clear.discard = false"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("overlayClear.clear = false"), std::string::npos);
+    EXPECT_NE(coordinatorSource.find("renderer.setClearOptions(clear);"), std::string::npos);
 
     const std::size_t prepareViewports =
             appSource.find("ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets())");
@@ -2143,6 +2228,8 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(viewportPanelSource.find("const SceneDocument& document"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("const AssetRegistry& assets"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.updateCamera(paneWorkspace.camera)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setSceneLayerMask"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setShadowingEnabled"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setSceneVisible"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame("), std::string::npos);
@@ -4654,10 +4741,13 @@ TEST(ProjectDocumentTests, OwnsSceneAssetsAndStableObjectRecords) {
     }), 42u);
     EXPECT_EQ(document.objectIdForEntity(entity), 42u);
     EXPECT_EQ(document.createObjectRecord(ProjectObjectRecord{}), 43u);
+    const EntityId sceneRoot = document.scene().sceneRoot();
     const std::vector<ProjectObjectRecord> records = document.objectRecords();
-    ASSERT_EQ(records.size(), 2u);
-    EXPECT_EQ(records[0].id, 42u);
-    EXPECT_EQ(records[1].id, 43u);
+    ASSERT_EQ(records.size(), 3u);
+    EXPECT_EQ(records[0].sceneEntity, sceneRoot);
+    EXPECT_EQ(records[0].authoredName, "scene");
+    EXPECT_EQ(records[1].id, 42u);
+    EXPECT_EQ(records[2].id, 43u);
 
     document.rename("Renamed Project");
     EXPECT_EQ(document.name(), "Renamed Project");
@@ -4741,14 +4831,20 @@ TEST(ProjectDocumentTests, MirrorsEverySceneEntityIntoStableEditorObjectRecords)
 
     const EditorObjectId meshObject = document.scene().editorObjectId(mesh);
     const EditorObjectId groupObject = document.scene().editorObjectId(group);
+    const EditorObjectId rootObject = document.scene().editorObjectId(document.scene().sceneRoot());
+    ASSERT_NE(rootObject, InvalidEditorObjectId);
     ASSERT_NE(meshObject, InvalidEditorObjectId);
     ASSERT_NE(groupObject, InvalidEditorObjectId);
+    EXPECT_NE(rootObject, meshObject);
+    EXPECT_NE(rootObject, groupObject);
     EXPECT_NE(meshObject, groupObject);
 
     const std::vector<ProjectObjectRecord> records = document.objectRecords();
-    ASSERT_EQ(records.size(), 2u);
+    ASSERT_EQ(records.size(), 3u);
+    EXPECT_EQ(document.objectIdForEntity(document.scene().sceneRoot()), rootObject);
     EXPECT_EQ(document.objectIdForEntity(mesh), meshObject);
     EXPECT_EQ(document.objectIdForEntity(group), groupObject);
+    EXPECT_EQ(document.entityForObjectId(rootObject), document.scene().sceneRoot());
     EXPECT_EQ(document.entityForObjectId(meshObject), mesh);
     EXPECT_EQ(document.entityForObjectId(groupObject), group);
     EXPECT_TRUE(document.objectRecord(meshObject).has_value());
@@ -4768,16 +4864,16 @@ TEST(ProjectDocumentTests, SceneEntitiesReserveStableObjectIdsFromProjectDocumen
 
     const EntityId first = document.scene().createEntity("First", EntityKind::Mesh);
     ASSERT_NE(first, InvalidEntityId);
-    EXPECT_EQ(document.scene().editorObjectId(first), 1u);
+    EXPECT_EQ(document.scene().editorObjectId(first), 2u);
 
     const EditorObjectId detached = document.createObjectRecord(ProjectObjectRecord{
             .authoredName = "Detached Object Record",
     });
-    EXPECT_EQ(detached, 2u);
+    EXPECT_EQ(detached, 3u);
 
     const EntityId second = document.scene().createEntity("Second", EntityKind::Mesh);
     ASSERT_NE(second, InvalidEntityId);
-    EXPECT_EQ(document.scene().editorObjectId(second), 3u);
+    EXPECT_EQ(document.scene().editorObjectId(second), 4u);
 
     const EntityId imported = document.scene().createEntityWithId(50u, "Imported", EntityKind::Mesh, 99u);
     ASSERT_NE(imported, InvalidEntityId);
@@ -4808,8 +4904,9 @@ TEST(ProjectDocumentTests, ConstObjectRecordQueriesDoNotMutateProjectRevision) {
     const std::uint64_t revisionBeforeQueries = document.revision();
 
     const std::vector<ProjectObjectRecord> records = std::as_const(document).objectRecords();
-    ASSERT_EQ(records.size(), 1u);
-    EXPECT_EQ(records.front().id, object);
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records.front().sceneEntity, document.scene().sceneRoot());
+    EXPECT_EQ(records.back().id, object);
     const std::optional<ProjectObjectRecord> record = std::as_const(document).objectRecord(object);
     ASSERT_TRUE(record.has_value());
     EXPECT_EQ(record->sceneEntity, entity);
@@ -4831,7 +4928,7 @@ TEST(ProjectDocumentTests, ExplicitObjectRecordSyncParticipatesInProjectSessionD
     session.markClean();
     EXPECT_FALSE(session.dirty());
 
-    EXPECT_EQ(std::as_const(session.document()).objectRecords().size(), 1u);
+    EXPECT_EQ(std::as_const(session.document()).objectRecords().size(), 2u);
     EXPECT_FALSE(session.dirty());
 
     EXPECT_TRUE(session.document().synchronizeObjectRecordsWithScene());
@@ -5194,6 +5291,107 @@ TEST(DocumentCommandTests, TypedCommandsExecuteDirectlyThroughUndoRedoManager) {
     EXPECT_EQ(value, 1);
     ASSERT_TRUE(undoRedo.undo().ok);
     EXPECT_EQ(value, 0);
+}
+
+TEST(DocumentCommandTests, UndoRedoManagerCoalescesOnlyExplicitMergeKeys) {
+    int value = 0;
+    UndoRedoManager undoRedo;
+
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("Set Value", value, 0, 1, nullptr, nullptr, true, true, "value.drag"),
+            UndoRedoExecuteOptions{.mergeKey = "value.drag"});
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(value, 1);
+
+    result = undoRedo.execute(
+            std::make_unique<TestValueCommand>("Set Value", value, 1, 2, nullptr, nullptr, true, true, "value.drag"),
+            UndoRedoExecuteOptions{.mergeKey = "value.drag"});
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_EQ(value, 2);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(value, 0);
+    EXPECT_FALSE(undoRedo.canUndo());
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_EQ(value, 2);
+
+    result = undoRedo.execute(std::make_unique<TestValueCommand>("Set Value", value, 2, 3));
+    ASSERT_TRUE(result.ok) << result.message;
+    result = undoRedo.execute(std::make_unique<TestValueCommand>("Set Value", value, 3, 4));
+    ASSERT_TRUE(result.ok) << result.message;
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_EQ(value, 3);
+}
+
+TEST(DocumentCommandTests, EditorTransactionsCoalesceExplicitMergeKeysBeforeCommit) {
+    int value = 0;
+    EditorHistoryService history;
+
+    EditorTransaction transaction = history.beginTransaction("Value Drag");
+    ASSERT_TRUE(transaction.execute(
+            std::make_unique<TestValueCommand>("Set Value", value, 0, 1, nullptr, nullptr, true, true, "value.drag"),
+            UndoRedoExecuteOptions{.mergeKey = "value.drag"})
+                    .ok);
+    ASSERT_TRUE(transaction.execute(
+            std::make_unique<TestValueCommand>("Set Value", value, 1, 2, nullptr, nullptr, true, true, "value.drag"),
+            UndoRedoExecuteOptions{.mergeKey = "value.drag"})
+                    .ok);
+    ASSERT_TRUE(transaction.commit().ok);
+
+    EXPECT_EQ(value, 2);
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_EQ(value, 0);
+    EXPECT_FALSE(history.canUndo());
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_EQ(value, 2);
+}
+
+TEST(DocumentCommandTests, SceneBeforeAfterCommandsSupportExplicitMergeKeys) {
+    SceneDocument scene;
+    const EntityId entity = scene.createEntity("Brush");
+    UndoRedoManager undoRedo;
+
+    TransformComponent before = *scene.transform(entity);
+    TransformComponent middle = before;
+    middle.position.x = 1.0f;
+    TransformComponent after = before;
+    after.position.x = 2.0f;
+
+    UndoRedoResult result = undoRedo.execute(
+            std::make_unique<ApplyEntityTransformCommand>(scene, entity, before, middle, "Set Transform"),
+            UndoRedoExecuteOptions{.mergeKey = "transform.drag"});
+    ASSERT_TRUE(result.ok) << result.message;
+    result = undoRedo.execute(
+            std::make_unique<ApplyEntityTransformCommand>(scene, entity, middle, after, "Set Transform"),
+            UndoRedoExecuteOptions{.mergeKey = "transform.drag"});
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
+    EXPECT_FALSE(undoRedo.canUndo());
+    ASSERT_TRUE(undoRedo.redo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+
+    TransformComponent third = after;
+    third.position.x = 3.0f;
+    TransformComponent fourth = after;
+    fourth.position.x = 4.0f;
+
+    result = undoRedo.execute(
+            std::make_unique<ApplyEntityTransformCommand>(scene, entity, after, third, "Set Transform"),
+            UndoRedoExecuteOptions{.mergeKey = "transform.drag.second"});
+    ASSERT_TRUE(result.ok) << result.message;
+    result = undoRedo.execute(
+            std::make_unique<ApplyEntityTransformCommand>(scene, entity, third, fourth, "Set Transform"),
+            UndoRedoExecuteOptions{.mergeKey = "transform.drag.second"});
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 4.0f);
+
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 2.0f);
+    ASSERT_TRUE(undoRedo.undo().ok);
+    EXPECT_FLOAT_EQ(scene.transform(entity)->position.x, 0.0f);
 }
 
 TEST(DocumentCommandTests, BatchDocumentCommandRollsBackFailedRedoAndUndo) {
@@ -5847,6 +6045,74 @@ TEST(DocumentCommandServiceTests, SetMaterialComparesFullMaterialComponentState)
     ASSERT_NE(scene.material(entity), nullptr);
     EXPECT_EQ(scene.material(entity)->material, baseMaterial);
     EXPECT_TRUE(scene.material(entity)->materialSlots.empty());
+}
+
+TEST(DocumentCommandServiceTests, CreatePointLightAndSetLightComponentAreUndoable) {
+    SceneDocument scene;
+    EditorHistoryService history;
+    DocumentCommandService commands(scene, history);
+
+    TransformComponent transform;
+    transform.position = {1.0f, 2.0f, 3.0f};
+
+    LightComponent light;
+    light.type = LightType::Point;
+    light.color = {1.0f, 0.8f, 0.6f};
+    light.intensity = 900.0f;
+    light.range = 12.0f;
+    light.castsShadows = true;
+
+    const DocumentCreateEntityResult created =
+            commands.createPointLight("Key Light", light, InvalidEntityId, transform, true);
+    ASSERT_TRUE(created.ok) << created.message;
+    EXPECT_TRUE(created.changed);
+    ASSERT_NE(created.entity, InvalidEntityId);
+    EXPECT_TRUE(scene.exists(created.entity));
+    EXPECT_EQ(scene.kind(created.entity), EntityKind::Light);
+    ASSERT_NE(scene.transform(created.entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.transform(created.entity)->position.z, 3.0f);
+    ASSERT_NE(scene.light(created.entity), nullptr);
+    EXPECT_EQ(scene.light(created.entity)->type, LightType::Point);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->intensity, 900.0f);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->range, 12.0f);
+    EXPECT_TRUE(scene.light(created.entity)->castsShadows);
+    EXPECT_EQ(scene.primarySelection(), created.entity);
+
+    LightComponent edited = *scene.light(created.entity);
+    edited.color = {0.25f, 0.5f, 1.0f};
+    edited.intensity = 1250.0f;
+    edited.range = 6.5f;
+    edited.castsShadows = false;
+    DocumentCommandResult result = commands.setLightComponent(created.entity, edited);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_TRUE(result.changed);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->color.z, 1.0f);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->range, 6.5f);
+    EXPECT_FALSE(scene.light(created.entity)->castsShadows);
+
+    result = commands.setLightComponent(created.entity, edited);
+    ASSERT_TRUE(result.ok) << result.message;
+    EXPECT_FALSE(result.changed);
+
+    ASSERT_TRUE(history.undo().ok);
+    ASSERT_NE(scene.light(created.entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->color.z, 0.6f);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->range, 12.0f);
+    EXPECT_TRUE(scene.light(created.entity)->castsShadows);
+
+    ASSERT_TRUE(history.undo().ok);
+    EXPECT_FALSE(scene.exists(created.entity));
+
+    ASSERT_TRUE(history.redo().ok);
+    EXPECT_TRUE(scene.exists(created.entity));
+    ASSERT_NE(scene.light(created.entity), nullptr);
+    EXPECT_EQ(scene.light(created.entity)->type, LightType::Point);
+    EXPECT_EQ(scene.primarySelection(), created.entity);
+
+    ASSERT_TRUE(history.redo().ok);
+    ASSERT_NE(scene.light(created.entity), nullptr);
+    EXPECT_FLOAT_EQ(scene.light(created.entity)->range, 6.5f);
+    EXPECT_FALSE(scene.light(created.entity)->castsShadows);
 }
 
 TEST(DocumentCommandServiceTests, DefaultGroupNameStaysLiteralGroup) {

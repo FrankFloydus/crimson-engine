@@ -7,6 +7,7 @@
 #include "render/tool_preview_renderable_cache.hpp"
 
 #include "render/material_binding_service.hpp"
+#include "render/render_layers.hpp"
 #include "render/render_signature_builder.hpp"
 
 namespace quader {
@@ -57,7 +58,9 @@ bool ToolPreviewRenderableCache::setMeshes(const std::vector<ToolPreviewMesh>& m
                 previewMesh.transform,
                 false,
                 true,
-                materialBinding_->materialRevision(assets, &material)));
+                materialBinding_->materialRevision(assets, &material),
+                kViewportToolPreviewLayerMask,
+                true));
     }
     return true;
 }

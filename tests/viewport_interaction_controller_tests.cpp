@@ -5,6 +5,7 @@
 // file except through prior written authorization from Francesco Di Blasi.
 ////////////////////////////////////////////////////////////////////////////////
 #include "api/quader_editor_api.hpp"
+#include "api/quader_command_ids.hpp"
 #include "api/quader_api_session_internal_access.hpp"
 #include "editor/tools/viewport_tool.hpp"
 #include "editor/viewport/viewport_interaction_controller.hpp"
@@ -122,6 +123,20 @@ quader::QVec2 rotatedPoint(quader::QVec2 pivot, quader::QVec2 point, float radia
             pivot.x + delta.x * c - delta.y * s,
             pivot.y + delta.x * s + delta.y * c,
     };
+}
+
+void expectTransformNear(
+        const quader::TransformComponent& actual,
+        const quader::TransformComponent& expected) {
+    EXPECT_NEAR(actual.position.x, expected.position.x, 0.001f);
+    EXPECT_NEAR(actual.position.y, expected.position.y, 0.001f);
+    EXPECT_NEAR(actual.position.z, expected.position.z, 0.001f);
+    EXPECT_NEAR(actual.rotationEuler.x, expected.rotationEuler.x, 0.001f);
+    EXPECT_NEAR(actual.rotationEuler.y, expected.rotationEuler.y, 0.001f);
+    EXPECT_NEAR(actual.rotationEuler.z, expected.rotationEuler.z, 0.001f);
+    EXPECT_NEAR(actual.scale.x, expected.scale.x, 0.001f);
+    EXPECT_NEAR(actual.scale.y, expected.scale.y, 0.001f);
+    EXPECT_NEAR(actual.scale.z, expected.scale.z, 0.001f);
 }
 
 void pressUpdateReleaseGizmo(
@@ -543,6 +558,91 @@ TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedObj
             EXPECT_GT(length(afterTransform.scale - beforeTransform.scale), 0.001f);
         }
         EXPECT_EQ(harness.editor.selection().summary().selectedObjectCount, 1u);
+
+        ASSERT_TRUE(harness.editor.history().canUndo());
+        const quader::QuaderApiVoidResult undo =
+                harness.editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+        EXPECT_TRUE(undo.changed());
+        ASSERT_NE(harness.session.scene().transform(box.entity), nullptr);
+        expectTransformNear(*harness.session.scene().transform(box.entity), beforeTransform);
+    }
+}
+
+TEST(ViewportInteractionControllerTests, MoveRotateAndScaleGizmosDragSelectedPointLightThroughViewportFrames) {
+    /**
+     * Captures the viewport tool under test and the trace label for per-tool gizmo assertions.
+     */
+    struct ToolCase {
+        quader::ViewportToolId tool = quader::ViewportToolId::Move;
+        const char* label = "";
+    };
+
+    for (const ToolCase toolCase : {
+                 ToolCase{quader::ViewportToolId::Move, "move"},
+                 ToolCase{quader::ViewportToolId::Rotate, "rotate"},
+                 ToolCase{quader::ViewportToolId::Scale, "scale"},
+         }) {
+        SCOPED_TRACE(toolCase.label);
+        ViewportInteractionHarness harness;
+        quader::QuaderCreatePointLightArgs args;
+        args.name = "Viewport Point Light";
+        args.selectCreated = true;
+        const quader::QuaderApiResult<quader::QuaderEntityRef> light =
+                harness.editor.scene().createPointLight(args);
+        ASSERT_TRUE(light.ok()) << light.errorMessage();
+        ASSERT_NE(harness.session.scene().light(light.value().id), nullptr);
+
+        ASSERT_TRUE(harness.editor.tools().activate(toolCase.tool).ok);
+        harness.router.setActiveTool(toolCase.tool);
+
+        const quader::ViewportBeforeToolInteractionResult warmup =
+                harness.controller.handleBeforeActiveTool(harness.editor, harness.frame());
+        EXPECT_FALSE(warmup.gizmoConsumed);
+        const quader_editor_core::TransformGizmoFrame* frame = harness.controller.transformGizmoFrame();
+        ASSERT_NE(frame, nullptr);
+
+        quader::QVec2 start{};
+        quader::QVec2 update{};
+        if (toolCase.tool == quader::ViewportToolId::Rotate) {
+            const quader_editor_core::TransformGizmoRingSegmentPrimitive* ring =
+                    findRing(*frame, quader_editor_core::TransformAxis::z);
+            ASSERT_NE(ring, nullptr);
+            start = ring->screen_start;
+            update = rotatedPoint(frame->info.screen_pivot, start, 0.6f);
+        } else if (toolCase.tool == quader::ViewportToolId::Scale) {
+            start = frame->info.screen_pivot;
+            update = start + quader::QVec2{120.0f, 0.0f};
+        } else {
+            const quader_editor_core::TransformGizmoAxisPrimitive* axis =
+                    findAxis(*frame, quader_editor_core::TransformAxis::x);
+            ASSERT_NE(axis, nullptr);
+            start = axis->screen_tip;
+            update = start + quader::QVec2{120.0f, 0.0f};
+        }
+
+        const quader::TransformComponent beforeTransform =
+                *harness.session.scene().transform(light.value().id);
+        pressUpdateReleaseGizmo(harness, start, update);
+        const quader::TransformComponent afterTransform =
+                *harness.session.scene().transform(light.value().id);
+
+        if (toolCase.tool == quader::ViewportToolId::Move) {
+            EXPECT_GT(length(afterTransform.position - beforeTransform.position), 0.001f);
+        } else if (toolCase.tool == quader::ViewportToolId::Rotate) {
+            EXPECT_GT(length(afterTransform.rotationEuler - beforeTransform.rotationEuler), 0.001f);
+        } else {
+            EXPECT_GT(length(afterTransform.scale - beforeTransform.scale), 0.001f);
+        }
+        EXPECT_EQ(harness.editor.selection().summary().activeKind, quader::QuaderActiveSelectionKind::Light);
+
+        ASSERT_TRUE(harness.editor.history().canUndo());
+        const quader::QuaderApiVoidResult undo =
+                harness.editor.commands().execute(quader::QuaderCommand::HistoryUndo);
+        ASSERT_TRUE(undo.ok()) << undo.errorMessage();
+        EXPECT_TRUE(undo.changed());
+        ASSERT_NE(harness.session.scene().transform(light.value().id), nullptr);
+        expectTransformNear(*harness.session.scene().transform(light.value().id), beforeTransform);
     }
 }
 

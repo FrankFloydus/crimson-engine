@@ -9,6 +9,7 @@
 #include "core/command_result.hpp"
 
 #include <string>
+#include <string_view>
 
 namespace quader {
 
@@ -22,6 +23,11 @@ public:
     [[nodiscard]] virtual const std::string& label() const = 0;
     virtual CommandResult undo() = 0;
     virtual CommandResult redo() = 0;
+    virtual bool mergeWith(const IUndoableCommand& newerCommand, std::string_view mergeKey) {
+        (void)newerCommand;
+        (void)mergeKey;
+        return false;
+    }
 };
 
 } // namespace quader

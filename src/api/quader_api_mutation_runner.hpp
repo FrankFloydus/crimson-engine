@@ -43,6 +43,8 @@ public:
             ModelingSessionMemento after);
 
     QuaderApiResult<QuaderEntityRef> createEntity(const QuaderCreateEntityArgs& args);
+    QuaderApiResult<QuaderEntityRef> createPointLight(const QuaderCreatePointLightArgs& args);
+    QuaderApiResult<QuaderEntityRef> createDirectionalLight(const QuaderCreateDirectionalLightArgs& args);
     QuaderApiVoidResult runDocumentCommand(CommandResult result, std::string_view label);
     QuaderApiVoidResult runDocumentCommand(std::unique_ptr<IUndoableCommand> command, std::string_view label);
     QuaderApiVoidResult runDocumentResult(DocumentCommandResult result, std::string_view label);

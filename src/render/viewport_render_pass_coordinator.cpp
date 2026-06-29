@@ -46,33 +46,67 @@ bool ViewportRenderPassCoordinator::setSceneVisible(bool visible) {
     return true;
 }
 
-std::uint8_t ViewportRenderPassCoordinator::visibleLayerMask() const {
-    std::uint8_t visibleLayers = sceneVisible_ ? kViewportSceneLayerMask : 0u;
+bool ViewportRenderPassCoordinator::setSceneLayerMask(std::uint8_t layerMask) {
+    if (sceneLayerMask_ == layerMask) {
+        return false;
+    }
+    sceneLayerMask_ = layerMask;
+    return true;
+}
+
+std::uint8_t ViewportRenderPassCoordinator::sceneVisibleLayerMask() const {
+    return sceneVisible_
+            ? static_cast<std::uint8_t>(sceneLayerMask_ | kViewportToolPreviewLayerMask)
+            : 0u;
+}
+
+std::uint8_t ViewportRenderPassCoordinator::overlayVisibleLayerMask() const {
     if (groundGridVisible_ || overlayVisible_) {
-        visibleLayers |= gridLayerMask_;
+        return gridLayerMask_;
     }
-    return visibleLayers;
+    return 0u;
 }
 
-void ViewportRenderPassCoordinator::applyVisibleLayers(filament::View* view) const {
-    if (!view) {
-        return;
-    }
-    view->setVisibleLayers(kViewportAllLayerMask, visibleLayerMask());
+std::uint8_t ViewportRenderPassCoordinator::visibleLayerMask() const {
+    return static_cast<std::uint8_t>(sceneVisibleLayerMask() | overlayVisibleLayerMask());
 }
 
-void ViewportRenderPassCoordinator::render(filament::Renderer& renderer, filament::View* view, filament::RenderTarget* renderTarget) const {
+void ViewportRenderPassCoordinator::applyVisibleLayers(filament::View* sceneView, filament::View* overlayView) const {
+    if (sceneView) {
+        sceneView->setVisibleLayers(kViewportAllLayerMask, sceneVisibleLayerMask());
+    }
+    if (overlayView) {
+        overlayView->setVisibleLayers(kViewportAllLayerMask, overlayVisibleLayerMask());
+    }
+}
+
+void ViewportRenderPassCoordinator::render(
+        filament::Renderer& renderer,
+        filament::View* sceneView,
+        filament::View* overlayView,
+        filament::RenderTarget* renderTarget) const {
     (void)renderTarget;
-    if (!view) {
+    if (!sceneView) {
         return;
     }
 
     filament::Renderer::ClearOptions clear;
     clear.clear = true;
-    clear.discard = true;
+    clear.discard = false;
     clear.clearColor = {backgroundColor_.r, backgroundColor_.g, backgroundColor_.b, backgroundColor_.a};
     renderer.setClearOptions(clear);
-    renderer.render(view);
+    renderer.render(sceneView);
+
+    if (!overlayView || overlayVisibleLayerMask() == 0u) {
+        return;
+    }
+
+    filament::Renderer::ClearOptions overlayClear;
+    overlayClear.clear = false;
+    overlayClear.discard = false;
+    renderer.setClearOptions(overlayClear);
+    renderer.render(overlayView);
+    renderer.setClearOptions(clear);
 }
 
 } // namespace quader

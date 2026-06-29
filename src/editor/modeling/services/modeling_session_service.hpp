@@ -95,6 +95,7 @@ public:
     ModelingCommandResult applyActiveMaterial(std::uint32_t materialSlot = 0);
     [[nodiscard]] bool modalToolOwnsViewport() const;
     [[nodiscard]] bool canCancelActiveToolOrPreview() const;
+    [[nodiscard]] bool canCancelActivePreviewForUndo() const;
     [[nodiscard]] ModelingToolStatus toolStatus() const;
     [[nodiscard]] ModelingToolSettingsTarget toolSettingsTarget() const;
     [[nodiscard]] ModelingInteractionSettings interactionSettings() const;

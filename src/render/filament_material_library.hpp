@@ -33,6 +33,7 @@ public:
     }
 
     filament::Material& quaderMesh() { return *quaderMeshMaterial_; }
+    filament::Material& quaderMeshLit() { return *quaderMeshLitMaterial_; }
     filament::Material& vertexColorOverlay() { return *vertexColorOverlayMaterial_; }
     filament::Material& overlayLine() { return *overlayLineMaterial_; }
     filament::Material& overlayPoint() { return *overlayPointMaterial_; }
@@ -45,6 +46,7 @@ private:
 
     filament::Engine* engine_ = nullptr;
     filament::Material* quaderMeshMaterial_ = nullptr;
+    filament::Material* quaderMeshLitMaterial_ = nullptr;
     filament::Material* vertexColorOverlayMaterial_ = nullptr;
     filament::Material* overlayLineMaterial_ = nullptr;
     filament::Material* overlayPointMaterial_ = nullptr;

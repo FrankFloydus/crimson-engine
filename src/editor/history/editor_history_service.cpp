@@ -146,6 +146,10 @@ EditorTransaction& EditorTransaction::operator=(EditorTransaction&& other) noexc
 }
 
 CommandResult EditorTransaction::execute(std::unique_ptr<IUndoableCommand> command) {
+    return execute(std::move(command), {});
+}
+
+CommandResult EditorTransaction::execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options) {
     if (history_ == nullptr) {
         return commandInvalidResult("Editor transaction is not active");
     }
@@ -155,7 +159,16 @@ CommandResult EditorTransaction::execute(std::unique_ptr<IUndoableCommand> comma
 
     CommandResult result = command->redo();
     if (result.ok && result.changed) {
-        commands_.push_back(std::move(command));
+        if (!options.mergeKey.empty() &&
+                !commands_.empty() &&
+                commands_.back().mergeKey == options.mergeKey &&
+                commands_.back().command->mergeWith(*command, options.mergeKey)) {
+            return result;
+        }
+        commands_.push_back(TransactionCommand{
+                .command = std::move(command),
+                .mergeKey = std::move(options.mergeKey),
+        });
     }
     return result;
 }
@@ -170,7 +183,13 @@ CommandResult EditorTransaction::commit() {
         history->activeTransaction_ = nullptr;
     }
     history_ = nullptr;
-    return history->commitTransaction(std::move(label_), std::move(commands_));
+    std::vector<std::unique_ptr<IUndoableCommand>> commands;
+    commands.reserve(commands_.size());
+    for (TransactionCommand& entry : commands_) {
+        commands.push_back(std::move(entry.command));
+    }
+    commands_.clear();
+    return history->commitTransaction(std::move(label_), std::move(commands));
 }
 
 CommandResult EditorTransaction::cancel() {
@@ -180,7 +199,7 @@ CommandResult EditorTransaction::cancel() {
 
     bool changed = false;
     for (std::size_t index = commands_.size(); index > 0u; --index) {
-        IUndoableCommand* command = commands_[index - 1u].get();
+        IUndoableCommand* command = commands_[index - 1u].command.get();
         if (command == nullptr) {
             return commandInvalidResult("Editor transaction command is missing");
         }
@@ -223,10 +242,14 @@ EditorHistoryService::EditorHistoryService(EditorHistoryService&&) noexcept = de
 EditorHistoryService& EditorHistoryService::operator=(EditorHistoryService&&) noexcept = default;
 
 CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> command) {
+    return execute(std::move(command), {});
+}
+
+CommandResult EditorHistoryService::execute(std::unique_ptr<IUndoableCommand> command, UndoRedoExecuteOptions options) {
     if (activeTransaction_ != nullptr) {
-        return activeTransaction_->execute(std::move(command));
+        return activeTransaction_->execute(std::move(command), std::move(options));
     }
-    return undoRedo_->execute(std::move(command));
+    return undoRedo_->execute(std::move(command), std::move(options));
 }
 
 CommandResult EditorHistoryService::recordExecuted(std::unique_ptr<IUndoableCommand> command) {

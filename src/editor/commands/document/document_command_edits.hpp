@@ -87,4 +87,12 @@ inline bool documentCommandSameMeshComponent(const MeshComponent& left, const Me
             left.bodyType == right.bodyType;
 }
 
+inline bool documentCommandSameLightComponent(const LightComponent& left, const LightComponent& right) {
+    return left == right;
+}
+
+inline bool documentCommandSameSceneSettings(const SceneSettingsComponent& left, const SceneSettingsComponent& right) {
+    return left == right;
+}
+
 } // namespace quader

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "core/types.hpp"
+#include "ui/ui_continuous_edit_tracker.hpp"
 #include "ui/ui_dock_panel.hpp"
 
 #include <array>
@@ -48,6 +49,7 @@ private:
     void drawContent(UIContext& context) override;
 
     std::optional<InspectorTransformEditState> activeTransformEdit_;
+    UIContinuousEditTracker activeContinuousEdit_;
 };
 
 } // namespace quader

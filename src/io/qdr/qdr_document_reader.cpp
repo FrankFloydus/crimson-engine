@@ -177,9 +177,72 @@ LightComponent lightFromJson(const json& value) {
     LightComponent light;
     light.type = qdrLightTypeFromName(value.value("type", std::string("directional")));
     light.color = vec3FromJson(value.value("color", json::object()), {1.0f, 1.0f, 1.0f});
-    light.intensity = value.value("intensity", 80000.0f);
+    light.intensity = value.value("intensity", 1.0f);
+    light.range = value.value("range", 10.0f);
     light.castsShadows = value.value("castsShadows", false);
     return light;
+}
+
+SceneToneMapping sceneToneMappingFromName(std::string_view name) {
+    if (name == "linear") {
+        return SceneToneMapping::Linear;
+    }
+    if (name == "acesLegacy") {
+        return SceneToneMapping::AcesLegacy;
+    }
+    if (name == "aces") {
+        return SceneToneMapping::Aces;
+    }
+    if (name == "filmic") {
+        return SceneToneMapping::Filmic;
+    }
+    if (name == "displayRange") {
+        return SceneToneMapping::DisplayRange;
+    }
+    return SceneToneMapping::Aces;
+}
+
+SceneSettingsComponent sceneSettingsFromJson(const json& value) {
+    SceneSettingsComponent settings;
+    if (!value.is_object()) {
+        return settings;
+    }
+    if (const auto environmentJson = value.find("environment");
+            environmentJson != value.end() && environmentJson->is_object()) {
+        settings.environment.environmentId = environmentJson->value("environmentId", settings.environment.environmentId);
+        settings.environment.enabled = environmentJson->value("enabled", settings.environment.enabled);
+        settings.environment.showBackground =
+                environmentJson->value("showBackground", settings.environment.showBackground);
+        settings.environment.intensity = environmentJson->value("intensity", settings.environment.intensity);
+        settings.environment.backgroundIntensity =
+                environmentJson->value("backgroundIntensity", settings.environment.backgroundIntensity);
+        settings.environment.rotationY = environmentJson->value("rotationY", settings.environment.rotationY);
+    }
+    if (const auto cameraJson = value.find("camera"); cameraJson != value.end() && cameraJson->is_object()) {
+        settings.camera.aperture = cameraJson->value("aperture", settings.camera.aperture);
+        settings.camera.shutterSpeed = cameraJson->value("shutterSpeed", settings.camera.shutterSpeed);
+        settings.camera.sensitivity = cameraJson->value("sensitivity", settings.camera.sensitivity);
+        settings.camera.nearPlane = cameraJson->value("nearPlane", settings.camera.nearPlane);
+        settings.camera.farPlane = cameraJson->value("farPlane", settings.camera.farPlane);
+    }
+    if (const auto postProcessJson = value.find("postProcess");
+            postProcessJson != value.end() && postProcessJson->is_object()) {
+        settings.postProcess.enabled = postProcessJson->value("enabled", settings.postProcess.enabled);
+        settings.postProcess.antiAliasing = postProcessJson->value("antiAliasing", settings.postProcess.antiAliasing);
+        settings.postProcess.ambientOcclusion =
+                postProcessJson->value("ambientOcclusion", settings.postProcess.ambientOcclusion);
+        settings.postProcess.ambientOcclusionIntensity =
+                postProcessJson->value("ambientOcclusionIntensity", settings.postProcess.ambientOcclusionIntensity);
+        settings.postProcess.ambientOcclusionRadius =
+                postProcessJson->value("ambientOcclusionRadius", settings.postProcess.ambientOcclusionRadius);
+        settings.postProcess.bloom = postProcessJson->value("bloom", settings.postProcess.bloom);
+        settings.postProcess.bloomStrength =
+                postProcessJson->value("bloomStrength", settings.postProcess.bloomStrength);
+        settings.postProcess.dithering = postProcessJson->value("dithering", settings.postProcess.dithering);
+        settings.postProcess.toneMapping = sceneToneMappingFromName(
+                postProcessJson->value("toneMapping", std::string("aces")));
+    }
+    return settings;
 }
 
 EditorObjectId editorObjectIdFromJson(const json& value) {
@@ -237,10 +300,12 @@ void requireValidAssetReferencesForQdr(const ProjectDocumentAssetReferenceReport
 ProjectDocument projectDocumentFromAppPayload(const json& payload) {
     requireObject(payload, "QDR project document payload");
     const json project = payload.value("project", json::object());
-    ProjectDocument document(ProjectDocumentRecord{
-            .id = project.value("id", 0ull),
-            .name = project.value("name", std::string("Untitled Project")),
-    });
+    ProjectDocument document(
+            ProjectDocumentRecord{
+                    .id = project.value("id", 0ull),
+                    .name = project.value("name", std::string("Untitled Project")),
+            },
+            ProjectDocumentRootPolicy::DeferSceneRoot);
 
     const json assetsJson = payload.value("assets", json::object());
     std::set<AssetId> meshAssetIds;
@@ -321,6 +386,13 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         if (const auto lightJson = entityJson.find("light"); lightJson != entityJson.end() && lightJson->is_object()) {
             document.scene().setLight(entity, lightFromJson(*lightJson));
         }
+        if (entityJson.value("sceneRoot", false) ||
+                entityJson.find("sceneSettings") != entityJson.end()) {
+            const json settingsJson = entityJson.value("sceneSettings", json::object());
+            if (!document.scene().setSceneSettings(entity, sceneSettingsFromJson(settingsJson))) {
+                throw std::runtime_error("QDR project document contains multiple scene root entities.");
+            }
+        }
 
         if (entityJson.value("selected", false)) {
             document.scene().setSelected(entity, true);
@@ -345,6 +417,10 @@ ProjectDocument projectDocumentFromAppPayload(const json& payload) {
         if (!document.scene().setActiveSelection(activeSelection)) {
             throw std::runtime_error("QDR project document active selection must reference a selected entity.");
         }
+    }
+
+    if (document.ensureSceneRoot() == InvalidEntityId) {
+        throw std::runtime_error("QDR project document could not create a scene root.");
     }
 
     requireValidAssetReferencesForQdr(document.validateAssetReferences());
@@ -397,7 +473,9 @@ LightType lightTypeFromLegacy(quader_io::QdrLightType type) {
 }
 
 ProjectDocument projectDocumentFromLegacyQdr(const quader_io::QdrDocument& legacy) {
-    ProjectDocument document(ProjectDocumentRecord{.name = "Imported QDR"});
+    ProjectDocument document(
+            ProjectDocumentRecord{.name = "Imported QDR"},
+            ProjectDocumentRootPolicy::DeferSceneRoot);
     std::unordered_map<std::uint32_t, AssetId> materialBySlot;
     std::unordered_map<int, EntityId> entityByLegacyObject;
 
@@ -455,6 +533,7 @@ ProjectDocument projectDocumentFromLegacyQdr(const quader_io::QdrDocument& legac
                 .type = lightTypeFromLegacy(legacyLight.type),
                 .color = colorFromAbgr(legacyLight.color_abgr),
                 .intensity = legacyLight.intensity,
+                .range = legacyLight.range,
                 .castsShadows = legacyLight.shadow_mode != quader_io::QdrLightShadowMode::none,
         });
         if (legacyLight.selected) {
@@ -462,13 +541,14 @@ ProjectDocument projectDocumentFromLegacyQdr(const quader_io::QdrDocument& legac
         }
     }
 
+    (void)document.ensureSceneRoot();
     return document;
 }
 
 QdrProjectReadResult legacyReadResult(std::string_view text) {
     quader_io::QdrReadResult legacy = quader_io::deserialize_document(text);
     if (!legacy.ok) {
-        return {false, {}, legacy.message, false};
+        return {false, ProjectDocument{}, legacy.message, false};
     }
     return {true, projectDocumentFromLegacyQdr(legacy.document), {}, true};
 }
@@ -477,38 +557,38 @@ QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
     quader_io::require_qdr_root_object(root);
     const quader_io::QdrRootHeader header = quader_io::read_qdr_root_header(root);
     if (header.format != quader_io::qdr_string_from_view(kQdrFormatName)) {
-        return {false, {}, "Unsupported Quader file format: " + header.format, false};
+        return {false, ProjectDocument{}, "Unsupported Quader file format: " + header.format, false};
     }
 
     const int version = header.version;
     if (version < kQdrMinSupportedFormatVersion || version > kQdrProjectFormatVersion) {
-        return {false, {}, "Unsupported Quader file version: " + std::to_string(version), false};
+        return {false, ProjectDocument{}, "Unsupported Quader file version: " + std::to_string(version), false};
     }
 
     const auto documentPayload = root.find(quader_io::qdr_string_from_view(kQdrDocumentPayloadKey));
     if (documentPayload != root.end()) {
         if (!documentPayload->is_object()) {
-            return {false, {}, "QDR document payload must be an object.", false};
+            return {false, ProjectDocument{}, "QDR document payload must be an object.", false};
         }
 
         const auto kind = documentPayload->find("kind");
         if (kind != documentPayload->end()) {
             if (!kind->is_string()) {
-                return {false, {}, "QDR project document payload kind must be a string.", false};
+                return {false, ProjectDocument{}, "QDR project document payload kind must be a string.", false};
             }
             const std::string kindText = kind->get<std::string>();
             if (kindText != quader_io::qdr_string_from_view(kQdrProjectDocumentKind)) {
-                return {false, {}, "Unsupported QDR project document payload kind: " + kindText, false};
+                return {false, ProjectDocument{}, "Unsupported QDR project document payload kind: " + kindText, false};
             }
             if (version != kQdrProjectFormatVersion) {
-                return {false, {}, "QDR project document payload requires version " +
+                return {false, ProjectDocument{}, "QDR project document payload requires version " +
                                 std::to_string(kQdrProjectFormatVersion) + ".", false};
             }
             return {true, projectDocumentFromAppPayload(*documentPayload), {}, false};
         }
 
         if (version == kQdrProjectFormatVersion) {
-            return {false, {}, "QDR project document payload is missing its kind.", false};
+            return {false, ProjectDocument{}, "QDR project document payload is missing its kind.", false};
         }
         return legacyReadResult(text);
     }
@@ -517,7 +597,7 @@ QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
         return legacyReadResult(text);
     }
 
-    return {false, {}, "QDR document is missing its document payload.", false};
+    return {false, ProjectDocument{}, "QDR document is missing its document payload.", false};
 }
 
 } // namespace
@@ -527,16 +607,16 @@ QdrProjectReadResult QdrDocumentReader::deserializeProjectDocument(std::string_v
         const json root = json::parse(text.begin(), text.end());
         return readFromRoot(root, text);
     } catch (const std::exception& exception) {
-        return {false, {}, exception.what(), false};
+        return {false, ProjectDocument{}, exception.what(), false};
     } catch (...) {
-        return {false, {}, "Unknown error reading QDR document.", false};
+        return {false, ProjectDocument{}, "Unknown error reading QDR document.", false};
     }
 }
 
 QdrProjectReadResult QdrDocumentReader::readProjectDocument(const std::filesystem::path& path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream.is_open()) {
-        return {false, {}, "Could not open QDR document: " + path.string(), false};
+        return {false, ProjectDocument{}, "Could not open QDR document: " + path.string(), false};
     }
     const std::string text{
             std::istreambuf_iterator<char>(stream),

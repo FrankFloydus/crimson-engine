@@ -62,6 +62,14 @@ public:
 };
 
 /**
+ * Owns Create Menu behavior within the ImGui editor presentation layer.
+ */
+class CreateMenu {
+public:
+    bool draw(MainMenuBarContext& context) const;
+};
+
+/**
  * Owns View Menu behavior within the ImGui editor presentation layer.
  */
 class ViewMenu {
@@ -89,6 +97,7 @@ private:
     FileMenu fileMenu_;
     EditMenu editMenu_;
     ToolsMenu toolsMenu_;
+    CreateMenu createMenu_;
     ViewMenu viewMenu_;
     LayoutMenu layoutMenu_;
 };

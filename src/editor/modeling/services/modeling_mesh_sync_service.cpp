@@ -73,6 +73,10 @@ std::optional<MaterialComponent> materialComponentForModelingSlot(
     };
 }
 
+EntityId modelingDefaultParent(const SceneDocument& scene) {
+    return scene.sceneRoot();
+}
+
 void syncMaterialSlotBindings(
         SceneDocument& scene,
         EntityId entity,
@@ -95,8 +99,11 @@ void applyDurableSceneIdentityToEntity(
         EntityId entity,
         const ModelingObjectSceneIdentity& identity) {
     scene.setTransform(entity, identity.transform);
-    if (identity.parent != InvalidEntityId && scene.exists(identity.parent)) {
-        (void)scene.setParent(entity, identity.parent, false);
+    const EntityId parent = identity.parent != InvalidEntityId && scene.exists(identity.parent)
+            ? identity.parent
+            : modelingDefaultParent(scene);
+    if (parent != InvalidEntityId && scene.exists(parent)) {
+        (void)scene.setParent(entity, parent, false);
     }
     scene.setVisible(entity, identity.visibility.visible);
     scene.setLocked(entity, identity.lock.locked);
@@ -132,6 +139,12 @@ void reconcileModelingObjectSceneNodes(
                 : scene.createEntity(name, EntityKind::Mesh);
         if (entity == InvalidEntityId) {
             continue;
+        }
+        if (!identity.has_value()) {
+            const EntityId parent = modelingDefaultParent(scene);
+            if (parent != InvalidEntityId && scene.exists(parent)) {
+                (void)scene.setParent(entity, parent, false);
+            }
         }
 
         scene.setModelingObject(entity, ModelingObjectComponent{
@@ -300,6 +313,10 @@ ModelingCreateBoxResult ModelingMeshSyncService::createSceneObjectFromLatest(
     const AssetId meshId = assets.addMesh(std::move(mesh));
 
     const EntityId entity = scene.createEntity(name);
+    const EntityId parent = modelingDefaultParent(scene);
+    if (parent != InvalidEntityId && scene.exists(parent)) {
+        (void)scene.setParent(entity, parent, false);
+    }
     scene.setModelingObject(entity, ModelingObjectComponent{
             .objectId = object.id,
             .materialSlot = static_cast<std::uint32_t>(object.material_id),

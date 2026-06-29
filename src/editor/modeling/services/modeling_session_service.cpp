@@ -20,6 +20,7 @@
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
 #include "math/glm_bridge.hpp"
+#include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
 #include "scene/scene_entity_naming.hpp"
 
@@ -1301,6 +1302,13 @@ public:
                 modalToolOwnsViewport();
     }
 
+    [[nodiscard]] bool canCancelActivePreviewForUndo() const {
+        return toolSettingsTarget().operationPreviewActive ||
+                runtime_.transform_drag_active() ||
+                hasTransformPreview() ||
+                sceneTransformDragService_.previewActive();
+    }
+
     [[nodiscard]] ModelingActionQuery effectiveActionQuery(ModelingActionQuery query) const {
         return contextActionService_.effectiveActionQuery(query, modalToolOwnsViewport());
     }
@@ -1641,21 +1649,27 @@ public:
         if (runtime_.transform_drag_active() || hasTransformPreview()) {
             (void)cancelTransformDrag();
         }
-        if (!session_.has_selection() || request.axis == ModelingTransformAxis::None) {
+        if ((!session_.has_selection() && !hasSceneTransformSelection()) ||
+                request.axis == ModelingTransformAxis::None) {
             return transformDragPreview(false);
         }
 
+        const bool runtimeHasSelection = session_.has_selection();
+        const bool sceneTransformSelection = !runtimeHasSelection && hasSceneTransformSelection();
+        const quader_editor_core::SelectionMode dragSelectionMode = sceneTransformSelection
+                ? quader_editor_core::SelectionMode::object
+                : session_.selection_mode();
         const quader_editor_core::ViewportInteractionTool tool = toRuntime(request.tool);
         const quader_editor_core::TransformDragOperation operation =
                 quader_editor_core::sanitize_transform_drag_operation(
                         toRuntime(request.operation),
                         tool,
-                        session_.selection_mode());
+                        dragSelectionMode);
         const quader_editor_core::TransformAxis axis = toRuntime(request.axis);
         const quader::QVec3 pivot = toRuntime(request.pivot);
         const TransformDragPreviewRouting previewRouting = TransformDragController::previewRouting(
                 request.duplicateSelected,
-                session_.selection_mode() == quader_editor_core::SelectionMode::object,
+                dragSelectionMode == quader_editor_core::SelectionMode::object,
                 operation == quader_editor_core::TransformDragOperation::transform);
 
         runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
@@ -1760,7 +1774,7 @@ public:
             begin.screen_pivot = screenPivot;
             begin.has_screen_tip = true;
             begin.screen_tip = screenTip;
-            const quader_editor_core::Bounds3 bounds = session_.selection_bounds();
+            const quader_editor_core::Bounds3 bounds = transformDragBounds();
             begin.bounds.has_bounds = !bounds.empty;
             begin.bounds.min = bounds.min;
             begin.bounds.max = bounds.max;
@@ -2037,13 +2051,18 @@ public:
         command.settings = settings;
 
         const bool preserveGroupSelection = appSelectionMode_ == ModelingSelectionMode::Group;
-        const std::vector<EntityId> selectedBefore = preserveGroupSelection ? scene_.selectedEntities() : std::vector<EntityId>{};
-        const EntityId activeBefore = preserveGroupSelection ? scene_.primarySelection() : InvalidEntityId;
+        const bool preserveSceneTransformSelection =
+                !preserveGroupSelection && !session_.has_selection() && hasSceneTransformSelection();
+        const bool preserveSceneSelection = preserveGroupSelection || preserveSceneTransformSelection;
+        const std::vector<EntityId> selectedBefore = preserveSceneSelection ? scene_.selectedEntities() : std::vector<EntityId>{};
+        const EntityId activeBefore = preserveSceneSelection ? scene_.primarySelection() : InvalidEntityId;
 
         ModelingCommandResult result = executeRuntimeCommand(command, false);
-        if (preserveGroupSelection) {
+        if (preserveSceneSelection) {
             restoreSceneSelection(selectedBefore, activeBefore);
-            appSelectionMode_ = ModelingSelectionMode::Group;
+            if (preserveGroupSelection) {
+                appSelectionMode_ = ModelingSelectionMode::Group;
+            }
             invalidateSelectionOverlayCaches();
         }
         return result;
@@ -2051,12 +2070,17 @@ public:
 
     ModelingCommandResult activateViewportTool(ModelingViewportTool tool) {
         const bool preserveGroupSelection = appSelectionMode_ == ModelingSelectionMode::Group;
-        const std::vector<EntityId> selectedBefore = preserveGroupSelection ? scene_.selectedEntities() : std::vector<EntityId>{};
-        const EntityId activeBefore = preserveGroupSelection ? scene_.primarySelection() : InvalidEntityId;
+        const bool preserveSceneTransformSelection =
+                !preserveGroupSelection && !session_.has_selection() && hasSceneTransformSelection();
+        const bool preserveSceneSelection = preserveGroupSelection || preserveSceneTransformSelection;
+        const std::vector<EntityId> selectedBefore = preserveSceneSelection ? scene_.selectedEntities() : std::vector<EntityId>{};
+        const EntityId activeBefore = preserveSceneSelection ? scene_.primarySelection() : InvalidEntityId;
         const auto finish = [&](ModelingCommandResult result) {
-            if (preserveGroupSelection) {
+            if (preserveSceneSelection) {
                 restoreSceneSelection(selectedBefore, activeBefore);
-                appSelectionMode_ = ModelingSelectionMode::Group;
+                if (preserveGroupSelection) {
+                    appSelectionMode_ = ModelingSelectionMode::Group;
+                }
                 invalidateSelectionOverlayCaches();
             }
             return result;
@@ -2699,6 +2723,28 @@ private:
         return transformPreviewService_.hasTransformPreview(session_);
     }
 
+    [[nodiscard]] bool hasSceneTransformSelection() const {
+        for (const EntityId entity : scene_.selectedEntities()) {
+            if (scene_.transform(entity) != nullptr && !scene_.isEffectivelyLocked(entity)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] quader_editor_core::Bounds3 transformDragBounds() const {
+        quader_editor_core::Bounds3 bounds = session_.selection_bounds();
+        if (!bounds.empty) {
+            return bounds;
+        }
+        if (const std::optional<SceneBounds> sceneBounds = selectedTransformWorldBounds(scene_, assets_)) {
+            bounds.empty = false;
+            bounds.min = sceneBounds->min;
+            bounds.max = sceneBounds->max;
+        }
+        return bounds;
+    }
+
     void clearTransformDragRuntimeState() {
         runtime_.clear_transform_drag_state();
         runtime_.clear_gizmo_hover();
@@ -3056,6 +3102,10 @@ bool ModelingSessionService::modalToolOwnsViewport() const {
 
 bool ModelingSessionService::canCancelActiveToolOrPreview() const {
     return impl_->canCancelActiveToolOrPreview();
+}
+
+bool ModelingSessionService::canCancelActivePreviewForUndo() const {
+    return impl_->canCancelActivePreviewForUndo();
 }
 
 ModelingToolStatus ModelingSessionService::toolStatus() const {

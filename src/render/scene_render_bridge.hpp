@@ -46,7 +46,8 @@ public:
 
     void initialize(filament::Engine& engine,
             filament::Scene& scene,
-            filament::Material& meshMaterial,
+            filament::Material& shadedMeshMaterial,
+            filament::Material& renderedMeshMaterial,
             filament::Material& overlayMaterial,
             filament::Material& overlayLineMaterial,
             filament::Material& overlayPointMaterial,

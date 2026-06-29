@@ -12,13 +12,19 @@
 
 namespace quader {
 
-ProjectDocument::ProjectDocument() {
+ProjectDocument::ProjectDocument(ProjectDocumentRootPolicy rootPolicy) {
     bindSceneObjectIdentityAllocator();
+    if (rootPolicy == ProjectDocumentRootPolicy::EnsureSceneRoot) {
+        (void)ensureSceneRoot();
+    }
 }
 
-ProjectDocument::ProjectDocument(ProjectDocumentRecord record)
+ProjectDocument::ProjectDocument(ProjectDocumentRecord record, ProjectDocumentRootPolicy rootPolicy)
     : record_(std::move(record)) {
     bindSceneObjectIdentityAllocator();
+    if (rootPolicy == ProjectDocumentRootPolicy::EnsureSceneRoot) {
+        (void)ensureSceneRoot();
+    }
 }
 
 void ProjectDocument::rename(std::string name) {
@@ -363,6 +369,45 @@ ProjectDocumentAssetReferenceReport ProjectDocument::validateAssetReferences(Pro
         });
     }
     return report;
+}
+
+EntityId ProjectDocument::ensureSceneRoot() {
+    EntityId root = scene_.sceneRoot();
+    if (root == InvalidEntityId) {
+        root = scene_.createEntity("scene", EntityKind::Empty);
+        if (root == InvalidEntityId) {
+            return InvalidEntityId;
+        }
+        if (!scene_.setSceneSettings(root, SceneSettingsComponent{})) {
+            return InvalidEntityId;
+        }
+    }
+
+    if (const NameComponent* name = scene_.name(root); name != nullptr && name->name != "scene") {
+        (void)scene_.renameEntity(root, "scene");
+    }
+    if (scene_.kind(root) != EntityKind::Empty) {
+        (void)scene_.setEntityKind(root, EntityKind::Empty);
+    }
+    if (const VisibilityComponent* visibility = scene_.visibility(root)) {
+        if (!visibility->visible) {
+            (void)scene_.setVisible(root, true);
+        }
+        if (!visibility->selectable) {
+            (void)scene_.setSelectable(root, true);
+        }
+    }
+    if (const LockComponent* lock = scene_.lock(root); lock != nullptr && lock->locked) {
+        (void)scene_.setLocked(root, false);
+    }
+
+    const std::vector<EntityId> entities = scene_.entities();
+    for (const EntityId entity : entities) {
+        if (entity != root && scene_.parent(entity) == InvalidEntityId) {
+            (void)scene_.setParent(entity, root, true);
+        }
+    }
+    return root;
 }
 
 std::uint64_t ProjectDocument::revision() const {

@@ -10,20 +10,8 @@ material {
             name : baseColorTexture
         },
         {
-            type : sampler2d,
-            name : roughnessTexture
-        },
-        {
             type : float4,
             name : baseColorFactor
-        },
-        {
-            type : float,
-            name : metallicFactor
-        },
-        {
-            type : float,
-            name : roughnessFactor
         }
     ]
 }

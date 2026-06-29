@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <mesh/polygon/document.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -172,6 +173,19 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     accentMaterial.baseColor = {0.1f, 0.8f, 0.2f};
     const AssetId accentMaterialId = document.assets().addMaterial(23u, std::move(accentMaterial));
 
+    const EntityId sceneRoot = document.scene().sceneRoot();
+    ASSERT_NE(sceneRoot, InvalidEntityId);
+    SceneSettingsComponent sceneSettings;
+    sceneSettings.environment.environmentId = "pillars_2k";
+    sceneSettings.environment.rotationY = 1.25f;
+    sceneSettings.camera.nearPlane = 0.2f;
+    sceneSettings.camera.farPlane = 2500.0f;
+    sceneSettings.postProcess.dithering = false;
+    sceneSettings.postProcess.toneMapping = SceneToneMapping::DisplayRange;
+    sceneSettings.postProcess.bloom = true;
+    sceneSettings.postProcess.bloomStrength = 0.75f;
+    ASSERT_TRUE(document.scene().setSceneSettings(sceneRoot, sceneSettings));
+
     const EntityId group = document.scene().createEntityWithId(100u, "Group", EntityKind::Empty);
     const EntityId wall = document.scene().createEntityWithId(200u, "Wall", EntityKind::Mesh);
     const std::string groupUuid = document.scene().uuid(group);
@@ -200,15 +214,35 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     const EditorObjectId wallObject = document.scene().editorObjectId(wall);
     ASSERT_EQ(wallObject, 900u);
 
+    const EntityId light = document.scene().createEntityWithId(300u, "Key Light", EntityKind::Light);
+    const std::string lightUuid = document.scene().uuid(light);
+    document.scene().setTransform(light, TransformComponent{.position = {-2.0f, 5.0f, 1.0f}});
+    document.scene().setLight(light, LightComponent{
+            .type = LightType::Point,
+            .color = {1.0f, 0.75f, 0.5f},
+            .intensity = 950.0f,
+            .range = 14.0f,
+            .castsShadows = true,
+    });
+
     const std::string text = QdrDocumentWriter::serializeProjectDocument(document);
     EXPECT_NE(text.find("\"kind\": \"quader.project-document\""), std::string::npos);
     EXPECT_NE(text.find("\"uuid\": \"" + groupUuid + "\""), std::string::npos);
     EXPECT_NE(text.find("\"uuid\": \"" + wallUuid + "\""), std::string::npos);
+    EXPECT_NE(text.find("\"uuid\": \"" + lightUuid + "\""), std::string::npos);
     EXPECT_NE(text.find("\"editorObjectId\": " + std::to_string(groupObject)), std::string::npos);
     EXPECT_NE(text.find("\"editorObjectId\": 900"), std::string::npos);
+    EXPECT_NE(text.find("\"type\": \"point\""), std::string::npos);
+    EXPECT_NE(text.find("\"range\": 14"), std::string::npos);
+    EXPECT_NE(text.find("\"castsShadows\": true"), std::string::npos);
     EXPECT_NE(text.find("\"textures\": ["), std::string::npos);
     EXPECT_NE(text.find("\"baseColorTexture\": 31"), std::string::npos);
     EXPECT_NE(text.find("\"roughnessTexture\": 32"), std::string::npos);
+    EXPECT_NE(text.find("\"environmentId\": \"pillars_2k\""), std::string::npos);
+    EXPECT_NE(text.find("\"nearPlane\": 0.2"), std::string::npos);
+    EXPECT_NE(text.find("\"farPlane\": 2500"), std::string::npos);
+    EXPECT_NE(text.find("\"dithering\": false"), std::string::npos);
+    EXPECT_NE(text.find("\"toneMapping\": \"displayRange\""), std::string::npos);
     EXPECT_EQ(text.find("\"session\""), std::string::npos);
 
     QdrProjectReadResult result = QdrDocumentReader::deserializeProjectDocument(text);
@@ -220,15 +254,34 @@ TEST(QdrDocumentIoTests, WritesAndReadsProjectDocumentPayloadWithStableIdsAndBin
     EXPECT_EQ(loaded.name(), "Projection IO");
     EXPECT_TRUE(loaded.scene().exists(group));
     EXPECT_TRUE(loaded.scene().exists(wall));
+    EXPECT_TRUE(loaded.scene().exists(light));
     EXPECT_EQ(loaded.scene().uuid(group), groupUuid);
     EXPECT_EQ(loaded.scene().uuid(wall), wallUuid);
+    EXPECT_EQ(loaded.scene().uuid(light), lightUuid);
     EXPECT_EQ(loaded.scene().entityForUuid(groupUuid), group);
     EXPECT_EQ(loaded.scene().entityForUuid(wallUuid), wall);
     EXPECT_EQ(loaded.scene().editorObjectId(group), groupObject);
     EXPECT_EQ(loaded.scene().editorObjectId(wall), wallObject);
+    ASSERT_NE(loaded.scene().sceneSettings(sceneRoot), nullptr);
+    EXPECT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.environmentId, "pillars_2k");
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->environment.rotationY, 1.25f);
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->camera.nearPlane, 0.2f);
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->camera.farPlane, 2500.0f);
+    EXPECT_FALSE(loaded.scene().sceneSettings(sceneRoot)->postProcess.dithering);
+    EXPECT_EQ(loaded.scene().sceneSettings(sceneRoot)->postProcess.toneMapping, SceneToneMapping::DisplayRange);
+    EXPECT_TRUE(loaded.scene().sceneSettings(sceneRoot)->postProcess.bloom);
+    EXPECT_FLOAT_EQ(loaded.scene().sceneSettings(sceneRoot)->postProcess.bloomStrength, 0.75f);
     EXPECT_EQ(loaded.scene().parent(wall), group);
     ASSERT_NE(loaded.scene().transform(wall), nullptr);
     EXPECT_FLOAT_EQ(loaded.scene().transform(wall)->position.x, 2.0f);
+    ASSERT_NE(loaded.scene().transform(light), nullptr);
+    EXPECT_FLOAT_EQ(loaded.scene().transform(light)->position.y, 5.0f);
+    ASSERT_NE(loaded.scene().light(light), nullptr);
+    EXPECT_EQ(loaded.scene().light(light)->type, LightType::Point);
+    EXPECT_FLOAT_EQ(loaded.scene().light(light)->color.y, 0.75f);
+    EXPECT_FLOAT_EQ(loaded.scene().light(light)->intensity, 950.0f);
+    EXPECT_FLOAT_EQ(loaded.scene().light(light)->range, 14.0f);
+    EXPECT_TRUE(loaded.scene().light(light)->castsShadows);
     ASSERT_NE(loaded.scene().mesh(wall), nullptr);
     EXPECT_EQ(loaded.scene().mesh(wall)->mesh, meshId);
     ASSERT_NE(loaded.scene().material(wall), nullptr);
@@ -326,8 +379,14 @@ TEST(QdrDocumentIoTests, ImportsLegacySessionPayloadButWritesProjectDocumentPayl
     EXPECT_TRUE(result.migratedLegacySession);
 
     const std::vector<EntityId> entities = result.document.scene().entities();
-    ASSERT_EQ(entities.size(), 1u);
-    const EntityId entity = entities.front();
+    ASSERT_EQ(entities.size(), 2u);
+    const EntityId sceneRoot = result.document.scene().sceneRoot();
+    ASSERT_NE(sceneRoot, InvalidEntityId);
+    const auto imported = std::find_if(entities.begin(), entities.end(), [&](EntityId entity) {
+        return entity != sceneRoot;
+    });
+    ASSERT_NE(imported, entities.end());
+    const EntityId entity = *imported;
     EXPECT_NE(entity, static_cast<EntityId>(42u));
     ASSERT_NE(result.document.scene().modelingObject(entity), nullptr);
     EXPECT_EQ(result.document.scene().modelingObject(entity)->objectId, 42);

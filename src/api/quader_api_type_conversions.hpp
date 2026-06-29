@@ -45,6 +45,30 @@ inline QuaderEntityKind toApiEntityKind(EntityKind kind) {
     return QuaderEntityKind::Generic;
 }
 
+inline LightType toSceneLightType(QuaderLightType type) {
+    switch (type) {
+    case QuaderLightType::Directional:
+        return LightType::Directional;
+    case QuaderLightType::Point:
+        return LightType::Point;
+    case QuaderLightType::Spot:
+        return LightType::Spot;
+    }
+    return LightType::Point;
+}
+
+inline QuaderLightType toApiLightType(LightType type) {
+    switch (type) {
+    case LightType::Directional:
+        return QuaderLightType::Directional;
+    case LightType::Point:
+        return QuaderLightType::Point;
+    case LightType::Spot:
+        return QuaderLightType::Spot;
+    }
+    return QuaderLightType::Point;
+}
+
 inline TransformComponent toSceneTransform(const QuaderTransform& transform) {
     return {
             .position = transform.position,
@@ -136,6 +160,120 @@ inline QuaderMeshComponent toApiMeshComponent(const MeshComponent& component) {
             .collisionType = toApiMeshCollisionType(component.collisionType),
             .displayCollision = component.displayCollision,
             .bodyType = toApiMeshPhysicsBodyType(component.bodyType),
+    };
+}
+
+inline LightComponent toSceneLightComponent(const QuaderLightComponent& component) {
+    return {
+            .type = toSceneLightType(component.type),
+            .color = component.color,
+            .intensity = component.intensity,
+            .range = component.range,
+            .castsShadows = component.castsShadows,
+    };
+}
+
+inline QuaderLightComponent toApiLightComponent(const LightComponent& component) {
+    return {
+            .type = toApiLightType(component.type),
+            .color = component.color,
+            .intensity = component.intensity,
+            .range = component.range,
+            .castsShadows = component.castsShadows,
+    };
+}
+
+inline SceneToneMapping toSceneToneMapping(QuaderToneMapping toneMapping) {
+    switch (toneMapping) {
+    case QuaderToneMapping::Linear:
+        return SceneToneMapping::Linear;
+    case QuaderToneMapping::AcesLegacy:
+        return SceneToneMapping::AcesLegacy;
+    case QuaderToneMapping::Aces:
+        return SceneToneMapping::Aces;
+    case QuaderToneMapping::Filmic:
+        return SceneToneMapping::Filmic;
+    case QuaderToneMapping::DisplayRange:
+        return SceneToneMapping::DisplayRange;
+    }
+    return SceneToneMapping::Aces;
+}
+
+inline QuaderToneMapping toApiToneMapping(SceneToneMapping toneMapping) {
+    switch (toneMapping) {
+    case SceneToneMapping::Linear:
+        return QuaderToneMapping::Linear;
+    case SceneToneMapping::AcesLegacy:
+        return QuaderToneMapping::AcesLegacy;
+    case SceneToneMapping::Aces:
+        return QuaderToneMapping::Aces;
+    case SceneToneMapping::Filmic:
+        return QuaderToneMapping::Filmic;
+    case SceneToneMapping::DisplayRange:
+        return QuaderToneMapping::DisplayRange;
+    }
+    return QuaderToneMapping::Aces;
+}
+
+inline SceneSettingsComponent toSceneSettingsComponent(const QuaderSceneSettings& settings) {
+    return {
+            .environment = SceneEnvironmentSettings{
+                    .environmentId = settings.environment.environmentId,
+                    .enabled = settings.environment.enabled,
+                    .showBackground = settings.environment.showBackground,
+                    .intensity = settings.environment.intensity,
+                    .backgroundIntensity = settings.environment.backgroundIntensity,
+                    .rotationY = settings.environment.rotationY,
+            },
+            .camera = SceneCameraSettings{
+                    .aperture = settings.camera.aperture,
+                    .shutterSpeed = settings.camera.shutterSpeed,
+                    .sensitivity = settings.camera.sensitivity,
+                    .nearPlane = settings.camera.nearPlane,
+                    .farPlane = settings.camera.farPlane,
+            },
+            .postProcess = ScenePostProcessSettings{
+                    .enabled = settings.postProcess.enabled,
+                    .antiAliasing = settings.postProcess.antiAliasing,
+                    .ambientOcclusion = settings.postProcess.ambientOcclusion,
+                    .ambientOcclusionIntensity = settings.postProcess.ambientOcclusionIntensity,
+                    .ambientOcclusionRadius = settings.postProcess.ambientOcclusionRadius,
+                    .bloom = settings.postProcess.bloom,
+                    .bloomStrength = settings.postProcess.bloomStrength,
+                    .dithering = settings.postProcess.dithering,
+                    .toneMapping = toSceneToneMapping(settings.postProcess.toneMapping),
+            },
+    };
+}
+
+inline QuaderSceneSettings toApiSceneSettings(const SceneSettingsComponent& settings) {
+    return {
+            .environment = QuaderSceneEnvironmentSettings{
+                    .environmentId = settings.environment.environmentId,
+                    .enabled = settings.environment.enabled,
+                    .showBackground = settings.environment.showBackground,
+                    .intensity = settings.environment.intensity,
+                    .backgroundIntensity = settings.environment.backgroundIntensity,
+                    .rotationY = settings.environment.rotationY,
+            },
+            .camera = QuaderSceneCameraSettings{
+                    .aperture = settings.camera.aperture,
+                    .shutterSpeed = settings.camera.shutterSpeed,
+                    .sensitivity = settings.camera.sensitivity,
+                    .nearPlane = settings.camera.nearPlane,
+                    .farPlane = settings.camera.farPlane,
+            },
+            .postProcess = QuaderScenePostProcessSettings{
+                    .enabled = settings.postProcess.enabled,
+                    .antiAliasing = settings.postProcess.antiAliasing,
+                    .ambientOcclusion = settings.postProcess.ambientOcclusion,
+                    .ambientOcclusionIntensity = settings.postProcess.ambientOcclusionIntensity,
+                    .ambientOcclusionRadius = settings.postProcess.ambientOcclusionRadius,
+                    .bloom = settings.postProcess.bloom,
+                    .bloomStrength = settings.postProcess.bloomStrength,
+                    .dithering = settings.postProcess.dithering,
+                    .toneMapping = toApiToneMapping(settings.postProcess.toneMapping),
+            },
     };
 }
 

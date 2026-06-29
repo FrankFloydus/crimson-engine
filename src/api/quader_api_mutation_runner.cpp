@@ -83,6 +83,49 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createEntity(const Qua
     return result;
 }
 
+QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createPointLight(const QuaderCreatePointLightArgs& args) {
+    DocumentCreateEntityResult command = session_.documentCommands().createPointLight(
+            args.name,
+            toSceneLightComponent(args.light),
+            args.parent,
+            toSceneTransform(args.transform),
+            args.selectCreated);
+    const EntityId createdEntity = command.entity;
+
+    const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Point Light");
+    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
+    if (result.ok && result.changed) {
+        result.value = QuaderEntityRef{
+                .id = createdEntity,
+                .uuid = session_.scene().uuid(createdEntity),
+                .editorObjectId = session_.scene().editorObjectId(createdEntity),
+        };
+    }
+    return result;
+}
+
+QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createDirectionalLight(
+        const QuaderCreateDirectionalLightArgs& args) {
+    DocumentCreateEntityResult command = session_.documentCommands().createDirectionalLight(
+            args.name,
+            toSceneLightComponent(args.light),
+            args.parent,
+            toSceneTransform(args.transform),
+            args.selectCreated);
+    const EntityId createdEntity = command.entity;
+
+    const QuaderApiVoidResult status = runDocumentResult(std::move(command), "Create Directional Light");
+    QuaderApiResult<QuaderEntityRef> result = quaderApiResultFromStatus<QuaderEntityRef>(status);
+    if (result.ok && result.changed) {
+        result.value = QuaderEntityRef{
+                .id = createdEntity,
+                .uuid = session_.scene().uuid(createdEntity),
+                .editorObjectId = session_.scene().editorObjectId(createdEntity),
+        };
+    }
+    return result;
+}
+
 QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(CommandResult result, std::string_view label) {
     return statusFrom(std::move(result), QuaderMutationKind::Document, label);
 }
@@ -159,16 +202,18 @@ QuaderApiVoidResult QuaderApiMutationRunner::runAssetFailure(std::string message
 }
 
 bool QuaderApiMutationRunner::canUndo() const {
-    if (session_.modeling().canCancelActiveToolOrPreview()) {
+    if (session_.modeling().canCancelActivePreviewForUndo()) {
         return true;
     }
     return history_.canUndo();
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::undo() {
-    if (session_.modeling().canCancelActiveToolOrPreview()) {
+    if (session_.modeling().canCancelActivePreviewForUndo()) {
         const ModelingCommandResult cancel = cancelActiveToolOrPreviewForUndo();
-        return statusFrom(cancel, QuaderMutationKind::Runtime, "Undo");
+        if (!cancel.ok || cancel.changed || !history_.canUndo()) {
+            return statusFrom(cancel, QuaderMutationKind::Runtime, "Undo");
+        }
     }
     return statusFrom(editorCommands_.undo(), QuaderMutationKind::Document, "Undo");
 }
@@ -220,7 +265,7 @@ ModelingCommandResult QuaderApiMutationRunner::cancelActiveToolOrPreviewForUndo(
         return cancel;
     }
 
-    return session_.modeling().cancelActiveModalTool();
+    return {.ok = true, .changed = false};
 }
 
 } // namespace quader

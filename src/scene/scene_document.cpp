@@ -127,6 +127,9 @@ EntityId SceneDocument::createEmpty(std::string name, EditorObjectId editorObjec
 }
 
 bool SceneDocument::destroyEntity(EntityId id) {
+    if (isSceneRoot(id)) {
+        return false;
+    }
     const std::vector<EntityId> toDestroy = descendants(id, true);
     if (toDestroy.empty()) {
         return false;
@@ -325,6 +328,9 @@ bool SceneDocument::setParent(EntityId child, EntityId newParent, bool preserveW
     if (child == InvalidEntityId || requireEntity(child) == entt::null) {
         return false;
     }
+    if (isSceneRoot(child) && newParent != InvalidEntityId) {
+        return false;
+    }
     if (newParent != InvalidEntityId && requireEntity(newParent) == entt::null) {
         return false;
     }
@@ -428,6 +434,24 @@ void SceneDocument::setLight(EntityId id, LightComponent light) {
     markDirty();
 }
 
+bool SceneDocument::setSceneSettings(EntityId id, SceneSettingsComponent settings) {
+    const entt::entity entity = requireEntity(id);
+    if (entity == entt::null) {
+        return false;
+    }
+    const EntityId root = sceneRoot();
+    if (root != InvalidEntityId && root != id) {
+        return false;
+    }
+    if (const SceneSettingsComponent* current = sceneSettings(id); current != nullptr && *current == settings) {
+        return true;
+    }
+    registry_.emplace_or_replace<SceneSettingsComponent>(entity, std::move(settings));
+    registry_.emplace_or_replace<EntityKindComponent>(entity, EntityKindComponent{.kind = EntityKind::Empty});
+    markDirty();
+    return true;
+}
+
 NameComponent* SceneDocument::mutableName(EntityId id) {
     const entt::entity entity = requireEntity(id);
     return entity == entt::null ? nullptr : registry_.try_get<NameComponent>(entity);
@@ -528,6 +552,11 @@ const LightComponent* SceneDocument::light(EntityId id) const {
     return entity == entt::null ? nullptr : registry_.try_get<LightComponent>(entity);
 }
 
+const SceneSettingsComponent* SceneDocument::sceneSettings(EntityId id) const {
+    const entt::entity entity = requireEntity(id);
+    return entity == entt::null ? nullptr : registry_.try_get<SceneSettingsComponent>(entity);
+}
+
 std::vector<EntityId> SceneDocument::entities() const {
     std::vector<EntityId> ids;
     ids.reserve(entities_.size());
@@ -538,12 +567,32 @@ std::vector<EntityId> SceneDocument::entities() const {
     return ids;
 }
 
+EntityId SceneDocument::sceneRoot() const {
+    EntityId root = InvalidEntityId;
+    for (auto [entity, settings, identity] :
+            registry_.view<SceneSettingsComponent, EntityIdentityComponent>().each()) {
+        (void)settings;
+        if (root == InvalidEntityId || identity.id < root) {
+            root = identity.id;
+        }
+    }
+    return exists(root) ? root : InvalidEntityId;
+}
+
+bool SceneDocument::isSceneRoot(EntityId id) const {
+    return id != InvalidEntityId && sceneSettings(id) != nullptr;
+}
+
 std::vector<EntityId> SceneDocument::rootEntities() const {
     std::vector<EntityId> roots;
     const std::vector<EntityId> ids = entities();
     roots.reserve(ids.size());
+    const EntityId root = sceneRoot();
+    if (root != InvalidEntityId && parent(root) == InvalidEntityId) {
+        roots.push_back(root);
+    }
     for (const EntityId id : ids) {
-        if (parent(id) == InvalidEntityId) {
+        if (id != root && parent(id) == InvalidEntityId) {
             roots.push_back(id);
         }
     }
@@ -834,6 +883,8 @@ EntityRecord SceneDocument::makeEntityRecord(EntityId id, int depth, EntityId ac
     record.hasChildren = hasChildren(id);
     record.hasMesh = mesh(id) != nullptr;
     record.hasLight = light(id) != nullptr;
+    record.isSceneRoot = isSceneRoot(id);
+    record.hasSceneSettings = sceneSettings(id) != nullptr;
     record.hasModelingObject = modelingObject(id) != nullptr;
     return record;
 }
