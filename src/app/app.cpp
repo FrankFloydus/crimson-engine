@@ -15,6 +15,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 
@@ -31,12 +32,20 @@ bool App::initialize(const std::filesystem::path& executablePath, AppOptions opt
     const std::filesystem::path executableDir = executablePath.parent_path();
     windowSettingsPath_ = AppWindowSettings::resolvePath(executableDir);
     windowSettings_ = AppWindowSettings::load(windowSettingsPath_);
+    const std::optional<PlatformWindowPlacement> savedPlacement = windowSettings_.placement();
+    const PlatformWindowChromeFrame initialFrame = savedPlacement ?
+            savedPlacement->normalFrame :
+            PlatformWindowChromeFrame{0, 0, 1600, 960};
 
-    if (!window_.create("Quader", 1600, 960, {.borderless = options.borderlessWindow})) {
+    if (!window_.create(
+                "Quader",
+                std::max(kPlatformWindowMinimumWidth, initialFrame.width),
+                std::max(kPlatformWindowMinimumHeight, initialFrame.height),
+                {.borderless = options.borderlessWindow})) {
         return false;
     }
-    if (windowSettings_.placement()) {
-        window_.applyPlacement(*windowSettings_.placement());
+    if (savedPlacement) {
+        window_.applyPlacement(*savedPlacement);
     }
 
     if (!renderSystem_.initialize(window_.nativeWindowHandle(), executableDir, RenderConfig{.backend = RendererBackend::Vulkan})) {

@@ -359,6 +359,7 @@ add_library(quader_runtime STATIC
     src/render/viewport_render_target.cpp
     src/render/viewport_renderer.cpp
     src/ui/console_panel.cpp
+    src/ui/imgui_popup_utils.cpp
     src/ui/inspector_panel.cpp
     src/ui/main_menu_bar.cpp
     src/ui/modal_tool_overlay_renderer.cpp
@@ -486,6 +487,7 @@ if(QUADER_BUILD_TESTS)
         tests/build_guardrail_tests.cpp
         tests/oop_architecture_guardrail_tests.cpp
         tests/programmatic_api_guardrail_tests.cpp
+        tests/ui_layout_guardrail_tests.cpp
         tests/support/guardrail_file_scan.cpp
     )
     quader_enable_common_pch(quader_guardrail_tests)

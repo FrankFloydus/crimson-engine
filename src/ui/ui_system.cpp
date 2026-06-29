@@ -12,6 +12,7 @@
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "ui/console_panel.hpp"
+#include "ui/imgui_popup_utils.hpp"
 #include "ui/inspector_panel.hpp"
 #include "ui/outliner_panel.hpp"
 #include "ui/ui_context.hpp"
@@ -45,7 +46,10 @@ constexpr float kWindowChromeControlsWidth = 105.0f;
 constexpr float kWindowChromeButtonWidth = 35.0f;
 constexpr float kStaticBottomBarHeight = 28.0f;
 constexpr float kStaticBottomBarAccentHeight = 3.0f;
-constexpr float kChromeLogoSize = 16.0f;
+constexpr float kChromeLogoSize = 18.0f;
+constexpr float kChromeLogoLeft = 16.0f;
+constexpr float kChromeMenuLeft = 48.0f;
+constexpr float kChromeMenuSpacing = 10.0f;
 
 ImVec4 uiColor(int red, int green, int blue, float alpha = 1.0f) {
     return {
@@ -136,7 +140,7 @@ bool chromeIconButton(const char* stableId, WindowChromeAction action, const ImV
     const float thickness = 1.25f;
     const float half = 4.5f;
     if (action == WindowChromeAction::Minimize) {
-        drawList->AddLine({center.x - half, center.y + 3.5f}, {center.x + half, center.y + 3.5f}, iconColor, thickness);
+        drawList->AddLine({center.x - half, center.y + 0.5f}, {center.x + half, center.y + 0.5f}, iconColor, thickness);
     } else if (action == WindowChromeAction::ToggleMaximizeRestore) {
         drawList->AddRect({center.x - half, center.y - half}, {center.x + half, center.y + half}, iconColor, 0.0f, 0, thickness);
     } else {
@@ -202,7 +206,8 @@ void drawStaticBottomBar(const ImGuiViewport& viewport, const LocalizationServic
             max,
             uiPackedColor(118, 92, 168));
 
-    const float textY = min.y + std::floor((kStaticBottomBarHeight - ImGui::GetFontSize()) * 0.5f);
+    const float bottomBarTextHeight = kStaticBottomBarHeight - kStaticBottomBarAccentHeight;
+    const float textY = min.y + std::floor((bottomBarTextHeight - ImGui::GetTextLineHeight()) * 0.5f);
     const std::string ready = localization.text("ui.shell.status.ready", "Ready");
     drawList->AddText({min.x + 12.0f, textY}, uiPackedColor(216, 216, 216), ready.c_str());
 
@@ -383,7 +388,9 @@ void UISystem::draw(QuaderEditorApi& editor,
                 return runtimeStatus(before != visible);
             },
     });
+    closeMenuPopupForPassThroughClick();
     const MainMenuBarResult chromeMenuResult = drawWindowChrome(editor, quitRequested, document, modeling);
+    mainMenuPopupOpen_ = chromeMenuResult.popupOpen;
     if (chromeMenuResult.settingsChanged) {
         saveSettings();
     }
@@ -541,15 +548,15 @@ MainMenuBarResult UISystem::drawWindowChrome(
     const ImVec2 min = ImGui::GetWindowPos();
     const ImVec2 max{min.x + ImGui::GetWindowWidth(), min.y + kWindowChromeHeight};
     drawList->AddLine({min.x, max.y - 1.0f}, {max.x, max.y - 1.0f}, uiPackedColor(46, 46, 46));
+    const bool drawLogo = icons_.logo != ImTextureID_Invalid;
+    const float logoY = std::floor((kWindowChromeHeight - kChromeLogoSize) * 0.5f);
+    const ImVec2 logoMin{min.x + kChromeLogoLeft, min.y + logoY};
+    const ImVec2 logoMax{logoMin.x + kChromeLogoSize, logoMin.y + kChromeLogoSize};
 
     const float controlsLeft = std::max(0.0f, ImGui::GetWindowWidth() - kWindowChromeControlsWidth);
     if (ImGui::BeginMenuBar()) {
-        const float logoY = std::floor((kWindowChromeHeight - kChromeLogoSize) * 0.5f);
-        if (icons_.logo != ImTextureID_Invalid) {
-            ImGui::SetCursorPos({16.0f, logoY});
-            ImGui::Image(icons_.logo, {kChromeLogoSize, kChromeLogoSize});
-        }
-        ImGui::SetCursorPos({38.0f, 0.0f});
+        ImGui::SetCursorPos({kChromeMenuLeft, 0.0f});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {kChromeMenuSpacing, 0.0f});
         menuResult = mainMenuBar_.drawMenus({
                 .quitRequested = quitRequested,
                 .editor = editor,
@@ -560,6 +567,7 @@ MainMenuBarResult UISystem::drawWindowChrome(
                 .localization = localization_,
                 .viewportSettingsPanelOpen = settingsPanelOpen_,
         });
+        ImGui::PopStyleVar();
 
         ImGui::SetCursorPos({controlsLeft, 0.0f});
         if (chromeIconButton("minimize", WindowChromeAction::Minimize, {kWindowChromeButtonWidth, kWindowChromeHeight})) {
@@ -579,6 +587,9 @@ MainMenuBarResult UISystem::drawWindowChrome(
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar(5);
     ImGui::End();
+    if (drawLogo) {
+        ImGui::GetForegroundDrawList()->AddImage(icons_.logo, logoMin, logoMax);
+    }
     return menuResult;
 }
 
@@ -666,6 +677,24 @@ void UISystem::buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize)
         ImGui::DockBuilderDockWindow(uiPanelKey(UIPanelId::Console), consoleId);
     }
     ImGui::DockBuilderFinish(dockspaceId);
+}
+
+void UISystem::closeMenuPopupForPassThroughClick() {
+    if (!mainMenuPopupOpen_) {
+        return;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 mouse = ImGui::GetMousePos();
+    if (customChrome_ && mouse.y <= viewport->Pos.y + kWindowChromeHeight) {
+        return;
+    }
+
+    const ImVec2 passThroughMin{viewport->Pos.x, viewport->Pos.y + (customChrome_ ? kWindowChromeHeight : 0.0f)};
+    const ImVec2 passThroughMax{viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y};
+    if (imguiClosePopupForPassThroughClick(passThroughMin, passThroughMax)) {
+        mainMenuPopupOpen_ = false;
+    }
 }
 
 void UISystem::enforceSidebarDockMinimums() {

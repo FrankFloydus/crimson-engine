@@ -99,6 +99,7 @@ private:
             SceneDocument& document,
             ModelingSessionService& modeling);
     void buildDefaultDockLayout(ImGuiID dockspaceId, ImVec2 dockspaceSize);
+    void closeMenuPopupForPassThroughClick();
     void enforceSidebarDockMinimums();
     void setViewportCursorCaptured(bool captured);
     void warpCapturedCursor(QVec2 point);
@@ -131,6 +132,7 @@ private:
     bool customChrome_ = false;
     bool dockLayoutBuilt_ = false;
     bool hasSavedDockLayout_ = false;
+    bool mainMenuPopupOpen_ = false;
     bool relativeMouseCaptured_ = false;
     bool relativeMouseCaptureWarningIssued_ = false;
     QVec2 relativeMouseDelta_ = {};

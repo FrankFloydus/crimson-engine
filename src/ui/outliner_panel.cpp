@@ -210,7 +210,7 @@ ImVec2 OutlinerPanel::panelWindowPadding(const UIContext& context) const {
 }
 
 ImGuiWindowFlags OutlinerPanel::windowFlags(const UIContext& context) const {
-    return context.style.panelWindowFlags | ImGuiWindowFlags_AlwaysVerticalScrollbar;
+    return context.style.panelWindowFlags;
 }
 
 void OutlinerPanel::drawContent(UIContext& context) {

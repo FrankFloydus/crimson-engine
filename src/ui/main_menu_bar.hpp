@@ -34,6 +34,7 @@ struct MainMenuBarContext {
  */
 struct MainMenuBarResult {
     bool settingsChanged = false;
+    bool popupOpen = false;
 };
 
 /**
@@ -41,7 +42,7 @@ struct MainMenuBarResult {
  */
 class FileMenu {
 public:
-    void draw(MainMenuBarContext& context) const;
+    bool draw(MainMenuBarContext& context) const;
 };
 
 /**
@@ -49,7 +50,7 @@ public:
  */
 class EditMenu {
 public:
-    void draw(MainMenuBarContext& context) const;
+    bool draw(MainMenuBarContext& context) const;
 };
 
 /**
@@ -57,7 +58,7 @@ public:
  */
 class ToolsMenu {
 public:
-    void draw(MainMenuBarContext& context) const;
+    bool draw(MainMenuBarContext& context) const;
 };
 
 /**
@@ -65,7 +66,7 @@ public:
  */
 class ViewMenu {
 public:
-    void draw(MainMenuBarContext& context, MainMenuBarResult& result) const;
+    bool draw(MainMenuBarContext& context, MainMenuBarResult& result) const;
 };
 
 /**
@@ -73,7 +74,7 @@ public:
  */
 class LayoutMenu {
 public:
-    void draw(MainMenuBarContext& context) const;
+    bool draw(MainMenuBarContext& context) const;
 };
 
 /**

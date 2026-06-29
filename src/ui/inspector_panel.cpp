@@ -144,7 +144,7 @@ AxisDragFloatResult axisDragFloat(const char* axis,
     ImGui::TextUnformatted(axis);
     ImGui::PopStyleColor();
     ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-    ImGui::SetNextItemWidth(std::max(inputWidth, kMinAxisInputWidth));
+    ImGui::SetNextItemWidth(inputWidth < 0.0f ? inputWidth : std::max(inputWidth, kMinAxisInputWidth));
     AxisDragFloatResult result;
     if (mixed) {
         std::array<char, 64> mixedBuffer{};
@@ -173,20 +173,19 @@ AxisDragFloatResult axisDragFloat3(const char* stableId,
     AxisDragFloatResult result;
     ImGui::PushID(stableId);
     const float availableWidth = ImGui::GetContentRegionAvail().x;
-    const float axisChromeWidth = kAxisTextColumnWidth + ImGui::GetStyle().ItemInnerSpacing.x;
+    const ImGuiStyle& imguiStyle = ImGui::GetStyle();
+    const float minAxisColumnWidth =
+            kAxisTextColumnWidth + imguiStyle.ItemInnerSpacing.x + kMinAxisInputWidth + imguiStyle.CellPadding.x * 2.0f;
     const float labelColumnWidth =
-            std::clamp(kTransformLabelColumnWidth, 0.0f, std::max(0.0f, availableWidth - 3.0f * (axisChromeWidth + kMinAxisInputWidth)));
-    const float axisColumnWidth =
-            std::max((availableWidth - labelColumnWidth) / 3.0f, axisChromeWidth + kMinAxisInputWidth);
-    const float inputWidth = axisColumnWidth - axisChromeWidth;
+            std::clamp(kTransformLabelColumnWidth, 0.0f, std::max(0.0f, availableWidth - 3.0f * minAxisColumnWidth));
     if (ImGui::BeginTable("##AxisDragFloat3", 4,
-                ImGuiTableFlags_SizingFixedFit |
+                ImGuiTableFlags_SizingStretchProp |
                         ImGuiTableFlags_NoSavedSettings |
                         ImGuiTableFlags_NoPadOuterX)) {
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, labelColumnWidth);
-        ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
-        ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
-        ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthFixed, axisColumnWidth);
+        ImGui::TableSetupColumn("X", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Y", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Z", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableNextRow();
 
         ImGui::TableSetColumnIndex(0);
@@ -194,17 +193,17 @@ AxisDragFloatResult axisDragFloat3(const char* stableId,
         ImGui::TextUnformatted(label);
 
         ImGui::TableSetColumnIndex(1);
-        const AxisDragFloatResult x = axisDragFloat("X", style.axisX, &values[0], mixed[0], mixedLabel, speed, minValue, maxValue, inputWidth);
+        const AxisDragFloatResult x = axisDragFloat("X", style.axisX, &values[0], mixed[0], mixedLabel, speed, minValue, maxValue, -FLT_MIN);
         result.changed = result.changed || x.changed;
         result.activated = result.activated || x.activated;
         result.deactivatedAfterEdit = result.deactivatedAfterEdit || x.deactivatedAfterEdit;
         ImGui::TableSetColumnIndex(2);
-        const AxisDragFloatResult y = axisDragFloat("Y", style.axisY, &values[1], mixed[1], mixedLabel, speed, minValue, maxValue, inputWidth);
+        const AxisDragFloatResult y = axisDragFloat("Y", style.axisY, &values[1], mixed[1], mixedLabel, speed, minValue, maxValue, -FLT_MIN);
         result.changed = result.changed || y.changed;
         result.activated = result.activated || y.activated;
         result.deactivatedAfterEdit = result.deactivatedAfterEdit || y.deactivatedAfterEdit;
         ImGui::TableSetColumnIndex(3);
-        const AxisDragFloatResult z = axisDragFloat("Z", style.axisZ, &values[2], mixed[2], mixedLabel, speed, minValue, maxValue, inputWidth);
+        const AxisDragFloatResult z = axisDragFloat("Z", style.axisZ, &values[2], mixed[2], mixedLabel, speed, minValue, maxValue, -FLT_MIN);
         result.changed = result.changed || z.changed;
         result.activated = result.activated || z.activated;
         result.deactivatedAfterEdit = result.deactivatedAfterEdit || z.deactivatedAfterEdit;
@@ -407,7 +406,7 @@ ImVec2 InspectorPanel::panelWindowPadding(const UIContext& context) const {
 }
 
 ImGuiWindowFlags InspectorPanel::windowFlags(const UIContext& context) const {
-    return context.style.panelWindowFlags | ImGuiWindowFlags_AlwaysVerticalScrollbar;
+    return context.style.panelWindowFlags;
 }
 
 void InspectorPanel::drawContent(UIContext& context) {

@@ -1345,7 +1345,11 @@ TEST(WindowGuardrailTests, WindowPlacementPersistenceAndResizeRecoveryStayOwned)
     expectContains(appHeader, "saveWindowSettings()");
     expectContains(appSource, "AppWindowSettings::resolvePath(executableDir)");
     expectContains(appSource, "AppWindowSettings::load(windowSettingsPath_)");
-    expectContains(appSource, "window_.applyPlacement(*windowSettings_.placement())");
+    expectContains(appSource, "const std::optional<PlatformWindowPlacement> savedPlacement");
+    expectContains(appSource, "const PlatformWindowChromeFrame initialFrame");
+    expectContains(appSource, "std::max(kPlatformWindowMinimumWidth, initialFrame.width)");
+    expectContains(appSource, "std::max(kPlatformWindowMinimumHeight, initialFrame.height)");
+    expectContains(appSource, "window_.applyPlacement(*savedPlacement)");
     expectContains(appSource, "window_.placement()");
     expectContains(appSource, "windowSettings_.save(windowSettingsPath_)");
     expectContains(appSettingsHeader, "std::optional<PlatformWindowPlacement>");

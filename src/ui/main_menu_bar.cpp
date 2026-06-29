@@ -20,6 +20,30 @@
 namespace quader {
 namespace {
 
+constexpr float kMenuPopupPaddingX = 12.0f;
+constexpr float kMenuPopupPaddingY = 8.0f;
+constexpr float kMenuPopupFramePaddingY = 5.0f;
+constexpr float kMenuPopupItemSpacingY = 4.0f;
+
+bool beginMenuWithPopupSpacing(const std::string& label) {
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{kMenuPopupPaddingX, kMenuPopupPaddingY});
+    if (!ImGui::BeginMenu(label.c_str())) {
+        ImGui::PopStyleVar();
+        return false;
+    }
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2{style.FramePadding.x, kMenuPopupFramePaddingY});
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2{style.ItemSpacing.x, kMenuPopupItemSpacingY});
+    return true;
+}
+
+void endMenuWithPopupSpacing() {
+    ImGui::PopStyleVar(2);
+    ImGui::EndMenu();
+    ImGui::PopStyleVar();
+}
+
 std::string toolLabel(const LocalizationService& localization, const Tool& tool) {
     std::string key = "viewport.tool.";
     key.append(tool.id());
@@ -101,7 +125,7 @@ void drawViewMenuContents(MainMenuBarContext& context, MainMenuBarResult& result
     ImGui::Separator();
 
     const std::string toolbarsLabel = context.localization.imguiLabel("ui.menu.view.toolbars", "ui.menu.view.toolbars", "Toolbars");
-    if (ImGui::BeginMenu(toolbarsLabel.c_str())) {
+    if (beginMenuWithPopupSpacing(toolbarsLabel)) {
         for (const std::unique_ptr<UIPanel>& panel : context.panels.panels()) {
             if (!panel->canToggle()) {
                 continue;
@@ -117,7 +141,7 @@ void drawViewMenuContents(MainMenuBarContext& context, MainMenuBarResult& result
                 result.settingsChanged = true;
             }
         }
-        ImGui::EndMenu();
+        endMenuWithPopupSpacing();
     }
 }
 
@@ -133,54 +157,59 @@ void drawLayoutMenuContents(MainMenuBarContext& context) {
 
 } // namespace
 
-void FileMenu::draw(MainMenuBarContext& context) const {
+bool FileMenu::draw(MainMenuBarContext& context) const {
     const std::string label = context.localization.imguiLabel("ui.menu.file", "ui.menu.file", "File");
-    if (!ImGui::BeginMenu(label.c_str())) {
-        return;
+    if (!beginMenuWithPopupSpacing(label)) {
+        return false;
     }
 
     drawFileMenuContents(context);
-    ImGui::EndMenu();
+    endMenuWithPopupSpacing();
+    return true;
 }
 
-void EditMenu::draw(MainMenuBarContext& context) const {
+bool EditMenu::draw(MainMenuBarContext& context) const {
     const std::string label = context.localization.imguiLabel("ui.menu.edit", "ui.menu.edit", "Edit");
-    if (!ImGui::BeginMenu(label.c_str())) {
-        return;
+    if (!beginMenuWithPopupSpacing(label)) {
+        return false;
     }
 
     drawEditMenuContents(context);
-    ImGui::EndMenu();
+    endMenuWithPopupSpacing();
+    return true;
 }
 
-void ToolsMenu::draw(MainMenuBarContext& context) const {
+bool ToolsMenu::draw(MainMenuBarContext& context) const {
     const std::string label = context.localization.imguiLabel("ui.menu.tools", "ui.menu.tools", "Tools");
-    if (!ImGui::BeginMenu(label.c_str())) {
-        return;
+    if (!beginMenuWithPopupSpacing(label)) {
+        return false;
     }
 
     drawToolsMenuContents(context);
-    ImGui::EndMenu();
+    endMenuWithPopupSpacing();
+    return true;
 }
 
-void ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
+bool ViewMenu::draw(MainMenuBarContext& context, MainMenuBarResult& result) const {
     const std::string label = context.localization.imguiLabel("ui.menu.view", "ui.menu.view", "View");
-    if (!ImGui::BeginMenu(label.c_str())) {
-        return;
+    if (!beginMenuWithPopupSpacing(label)) {
+        return false;
     }
 
     drawViewMenuContents(context, result);
-    ImGui::EndMenu();
+    endMenuWithPopupSpacing();
+    return true;
 }
 
-void LayoutMenu::draw(MainMenuBarContext& context) const {
+bool LayoutMenu::draw(MainMenuBarContext& context) const {
     const std::string label = context.localization.imguiLabel("ui.menu.layout", "ui.menu.layout", "Layout");
-    if (!ImGui::BeginMenu(label.c_str())) {
-        return;
+    if (!beginMenuWithPopupSpacing(label)) {
+        return false;
     }
 
     drawLayoutMenuContents(context);
-    ImGui::EndMenu();
+    endMenuWithPopupSpacing();
+    return true;
 }
 
 MainMenuBarResult MainMenuBar::draw(MainMenuBarContext context) const {
@@ -196,14 +225,15 @@ MainMenuBarResult MainMenuBar::draw(MainMenuBarContext context) const {
 
 MainMenuBarResult MainMenuBar::drawMenus(MainMenuBarContext context) const {
     MainMenuBarResult result;
-    fileMenu_.draw(context);
-    editMenu_.draw(context);
-    toolsMenu_.draw(context);
-    viewMenu_.draw(context, result);
-    layoutMenu_.draw(context);
+    result.popupOpen = fileMenu_.draw(context) || result.popupOpen;
+    result.popupOpen = editMenu_.draw(context) || result.popupOpen;
+    result.popupOpen = toolsMenu_.draw(context) || result.popupOpen;
+    result.popupOpen = viewMenu_.draw(context, result) || result.popupOpen;
+    result.popupOpen = layoutMenu_.draw(context) || result.popupOpen;
     const std::string helpLabel = context.localization.imguiLabel("ui.menu.help", "ui.menu.help", "Help");
-    if (ImGui::BeginMenu(helpLabel.c_str())) {
-        ImGui::EndMenu();
+    if (beginMenuWithPopupSpacing(helpLabel)) {
+        result.popupOpen = true;
+        endMenuWithPopupSpacing();
     }
     return result;
 }

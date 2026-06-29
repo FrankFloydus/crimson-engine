@@ -532,6 +532,48 @@ Verification:
   `ninja-msvc-debug` `quader` build 2.98s, 4.92s saved. The first-time Ninja tree build is not
   included in this warm prototyping comparison.
 
+## 2026-06-29 - ImGui Shell Interaction And Startup Fill Regressions
+
+Task/context: native ImGui shell polish exposed regressions where dragging the sidebar dock splitter
+also started viewport box selection, a top-menu popup swallowed the first click on panel dropdowns,
+and restoring a wider saved window could show a transparent right strip during boot.
+
+Invariant:
+
+- Viewport pane hover/input must respect active ImGui items. Do not use
+  `ImGuiHoveredFlags_AllowWhenBlockedByActiveItem` for normal viewport pane input hit-testing, or
+  dock splitters/panel drags can leak into viewport selection.
+- Main-menu popups should close for pass-through panel clicks before panels draw, while preserving
+  clicks inside the menu popup itself.
+- App startup must create the SDL window at the saved normal placement size before applying the full
+  placement, so the first rendered frame covers the restored window bounds instead of defaulting to
+  1600 px.
+
+Affected owners/files:
+
+- `src/ui/viewport_panel.cpp`
+- `src/ui/main_menu_bar.*`
+- `src/ui/ui_system.*`
+- `src/app/app.cpp`
+- `tests/ui_layout_guardrail_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+
+Resolved approach:
+
+- Switched viewport pane hover collection to plain `ImGui::IsItemHovered()`.
+- Tracked whether main-menu popups are open and call `ImGui::ClosePopupsExceptModals()` on a
+  click-through target outside the menu bar and outside existing popup rects before panel widgets
+  are drawn.
+- Reused saved window placement to choose the initial `PlatformWindow::create` size, then applied
+  the recovered placement as before.
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_filter=UiLayoutGuardrailTests.*:WindowGuardrailTests.WindowPlacementPersistenceAndResizeRecoveryStayOwned`
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `ctest --preset vs2026-debug --output-on-failure`
+
 ## 2026-06-29 - Native Window Shell, Layout Restore, And Stable Entity Identity
 
 Task/context: native standalone app needed Windows 11 borderless maximize fixes, persisted window

@@ -22,6 +22,7 @@
 #include "scene/scene_entity_naming.hpp"
 #include "render/render_layers.hpp"
 #include "render/render_system.hpp"
+#include "ui/imgui_popup_utils.hpp"
 #include "ui/ui_context.hpp"
 #include "ui/viewport_context_menu_policy.hpp"
 #include "ui/viewport_pane_controller.hpp"
@@ -795,6 +796,9 @@ bool ViewportPanel::drawPaneChrome(
     };
     const ImRect chromeRect(comboPos, ImVec2(itemMax.x - 8.0f, comboPos.y + kComboHeight));
     bool consumesInput = chromeRect.Contains(ImGui::GetMousePos());
+    if (imguiClosePopupForPassThroughClick(chromeRect.Min, chromeRect.Max)) {
+        consumesInput = true;
+    }
 
     ImGui::SetCursorScreenPos(comboPos);
     if (viewWidth >= 44.0f) {
@@ -1016,7 +1020,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
                 .pane = &paneState,
                 .itemMin = ImGui::GetItemRectMin(),
                 .itemSize = {ImGui::GetItemRectSize().x, ImGui::GetItemRectSize().y},
-                .hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+                .hovered = ImGui::IsItemHovered(),
                 .focusHovered = ImGui::IsItemHovered(),
         };
         drawPanes.push_back(drawPane);
