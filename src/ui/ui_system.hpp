@@ -66,6 +66,7 @@ public:
 
     bool processEvent(const SDL_Event& event);
     void beginFrame(const FrameTiming& frameTiming);
+    void endFrameWithoutRender();
     void draw(QuaderEditorApi& editor,
             SceneRenderBridge& renderBridge,
             SceneDocument& document,
@@ -83,6 +84,7 @@ public:
     void renderViewports(RenderSystem& renderSystem);
     void render(RenderSystem& renderSystem);
     void setViewportRenderResizeSuspended(bool suspended);
+    [[nodiscard]] bool needsContinuousRendering() const;
     std::optional<WindowChromeAction> takeWindowChromeAction();
     const ViewportToolState& viewportToolState() const { return viewportPanel_->toolState(); }
 

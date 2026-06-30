@@ -31,6 +31,7 @@
 #include "ui/viewport_screen_geometry.hpp"
 #include "viewport/viewport_camera_adapter.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
+#include "viewport/viewport_settings.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 
 #include <algorithm>
@@ -201,7 +202,8 @@ bool hitDrawnPlaneLine(
 ModelingBoxToolEvent modelingBoxEvent(
         const ViewportCameraController& camera,
         const ViewportInputFrame& input,
-        float gridSize) {
+        float gridSize,
+        bool snapEnabled) {
     const ViewportRay ray = camera.rayFromViewportPoint(input.mouseLocal);
     return {
             .screenPosition = input.mouseLocal,
@@ -212,6 +214,7 @@ ModelingBoxToolEvent modelingBoxEvent(
             .gridSize = gridSize,
             .hasCamera = true,
             .camera = ViewportCameraAdapter::modelingCamera(camera, input.viewportSize),
+            .snapEnabled = snapEnabled,
     };
 }
 
@@ -612,6 +615,9 @@ void ViewportPanel::prepareViewports(
     workspace_ = &workspace;
     const float gridWorldSize = viewportGridWorldSizeForPreset(workspace.gridPreset());
     const ViewportSettings& settings = activeViewportSettings();
+    const bool gridVisible = settings.boolValue(ViewportBoolSettingId::ShowGrid);
+    const bool gizmosVisible = settings.boolValue(ViewportBoolSettingId::ShowGizmos);
+    const bool overlaysVisible = settings.boolValue(ViewportBoolSettingId::ShowOverlays);
     for (ViewportPaneId paneId : activeRenderPanes_) {
         Pane& paneState = pane(paneId);
         ViewportWorkspacePaneState& paneWorkspace = workspace.pane(paneId);
@@ -626,14 +632,18 @@ void ViewportPanel::prepareViewports(
             }
         }
         paneState.renderer.updateCamera(paneWorkspace.camera);
-        paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings);
+        paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings, gridVisible);
         paneState.renderer.setSceneLayerMask(paneWorkspace.shading == ViewportShadingMode::Rendered
                         ? kViewportRenderedSceneLayerMask
                         : kViewportShadedSceneLayerMask);
         paneState.renderer.setShadowingEnabled(paneWorkspace.shading == ViewportShadingMode::Rendered);
         paneState.renderer.setSceneVisible(paneWorkspace.shading != ViewportShadingMode::Wireframe);
-        paneState.renderer.setOverlayVisible(true);
-        ViewportOverlayFrame overlayFrame = selectionOverlayCache_.valid() ? selectionOverlayCache_.frame() : ViewportOverlayFrame{};
+        paneState.renderer.setOverlayVisible(overlaysVisible ||
+                gizmosVisible ||
+                paneWorkspace.shading == ViewportShadingMode::Wireframe);
+        ViewportOverlayFrame overlayFrame = overlaysVisible && selectionOverlayCache_.valid()
+                ? selectionOverlayCache_.frame()
+                : ViewportOverlayFrame{};
         const ModelingSelectionMode overlayMode = selectionOverlayCache_.valid()
                 ? selectionOverlayCache_.key().selectionMode
                 : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
@@ -649,12 +659,16 @@ void ViewportPanel::prepareViewports(
                     ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize);
             if (const quader_editor_core::TransformGizmoFrame* gizmoFrame =
                         interactionController_.transformGizmoFrame()) {
-                ViewportTransformGizmoOverlayBuilder::append(overlayFrame, *gizmoFrame, overlayCamera);
+                if (gizmosVisible) {
+                    ViewportTransformGizmoOverlayBuilder::append(overlayFrame, *gizmoFrame, overlayCamera);
+                }
             }
-            ViewportSelectionMarqueeOverlayBuilder::append(
-                    overlayFrame,
-                    overlayCamera,
-                    interactionController_.selectionMarquee());
+            if (overlaysVisible) {
+                ViewportSelectionMarqueeOverlayBuilder::append(
+                        overlayFrame,
+                        overlayCamera,
+                        interactionController_.selectionMarquee());
+            }
         }
         ViewportOverlayStyleResolver::apply(
                 overlayFrame,
@@ -1457,6 +1471,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         });
     };
     auto makeModelingToolEventAt = [&](QVec2 mouseLocal, bool dragging = false) {
+        const ViewportSettings& settings = activeViewportSettings();
         const ViewportRay worldRay = camera.rayFromViewportPoint(mouseLocal);
         return ModelingToolRayEvent{
                 .screenPosition = mouseLocal,
@@ -1466,9 +1481,9 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
                 },
                 .camera = ViewportCameraAdapter::modelingCamera(camera, {itemSize.x, itemSize.y}),
                 .gridSize = std::max(static_cast<double>(gridSizeForPreset(inputRouter_.state().gridPreset)), 0.0001),
-                .vertexRadius = activeViewportSettings().floatValue(ViewportFloatSettingId::PickVertexRadius),
-                .edgeRadius = activeViewportSettings().floatValue(ViewportFloatSettingId::PickEdgeRadius),
-                .snapEnabled = !input.modifiers.primary,
+                .vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius),
+                .edgeRadius = settings.floatValue(ViewportFloatSettingId::PickEdgeRadius),
+                .snapEnabled = viewportGridSnapActive(settings, input.modifiers.primary),
                 .constrainAxis = input.modifiers.shift,
                 .dragging = dragging,
         };
@@ -1494,7 +1509,11 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     };
     boxToolContext.makeEvent = [&]() {
         const float gridSize = gridSizeForPreset(inputRouter_.state().gridPreset);
-        return modelingBoxEvent(camera, input, gridSize);
+        return modelingBoxEvent(
+                camera,
+                input,
+                gridSize,
+                viewportGridSnapActive(activeViewportSettings(), input.modifiers.primary));
     };
     boxToolContext.commitPreview = [&](std::string name, AssetId material) {
         const QuaderApiResult<QuaderModelingObjectRef> result =

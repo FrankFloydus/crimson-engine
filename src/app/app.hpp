@@ -48,6 +48,7 @@ private:
     void handleWindowChromeAction(WindowChromeAction action);
     void saveWindowSettings();
     bool renderFrame(const FrameTiming& frameTiming);
+    void waitUntilNextFrame();
     [[nodiscard]] bool shouldRenderLiveResizeEvent(const SDL_Event& event) const;
     static bool SDLCALL liveResizeEventWatch(void* userdata, SDL_Event* event);
 

@@ -252,6 +252,7 @@ struct TransformDragPreviewInput {
 	quader::QVec2 screen_position;
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
+	bool grid_enabled = true;
 	bool precision = false;
 	double rotate_snap_degrees = 15.0;
 	double epsilon = tool_epsilon;

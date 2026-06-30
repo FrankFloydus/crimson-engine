@@ -1888,7 +1888,8 @@ public:
                 .camera = request.camera,
                 .gridSize = request.gridSize,
                 .vertexSnapRadius = request.vertexSnapRadius,
-                .precision = false,
+                .gridSnapEnabled = request.gridSnapEnabled,
+                .precision = request.precision,
         });
     }
 
@@ -2558,6 +2559,7 @@ public:
         quader_editor_core::BoxRayRuntimeCommandSettings settings;
         settings.ray = toRuntime(event.ray);
         settings.grid_size = event.gridSize;
+        settings.snap_enabled = event.snapEnabled;
         return executeBoxPreviewCommand(quader_editor_core::EditorRuntimeCommandId::update_box_hover, settings);
     }
 
@@ -2565,6 +2567,7 @@ public:
         quader_editor_core::BoxRayRuntimeCommandSettings settings;
         settings.ray = toRuntime(event.ray);
         settings.grid_size = event.gridSize;
+        settings.snap_enabled = event.snapEnabled;
         ModelingBoxPreview preview =
                 executeBoxPreviewCommand(quader_editor_core::EditorRuntimeCommandId::begin_box_footprint, settings);
         if (preview.ok) {
@@ -2577,6 +2580,7 @@ public:
         quader_editor_core::BoxRayRuntimeCommandSettings settings;
         settings.ray = toRuntime(event.ray);
         settings.grid_size = event.gridSize;
+        settings.snap_enabled = event.snapEnabled;
         return executeBoxPreviewCommand(quader_editor_core::EditorRuntimeCommandId::update_box_footprint, settings);
     }
 
@@ -2585,6 +2589,7 @@ public:
         settings.screen_position = toRuntime(event.screenPosition);
         settings.ray = toRuntime(event.ray);
         settings.grid_size = event.gridSize;
+        settings.snap_enabled = event.snapEnabled;
         settings.has_camera = event.hasCamera;
         if (event.hasCamera) {
             settings.camera = toRuntime(event.camera);
@@ -2597,6 +2602,7 @@ public:
         settings.screen_position = toRuntime(event.screenPosition);
         settings.ray = toRuntime(event.ray);
         settings.grid_size = event.gridSize;
+        settings.snap_enabled = event.snapEnabled;
         settings.has_camera = event.hasCamera;
         if (event.hasCamera) {
             settings.camera = toRuntime(event.camera);
@@ -2939,6 +2945,7 @@ private:
         input.screen_position = toRuntime(request.screenPosition);
         input.ray = toRuntime(request.ray);
         input.grid_size = request.gridSize;
+        input.grid_enabled = request.gridSnapEnabled;
         input.precision = request.precision;
         if (request.vertexSnapRadius > 0.0) {
             input.vertex_snap_enabled = true;
@@ -3042,7 +3049,7 @@ private:
             };
         }
 
-        quader_editor_core::BoxPreviewDescriptor preview = runtime_.box_preview_descriptor(true);
+        quader_editor_core::BoxPreviewDescriptor preview = runtime_.box_preview_descriptor(settings.snap_enabled);
         std::vector<quader::QVec3> corners;
         if (preview.drag_state == quader_editor_core::BoxDragState::height) {
             corners = quader_editor_core::box_preview_corners(preview);

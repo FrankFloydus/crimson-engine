@@ -74,6 +74,12 @@ public:
             ModelingSessionService& modeling);
     const ViewportToolState& toolState() const { return inputRouter_.state(); }
     bool flyNavigationActive() const { return lastFlyNavigationActive_; }
+    bool needsContinuousRendering() const {
+        return lastFlyNavigationActive_ ||
+                navigationGizmo_.inputLocked() ||
+                interactionController_.dragging() ||
+                splitHandleDragging_;
+    }
     bool navigationGizmoVisible() const { return navigationGizmo_.visible(); }
     void setNavigationGizmoVisible(bool visible) { navigationGizmo_.setVisible(visible); }
 

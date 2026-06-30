@@ -91,6 +91,7 @@ ModelingTransformDragBeginRequest transformDragBegin(DragBeginOptions options) {
             .camera = orthographicCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
+            .gridSnapEnabled = options.gridSnapEnabled,
             .duplicateSelected = options.duplicateSelected,
     };
 }
@@ -102,6 +103,7 @@ ModelingTransformDragUpdateRequest transformDragUpdate(QVec2 screenPosition) {
             .camera = orthographicCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
+            .gridSnapEnabled = true,
             .precision = false,
     };
 }

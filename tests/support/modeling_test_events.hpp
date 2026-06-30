@@ -54,6 +54,7 @@ struct DragBeginOptions {
     QVec2 screenTip = {10.0f, 0.0f};
     bool hasWorldDirection = true;
     QVec3 worldDirection = {1.0f, 0.0f, 0.0f};
+    bool gridSnapEnabled = true;
     bool duplicateSelected = false;
 };
 

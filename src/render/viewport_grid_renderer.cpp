@@ -158,7 +158,7 @@ void ViewportGridRenderer::update(const ViewportCameraController& controller,
         return;
     }
 
-    visible_ = visible;
+    setGroundGridVisible(visible);
     if (!visible) {
         return;
     }
@@ -266,6 +266,22 @@ void ViewportGridRenderer::createGroundGrid() {
     groundGridMeshHeight_ = kViewportGridDefaultPlaneSize;
     visible_ = true;
     creationGuard.release();
+}
+
+void ViewportGridRenderer::setGroundGridVisible(bool visible) {
+    if (visible_ == visible) {
+        return;
+    }
+    visible_ = visible;
+    if (!engine_ || !groundGridEntity_) {
+        return;
+    }
+
+    auto& renderables = engine_->getRenderableManager();
+    const filament::RenderableManager::Instance renderable = renderables.getInstance(groundGridEntity_);
+    if (renderable) {
+        renderables.setLayerMask(renderable, kViewportAllLayerMask, visible ? gridLayerMask_ : 0u);
+    }
 }
 
 void ViewportGridRenderer::updateGroundGridMesh(float width, float height) {

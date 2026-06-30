@@ -14,6 +14,7 @@ class QuaderEditorApi;
 class SceneDocument;
 class UIPanelManager;
 class ViewportPanel;
+class ViewportSettings;
 
 /**
  * Stores the Main Menu Bar Context data contract used by the ImGui editor presentation layer.
@@ -24,6 +25,7 @@ struct MainMenuBarContext {
     SceneDocument& document;
     ModelingSessionService& modeling;
     ViewportPanel* viewportPanel = nullptr;
+    ViewportSettings& viewportSettings;
     UIPanelManager& panels;
     LocalizationService& localization;
     bool& viewportSettingsPanelOpen;
@@ -34,6 +36,7 @@ struct MainMenuBarContext {
  */
 struct MainMenuBarResult {
     bool settingsChanged = false;
+    bool viewportSettingsChanged = false;
     bool popupOpen = false;
 };
 
@@ -50,7 +53,7 @@ public:
  */
 class EditMenu {
 public:
-    bool draw(MainMenuBarContext& context) const;
+    bool draw(MainMenuBarContext& context, MainMenuBarResult& result) const;
 };
 
 /**

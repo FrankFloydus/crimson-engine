@@ -175,6 +175,7 @@ struct ViewFlipRuntimeCommandSettings {
 struct BoxRayRuntimeCommandSettings {
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
+	bool snap_enabled = true;
 };
 
 /**
@@ -184,6 +185,7 @@ struct BoxHeightRuntimeCommandSettings {
 	quader::QVec2 screen_position;
 	quader_poly::Ray ray;
 	double grid_size = 1.0;
+	bool snap_enabled = true;
 	bool has_camera = false;
 	ViewportCameraState camera;
 };

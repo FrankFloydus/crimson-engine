@@ -13,6 +13,8 @@
 
 namespace quader {
 
+class ViewportSettings;
+
 /**
  * Represents a Viewport Setting Color value used by the viewport input, layout, and camera layer.
  */
@@ -88,6 +90,11 @@ enum class ViewportFloatSettingId {
  * Enumerates ViewportBoolSettingId values used by the viewport layer.
  */
 enum class ViewportBoolSettingId {
+    ShowGrid,
+    ShowGizmos,
+    ShowOverlays,
+    GridSnap,
+    VertexSnap,
     Count,
 };
 
@@ -149,11 +156,16 @@ const std::array<ViewportColorSettingDescriptor, kViewportColorSettingCount>& vi
 const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount>& viewportFloatSettings();
 const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount>& viewportBoolSettings();
 
+bool viewportGridSnapActive(const ViewportSettings& settings, bool temporaryTogglePressed);
+float viewportVertexSnapRadius(const ViewportSettings& settings);
+
 /**
  * Owns Viewport Settings behavior within the viewport input, layout, and camera layer.
  */
 class ViewportSettings {
 public:
+    ViewportSettings();
+
     static ViewportSettings defaults();
     static ViewportSettings load(const std::filesystem::path& path);
 

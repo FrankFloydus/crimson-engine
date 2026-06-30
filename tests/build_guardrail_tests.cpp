@@ -1293,10 +1293,15 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(appSource, "window_.refreshNativeChrome()");
     expectContains(appSource, "window_.minimize()");
     expectContains(appSource, "window_.toggleMaximizeRestore()");
+    expectContains(appSource, "window_.canRenderFrames()");
+    expectContains(appSource, "waitUntilNextFrame()");
+    expectContains(appSource, "SDL_WaitEventTimeout(nullptr, waitMs)");
     expectContains(platformHeader, "struct PlatformWindowOptions");
     expectContains(platformHeader, "kPlatformWindowMinimumWidth = 800");
     expectContains(platformHeader, "kPlatformWindowMinimumHeight = 600");
     expectContains(platformHeader, "refreshNativeChrome()");
+    expectContains(platformHeader, "platformWindowCanRenderFrames");
+    expectContains(platformHeader, "canRenderFrames() const");
     expectContains(platformHeader, "PlatformWindowChromeHitTest");
     expectContains(platformHeader, "platformWindowChromeHitTestResult");
     expectContains(platformHeader, "PlatformWindowChromeResizeDrag");
@@ -1314,6 +1319,8 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(platformSource, "SDL_SetWindowPosition");
     expectContains(platformSource, "SDL_SetWindowSize");
     expectContains(platformSource, "SDL_MinimizeWindow");
+    expectContains(platformSource, "SDL_SyncWindow failed after minimize");
+    expectContains(platformSource, "SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED");
     expectContains(platformSource, "SDL_MaximizeWindow");
     expectContains(platformSource, "SDL_RestoreWindow");
     expectContains(platformSource, "HTLEFT");
@@ -1335,7 +1342,9 @@ TEST(WindowGuardrailTests, BorderlessWindowModeIsDefault) {
     expectContains(rootCMake, "Advapi32");
     expectContains(uiSystemHeader, "enum class WindowChromeAction");
     expectContains(uiSystemHeader, "takeWindowChromeAction()");
+    expectContains(uiSystemHeader, "needsContinuousRendering() const");
     expectContains(uiSystemHeader, "std::optional<WindowChromeAction> pendingChromeAction_");
+    expectContains(uiSystemSource, "viewportPanel_->needsContinuousRendering()");
     expectContains(uiSystemSource, "chromeIconButton(\"minimize\", WindowChromeAction::Minimize");
     expectContains(uiSystemSource, "chromeIconButton(\"restore\", WindowChromeAction::ToggleMaximizeRestore");
     expectContains(uiSystemSource, "chromeIconButton(\"close\", WindowChromeAction::Close");

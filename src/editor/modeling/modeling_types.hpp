@@ -248,6 +248,7 @@ struct ModelingBoxToolEvent {
     double gridSize = 1.0;
     bool hasCamera = false;
     ModelingViewportCamera camera;
+    bool snapEnabled = true;
 };
 
 /**
@@ -572,6 +573,8 @@ struct ModelingTransformDragBeginRequest {
     ModelingViewportCamera camera;
     double gridSize = 1.0;
     double vertexSnapRadius = 0.3;
+    bool gridSnapEnabled = true;
+    bool precision = false;
     bool duplicateSelected = false;
 };
 
@@ -584,6 +587,7 @@ struct ModelingTransformDragUpdateRequest {
     ModelingViewportCamera camera;
     double gridSize = 1.0;
     double vertexSnapRadius = 0.3;
+    bool gridSnapEnabled = true;
     bool precision = false;
 };
 

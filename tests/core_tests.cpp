@@ -593,6 +593,7 @@ ModelingTransformDragBeginRequest testXMoveDragBeginRequest(
             .camera = testOrthographicViewportCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
+            .gridSnapEnabled = true,
             .duplicateSelected = duplicateSelected,
     };
 }
@@ -604,6 +605,7 @@ ModelingTransformDragUpdateRequest testXMoveDragUpdateRequest(float screenX) {
             .camera = testOrthographicViewportCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
+            .gridSnapEnabled = true,
             .precision = false,
     };
 }
@@ -642,6 +644,7 @@ QuaderTransformDragBeginRequest testApiXMoveDragBeginRequest() {
             .camera = testApiOrthographicViewportCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
+            .gridSnapEnabled = true,
     };
 }
 
@@ -652,6 +655,7 @@ QuaderTransformDragUpdateRequest testApiXMoveDragUpdateRequest(float screenX) {
             .camera = testApiOrthographicViewportCamera(),
             .gridSize = 1.0,
             .vertexSnapRadius = 0.3,
+            .gridSnapEnabled = true,
             .precision = false,
     };
 }
@@ -1032,6 +1036,19 @@ TEST(PlatformWindowChromeTests, ManualResizeFrameDefaultsToApplicationMinimumSiz
     EXPECT_EQ(clamped.height, 600);
 }
 
+TEST(PlatformWindowChromeTests, RenderFrameAvailabilityRejectsNonDrawableWindowStates) {
+    EXPECT_TRUE(platformWindowCanRenderFrames(0u, 1600, 900));
+    EXPECT_TRUE(platformWindowCanRenderFrames(SDL_WINDOW_INPUT_FOCUS, 1600, 900));
+    EXPECT_TRUE(platformWindowCanRenderFrames(SDL_WINDOW_MAXIMIZED, 1600, 900));
+
+    EXPECT_FALSE(platformWindowCanRenderFrames(SDL_WINDOW_MINIMIZED, 1600, 900));
+    EXPECT_FALSE(platformWindowCanRenderFrames(SDL_WINDOW_HIDDEN, 1600, 900));
+    EXPECT_FALSE(platformWindowCanRenderFrames(SDL_WINDOW_OCCLUDED, 1600, 900));
+    EXPECT_FALSE(platformWindowCanRenderFrames(SDL_WINDOW_MINIMIZED | SDL_WINDOW_INPUT_FOCUS, 1600, 900));
+    EXPECT_FALSE(platformWindowCanRenderFrames(0u, 0, 900));
+    EXPECT_FALSE(platformWindowCanRenderFrames(0u, 1600, 0));
+}
+
 TEST(SdlEventUtilsTests, ExtractsWindowIdsForRuntimeRoutedEvents) {
     constexpr SDL_WindowID windowId = 42u;
     SDL_Event event{};
@@ -1066,6 +1083,11 @@ TEST(SdlEventUtilsTests, ExtractsWindowIdsForRuntimeRoutedEvents) {
     EXPECT_EQ(sdlEventWindowId(event), windowId);
 
     event = {};
+    event.type = SDL_EVENT_WINDOW_OCCLUDED;
+    event.window.windowID = windowId;
+    EXPECT_EQ(sdlEventWindowId(event), windowId);
+
+    event = {};
     event.type = SDL_EVENT_QUIT;
     EXPECT_FALSE(sdlEventWindowId(event).has_value());
 }
@@ -1088,7 +1110,27 @@ TEST(ViewportSettingsTests, DefaultsMatchNativeViewportSettingsState) {
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::SelectionEdgeLineSize), 2.5f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::PickVertexRadius), 0.3f);
     EXPECT_FLOAT_EQ(settings.floatValue(ViewportFloatSettingId::GizmoSize), 1.0f);
-    EXPECT_TRUE(viewportBoolSettings().empty());
+    ASSERT_EQ(viewportBoolSettings().size(), 5u);
+    EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::ShowGrid));
+    EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::ShowGizmos));
+    EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::ShowOverlays));
+    EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::GridSnap));
+    EXPECT_TRUE(settings.boolValue(ViewportBoolSettingId::VertexSnap));
+}
+
+TEST(ViewportSettingsTests, SnapSettingsOwnTemporaryGridToggleAndGlobalVertexSnap) {
+    ViewportSettings settings = ViewportSettings::defaults();
+
+    EXPECT_TRUE(viewportGridSnapActive(settings, false));
+    EXPECT_FALSE(viewportGridSnapActive(settings, true));
+    EXPECT_FLOAT_EQ(viewportVertexSnapRadius(settings), 0.3f);
+
+    EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::GridSnap, false));
+    EXPECT_FALSE(viewportGridSnapActive(settings, false));
+    EXPECT_TRUE(viewportGridSnapActive(settings, true));
+
+    EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::VertexSnap, false));
+    EXPECT_FLOAT_EQ(viewportVertexSnapRadius(settings), 0.0f);
 }
 
 TEST(ViewportSettingsTests, OverlayDefaultsComeFromRenderOverlayPolicy) {
@@ -1150,11 +1192,17 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
     ViewportSettings settings = ViewportSettings::defaults();
     EXPECT_TRUE(settings.setColor(ViewportColorSettingId::GridMinor, {0.25f, 0.5f, 0.75f, 0.6f}));
     EXPECT_TRUE(settings.setFloatValue(ViewportFloatSettingId::GizmoSize, 10.0f));
+    EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::ShowGrid, false));
+    EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::GridSnap, false));
+    EXPECT_TRUE(settings.setBoolValue(ViewportBoolSettingId::VertexSnap, false));
     ASSERT_TRUE(settings.save(path));
 
     const ViewportSettings loaded = ViewportSettings::load(path);
     expectColorNear(loaded.color(ViewportColorSettingId::GridMinor), {0.25098f, 0.501961f, 0.74902f, 0.6f});
     EXPECT_FLOAT_EQ(loaded.floatValue(ViewportFloatSettingId::GizmoSize), 2.0f);
+    EXPECT_FALSE(loaded.boolValue(ViewportBoolSettingId::ShowGrid));
+    EXPECT_FALSE(loaded.boolValue(ViewportBoolSettingId::GridSnap));
+    EXPECT_FALSE(loaded.boolValue(ViewportBoolSettingId::VertexSnap));
 
     {
         std::ifstream sourceFile(path);
@@ -1164,6 +1212,9 @@ TEST(ViewportSettingsTests, SavesLoadsAndClampsViewportPreferenceKeys) {
                 std::istreambuf_iterator<char>()};
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridMinorColor"), std::string::npos);
         EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GizmoSize"), std::string::npos);
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.ShowGrid"), std::string::npos);
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.GridSnap"), std::string::npos);
+        EXPECT_NE(source.find("QVertexWorks.Quader.Viewport.VertexSnap"), std::string::npos);
         EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.BackgroundColor"), std::string::npos);
         EXPECT_EQ(source.find("QVertexWorks.Quader.Viewport.ShowSpecialTextures"), std::string::npos);
     }
@@ -2248,7 +2299,11 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setSceneLayerMask"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setShadowingEnabled"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("paneState.renderer.setSceneVisible"), std::string::npos);
-    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(true)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowGrid"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowGizmos"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("ViewportBoolSettingId::ShowOverlays"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.updateGroundGrid(paneWorkspace.camera, gridWorldSize, settings, gridVisible)"), std::string::npos);
+    EXPECT_NE(viewportPanelSource.find("paneState.renderer.setOverlayVisible(overlaysVisible ||"), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame("), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("viewportGridLayerMask(viewportPaneIndex(paneId))"), std::string::npos);
     EXPECT_NE(overlayProxyFactorySource.find(".layerMask(kViewportAllLayerMask, layerMask)"), std::string::npos);
@@ -2294,6 +2349,35 @@ TEST(AppStartupTests, DoesNotCreateDefaultModelingMesh) {
     EXPECT_EQ(source.find("startup box"), std::string::npos);
     EXPECT_EQ(source.find("Fake Directional Light"), std::string::npos);
     EXPECT_EQ(source.find("document_.setLight"), std::string::npos);
+}
+
+TEST(AppLoopTests, SuspendsGpuSubmissionForNonDrawableWindowsAndIdlesBetweenFrames) {
+    const std::string appHeader = readSourceFile("src/app/app.hpp");
+    const std::string appSource = readSourceFile("src/app/app.cpp");
+    const std::string platformHeader = readSourceFile("src/platform/platform_window.hpp");
+    const std::string platformSource = readSourceFile("src/platform/platform_window.cpp");
+    const std::string uiHeader = readSourceFile("src/ui/ui_system.hpp");
+    const std::string uiSource = readSourceFile("src/ui/ui_system.cpp");
+    const std::string viewportPanelHeader = readSourceFile("src/ui/viewport_panel.hpp");
+
+    EXPECT_NE(platformHeader.find("platformWindowCanRenderFrames"), std::string::npos);
+    EXPECT_NE(platformHeader.find("[[nodiscard]] bool canRenderFrames() const"), std::string::npos);
+    EXPECT_NE(platformSource.find("SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED"), std::string::npos);
+    EXPECT_NE(platformSource.find("pixelWidth > 0 && pixelHeight > 0"), std::string::npos);
+    EXPECT_NE(appHeader.find("waitUntilNextFrame()"), std::string::npos);
+    EXPECT_NE(appSource.find("if (window_.canRenderFrames()) {\n                renderFrame(frameTiming);"), std::string::npos);
+    EXPECT_NE(appSource.find("if (!window_.canRenderFrames()) {\n        renderingFrame_ = false;"), std::string::npos);
+    EXPECT_NE(appSource.find("ui_.endFrameWithoutRender();"), std::string::npos);
+    EXPECT_NE(appSource.find("SDL_WaitEventTimeout(nullptr, waitMs)"), std::string::npos);
+    EXPECT_NE(appSource.find("kIdleFrameWaitMs = 100"), std::string::npos);
+    EXPECT_NE(appSource.find("kSuspendedWindowWaitMs = 250"), std::string::npos);
+    EXPECT_NE(appSource.find("!window_.canRenderFrames())"), std::string::npos);
+    EXPECT_NE(uiHeader.find("endFrameWithoutRender()"), std::string::npos);
+    EXPECT_NE(uiHeader.find("[[nodiscard]] bool needsContinuousRendering() const"), std::string::npos);
+    EXPECT_NE(uiSource.find("relativeMouseCaptured_ ||"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("lastFlyNavigationActive_"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("navigationGizmo_.inputLocked()"), std::string::npos);
+    EXPECT_NE(viewportPanelHeader.find("interactionController_.dragging()"), std::string::npos);
 }
 
 TEST(SceneDocumentTests, CreatesStableEntitiesAndComponents) {

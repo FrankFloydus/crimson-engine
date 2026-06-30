@@ -211,11 +211,13 @@ quader_poly::Ray box_ground_ray(float x = 4.0F, float z = 4.0F)
 
 qec::EditorRuntimeCommand box_ray_command(
 		qec::EditorRuntimeCommandId command_id,
-		quader_poly::Ray ray = box_ground_ray())
+		quader_poly::Ray ray = box_ground_ray(),
+		bool snap_enabled = true)
 {
 	qec::BoxRayRuntimeCommandSettings settings;
 	settings.ray = ray;
 	settings.grid_size = 1.0;
+	settings.snap_enabled = snap_enabled;
 
 	qec::EditorRuntimeCommand command;
 	command.command_id = command_id;
@@ -226,12 +228,14 @@ qec::EditorRuntimeCommand box_ray_command(
 qec::EditorRuntimeCommand box_height_command(
 		qec::EditorRuntimeCommandId command_id,
 		quader::QVec2 screen_position = { 400.0F, 300.0F },
-		quader_poly::Ray ray = box_ground_ray())
+		quader_poly::Ray ray = box_ground_ray(),
+		bool snap_enabled = true)
 {
 	qec::BoxHeightRuntimeCommandSettings settings;
 	settings.screen_position = screen_position;
 	settings.ray = ray;
 	settings.grid_size = 1.0;
+	settings.snap_enabled = snap_enabled;
 
 	qec::EditorRuntimeCommand command;
 	command.command_id = command_id;

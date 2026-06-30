@@ -473,6 +473,8 @@ struct QuaderTransformDragBeginRequest {
     QuaderViewportCamera camera;
     double gridSize = 1.0;
     double vertexSnapRadius = 0.3;
+    bool gridSnapEnabled = true;
+    bool precision = false;
     bool duplicateSelected = false;
 };
 
@@ -485,6 +487,7 @@ struct QuaderTransformDragUpdateRequest {
     QuaderViewportCamera camera;
     double gridSize = 1.0;
     double vertexSnapRadius = 0.3;
+    bool gridSnapEnabled = true;
     bool precision = false;
 };
 

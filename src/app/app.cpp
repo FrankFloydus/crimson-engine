@@ -21,6 +21,13 @@
 #include <utility>
 
 namespace quader {
+namespace {
+
+constexpr Sint32 kActiveFrameWaitMs = 1;
+constexpr Sint32 kIdleFrameWaitMs = 100;
+constexpr Sint32 kSuspendedWindowWaitMs = 250;
+
+} // namespace
 
 App::App() = default;
 App::~App() {
@@ -111,12 +118,22 @@ int App::run() {
                 running_ = false;
             }
             if ((event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-                        event.type == SDL_EVENT_WINDOW_RESIZED) &&
+                        event.type == SDL_EVENT_WINDOW_RESIZED ||
+                        event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
+                        event.type == SDL_EVENT_WINDOW_RESTORED ||
+                        event.type == SDL_EVENT_WINDOW_SHOWN ||
+                        event.type == SDL_EVENT_WINDOW_EXPOSED) &&
                     sdlEventTargetsWindow(event, mainWindowId)) {
                 window_.refreshPixelSize();
             }
             if ((event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
-                        event.type == SDL_EVENT_WINDOW_FOCUS_LOST) &&
+                        event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+                        event.type == SDL_EVENT_WINDOW_MAXIMIZED ||
+                        event.type == SDL_EVENT_WINDOW_RESTORED ||
+                        event.type == SDL_EVENT_WINDOW_SHOWN ||
+                        event.type == SDL_EVENT_WINDOW_HIDDEN ||
+                        event.type == SDL_EVENT_WINDOW_MINIMIZED ||
+                        event.type == SDL_EVENT_WINDOW_OCCLUDED) &&
                     sdlEventTargetsWindow(event, mainWindowId)) {
                 window_.refreshNativeChrome();
             }
@@ -128,10 +145,12 @@ int App::run() {
         if (liveResizeFrameRendered_) {
             liveResizeFrameRendered_ = false;
         } else {
-            renderFrame(frameTiming);
+            if (window_.canRenderFrames()) {
+                renderFrame(frameTiming);
+            }
         }
 
-        SDL_Delay(1);
+        waitUntilNextFrame();
     }
 
     return 0;
@@ -216,6 +235,10 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
     renderingFrame_ = true;
 
     window_.refreshPixelSize();
+    if (!window_.canRenderFrames()) {
+        renderingFrame_ = false;
+        return running_;
+    }
     ui_.setViewportRenderResizeSuspended(window_.chromeResizeActive());
     ui_.beginFrame(frameTiming);
     bool quitRequested = false;
@@ -234,8 +257,14 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
         running_ = false;
     }
     if (!running_) {
+        ui_.endFrameWithoutRender();
         renderingFrame_ = false;
         return false;
+    }
+    if (!window_.canRenderFrames()) {
+        ui_.endFrameWithoutRender();
+        renderingFrame_ = false;
+        return running_;
     }
     (void)QuaderRenderApiRuntimeAccess::syncScene(editor_->render(), renderBridge_);
     if (const EntityId root = projectSession_.scene().sceneRoot(); root != InvalidEntityId) {
@@ -257,9 +286,16 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
     return running_;
 }
 
+void App::waitUntilNextFrame() {
+    const bool drawable = window_.canRenderFrames();
+    const Sint32 waitMs = !drawable ? kSuspendedWindowWaitMs :
+            (ui_.needsContinuousRendering() || window_.chromeResizeActive() ? kActiveFrameWaitMs : kIdleFrameWaitMs);
+    (void)SDL_WaitEventTimeout(nullptr, waitMs);
+}
+
 bool App::shouldRenderLiveResizeEvent(const SDL_Event& event) const {
     if (!running_ || shutdownComplete_ || renderingFrame_ || event.type != SDL_EVENT_WINDOW_EXPOSED ||
-            event.window.data1 != 1 || window_.sdlWindow() == nullptr) {
+            event.window.data1 != 1 || window_.sdlWindow() == nullptr || !window_.canRenderFrames()) {
         return false;
     }
 

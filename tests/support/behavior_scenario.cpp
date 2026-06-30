@@ -99,6 +99,8 @@ QuaderTransformDragBeginRequest apiTransformDragBegin(DragBeginOptions options) 
             .camera = toApiViewportCamera(request.camera),
             .gridSize = request.gridSize,
             .vertexSnapRadius = request.vertexSnapRadius,
+            .gridSnapEnabled = request.gridSnapEnabled,
+            .precision = request.precision,
             .duplicateSelected = request.duplicateSelected,
     };
 }
@@ -111,6 +113,7 @@ QuaderTransformDragUpdateRequest apiTransformDragUpdate(QVec2 screenPosition) {
             .camera = toApiViewportCamera(request.camera),
             .gridSize = request.gridSize,
             .vertexSnapRadius = request.vertexSnapRadius,
+            .gridSnapEnabled = request.gridSnapEnabled,
             .precision = request.precision,
     };
 }

@@ -75,6 +75,7 @@ struct PlatformWindowPlacement {
 [[nodiscard]] SDL_HitTestResult platformWindowChromeHitTestResult(const PlatformWindowChromeHitTest& hitTest);
 [[nodiscard]] PlatformWindowChromeFrame platformWindowChromeResizeFrame(const PlatformWindowChromeResizeDrag& drag);
 [[nodiscard]] int platformWindowChromeResizeBorderForSystemMetrics(int fallbackBorder, int sizeFrame, int paddedBorder);
+[[nodiscard]] bool platformWindowCanRenderFrames(std::uint64_t windowFlags, int pixelWidth, int pixelHeight);
 [[nodiscard]] PlatformWindowChromeFrame platformWindowRecoverFrameToDisplayWorkArea(
         PlatformWindowChromeFrame frame,
         std::span<const PlatformWindowChromeFrame> displayWorkAreas);
@@ -104,6 +105,7 @@ public:
     void refreshNativeChrome();
     void minimize();
     void toggleMaximizeRestore();
+    [[nodiscard]] bool canRenderFrames() const;
     [[nodiscard]] std::optional<PlatformWindowPlacement> placement() const;
     void applyPlacement(const PlatformWindowPlacement& placement);
     [[nodiscard]] bool processChromeEvent(const SDL_Event& event);

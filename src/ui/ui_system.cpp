@@ -357,6 +357,12 @@ void UISystem::beginFrame(const FrameTiming& frameTiming) {
     ImGui::NewFrame();
 }
 
+void UISystem::endFrameWithoutRender() {
+    if (ImGui::GetCurrentContext() != nullptr) {
+        ImGui::EndFrame();
+    }
+}
+
 void UISystem::draw(QuaderEditorApi& editor,
         SceneRenderBridge& renderBridge,
         SceneDocument& document,
@@ -432,6 +438,9 @@ void UISystem::draw(QuaderEditorApi& editor,
     mainMenuPopupOpen_ = chromeMenuResult.popupOpen;
     if (chromeMenuResult.settingsChanged) {
         saveSettings();
+    }
+    if (chromeMenuResult.viewportSettingsChanged) {
+        saveViewportSettings();
     }
     drawDockspace(editor, quitRequested, document, modeling);
 
@@ -536,6 +545,11 @@ void UISystem::setViewportRenderResizeSuspended(bool suspended) {
     viewportRenderResizeSuspended_ = suspended;
 }
 
+bool UISystem::needsContinuousRendering() const {
+    return relativeMouseCaptured_ ||
+            (viewportPanel_ != nullptr && viewportPanel_->needsContinuousRendering());
+}
+
 std::optional<WindowChromeAction> UISystem::takeWindowChromeAction() {
     std::optional<WindowChromeAction> action = pendingChromeAction_;
     pendingChromeAction_.reset();
@@ -611,6 +625,7 @@ MainMenuBarResult UISystem::drawWindowChrome(
                 .document = document,
                 .modeling = modeling,
                 .viewportPanel = viewportPanel_,
+                .viewportSettings = viewportSettings_,
                 .panels = panels_,
                 .localization = localization_,
                 .viewportSettingsPanelOpen = settingsPanelOpen_,
@@ -674,12 +689,16 @@ void UISystem::drawDockspace(
                 .document = document,
                 .modeling = modeling,
                 .viewportPanel = viewportPanel_,
+                .viewportSettings = viewportSettings_,
                 .panels = panels_,
                 .localization = localization_,
                 .viewportSettingsPanelOpen = settingsPanelOpen_,
         });
         if (menuResult.settingsChanged) {
             saveSettings();
+        }
+        if (menuResult.viewportSettingsChanged) {
+            saveViewportSettings();
         }
     }
 
@@ -734,11 +753,12 @@ void UISystem::closeMenuPopupForPassThroughClick() {
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 mouse = ImGui::GetMousePos();
-    if (customChrome_ && mouse.y <= viewport->Pos.y + kWindowChromeHeight) {
+    const float menuClickExclusionHeight = customChrome_ ? kWindowChromeHeight : ImGui::GetFrameHeight();
+    if (mouse.y <= viewport->Pos.y + menuClickExclusionHeight) {
         return;
     }
 
-    const ImVec2 passThroughMin{viewport->Pos.x, viewport->Pos.y + (customChrome_ ? kWindowChromeHeight : 0.0f)};
+    const ImVec2 passThroughMin{viewport->Pos.x, viewport->Pos.y + menuClickExclusionHeight};
     const ImVec2 passThroughMax{viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y};
     if (imguiClosePopupForPassThroughClick(passThroughMin, passThroughMax)) {
         mainMenuPopupOpen_ = false;

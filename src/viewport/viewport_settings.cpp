@@ -111,7 +111,13 @@ const std::array<ViewportFloatSettingDescriptor, kViewportFloatSettingCount> kFl
         {ViewportFloatSettingId::GizmoSize, ViewportSettingsSectionId::Gizmo, "Size", key("GizmoSize"), kMinGizmoSize, kMaxGizmoSize, 1.0f},
 }};
 
-const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{};
+const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount> kBoolSettings{{
+        {ViewportBoolSettingId::ShowGrid, ViewportSettingsSectionId::Grid, "Show Grid", key("ShowGrid"), true},
+        {ViewportBoolSettingId::ShowGizmos, ViewportSettingsSectionId::Gizmo, "Show Gizmos", key("ShowGizmos"), true},
+        {ViewportBoolSettingId::ShowOverlays, ViewportSettingsSectionId::Overlay, "Show Overlays", key("ShowOverlays"), true},
+        {ViewportBoolSettingId::GridSnap, ViewportSettingsSectionId::Grid, "Grid Snap", key("GridSnap"), true},
+        {ViewportBoolSettingId::VertexSnap, ViewportSettingsSectionId::Picking, "Vertex Snap", key("VertexSnap"), true},
+}};
 
 std::string fullKey(std::string_view suffix) {
     std::string value{kViewportSettingsPrefix};
@@ -259,9 +265,22 @@ const std::array<ViewportBoolSettingDescriptor, kViewportBoolSettingCount>& view
     return kBoolSettings;
 }
 
+bool viewportGridSnapActive(const ViewportSettings& settings, bool temporaryTogglePressed) {
+    return settings.boolValue(ViewportBoolSettingId::GridSnap) != temporaryTogglePressed;
+}
+
+float viewportVertexSnapRadius(const ViewportSettings& settings) {
+    return settings.boolValue(ViewportBoolSettingId::VertexSnap)
+            ? settings.floatValue(ViewportFloatSettingId::PickVertexRadius)
+            : 0.0f;
+}
+
+ViewportSettings::ViewportSettings() {
+    resetToDefaults();
+}
+
 ViewportSettings ViewportSettings::defaults() {
     ViewportSettings settings;
-    settings.resetToDefaults();
     return settings;
 }
 

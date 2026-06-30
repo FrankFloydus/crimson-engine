@@ -421,6 +421,12 @@ int platformWindowChromeResizeBorderForSystemMetrics(int fallbackBorder, int siz
     return std::max({1, fallbackBorder, std::max(0, sizeFrame) + std::max(0, paddedBorder)});
 }
 
+bool platformWindowCanRenderFrames(std::uint64_t windowFlags, int pixelWidth, int pixelHeight) {
+    constexpr std::uint64_t kNonDrawableWindowFlags =
+            SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED;
+    return (windowFlags & kNonDrawableWindowFlags) == 0u && pixelWidth > 0 && pixelHeight > 0;
+}
+
 PlatformWindowChromeFrame platformWindowRecoverFrameToDisplayWorkArea(
         PlatformWindowChromeFrame frame,
         std::span<const PlatformWindowChromeFrame> displayWorkAreas) {
@@ -540,9 +546,17 @@ void PlatformWindow::refreshNativeChrome() {
 }
 
 void PlatformWindow::minimize() {
-    if (window_ && !SDL_MinimizeWindow(window_)) {
-        LOG_WARN("SDL_MinimizeWindow failed: {}", SDL_GetError());
+    if (!window_) {
+        return;
     }
+    if (!SDL_MinimizeWindow(window_)) {
+        LOG_WARN("SDL_MinimizeWindow failed: {}", SDL_GetError());
+        return;
+    }
+    if (!SDL_SyncWindow(window_)) {
+        LOG_WARN("SDL_SyncWindow failed after minimize: {}", SDL_GetError());
+    }
+    refreshPixelSize();
 }
 
 void PlatformWindow::toggleMaximizeRestore() {
@@ -719,6 +733,7 @@ bool PlatformWindow::processChromeEvent(const SDL_Event& event) {
         case SDL_EVENT_WINDOW_FOCUS_LOST:
         case SDL_EVENT_WINDOW_MINIMIZED:
         case SDL_EVENT_WINDOW_HIDDEN:
+        case SDL_EVENT_WINDOW_OCCLUDED:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             cancelChromeInteraction();
             return true;
@@ -779,6 +794,17 @@ bool PlatformWindow::maximized() const {
     }
 #endif
     return window_ && (SDL_GetWindowFlags(window_) & SDL_WINDOW_MAXIMIZED) != 0u;
+}
+
+bool PlatformWindow::canRenderFrames() const {
+    if (!window_) {
+        return false;
+    }
+
+    int pixelWidth = 0;
+    int pixelHeight = 0;
+    SDL_GetWindowSizeInPixels(window_, &pixelWidth, &pixelHeight);
+    return platformWindowCanRenderFrames(SDL_GetWindowFlags(window_), pixelWidth, pixelHeight);
 }
 
 bool PlatformWindow::chromeResizeActive() const {

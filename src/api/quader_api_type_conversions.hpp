@@ -712,6 +712,8 @@ inline ModelingTransformDragBeginRequest toModelingTransformDragBeginRequest(
             .camera = toModelingViewportCamera(request.camera),
             .gridSize = request.gridSize,
             .vertexSnapRadius = request.vertexSnapRadius,
+            .gridSnapEnabled = request.gridSnapEnabled,
+            .precision = request.precision,
             .duplicateSelected = request.duplicateSelected,
     };
 }
@@ -724,6 +726,7 @@ inline ModelingTransformDragUpdateRequest toModelingTransformDragUpdateRequest(
             .camera = toModelingViewportCamera(request.camera),
             .gridSize = request.gridSize,
             .vertexSnapRadius = request.vertexSnapRadius,
+            .gridSnapEnabled = request.gridSnapEnabled,
             .precision = request.precision,
     };
 }

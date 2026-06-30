@@ -241,7 +241,7 @@ CommandResult update_box_hover(
 		return { true, box_runtime_status_changed(before, runtime.status()), "" };
 	}
 
-	const BoxToolStateResult result = runtime.update_box_hover_cell(point.position, true);
+	const BoxToolStateResult result = runtime.update_box_hover_cell(point.position, settings.snap_enabled);
 	return box_state_result_to_command(before, runtime, result, "Box hover failed.");
 }
 
@@ -263,7 +263,7 @@ CommandResult begin_box_footprint(
 		return { false, false, point.message.empty() ? "Box needs a ground-plane hit." : point.message };
 	}
 
-	const BoxToolStateResult result = runtime.begin_box_footprint(point.position, point.position, true);
+	const BoxToolStateResult result = runtime.begin_box_footprint(point.position, point.position, settings.snap_enabled);
 	if (!result.ok) {
 		return box_state_result_to_command(before, runtime, result, "Box footprint failed.");
 	}
@@ -286,7 +286,7 @@ CommandResult update_box_footprint(
 	if (!point.ok) {
 		return { false, false, point.message.empty() ? "Box needs a construction-plane hit." : point.message };
 	}
-	const BoxToolStateResult result = runtime.update_box_footprint(point.position, true);
+	const BoxToolStateResult result = runtime.update_box_footprint(point.position, settings.snap_enabled);
 	return box_state_result_to_command(before, runtime, result, "Box footprint update failed.");
 }
 
@@ -298,7 +298,7 @@ CommandResult begin_box_height(
 	runtime.set_box_grid_size(settings.grid_size);
 	const double axis_distance = runtime.box_height_distance_for_ray(settings.ray);
 	const BoxToolStateResult result =
-		runtime.begin_box_height(settings.screen_position, axis_distance, std::isfinite(axis_distance), true);
+		runtime.begin_box_height(settings.screen_position, axis_distance, std::isfinite(axis_distance), settings.snap_enabled);
 	return box_state_result_to_command(before, runtime, result, "Box height failed.");
 }
 
@@ -310,14 +310,14 @@ CommandResult update_box_height(
 	runtime.set_box_grid_size(settings.grid_size);
 	const double axis_distance = runtime.box_height_distance_for_ray(settings.ray);
 	const BoxToolStateResult result =
-		runtime.update_box_height_preview(axis_distance, std::isfinite(axis_distance), settings.screen_position, true);
+		runtime.update_box_height_preview(axis_distance, std::isfinite(axis_distance), settings.screen_position, settings.snap_enabled);
 	return box_state_result_to_command(before, runtime, result, "Box height update failed.");
 }
 
 CommandResult commit_box(EditorSession& session, EditorRuntime& runtime)
 {
 	const EditorRuntimeStatus before = runtime.status();
-	const BoxPreviewDescriptor preview = runtime.box_preview_descriptor(true);
+	const BoxPreviewDescriptor preview = runtime.box_preview_descriptor(false);
 	if (!preview.ok) {
 		return { false, false, preview.message.empty() ? "Box preview failed." : preview.message };
 	}

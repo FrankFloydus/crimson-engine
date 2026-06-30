@@ -52,6 +52,7 @@ public:
 
 private:
     void createGroundGrid();
+    void setGroundGridVisible(bool visible);
     void updateGroundGridMesh(float width, float height);
     void destroyGroundGrid();
 
