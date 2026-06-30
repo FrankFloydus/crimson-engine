@@ -110,6 +110,19 @@ struct TransformGizmoTrackballSegmentPrimitive {
 };
 
 /**
+ * Stores the active rotate drag angle indicator shown over the transform gizmo.
+ */
+struct TransformGizmoRotateIndicator {
+	bool active = false;
+	TransformAxis axis = TransformAxis::none;
+	quader::QVec3 world_axis;
+	quader::QVec3 start_direction;
+	bool has_mouse_position = false;
+	quader::QVec3 mouse_position;
+	double angle_degrees = 0.0;
+};
+
+/**
  * Stores the Transform Gizmo Frame Info data contract used by the modal modeling interaction layer.
  */
 struct TransformGizmoFrameInfo {
@@ -120,6 +133,7 @@ struct TransformGizmoFrameInfo {
 	quader::QVec3 pivot;
 	quader::QVec2 screen_pivot;
 	double gizmo_scale = 1.0;
+	TransformGizmoRotateIndicator rotate_indicator;
 };
 
 /**

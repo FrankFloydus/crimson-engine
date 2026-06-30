@@ -8,6 +8,7 @@
 
 #include <editor/modeling/runtime/editor_runtime.hpp>
 #include <editor/interactions/interaction_api.hpp>
+#include <editor/interactions/transform_gizmo.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,16 @@ float screen_distance(quader::QVec2 left, quader::QVec2 right)
 	const float dx = right.x - left.x;
 	const float dy = right.y - left.y;
 	return std::sqrt(dx * dx + dy * dy);
+}
+
+const quader_editor_core::TransformGizmoAxisPrimitive* find_axis(
+		const quader_editor_core::TransformGizmoFrame& frame,
+		quader_editor_core::TransformAxis axis)
+{
+	const auto found = std::find_if(frame.axes.begin(), frame.axes.end(), [axis](const quader_editor_core::TransformGizmoAxisPrimitive& primitive) {
+		return primitive.axis == axis;
+	});
+	return found == frame.axes.end() ? nullptr : &*found;
 }
 
 TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoHoverHelperPromotesHitsAndClearsMisses) {
@@ -68,6 +79,14 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 	EXPECT_TRUE(move_frame.ring_segments.empty());
 	EXPECT_TRUE(move_frame.trackball_segments.empty());
 
+	const quader_editor_core::TransformGizmoAxisPrimitive* move_x_axis =
+		find_axis(move_frame, quader_editor_core::TransformAxis::x);
+	ASSERT_TRUE(move_x_axis != nullptr);
+	EXPECT_NEAR(
+		screen_distance(move_frame.info.screen_pivot, move_x_axis->screen_tip),
+		static_cast<float>(input.gizmo_size_pixels * 1.75),
+		1.5F);
+
 	const auto xy_plane = std::find_if(move_frame.planes.begin(), move_frame.planes.end(), [](const quader_editor_core::TransformGizmoPlanePrimitive& plane) {
 		return plane.axis == quader_editor_core::TransformAxis::xy;
 	});
@@ -76,7 +95,26 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 		(xy_plane->screen0.x + xy_plane->screen1.x + xy_plane->screen2.x + xy_plane->screen3.x) * 0.25F,
 		(xy_plane->screen0.y + xy_plane->screen1.y + xy_plane->screen2.y + xy_plane->screen3.y) * 0.25F,
 	};
-	EXPECT_TRUE(screen_distance(move_frame.info.screen_pivot, xy_center) > static_cast<float>(input.gizmo_size_pixels) * 0.60F);
+	EXPECT_NEAR(
+		screen_distance(move_frame.info.screen_pivot, xy_center),
+		static_cast<float>(input.gizmo_size_pixels * std::sqrt(2.0) * 0.4),
+		1.5F);
+	EXPECT_NEAR(
+		screen_distance(xy_plane->screen0, xy_plane->screen1),
+		static_cast<float>(input.gizmo_size_pixels * 0.2),
+		1.0F);
+
+	input.tool = quader_editor_core::ViewportInteractionTool::scale;
+	const quader_editor_core::TransformGizmoFrame scale_frame =
+		quader_editor_core::build_transform_gizmo_frame(input);
+	EXPECT_TRUE(scale_frame.info.ok);
+	const quader_editor_core::TransformGizmoAxisPrimitive* scale_x_axis =
+		find_axis(scale_frame, quader_editor_core::TransformAxis::x);
+	ASSERT_TRUE(scale_x_axis != nullptr);
+	EXPECT_NEAR(
+		screen_distance(scale_frame.info.screen_pivot, scale_x_axis->screen_tip),
+		static_cast<float>(input.gizmo_size_pixels * 1.554),
+		1.5F);
 
 	input.tool = quader_editor_core::ViewportInteractionTool::rotate;
 	const quader_editor_core::TransformGizmoFrame rotate_frame =
@@ -96,6 +134,7 @@ TEST(QdrModelingRuntimeToolTransformGizmoTests, TransformGizmoBuildsFramesOnlyFo
 		axis_ring_radius = std::max(axis_ring_radius, screen_distance(rotate_frame.info.screen_pivot, segment.screen_start));
 		axis_ring_radius = std::max(axis_ring_radius, screen_distance(rotate_frame.info.screen_pivot, segment.screen_end));
 	}
+	EXPECT_NEAR(axis_ring_radius, static_cast<float>(input.gizmo_size_pixels * 1.1), 2.0F);
 	EXPECT_TRUE(trackball_radius > axis_ring_radius * 1.08F);
 	EXPECT_TRUE(trackball_radius < axis_ring_radius * 1.20F);
 	EXPECT_TRUE(std::any_of(rotate_frame.ring_segments.begin(), rotate_frame.ring_segments.end(), [](const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment) {

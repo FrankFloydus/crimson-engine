@@ -21,6 +21,16 @@ namespace quader_editor_core {
 
 namespace {
 
+constexpr double gizmo_circle_size = 1.1;
+constexpr double gizmo_plane_size = 0.2;
+constexpr double gizmo_plane_distance = 0.3;
+constexpr double gizmo_arrow_size = 0.35;
+constexpr double gizmo_arrow_offset = gizmo_circle_size + 0.3;
+constexpr double gizmo_arrow_tip = gizmo_arrow_offset + gizmo_arrow_size;
+constexpr double gizmo_scale_offset = gizmo_circle_size + 0.3;
+constexpr double gizmo_scale_tip = gizmo_scale_offset * 1.11;
+constexpr double gizmo_view_rotation_scale = 1.14;
+
 quader_geometry::QVec2d tool_geometry_vec2(quader::QVec2 value)
 {
 	return { value.x, value.y };
@@ -286,8 +296,7 @@ void add_gizmo_ring(TransformGizmoFrame& frame, const ViewportCameraState& camer
 
 void add_gizmo_trackball_ring(TransformGizmoFrame& frame, const ViewportCameraState& camera, quader::QVec3 center, double screen_size, int ring_segment_count)
 {
-	constexpr double view_rotation_scale = 1.14;
-	const double radius = screen_sized_world_radius(camera, center, screen_size * view_rotation_scale);
+	const double radius = screen_sized_world_radius(camera, center, screen_size * gizmo_view_rotation_scale);
 	quader::QVec3 right = normalized_axis(camera.transform.x_axis);
 	quader::QVec3 up = normalized_axis(camera.transform.y_axis);
 	if (vec3_is_tiny(right)) {
@@ -368,23 +377,25 @@ TransformGizmoFrame build_transform_gizmo_frame(const TransformGizmoFrameInput& 
 	}
 
 	const double visual_scale = clamped_gizmo_scale(input.gizmo_scale);
-	const double screen_size = std::max(1.0, input.gizmo_size_pixels) * visual_scale;
+	const double unit_screen_size = std::max(1.0, input.gizmo_size_pixels) * visual_scale;
 	frame.info.ok = true;
 	frame.info.pivot = input.pivot;
 	frame.info.screen_pivot = screen_pivot;
 
 	if (input.tool == ViewportInteractionTool::rotate) {
-		add_gizmo_trackball_ring(frame, input.camera, input.pivot, screen_size, input.ring_segments);
-		add_gizmo_ring(frame, input.camera, TransformAxis::x, input.pivot, screen_size, input.ring_segments);
-		add_gizmo_ring(frame, input.camera, TransformAxis::y, input.pivot, screen_size, input.ring_segments);
-		add_gizmo_ring(frame, input.camera, TransformAxis::z, input.pivot, screen_size, input.ring_segments);
+		const double ring_screen_size = unit_screen_size * gizmo_circle_size;
+		add_gizmo_trackball_ring(frame, input.camera, input.pivot, ring_screen_size, input.ring_segments);
+		add_gizmo_ring(frame, input.camera, TransformAxis::x, input.pivot, ring_screen_size, input.ring_segments);
+		add_gizmo_ring(frame, input.camera, TransformAxis::y, input.pivot, ring_screen_size, input.ring_segments);
+		add_gizmo_ring(frame, input.camera, TransformAxis::z, input.pivot, ring_screen_size, input.ring_segments);
 		return frame;
 	}
 
 	const double pixel_world = viewport_world_units_per_pixel(input.camera, input.pivot);
-	const double axis_length = pixel_world * screen_size;
-	const double plane_offset = pixel_world * (screen_size * 0.50);
-	const double plane_half_size = pixel_world * (8.0 * visual_scale);
+	const double axis_length = pixel_world * unit_screen_size *
+		(input.tool == ViewportInteractionTool::scale ? gizmo_scale_tip : gizmo_arrow_tip);
+	const double plane_offset = pixel_world * unit_screen_size * (gizmo_plane_distance + gizmo_plane_size * 0.5);
+	const double plane_half_size = pixel_world * unit_screen_size * (gizmo_plane_size * 0.5);
 	add_gizmo_axis(frame, input.camera, TransformAxis::x, input.pivot, axis_length);
 	add_gizmo_axis(frame, input.camera, TransformAxis::y, input.pivot, axis_length);
 	add_gizmo_axis(frame, input.camera, TransformAxis::z, input.pivot, axis_length);
@@ -408,6 +419,28 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
 	const double pick_radius = scaled_gizmo_pick_radius(input.pick_radius_pixels, frame.info.gizmo_scale);
 
 	if (input.tool == ViewportInteractionTool::move || input.tool == ViewportInteractionTool::scale) {
+		std::vector<TransformGizmoPickCandidate> candidates;
+		candidates.reserve(frame.axes.size());
+		for (const TransformGizmoAxisPrimitive& axis : frame.axes) {
+			TransformGizmoPickCandidate candidate;
+			candidate.axis = axis.axis;
+			candidate.local_direction = axis_vector(axis.axis);
+			candidate.world_direction = candidate.local_direction;
+			candidate.screen_tip = axis.screen_tip;
+			candidate.visible = true;
+			candidates.push_back(candidate);
+		}
+		const TransformGizmoPickHit axis_hit = input.tool == ViewportInteractionTool::scale
+			? pick_scale_gizmo_axis(
+					screen_position,
+					frame.info.screen_pivot,
+					candidates,
+					pick_radius,
+					std::max(1.0, input.gizmo_size_pixels) * clamped_gizmo_scale(frame.info.gizmo_scale))
+			: pick_move_gizmo_axis(screen_position, frame.info.screen_pivot, candidates, pick_radius);
+		if (axis_hit.hit) {
+			return axis_hit;
+		}
 		for (const TransformGizmoPlanePrimitive& plane : frame.planes) {
 			const std::array<quader::QVec2, 4> polygon {
 				plane.screen0,
@@ -425,6 +458,7 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
 			result.screen_tip = plane_centroid(plane);
 			return result;
 		}
+		return result;
 	}
 
 	if (input.tool == ViewportInteractionTool::rotate) {
@@ -441,27 +475,7 @@ TransformGizmoPickHit pick_transform_gizmo(const TransformGizmoFrameInput& input
 		}
 		return pick_rotate_gizmo_axis(screen_position, candidates, pick_radius);
 	}
-
-	std::vector<TransformGizmoPickCandidate> candidates;
-	candidates.reserve(frame.axes.size());
-	for (const TransformGizmoAxisPrimitive& axis : frame.axes) {
-		TransformGizmoPickCandidate candidate;
-		candidate.axis = axis.axis;
-		candidate.local_direction = axis_vector(axis.axis);
-		candidate.world_direction = candidate.local_direction;
-		candidate.screen_tip = axis.screen_tip;
-		candidate.visible = true;
-		candidates.push_back(candidate);
-	}
-	if (input.tool == ViewportInteractionTool::scale) {
-		return pick_scale_gizmo_axis(
-				screen_position,
-				frame.info.screen_pivot,
-				candidates,
-				pick_radius,
-				std::max(1.0, input.gizmo_size_pixels) * clamped_gizmo_scale(frame.info.gizmo_scale));
-	}
-	return pick_move_gizmo_axis(screen_position, frame.info.screen_pivot, candidates, pick_radius);
+	return result;
 }
 
 double distance_to_screen_segment_squared(quader::QVec2 point, quader::QVec2 a, quader::QVec2 b)

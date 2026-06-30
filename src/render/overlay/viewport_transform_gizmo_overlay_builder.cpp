@@ -21,8 +21,15 @@ namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kCircleTau = kPi * 2.0f;
-constexpr int kConeSegments = 14;
-constexpr int kCenterCircleSegments = 18;
+constexpr float kGizmoCircleSize = 1.1f;
+constexpr float kGizmoArrowSize = 0.35f;
+constexpr float kGizmoArrowOffset = kGizmoCircleSize + 0.3f;
+constexpr float kGizmoArrowTip = kGizmoArrowOffset + kGizmoArrowSize;
+constexpr float kGizmoArrowConeRadius = 0.065f;
+constexpr float kGizmoScaleOffset = kGizmoCircleSize + 0.3f;
+constexpr float kGizmoScaleTip = kGizmoScaleOffset * 1.11f;
+constexpr float kGizmoScaleHalfWidth = 0.07f;
+constexpr int kConeSegments = 16;
 
 std::uint8_t channel(std::uint32_t color, int shift) {
     return static_cast<std::uint8_t>((color >> shift) & 0xffu);
@@ -30,12 +37,6 @@ std::uint8_t channel(std::uint32_t color, int shift) {
 
 std::uint8_t scaledByte(std::uint8_t value, float scale) {
     return static_cast<std::uint8_t>(std::clamp(std::lround(static_cast<float>(value) * scale), 0l, 255l));
-}
-
-std::uint32_t withAlpha(std::uint32_t color, float alpha) {
-    const std::uint32_t clampedAlpha =
-            static_cast<std::uint32_t>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-    return (color & 0x00ffffffu) | (clampedAlpha << 24u);
 }
 
 std::uint32_t multiplyColor(std::uint32_t color, float rgbScale, float alphaScale = 1.0f) {
@@ -68,13 +69,31 @@ std::uint32_t colorForPlane(quader_editor_core::TransformAxis axis) {
     switch (axis) {
     case quader_editor_core::TransformAxis::xy:
         return kOverlayToolPlaneXYColor;
-    case quader_editor_core::TransformAxis::yz:
-        return kOverlayToolPlaneYZColor;
     case quader_editor_core::TransformAxis::xz:
         return kOverlayToolPlaneXZColor;
+    case quader_editor_core::TransformAxis::yz:
+        return kOverlayToolPlaneYZColor;
     default:
         return rgba8(255, 255, 255, 255);
     }
+}
+
+std::uint32_t highlightColorForAxis(quader_editor_core::TransformAxis axis) {
+    switch (axis) {
+    case quader_editor_core::TransformAxis::x:
+    case quader_editor_core::TransformAxis::yz:
+        return kOverlayToolAxisXHighlightColor;
+    case quader_editor_core::TransformAxis::y:
+    case quader_editor_core::TransformAxis::xz:
+        return kOverlayToolAxisYHighlightColor;
+    case quader_editor_core::TransformAxis::z:
+    case quader_editor_core::TransformAxis::xy:
+        return kOverlayToolAxisZHighlightColor;
+    case quader_editor_core::TransformAxis::all:
+    case quader_editor_core::TransformAxis::none:
+        return kOverlayToolAxisHighlightColor;
+    }
+    return kOverlayToolAxisHighlightColor;
 }
 
 bool axisMatches(quader_editor_core::TransformAxis expected, quader_editor_core::TransformAxis actual) {
@@ -91,7 +110,7 @@ std::uint32_t authoredAxisColor(
         const quader_editor_core::TransformGizmoFrame& frame,
         quader_editor_core::TransformAxis axis,
         float alpha = 1.0f) {
-    return highlighted(frame, axis) ? kOverlayToolAxisHighlightColor : withAlpha(colorForAxis(axis), alpha);
+    return highlighted(frame, axis) ? highlightColorForAxis(axis) : multiplyColor(colorForAxis(axis), 1.0f, alpha);
 }
 
 float visualWidthScale(const quader_editor_core::TransformGizmoFrame& frame) {
@@ -153,7 +172,7 @@ void appendLine(
         std::uint32_t color,
         ViewportOverlayLayer layer,
         float widthPixels,
-        bool underpaint = true) {
+        bool underpaint = false) {
     const float clampedWidth = std::max(widthPixels, 1.0f);
     if (underpaint) {
         overlayFrame.lines.push_back(gizmoLine(
@@ -184,6 +203,18 @@ void appendTriangle(
     });
 }
 
+void appendQuad(
+        ViewportOverlayFrame& overlayFrame,
+        QVec3 a,
+        QVec3 b,
+        QVec3 c,
+        QVec3 d,
+        std::uint32_t color,
+        ViewportOverlayLayer layer = ViewportOverlayLayer::ToolHandle) {
+    appendTriangle(overlayFrame, a, b, c, color, layer);
+    appendTriangle(overlayFrame, a, c, d, color, layer);
+}
+
 float axisWorldLength(const quader_editor_core::TransformGizmoAxisPrimitive& axis) {
     return length(axis.world_tip - axis.world_start);
 }
@@ -193,6 +224,40 @@ float firstAxisWorldLength(const quader_editor_core::TransformGizmoFrame& frame)
         return 0.001f;
     }
     return std::max(axisWorldLength(frame.axes.front()), 0.001f);
+}
+
+float rotationRingRadiusWorld(
+        const quader_editor_core::TransformGizmoFrame& frame,
+        quader_editor_core::TransformAxis axis) {
+    float radius = 0.0f;
+    for (const quader_editor_core::TransformGizmoRingSegmentPrimitive& segment : frame.ring_segments) {
+        if (segment.axis != axis) {
+            continue;
+        }
+        radius = std::max(radius, length(segment.world_start - frame.info.pivot));
+        radius = std::max(radius, length(segment.world_end - frame.info.pivot));
+    }
+    return std::max(radius, 0.001f);
+}
+
+QVec3 projectedOntoPlane(QVec3 value, QVec3 normal) {
+    return value - normal * dot(value, normal);
+}
+
+QVec3 rotateAroundAxis(QVec3 value, QVec3 axis, float angleRadians) {
+    const float c = std::cos(angleRadians);
+    const float s = std::sin(angleRadians);
+    return value * c + cross(axis, value) * s + axis * (dot(axis, value) * (1.0f - c));
+}
+
+QVec3 normalizedRotateIndicatorStartDirection(
+        const quader_editor_core::TransformGizmoRotateIndicator& indicator) {
+    const QVec3 start = projectedOntoPlane(indicator.start_direction, indicator.world_axis);
+    const float startLength = length(start);
+    if (startLength > 0.000001f) {
+        return start / startLength;
+    }
+    return viewportOverlayFallbackPerpendicular(indicator.world_axis);
 }
 
 void appendPlane(
@@ -217,20 +282,18 @@ void appendPlane(
     appendLine(overlayFrame, plane.world3, plane.world0, color, ViewportOverlayLayer::ToolPlaneLine, 1.2f, false);
 }
 
-bool appendConeHandle(
+void appendConeHandle(
         ViewportOverlayFrame& overlayFrame,
-        QVec3 start,
+        QVec3 baseCenter,
         QVec3 tip,
         std::uint32_t color,
-        float sizeScale) {
-    QVec3 axis = tip - start;
-    const float axisLength = length(axis);
-    if (axisLength <= 0.000001f) {
-        return false;
+        float radiusWorld) {
+    QVec3 axis = tip - baseCenter;
+    const float coneLength = length(axis);
+    if (coneLength <= 0.000001f || radiusWorld <= 0.000001f) {
+        return;
     }
-    axis = axis / axisLength;
-    const float coneLength = axisLength * 0.22f * sizeScale;
-    const float radius = coneLength * 0.38f;
+    axis = axis / coneLength;
     QVec3 u = viewportOverlayFallbackPerpendicular(axis);
     QVec3 v = cross(axis, u);
     if (viewportOverlayVec3Tiny(v)) {
@@ -239,12 +302,11 @@ bool appendConeHandle(
         v = normalize(v);
     }
     u = normalize(cross(v, axis));
-    const QVec3 baseCenter = tip - axis * coneLength;
 
     std::array<QVec3, kConeSegments> basePoints = {};
     for (int i = 0; i < kConeSegments; ++i) {
         const float angle = kCircleTau * static_cast<float>(i) / static_cast<float>(kConeSegments);
-        basePoints[static_cast<std::size_t>(i)] = baseCenter + (u * std::cos(angle) + v * std::sin(angle)) * radius;
+        basePoints[static_cast<std::size_t>(i)] = baseCenter + (u * std::cos(angle) + v * std::sin(angle)) * radiusWorld;
     }
 
     for (int i = 0; i < kConeSegments; ++i) {
@@ -252,10 +314,87 @@ bool appendConeHandle(
         const QVec3 a = basePoints[static_cast<std::size_t>(i)];
         const QVec3 b = basePoints[static_cast<std::size_t>(next)];
         appendTriangle(overlayFrame, tip, a, b, color);
-        appendLine(overlayFrame, a, b, color, ViewportOverlayLayer::ToolHandle, 1.0f);
+        appendTriangle(overlayFrame, baseCenter, b, a, color);
     }
-    appendLine(overlayFrame, baseCenter, tip, color, ViewportOverlayLayer::ToolHandle, 1.0f);
-    return true;
+}
+
+void appendArrowHandle(
+        ViewportOverlayFrame& overlayFrame,
+        QVec3 start,
+        QVec3 tip,
+        std::uint32_t color,
+        float lineWidthPixels) {
+    QVec3 direction = tip - start;
+    const float axisLength = length(direction);
+    if (axisLength <= 0.000001f) {
+        return;
+    }
+    direction = direction / axisLength;
+    const float unitWorld = axisLength / kGizmoArrowTip;
+    const QVec3 coneBase = start + direction * (unitWorld * kGizmoArrowOffset);
+    appendLine(overlayFrame, start, coneBase, color, ViewportOverlayLayer::ToolHandle, lineWidthPixels);
+    appendConeHandle(overlayFrame, coneBase, tip, color, unitWorld * kGizmoArrowConeRadius);
+}
+
+void appendSquarePrism(
+        ViewportOverlayFrame& overlayFrame,
+        QVec3 start,
+        QVec3 end,
+        float halfWidthWorld,
+        std::uint32_t color) {
+    QVec3 axis = end - start;
+    const float lengthWorld = length(axis);
+    if (lengthWorld <= 0.000001f || halfWidthWorld <= 0.000001f) {
+        return;
+    }
+    axis = axis / lengthWorld;
+    QVec3 sideA = viewportOverlayFallbackPerpendicular(axis);
+    QVec3 sideB = viewportOverlayNormalizeOr(cross(axis, sideA), {0.0f, 1.0f, 0.0f});
+    sideA = viewportOverlayNormalizeOr(cross(sideB, axis), {1.0f, 0.0f, 0.0f});
+
+    const std::array<QVec3, 4> startCorners{{
+            start + sideA * halfWidthWorld + sideB * halfWidthWorld,
+            start - sideA * halfWidthWorld + sideB * halfWidthWorld,
+            start - sideA * halfWidthWorld - sideB * halfWidthWorld,
+            start + sideA * halfWidthWorld - sideB * halfWidthWorld,
+    }};
+    const std::array<QVec3, 4> endCorners{{
+            end + sideA * halfWidthWorld + sideB * halfWidthWorld,
+            end - sideA * halfWidthWorld + sideB * halfWidthWorld,
+            end - sideA * halfWidthWorld - sideB * halfWidthWorld,
+            end + sideA * halfWidthWorld - sideB * halfWidthWorld,
+    }};
+
+    for (int index = 0; index < 4; ++index) {
+        const int next = (index + 1) % 4;
+        appendQuad(
+                overlayFrame,
+                startCorners[static_cast<std::size_t>(index)],
+                startCorners[static_cast<std::size_t>(next)],
+                endCorners[static_cast<std::size_t>(next)],
+                endCorners[static_cast<std::size_t>(index)],
+                color);
+    }
+    appendQuad(overlayFrame, startCorners[0], startCorners[1], startCorners[2], startCorners[3], color);
+    appendQuad(overlayFrame, endCorners[3], endCorners[2], endCorners[1], endCorners[0], color);
+}
+
+void appendScaleHandle(
+        ViewportOverlayFrame& overlayFrame,
+        QVec3 start,
+        QVec3 tip,
+        std::uint32_t color,
+        float lineWidthPixels) {
+    QVec3 direction = tip - start;
+    const float axisLength = length(direction);
+    if (axisLength <= 0.000001f) {
+        return;
+    }
+    direction = direction / axisLength;
+    const float unitWorld = axisLength / kGizmoScaleTip;
+    const QVec3 blockStart = start + direction * (unitWorld * kGizmoScaleOffset);
+    appendLine(overlayFrame, start, blockStart, color, ViewportOverlayLayer::ToolHandle, lineWidthPixels);
+    appendSquarePrism(overlayFrame, blockStart, tip, unitWorld * kGizmoScaleHalfWidth, color);
 }
 
 void appendCubeFaceOutline(
@@ -338,31 +477,73 @@ void appendCubeHandle(
     }
 }
 
-void appendCenterCircle(
+void appendRotateIndicator(
         ViewportOverlayFrame& overlayFrame,
-        const ViewportOverlayCamera& camera,
-        QVec3 center,
-        float radiusWorld,
-        std::uint32_t color) {
-    if (radiusWorld <= 0.000001f) {
+        const quader_editor_core::TransformGizmoFrame& gizmoFrame) {
+    const quader_editor_core::TransformGizmoRotateIndicator& indicator = gizmoFrame.info.rotate_indicator;
+    if (!indicator.active ||
+            indicator.axis == quader_editor_core::TransformAxis::none ||
+            !std::isfinite(indicator.angle_degrees)) {
         return;
     }
-    const QVec3 right = viewportOverlayNormalizeOr(camera.right, {1.0f, 0.0f, 0.0f});
-    const QVec3 up = viewportOverlayNormalizeOr(camera.up, {0.0f, 1.0f, 0.0f});
-    for (int i = 0; i < kCenterCircleSegments; ++i) {
-        const float a0 = kCircleTau * static_cast<float>(i) / static_cast<float>(kCenterCircleSegments);
-        const float a1 = kCircleTau * static_cast<float>(i + 1) / static_cast<float>(kCenterCircleSegments);
-        const QVec3 p0 = center + (right * std::cos(a0) + up * std::sin(a0)) * radiusWorld;
-        const QVec3 p1 = center + (right * std::cos(a1) + up * std::sin(a1)) * radiusWorld;
-        appendTriangle(overlayFrame, center, p0, p1, color);
+
+    const float axisLength = length(indicator.world_axis);
+    if (axisLength <= 0.000001f) {
+        return;
     }
+    const QVec3 planeNormal = indicator.world_axis / axisLength;
+    const QVec3 startDirection = normalizedRotateIndicatorStartDirection(indicator);
+    const float angleRadians = static_cast<float>(indicator.angle_degrees * static_cast<double>(kPi) / 180.0);
+    const QVec3 currentDirection = viewportOverlayNormalizeOr(
+            rotateAroundAxis(startDirection, planeNormal, angleRadians),
+            startDirection);
+    const float ringRadius = rotationRingRadiusWorld(gizmoFrame, indicator.axis);
+    const float pieRadius = ringRadius * 0.98f;
+    const int arcSteps = std::clamp(static_cast<int>(std::abs(angleRadians) / (kPi / 24.0f)) + 2, 3, 72);
+
+    QVec3 previousPoint = gizmoFrame.info.pivot + startDirection * pieRadius;
+    if (std::abs(angleRadians) > 0.005f) {
+        for (int step = 1; step <= arcSteps; ++step) {
+            const float t = static_cast<float>(step) / static_cast<float>(arcSteps);
+            const QVec3 direction = rotateAroundAxis(startDirection, planeNormal, angleRadians * t);
+            const QVec3 point = gizmoFrame.info.pivot + direction * pieRadius;
+            appendTriangle(
+                    overlayFrame,
+                    gizmoFrame.info.pivot,
+                    previousPoint,
+                    point,
+                    kOverlayTransformGizmoRotatePieFillColor,
+                    ViewportOverlayLayer::ToolPreviewFill);
+            previousPoint = point;
+        }
+    }
+
+    const QVec3 startPoint = gizmoFrame.info.pivot + startDirection * pieRadius;
+    const QVec3 currentPoint = gizmoFrame.info.pivot + currentDirection * (ringRadius * 1.04f);
+    const QVec3 mousePoint = indicator.has_mouse_position ? indicator.mouse_position : currentPoint;
+    appendLine(
+            overlayFrame,
+            gizmoFrame.info.pivot,
+            startPoint,
+            kOverlayTransformGizmoRotatePieLineColor,
+            ViewportOverlayLayer::ToolPreviewLine,
+            1.25f,
+            false);
+    appendLine(
+            overlayFrame,
+            gizmoFrame.info.pivot,
+            mousePoint,
+            kOverlayTransformGizmoRotatePieLineColor,
+            ViewportOverlayLayer::ToolPreviewLine,
+            1.55f,
+            false);
 }
 
 void appendRotateGizmo(
         ViewportOverlayFrame& overlayFrame,
         const quader_editor_core::TransformGizmoFrame& gizmoFrame,
         float widthScale) {
-    const float trackballWidth = 2.65f * widthScale;
+    const float trackballWidth = 2.25f * widthScale;
     for (const quader_editor_core::TransformGizmoTrackballSegmentPrimitive& segment : gizmoFrame.trackball_segments) {
         appendLine(
                 overlayFrame,
@@ -381,10 +562,12 @@ void appendRotateGizmo(
                 overlayFrame,
                 segment.world_start,
                 segment.world_end,
-                authoredAxisColor(gizmoFrame, segment.axis, segment.alpha),
+                authoredAxisColor(gizmoFrame, segment.axis),
                 ViewportOverlayLayer::ToolHandle,
-                3.45f * widthScale);
+                3.0f * widthScale);
     }
+
+    appendRotateIndicator(overlayFrame, gizmoFrame);
 }
 
 void appendMoveOrScaleGizmo(
@@ -397,7 +580,7 @@ void appendMoveOrScaleGizmo(
             continue;
         }
         const std::uint32_t color =
-                highlighted(gizmoFrame, plane.axis) ? kOverlayToolAxisHighlightColor : colorForPlane(plane.axis);
+                highlighted(gizmoFrame, plane.axis) ? highlightColorForAxis(plane.axis) : colorForPlane(plane.axis);
         appendPlane(overlayFrame, plane, color);
     }
 
@@ -407,24 +590,14 @@ void appendMoveOrScaleGizmo(
         }
         const bool isHighlighted = highlighted(gizmoFrame, axis.axis);
         const std::uint32_t color = isHighlighted
-                ? kOverlayToolAxisHighlightColor
-                : withAlpha(colorForAxis(axis.axis), axis.alpha);
-        appendLine(
-                overlayFrame,
-                axis.world_start,
-                axis.world_tip,
-                color,
-                ViewportOverlayLayer::ToolHandle,
-                kOverlayTransformGizmoAxisLineWidthPixels * widthScale);
+                ? highlightColorForAxis(axis.axis)
+                : multiplyColor(colorForAxis(axis.axis), 1.0f, axis.alpha);
+        const float axisLineWidth = kOverlayTransformGizmoAxisLineWidthPixels * widthScale;
 
-        const float axisLength = std::max(axisWorldLength(axis), 0.0001f);
         if (gizmoFrame.info.tool == quader_editor_core::ViewportInteractionTool::scale) {
-            const float worldSize = std::max(
-                    0.0001f,
-                    axisLength * (kOverlayTransformGizmoScaleHandleSizePixels / kOverlayTransformGizmoSizePixels));
-            appendCubeHandle(overlayFrame, camera, axis.world_tip, worldSize, color, isHighlighted);
+            appendScaleHandle(overlayFrame, axis.world_start, axis.world_tip, color, axisLineWidth);
         } else {
-            (void)appendConeHandle(overlayFrame, axis.world_start, axis.world_tip, color, 1.0f);
+            appendArrowHandle(overlayFrame, axis.world_start, axis.world_tip, color, axisLineWidth);
         }
     }
 
@@ -432,22 +605,19 @@ void appendMoveOrScaleGizmo(
             gizmoFrame.info.hover_axis == quader_editor_core::TransformAxis::all ||
             gizmoFrame.info.active_axis == quader_editor_core::TransformAxis::all;
     if (gizmoFrame.info.tool == quader_editor_core::ViewportInteractionTool::scale) {
-        const float worldSize = std::max(
-                0.0001f,
-                firstAxisWorldLength(gizmoFrame) *
-                        (kOverlayTransformGizmoScaleCenterSizePixels / kOverlayTransformGizmoSizePixels));
-        appendCubeHandle(
-                overlayFrame,
-                camera,
-                gizmoFrame.info.pivot,
-                worldSize,
-                centerHovered ? kOverlayToolAxisHighlightColor : kOverlayToolCenterColor,
-                centerHovered);
-    } else {
-        const float radiusWorld =
-                firstAxisWorldLength(gizmoFrame) *
-                        (kOverlayTransformGizmoMoveCenterRadiusPixels / kOverlayTransformGizmoSizePixels);
-        appendCenterCircle(overlayFrame, camera, gizmoFrame.info.pivot, radiusWorld, kOverlayToolCenterColor);
+        if (centerHovered) {
+            const float worldSize = std::max(
+                    0.0001f,
+                    firstAxisWorldLength(gizmoFrame) *
+                            (kOverlayTransformGizmoScaleCenterSizePixels / kOverlayTransformGizmoSizePixels));
+            appendCubeHandle(
+                    overlayFrame,
+                    camera,
+                    gizmoFrame.info.pivot,
+                    worldSize,
+                    kOverlayToolAxisHighlightColor,
+                    true);
+        }
     }
 }
 
