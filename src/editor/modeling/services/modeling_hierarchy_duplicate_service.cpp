@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/services/modeling_hierarchy_duplicate_service.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
@@ -125,17 +126,26 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedEntity
         DocumentCommandService& documentCommands,
         ModelingHierarchyDuplicateRuntime runtime,
         ModelingSelectionMode resultSelectionMode) const {
+    QDR_PROFILE_FUNCTION();
     const std::vector<EntityId> roots = documentCommandSelectedRootEntities(scene);
     if (roots.empty()) {
         return {.ok = false, .changed = false, .message = "Select an entity to duplicate."};
     }
 
-    std::vector<EntityId> sourceMeshes = sourceMeshEntitiesInTreeOrder(scene, roots);
+    std::vector<EntityId> sourceMeshes;
+    {
+        QDR_PROFILE_SCOPE("Duplicate collect source meshes");
+        sourceMeshes = sourceMeshEntitiesInTreeOrder(scene, roots);
+    }
     if (!sourceMeshes.empty()) {
         if (runtime.ensureSceneObjectsSynced) {
+            QDR_PROFILE_SCOPE("Duplicate ensure scene objects synced");
             runtime.ensureSceneObjectsSynced();
         }
-        sourceMeshes = sourceMeshEntitiesInRuntimeOrder(session, scene, objectRegistry, sourceMeshes);
+        {
+            QDR_PROFILE_SCOPE("Duplicate order source meshes by runtime");
+            sourceMeshes = sourceMeshEntitiesInRuntimeOrder(session, scene, objectRegistry, sourceMeshes);
+        }
     }
 
     std::vector<EntityId> duplicateMeshes;
@@ -145,20 +155,35 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedEntity
             return {.ok = false, .changed = false, .message = "Modeling hierarchy duplicate runtime is unavailable."};
         }
 
-        const ModelingCommandResult objectMode = runtime.setSelectionMode(ModelingSelectionMode::Object);
+        const ModelingCommandResult objectMode = [&]() {
+            QDR_PROFILE_SCOPE("Duplicate switch to object mode");
+            return runtime.setSelectionMode(ModelingSelectionMode::Object);
+        }();
         if (!objectMode.ok) {
             restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return objectMode;
         }
-        (void)documentCommands.selectEntities(sourceMeshes, sourceMeshes.front());
-        runtime.projectObjectSelectionFromScene();
-        const ModelingCommandResult duplicate = runtime.duplicateSelectedMeshes();
+        {
+            QDR_PROFILE_SCOPE("Duplicate select source meshes");
+            (void)documentCommands.selectEntities(sourceMeshes, sourceMeshes.front());
+        }
+        {
+            QDR_PROFILE_SCOPE("Duplicate project object selection");
+            runtime.projectObjectSelectionFromScene();
+        }
+        const ModelingCommandResult duplicate = [&]() {
+            QDR_PROFILE_SCOPE("Duplicate runtime meshes");
+            return runtime.duplicateSelectedMeshes();
+        }();
         if (!duplicate.ok) {
             restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return duplicate;
         }
 
-        duplicateMeshes = selectedDuplicateMeshEntities(session, objectRegistry);
+        {
+            QDR_PROFILE_SCOPE("Duplicate collect runtime mesh clones");
+            duplicateMeshes = selectedDuplicateMeshEntities(session, objectRegistry);
+        }
         if (duplicateMeshes.size() != sourceMeshes.size()) {
             restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
             return {
@@ -170,8 +195,10 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedEntity
     }
 
     const std::unordered_map<EntityId, EntityId> cloneBySource = pairDuplicateMeshes(sourceMeshes, duplicateMeshes);
-    const DocumentDuplicateHierarchyResult duplicated =
-            documentCommands.duplicateHierarchyWithExistingClones(roots, cloneBySource);
+    const DocumentDuplicateHierarchyResult duplicated = [&]() {
+        QDR_PROFILE_SCOPE("Duplicate document hierarchy");
+        return documentCommands.duplicateHierarchyWithExistingClones(roots, cloneBySource);
+    }();
     if (!duplicated.ok || duplicated.duplicateRoots.empty()) {
         restoreGroupSelection(documentCommands, runtime, roots, resultSelectionMode);
         return {
@@ -181,7 +208,10 @@ ModelingCommandResult ModelingHierarchyDuplicateService::duplicateSelectedEntity
         };
     }
 
-    (void)documentCommands.selectEntities(duplicated.duplicateRoots, duplicated.duplicateRoots.front());
+    {
+        QDR_PROFILE_SCOPE("Duplicate select duplicate roots");
+        (void)documentCommands.selectEntities(duplicated.duplicateRoots, duplicated.duplicateRoots.front());
+    }
     if (runtime.setSelectionMode) {
         (void)runtime.setSelectionMode(resultSelectionMode);
     }

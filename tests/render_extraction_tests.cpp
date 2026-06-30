@@ -960,6 +960,39 @@ TEST(OverlayRenderableBuilderTests, SanitizesCameraBeforeSigning) {
     EXPECT_NE(OverlayRenderableBuilder::cameraSignature(sanitized), OverlayRenderableBuilder::cameraSignature(testOverlayCamera()));
 }
 
+TEST(OverlayRenderableBuilderTests, LayerBuildSignatureOnlyUsesCameraForScreenSpaceLayers) {
+    ViewportOverlayFrame frame;
+    frame.triangles.push_back({
+            .layer = ViewportOverlayLayer::SelectedVisibleFace,
+            .a = {-0.5f, -0.5f, -1.0f},
+            .b = {0.5f, -0.5f, -1.0f},
+            .c = {0.0f, 0.5f, -1.0f},
+            .color = kOverlaySelectionFaceColor,
+    });
+    frame.lines.push_back({
+            .layer = ViewportOverlayLayer::SourceWire,
+            .start = {-0.5f, 0.0f, -1.0f},
+            .end = {0.5f, 0.0f, -1.0f},
+            .color = kOverlaySourceWireColor,
+            .widthPixels = 1.5f,
+    });
+
+    ViewportOverlayCamera camera = testOverlayCamera();
+    ViewportOverlayCamera movedCamera = camera;
+    movedCamera.eye.x += 3.0f;
+    movedCamera.forward = {0.25f, 0.0f, -1.0f};
+
+    EXPECT_FALSE(OverlayRenderableBuilder::layerBuildDependsOnCamera(ViewportOverlayLayer::SelectedVisibleFace));
+    EXPECT_EQ(
+            OverlayRenderableBuilder::layerBuildSignature(frame, camera, ViewportOverlayLayer::SelectedVisibleFace),
+            OverlayRenderableBuilder::layerBuildSignature(frame, movedCamera, ViewportOverlayLayer::SelectedVisibleFace));
+
+    EXPECT_TRUE(OverlayRenderableBuilder::layerBuildDependsOnCamera(ViewportOverlayLayer::SourceWire));
+    EXPECT_NE(
+            OverlayRenderableBuilder::layerBuildSignature(frame, camera, ViewportOverlayLayer::SourceWire),
+            OverlayRenderableBuilder::layerBuildSignature(frame, movedCamera, ViewportOverlayLayer::SourceWire));
+}
+
 TEST(OverlayProxyFactoryTests, CountsOnlyNonEmptyRenderableBatches) {
     OverlayLayerBuildPlan plan;
     plan.faceFillBatches.push_back({});

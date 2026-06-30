@@ -11,14 +11,36 @@
 namespace quader {
 
 bool ViewportPaneOverlayCache::needsRefresh(const ViewportPaneOverlayCacheKey& key) const {
-    return dirty_ ||
-            !valid_ ||
-            key_.contentRevision != key.contentRevision ||
-            key_.selectionRevision != key.selectionRevision ||
-            key_.sceneRevision != key.sceneRevision ||
-            key_.assetRevision != key.assetRevision ||
-            key_.overlaySignature != key.overlaySignature ||
-            key_.selectionMode != key.selectionMode;
+    return refreshReason(key) != ViewportPaneOverlayCacheRefreshReason::None;
+}
+
+ViewportPaneOverlayCacheRefreshReason ViewportPaneOverlayCache::refreshReason(
+        const ViewportPaneOverlayCacheKey& key) const {
+    if (dirty_) {
+        return ViewportPaneOverlayCacheRefreshReason::Dirty;
+    }
+    if (!valid_) {
+        return ViewportPaneOverlayCacheRefreshReason::Invalid;
+    }
+    if (key_.contentRevision != key.contentRevision) {
+        return ViewportPaneOverlayCacheRefreshReason::ContentRevision;
+    }
+    if (key_.selectionRevision != key.selectionRevision) {
+        return ViewportPaneOverlayCacheRefreshReason::SelectionRevision;
+    }
+    if (key_.sceneRevision != key.sceneRevision) {
+        return ViewportPaneOverlayCacheRefreshReason::SceneRevision;
+    }
+    if (key_.assetRevision != key.assetRevision) {
+        return ViewportPaneOverlayCacheRefreshReason::AssetRevision;
+    }
+    if (key_.overlaySignature != key.overlaySignature) {
+        return ViewportPaneOverlayCacheRefreshReason::OverlaySignature;
+    }
+    if (key_.selectionMode != key.selectionMode) {
+        return ViewportPaneOverlayCacheRefreshReason::SelectionMode;
+    }
+    return ViewportPaneOverlayCacheRefreshReason::None;
 }
 
 void ViewportPaneOverlayCache::markDirty() {

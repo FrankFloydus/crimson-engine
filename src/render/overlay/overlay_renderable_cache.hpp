@@ -79,7 +79,7 @@ private:
         std::array<OverlayProxyGroup, kViewportOverlayLayerCount> proxyGroups;
     };
 
-    void rebuildSlot(OverlaySlot& slot);
+    void rebuildSlot(OverlaySlot& slot, bool rebuildCameraIndependentLayers);
     void destroySlot(OverlaySlot& slot);
     void destroyGroup(OverlayProxyGroup& group);
 

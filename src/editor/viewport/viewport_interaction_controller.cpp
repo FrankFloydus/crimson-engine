@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/viewport/viewport_interaction_controller.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/tools/viewport_tool.hpp"
 
 namespace quader {
@@ -13,6 +14,7 @@ namespace quader {
 ViewportBeforeToolInteractionResult ViewportInteractionController::handleBeforeActiveTool(
         QuaderEditorApi& editor,
         const ViewportInteractionFrame& frame) {
+    QDR_PROFILE_FUNCTION();
     return transformGizmo_.handleFrame(editor, frame);
 }
 
@@ -21,6 +23,7 @@ void ViewportInteractionController::handleAfterActiveTool(
         const ViewportInteractionFrame& frame,
         const ViewportToolResult& toolResult,
         const ViewportBeforeToolInteractionResult& beforeTool) {
+    QDR_PROFILE_FUNCTION();
     selection_.handleFrame(editor, frame, toolResult, beforeTool);
 }
 

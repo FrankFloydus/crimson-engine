@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/mesh_renderable_cache.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
 
 #include <utility>
@@ -112,11 +113,13 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
         bool castShadows,
         bool doubleSided,
         std::uint64_t materialRevision) {
+    QDR_PROFILE_FUNCTION();
     if (!factory_) {
         return;
     }
 
     if (needsRebuild(entityId, meshId, mesh, materialId, castShadows, doubleSided, materialRevision)) {
+        QDR_PROFILE_SCOPE("Mesh renderable rebuild proxies");
         remove(entityId);
         MeshRenderableProxy renderedProxy = factory_->create(
                 entityId,
@@ -163,17 +166,21 @@ void MeshRenderableCache::syncMesh(EntityId entityId,
     }
 
     if (auto existing = renderedMeshProxies_.find(entityId); existing != renderedMeshProxies_.end()) {
+        QDR_PROFILE_SCOPE("Mesh renderable update rendered transform");
         factory_->updateTransform(existing->second, worldTransform);
     }
     if (auto existing = shadedMeshProxies_.find(entityId); existing != shadedMeshProxies_.end()) {
+        QDR_PROFILE_SCOPE("Mesh renderable update shaded transform");
         factory_->updateTransform(existing->second, worldTransform);
     }
     if (auto existing = overlayDepthMeshProxies_.find(entityId); existing != overlayDepthMeshProxies_.end()) {
+        QDR_PROFILE_SCOPE("Mesh renderable update depth transform");
         factory_->updateTransform(existing->second, worldTransform);
     }
 }
 
 void MeshRenderableCache::remove(EntityId entityId) {
+    QDR_PROFILE_FUNCTION();
     if (!factory_) {
         return;
     }
@@ -193,6 +200,7 @@ void MeshRenderableCache::remove(EntityId entityId) {
 }
 
 void MeshRenderableCache::removeExcept(const std::unordered_set<EntityId>& liveMeshEntities) {
+    QDR_PROFILE_FUNCTION();
     if (!factory_) {
         return;
     }

@@ -12,6 +12,7 @@
 #include "assets/mesh_asset.hpp"
 #include "core/localization_service.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/commands/modeling/scene_aware_delete_selection_command.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
@@ -710,6 +711,7 @@ void ViewportPanel::prepareViewports(
         SceneRenderBridge& renderBridge,
         const SceneDocument& document,
         const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     workspace_ = &workspace;
     const float gridWorldSize = viewportGridWorldSizeForPreset(workspace.gridPreset());
     const ViewportSettings& settings = activeViewportSettings();
@@ -717,6 +719,7 @@ void ViewportPanel::prepareViewports(
     const bool gizmosVisible = settings.boolValue(ViewportBoolSettingId::ShowGizmos);
     const bool overlaysVisible = settings.boolValue(ViewportBoolSettingId::ShowOverlays);
     for (ViewportPaneId paneId : activeRenderPanes_) {
+        QDR_PROFILE_SCOPE("Viewport prepare pane");
         Pane& paneState = pane(paneId);
         ViewportWorkspacePaneState& paneWorkspace = workspace.pane(paneId);
         if (!paneState.initialized || !paneWorkspace.visibleThisFrame) {
@@ -746,6 +749,7 @@ void ViewportPanel::prepareViewports(
                 ? selectionOverlayCache_.key().selectionMode
                 : viewportSelectionModeToApp(inputRouter_.state().selectionMode);
         if (paneWorkspace.shading == ViewportShadingMode::Wireframe) {
+            QDR_PROFILE_SCOPE("Viewport build wireframe overlay");
             overlayFrame = ViewportSceneOverlayBuilder::buildWireframeFrame(
                     std::move(overlayFrame),
                     overlayMode,
@@ -772,16 +776,21 @@ void ViewportPanel::prepareViewports(
                 overlayFrame,
                 settings,
                 ViewportOverlayStyleContext{.selectionMode = overlaySelectionContext(overlayMode)});
-        renderBridge.setOverlayFrame(
-                viewportPaneIndex(paneId),
-                viewportGridLayerMask(viewportPaneIndex(paneId)),
-                std::move(overlayFrame),
-                ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize));
+        {
+            QDR_PROFILE_SCOPE("Viewport submit overlay frame");
+            renderBridge.setOverlayFrame(
+                    viewportPaneIndex(paneId),
+                    viewportGridLayerMask(viewportPaneIndex(paneId)),
+                    std::move(overlayFrame),
+                    ViewportCameraAdapter::overlayCamera(paneWorkspace.camera, paneWorkspace.renderSize));
+        }
     }
 }
 
 void ViewportPanel::renderViewports(filament::Renderer& renderer) {
+    QDR_PROFILE_FUNCTION();
     for (ViewportPaneId paneId : activeRenderPanes_) {
+        QDR_PROFILE_SCOPE("Viewport render pane");
         Pane& paneState = pane(paneId);
         if (!paneState.initialized || workspace_ == nullptr || !workspace_->paneVisible(paneId)) {
             continue;
@@ -1021,6 +1030,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         bool* viewportCursorCaptureRequested,
         QVec2* viewportCursorCapturePoint,
         const UIContext& uiContext) {
+    QDR_PROFILE_FUNCTION();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     const std::string windowTitle =
@@ -1074,6 +1084,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
     const std::vector<ViewportPanePlacement> placements = viewportWorkspace.activePanePlacements();
     drawPanes.reserve(placements.size());
     for (const ViewportPanePlacement& placement : placements) {
+        QDR_PROFILE_SCOPE("Viewport draw pane image");
         Pane& paneState = pane(placement.paneId);
         const ImVec2 itemMin = ViewportPaneController::paneRectMin(canvasMin, available, placement.normalizedRect);
         const ImVec2 itemSize = ViewportPaneController::paneRectSize(available, placement.normalizedRect);
@@ -1146,6 +1157,7 @@ void ViewportPanel::draw(SceneRenderBridge& renderBridge,
         }
     }
     if (inputPane != nullptr) {
+        QDR_PROFILE_SCOPE("Viewport draw input pane contents");
         const bool inputOwnsActiveGizmoDrag =
                 transformDragLocksInput && inputPane->pane->id == interactionPaneId_;
         const bool inputOwnsActiveNavigationGizmoDrag =
@@ -1260,24 +1272,89 @@ void ViewportPanel::refreshCachedSelectionOverlayFrame(
         const SceneDocument& document,
         const AssetRegistry& assets,
         ModelingSessionService& modeling) {
-    const ModelingSelectionSummary overlaySummary = modeling.selectionSummary();
+    const ModelingSelectionSummary overlaySummary = [&]() {
+        QDR_PROFILE_SCOPE("Viewport selection overlay summary");
+        return modeling.selectionSummary();
+    }();
+    const std::uint64_t overlaySignature = [&]() {
+        QDR_PROFILE_SCOPE("Viewport selection overlay signature");
+        return modeling.selectionOverlaySignature();
+    }();
     const ViewportPaneOverlayCacheKey key{
             .contentRevision = overlaySummary.contentRevision,
             .selectionRevision = overlaySummary.selectionRevision,
             .sceneRevision = document.revision(),
             .assetRevision = assets.revision(),
-            .overlaySignature = modeling.selectionOverlaySignature(),
+            .overlaySignature = overlaySignature,
             .selectionMode = overlaySummary.mode,
     };
-    if (!selectionOverlayCache_.needsRefresh(key)) {
+    const ViewportPaneOverlayCacheRefreshReason refreshReason = [&]() {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache check");
+        return selectionOverlayCache_.refreshReason(key);
+    }();
+    if (refreshReason == ViewportPaneOverlayCacheRefreshReason::None) {
         return;
     }
 
-    ViewportOverlayFrame frame = ViewportSceneOverlayBuilder::buildSelectionFrame(
-            modeling.selectionOverlayFrame(),
-            document,
-            assets);
-    selectionOverlayCache_.update(std::move(frame), key);
+    auto rebuildCache = [&]() {
+        ViewportOverlayFrame sourceFrame = [&]() {
+            QDR_PROFILE_SCOPE("Viewport selection overlay source frame");
+            return modeling.selectionOverlayFrame();
+        }();
+        ViewportOverlayFrame frame = [&]() {
+            QDR_PROFILE_SCOPE("Viewport selection overlay project frame");
+            return ViewportSceneOverlayBuilder::buildSelectionFrame(
+                    std::move(sourceFrame),
+                    document,
+                    assets);
+        }();
+        selectionOverlayCache_.update(std::move(frame), key);
+    };
+
+    switch (refreshReason) {
+    case ViewportPaneOverlayCacheRefreshReason::Dirty: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh dirty");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::Invalid: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh invalid");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::ContentRevision: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh content revision");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::SelectionRevision: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh selection revision");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::SceneRevision: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh scene revision");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::AssetRevision: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh asset revision");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::OverlaySignature: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh overlay signature");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::SelectionMode: {
+        QDR_PROFILE_SCOPE("Viewport selection overlay cache refresh selection mode");
+        rebuildCache();
+        break;
+    }
+    case ViewportPaneOverlayCacheRefreshReason::None:
+        break;
+    }
 }
 
 ViewportWorkspaceService& ViewportPanel::workspace() {
@@ -1307,6 +1384,7 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         ImVec2 itemSize,
         bool hovered,
         bool focusHovered) {
+    QDR_PROFILE_FUNCTION();
     ViewportWorkspaceService& viewportWorkspace = workspace();
     ViewportCameraController& camera = viewportWorkspace.camera(paneState.id);
     const ImVec2 itemMax{itemMin.x + itemSize.x, itemMin.y + itemSize.y};
@@ -1318,16 +1396,20 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     };
 
     const bool useCapturedMouseDelta = inputRouter_.flyCursorCaptureActive();
-    ViewportInputFrame input = inputFrameBuilder_.build({
-            .hovered = hovered,
-            .focused = focusState.focused,
-            .itemMin = itemMin,
-            .itemSize = itemSize,
-            .routeActiveNavigationInput = inputRouter_.navigating(),
-            .useCapturedMouseDelta = useCapturedMouseDelta,
-            .capturedMouseDelta = capturedMouseDelta,
-            .deltaSeconds = static_cast<float>(std::max(uiContext.frameTiming.deltaSeconds, 0.0)),
-    });
+    ViewportInputFrame input;
+    {
+        QDR_PROFILE_SCOPE("Viewport build input frame");
+        input = inputFrameBuilder_.build({
+                .hovered = hovered,
+                .focused = focusState.focused,
+                .itemMin = itemMin,
+                .itemSize = itemSize,
+                .routeActiveNavigationInput = inputRouter_.navigating(),
+                .useCapturedMouseDelta = useCapturedMouseDelta,
+                .capturedMouseDelta = capturedMouseDelta,
+                .deltaSeconds = static_cast<float>(std::max(uiContext.frameTiming.deltaSeconds, 0.0)),
+        });
+    }
     const ModelingToolSettingsTarget toolSettingsTarget = modeling.toolSettingsTarget();
     input.navigationActive = inputRouter_.navigating();
     input.flyNavigationActive = inputRouter_.flyNavigating();
@@ -1337,12 +1419,18 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     input.activeToolOwnsViewport = inputRouter_.activeToolOwnsViewport();
     input.operationPreviewActive = toolSettingsTarget.operationPreviewActive;
     input.gridPreset = viewportWorkspace.gridPreset();
-    resolveKeybindingsForFrame(
-            uiContext.editor,
-            inputRouter_.state(),
-            input,
-            uiContext.commandShortcutConsumed);
-    const ViewportInputResult result = inputRouter_.handleFrame(input, camera);
+    {
+        QDR_PROFILE_SCOPE("Viewport resolve keybindings");
+        resolveKeybindingsForFrame(
+                uiContext.editor,
+                inputRouter_.state(),
+                input,
+                uiContext.commandShortcutConsumed);
+    }
+    const ViewportInputResult result = [&]() {
+        QDR_PROFILE_SCOPE("Viewport route input frame");
+        return inputRouter_.handleFrame(input, camera);
+    }();
     const ViewportShortcutControllerResult operationPreviewShortcut =
             shortcutController_.handleOperationPreviewShortcut(result, toolSettingsTarget, uiContext.editor);
     const bool operationPreviewShortcutConsumed = operationPreviewShortcut.consumed;
@@ -1535,14 +1623,17 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     }
 
     const bool suppressHoverWork = result.navigationActive || result.cameraChanged;
-    const bool navigationGizmoConsumed = navigationGizmo_.draw(
-            camera,
-            paneState.id,
-            itemMin,
-            itemSize,
-            capturedMouseDelta,
-            viewportCursorCaptureRequested,
-            viewportCursorCapturePoint);
+    const bool navigationGizmoConsumed = [&]() {
+        QDR_PROFILE_SCOPE("Viewport draw navigation gizmo");
+        return navigationGizmo_.draw(
+                camera,
+                paneState.id,
+                itemMin,
+                itemSize,
+                capturedMouseDelta,
+                viewportCursorCaptureRequested,
+                viewportCursorCapturePoint);
+    }();
     if (suppressHoverWork || navigationGizmoConsumed || result.gridPresetChanged) {
         hoverController_.invalidate();
     }
@@ -1567,9 +1658,11 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
             .leftDown = leftDown,
             .leftReleased = leftReleased,
     };
-    const ViewportBeforeToolInteractionResult beforeTool =
-            cancelConsumed ? ViewportBeforeToolInteractionResult{} :
-            interactionController_.handleBeforeActiveTool(uiContext.editor, interactionFrame);
+    const ViewportBeforeToolInteractionResult beforeTool = [&]() {
+        QDR_PROFILE_SCOPE("Viewport before tool interaction");
+        return cancelConsumed ? ViewportBeforeToolInteractionResult{} :
+                interactionController_.handleBeforeActiveTool(uiContext.editor, interactionFrame);
+    }();
     if (interactionController_.dragging() || beforeTool.gizmoConsumed) {
         interactionPaneId_ = paneState.id;
     }
@@ -1730,38 +1823,43 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
     toolContext.handleToolCommandResult = handleToolCommandResult;
 
     const bool canInteractWithActiveTool = hovered && !gizmoConsumed && !result.navigationActive;
-    const ViewportToolResult activeToolFrameResult = inputRouter_.handleActiveToolEvent(toolContext, ViewportToolEvent{
-            .kind = ViewportToolEventKind::Frame,
-            .tool = inputRouter_.state().activeTool,
-            .pointer = {
-                    .hovered = hovered,
-                    .leftClicked = leftClicked,
-                    .leftDown = leftDown,
-                    .leftReleased = leftReleased,
-                    .canInteract = canInteractWithActiveTool,
-                    .finalizePressed = finalizePressed,
-                    .modeCyclePressed = modeCyclePressed,
-                    .suppressHoverWork = suppressHoverWork,
-                    .gizmoConsumed = gizmoConsumed,
-                    .navigationActive = result.navigationActive,
-                    .textInputActive = input.textInputActive,
-                    .mouseLocal = input.mouseLocal,
-                    .leftClickLocal = leftClickLocal,
-                    .viewportSize = input.viewportSize,
-                    .modifiers = input.modifiers,
-            },
-    });
+    const ViewportToolResult activeToolFrameResult = [&]() {
+        QDR_PROFILE_SCOPE("Viewport active tool frame");
+        return inputRouter_.handleActiveToolEvent(toolContext, ViewportToolEvent{
+                .kind = ViewportToolEventKind::Frame,
+                .tool = inputRouter_.state().activeTool,
+                .pointer = {
+                        .hovered = hovered,
+                        .leftClicked = leftClicked,
+                        .leftDown = leftDown,
+                        .leftReleased = leftReleased,
+                        .canInteract = canInteractWithActiveTool,
+                        .finalizePressed = finalizePressed,
+                        .modeCyclePressed = modeCyclePressed,
+                        .suppressHoverWork = suppressHoverWork,
+                        .gizmoConsumed = gizmoConsumed,
+                        .navigationActive = result.navigationActive,
+                        .textInputActive = input.textInputActive,
+                        .mouseLocal = input.mouseLocal,
+                        .leftClickLocal = leftClickLocal,
+                        .viewportSize = input.viewportSize,
+                        .modifiers = input.modifiers,
+                },
+        });
+    }();
     const ModelingBoxPreview& boxPreview = inputRouter_.boxPreview();
     if (boxPreview.dragState != ModelingBoxDragState::Height) {
         modalToolOverlayRenderer_.drawBoxPreview(ImGui::GetWindowDrawList(), boxPreview, camera, itemMin, itemSize);
     }
 
-    interactionController_.handleAfterActiveTool(
-            uiContext.editor,
-            interactionFrame,
-            activeToolFrameResult,
-            beforeTool);
-    selectionOverlayCache_.markDirty();
+    {
+        QDR_PROFILE_SCOPE("Viewport after tool interaction");
+        interactionController_.handleAfterActiveTool(
+                uiContext.editor,
+                interactionFrame,
+                activeToolFrameResult,
+                beforeTool);
+    }
 
     const bool selectionFallbackActive = inputRouter_.activeToolAllowsSelectionFallback();
     if (!activeToolFrameResult.handled &&
@@ -1796,7 +1894,10 @@ void ViewportPanel::drawPaneContents(Pane& paneState,
         selectionOverlayCache_.markDirty();
     }
 
-    refreshCachedSelectionOverlayFrame(document, assets, modeling);
+    {
+        QDR_PROFILE_SCOPE("Viewport refresh selection overlay");
+        refreshCachedSelectionOverlayFrame(document, assets, modeling);
+    }
     modalToolOverlayRenderer_.drawFlyNavigationOverlay(
             ImGui::GetWindowDrawList(),
             itemMin,

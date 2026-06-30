@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "assets/mesh_asset.hpp"
+#include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
 #include "scene/scene_document.hpp"
 
@@ -29,9 +30,11 @@ SceneRenderExtractionPlan buildSceneRenderExtractionPlan(
         const SceneDocument& document,
         const AssetRegistry& assets,
         const MaterialBindingService& materialBinding) {
+    QDR_PROFILE_FUNCTION();
     SceneRenderExtractionPlan plan;
 
     for (const EntityId entityId : document.entities()) {
+        QDR_PROFILE_SCOPE("Scene render extract entity");
         if (!document.isEffectivelyVisible(entityId)) {
             continue;
         }

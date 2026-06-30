@@ -7,6 +7,7 @@
 #include "render/overlay/viewport_scene_overlay_builder.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "mesh/polygon/document.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -118,6 +119,7 @@ void appendMeshSelectionWire(
         ViewportOverlayLayer layer = ViewportOverlayLayer::SourceWire,
         ViewportOverlayStyleRole styleRole = ViewportOverlayStyleRole::SelectedSourceWire,
         ViewportOverlaySource source = ViewportOverlaySource::Selection) {
+    QDR_PROFILE_FUNCTION();
     if (!document.isEffectivelyVisible(entity)) {
         return;
     }
@@ -433,7 +435,9 @@ void appendSceneWireframeOverlay(
         ViewportOverlayFrame& frame,
         const SceneDocument& document,
         const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     for (const EntityId entity : document.entities()) {
+        QDR_PROFILE_SCOPE("Viewport scene wireframe entity");
         if (!document.isEffectivelyVisible(entity)) {
             continue;
         }
@@ -481,6 +485,7 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::buildSelectionFrame(
         ViewportOverlayFrame baseFrame,
         const SceneDocument& document,
         const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     appendHierarchySelectionWires(baseFrame, document, assets);
     appendGroupSelectionCages(baseFrame, document, assets);
     appendSelectedLightMarkers(baseFrame, document);
@@ -492,6 +497,7 @@ ViewportOverlayFrame ViewportSceneOverlayBuilder::buildWireframeFrame(
         ModelingSelectionMode selectionMode,
         const SceneDocument& document,
         const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     stripWireframeObjectFaceFills(baseFrame, selectionMode);
     appendSceneWireframeOverlay(baseFrame, document, assets);
     return baseFrame;

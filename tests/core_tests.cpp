@@ -2415,7 +2415,7 @@ TEST(ViewportRendererTests, MultiViewportRenderDoesNotMutateSceneInsideFilamentF
     EXPECT_NE(viewportPanelSource.find("renderBridge.setOverlayFrame("), std::string::npos);
     EXPECT_NE(viewportPanelSource.find("viewportGridLayerMask(viewportPaneIndex(paneId))"), std::string::npos);
     EXPECT_NE(overlayProxyFactorySource.find(".layerMask(kViewportAllLayerMask, layerMask)"), std::string::npos);
-    EXPECT_NE(overlayCacheSource.find("void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot)"), std::string::npos);
+    EXPECT_NE(overlayCacheSource.find("void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot, bool rebuildCameraIndependentLayers)"), std::string::npos);
 }
 
 TEST(RenderLifecycleTests, ResourceOwnersShutdownBeforeInitialize) {
@@ -2587,6 +2587,22 @@ TEST(SceneEntityNamingTests, MeshNamesStartAtBaseNameThenUseOneBasedSuffixes) {
     scene.setMesh(second, MeshComponent{.mesh = 2});
     EXPECT_EQ(SceneEntityNaming::nextNameForKind(scene, SceneEntityKind::Mesh), "Mesh_2");
     EXPECT_NE(SceneEntityNaming::nextNameForKind(scene, SceneEntityKind::Mesh), "Mesh_0");
+}
+
+TEST(SceneEntityNamingTests, BatchAllocatorUsesDocumentNamesAndReservesGeneratedNames) {
+    SceneDocument scene;
+    const EntityId first = scene.createEntity("Mesh");
+    scene.setMesh(first, MeshComponent{.mesh = 1});
+    const EntityId second = scene.createEntity("Mesh_1");
+    scene.setMesh(second, MeshComponent{.mesh = 2});
+
+    SceneEntityNameAllocator names(scene);
+
+    EXPECT_EQ(names.nextNameForKind(SceneEntityKind::Mesh), "Mesh_2");
+    EXPECT_EQ(names.nextNameForKind(SceneEntityKind::Mesh), "Mesh_3");
+
+    names.reserveName("Mesh_4");
+    EXPECT_EQ(names.nextNameForKind(SceneEntityKind::Mesh), "Mesh_5");
 }
 
 TEST(SceneDocumentTests, TracksMultipleSelectedEntitiesInStableOrder) {
@@ -9361,6 +9377,57 @@ TEST(ModelingSessionServiceTests, FaceTransformDragKeepsComponentSelectionAndMov
     ASSERT_TRUE(storedBounds.has_value());
     EXPECT_NEAR(storedBounds->min.x, -1.0f, 0.001f);
     EXPECT_NEAR(storedBounds->max.x, 3.0f, 0.001f);
+}
+
+TEST(ModelingSessionServiceTests, ComponentTransformSyncKeepsUntouchedMeshAssetRevision) {
+    SceneDocument scene;
+    AssetRegistry assets;
+    ModelingSessionService service(scene, assets);
+
+    const ModelingCreateBoxResult edited = service.createBoxFromBounds({
+            .bounds = {.min = {-3.0f, -1.0f, -1.0f}, .max = {-1.0f, 1.0f, 1.0f}},
+            .name = "Edited Component Sync Box",
+    });
+    ASSERT_TRUE(edited.ok) << edited.message;
+    const ModelingCreateBoxResult untouched = service.createBoxFromBounds({
+            .bounds = {.min = {1.0f, -1.0f, -1.0f}, .max = {3.0f, 1.0f, 1.0f}},
+            .name = "Untouched Component Sync Box",
+    });
+    ASSERT_TRUE(untouched.ok) << untouched.message;
+
+    const MeshComponent* editedMesh = scene.mesh(edited.object.entity);
+    ASSERT_NE(editedMesh, nullptr);
+    const MeshComponent* untouchedMesh = scene.mesh(untouched.object.entity);
+    ASSERT_NE(untouchedMesh, nullptr);
+    const AssetId editedMeshId = editedMesh->mesh;
+    const AssetId untouchedMeshId = untouchedMesh->mesh;
+    const std::uint64_t editedRevisionBefore = assets.meshRevision(editedMeshId).value;
+    const std::uint64_t untouchedRevisionBefore = assets.meshRevision(untouchedMeshId).value;
+
+    ASSERT_TRUE(service.setSelectionMode(ModelingSelectionMode::Face).ok);
+    const ModelingSelectionSummary picked = service.pickSelect(ModelingPickSelectRequest{
+            .ray = {.origin = {-2.0f, 0.0f, 5.0f}, .direction = {0.0f, 0.0f, -1.0f}},
+            .clickCount = 1,
+    });
+    ASSERT_EQ(picked.activeObjectId, edited.object.modelingObjectId);
+    ASSERT_EQ(picked.selectedFaceCount, 1u);
+
+    const std::optional<QVec3> selectionCenter = service.selectionCenter();
+    ASSERT_TRUE(selectionCenter.has_value());
+    ModelingTransformDragPreview begin = service.beginTransformDrag(testXMoveDragBeginRequest(*selectionCenter));
+    ASSERT_TRUE(begin.ok) << begin.message;
+    ASSERT_TRUE(begin.previewDriven);
+
+    ModelingTransformDragPreview update = service.updateTransformDrag(testXMoveDragUpdateRequest(2.0f));
+    ASSERT_TRUE(update.ok) << update.message;
+    EXPECT_TRUE(update.previewDriven);
+
+    EXPECT_GT(assets.meshRevision(editedMeshId).value, editedRevisionBefore);
+    EXPECT_EQ(assets.meshRevision(untouchedMeshId).value, untouchedRevisionBefore);
+
+    ModelingTransformDragPreview commit = service.commitTransformDrag();
+    ASSERT_TRUE(commit.ok) << commit.message;
+    EXPECT_EQ(assets.meshRevision(untouchedMeshId).value, untouchedRevisionBefore);
 }
 
 TEST(ModelingSessionServiceTests, TransformDragObjectSelectionUsesSceneTransformPreview) {

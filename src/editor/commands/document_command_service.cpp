@@ -7,6 +7,7 @@
 #include "editor/commands/document_command_service.hpp"
 
 #include "assets/asset_registry.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/commands/document/apply_entity_transform_command.hpp"
 #include "editor/commands/document/batch_document_command.hpp"
 #include "editor/commands/document/create_entity_command.hpp"
@@ -354,6 +355,7 @@ DocumentDuplicateEntityResult DocumentCommandService::duplicateEntity(EntityId e
 }
 
 DocumentDuplicateHierarchyResult DocumentCommandService::duplicateSelectedHierarchy() {
+    QDR_PROFILE_FUNCTION();
     if (documentCommandSelectionIncludesSceneRoot(scene_)) {
         DocumentDuplicateHierarchyResult result;
         assignDocumentCommandStatus(result, documentCommandSceneRootProtectedResult());
@@ -368,7 +370,10 @@ DocumentDuplicateHierarchyResult DocumentCommandService::duplicateSelectedHierar
     auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(scene_);
     DuplicateSelectedHierarchyCommand* duplicateCommand = command.get();
     DocumentDuplicateHierarchyResult result;
-    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    {
+        QDR_PROFILE_SCOPE("Duplicate execute selected hierarchy command");
+        assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    }
     if (result.ok && result.changed) {
         result.duplicateRoots = duplicateCommand->duplicateRoots();
     }
@@ -378,6 +383,7 @@ DocumentDuplicateHierarchyResult DocumentCommandService::duplicateSelectedHierar
 DocumentDuplicateHierarchyResult DocumentCommandService::duplicateHierarchyWithExistingClones(
         std::vector<EntityId> roots,
         std::unordered_map<EntityId, EntityId> existingClonesBySource) {
+    QDR_PROFILE_FUNCTION();
     std::unordered_set<EntityId> seenRoots;
     std::vector<EntityId> existingRoots;
     existingRoots.reserve(roots.size());
@@ -395,14 +401,17 @@ DocumentDuplicateHierarchyResult DocumentCommandService::duplicateHierarchyWithE
 
     std::vector<DocumentEntitySnapshot> sourceSnapshots;
     sourceSnapshots.reserve(roots.size());
-    for (const EntityId root : roots) {
-        std::optional<DocumentEntitySnapshot> snapshot = documentCommandCaptureEntitySnapshot(scene_, root);
-        if (!snapshot.has_value()) {
-            DocumentDuplicateHierarchyResult result;
-            assignDocumentCommandStatus(result, documentCommandMissingEntityResult());
-            return result;
+    {
+        QDR_PROFILE_SCOPE("Duplicate capture hierarchy snapshots");
+        for (const EntityId root : roots) {
+            std::optional<DocumentEntitySnapshot> snapshot = documentCommandCaptureEntitySnapshot(scene_, root);
+            if (!snapshot.has_value()) {
+                DocumentDuplicateHierarchyResult result;
+                assignDocumentCommandStatus(result, documentCommandMissingEntityResult());
+                return result;
+            }
+            sourceSnapshots.push_back(std::move(*snapshot));
         }
-        sourceSnapshots.push_back(std::move(*snapshot));
     }
 
     auto command = std::make_unique<DuplicateSelectedHierarchyCommand>(
@@ -441,7 +450,10 @@ DocumentCreateEntityResult DocumentCommandService::createPointLight(
             selectCreated);
     CreateLightCommand* createdCommand = command.get();
     DocumentCreateEntityResult result;
-    assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    {
+        QDR_PROFILE_SCOPE("Duplicate execute hierarchy command");
+        assignDocumentCommandStatus(result, executeDocumentCommand(history_, std::move(command)));
+    }
     if (result.ok && result.changed) {
         result.entity = createdCommand->entity();
     }

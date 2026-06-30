@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/selection/editor_selection_service.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/commands/document_command_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
@@ -212,6 +213,7 @@ ModelingSelectionMode EditorSelectionService::mode() const {
 }
 
 DocumentCommandResult EditorSelectionService::setSceneSelection(std::span<const EntityId> entities, EntityId active) {
+    QDR_PROFILE_FUNCTION();
     const ModelingSelectionSummary before = modeling_.selectionSummary();
     std::vector<EntityId> selectable = userSelectableSceneEntities(scene_, entities);
     const EntityId selectableActive = userSelectableActiveEntity(scene_, selectable, active);
@@ -254,12 +256,18 @@ ModelingCommandResult EditorSelectionService::setMode(ModelingSelectionMode mode
 }
 
 ModelingCommandResult EditorSelectionService::selectAll() {
+    QDR_PROFILE_FUNCTION();
     const ModelingSelectionMode selectionMode = modeling_.selectionMode();
     if (!selectionModeUsesSceneDocument(selectionMode)) {
+        QDR_PROFILE_SCOPE("Selection select all runtime components");
         return modeling_.selectAll();
     }
 
-    std::vector<EntityId> selected = userSelectableSceneEntitiesForMode(scene_, selectionMode);
+    std::vector<EntityId> selected;
+    {
+        QDR_PROFILE_SCOPE("Selection collect scene select all entities");
+        selected = userSelectableSceneEntitiesForMode(scene_, selectionMode);
+    }
     const EntityId active = selected.empty() ? InvalidEntityId : selected.back();
     return modelingCommandResultFromDocument(setSceneSelection(selected, active));
 }

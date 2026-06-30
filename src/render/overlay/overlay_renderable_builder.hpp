@@ -104,6 +104,11 @@ public:
     static std::uint64_t frameSignature(const ViewportOverlayFrame& frame);
     static std::uint64_t cameraSignature(const ViewportOverlayCamera& camera);
     static std::uint64_t layerSignature(const ViewportOverlayFrame& frame, ViewportOverlayLayer layer);
+    static std::uint64_t layerBuildSignature(
+            const ViewportOverlayFrame& frame,
+            const ViewportOverlayCamera& camera,
+            ViewportOverlayLayer layer);
+    static bool layerBuildDependsOnCamera(ViewportOverlayLayer layer);
 
     static OverlayRenderState makeState(
             ViewportOverlayLayer layer,
@@ -130,12 +135,12 @@ private:
             const ViewportOverlayFrame& frame,
             ViewportOverlayLayer layer,
             const ViewportOverlayCamera& camera,
-            const OverlayDepthStampVisibilityFilter& visibility);
+            const OverlayDepthStampVisibilityFilter* visibility);
     static std::vector<const ViewportOverlayPoint*> pointsForLayer(
             const ViewportOverlayFrame& frame,
             ViewportOverlayLayer layer,
             const ViewportOverlayCamera& camera,
-            const OverlayDepthStampVisibilityFilter& visibility);
+            const OverlayDepthStampVisibilityFilter* visibility);
     static std::vector<LineBatchKey> lineBatchKeys(
             const std::vector<const ViewportOverlayLine*>& lines,
             ViewportOverlayLayer layer);

@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/scene_render_bridge.hpp"
 
+#include "diagnostics/profile.hpp"
+
 #include <utility>
 
 namespace quader {
@@ -54,6 +56,7 @@ void SceneRenderBridge::shutdown() {
 }
 
 void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     if (!engine_ || !scene_ || !syncService_.initialized()) {
         return;
     }
@@ -61,6 +64,7 @@ void SceneRenderBridge::sync(const SceneDocument& document, const AssetRegistry&
 }
 
 void SceneRenderBridge::setToolPreviewMeshes(std::vector<PreviewMesh> meshes, const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     if (!engine_ || !scene_ || !toolPreviewCache_.initialized()) {
         return;
     }
@@ -68,6 +72,7 @@ void SceneRenderBridge::setToolPreviewMeshes(std::vector<PreviewMesh> meshes, co
 }
 
 void SceneRenderBridge::setOverlayFrame(ViewportOverlayFrame frame, ViewportOverlayCamera camera) {
+    QDR_PROFILE_FUNCTION();
     (void)overlayCache_.setOverlayFrame(std::move(frame), camera);
 }
 
@@ -76,6 +81,7 @@ void SceneRenderBridge::setOverlayFrame(
         std::uint8_t layerMask,
         ViewportOverlayFrame frame,
         ViewportOverlayCamera camera) {
+    QDR_PROFILE_FUNCTION();
     (void)overlayCache_.setOverlayFrame(viewportIndex, layerMask, std::move(frame), camera);
 }
 

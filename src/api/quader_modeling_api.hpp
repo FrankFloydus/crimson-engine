@@ -63,6 +63,7 @@ public:
     QuaderApiVoidResult rotateSelection(QVec3 eulerRadians, QVec3 pivot = {});
     QuaderApiVoidResult scaleSelection(QVec3 scale, QVec3 pivot = {});
     QuaderApiVoidResult transformSelection(const QuaderTransform3& transform, QVec3 pivot = {});
+    [[nodiscard]] bool canDuplicateSelectedEntityHierarchy() const;
     QuaderApiVoidResult duplicateSelectedEntityHierarchy();
     QuaderApiVoidResult duplicateSelectedHierarchyForGroupDrag();
 

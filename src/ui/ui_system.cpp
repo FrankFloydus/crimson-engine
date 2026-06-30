@@ -8,6 +8,7 @@
 
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/viewport/quader_viewport_api_runtime_access.hpp"
 #include "quader_app_version.hpp"
@@ -344,6 +345,7 @@ bool UISystem::processEvent(const SDL_Event& event) {
 }
 
 void UISystem::beginFrame(const FrameTiming& frameTiming) {
+    QDR_PROFILE_FUNCTION();
     currentFrameTiming_ = frameTiming;
     renderer_.releaseFrameResources();
     relativeMouseDelta_ = {};
@@ -372,6 +374,7 @@ void UISystem::draw(QuaderEditorApi& editor,
         EditorSelectionService& selection,
         AssetId defaultMaterial,
         bool& quitRequested) {
+    QDR_PROFILE_FUNCTION();
     editor.ui().setRuntimeHooks(QuaderUIRuntimeHooks{
             .isPanelVisible = [this](std::string_view panel) {
                 const std::optional<UIPanelId> id = panelIdFromName(panel);
@@ -434,8 +437,14 @@ void UISystem::draw(QuaderEditorApi& editor,
                 return runtimeStatus(before != visible);
             },
     });
-    closeMenuPopupForPassThroughClick();
-    const MainMenuBarResult chromeMenuResult = drawWindowChrome(editor, quitRequested, document, modeling);
+    {
+        QDR_PROFILE_SCOPE("UI menus and chrome");
+        closeMenuPopupForPassThroughClick();
+    }
+    const MainMenuBarResult chromeMenuResult = [&]() {
+        QDR_PROFILE_SCOPE("UI draw window chrome");
+        return drawWindowChrome(editor, quitRequested, document, modeling);
+    }();
     mainMenuPopupOpen_ = chromeMenuResult.popupOpen;
     if (chromeMenuResult.settingsChanged) {
         saveSettings();
@@ -443,7 +452,10 @@ void UISystem::draw(QuaderEditorApi& editor,
     if (chromeMenuResult.viewportSettingsChanged) {
         saveViewportSettings();
     }
-    drawDockspace(editor, quitRequested, document, modeling);
+    {
+        QDR_PROFILE_SCOPE("UI draw dockspace");
+        drawDockspace(editor, quitRequested, document, modeling);
+    }
 
     bool viewportCursorCaptureRequested = false;
     QVec2 viewportCursorCapturePoint = {};
@@ -478,7 +490,10 @@ void UISystem::draw(QuaderEditorApi& editor,
             .commandShortcutConsumed = &commandShortcutConsumed,
             .settingsChanged = &settingsChanged,
     };
-    panels_.draw(context);
+    {
+        QDR_PROFILE_SCOPE("UI draw panels");
+        panels_.draw(context);
+    }
     if (viewportSettingsPanel_.draw(context, settingsPanelOpen_)) {
         saveViewportSettings();
     }
@@ -494,19 +509,27 @@ void UISystem::draw(QuaderEditorApi& editor,
                 commandShortcutConsumed);
     }
     drawStaticBottomBar(*ImGui::GetMainViewport(), localization_);
-    std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes = modeling.toolPreviewMeshes();
-    std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
-    renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
-    for (ModelingToolPreviewMesh& previewMesh : modelingPreviewMeshes) {
-        const AssetId material = previewMesh.material != InvalidAssetId ? previewMesh.material : defaultMaterial;
-        renderPreviewMeshes.push_back(SceneRenderBridge::PreviewMesh{
-                .sourceEntity = previewMesh.sourceEntity,
-                .material = material,
-                .mesh = std::move(previewMesh.mesh),
-                .transform = {},
-        });
+    {
+        QDR_PROFILE_SCOPE("UI sync tool preview meshes");
+        const ModelingToolStatus toolStatus = modeling.toolStatus();
+        const bool hasToolPreviewMeshes =
+                toolStatus.activeTool == ModelingViewportTool::Box ||
+                (toolStatus.mirrorActive && toolStatus.mirrorCanPreview && toolStatus.mirrorPreviewValid);
+        std::vector<ModelingToolPreviewMesh> modelingPreviewMeshes =
+                hasToolPreviewMeshes ? modeling.toolPreviewMeshes() : std::vector<ModelingToolPreviewMesh>{};
+        std::vector<SceneRenderBridge::PreviewMesh> renderPreviewMeshes;
+        renderPreviewMeshes.reserve(modelingPreviewMeshes.size());
+        for (ModelingToolPreviewMesh& previewMesh : modelingPreviewMeshes) {
+            const AssetId material = previewMesh.material != InvalidAssetId ? previewMesh.material : defaultMaterial;
+            renderPreviewMeshes.push_back(SceneRenderBridge::PreviewMesh{
+                    .sourceEntity = previewMesh.sourceEntity,
+                    .material = material,
+                    .mesh = std::move(previewMesh.mesh),
+                    .transform = {},
+            });
+        }
+        renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets);
     }
-    renderBridge.setToolPreviewMeshes(std::move(renderPreviewMeshes), assets);
     enforceSidebarDockMinimums();
     setViewportCursorCaptured(viewportCursorCaptureRequested);
     if (viewportCursorCaptureRequested) {
@@ -515,6 +538,7 @@ void UISystem::draw(QuaderEditorApi& editor,
 }
 
 void UISystem::prepareRenderData(std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
+    QDR_PROFILE_FUNCTION();
     ImGui::Render();
     renderer_.prepare(ImGui::GetDrawData(), framebufferWidth, framebufferHeight);
 }
@@ -524,6 +548,7 @@ void UISystem::prepareViewports(
         SceneRenderBridge& renderBridge,
         const SceneDocument& document,
         const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     if (viewportPanel_ != nullptr) {
         viewportPanel_->prepareViewports(
                 QuaderViewportApiRuntimeAccess::workspace(editor.viewports()),
@@ -534,12 +559,14 @@ void UISystem::prepareViewports(
 }
 
 void UISystem::renderViewports(RenderSystem& renderSystem) {
+    QDR_PROFILE_FUNCTION();
     if (viewportPanel_ != nullptr) {
         viewportPanel_->renderViewports(renderSystem.renderer());
     }
 }
 
 void UISystem::render(RenderSystem& renderSystem) {
+    QDR_PROFILE_FUNCTION();
     renderer_.render(renderSystem.renderer());
 }
 

@@ -11,6 +11,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
 #include "api/quader_polygon_document_internal_access.hpp"
+#include "diagnostics/profile.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/commands/modeling/commit_box_preview_command.hpp"
 #include "editor/history/modeling_memento_command.hpp"
@@ -243,6 +244,7 @@ QuaderApiVoidResult QuaderModelingApi::cancelTransformPreview() {
 
 QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::beginTransformDrag(
         const QuaderTransformDragBeginRequest& request) {
+    QDR_PROFILE_FUNCTION();
     return resultFromTransformDragPreview(
             projectSession(session_),
             projectSession(session_).modeling().beginTransformDrag(toModelingTransformDragBeginRequest(request)));
@@ -250,12 +252,14 @@ QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::beginTransformDra
 
 QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::updateTransformDrag(
         const QuaderTransformDragUpdateRequest& request) {
+    QDR_PROFILE_FUNCTION();
     return resultFromTransformDragPreview(
             projectSession(session_),
             projectSession(session_).modeling().updateTransformDrag(toModelingTransformDragUpdateRequest(request)));
 }
 
 QuaderApiResult<QuaderTransformDragPreview> QuaderModelingApi::commitTransformDrag() {
+    QDR_PROFILE_FUNCTION();
     return resultFromTransformDragPreview(
             projectSession(session_),
             projectSession(session_).modeling().commitTransformDrag(projectSession(session_).history()));
@@ -311,7 +315,27 @@ QuaderApiVoidResult QuaderModelingApi::transformSelection(const QuaderTransform3
             "Transform Selection");
 }
 
+bool QuaderModelingApi::canDuplicateSelectedEntityHierarchy() const {
+    QDR_PROFILE_FUNCTION();
+    const ProjectSession& session = projectSession(session_);
+    const QuaderSelectionSummary selection = selectionSummary();
+    if (!selection.hasSelection ||
+            (selection.mode != QuaderSelectionMode::Object &&
+                    selection.mode != QuaderSelectionMode::Group)) {
+        return false;
+    }
+
+    const SceneDocument& scene = session.scene();
+    for (const EntityId entity : scene.selectedEntities()) {
+        if (!scene.isSceneRoot(entity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 QuaderApiVoidResult QuaderModelingApi::duplicateSelectedEntityHierarchy() {
+    QDR_PROFILE_FUNCTION();
     ProjectSession& session = projectSession(session_);
     EditorTransaction transaction = mutations_.beginTransaction("Duplicate Selection");
     if (!transaction.active()) {
@@ -319,8 +343,10 @@ QuaderApiVoidResult QuaderModelingApi::duplicateSelectedEntityHierarchy() {
                 commandInvalidResult("Cannot duplicate selection while another editor transaction is active."),
                 "Duplicate Selection");
     }
-    const ModelingCommandResult duplicate =
-            session.modeling().duplicateSelectedEntityHierarchy(session.documentCommands());
+    const ModelingCommandResult duplicate = [&]() {
+        QDR_PROFILE_SCOPE("Duplicate selected entity hierarchy owner");
+        return session.modeling().duplicateSelectedEntityHierarchy(session.documentCommands());
+    }();
     if (!duplicate.ok) {
         const CommandResult cancel = transaction.cancel();
         if (!cancel.ok) {
@@ -336,10 +362,14 @@ QuaderApiVoidResult QuaderModelingApi::duplicateSelectedEntityHierarchy() {
         return mutations_.runModelingResult(duplicate, "Duplicate Selection");
     }
 
-    return mutations_.runDocumentCommand(transaction.commit(), "Duplicate Selection");
+    {
+        QDR_PROFILE_SCOPE("Duplicate selection commit transaction");
+        return mutations_.runDocumentCommand(transaction.commit(), "Duplicate Selection");
+    }
 }
 
 QuaderApiVoidResult QuaderModelingApi::duplicateSelectedHierarchyForGroupDrag() {
+    QDR_PROFILE_FUNCTION();
     ProjectSession& session = projectSession(session_);
     EditorTransaction transaction = mutations_.beginTransaction("Duplicate Group Selection");
     if (!transaction.active()) {
@@ -348,8 +378,10 @@ QuaderApiVoidResult QuaderModelingApi::duplicateSelectedHierarchyForGroupDrag() 
                 "Duplicate Group Selection");
     }
 
-    const ModelingCommandResult duplicate =
-            session.modeling().duplicateSelectedHierarchyForGroupDrag(session.documentCommands());
+    const ModelingCommandResult duplicate = [&]() {
+        QDR_PROFILE_SCOPE("Duplicate group hierarchy owner");
+        return session.modeling().duplicateSelectedHierarchyForGroupDrag(session.documentCommands());
+    }();
     if (!duplicate.ok) {
         const CommandResult cancel = transaction.cancel();
         if (!cancel.ok) {
@@ -365,7 +397,10 @@ QuaderApiVoidResult QuaderModelingApi::duplicateSelectedHierarchyForGroupDrag() 
         return mutations_.runModelingResult(duplicate, "Duplicate Group Selection");
     }
 
-    return mutations_.runDocumentCommand(transaction.commit(), "Duplicate Group Selection");
+    {
+        QDR_PROFILE_SCOPE("Duplicate group commit transaction");
+        return mutations_.runDocumentCommand(transaction.commit(), "Duplicate Group Selection");
+    }
 }
 
 QuaderApiVoidResult QuaderModelingApi::applyActiveMaterial(std::uint32_t materialSlot) {

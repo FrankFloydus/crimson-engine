@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/mesh_renderable_factory.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 #include "render/filament_utils.hpp"
@@ -181,6 +182,7 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
         bool editorUnlit,
         bool depthOnly,
         std::uint8_t channel) {
+    QDR_PROFILE_FUNCTION();
     MeshRenderableProxy proxy;
     MeshRenderableCreationGuard creationGuard(*engine_, *scene_, proxy);
     proxy.entity = utils::EntityManager::get().create();
@@ -193,64 +195,76 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
     proxy.doubleSided = doubleSided;
 
     std::vector<RenderVertex> vertices;
-    vertices.reserve(mesh.vertices.size());
-    for (const MeshVertex& vertex : mesh.vertices) {
-        vertices.push_back({
-                toFilament(vertex.position),
-                tangentFrameFromNormal(vertex.normal),
-                {vertex.uv.x, vertex.uv.y},
-                vertex.rgba,
-        });
+    {
+        QDR_PROFILE_SCOPE("Mesh renderable build vertices");
+        vertices.reserve(mesh.vertices.size());
+        for (const MeshVertex& vertex : mesh.vertices) {
+            vertices.push_back({
+                    toFilament(vertex.position),
+                    tangentFrameFromNormal(vertex.normal),
+                    {vertex.uv.x, vertex.uv.y},
+                    vertex.rgba,
+            });
+        }
     }
 
-    proxy.vertexBuffer = filament::VertexBuffer::Builder()
-            .vertexCount(static_cast<std::uint32_t>(vertices.size()))
-            .bufferCount(1)
-            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(RenderVertex, position), sizeof(RenderVertex))
-            .attribute(filament::VertexAttribute::TANGENTS, 0, AttributeType::FLOAT4, offsetof(RenderVertex, tangentFrame), sizeof(RenderVertex))
-            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(RenderVertex, uv), sizeof(RenderVertex))
-            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(RenderVertex, color), sizeof(RenderVertex))
-            .normalized(filament::VertexAttribute::COLOR)
-            .build(*engine_);
-    proxy.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
+    {
+        QDR_PROFILE_SCOPE("Mesh renderable upload vertex/index buffers");
+        proxy.vertexBuffer = filament::VertexBuffer::Builder()
+                .vertexCount(static_cast<std::uint32_t>(vertices.size()))
+                .bufferCount(1)
+                .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(RenderVertex, position), sizeof(RenderVertex))
+                .attribute(filament::VertexAttribute::TANGENTS, 0, AttributeType::FLOAT4, offsetof(RenderVertex, tangentFrame), sizeof(RenderVertex))
+                .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(RenderVertex, uv), sizeof(RenderVertex))
+                .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(RenderVertex, color), sizeof(RenderVertex))
+                .normalized(filament::VertexAttribute::COLOR)
+                .build(*engine_);
+        proxy.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
 
-    proxy.indexBuffer = filament::IndexBuffer::Builder()
-            .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
-            .bufferType(filament::IndexBuffer::IndexType::UINT)
-            .build(*engine_);
-    proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(mesh.indices));
+        proxy.indexBuffer = filament::IndexBuffer::Builder()
+                .indexCount(static_cast<std::uint32_t>(mesh.indices.size()))
+                .bufferType(filament::IndexBuffer::IndexType::UINT)
+                .build(*engine_);
+        proxy.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(mesh.indices));
+    }
 
     const std::vector<MeshPrimitiveSpan> primitiveSpans = normalizedMeshPrimitiveSpans(mesh);
     proxy.materialSlots.reserve(primitiveSpans.size());
     proxy.materialInstances.reserve(primitiveSpans.size());
     filament::RenderableManager::Builder builder(primitiveSpans.size());
-    for (std::size_t primitiveIndex = 0; primitiveIndex < primitiveSpans.size(); ++primitiveIndex) {
-        const MeshPrimitiveSpan& primitive = primitiveSpans[primitiveIndex];
-        const AssetId primitiveMaterialId = material ? material->materialForSlot(primitive.materialSlot) : InvalidAssetId;
-        const MaterialDocument* primitiveMaterial = assets.material(primitiveMaterialId);
-        filament::MaterialInstance* materialInstance =
-                materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided, editorUnlit);
-        if (depthOnly && materialInstance) {
-            materialInstance->setColorWrite(false);
-            materialInstance->setDepthWrite(true);
-            materialInstance->setDepthCulling(true);
+    {
+        QDR_PROFILE_SCOPE("Mesh renderable build primitives");
+        for (std::size_t primitiveIndex = 0; primitiveIndex < primitiveSpans.size(); ++primitiveIndex) {
+            const MeshPrimitiveSpan& primitive = primitiveSpans[primitiveIndex];
+            const AssetId primitiveMaterialId = material ? material->materialForSlot(primitive.materialSlot) : InvalidAssetId;
+            const MaterialDocument* primitiveMaterial = assets.material(primitiveMaterialId);
+            filament::MaterialInstance* materialInstance =
+                    materialBinding_->createMeshMaterialInstance(assets, primitiveMaterial, doubleSided, editorUnlit);
+            if (depthOnly && materialInstance) {
+                materialInstance->setColorWrite(false);
+                materialInstance->setDepthWrite(true);
+                materialInstance->setDepthCulling(true);
+            }
+            proxy.materialSlots.push_back(primitive.materialSlot);
+            proxy.materialInstances.push_back(materialInstance);
+            builder.geometry(primitiveIndex,
+                    filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    proxy.vertexBuffer,
+                    proxy.indexBuffer,
+                    primitive.indexOffset,
+                    primitive.indexCount);
+            builder.material(primitiveIndex, materialInstance);
         }
-        proxy.materialSlots.push_back(primitive.materialSlot);
-        proxy.materialInstances.push_back(materialInstance);
-        builder.geometry(primitiveIndex,
-                filament::RenderableManager::PrimitiveType::TRIANGLES,
-                proxy.vertexBuffer,
-                proxy.indexBuffer,
-                primitive.indexOffset,
-                primitive.indexCount);
-        builder.material(primitiveIndex, materialInstance);
     }
-    builder.boundingBox(computeBounds(mesh))
-            .layerMask(kViewportAllLayerMask, layerMask)
-            .channel(channel)
-            .castShadows(castShadows)
-            .receiveShadows(!editorUnlit && !depthOnly)
-            .build(*engine_, proxy.entity);
+    {
+        QDR_PROFILE_SCOPE("Mesh renderable build Filament entity");
+        builder.boundingBox(computeBounds(mesh))
+                .layerMask(kViewportAllLayerMask, layerMask)
+                .channel(channel)
+                .castShadows(castShadows)
+                .receiveShadows(!editorUnlit && !depthOnly)
+                .build(*engine_, proxy.entity);
+    }
 
     engine_->getTransformManager().create(proxy.entity);
     updateTransform(proxy, worldTransform);
@@ -261,6 +275,7 @@ MeshRenderableProxy MeshRenderableFactory::create(EntityId entityId,
 }
 
 void MeshRenderableFactory::updateTransform(const MeshRenderableProxy& proxy, const QMat4& worldTransform) {
+    QDR_PROFILE_FUNCTION();
     if (!engine_ || !proxy.entity) {
         return;
     }

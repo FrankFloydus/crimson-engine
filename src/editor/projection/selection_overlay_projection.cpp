@@ -6,12 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/projection/selection_overlay_projection.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/runtime/modeling_object_runtime_map.hpp"
 #include "math/glm_bridge.hpp"
 #include "render/viewport_overlay_policy.hpp"
 #include "scene/scene_document.hpp"
 
 #include <optional>
+#include <unordered_map>
 
 #include <mesh/polygon/document.hpp>
 
@@ -259,31 +261,63 @@ ViewportOverlayElementRef runtimeElementRef(
     };
 }
 
-QVec3 transformObjectPoint(
-        int objectId,
-        QVec3 point,
-        const ModelingObjectRuntimeMap& objectRegistry,
-        const SceneDocument& scene) {
-    const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId);
-    if (!entity.has_value()) {
-        return point;
-    }
-    const TransformComponent* transform = scene.transform(*entity);
-    if (transform == nullptr) {
-        return point;
-    }
-    return transformPoint(scene.worldTransformMatrix(*entity), point);
-}
+struct ProjectionObjectState {
+    bool visible = true;
+    bool hasWorldTransform = false;
+    QMat4 worldTransform;
+};
 
-bool objectEffectivelyVisible(
-        int objectId,
-        const ModelingObjectRuntimeMap& objectRegistry,
-        const SceneDocument& scene) {
-    if (objectId < 0) {
-        return true;
+class ProjectionObjectStateCache {
+public:
+    ProjectionObjectStateCache() {
+        states_.reserve(64);
     }
-    const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId);
-    return entity.has_value() && scene.isEffectivelyVisible(*entity);
+
+    [[nodiscard]] const ProjectionObjectState& stateFor(
+            int objectId,
+            const ModelingObjectRuntimeMap& objectRegistry,
+            const SceneDocument& scene) {
+        if (objectId < 0) {
+            lastObjectId_ = objectId;
+            lastState_ = &defaultState_;
+            return defaultState_;
+        }
+        if (objectId == lastObjectId_ && lastState_ != nullptr) {
+            return *lastState_;
+        }
+        const auto existing = states_.find(objectId);
+        if (existing != states_.end()) {
+            lastObjectId_ = objectId;
+            lastState_ = &existing->second;
+            return existing->second;
+        }
+
+        ProjectionObjectState state;
+        const std::optional<EntityId> entity = objectRegistry.entityForModelingObject(objectId);
+        if (!entity.has_value()) {
+            state.visible = false;
+        } else {
+            state.visible = scene.isEffectivelyVisible(*entity);
+            if (state.visible && scene.transform(*entity) != nullptr) {
+                state.hasWorldTransform = true;
+                state.worldTransform = scene.worldTransformMatrix(*entity);
+            }
+        }
+        const auto [inserted, _] = states_.emplace(objectId, state);
+        lastObjectId_ = objectId;
+        lastState_ = &inserted->second;
+        return *lastState_;
+    }
+
+private:
+    ProjectionObjectState defaultState_;
+    std::unordered_map<int, ProjectionObjectState> states_;
+    int lastObjectId_ = -1;
+    const ProjectionObjectState* lastState_ = nullptr;
+};
+
+QVec3 transformObjectPoint(const ProjectionObjectState& state, QVec3 point) {
+    return state.hasWorldTransform ? transformPoint(state.worldTransform, point) : point;
 }
 
 } // namespace
@@ -292,65 +326,82 @@ ViewportOverlayFrame SelectionOverlayProjection::projectSelectionOverlayFrame(
         const quader_editor_core::SelectionOverlayFrame& frame,
         const ModelingObjectRuntimeMap& objectRegistry,
         const SceneDocument& scene) {
+    QDR_PROFILE_FUNCTION();
     ViewportOverlayFrame result;
     result.triangles.reserve(frame.triangles.size());
     result.lines.reserve(frame.lines.size());
     result.points.reserve(frame.points.size());
     result.hoverTargetSelected = frame.hover_target_selected;
+    ProjectionObjectStateCache objectStateCache;
 
-    for (const quader_editor_core::SelectionOverlayTriangle& triangle : frame.triangles) {
-        if (!objectEffectivelyVisible(triangle.object_id, objectRegistry, scene)) {
-            continue;
+    {
+        QDR_PROFILE_SCOPE("Selection overlay project triangles");
+        for (const quader_editor_core::SelectionOverlayTriangle& triangle : frame.triangles) {
+            const ProjectionObjectState& objectState =
+                    objectStateCache.stateFor(triangle.object_id, objectRegistry, scene);
+            if (!objectState.visible) {
+                continue;
+            }
+            const ViewportOverlayLayer layer = fromRuntime(triangle.layer);
+            const ViewportOverlayStyleRole role = triangleStyleRole(triangle.layer, triangle.color_abgr);
+            result.triangles.push_back(ViewportOverlayTriangle{
+                    .layer = layer,
+                    .a = transformObjectPoint(objectState, fromRuntime(triangle.a)),
+                    .b = transformObjectPoint(objectState, fromRuntime(triangle.b)),
+                    .c = transformObjectPoint(objectState, fromRuntime(triangle.c)),
+                    .color = projectedColorFor(layer, role, triangle.color_abgr),
+                    .styleRole = role,
+                    .source = overlaySourceForRole(role),
+                    .element = runtimeElementRef(triangle.object_id, quader_poly::invalid_element_id, {}, triangle.face_id),
+            });
         }
-        const ViewportOverlayLayer layer = fromRuntime(triangle.layer);
-        const ViewportOverlayStyleRole role = triangleStyleRole(triangle.layer, triangle.color_abgr);
-        result.triangles.push_back(ViewportOverlayTriangle{
-                .layer = layer,
-                .a = transformObjectPoint(triangle.object_id, fromRuntime(triangle.a), objectRegistry, scene),
-                .b = transformObjectPoint(triangle.object_id, fromRuntime(triangle.b), objectRegistry, scene),
-                .c = transformObjectPoint(triangle.object_id, fromRuntime(triangle.c), objectRegistry, scene),
-                .color = projectedColorFor(layer, role, triangle.color_abgr),
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(triangle.object_id, quader_poly::invalid_element_id, {}, triangle.face_id),
-        });
     }
-    for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
-        if (!objectEffectivelyVisible(line.object_id, objectRegistry, scene)) {
-            continue;
+    {
+        QDR_PROFILE_SCOPE("Selection overlay project lines");
+        for (const quader_editor_core::SelectionOverlayLine& line : frame.lines) {
+            const ProjectionObjectState& objectState =
+                    objectStateCache.stateFor(line.object_id, objectRegistry, scene);
+            if (!objectState.visible) {
+                continue;
+            }
+            const ViewportOverlayLayer layer = fromRuntime(line.layer);
+            const ViewportOverlayStyleRole role = lineStyleRole(line.layer, line.color_abgr);
+            result.lines.push_back(ViewportOverlayLine{
+                    .layer = layer,
+                    .start = transformObjectPoint(objectState, fromRuntime(line.start)),
+                    .end = transformObjectPoint(objectState, fromRuntime(line.end)),
+                    .color = projectedColorFor(layer, role, line.color_abgr),
+                    .widthPixels = line.width_pixels,
+                    .styleRole = role,
+                    .source = overlaySourceForRole(role),
+                    .element = runtimeElementRef(
+                            line.object_id,
+                            quader_poly::invalid_element_id,
+                            line.edge,
+                            line.face_id),
+            });
         }
-        const ViewportOverlayLayer layer = fromRuntime(line.layer);
-        const ViewportOverlayStyleRole role = lineStyleRole(line.layer, line.color_abgr);
-        result.lines.push_back(ViewportOverlayLine{
-                .layer = layer,
-                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), objectRegistry, scene),
-                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), objectRegistry, scene),
-                .color = projectedColorFor(layer, role, line.color_abgr),
-                .widthPixels = line.width_pixels,
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(
-                        line.object_id,
-                        quader_poly::invalid_element_id,
-                        line.edge,
-                        line.face_id),
-        });
     }
-    for (const quader_editor_core::SelectionOverlayPoint& point : frame.points) {
-        if (!objectEffectivelyVisible(point.object_id, objectRegistry, scene)) {
-            continue;
+    {
+        QDR_PROFILE_SCOPE("Selection overlay project points");
+        for (const quader_editor_core::SelectionOverlayPoint& point : frame.points) {
+            const ProjectionObjectState& objectState =
+                    objectStateCache.stateFor(point.object_id, objectRegistry, scene);
+            if (!objectState.visible) {
+                continue;
+            }
+            const ViewportOverlayLayer layer = fromRuntime(point.layer);
+            const ViewportOverlayStyleRole role = pointStyleRole(point.layer, point.color_abgr);
+            result.points.push_back(ViewportOverlayPoint{
+                    .layer = layer,
+                    .position = transformObjectPoint(objectState, fromRuntime(point.position)),
+                    .color = projectedColorFor(layer, role, point.color_abgr),
+                    .sizePixels = point.size_pixels,
+                    .styleRole = role,
+                    .source = overlaySourceForRole(role),
+                    .element = runtimeElementRef(point.object_id, point.vertex_id, {}, quader_poly::invalid_element_id),
+            });
         }
-        const ViewportOverlayLayer layer = fromRuntime(point.layer);
-        const ViewportOverlayStyleRole role = pointStyleRole(point.layer, point.color_abgr);
-        result.points.push_back(ViewportOverlayPoint{
-                .layer = layer,
-                .position = transformObjectPoint(point.object_id, fromRuntime(point.position), objectRegistry, scene),
-                .color = projectedColorFor(layer, role, point.color_abgr),
-                .sizePixels = point.size_pixels,
-                .styleRole = role,
-                .source = overlaySourceForRole(role),
-                .element = runtimeElementRef(point.object_id, point.vertex_id, {}, quader_poly::invalid_element_id),
-        });
     }
     return result;
 }
@@ -363,15 +414,19 @@ void SelectionOverlayProjection::appendProjectedOverlayLines(
         ViewportOverlayLayer layer,
         ViewportOverlayStyleRole styleRole,
         ViewportOverlaySource source) {
+    QDR_PROFILE_FUNCTION();
     frame.lines.reserve(frame.lines.size() + lines.size());
+    ProjectionObjectStateCache objectStateCache;
     for (const quader_editor_core::SelectionOverlayLine& line : lines) {
-        if (!objectEffectivelyVisible(line.object_id, objectRegistry, scene)) {
+        const ProjectionObjectState& objectState =
+                objectStateCache.stateFor(line.object_id, objectRegistry, scene);
+        if (!objectState.visible) {
             continue;
         }
         frame.lines.push_back(ViewportOverlayLine{
                 .layer = layer,
-                .start = transformObjectPoint(line.object_id, fromRuntime(line.start), objectRegistry, scene),
-                .end = transformObjectPoint(line.object_id, fromRuntime(line.end), objectRegistry, scene),
+                .start = transformObjectPoint(objectState, fromRuntime(line.start)),
+                .end = transformObjectPoint(objectState, fromRuntime(line.end)),
                 .color = viewportOverlayColorFor(layer, line.color_abgr),
                 .widthPixels = line.width_pixels,
                 .styleRole = styleRole,

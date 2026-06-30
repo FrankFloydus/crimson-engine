@@ -9,6 +9,7 @@
 
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_api_mutation_runner.hpp"
+#include "diagnostics/profile.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 
@@ -249,6 +250,7 @@ QuaderApiVoidResult QuaderSelectionApi::clear() {
 }
 
 QuaderApiVoidResult QuaderSelectionApi::selectAll() {
+    QDR_PROFILE_FUNCTION();
     return mutations_.runModelingResult(projectSession(session_).selection().selectAll(), "Select All");
 }
 
@@ -263,6 +265,7 @@ QuaderApiVoidResult QuaderSelectionApi::setMode(QuaderSelectionMode mode) {
 }
 
 QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::pickSelect(const QuaderPickSelectRequest& request) {
+    QDR_PROFILE_FUNCTION();
     const ModelingSelectionSummary before = projectSession(session_).selection().summary();
     const ModelingSelectionSummary picked = projectSession(session_).selection().pickSelect(toModelingPickSelectRequest(request));
     const ModelingSelectionSummary after = projectSession(session_).selection().summary();
@@ -281,6 +284,7 @@ QuaderSelectionBoxBaseline QuaderSelectionApi::captureBoxSelectionBaseline() con
 }
 
 QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::boxSelect(const QuaderBoxSelectRequest& request) {
+    QDR_PROFILE_FUNCTION();
     const ModelingSelectionSummary before = projectSession(session_).selection().summary();
     const ModelingSelectionSummary selected = projectSession(session_).selection().boxSelect(toModelingBoxSelectRequest(request));
     const ModelingSelectionSummary after = projectSession(session_).selection().summary();
@@ -295,6 +299,7 @@ QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::boxSelect(const Quad
 QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::boxSelect(
         const QuaderBoxSelectRequest& request,
         const QuaderSelectionBoxBaseline& baseline) {
+    QDR_PROFILE_FUNCTION();
     const ModelingSelectionSummary before = projectSession(session_).selection().summary();
     const ModelingSelectionSummary selected = baseline.impl_ != nullptr
             ? projectSession(session_).selection().boxSelect(toModelingBoxSelectRequest(request), baseline.impl_->baseline)
@@ -309,6 +314,7 @@ QuaderApiResult<QuaderSelectionSummary> QuaderSelectionApi::boxSelect(
 }
 
 QuaderApiResult<QuaderHoverSummary> QuaderSelectionApi::hover(const QuaderHoverRequest& request) {
+    QDR_PROFILE_FUNCTION();
     QuaderApiVoidResult status = mutations_.runModelingResult(
             projectSession(session_).selection().updateHover(toModelingHoverRequest(request)),
             "Update Hover");

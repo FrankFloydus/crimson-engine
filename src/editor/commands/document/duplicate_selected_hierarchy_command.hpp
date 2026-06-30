@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "diagnostics/profile.hpp"
 #include "editor/commands/document/document_command_scene_helpers.hpp"
 #include "editor/commands/document/scene_command.hpp"
 
@@ -38,6 +39,7 @@ public:
     }
 
     DocumentCommandResult undo() override {
+        QDR_PROFILE_FUNCTION();
         if (duplicateRoots_.empty()) {
             return documentCommandMissingEntityResult();
         }
@@ -53,6 +55,7 @@ public:
     }
 
     DocumentCommandResult redo() override {
+        QDR_PROFILE_FUNCTION();
         duplicateRoots_.clear();
         if (!capturedSources_) {
             DocumentCommandResult captured = captureSources();
@@ -80,6 +83,7 @@ public:
 
 private:
     DocumentCommandResult captureSources() {
+        QDR_PROFILE_FUNCTION();
         capturedSources_ = true;
         const std::vector<EntityId> roots = documentCommandSelectedRootEntities(scene());
         if (roots.empty()) {
@@ -101,9 +105,11 @@ private:
     }
 
     DocumentCommandResult duplicateFromSources() {
+        QDR_PROFILE_FUNCTION();
         duplicateSnapshots_.clear();
         duplicateSnapshots_.reserve(sourceSnapshots_.size());
         for (const DocumentEntitySnapshot& snapshot : sourceSnapshots_) {
+            QDR_PROFILE_SCOPE("Duplicate snapshot tree");
             const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
                     ? snapshot.originalParent
                     : InvalidEntityId;
@@ -120,6 +126,7 @@ private:
         }
 
         for (const EntityId duplicate : duplicateRoots_) {
+            QDR_PROFILE_SCOPE("Capture duplicate snapshot");
             std::optional<DocumentEntitySnapshot> snapshot =
                     documentCommandCaptureEntitySnapshot(scene(), duplicate);
             if (!snapshot.has_value()) {
@@ -131,8 +138,10 @@ private:
     }
 
     DocumentCommandResult restoreDuplicates() {
+        QDR_PROFILE_FUNCTION();
         std::unordered_map<EntityId, EntityId> remappedEntities;
         for (const DocumentEntitySnapshot& snapshot : duplicateSnapshots_) {
+            QDR_PROFILE_SCOPE("Restore duplicate snapshot tree");
             const EntityId parent = snapshot.originalParent != InvalidEntityId && scene().exists(snapshot.originalParent)
                     ? snapshot.originalParent
                     : InvalidEntityId;

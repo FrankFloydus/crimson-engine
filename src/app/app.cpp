@@ -11,6 +11,7 @@
 #include "assets/default_material_catalog.hpp"
 #include "assets/material_document.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/render/quader_render_api_runtime_access.hpp"
 #include "platform/platform_file_dialog.hpp"
 #include "platform/sdl_event_utils.hpp"
@@ -258,6 +259,7 @@ void App::saveWindowSettings() {
 }
 
 bool App::renderFrame(const FrameTiming& frameTiming) {
+    QDR_PROFILE_FUNCTION();
     if (renderingFrame_ || !editor_) {
         return running_;
     }
@@ -271,16 +273,22 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
     }
     ui_.setViewportRenderResizeSuspended(window_.chromeResizeActive());
     ui_.setRenderPerformanceStats(renderSystem_.framePerformanceStats());
-    ui_.beginFrame(frameTiming);
+    {
+        QDR_PROFILE_SCOPE("UI begin frame");
+        ui_.beginFrame(frameTiming);
+    }
     bool quitRequested = false;
-    ui_.draw(*editor_,
-            renderBridge_,
-            projectSession_.scene(),
-            projectSession_.assets(),
-            projectSession_.modeling(),
-            projectSession_.selection(),
-            defaultMaterial_,
-            quitRequested);
+    {
+        QDR_PROFILE_SCOPE("UI draw");
+        ui_.draw(*editor_,
+                renderBridge_,
+                projectSession_.scene(),
+                projectSession_.assets(),
+                projectSession_.modeling(),
+                projectSession_.selection(),
+                defaultMaterial_,
+                quitRequested);
+    }
     if (const std::optional<WindowChromeAction> chromeAction = ui_.takeWindowChromeAction()) {
         handleWindowChromeAction(*chromeAction);
     }
@@ -297,23 +305,42 @@ bool App::renderFrame(const FrameTiming& frameTiming) {
         renderingFrame_ = false;
         return running_;
     }
-    (void)QuaderRenderApiRuntimeAccess::syncScene(editor_->render(), renderBridge_);
+    {
+        QDR_PROFILE_SCOPE("Render sync scene");
+        (void)QuaderRenderApiRuntimeAccess::syncScene(editor_->render(), renderBridge_);
+    }
     if (const EntityId root = projectSession_.scene().sceneRoot(); root != InvalidEntityId) {
         if (const SceneSettingsComponent* settings = projectSession_.scene().sceneSettings(root)) {
             renderSystem_.applySceneSettings(*settings);
         }
     }
 
-    ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
-    ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
+    {
+        QDR_PROFILE_SCOPE("UI prepare viewports");
+        ui_.prepareViewports(*editor_, renderBridge_, projectSession_.scene(), projectSession_.assets());
+    }
+    {
+        QDR_PROFILE_SCOPE("UI prepare render data");
+        ui_.prepareRenderData(window_.widthPixels(), window_.heightPixels());
+    }
 
-    if (renderSystem_.beginFrame()) {
-        ui_.renderViewports(renderSystem_);
-        ui_.render(renderSystem_);
-        renderSystem_.endFrame();
+    {
+        QDR_PROFILE_SCOPE("Render frame submit");
+        if (renderSystem_.beginFrame()) {
+            {
+                QDR_PROFILE_SCOPE("Render viewport panes");
+                ui_.renderViewports(renderSystem_);
+            }
+            {
+                QDR_PROFILE_SCOPE("Render ImGui");
+                ui_.render(renderSystem_);
+            }
+            renderSystem_.endFrame();
+        }
     }
 
     renderingFrame_ = false;
+    QDR_PROFILE_FRAME_MARK();
     return running_;
 }
 

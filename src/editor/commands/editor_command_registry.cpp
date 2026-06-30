@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/editor_command_registry.hpp"
 
+#include "diagnostics/profile.hpp"
+
 #include <algorithm>
 #include <utility>
 
@@ -23,6 +25,8 @@ bool EditorCommandRegistry::contains(std::string_view commandId) const {
 }
 
 std::optional<QuaderApiVoidResult> EditorCommandRegistry::execute(std::string_view commandId) const {
+    QDR_PROFILE_FUNCTION();
+    QDR_PROFILE_NAME(commandId.data(), commandId.size());
     if (const EditorCommandRegistration* command = find(commandId)) {
         if (command->enabled && !command->enabled()) {
             return QuaderApiVoidResult{
@@ -40,6 +44,7 @@ std::optional<QuaderApiVoidResult> EditorCommandRegistry::execute(std::string_vi
                     .mutationKind = QuaderMutationKind::None,
             };
         }
+        QDR_PROFILE_SCOPE("Editor command handler");
         return command->execute();
     }
 
@@ -47,6 +52,7 @@ std::optional<QuaderApiVoidResult> EditorCommandRegistry::execute(std::string_vi
 }
 
 std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
+    QDR_PROFILE_FUNCTION();
     std::vector<QuaderCommandDescriptor> result;
     result.reserve(commands_.size());
     for (const EditorCommandRegistration& command : commands_) {
@@ -57,7 +63,11 @@ std::vector<QuaderCommandDescriptor> EditorCommandRegistry::available() const {
                 .id = command.id,
                 .label = command.label,
                 .shortcut = command.shortcut,
-                .enabled = command.enabled ? command.enabled() : true,
+                .enabled = [&]() {
+                    QDR_PROFILE_SCOPE("Editor command availability predicate");
+                    QDR_PROFILE_NAME(command.id.data(), command.id.size());
+                    return command.enabled ? command.enabled() : true;
+                }(),
         });
     }
     return result;

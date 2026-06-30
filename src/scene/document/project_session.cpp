@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "scene/document/project_session.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 
@@ -29,6 +30,7 @@ ProjectSession::ProjectSession(ProjectDocument document)
 ProjectSession::~ProjectSession() = default;
 
 void ProjectSession::rebuildServices() {
+    QDR_PROFILE_FUNCTION();
     history_ = std::make_unique<EditorHistoryService>();
     documentCommands_ = std::make_unique<DocumentCommandService>(document_.scene(), *history_, &document_.assets());
     modeling_ = std::make_unique<ModelingSessionService>(document_.scene(), document_.assets());
@@ -72,13 +74,29 @@ ProjectAssetMutationResult ProjectSession::replaceStandaloneMesh(AssetId mesh, M
 }
 
 void ProjectSession::replaceDocument(ProjectDocument document) {
+    QDR_PROFILE_FUNCTION();
     const std::uint64_t previousSceneRevision = document_.scene().revision();
     document_ = std::move(document);
-    (void)document_.ensureSceneRoot();
-    document_.scene().advanceRevisionForReplacement(previousSceneRevision);
-    history_->clear();
-    modeling_->resetFromScene();
-    markClean();
+    {
+        QDR_PROFILE_SCOPE("ProjectSession replace ensure scene root");
+        (void)document_.ensureSceneRoot();
+    }
+    {
+        QDR_PROFILE_SCOPE("ProjectSession replace advance scene revision");
+        document_.scene().advanceRevisionForReplacement(previousSceneRevision);
+    }
+    {
+        QDR_PROFILE_SCOPE("ProjectSession replace clear history");
+        history_->clear();
+    }
+    {
+        QDR_PROFILE_SCOPE("ProjectSession replace reset modeling from scene");
+        modeling_->resetFromScene();
+    }
+    {
+        QDR_PROFILE_SCOPE("ProjectSession replace mark clean");
+        markClean();
+    }
 }
 
 void ProjectSession::markClean() {

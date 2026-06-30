@@ -6,12 +6,14 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/commands/modeling/select_all_tool.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/selection/editor_selection_service.hpp"
 
 namespace quader {
 
 ModelingCommandResult SelectAllTool::executeCustomCommand(ModelingCommandExecutionContext& context) const {
+    QDR_PROFILE_FUNCTION();
     if (context.selection != nullptr) {
         return context.selection->selectAll();
     }

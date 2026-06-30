@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_renderable_cache.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
 #include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_renderable_builder.hpp"
@@ -42,6 +43,7 @@ bool OverlayRenderableCache::setOverlayFrame(
         std::uint8_t layerMask,
         ViewportOverlayFrame frame,
         ViewportOverlayCamera camera) {
+    QDR_PROFILE_FUNCTION();
     if (viewportIndex >= slots_.size()) {
         return false;
     }
@@ -54,9 +56,10 @@ bool OverlayRenderableCache::setOverlayFrame(
     const std::uint64_t signature = OverlayRenderableBuilder::frameSignature(frame);
     camera = OverlayCameraProjector::sanitizedCamera(camera);
     const std::uint64_t cameraSignature = OverlayRenderableBuilder::cameraSignature(camera);
+    const bool frameChanged = signature != slot.frameSignature;
     const bool cameraChanged = cameraSignature != slot.cameraSignature;
     const bool layerChanged = layerMask != slot.layerMask;
-    if (signature == slot.frameSignature && !cameraChanged && !layerChanged) {
+    if (!frameChanged && !cameraChanged && !layerChanged) {
         slot.frame = std::move(frame);
         return false;
     }
@@ -67,13 +70,15 @@ bool OverlayRenderableCache::setOverlayFrame(
         slot.camera = camera;
         slot.cameraSignature = cameraSignature;
         slot.layerMask = layerMask;
+    }
+    if (layerChanged) {
         for (OverlayProxyGroup& group : slot.proxyGroups) {
             group.signature = 0;
         }
     }
 
     if (factory_ && factory_->initialized()) {
-        rebuildSlot(slot);
+        rebuildSlot(slot, frameChanged || layerChanged);
     }
     return true;
 }
@@ -111,9 +116,15 @@ std::size_t OverlayRenderableCache::activeProxyCount(std::size_t viewportIndex) 
     return count;
 }
 
-void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot) {
+void OverlayRenderableCache::rebuildSlot(OverlaySlot& slot, bool rebuildCameraIndependentLayers) {
+    QDR_PROFILE_FUNCTION();
     for (const ViewportOverlayLayer layer : kViewportOverlayDrawOrder) {
-        const std::uint64_t layerSignature = OverlayRenderableBuilder::layerSignature(slot.frame, layer);
+        QDR_PROFILE_SCOPE("Overlay rebuild layer");
+        if (!rebuildCameraIndependentLayers && !OverlayRenderableBuilder::layerBuildDependsOnCamera(layer)) {
+            continue;
+        }
+        const std::uint64_t layerSignature =
+                OverlayRenderableBuilder::layerBuildSignature(slot.frame, slot.camera, layer);
         OverlayProxyGroup& group = slot.proxyGroups[static_cast<std::size_t>(layer)];
         if (group.signature == layerSignature) {
             continue;

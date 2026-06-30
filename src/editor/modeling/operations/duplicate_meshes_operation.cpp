@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "editor/modeling/runtime/session_internal.hpp"
 
+#include <diagnostics/profile.hpp>
 #include <editor/modeling/operations/operation_registry.hpp>
 
 namespace quader_editor_core {
@@ -74,6 +75,7 @@ CommandResult DuplicateMeshesOperation::execute(EditorSession& session, const Ed
 
 CommandResult DuplicateMeshesOperation::execute(EditorSession& session, DuplicateMeshesOperationSettings settings) const
 {
+	QDR_PROFILE_FUNCTION();
 	return session.duplicate_selected_objects(settings);
 }
 

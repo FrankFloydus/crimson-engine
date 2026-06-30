@@ -7,8 +7,8 @@
 #include "io/qdr/qdr_document_writer.hpp"
 
 #include "assets/material_document.hpp"
+#include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_atomic_write.hpp"
-#include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_format.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
 #include "io/qdr/qdr_project_codecs.hpp"
@@ -31,23 +31,28 @@ std::string stringFromView(std::string_view value) {
 }
 
 json meshToJson(AssetId id, const MeshAsset& mesh) {
+    QDR_PROFILE_FUNCTION();
     json vertices = json::array();
-    for (const MeshVertex& vertex : mesh.vertices) {
-        vertices.push_back(json{
-                {"position", qdrVec3ToJson(vertex.position)},
-                {"normal", qdrVec3ToJson(vertex.normal)},
-                {"uv", qdrVec2ToJson(vertex.uv)},
-                {"rgba", vertex.rgba},
-        });
-    }
-
+    json indices = json::array();
     json primitives = json::array();
-    for (const MeshPrimitiveSpan& primitive : normalizedMeshPrimitiveSpans(mesh)) {
-        primitives.push_back(json{
-                {"indexOffset", primitive.indexOffset},
-                {"indexCount", primitive.indexCount},
-                {"materialSlot", primitive.materialSlot},
-        });
+    if (!mesh.hasAuthoredPolygonDocument || !mesh.authoredPolygonDocument) {
+        for (const MeshVertex& vertex : mesh.vertices) {
+            vertices.push_back(json{
+                    {"position", qdrVec3ToJson(vertex.position)},
+                    {"normal", qdrVec3ToJson(vertex.normal)},
+                    {"uv", qdrVec2ToJson(vertex.uv)},
+                    {"rgba", vertex.rgba},
+            });
+        }
+
+        indices = mesh.indices;
+        for (const MeshPrimitiveSpan& primitive : normalizedMeshPrimitiveSpans(mesh)) {
+            primitives.push_back(json{
+                    {"indexOffset", primitive.indexOffset},
+                    {"indexCount", primitive.indexCount},
+                    {"materialSlot", primitive.materialSlot},
+            });
+        }
     }
 
     json value{
@@ -55,7 +60,7 @@ json meshToJson(AssetId id, const MeshAsset& mesh) {
             {"name", mesh.name},
             {"hasStableCpuTopology", mesh.hasStableCpuTopology},
             {"vertices", vertices},
-            {"indices", mesh.indices},
+            {"indices", indices},
             {"primitives", primitives},
     };
     if (mesh.hasAuthoredPolygonDocument && mesh.authoredPolygonDocument) {
@@ -96,6 +101,7 @@ json materialToJson(AssetId id, const MaterialDocument& material) {
 }
 
 json entityToJson(const SceneDocument& scene, EntityId entity) {
+    QDR_PROFILE_FUNCTION();
     json value{
             {"id", entity},
             {"uuid", scene.uuid(entity)},
@@ -156,6 +162,7 @@ json objectRecordToJson(const ProjectObjectRecord& record) {
 }
 
 json projectPayloadToJson(const ProjectDocument& document) {
+    QDR_PROFILE_FUNCTION();
     const SceneDocument& scene = document.scene();
     const AssetRegistry& assets = document.assets();
 
@@ -206,19 +213,6 @@ json projectPayloadToJson(const ProjectDocument& document) {
     };
 }
 
-quader_io::QdrAtomicWriteResult validateTemporaryProjectFile(const std::filesystem::path& temp) {
-    const QdrProjectReadResult validation = QdrDocumentReader::readProjectDocument(temp);
-    if (!validation.ok) {
-        return {
-                false,
-                validation.message.empty()
-                        ? "Serialized QDR project document failed validation."
-                        : "Serialized QDR project document failed validation: " + validation.message,
-        };
-    }
-    return {true, {}};
-}
-
 QdrProjectWriteResult projectWriteResultFromAtomic(quader_io::QdrAtomicWriteResult result) {
     return {result.ok, std::move(result.message)};
 }
@@ -226,6 +220,7 @@ QdrProjectWriteResult projectWriteResultFromAtomic(quader_io::QdrAtomicWriteResu
 } // namespace
 
 std::string QdrDocumentWriter::serializeProjectDocument(const ProjectDocument& document) {
+    QDR_PROFILE_FUNCTION();
     const json root{
             {"format", stringFromView(kQdrFormatName)},
             {"version", kQdrProjectFormatVersion},
@@ -237,10 +232,12 @@ std::string QdrDocumentWriter::serializeProjectDocument(const ProjectDocument& d
 QdrProjectWriteResult QdrDocumentWriter::writeProjectDocumentAtomic(
         const std::filesystem::path& path,
         const ProjectDocument& document) {
-    return projectWriteResultFromAtomic(quader_io::write_qdr_text_atomic(
-            path,
-            serializeProjectDocument(document),
-            validateTemporaryProjectFile));
+    QDR_PROFILE_FUNCTION();
+    const std::string serialized = [&]() {
+        QDR_PROFILE_SCOPE("QDR serialize project document");
+        return serializeProjectDocument(document);
+    }();
+    return projectWriteResultFromAtomic(quader_io::write_qdr_text_atomic(path, serialized));
 }
 
 } // namespace quader

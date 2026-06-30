@@ -7,6 +7,7 @@
 #include "io/qdr/qdr_document_reader.hpp"
 
 #include "assets/material_document.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/projection/mesh_projection_service.hpp"
 #include "io/qdr/qdr_format.hpp"
 #include "io/qdr/qdr_polygon_document_codec.hpp"
@@ -47,6 +48,7 @@ QVec3 fromRuntime(quader::QVec3 value) {
 }
 
 MeshAsset meshFromPolygonDocument(const quader_poly::Document& document, std::string name) {
+    QDR_PROFILE_FUNCTION();
     MeshAsset mesh = MeshProjectionService::compilePolygonDocumentMesh(document);
     mesh.name = std::move(name);
     mesh.hasAuthoredPolygonDocument = true;
@@ -55,6 +57,7 @@ MeshAsset meshFromPolygonDocument(const quader_poly::Document& document, std::st
 }
 
 MeshAsset meshFromJson(const json& value) {
+    QDR_PROFILE_FUNCTION();
     MeshAsset mesh;
     mesh.name = value.value("name", std::string("Mesh"));
     mesh.hasStableCpuTopology = value.value("hasStableCpuTopology", true);
@@ -168,6 +171,7 @@ void requireValidAssetReferencesForQdr(const ProjectDocumentAssetReferenceReport
 }
 
 ProjectDocument projectDocumentFromAppPayload(const json& payload) {
+    QDR_PROFILE_FUNCTION();
     requireObject(payload, "QDR project document payload");
     const json project = payload.value("project", json::object());
     ProjectDocument document(
@@ -343,6 +347,7 @@ LightType lightTypeFromLegacy(quader_io::QdrLightType type) {
 }
 
 ProjectDocument projectDocumentFromLegacyQdr(const quader_io::QdrDocument& legacy) {
+    QDR_PROFILE_FUNCTION();
     ProjectDocument document(
             ProjectDocumentRecord{.name = "Imported QDR"},
             ProjectDocumentRootPolicy::DeferSceneRoot);
@@ -416,6 +421,7 @@ ProjectDocument projectDocumentFromLegacyQdr(const quader_io::QdrDocument& legac
 }
 
 QdrProjectReadResult legacyReadResult(std::string_view text) {
+    QDR_PROFILE_FUNCTION();
     quader_io::QdrReadResult legacy = quader_io::deserialize_document(text);
     if (!legacy.ok) {
         return {false, ProjectDocument{}, legacy.message, false};
@@ -424,6 +430,7 @@ QdrProjectReadResult legacyReadResult(std::string_view text) {
 }
 
 QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
+    QDR_PROFILE_FUNCTION();
     quader_io::require_qdr_root_object(root);
     const quader_io::QdrRootHeader header = quader_io::read_qdr_root_header(root);
     if (header.format != quader_io::qdr_string_from_view(kQdrFormatName)) {
@@ -473,8 +480,12 @@ QdrProjectReadResult readFromRoot(const json& root, std::string_view text) {
 } // namespace
 
 QdrProjectReadResult QdrDocumentReader::deserializeProjectDocument(std::string_view text) {
+    QDR_PROFILE_FUNCTION();
     try {
-        const json root = json::parse(text.begin(), text.end());
+        const json root = [&]() {
+            QDR_PROFILE_SCOPE("QDR parse project JSON");
+            return json::parse(text.begin(), text.end());
+        }();
         return readFromRoot(root, text);
     } catch (const std::exception& exception) {
         return {false, ProjectDocument{}, exception.what(), false};
@@ -484,13 +495,17 @@ QdrProjectReadResult QdrDocumentReader::deserializeProjectDocument(std::string_v
 }
 
 QdrProjectReadResult QdrDocumentReader::readProjectDocument(const std::filesystem::path& path) {
+    QDR_PROFILE_FUNCTION();
     std::ifstream stream(path, std::ios::binary);
     if (!stream.is_open()) {
         return {false, ProjectDocument{}, "Could not open QDR document: " + path.string(), false};
     }
-    const std::string text{
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()};
+    const std::string text = [&]() {
+        QDR_PROFILE_SCOPE("QDR read project file bytes");
+        return std::string{
+                std::istreambuf_iterator<char>(stream),
+                std::istreambuf_iterator<char>()};
+    }();
     return deserializeProjectDocument(text);
 }
 

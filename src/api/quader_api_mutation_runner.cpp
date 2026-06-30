@@ -8,6 +8,7 @@
 
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_type_conversions.hpp"
+#include "diagnostics/profile.hpp"
 #include "scene/document/project_session.hpp"
 #include "editor/modeling/services/modeling_session_service.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
@@ -169,34 +170,40 @@ QuaderApiResult<QuaderEntityRef> QuaderApiMutationRunner::createDirectionalLight
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(CommandResult result, std::string_view label) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(std::move(result), QuaderMutationKind::Document, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runDocumentCommand(
         std::unique_ptr<IUndoableCommand> command,
         std::string_view label) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Document, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runDocumentResult(DocumentCommandResult result, std::string_view label) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(std::move(result), QuaderMutationKind::Document, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runModelingResult(
         ModelingCommandResult result,
         std::string_view label) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(std::move(result), QuaderMutationKind::Modeling, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runModelingCommand(
         std::unique_ptr<ModelingMementoCommand> command,
         std::string_view label) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(editorCommands_.executeModeling(std::move(command)), QuaderMutationKind::Modeling, label);
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runModelingUndoableCommand(
         std::unique_ptr<IUndoableCommand> command,
         std::string_view label) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(editorCommands_.execute(std::move(command)), QuaderMutationKind::Modeling, label);
 }
 
@@ -208,6 +215,7 @@ bool QuaderApiMutationRunner::canRunTrackedModelingTool(std::string_view toolId)
 }
 
 QuaderApiVoidResult QuaderApiMutationRunner::runTrackedModelingTool(std::string_view toolId) {
+    QDR_PROFILE_FUNCTION();
     return statusFrom(
             modelingCommands_.execute(history_, session_.modeling(), session_.selection(), toolId),
             QuaderMutationKind::Modeling,

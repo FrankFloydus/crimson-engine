@@ -162,6 +162,8 @@ target_link_libraries(quader_modeling
         quader_modeling_runtime
         quader_editor_metadata
         quader_qdr_runtime_io
+    PRIVATE
+        quader_modeling_profile
 )
 
 add_library(quader_core STATIC
@@ -200,7 +202,7 @@ quader_enable_common_pch(quader_core)
 target_include_directories(quader_core
     PUBLIC src
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty")
-target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io PRIVATE stduuid)
+target_link_libraries(quader_core PUBLIC spdlog::spdlog quader_modeling quader_qdr_shared_io PRIVATE stduuid quader_modeling_profile)
 target_compile_definitions(quader_core
     PUBLIC
         GLM_ENABLE_EXPERIMENTAL)
@@ -230,7 +232,7 @@ add_library(quader_api STATIC
 
 quader_enable_common_pch(quader_api)
 target_include_directories(quader_api PUBLIC src)
-target_link_libraries(quader_api PUBLIC quader_core)
+target_link_libraries(quader_api PUBLIC quader_core PRIVATE quader_modeling_profile)
 target_compile_definitions(quader_api
     PUBLIC
         GLM_ENABLE_EXPERIMENTAL)
@@ -437,6 +439,8 @@ target_link_libraries(quader_runtime
         SDL3::SDL3
         imgui::imgui
         lodepng
+    PRIVATE
+        quader_modeling_profile
 )
 if(WIN32)
     target_link_libraries(quader_runtime PUBLIC Dbghelp Dwmapi Advapi32 Comdlg32)

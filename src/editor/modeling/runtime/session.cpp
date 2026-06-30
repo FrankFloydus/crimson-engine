@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "session_internal.hpp"
 
+#include <diagnostics/profile.hpp>
 #include <editor/modeling/runtime/session.hpp>
 #include <editor/interactions/interaction_api.hpp>
 
@@ -804,12 +805,14 @@ std::optional<BridgeAlignedBoundaryGroups> bridge_aligned_boundary_groups(
 
 CommandResult select_all(std::vector<PolygonObject>& objects, SelectionMode mode, int& active_object_id)
 {
+	QDR_PROFILE_FUNCTION();
 	if (objects.empty()) {
 		return ok_result(false);
 	}
 
 	bool changed = false;
 	if (mode == SelectionMode::object) {
+		QDR_PROFILE_SCOPE("Runtime select all objects");
 		for (PolygonObject& object : objects) {
 			if (!object.selected || !object.selection.empty()) {
 				object.selected = true;
@@ -824,6 +827,7 @@ CommandResult select_all(std::vector<PolygonObject>& objects, SelectionMode mode
 
 	const std::vector<int> target_indices = component_command_object_indices(objects);
 	for (int index = 0; index < static_cast<int>(objects.size()); ++index) {
+		QDR_PROFILE_SCOPE("Runtime select all component object");
 		const bool target = std::find(target_indices.begin(), target_indices.end(), index) != target_indices.end();
 		PolygonObject& object = objects[index];
 		if (!target) {
@@ -2744,6 +2748,7 @@ std::vector<PolygonObject> selected_object_copies(const std::vector<PolygonObjec
 
 CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, int& next_object_id, SelectionMode& mode, int& active_object_id, quader::QVec3 offset)
 {
+	QDR_PROFILE_FUNCTION();
 	std::vector<PolygonObject> copied_objects = selected_object_copies(objects, mode);
 	if (copied_objects.empty()) {
 		return error_result("Select one or more meshes in object mode before duplicating.");
@@ -2758,6 +2763,7 @@ CommandResult duplicate_selected_objects(std::vector<PolygonObject>& objects, in
 	std::vector<int> duplicated_ids;
 	duplicated_ids.reserve(copied_objects.size());
 	for (PolygonObject& copy : copied_objects) {
+		QDR_PROFILE_SCOPE("Runtime duplicate polygon object");
 		copy.id = next_object_id++;
 		copy.selected = true;
 		copy.selection = quader_poly::Selection();

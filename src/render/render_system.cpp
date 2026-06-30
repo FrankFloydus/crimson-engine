@@ -7,6 +7,7 @@
 #include "render/render_system.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 
 #include <filament/Renderer.h>
 #include <math/vec4.h>
@@ -167,14 +168,17 @@ void RenderSystem::shutdown() {
 }
 
 bool RenderSystem::beginFrame() {
+    QDR_PROFILE_FUNCTION();
     return beginFrameWithSwapChain(swapChain_);
 }
 
 bool RenderSystem::beginFrame(filament::SwapChain* swapChain) {
+    QDR_PROFILE_FUNCTION();
     return beginFrameWithSwapChain(swapChain);
 }
 
 void RenderSystem::endFrame() {
+    QDR_PROFILE_FUNCTION();
     if (renderer_) {
         renderer_->endFrame();
         updateFramePerformanceStatsAfterEndFrame();
@@ -182,6 +186,7 @@ void RenderSystem::endFrame() {
 }
 
 bool RenderSystem::beginFrameWithSwapChain(filament::SwapChain* swapChain) {
+    QDR_PROFILE_FUNCTION();
     if (renderer_ == nullptr || swapChain == nullptr || !renderer_->beginFrame(swapChain)) {
         frameCpuActive_ = false;
         return false;

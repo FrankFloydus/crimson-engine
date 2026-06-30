@@ -7,6 +7,7 @@
 #include "render/imgui_filament_renderer.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "render/filament_buffer_descriptor_factory.hpp"
 
 #include <backend/DriverEnums.h>
@@ -50,6 +51,22 @@ struct UIPrimitive {
     std::uint32_t scissorWidth = 0;
     std::uint32_t scissorHeight = 0;
 };
+
+std::uint32_t growCapacity(std::uint32_t required) {
+    std::uint32_t capacity = 1u;
+    while (capacity < required) {
+        capacity *= 2u;
+    }
+    return capacity;
+}
+
+std::size_t growCapacity(std::size_t required) {
+    std::size_t capacity = 1u;
+    while (capacity < required) {
+        capacity *= 2u;
+    }
+    return capacity;
+}
 
 } // namespace
 
@@ -95,7 +112,7 @@ void ImGuiFilamentRenderer::shutdown() {
         return;
     }
 
-    releaseFrameResources();
+    destroyAllFrameResources();
 
     if (fontTextureId_ != ImTextureID_Invalid) {
         textures_->unregisterTexture(fontTextureId_);
@@ -147,7 +164,9 @@ void ImGuiFilamentRenderer::shutdown() {
 }
 
 void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebufferWidth, std::uint32_t framebufferHeight) {
+    QDR_PROFILE_FUNCTION();
     if (!engine_ || !drawData || drawData->CmdListsCount == 0 || framebufferWidth == 0 || framebufferHeight == 0) {
+        hideUnusedFrameResources(0u);
         return;
     }
 
@@ -166,8 +185,8 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
             filament::TextureSampler::MagFilter::LINEAR,
             filament::TextureSampler::WrapMode::CLAMP_TO_EDGE);
 
-    auto& entityManager = utils::EntityManager::get();
     std::uint16_t drawOrder = 0;
+    std::size_t activeResourceCount = 0;
 
     for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex) {
         const ImDrawList* commandList = drawData->CmdLists[listIndex];
@@ -266,36 +285,26 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
             continue;
         }
 
-        DrawResource resource;
-        resource.entity = entityManager.create();
-        resource.vertexBuffer = filament::VertexBuffer::Builder()
-                    .vertexCount(static_cast<std::uint32_t>(vertices.size()))
-                    .bufferCount(1)
-                    .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(UIVertex, position), sizeof(UIVertex))
-                    .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(UIVertex, uv), sizeof(UIVertex))
-                    .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(UIVertex, color), sizeof(UIVertex))
-                    .normalized(filament::VertexAttribute::COLOR)
-                    .build(*engine_);
+        DrawResource& resource = ensureDrawResource(
+                activeResourceCount++,
+                static_cast<std::uint32_t>(vertices.size()),
+                static_cast<std::uint32_t>(indices.size()),
+                primitives.size(),
+                framebufferWidth,
+                framebufferHeight);
         resource.vertexBuffer->setBufferAt(*engine_, 0, FilamentBufferDescriptorFactory::vector(vertices));
-
-        resource.indexBuffer = filament::IndexBuffer::Builder()
-                    .indexCount(static_cast<std::uint32_t>(indices.size()))
-                    .bufferType(filament::IndexBuffer::IndexType::UINT)
-                    .build(*engine_);
         resource.indexBuffer->setBuffer(*engine_, FilamentBufferDescriptorFactory::vector(indices));
 
-        filament::RenderableManager::Builder builder(primitives.size());
-        builder.boundingBox({{static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 0.0f},
-                            {static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 1.0f}})
-                .culling(false)
-                .castShadows(false)
-                .receiveShadows(false)
-                .priority(0);
-
-        resource.materialInstances.reserve(primitives.size());
+        auto& renderableManager = engine_->getRenderableManager();
+        filament::RenderableManager::Instance instance = renderableManager.getInstance(resource.entity);
+        renderableManager.setAxisAlignedBoundingBox(
+                instance,
+                {{static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 0.0f},
+                        {static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 1.0f}});
+        renderableManager.setLayerMask(instance, 0xffu, 0xffu);
         for (std::size_t primitiveIndex = 0; primitiveIndex < primitives.size(); ++primitiveIndex) {
             const UIPrimitive& primitive = primitives[primitiveIndex];
-            filament::MaterialInstance* materialInstance = material_->createInstance();
+            filament::MaterialInstance* materialInstance = resource.materialInstances[primitiveIndex];
             materialInstance->setParameter("albedo", primitive.texture, sampler);
             const float encodeToSrgb = primitive.sampleColorSpace == TextureSampleColorSpace::LinearSrgb ? 1.0f : 0.0f;
             materialInstance->setParameter("encodeToSrgb", encodeToSrgb);
@@ -306,22 +315,35 @@ void ImGuiFilamentRenderer::prepare(ImDrawData* drawData, std::uint32_t framebuf
             materialInstance->setParameter("premultipliedAlpha", premultipliedAlpha);
             materialInstance->setScissor(primitive.scissorLeft, primitive.scissorBottom,
                     primitive.scissorWidth, primitive.scissorHeight);
-            resource.materialInstances.push_back(materialInstance);
-
-            builder.geometry(primitiveIndex, filament::RenderableManager::PrimitiveType::TRIANGLES,
-                            resource.vertexBuffer, resource.indexBuffer, primitive.indexOffset, primitive.indexCount)
-                    .material(primitiveIndex, materialInstance)
-                    .blendOrder(primitiveIndex, drawOrder++)
-                    .globalBlendOrderEnabled(primitiveIndex, true);
+            renderableManager.setMaterialInstanceAt(instance, primitiveIndex, materialInstance);
+            renderableManager.setGeometryAt(
+                    instance,
+                    primitiveIndex,
+                    filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    resource.vertexBuffer,
+                    resource.indexBuffer,
+                    primitive.indexOffset,
+                    primitive.indexCount);
+            renderableManager.setBlendOrderAt(instance, primitiveIndex, drawOrder++);
+            renderableManager.setGlobalBlendOrderEnabledAt(instance, primitiveIndex, true);
         }
-
-        builder.build(*engine_, resource.entity);
-        scene_->addEntity(resource.entity);
-        frameResources_.push_back(std::move(resource));
+        for (std::size_t primitiveIndex = primitives.size(); primitiveIndex < resource.primitiveCapacity; ++primitiveIndex) {
+            renderableManager.setGeometryAt(
+                    instance,
+                    primitiveIndex,
+                    filament::RenderableManager::PrimitiveType::TRIANGLES,
+                    resource.vertexBuffer,
+                    resource.indexBuffer,
+                    0u,
+                    0u);
+        }
     }
+
+    hideUnusedFrameResources(activeResourceCount);
 }
 
 void ImGuiFilamentRenderer::render(filament::Renderer& renderer) {
+    QDR_PROFILE_FUNCTION();
     if (!view_) {
         return;
     }
@@ -374,35 +396,134 @@ void ImGuiFilamentRenderer::createFontTexture() {
 }
 
 void ImGuiFilamentRenderer::releaseFrameResources() {
+    QDR_PROFILE_FUNCTION();
+}
+
+ImGuiFilamentRenderer::DrawResource& ImGuiFilamentRenderer::ensureDrawResource(
+        std::size_t slot,
+        std::uint32_t vertexCount,
+        std::uint32_t indexCount,
+        std::size_t primitiveCount,
+        std::uint32_t framebufferWidth,
+        std::uint32_t framebufferHeight) {
+    QDR_PROFILE_FUNCTION();
+    if (slot >= frameResources_.size()) {
+        frameResources_.resize(slot + 1u);
+    }
+
+    DrawResource& resource = frameResources_[slot];
+    const bool needsRebuild =
+            !resource.entity ||
+            resource.vertexBuffer == nullptr ||
+            resource.indexBuffer == nullptr ||
+            resource.vertexCapacity < vertexCount ||
+            resource.indexCapacity < indexCount ||
+            resource.primitiveCapacity < primitiveCount;
+    if (!needsRebuild) {
+        return resource;
+    }
+
+    if (resource.entity || resource.vertexBuffer != nullptr || resource.indexBuffer != nullptr) {
+        QDR_PROFILE_SCOPE("ImGui rebuild undersized frame resource");
+        destroyDrawResource(resource);
+    }
+
+    resource.vertexCapacity = growCapacity(vertexCount);
+    resource.indexCapacity = growCapacity(indexCount);
+    resource.primitiveCapacity = growCapacity(primitiveCount);
+    resource.entity = utils::EntityManager::get().create();
+    resource.vertexBuffer = filament::VertexBuffer::Builder()
+            .vertexCount(resource.vertexCapacity)
+            .bufferCount(1)
+            .attribute(filament::VertexAttribute::POSITION, 0, AttributeType::FLOAT3, offsetof(UIVertex, position), sizeof(UIVertex))
+            .attribute(filament::VertexAttribute::UV0, 0, AttributeType::FLOAT2, offsetof(UIVertex, uv), sizeof(UIVertex))
+            .attribute(filament::VertexAttribute::COLOR, 0, AttributeType::UBYTE4, offsetof(UIVertex, color), sizeof(UIVertex))
+            .normalized(filament::VertexAttribute::COLOR)
+            .build(*engine_);
+    resource.indexBuffer = filament::IndexBuffer::Builder()
+            .indexCount(resource.indexCapacity)
+            .bufferType(filament::IndexBuffer::IndexType::UINT)
+            .build(*engine_);
+
+    resource.materialInstances.reserve(resource.primitiveCapacity);
+    filament::RenderableManager::Builder builder(resource.primitiveCapacity);
+    builder.boundingBox({{static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 0.0f},
+                        {static_cast<float>(framebufferWidth) * 0.5f, static_cast<float>(framebufferHeight) * 0.5f, 1.0f}})
+            .culling(false)
+            .castShadows(false)
+            .receiveShadows(false)
+            .priority(0);
+    for (std::size_t primitiveIndex = 0; primitiveIndex < resource.primitiveCapacity; ++primitiveIndex) {
+        filament::MaterialInstance* materialInstance = material_->createInstance();
+        resource.materialInstances.push_back(materialInstance);
+        builder.geometry(
+                        primitiveIndex,
+                        filament::RenderableManager::PrimitiveType::TRIANGLES,
+                        resource.vertexBuffer,
+                        resource.indexBuffer,
+                        0u,
+                        0u)
+                .material(primitiveIndex, materialInstance)
+                .blendOrder(primitiveIndex, 0u)
+                .globalBlendOrderEnabled(primitiveIndex, true);
+    }
+    builder.build(*engine_, resource.entity);
+    scene_->addEntity(resource.entity);
+    return resource;
+}
+
+void ImGuiFilamentRenderer::destroyDrawResource(DrawResource& resource) {
+    if (resource.entity) {
+        scene_->remove(resource.entity);
+        engine_->getRenderableManager().destroy(resource.entity);
+    }
+    for (filament::MaterialInstance* materialInstance : resource.materialInstances) {
+        if (materialInstance) {
+            engine_->destroy(materialInstance);
+        }
+    }
+    resource.materialInstances.clear();
+    if (resource.vertexBuffer) {
+        engine_->destroy(resource.vertexBuffer);
+        resource.vertexBuffer = nullptr;
+    }
+    if (resource.indexBuffer) {
+        engine_->destroy(resource.indexBuffer);
+        resource.indexBuffer = nullptr;
+    }
+    if (resource.entity) {
+        utils::EntityManager::get().destroy(resource.entity);
+        resource.entity.clear();
+    }
+    resource.vertexCapacity = 0;
+    resource.indexCapacity = 0;
+    resource.primitiveCapacity = 0;
+}
+
+void ImGuiFilamentRenderer::destroyAllFrameResources() {
+    QDR_PROFILE_FUNCTION();
+    for (DrawResource& resource : frameResources_) {
+        destroyDrawResource(resource);
+    }
+    frameResources_.clear();
+}
+
+void ImGuiFilamentRenderer::hideUnusedFrameResources(std::size_t firstUnusedSlot) {
     if (!engine_) {
         return;
     }
 
-    for (DrawResource& resource : frameResources_) {
-        if (resource.entity) {
-            scene_->remove(resource.entity);
-            engine_->getRenderableManager().destroy(resource.entity);
+    auto& renderableManager = engine_->getRenderableManager();
+    for (std::size_t slot = firstUnusedSlot; slot < frameResources_.size(); ++slot) {
+        DrawResource& resource = frameResources_[slot];
+        if (!resource.entity) {
+            continue;
         }
-        for (filament::MaterialInstance* materialInstance : resource.materialInstances) {
-            if (materialInstance) {
-                engine_->destroy(materialInstance);
-            }
-        }
-        resource.materialInstances.clear();
-        if (resource.vertexBuffer) {
-            engine_->destroy(resource.vertexBuffer);
-            resource.vertexBuffer = nullptr;
-        }
-        if (resource.indexBuffer) {
-            engine_->destroy(resource.indexBuffer);
-            resource.indexBuffer = nullptr;
-        }
-        if (resource.entity) {
-            utils::EntityManager::get().destroy(resource.entity);
-            resource.entity.clear();
+        filament::RenderableManager::Instance instance = renderableManager.getInstance(resource.entity);
+        if (instance) {
+            renderableManager.setLayerMask(instance, 0xffu, 0x00u);
         }
     }
-    frameResources_.clear();
 }
 
 } // namespace quader

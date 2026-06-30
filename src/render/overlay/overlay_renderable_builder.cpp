@@ -6,7 +6,9 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "render/overlay/overlay_renderable_builder.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "render/render_signature_builder.hpp"
+#include "render/overlay/overlay_camera_projector.hpp"
 #include "render/overlay/overlay_face_fill_builder.hpp"
 #include "render/overlay/overlay_line_mesh_builder.hpp"
 #include "render/overlay/overlay_point_mesh_builder.hpp"
@@ -14,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -30,6 +33,41 @@ bool overlayLayerUsesDepthStampVisibility(ViewportOverlayLayer layer) {
             layer == ViewportOverlayLayer::HoverEdge ||
             layer == ViewportOverlayLayer::SelectedVertex ||
             layer == ViewportOverlayLayer::HoverVertex;
+}
+
+bool overlayLayerCanBuildFaceFill(ViewportOverlayLayer layer) {
+    return layer == ViewportOverlayLayer::SelectedVisibleFace ||
+            layer == ViewportOverlayLayer::SelectedXrayFace ||
+            layer == ViewportOverlayLayer::SelectedFaceMask ||
+            layer == ViewportOverlayLayer::HoverFace ||
+            layer == ViewportOverlayLayer::ToolPlane ||
+            layer == ViewportOverlayLayer::ToolPreviewFill ||
+            layer == ViewportOverlayLayer::ToolHandle;
+}
+
+bool overlayLayerCanBuildLines(ViewportOverlayLayer layer) {
+    return layer == ViewportOverlayLayer::WireframeBase ||
+            layer == ViewportOverlayLayer::WireframeXray ||
+            layer == ViewportOverlayLayer::SourceWire ||
+            layer == ViewportOverlayLayer::OpenEdge ||
+            layer == ViewportOverlayLayer::DiagnosticEdge ||
+            layer == ViewportOverlayLayer::SelectedFaceEdge ||
+            layer == ViewportOverlayLayer::SelectedEdge ||
+            layer == ViewportOverlayLayer::GroupBounds ||
+            layer == ViewportOverlayLayer::HoverFaceEdge ||
+            layer == ViewportOverlayLayer::HoverEdge ||
+            layer == ViewportOverlayLayer::ToolPlaneLine ||
+            layer == ViewportOverlayLayer::ToolPreviewLine ||
+            layer == ViewportOverlayLayer::ToolPreviewSeam ||
+            layer == ViewportOverlayLayer::ToolHandle;
+}
+
+bool overlayLayerCanBuildPoints(ViewportOverlayLayer layer) {
+    return layer == ViewportOverlayLayer::UnselectedVertex ||
+            layer == ViewportOverlayLayer::SelectedVertex ||
+            layer == ViewportOverlayLayer::HoverVertex ||
+            layer == ViewportOverlayLayer::SnapTargetVertex ||
+            layer == ViewportOverlayLayer::ToolHandle;
 }
 
 QVec3 pointOnLine(QVec3 a, QVec3 b, float t) {
@@ -84,6 +122,7 @@ class OverlayDepthStampVisibilityFilter {
 public:
     explicit OverlayDepthStampVisibilityFilter(const ViewportOverlayFrame& frame)
     {
+        QDR_PROFILE_FUNCTION();
         for (const ViewportOverlayTriangle& triangle : frame.triangles) {
             if (triangle.layer == ViewportOverlayLayer::SourceWireDepthStamp &&
                     triangle.element.objectId >= 0) {
@@ -204,6 +243,22 @@ std::uint64_t OverlayRenderableBuilder::layerSignature(const ViewportOverlayFram
     return RenderSignatureBuilder::overlayLayerSignature(frame, layer);
 }
 
+bool OverlayRenderableBuilder::layerBuildDependsOnCamera(ViewportOverlayLayer layer) {
+    return overlayLayerCanBuildLines(layer) || overlayLayerCanBuildPoints(layer);
+}
+
+std::uint64_t OverlayRenderableBuilder::layerBuildSignature(
+        const ViewportOverlayFrame& frame,
+        const ViewportOverlayCamera& camera,
+        ViewportOverlayLayer layer) {
+    RenderSignatureBuilder signature;
+    signature.addValue(layerSignature(frame, layer));
+    if (layerBuildDependsOnCamera(layer)) {
+        signature.addValue(cameraSignature(OverlayCameraProjector::sanitizedCamera(camera)));
+    }
+    return signature.value();
+}
+
 OverlayRenderState OverlayRenderableBuilder::makeState(
         ViewportOverlayLayer layer,
         ViewportOverlayGeometryKind kind,
@@ -241,65 +296,93 @@ OverlayLayerBuildPlan OverlayRenderableBuilder::buildLayer(
         const ViewportOverlayFrame& frame,
         const ViewportOverlayCamera& camera,
         ViewportOverlayLayer layer) {
+    QDR_PROFILE_FUNCTION();
     OverlayLayerBuildPlan plan;
     if (layer == ViewportOverlayLayer::SourceWireDepthStamp) {
         return plan;
     }
 
     std::uint16_t blendOrder = static_cast<std::uint16_t>(viewportOverlayDrawOrder(layer) * 64);
-    OverlayFaceFillMesh faceFillMesh = OverlayFaceFillBuilder::buildLayer(frame, layer);
-    if (!faceFillMesh.empty()) {
-        if (viewportOverlayLayerUsesDepthOnlyFaceFill(layer)) {
-            plan.faceFillBatches.push_back({
-                    .mesh = std::move(faceFillMesh),
-                    .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
-            });
-        } else if (viewportOverlayLayerUsesDepthStampedFaceFill(layer)) {
-            plan.faceFillBatches.push_back({
-                    .mesh = faceFillMesh,
-                    .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
-            });
-            plan.faceFillBatches.push_back({
-                    .mesh = std::move(faceFillMesh),
-                    .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, false, true),
-            });
-        } else {
-            plan.faceFillBatches.push_back({
-                    .mesh = std::move(faceFillMesh),
-                    .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++),
-            });
+    if (overlayLayerCanBuildFaceFill(layer)) {
+        OverlayFaceFillMesh faceFillMesh = [&]() {
+            QDR_PROFILE_SCOPE("Overlay build face fill mesh");
+            return OverlayFaceFillBuilder::buildLayer(frame, layer);
+        }();
+        if (!faceFillMesh.empty()) {
+            if (viewportOverlayLayerUsesDepthOnlyFaceFill(layer)) {
+                plan.faceFillBatches.push_back({
+                        .mesh = std::move(faceFillMesh),
+                        .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
+                });
+            } else if (viewportOverlayLayerUsesDepthStampedFaceFill(layer)) {
+                plan.faceFillBatches.push_back({
+                        .mesh = faceFillMesh,
+                        .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, true, false),
+                });
+                plan.faceFillBatches.push_back({
+                        .mesh = std::move(faceFillMesh),
+                        .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++, false, true),
+                });
+            } else {
+                plan.faceFillBatches.push_back({
+                        .mesh = std::move(faceFillMesh),
+                        .state = makeState(layer, ViewportOverlayGeometryKind::Triangles, blendOrder++),
+                });
+            }
         }
     }
 
-    const OverlayDepthStampVisibilityFilter visibility(frame);
-    const std::vector<const ViewportOverlayLine*> lines = linesForLayer(frame, layer, camera, visibility);
-    const std::vector<LineBatchKey> lineKeys = lineBatchKeys(lines, layer);
-    for (const LineBatchKey& key : lineKeys) {
-        std::vector<const ViewportOverlayLine*> batchLines;
-        batchLines.reserve(lines.size());
-        for (const ViewportOverlayLine* line : lines) {
-            if (line->color != key.color ||
-                    viewportOverlayLineWidthPixels(layer, line->widthPixels) != key.widthPixels) {
+    std::optional<OverlayDepthStampVisibilityFilter> visibility;
+    if (overlayLayerUsesDepthStampVisibility(layer) &&
+            (overlayLayerCanBuildLines(layer) || overlayLayerCanBuildPoints(layer))) {
+        visibility.emplace(frame);
+    }
+
+    if (overlayLayerCanBuildLines(layer)) {
+        const std::vector<const ViewportOverlayLine*> lines = [&]() {
+            QDR_PROFILE_SCOPE("Overlay collect layer lines");
+            return linesForLayer(frame, layer, camera, visibility ? &*visibility : nullptr);
+        }();
+        const std::vector<LineBatchKey> lineKeys = lineBatchKeys(lines, layer);
+        for (const LineBatchKey& key : lineKeys) {
+            QDR_PROFILE_SCOPE("Overlay build line batch");
+            std::vector<const ViewportOverlayLine*> batchLines;
+            batchLines.reserve(lines.size());
+            for (const ViewportOverlayLine* line : lines) {
+                if (line->color != key.color ||
+                        viewportOverlayLineWidthPixels(layer, line->widthPixels) != key.widthPixels) {
+                    continue;
+                }
+                batchLines.push_back(line);
+            }
+            const float depthBias = viewportOverlayDepthBias(layer, ViewportOverlayGeometryKind::Lines);
+            OverlayLineMesh mesh = OverlayLineMeshBuilder::build(batchLines, camera, key.widthPixels, depthBias);
+            if (mesh.empty()) {
                 continue;
             }
-            batchLines.push_back(line);
+            plan.lineBatches.push_back({
+                    .mesh = std::move(mesh),
+                    .state = makeState(layer, ViewportOverlayGeometryKind::Lines, blendOrder++),
+                    .widthPixels = key.widthPixels,
+                    .depthBias = depthBias,
+            });
         }
-        const float depthBias = viewportOverlayDepthBias(layer, ViewportOverlayGeometryKind::Lines);
-        OverlayLineMesh mesh = OverlayLineMeshBuilder::build(batchLines, camera, key.widthPixels, depthBias);
-        if (mesh.empty()) {
-            continue;
-        }
-        plan.lineBatches.push_back({
-                .mesh = std::move(mesh),
-                .state = makeState(layer, ViewportOverlayGeometryKind::Lines, blendOrder++),
-                .widthPixels = key.widthPixels,
-                .depthBias = depthBias,
-        });
     }
 
-    const std::vector<const ViewportOverlayPoint*> points = pointsForLayer(frame, layer, camera, visibility);
-    appendPointPass(plan, points, camera, layer, blendOrder, true);
-    appendPointPass(plan, points, camera, layer, blendOrder, false);
+    if (overlayLayerCanBuildPoints(layer)) {
+        const std::vector<const ViewportOverlayPoint*> points = [&]() {
+            QDR_PROFILE_SCOPE("Overlay collect layer points");
+            return pointsForLayer(frame, layer, camera, visibility ? &*visibility : nullptr);
+        }();
+        {
+            QDR_PROFILE_SCOPE("Overlay build point outline pass");
+            appendPointPass(plan, points, camera, layer, blendOrder, true);
+        }
+        {
+            QDR_PROFILE_SCOPE("Overlay build point fill pass");
+            appendPointPass(plan, points, camera, layer, blendOrder, false);
+        }
+    }
     return plan;
 }
 
@@ -307,12 +390,14 @@ std::vector<const ViewportOverlayLine*> OverlayRenderableBuilder::linesForLayer(
         const ViewportOverlayFrame& frame,
         ViewportOverlayLayer layer,
         const ViewportOverlayCamera& camera,
-        const OverlayDepthStampVisibilityFilter& visibility) {
+        const OverlayDepthStampVisibilityFilter* visibility) {
     std::vector<const ViewportOverlayLine*> lines;
     lines.reserve(frame.lines.size());
     for (const ViewportOverlayLine& line : frame.lines) {
         if (line.layer == layer &&
-                (!overlayLayerUsesDepthStampVisibility(layer) || visibility.lineVisible(line, camera))) {
+                (!overlayLayerUsesDepthStampVisibility(layer) ||
+                 visibility == nullptr ||
+                 visibility->lineVisible(line, camera))) {
             lines.push_back(&line);
         }
     }
@@ -323,12 +408,14 @@ std::vector<const ViewportOverlayPoint*> OverlayRenderableBuilder::pointsForLaye
         const ViewportOverlayFrame& frame,
         ViewportOverlayLayer layer,
         const ViewportOverlayCamera& camera,
-        const OverlayDepthStampVisibilityFilter& visibility) {
+        const OverlayDepthStampVisibilityFilter* visibility) {
     std::vector<const ViewportOverlayPoint*> points;
     points.reserve(frame.points.size());
     for (const ViewportOverlayPoint& point : frame.points) {
         if (point.layer == layer &&
-                (!overlayLayerUsesDepthStampVisibility(layer) || visibility.pointVisible(point, camera))) {
+                (!overlayLayerUsesDepthStampVisibility(layer) ||
+                 visibility == nullptr ||
+                 visibility->pointVisible(point, camera))) {
             points.push_back(&point);
         }
     }

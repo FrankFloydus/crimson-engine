@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "io/qdr/qdr_atomic_write.hpp"
 
+#include "diagnostics/profile.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -66,6 +68,7 @@ void delete_temp_file_best_effort(const std::filesystem::path& temp_path) {
 }
 
 QdrAtomicWriteResult write_text_file(const std::filesystem::path& temp_path, std::string_view text) {
+    QDR_PROFILE_FUNCTION();
     std::ofstream stream(temp_path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!stream.is_open()) {
         return {false, "Could not create temporary QDR file: " + temp_path.string()};
@@ -92,6 +95,7 @@ QdrAtomicWriteResult write_text_file(const std::filesystem::path& temp_path, std
 QdrAtomicWriteResult replace_with_temp_file(
         const std::filesystem::path& temp_path,
         const std::filesystem::path& target) {
+    QDR_PROFILE_FUNCTION();
 #ifdef _WIN32
     if (::MoveFileExW(
                 temp_path.c_str(),
@@ -116,6 +120,7 @@ QdrAtomicWriteResult write_qdr_text_atomic(
         const std::filesystem::path& target,
         std::string_view text,
         QdrAtomicWriteValidator validate_temp) {
+    QDR_PROFILE_FUNCTION();
     if (target.empty() || target.filename().empty()) {
         return {false, "QDR file path is empty."};
     }
@@ -136,21 +141,30 @@ QdrAtomicWriteResult write_qdr_text_atomic(
             return {false, system_error_message("Could not inspect temporary QDR file path", error)};
         }
 
-        QdrAtomicWriteResult write_result = write_text_file(temp_path, text);
+        QdrAtomicWriteResult write_result = [&]() {
+            QDR_PROFILE_SCOPE("QDR write temp file");
+            return write_text_file(temp_path, text);
+        }();
         if (!write_result.ok) {
             delete_temp_file_best_effort(temp_path);
             return write_result;
         }
 
         if (validate_temp) {
-            QdrAtomicWriteResult validation_result = validate_temp(temp_path);
+            QdrAtomicWriteResult validation_result = [&]() {
+                QDR_PROFILE_SCOPE("QDR validate temp file");
+                return validate_temp(temp_path);
+            }();
             if (!validation_result.ok) {
                 delete_temp_file_best_effort(temp_path);
                 return validation_result;
             }
         }
 
-        QdrAtomicWriteResult replace_result = replace_with_temp_file(temp_path, target);
+        QdrAtomicWriteResult replace_result = [&]() {
+            QDR_PROFILE_SCOPE("QDR replace target file");
+            return replace_with_temp_file(temp_path, target);
+        }();
         if (!replace_result.ok) {
             delete_temp_file_best_effort(temp_path);
             return replace_result;

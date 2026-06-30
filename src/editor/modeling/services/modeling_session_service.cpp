@@ -19,6 +19,7 @@
 #include "editor/tools/viewport_tool_descriptor_catalog.hpp"
 #include "editor/selection/selection_projection_service.hpp"
 #include "editor/transform/scene_transform_drag_service.hpp"
+#include "diagnostics/profile.hpp"
 #include "math/glm_bridge.hpp"
 #include "scene/scene_bounds.hpp"
 #include "scene/scene_document.hpp"
@@ -868,7 +869,7 @@ public:
                 runtime_,
                 scene_,
                 objectRegistry_,
-                sceneTransformedObjectsForPicking());
+                cachedSceneTransformedObjectsForPicking());
     }
 
     [[nodiscard]] std::vector<ModelingToolPreviewMesh> toolPreviewMeshes() const {
@@ -876,7 +877,7 @@ public:
                 runtime_,
                 scene_,
                 objectRegistry_,
-                sceneTransformedObjectsForPicking());
+                cachedSceneTransformedObjectsForPicking());
     }
 
     [[nodiscard]] static std::unordered_set<int> liveModelingObjectIds(
@@ -995,6 +996,7 @@ public:
     }
 
     void syncObjectSelectionFromScene(bool forceObjectMode = false) {
+        QDR_PROFILE_FUNCTION();
         if (!selectionProjectionService_.shouldProjectObjectSelectionFromScene(session_, forceObjectMode)) {
             return;
         }
@@ -1010,6 +1012,7 @@ public:
     }
 
     void promoteDrawnPlaneToolObjectSelection() {
+        QDR_PROFILE_FUNCTION();
         if (!sceneObjectsSyncedForCurrentModelingContent()) {
             syncSceneObjectsFromModeling();
         }
@@ -1021,6 +1024,7 @@ public:
     }
 
     void syncSceneSelectionFromModeling() {
+        QDR_PROFILE_FUNCTION();
         if (!sceneObjectsSyncedForCurrentModelingContent()) {
             syncSceneObjectsFromModeling();
         }
@@ -1032,6 +1036,7 @@ public:
     }
 
     [[nodiscard]] std::vector<ModelingObjectSceneIdentity> captureSelectedDuplicateSceneIdentities() const {
+        QDR_PROFILE_FUNCTION();
         const std::vector<int> selectedObjectIds = session_.selected_object_ids();
         return objectRegistry_.captureSceneIdentitiesForModelingObjects(
                 scene_,
@@ -1039,6 +1044,7 @@ public:
     }
 
     void applySceneIdentitiesToSelectedDuplicates(const std::vector<ModelingObjectSceneIdentity>& sourceIdentities) {
+        QDR_PROFILE_FUNCTION();
         if (sourceIdentities.empty()) {
             return;
         }
@@ -1790,7 +1796,9 @@ public:
     }
 
     ModelingTransformDragPreview beginTransformDrag(const ModelingTransformDragBeginRequest& request) {
+        QDR_PROFILE_FUNCTION();
         if (runtime_.transform_drag_active() || hasTransformPreview()) {
+            QDR_PROFILE_SCOPE("Modeling transform drag cancel active preview");
             (void)cancelTransformDrag();
         }
         if ((!session_.has_selection() && !hasSceneTransformSelection()) ||
@@ -1816,21 +1824,31 @@ public:
                 dragSelectionMode == quader_editor_core::SelectionMode::object,
                 operation == quader_editor_core::TransformDragOperation::transform);
 
-        runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
         {
+            QDR_PROFILE_SCOPE("Modeling transform drag begin runtime state");
+            runtime_.begin_transform_drag_state(tool, operation, axis, pivot);
+        }
+        {
+            QDR_PROFILE_SCOPE("Modeling transform drag configure state");
             quader_editor_core::TransformDragState drag = runtime_.transform_drag_state();
             drag.scene_transform_preview_eligible = previewRouting.sceneTransformPreviewEligible;
             runtime_.set_transform_drag_state(drag);
         }
-        transformDragController_.setPreviewDriven(previewRouting.previewDriven, request.duplicateSelected);
+        {
+            QDR_PROFILE_SCOPE("Modeling transform drag set preview routing");
+            transformDragController_.setPreviewDriven(previewRouting.previewDriven, request.duplicateSelected);
+        }
 
         if (previewRouting.needsRuntimePreviewTransaction) {
+            QDR_PROFILE_SCOPE("Modeling transform drag runtime preview transaction");
             const std::vector<ModelingObjectSceneIdentity> duplicateSceneIdentities =
                     request.duplicateSelected
                     ? captureSelectedDuplicateSceneIdentities()
                     : std::vector<ModelingObjectSceneIdentity>{};
-            const quader_editor_core::CommandResult beginPreview =
-                    session_.begin_transform_preview(request.duplicateSelected);
+            const quader_editor_core::CommandResult beginPreview = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag begin transform preview");
+                return session_.begin_transform_preview(request.duplicateSelected);
+            }();
             if (!beginPreview.ok) {
                 clearTransformDragRuntimeState();
                 return {
@@ -1840,10 +1858,19 @@ public:
                                 : beginPreview.message,
                 };
             }
-            invalidateSelectionOverlayCaches();
+            {
+                QDR_PROFILE_SCOPE("Modeling transform drag invalidate overlay caches");
+                invalidateSelectionOverlayCaches();
+            }
             if (beginPreview.changed) {
-                syncSceneObjectsFromModeling(true);
-                syncSceneSelectionFromModeling();
+                {
+                    QDR_PROFILE_SCOPE("Modeling transform drag sync scene objects after begin");
+                    syncSceneObjectsFromModeling(true);
+                }
+                {
+                    QDR_PROFILE_SCOPE("Modeling transform drag sync scene selection after begin");
+                    syncSceneSelectionFromModeling();
+                }
                 if (request.duplicateSelected) {
                     applySceneIdentitiesToSelectedDuplicates(duplicateSceneIdentities);
                 }
@@ -1851,7 +1878,10 @@ public:
         }
 
         if (previewRouting.sceneTransformPreviewEligible &&
-                !sceneTransformDragService_.begin(scene_, request.pivot, true, "Transform Selection")) {
+                !([&]() {
+                    QDR_PROFILE_SCOPE("Modeling transform drag begin scene transform preview");
+                    return sceneTransformDragService_.begin(scene_, request.pivot, true, "Transform Selection");
+                }())) {
             (void)cancelTransformDrag();
             return {
                     .ok = false,
@@ -1880,7 +1910,10 @@ public:
             begin.start_ray = toRuntime(request.ray);
             begin.has_camera = true;
             begin.camera_transform = camera.transform;
-            const quader_editor_core::MoveBeginResult beginResult = quader_editor_core::begin_move_drag(begin);
+            const quader_editor_core::MoveBeginResult beginResult = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag begin move");
+                return quader_editor_core::begin_move_drag(begin);
+            }();
             if (!beginResult.ok) {
                 (void)cancelTransformDrag();
                 return {.ok = false, .message = beginResult.message.empty() ? "Move drag failed." : beginResult.message};
@@ -1902,7 +1935,10 @@ public:
             begin.world_pivot = pivot;
             begin.has_camera = true;
             begin.camera_transform = camera.transform;
-            const quader_editor_core::RotateBeginResult beginResult = quader_editor_core::begin_rotate_drag(begin);
+            const quader_editor_core::RotateBeginResult beginResult = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag begin rotate");
+                return quader_editor_core::begin_rotate_drag(begin);
+            }();
             if (!beginResult.ok) {
                 (void)cancelTransformDrag();
                 return {.ok = false, .message = beginResult.message.empty() ? "Rotate drag failed." : beginResult.message};
@@ -1918,11 +1954,17 @@ public:
             begin.screen_pivot = screenPivot;
             begin.has_screen_tip = true;
             begin.screen_tip = screenTip;
-            const quader_editor_core::Bounds3 bounds = transformDragBounds();
+            const quader_editor_core::Bounds3 bounds = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag scale bounds");
+                return transformDragBounds();
+            }();
             begin.bounds.has_bounds = !bounds.empty;
             begin.bounds.min = bounds.min;
             begin.bounds.max = bounds.max;
-            const quader_editor_core::ScaleBeginResult beginResult = quader_editor_core::begin_scale_drag(begin);
+            const quader_editor_core::ScaleBeginResult beginResult = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag begin scale");
+                return quader_editor_core::begin_scale_drag(begin);
+            }();
             if (!beginResult.ok) {
                 (void)cancelTransformDrag();
                 return {.ok = false, .message = beginResult.message.empty() ? "Scale drag failed." : beginResult.message};
@@ -1933,18 +1975,22 @@ public:
             return {.ok = false, .message = "Transform drag only supports move, rotate, or scale."};
         }
 
-        return applyTransformDragPreview({
-                .screenPosition = request.screenPosition,
-                .ray = request.ray,
-                .camera = request.camera,
-                .gridSize = request.gridSize,
-                .vertexSnapRadius = request.vertexSnapRadius,
-                .gridSnapEnabled = request.gridSnapEnabled,
-                .precision = request.precision,
-        });
+        {
+            QDR_PROFILE_SCOPE("Modeling transform drag first preview apply");
+            return applyTransformDragPreview({
+                    .screenPosition = request.screenPosition,
+                    .ray = request.ray,
+                    .camera = request.camera,
+                    .gridSize = request.gridSize,
+                    .vertexSnapRadius = request.vertexSnapRadius,
+                    .gridSnapEnabled = request.gridSnapEnabled,
+                    .precision = request.precision,
+            });
+        }
     }
 
     ModelingTransformDragPreview updateTransformDrag(const ModelingTransformDragUpdateRequest& request) {
+        QDR_PROFILE_FUNCTION();
         if (!runtime_.transform_drag_active()) {
             if (hasTransformPreview()) {
                 (void)cancelTransformDrag();
@@ -1955,6 +2001,7 @@ public:
     }
 
     ModelingTransformDragPreview commitTransformDrag(EditorHistoryService* history = nullptr) {
+        QDR_PROFILE_FUNCTION();
         const bool previewDriven = transformDragController_.previewDriven();
         const bool finishPreviewTransaction = previewDriven || transformDragController_.duplicateSelected();
         const quader_editor_core::TransformDragState repeatDrag = runtime_.transform_drag_state();
@@ -1964,13 +2011,21 @@ public:
         bool changed = false;
 
         if (finishPreviewTransaction) {
-            const quader_editor_core::PreviewTransactionFinishResult finish =
-                    session_.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
+            const quader_editor_core::PreviewTransactionFinishResult finish = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag commit preview transaction");
+                return session_.commit_preview_transaction(quader_editor_core::PreviewTransactionKind::transform);
+            }();
             if (finish.before.active) {
                 invalidateSelectionOverlayCaches();
             }
-            syncSceneObjectsFromModeling(finish.before.active);
-            syncSceneSelectionFromModeling();
+            {
+                QDR_PROFILE_SCOPE("Modeling transform drag sync scene objects after commit");
+                syncSceneObjectsFromModeling(finish.before.active);
+            }
+            {
+                QDR_PROFILE_SCOPE("Modeling transform drag sync scene selection after commit");
+                syncSceneSelectionFromModeling();
+            }
             const bool ok =
                     !finish.before.active ||
                     finish.before.kind == quader_editor_core::PreviewTransactionKind::transform;
@@ -2013,9 +2068,12 @@ public:
         }
 
         if (sceneTransformDragService_.previewActive()) {
-            const DocumentCommandResult sceneCommit = history != nullptr
-                    ? sceneTransformDragService_.commit(*history)
-                    : sceneTransformDragService_.accept();
+            const DocumentCommandResult sceneCommit = [&]() {
+                QDR_PROFILE_SCOPE("Modeling transform drag commit scene transform preview");
+                return history != nullptr
+                        ? sceneTransformDragService_.commit(*history)
+                        : sceneTransformDragService_.accept();
+            }();
             if (!sceneCommit.ok) {
                 clearTransformDragRuntimeState();
                 return {
@@ -2039,6 +2097,7 @@ public:
     }
 
     ModelingCommandResult cancelTransformDrag() {
+        QDR_PROFILE_FUNCTION();
         const bool activeBefore = runtime_.transform_drag_active() || hasTransformPreview();
         const bool scenePreviewActive = sceneTransformDragService_.previewActive();
         if (scenePreviewActive) {
@@ -2991,6 +3050,7 @@ private:
     }
 
     ModelingTransformDragPreview applyTransformDragPreview(const ModelingTransformDragUpdateRequest& request) {
+        QDR_PROFILE_FUNCTION();
         quader_editor_core::TransformDragPreviewInput input;
         input.camera = toRuntime(request.camera);
         input.screen_position = toRuntime(request.screenPosition);
@@ -2999,14 +3059,17 @@ private:
         input.grid_enabled = request.gridSnapEnabled;
         input.precision = request.precision;
         if (request.vertexSnapRadius > 0.0) {
+            QDR_PROFILE_SCOPE("Modeling transform drag build snap caches");
             input.vertex_snap_enabled = true;
             input.vertex_snap_radius = request.vertexSnapRadius;
             input.snap_object_bounds = cachedPickObjectBounds();
             input.snap_face_geometry = cachedPickFaceGeometry();
         }
 
-        const quader_editor_core::CommandResult result =
-                runtime_.apply_transform_drag_preview(session_, input);
+        const quader_editor_core::CommandResult result = [&]() {
+            QDR_PROFILE_SCOPE("Modeling transform drag apply runtime preview");
+            return runtime_.apply_transform_drag_preview(session_, input);
+        }();
         if (!result.ok) {
             const bool previewDriven = transformDragController_.previewDriven();
             (void)cancelTransformDrag();
@@ -3021,6 +3084,7 @@ private:
 
         bool changed = result.changed;
         if (sceneTransformDragService_.previewActive()) {
+            QDR_PROFILE_SCOPE("Modeling transform drag apply scene preview");
             quader_poly::Transform3 sceneTransform;
             if (scenePreviewTransformForDrag(runtime_.transform_drag_state(), sceneTransform)) {
                 const DocumentCommandResult scenePreview =
@@ -3042,32 +3106,46 @@ private:
             }
         }
 
-        invalidateSelectionOverlayCaches();
+        {
+            QDR_PROFILE_SCOPE("Modeling transform drag invalidate overlay caches after apply");
+            invalidateSelectionOverlayCaches();
+        }
         if (transformDragController_.previewDriven()) {
-            syncSceneObjectsFromModeling(true);
-            syncSceneSelectionFromModeling();
+            {
+                QDR_PROFILE_SCOPE("Modeling transform drag sync scene objects after apply");
+                syncSceneObjectsFromModeling(true);
+            }
+            {
+                QDR_PROFILE_SCOPE("Modeling transform drag sync scene selection after apply");
+                syncSceneSelectionFromModeling();
+            }
         }
         return transformDragPreview(changed);
     }
 
     void syncSceneObjectsFromModeling(bool force = false) {
+        QDR_PROFILE_FUNCTION();
         meshSyncService_.syncSceneObjectsFromModeling(session_, scene_, assets_, sceneSyncService_, force);
     }
 
     [[nodiscard]] const std::vector<quader_editor_core::PolygonObject>& cachedSceneTransformedObjectsForPicking() const {
+        QDR_PROFILE_FUNCTION();
         return selectionService_.cachedSceneTransformedObjectsForPicking(session_, scene_, objectRegistry_);
     }
 
     [[nodiscard]] std::vector<quader_editor_core::PolygonObject> sceneTransformedObjectsForPicking() const {
+        QDR_PROFILE_FUNCTION();
         return selectionService_.sceneTransformedObjectsForPicking(session_, scene_, objectRegistry_);
     }
 
     [[nodiscard]] const std::vector<quader_editor_core::PickObjectBounds>& cachedPickObjectBounds() const {
+        QDR_PROFILE_FUNCTION();
         return selectionService_.cachedPickObjectBounds(session_, scene_, objectRegistry_);
     }
 
     [[nodiscard]] const std::vector<quader_editor_core::PickObjectFaceGeometry>& cachedPickFaceGeometry(
             quader_poly::PickOptions pickOptions = {}) const {
+        QDR_PROFILE_FUNCTION();
         return selectionService_.cachedPickFaceGeometry(session_, scene_, objectRegistry_, pickOptions);
     }
 
@@ -3382,22 +3460,27 @@ ModelingCommandResult ModelingSessionService::recordRepeatableTransform(const Mo
 }
 
 ModelingTransformDragPreview ModelingSessionService::beginTransformDrag(const ModelingTransformDragBeginRequest& request) {
+    QDR_PROFILE_FUNCTION();
     return impl_->beginTransformDrag(request);
 }
 
 ModelingTransformDragPreview ModelingSessionService::updateTransformDrag(const ModelingTransformDragUpdateRequest& request) {
+    QDR_PROFILE_FUNCTION();
     return impl_->updateTransformDrag(request);
 }
 
 ModelingTransformDragPreview ModelingSessionService::commitTransformDrag() {
+    QDR_PROFILE_FUNCTION();
     return impl_->commitTransformDrag();
 }
 
 ModelingTransformDragPreview ModelingSessionService::commitTransformDrag(EditorHistoryService& history) {
+    QDR_PROFILE_FUNCTION();
     return impl_->commitTransformDrag(&history);
 }
 
 ModelingCommandResult ModelingSessionService::cancelTransformDrag() {
+    QDR_PROFILE_FUNCTION();
     return impl_->cancelTransformDrag();
 }
 

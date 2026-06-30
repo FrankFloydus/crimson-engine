@@ -911,7 +911,7 @@ TEST(QdrDocumentIoTests, SharedPolygonDocumentCodecPreservesAuthoredNormalShadin
     const quader_poly::Document polygon = makeAuthoredPolygonDocument();
 
     ProjectDocument project(ProjectDocumentRecord{.id = 91u, .name = "Authored Normals"});
-    MeshAsset authoredMesh;
+    MeshAsset authoredMesh = makeTriangleMesh("Authored Polygon Mesh");
     authoredMesh.name = "Authored Polygon Mesh";
     authoredMesh.hasAuthoredPolygonDocument = true;
     authoredMesh.authoredPolygonDocument = std::make_shared<quader_poly::Document>(polygon);
@@ -919,11 +919,16 @@ TEST(QdrDocumentIoTests, SharedPolygonDocumentCodecPreservesAuthoredNormalShadin
     ASSERT_NE(meshId, InvalidAssetId);
 
     const std::string projectText = QdrDocumentWriter::serializeProjectDocument(project);
+    EXPECT_NE(projectText.find("\"vertices\": []"), std::string::npos);
+    EXPECT_NE(projectText.find("\"indices\": []"), std::string::npos);
+    EXPECT_NE(projectText.find("\"primitives\": []"), std::string::npos);
     EXPECT_NE(projectText.find("\"normalShading\": \"authored\""), std::string::npos);
     QdrProjectReadResult projectRoundTrip = QdrDocumentReader::deserializeProjectDocument(projectText);
     ASSERT_TRUE(projectRoundTrip.ok) << projectRoundTrip.message;
     const MeshAsset* loadedMesh = projectRoundTrip.document.assets().mesh(meshId);
     ASSERT_NE(loadedMesh, nullptr);
+    EXPECT_FALSE(loadedMesh->vertices.empty());
+    EXPECT_FALSE(loadedMesh->indices.empty());
     ASSERT_TRUE(loadedMesh->authoredPolygonDocument);
     ASSERT_EQ(loadedMesh->authoredPolygonDocument->faces.size(), 1u);
     EXPECT_EQ(loadedMesh->authoredPolygonDocument->faces.front().normal_shading, quader_poly::SurfaceShading::authored);

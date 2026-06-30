@@ -9,6 +9,77 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-30 - Tracy Profiling Boot Convention And Diagnostic Build
+
+Task/context: Tracy 0.13.1 was installed for local optimization captures. The user-provided profiler
+GUI bundle is at `C:\Users\Drako\Desktop\quader-windows\_SOURCES\windows-0.13.1`; the matching
+source checkout needed by the app client was installed at
+`C:\Users\Drako\Desktop\quader-windows\_SOURCES\tracy-0.13.1`.
+
+Invariant:
+
+- When the user says to "boot up Tracy", launch both
+  `_SOURCES\windows-0.13.1\tracy-profiler.exe` and
+  `build\vs2026\Debug\quader.exe`, with the profiler first.
+- The VS debug build cache is configured with `QUADER_ENABLE_TRACY=ON`,
+  `QUADER_TRACY_ON_DEMAND=ON`, and `QUADER_TRACY_SOURCE_DIR` pointing at the 0.13.1 source checkout.
+- Tracy zones are diagnostic-only through `src/diagnostics/profile.hpp`; normal builds remain no-op
+  unless `QUADER_ENABLE_TRACY` is enabled.
+- First capture `C:\Users\Drako\Desktop\quader-windows\logs\one.tracy` showed the largest stall as
+  `TransformGizmoInteraction::beginPendingDrag` (~31.4s inside one frame). Add or preserve deeper
+  zones in `QuaderModelingApi::beginTransformDrag`, `ModelingSessionService::beginTransformDrag`,
+  preview transaction setup, scene sync, snap cache generation, and first preview apply before
+  optimizing that path; otherwise the stall appears as opaque viewport wrapper self-time.
+- Capture `three.tracy` showed command availability was no longer the duplicate/selection stall,
+  but `Viewport refresh selection overlay` still rebuilt every frame because
+  `ViewportPanel::drawPaneContents` unconditionally dirtied `selectionOverlayCache_` after active
+  tool interaction. Keep selected overlay refresh driven by content/selection/scene/asset revisions
+  plus `selectionOverlaySignature()`, not by every viewport frame.
+- The same capture showed transform/duplicate preview begin still spending ~880ms in
+  `Modeling mesh sync reconcile scene nodes`, while mesh projection was only ~23ms. Preserve the
+  sub-zones in `modeling_mesh_sync_service.cpp` around scene identity lookup, name resolution,
+  entity creation, parent/identity/material application, and object binding until the remaining
+  scene-node stall is named and fixed.
+- Capture `seven.tracy` showed the next transform/render stall came from forced modeling mesh sync
+  replacing unchanged mesh assets. `AssetRegistry::replaceMesh` stamps a new mesh revision even when
+  the compiled payload is identical, which made render sync destroy/recreate mesh proxies for
+  untouched objects during component transform previews. `ModelingMeshSyncService` now compares the
+  compiled mesh payload and authored polygon document before calling `replaceMesh`; unchanged assets
+  keep their revisions so render sync can skip their proxies.
+- Capture `eight.tracy` showed the fixed mesh-revision path was working but the dominant frame stall
+  moved to `UISystem::beginFrame` self-time. The ImGui Filament renderer was destroying the previous
+  frame's UI vertex/index buffers, material instances, and entities at the start of the next frame,
+  which can force CPU/GPU synchronization. Capture `nine.tracy` proved merely buffering destruction
+  moved the stall to `ImGui destroy retired frame resource batch`; the renderer now reuses persistent
+  UI draw resource slots and only rebuilds a slot when vertex/index/primitive capacity grows. The
+  same captures showed save spending seconds parsing the just-serialized QDR payload; hot project
+  saves now skip self-parse validation and rely on QDR round-trip tests for writer coverage.
+  Authored/modeling mesh assets are persisted through their `polygonDocument` only, not redundant
+  compiled vertices/indices/primitives; the QDR reader already regenerates compiled render geometry
+  from authored topology on load.
+
+Affected owners/files:
+
+- `src/diagnostics/profile.hpp`
+- `CMakeLists.txt`
+- `cmake/QuaderBuildOptions.cmake`
+- `src/editor/modeling/services/modeling_mesh_sync_service.cpp`
+- `src/render/imgui_filament_renderer.*`
+- `src/io/qdr/qdr_document_reader.cpp`
+- `src/io/qdr/qdr_document_writer.cpp`
+- `src/scene/document/project_session.cpp`
+- app/UI/viewport/render/save/selection/duplicate owner paths instrumented with `QDR_PROFILE_*`
+
+Verification:
+
+- `cmake --preset vs2026 -DQUADER_ENABLE_TRACY=ON -DQUADER_TRACY_SOURCE_DIR=C:\Users\Drako\Desktop\quader-windows\_SOURCES\tracy-0.13.1`
+- `cmake --build --preset vs2026-debug --target quader`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ModelingSessionServiceTests.ComponentTransformSyncKeepsUntouchedMeshAssetRevision:ModelingSessionServiceTests.FaceTransformDragKeepsComponentSelectionAndMovesOnlyFaceGeometry:ModelingSessionServiceTests.TransformDragObjectSelectionUsesSceneTransformPreview:ModelingSessionServiceTests.PublicTransformDragFaceSelectionRecordsModelingHistory`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QdrDocumentIoTests.WritesAndReadsProjectDocumentPayloadWithStableIdsAndBindings:QdrDocumentIoTests.WritesAndReadsUnreferencedProjectAssets:ProjectSessionTests.ReplaceDocumentAdvancesSceneRevisionPastPreviousDocument:ModelingSessionServiceTests.ComponentTransformSyncKeepsUntouchedMeshAssetRevision`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=QdrDocumentIoTests.SharedPolygonDocumentCodecPreservesAuthoredNormalShadingAcrossProjectAndLegacyQdr:QdrDocumentIoTests.WritesAndReadsProjectDocumentPayloadWithStableIdsAndBindings:QdrDocumentIoTests.WritesAndReadsUnreferencedProjectAssets:ProjectSessionTests.ReplaceDocumentAdvancesSceneRevisionPastPreviousDocument:ModelingSessionServiceTests.ComponentTransformSyncKeepsUntouchedMeshAssetRevision`
+- Launched `tracy-profiler.exe` and `build\vs2026\Debug\quader.exe`; both processes were alive and
+  responding.
+
 ## 2026-06-30 - ImGui Combo Icons Must Preserve Popup Stack Ownership
 
 Task/context: replacing native combo/collapsing arrows with Phosphor glyphs regressed the top menu
@@ -1659,3 +1730,37 @@ Verification:
 
 - `cmake --build --preset vs2026-debug --target quader_tests`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportSceneOverlayBuilderTests.*:ViewportOverlayPolicyTests.*:ViewportRendererTests.MultiViewportRenderDoesNotMutateSceneInsideFilamentFrame:ViewportRendererTests.PresentsSceneAndOverlayViewportTexturesThroughUiEncoder:ViewportRendererTests.OverlayPassUsesNeutralExposureCamera`
+
+## 2026-06-30 - Overlay Cache Camera Changes Must Not Rebuild World-Space Face Fills
+
+Task/context: `ten.tracy` showed that after selecting hundreds of objects, navigation stayed slow
+even after ImGui frame-resource destruction was fixed. The steady-state cost was dominated by
+viewport rendering plus overlay submission. `OverlayRenderableCache::rebuildSlot` ran on camera-only
+changes, rebuilt every overlay layer, and repeatedly scanned/rebuilt selected face-fill triangle
+layers even though their world-space geometry did not depend on the viewport camera.
+
+Invariants:
+
+- Overlay face-fill triangle layers are world-space render geometry. Camera-only viewport navigation
+  must not rebuild their proxies or even rescan their layer signatures.
+- Overlay line and point layers are camera-dependent because the builder expands them in screen
+  space and source-wire visibility can depend on depth-stamp camera rays.
+- `OverlayRenderableCache::rebuildSlot(..., rebuildCameraIndependentLayers)` is the layer-aware
+  invalidation boundary. Frame/layer-mask changes rebuild all layers; camera-only changes rebuild
+  only `OverlayRenderableBuilder::layerBuildDependsOnCamera(...)` layers.
+- `OverlayRenderableBuilder::buildLayer(...)` must skip primitive-kind collectors for layers that
+  cannot emit that primitive kind. Large selected-object overlays must not scan all triangles for
+  every line/point-only layer.
+
+Affected owners/files:
+
+- `src/render/overlay/overlay_renderable_builder.*`
+- `src/render/overlay/overlay_renderable_cache.*`
+- `tests/render_extraction_tests.cpp`
+- `tests/core_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=OverlayRenderableBuilderTests.*:OverlayRenderableCacheTests.*:OverlayProxyFactoryTests.*:ViewportRenderPassCoordinatorTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportRendererTests.*`

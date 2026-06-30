@@ -8,6 +8,7 @@
 
 #include "api/quader_api_status_internal.hpp"
 #include "api/quader_api_session_internal_access.hpp"
+#include "diagnostics/profile.hpp"
 #include "io/qdr/qdr_document_reader.hpp"
 #include "io/qdr/qdr_document_writer.hpp"
 #include "scene/document/project_session.hpp"
@@ -81,6 +82,7 @@ QuaderApiVoidResult QuaderProjectApi::open(const std::filesystem::path& path) {
 }
 
 QuaderApiVoidResult QuaderProjectApi::save() {
+    QDR_PROFILE_FUNCTION();
     if (path_.empty()) {
         return saveAs({});
     }
@@ -88,6 +90,7 @@ QuaderApiVoidResult QuaderProjectApi::save() {
 }
 
 QuaderApiVoidResult QuaderProjectApi::saveAs(const std::filesystem::path& path) {
+    QDR_PROFILE_FUNCTION();
     std::filesystem::path target = path;
     if (target.empty()) {
         if (!runtimeHooks_.chooseSaveAsPath) {
@@ -135,12 +138,16 @@ QuaderApiVoidResult QuaderProjectApi::unsupported(std::string message) const {
 }
 
 QuaderApiVoidResult QuaderProjectApi::saveToPath(const std::filesystem::path& path, bool updatePath) {
+    QDR_PROFILE_FUNCTION();
     if (path.empty()) {
         return unsupported("Project save requires a path.");
     }
 
     ProjectSession& session = projectSession(session_);
-    QdrProjectWriteResult write = QdrDocumentWriter::writeProjectDocumentAtomic(path, session.document());
+    QdrProjectWriteResult write = [&]() {
+        QDR_PROFILE_SCOPE("Project write QDR document");
+        return QdrDocumentWriter::writeProjectDocumentAtomic(path, session.document());
+    }();
     if (!write.ok) {
         return quaderApiFailureStatus(
                 session,

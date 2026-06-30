@@ -26,6 +26,21 @@ struct ViewportPaneOverlayCacheKey {
 };
 
 /**
+ * Describes why the viewport pane overlay cache needs to rebuild.
+ */
+enum class ViewportPaneOverlayCacheRefreshReason {
+    None,
+    Dirty,
+    Invalid,
+    ContentRevision,
+    SelectionRevision,
+    SceneRevision,
+    AssetRevision,
+    OverlaySignature,
+    SelectionMode,
+};
+
+/**
  * Caches Viewport Pane Overlay Cache derived state for the ImGui editor presentation layer.
  */
 class ViewportPaneOverlayCache {
@@ -34,6 +49,8 @@ public:
     [[nodiscard]] const ViewportOverlayFrame& frame() const { return frame_; }
     [[nodiscard]] const ViewportPaneOverlayCacheKey& key() const { return key_; }
     [[nodiscard]] bool needsRefresh(const ViewportPaneOverlayCacheKey& key) const;
+    [[nodiscard]] ViewportPaneOverlayCacheRefreshReason refreshReason(
+            const ViewportPaneOverlayCacheKey& key) const;
 
     void markDirty();
     void update(ViewportOverlayFrame frame, const ViewportPaneOverlayCacheKey& key);

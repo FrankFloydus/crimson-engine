@@ -9,6 +9,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "render/viewport_overlay_policy.hpp"
@@ -195,6 +196,7 @@ bool TransformGizmoInteraction::pendingDragThresholdReached(QVec2 current) const
 }
 
 bool TransformGizmoInteraction::beginPendingDrag(QuaderEditorApi& editor, const ViewportInteractionFrame& frame) {
+    QDR_PROFILE_FUNCTION();
     if (!pendingDrag_.has_value()) {
         return false;
     }
@@ -238,6 +240,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::releasePendingCli
 ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
         QuaderEditorApi& editor,
         const ViewportInteractionFrame& frame) {
+    QDR_PROFILE_FUNCTION();
     ViewportBeforeToolInteractionResult result;
 
     const ViewportToolId tool = frame.inputRouter.state().activeTool;
@@ -273,6 +276,7 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
                     hoverAxis_);
 
     if (!dragging_ && !pendingDrag_.has_value() && frame.input.viewportHovered && !suppressHover) {
+        QDR_PROFILE_SCOPE("Transform gizmo hover pick");
         const quader_editor_core::TransformGizmoPickHit hover =
                 quader_editor_core::pick_transform_gizmo(gizmoInput, frame.input.mouseLocal);
         hoverAxis_ = hover.hit ? hover.axis : quader_editor_core::TransformAxis::none;
@@ -282,7 +286,10 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
         gizmoInput.hover_axis = hoverAxis_;
     }
 
-    currentFrame_ = quader_editor_core::build_transform_gizmo_frame(gizmoInput);
+    {
+        QDR_PROFILE_SCOPE("Transform gizmo build frame");
+        currentFrame_ = quader_editor_core::build_transform_gizmo_frame(gizmoInput);
+    }
 
     if (pendingDrag_.has_value()) {
         result.gizmoConsumed = true;
@@ -314,19 +321,21 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
         }
 
         const ViewportRay dragRay = frame.camera.rayFromViewportPoint(frame.input.mouseLocal);
-        const QuaderApiResult<QuaderTransformDragPreview> preview =
-                editor.modeling().updateTransformDrag({
-                        .screenPosition = frame.input.mouseLocal,
-                        .ray = {
-                                .origin = dragRay.origin,
-                                .direction = dragRay.direction,
-                        },
-                        .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
-                        .gridSize = viewportGridWorldSizeForPreset(frame.input.gridPreset),
-                        .vertexSnapRadius = viewportVertexSnapRadius(frame.settings),
-                        .gridSnapEnabled = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary),
-                        .precision = frame.input.modifiers.primary,
-                });
+        const QuaderApiResult<QuaderTransformDragPreview> preview = [&]() {
+            QDR_PROFILE_SCOPE("Transform gizmo update drag");
+            return editor.modeling().updateTransformDrag({
+                    .screenPosition = frame.input.mouseLocal,
+                    .ray = {
+                            .origin = dragRay.origin,
+                            .direction = dragRay.direction,
+                    },
+                    .camera = toApiViewportCamera(ViewportCameraAdapter::modelingCamera(frame.camera, frame.input.viewportSize)),
+                    .gridSize = viewportGridWorldSizeForPreset(frame.input.gridPreset),
+                    .vertexSnapRadius = viewportVertexSnapRadius(frame.settings),
+                    .gridSnapEnabled = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary),
+                    .precision = frame.input.modifiers.primary,
+            });
+        }();
         if (!preview.ok) {
             LOG_ERROR("Transform drag update failed: {}", preview.message.empty() ? "Update failed." : preview.message);
         }
@@ -358,7 +367,10 @@ ViewportBeforeToolInteractionResult TransformGizmoInteraction::handleFrame(
     }
 
     const quader_editor_core::TransformGizmoPickHit hit =
-            quader_editor_core::pick_transform_gizmo(gizmoInput, frame.leftClickLocal);
+            [&]() {
+                QDR_PROFILE_SCOPE("Transform gizmo click pick");
+                return quader_editor_core::pick_transform_gizmo(gizmoInput, frame.leftClickLocal);
+            }();
     if (!hit.hit || hit.axis == quader_editor_core::TransformAxis::none) {
         return result;
     }

@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "session_internal.hpp"
 
+#include <diagnostics/profile.hpp>
 #include <editor/interactions/interaction_api.hpp>
 
 #include <algorithm>
@@ -1031,6 +1032,7 @@ std::vector<PolygonObject> EditorSession::selected_object_copies() const
 
 CommandResult EditorSession::duplicate_selected_objects(quader::QVec3 offset)
 {
+	QDR_PROFILE_FUNCTION();
 	const CommandResult result = quader_editor_core::duplicate_selected_objects(state_.objects, state_.next_object_id, state_.selection_mode, state_.active_object_id, offset);
 	note_content_result(result);
 	if (result.changed) {

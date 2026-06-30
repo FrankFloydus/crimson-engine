@@ -9,6 +9,7 @@
 #include "api/quader_api_type_conversions.hpp"
 #include "api/quader_editor_api.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/modeling/services/selection_mode_adapter.hpp"
 #include "editor/selection/box_selection_rules.hpp"
 #include "editor/tools/viewport_tool.hpp"
@@ -162,6 +163,7 @@ QuaderSelectionSummary pickSelection(
         bool preserveSelectionOnMiss = false,
         bool preserveSelectionOnSelectedHit = false,
         bool preserveExistingComponentSelectionOnHit = false) {
+    QDR_PROFILE_FUNCTION();
     const QuaderApiResult<QuaderSelectionSummary> result =
             editor.selection().pickSelect(makePickSelectRequest(
                     frame.camera,
@@ -188,6 +190,7 @@ QuaderSelectionSummary boxSelection(
         QVec2 end,
         QuaderSelectionEdit edit,
         const QuaderSelectionBoxBaseline* baseline = nullptr) {
+    QDR_PROFILE_FUNCTION();
     const QuaderBoxSelectRequest request = makeBoxSelectRequest(
             frame.camera,
             frame.input.viewportSize,
@@ -231,6 +234,7 @@ void ViewportSelectionInteraction::handleFrame(
         const ViewportInteractionFrame& frame,
         const ViewportToolResult& toolResult,
         const ViewportBeforeToolInteractionResult& beforeTool) {
+    QDR_PROFILE_FUNCTION();
     committedMarquee_.reset();
     const bool gizmoConsumed = beforeTool.gizmoConsumed;
     const bool selectionFallbackActive = frame.inputRouter.activeToolAllowsSelectionFallback();
@@ -278,6 +282,7 @@ void ViewportSelectionInteraction::handleFrame(
     };
 
     if (beforeTool.selectionClickRequested && canPick) {
+        QDR_PROFILE_SCOPE("Viewport selection deferred gizmo click");
         const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
         const QuaderSelectionSummary summary = pickSelection(
                 editor,
@@ -290,6 +295,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     if (!boxState_.active && canUseSelectionFallback && frame.leftPressed) {
+        QDR_PROFILE_SCOPE("Viewport selection begin box");
         boxEdit_ = selectionEditFromModifiers(frame.input.modifiers);
         boxHoveredBeforeSelection_ = editor.selection().hoverSummary().target;
         boxBaseline_ = editor.selection().captureBoxSelectionBaseline();
@@ -301,6 +307,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     if (boxState_.active && frame.leftDown) {
+        QDR_PROFILE_SCOPE("Viewport selection update box");
         quader_editor_core::update_selection_box(boxState_, frame.input.mouseLocal);
         if (boxState_.dragging) {
             const ViewportSelectionMarquee liveMarquee = boxMarquee(boxState_.start, boxState_.end);
@@ -321,6 +328,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     if (boxState_.active && (frame.leftReleased || !frame.leftDown)) {
+        QDR_PROFILE_SCOPE("Viewport selection finish box");
         const quader_editor_core::SelectionBoxCommit commit =
                 quader_editor_core::finish_selection_box(
                         boxState_,
@@ -365,6 +373,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     if (!boxState_.active && canPick && paintSelectionActive_ && frame.leftDown) {
+        QDR_PROFILE_SCOPE("Viewport paint selection");
         const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
         const QuaderSelectionSummary summary = pickSelection(
                 editor,
@@ -413,6 +422,7 @@ void ViewportSelectionInteraction::handleFrame(
     }
 
     if (canHover && !hoverSuppressedThisFrame) {
+        QDR_PROFILE_SCOPE("Viewport hover selection");
         const QuaderApiResult<QuaderHoverSummary> hover =
                 editor.selection().hover(makeHoverRequest(
                         frame.camera,

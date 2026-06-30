@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #include "viewport/viewport_input_router.hpp"
 
+#include "diagnostics/profile.hpp"
 #include "viewport/host_viewport_contract_adapter.hpp"
 #include "editor/tools/viewport_tool_catalog.hpp"
 #include "editor/tools/viewport_tool_runtime.hpp"
@@ -94,6 +95,7 @@ ViewportInputRouter::ViewportInputRouter()
 ViewportInputRouter::~ViewportInputRouter() = default;
 
 ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& input, ViewportCameraController& camera) {
+    QDR_PROFILE_FUNCTION();
     ViewportInputResult result;
     camera.setViewportSize(input.viewportSize.x, input.viewportSize.y);
 
@@ -107,6 +109,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
             ? pressedNavigationAction(input)
             : ViewportInputActionKind::None;
     if (pressedAction != ViewportInputActionKind::None) {
+        QDR_PROFILE_SCOPE("Viewport navigation begin");
         activeNavigationAction_ = pressedAction;
         navigationMode_ = navigationModeForAction(pressedAction, camera);
         orbitSnapActionUsesAltModifier_ = pressedAction == ViewportInputActionKind::OrbitSnap && input.modifiers.alt;
@@ -118,6 +121,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     }
 
     if (navigationMode_ == ViewportDragMode::Fly) {
+        QDR_PROFILE_SCOPE("Viewport fly navigation");
         if (input.navigationBindings.resetFlySpeedPressed) {
             camera.resetFlySpeed();
             result.consumed = true;
@@ -165,6 +169,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
     }
 
     if (navigating()) {
+        QDR_PROFILE_SCOPE("Viewport drag navigation");
         const bool dragDown = navigationActionDown(input, activeNavigationAction_);
         const bool dragReleased = navigationActionReleased(input, activeNavigationAction_) ||
                 input.navigationBindings.cancelNavigationPressed;
@@ -200,6 +205,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
 
     const bool wheelZoomActive = input.navigationBindings.zoomWheel || input.navigationBindings.zoomToCursorWheel;
     if (input.viewportHovered && input.mouseWheel != 0.0f && wheelZoomActive) {
+        QDR_PROFILE_SCOPE("Viewport wheel zoom");
         if (input.navigationBindings.zoomToCursorWheel) {
             camera.scrollToCursor(input.mouseWheel, input.mouseLocal);
             result.zoomedToCursor = true;
@@ -212,6 +218,7 @@ ViewportInputResult ViewportInputRouter::handleFrame(const ViewportInputFrame& i
 
     const bool acceptsShortcuts = input.viewportFocused && !input.textInputActive && !navigating();
     if (acceptsShortcuts) {
+        QDR_PROFILE_SCOPE("Viewport shortcuts");
         for (const ViewportShortcut& shortcut : input.resolvedShortcuts) {
             if (shortcut.kind == ViewportShortcutKind::None) {
                 result.consumed = true;

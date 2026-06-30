@@ -23,6 +23,7 @@
 #include <utils/Entity.h>
 
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 
 namespace quader {
@@ -49,9 +50,23 @@ private:
         filament::VertexBuffer* vertexBuffer = nullptr;
         filament::IndexBuffer* indexBuffer = nullptr;
         std::vector<filament::MaterialInstance*> materialInstances;
+        std::uint32_t vertexCapacity = 0;
+        std::uint32_t indexCapacity = 0;
+        std::size_t primitiveCapacity = 0;
     };
 
     void createFontTexture();
+    DrawResource& ensureDrawResource(
+            std::size_t slot,
+            std::uint32_t vertexCount,
+            std::uint32_t indexCount,
+            std::size_t primitiveCount,
+            std::uint32_t framebufferWidth,
+            std::uint32_t framebufferHeight);
+    void destroyDrawResource(DrawResource& resource);
+    void destroyAllFrameResources();
+    void hideUnusedFrameResources(std::size_t firstUnusedSlot);
+
     filament::Engine* engine_ = nullptr;
     filament::Material* material_ = nullptr;
     TextureRegistry* textures_ = nullptr;

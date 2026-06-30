@@ -8,6 +8,7 @@
 
 #include "assets/asset_registry.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "render/material_binding_service.hpp"
 #include "render/mesh_renderable_cache.hpp"
 #include "render/scene_render_extraction.hpp"
@@ -45,6 +46,7 @@ void SceneRenderSyncService::shutdown() {
 }
 
 bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegistry& assets) {
+    QDR_PROFILE_FUNCTION();
     if (!initialized()) {
         return false;
     }
@@ -59,7 +61,10 @@ bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegi
         return false;
     }
 
-    rebuild(document, assets);
+    {
+        QDR_PROFILE_SCOPE("Scene render rebuild");
+        rebuild(document, assets);
+    }
     syncedRevision_ = document.revision();
     syncedAssetRevision_ = assets.revision();
     hasSynced_ = true;
@@ -67,8 +72,11 @@ bool SceneRenderSyncService::sync(const SceneDocument& document, const AssetRegi
 }
 
 bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& document, const AssetRegistry& assets) const {
-    const SceneRenderExtractionPlan plan =
-            buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
+    QDR_PROFILE_FUNCTION();
+    const SceneRenderExtractionPlan plan = [&]() {
+        QDR_PROFILE_SCOPE("Scene render revision extraction plan");
+        return buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
+    }();
     for (const SceneRenderMeshEntry& meshEntry : plan.meshes) {
         if (!meshEntry.renderable()) {
             if (meshCache_->contains(meshEntry.entityId)) {
@@ -92,10 +100,14 @@ bool SceneRenderSyncService::renderAssetRevisionsChanged(const SceneDocument& do
 }
 
 void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetRegistry& assets) {
-    const SceneRenderExtractionPlan plan =
-            buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
+    QDR_PROFILE_FUNCTION();
+    const SceneRenderExtractionPlan plan = [&]() {
+        QDR_PROFILE_SCOPE("Scene render extraction plan");
+        return buildSceneRenderExtractionPlan(document, assets, *materialBinding_);
+    }();
 
     for (const SceneRenderMeshEntry& meshEntry : plan.meshes) {
+        QDR_PROFILE_SCOPE("Scene render sync mesh entry");
         if (!meshEntry.renderable()) {
             meshCache_->remove(meshEntry.entityId);
             LOG_WARN("Skipping render entity {} because its mesh asset is missing or empty", meshEntry.entityId);
@@ -115,11 +127,18 @@ void SceneRenderSyncService::rebuild(const SceneDocument& document, const AssetR
     }
 
     for (const SceneRenderLightEntry& lightEntry : plan.lights) {
+        QDR_PROFILE_SCOPE("Scene render sync light entry");
         lightCache_.syncLight(lightEntry.entityId, *lightEntry.light, lightEntry.worldTransform);
     }
 
-    meshCache_->removeExcept(plan.liveMeshEntities);
-    lightCache_.removeExcept(plan.liveLightEntities);
+    {
+        QDR_PROFILE_SCOPE("Scene render remove stale meshes");
+        meshCache_->removeExcept(plan.liveMeshEntities);
+    }
+    {
+        QDR_PROFILE_SCOPE("Scene render remove stale lights");
+        lightCache_.removeExcept(plan.liveLightEntities);
+    }
 }
 
 } // namespace quader

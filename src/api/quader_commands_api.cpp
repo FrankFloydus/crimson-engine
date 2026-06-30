@@ -11,6 +11,7 @@
 #include "api/quader_tools_api.hpp"
 #include "api/quader_viewport_api.hpp"
 #include "core/public_command_targets.hpp"
+#include "diagnostics/profile.hpp"
 #include "editor/commands/editor_command_registry.hpp"
 #include "editor/commands/modeling_command_tool_catalog.hpp"
 #include "editor/input/quader_keybinding_service.hpp"
@@ -41,19 +42,8 @@ bool modelingActionRegistersDedicatedCommand(const CommandTool& tool) {
 }
 
 bool duplicateSelectionAvailable(const QuaderApi& api) {
-    const QuaderSelectionSummary selection = api.query().selection();
-    if (!selection.hasSelection ||
-            (selection.mode != QuaderSelectionMode::Object &&
-                    selection.mode != QuaderSelectionMode::Group)) {
-        return false;
-    }
-
-    for (const auto& entity : api.query().entities()) {
-        if (entity.selected && !entity.isSceneRoot) {
-            return true;
-        }
-    }
-    return false;
+    QDR_PROFILE_FUNCTION();
+    return api.modeling().canDuplicateSelectedEntityHierarchy();
 }
 
 std::string commandIdForToolActivation(std::string_view toolId) {
@@ -253,10 +243,16 @@ QuaderCommandsApi::Impl::Impl(QuaderApi& api, QuaderProjectApi& project, QuaderV
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::execute(QuaderCommandId commandId) {
+    QDR_PROFILE_FUNCTION();
+    const std::string_view id = commandId.string();
+    QDR_PROFILE_NAME(id.data(), id.size());
     return execute(commandId.string());
 }
 
 QuaderApiVoidResult QuaderCommandsApi::Impl::execute(std::string_view commandId) {
+    QDR_PROFILE_FUNCTION();
+    QDR_PROFILE_NAME(commandId.data(), commandId.size());
+    QDR_PROFILE_MESSAGE_DYNAMIC(commandId.data(), commandId.size());
     if (std::optional<QuaderApiVoidResult> result = registry_.execute(commandId)) {
         result->revisions = api_.revisions();
         return *result;

@@ -7,6 +7,7 @@
 #include "render/viewport_renderer.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/profile.hpp"
 #include "render/render_layers.hpp"
 
 #include <filament/ColorGrading.h>
@@ -184,6 +185,7 @@ void ViewportRenderer::shutdown() {
 }
 
 void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
+    QDR_PROFILE_FUNCTION();
     width_ = std::max(1u, width);
     height_ = std::max(1u, height);
     if (surface_ == ViewportRenderSurface::Texture) {
@@ -207,6 +209,7 @@ void ViewportRenderer::resize(std::uint32_t width, std::uint32_t height) {
 }
 
 void ViewportRenderer::updateCamera(const ViewportCameraController& controller) {
+    QDR_PROFILE_FUNCTION();
     const auto pose = controller.pose();
     const auto applyLookAt = [&](filament::Camera* camera) {
         if (camera) {
@@ -241,6 +244,7 @@ void ViewportRenderer::updateCamera(const ViewportCameraController& controller) 
 }
 
 void ViewportRenderer::applySceneSettings(const SceneSettingsComponent& settings, bool renderedMode) {
+    QDR_PROFILE_FUNCTION();
     if (!view_ || !camera_) {
         return;
     }
@@ -328,6 +332,7 @@ void ViewportRenderer::updateGroundGrid(
         float gridWorldSpacing,
         const ViewportSettings& settings,
         bool visible) {
+    QDR_PROFILE_FUNCTION();
     if (!engine_ || !scene_) {
         return;
     }
@@ -368,6 +373,7 @@ void ViewportRenderer::setShadowingEnabled(bool enabled) {
 }
 
 void ViewportRenderer::render(filament::Renderer& renderer) {
+    QDR_PROFILE_FUNCTION();
     renderPassCoordinator_.render(
             renderer,
             view_,

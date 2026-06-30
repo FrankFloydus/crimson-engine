@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <unordered_set>
+#include <vector>
 
 namespace quader {
 
@@ -47,16 +49,6 @@ public:
         return nextName(document, baseNameForKind(kind));
     }
 
-private:
-    static bool documentHasName(const SceneDocument& document, const std::string& name) {
-        for (const EntityRecord& record : document.entityRecords()) {
-            if (record.name == name) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     static std::string baseNameForKind(SceneEntityKind kind) {
         switch (kind) {
         case SceneEntityKind::Empty:
@@ -70,6 +62,57 @@ private:
         }
         return "Entity";
     }
+
+private:
+    static bool documentHasName(const SceneDocument& document, const std::string& name) {
+        for (const EntityRecord& record : document.entityRecords()) {
+            if (record.name == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+};
+
+/**
+ * Allocates unique Scene Entity names for batch creation without repeatedly scanning the document.
+ */
+class SceneEntityNameAllocator {
+public:
+    explicit SceneEntityNameAllocator(const SceneDocument& document) {
+        const std::vector<EntityRecord> records = document.entityRecords();
+        names_.reserve(records.size());
+        for (const EntityRecord& record : records) {
+            reserveName(record.name);
+        }
+    }
+
+    void reserveName(std::string_view name) {
+        if (!name.empty()) {
+            names_.insert(std::string(name));
+        }
+    }
+
+    std::string nextName(std::string_view baseName) {
+        const std::string base(baseName.empty() ? "Entity" : baseName);
+        if (names_.insert(base).second) {
+            return base;
+        }
+
+        for (std::size_t index = 1;; ++index) {
+            std::string candidate = base + "_" + std::to_string(index);
+            if (names_.insert(candidate).second) {
+                return candidate;
+            }
+        }
+    }
+
+    std::string nextNameForKind(SceneEntityKind kind) {
+        return nextName(SceneEntityNaming::baseNameForKind(kind));
+    }
+
+private:
+    std::unordered_set<std::string> names_;
 };
 
 } // namespace quader
