@@ -39,7 +39,7 @@ public:
             QuaderEditorApi& editor,
             const ViewportInteractionFrame& frame,
             const ViewportToolResult& toolResult,
-            bool gizmoConsumed);
+            const ViewportBeforeToolInteractionResult& beforeTool);
     [[nodiscard]] QuaderSelectionSummary pickContextMenuTarget(
             QuaderEditorApi& editor,
             const ViewportInteractionFrame& frame);

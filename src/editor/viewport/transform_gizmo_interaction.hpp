@@ -6,6 +6,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 #pragma once
 
+#include "api/quader_api_types.hpp"
 #include "editor/viewport/viewport_interaction_frame.hpp"
 
 #include <editor/interactions/transform_gizmo.hpp>
@@ -31,12 +32,27 @@ public:
     [[nodiscard]] const quader_editor_core::TransformGizmoFrame* frame() const;
 
 private:
+    struct PendingGizmoDrag {
+        QuaderTransformDragBeginRequest beginRequest;
+        ViewportToolId tool = ViewportToolId::Select;
+        quader_editor_core::TransformAxis axis = quader_editor_core::TransformAxis::none;
+        quader::QVec2 clickLocal = {};
+        int clickCount = 1;
+    };
+
+    [[nodiscard]] bool pendingDragThresholdReached(quader::QVec2 current) const;
+    [[nodiscard]] bool beginPendingDrag(QuaderEditorApi& editor, const ViewportInteractionFrame& frame);
+    [[nodiscard]] ViewportBeforeToolInteractionResult releasePendingClick();
     void resetDragState();
+    void resetPendingDrag();
     void clearFrame();
 
     bool dragging_ = false;
+    std::optional<PendingGizmoDrag> pendingDrag_;
     quader_editor_core::TransformAxis activeAxis_ = quader_editor_core::TransformAxis::none;
     quader_editor_core::TransformAxis hoverAxis_ = quader_editor_core::TransformAxis::none;
+    quader::QVec3 activeWorldDirection_ = {};
+    std::optional<quader::QVec3> rotationIndicatorStartDirection_;
     std::optional<quader_editor_core::TransformGizmoFrame> currentFrame_;
 };
 

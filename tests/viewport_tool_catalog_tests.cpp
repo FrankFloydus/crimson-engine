@@ -415,6 +415,8 @@ TEST(ViewportToolGuardrailTests, DrawnPlaneToolUsesSharedCutMirrorLifecycle) {
 TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalTools) {
     const std::filesystem::path root = sourceRoot();
     const std::string viewportPanel = readSourceFile(root / "src" / "ui" / "viewport_panel.cpp");
+    const std::string transformGizmo =
+            readSourceFile(root / "src" / "editor" / "viewport" / "transform_gizmo_interaction.cpp");
 
     EXPECT_NE(viewportPanel.find("ViewportPointToolContext pointToolContext"), std::string::npos);
     EXPECT_NE(viewportPanel.find("pointToolContext.makeEventAt"), std::string::npos);
@@ -422,8 +424,13 @@ TEST(ViewportToolGuardrailTests, ViewportPanelProvidesPointToolContextToModalToo
     EXPECT_NE(viewportPanel.find("pointToolContext.hitDrawnPlaneLine"), std::string::npos);
     EXPECT_NE(viewportPanel.find(".point = &pointToolContext"), std::string::npos);
     EXPECT_NE(viewportPanel.find("makeModelingToolEventAt"), std::string::npos);
-    EXPECT_NE(viewportPanel.find("snapEnabled = !input.modifiers.primary"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("snapEnabled = viewportGridSnapActive(settings, input.modifiers.primary)"), std::string::npos);
+    EXPECT_NE(viewportPanel.find("vertexRadius = settings.floatValue(ViewportFloatSettingId::PickVertexRadius)"), std::string::npos);
     EXPECT_NE(viewportPanel.find("constrainAxis = input.modifiers.shift"), std::string::npos);
+    EXPECT_NE(transformGizmo.find("!frame.settings.boolValue(ViewportBoolSettingId::ShowGizmos)"), std::string::npos);
+    EXPECT_NE(transformGizmo.find(".vertexSnapRadius = viewportVertexSnapRadius(frame.settings)"), std::string::npos);
+    EXPECT_NE(transformGizmo.find(".gridSnapEnabled = viewportGridSnapActive(frame.settings, frame.input.modifiers.primary)"), std::string::npos);
+    EXPECT_NE(transformGizmo.find(".precision = frame.input.modifiers.primary"), std::string::npos);
 }
 
 TEST(ViewportToolGuardrailTests, EditorOwnsViewportToolRuntimeSources) {

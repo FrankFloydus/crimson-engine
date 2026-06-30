@@ -28,6 +28,8 @@ struct MoveToolState {
 	quader::QVec2 screen_axis { 1.0F, 0.0F };
 	quader::QVec2 start_screen;
 	quader::QVec3 plane_start_point;
+	bool has_axis_start_distance = false;
+	double axis_start_distance = 0.0;
 	double preview_distance = 0.0;
 	quader::QVec3 preview_delta;
 };

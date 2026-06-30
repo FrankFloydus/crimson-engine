@@ -9,6 +9,65 @@ affected owners/files, resolved approach, and verification. Do not record routin
 private user data, guesses, or unresolved issues. Prefer updating a related existing entry over
 adding a duplicate.
 
+## 2026-06-30 - Vertex Snap Must Not Steal Plain Gizmo-Overlapped Selection Clicks
+
+Task/context: with vertex snap enabled, clicking a vertex that was overlapped by the move gizmo could
+start transform-drag preview on mouse-down and show the snap target indicator instead of behaving like
+a normal component selection click.
+
+Invariant:
+
+- Transform gizmo press is only a pending grab until the pointer crosses the shared selection-box drag
+  threshold. Release before that threshold must route back through viewport selection fallback.
+- Vertex snap target resolution belongs to active transform-drag update frames only. The press/begin
+  preview must use a zero snap radius so snap indicators cannot appear on ordinary clicks.
+- Selection fallback owns the actual pick; gizmo code only reports a deferred click through
+  `ViewportBeforeToolInteractionResult`.
+
+Affected owners/files:
+
+- `src/editor/viewport/transform_gizmo_interaction.*`
+- `src/editor/viewport/viewport_selection_interaction.*`
+- `src/editor/viewport/viewport_interaction_frame.hpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.VertexSnapDoesNotStealPendingMoveGizmoVertexClick:ViewportInteractionControllerTests.MoveGizmoComponentAxisDragKeepsPickedAxisUnderMouse:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedPointLightThroughViewportFrames:ViewportInteractionControllerTests.RotateGizmoDragEmitsPieAngleIndicator`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.*`
+- `build\vs2026\Debug\quader_tests.exe`
+- `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-30 - Component Move Gizmo Axis Drags Must Use Axis-Ray Distance
+
+Task/context: Godot-style gizmo visual refactoring exposed bad move-drag behavior in vertex/edge/face
+component modes: Z-axis drags could visibly drift away from the mouse in perspective, and axis/plane
+hit overlap made it too easy for a visually axis-like click to use another constraint.
+
+Root cause/invariant:
+
+- Single-axis move drags must derive distance from the current mouse ray projected against the picked
+  world axis, relative to the press-time axis distance. Pixel-to-world fallback is only for synthetic
+  callers whose rays do not change with screen position.
+- Vertex snap targets on a constrained axis must project onto `state.world_axis`, not recompute by
+  enum component, so visual/world direction stays authoritative.
+- Transform gizmo picking must give visible axes priority before plane handles when the cursor lies on
+  an axis shaft or tip.
+
+Affected owners/files:
+
+- `src/editor/interactions/move_tool.*`
+- `src/editor/modeling/runtime/transform_gizmo.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_tests`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.MoveGizmoComponentAxisDragKeepsPickedAxisUnderMouse`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=*TransformDrag*:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames:ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedPointLightThroughViewportFrames`
+- `build\vs2026\Debug\quader_tests.exe --gtest_filter=ViewportInteractionControllerTests.*:ViewportTransformGizmoOverlayBuilderTests.*`
+
 ## 2026-06-29 - Undo Must Not Be Swallowed By Idle Modal Tools
 
 Task/context: after moving entities with the viewport transform gizmo, Ctrl+Z could appear to do
@@ -217,6 +276,51 @@ Verification:
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportInteractionControllerTests.MoveRotateAndScaleGizmosDragSelectedObjectThroughViewportFrames:ViewportSceneOverlayBuilderTests.*:EditorApiTests.SceneCreatePointLightCommandCreatesSelectedPointLight`
 - `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=ViewportToolGuardrailTests.TransformGizmoEligibilityLivesInViewportToolMetadata:ModelingSessionServiceSplitTests.*`
 - `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=UiLayoutGuardrailTests.InspectorLightEditsRouteThroughPublicSceneApi:UiLayoutGuardrailTests.MainMenuDropdownsUsePopupPaddingAndVerticalSpacing`
+
+## 2026-06-30 - Transform Gizmo Visuals Follow Godot Proportions
+
+Task/context: Quader transform gizmo visuals looked heavier and less like Godot's editor gizmos.
+The reference source was `C:\Users\Drako\Desktop\_QUADER_DEV\resources\_SOURCE_CODE\godot-master`.
+
+Root cause/invariants:
+
+- Runtime gizmo pick geometry and render overlay geometry must share the same proportions, otherwise
+  visual handles drift from interactive handles.
+- Godot-style constants are the source of truth for visual proportions: circle size `1.1`, plane
+  size `0.2`, plane distance `0.3`, arrow offset `1.4`, arrow tip `1.75`, scale tip `1.554`,
+  view rotation scale `1.14`, and viewport gizmo size `80` pixels.
+- Plane handle colors follow the omitted normal axis, not the visible two-axis label: XY is Z/blue,
+  YZ is X/red, XZ is Y/green.
+- Active rotate drags must carry a rotate angle indicator through `TransformGizmoFrame`: the
+  overlay draws the restored pie/wedge fill, the radial line from the center to the original grab
+  direction, and the Godot-style center-to-current-mouse line.
+
+Affected owners/files:
+
+- `src/editor/modeling/runtime/transform_gizmo.cpp`
+- `src/render/overlay/viewport_transform_gizmo_overlay_builder.cpp`
+- `src/render/viewport_overlay_policy.hpp`
+- `tests/modeling_domain/tool/qdr_modeling_runtime_tool_transform_gizmo_tests.cpp`
+- `tests/viewport_interaction_controller_tests.cpp`
+
+Resolved approach:
+
+- Updated runtime gizmo frame generation to use Godot-style pixel proportions for move, scale,
+  plane, and rotate primitives.
+- Reworked overlay rendering to use slim arrow cones, square-prism scale handles, full rotate rings
+  for the neutral trackball/view ring, front-only colored rotate axis arcs, Godot axis colors,
+  normal-axis plane colors, and no move center dot or black axis underpaint.
+- Restored the previous rotate drag pie indicator as overlay geometry owned by the transform gizmo
+  frame/builder instead of UI-only immediate drawing.
+- Added guardrail coverage for the Godot-style dimensions, colors, and emitted overlay primitives.
+
+Verification:
+
+- `build\vs2026\Debug\quader_modeling_domain_runtime_loop_tests.exe --gtest_color=no --gtest_filter=QdrModelingRuntime*:QdrModelingRuntimeToolTransformGizmoTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=GroundGridMaterialTests.*:LightRenderableCacheTests.*:ModelingSessionService*Hover*:ModelingSessionService*Overlay*:ModelingSessionService*Pick*:Overlay*:QuaderMeshMaterialTests.*:Render*:RenderExtractionTests.*:SceneRenderBridge*:TextureRegistryTests.*:Viewport*:ViewportBoxOverlayBuilderTests.*:ViewportInteractionControllerTests.*:ViewportSelectionMarqueeOverlayBuilderTests.*:ViewportTransformGizmoOverlayBuilderTests.*`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.FilamentSdkIsValidatedAtConfigureTime`
+- `build\vs2026\Debug\quader_modeling_domain_metadata_loop_tests.exe --gtest_color=no --gtest_filter=QdrEditorMetadata*`
+- `cmake --build --preset vs2026-debug --target quader`
 
 ## 2026-06-29 - ImGui Viewport Layouts Require MultiPane Public Workspace
 
@@ -1341,3 +1445,39 @@ Verification:
 - `cmake --build --preset vs2026-debug --target quader_guardrail_tests`
 - `build\vs2026\Debug\quader_guardrail_tests.exe`
 - `cmake --build --preset vs2026-debug --target quader`
+
+## 2026-06-30 - Minimized Or Occluded Windows Must Not Submit Frames
+
+Task/context: minimizing Quader or covering it with another app could leave the restored window in a
+broken internal render state.
+
+Invariants:
+
+- Focus loss is not a render-suspension signal; minimized, hidden, occluded, and zero-pixel window
+  states are.
+- `PlatformWindow` owns drawable/presentable window state through `canRenderFrames()` and the
+  testable `platformWindowCanRenderFrames(...)` helper.
+- `App::renderFrame()` must check presentability before UI/GPU frame prep and again after chrome
+  actions, because the custom minimize button can make the swapchain non-drawable mid-frame.
+- If a frame was begun but the window becomes non-drawable before `ImGui::Render()`, `UISystem`
+  must close the ImGui frame with `endFrameWithoutRender()` instead of submitting draw data.
+- CPU/power idling belongs in the app loop: active viewport input uses a short wait, normal visible
+  idle uses a low-FPS wait, and suspended windows wait longer while waking immediately on SDL events.
+
+Affected owners/files:
+
+- `src/platform/platform_window.*`
+- `src/app/app.*`
+- `src/ui/ui_system.*`
+- `src/ui/viewport_panel.hpp`
+- `tests/core_tests.cpp`
+- `tests/build_guardrail_tests.cpp`
+
+Verification:
+
+- `cmake --build --preset vs2026-debug --target quader_guardrail_tests quader_tests`
+- `build\vs2026\Debug\quader_guardrail_tests.exe --gtest_color=no --gtest_filter=BuildGuardrailTests.*:BuildGuardrailTests.ImGuiRuntimeResourcesArePackagedWithRuntime:BuildGuardrailTests.ImGuiShellViewportAndControlStylingStayVisible:DependencyLicenseGuardrailTests.*:WindowGuardrailTests.*`
+- `build\vs2026\Debug\quader_tests.exe --gtest_color=no --gtest_filter=AppFrameClockTests.*:AppLoopTests.*:AppStartupTests.*:AppWindowSettingsTests.*:AssetProjectArchitectureTests.*:AssetRegistryTests.*:BakeServiceTests.*:Console*:ConsoleModelTests.*:DocumentCommandServiceTests.*:DocumentCommandTests.*:EditorCommandServiceTests.*:EditorHistoryServiceTests.*:FatalErrorHandlerTests.*:GroundGridMaterialTests.*:Localization*:LoggerTests.*:MaterialDocumentTests.*:MathTypesTests.*:ModelingInteractionTests.*:ModelingSessionServiceOverlayTests.*:ModelingSessionServiceTests.*:NavigationGizmo*:OverlayMaterialTests.*:PlatformWindow*:PlatformWindowChromeTests.*:PolygonOperationRegistryTests.*:ProjectDocumentTests.*:ProjectSessionTests.*:QuaderMeshMaterialTests.*:RenderLifecycleTests.*:RenderProxyLifecycleTests.*:RenderSystemTests.*:SceneBoundsTests.*:SceneDocumentTests.*:SceneEntityNamingTests.*:SceneRenderBridgeTests.*:Sdl*:SdlEventUtilsTests.*:TextureRegistryTests.*:TransformPivotTests.*:Ui*:UISettingsTests.*:UndoRedoManagerTests.*:Viewport*:ViewportCameraAdapterTests.*:ViewportCameraTests.*:ViewportContextMenuPolicyTests.*:ViewportGridPlacementPolicyTests.*:ViewportInputRouterTests.*:ViewportLayoutTests.*:ViewportOverlayPolicyTests.*:ViewportOverlayStyleResolverTests.*:ViewportRendererTests.*:ViewportSettingsTests.*:ViewportWorkspaceServiceTests.*:Window*`
+- `cmake --build --preset vs2026-debug --target quader`
+- Manual smoke: launched `build\vs2026\Debug\quader.exe --borderless-window`, minimized, restored,
+  maximized, restored, and confirmed the process/window stayed alive.

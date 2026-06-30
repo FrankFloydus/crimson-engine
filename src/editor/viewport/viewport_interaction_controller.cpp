@@ -21,7 +21,7 @@ void ViewportInteractionController::handleAfterActiveTool(
         const ViewportInteractionFrame& frame,
         const ViewportToolResult& toolResult,
         const ViewportBeforeToolInteractionResult& beforeTool) {
-    selection_.handleFrame(editor, frame, toolResult, beforeTool.gizmoConsumed);
+    selection_.handleFrame(editor, frame, toolResult, beforeTool);
 }
 
 QuaderSelectionSummary ViewportInteractionController::pickContextMenuTarget(

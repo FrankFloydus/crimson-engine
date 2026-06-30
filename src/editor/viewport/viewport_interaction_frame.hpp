@@ -34,6 +34,9 @@ struct ViewportInteractionFrame {
  */
 struct ViewportBeforeToolInteractionResult {
     bool gizmoConsumed = false;
+    bool selectionClickRequested = false;
+    QVec2 selectionClickLocal = {};
+    int selectionClickCount = 1;
 };
 
 } // namespace quader

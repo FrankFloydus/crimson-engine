@@ -279,6 +279,14 @@ public:
 			};
 			state.screen_axis = vec2_normalize_or(state.screen_axis, { 1.0F, 0.0F });
 		}
+		if (transform_axis_is_single_axis(input.axis) && input.has_start_ray) {
+			const DragDistanceResult start_distance =
+				axis_distance_from_ray(state.world_axis, state.center_world, input.start_ray, screen_epsilon);
+			if (start_distance.ok && std::isfinite(start_distance.distance)) {
+				state.has_axis_start_distance = true;
+				state.axis_start_distance = start_distance.distance;
+			}
+		}
 		return { true, {}, state };
 	}
 
@@ -329,8 +337,7 @@ public:
 			return { false, "Move snap target requires a single move axis.", {}, {}, {} };
 		}
 		const double distance =
-			axis_coordinate(target_position, state.axis) -
-			axis_coordinate(state.center_world, state.axis);
+			vec3_dot(target_position - state.center_world, state.world_axis);
 		state.preview_distance = distance;
 		state.preview_delta = vec3_scale(state.local_axis, distance);
 		return { true, {}, distance, distance, state.preview_delta };
@@ -365,11 +372,18 @@ public:
 		} else {
 			const quader::QVec2 screen_delta = vec2_sub(screen_position, state.start_screen);
 			const double pixel_delta = vec2_dot(screen_delta, state.screen_axis);
-			const double raw_distance = pixel_delta * viewport_world_units_per_pixel(camera, state.center_world);
+			double raw_distance = pixel_delta * viewport_world_units_per_pixel(camera, state.center_world);
+			const double ray_distance = move_axis_distance(state, ray);
+			if (state.has_axis_start_distance && std::isfinite(ray_distance)) {
+				const double ray_delta = ray_distance - state.axis_start_distance;
+				if (std::abs(ray_delta) > screen_epsilon || std::abs(pixel_delta) <= screen_epsilon) {
+					raw_distance = ray_delta;
+				}
+			}
 			if (snap_center_to_grid && grid_enabled) {
 				const quader::QVec3 raw_delta = vec3_scale(state.world_axis, raw_distance);
 				delta = snap_center_drag_delta(state.axis, state.center_world, raw_delta, grid_size);
-				distance = axis_coordinate(state.center_world + delta, state.axis) - axis_coordinate(state.center_world, state.axis);
+				distance = vec3_dot(delta, state.world_axis);
 			} else {
 				distance = maybe_snap_world_value(raw_distance, grid_size, grid_enabled);
 				delta = vec3_scale(state.local_axis, distance);
@@ -442,7 +456,7 @@ public:
 					input.ray,
 					input.camera,
 					input.precision,
-					!input.precision,
+					input.grid_enabled,
 					input.grid_size,
 					state.scene_transform_preview_eligible && state.operation == TransformDragOperation::transform);
 			}
@@ -472,7 +486,9 @@ public:
 		if (state.tool == ViewportInteractionTool::rotate) {
 			const double previous_angle_degrees = state.rotate.preview_angle_degrees;
 			const RotatePreviewResult preview =
-				preview_rotate_from_screen_position(state.rotate, input.screen_position, input.precision ? 0.0 : input.rotate_snap_degrees);
+				preview_rotate_from_screen_position(state.rotate,
+					input.screen_position,
+					input.grid_enabled ? input.rotate_snap_degrees : 0.0);
 			if (!preview.ok) {
 				return { false, false, preview.message.empty() ? "Rotate preview failed." : preview.message };
 			}
@@ -488,7 +504,7 @@ public:
 		if (state.tool == ViewportInteractionTool::scale) {
 			const quader::QVec3 previous_scale = state.scale.preview_scale;
 			const ScalePreviewResult preview =
-				preview_scale_from_screen_position(state.scale, input.screen_position, !input.precision, input.grid_size);
+				preview_scale_from_screen_position(state.scale, input.screen_position, input.grid_enabled, input.grid_size);
 			if (!preview.ok) {
 				return { false, false, preview.message.empty() ? "Scale preview failed." : preview.message };
 			}

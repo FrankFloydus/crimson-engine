@@ -230,8 +230,9 @@ void ViewportSelectionInteraction::handleFrame(
         QuaderEditorApi& editor,
         const ViewportInteractionFrame& frame,
         const ViewportToolResult& toolResult,
-        bool gizmoConsumed) {
+        const ViewportBeforeToolInteractionResult& beforeTool) {
     committedMarquee_.reset();
+    const bool gizmoConsumed = beforeTool.gizmoConsumed;
     const bool selectionFallbackActive = frame.inputRouter.activeToolAllowsSelectionFallback();
     const bool suppressHoverWork =
             frame.inputResult.navigationActive ||
@@ -275,6 +276,18 @@ void ViewportSelectionInteraction::handleFrame(
         }
         clearHover();
     };
+
+    if (beforeTool.selectionClickRequested && canPick) {
+        const QuaderHoverTarget hoveredBeforeSelection = editor.selection().hoverSummary().target;
+        const QuaderSelectionSummary summary = pickSelection(
+                editor,
+                frame.inputRouter,
+                frame,
+                beforeTool.selectionClickLocal,
+                std::max(1, beforeTool.selectionClickCount));
+        paintSelectionActive_ = isComponentSelectionMode(toModelingSelectionMode(summary.mode));
+        suppressHoverAfterSelection(beforeTool.selectionClickLocal, hoveredBeforeSelection);
+    }
 
     if (!boxState_.active && canUseSelectionFallback && frame.leftPressed) {
         boxEdit_ = selectionEditFromModifiers(frame.input.modifiers);
